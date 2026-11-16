@@ -1,16 +1,8 @@
 name: Release archives
+# Release builds run only for a v-tag push or a manual run. Pull requests run the regular CI
+# (ci.yml) only: a break in the release scripts shows when a tag or manual release runs.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - .github/workflows/release.yml
-      - scripts/release/**
-      - scripts/install.sh
-      - apps/neuve-cli/scripts/build.ts
-      - apps/neuve-cli/src/cli.ts
-      - apps/neuve-cli/src/upgrade-cli.ts
-      - apps/neuve-cli/tests/upgrade-cli.test.ts
-      - tests/release/**
   push:
     tags: ["v*"]
 permissions:
