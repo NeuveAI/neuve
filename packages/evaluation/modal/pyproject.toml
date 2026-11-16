@@ -19,7 +19,7 @@ gpu = [
   "safetensors==0.8.0",
   "huggingface_hub==1.33.0",
   # EmbeddingGemma 2's processor imports these even when it loads text-only.
-  "pillow==12.3.0",
+  "pillow==13.0.0",
   "torchvision==0.29.1",
   "soundfile==0.14.0",
 ]
@@ -28,4 +28,4 @@ gpu = [
 package = false
 default-groups = []
 # Mirrors the workspace's 10-day minimum release age for npm packages.
-exclude-newer = "2026-10-07T00:00:00Z"
+exclude-newer = "2026-11-06T00:00:00Z"
