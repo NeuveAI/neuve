@@ -1,0 +1,13 @@
+{
+  "project": "graphql/graphql-js",
+  "source": "https://github.com/graphql/graphql-js",
+  "commit": "52f67c02ffb6aeb72a0e67f4be150665aa229f43",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/graphql/graphql-js/52f67c02ffb6aeb72a0e67f4be150665aa229f43/LICENSE",
+      "sha256": "35a11da7e877009ddc57405844209908cfc567adda0ec1daf410368c9f5b0d01"
+    }
+  ]
+}

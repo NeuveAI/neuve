@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Review identity</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+h2{margin:0;font-size:20px;line-height:26px;font-weight:600;letter-spacing:-0.01em}
+.sec{display:flex;flex-direction:column;gap:20px}
+.sub{margin:0;font-size:14px;line-height:21px;color:var(--muted);max-width:660px}
+.card{border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line);padding:20px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;min-width:0}
+.cap{font-size:12.5px;line-height:18px;color:var(--muted)}
+
+/* ── IDENTITY: two avatars, never altered by placement or state ── */
+.av{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-weight:600;line-height:1}
+/* person: a chat bubble (organic) · agent: a square with an antenna and a fine dashed outer edge (mechanical) */
+.av.person{font-family:Geist,system-ui,sans-serif;border-radius:50% 50% 50% 14%;background:var(--raised2);color:var(--ink2)}
+/* agent: one SVG on a 24×29.2 grid, so antenna, edge and id scale together at every size */
+.av.agent{display:inline-block;overflow:visible;transform:translateY(-10%)}
+.av.agent.s24{width:24px;height:29.2px}
+.av.agent.s20{width:20px;height:24.33px}
+.av.agent.s16{width:16px;height:19.47px}
+.av.agent .body{stroke:none}
+.av.agent .edge{fill:none;stroke-width:1;stroke-linecap:butt;opacity:.5} /* dashes live on the path: an open path leaves a 3.6 opening for the antenna, then 16 even dashes */
+.av.agent .ant{stroke-width:.85;stroke-linecap:round;fill:none}
+.av.agent .tip{stroke:none}
+.av.agent text{font-family:'Geist Mono',ui-monospace,monospace;font-size:8.6px;font-weight:600;text-anchor:middle;dominant-baseline:central}
+.av.agent.impl .body{fill:var(--agt-tint)} .av.agent.impl .edge,.av.agent.impl .ant{stroke:var(--agt-fg)} .av.agent.impl .tip,.av.agent.impl text{fill:var(--agt-fg)}
+.av.agent.rev .body{fill:var(--sug-tint)} .av.agent.rev .edge,.av.agent.rev .ant{stroke:var(--sug-ink)} .av.agent.rev .tip,.av.agent.rev text{fill:var(--sug-ink)}
+/* comment pin states: ring around the avatar; the agent's antenna rises to clear its ring */
+.pgrid{display:grid;grid-template-columns:170px repeat(5,minmax(0,96px));align-items:center;row-gap:22px;column-gap:8px;padding:20px;border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.pinc{display:inline-flex;align-items:center;gap:5px}
+.pck{width:11px;height:11px;fill:none;stroke:var(--muted);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.pslot{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50% 50% 50% 14%}
+.pslot[data-pin="hover"]{box-shadow:0 0 0 1.5px var(--line-strong)}
+.pslot[data-pin="focus"]{box-shadow:0 0 0 2px var(--focus)}
+.pslot[data-pin="open"]{box-shadow:0 0 0 2px var(--ink)}
+.pslot[data-pin="resolved"]{box-shadow:0 0 0 1px var(--line-strong)}
+.av.agent{overflow:visible}
+.av.agent .pinring{fill:none;stroke:none}
+.av.agent .tip,.av.agent .ant{transform-box:view-box}
+.av.agent .ant{transform-origin:12px 6.4px}
+.av.agent[data-pin="hover"] .pinring{stroke:var(--line-strong);stroke-width:1.4}
+.av.agent[data-pin="focus"] .pinring{stroke:var(--focus);stroke-width:1.8}
+.av.agent[data-pin="open"] .pinring{stroke:var(--ink);stroke-width:1.8}
+.av.agent[data-pin="hover"] .tip,.av.agent[data-pin="focus"] .tip,.av.agent[data-pin="open"] .tip{transform:translateY(-1.6px)}
+.av.agent[data-pin="hover"] .ant,.av.agent[data-pin="focus"] .ant,.av.agent[data-pin="open"] .ant{transform:scaleY(1.32)}
+@media (max-width:900px){.pgrid{grid-template-columns:110px repeat(5,minmax(0,1fr))}}
+/* PLACEMENT changes size only */
+.s16{width:16px;height:16px;font-size:7.5px}
+.s20{width:20px;height:20px;font-size:8.5px}
+.s24{width:24px;height:24px;font-size:9.5px}
+
+/* ── STATE: icon + verb, edge only while unsent ── */
+.vi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke-width:2.8;stroke-linecap:round;stroke-linejoin:round}
+.vi.ok{stroke:var(--agt)} .vi.no{stroke:var(--req)}
+.mark{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--ink);white-space:nowrap}
+.mark b{font-weight:600}
+.mark.unsent{padding:2px 9px;border:1px dashed var(--line-strong);border-radius:7px}
+.say{display:inline-flex;align-items:flex-start;gap:8px;font-size:13.5px;line-height:20px;color:var(--ink2)}
+
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.place{display:grid;grid-template-columns:150px minmax(0,1fr) 70px;border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line);overflow:clip}
+.place>span{padding:12px 14px;border-bottom:1px solid var(--line2);font-size:13px;display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
+.place>.th{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--bg)}
+.place>.last{border-bottom:0}
+
+/* desk mock */
+.desk{display:grid;grid-template-columns:260px minmax(0,1fr);border-radius:14px;overflow:hidden;box-shadow:0 0 0 1px var(--line);background:var(--bg)}
+.rail{border-right:1px solid var(--line);padding:16px 12px;display:flex;flex-direction:column;gap:4px}
+.rrow{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;font-size:13px;color:var(--ink2)}
+.rrow.on{background:var(--select);color:var(--ink)}
+.rail .rrow:not(.grp){padding-left:34px}
+.rrow .t{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.main{padding:24px 28px 28px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.vcard{border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.why{margin-left:auto;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;font-size:12.5px;color:var(--ink2);box-shadow:inset 0 0 0 1px var(--line)}
+.ev{align-self:flex-start;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;padding:1px 7px;border-radius:5px;background:var(--raised);color:var(--ink2)}
+.dock{align-self:center;display:flex;align-items:center;gap:6px;padding:5px 5px 5px 14px;border-radius:13px;background:var(--dock);color:var(--dock-fg);font-size:13px}
+.dock .s{display:inline-flex;align-items:center;gap:8px;color:var(--dock-muted);padding-right:8px}
+.dock .sep{width:1px;height:20px;background:var(--dock-line)}
+.dock .b{padding:7px 12px;border-radius:8px}
+.dock .p{background:var(--accent);color:var(--accent-ink);font-weight:500}
+
+/* done-when vs scope rows */
+.rows{display:flex;flex-direction:column}
+.row{display:grid;grid-template-columns:24px minmax(0,1fr);gap:2px 10px;padding:10px 0;border-top:1px solid var(--line2);align-items:start}
+.row:first-child{border-top:0}
+.mk{width:20px;height:20px;border-radius:10px;display:flex;align-items:center;justify-content:center}
+.mk svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.f-ok{background:var(--agt-tint);color:var(--agt-fg)} .f-no{background:var(--req-tint);color:var(--req)} .f-ne{background:var(--sug-tint);color:var(--sug)}
+.r-ok{box-shadow:inset 0 0 0 1.5px var(--agt);color:var(--agt-fg)} .r-no{box-shadow:inset 0 0 0 1.5px var(--req);color:var(--req)} .r-ne{box-shadow:inset 0 0 0 1.5px var(--sug);color:var(--sug)}
+.dash{stroke-dasharray:3 3}
+.crit{font-size:13.5px;font-weight:600}
+.st{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;font-weight:500;margin-left:8px}
+/* the Scope card's checkpoints (criteria-card.tsx, 11.23): unmet ones under their item, the rest one count row at the foot */
+.cpb{grid-column:2;display:flex;flex-direction:column;gap:6px;padding-top:8px}
+.cps{list-style:none;margin:0;padding:0;border-radius:10px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line2)}
+.cp{display:flex;flex-direction:column;gap:3px;padding:9px 11px;border-top:1px solid var(--line2)}
+.cp:first-child{border-top:0}
+.cp-top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 10px}
+.cst{display:inline-flex;align-items:center;gap:6px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;line-height:16px}
+.cst svg,.ctl svg,.cpin svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.cst.sug{color:var(--sug-ink)} .cst.sug svg{color:var(--sug)} .cst.req{color:var(--req-ink)} .cst.req svg{color:var(--req)}
+.cwhere{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:var(--muted)}
+.cpin{display:inline-flex;align-items:center;gap:5px;height:22px;border-radius:6px;padding:0 8px 0 6px;background:var(--raised);font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:var(--ink2)}
+.cpin svg{color:var(--muted);stroke-width:2}
+.cpin .t{color:var(--muted)}
+.creq{font-size:13px;line-height:19px;color:var(--ink)}
+.cnote{font-size:12px;line-height:17px;color:var(--muted)}
+.cfoot{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px;min-height:40px;border-top:1px solid var(--line2);font-size:13px;color:var(--ink2)}
+.cfoot .chev{width:14px;height:14px;fill:none;stroke:var(--faint);stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.ctl{display:inline-flex;align-items:center;gap:5px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;line-height:16px}
+.ctl.sug{color:var(--sug-ink)} .ctl.sug svg{color:var(--sug)} .ctl.neu{color:var(--ink2)} .ctl.neu svg{color:var(--muted)}
+.csug{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;font-size:13px;color:var(--ink2);padding-top:4px}
+.csug .m{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:8px;border:1.5px dashed var(--line-strong);color:var(--ink)}
+.csug .m svg{width:12px;height:12px;fill:none;stroke:var(--req);stroke-width:2.6;stroke-linecap:round}
+.rule{display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px 12px;padding:12px 0;border-top:1px solid var(--line2)}
+.rule .n{font-family:'Geist Mono',ui-monospace,monospace;font-size:12px;color:var(--muted);padding-top:2px}
+.rule .t{font-size:14.5px;font-weight:600;line-height:21px}
+.rule .d{grid-column:2;font-size:13.5px;line-height:20px;color:var(--ink2);max-width:760px}
+@media (max-width:900px){.desk{grid-template-columns:minmax(0,1fr)}.rail{display:none}.grid3,.g2{grid-template-columns:minmax(0,1fr)!important}.place{grid-template-columns:110px minmax(0,1fr)}.place>.c3{display:none}}
+/* the briefing's claims, one per line (UnitBriefing.dc.html, approved 25 October 2026) */
+.claims{list-style:none;margin:0;padding-left:0;display:flex;flex-direction:column;gap:5px;max-width:820px;font-size:15px;line-height:22px;color:var(--ink2)}
+.claims>li{position:relative;padding-left:16px;text-wrap:pretty}
+.claims>li::before{content:"";position:absolute;left:3px;top:9px;width:4px;height:4px;border-radius:50%;background:var(--faint)}
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 2400px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<div style="max-width: 1240px; margin: 0 auto; padding: 64px 24px 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 64px">
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<span class="lbl">Neuve web · identity</span>
+<h1 style="margin: 0; font-size: 44px; line-height: 48px; letter-spacing: -0.025em; font-weight: 600">Review identity</h1>
+<p class="sub" style="font-size: 16px; line-height: 24px">Three separate things. Identity says who: one avatar for each person or agent, the same everywhere. Placement says where: it only changes the size. State says what happened: an icon and a verb beside the avatar, never a change to it.</p>
+</div>
+
+<section class="sec">
+<div style="display: flex; flex-direction: column; gap: 6px"><h2>Identity · two avatars</h2><p class="sub">People are chat bubbles: organic, like the conversation they take part in. Agents are squares with a small antenna and a fine dashed outer edge: mechanical, tinted by role. Nothing else ever changes their shape, fill or type.</p></div>
+<div class="grid3">
+<div class="card"><span class="lbl">Person</span><div style="display: flex; align-items: center; gap: 14px"><span class="av person s24">VD</span><span class="av person s20">VD</span><span class="av person s16">VD</span></div><span class="cap">Chat bubble, initials in Geist, neutral fill. A photo can fill it later; the bubble stays.</span></div>
+<div class="card"><span class="lbl">Agent · implementer</span><div style="display: flex; align-items: center; gap: 14px"><svg class="av agent impl s24" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I1</text></svg><svg class="av agent impl s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I1</text></svg><svg class="av agent impl s16" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I1</text></svg></div><span class="cap">Square with an antenna and a fine dashed outer edge, id in Geist Mono, green. Replaces the plain square in the agents control.</span></div>
+<div class="card"><span class="lbl">Agent · reviewer</span><div style="display: flex; align-items: center; gap: 14px"><svg class="av agent rev s24" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><svg class="av agent rev s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg></div><span class="cap">Square with an antenna and a fine dashed outer edge, id in Geist Mono, amber.</span></div>
+</div>
+</section>
+
+<section class="sec">
+<div style="display: flex; flex-direction: column; gap: 6px"><h2>Placement · size only</h2><p class="sub">The same avatars wherever they appear. Only the size follows the place.</p></div>
+<div class="place">
+<span class="th">Place</span><span class="th">How it appears</span><span class="th c3">Size</span>
+<span>Header · agents</span><span><svg class="av agent impl s24" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I1</text></svg><svg class="av agent impl s24" viewBox="0 -1.2 24 29.2" role="img" aria-label="I2, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I2</text></svg><svg class="av agent rev s24" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg></span><span class="c3 mono">24</span>
+<span>Unit rail</span><span><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><span class="cap">beside each unit it reviewed</span></span><span class="c3 mono">16</span>
+<span>Review card</span><span><svg class="av agent rev s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><span class="cap">leads the review</span></span><span class="c3 mono">20</span>
+<span>Thread</span><span><span class="av person s20">VD</span><svg class="av agent impl s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I1</text></svg><span class="cap">leads each message</span></span><span class="c3 mono">20</span>
+<span class="last">Margin · comment</span><span class="last"><span class="av person s20">VD</span><span class="cap">the comment pin is its author's avatar</span></span><span class="c3 mono last">20</span>
+</div>
+<p class="cap">The comment pin in the margin keeps the bubble from the marker identity: it is simply its author's avatar. An agent's comment pin is the agent's square.</p>
+</section>
+
+<section class="sec">
+<div style="display: flex; flex-direction: column; gap: 6px"><h2>State · icon and verb beside the avatar</h2><p class="sub">Who in words, what in the verb, the verdict's colour on the icon only. A comment has no icon and no verb. Unsent is the only state with an edge.</p></div>
+<div class="card" style="gap: 16px">
+<span class="mark"><svg class="av agent rev s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><svg class="vi ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span><b>R1</b> approved</span></span>
+<span class="mark"><span class="av person s20">VD</span><svg class="vi no" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg><span><b>You</b> requested changes</span></span>
+<span class="mark unsent" style="align-self: flex-start"><svg class="vi no" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg><span><b>Suggested</b> · request changes</span></span>
+<span class="say"><span class="av person s20">VD</span>Wait on ctx.Done() too?</span>
+<span class="say"><svg class="av agent impl s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I1</text></svg>Done in the next revision.</span>
+</div>
+</section>
+
+<section class="sec">
+<div style="display: flex; flex-direction: column; gap: 6px"><h2>Comment pins · state around the avatar</h2><p class="sub">A comment pin is its author's avatar. Hover, focus and open draw a ring around it in the same colours for everyone. On an agent the ring sits just outside the dashed edge, and the antenna rises to clear it. Resolved is quiet: a person keeps a thin ring, an agent goes back to its dashed edge, and both get a check beside them.</p></div>
+<div class="pgrid"><span></span><span class="lbl">rest</span><span class="lbl">hover</span><span class="lbl">focus</span><span class="lbl">open</span><span class="lbl">resolved</span><span class="cap" style="font-size: 13px; color: var(--ink2)">Person</span><span class="pinc"><span class="pslot" data-pin="rest"><span class="av person s20">VD</span></span></span><span class="pinc"><span class="pslot" data-pin="hover"><span class="av person s20">VD</span></span></span><span class="pinc"><span class="pslot" data-pin="focus"><span class="av person s20">VD</span></span></span><span class="pinc"><span class="pslot" data-pin="open"><span class="av person s20">VD</span></span></span><span class="pinc"><span class="pslot" data-pin="resolved"><span class="av person s20">VD</span></span><svg class="pck" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="cap" style="font-size: 13px; color: var(--ink2)">Agent · implementer</span><span class="pinc"><svg class="av agent impl s20" data-pin="rest" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">I1</text></svg></span><span class="pinc"><svg class="av agent impl s20" data-pin="hover" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">I1</text></svg></span><span class="pinc"><svg class="av agent impl s20" data-pin="focus" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">I1</text></svg></span><span class="pinc"><svg class="av agent impl s20" data-pin="open" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">I1</text></svg></span><span class="pinc"><svg class="av agent impl s20" data-pin="resolved" viewBox="0 -1.2 24 29.2" role="img" aria-label="I1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">I1</text></svg><svg class="pck" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="cap" style="font-size: 13px; color: var(--ink2)">Agent · reviewer</span><span class="pinc"><svg class="av agent rev s20" data-pin="rest" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">R1</text></svg></span><span class="pinc"><svg class="av agent rev s20" data-pin="hover" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">R1</text></svg></span><span class="pinc"><svg class="av agent rev s20" data-pin="focus" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">R1</text></svg></span><span class="pinc"><svg class="av agent rev s20" data-pin="open" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">R1</text></svg></span><span class="pinc"><svg class="av agent rev s20" data-pin="resolved" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><path class="pinring" d="M14.4 3.9H16.9A7.6 7.6 0 0 1 24.1 11.1V20.9A7.6 7.6 0 0 1 16.9 28.1H7.1A7.6 7.6 0 0 1 -0.1 20.9V11.1A7.6 7.6 0 0 1 7.1 3.9H9.6"></path><text x="12" y="16.3">R1</text></svg><svg class="pck" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span></div>
+<p class="cap">Motion: the ring fades in over TIMING.pinRing (140ms) while the antenna ball rises 1.6 units and the rod stretches to follow (SPRING.snappy, a slight overshoot). Leaving is quicker: pinRingExit, 100ms. With reduced motion the ring and the raised antenna simply appear.</p>
+</section>
+
+<section class="sec">
+<div style="display: flex; flex-direction: column; gap: 6px"><h2>Human-suggested at Guided, said once</h2><p class="sub">The agent's review lives in one card. The rail repeats only the avatar and icon; the dock says what you'd be deciding on.</p></div>
+<div class="desk">
+<div class="rail" aria-hidden="true">
+<span class="lbl" style="padding: 4px 8px 6px">Decided by agents and tools</span><span class="rrow grp" style="color: var(--ink)"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg><span class="t">Suggested</span><span class="mono" style="font-size: 11px; color: var(--muted)">3</span><svg viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px; flex: 0 0 auto; fill: none; stroke: var(--faint); stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round"><path d="m18 15-6-6-6 6"></path></svg></span>
+<div class="rrow"><span class="t">Audit event for revocation</span><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><svg class="vi ok" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+<div class="rrow"><span class="t">Link list shows revoked links</span><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><svg class="vi ok" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+<div class="rrow on"><span class="t">Index writes retry when busy</span><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><svg class="vi ok" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></div>
+</div>
+<div class="main">
+<span class="lbl" style="color: var(--sug-ink)">Human-suggested · optional</span>
+<span style="font-size: 24px; font-weight: 600; letter-spacing: -0.02em">Index writes retry when the database is busy</span>
+<ul class="claims" style="font-size: 14px; line-height: 22px; max-width: 640px"><li>Commit used to fail on the first lock clash.</li><li>It now retries up to three times with growing waits, then returns ErrIndexBusy.</li></ul>
+<div class="vcard">
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap"><span class="mark"><svg class="av agent rev s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><svg class="vi ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span><b>R1</b> approved</span></span><span class="why">Why · 2 of 3 not done<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></span></div>
+<span style="font-size: 13.5px; line-height: 20px; color: var(--ink2)">Retries busy writes; accepted the untested path.</span>
+<span class="ev">writer_test.go ✓</span>
+</div>
+<div class="dock" aria-hidden="true"><span class="s"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg>Covers 1 hunk</span><span class="sep"></span><span class="b">Request changes</span><span class="b p">Agree</span></div>
+</div>
+</div>
+<p class="cap">Hovering or focusing R1 shows where the review came from (reviewer agent · agentic review · a3f9c2e). The rail's “Agent approved · yours to override” note and the dock's “Agent approved this unit” go.</p>
+</section>
+
+<section class="sec">
+<div style="display: flex; flex-direction: column; gap: 6px"><h2>Done when, Scope and Gathered scope</h2><p class="sub">Same card, same colours. Guided always has a basis: the ticket's Done when, else its scope, else a scope the harness gathers from code and history. The weaker the basis, the quieter the marks.</p></div>
+<div class="g2" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+<div class="card" style="gap: 8px">
+<span class="lbl">Done when</span>
+<span style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap"><span style="font-size: 15px; font-weight: 600">Index writes fail when the database is busy</span><span class="mono" style="font-size: 11.5px; color: var(--muted)">SHR-318</span></span>
+<div class="rows">
+<div class="row"><span class="mk f-ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="crit">Index writes retry when the database is busy<span class="st" style="color: var(--agt-fg)">Done</span></span></div>
+<div class="row"><span class="mk f-no"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg></span><span class="crit">Cancelling a request stops index work<span class="st" style="color: var(--req-fg)">Not done</span></span></div>
+<div class="row"><span class="mk f-ne"><svg viewBox="0 0 24 24"><circle class="dash" cx="12" cy="12" r="7"></circle></svg></span><span class="crit">The busy path is covered by a test<span class="st" style="color: var(--sug-ink)">No evidence</span></span></div>
+</div>
+</div>
+<div class="card" style="gap: 8px">
+<span class="lbl">Scope</span>
+<span style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap"><span style="font-size: 15px; font-weight: 600">Revoked links keep working for open sessions</span><span class="mono" style="font-size: 11.5px; color: var(--muted)">SHR-212</span></span>
+<div class="rows">
+<div class="row"><span class="mk r-ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="crit">Revoking a link ends access immediately<span class="st" style="color: var(--agt-fg)">Covered</span></span></div>
+<div class="row"><span class="mk r-no"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg></span><span class="crit">Open documents lose access too<span class="st" style="color: var(--req-fg)">Not covered</span></span>
+<div class="cpb"><span class="lbl">2 unmet checkpoints</span>
+<ol class="cps">
+<li class="cp"><span class="cp-top"><span class="cst sug"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.1 2.182a10 10 0 0 1 3.8 0"></path><path d="M13.9 21.818a10 10 0 0 1-3.8 0"></path><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"></path><path d="M2.182 13.9a10 10 0 0 1 0-3.8"></path><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"></path><path d="M21.818 10.1a10 10 0 0 1 0 3.8"></path><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"></path><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"></path></svg>Missing</span><span class="cwhere">This unit as a whole</span></span><span class="creq">A document already open stops showing its content once its link is revoked.</span><span class="cnote">No proof record it names is in Records.</span></li>
+<li class="cp"><span class="cp-top"><span class="cst req"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg>Conflicting</span><span class="cpin"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg>viewer-access.ts<span class="t">lines 9–13</span></span></span><span class="creq">A revoke refuses the open document’s next request for its content.</span><span class="cnote">Its records disagree: a test run and logs.</span></li>
+</ol></div></div>
+<div class="row"><span class="mk r-ne"><svg viewBox="0 0 24 24"><circle class="dash" cx="12" cy="12" r="7"></circle></svg></span><span class="crit">Viewers see why access ended<span class="st" style="color: var(--sug-ink)">No evidence</span></span></div>
+</div>
+<div class="cfoot"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg><span>3 other checkpoints</span><span style="display: inline-flex; align-items: center; gap: 6px"><span class="ctl sug"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 18a6 6 0 0 0 0-12v12z"></path></svg>1 thin</span><span style="color: var(--muted)">·</span><span class="ctl neu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="m16 9-5.5 5.5L8 12"></path></svg>2 proven</span></span></div>
+<div class="csug"><span class="m"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg><span><b style="font-weight: 600">Suggested</b> · request changes</span></span><span>· 2 of 3 not covered</span><span>· 2 unmet checkpoints</span></div>
+</div>
+<div class="card" style="gap: 8px">
+<span class="lbl">Gathered scope</span>
+<span style="font-size: 15px; font-weight: 600">Retry index writes when SQLite reports busy</span>
+<div class="rows">
+<div class="row"><span class="mk r-ok"><svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="crit">Writes retry instead of failing<span class="st" style="color: var(--agt-fg)">Covered</span><span class="mono" style="display: block; font-size: 11px; color: var(--muted); font-weight: 400; padding-top: 3px">Source · lines 29–36 · History · commit 4e1a7c2</span></span></div>
+<div class="row"><span class="mk r-no"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg></span><span class="crit">Callers keep their cancellation<span class="st" style="color: var(--req-fg)">Not covered</span><span class="mono" style="display: block; font-size: 11px; color: var(--muted); font-weight: 400; padding-top: 3px">Graph · 3 callers · Source · line 34</span></span></div>
+<div class="row"><span class="mk r-ne"><svg viewBox="0 0 24 24"><circle class="dash" cx="12" cy="12" r="7"></circle></svg></span><span class="crit">Busy path tested<span class="st" style="color: var(--sug-ink)">No evidence</span><span class="mono" style="display: block; font-size: 11px; color: var(--muted); font-weight: 400; padding-top: 3px">History · earlier review asked for one</span></span></div>
+</div>
+</div>
+</div>
+<p class="cap">Checkpoints: an unmet one (Missing, Out of date or Conflicting) sits under the item it fails, with its state, what it asks for, Records' note and where it sits; an item whose checkpoints are all met looks as before. Every other checkpoint is one count row at the foot, a native disclosure grouped by item, and the suggested review counts the unmet ones. The agent's word never changes with them.</p>
+<p class="cap">No ticket: the harness climbs from the change itself to commit history, earlier reviews, the blast radius and docs until the intent is stated and every item cites a fact. No ticket id; the evidence comes mostly from Source and History.</p>
+</section>
+
+<section class="sec">
+<h2>Rules</h2>
+<div>
+<sc-for list="{{rules}}" as="r" hint-placeholder-count="6">
+<div class="rule"><span class="n">{{r.n}}</span><span class="t">{{r.t}}</span><span class="d">{{r.d}}</span></div>
+</sc-for>
+</div>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":2400}}'>
+var RULES = [
+  { t: 'One avatar per actor, everywhere', d: 'People are chat bubbles; agents are role-tinted squares with an antenna and a fine dashed outer edge. Header, rail, review, thread and margin all use the same one.' },
+  { t: 'Placement changes size only', d: '24 in the header, 20 in cards, threads and the margin, 16 in the rail. Never a different shape, fill or type for a different place.' },
+  { t: 'State never touches the avatar', d: 'Approved, requested changes, suggested or a comment are told by the icon, the verb and the edge beside it. No tinted chips or rings added to the avatar.' },
+  { t: 'Say a verdict once per region', d: 'One review in the desk column; the rail echoes avatar and icon only; the dock says what the decision covers.' },
+  { t: 'Verdict colour on the icon only', d: 'Green check, magenta cross. The words stay ink. Comments carry no icon and no verb.' },
+  { t: 'Dashed until sent', d: '“Suggested · request changes” has a dashed edge around the whole mark and no avatar. Once sent it becomes “You requested changes” with your avatar. The agent avatar’s fine outer dashes are part of its identity, at avatar scale, never around a mark.' }
+].map(function (r, i) { return { n: String(i + 1).padStart(2, '0'), t: r.t, d: r.d }; });
+class Component extends DCLogic {
+  renderVals() { return { theme: this.props.theme || 'light', rules: RULES }; }
+}
+</script>
+</body>
+</html>

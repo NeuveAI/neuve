@@ -1,0 +1,32 @@
+//  @ts-check
+
+import { tanstackConfig } from "@tanstack/eslint-config"
+import storybook from "eslint-plugin-storybook"
+
+import {
+  neuveReactRules,
+  neuveStoryAllowances,
+} from "./eslint/neuve-react-rules.js"
+
+export default [
+  ...tanstackConfig,
+  ...storybook.configs["flat/recommended"],
+  ...neuveReactRules,
+  {
+    rules: {
+      "import/no-cycle": "off",
+      "import/order": "off",
+      "import/consistent-type-specifier-style": "off",
+      "sort-imports": "off",
+      "@typescript-eslint/array-type": "off",
+      "@typescript-eslint/require-await": "off",
+      "pnpm/json-enforce-catalog": "off",
+    },
+  },
+  // Story-only imports (DialKit, the story kit) are banned in product code
+  // by neuveReactRules; stories, the kit and its shims are allowed here.
+  ...neuveStoryAllowances,
+  {
+    ignores: ["eslint.config.js", "eslint/**", ".prettierrc", "storybook-static/**"],
+  },
+]

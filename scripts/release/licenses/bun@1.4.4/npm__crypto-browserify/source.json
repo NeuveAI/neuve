@@ -1,0 +1,14 @@
+{
+  "project": "crypto-browserify",
+  "source": "https://registry.npmjs.org/crypto-browserify/-/crypto-browserify-3.12.1.tgz",
+  "version": "3.12.1",
+  "commit": "55476aca92a99c81fcc438519a4d55817fb455fc",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/crypto-browserify/-/crypto-browserify-3.12.1.tgz#package/LICENSE",
+      "sha256": "6134c69bc22c8289252e70de3af20bd67071233459055be74d83acfcc4865e7e"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@ace/compute-pilot",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "bun build runner.ts --target bun --outdir dist",
+    "deploy": "bun run build && wrangler deploy",
+    "types": "tsgo --noEmit && tsgo --noEmit -p tsconfig.runner.json",
+    "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.runner.json"
+  },
+  "dependencies": {
+    "@ace/channel": "workspace:*",
+    "@ace/directory": "workspace:*",
+    "@earendil-works/chord": "1.0.0",
+    "@earendil-works/pi-durable": "1.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260925.2",
+    "@types/bun": "1.3.14",
+    "wrangler": "4.140.0"
+  }
+}

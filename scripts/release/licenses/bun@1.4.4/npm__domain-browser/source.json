@@ -1,0 +1,14 @@
+{
+  "project": "domain-browser",
+  "source": "https://registry.npmjs.org/domain-browser/-/domain-browser-4.23.0.tgz",
+  "version": "4.23.0",
+  "commit": "e40ec3d274ff42bb1dc7762b0698a1a21a12e17e",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://registry.npmjs.org/domain-browser/-/domain-browser-4.23.0.tgz#package/LICENSE.md",
+      "sha256": "4380ef327b7e7b1f291d74bdccc2995758d76d7f9d179ad1ac41c5fadea9feb5"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "project": "dtoa-short",
+  "source": "https://static.crates.io/crates/dtoa-short/dtoa-short-0.3.5.crate",
+  "version": "0.3.5",
+  "commit": "2d905cdb8b2e08163dc0d015f529877fe657b4ef",
+  "pin": "the version Bun 1.4.4's Cargo.lock pins; it arrives through lol-html",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://static.crates.io/crates/dtoa-short/dtoa-short-0.3.5.crate#dtoa-short-0.3.5/LICENSE",
+      "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+    }
+  ]
+}

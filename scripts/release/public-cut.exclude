@@ -1,0 +1,73 @@
+# Third-party PR captures with personal data, including discovery API bodies.
+research/pr-bench/raw/
+research/pr-bench/curation/ui-search-*.json
+
+# Captured sources without established reproduction rights.
+research/sources/
+
+# Recorded model runs, benchmark inputs and selected evidence.
+research/embedding-pipeline/
+research/pr-bench/replay/
+validation/benchmarks/
+validation/evidence/
+validation/review-quality*/
+validation/external/
+
+# Opaque design source files; exported design assets remain public.
+design/neuve-web/design.pen
+design/neuve-web/design.fig
+
+# Indexes and verification summaries that only describe excluded captures.
+research/pr-bench/manifest.json
+research/pr-bench/cases.jsonl
+research/pr-bench/curation/ui-cases.json
+research/pr-bench/curation/systems-cases.json
+research/pr-bench/curation/systems-discovery-manifest.json
+research/pr-bench/curation/systems-verification.json
+research/pr-bench/curation/ui-selection.json
+
+# Scripts, modules and tests that only serve private captures and runs.
+packages/evaluation/scripts/measure-dependency-investigation.ts
+packages/evaluation/scripts/measure-parallel-investigation.ts
+packages/evaluation/scripts/measure-post-cache-gates.ts
+packages/evaluation/scripts/verify-external-neuve-effect.ts
+packages/evaluation/scripts/verify-review-quality.ts
+packages/evaluation/src/external-validation-suite.ts
+packages/evaluation/src/retrieval-bench/cli.ts
+packages/evaluation/src/retrieval-bench/arms.ts
+packages/evaluation/src/retrieval-bench/labelling/cli.ts
+packages/evaluation/src/retrieval-bench/labelling/later-fixes/cli.ts
+packages/evaluation/src/retrieval-bench/score/cli.ts
+packages/evaluation/src/harness-compare/cli.ts
+packages/evaluation/src/harness-compare/full-test/cli.ts
+packages/harness/scripts/e0-parity.ts
+packages/harness/scripts/e0-chunk-parity.ts
+packages/harness/tests/pi/capture/archive-store-policy.test.ts
+research/pr-bench/build-index.ts
+research/pr-bench/verify.ts
+apps/neuve-cli/tests/capture-close-diagnostic-archive.test.ts
+apps/neuve-cli/tests/sidecarless-wal-readers-archive.test.ts
+packages/evaluation/tests/retrieval-bench-heldout-archive.test.ts
+research/pr-bench/curation/systems-annotate.py
+research/pr-bench/curation/systems-capture-revisions.py
+research/pr-bench/curation/systems-capture.py
+research/pr-bench/curation/ui-annotate.py
+research/pr-bench/curation/ui-collect.py
+research/pr-bench/curation/ui-commits.py
+research/pr-bench/curation/ui-review-commits.py
+research/pr-bench/embedding-rd/run.ts
+research/pr-bench/embedding-rd/worker.py
+research/pr-bench/embedding-rd/test_worker.py
+
+# Owner-only: a case whose input is a checkout on the owner's machine, a tool that writes only to the
+# owner's drive, and the desktop app's launch settings for the owner's checkout.
+validation/cases/mixed-visible-members/
+packages/evaluation/src/harness-compare/full-test/finders-gate-cli.ts
+.claude/launch.json
+
+packages/evaluation/tests/review-quality-archive.test.ts
+packages/evaluation/tests/external-validation-case-archive.test.ts
+packages/evaluation/tests/harness-compare-full-test-archive.test.ts
+packages/evaluation/tests/harness-compare-run-folder-archive.test.ts
+packages/evaluation/tests/retrieval-bench-stage-archive.test.ts
+packages/evaluation/tests/retrieval-bench-cancel-archive.test.ts

@@ -1,0 +1,18 @@
+{
+  "project": "sru-systems/rust-argon2",
+  "source": "https://github.com/sru-systems/rust-argon2",
+  "commit": "ed81866f163f0c7026aa6fd8388adf37242eb32a",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/sru-systems/rust-argon2/ed81866f163f0c7026aa6fd8388adf37242eb32a/LICENSE-MIT",
+      "sha256": "26b997d1a1496df49cb1ad2cbe024714cd9126543c18e1bc6c7bbca1b3dc42b6"
+    },
+    {
+      "name": "LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/sru-systems/rust-argon2/ed81866f163f0c7026aa6fd8388adf37242eb32a/LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+    }
+  ]
+}

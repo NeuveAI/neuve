@@ -1,0 +1,13 @@
+{
+  "project": "gulpjs/glob-parent",
+  "source": "https://github.com/gulpjs/glob-parent",
+  "commit": "135c3af0874aca72724b1456c5f89caa67cf4a63",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/gulpjs/glob-parent/135c3af0874aca72724b1456c5f89caa67cf4a63/LICENSE",
+      "sha256": "75fefbea6a5181cbca51c226e14d7244e688d5752526b0fdb94d84b6adbff3b1"
+    }
+  ]
+}

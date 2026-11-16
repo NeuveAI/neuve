@@ -1,0 +1,13 @@
+{
+  "project": "microsoft/mimalloc",
+  "source": "https://github.com/oven-sh/mimalloc",
+  "commit": "92ef6587c57b262f6e6abf513f7776a2f8d12aeb",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/oven-sh/mimalloc/92ef6587c57b262f6e6abf513f7776a2f8d12aeb/LICENSE",
+      "sha256": "82ade5d7d9b029044b5fbbc326207fc47c2d44ee4dd71e8a559c36d728217de9"
+    }
+  ]
+}

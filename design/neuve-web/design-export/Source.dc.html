@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Source sheet, richer</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+/* Board-only, no code token: */
+.theme-light{--sta-tint:#F1EEE8}
+.theme-dark{--sta-tint:#23211E}
+
+a{color:var(--ink)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.iconbtn{width:36px;height:36px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.iconbtn:hover{background:var(--raised);color:var(--ink)}
+.tone{transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.tone:hover{background:var(--raised)}
+.seg{display:flex;padding:3px;border-radius:8px;background:var(--raised)}
+.seg button{border:0;background:transparent;padding:0 12px;height:30px;border-radius:6px;font-size:13px;color:var(--muted);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.kw{color:var(--kw)}.st{color:var(--st)}.fn{color:var(--fn)}.cm{color:var(--cm);font-style:italic}.nu{color:var(--nu)}.id{color:var(--id)}.pl{color:var(--pl)}
+.fade{animation:fadeUp var(--nv-dur-card) var(--nv-ease-emphasized-decelerate) both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(var(--nv-offset-rise))}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+.sheet{background:var(--surface);border-radius:14px;box-shadow:var(--shadow-card);display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.sh-top{padding:18px 22px 14px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid var(--line2)}
+.chip{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;padding:2px 7px;border-radius:5px;white-space:nowrap}
+.act{height:30px;padding:0 10px;border:0;border-radius:7px;background:var(--raised);color:var(--ink);font-size:12.5px;display:inline-flex;align-items:center;gap:6px;text-decoration:none;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.act:hover{background:var(--raised2)}
+.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;padding:14px 22px;border-bottom:1px solid var(--line2)}
+.fact{display:flex;flex-direction:column;gap:2px;min-width:0}
+.fact .k{font-size:11.5px;color:var(--muted)}
+.fact .v{font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.codebox{margin:16px 22px 0;border-radius:10px;background:var(--bg);box-shadow:0 0 0 1px var(--line2);overflow:hidden;padding:6px 0}
+.cl{display:grid;grid-template-columns:40px minmax(0,1fr);font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px;line-height:23px;white-space:pre}
+.cl .n{color:var(--nv-ln);text-align:right;padding-right:12px}
+.cl.hl{background:var(--sug-tint)}
+.cl.hl .n{color:var(--sug-ink)}
+.foot{margin-top:auto;padding:12px 22px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.foot .chip{background:var(--raised);color:var(--ink2);font-size:11px}
+/* Header (source-sheet.tsx): the marker's kind tile (32px, its family's tint, the kind icon; marker-kind.tsx MarkerKindTile)
+   beside the kind label and chips, Back to unit, the title and the subtitle. */
+.shead{display:grid;grid-template-columns:32px minmax(0,1fr) auto;column-gap:10px;row-gap:4px;align-items:center}
+.tile{grid-row:span 3;align-self:start;margin-top:2px;width:32px;height:32px;box-sizing:border-box;border-radius:8px;display:inline-flex;align-items:center;justify-content:center}
+.tile .ki{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.tile .dash,.mk .dash{stroke-dasharray:3.2 3.2}
+.fam-neutral{background:var(--raised);color:var(--muted)}
+.fam-req{background:var(--req-tint);color:var(--req)}
+.fam-transient{background:transparent;border:1px dashed var(--line-strong);color:var(--muted)}
+/* Every action keeps its 28px look with a 44px hit area (::after). */
+.act{position:relative}
+.act::after{content:"";position:absolute;top:50%;left:50%;width:max(100%,46px);height:44px;transform:translate(-50%,-50%)}
+.act[aria-label="Copy path"]::after{width:44px;left:0;transform:translateY(-50%)}
+/* Rows (source-sheet.tsx ROW_MARK_ICON, 0ebdcef6): icon marks in the product's icon language, 15px, in the family's icon
+   colour (Eye observed in --agt, the assessment-gap icon for no evidence in --sug, File in --muted), in a 15px column; word
+   marks ("1 hop") stay text in a 48px column. The icon is decorative (aria-hidden): the status word carries the meaning. */
+.row2{display:grid;grid-template-columns:48px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 0}
+.row2.ico{grid-template-columns:15px minmax(0,1fr) auto}
+.mk{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.row2+.row2{border-top:1px solid var(--line2)}
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="width: 1440px; min-height: 1320px; box-sizing: border-box; padding: 48px 56px; background: var(--raised); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; align-content: start">
+
+<!-- Code · transient context -->
+<section class="sheet" aria-label="Code source sheet">
+<div class="sh-top">
+<div class="shead"><span class="tile fam-transient" aria-hidden="true"><svg class="ki" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"></path></svg></span><div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0"><span class="lbl">Code</span><span class="chip" style="box-shadow: inset 0 0 0 1px var(--line); color: var(--muted)">Unapproved · same batch</span></div><button type="button" class="act"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>Back to unit</button><h2 style="grid-column: span 2; margin: 0; font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -0.02em">invalidateByLink</h2><span class="mono" style="grid-column: 2 / span 2; font-size: 12px; color: var(--muted)">src/sessions/sessions.ts:12–14</span></div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap">
+<a href="#" class="act"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>VS Code</a>
+<a href="#" class="act">Cursor</a>
+<a href="#" class="act">Zed</a>
+<button type="button" class="act" aria-label="Copy path"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><rect x="8" y="8" width="13" height="13" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path></svg></button>
+</div>
+</div>
+<dl class="facts" style="margin: 0">
+<div class="fact"><dt class="k">Its unit</dt><dd class="v" style="margin: 0">Session invalidation by link</dd></div>
+<div class="fact"><dt class="k">Lane</dt><dd class="v" style="margin: 0; color: var(--req-fg)">Agentic review · changes requested</dd></div>
+<div class="fact"><dt class="k">Called from</dt><dd class="v mono" style="margin: 0; font-size: 12px">revoke.ts:23 · this unit</dd></div>
+<div class="fact"><dt class="k">Changed</dt><dd class="v" style="margin: 0">Unstaged · 4 min ago</dd></div>
+</dl>
+<div class="codebox">
+<sc-for list="{{codeLines}}" as="l" hint-placeholder-count="6"><div class="cl {{l.cls}}"><span class="n">{{l.no}}</span><span><sc-for list="{{l.toks}}" as="tk" hint-placeholder-count="3"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div></sc-for>
+</div>
+<p style="margin: 14px 22px 0; font-size: 13px; line-height: 20px; color: var(--ink2)">Explains the call on line 23. Approving the unit doesn’t approve this.</p>
+<div class="foot">Cited by<span class="chip">This unit</span><a href="#" class="act" style="margin-left: auto">Go to its unit<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></a></div>
+</section>
+
+<!-- Ticket -->
+<section class="sheet" aria-label="Ticket source sheet">
+<div class="sh-top">
+<div class="shead"><span class="tile fam-req" aria-hidden="true"><svg class="ki" viewBox="0 0 24 24"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></span><div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0"><span class="lbl">Ticket</span><span class="chip" style="background: var(--sug-tint); color: var(--sug-ink)">Pinned scope</span><span class="chip" style="background: var(--raised); color: var(--ink2)">In progress</span></div><button type="button" class="act"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>Back to unit</button><h2 style="grid-column: span 2; margin: 0; font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -0.02em">Revoke share links immediately</h2><span class="mono" style="grid-column: 2 / span 2; font-size: 12px; color: var(--muted)">SHR-212 · Linear</span></div>
+<div style="display: flex; gap: 6px"><a href="#" class="act"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>Open in Linear</a></div>
+</div>
+<dl class="facts" style="margin: 0">
+<div class="fact"><dt class="k">Owner</dt><dd class="v" style="margin: 0">Maya Chen</dd></div>
+<div class="fact"><dt class="k">Opened</dt><dd class="v" style="margin: 0">2026-09-22</dd></div>
+<div class="fact"><dt class="k">Conflicts with</dt><dd class="v" style="margin: 0; color: var(--req-fg)">7d1e0b4 · keep sessions alive</dd></div>
+</dl>
+<div style="padding: 16px 22px 0; display: flex; flex-direction: column; gap: 10px">
+<p style="margin: 0; font-size: 13.5px; line-height: 21px; padding: 8px 10px; border-radius: 8px; background: var(--sug-tint)">Revoking a link must end access immediately, including people who already have the document open.</p>
+<span class="lbl" style="padding-top: 6px">Done when</span>
+<div>
+<div class="row2 ico"><svg class="mk" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--agt)"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"></path><circle cx="12" cy="12" r="3"></circle></svg><span style="font-size: 13.5px">The old link is denied</span><span class="mono" style="font-size: 11px; color: var(--agt-fg)">observed</span></div>
+<div class="row2 ico"><svg class="mk" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--sug)"><path d="M10.1 2.182a10 10 0 0 1 3.8 0"></path><path d="M13.9 21.818a10 10 0 0 1-3.8 0"></path><path d="M17.609 3.721a10 10 0 0 1 2.69 2.7"></path><path d="M2.182 13.9a10 10 0 0 1 0-3.8"></path><path d="M20.279 17.609a10 10 0 0 1-2.7 2.69"></path><path d="M21.818 10.1a10 10 0 0 1 0 3.8"></path><path d="M3.721 6.391a10 10 0 0 1 2.7-2.69"></path><path d="M6.391 20.279a10 10 0 0 1-2.69-2.7"></path></svg><span style="font-size: 13.5px">Open sessions are denied</span><span class="mono" style="font-size: 11px; color: var(--sug-fg)">no evidence</span></div>
+</div>
+</div>
+<div class="foot">Cited by<span class="chip">Revoke cuts off open sessions</span><span class="chip">Session invalidation by link</span></div>
+</section>
+
+<!-- History -->
+<section class="sheet" aria-label="History source sheet">
+<div class="sh-top">
+<div class="shead"><span class="tile fam-neutral" aria-hidden="true"><svg class="ki" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></span><div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0"><span class="lbl">History</span><span class="chip" style="background: var(--raised); color: var(--ink2)">Regression</span></div><button type="button" class="act"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>Back to unit</button><h2 style="grid-column: span 2; margin: 0; font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -0.02em">Hotfix: deny revoked links served from cache</h2><span class="mono" style="grid-column: 2 / span 2; font-size: 12px; color: var(--muted)">2c88f10 · 2026-03-04 · INC-41</span></div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap"><a href="#" class="act">Show commit</a><a href="#" class="act"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>INC-41</a></div>
+</div>
+<dl class="facts" style="margin: 0">
+<div class="fact"><dt class="k">Author</dt><dd class="v" style="margin: 0">Maya Chen</dd></div>
+<div class="fact"><dt class="k">Reviewed</dt><dd class="v" style="margin: 0">Human-required · approved</dd></div>
+</dl>
+<div style="padding: 16px 22px 0; display: flex; flex-direction: column; gap: 10px">
+<p style="margin: 0; font-size: 13.5px; line-height: 21px; padding: 8px 10px; border-radius: 8px; background: var(--sug-tint)">Revoked links still opened when the viewer was served from cache.</p>
+<div>
+<div class="row2 ico"><svg class="mk" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--muted)"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg><span class="mono" style="font-size: 12.5px">src/routes/open.ts</span><span class="mono" style="font-size: 11px"><span style="color: var(--add-fg)">+6</span> <span style="color: var(--del-fg)">−1</span></span></div>
+<div class="row2 ico"><svg class="mk" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--muted)"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg><span class="mono" style="font-size: 12.5px">test/routes/open.test.ts</span><span class="mono" style="font-size: 11px"><span style="color: var(--add-fg)">+18</span></span></div>
+</div>
+<p style="margin: 0; font-size: 13px; line-height: 20px; color: var(--ink2)">This unit moves that check into canOpen. The route check may now be redundant.</p>
+</div>
+<div class="foot">Cited by<span class="chip">This unit</span></div>
+</section>
+
+<!-- Graph -->
+<section class="sheet" aria-label="Graph source sheet">
+<div class="sh-top">
+<div class="shead"><span class="tile fam-neutral" aria-hidden="true"><svg class="ki" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></span><div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0"><span class="lbl">Graph</span><span class="chip" style="background: var(--raised); color: var(--ink2)">Committed · 9c04e1a</span></div><button type="button" class="act"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M19 12H5M12 19l-7-7 7-7"></path></svg>Back to unit</button><h2 style="grid-column: span 2; margin: 0; font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -0.02em">Readers of link.version</h2><span class="mono" style="grid-column: 2 / span 2; font-size: 12px; color: var(--muted)">incoming · CALLS · depth 2</span></div>
+</div>
+<dl class="facts" style="margin: 0">
+<div class="fact"><dt class="k">Readers</dt><dd class="v" style="margin: 0">4 within 2 hops</dd></div>
+<div class="fact"><dt class="k">Coverage</dt><dd class="v" style="margin: 0; color: var(--sug-fg)">1 edge unresolved</dd></div>
+</dl>
+<div style="padding: 6px 22px 0">
+<sc-for list="{{readers}}" as="r" hint-placeholder-count="4">
+<div class="row2"><span class="mono" style="font-size: 10.5px; color: {{r.ink}}">{{r.hop}}</span><span style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><span class="mono" style="font-size: 12.5px; color: {{r.nameInk}}">{{r.name}}</span><span class="mono" style="font-size: 11px; color: var(--muted)">{{r.path}}</span></span><a href="#" class="act" aria-label="{{r.aria}}" style="height: 26px; padding: 0 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg></a></div>
+</sc-for>
+</div>
+<p style="margin: 10px 22px 0; font-size: 13px; line-height: 20px; color: var(--ink2)">Committed tree only. Same-batch hunks aren’t in this graph.</p>
+<div class="foot">Cited by<span class="chip">This unit</span><span class="chip">Link list shows revoked state</span></div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1320}}'>
+var KW = /^(export|async|function|const|await|return|if|import|from|let|new|true|false|null|expect)$/;
+function tokenize(code) {
+  var out = [];
+  var re = /(\/\/.*$)|('[^']*'|"[^"]*"|`[^`]*`)|([A-Za-z_$][\w$]*)(?=\s*\()|([A-Za-z_$][\w$]*)|(\d+)|(\s+)|([^\sA-Za-z_$\d'"`]+)/g;
+  var m;
+  while ((m = re.exec(code))) {
+    if (m[1]) out.push({ t: m[1], c: 'cm' });
+    else if (m[2]) out.push({ t: m[2], c: 'st' });
+    else if (m[3]) out.push({ t: m[3], c: KW.test(m[3]) ? 'kw' : 'fn' });
+    else if (m[4]) out.push({ t: m[4], c: KW.test(m[4]) ? 'kw' : 'id' });
+    else if (m[5]) out.push({ t: m[5], c: 'nu' });
+    else out.push({ t: m[0], c: 'pl' });
+  }
+  return out;
+}
+
+var CODE = [[10, "import { store } from './store';", 0], [11, '', 0], [12, 'export async function invalidateByLink(linkId) {', 1], [13, '  await store.deleteWhere({ linkId });', 1], [14, '}', 1], [15, '', 0]];
+var READERS = [['1 hop', 'canOpen', 'src/sharing/access-policy.ts:41'], ['2 hops', 'openSharedDocument', 'src/routes/open.ts:12'], ['1 hop', 'exportLinkReport', 'src/reports/links.ts:30'], ['1 hop', 'syncLinkCache · unresolved', 'src/cache/links.ts:8']];
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      theme: this.props.theme ?? 'light',
+      codeLines: CODE.map(function (c) { return { no: c[0], toks: tokenize(c[1]), cls: c[2] ? 'hl' : '' }; }),
+      // the unresolved reader is missing evidence: its hop mark in amber (sug); the name stays ink, as source-sheet.tsx tones a
+      // label only for req in a mono block
+      readers: READERS.map(function (r) { var gap = /unresolved/.test(r[1]); return { hop: r[0], name: r[1], path: r[2], aria: 'Open ' + r[2] + ' in editor', ink: gap ? 'var(--sug-fg)' : 'var(--muted)', nameInk: 'var(--ink)' }; })
+    };
+  }
+}
+</script>
+</body>
+</html>

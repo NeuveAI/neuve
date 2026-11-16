@@ -1,0 +1,13 @@
+{
+  "project": "tigerbeetle/tigerbeetle",
+  "source": "https://github.com/tigerbeetle/tigerbeetle",
+  "commit": "532c8b70b9142c17e07737ab6d3da68d7500cbca",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/tigerbeetle/tigerbeetle/532c8b70b9142c17e07737ab6d3da68d7500cbca/LICENSE",
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+    }
+  ]
+}

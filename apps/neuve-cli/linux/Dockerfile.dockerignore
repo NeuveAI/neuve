@@ -1,0 +1,15 @@
+# The build needs the workspace's sources, its lockfile and the Graph submodule's Go sources.
+**/node_modules
+**/.git
+.scratchpad
+.audit
+/dist
+apps/neuve-cli/dist
+apps/neuve-graph/entire-graph
+design
+research
+validation
+neuve
+**/.env*
+.claude
+debug

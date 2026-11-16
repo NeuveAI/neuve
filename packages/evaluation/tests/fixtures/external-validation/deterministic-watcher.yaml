@@ -1,0 +1,113 @@
+schema_version: 1
+case_id: neuve-effect-deterministic-watcher
+status: candidate
+language: TypeScript
+
+target:
+  positive_revision: a75644f83d6cec8e8555caddbce6d363861db05d
+  parent_revision: 173fd1082c77e76416006a2f7a39515a4d7c8fdf
+  file: apps/embeds/server/services/browsing-agent-loop.ts
+  symbol: runWithOptionalCommandQueueWatcher
+
+questions:
+  authoritative: >-
+    How does runWithOptionalCommandQueueWatcher bypass both the watcher
+    and run effect for deterministic execution while preserving watcher
+    semantics for the non-deterministic path, and which production caller
+    and parity checks establish both branches?
+  sensitivity_paraphrase: >-
+    Where does deterministic browsing skip the command watcher and run
+    effect, while ordinary browsing still runs under the watcher?
+
+required_retrieval:
+  - role: target_branch
+    path: apps/embeds/server/services/browsing-agent-loop.ts
+    symbol: runWithOptionalCommandQueueWatcher
+  - role: watcher_delegate
+    path: apps/embeds/server/services/runner-loop-kernel.ts
+    symbol: withCommandQueueWatcher
+  - role: production_caller
+    path: apps/embeds/server/services/browsing-agent-loop.ts
+    symbol: runBrowsingAgentLoop
+  - role: parity_checks
+    path: apps/embeds/server/services/__tests__/browsing-agent-loop-kernel-parity.test.ts
+    lines:
+      start: 6
+      end: 56
+
+required_relationships:
+  - id: wrapper-calls-watcher
+    relation: CALLS
+    accepted_resolutions: [exact, import_resolved]
+    from:
+      path: apps/embeds/server/services/browsing-agent-loop.ts
+      symbol: runWithOptionalCommandQueueWatcher
+    to:
+      path: apps/embeds/server/services/runner-loop-kernel.ts
+      symbol: withCommandQueueWatcher
+  - id: loop-calls-wrapper
+    relation: CALLS
+    resolution: exact
+    from:
+      path: apps/embeds/server/services/browsing-agent-loop.ts
+      symbol: runBrowsingAgentLoop
+    to:
+      path: apps/embeds/server/services/browsing-agent-loop.ts
+      symbol: runWithOptionalCommandQueueWatcher
+behavioral_obligations:
+  - When usedDeterministicExecution is true, the function returns a null effect without running the supplied effect or watcher.
+  - When usedDeterministicExecution is false, the function delegates to withCommandQueueWatcher and preserves its pending-flag behavior.
+  - The pinned parity region calls runWithOptionalCommandQueueWatcher once for each branch and checks both outcomes.
+  - The wrapper-to-watcher CALLS relationship is exercised only by the non-deterministic branch; this is behavioral context, not a structural relationship condition.
+
+revision_controls:
+  - id: parent-before-parity-check
+    revision: 173fd1082c77e76416006a2f7a39515a4d7c8fdf
+    source_assertions:
+      - id: wrapper-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-agent-loop.ts
+        region: { start: 300, end: 370 }
+        literal: export const runWithOptionalCommandQueueWatcher
+        expected: present
+      - id: parity-file
+        kind: file
+        path: apps/embeds/server/services/__tests__/browsing-agent-loop-kernel-parity.test.ts
+        expected: absent
+    retrieval:
+      present: [target_branch, watcher_delegate, production_caller]
+      absent: [parity_checks]
+    relationships:
+      present: [wrapper-calls-watcher, loop-calls-wrapper]
+      absent: []
+  - id: ownership-comparison-before-loop-wrapper
+    revision: 7ec57c5bf14463829727e3b8d74a4daf8b2eceed
+    source_assertions:
+      - id: wrapper-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-agent-loop.ts
+        region: { start: 280, end: 380 }
+        literal: runWithOptionalCommandQueueWatcher
+        expected: absent
+      - id: production-caller-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-agent-loop.ts
+        region: { start: 2430, end: 2480 }
+        literal: export const runBrowsingAgentLoop
+        expected: present
+      - id: watcher-delegate-literal
+        kind: literal
+        path: apps/embeds/server/services/runner-loop-kernel.ts
+        region: { start: 1, end: 70 }
+        literal: export const withCommandQueueWatcher
+        expected: present
+    retrieval:
+      present: [watcher_delegate, production_caller]
+      absent: [target_branch, parity_checks]
+    relationships:
+      present: []
+      absent: [wrapper-calls-watcher, loop-calls-wrapper]
+
+known_lexical_baseline:
+  verdict: fail
+  reason: The current provider retrieves the target and nearby test but does not classify a verified direct-support path.

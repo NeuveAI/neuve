@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Review delivery settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). Focus rings use --dt-ring (--nv-engaged-ring,
+   3:1 or better) until the code's --nv-focus is raised to 3:1 (focus-token task). */
+button,a{font:inherit;color:inherit}
+button{cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--dt-ring);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.help{margin:0;font-size:13px;line-height:19px;color:var(--muted);max-width:540px}
+
+/* app header (app-header.tsx AppHeader, current="settings"; no review batch, so brand, Settings and theme only) */
+.apphead{min-height:56px;display:flex;align-items:center;gap:16px;padding:8px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap;box-sizing:border-box}
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:17px;letter-spacing:-0.02em;color:var(--ink);text-decoration:none;border-radius:6px}
+.ic{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.iconbtn{position:relative;width:36px;height:36px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;text-decoration:none;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.iconbtn::after{content:"";position:absolute;inset:-4px}
+.iconbtn:hover{background:var(--raised);color:var(--ink)}
+.iconbtn[aria-current="page"]{background:var(--raised);color:var(--ink)}
+
+/* section nav (settings-screen.tsx): the eyebrow names the section, the current one marked */
+.secnav{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 8px}
+.secnav ul{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:0 12px}
+.seclink{position:relative;color:var(--muted);text-decoration:none;border-radius:4px;transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.seclink::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+.seclink:hover{color:var(--ink)}
+
+/* the delivery glyph (round 6, one glyph language): four ascending ticks, filled up to the stop; hollow ones in
+   --line-strong (3:1), stepping to --nv-muted on a raised fill. Static here: the dial's stops don't animate their ticks. */
+.ticks{display:flex;align-items:flex-end;gap:2px;height:14px}
+.ticks i{position:relative;display:block;width:4px;box-sizing:border-box;border-radius:1px;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.ticks i b{position:absolute;inset:0;border-radius:1px;background:currentColor;opacity:0}
+.ticks i b.f{opacity:1}
+
+/* the main dial (shared/delivery-dial.tsx, size large): 2×2 until its own container is 520px wide (@min-[520px]/dial),
+   then four across with the travelling thumb */
+.dialwrap{container:dial/inline-size;width:100%}
+.bigdial{position:relative;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:4px;border-radius:14px;background:var(--raised)}
+.bigdial .thumb{display:none;position:absolute;top:4px;left:4px;bottom:4px;width:calc((100% - 8px) / 4);border-radius:11px;background:var(--surface);box-shadow:var(--shadow-thumb);transition:transform var(--nv-spring-snappy-dur) var(--nv-spring-snappy)}
+.bstop{position:relative;z-index:1;display:flex;flex-direction:column;gap:6px;min-height:44px;padding:14px 14px 16px;border-radius:11px;cursor:pointer;color:var(--muted);transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.bstop:hover{color:var(--ink2)}
+.bstop.on{color:var(--ink);background:var(--surface);box-shadow:var(--shadow-thumb)}
+/* the big dial sits on --raised, where --line-strong drops under 3:1 in dark: its hollow ticks take --nv-muted, as the title
+   glyph's do on a raised fill */
+.bigdial .ticks i{box-shadow:inset 0 0 0 1px var(--nv-muted)}
+@container dial (min-width:520px){.bigdial{grid-template-columns:repeat(4,minmax(0,1fr))}.bigdial .thumb{display:block}.bstop.on{background:transparent;box-shadow:none}}
+.bstop input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.bstop:has(input:focus-visible){outline:2px solid var(--dt-ring);outline-offset:1px}
+.bstop .nm{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:600;letter-spacing:-0.01em}
+.bstop .ds{font-size:12.5px;line-height:17px;color:var(--muted)}
+
+/* language refinements: subordinate */
+.lrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;align-items:center;padding:12px 14px;border-top:1px solid var(--line2);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.lrow:first-child{border-top:0}
+.lrow:hover{background:var(--bg)}
+.lrow.sel{background:var(--bg)}
+.lname{position:relative;border:0;background:transparent;padding:0;text-align:left;display:flex;align-items:baseline;gap:10px;min-width:0;flex-wrap:wrap;justify-self:start;border-radius:4px}
+.lname::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+.minidial{position:relative;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:max-content;max-width:100%;padding:2px;border-radius:8px;background:var(--raised)}
+.minidial .thumb{position:absolute;top:2px;left:2px;width:calc((100% - 4px) / 4);height:26px;border-radius:6px;background:var(--surface);box-shadow:var(--shadow-thumb);transition:transform var(--nv-spring-snappy-dur) var(--nv-spring-snappy),background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),box-shadow var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+/* following the default: an outline thumb, in --nv-muted (the code's --line-strong outline is 2.99:1 on --raised in dark) */
+.minidial.follows .thumb{background:transparent;box-shadow:inset 0 0 0 1px var(--nv-muted)}
+.mstop{position:relative;z-index:1;min-width:0;height:26px;padding:0 12px;white-space:nowrap;display:flex;align-items:center;justify-content:center;font-size:11.5px;color:var(--muted);border-radius:6px;cursor:pointer}
+.mstop::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+.mstop.on{color:var(--ink);font-weight:500}
+/* the hidden medium-weight copy reserves the selected width, so choosing a stop never resizes the dial (code: LABEL_RESERVE) */
+.mlbl{display:inline-grid}
+.mlbl::after{content:attr(data-text);visibility:hidden;height:0;overflow:hidden;font-weight:500}
+.minidial.follows .mstop.on{color:var(--muted);font-weight:400}
+.mstop input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.mstop:has(input:focus-visible){outline:2px solid var(--dt-ring);outline-offset:1px}
+.tag{font-size:12px;color:var(--muted)}
+.reset{position:relative;border:0;background:transparent;padding:2px 4px;border-radius:4px;font-size:12px;color:var(--muted);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--line-strong)}
+.reset::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+.reset:hover{color:var(--ink)}
+.addlang{position:relative;height:32px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:13px;display:inline-flex;align-items:center;gap:6px;cursor:not-allowed}
+.addlang::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+@media (max-width:639px){.mstop{padding:0 8px}.lrow{grid-template-columns:minmax(0,1fr)}}
+
+/* preview: same layer mechanics as the desk (the preview's motion waits on approval of the phased choreography; unchanged) */
+.lay{display:grid;grid-template-rows:0fr;opacity:0;visibility:hidden;transition:grid-template-rows var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate),opacity var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate),visibility 0s var(--nv-ease-linear) var(--nv-dur-delivery-exit)}
+.lay>.in{overflow:hidden;min-height:0}
+.lay.on{grid-template-rows:1fr;opacity:1;visibility:visible;transition:grid-template-rows var(--nv-spring-responsive-dur) var(--nv-spring-responsive) var(--d,0ms),opacity var(--nv-dur-card) var(--nv-ease-standard-decelerate) var(--d,0ms),visibility 0s var(--nv-ease-linear) 0s}
+.kid{transform:translateY(var(--nv-offset-rise));opacity:0;transition:transform var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate),opacity var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate)}
+.lay.on .kid{transform:none;opacity:1;transition:transform var(--nv-spring-responsive-dur) var(--nv-spring-responsive) calc(var(--d,0ms) + var(--nv-dur-delivery-children) + var(--k,0) * var(--nv-dur-delivery-child-stagger)),opacity var(--nv-dur-card) var(--nv-ease-standard-decelerate) calc(var(--d,0ms) + var(--nv-dur-delivery-children) + var(--k,0) * var(--nv-dur-delivery-child-stagger))}
+.mark{transform:scale(var(--nv-scale-mark));opacity:0;transition:transform var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate),opacity var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate)}
+.lay.on .mark{transform:none;opacity:1;transition:transform var(--nv-spring-snappy-dur) var(--nv-spring-snappy) calc(var(--d,0ms) + var(--nv-dur-delivery-mark) + var(--k,0) * var(--nv-dur-delivery-mark-stagger)),opacity var(--nv-dur-card) var(--nv-ease-standard-decelerate) calc(var(--d,0ms) + var(--nv-dur-delivery-mark) + var(--k,0) * var(--nv-dur-delivery-mark-stagger))}
+/* skeleton (delivery-preview.tsx): bars on --line, boxes and the title on --raised-2 */
+.b{display:block;height:7px;border-radius:4px;background:var(--line)}
+.b2{background:var(--raised2)}
+.pv{border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card);padding:18px;box-sizing:border-box;display:flex;flex-direction:column}
+.pvsec{border-radius:9px;background:var(--bg);padding:10px 12px;display:flex;flex-direction:column;gap:7px}
+.cdot{flex:0 0 auto;width:4px;height:4px;border-radius:50%;background:var(--faint)}
+.mnd{display:inline-block;height:14px;border-radius:4px;background:var(--raised2)}
+.dot{width:12px;height:12px;border-radius:6px;flex:0 0 auto}
+/* the suggested review in miniature (round 4.2; delivery-preview.tsx): a plain surface card ringed in --nv-line, holding the
+   full-size review mark (shared/review-mark.tsx, sent=false, changes_requested), which carries the dashed edge, then skeleton bars */
+/* the ring is drawn inset: the layer clips at the card's edge, so an outset ring would lose its sides and bottom */
+.sugcard{margin-top:10px;display:flex;flex-direction:column;gap:8px;border-radius:10px;background:var(--surface);padding:10px 12px;box-shadow:inset 0 0 0 1px var(--nv-line)}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:2px 9px;border:1px dashed var(--line-strong);border-radius:7px;font-size:13.5px;line-height:20px;color:var(--ink);white-space:nowrap}
+.pill b{font-weight:600}
+.pill svg{width:12px;height:12px;flex:0 0 auto;fill:none;stroke:var(--req);stroke-width:2.8;stroke-linecap:round;stroke-linejoin:round}
+/* the preview label: the old one leaves, then the new one enters (AnimatePresence mode="wait"); a and b restart the pair */
+.pvlbl{display:inline-grid;justify-items:end}
+.pvlbl>span{grid-area:1/1}
+.lo-a{animation:lOutA var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate) both}.lo-b{animation:lOutB var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate) both}
+.li-a{animation:lInA var(--nv-dur-card) var(--nv-ease-standard-decelerate) var(--nv-dur-delivery-exit) both}.li-b{animation:lInB var(--nv-dur-card) var(--nv-ease-standard-decelerate) var(--nv-dur-delivery-exit) both}
+@keyframes lOutA{from{opacity:1}to{opacity:0}}@keyframes lOutB{from{opacity:1}to{opacity:0}}
+@keyframes lInA{from{opacity:0;transform:translateY(var(--nv-offset-label))}to{opacity:1;transform:none}}@keyframes lInB{from{opacity:0;transform:translateY(var(--nv-offset-label))}to{opacity:1;transform:none}}
+.rm .lay,.rm .lay.on{transition:opacity var(--nv-dur-reduced) var(--nv-ease-out),visibility 0s}
+.rm .kid,.rm .lay.on .kid,.rm .mark,.rm .lay.on .mark{transform:none;transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}
+.rm .thumb,.rm .iconbtn{transition:none}
+.rm .lo-a,.rm .lo-b{animation-duration:var(--nv-dur-reduced);animation-timing-function:var(--nv-ease-out)}
+.rm .li-a{animation:lFadeA var(--nv-dur-reduced) var(--nv-ease-out) var(--nv-dur-reduced) both}.rm .li-b{animation:lFadeB var(--nv-dur-reduced) var(--nv-ease-out) var(--nv-dur-reduced) both}
+@keyframes lFadeA{from{opacity:0}to{opacity:1}}@keyframes lFadeB{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.lay,.lay.on{transition:opacity var(--nv-dur-reduced) var(--nv-ease-out),visibility 0s}.kid,.lay.on .kid,.mark,.lay.on .mark{transform:none;transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}.thumb,.iconbtn{transition:none}
+  .lo-a,.lo-b{animation-duration:var(--nv-dur-reduced);animation-timing-function:var(--nv-ease-out)}.li-a{animation:lFadeA var(--nv-dur-reduced) var(--nv-ease-out) var(--nv-dur-reduced) both}.li-b{animation:lFadeB var(--nv-dur-reduced) var(--nv-ease-out) var(--nv-dur-reduced) both}}
+</style>
+</helmet>
+<div class="theme-{{theme}} {{rmCls}}" style="--dt-ring: var(--nv-engaged-ring); min-height: 1000px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<header class="apphead">
+<a class="brand" href="Overview.dc.html" aria-label="Neuve — back to the review batch"><svg width="20" height="20" viewBox="0 0 306 306" aria-hidden="true" style="flex: 0 0 auto"><path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M274.399 177.261a14.268 14.268 0 0 1-.035 20.492l-43.099 42.02c-5.794 5.649-15.171 5.634-20.945-.035a14.27 14.27 0 0 1 .036-20.492l43.099-42.02c5.793-5.648 15.171-5.633 20.944.035Z M194.043 255.205a14.256 14.256 0 0 1 0 20.303l-.29.287c-5.663 5.607-14.844 5.607-20.506 0a14.255 14.255 0 0 1 0-20.303l.29-.287c5.663-5.607 14.843-5.607 20.506 0Z M235.26 142.126a14.222 14.222 0 0 1 .014 20.374L126.251 269.687c-5.726 5.629-15.017 5.636-20.751.012a14.222 14.222 0 0 1-.014-20.374L214.51 142.139c5.725-5.63 15.016-5.636 20.75-.013Z M274.754 102.932a14.256 14.256 0 0 1 0 20.303l-.29.286c-5.663 5.607-14.844 5.607-20.506 0a14.255 14.255 0 0 1 0-20.303l.29-.286c5.663-5.607 14.843-5.607 20.506 0Z M122.738 182.202a14.063 14.063 0 0 1-.037 20.203l-40.47 39.429c-5.716 5.568-14.967 5.553-20.662-.036a14.063 14.063 0 0 1 .037-20.203l40.47-39.429c5.717-5.568 14.967-5.553 20.662.036ZM246.931 60.217a14.208 14.208 0 0 1 0 20.359l-84.791 83.207c-5.729 5.623-15.017 5.623-20.746 0a14.205 14.205 0 0 1 0-20.358l84.791-83.209c5.729-5.622 15.017-5.622 20.746 0Z M53.063 177.205a14.256 14.256 0 0 1 0 20.303l-.29.287c-5.663 5.607-14.844 5.607-20.507 0a14.256 14.256 0 0 1 0-20.303l.29-.287c5.663-5.607 14.844-5.607 20.507 0Z M201.475 31.213a14.222 14.222 0 0 1 .014 20.374L92.466 158.774c-5.726 5.629-15.017 5.636-20.751.012a14.222 14.222 0 0 1-.014-20.374L180.724 31.226c5.726-5.63 15.017-5.636 20.751-.013ZM94.4 65.261a14.268 14.268 0 0 1-.036 20.492l-43.099 42.02c-5.794 5.649-15.171 5.634-20.945-.035a14.27 14.27 0 0 1 .036-20.492l43.099-42.02c5.793-5.648 15.17-5.633 20.945.035Z M130.832 31.205a14.255 14.255 0 0 1 0 20.303l-.29.287c-5.663 5.607-14.844 5.607-20.506 0a14.255 14.255 0 0 1 0-20.303l.29-.287c5.663-5.607 14.844-5.607 20.506 0Z"></path></svg>Neuve</a>
+<div style="flex: 1 1 auto"></div>
+<a class="iconbtn" href="#" aria-label="Settings" aria-current="page" title="Settings"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></a>
+<button type="button" class="iconbtn" onClick="{{toggleTheme}}" aria-label="{{themeLabel}}">
+<sc-if value="{{isLight}}" hint-placeholder-val="{{true}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg></sc-if>
+<sc-if value="{{isDark}}" hint-placeholder-val="{{false}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg></sc-if>
+</button>
+</header>
+<main style="max-width: 1240px; margin: 0 auto; padding: 48px 24px 64px; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px">
+<nav aria-label="Settings sections" class="lbl secnav"><span>Workspace settings</span><span aria-hidden="true">·</span><ul><li><a class="seclink" href="#" aria-current="page">Review delivery</a></li></ul></nav>
+<div style="display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start">
+
+<div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 48px">
+
+<section aria-labelledby="review-delivery-title" style="display: flex; flex-direction: column; gap: 20px">
+<div style="display: flex; flex-direction: column; gap: 8px">
+<h1 id="review-delivery-title" style="margin: 0; font-size: 32px; line-height: 38px; font-weight: 600; letter-spacing: -0.025em">Review delivery</h1>
+<p class="help" style="font-size: 14px; line-height: 21px">How much each review explains before anyone reads the code. Every stop keeps the same cited facts.</p>
+</div>
+<div class="dialwrap"><div role="radiogroup" aria-label="Review delivery for this workspace" class="bigdial">
+<span class="thumb" aria-hidden="true" style="transform: translateX({{bigX}})"></span>
+<sc-for list="{{bigStops}}" as="s" hint-placeholder-count="4">
+<label class="bstop {{s.cls}}"><input type="radio" name="ws-default" value="{{s.id}}" checked="{{s.on}}" onChange="{{s.pick}}"><span class="nm"><span class="ticks" aria-hidden="true"><sc-for list="{{s.ticks}}" as="t" hint-placeholder-count="4"><i style="height: {{t.h}}px"><b class="{{t.cls}}"></b></i></sc-for></span>{{s.label}}</span><span class="ds">{{s.desc}}</span></label>
+</sc-for>
+</div></div>
+<p style="margin: 0; font-size: 12px; line-height: 17px; color: var(--muted)">This is a sample setting. It’s saved in this browser only and isn’t shared with your workspace.</p>
+</section>
+
+<section aria-labelledby="refine-by-language-title" style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap">
+<div style="display: flex; flex-direction: column; gap: 4px"><h2 id="refine-by-language-title" style="margin: 0; font-size: 15px; font-weight: 600">Refine by language</h2><p class="help">{{refineHelp}}</p></div>
+<span class="mono" style="font-size: 11.5px; color: var(--muted)">{{refinedCount}}</span>
+</div>
+<ul style="margin: 0; padding: 0; list-style: none; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); overflow: hidden">
+<sc-for list="{{langs}}" as="l" hint-placeholder-count="4">
+<li class="lrow {{l.cls}}">
+<button type="button" class="lname" onClick="{{l.preview}}" aria-label="Preview {{l.name}}" aria-pressed="{{l.pressed}}"><span style="font-size: 14px; font-weight: 500">{{l.name}}</span><span class="mono tag">{{l.ext}}</span></button>
+<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+<sc-if value="{{l.follows}}" hint-placeholder-val="{{true}}"><span class="tag" id="follows-{{l.id}}">Follows default</span></sc-if>
+<sc-if value="{{l.refined}}" hint-placeholder-val="{{false}}"><button type="button" class="reset" onClick="{{l.reset}}" aria-label="Reset {{l.name}} to the workspace default">Reset</button></sc-if>
+<div role="radiogroup" aria-label="{{l.name}} delivery" aria-describedby="{{l.describedBy}}" class="minidial {{l.dialCls}}">
+<span class="thumb" aria-hidden="true" style="transform: translateX(calc({{l.x}} * 100%))"></span>
+<sc-for list="{{l.stops}}" as="m" hint-placeholder-count="4"><label class="mstop {{m.cls}}"><input type="radio" name="{{l.group}}" value="{{m.id}}" checked="{{m.on}}" onChange="{{m.pick}}"><span class="mlbl" data-text="{{m.label}}">{{m.label}}</span></label></sc-for>
+</div>
+</div>
+</li>
+</sc-for>
+</ul>
+<div><button type="button" class="addlang" aria-disabled="true" title="Not available in this sample"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Add a language</button></div>
+</section>
+</div>
+
+<aside aria-label="Preview" style="flex: 1 1 380px; min-width: 0; max-width: 460px; position: sticky; top: 24px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px"><span class="lbl">Preview</span><span class="pvlbl mono" style="font-size: 11.5px; color: var(--muted)"><sc-if value="{{hasOld}}" hint-placeholder-val="{{false}}"><span class="{{oldCls}}" aria-hidden="true">{{oldLabel}}</span></sc-if><span class="{{newCls}}">{{pvLabel}}</span></span></div>
+<div class="pv" role="img" aria-label="{{pvName}}">
+<div style="display: flex; align-items: center; gap: 6px"><svg width="8" height="8" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg><span class="b" style="width: 90px; height: 6px"></span></div>
+<div style="padding-top: 12px"><span class="b b2" style="width: 62%; height: 10px"></span></div>
+
+<div class="lay {{p1}}" style="--d: 0ms"><div class="in"><div class="kid" style="padding-top: 10px; display: flex; align-items: center; gap: 6px"><span class="b" style="width: 72%"></span><span class="mnd" style="width: 14px; height: 10px; background: var(--sug-tint)"></span></div></div></div>
+<div class="lay {{p2}}" style="--d: 0ms"><div class="in"><div class="kid" style="padding-top: 10px; display: flex; flex-direction: column; gap: 6px"><span style="display: flex; gap: 6px; align-items: center"><span class="cdot"></span><span class="b" style="width: 62%"></span><span class="mnd" style="width: 14px; height: 10px; background: var(--sug-tint)"></span></span><span style="display: flex; gap: 6px; align-items: center"><span class="cdot"></span><span class="b" style="width: 84%"></span></span><span style="display: flex; gap: 6px; align-items: center"><span class="cdot"></span><span class="b" style="width: 46%"></span><span class="mnd" style="width: 14px; height: 10px; background: var(--sug-tint)"></span></span></div></div></div>
+
+<div class="lay {{p3}}" style="--d: var(--nv-dur-delivery-layer)"><div class="in"><div style="padding-top: 10px; display: flex; flex-direction: column; gap: 12px"><div style="display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 0 12px"><span class="kid" style="--k: 0; display: flex; flex-direction: column; gap: 6px"><span class="lbl" style="font-size: 9.5px">Before</span><span class="b" style="width: 92%; opacity: .6"></span><span class="b" style="width: 56%; opacity: .6"></span></span><span class="kid" style="--k: 1; display: flex; flex-direction: column; gap: 6px"><span class="lbl" style="font-size: 9.5px">After</span><span class="b" style="width: 96%"></span><span class="b" style="width: 88%"></span><span class="b" style="width: 40%"></span></span></div><span class="kid" style="--k: 2; display: flex; gap: 6px; align-items: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 10 5 5-5 5"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/></svg><span class="b" style="width: 22%; height: 5px; background: var(--sug-tint)"></span><span class="b" style="width: 30%; height: 5px; background: var(--sug-tint)"></span></span><div style="display: flex; flex-direction: column; gap: 6px"><span class="lbl kid" style="--k: 3; font-size: 9.5px">{{termsLabel}}</span><span class="kid" style="--k: 4; display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px"><span style="display: flex; flex-direction: column; gap: 4px"><span class="mnd" style="width: 46px"></span><span class="b" style="width: 78%; height: 5px"></span></span><span style="display: flex; flex-direction: column; gap: 4px"><span class="mnd" style="width: 32px"></span><span class="b" style="width: 64%; height: 5px"></span></span></span></div></div></div></div>
+
+<div class="lay {{p4}}" style="--d: var(--nv-dur-delivery-guided)"><div class="in"><div class="pvsec kid" style="--k: 0; margin-top: 10px"><span class="lbl" style="font-size: 9.5px">Done when</span>
+<span style="display: flex; gap: 8px; align-items: center"><span class="dot mark" style="--k: 0; background: var(--agt-tint); box-shadow: inset 0 0 0 1.5px var(--agt-fg)"></span><span class="b" style="width: 70%"></span></span>
+<span style="display: flex; gap: 8px; align-items: center"><span class="dot mark" style="--k: 1; background: var(--req-tint); box-shadow: inset 0 0 0 1.5px var(--req)"></span><span class="b" style="width: 58%"></span></span>
+<span style="display: flex; gap: 8px; align-items: center"><span class="dot mark" style="--k: 2; background: var(--sug-tint); box-shadow: inset 0 0 0 1.5px var(--sug)"></span><span class="b" style="width: 48%"></span></span>
+</div></div></div>
+
+<div class="lay {{pCode}}" style="--d: 0ms"><div class="in"><div class="kid" style="margin-top: 12px; border-radius: 8px; background: var(--raised); display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; box-sizing: border-box" aria-hidden="true">
+<span style="display: flex; gap: 4px"><sc-for list="{{codeA}}" as="t" hint-placeholder-count="3"><span class="b b2" style="width: {{t}}; height: 6px"></span></sc-for></span>
+<span style="display: flex; gap: 4px; padding-left: 14px"><sc-for list="{{codeB}}" as="t" hint-placeholder-count="3"><span class="b b2" style="width: {{t}}; height: 6px"></span></sc-for></span>
+<span style="display: flex; gap: 4px; padding-left: 14px"><sc-for list="{{codeC}}" as="t" hint-placeholder-count="2"><span class="b b2" style="width: {{t}}; height: 6px"></span></sc-for></span>
+</div></div></div>
+
+<div class="lay {{p4}}" style="--d: calc(var(--nv-dur-delivery-guided) + var(--nv-dur-delivery-verdict) - var(--nv-dur-delivery-children))"><div class="in"><div class="sugcard kid"><span style="display: flex; align-items: center; gap: 8px"><span class="pill"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg><span><b>Suggested</b> · request changes</span></span><span class="b" style="width: 40px"></span></span><span class="b" style="width: 70%; height: 5px"></span></div></div></div>
+
+<div style="margin-top: 14px; align-self: center; height: 30px; padding: 0 12px; border-radius: 10px; background: var(--dock); display: flex; align-items: center; gap: 10px" aria-hidden="true"><span style="width: 44px; height: 6px; border-radius: 3px; background: var(--dock-muted)"></span><span style="width: 52px; height: 18px; border-radius: 6px; background: var(--accent)"></span></div>
+</div>
+<p class="help" style="font-size: 12px; line-height: 17px">One unit, the same facts. Layers open or close as you move a dial. Guided swaps the code for the ticket check.</p>
+</aside>
+
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"reducedMotion":{"editor":"boolean","default":false},"sampleLanguages":{"editor":"boolean","default":true},"$preview":{"width":1440,"height":1000}}'>
+/* FIXTURE:delivery-settings */
+// generated by canvas-t5/edits/gen-fixture.ts from packages/ui/src (fixtures and shared/delivery.ts) — do not edit by hand
+var FX_DELIVERY_SETTINGS = {"stops":[{"id":"facts","label":"Facts","desc":"One cited sentence, then the code."},{"id":"briefed","label":"Briefed","desc":"Cited claims, one per line, then the code."},{"id":"explained","label":"Explained","desc":"Adds what it did before and does after, and the language terms it uses."},{"id":"guided","label":"Guided","desc":"No code. What the ticket asked for, done or not, with a suggested review."}],"languages":[{"id":"typescript","name":"TypeScript","ext":".ts .tsx"},{"id":"go","name":"Go","ext":".go"},{"id":"sql","name":"SQL","ext":".sql"},{"id":"hcl","name":"HCL","ext":".tf"}],"settings":{"workspaceDefault":"briefed","byLanguage":{"go":"explained","hcl":"guided"}}};
+/* end FIXTURE:delivery-settings */
+var FXS = FX_DELIVERY_SETTINGS;
+var STOPS = FXS.stops;
+var LANGS = FXS.languages;
+function stopIndex(id) { return STOPS.map(function (s) { return s.id; }).indexOf(id); }
+function ticks(i) { return [0, 1, 2, 3].map(function (b) { return { cls: b <= i ? 'f' : '', h: 5 + b * 3 }; }); }
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    var over = {};
+    Object.keys(FXS.settings.byLanguage).forEach(function (k) { over[k] = stopIndex(FXS.settings.byLanguage[k]); });
+    this.state = { ws: stopIndex(FXS.settings.workspaceDefault), over: over, sel: 'ws', theme: null };
+    this.lbl = null;
+  }
+  renderVals() {
+    var self = this;
+    var st = this.state;
+    var theme = st.theme || this.props.theme || 'light';
+    var stopOf = function (id) { return st.over[id] === undefined ? st.ws : st.over[id]; };
+    var sel = LANGS.filter(function (l) { return l.id === st.sel; })[0];
+    var pIdx = sel ? stopOf(sel.id) : st.ws;
+    var on = function (b) { return b ? 'on' : ''; };
+    var refined = LANGS.filter(function (l) { return st.over[l.id] !== undefined; }).length;
+    var pvLabel = (sel ? sel.name : 'Workspace default') + ' · ' + STOPS[pIdx].label;
+    // the label swap: the old one leaves before the new one enters (delivery-preview.tsx, AnimatePresence mode="wait")
+    var L = this.lbl || (this.lbl = { cur: pvLabel, old: null, seq: 0 });
+    if (L.cur !== pvLabel) { L.old = L.cur; L.cur = pvLabel; L.seq++; }
+    var ab = L.seq % 2 ? 'a' : 'b';
+    var sample = this.props.sampleLanguages !== false;
+    return {
+      theme: theme,
+      rmCls: this.props.reducedMotion ? 'rm' : '',
+      isLight: theme === 'light', isDark: theme === 'dark',
+      themeLabel: theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme',
+      toggleTheme: function () { self.setState({ theme: theme === 'light' ? 'dark' : 'light' }); },
+      bigX: 'calc(' + st.ws + ' * 100%)',
+      bigStops: STOPS.map(function (s, i) {
+        return { id: s.id, label: s.label, desc: s.desc, on: i === st.ws, cls: i === st.ws ? 'on' : '', ticks: ticks(i),
+          pick: function () { self.setState({ ws: i, sel: 'ws' }); } };
+      }),
+      refineHelp: sample ? 'These are sample languages until this workspace reports its own. Each follows the workspace default until you set it.' : 'Each language follows the workspace default until you set it.',
+      refinedCount: refined === 0 ? 'All follow the default' : refined + ' of ' + LANGS.length + ' refined',
+      langs: LANGS.map(function (l) {
+        var cur = stopOf(l.id);
+        var follows = st.over[l.id] === undefined;
+        return { id: l.id, name: l.name, ext: l.ext, cls: st.sel === l.id ? 'sel' : '', pressed: st.sel === l.id ? 'true' : 'false', x: cur, group: 'lang-' + l.id,
+          follows: follows, refined: !follows, dialCls: follows ? 'follows' : '', describedBy: follows ? 'follows-' + l.id : null,
+          preview: function () { self.setState({ sel: l.id }); },
+          reset: function () { var o = Object.assign({}, st.over); delete o[l.id]; self.setState({ over: o, sel: l.id }); },
+          stops: STOPS.map(function (s, i) {
+            return { id: s.id, label: s.label, on: i === cur, cls: i === cur ? 'on' : '',
+              pick: function () { var o = Object.assign({}, st.over); if (i === st.ws) { delete o[l.id]; } else { o[l.id] = i; } self.setState({ over: o, sel: l.id }); } };
+          }) };
+      }),
+      pvLabel: pvLabel,
+      hasOld: !!L.old, oldLabel: L.old || '', oldCls: L.old ? 'lo-' + ab : '', newCls: L.seq ? 'li-' + ab : '',
+      pvName: pvLabel + '. ' + STOPS[pIdx].desc,
+      termsLabel: sel ? sel.name + ' terms' : 'Language terms',
+      p1: on(pIdx === 0), p2: on(pIdx === 1 || pIdx === 3), p3: on(pIdx === 2), p4: on(pIdx === 3), pCode: on(pIdx < 3),
+      codeA: ['18%', '30%', '22%'], codeB: ['26%', '40%', '12%'], codeC: ['20%', '34%']
+    };
+  }
+}
+</script>
+</body>
+</html>

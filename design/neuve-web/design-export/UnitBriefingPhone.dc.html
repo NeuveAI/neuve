@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Unit briefing · joined unit, phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+a{color:var(--ink)}a:hover{color:var(--ink)}
+button{font:inherit;color:inherit}
+.ub{min-height:100vh;background:var(--bg);color:var(--ink);font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.ub-shell{display:flex;align-items:stretch;min-height:100vh}
+.ub-mono{font-family:'Geist Mono',ui-monospace,monospace}
+.ub-lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+/* rail (desktop boards): only to set the main column at its real width */
+.ub-rail{flex:0 0 280px;box-sizing:border-box;border-right:1px solid var(--line);padding:22px 14px;display:flex;flex-direction:column;gap:18px}
+.ub-rail h2{margin:0;font-size:13px;line-height:18px;font-weight:600;color:var(--ink)}
+.ub-rail ul{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:2px}
+.ub-rail li{font-size:13px;line-height:18px;color:var(--ink2);padding:7px 10px;border-radius:8px}
+.ub-rail li.cur{background:var(--raised);color:var(--ink);font-weight:500}
+/* the unit column: the briefing measures its own width (container queries), so the same rules serve desk and phone */
+.ub-main{flex:1 1 0;min-width:0;container-type:inline-size}
+.ub-col{box-sizing:border-box;max-width:1240px;padding:44px 32px 28px;display:flex;flex-direction:column;gap:12px}
+@container (max-width:639px){.ub-col{padding:24px 16px 20px}}
+.ub-lane{display:flex;align-items:center;gap:8px}
+.ub-titleline{position:relative;line-height:34px}
+.ub-h1{display:inline;margin:0;font-size:28px;line-height:34px;font-weight:600;letter-spacing:-.025em}
+@container (max-width:639px){.ub-titleline{line-height:28px}.ub-h1{font-size:22px;line-height:28px;letter-spacing:-.02em}}
+/* review delivery: the glyph after the title and its dial (Main.dc.html anatomy, trimmed) */
+.ub-slot{position:relative;display:inline-flex;vertical-align:4px;margin-left:8px}
+.ub-trig{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted);cursor:pointer;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.ub-trig::after{content:"";position:absolute;left:50%;top:50%;width:44px;height:44px;transform:translate(-50%,-50%)}
+@media (hover:hover){.ub-trig:hover{background:var(--raised);color:var(--ink2)}}
+.ub-trig[aria-expanded="true"]{background:var(--raised);color:var(--ink2)}
+.ub-trig:focus-visible,.ub-stop:has(input:focus-visible),.lk:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.ub-ticks{display:flex;align-items:flex-end;gap:2px;height:14px}
+.ub-ticks i{display:block;width:4px;box-sizing:border-box;border-radius:1px;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.ub-ticks i.f{background:currentColor;box-shadow:none}
+.ub-dial{position:absolute;right:0;top:calc(100% + 6px);z-index:6;display:grid;grid-template-columns:repeat(4,auto);padding:3px;border-radius:10px;
+  background:var(--surface);box-shadow:var(--nv-shadow-card);line-height:normal;animation:ubFade var(--nv-dur-card) var(--nv-ease-standard-decelerate) both}
+.ub-dial-flow{display:none}
+@container (max-width:639px){.ub-dial{display:none}.ub-dial-flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:3px;border-radius:10px;box-shadow:inset 0 0 0 1px var(--line);background:var(--surface);animation:ubFade var(--nv-dur-card) var(--nv-ease-standard-decelerate) both}}
+.ub-stop{position:relative;display:inline-flex;align-items:center;justify-content:center;height:34px;padding:0 10px;border-radius:8px;font-size:12.5px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.ub-stop input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+@media (hover:hover){.ub-stop:hover{color:var(--ink2)}}
+/* No agent decision (briefing.tsx): the plain line, and under it why, in the same secondary text; several reasons a plain list */
+.ub-und{display:flex;flex-direction:column;gap:2px}
+.ub-undl{margin:0;max-width:760px;font-size:14px;line-height:22px;color:var(--muted);text-wrap:pretty}
+.ub-undn{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px}
+/* a stop the unit does not offer (delivery-dial.tsx `offered`): it keeps its place, the faint tone, never pressable */
+.ub-stop.off,.ub-stop.off:hover{color:var(--faint);cursor:default}.ub-stop.off input{cursor:default}
+.ub-stop.on{background:var(--raised);box-shadow:inset 0 0 0 1px var(--line);color:var(--ink);font-weight:500}
+@keyframes ubFade{from{opacity:0}to{opacity:1}}
+/* the briefing */
+.ub-lead{margin:0;max-width:760px;font-size:15px;line-height:24px;color:var(--ink2);text-wrap:pretty}
+.ub-rows{display:flex;flex-direction:column}
+.ub-row{display:grid;grid-template-columns:minmax(0,224px) minmax(0,1fr);column-gap:32px;padding:14px 0;border-top:1px solid var(--line2)}
+.ub-rows>.ub-row:first-child{border-top:0;padding-top:4px}
+.ub-head{display:grid;grid-template-columns:minmax(0,224px) minmax(0,1fr);column-gap:32px;padding:4px 0 2px}
+.ub-single .ub-row,.ub-single .ub-head{grid-template-columns:minmax(0,1fr)}
+.ub-single .ub-row{border-top:0;padding-top:0}
+.ub-st{margin:0;font-size:14px;line-height:22px;font-weight:600;color:var(--ink);text-wrap:pretty}
+.ub-body{min-width:0}
+.ub-in{animation:ubFade var(--nv-dur-card) var(--nv-ease-standard-decelerate) both}
+.ub-facts{margin:0;max-width:760px;font-size:15px;line-height:22px;color:var(--ink2);text-wrap:pretty}
+.ub-claims{list-style:none;margin:0;padding:0;max-width:820px;display:flex;flex-direction:column;gap:5px;font-size:15px;line-height:22px;color:var(--ink2)}
+.ub-claims li{position:relative;padding-left:16px;text-wrap:pretty}
+.ub-claims li::before{content:"";position:absolute;left:3px;top:9px;width:4px;height:4px;border-radius:50%;background:var(--faint)}
+.lk{color:var(--ink);text-decoration:underline;text-decoration-color:var(--line-strong);text-decoration-thickness:1px;text-underline-offset:3px;border-radius:3px;
+  transition:text-decoration-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.lk:hover{text-decoration-color:var(--ink)}}
+.lsr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+/* Explained: before beside after; the claim's links fold into one line under them */
+.ub-ba{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);column-gap:28px}
+.ub-ba p{margin:0;font-size:14px;line-height:21px;text-wrap:pretty}
+.ub-before{color:var(--muted)}
+.ub-after{color:var(--ink2)}
+.ub-ilbl{display:none}
+.ub-links{display:flex;align-items:flex-start;gap:8px;margin:10px 0 0;font-size:13px;line-height:20px;color:var(--muted)}
+.ub-links svg{flex:0 0 auto;width:13px;height:13px;margin-top:3px;fill:none;stroke:var(--faint);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ub-links .lk{color:var(--ink2)}
+.ub-terms{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(250px,100%),1fr));gap:12px 28px;margin:0}
+.ub-terms div{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0}
+.ub-terms dt{display:inline-flex;align-items:center;min-height:22px;max-width:100%;padding:0 7px;border-radius:5px;background:var(--raised);font-family:'Geist Mono',ui-monospace,monospace;font-size:12px;color:var(--kw);overflow-wrap:anywhere}
+.ub-terms dd{margin:0;font-size:13px;line-height:19px;color:var(--ink2)}
+@container (max-width:639px){
+  .ub-row,.ub-head{grid-template-columns:minmax(0,1fr)}
+  .ub-row{row-gap:6px}
+  .ub-head{display:none}
+  .ub-ba{grid-template-columns:minmax(0,1fr);row-gap:10px}
+  .ub-ilbl{display:block;margin-bottom:2px;font-size:10px}
+  .ub-claims,.ub-facts{font-size:14.5px}
+}
+/* Guided: unchanged parts, drawn plainly */
+.ub-card{border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line);padding:14px 18px;display:flex;flex-direction:column;gap:10px}
+.ub-card h3{margin:0;font-size:15px;line-height:22px;font-weight:600}
+.ub-crit{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.ub-crit li{display:grid;grid-template-columns:110px minmax(0,1fr);column-gap:14px;padding:10px 0;border-top:1px solid var(--line2)}
+@container (max-width:639px){.ub-crit li{grid-template-columns:minmax(0,1fr);row-gap:4px}}
+.ub-crit .st{display:inline-flex;align-items:center;gap:6px;height:22px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:var(--sug-fg)}
+.ub-crit .st i{width:9px;height:9px;border-radius:50%;box-shadow:inset 0 0 0 1.5px currentColor}
+.ub-crit p{margin:0;font-size:14px;line-height:21px}
+.ub-crit p+p{color:var(--muted);font-size:13px;line-height:19px;margin-top:2px}
+.ub-sugg{border-top:1px solid var(--line2);padding-top:12px;display:flex;flex-direction:column;gap:6px}
+.ub-sugg p{margin:0;font-size:14px;line-height:21px;color:var(--ink2)}
+.ub-rev{display:flex;flex-direction:column;gap:8px}
+.ub-rev .hd{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600}
+.ub-rev .av{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--raised);font-family:'Geist Mono',ui-monospace,monospace;font-size:10px;font-weight:500;color:var(--ink2)}
+.ub-rev p{margin:0;font-size:13.5px;line-height:20px;color:var(--ink2)}
+/* where the diff starts */
+.ub-diff{margin:4px 32px 0;border-radius:10px 10px 0 0;background:var(--surface);box-shadow:0 0 0 1px var(--line);display:flex;align-items:center;gap:12px;padding:0 14px;height:44px;font-size:12.5px}
+@container (max-width:639px){.ub-diff{margin:4px 16px 0}}
+.ub-diff .p{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.ub-diff .a{color:var(--add-fg)}.ub-diff .d{color:var(--del-fg)}
+@media (prefers-reduced-motion:reduce){.ub-in,.ub-dial,.ub-dial-flow{animation:ubFade var(--nv-dur-reduced) var(--nv-ease-out) both}.ub-trig,.lk{transition:none}}
+</style>
+</helmet>
+<div class="ub theme-{{theme}}">
+<div class="ub-shell">
+<sc-if value="{{rail}}" hint-placeholder-val="{{false}}">
+<nav class="ub-rail" aria-label="Review units">
+<span class="ub-lbl">{{railData.batch}}</span>
+<sc-for list="{{railData.groups}}" as="g" hint-placeholder-count="2"><div><h2>{{g.lane}}</h2><ul><sc-for list="{{g.units}}" as="r" hint-placeholder-count="2"><li class="{{r.cls}}" aria-current="{{r.current}}">{{r.t}}</li></sc-for></ul></div></sc-for>
+</nav>
+</sc-if>
+<main class="ub-main">
+<div class="ub-col">
+<div class="ub-lane"><sc-if value="{{isReq}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg><span class="ub-lbl" style="color: var(--req-fg)">{{u.laneText}}</span></sc-if><sc-if value="{{isSug}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.6" fill="none" stroke="var(--sug)" stroke-width="1.6"></circle></svg><span class="ub-lbl" style="color: var(--sug-fg)">{{u.laneText}}</span></sc-if></div>
+<div class="ub-titleline"><h1 class="ub-h1">{{u.title}}</h1><span class="ub-slot"><button type="button" class="ub-trig" aria-expanded="{{dialOpen}}" aria-controls="ub-dial" aria-label="Review delivery: {{stopLabel}}" onClick="{{toggleDial}}"><span class="ub-ticks" aria-hidden="true"><sc-for list="{{ticks}}" as="t" hint-placeholder-count="4"><i class="{{t.cls}}" style="height: {{t.h}}px"></i></sc-for></span></button><sc-if value="{{dialOpen}}" hint-placeholder-val="{{false}}"><span class="ub-dial" role="radiogroup" aria-label="Review delivery" id="ub-dial"><sc-for list="{{stops}}" as="s" hint-placeholder-count="4"><label class="ub-stop {{s.cls}}"><input type="radio" name="ub-stop" value="{{s.id}}" checked="{{s.on}}" disabled="{{s.off}}" onChange="{{s.pick}}">{{s.label}}</label></sc-for></span></sc-if></span></div>
+<sc-if value="{{dialOpen}}" hint-placeholder-val="{{false}}"><div class="ub-dial-flow" role="radiogroup" aria-label="Review delivery"><sc-for list="{{stops}}" as="s" hint-placeholder-count="4"><label class="ub-stop {{s.cls}}"><input type="radio" name="ub-stop-flow" value="{{s.id}}" checked="{{s.on}}" disabled="{{s.off}}" onChange="{{s.pick}}">{{s.label}}</label></sc-for></div></sc-if>
+
+<sc-if value="{{undecided}}" hint-placeholder-val="{{false}}"><div class="ub-und ub-in"><p class="ub-undl">No agent decision in this run</p><sc-if value="{{oneNote}}" hint-placeholder-val="{{false}}"><p class="ub-undl">{{noteOne}}</p></sc-if><sc-if value="{{manyNotes}}" hint-placeholder-val="{{false}}"><ul class="ub-undn"><sc-for list="{{notes}}" as="n" hint-placeholder-count="2"><li class="ub-undl">{{n.t}}</li></sc-for></ul></sc-if></div></sc-if>
+<sc-if value="{{showLead}}" hint-placeholder-val="{{true}}"><p class="ub-lead ub-in">{{u.lead}}</p></sc-if>
+
+<div class="ub-rows {{singleCls}}">
+<sc-if value="{{isExplained}}" hint-placeholder-val="{{false}}"><div class="ub-head ub-in" aria-hidden="true"><sc-if value="{{u.joined}}" hint-placeholder-val="{{true}}"><span></span></sc-if><div class="ub-ba"><span class="ub-lbl" style="font-size: 10px">Before</span><span class="ub-lbl" style="font-size: 10px">After</span></div></div></sc-if>
+<sc-for list="{{u.sections}}" as="s" hint-placeholder-count="3">
+<section class="ub-row" aria-label="{{s.aria}}">
+<sc-if value="{{s.titled}}" hint-placeholder-val="{{true}}"><h2 class="ub-st">{{s.title}}</h2></sc-if>
+<div class="ub-body">
+<sc-if value="{{isFacts}}" hint-placeholder-val="{{false}}"><p class="ub-facts ub-in">{{s.facts}}</p></sc-if>
+<sc-if value="{{showClaims}}" hint-placeholder-val="{{true}}"><ul class="ub-claims ub-in"><sc-for list="{{s.claims}}" as="c" hint-placeholder-count="3"><li><sc-for list="{{c.segs}}" as="g" hint-placeholder-count="3"><sc-if value="{{g.isText}}" hint-placeholder-val="{{true}}">{{g.t}}</sc-if><sc-if value="{{g.isLink}}" hint-placeholder-val="{{false}}"><a class="lk" href="#{{g.href}}">{{g.t}}<span class="lsr"> · {{g.where}}</span></a></sc-if></sc-for></li></sc-for></ul></sc-if>
+<sc-if value="{{isExplained}}" hint-placeholder-val="{{false}}"><div class="ub-in"><div class="ub-ba"><div><span class="ub-lbl ub-ilbl">Before</span><p class="ub-before">{{s.before}}</p></div><div><span class="ub-lbl ub-ilbl">After</span><p class="ub-after">{{s.after}}</p></div></div><p class="ub-links"><svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 10 20 15 15 20"></polyline><path d="M4 4v7a4 4 0 0 0 4 4h12"></path></svg><span><sc-for list="{{s.links}}" as="l" hint-placeholder-count="4"><sc-if value="{{l.sep}}" hint-placeholder-val="{{false}}"><span aria-hidden="true"> · </span></sc-if><a class="lk" href="#{{l.href}}">{{l.t}}<span class="lsr"> · {{l.where}}</span></a></sc-for></span></p></div></sc-if>
+</div>
+</section>
+</sc-for>
+<sc-if value="{{showTerms}}" hint-placeholder-val="{{false}}"><div class="ub-row ub-in"><sc-if value="{{u.joined}}" hint-placeholder-val="{{true}}"><span></span></sc-if><dl class="ub-terms"><sc-for list="{{u.terms}}" as="t" hint-placeholder-count="3"><div><dt>{{t.term}}</dt><dd>{{t.meaning}}</dd></div></sc-for></dl></div></sc-if>
+</div>
+
+<sc-if value="{{showReview}}" hint-placeholder-val="{{false}}"><section class="ub-card ub-rev" aria-label="The agent’s review"><div class="hd"><span class="av" aria-hidden="true">{{u.review.who}}</span>{{u.review.headline}}</div><p>{{u.review.summary}}</p><sc-if value="{{isGuided}}" hint-placeholder-val="{{false}}"><ul class="ub-crit ub-in"><sc-for list="{{u.check.rows}}" as="r" hint-placeholder-count="1"><li><span class="st"><i></i>{{r.label}}</span><div><p>{{r.criterion}}</p><p>{{r.does}}</p></div></li></sc-for></ul></sc-if></section></sc-if>
+<sc-if value="{{showCheck}}" hint-placeholder-val="{{false}}"><section class="ub-card ub-in" aria-label="{{u.basis}}: {{u.check.ticket}}"><span class="ub-lbl">{{u.basis}}</span><h3>{{u.check.ticket}}</h3><ul class="ub-crit"><sc-for list="{{u.check.rows}}" as="r" hint-placeholder-count="3"><li><span class="st"><i></i>{{r.label}}</span><div><p>{{r.criterion}}</p><p>{{r.does}}</p></div></li></sc-for></ul><sc-if value="{{u.suggestion}}" hint-placeholder-val="{{false}}"><div class="ub-sugg"><span class="ub-lbl">Suggested review · {{u.suggestion.decision}}</span><p>{{u.suggestion.message}}</p></div></sc-if></section></sc-if>
+</div>
+<sc-if value="{{showDiff}}" hint-placeholder-val="{{true}}"><div class="ub-diff ub-in"><span class="p ub-mono">{{u.file.path}}</span><span class="ub-mono a">+{{u.file.add}}</span><span class="ub-mono d">−{{u.file.del}}</span></div></sc-if>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"unit": {"editor": "enum", "options": ["joined", "single", "undecided"], "default": "joined"}, "stop": {"editor": "enum", "options": ["facts", "briefed", "explained", "guided"], "default": "briefed"}, "dialOpen": {"editor": "boolean", "default": false}, "theme": {"editor": "enum", "options": ["light", "dark"], "default": "light"}, "rail": {"editor": "boolean", "default": false}}'>
+const UNITS = {"joined": {"title": "Create model processes lazily with shared idle tracking and call-specific cleanup", "lane": "human-required", "laneText": "Human-required · 1 of 1", "lead": "The process holder creates encoder and reranker processes on demand, tracks active calls for idle shutdown, and lets each adapter clean up the process used by its call.", "sections": [{"title": "Lazy model processes and shared idle accounting", "facts": "Holder replaces the paired lifetime with lazy per-process records, shared in-flight idle accounting, identity-guarded closure and separate exit reporting.", "claims": [[{"t": "The ", "link": false}, {"t": "holder now creates each model on demand and detaches it before awaiting close", "link": true, "where": "lines 93–96"}, {"t": ".", "link": false}], [{"t": "Both adapters count queued work", "link": true, "where": "Same batch"}, {"t": " and ", "link": false}, {"t": "retain the captured process for cleanup", "link": true, "where": "Same batch"}, {"t": ", while ", "link": false}, {"t": "cached workers keep using the holder after shutdown", "link": true, "where": "Same batch"}, {"t": ".", "link": false}], [{"t": "The ", "link": false}, {"t": "direct lifecycle tests cover single-call idle timing and stale reranker cleanup", "link": true, "where": "Same batch"}, {"t": ", not overlapping adapter calls.", "link": false}]], "links": [{"t": "holder now creates each model on demand and detaches it before awaiting close", "where": "lines 93–96"}, {"t": "Both adapters count queued work", "where": "Same batch"}, {"t": "retain the captured process for cleanup", "where": "Same batch"}, {"t": "cached workers keep using the holder after shutdown", "where": "Same batch"}, {"t": "direct lifecycle tests cover single-call idle timing and stale reranker cleanup", "where": "Same batch"}], "before": "Calls reset one idle timer at their start, and ending the lifetime closed both processes together.", "after": "Each model is acquired lazily, and idle time begins after the shared in-flight count reaches zero. Closing one model removes its record before waiting, allowing later calls to replace it while identity checks keep older cleanup from removing that replacement. No execution proof is recorded.", "terms": [{"term": "Holder", "meaning": "The owner of the current encoder and reranker and their shared idle timer."}, {"term": "only", "meaning": "An optional captured process that must still match the held instance before cleanup can close it."}]}, {"title": "Encoder call accounting, replacement and interruption cleanup", "facts": "chunkEncoder acquires a client per call, brackets work with holder accounting, closes that captured client on errors or interruption, retains it for item retries, and exposes an Apple GPU batch limit.", "claims": [[{"t": "The ", "link": false}, {"t": "encoder obtains a client inside each accounted Effect call", "link": true, "where": "line 464"}, {"t": ", with ", "link": false}, {"t": "item retries staying on that client", "link": true, "where": "Same batch"}, {"t": ".", "link": false}], [{"t": "Its ", "link": false}, {"t": "refusal allowlist separates item results from process errors", "link": true, "where": "Signal"}, {"t": "; cleanup must align with ", "link": false}, {"t": "bounded client shutdown", "link": true, "where": "Signal"}, {"t": " and the ", "link": false}, {"t": "worker's deadline interruption", "link": true, "where": "Signal"}, {"t": ".", "link": false}], [{"t": "The ", "link": false}, {"t": "Apple GPU batch override is consumed by batch planning", "link": true, "where": "Same batch"}, {"t": ".", "link": false}]], "links": [{"t": "encoder obtains a client inside each accounted Effect call", "where": "line 464"}, {"t": "item retries staying on that client", "where": "Same batch"}, {"t": "refusal allowlist separates item results from process errors", "where": "Signal"}, {"t": "bounded client shutdown", "where": "Signal"}, {"t": "worker's deadline interruption", "where": "Signal"}, {"t": "Apple GPU batch override is consumed by batch planning", "where": "Same batch"}], "before": "The adapter permanently captured one client, reset the paired idle lifetime at call start, and ended that paired lifetime on typed errors.", "after": "Each call enters shared accounting before acquiring its client. Batch refusal recovery stays on that client; process errors or interruption close only that captured encoder, and release ends accounting. Apple GPU batches also expose a smaller limit. The supplied tests do not exercise interrupted or overlapping adapter calls.", "terms": [{"term": "Effect.acquireUseRelease", "meaning": "Brackets a call with acquisition and release so accounting ends even when work is interrupted."}, {"term": "ITEM_REFUSALS", "meaning": "The reasons treated as input refusals rather than process failure."}, {"term": "batchItems", "meaning": "An optional request-size limit read by chunk batch planning."}]}, {"title": "Reranker call accounting and process-specific cleanup", "facts": "The reranker adapter acquires its process per call, brackets scoring with holder accounting, closes failed processes on typed errors, and closes the captured process on interruption.", "claims": [[{"t": "The ", "link": false}, {"t": "reranker now acquires its process within an accounted Effect call", "link": true, "where": "line 464"}, {"t": ".", "link": false}], [{"t": "Request refusals do not set the terminal failure state", "link": true, "where": "Same batch"}, {"t": ", so typed errors close the process only when it has failed; interruption closes the captured instance regardless.", "link": false}], [{"t": "Validation must connect the ", "link": false}, {"t": "serialized score queue", "link": true, "where": "Same batch"}, {"t": " to the ", "link": false}, {"t": "worker's deadline interruption", "link": true, "where": "Signal"}, {"t": ", rather than relying only on ", "link": false}, {"t": "direct holder tests", "link": true, "where": "Same batch"}, {"t": ".", "link": false}]], "links": [{"t": "reranker now acquires its process within an accounted Effect call", "where": "line 464"}, {"t": "Request refusals do not set the terminal failure state", "where": "Same batch"}, {"t": "serialized score queue", "where": "Same batch"}, {"t": "worker's deadline interruption", "where": "Signal"}, {"t": "direct holder tests", "where": "Same batch"}], "before": "The adapter held one reranker permanently and closed the shared lifetime for every typed error, including request refusals.", "after": "Each scoring call acquires the current reranker after entering shared accounting. Typed errors close it only when it is marked failed, while interruption closes the captured process; release ends accounting. Successful score results and timing annotations remain in the call flow. No adapter-level execution proof is recorded.", "terms": [{"term": "process.failed", "meaning": "Whether the captured reranker has recorded a terminal failure, rather than a request-only refusal."}, {"term": "Effect.onInterrupt", "meaning": "Runs cleanup when the scoring Effect is stopped before completion."}]}], "file": {"path": "packages/harness/src/hybrid-models.ts", "add": 212, "del": 128}, "check": {"ticket": "Hybrid model calls survive idle gaps and failed or interrupted processes", "rows": [{"status": "no-evidence", "criterion": "Run the idle timer only when no calls are in flight, and start a fresh process on the next call after closure.", "does": "Counts queued and active calls through acquireUseRelease and lazily replaces detached processes. Proof is not recorded."}, {"status": "not-met", "criterion": "Close only the failed process; request refusals must not close either process.", "does": "Identity guards isolate cleanup, but an invalid encoder batch is treated as a process failure and closes a healthy encoder."}, {"status": "no-evidence", "criterion": "A call interrupted at the job deadline closes its process so the next job does not wait behind it.", "does": "Interruption handlers close the captured process and release accounting; deadline behavior has no recorded proof."}]}, "review": null, "suggestion": {"decision": "Request changes", "message": "The holder now detaches processes before shutdown and guards cleanup against replacements, but encoder request refusals are not fully isolated: invalid-batch-size reaches unconditional failed-process cleanup and closes a healthy encoder. Distinguish that validation refusal from terminal failures. Proof is not recorded for idle overlap, replacement, or deadline interruption."}, "basis": "Scope"}, "single": {"title": "Release the encoder’s Apple GPU cache after encoding", "lane": "human-suggested", "laneText": "Human-suggested · optional", "lead": "", "sections": [{"title": "", "facts": "The encoder adds an Apple GPU-only cache-release call after model encoding and before vector validation and normalization.", "claims": [[{"t": "The encoder ", "link": false}, {"t": "empties the Apple GPU cache after encoding", "link": true, "where": "lines 168–171"}, {"t": " while retaining ", "link": false}, {"t": "vector validation and normalization", "link": true, "where": "Same batch"}, {"t": " and the ", "link": false}, {"t": "existing CPU default and device selection", "link": true, "where": "Signal"}, {"t": ".", "link": false}], [{"t": "The edit is paired with ", "link": false}, {"t": "an updated encoder integrity pin", "link": true, "where": "Same batch"}, {"t": ".", "link": false}], [{"t": "The commit's memory figures describe combined batching and cleanup changes, not an independently recorded cleanup-only result.", "link": false}]], "links": [{"t": "empties the Apple GPU cache after encoding", "where": "lines 168–171"}, {"t": "vector validation and normalization", "where": "Same batch"}, {"t": "existing CPU default and device selection", "where": "Signal"}, {"t": "an updated encoder integrity pin", "where": "Same batch"}], "before": "The encoder converted model output to NumPy, validated and normalized vectors, and returned them without an explicit Apple GPU cache release. Inference errors became refusals.", "after": "After model encoding returns, Apple GPU requests empty the cache before vector validation and normalization. CPU requests skip the call, and exceptions before it still produce refusals without cleanup. No recorded run establishes sustained memory use or vector drift.", "terms": [{"term": "torch.mps.empty_cache()", "meaning": "Releases unused cached Apple GPU allocations, rather than unloading the model or freeing live tensors."}, {"term": "args.device", "meaning": "The selected execution device, either CPU or Apple GPU."}]}], "file": {"path": "packages/semantic-client/src/worker.py", "add": 4, "del": 0}, "check": {"ticket": "Release Apple GPU worker caches and update encoder identity", "rows": [{"status": "not-met", "criterion": "Encoder and reranker workers release the Apple GPU cache after each request, with the updated encoder WORKER_SHA256.", "does": "Releases the encoder's Apple GPU cache after successful encoding, but inference failures skip cleanup and return a refusal."}]}, "review": {"who": "R1", "headline": "R1 requested changes", "summary": "The encoder releases cached allocations after successful NumPy encoding and leaves CPU requests unchanged, but inference failures bypass the new cleanup while the worker continues accepting requests. Cleanup must also cover that failure path to satisfy per-request cache release. Proof is not recorded for successful encoding, repeated-request memory behavior, vector drift, or inference failures."}, "suggestion": null, "basis": "Scope"}};
+const RAILS = {"joined": {"batch": "Hybrid model calls survive idle gaps and failed or interrupted processes", "groups": [{"lane": "Human-required", "units": [{"t": "Create model processes lazily with shared idle tracking and call-specific cleanup", "cur": true}]}, {"lane": "Agentic review", "units": [{"t": "Reject reranker requests on input failure or closure and retain cached process holders", "cur": false}, {"t": "Add regression tests for reranker replacement and idle process closure", "cur": false}]}]}, "single": {"batch": "Release Apple GPU worker caches and update encoder identity", "groups": [{"lane": "Human-suggested", "units": [{"t": "Release the reranker’s Apple GPU cache after scoring", "cur": false}, {"t": "Release the encoder’s Apple GPU cache after encoding", "cur": true}]}, {"lane": "Agentic review", "units": [{"t": "Update the encoder worker integrity pin", "cur": false}]}]}};
+// A human-required unit no agent decided (briefing.tsx NoAgentDecision, UndecidedNotes): its reasons sit under the line,
+// each led by its change; it offers Facts, Briefed and Guided, so Explained keeps its place but cannot be chosen.
+UNITS.undecided = {"title": "records.server.ts: locate and 1 more", "lane": "human-required", "laneText": "Human-required · 2 of 3", "lead": "records.server.ts at lines 6 and 12: 4 lines added and 2 removed.", "undecided": true, "notes": ["locate in records.server.ts: Whether StoreNotFound reaches callers that expect a path is not in the owned lines.", "openStore in records.server.ts: The stores map is shared across workspaces, and the change does not say whether that is intended."], "offered": ["facts", "briefed", "guided"], "sections": [{"title": "locate in records.server.ts", "facts": "locate in records.server.ts: 2 lines added and 1 removed.", "claims": [[{"t": "Callers locating one folder’s store share one Git discovery; a folder with no repository now throws StoreNotFound.", "link": false}]], "links": [], "before": "", "after": "", "terms": []}, {"title": "openStore in records.server.ts", "facts": "openStore in records.server.ts: 2 lines added and 1 removed.", "claims": [[{"t": "openStore keeps one open store per path and hands it to every later caller.", "link": false}]], "links": [], "before": "", "after": "", "terms": []}], "file": {"path": "apps/neuve-web/apps/web/src/server/records.server.ts", "add": 4, "del": 2}, "check": {"ticket": "Share low-risk reads", "rows": [{"status": "met", "label": "Done", "criterion": "Concurrent callers locating one folder run one Git discovery", "does": ""}, {"status": "no-evidence", "label": "No evidence", "criterion": "A failed discovery is not cached; the next caller retries", "does": ""}]}, "review": null, "suggestion": null, "basis": "Done when"};
+RAILS.undecided = {"batch": "Share low-risk reads", "groups": [{"lane": "Human-required", "units": [{"t": "projects.ts: checkout", "cur": false}, {"t": "records.server.ts: locate and 1 more", "cur": true}, {"t": "projects.ts: probeCache", "cur": false}]}, {"lane": "Human-suggested", "units": [{"t": "projects.ts: imports and 2 more", "cur": false}, {"t": "records.server.ts: imports and 1 more", "cur": false}, {"t": "package.json: line 20", "cur": false}]}, {"lane": "Agentic review", "units": [{"t": "projects-shared.test.ts: imports and 4 more", "cur": false}, {"t": "records-shared.test.ts: imports and 1 more", "cur": false}]}]};
+const STOPS = [{ id: 'facts', label: 'Facts' }, { id: 'briefed', label: 'Briefed' }, { id: 'explained', label: 'Explained' }, { id: 'guided', label: 'Guided' }];
+const LABELS = { 'not-met': 'Not covered', 'no-evidence': 'No evidence', met: 'Covered' };
+function slug(t) { return t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
+function shape(raw) {
+  const joined = raw.sections.length > 1;
+  const seen = {};
+  const terms = [];
+  raw.sections.forEach((s) => s.terms.forEach((t) => { if (!seen[t.term]) { seen[t.term] = true; terms.push(t); } }));
+  return Object.assign({}, raw, {
+    joined: joined,
+    terms: terms,
+    check: Object.assign({}, raw.check, { rows: raw.check.rows.map((r) => Object.assign({}, r, { label: r.label || LABELS[r.status] || r.status })) }),
+    sections: raw.sections.map((s) => Object.assign({}, s, {
+      titled: !!s.title,
+      aria: s.title || raw.title,
+      claims: s.claims.map((c) => ({ segs: c.map((g) => ({ t: g.t, isLink: g.link, isText: !g.link, where: g.where || '', href: slug(g.t) })) })),
+      links: s.links.map((l, i) => ({ t: l.t, where: l.where, sep: i > 0, href: slug(l.t) })),
+    })),
+  });
+}
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { stop: null, dial: null }; }
+  renderVals() {
+    const q = new URLSearchParams(window.location.search);
+    const unitId = q.get('unit') ?? this.props.unit ?? 'joined';
+    const u = shape(UNITS[unitId]);
+    const stop = this.state.stop ?? q.get('stop') ?? this.props.stop ?? 'briefed';
+    const idx = STOPS.findIndex((s) => s.id === stop);
+    const dialOpen = this.state.dial ?? (this.props.dialOpen ?? false);
+    const rail = q.has('rail') ? q.get('rail') === '1' : (this.props.rail ?? false);
+    const railData = RAILS[unitId];
+    const offered = u.offered || STOPS.map((s) => s.id);
+    const notes = u.notes || [];
+    return {
+      theme: this.props.theme ?? 'light',
+      rail: rail,
+      railData: { batch: railData.batch, groups: railData.groups.map((g) => ({ lane: g.lane, units: g.units.map((r) => ({ t: r.t, cls: r.cur ? 'cur' : '', current: r.cur ? 'page' : undefined })) })) },
+      u: u,
+      isReq: u.lane === 'human-required',
+      isSug: u.lane === 'human-suggested',
+      singleCls: u.joined ? '' : 'ub-single',
+      isFacts: stop === 'facts',
+      isExplained: stop === 'explained',
+      isGuided: stop === 'guided',
+      showClaims: stop === 'briefed' || stop === 'guided',
+      showLead: u.joined && stop !== 'facts' && !!u.lead,
+      showTerms: stop === 'explained' && u.terms.length > 0,
+      showReview: !!u.review,
+      showCheck: stop === 'guided' && !u.review,
+      showDiff: stop !== 'guided',
+      dialOpen: dialOpen,
+      stopLabel: STOPS[idx].label,
+      toggleDial: () => this.setState({ dial: !dialOpen }),
+      ticks: STOPS.map((s, i) => ({ h: 6 + i * 2.5, cls: i <= idx ? 'f' : '' })),
+      undecided: !!u.undecided, oneNote: notes.length === 1, manyNotes: notes.length > 1, noteOne: notes[0] || '', notes: notes.map((t) => ({ t: t })),
+      stops: STOPS.map((s, i) => { const off = i !== idx && !offered.includes(s.id); return { id: s.id, label: s.label, on: i === idx, off: off, cls: i === idx ? 'on' : off ? 'off' : '', pick: () => { if (!off) this.setState({ stop: s.id }); } }; }),
+    };
+  }
+}
+</script>
+</body>
+</html>

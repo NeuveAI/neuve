@@ -1,0 +1,526 @@
+/*
+ * Neuve's look over Ace (decision 12.15).
+ *
+ * The app imports this sheet right after Ace's own (`@ace/ui/css`). It only re-points Ace's
+ * variables to Neuve's design system and retimes Ace's moments on Neuve's motion tokens, so no
+ * Ace component changes and upstream updates keep merging. Rules here are unlayered: they beat
+ * Ace's layered utilities, and the `:root` prefix outranks Ace's own unlayered component sheets,
+ * which load later.
+ *
+ * Sources: colours, radii and fonts from apps/neuve-web/packages/ui/src/styles/globals.css (the
+ * `--nv-*` values below are copied from it; tests/ace-neuve-theme.test.ts fails if they drift);
+ * motion from apps/neuve-web/packages/ui/src/lib/motion.ts through its generated motion.css,
+ * imported as is so there is one copy of the timing. It is a relative path because
+ * @workspace/ui does not export motion.css.
+ */
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "../../../../apps/neuve-web/packages/ui/src/styles/motion.css";
+
+/* Neuve's palette, as globals.css names it. Ace's variables below point at these. */
+:root {
+	--nv-bg: #faf8f3;
+	--nv-surface: #ffffff;
+	--nv-raised: #f3efe6;
+	--nv-raised-2: #eae4d6;
+	--nv-select: #efeadd;
+	--nv-line: #e6e0d4;
+	--nv-line-2: #eee9df;
+	--nv-ink: #1c1a16;
+	--nv-ink-2: #45413a;
+	--nv-muted: #6b665c;
+	--nv-faint: #9a9488;
+	--nv-warn: #b7791f;
+	--nv-add-fg: #156b42;
+	--nv-del-fg: #a1352a;
+	--nv-sug-fg: #8b5b18;
+	--nv-agt: #148252;
+	--nv-agt-fg: #0c6944;
+	--nv-accent: #d2a62b;
+	--nv-focus: #866400;
+	--nv-dock-hover: #2d2a25;
+	--nv-land: rgba(226, 202, 94, 0.42);
+	--nv-lit: rgba(226, 202, 94, 0.3);
+	--nv-syn-kw: #8e265f;
+	--nv-syn-st: #0c6944;
+	--nv-syn-fn: #1f4f8f;
+	--nv-syn-cm: #655f56;
+	--nv-syn-nu: #845617;
+	--nv-syn-id: #1c1a16;
+	--nv-syn-pl: #45413a;
+	--nv-shadow-card: 0 0 0 1px rgba(28, 26, 22, 0.06), 0 12px 32px rgba(28, 26, 22, 0.14);
+	--nv-shadow-dock: 0 0 0 1px rgba(28, 26, 22, 0.08), 0 16px 40px rgba(28, 26, 22, 0.2);
+}
+
+:root.dark {
+	--nv-bg: #141311;
+	--nv-surface: #1b1a17;
+	--nv-raised: #23211e;
+	--nv-raised-2: #2c2925;
+	--nv-select: #2a2723;
+	--nv-line: #2e2b27;
+	--nv-line-2: #262420;
+	--nv-ink: #edeae3;
+	--nv-ink-2: #c9c4b8;
+	--nv-muted: #9c968a;
+	--nv-faint: #6f6a60;
+	--nv-warn: #e2b04a;
+	--nv-add-fg: #74d7a0;
+	--nv-del-fg: #ffa49b;
+	--nv-sug-fg: #ece09a;
+	--nv-agt: #44be82;
+	--nv-agt-fg: #8fdcb2;
+	--nv-accent: #e2ca5e;
+	--nv-focus: #e2ca5e;
+	--nv-dock-hover: #38342f;
+	--nv-land: rgba(226, 202, 94, 0.2);
+	--nv-lit: rgba(226, 202, 94, 0.18);
+	--nv-syn-kw: #efa0d3;
+	--nv-syn-st: #8fdcb2;
+	--nv-syn-fn: #9dbdf2;
+	--nv-syn-cm: #bdbab2;
+	--nv-syn-nu: #e8cf70;
+	--nv-syn-id: #edeae3;
+	--nv-syn-pl: #c9c4b8;
+	--nv-shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 16px 40px rgba(0, 0, 0, 0.55);
+	--nv-shadow-dock: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 16px 40px rgba(0, 0, 0, 0.6);
+}
+
+/*
+ * Ace's variables on Neuve's palette. Paper and ink neutrals; primary actions are ink (12.17).
+ * Ace's accent does five jobs (active glyphs, unread pills, mention text, menu highlight, added
+ * lines), so it takes Neuve's green rather than gold, which would paint additions gold. Gold
+ * stays for focus, selection and the landing tint. Merged purple and the agent tones stay Ace's:
+ * they carry meanings Neuve has no token for.
+ */
+:root {
+	--background: var(--nv-bg);
+	--foreground: var(--nv-ink);
+	--card: var(--nv-surface);
+	--card-foreground: var(--nv-ink);
+	--popover: var(--nv-surface);
+	--popover-foreground: var(--nv-ink);
+	--primary: var(--nv-ink);
+	--primary-hover: var(--nv-dock-hover);
+	--primary-foreground: var(--nv-bg);
+	--secondary: var(--nv-raised);
+	--secondary-foreground: var(--nv-ink);
+	--muted: var(--nv-raised);
+	--muted-foreground: var(--nv-muted);
+	/* Ace also sets text in its accent (PR numbers, "+N" counts), so light takes the darker
+	   agentic green, which keeps ≥4.5:1 on paper, surface and raised; dark keeps --nv-agt. */
+	--accent: var(--nv-agt-fg);
+	--accent-text: var(--nv-agt-fg);
+	--accent-foreground: #ffffff;
+	--destructive: var(--nv-del-fg);
+	--success: var(--nv-add-fg);
+	--warning: var(--nv-warn);
+	--warning-strong: var(--nv-sug-fg);
+	--border: var(--nv-line);
+	--input: var(--nv-line);
+	--ring: var(--nv-focus);
+	--sidebar: var(--nv-raised);
+	--sidebar-foreground: var(--nv-ink);
+	--sidebar-primary: var(--nv-ink);
+	--sidebar-primary-foreground: var(--nv-bg);
+	--sidebar-accent: var(--nv-surface);
+	--sidebar-accent-foreground: var(--nv-ink);
+	--sidebar-border: var(--nv-line);
+	--sidebar-ring: var(--nv-focus);
+	--edge: rgb(28 26 22 / 0.14);
+	--badge: var(--nv-accent);
+	--shell-tint: 243 239 230;
+	--highlight: var(--nv-accent);
+	--selection: var(--nv-lit);
+	--code: var(--nv-raised);
+
+	--shadow-surface: 0 0 0 1px rgb(28 26 22 / 0.07), 0 1px 2px rgb(28 26 22 / 0.06);
+	--shadow-popover: var(--nv-shadow-card);
+	--shadow-modal: var(--nv-shadow-dock);
+	--shadow-composer:
+		0 0 0 1px rgb(28 26 22 / 0.08), 0 1px 2px rgb(28 26 22 / 0.06),
+		0 -4px 8px -2px rgb(28 26 22 / 0.05);
+	--shadow-composer-tray: 0 0 0 1px rgb(28 26 22 / 0.06), 0 -2px 4px rgb(28 26 22 / 0.04);
+	--shadow-button-primary: 0 0 0 0.5px rgb(28 26 22 / 0.7), 0 1px 2px rgb(28 26 22 / 0.2);
+	--shadow-button-neutral: 0 0 0 1px rgb(28 26 22 / 0.08), 0 1px 2px rgb(28 26 22 / 0.06);
+}
+
+/* Dark: the window body is Neuve's surface on the darker paper shell, as Ace's own dark does. */
+:root.dark {
+	--background: var(--nv-surface);
+	--card: var(--nv-raised);
+	--popover: var(--nv-raised);
+	--primary-hover: #ffffff;
+	--primary-foreground: var(--nv-bg);
+	--secondary: var(--nv-raised-2);
+	--muted: var(--nv-raised-2);
+	--accent: var(--nv-agt);
+	--accent-foreground: #0a1f14;
+	--sidebar: var(--nv-bg);
+	--sidebar-accent: var(--nv-raised);
+	--edge: rgb(255 255 255 / 0.1);
+	--shell-tint: 20 19 17;
+	--code: var(--nv-bg);
+
+	--shadow-surface: 0 0 0 1px rgb(255 255 255 / 0.08);
+	--shadow-composer:
+		0 0 0 1px rgb(255 255 255 / 0.08), 0 1px 2px rgb(0 0 0 / 0.3),
+		0 -4px 8px -2px rgb(0 0 0 / 0.2);
+	--shadow-composer-tray: 0 0 0 1px rgb(255 255 255 / 0.06);
+	--shadow-button-primary: 0 0 0 0.5px rgb(255 255 255 / 0.2), 0 1px 2px rgb(0 0 0 / 0.3);
+	--shadow-button-neutral: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 1px 2px rgb(0 0 0 / 0.24);
+}
+
+/*
+ * Radii: Ace's small, medium and large steps move to Neuve's 6, 8 and 10 (and xl, 2xl to its 14,
+ * 18). Ace registers the scale with `inherits: false`, so each element needs the value itself;
+ * the build keeps only the first registration, so the values are set in the base layer, where
+ * Ace's squircle utility still outranks them. The window, panels (3xl, 4xl) and the squircle bump
+ * stay Ace's: they are structure. A squircle reads tighter than a circle at the same radius, so
+ * Ace's bumped small steps already land near Neuve's round ones.
+ */
+@layer base {
+	*,
+	::before,
+	::after {
+		--r-sm: 0.375rem;
+		--r-md: 0.5rem;
+		--r-lg: 0.625rem;
+		--r-xl: 0.875rem;
+		--r-2xl: 1.125rem;
+	}
+}
+
+/* Type: Geist and Geist Mono. Ace's theme inlines its font into utilities, so the family is set
+   where it lands, and in the theme variables that shadow roots (the diff header) read. The
+   measured text constants (blocks/constants.ts) name the same faces. */
+:root {
+	--font-sans: "Geist Variable", "Geist", system-ui, sans-serif;
+	--font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
+}
+
+:root,
+:root body,
+:root .font-sans {
+	font-family: "Geist Variable", "Geist", system-ui, sans-serif;
+}
+
+:root .font-mono,
+:root code,
+:root pre,
+:root kbd,
+:root .content code,
+:root .content pre {
+	font-family: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
+}
+
+/* Ace's display sizes stay; their tracking follows Neuve's headings. */
+:root .text-display-xs,
+:root .text-display-sm {
+	letter-spacing: -0.02em;
+}
+
+:root .text-display,
+:root .text-display-lg {
+	letter-spacing: -0.025em;
+}
+
+/* Photo-less avatars: initials on the raised tone, never a solid primary disc. */
+:root [data-slot="avatar-fallback"],
+:root [data-slot="timeline-avatar-initials"] {
+	background-color: var(--nv-raised);
+	box-shadow: inset 0 0 0 1px var(--nv-line);
+	color: var(--nv-ink-2);
+	font-weight: 500;
+}
+
+/* Menus highlight a row with the raised tone (Neuve's menu rule), not Ace's ink or accent: menu,
+   combobox and context-menu items, the command palette's chosen option and the composer's
+   mention popup. Ace paints the row's descendants in the accent's foreground, so they inherit. */
+:root [data-slot$="-item"]:not([data-variant="destructive"])[data-highlighted],
+:root [data-slot="context-menu-item"]:not([data-variant="destructive"]):focus,
+:root [role="option"].bg-accent.text-accent-foreground,
+:root [data-slot="popover-content"] button.bg-accent.text-accent-foreground {
+	background-color: var(--muted);
+	color: var(--foreground);
+
+	& * {
+		color: inherit;
+	}
+
+	& .text-accent-foreground\/70 {
+		color: var(--muted-foreground);
+	}
+}
+
+/* A chosen row (the composer's model picker) takes Neuve's select tone. */
+:root [data-slot$="-item"][data-selected] {
+	background-color: var(--nv-select);
+	color: var(--foreground);
+}
+
+:root [data-slot$="-item"][data-selected] * {
+	color: inherit;
+}
+
+/* The composer's agent beam glows Neuve green, the agent's colour, instead of Ace's. */
+:root .composer\:body[data-beam="ace"]::before {
+	border-color: color-mix(in oklab, var(--accent) 55%, transparent);
+}
+
+:root button[data-beam="ace"]:not(:disabled) {
+	box-shadow: 0 0 12px 0 color-mix(in oklab, var(--accent) 45%, transparent);
+}
+
+/* Code blocks, the editor and diffs read Neuve's syntax and diff palette (styles/syntax.css). The
+   diff slots are light-dark() pairs, so they take both themes' values at once. */
+:root {
+	--syntax-token-comment: var(--nv-syn-cm);
+	--syntax-token-keyword: var(--nv-syn-kw);
+	--syntax-token-string: var(--nv-syn-st);
+	--syntax-token-constant: var(--nv-syn-nu);
+	--syntax-token-parameter: var(--nv-syn-id);
+	--syntax-token-function: var(--nv-syn-fn);
+	--syntax-token-string-expression: var(--nv-syn-st);
+	--syntax-token-punctuation: var(--nv-syn-pl);
+	--syntax-token-link: var(--nv-syn-fn);
+
+	--diffs-light-bg: #ffffff;
+	--diffs-dark-bg: #1b1a17;
+	--diffs-light: #1c1a16;
+	--diffs-dark: #edeae3;
+	--diffs-light-addition-color: #156b42;
+	--diffs-dark-addition-color: #74d7a0;
+	--diffs-light-deletion-color: #a1352a;
+	--diffs-dark-deletion-color: #ffa49b;
+}
+
+/* ─────────────────────────────────────────────────────────
+ * MOTION: Ace's moments on Neuve's tokens (canvas board "Motion")
+ *
+ *   press      buttons compress to .97 over 80ms; tone shifts over 120ms
+ *   menus      popovers and menus drop 4px and scale .98 → 1 over 220ms,
+ *              emphasized decelerate, from the trigger; leave over 160ms
+ *   tabs       a tab's tone shifts over 120ms; its panel rises 8px over
+ *              220ms after a 30ms beat, the old one already gone
+ *   message    a reply rises 6px and fades in over 260ms
+ *   working    the working card and tool rows drop 4px over 240ms; they
+ *              fade out over 160ms; working dots and the running title
+ *              pulse on the 1100ms working cycle
+ *
+ * Transform and opacity only. Reduced motion: Ace's own rule makes every
+ * animation and transition instant; press no longer compresses, and the
+ * looping working cues stand still.
+ * ───────────────────────────────────────────────────────── */
+
+:root [data-slot="button"] {
+	transition-property: background-color, color, box-shadow, outline-color, scale;
+	transition-duration:
+		var(--nv-dur-surface-tone), var(--nv-dur-surface-tone), var(--nv-dur-surface-tone),
+		var(--nv-dur-surface-tone), var(--nv-dur-press-in);
+	transition-timing-function: var(--nv-ease-standard);
+}
+
+:root [data-slot="button"]:active:not([aria-haspopup]) {
+	translate: none;
+	scale: var(--nv-scale-press);
+}
+
+/* Keyboard focus gets the full gold ring at once (≥3:1 on every surface), where Ace drew its
+   ring at half strength: the base outline, and the half-strength outline and ring utilities. */
+@layer base {
+	* {
+		outline-color: var(--ring);
+	}
+}
+
+:root [data-slot="button"]:focus-visible,
+:root .focus-visible\:outline-ring\/50:focus-visible {
+	outline-color: var(--ring);
+}
+
+:root :is(.focus-visible\:ring-ring\/30, .focus-visible\:ring-ring\/50):focus-visible,
+:root .focus\:ring-ring\/30:focus {
+	--tw-ring-color: var(--ring);
+}
+
+:is(
+		[data-slot="dropdown-menu-content"],
+		[data-slot="context-menu-content"],
+		[data-slot="popover-content"],
+		[data-slot="combobox-content"],
+		[data-slot="dialog-content"]
+	):where([data-open]) {
+	--tw-animation-duration: var(--nv-dur-card);
+	--tw-ease: var(--nv-ease-emphasized-decelerate);
+	--tw-enter-scale: var(--nv-scale-enter);
+}
+
+:is(
+		[data-slot="dropdown-menu-content"],
+		[data-slot="context-menu-content"],
+		[data-slot="popover-content"],
+		[data-slot="combobox-content"]
+	) {
+	&[data-side="bottom"] {
+		--tw-enter-translate-y: calc(var(--nv-offset-card) * -1);
+	}
+
+	&[data-side="top"] {
+		--tw-enter-translate-y: var(--nv-offset-card);
+	}
+
+	&:is([data-side="left"], [data-side="inline-start"]) {
+		--tw-enter-translate-x: var(--nv-offset-card);
+	}
+
+	&:is([data-side="right"], [data-side="inline-end"]) {
+		--tw-enter-translate-x: calc(var(--nv-offset-card) * -1);
+	}
+}
+
+:is(
+		[data-slot="dropdown-menu-content"],
+		[data-slot="context-menu-content"],
+		[data-slot="popover-content"],
+		[data-slot="combobox-content"],
+		[data-slot="dialog-content"]
+	):where([data-closed]) {
+	--tw-animation-duration: var(--nv-dur-card-exit);
+	--tw-ease: var(--nv-ease-emphasized-accelerate);
+	--tw-exit-scale: 1;
+}
+
+/* Tooltips are hints: a 2px drop over 140ms on the iOS ease-out. */
+[data-slot="tooltip-content"] {
+	--tw-animation-duration: var(--nv-dur-hint);
+	--tw-ease: var(--nv-ease-ios-out);
+	--tw-enter-scale: 1;
+
+	&[data-side="bottom"] {
+		--tw-enter-translate-y: calc(var(--nv-offset-hint) * -1);
+	}
+
+	&[data-side="top"] {
+		--tw-enter-translate-y: var(--nv-offset-hint);
+	}
+}
+
+:root [role="tab"][data-layout-tab] {
+	transition-property: background-color, color;
+	transition-duration: var(--nv-dur-surface-tone);
+	transition-timing-function: var(--nv-ease-standard);
+}
+
+/* Panels stay mounted and toggle `invisible`, so the leaving panel is gone at once and the one
+   arriving transitions in from its hidden pose. */
+:root [data-layout-zone] > [role="tabpanel"] {
+	transition:
+		opacity var(--nv-vt-enter) var(--nv-ease-emphasized-decelerate) var(--nv-vt-beat),
+		translate var(--nv-vt-enter) var(--nv-ease-emphasized-decelerate) var(--nv-vt-beat);
+
+	&.invisible {
+		opacity: 0;
+		translate: 0 var(--nv-vt-enter-offset);
+		transition: none;
+	}
+}
+
+@keyframes nv-rise {
+	from {
+		opacity: 0;
+		transform: translateY(var(--nv-offset-rise));
+	}
+}
+
+@keyframes nv-drop {
+	from {
+		opacity: 0;
+		transform: translateY(calc(var(--nv-offset-card) * -1));
+	}
+}
+
+@keyframes nv-leave {
+	to {
+		opacity: 0;
+	}
+}
+
+@keyframes nv-working-dot {
+	0%,
+	100% {
+		opacity: var(--nv-opacity-working-low);
+	}
+
+	40% {
+		opacity: 1;
+	}
+}
+
+@keyframes nv-live-pulse {
+	50% {
+		opacity: var(--nv-opacity-live-pulse);
+	}
+}
+
+/* Ace's arrival blurred in; Neuve's rises on opacity and transform only. */
+:root .timeline-stream-in {
+	animation: nv-rise var(--nv-dur-message) var(--nv-ease-emphasized-decelerate) both;
+	will-change: opacity, transform;
+}
+
+:root .timeline-tools-expand-in,
+:root .tool-result-expand-in,
+:root .timeline-working-rollup-in,
+:root .timeline-working-context-open {
+	animation: nv-drop var(--nv-dur-detail) var(--nv-ease-emphasized-decelerate) both;
+}
+
+/* Ace unmounts these after 180ms, so the exit stays inside that. */
+:root .tool-result-expand-out,
+:root .timeline-working-rollup-out {
+	animation: nv-leave var(--nv-dur-card-exit) var(--nv-ease-emphasized-accelerate) both;
+}
+
+:root .timeline-working-context-closing {
+	animation: none;
+}
+
+:root .typing-dots-dot {
+	animation: nv-working-dot var(--nv-dur-working) var(--nv-ease-in-out) infinite;
+
+	&:nth-child(2) {
+		animation-delay: var(--nv-dur-working-stagger);
+	}
+
+	&:nth-child(3) {
+		animation-delay: calc(var(--nv-dur-working-stagger) * 2);
+	}
+}
+
+/* A running tool's title pulses instead of sweeping a gradient through its text. */
+:root .text-shimmer {
+	animation: nv-live-pulse var(--nv-dur-working) var(--nv-ease-in-out) infinite;
+	background-image: none;
+	color: var(--text-shimmer-base);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	:root [data-slot="button"]:active:not([aria-haspopup]) {
+		scale: none;
+	}
+
+	:root .typing-dots-dot,
+	:root .text-shimmer {
+		animation: none;
+		opacity: 1;
+	}
+
+	:root [data-layout-zone] > [role="tabpanel"] {
+		transition-delay: 0s;
+
+		&.invisible {
+			translate: none;
+		}
+	}
+}

@@ -1,0 +1,13 @@
+{
+  "project": "keithamus/sort-package-json",
+  "source": "https://github.com/keithamus/sort-package-json",
+  "commit": "c22cfe87e6b3712d305bec55260a4c52f237a0f8",
+  "pin": "tag v3.7.1, the version Bun's src/format/json/sort_package_json/npm.rs says it ports",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/keithamus/sort-package-json/c22cfe87e6b3712d305bec55260a4c52f237a0f8/LICENSE",
+      "sha256": "cf9a066fae02f2ed882a4eb42e232cf1c756a5dbb7da0c8e79b75ffdac863b46"
+    }
+  ]
+}

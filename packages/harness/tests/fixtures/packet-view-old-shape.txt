@@ -1,0 +1,40 @@
+packet (packet.published@1 <id1>, manifest blob <hex11>): complete
+  1 batch(es), 3 unit(s), 2 context reference(s), 3 assessment(s), 2 delivery stop(s), 3 comment(s), 3 disposition(s), 2 publish gap(s)
+
+batch <short2> (b1) "Batch"
+  focus: "Focus"
+  unit <short3> (b1.u1) [no assessment] "Unit one, merged"
+    owned: a.ts new 1-9, a.ts old 2-3
+    guided (none; scope ?):
+    review: none (the unit's review did not finish; nothing invented)
+    disposition: none recorded by the agent
+    closure: closed (by 1 disposition(s))
+  unit <short4> (b1.u2) [human-suggested] "Unit two"
+    owned: b.ts new 5-30
+    high-easy: High complexity; the validation reading has a gap.
+    requirement MISSING: The retry stops after three attempts.
+    guided (none; scope ?):
+    review: none (the unit's review did not finish; nothing invented)
+    disposition request-changes (<short5>) at <hex12>; rests on 1 comment(s); cites 0 proof record(s)
+    comment <short6> [defect/tests/forged] a.ts:new3-4 The test mocks the retry away. (computation <hex13>#tests/b.test.ts:12)
+    comment <short7> [risk/tests/test-bloat] Forty tests for one branch.
+    context <short8> doc/supports docs/retry.md
+    closure: closed (by 1 disposition(s))
+  unit <short9> (b1.u3) [human-required] "Unit three"
+    owned: logo.png new whole
+    high-hard: Visible everywhere and hard to validate.
+    guided (none; scope ?):
+    review: none (the unit's review did not finish; nothing invented)
+    disposition request-changes (<short10>) at <hex12>; rests on 0 comment(s); cites 0 proof record(s)
+    closure: open: needs a person's disposition; 1 agent disposition(s) reach them as context (4.14)
+
+gaps disclosed by the run (gap.disclosed@1)
+  run: history-not-consulted: History is not consulted in M3 (10.3).
+  understand: scope-missing (unit <short4>): The ticket was named but not fetched.
+
+ownership disclosures (10.21): none
+
+stored content not decoded (disclosed; the rest of the packet reads as stored)
+  assembled batch of b1 (none none): the packet names no assembled batch, so its local IDs stay unresolved
+  batch digest of b1 (computation <hex14>): not held in this store
+  facts of b1.u2 (computation <hex15>): not held in this store

@@ -1,0 +1,13 @@
+{
+  "project": "v8/v8",
+  "source": "https://github.com/v8/v8",
+  "commit": "dc7873b18ab6f3003e0bed1dd856bf215fd6bbae",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/v8/v8/dc7873b18ab6f3003e0bed1dd856bf215fd6bbae/LICENSE",
+      "sha256": "6ab33af8774a0f396ee3aeeb761e3229057682d6f9fa7f572e390c2cb3a6e509"
+    }
+  ]
+}

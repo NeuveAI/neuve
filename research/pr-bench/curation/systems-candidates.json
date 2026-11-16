@@ -1,0 +1,74 @@
+[
+  {
+    "repo": "ChromeDevTools/chrome-devtools-mcp",
+    "number": 2641,
+    "title": "test: add sinon mock utils and emulate tool unit tests",
+    "comments": 17,
+    "review_comments": 39,
+    "commits": 28,
+    "author": "maheshsingh20"
+  },
+  {
+    "repo": "ChromeDevTools/chrome-devtools-mcp",
+    "number": 2060,
+    "title": "feat: include source location in list_console_messages",
+    "comments": 13,
+    "review_comments": 0,
+    "commits": 3,
+    "author": "masamaru0513"
+  },
+  {
+    "repo": "ChromeDevTools/chrome-devtools-mcp",
+    "number": 2605,
+    "title": "feat: support configurable filesystem roots",
+    "comments": 6,
+    "review_comments": 18,
+    "commits": 7,
+    "author": "joebasrawi"
+  },
+  {
+    "repo": "ChromeDevTools/chrome-devtools-mcp",
+    "number": 2503,
+    "title": "fix(loadResource): re-validate URL policy after redirects",
+    "comments": 4,
+    "review_comments": 4,
+    "commits": 1,
+    "author": "jatinsingh1603"
+  },
+  {
+    "repo": "ChromeDevTools/chrome-devtools-mcp",
+    "number": 2296,
+    "title": "feat: support --allow-unrestricted-paths configuration",
+    "comments": 13,
+    "review_comments": 0,
+    "commits": 10,
+    "author": "herdiyana256"
+  },
+  {
+    "repo": "entireio/cli",
+    "number": 2198,
+    "title": "Install the search skill as a real skill on every agent",
+    "comments": 2,
+    "review_comments": 14,
+    "commits": 5,
+    "author": "evisdren"
+  },
+  {
+    "repo": "entireio/cli",
+    "number": 2211,
+    "title": "fix(checkpoint): serialize OPF ref updates",
+    "comments": 15,
+    "review_comments": 7,
+    "commits": 15,
+    "author": "MuskanPaliwal"
+  },
+  {
+    "repo": "entireio/cli",
+    "number": 2052,
+    "title": "fix(codex): use repository hook root in linked worktrees",
+    "comments": 16,
+    "review_comments": 44,
+    "commits": 42,
+    "author": "MuskanPaliwal"
+  }
+]

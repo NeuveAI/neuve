@@ -1,0 +1,57 @@
+import { createHash } from "node:crypto";
+
+/** The body of every inline <script> (no src) in an HTML document. */
+export function inlineScripts(html: string): string[] {
+  const out: string[] = [];
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    const attrs = m[1] ?? "";
+    if (/\bsrc\s*=/.test(attrs)) continue;
+    out.push(m[2] ?? "");
+  }
+  return out;
+}
+
+export const sha256 = (text: string) =>
+  `'sha256-${createHash("sha256").update(text, "utf8").digest("base64")}'`;
+
+/**
+ * The Content-Security-Policy for the page: everything same-origin, inline
+ * scripts allowed only by hash, no inline styles, no frames, no plugins.
+ */
+export function csp(html: string): string {
+  const hashes = inlineScripts(html).map(sha256);
+  return [
+    "default-src 'self'",
+    `script-src 'self' ${hashes.join(" ")}`.trim(),
+    "style-src 'self'",
+    "img-src 'self'",
+    "font-src 'self'",
+    "connect-src 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+    // No script writes HTML strings, so no Trusted Types policy is needed;
+    // browsers without Trusted Types ignore these two (modern-web-guidance: security).
+    "require-trusted-types-for 'script'",
+    "trusted-types 'none'",
+  ].join("; ");
+}
+
+/** dist/_headers for Cloudflare's static assets. */
+export function headersFile(html: string): string {
+  return [
+    "/*",
+    `  Content-Security-Policy: ${csp(html)}`,
+    "  X-Content-Type-Options: nosniff",
+    "  Referrer-Policy: strict-origin-when-cross-origin",
+    "  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    "  Cross-Origin-Opener-Policy: same-origin",
+    // For browsers that predate CSP frame-ancestors.
+    "  X-Frame-Options: DENY",
+    "",
+    "/assets/*",
+    "  Cache-Control: public, max-age=31536000, immutable",
+    "",
+  ].join("\n");
+}

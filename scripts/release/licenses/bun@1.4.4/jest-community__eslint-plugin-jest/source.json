@@ -1,0 +1,13 @@
+{
+  "project": "jest-community/eslint-plugin-jest",
+  "source": "https://github.com/jest-community/eslint-plugin-jest",
+  "commit": "412426e83a6e608aa54e8091c8f7a6f3472d0262",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/jest-community/eslint-plugin-jest/412426e83a6e608aa54e8091c8f7a6f3472d0262/LICENSE",
+      "sha256": "e2ee1d888c2048a71a8d581da664cae00dc9fc64bf5627dca44518ae08cabe9d"
+    }
+  ]
+}

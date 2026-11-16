@@ -1,0 +1,34 @@
+{
+  "name": "@neuve/website",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "bun --bun vite",
+    "build": "bun --bun vite build && bun --bun vite build --ssr src/entry-server.tsx --outDir dist-ssr && bun scripts/prerender.ts",
+    "preview": "bun --bun vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun ../../scripts/test-budget.ts ./tests",
+    "format": "prettier --write src tests scripts package.json tsconfig.json vite.config.ts index.html",
+    "format:check": "prettier --check src tests scripts package.json tsconfig.json vite.config.ts index.html"
+  },
+  "dependencies": {
+    "@floating-ui/dom": "1.8.0",
+    "@workspace/ui": "workspace:*",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4",
+    "@types/bun": "1.4.4",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6",
+    "dialkit": "2.0.2",
+    "prettier": "3.9.6",
+    "tailwindcss": "^4",
+    "typescript": "^6.0.2",
+    "vite": "^8"
+  }
+}

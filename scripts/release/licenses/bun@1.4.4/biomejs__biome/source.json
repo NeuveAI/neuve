@@ -1,0 +1,18 @@
+{
+  "project": "biomejs/biome",
+  "source": "https://github.com/biomejs/biome",
+  "commit": "97aa1838863c7d70618879ec96cfa0d287fd08f0",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/biomejs/biome/97aa1838863c7d70618879ec96cfa0d287fd08f0/LICENSE-MIT",
+      "sha256": "35365b6285e1f8cac61549f321befdbbe6139bf1e3d7ef6ccf1f1294ab015202"
+    },
+    {
+      "name": "LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/biomejs/biome/97aa1838863c7d70618879ec96cfa0d287fd08f0/LICENSE-APACHE",
+      "sha256": "e2746aba8799f7a3378259f36a83a079e811ca7926cbdd248a2eb7ca9cbbac5d"
+    }
+  ]
+}

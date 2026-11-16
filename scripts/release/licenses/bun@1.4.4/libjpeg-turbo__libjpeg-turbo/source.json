@@ -1,0 +1,18 @@
+{
+  "project": "libjpeg-turbo/libjpeg-turbo",
+  "source": "https://github.com/libjpeg-turbo/libjpeg-turbo",
+  "commit": "c85e6b905bf237038faa936dab160ebfc5da0344",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/libjpeg-turbo/libjpeg-turbo/c85e6b905bf237038faa936dab160ebfc5da0344/LICENSE.md",
+      "sha256": "ba6bceebcba0fdd35488477c2cca8c4632ce82c74dbfbc87d886ce6fc4433579"
+    },
+    {
+      "name": "README.ijg",
+      "url": "https://raw.githubusercontent.com/libjpeg-turbo/libjpeg-turbo/c85e6b905bf237038faa936dab160ebfc5da0344/README.ijg",
+      "sha256": "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+    }
+  ]
+}

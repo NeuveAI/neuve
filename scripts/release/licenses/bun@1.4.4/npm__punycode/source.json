@@ -1,0 +1,14 @@
+{
+  "project": "punycode",
+  "source": "https://registry.npmjs.org/punycode/-/punycode-2.3.1.tgz",
+  "version": "2.3.1",
+  "commit": "9e1b2cda98d215d3a73fcbfe93c62e021f4ba768",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE-MIT.txt",
+      "url": "https://registry.npmjs.org/punycode/-/punycode-2.3.1.tgz#package/LICENSE-MIT.txt",
+      "sha256": "483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a"
+    }
+  ]
+}

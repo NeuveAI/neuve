@@ -1,0 +1,88 @@
+schema_version: 1
+case_id: neuve-effect-argument-roundtrip
+status: candidate
+language: TypeScript
+
+target:
+  positive_revision: 6e98e699a32109c1c5b2e64ebbfe3d41f0ec455b
+  parent_revision: 813b28627cc76ba14643304d23a6872c4756c9c0
+  file: apps/browser-service/server/services/agent-browser-executor.service.ts
+  symbol: parseCommandTokens
+
+questions:
+  authoritative: >-
+    How does parseCommandTokens preserve spaces, quotes, backslashes,
+    multiline text, and empty arguments across commandSpecToRawCommand
+    batch serialization, and which production caller and regression check
+    establish that contract?
+  sensitivity_paraphrase: >-
+    Where are command arguments serialized, parsed, called in production,
+    and checked for round-trip fidelity?
+
+required_retrieval:
+  - role: target_parser
+    path: apps/browser-service/server/services/agent-browser-executor.service.ts
+    symbol: parseCommandTokens
+  - role: production_caller
+    path: apps/browser-service/server/services/agent-browser-executor.service.ts
+    symbol: parseCommandSpec
+  - role: serializer
+    path: apps/browser-service/server/services/agent-browser-runner-adapter.service.ts
+    symbol: commandSpecToRawCommand
+  - role: quoting_helper
+    path: apps/browser-service/server/services/agent-browser-runner-adapter.service.ts
+    symbol: quoteCommandArg
+  - role: regression_check
+    path: apps/browser-service/server/services/__tests__/execution-runner-batch-roundtrip.test.ts
+    lines:
+      start: 5
+      end: 39
+
+required_relationships:
+  - id: parser-calls-tokenizer
+    relation: CALLS
+    resolution: exact
+    from:
+      path: apps/browser-service/server/services/agent-browser-executor.service.ts
+      symbol: parseCommandSpec
+    to:
+      path: apps/browser-service/server/services/agent-browser-executor.service.ts
+      symbol: parseCommandTokens
+  - id: serializer-calls-quoting-helper
+    relation: CALLS
+    resolution: exact
+    from:
+      path: apps/browser-service/server/services/agent-browser-runner-adapter.service.ts
+      symbol: commandSpecToRawCommand
+    to:
+      path: apps/browser-service/server/services/agent-browser-runner-adapter.service.ts
+      symbol: quoteCommandArg
+
+behavioral_obligations:
+  - The pinned regression region passes each command specification through commandSpecToRawCommand and parseCommandTokens.
+  - The pinned regression region compares every parsed token with the original command and arguments, including the empty argument.
+
+revision_controls:
+  - id: parent-before-roundtrip-regression
+    revision: 813b28627cc76ba14643304d23a6872c4756c9c0
+    source_assertions:
+      - id: exported-parser-repair
+        kind: literal
+        path: apps/browser-service/server/services/agent-browser-executor.service.ts
+        region: { start: 1, end: 120 }
+        literal: export const parseCommandTokens
+        expected: absent
+      - id: regression-file
+        kind: file
+        path: apps/browser-service/server/services/__tests__/execution-runner-batch-roundtrip.test.ts
+        expected: absent
+    retrieval:
+      present: [target_parser, production_caller, serializer, quoting_helper]
+      absent: [regression_check]
+    relationships:
+      present: [parser-calls-tokenizer, serializer-calls-quoting-helper]
+      absent: []
+
+known_lexical_baseline:
+  verdict: fail
+  reason: The current provider retrieves relevant source and tests but does not classify a verified direct-support path.

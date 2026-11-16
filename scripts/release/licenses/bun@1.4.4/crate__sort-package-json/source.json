@@ -1,0 +1,13 @@
+{
+  "project": "sort-package-json",
+  "source": "https://static.crates.io/crates/sort-package-json/sort-package-json-1.0.0.crate",
+  "version": "1.0.0",
+  "pin": "Bun names no version; the version current on crates.io when bun-v1.4.4 was tagged (22 October 2026)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://static.crates.io/crates/sort-package-json/sort-package-json-1.0.0.crate#sort-package-json-1.0.0/LICENSE",
+      "sha256": "20538257cfb1812d48164a7d11c0008a66b33c01b4debdfa0ec2a104fe00f028"
+    }
+  ]
+}

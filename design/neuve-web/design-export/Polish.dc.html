@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Smaller refinements</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+/* Board-only, no code token: */
+.theme-light{--sta-tint:#F1EEE8}
+.theme-dark{--sta-tint:#23211E}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tile{display:flex;flex-direction:column;gap:12px;min-width:0}
+.tt{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.pane{position:relative;border-radius:10px;background:var(--surface);box-shadow:0 0 0 1px var(--line);overflow:clip;padding:14px;box-sizing:border-box;min-height:120px}
+.pane.now{background:transparent;box-shadow:inset 0 0 0 1px var(--line2)}
+.pane.now>*:not(.tag){opacity:.72}
+.tag{position:absolute;top:10px;right:12px;font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.tag.new{color:var(--agt-fg)}
+.row{display:grid;grid-template-columns:40px 16px minmax(0,1fr);height:22px;align-items:center;font-family:'Geist Mono',ui-monospace,monospace;font-size:12px}
+.ln{color:var(--nv-ln);text-align:right;padding-right:8px;font-size:11px}
+.k-add{background:var(--add-bg)}.k-add .ln{color:var(--add-ln)}
+.k-del{background:var(--del-bg)}.k-del .ln{color:var(--del-ln)}
+.bar{display:block;height:7px;border-radius:4px;background:var(--skel)}
+.k-add .bar{background:color-mix(in srgb,var(--nv-add-fg) 16%,transparent)}.k-del .bar{background:color-mix(in srgb,var(--nv-del-fg) 14%,transparent)}
+.spin{animation:spin var(--nv-dur-working-spin) var(--nv-ease-linear) infinite;transform-origin:50% 50%}
+@keyframes spin{to{transform:rotate(360deg)}}
+.dim{opacity:var(--nv-opacity-switching);transition:opacity var(--nv-dur-switch-dim) var(--nv-ease-standard) var(--nv-dur-switch-wait)}
+.disc{display:flex;align-items:center;gap:10px;width:100%;height:40px;border:0;background:transparent;border-radius:8px;padding:0 10px;text-align:left;font-size:13px;color:var(--ink2);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.disc:hover{background:var(--raised)}}
+.chev{transition:transform var(--nv-dur-chevron) var(--nv-ease-standard)}
+.reveal{animation:reveal var(--nv-dur-chevron) var(--nv-ease-emphasized-decelerate) both}
+@keyframes reveal{from{opacity:0;transform:translateY(calc(var(--nv-offset-card) * -1))}to{opacity:1;transform:none}}
+.cnt{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--raised);color:var(--muted)}
+.dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+.pulse{animation:pulse var(--nv-dur-working) var(--nv-ease-in-out) infinite alternate}
+@keyframes pulse{from{opacity:1}to{opacity:var(--nv-opacity-live-pulse)}}
+@media (prefers-reduced-motion:reduce){.spin,.pulse,.reveal{animation:none}.chev,.dim{transition:none}}
+@media (max-width:900px){.grid2{grid-template-columns:minmax(0,1fr)!important}}
+/* ── REVIEW IDENTITY (Verdicts.dc.html · round-4.md § Review identity). Identity is who: one avatar per actor,
+   never altered by placement or state. Placement changes size only (24 header · 20 cards, threads, margin · 16 rail).
+   State goes beside the avatar, never on it: no status dot, badge or tint. ── */
+.av{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-weight:600;line-height:1}
+.av.person{font-family:Geist,system-ui,sans-serif;border-radius:50% 50% 50% 14%;background:var(--raised2);color:var(--ink2)}
+.av.person.s16{width:16px;height:16px;font-size:7.5px}
+.av.person.s20{width:20px;height:20px;font-size:8.5px}
+.av.person.s24{width:24px;height:24px;font-size:9.5px}
+.av.agent{display:inline-block;overflow:visible;transform:translateY(-10%)}
+.av.agent.s24{width:24px;height:29.2px}
+.av.agent.s20{width:20px;height:24.33px}
+.av.agent.s16{width:16px;height:19.47px}
+.av.agent .body{stroke:none}
+.av.agent .edge{fill:none;stroke-width:1;stroke-linecap:butt;opacity:.5}
+.av.agent .ant{stroke-width:.85;stroke-linecap:round;fill:none}
+.av.agent .tip{stroke:none}
+.av.agent text{font-family:'Geist Mono',ui-monospace,monospace;font-size:8.6px;font-weight:600;text-anchor:middle;dominant-baseline:central}
+.av.agent.impl .body{fill:var(--agt-tint)} .av.agent.impl .edge,.av.agent.impl .ant{stroke:var(--agt-fg)} .av.agent.impl .tip,.av.agent.impl text{fill:var(--agt-fg)}
+.av.agent.rev .body{fill:var(--sug-tint)} .av.agent.rev .edge,.av.agent.rev .ant{stroke:var(--sug-ink)} .av.agent.rev .tip,.av.agent.rev text{fill:var(--sug-ink)}
+/* holds an agent's taller box (the antenna) to the bubble's square, so rows line up whoever it is */
+.avbox{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center}
+.avbox.s16{width:16px;height:16px}.avbox.s20{width:20px;height:20px}.avbox.s24{width:24px;height:24px}
+.vi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke-width:2.8;stroke-linecap:round;stroke-linejoin:round}
+.vi.ok{stroke:var(--agt)} .vi.no{stroke:var(--req)}
+.mark{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;line-height:20px;color:var(--ink);white-space:nowrap}
+.mark b{font-weight:600}
+.mark .w{font-weight:400}
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 1560px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<div class="grid2" style="max-width: 1320px; margin: 0 auto; padding: 48px 24px 80px; box-sizing: border-box; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 48px 40px">
+
+<section class="tile">
+<h2 class="tt">Switching units answers at once</h2>
+<div class="pane now"><span class="tag">Now</span>
+<div style="display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 14px; align-items: start">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<div style="padding: 8px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 600; background: var(--select)">Prepared start request…</div>
+<div style="padding: 8px 10px; border-radius: 8px; font-size: 12.5px; display: flex; gap: 8px; align-items: center"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path></svg>Client retry identity…</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px"><span style="font-size: 15px; font-weight: 600">Prepared start request and correlated…</span><span class="bar" style="width: 80%"></span><span class="bar" style="width: 64%"></span><span class="mono" style="font-size: 11px; color: var(--faint)">old unit stays for 2.1 s · lands mid-scroll</span></div>
+</div>
+</div>
+<div class="pane"><span class="tag new">Proposed</span>
+<div style="display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 14px; align-items: start">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<div style="padding: 8px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 500; color: var(--muted)">Prepared start request…</div>
+<div aria-busy="true" style="padding: 8px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 600; background: var(--select); display: flex; gap: 8px; align-items: center"><svg class="spin" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.8" fill="none" stroke="var(--line)" stroke-width="1.6"></circle><path d="M5 1.2a3.8 3.8 0 0 1 3.8 3.8" fill="none" stroke="var(--sug)" stroke-width="1.6" stroke-linecap="round"></path></svg>Client retry identity…</div>
+</div>
+<div class="dim" style="display: flex; flex-direction: column; gap: 8px"><span style="font-size: 15px; font-weight: 600">Prepared start request and correlated…</span><span class="bar" style="width: 80%"></span><span class="bar" style="width: 64%"></span></div>
+</div>
+<div style="display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap"><span class="cnt">0 ms  row selects</span><span class="cnt">150 ms  old unit dims</span><span class="cnt">arrive  top of unit</span></div>
+</div>
+</section>
+
+<section class="tile">
+<h2 class="tt">The decision dock never covers code</h2>
+<div class="pane now" style="padding: 0"><span class="tag">Now</span>
+<div style="padding-top: 8px">
+<div class="row k-add"><span class="ln">1181</span><span>+</span><span class="bar" style="width: 70%"></span></div>
+<div class="row k-add"><span class="ln">1182</span><span>+</span><span class="bar" style="width: 20%"></span></div>
+<div class="row k-add"><span class="ln">1183</span><span>+</span><span class="bar" style="width: 52%"></span></div>
+<div class="row k-add"><span class="ln">1184</span><span>+</span><span class="bar" style="width: 38%"></span></div>
+</div>
+<div style="position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); height: 36px; padding: 0 6px 0 14px; border-radius: 10px; background: var(--dock); color: var(--dock-fg); display: flex; align-items: center; gap: 12px; font-size: 12.5px; white-space: nowrap">Approved · 20 ranges<span style="color: var(--dock-muted)">Undo</span><span style="height: 26px; padding: 0 10px; border-radius: 7px; background: var(--accent); color: var(--accent-ink); display: inline-flex; align-items: center">Back to batch</span></div>
+</div>
+<div class="pane" style="padding: 0"><span class="tag new">Proposed</span>
+<div style="padding-top: 8px">
+<div class="row k-add"><span class="ln">1181</span><span>+</span><span class="bar" style="width: 70%"></span></div>
+<div class="row k-add"><span class="ln">1182</span><span>+</span><span class="bar" style="width: 20%"></span></div>
+<div class="row k-add"><span class="ln">1183</span><span>+</span><span class="bar" style="width: 52%"></span></div>
+<div class="row k-add"><span class="ln">1184</span><span>+</span><span class="bar" style="width: 38%"></span></div>
+</div>
+<div style="height: 64px; display: flex; align-items: center; justify-content: center">
+<div style="height: 40px; padding: 0 6px 0 8px; border-radius: 12px; background: var(--dock); color: var(--dock-fg); display: flex; align-items: center; gap: 10px; font-size: 12.5px; white-space: nowrap">
+<span style="width: 22px; height: 22px; border-radius: 6px; background: var(--dock-ok-tint); color: var(--dock-ok); display: inline-flex; align-items: center; justify-content: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px"><path d="m5 12 5 5L20 7"></path></svg></span>You approved this unit<span style="width: 1px; height: 18px; background: var(--dock-line)"></span><span style="color: var(--dock-muted)">Undo</span>
+<span style="height: 28px; padding: 0 10px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); display: inline-flex; align-items: center; gap: 6px; font-weight: 500">Next unit<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></span>
+</div>
+</div>
+</div>
+</section>
+
+<section class="tile" style="grid-column: 1 / -1">
+<h2 class="tt">Table cells truncate instead of colliding</h2>
+<div class="pane now"><span class="tag">Now</span>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 90px 92px 110px 110px; gap: 10px; align-items: center; font-size: 12px; padding-top: 18px">
+<span style="font-weight: 600; font-size: 13px">Prepared start request and correlated acknowledgment contract</span><span>2 · 3 hunks</span><span>4 markers</span><span style="color: var(--agt-fg); white-space: nowrap">Cited briefing record</span><span style="white-space: nowrap; margin-left: -34px">Readers unavailable</span>
+</div>
+</div>
+<div class="pane"><span class="tag new">Proposed</span>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 92px 168px 160px 148px; gap: 16px; align-items: center; font-size: 12px; padding-top: 18px">
+<span style="display: flex; flex-direction: column; gap: 4px; min-width: 0"><span style="font-weight: 600; font-size: 13px; line-height: 18px">Prepared start request and correlated acknowledgment contract</span><span style="display: inline-flex; gap: 6px; align-items: center; color: var(--req-fg); font-size: 11.5px"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg>Human required</span></span>
+<span class="mono" style="font-size: 11.5px; color: var(--ink2)">3 hunks</span>
+<span class="mono" style="font-size: 11.5px; color: var(--ink2)">4 markers</span>
+<span title="Cited briefing recorded" style="display: flex; gap: 6px; align-items: center; min-width: 0; color: var(--agt-fg)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="m5 12 5 5L20 7"></path></svg><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Cited briefing recorded</span></span>
+<span title="Readers unavailable" style="display: flex; gap: 6px; align-items: center; min-width: 0; color: var(--muted)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><circle cx="12" cy="12" r="8"></circle><path d="M8 12h8"></path></svg><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Readers unavailable</span></span>
+</div>
+</div>
+</section>
+
+<section class="tile">
+<h2 class="tt">Lane bar: solid colours, legible counts, no raw slugs</h2>
+<div class="pane now"><span class="tag">Now</span>
+<div style="padding-top: 18px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr 28px; gap: 2px; height: 28px">
+<span style="background: #A84E8C; border-radius: 6px 0 0 6px; color: #fff; font-size: 11px; padding: 6px 8px">1</span><span style="background: var(--sug-tint); color: var(--faint); font-size: 11px; padding: 6px 8px">1</span><span style="background: var(--agt-tint); color: var(--faint); font-size: 11px; padding: 6px 8px">1</span><span style="background: var(--sta-tint); border-radius: 0 6px 6px 0; color: var(--faint); font-size: 11px; padding: 6px 8px">0</span>
+</div>
+<span style="font-size: 12px; color: var(--req-fg); font-weight: 600">Human required 1</span><span style="font-size: 11.5px">awaiting-human</span>
+</div>
+</div>
+<div class="pane"><span class="tag new">Proposed</span>
+<div style="padding-top: 18px; display: flex; flex-direction: column; gap: 10px">
+<div role="img" aria-label="Human-required 1, Human-suggested 1, Agentic review 1, Static automation 0" style="display: grid; grid-template-columns: 1fr 1fr 1fr 6px; gap: 3px; height: 10px">
+<span style="background: var(--req); border-radius: 5px 2px 2px 5px"></span><span style="background: var(--sug); border-radius: 2px"></span><span style="background: var(--agt); border-radius: 2px"></span><span style="background: var(--line-strong); border-radius: 2px 5px 5px 2px"></span>
+</div>
+<div style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 12.5px">
+<span style="display: inline-flex; gap: 7px; align-items: center; color: var(--ink2)"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg>Human-required<span class="mono" style="color: var(--ink)">1</span><span class="mono" style="font-size: 11px; color: var(--req-fg)">waiting on you</span></span>
+<span style="display: inline-flex; gap: 7px; align-items: center; color: var(--ink2)"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg>Human-suggested<span class="mono" style="color: var(--ink)">1</span></span>
+<span style="display: inline-flex; gap: 7px; align-items: center; color: var(--ink2)"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg>Agentic review<span class="mono" style="color: var(--ink)">1</span></span>
+<span style="display: inline-flex; gap: 7px; align-items: center; color: var(--muted)"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.5" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg>Static automation<span class="mono">0</span></span>
+</div>
+</div>
+</div>
+</section>
+
+<section class="tile">
+<h2 class="tt">One disclosure style, everywhere</h2>
+<div class="pane now"><span class="tag">Now</span>
+<div style="padding-top: 18px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; color: var(--muted)">
+<span>▸ Original submitted patch · read-only context</span>
+<span>▸ Owned hunks and recorded decisions</span>
+<span style="font-size: 11.5px; line-height: 16px">Recorded limitations: Submitted-source citation support is unavailable: the schema cites only captured source_evidence ranges and cannot represent…</span>
+</div>
+</div>
+<div class="pane" style="padding: 8px"><span class="tag new">Proposed</span>
+<button type="button" class="disc" onClick="{{toggleLim}}" aria-expanded="{{limOpen}}">
+<svg class="ic chev" viewBox="0 0 24 24" aria-hidden="true" style="transform: {{limChev}}; color: var(--faint)"><path d="m9 6 6 6-6 6"></path></svg>Recorded limitations<span class="cnt">6</span><span style="flex: 1 1 auto"></span>
+</button>
+<sc-if value="{{limOpen}}" hint-placeholder-val="{{false}}">
+<ul class="reveal" style="margin: 0 0 6px; padding: 0 12px 0 42px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; line-height: 18px; color: var(--ink2)">
+<li>Submitted-source citation support is unavailable</li>
+<li>Review-obligation coverage is not established</li>
+<li>A partial provider failure skipped one file</li>
+</ul>
+</sc-if>
+<button type="button" class="disc" onClick="{{toggleAgent}}" aria-expanded="{{agentOpen}}">
+<svg class="ic chev" viewBox="0 0 24 24" aria-hidden="true" style="transform: {{agentChev}}; color: var(--faint)"><path d="m9 6 6 6-6 6"></path></svg>Owned hunks and recorded decisions<span class="cnt">3</span><span style="flex: 1 1 auto"></span>
+</button>
+<sc-if value="{{agentOpen}}" hint-placeholder-val="{{false}}">
+<div class="reveal" style="padding: 0 12px 8px 42px; display: flex; flex-direction: column; gap: 6px">
+<span class="bar" style="width: 70%"></span><span class="bar" style="width: 52%"></span><span class="bar" style="width: 61%"></span>
+</div>
+</sc-if>
+</div>
+</section>
+
+<section class="tile">
+<h2 class="tt">Live status lives in the header</h2>
+<div class="pane now" style="padding: 0"><span class="tag">Now</span>
+<div style="height: 26px; display: flex; align-items: center; padding: 0 14px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line2)">Watching live review updates</div>
+<div style="height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 14px; font-size: 12.5px; color: var(--muted)"><span style="font-weight: 600; color: var(--ink)">Neuve</span>neuve / <span style="color: var(--ink)">codex/demo-prepared-start-review</span><span class="mono" style="padding: 2px 6px; border-radius: 5px; background: var(--raised); font-size: 11px">4fc76f5</span></div>
+</div>
+<div class="pane" style="padding: 0"><span class="tag new">Proposed</span>
+<div style="height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 14px; font-size: 12.5px; color: var(--muted)"><span style="font-weight: 600; color: var(--ink)">Neuve</span>neuve / <span style="color: var(--ink)">codex/demo-prepared-start-review</span><span class="mono" style="padding: 2px 6px; border-radius: 5px; background: var(--raised); font-size: 11px">4fc76f5</span><span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px"><span class="dot" style="background: var(--agt)"></span>Live</span></div>
+<div style="height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 14px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line2)"><span style="font-weight: 600; color: var(--ink)">Neuve</span>neuve / <span style="color: var(--ink)">codex/demo-prepared-start-review</span><span class="mono" style="padding: 2px 6px; border-radius: 5px; background: var(--raised); font-size: 11px">4fc76f5</span><span role="status" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink2)"><span class="dot pulse" style="background: var(--warn)"></span>Reconnecting</span></div>
+</div>
+</section>
+
+<section class="tile">
+<h2 class="tt">Split view fills the missing side</h2>
+<div class="pane now" style="padding: 0"><span class="tag">Now</span>
+<div style="display: grid; grid-template-columns: 1fr 1fr; padding-top: 28px">
+<div></div><div><div class="row k-add"><span class="ln">30</span><span>+</span><span class="bar" style="width: 72%"></span></div><div class="row k-add"><span class="ln">31</span><span>+</span><span class="bar" style="width: 60%"></span></div></div>
+<div><div class="row k-del"><span class="ln">2</span><span>−</span><span class="bar" style="width: 66%"></span></div></div><div></div>
+</div>
+</div>
+<div class="pane" style="padding: 0"><span class="tag new">Proposed</span>
+<div style="display: grid; grid-template-columns: 1fr 1fr; padding-top: 28px">
+<div style="background: var(--expand); box-shadow: inset -1px 0 0 var(--line2)"></div><div><div class="row k-add"><span class="ln">30</span><span>+</span><span class="bar" style="width: 72%"></span></div><div class="row k-add"><span class="ln">31</span><span>+</span><span class="bar" style="width: 60%"></span></div></div>
+<div style="box-shadow: inset -1px 0 0 var(--line2)"><div class="row k-del"><span class="ln">2</span><span>−</span><span class="bar" style="width: 66%"></span></div></div><div style="background: var(--expand)"></div>
+</div>
+</div>
+</section>
+
+<section class="tile">
+<h2 class="tt">Lineage uses the same lane glyphs as the rail</h2>
+<div class="pane now"><span class="tag">Now</span>
+<div style="padding-top: 18px; display: flex; flex-direction: column; gap: 6px">
+<div style="border-radius: 8px; box-shadow: 0 0 0 1px var(--line); padding: 10px 12px; display: flex; flex-direction: column; gap: 4px"><span style="font-weight: 600; font-size: 13px">Client retry identity, notices and projection refresh</span><span style="font-size: 11.5px">human-suggested · Human approved</span><span style="font-size: 11.5px; color: var(--muted)">▸ Owned hunks and recorded decisions</span></div>
+<div style="border-radius: 8px; box-shadow: 0 0 0 1px var(--line); padding: 10px 12px; display: flex; flex-direction: column; gap: 4px"><span style="font-weight: 600; font-size: 13px">Typed preparation failures and recovery messages</span><span style="font-size: 11.5px">agentic-review · Agent approved</span></div>
+</div>
+</div>
+<div class="pane" style="padding: 6px"><span class="tag new">Proposed</span>
+<div style="display: flex; flex-direction: column; padding-top: 22px">
+<div style="display: grid; grid-template-columns: 14px minmax(0, 1fr) auto 14px; gap: 10px; align-items: center; padding: 12px 10px; border-bottom: 1px solid var(--line2)"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg><span style="font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Client retry identity, notices and projection refresh</span><span class="mark"><span class="av person s16" aria-hidden="true">VD</span><svg class="vi ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span class="w"><b>You</b> approved</span></span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px; color: var(--faint)"><path d="m9 6 6 6-6 6"></path></svg></div>
+<div style="display: grid; grid-template-columns: 14px minmax(0, 1fr) auto 14px; gap: 10px; align-items: center; padding: 12px 10px; border-bottom: 1px solid var(--line2)"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg><span style="font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Typed preparation failures and recovery messages</span><span class="mark"><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><svg class="vi ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span class="w"><b>R1</b> approved</span></span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px; color: var(--faint)"><path d="m9 6 6 6-6 6"></path></svg></div>
+<div style="display: grid; grid-template-columns: 14px minmax(0, 1fr) auto 14px; gap: 10px; align-items: center; padding: 12px 10px"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg><span style="font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Audit event for revocation</span><span class="mark"><span class="av person s16" aria-hidden="true">MA</span><svg class="vi no" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg><span class="w"><b>maya</b> requested changes</span></span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px; color: var(--faint)"><path d="m9 6 6 6-6 6"></path></svg></div>
+</div>
+</div>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1560}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { lim: true, agent: false }; }
+  renderVals() {
+    var self = this;
+    return {
+      theme: this.props.theme || 'light',
+      limOpen: this.state.lim, limChev: this.state.lim ? 'rotate(90deg)' : 'none',
+      agentOpen: this.state.agent, agentChev: this.state.agent ? 'rotate(90deg)' : 'none',
+      toggleLim: function () { self.setState({ lim: !self.state.lim }); },
+      toggleAgent: function () { self.setState({ agent: !self.state.agent }); }
+    };
+  }
+}
+</script>
+</body>
+</html>

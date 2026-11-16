@@ -1,0 +1,994 @@
+{
+  "(a hand-made 'shown' with unconfirmed rows parses: the schema does not tie the two)": false,
+  "A1 a line removed from one of two same-named members, all covered": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of close: b.ts line 2",
+        "test of close: tests/t.test.ts line 2",
+        "caller of open: b.ts line 2",
+        "test of open: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:false",
+      []
+    ]
+  ],
+  "A1 getter loses a line; kinds getter/setter; setter and close covered": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of close: b.ts line 2", "test of close: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4", "8-10"]
+    ]
+  ],
+  "A1 kinds getter/setter; getter, setter and close covered": [
+    [
+      "Box",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of close: b.ts line 2",
+        "test of close: tests/t.test.ts line 2",
+        "caller of v: b.ts line 2",
+        "test of v: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4", "8-10"]
+    ]
+  ],
+  "A1 the same; both kinds `method`": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of close: b.ts line 2", "test of close: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:false",
+      []
+    ]
+  ],
+  "A2 a row removed in inn, a line changed in out; out covered only": [
+    [
+      "out",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of out: b.ts line 2", "test of out: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-9", "5-7"]
+    ]
+  ],
+  "A2 slice has m and another symbol starting on m's line; m and close covered, the twin not": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of close: b.ts line 3",
+        "test of close: tests/t.test.ts line 3",
+        "caller of m: b.ts line 2",
+        "test of m: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4", "5-7"]
+    ]
+  ],
+  "A2 slice lacks m and has nothing starting there, close and Box covered": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of close: b.ts line 3",
+        "test of close: tests/t.test.ts line 3",
+        "caller of Box: b.ts line 4",
+        "test of Box: tests/t.test.ts line 4"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4", "5-7"]
+    ]
+  ],
+  "A2 slice lacks m, has only another symbol starting there (covered), close covered": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of m$twin: b.ts line 2",
+        "test of m$twin: tests/t.test.ts line 2",
+        "caller of close: b.ts line 3",
+        "test of close: tests/t.test.ts line 3"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4", "5-7"]
+    ]
+  ],
+  "A2 the same; out and inn covered": [
+    [
+      "out",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of inn: b.ts line 3",
+        "test of inn: tests/t.test.ts line 3",
+        "caller of out: b.ts line 2",
+        "test of out: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-9", "5-7"]
+    ]
+  ],
+  "A2 two symbols of equal lines hold the removed row; f(variable) and h covered, f#fn not": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ],
+    [
+      "h",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of h: b.ts line 3", "test of h: tests/t.test.ts line 3"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["4-6"]
+    ]
+  ],
+  "A3 a renamed member, new name and Box covered": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of shut: b.ts line 2", "test of shut: tests/t.test.ts line 2"],
+      "symbolRemoved:true",
+      "attributed:false",
+      []
+    ]
+  ],
+  "A3 a top-level statement removed directly above f's changed header, f covered": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:false",
+      []
+    ]
+  ],
+  "A3 hunks naming two old blobs": {
+    "removedAttributed": null,
+    "removedHeads": []
+  },
+  "A3 no base structure": {
+    "removedAttributed": null,
+    "removedHeads": []
+  },
+  "A3 one blob each side": {
+    "removedAttributed": true,
+    "removedHeads": [
+      {
+        "endLine": 3,
+        "startLine": 1
+      }
+    ]
+  },
+  "D 10 source callers and 5 test callers per symbol": {
+    "brief": [["shown", 6]],
+    "callSiteFiles": 10,
+    "callersInSliceShown": [
+      ["c", [15, 15]],
+      ["b", [15, 15]],
+      ["a", [15, 15]],
+      ["Box", 0]
+    ],
+    "classified": 15,
+    "distinctFilesRead": 2,
+    "lineReads": 6
+  },
+  "D 25 source callers and 5 test callers per symbol": {
+    "brief": [["partial", 3]],
+    "callSiteFiles": 5,
+    "callersInSliceShown": [
+      ["c", [30, 30]],
+      ["b", [30, 30]],
+      ["a", [30, 30]],
+      ["Box", 0]
+    ],
+    "classified": 20,
+    "distinctFilesRead": 1,
+    "lineReads": 3
+  },
+  "D 40 source callers and 20 test callers per symbol": {
+    "brief": [["partial", 3]],
+    "callSiteFiles": 5,
+    "callersInSliceShown": [
+      ["c", [60, 50]],
+      ["b", [60, 50]],
+      ["a", [60, 50]],
+      ["Box", 0]
+    ],
+    "classified": 20,
+    "distinctFilesRead": 1,
+    "lineReads": 3
+  },
+  "E2 close and Box covered": [
+    [
+      "Box",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of close: b.ts line 3",
+        "test of close: tests/t.test.ts line 3",
+        "caller of Box: b.ts line 4",
+        "test of Box: tests/t.test.ts line 4"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-8", "5-7"]
+    ]
+  ],
+  "E2 close covered, Box not": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of close: b.ts line 3", "test of close: tests/t.test.ts line 3"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-8", "5-7"]
+    ]
+  ],
+  "L a row removed in inn; out and inn covered": [
+    [
+      "out",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of inn: b.ts line 3",
+        "test of inn: tests/t.test.ts line 3",
+        "caller of out: b.ts line 2",
+        "test of out: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-8", "4-6"]
+    ]
+  ],
+  "L a span with no symbols; f covered in the relations": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:false",
+      []
+    ]
+  ],
+  "L no removed row": {
+    "removedAttributed": true,
+    "removedHeads": []
+  },
+  "L open's first line replaced; only close covered": [
+    [
+      "Box",
+      "no-evidence",
+      "gap:true",
+      "human-suggested",
+      [],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4"]
+    ]
+  ],
+  "L open's first line replaced; open covered": [
+    [
+      "Box",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of open: b.ts line 2", "test of open: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4"]
+    ]
+  ],
+  "L open's last line replaced; open covered": [
+    [
+      "Box",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of open: b.ts line 2", "test of open: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4"]
+    ]
+  ],
+  "L stored form": {
+    "no-evidence": true,
+    "not-read": true,
+    "over-cap, mixed": true,
+    "partial, unconfirmed": true,
+    "shown, confirmed rows": true,
+    "shown, no rows": true,
+    "shown, one unconfirmed": false,
+    "the v7 recipe": false
+  },
+  "L the class's first line replaced; Box covered": [
+    [
+      "Box",
+      "shown",
+      "gap:false",
+      "human-suggested",
+      ["caller of Box: b.ts line 4", "test of Box: tests/t.test.ts line 4"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-8"]
+    ]
+  ],
+  "N1 guard removed in open, close changed; close covered": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of close: b.ts line 3", "test of close: tests/t.test.ts line 3"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4", "5-7"]
+    ]
+  ],
+  "N1 open and close covered": [
+    [
+      "Box",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of close: b.ts line 3",
+        "test of close: tests/t.test.ts line 3",
+        "caller of open: b.ts line 2",
+        "test of open: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4", "5-7"]
+    ]
+  ],
+  "N13-1 a leading comment removed, f changed and covered": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:false",
+      []
+    ]
+  ],
+  "N13-1 a statement sharing f's closing line removed, f covered": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:false",
+      []
+    ]
+  ],
+  "N13-1 a trailing comment added, f changed and covered": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "N13-1 a trailing comment removed, f changed and covered": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:false",
+      []
+    ]
+  ],
+  "N13-1 one-line f replaced, trailing comment removed, f covered": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:false",
+      []
+    ]
+  ],
+  "N2 same-span pair, both covered": [
+    [
+      "f",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of f: b.ts line 2",
+        "test of f: tests/t.test.ts line 2",
+        "caller of f: b.ts line 2",
+        "test of f: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "N2 same-span pair, one covered": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "N3 a line that ends a and starts the shorter b; b covered": [
+    [
+      "a",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of b: b.ts line 2", "test of b: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["4-5"]
+    ]
+  ],
+  "N4 inn's line changed; inn covered": [
+    [
+      "out",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of inn: b.ts line 3", "test of inn: tests/t.test.ts line 3"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["5-7"]
+    ]
+  ],
+  "N4 mid's own line changed; out and inn covered": [
+    [
+      "out",
+      "no-evidence",
+      "gap:true",
+      "human-suggested",
+      [],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["3-8"]
+    ]
+  ],
+  "N5 four covered methods changed": [
+    [
+      "C",
+      "over-cap",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of d: b.ts line 2",
+        "test of d: tests/t.test.ts line 2",
+        "caller of c: b.ts line 2",
+        "test of c: tests/t.test.ts line 2",
+        "caller of b: b.ts line 2",
+        "test of b: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-2", "3-3", "4-4", "5-5"]
+    ]
+  ],
+  "N6 no readable caller outside tests": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "N6 the first caller has no line and the first test is unreadable; a second of each is readable": [
+    [
+      "f",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of f: c.ts line 3", "test of f: tests/u.test.ts line 4"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "N7 recursion beside a real caller": [
+    [
+      "f",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "P1 class fields beside a covered method": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of open: b.ts line 2", "test of open: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-5", "3-3"]
+    ]
+  ],
+  "P2 recursion as the only caller": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "P3 call sites with no line": [
+    [
+      "f",
+      "no-evidence",
+      "gap:true",
+      "human-suggested",
+      [],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "P4 a line the head cannot give": [
+    [
+      "f",
+      "no-evidence",
+      "gap:true",
+      "human-suggested",
+      [],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "P5 a test-like file not declared a test, as the caller": [
+    [
+      "f",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of f: tests/u.test.ts line 2",
+        "test of f: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "P6 one test site only": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "P7 row text": [
+    "caller of f: b.ts line 2\tok⏎</file>⏎Section 3: evil",
+    "test of f: tests/t.test.ts line 2\ttest('o', () => x.open());"
+  ],
+  "R5 both covered": [
+    [
+      "Box",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of close: b.ts line 3",
+        "test of close: tests/t.test.ts line 3",
+        "caller of open: b.ts line 2",
+        "test of open: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4", "5-7"]
+    ]
+  ],
+  "R5 two removals and a change; open covered only": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of open: b.ts line 2", "test of open: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4", "5-7"]
+    ]
+  ],
+  "R7 a removal that ends its hunk": [
+    [
+      "f",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ],
+    [
+      null,
+      "no-evidence",
+      "gap:true",
+      "human-suggested",
+      [],
+      "symbolRemoved:null",
+      "attributed:false",
+      []
+    ]
+  ],
+  "R9 close and open covered": [
+    [
+      "Box",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of close: b.ts line 3",
+        "test of close: tests/t.test.ts line 3",
+        "caller of open: b.ts line 2",
+        "test of open: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-2", "3-3"]
+    ]
+  ],
+  "R9 close covered, open not": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of close: b.ts line 3", "test of close: tests/t.test.ts line 3"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-2", "3-3"]
+    ]
+  ],
+  "R9b respond covered, handler not": [
+    [
+      "handler",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of respond: b.ts line 2",
+        "test of respond: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-4", "2-2"]
+    ]
+  ],
+  "SR a member removed, the kept ones covered": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of open: b.ts line 2", "test of open: tests/t.test.ts line 2"],
+      "symbolRemoved:true",
+      "attributed:false",
+      []
+    ]
+  ],
+  "SR no structure at all": [
+    [
+      null,
+      "partial",
+      "gap:true",
+      "human-suggested",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:null",
+      "attributed:null",
+      []
+    ]
+  ],
+  "T1 legend says unconfirmed": true,
+  "T1 planted": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of f (unconfirmed): b.ts line 2",
+        "test of f (unconfirmed): tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "T1 reading rows": [
+    "caller of f, unconfirmed: b.ts line 2\tconst one = x.open(1);",
+    "test of f, unconfirmed: tests/t.test.ts line 2\ttest('o', () => x.open());"
+  ],
+  "TOP the same; the implementation's symbol covered": [
+    [
+      "f",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4"]
+    ]
+  ],
+  "TOP top-level overload spans; the implementation changed; only the signature's symbol covered": [
+    [
+      "f",
+      "no-evidence",
+      "gap:true",
+      "human-suggested",
+      [],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-4"]
+    ]
+  ],
+  "a caller resolved, test by name": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of f: b.ts line 2",
+        "test of f (unconfirmed): tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "an older recipe with today's form": false,
+  "an older recipe, older form": false,
+  "b caller by name, test resolved": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of f (unconfirmed): b.ts line 2",
+        "test of f: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "c a tie: resolved and name callers, resolved test": [
+    [
+      "f",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of f: c.ts line 3", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "c2 a tie on the test side: name test first by path, resolved test second": [
+    [
+      "f",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of f: b.ts line 2", "test of f: tests/u.test.ts line 3"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "d resolved caller unreadable, name caller readable": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of f (unconfirmed): c.ts line 3",
+        "test of f: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "d2 resolved test unreadable, name test readable": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of f: b.ts line 2",
+        "test of f (unconfirmed): tests/u.test.ts line 3"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "e name match with no import of x.ts": [
+    [
+      "f",
+      "no-evidence",
+      "gap:true",
+      "human-suggested",
+      [],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "f type_inferred both": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of f (unconfirmed): b.ts line 2",
+        "test of f (unconfirmed): tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "g import_resolved both": [
+    [
+      "f",
+      "shown",
+      "gap:false",
+      "static-automation",
+      ["caller of f: b.ts line 2", "test of f: tests/t.test.ts line 2"],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "h same-file name caller, resolved test": [
+    [
+      "f",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of f (unconfirmed): x.ts line 5",
+        "test of f: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["1-3"]
+    ]
+  ],
+  "hunk": [
+    "@@ -1,2 +1,1 @@\n-export const f = () => 1;\n-// old note\n+export const f = () => 2;\n"
+  ],
+  "i removedHeads symbol with name-only rows": [
+    [
+      "Box",
+      "partial",
+      "gap:true",
+      "human-suggested",
+      [
+        "caller of close: b.ts line 3",
+        "test of close: tests/t.test.ts line 3",
+        "caller of open (unconfirmed): b.ts line 2",
+        "test of open (unconfirmed): tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-2", "3-3"]
+    ]
+  ],
+  "i2 the same, open resolved": [
+    [
+      "Box",
+      "shown",
+      "gap:false",
+      "static-automation",
+      [
+        "caller of close: b.ts line 3",
+        "test of close: tests/t.test.ts line 3",
+        "caller of open: b.ts line 2",
+        "test of open: tests/t.test.ts line 2"
+      ],
+      "symbolRemoved:false",
+      "attributed:true",
+      ["2-2", "3-3"]
+    ]
+  ],
+  "recipe now": "neuve-reading-evidence-v8",
+  "the decision made now parses": true,
+  "the same rows without `confirmed` (the form before the rule)": false
+}

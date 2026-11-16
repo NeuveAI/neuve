@@ -1,0 +1,14 @@
+{
+  "project": "buffer",
+  "source": "https://registry.npmjs.org/buffer/-/buffer-5.0.5.tgz",
+  "version": "5.0.5",
+  "commit": "706a59cbb6bf2e7de701aefba437951ec6c0fb2a",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/buffer/-/buffer-5.0.5.tgz#package/LICENSE",
+      "sha256": "06bafa45fdad2579ba0e43b0c9b2c6290287c99c4203c300254a462b38a307f6"
+    }
+  ]
+}

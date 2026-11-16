@@ -1,0 +1,13 @@
+{
+  "project": "aklomp/base64",
+  "source": "https://github.com/aklomp/base64",
+  "commit": "5d5074cb856b9a53fe64f04ddf47812a85f4fb5a",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/aklomp/base64/5d5074cb856b9a53fe64f04ddf47812a85f4fb5a/LICENSE",
+      "sha256": "42871ad9f4e5e9255a4ec80b6c5ec9989bab6964693cf5fee6bb33f3afe39220"
+    }
+  ]
+}

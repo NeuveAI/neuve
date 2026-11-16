@@ -1,0 +1,13 @@
+{
+  "project": "uNetworking/uSockets",
+  "source": "https://github.com/uNetworking/uSockets",
+  "commit": "166a04810c9fa970fc22096a7b35b792378364fb",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/uNetworking/uSockets/166a04810c9fa970fc22096a7b35b792378364fb/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Context disclosure layers</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+a{color:var(--ink)}a:hover{color:var(--sug-fg)}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.code{font-family:'Geist Mono',ui-monospace,monospace;font-size:12px;line-height:24px;white-space:pre;overflow:hidden}
+.u{text-decoration:underline dotted var(--accent);text-decoration-thickness:1.5px;text-underline-offset:5px}
+.kw{color:var(--kw)}.fn{color:var(--fn)}
+/* Round-1 history (8fc290dd, 2026-10-03), kept as it was. The heading is set like Polish's "Now" tags: mono, uppercase, spaced. */
+.hist{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0;font-size:13px;line-height:20px;color:var(--muted)}
+.hist .htag{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:2px 7px;border-radius:5px;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.hist a{position:relative;color:var(--ink);text-decoration:underline;text-decoration-color:var(--muted);text-underline-offset:3px}
+.hist a::after{content:"";position:absolute;left:-4px;right:-4px;top:50%;height:44px;transform:translateY(-50%)}
+.hist a:hover{color:var(--ink);text-decoration-color:var(--ink)}
+.hist a:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:3px}
+</style>
+</helmet>
+<div class="theme-light" style="width: 1440px; height: 760px; box-sizing: border-box; padding: 16px 64px 56px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; display: flex; flex-direction: column; gap: 36px">
+
+<p class="hist"><span class="htag">History · round 1</span><span>As drawn on 2026-10-03. The layers today: <a href="Briefing.dc.html">Briefing</a>, <a href="Margin.dc.html">Margin</a>, <a href="Source.dc.html">Source</a>.</span></p>
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 760px; margin-top: -20px">
+<span class="lbl" style="color: var(--sug-fg)">Context disclosure</span>
+<h1 style="margin: 0; font-size: 36px; line-height: 42px; font-weight: 600; letter-spacing: -0.03em">Hint, peek, expand, drill</h1>
+<p style="margin: 0; font-size: 15px; line-height: 24px; color: var(--ink-2)">Context stays out of the code until you ask for it. Each layer answers one more question, and the code never moves.</p>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1.15fr 1.45fr 1.75fr; gap: 24px; flex: 1 1 auto; min-height: 0">
+
+<div style="display: flex; flex-direction: column; gap: 16px">
+<div style="height: 380px; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); padding: 20px 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<div style="background: var(--add-bg); border-radius: 4px; padding: 0 8px" class="code"><span class="u"><span class="kw">await</span> sessions.<span class="fn">invalidateByLink</span>(linkId);</span></div>
+<div style="display: flex; gap: 6px"><span class="mono" style="display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--req-tint); color: var(--req-ink); font-size: 11px"><span style="width: 6px; height: 6px; border-radius: 1px; background: var(--req); transform: rotate(45deg)"></span>Conflict</span><span class="mono" style="display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; box-shadow: inset 0 0 0 1px #D9D2C3; color: #57534B; font-size: 11px">Same batch</span></div>
+<div style="margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line-2); font-size: 12px; line-height: 17px; color: var(--muted)">Unit level: the rail row shows a conflict tag. The briefing carries numbered citations.</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span class="lbl">L0 · Hint</span>
+<span style="font-size: 16px; font-weight: 600">Is there more here?</span>
+<span style="font-size: 13px; line-height: 19px; color: var(--ink-2)">A dotted underline on the line, and a pin in the margin. Always visible, so nothing is hidden by default.</span>
+<span class="mono" style="font-size: 11px; color: var(--muted); padding-top: 4px">trigger · none · motion · none</span>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 16px">
+<div style="height: 380px; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); padding: 20px 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<div style="background: var(--add-bg); border-radius: 4px; padding: 0 8px" class="code"><span class="u"><span class="kw">await</span> sessions.<span class="fn">invalidateByLink</span>(linkId);</span></div>
+<div style="position: relative">
+<span class="mono" style="display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 6px; background: var(--req-tint-2); color: var(--req-ink); font-size: 11px"><span style="width: 6px; height: 6px; border-radius: 1px; background: var(--req); transform: rotate(45deg)"></span>Conflict</span>
+<div style="margin-top: 6px; width: 230px; padding: 8px 10px; border-radius: 8px; background: var(--peek-bg); color: var(--peek-fg); font-size: 12px; line-height: 17px">SHR-212 and commit 7d1e0b4 disagree about open sessions.</div>
+</div>
+<div style="margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line-2); font-size: 12px; line-height: 17px; color: var(--muted)">One sentence, written to be decided from. No source text yet.</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span class="lbl">L1 · Peek</span>
+<span style="font-size: 16px; font-weight: 600">What is it?</span>
+<span style="font-size: 13px; line-height: 19px; color: var(--ink-2)">The claim in one line, with the source type. Enough to dismiss it or to go deeper.</span>
+<span class="mono" style="font-size: 11px; color: var(--muted); padding-top: 4px">hover · focus · hint fade, 140ms</span>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 16px">
+<div style="height: 380px; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); padding: 20px 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<div style="background: var(--add-bg); border-radius: 4px; padding: 0 8px; box-shadow: inset 0 0 0 1px var(--nv-engaged-ring)" class="code"><span class="u"><span class="kw">await</span> sessions.<span class="fn">invalidateByLink</span>(linkId);</span></div>
+<div style="border-radius: 12px; box-shadow: var(--shadow-card); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px">
+<span class="mono" style="align-self: flex-start; font-size: 10.5px; padding: 2px 6px; border-radius: 4px; background: var(--req-tint); color: var(--req-ink)">Decision signal</span>
+<span style="font-size: 13px; font-weight: 600">Conflicting intent</span>
+<span style="font-size: 12px; line-height: 17px; background: var(--bg); border-radius: 6px; padding: 6px 8px">SHR-212 · “…end access immediately, including people who already have the document open.”</span>
+<span style="font-size: 12px; line-height: 17px; background: var(--req-tint); border-radius: 6px; padding: 6px 8px">7d1e0b4 · “Keep existing viewer sessions alive…”</span>
+<div style="display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 4px 8px; font-size: 11.5px; line-height: 16px">
+<span style="color: var(--muted)">Establishes</span><span>Opposite expectations</span>
+<span style="color: var(--muted)">Applies here</span><span>This line ends sessions</span>
+<span style="color: var(--muted)">Uncertain</span><span style="color: var(--req-ink)">Which intent holds</span>
+</div>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span class="lbl">L2 · Expand</span>
+<span style="font-size: 16px; font-weight: 600">Why does it apply?</span>
+<span style="font-size: 13px; line-height: 19px; color: var(--ink-2)">The fragment itself, plus what it establishes, why it is attached to this hunk, and what it leaves open. Floats in the margin like a comment.</span>
+<span class="mono" style="font-size: 11px; color: var(--muted); padding-top: 4px">click · ↵ · card, 220ms emphasized decelerate</span>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 16px">
+<div style="height: 380px; border-radius: 12px; background: #EDE8DD; box-sizing: border-box; position: relative; overflow: hidden">
+<div style="position: absolute; left: 16px; top: 20px; right: 120px; display: flex; flex-direction: column; gap: 6px; opacity: .5">
+<div style="height: 24px; border-radius: 4px; background: var(--surface)"></div>
+<div style="height: 24px; border-radius: 4px; background: var(--add-bg)"></div>
+<div style="height: 24px; border-radius: 4px; background: var(--add-bg)"></div>
+<div style="height: 24px; border-radius: 4px; background: var(--surface)"></div>
+</div>
+<div style="position: absolute; top: 0; right: 0; bottom: 0; width: 72%; background: var(--surface); box-shadow: -12px 0 32px rgba(28,26,22,.14); padding: 18px 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px">
+<span class="lbl">Ticket · pinned task scope</span>
+<span style="font-size: 16px; font-weight: 600; letter-spacing: -0.01em; line-height: 21px">SHR-212 · Revoke share links immediately</span>
+<span style="font-size: 12.5px; line-height: 19px; color: var(--ink-2)">Problem: revoked links keep working for anyone who already has the document open.</span>
+<span style="font-size: 12.5px; line-height: 19px; background: var(--sug-tint); border-radius: 6px; padding: 6px 8px">Revoking a link must end access immediately, including people who already have the document open.</span>
+<span style="font-size: 12.5px; line-height: 19px; color: var(--ink-2)">Done when: the old link and any open session are denied.</span>
+<span style="margin-top: auto; font-size: 11.5px; color: var(--muted)">Also cited by · Session invalidation by link</span>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span class="lbl">L3 · Drill</span>
+<span style="font-size: 16px; font-weight: 600">Where does it come from?</span>
+<span style="font-size: 13px; line-height: 19px; color: var(--ink-2)">The whole source in a sheet, with the fragment highlighted and the other units that cite it. Back returns you to the same line.</span>
+<span class="mono" style="font-size: 11px; color: var(--muted); padding-top: 4px">Open source · ⇧↵ · gentle spring, 24px slide</span>
+</div>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

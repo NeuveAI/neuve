@@ -1,0 +1,14 @@
+{
+  "project": "https-browserify",
+  "source": "https://registry.npmjs.org/https-browserify/-/https-browserify-1.0.0.tgz",
+  "version": "1.0.0",
+  "commit": "98a1310b385d24dd8cf1a67aa258e91ec03743e4",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/https-browserify/-/https-browserify-1.0.0.tgz#package/LICENSE",
+      "sha256": "ff151c00207c908581639851dd8504ce4255be0650b2b236edec2aa90342b0cd"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "project": "trivago/prettier-plugin-sort-imports",
+  "source": "https://github.com/trivago/prettier-plugin-sort-imports",
+  "commit": "d9c690fdbfe46334ec2bfb86a75ebde43c6a0fc6",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/trivago/prettier-plugin-sort-imports/d9c690fdbfe46334ec2bfb86a75ebde43c6a0fc6/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ]
+}

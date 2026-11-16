@@ -1,0 +1,47 @@
+{
+  "name": "web",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "generate-routes": "tsr generate",
+    "fixture:real-packet": "bun --no-env-file scripts/real-packet-fixture.ts",
+    "build": "bun --no-env-file --bun vite build",
+    "preview": "bun --no-env-file --bun vite preview",
+    "lint": "eslint",
+    "format": "prettier --write \"**/*.{ts,tsx}\"",
+    "typecheck": "tsc --noEmit",
+    "test": "bun ../../../../scripts/test-budget.ts src"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "4.0.0",
+    "@neuve/harness": "workspace:*",
+    "@neuve/records-core": "workspace:*",
+    "@neuve/records-schema": "workspace:*",
+    "@neuve/review-rules": "workspace:*",
+    "@tailwindcss/vite": "^4",
+    "@tanstack/react-router": "1.170.39",
+    "@tanstack/react-start": "1.168.58",
+    "@workspace/ui": "workspace:*",
+    "effect": "4.0.0",
+    "jotai": "^3.0.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tailwindcss": "^4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tanstack/devtools-vite": "0.8.5",
+    "@tanstack/eslint-config": "0.4.0",
+    "@tanstack/router-cli": "^1.167.38",
+    "@types/bun": "1.4.4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6",
+    "eslint": "^10",
+    "typescript": "^6.0.2",
+    "vite": "^8"
+  }
+}

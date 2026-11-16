@@ -1,0 +1,13 @@
+{
+  "project": "A11yance/aria-query",
+  "source": "https://github.com/A11yance/aria-query",
+  "commit": "c151dafa6ab17143479e5aeaa0826a3d657cc5be",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/A11yance/aria-query/c151dafa6ab17143479e5aeaa0826a3d657cc5be/LICENSE",
+      "sha256": "c8df456c7ccba74b959087dff494d4ac2a12dfb0400c08b46b2494a08a000567"
+    }
+  ]
+}

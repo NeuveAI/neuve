@@ -1,0 +1,14 @@
+{
+  "project": "angular-estree-parser",
+  "source": "https://registry.npmjs.org/angular-estree-parser/-/angular-estree-parser-15.5.0.tgz",
+  "version": "15.5.0",
+  "commit": "c4750538bd16acb3a13a63e413511efb954373f1",
+  "pin": "Prettier 3.9.9's yarn.lock (prettier/prettier at cdd17f2288b28b170a76416c72dac56e3ea5daff), the release Bun's src/format/CLAUDE.md names as the target of its port",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/angular-estree-parser/-/angular-estree-parser-15.5.0.tgz#package/LICENSE",
+      "sha256": "bc3c60953044b4ec92a85e49516b03da0ac7f0dde879f5359de700aeab4de0b7"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "project": "eslint-community/regexpp",
+  "source": "https://github.com/eslint-community/regexpp",
+  "commit": "1eb755f7e4327cefb0b78c95be346b9c4b9dc5ff",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/eslint-community/regexpp/1eb755f7e4327cefb0b78c95be346b9c4b9dc5ff/LICENSE",
+      "sha256": "fcf6eabf68ca96988a6b506b4fdc6cc32535d80eb2e11c79724af5ac6f50262b"
+    }
+  ]
+}

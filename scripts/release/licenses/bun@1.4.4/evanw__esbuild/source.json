@@ -1,0 +1,13 @@
+{
+  "project": "evanw/esbuild",
+  "source": "https://github.com/evanw/esbuild",
+  "commit": "f6058f8364fe7ab91ca57a83e02577ed74c9cae4",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/evanw/esbuild/f6058f8364fe7ab91ca57a83e02577ed74c9cae4/LICENSE.md",
+      "sha256": "b40ec5baec7bb34fa5b1c09521fa3cd52d5fad7adafed74932a2010d3612a681"
+    }
+  ]
+}

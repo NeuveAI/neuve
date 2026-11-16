@@ -1,0 +1,13 @@
+{
+  "project": "randy408/libspng",
+  "source": "https://github.com/randy408/libspng",
+  "commit": "fb768002d4288590083a476af628e51c3f1d47cd",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/randy408/libspng/fb768002d4288590083a476af628e51c3f1d47cd/LICENSE",
+      "sha256": "0622b0794d0fecde47d743f1bb70a03e6fdf082be8e71f39de672ed995d96ff9"
+    }
+  ]
+}

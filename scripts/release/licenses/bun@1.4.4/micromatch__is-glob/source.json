@@ -1,0 +1,13 @@
+{
+  "project": "micromatch/is-glob",
+  "source": "https://github.com/micromatch/is-glob",
+  "commit": "789e8bbc62e1fff7a2762449b3a7bac75c08916d",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/micromatch/is-glob/789e8bbc62e1fff7a2762449b3a7bac75c08916d/LICENSE",
+      "sha256": "4cd903859549d4b20b571041f96dfae1136ed079c476126268f9d7cc1b611150"
+    }
+  ]
+}

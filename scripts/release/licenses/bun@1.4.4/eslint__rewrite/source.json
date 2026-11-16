@@ -1,0 +1,13 @@
+{
+  "project": "eslint/rewrite",
+  "source": "https://github.com/eslint/rewrite",
+  "commit": "c49ae2d9c3140b90d28cc365422c9376b5cf2794",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/eslint/rewrite/c49ae2d9c3140b90d28cc365422c9376b5cf2794/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+	"extends": "../../tsconfig.ace.json",
+	"compilerOptions": {
+		"types": ["bun"],
+		"paths": {
+			"bun": ["./node_modules/@types/bun/index.d.ts"]
+		},
+		"skipLibCheck": true
+	},
+	"include": ["src", "scripts", "electrobun.config.ts"]
+}

@@ -1,0 +1,134 @@
+@import "@ace/ui/css";
+/* Neuve's look over Ace (decision 12.15): after Ace's sheet, so its values win. */
+@import "@ace/ui/neuve.css";
+@source "./**/*.{ts,tsx}";
+
+html,
+body {
+	block-size: 100%;
+	background: transparent;
+	overscroll-behavior: none;
+	overflow: hidden;
+}
+
+body {
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+}
+
+#root {
+	/* The visible viewport, which shrinks while a phone's keyboard is open (see viewport.ts). */
+	block-size: var(--viewport-height, 100dvh);
+	inline-size: 100%;
+}
+
+@media (width < 40rem) {
+	/* Keep content clear of the notch and home indicator in a full-screen web app. */
+	.layout\:shell {
+		padding:
+			max(0.5rem, env(safe-area-inset-top)) max(0.5rem, env(safe-area-inset-right))
+			max(0.5rem, env(safe-area-inset-bottom)) max(0.5rem, env(safe-area-inset-left));
+	}
+
+	/* The tab bar gives way to the keyboard, as native apps do. */
+	[data-keyboard] .layout\:nav {
+		display: none;
+	}
+
+	[data-keyboard] .layout\:shell {
+		padding-block-end: 0.5rem;
+	}
+}
+
+/* iOS zooms the page into any field smaller than 16px. */
+@media (pointer: coarse) {
+	input,
+	textarea,
+	select,
+	[contenteditable="true"] {
+		font-size: max(16px, 1em);
+	}
+}
+
+.layout-grip {
+	&::before,
+	&::after {
+		content: "";
+		position: absolute;
+	}
+
+	&::before {
+		background: var(--border);
+	}
+
+	&::after {
+		background: linear-gradient(var(--axis), transparent 20%, var(--primary) 50%, transparent 80%);
+		opacity: 0;
+		transition: opacity 200ms ease;
+	}
+
+	&:hover::after,
+	&:focus-visible::after,
+	&:active::after {
+		opacity: 1;
+	}
+
+	&[data-axis="col"] {
+		--axis: to bottom;
+		&::before,
+		&::after {
+			inset-block: 0;
+			inline-size: 1px;
+			inset-inline-start: 50%;
+			translate: -50% 0;
+		}
+	}
+
+	&[data-axis="row"] {
+		--axis: to right;
+		&::before,
+		&::after {
+			inset-inline: 0;
+			block-size: 1px;
+			inset-block-start: 50%;
+			translate: 0 -50%;
+		}
+	}
+}
+
+/* Hold the resize cursor everywhere while a grip is dragged, showing which way it can still move. */
+:root[data-layout-resize="col"],
+:root[data-layout-resize="col"] * {
+	cursor: col-resize !important;
+}
+
+:root[data-layout-resize="row"],
+:root[data-layout-resize="row"] * {
+	cursor: row-resize !important;
+}
+
+:root[data-layout-resize="east"],
+:root[data-layout-resize="east"] * {
+	cursor: e-resize !important;
+}
+
+:root[data-layout-resize="west"],
+:root[data-layout-resize="west"] * {
+	cursor: w-resize !important;
+}
+
+:root[data-layout-resize="south"],
+:root[data-layout-resize="south"] * {
+	cursor: s-resize !important;
+}
+
+:root[data-layout-resize="north"],
+:root[data-layout-resize="north"] * {
+	cursor: n-resize !important;
+}
+
+:root[data-layout-resize="none"],
+:root[data-layout-resize="none"] * {
+	cursor: not-allowed !important;
+}

@@ -1,0 +1,437 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Briefing.dc.html": {
+      "expand": "fill",
+      "h": 1180,
+      "is_interactive": true,
+      "title": "Descriptive links: phrases link, chips stay as icons",
+      "w": 1440,
+      "x": 0,
+      "y": 17020
+    },
+    "Cycle.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "New revision mid-review — arrival + lineage",
+      "w": 1440,
+      "x": 1520,
+      "y": 1460
+    },
+    "Delivery.dc.html": {
+      "expand": "fill",
+      "h": 1400,
+      "is_interactive": true,
+      "title": "Delivery dial on the desk — Guided trades code for reasons",
+      "w": 1440,
+      "x": 0,
+      "y": 11280
+    },
+    "DeliveryRules.dc.html": {
+      "expand": "fill",
+      "h": 4700,
+      "title": "Delivery rules — stops, dial anatomy, motion, nevers",
+      "w": 1440,
+      "x": 3040,
+      "y": 11280
+    },
+    "DeliverySettings.dc.html": {
+      "expand": "fill",
+      "h": 1000,
+      "is_interactive": true,
+      "title": "Workspace setting — one default dial, refined by language",
+      "w": 1440,
+      "x": 1520,
+      "y": 11280
+    },
+    "DialScrolled.dc.html": {
+      "expand": "fill",
+      "h": 3060,
+      "is_interactive": true,
+      "title": "Delivery dial after the title scrolls away — header, dock or nowhere",
+      "w": 1440,
+      "x": 1520,
+      "y": 18800
+    },
+    "DialTitle.dc.html": {
+      "expand": "fill",
+      "h": 5520,
+      "is_interactive": true,
+      "title": "Delivery dial in the title — decided: a glyph after the title",
+      "w": 1440,
+      "x": 0,
+      "y": 18800
+    },
+    "Disclosure.dc.html": {
+      "h": 760,
+      "title": "Context disclosure — four layers",
+      "w": 1440,
+      "x": 0,
+      "y": 1460
+    },
+    "Header.dc.html": {
+      "expand": "fill",
+      "h": 640,
+      "is_interactive": true,
+      "title": "Header — A with Units/Files from B, agents per branch",
+      "w": 1440,
+      "x": 0,
+      "y": 2780
+    },
+    "Lanes.dc.html": {
+      "expand": "fill",
+      "h": 960,
+      "is_interactive": true,
+      "title": "Units by lane — picked from the sidebar, decided per unit",
+      "w": 1440,
+      "x": 0,
+      "y": 4380
+    },
+    "Main.dc.html": {
+      "expand": "fill",
+      "h": 960,
+      "is_interactive": true,
+      "title": "Review desk — unit with context margin",
+      "w": 1440,
+      "x": 0,
+      "y": 0
+    },
+    "Margin.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "Margin pins — one per line, named by kind, linked on hover",
+      "w": 1440,
+      "x": 3040,
+      "y": 6300
+    },
+    "Markers.dc.html": {
+      "expand": "fill",
+      "h": 2400,
+      "title": "Contextual markers — identity, rules and base elements",
+      "w": 1440,
+      "x": 0,
+      "y": 8460
+    },
+    "OtherUnits.dc.html": {
+      "expand": "fill",
+      "h": 1400,
+      "is_interactive": true,
+      "title": "Other units' ranges at real volume — gap rows and owner chips, with switches",
+      "w": 1440,
+      "x": 6614,
+      "y": 6300
+    },
+    "Overview.dc.html": {
+      "expand": "fill",
+      "h": 1380,
+      "is_interactive": true,
+      "title": "Current review batch — decision panel and units by lane, by state",
+      "w": 1440,
+      "x": 1520,
+      "y": 0
+    },
+    "Polish.dc.html": {
+      "expand": "fill",
+      "h": 1560,
+      "is_interactive": true,
+      "title": "Smaller refinements — now vs proposed",
+      "w": 1440,
+      "x": 4560,
+      "y": 6300
+    },
+    "Ranges.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "Owned ranges — other units fold into gap rows; whole file names them",
+      "w": 1440,
+      "x": 1520,
+      "y": 6300
+    },
+    "References.dc.html": {
+      "h": 1800,
+      "title": "Context references — the card and the source sheet lead with why",
+      "w": 1440,
+      "x": 4560,
+      "y": 4380
+    },
+    "Source.dc.html": {
+      "h": 1320,
+      "title": "Source sheet — glanceable facts + open in editor",
+      "w": 1440,
+      "x": 1520,
+      "y": 4380
+    },
+    "Split.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "Stacked / split diff + read-only neighbor with its context",
+      "w": 1440,
+      "x": 1520,
+      "y": 2780
+    },
+    "Sticky.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "Sticky file header — stays until its file scrolls out",
+      "w": 1440,
+      "x": 0,
+      "y": 6300
+    },
+    "Threads.dc.html": {
+      "expand": "fill",
+      "h": 900,
+      "is_interactive": true,
+      "title": "Comment threads + live implementer events",
+      "w": 1440,
+      "x": 3040,
+      "y": 4380
+    },
+    "Verdicts.dc.html": {
+      "expand": "fill",
+      "h": 2300,
+      "title": "Review identity — who reviewed and what they decided, said once",
+      "w": 1440,
+      "x": 0,
+      "y": 14300
+    },
+    "Reviews.dc.html": {
+      "expand": "fill",
+      "h": 1400,
+      "is_interactive": true,
+      "title": "Reviews — what ran, and what waits on you",
+      "w": 1440,
+      "x": 0,
+      "y": 27740
+    },
+    "ReviewsPhone.dc.html": {
+      "h": 2000,
+      "is_interactive": true,
+      "title": "Reviews at phone width",
+      "w": 390,
+      "x": 1520,
+      "y": 27740
+    },
+    "UnitBriefingSingle.dc.html": {
+      "x": 1520,
+      "y": 31580,
+      "w": 1440,
+      "h": 620,
+      "title": "Unit briefing — single change",
+      "is_interactive": true,
+      "expand": "fill"
+    },
+    "UnitBriefingPhoneSingle.dc.html": {
+      "x": 3510,
+      "y": 31580,
+      "w": 390,
+      "h": 960,
+      "title": "Unit briefing — single change, phone",
+      "is_interactive": true
+    },
+    "UnitBriefing.dc.html": {
+      "x": 0,
+      "y": 31580,
+      "w": 1440,
+      "h": 1180,
+      "title": "Unit briefing — one briefing across the dial, joined unit",
+      "is_interactive": true,
+      "expand": "fill"
+    },
+    "UnitBriefingPhone.dc.html": {
+      "x": 3040,
+      "y": 31580,
+      "w": 390,
+      "h": 2120,
+      "title": "Unit briefing — joined unit, phone",
+      "is_interactive": true
+    },
+    "ReviewsOlder.dc.html": {
+      "expand": "fill",
+      "h": 1100,
+      "is_interactive": true,
+      "title": "Reviews, page 2 — numbered pages, ten to a page",
+      "w": 1440,
+      "x": 1990,
+      "y": 27740
+    },
+    "UnitBriefingUndecided.dc.html": {
+      "x": 3980,
+      "y": 31580,
+      "w": 1440,
+      "h": 640,
+      "title": "Unit briefing — no agent decision, Explained not offered",
+      "is_interactive": true,
+      "expand": "fill"
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-10-03T12:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "motion": {
+      "fill": "orange",
+      "maxH": 760,
+      "text": "MOTION STORYBOARD (lib/motion.ts tokens; CSS: ./tokens.css --nv-*)\n\nUnit switch (rail → desk): see the round 3 note below (it replaces the round 1 sequence).\n\nMarker disclosure\n  L0→L1  hint fades in, drops 2px (hint 140ms, iOS ease-out; CSS only)\n  L1→L2  card: opacity + translateY(-4px) + scale .98→1\n         (card 220ms, emphasized decelerate); other margin items dim\n         to 35% (dimOthers 160ms); the pin tone locks\n  L2→L3  sheet slides 24px from the right on SPRING.gentle; scrim\n         fades (scrim 160ms, ease-out); the cited fragment pulses once\n         (pulse 900ms after pulseDelay 280ms, ease-out)\n  close  card exits (cardExit 160ms), sheet exits (sheetExit 200ms),\n         both accelerate\n\nDisposition\n  press  buttons compress to .97 (SCALE.press, pressIn 80ms)\n  swap   the dock's state leaves (dockExit 120ms), the next rises\n         (dockRise 240ms, emphasized decelerate)\n\nReduced motion: opacity only (reduced 150ms, ease-out) or instant;\nthe pulse becomes a static tint.\nAnimate transform and opacity only; never blur.",
+      "w": 440,
+      "x": 3040,
+      "y": 1460
+    },
+    "motion3": {
+      "fill": "orange",
+      "maxH": 900,
+      "text": "ROUND 3 MICRO-INTERACTIONS (lib/motion.ts tokens)\n\nSticky file header\n  stuck     shadow fades in (stuck 160ms, standard); corners square at once\n  merged    position and layout icons drop 3px into place\n            (stuckEnter 180ms, emphasized decelerate); out: stuckExit 140ms\n  release   header leaves with its file (native sticky)\n  Viewed    box fills (check 140ms), file folds,\n            chevron −90° (chevron 200ms)\n\nJump from briefing chip\n  0ms       smooth scroll, lands below the sticky header\n  arrive    range tint holds (landHold 275ms), then fades\n            (landFade 825ms, emphasized accelerate)\n  reduced   instant scroll, static tint until next action\n\nGap row\n  open      the next rows appear in place, no motion (the renderer\n            re-renders them)\nRead-only neighbor\n  show      its rows rise 8px from .98, origin bottom (dockRise 240ms,\n            emphasized decelerate); Show/Hide chevron (chevron 200ms)\n\nMargin pin\n  hover     lines tint (lineTint 140ms); peek drops 2px\n            (hint 140ms, iOS ease-out)\n  open      card scale .98 → 1 (card 220ms, emphasized decelerate)\n\nUnit switch\n  0ms       rail row selects, its glyph turns into a spinner\n            (workingSpin 900ms)\n  150ms     old unit dims to 45% (switchDim 160ms after switchWait 150ms)\n            if the next unit hasn't arrived\n  arrive    scroll to top; the page regions enter (PAGE)\n\nAll: transform/opacity only, real hover only,\nfocus-visible for keyboard, reduced motion = opacity or instant.",
+      "w": 440,
+      "x": 6080,
+      "y": 6300
+    },
+    "motion4": {
+      "fill": "orange",
+      "maxH": 1000,
+      "text": "DELIVERY DIAL STORYBOARD (lib/motion.ts · delivery-choreography.ts)\n\n/* one height movement per stop change; layers never animate their own size */\nPHASED SEQUENCE (ms from the stop change; Explained → Guided)\n  thumb            0    SPRING.snappy (slight overshoot)\n  leaving blocks   0    fade out last-first, 27.5ms apart\n                        (deliveryChildStagger / 2), hint 140ms,\n                        emphasized accelerate; fade only, no drop\n  height move      210  when the last leaving block is at 30% opacity\n                        (--nv-share-morph-start-opacity, 13ms before\n                        it is out): old total → new total once,\n                        card 220ms, EASE.standard (no overshoot);\n                        transform-only FLIP, nothing clipped\n  arriving blocks  287  at 75% of the move (--nv-share-content-start,\n                        77ms in), 27.5ms apart in reading order;\n                        fade over hint 140ms, rise 2px (OFFSET.hint)\n                        over card 220ms, standard decelerate\n  in by            564\nNothing leaves: the move starts at the change. Same total: no move;\nthe blocks cross over in order. The flow card stays still.\n\nGlyph: the bars fill left → right and empty right → left; each starts\nwhen the one before has made 85% of its travel\n(--nv-share-chain-threshold: 125ms on SPRING.snappy).\nQuick return: reverses from where things are; a block still on screen\ncomes straight back, a moving height turns toward the new total.\nNo queue, no replay.\n\nReduced motion: the thumb snaps; the height snaps once and blocks fade\nin place over reduced 150ms, together; no move, rise or stagger.\nTransform/opacity only; never blur.",
+      "w": 460,
+      "x": 4560,
+      "y": 11280
+    },
+    "row1": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Review desk: units first, context in the margin",
+      "w": 240,
+      "x": 0,
+      "y": -300
+    },
+    "row10": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Delivery dial · in the title",
+      "w": 240,
+      "x": 0,
+      "y": 18500
+    },
+    "row2": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Layers of context and cycles",
+      "w": 240,
+      "x": 0,
+      "y": 1160
+    },
+    "row3": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Round 2 · header, layout and neighbors",
+      "w": 240,
+      "x": 0,
+      "y": 2480
+    },
+    "row4": {
+      "kind": "title1",
+      "maxW": 4480,
+      "text": "Round 2 · lanes, sources and live threads",
+      "w": 240,
+      "x": 0,
+      "y": 4080
+    },
+    "row5": {
+      "kind": "title1",
+      "maxW": 5920,
+      "text": "Round 3 · refinements from the live app",
+      "w": 240,
+      "x": 0,
+      "y": 6000
+    },
+    "row6": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Identity · contextual markers",
+      "w": 240,
+      "x": 0,
+      "y": 8160
+    },
+    "row7": {
+      "kind": "title1",
+      "maxW": 4480,
+      "text": "Review delivery · one dial from facts to guided",
+      "w": 240,
+      "x": 0,
+      "y": 10980
+    },
+    "row8": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Identity · reviews and verdicts",
+      "w": 240,
+      "x": 0,
+      "y": 14000
+    },
+    "row9": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Briefing · descriptive links",
+      "w": 240,
+      "x": 0,
+      "y": 16720
+    },
+    "row12": {
+      "kind": "title1",
+      "maxW": 2960,
+      "text": "Reviews · every review, newest first",
+      "w": 240,
+      "x": 0,
+      "y": 27440
+    },
+    "unitBriefing": {
+      "x": 0,
+      "y": 31320,
+      "text": "Unit briefing — draft, 25 October",
+      "kind": "title1",
+      "maxW": 5420
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Overview.dc.html",
+    "Disclosure.dc.html",
+    "Cycle.dc.html",
+    "Header.dc.html",
+    "Split.dc.html",
+    "Lanes.dc.html",
+    "Source.dc.html",
+    "References.dc.html",
+    "Threads.dc.html",
+    "Sticky.dc.html",
+    "Ranges.dc.html",
+    "Margin.dc.html",
+    "Polish.dc.html",
+    "Markers.dc.html",
+    "Delivery.dc.html",
+    "DeliverySettings.dc.html",
+    "DeliveryRules.dc.html",
+    "Verdicts.dc.html",
+    "Briefing.dc.html",
+    "DialTitle.dc.html",
+    "DialScrolled.dc.html",
+    "OtherUnits.dc.html",
+    "Reviews.dc.html",
+    "ReviewsPhone.dc.html",
+    "UnitBriefingSingle.dc.html",
+    "UnitBriefingPhoneSingle.dc.html",
+    "UnitBriefing.dc.html",
+    "UnitBriefingPhone.dc.html",
+    "ReviewsOlder.dc.html",
+    "UnitBriefingUndecided.dc.html"
+  ],
+  "pages": [],
+  "title": "Neuve Web — Review UI"
+}

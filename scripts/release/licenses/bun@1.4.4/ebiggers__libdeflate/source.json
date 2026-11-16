@@ -1,0 +1,13 @@
+{
+  "project": "ebiggers/libdeflate",
+  "source": "https://github.com/ebiggers/libdeflate",
+  "commit": "92e6a0db9fa848d742f9eb286c92afc60f2c3dda",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "COPYING",
+      "url": "https://raw.githubusercontent.com/ebiggers/libdeflate/92e6a0db9fa848d742f9eb286c92afc60f2c3dda/COPYING",
+      "sha256": "4ad69099cb4374836fd27583d9991e2838cd86b6e4666ab26b2d32582c91e73a"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "project": "postcss-values-parser",
+  "source": "https://registry.npmjs.org/postcss-values-parser/-/postcss-values-parser-2.0.1.tgz",
+  "version": "2.0.1",
+  "commit": "c00f858ab8c86ce9f06fdb702e8f26376f467248",
+  "pin": "Prettier 3.9.9's yarn.lock (prettier/prettier at cdd17f2288b28b170a76416c72dac56e3ea5daff), the release Bun's src/format/CLAUDE.md names as the target of its port; Bun's src/format/css/value_parser.rs names 2.0.1",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/postcss-values-parser/-/postcss-values-parser-2.0.1.tgz#package/LICENSE",
+      "sha256": "d9883e65ec9683f07ee7c34c9662eafd29f230c51f16f520c4fcc854ef595f6d"
+    }
+  ]
+}

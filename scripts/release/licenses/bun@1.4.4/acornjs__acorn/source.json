@@ -1,0 +1,18 @@
+{
+  "project": "acornjs/acorn",
+  "source": "https://github.com/acornjs/acorn",
+  "commit": "e4516ce0f49aea06b98ae1a551644119958ed4e1",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "acorn__LICENSE",
+      "url": "https://raw.githubusercontent.com/acornjs/acorn/e4516ce0f49aea06b98ae1a551644119958ed4e1/acorn/LICENSE",
+      "sha256": "76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7"
+    },
+    {
+      "name": "acorn-walk__LICENSE",
+      "url": "https://raw.githubusercontent.com/acornjs/acorn/e4516ce0f49aea06b98ae1a551644119958ed4e1/acorn-walk/LICENSE",
+      "sha256": "c2d8184ea9becd063aa40be243e8c6ec2c4f72828fdfe4b0752664ef73e96ed3"
+    }
+  ]
+}

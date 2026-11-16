@@ -1,0 +1,14 @@
+{
+  "project": "events",
+  "source": "https://registry.npmjs.org/events/-/events-3.3.0.tgz",
+  "version": "3.3.0",
+  "commit": "aed9f91fee236bdedab8d593f7aa418ae6ed2718",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/events/-/events-3.3.0.tgz#package/LICENSE",
+      "sha256": "631987b7616a325a5b97566c232418481ddf7dbb5ecadefb991e791876cc2599"
+    }
+  ]
+}

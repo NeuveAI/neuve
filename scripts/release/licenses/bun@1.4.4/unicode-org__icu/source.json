@@ -1,0 +1,13 @@
+{
+  "project": "unicode-org/icu",
+  "source": "https://github.com/unicode-org/icu",
+  "commit": "049e0d6a420629ac7db77256987d083a563287b5",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/unicode-org/icu/049e0d6a420629ac7db77256987d083a563287b5/LICENSE",
+      "sha256": "e55522d81edc687a341a4411e0776e54ca654e90147f354a90458aaced4116af"
+    }
+  ]
+}

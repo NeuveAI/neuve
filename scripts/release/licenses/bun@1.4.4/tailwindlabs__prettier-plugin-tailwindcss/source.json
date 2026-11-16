@@ -1,0 +1,13 @@
+{
+  "project": "tailwindlabs/prettier-plugin-tailwindcss",
+  "source": "https://github.com/tailwindlabs/prettier-plugin-tailwindcss",
+  "commit": "5b27f947f5d3e6de8702dc40d4054e02fbf4cdd8",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/tailwindlabs/prettier-plugin-tailwindcss/5b27f947f5d3e6de8702dc40d4054e02fbf4cdd8/LICENSE",
+      "sha256": "2c93b6bf68a7e6809d6b5025c136818c3eb84adcf5f52e6c20711629ad34a796"
+    }
+  ]
+}

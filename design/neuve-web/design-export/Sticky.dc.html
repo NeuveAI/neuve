@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sticky file headers</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens come from ./tokens.css (generated from the code). Board-only: */
+.theme-light,.theme-dark{--land0:rgba(226,202,94,0)}
+a{color:var(--ink)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.iconbtn{width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.iconbtn:hover{background:var(--raised);color:var(--ink)}}
+/* Rail rows: TIMING.railTone (unit-rail.tsx). */
+.tone{transition:background-color var(--nv-dur-rail-tone) var(--nv-ease-standard)}
+@media (hover:hover){.tone:hover{background:var(--raised)}}
+.seg{display:inline-flex;padding:3px;border-radius:8px;background:var(--raised)}
+.seg button{border:0;background:transparent;padding:0 10px;height:28px;border-radius:6px;font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.kw{color:var(--kw)}.st{color:var(--st)}.fn{color:var(--fn)}.cm{color:var(--cm);font-style:italic}.nu{color:var(--nu)}.id{color:var(--id)}.pl{color:var(--pl)}
+
+/* the desk's own scroller, like the app's main column */
+.scroller{overflow-y:auto;scroll-behavior:smooth;overscroll-behavior:contain}
+@media (prefers-reduced-motion:reduce){.scroller{scroll-behavior:auto}}
+
+/* file card: overflow clip (not hidden) so the sticky header keeps the scroller as its scroll container */
+.fcard{border-radius:10px;background:var(--surface);box-shadow:0 0 0 1px var(--line);overflow:clip}
+.fh{position:sticky;top:var(--fh-top);z-index:3;container-type:scroll-state;container-name:fh}
+.stick-stacked .fh{--fh-top:48px}
+.stick-merged .fh,.stick-file .fh{--fh-top:0px}
+.fh-in{height:44px;display:flex;align-items:center;gap:8px;padding:0 8px 0 6px;background:var(--surface);border-bottom:1px solid var(--line2);transition:box-shadow var(--nv-dur-stuck) var(--nv-ease-standard)}
+.path{display:flex;align-items:baseline;min-width:0;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px}
+.dir{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto}
+.base{color:var(--ink);font-weight:500;white-space:nowrap;flex:0 0 auto}
+.copy{opacity:1}
+@media (hover:hover){.copy{opacity:0;transition:opacity var(--nv-dur-surface-tone) var(--nv-ease-standard)}.fh:hover .copy,.fh:focus-within .copy{opacity:1}}
+.when-stuck{opacity:0;visibility:hidden;transform:translateY(calc(var(--nv-offset-stuck) * -1));transition:opacity var(--nv-dur-stuck-exit) var(--nv-ease-standard),transform var(--nv-dur-stuck-exit) var(--nv-ease-standard),visibility 0s var(--nv-ease-linear) var(--nv-dur-stuck-exit)}
+@container fh scroll-state(stuck: top){
+.fh-in{box-shadow:var(--stuck-shadow);border-bottom-color:transparent}
+.stick-merged .when-stuck{opacity:1;visibility:visible;transform:none;transition:opacity var(--nv-dur-stuck-enter) var(--nv-ease-emphasized-decelerate),transform var(--nv-dur-stuck-enter) var(--nv-ease-emphasized-decelerate),visibility 0s}
+.pos{opacity:1;visibility:visible;transform:none;transition:opacity var(--nv-dur-stuck-enter) var(--nv-ease-emphasized-decelerate),transform var(--nv-dur-stuck-enter) var(--nv-ease-emphasized-decelerate),visibility 0s}
+}
+@media (prefers-reduced-motion:reduce){.when-stuck,.fh-in{transition:none!important}}
+.viewed{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px 0 8px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-size:12.5px;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.viewed:hover{background:var(--raised);color:var(--ink)}}
+.box{width:14px;height:14px;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--line-strong);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-check) var(--nv-ease-standard),box-shadow var(--nv-dur-check) var(--nv-ease-standard)}
+.viewed.on{color:var(--agt-fg)}
+.viewed.on .box{background:var(--agt);box-shadow:none;color:#fff}
+.is-viewed .base{color:var(--muted)}
+.chev{transition:transform var(--nv-dur-chevron) var(--nv-ease-standard)}
+@media (prefers-reduced-motion:reduce){.chev{transition:none}}
+
+.tb{position:relative;z-index:4;height:48px;display:flex;align-items:center;gap:12px;background:var(--bg)}
+.stick-stacked .tb{position:sticky;top:0}
+
+.row{display:grid;grid-template-columns:52px 18px minmax(0,1fr);height:24px;align-items:center;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px;line-height:24px;scroll-margin-top:var(--land-top)}
+.stick-stacked{--land-top:108px}
+.stick-merged,.stick-file{--land-top:60px}
+.ln{color:var(--nv-ln);text-align:right;padding-right:10px;font-size:11.5px;height:24px}
+.sg{color:var(--faint);text-align:center}
+.code{white-space:pre;overflow:hidden;padding-right:12px}
+.k-ctx{background:var(--surface)}
+.k-add{background:var(--add-bg)}.k-add .ln{background:var(--add-num);color:var(--add-ln)}.k-add .sg{color:var(--add-fg)}
+.k-del{background:var(--del-bg)}.k-del .ln{background:var(--del-num);color:var(--del-ln)}.k-del .sg{color:var(--del-fg)}
+.hunk{height:28px;display:flex;align-items:center;padding:0 14px;font-size:11.5px;color:var(--muted);background:var(--hunk)}
+.fold{animation:fadeIn var(--nv-dur-swap) var(--nv-ease-standard) both}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.fold{animation:none}}
+
+.mg{position:relative;flex:0 0 220px}
+/* ── MARGIN PINS (Markers.dc.html anatomy · context-margin.tsx MarginPin). One block on Main, Split and Sticky: keep the
+   copies identical. One pin per line: the line's highest-priority kind leads with its Lucide icon (12px, stroke 2.2) and label,
+   a count chip when the line holds more, a target only when it is another file, one dot per other unit (at most 3).
+   Colour says it asks you (magenta decision, amber evidence); a dashed edge says same batch. Open: ink fill. ── */
+.pin{position:relative;display:inline-flex;align-items:center;gap:5px;height:22px;max-width:220px;padding:0 8px 0 6px;box-sizing:border-box;border:0;border-radius:6px;
+  font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;white-space:nowrap;vertical-align:middle;cursor:pointer;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),transform var(--nv-dur-press-in) var(--nv-ease-standard)}
+.pin::after{content:"";position:absolute;left:0;right:0;top:50%;height:24px;transform:translateY(-50%)} /* the row pitch: each pin owns exactly its row */
+.pin:active{transform:scale(var(--nv-scale-press))}
+.pin:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.pin:focus:not(:focus-visible){outline:none}
+.pin .pi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.pin .pi .dash{stroke-dasharray:3.2 3.2}
+.pin .tgt{color:var(--muted);overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pin .n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;border-radius:4px;background:var(--surface);color:var(--ink2);font-size:10.5px;line-height:16px}
+.pin .dots{display:inline-flex;gap:2px;margin-left:1px}
+.pin .dots i{width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.75} /* the code's 50% measures 2.1–2.5:1 on light tints; .75 keeps 3:1 */
+.f-neutral{background:var(--raised);color:var(--ink2)}.f-neutral .pi{color:var(--muted)}
+.f-req{background:var(--req-tint);color:var(--req-ink)}.f-req .pi{color:var(--req)}
+.f-sug{background:var(--sug-tint);color:var(--sug-ink)}.f-sug .pi{color:var(--sug)}
+.f-transient{background:transparent;border:1px dashed var(--line-strong);color:var(--muted)}.f-transient .pi{color:var(--muted)}
+@media (hover:hover){.f-neutral:hover{background:var(--raised2)}.f-req:hover{background:var(--req-tint2)}.f-sug:hover{background:var(--sug-tint2)}.f-transient:hover{background:var(--raised)}}
+.pin.on,.pin.on:hover{background:var(--ink);color:var(--bg);border-color:transparent}.pin.on .pi{color:var(--bg)}
+.pin.on .n{background:color-mix(in srgb,var(--bg) 20%,transparent);color:var(--bg)}.pin.on .tgt{color:color-mix(in srgb,var(--bg) 70%,transparent)}
+@media (prefers-reduced-motion:reduce){.pin{transition:none}.pin:active{transform:none}}
+/* ── end MARGIN PINS ── */
+.mgp{position:absolute;left:0}
+.pin[role="img"]{cursor:default}.pin[role="img"]::after{content:none}
+.tab{border:0;background:transparent;height:30px;padding:0 12px;border-radius:7px;font-size:13px;color:var(--muted)}
+.tab.on{background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+.frow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;align-items:center;padding:8px 10px;border-radius:8px;text-decoration:none;color:var(--ink)}
+.frow.cur{background:var(--select)}
+.live{width:7px;height:7px;border-radius:50%;background:var(--agt)}
+@media (max-width:980px){.mg{display:none}}
+.tbi{width:13px;height:13px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.kbd{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;padding:1px 5px;border-radius:4px;background:var(--raised2);color:var(--ink2)}
+.more{flex:0 0 auto;width:24px;height:24px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;background:var(--raised2);color:var(--ink2);font-family:'Geist Mono',ui-monospace,monospace;font-size:9.5px}
+.agents{height:34px;padding:0 10px 0 6px;border:0;border-radius:9px;background:transparent;display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.agents:hover,.agents.on{background:var(--raised)}
+/* ── REVIEW IDENTITY (Verdicts.dc.html · round-4.md § Review identity). Identity is who: one avatar per actor,
+   never altered by placement or state. Placement changes size only (24 header · 20 cards, threads, margin · 16 rail).
+   State goes beside the avatar, never on it: no status dot, badge or tint. ── */
+.av{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-weight:600;line-height:1}
+.av.person{font-family:Geist,system-ui,sans-serif;border-radius:50% 50% 50% 14%;background:var(--raised2);color:var(--ink2)}
+.av.person.s16{width:16px;height:16px;font-size:7.5px}
+.av.person.s20{width:20px;height:20px;font-size:8.5px}
+.av.person.s24{width:24px;height:24px;font-size:9.5px}
+.av.agent{display:inline-block;overflow:visible;transform:translateY(-10%)}
+.av.agent.s24{width:24px;height:29.2px}
+.av.agent.s20{width:20px;height:24.33px}
+.av.agent.s16{width:16px;height:19.47px}
+.av.agent .body{stroke:none}
+.av.agent .edge{fill:none;stroke-width:1;stroke-linecap:butt;opacity:.5}
+.av.agent .ant{stroke-width:.85;stroke-linecap:round;fill:none}
+.av.agent .tip{stroke:none}
+.av.agent text{font-family:'Geist Mono',ui-monospace,monospace;font-size:8.6px;font-weight:600;text-anchor:middle;dominant-baseline:central}
+.av.agent.impl .body{fill:var(--agt-tint)} .av.agent.impl .edge,.av.agent.impl .ant{stroke:var(--agt-fg)} .av.agent.impl .tip,.av.agent.impl text{fill:var(--agt-fg)}
+.av.agent.rev .body{fill:var(--sug-tint)} .av.agent.rev .edge,.av.agent.rev .ant{stroke:var(--sug-ink)} .av.agent.rev .tip,.av.agent.rev text{fill:var(--sug-ink)}
+/* holds an agent's taller box (the antenna) to the bubble's square, so rows line up whoever it is */
+.avbox{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center}
+.avbox.s16{width:16px;height:16px}.avbox.s20{width:20px;height:20px}.avbox.s24{width:24px;height:24px}
+/* ── BRIEFING LINKS (round-5.md, option B). One block on Briefing, Main, Delivery, Margin and Threads: keep the copies identical. ──
+   A phrase that describes part of the change is the link: ink, a quiet underline that turns ink on real hover, the focus
+   ring on keyboard focus (criteria-card.tsx REVIEW_LINK). An anchor, so a long phrase wraps with its sentence.
+   In the briefing a citation chip shows only its marker-kind icon; its name and tooltip say the kind and the target
+   (marker-kind.tsx CitationChip, iconOnly), kept on one line with the punctuation after it. One treatment for every entry
+   point to lines (round-5.md, follow-up decisions): hover or keyboard focus on a phrase, a chip or a margin pin (.go-tN,
+   comment pins too) lights exactly its lines (--nv-lit); activating any of them lands: a tint (--nv-land) that holds (landHold), then fades (landFade, emphasized
+   accelerate). Both tints are an inset shadow on the line's cells (never the pin margin), under the code text, as the diff draws them. */
+.lk{font:inherit;color:var(--nv-ink);background:transparent;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit;
+  text-decoration:underline;text-decoration-color:var(--nv-muted);text-decoration-thickness:1px;text-underline-offset:3px;border-radius:3px;
+  transition:text-decoration-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.lk:hover{text-decoration-color:var(--nv-ink)}}
+.lk:focus-visible{outline:2px solid var(--nv-focus);outline-offset:2px}
+.lk:focus:not(:focus-visible){outline:none}
+.lk .lsr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 6px 0 5px;box-sizing:border-box;border:0;border-radius:5px;vertical-align:1px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;line-height:20px;white-space:nowrap;cursor:pointer;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.chip.ico{width:20px;padding:0;justify-content:center}
+.lglue{white-space:nowrap}
+.chip:focus-visible{outline:2px solid var(--nv-focus);outline-offset:2px}
+.chip:focus:not(:focus-visible){outline:none}
+.chip .ci{width:11px;height:11px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.chip .dash{stroke-dasharray:3.2 3.2}
+.c-neutral{background:var(--nv-raised);color:var(--nv-ink-2)}.c-neutral .ci{color:var(--nv-muted)}
+.c-sug{background:var(--nv-sug-tint);color:var(--nv-sug-ink)}.c-sug .ci{color:var(--nv-sug)}
+.c-req{background:var(--nv-req-tint);color:var(--nv-req-ink)}.c-req .ci{color:var(--nv-req)}
+.c-transient{background:transparent;border:1px dashed var(--nv-line-strong);color:var(--nv-muted)}.c-transient .ci{color:var(--nv-muted)}
+@media (hover:hover){.c-neutral:hover{background:var(--nv-raised-2)}.c-sug:hover{background:var(--nv-sug-tint-2)}.c-req:hover{background:var(--nv-req-tint-2)}.c-transient:hover{background:var(--nv-raised)}}
+.lrow>span:not(.mg),.lrow>.half>span{transition:box-shadow var(--nv-dur-line-tint) var(--nv-ease-standard),color var(--nv-dur-line-tint) var(--nv-ease-standard)}
+@media (hover:hover){
+.lscope:has(.go-t1:hover) .lrow.t1>span:not(.mg),.lscope:has(.go-t1:hover) .lrow.t1>.half>span,
+.lscope:has(.go-t2:hover) .lrow.t2>span:not(.mg),.lscope:has(.go-t2:hover) .lrow.t2>.half>span,
+.lscope:has(.go-t3:hover) .lrow.t3>span:not(.mg),.lscope:has(.go-t3:hover) .lrow.t3>.half>span,
+.lscope:has(.go-t4:hover) .lrow.t4>span:not(.mg),.lscope:has(.go-t4:hover) .lrow.t4>.half>span,
+.lscope:has(.go-t5:hover) .lrow.t5>span:not(.mg),.lscope:has(.go-t5:hover) .lrow.t5>.half>span,
+.lscope:has(.go-t6:hover) .lrow.t6>span:not(.mg),.lscope:has(.go-t6:hover) .lrow.t6>.half>span,
+.lscope:has(.go-t7:hover) .lrow.t7>span:not(.mg),.lscope:has(.go-t7:hover) .lrow.t7>.half>span,
+.lscope:has(.go-t8:hover) .lrow.t8>span:not(.mg),.lscope:has(.go-t8:hover) .lrow.t8>.half>span,
+.lscope:has(.go-t9:hover) .lrow.t9>span:not(.mg),.lscope:has(.go-t9:hover) .lrow.t9>.half>span,
+.lscope:has(.go-t10:hover) .lrow.t10>span:not(.mg),.lscope:has(.go-t10:hover) .lrow.t10>.half>span{box-shadow:inset 0 0 0 100vmax var(--nv-lit)}
+}
+.lscope:has(.go-t1:focus-visible) .lrow.t1>span:not(.mg),.lscope:has(.go-t1:focus-visible) .lrow.t1>.half>span,
+.lscope:has(.go-t2:focus-visible) .lrow.t2>span:not(.mg),.lscope:has(.go-t2:focus-visible) .lrow.t2>.half>span,
+.lscope:has(.go-t3:focus-visible) .lrow.t3>span:not(.mg),.lscope:has(.go-t3:focus-visible) .lrow.t3>.half>span,
+.lscope:has(.go-t4:focus-visible) .lrow.t4>span:not(.mg),.lscope:has(.go-t4:focus-visible) .lrow.t4>.half>span,
+.lscope:has(.go-t5:focus-visible) .lrow.t5>span:not(.mg),.lscope:has(.go-t5:focus-visible) .lrow.t5>.half>span,
+.lscope:has(.go-t6:focus-visible) .lrow.t6>span:not(.mg),.lscope:has(.go-t6:focus-visible) .lrow.t6>.half>span,
+.lscope:has(.go-t7:focus-visible) .lrow.t7>span:not(.mg),.lscope:has(.go-t7:focus-visible) .lrow.t7>.half>span,
+.lscope:has(.go-t8:focus-visible) .lrow.t8>span:not(.mg),.lscope:has(.go-t8:focus-visible) .lrow.t8>.half>span,
+.lscope:has(.go-t9:focus-visible) .lrow.t9>span:not(.mg),.lscope:has(.go-t9:focus-visible) .lrow.t9>.half>span,
+.lscope:has(.go-t10:focus-visible) .lrow.t10>span:not(.mg),.lscope:has(.go-t10:focus-visible) .lrow.t10>.half>span{box-shadow:inset 0 0 0 100vmax var(--nv-lit)}
+.lrow.landed>span:not(.mg),.lrow.landed>.half>span{box-shadow:inset 0 0 0 100vmax var(--nv-land)!important;transition:none!important}
+.lrow.landed.fading>span:not(.mg),.lrow.landed.fading>.half>span{box-shadow:inset 0 0 0 100vmax transparent!important;transition:box-shadow var(--nv-dur-land-fade) var(--nv-ease-emphasized-accelerate)!important}
+@media (prefers-reduced-motion:reduce){.lrow>span:not(.mg),.lrow>.half>span,.lk,.chip{transition:none}}
+.rm .lrow>span:not(.mg),.rm .lrow>.half>span,.rm .lk,.rm .chip{transition:none}
+/* Engaged pin (round-5.md, 2026-10-15): while a pin's list or one of its cards is open, whichever entry point opened it,
+   its lines show it. The board names those lines on its scope: data-engaged="tN". As the code (lib/diffs.ts): the code cells keep
+   the hover tint (--nv-lit) under the text and carry a 2px outline in --nv-engaged-ring round the range (sides on every row, the top
+   on the first, the bottom on the last; inset on the code cell, so the sticky gutter never covers it); the number cells sit outside
+   the outline with the stronger open tint (--nv-range-strong: accent 28%, 21% in dark) and their own number colour
+   (--nv-ln, --nv-add-ln, --nv-del-ln). In a split row only the side that holds the line is engaged: the new side, the right half.
+   The outline eases in with the line tint and, like it, is instant under reduced motion. A landing on engaged lines keeps the
+   outline and fades back to the engaged tint, not to nothing. Selectors are raised ([data-lscope], .lrow.lrow) to stay above the
+   hover rules on the same lines. */
+.lscope{--eng-num:var(--nv-range-strong);--eng-ring:var(--nv-engaged-ring)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10{--eng-top:transparent;--eng-bot:transparent}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1:not(.lrow.t1 + .lrow.lrow.t1),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2:not(.lrow.t2 + .lrow.lrow.t2),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3:not(.lrow.t3 + .lrow.lrow.t3),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4:not(.lrow.t4 + .lrow.lrow.t4),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5:not(.lrow.t5 + .lrow.lrow.t5),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6:not(.lrow.t6 + .lrow.lrow.t6),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7:not(.lrow.t7 + .lrow.lrow.t7),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8:not(.lrow.t8 + .lrow.lrow.t8),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9:not(.lrow.t9 + .lrow.lrow.t9),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10:not(.lrow.t10 + .lrow.lrow.t10){--eng-top:var(--eng-ring)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1:not(:has(+ .lrow.lrow.t1)),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2:not(:has(+ .lrow.lrow.t2)),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3:not(:has(+ .lrow.lrow.t3)),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4:not(:has(+ .lrow.lrow.t4)),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5:not(:has(+ .lrow.lrow.t5)),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6:not(:has(+ .lrow.lrow.t6)),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7:not(:has(+ .lrow.lrow.t7)),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8:not(:has(+ .lrow.lrow.t8)),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9:not(:has(+ .lrow.lrow.t9)),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10:not(:has(+ .lrow.lrow.t10)){--eng-bot:var(--eng-ring)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.half:last-child>span:not(.ln):not(.code){box-shadow:inset 0 0 0 100vmax var(--nv-lit)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.code,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.half:last-child>.code{box-shadow:inset 2px 0 0 var(--eng-ring),inset -2px 0 0 var(--eng-ring),inset 0 2px 0 var(--eng-top),inset 0 -2px 0 var(--eng-bot),inset 0 0 0 100vmax var(--nv-lit)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.ln,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.half:last-child>.ln{box-shadow:inset 0 0 0 100vmax var(--eng-num)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed>.code,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed>.half:last-child>.code{box-shadow:inset 2px 0 0 var(--eng-ring),inset -2px 0 0 var(--eng-ring),inset 0 2px 0 var(--eng-top),inset 0 -2px 0 var(--eng-bot),inset 0 0 0 100vmax var(--nv-land)!important}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.half:last-child>span:not(.ln):not(.code){box-shadow:inset 0 0 0 100vmax var(--nv-lit)!important}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.half:last-child>.code{box-shadow:inset 2px 0 0 var(--eng-ring),inset -2px 0 0 var(--eng-ring),inset 0 2px 0 var(--eng-top),inset 0 -2px 0 var(--eng-bot),inset 0 0 0 100vmax var(--nv-lit)!important}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.half:last-child>.ln{box-shadow:inset 0 0 0 100vmax var(--eng-num)!important}
+/* ── end BRIEFING LINKS ── */
+@media (max-width:860px){.rail{display:none}}
+</style>
+</helmet>
+<div class="theme-{{theme}} stick-{{stick}} lscope" data-lscope="sticky" style="height: 900px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px; display: flex; flex-direction: column">
+
+<header style="min-height: 56px; flex: 0 0 auto; display: flex; align-items: center; gap: 16px; padding: 8px 20px; border-bottom: 1px solid var(--line); box-sizing: border-box">
+<a href="Overview.dc.html" style="display: flex; align-items: center; gap: 8px; text-decoration: none; color: var(--ink); font-weight: 600; font-size: 17px" aria-label="Neuve — back to the review batch">
+<svg width="22" height="22" viewBox="0 0 306 306" aria-hidden="true"><path fill="currentColor" d="M274.399 177.261a14.268 14.268 0 0 1-.035 20.492l-43.099 42.02c-5.794 5.649-15.171 5.634-20.945-.035a14.27 14.27 0 0 1 .036-20.492l43.099-42.02c5.793-5.648 15.171-5.633 20.944.035Z M235.26 142.126a14.222 14.222 0 0 1 .014 20.374L126.251 269.687c-5.726 5.629-15.017 5.636-20.751.012a14.222 14.222 0 0 1-.014-20.374L214.51 142.139c5.725-5.63 15.016-5.636 20.75-.013Z M246.931 60.217a14.208 14.208 0 0 1 0 20.359l-84.791 83.207c-5.729 5.623-15.017 5.623-20.746 0a14.205 14.205 0 0 1 0-20.358l84.791-83.209c5.729-5.622 15.017-5.622 20.746 0Z M201.475 31.213a14.222 14.222 0 0 1 .014 20.374L92.466 158.774c-5.726 5.629-15.017 5.636-20.751.012a14.222 14.222 0 0 1-.014-20.374L180.724 31.226c5.726-5.63 15.017-5.636 20.751-.013ZM94.4 65.261a14.268 14.268 0 0 1-.036 20.492l-43.099 42.02c-5.794 5.649-15.171 5.634-20.945-.035a14.27 14.27 0 0 1 .036-20.492l43.099-42.02c5.793-5.648 15.17-5.633 20.945.035Z M122.738 182.202a14.063 14.063 0 0 1-.037 20.203l-40.47 39.429c-5.716 5.568-14.967 5.553-20.662-.036a14.063 14.063 0 0 1 .037-20.203l40.47-39.429c5.717-5.568 14.967-5.553 20.662.036Z"></path></svg>Neuve</a>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); min-width: 0">
+<span>neuve</span><span aria-hidden="true">/</span><span style="color: var(--ink); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">codex/demo-prepared-start-review</span>
+<span class="mono" style="padding: 2px 8px; border-radius: 6px; background: var(--raised); font-size: 11.5px; color: var(--ink2)">4fc76f5</span>
+<span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted)"><span class="live" aria-hidden="true"></span>Live</span>
+</div>
+<div style="flex: 1 1 auto"></div>
+<button type="button" class="agents" aria-expanded="false" aria-haspopup="dialog" aria-label="6 agents on this branch, 0 connected"><span style="display: inline-flex; align-items: center; gap: 5px" aria-hidden="true"><svg class="av agent impl s24" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I1</text></svg><svg class="av agent impl s24" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I2</text></svg><svg class="av agent rev s24" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><span class="more">+3</span></span>6 agents · 0 live</button>
+<button type="button" style="height: 32px; padding: 0 8px 0 10px; border: 0; border-radius: 8px; background: var(--raised); color: var(--muted); font-size: 12.5px; display: inline-flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg>Find<span class="kbd">⌘K</span></button>
+<a href="DeliverySettings.dc.html" class="iconbtn" aria-label="Settings" title="Settings"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></a>
+<button type="button" class="iconbtn" onClick="{{toggleTheme}}" aria-label="Switch theme" style="width: 36px; height: 36px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"></path></svg></button>
+</header>
+
+<div style="flex: 1 1 auto; min-height: 0; display: flex">
+
+<nav class="rail" aria-label="Review units" style="flex: 0 0 280px; box-sizing: border-box; padding: 16px 12px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; overflow-y: auto">
+<div class="seg" role="tablist" aria-label="Rail view" style="align-self: flex-start; background: var(--raised)">
+<button type="button" role="tab" class="{{unitsTabCls}}" aria-selected="{{onUnits}}" onClick="{{toUnits}}">Units</button>
+<button type="button" role="tab" class="{{filesTabCls}}" aria-selected="{{onFiles}}" onClick="{{toFiles}}">Files</button>
+</div>
+<sc-if value="{{onUnits}}" hint-placeholder-val="{{true}}">
+<section style="display: flex; flex-direction: column; gap: 2px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 0 10px 8px">
+<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg>
+<span style="font-size: 12px; font-weight: 600; color: var(--req-fg)">Needs your decision</span><span class="mono" style="margin-left: auto; font-size: 11px; color: var(--muted)">0/1</span>
+</div>
+<button type="button" class="tone" aria-current="true" style="display: flex; flex-direction: column; gap: 4px; text-align: left; border: 0; background: var(--select); border-radius: 8px; padding: 10px">
+<span style="font-size: 13.5px; font-weight: 600; line-height: 18px">Prepared start request and correlated acknowledgment contract</span>
+<span class="mono" style="font-size: 11px; color: var(--muted)">3 files · 150 lines</span>
+</button>
+<span class="lbl" style="padding: 16px 10px 6px">Decided by agents and tools</span>
+<button type="button" class="tone" style="display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; align-items: center; text-align: left; border: 0; background: transparent; border-radius: 8px; padding: 9px 10px"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg><span style="font-size: 13px">Human suggested</span><span class="mono" style="font-size: 11px; color: var(--muted)">1</span></button>
+<button type="button" class="tone" style="display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; align-items: center; text-align: left; border: 0; background: transparent; border-radius: 8px; padding: 9px 10px"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg><span style="font-size: 13px">Agentic review</span><span class="mono" style="font-size: 11px; color: var(--muted)">1</span></button>
+</section>
+</sc-if>
+<sc-if value="{{onFiles}}" hint-placeholder-val="{{false}}">
+<section class="fold" style="display: flex; flex-direction: column; gap: 2px">
+<span class="lbl" style="padding: 0 10px 6px">In this unit</span>
+<sc-for list="{{files}}" as="f" hint-placeholder-count="3">
+<a href="#{{f.id}}" class="frow tone {{f.curCls}}" aria-current="{{f.isCur}}" onClick="{{f.jump}}">
+<span class="mono" style="font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: {{f.railInk}}">{{f.base}}</span>
+<span style="display: inline-flex; align-items: center; gap: 6px"><sc-if value="{{f.viewed}}" hint-placeholder-val="{{false}}"><svg class="ic" viewBox="0 0 24 24" aria-label="Viewed" style="width: 13px; height: 13px; color: var(--agt)"><path d="m5 12 5 5L20 7"></path></svg></sc-if><span class="mono" style="font-size: 11px; color: var(--add-fg)">+{{f.add}}</span><span class="mono" style="font-size: 11px; color: var(--del-fg)">−{{f.del}}</span></span>
+<span class="mono" style="grid-column: span 2; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{f.dir}}</span>
+</a>
+</sc-for>
+</section>
+</sc-if>
+</nav>
+
+<main class="scroller" onScroll="{{onScroll}}" style="flex: 1 1 auto; min-width: 0; padding: 0 32px 120px; box-sizing: border-box">
+<div style="max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column">
+<div style="padding: 32px 0 20px; display: flex; flex-direction: column; gap: 12px; max-width: 760px">
+<span class="lbl" style="color: var(--req-fg); display: inline-flex; align-items: center; gap: 8px"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg>Human-required · 1 of 1</span>
+<h1 style="margin: 0; font-size: 30px; line-height: 36px; letter-spacing: -0.02em; font-weight: 600">Prepared start request and correlated acknowledgment contract</h1>
+<p style="margin: 0; font-size: 15px; line-height: 24px; color: var(--ink2)"><sc-for list="{{brief}}" as="g" hint-placeholder-count="7"><sc-if value="{{g.isText}}" hint-placeholder-val="{{true}}">{{g.t}}</sc-if><sc-if value="{{g.isLink}}" hint-placeholder-val="{{false}}"><a class="lk go-{{g.tgt}}" href="#{{g.anchor}}" onClick="{{g.go}}">{{g.t}}<span class="lsr"> · {{g.where}}</span></a></sc-if><sc-if value="{{g.isChip}}" hint-placeholder-val="{{false}}"><span class="lglue"><button type="button" class="chip ico go-{{g.tgt}} {{g.fam}}" onClick="{{g.go}}" aria-label="{{g.name}}" title="{{g.name}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><sc-if value="{{g.k_source}}" hint-placeholder-val="{{false}}"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></sc-if><sc-if value="{{g.k_test}}" hint-placeholder-val="{{false}}"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></sc-if></svg></button>{{g.after}}</span></sc-if></sc-for></p>
+</div>
+
+<div class="tb">
+<div class="seg" role="radiogroup" aria-label="Diff layout"><button type="button" class="on" role="radio" aria-checked="true"><svg class="tbi" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 12h18"></path></svg>Stacked</button><button type="button" role="radio" aria-checked="false"><svg class="tbi" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M12 3v18"></path></svg>Split</button></div>
+<button type="button" class="viewed" aria-pressed="true" aria-label="Wrap long lines" style="background: var(--raised); color: var(--ink); padding: 0 10px"><svg class="tbi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 16-3 3 3 3"></path><path d="M3 12h14.5a1 1 0 0 1 0 7H13"></path><path d="M3 19h6"></path><path d="M3 5h18"></path></svg>Wrap</button>
+<span class="mono" style="font-size: 11.5px; color: var(--muted)">{{viewedCount}}/3 viewed</span>
+<span style="flex: 1 1 auto"></span>
+<button type="button" class="viewed" disabled style="font-size: 12.5px; opacity: .5; cursor: not-allowed">Show comments</button>
+</div>
+
+<sc-for list="{{files}}" as="f" hint-placeholder-count="3">
+<section data-fsec="1" id="{{f.id}}" style="display: flex; gap: 16px; align-items: flex-start; margin-bottom: 20px; scroll-margin-top: {{f.secMargin}}">
+<div class="fcard {{f.viewCls}}" style="flex: 1 1 auto; min-width: 0">
+<div class="fh" data-land-head="1">
+<div class="fh-in">
+<button type="button" class="iconbtn" onClick="{{f.toggle}}" aria-expanded="{{f.open}}" aria-label="{{f.toggleLabel}}"><svg class="ic chev" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px; transform: {{f.chevRot}}"><path d="m6 9 6 6 6-6"></path></svg></button>
+<span class="path" title="{{f.full}}"><span class="dir">{{f.dir}}</span><span class="base">{{f.base}}</span></span>
+<span class="mono" style="font-size: 11.5px; color: var(--add-fg); white-space: nowrap">+{{f.add}}</span><span class="mono" style="font-size: 11.5px; color: var(--del-fg); white-space: nowrap">−{{f.del}}</span>
+<button type="button" class="iconbtn copy" aria-label="Copy path {{f.full}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V6a2 2 0 0 1 2-2h8"></path></svg></button>
+<span style="flex: 1 1 auto"></span>
+<span class="mono when-stuck pos" style="font-size: 11px; color: var(--muted); white-space: nowrap">{{f.pos}}</span>
+<span class="when-stuck" style="display: inline-flex; align-items: center; gap: 2px; padding-left: 6px; margin-left: 2px; box-shadow: inset 1px 0 0 var(--line2)">
+<button type="button" class="iconbtn" aria-label="Stacked layout" aria-pressed="true" style="color: var(--ink); background: var(--raised)"><svg class="tbi" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 12h18"></path></svg></button>
+<button type="button" class="iconbtn" aria-label="Split layout" aria-pressed="false"><svg class="tbi" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M12 3v18"></path></svg></button>
+<button type="button" class="iconbtn" aria-label="Wrap lines" aria-pressed="true"><svg class="tbi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 16-3 3 3 3"></path><path d="M3 12h14.5a1 1 0 0 1 0 7H13"></path><path d="M3 19h6"></path><path d="M3 5h18"></path></svg></button>
+</span>
+<button type="button" class="viewed {{f.viewedCls}}" onClick="{{f.markViewed}}" aria-pressed="{{f.viewed}}"><span class="box" aria-hidden="true"><sc-if value="{{f.viewed}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"></path></svg></sc-if></span>Viewed</button>
+</div>
+</div>
+<sc-if value="{{f.open}}" hint-placeholder-val="{{true}}">
+<div class="fold">
+<sc-if value="{{f.hasHunk}}" hint-placeholder-val="{{false}}"><div class="hunk mono">{{f.hunk}}</div></sc-if>
+<sc-for list="{{f.rows}}" as="r" hint-placeholder-count="12">
+<div class="row lrow k-{{r.kind}} {{r.tc}}" id="{{r.id}}"><span class="ln">{{r.no}}</span><span class="sg">{{r.sign}}</span><span class="code"><sc-for list="{{r.toks}}" as="tk" hint-placeholder-count="4"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div>
+</sc-for>
+</div>
+</sc-if>
+</div>
+<div class="mg" aria-label="Context margin" style="align-self: stretch">
+<sc-if value="{{f.open}}" hint-placeholder-val="{{true}}">
+<sc-for list="{{f.pins}}" as="p" hint-placeholder-count="2">
+<span class="mgp" style="top: {{p.top}}px"><span class="pin f-{{p.pin.fam}}" role="img" aria-label="{{p.pin.aria}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><sc-if value="{{p.pin.k_conflict}}" hint-placeholder-val="{{false}}"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></sc-if><sc-if value="{{p.pin.k_source}}" hint-placeholder-val="{{false}}"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></sc-if><sc-if value="{{p.pin.k_graph}}" hint-placeholder-val="{{false}}"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></sc-if><sc-if value="{{p.pin.k_test}}" hint-placeholder-val="{{false}}"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></sc-if><sc-if value="{{p.pin.k_batch}}" hint-placeholder-val="{{false}}"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></sc-if></svg><span>{{p.pin.label}}</span><sc-if value="{{p.pin.tgt}}" hint-placeholder-val="{{false}}"><span class="tgt">{{p.pin.tgt}}</span></sc-if><sc-if value="{{p.pin.many}}" hint-placeholder-val="{{false}}"><span class="n" aria-hidden="true">{{p.pin.count}}</span></sc-if><sc-if value="{{p.pin.hasDots}}" hint-placeholder-val="{{false}}"><span class="dots" aria-hidden="true"><sc-for list="{{p.pin.dots}}" as="dt" hint-placeholder-count="1"><i></i></sc-for></span></sc-if></span></span>
+</sc-for>
+</sc-if>
+</div>
+</section>
+</sc-for>
+</div>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"stick":{"editor":"enum","options":["merged","stacked (rejected, round 3)","file (rejected, round 3)"],"default":"merged"},"$preview":{"width":1440,"height":900}}'>
+// ── BRIEFING LINKS (round-5.md, option B). One script on Briefing, Main, Delivery, Margin and Threads: keep the copies identical. ──
+// A phrase or chip lands on its lines: they scroll in below the sticky file header (unless already in view), tint,
+// hold (--nv-dur-land-hold), then fade (--nv-dur-land-fade). Reduced motion: an instant scroll, and the tint stays
+// until the next action. The phase is kept per scope ([data-lscope]), so a re-render repaints it (landPaint).
+var LAND = {};
+function landMs(el, name) { var v = parseFloat(getComputedStyle(el).getPropertyValue(name)); return isNaN(v) ? 0 : v; }
+function landScope(key) { return document.querySelector('[data-lscope="' + key + '"]'); }
+function landRows(key, tgt) { var s = landScope(key); return s ? Array.prototype.slice.call(s.querySelectorAll('.lrow.' + tgt)) : []; }
+function landPaint(key) {
+  var s = landScope(key);
+  if (!s) return;
+  s.querySelectorAll('.lrow.landed').forEach(function (r) { r.classList.remove('landed', 'fading'); });
+  var l = LAND[key];
+  if (!l || !l.phase) return;
+  landRows(key, l.tgt).forEach(function (r) { r.classList.add('landed'); if (l.phase === 'fading') r.classList.add('fading'); });
+}
+function landPaintAll() { Object.keys(LAND).forEach(landPaint); }
+function landClear(key) {
+  var l = LAND[key];
+  if (l) { l.timers.forEach(function (t) { clearTimeout(t); }); if (l.off) l.off(); }
+  LAND[key] = null;
+  landPaint(key);
+}
+function landScroller(el) {
+  for (var n = el.parentElement; n; n = n.parentElement) {
+    var o = getComputedStyle(n).overflowY;
+    if ((o === 'auto' || o === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+  }
+  return null;
+}
+function landReduced(props) {
+  return !!(props && props.reducedMotion) || (typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+function land(key, tgt, reduced) {
+  landClear(key);
+  // only lines on screen: a view that hides the code (Guided) has nothing to land on
+  var rows = landRows(key, tgt).filter(function (r) { return r.getClientRects().length && getComputedStyle(r).visibility !== 'hidden'; });
+  if (!rows.length) return;
+  // the timings are read now, from the connected scope: a re-render may replace it before the hold ends
+  var scope = landScope(key) || document.documentElement;
+  var l = LAND[key] = { tgt: tgt, phase: null, timers: [], off: null,
+    hold: landMs(scope, '--nv-dur-land-hold'), fade: landMs(scope, '--nv-dur-land-fade') };
+  var sc = landScroller(rows[0]);
+  var headEl = sc ? sc.querySelector('[data-land-head]') : null;
+  var top = (sc ? sc.getBoundingClientRect().top : 0) + (headEl ? headEl.offsetHeight : 0);
+  var bottom = sc ? sc.getBoundingClientRect().top + sc.clientHeight : window.innerHeight;
+  var a = rows[0].getBoundingClientRect(), b = rows[rows.length - 1].getBoundingClientRect();
+  var arrive = function () {
+    if (LAND[key] !== l) return;
+    l.phase = 'landed';
+    landPaint(key);
+    if (reduced) {
+      var off = function () { landClear(key); };
+      var evs = ['pointerdown', 'keydown', 'wheel'];
+      l.timers.push(setTimeout(function () { evs.forEach(function (e) { document.addEventListener(e, off, { capture: true, once: true }); }); }, 0));
+      l.off = function () { evs.forEach(function (e) { document.removeEventListener(e, off, { capture: true }); }); };
+      return;
+    }
+    l.timers.push(setTimeout(function () {
+      l.phase = 'fading';
+      landPaint(key);
+      l.timers.push(setTimeout(function () { if (LAND[key] === l) { LAND[key] = null; landPaint(key); } }, l.fade));
+    }, l.hold));
+  };
+  if (a.top >= top && b.bottom <= bottom) { arrive(); return; }
+  var box = sc || document.scrollingElement || document.documentElement;
+  var dest = Math.max(0, Math.min(box.scrollTop + (a.top - top) - 8, box.scrollHeight - (sc ? sc.clientHeight : window.innerHeight)));
+  if (reduced) { box.scrollTop = dest; arrive(); return; }
+  var done = false;
+  var bus = sc || window;
+  var go = function () { if (done) return; done = true; bus.removeEventListener('scrollend', ended); arrive(); };
+  // only the end of this scroll counts, not a scrollend left over from an earlier one
+  var ended = function () { if (Math.abs(box.scrollTop - dest) <= 2) go(); };
+  bus.addEventListener('scrollend', ended);
+  l.timers.push(setTimeout(go, 700)); // browsers without scrollend
+  (sc || window).scrollTo({ top: dest, behavior: 'smooth' });
+}
+// A chip keeps the punctuation that follows it (".", ",") on its own line: the punctuation moves into the chip's
+// segment as g.after, so a paragraph never strands a lone "." after an icon.
+function glue(segs) {
+  var out = segs.map(function (g) { return Object.assign({}, g); });
+  out.forEach(function (g, i) {
+    var next = out[i + 1];
+    if (!g.isChip || !next || !next.isText) return;
+    var m = /^[.,;:!?)]+/.exec(next.t);
+    if (m) { g.after = m[0]; next.t = next.t.slice(m[0].length); }
+  });
+  return out.filter(function (g) { return !g.isText || g.t !== ''; });
+}
+// Decision B, with a document listener as floating.tsx's onPointerDownOutside (no covering layer, so hover still reaches
+// the briefing): while a card is open, a press outside it closes it. On a briefing phrase or chip the click then follows the
+// link; any other press is stopped, its pointerdown and its click, so nothing underneath reacts (as the code's
+// OutsidePressDismiss). A mouse closes on pointerdown; touch and pen close on the tap (the click), so a scroll gesture that
+// starts outside the card (pointerdown, then pointercancel, no click) leaves it open. Escape closes it too and returns focus
+// to its pin. A non-modal layer (nonModal() true: a pinned list, which doesn't isolate) closes on the press the same way but
+// lets that press through, so the pin pressed opens its card or list in one click, as the code's popover does.
+// Attach once; isOpen and nonModal are asked each time.
+function outsideCloser(isOpen, insideSel, close, nonModal) {
+  var swallow = false, tap = false;
+  var outside = function (e) {
+    if (!isOpen()) return null;
+    var t = e.target;
+    if (t.closest && t.closest(insideSel)) return null;
+    return { link: !!(t.closest && t.closest('[data-lscope] p .lk, [data-lscope] p .chip')) };
+  };
+  var stop = function (e) { e.preventDefault(); e.stopPropagation(); };
+  var down = function (e) {
+    swallow = false;
+    tap = e.pointerType === 'touch' || e.pointerType === 'pen';
+    if (tap) return;
+    var o = outside(e);
+    if (!o) return;
+    swallow = !o.link && !(nonModal && nonModal());
+    if (swallow) stop(e);
+    close();
+  };
+  var cancel = function () { tap = false; };
+  // Escape closes and, as floating.tsx, returns focus to the pin whose card or list was open (found again by its key after
+  // the board re-renders).
+  var key = function (e) {
+    if (e.key !== 'Escape' || !isOpen()) return;
+    var pin = document.querySelector('[data-lscope] .pin[aria-expanded="true"]');
+    var sel = !pin ? null : pin.getAttribute('data-mk-pin') ? '[data-mk-pin="' + pin.getAttribute('data-mk-pin') + '"]'
+      : pin.getAttribute('aria-label') ? '.pin[aria-label="' + CSS.escape(pin.getAttribute('aria-label')) + '"]' : null;
+    close();
+    if (pin) setTimeout(function () { var el = (sel && document.querySelector(sel)) || pin; if (el && el.isConnected && el.focus) el.focus({ preventScroll: true }); }, 0);
+  };
+  var click = function (e) {
+    if (swallow) { swallow = false; stop(e); return; }
+    if (!tap) return;
+    tap = false;
+    var o = outside(e);
+    if (!o) return;
+    if (!o.link && !(nonModal && nonModal())) stop(e);
+    close();
+  };
+  return {
+    on: function () { document.addEventListener('pointerdown', down, true); document.addEventListener('pointercancel', cancel, true); document.addEventListener('click', click, true); document.addEventListener('keydown', key); },
+    off: function () { document.removeEventListener('pointerdown', down, true); document.removeEventListener('pointercancel', cancel, true); document.removeEventListener('click', click, true); document.removeEventListener('keydown', key); }
+  };
+}
+function landOn(key, tgt, props, before) {
+  return function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (before) before();
+    // after the board's own update (a card opening) has rendered
+    setTimeout(function () { land(key, tgt, landReduced(props)); }, 0);
+  };
+}
+// ── end BRIEFING LINKS ──
+// ── MARGIN PINS (Markers.dc.html anatomy). One block on Main, Split and Sticky: keep the copies identical. ──
+var PIN_PATHS = {
+  conflict: ['m16 3 4 4-4 4', 'M20 7H4', 'm8 21-4-4 4-4', 'M4 17h16'],
+  decision: ['M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z', 'M4 22v-7'],
+  failed: ['M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2', 'M8.5 2h7', 'm2 2 20 20'],
+  gap: [], unavailable: ['M9 9l6 6', 'M15 9l-6 6'],
+  batch: ['M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z', 'm22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65'],
+  signal: ['M22 12h-4l-3 9L9 3l-3 9H2'],
+  test: ['M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2', 'M8.5 2h7', 'M7 16h10'],
+  source: ['m16 18 6-6-6-6', 'm8 6-6 6 6 6'],
+  graph: ['M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9', 'M12 12v3'],
+  history: ['M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8', 'M3 3v5h5', 'M12 7v5l4 2'],
+  doc: ['M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z', 'M14 2v4a2 2 0 0 0 2 2h4', 'M16 13H8', 'M16 17H8']
+};
+// priority order (marker-kind.tsx MARKER_KINDS): a shared line's pin shows the first kind present and counts the rest
+var PIN_PRIO = ['conflict', 'decision', 'failed', 'gap', 'unavailable', 'comment', 'draft', 'batch', 'signal', 'test', 'source', 'graph', 'history', 'doc'];
+var PIN_FAM = { conflict: 'req', decision: 'req', failed: 'sug', gap: 'sug', unavailable: 'sug', comment: 'human', draft: 'draft', batch: 'transient' };
+var PIN_LABEL = { conflict: 'Conflict', decision: 'Decision', failed: 'Failed', gap: 'Gap', unavailable: 'Unavailable', batch: 'Same batch', signal: 'Signal', test: 'Test', source: 'Source', graph: 'Graph', history: 'History', doc: 'Doc', draft: 'Draft' };
+function pinFam(kind) { return PIN_FAM[kind] || 'neutral'; }
+function pinSort(kinds) { return kinds.slice().sort(function (a, b) { return PIN_PRIO.indexOf(a.kind) - PIN_PRIO.indexOf(b.kind); }); }
+function pinKind(kind) { var o = { kind: kind, fam: pinFam(kind), label: PIN_LABEL[kind] || kind, isGap: kind === 'gap' || kind === 'unavailable' }; o['k_' + kind] = true; return o; }
+// ── end MARGIN PINS ──
+var KW = /^(export|async|function|const|await|return|if|import|from|let|new|true|false|null|try|catch|type|typeof|instanceof)$/;
+function tokenize(code) {
+  var out = [];
+  var re = /(\/\/.*$)|('[^']*'|"[^"]*"|`[^`]*`)|([A-Za-z_$][\w$]*)(?=\s*\()|([A-Za-z_$][\w$]*)|(\d+)|(\s+)|([^\sA-Za-z_$\d'"`]+)/g;
+  var m;
+  while ((m = re.exec(code))) {
+    if (m[1]) out.push({ t: m[1], c: 'cm' });
+    else if (m[2]) out.push({ t: m[2], c: 'st' });
+    else if (m[3]) out.push({ t: m[3], c: KW.test(m[3]) ? 'kw' : 'fn' });
+    else if (m[4]) out.push({ t: m[4], c: KW.test(m[4]) ? 'kw' : 'id' });
+    else if (m[5]) out.push({ t: m[5], c: 'nu' });
+    else out.push({ t: m[0], c: 'pl' });
+  }
+  return out;
+}
+function seq(kind, start, lines) { return lines.map(function (l, i) { return [kind, start + i, l]; }); }
+
+var FILES = [
+  { id: 'f1', dir: 'apps/neuve-web/apps/web/src/components/', base: 'start-review-operation.ts', add: 83, del: 13, hunk: '',
+    rows: seq('add', 1, [
+      'import { Schema } from "effect"',
+      'import { StartReview } from "@workspace/backend/review-run"',
+      'import { SubmittedRevision } from "@workspace/backend/submission-schema"',
+      '',
+      'export const PreparedStartReview = Schema.Struct({',
+      '  ...StartReview.fields,',
+      '  recordedReadPolicy: Schema.Literal("qualified-observations"),',
+      '})',
+      'export type PreparedStartReview = typeof PreparedStartReview.Type',
+      'export const StartReviewAcknowledgment = Schema.Struct({',
+      '  commandId: StartReview.fields.commandId,',
+      '  branch: StartReview.fields.branch,',
+      '  baseBranch: StartReview.fields.baseBranch,',
+      '  revisionId: SubmittedRevision,',
+      '  status: Schema.Literals([',
+      '    "queued",',
+      '    "running",',
+      '    "finished",',
+      '    "failed",',
+      '    "uncertain",',
+      '  ]),',
+      '})',
+      'export const StartReviewResponse = Schema.Union([',
+      '  Schema.Struct({ kind: Schema.Literal("accepted"), run: StartReviewAcknowledgment }),',
+      '  Schema.Struct({ kind: Schema.Literal("refused"), message: Schema.NonEmptyString }),',
+      '  Schema.Struct({ kind: Schema.Literal("uncertain"), message: Schema.NonEmptyString }),',
+      '])'
+    ]),
+    pins: [[4, 'source', 'review-run.ts'], [22, 'graph', ''], [24, 'test', '']] },
+  { id: 'f2', dir: 'apps/neuve-web/apps/web/src/server/', base: 'live-review.ts', add: 40, del: 14, hunk: '@@ −1164,9 +1164,24 @@ startReview',
+    rows: [['ctx', 1164, '  .inputValidator((data: unknown) =>'],
+      ['del', 1165, '    Schema.decodeUnknownSync(StartReview)(data)'],
+      ['add', 1165, '    Schema.decodeUnknownSync(PreparedStartReview)(data)'],
+      ['ctx', 1166, '  )'],
+      ['del', 1167, '  .handler(async ({ data }) => {'],
+      ['del', 1168, '    await humanRequest("start-review", "POST", { ...data, commandId: crypto.randomUUID() })'],
+      ['del', 1169, '    return { started: true }'],
+      ['add', 1167, '  .handler(async ({ data }): Promise<StartReviewResponse> => {'],
+      ['add', 1168, '    try {'],
+      ['add', 1169, '      const payload: unknown = await humanRequest("start-review", "POST", data)'],
+      ['add', 1170, '      const { run } = Schema.decodeUnknownSync(Schema.Struct({ run: ReviewRun }))(payload)'],
+      ['add', 1171, '      if ('],
+      ['add', 1172, '        run.commandId !== data.commandId ||'],
+      ['add', 1173, '        run.harnessId !== data.harnessId ||'],
+      ['add', 1174, '        run.submission.branch !== data.branch'],
+      ['add', 1175, '      )'],
+      ['add', 1176, '        return { kind: "uncertain", message: uncertainStartMessage }'],
+      ['add', 1177, '      return { kind: "accepted", run: toAcknowledgment(run) }'],
+      ['add', 1178, '    } catch (cause) {'],
+      ['add', 1179, '      if (cause instanceof ReviewOperationError && cause.code !== "RecordsCommandUncertain")'],
+      ['add', 1180, '        return { kind: "refused", message: cause.message }'],
+      ['add', 1181, '      return { kind: "uncertain", message: uncertainStartMessage }'],
+      ['add', 1182, '    }'],
+      ['add', 1183, '  })'],
+      ['ctx', 1184, '']],
+    pins: [[8, 'conflict', ''], [18, 'source', 'review-errors.ts']] },
+  { id: 'f3', dir: 'apps/neuve-web/apps/web/src/routes/', base: 'index.tsx', add: 87, del: 19, hunk: '@@ −2,7 +2,13 @@',
+    rows: [['del', 2, 'import { atom, useAtom } from "jotai"'],
+      ['add', 2, 'import { atom, useAtom, useStore } from "jotai"'],
+      ['ctx', 3, 'import { createFileRoute, useRouter } from "@tanstack/react-router"'],
+      ['del', 4, 'import { startReviewOperation } from "@/components/start-review-operation"'],
+      ['add', 4, 'import {'],
+      ['add', 5, '  startReviewOperation,'],
+      ['add', 6, '  reviewStartNotice,'],
+      ['add', 7, '  PreparedStartReview,'],
+      ['add', 8, '} from "@/components/start-review-operation"'],
+      ['ctx', 9, ''],
+      ['add', 10, 'const requestAtom = atom<PreparedStartReview | null>(null)'],
+      ['add', 11, 'const noticeAtom = atom<string | null>(null)'],
+      ['ctx', 12, ''],
+      ['add', 13, 'async function refreshAfterStart(router, store) {'],
+      ['add', 14, '  await refreshOverview()'],
+      ['add', 15, '  await router.invalidate()'],
+      ['add', 16, '  store.set(requestAtom, null)'],
+      ['add', 17, '}'],
+      ['ctx', 18, '']],
+    pins: [[10, 'batch', ''], [13, 'test', '']] }
+];
+// briefing targets: t1 the prepared request (start-review-operation.ts 5–8), t2 the server correlation (live-review.ts
+// 1171–1176), t3 the refresh after a start (index.tsx 13–16)
+var TARGETS = { t1: ['f1', 5, 8], t2: ['f2', 1171, 1176], t3: ['f3', 13, 16] };
+function tcOf(fileId, kind, no) { return Object.keys(TARGETS).filter(function (k) { var g = TARGETS[k]; return g[0] === fileId && kind !== 'del' && no >= g[1] && no <= g[2]; }).join(' '); }
+function sign(k) { return k === 'add' ? '+' : (k === 'del' ? '−' : ''); }
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { theme: null, tab: 'files', cur: 0, closed: {}, viewed: {} };
+  }
+  scroller() { return this.root ? this.root : null; }
+  componentDidUpdate() { landPaintAll(); }
+  jumpTo(fileId, anchorId) {
+    var self = this;
+    var closed = Object.assign({}, this.state.closed); closed[fileId] = false;
+    this.setState({ closed: closed }, function () {
+      var el = document.getElementById(anchorId);
+      var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (el) el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+    });
+  }
+  renderVals() {
+    var self = this;
+    var st = this.state;
+    // stick: 'merged' is the decided header (round-3 #1); the other two options are the alternatives the user rejected
+    var stick = String(this.props.stick || 'merged').split(' ')[0];
+    var viewedCount = 0;
+    var files = FILES.map(function (f, fi) {
+      var viewed = !!st.viewed[f.id];
+      if (viewed) viewedCount++;
+      var open = st.closed[f.id] === undefined ? !viewed : !st.closed[f.id];
+      var hunkH = f.hunk ? 28 : 0;
+      return {
+        id: f.id, dir: f.dir, base: f.base, full: f.dir + f.base, add: f.add, del: f.del,
+        hasHunk: !!f.hunk, hunk: f.hunk, pos: (fi + 1) + ' / ' + FILES.length,
+        open: open, viewed: viewed, viewedCls: viewed ? 'on' : '', viewCls: viewed ? 'is-viewed' : '',
+        chevRot: open ? 'none' : 'rotate(-90deg)', toggleLabel: (open ? 'Collapse ' : 'Expand ') + f.base,
+        isCur: st.cur === fi ? 'true' : 'false', curCls: st.cur === fi ? 'cur' : '',
+        railInk: viewed ? 'var(--muted)' : 'var(--ink)',
+        secMargin: stick === 'stacked' ? '56px' : '8px',
+        toggle: function () { var c = Object.assign({}, st.closed); c[f.id] = open; self.setState({ closed: c }); },
+        markViewed: function () {
+          var v = Object.assign({}, st.viewed); v[f.id] = !viewed;
+          var c = Object.assign({}, st.closed); c[f.id] = !viewed;
+          self.setState({ viewed: v, closed: c });
+        },
+        jump: function (e) { if (e) e.preventDefault(); self.jumpTo(f.id, f.id); },
+        rows: f.rows.map(function (r) {
+          return { kind: r[0], no: r[1], sign: sign(r[0]), toks: tokenize(r[2]), id: r[0] === 'del' ? '' : f.id + '-' + r[1], tc: tcOf(f.id, r[0], r[1]) };
+        }),
+        pins: f.pins.map(function (p) {
+          var k = pinKind(p[1]); var line = f.rows[p[0]][1];
+          return { top: 44 + hunkH + p[0] * 24 + 1, pin: Object.assign(k, { tgt: p[2], many: false, count: 1, hasDots: false, dots: [],
+            aria: k.label + ' on line ' + line + (p[2] ? ', ' + p[2] : '') }) };
+        })
+      };
+    });
+    // a phrase or chip opens its file if folded, then lands on its lines (shared BRIEFING LINKS block)
+    var openFile = function (tgt) { return function () { var c = Object.assign({}, self.state.closed); c[TARGETS[tgt][0]] = false; self.setState({ closed: c }); }; };
+    var T = function (s) { return { isText: true, t: s }; };
+    var L = function (s, tgt, where) { return { isLink: true, t: s, tgt: tgt, anchor: TARGETS[tgt][0] + '-' + TARGETS[tgt][1], where: where, go: landOn('sticky', tgt, self.props, openFile(tgt)) }; };
+    var C = function (kind, tgt, name) { return { isChip: true, tgt: tgt, name: name, fam: 'c-neutral', k_source: kind === 'source', k_test: kind === 'test', go: landOn('sticky', tgt, self.props, openFile(tgt)) }; };
+    var brief = glue([
+      T('The client now sends a prepared request and only registers a run when the acknowledgment matches it. Check where each rule lives: the '),
+      L('prepared request policy', 't1', 'lands on start-review-operation.ts, lines 5 to 8'), T(' '), C('source', 't1', 'Source, start-review-operation.ts line 5'),
+      T(', the '), L('server correlation', 't2', 'lands on live-review.ts, lines 1171 to 1176'),
+      T(' and the '), L('client refresh ordering', 't3', 'lands on index.tsx, lines 13 to 16'), T(' '), C('test', 't3', 'Test, index.tsx line 13'), T('.')
+    ]);
+    var theme = st.theme || this.props.theme || 'light';
+    return {
+      theme: theme, stick: stick, files: files, viewedCount: viewedCount,
+      toggleTheme: function () { self.setState({ theme: theme === 'light' ? 'dark' : 'light' }); },
+      onUnits: st.tab === 'units', onFiles: st.tab === 'files',
+      unitsTabCls: st.tab === 'units' ? 'on' : '', filesTabCls: st.tab === 'files' ? 'on' : '',
+      toUnits: function () { self.setState({ tab: 'units' }); },
+      toFiles: function () { self.setState({ tab: 'files' }); },
+      brief: brief,
+      onScroll: function (e) {
+        var sc = e.currentTarget;
+        var top = sc.getBoundingClientRect().top;
+        var secs = sc.querySelectorAll('[data-fsec]');
+        var cur = 0;
+        for (var i = 0; i < secs.length; i++) { if (secs[i].getBoundingClientRect().top - top <= 120) cur = i; }
+        if (cur !== self.state.cur) self.setState({ cur: cur });
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Neuve review batch</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+a{color:var(--ink)}a:hover{color:var(--sug-fg)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.meta{display:inline-flex;align-items:center;gap:6px}
+.iconbtn{width:36px;height:36px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.iconbtn:hover{background:var(--raised);color:var(--ink)}
+.iconbtn{position:relative;text-decoration:none}.iconbtn::after{content:"";position:absolute;inset:-4px}
+.iconbtn[aria-current=page]{background:var(--raised);color:var(--ink)}
+.cta .ic{transition:transform var(--nv-dur-nudge) var(--nv-ease-ios-out)}
+.cta:hover .ic{transform:translateX(var(--nv-offset-nudge))}
+.lseg{border-radius:2px;transition:opacity var(--nv-dur-lane-tone) var(--nv-ease-standard)}
+.legend{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:8px 20px;font-size:12.5px}
+.legend li{display:inline-flex;align-items:center;gap:7px}
+.urow{display:grid;grid-template-columns:minmax(0,1fr) 92px 168px 160px 20px;gap:16px;align-items:center;padding:16px 20px;text-decoration:none;color:var(--ink);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+a.urow:hover{background:var(--raised)}
+.urow .go{color:var(--faint);transition:transform var(--nv-dur-nudge) var(--nv-ease-ios-out),color var(--nv-dur-nudge) var(--nv-ease-ios-out)}
+a.urow:hover .go{transform:translateX(var(--nv-offset-nudge));color:var(--ink)}
+.stat{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink2);white-space:nowrap;min-width:0}
+.clip{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (max-width:900px){.urow{grid-template-columns:minmax(0,1fr) 20px}.urow .col{display:none}.urow-head{display:none}}
+@media (prefers-reduced-motion:reduce){.urow,.urow .go,.tile,.cta .ic,.iconbtn{transition:none}.lseg{transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}}
+.more{flex:0 0 auto;width:24px;height:24px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;background:var(--raised2);color:var(--ink2);font-family:'Geist Mono',ui-monospace,monospace;font-size:9.5px}
+.agents{height:34px;padding:0 10px 0 6px;border:0;border-radius:9px;background:transparent;display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2);text-decoration:none;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.agents:hover{background:var(--raised)}
+.kbd{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;padding:1px 5px;border-radius:4px;background:var(--raised2);color:var(--muted)}
+/* ── REVIEW IDENTITY (Verdicts.dc.html · round-4.md § Review identity). Identity is who: one avatar per actor,
+   never altered by placement or state. Placement changes size only (24 header · 20 cards, threads, margin · 16 rail).
+   State goes beside the avatar, never on it: no status dot, badge or tint. ── */
+.av{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-weight:600;line-height:1}
+.av.person{font-family:Geist,system-ui,sans-serif;border-radius:50% 50% 50% 14%;background:var(--raised2);color:var(--ink2)}
+.av.person.s16{width:16px;height:16px;font-size:7.5px}
+.av.person.s20{width:20px;height:20px;font-size:8.5px}
+.av.person.s24{width:24px;height:24px;font-size:9.5px}
+.av.agent{display:inline-block;overflow:visible;transform:translateY(-10%)}
+.av.agent.s24{width:24px;height:29.2px}
+.av.agent.s20{width:20px;height:24.33px}
+.av.agent.s16{width:16px;height:19.47px}
+.av.agent .body{stroke:none}
+.av.agent .edge{fill:none;stroke-width:1;stroke-linecap:butt;opacity:.5}
+.av.agent .ant{stroke-width:.85;stroke-linecap:round;fill:none}
+.av.agent .tip{stroke:none}
+.av.agent text{font-family:'Geist Mono',ui-monospace,monospace;font-size:8.6px;font-weight:600;text-anchor:middle;dominant-baseline:central}
+.av.agent.impl .body{fill:var(--agt-tint)} .av.agent.impl .edge,.av.agent.impl .ant{stroke:var(--agt-fg)} .av.agent.impl .tip,.av.agent.impl text{fill:var(--agt-fg)}
+.av.agent.rev .body{fill:var(--sug-tint)} .av.agent.rev .edge,.av.agent.rev .ant{stroke:var(--sug-ink)} .av.agent.rev .tip,.av.agent.rev text{fill:var(--sug-ink)}
+/* holds an agent's taller box (the antenna) to the bubble's square, so rows line up whoever it is */
+.avbox{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center}
+.avbox.s16{width:16px;height:16px}.avbox.s20{width:20px;height:20px}.avbox.s24{width:24px;height:24px}
+/* ── DECISION PANEL, UNIT ROWS (decision-panel.tsx · unit-list.tsx · checkpoint-count.tsx · round-8.md, 10.110):
+   the human gate at the top, every unit under its lane with its review and how many of its checkpoints are unmet
+   (Missing, Out of date or Conflicting). None unmet shows nothing, never "met"; nothing expands: the row opens the unit. ── */
+.notice{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:16px 20px;border-radius:14px;background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.panel{display:flex;flex-direction:column;gap:16px;padding:20px;border-radius:16px;background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.panel-top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px 24px}
+.headline{margin:0;font-size:22px;line-height:28px;font-weight:600;letter-spacing:-0.02em;text-wrap:pretty}
+.oc{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 12px}.oc-i{display:inline-flex;align-items:center;gap:8px}.oc-i.soft{font-weight:400;color:var(--ink2)}
+.cells{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:6px}
+.cell{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.cell.done{background:var(--bg);box-shadow:0 0 0 1px var(--line)}.cell.done:hover{background:var(--raised)}
+.cell.wait{background:var(--req-tint);box-shadow:0 0 0 1px var(--req-tint2)}.cell.wait:hover{background:var(--req-tint2)}
+.vi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke-width:2.8;stroke-linecap:round;stroke-linejoin:round}.vi.vl{width:16px;height:16px}
+.cta.quiet{background:var(--raised)!important;color:var(--ink)!important}.cta.quiet:hover{background:var(--raised2)!important}
+.panel-foot{border-top:1px solid var(--line2);padding-top:12px}
+.disc>summary,.grp>summary{display:flex;align-items:center;gap:10px;height:40px;width:fit-content;padding:0 10px;margin-left:-10px;border-radius:8px;cursor:pointer;list-style:none;font-size:13px;color:var(--ink2);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.disc>summary::-webkit-details-marker,.grp>summary::-webkit-details-marker{display:none}
+.disc>summary:hover,.grp>summary:hover{background:var(--raised)}
+.dchev{color:var(--faint);transition:transform var(--nv-dur-chevron) var(--nv-ease-standard)}details[open]>summary .dchev{transform:rotate(90deg)}
+.grp h3{margin:0;font-size:14px;font-weight:500;color:var(--ink)}
+.chip{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--raised);color:var(--muted)}
+.rows{margin:4px 0 0;padding:0;list-style:none;border-radius:14px;background:var(--surface);box-shadow:0 0 0 1px var(--line);overflow:hidden}
+.rows>li+li,.jrow+.jrow{border-top:1px solid var(--line2)}
+.ur{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto 112px 15px;gap:16px;align-items:center;min-height:48px;padding:8px 20px;box-sizing:border-box;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.ur:hover,.urow.live:hover{background:var(--raised)}
+.ur .go,.urow.live .go{color:var(--faint);transition:transform var(--nv-dur-nudge) var(--nv-ease-ios-out),color var(--nv-dur-nudge) var(--nv-ease-ios-out)}
+.ur:hover .go,.urow.live:hover .go{transform:translateX(var(--nv-offset-nudge));color:var(--ink)}
+.rlink{color:var(--ink);text-decoration:none;outline:none}.rlink::after{content:"";position:absolute;inset:0}
+.ur:has(.rlink:focus-visible),.urow.live:has(.rlink:focus-visible){outline:2px solid var(--focus);outline-offset:-2px}
+.urow.live{position:relative}
+.mark{display:inline-flex;align-items:center;gap:7px;font-size:13px;white-space:nowrap}
+.unmet{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--sug-fg);white-space:nowrap}
+@media (max-width:600px){.ur{grid-template-columns:minmax(0,1fr) 15px;gap:4px 12px}.ur .m{grid-column:1;grid-row:2;padding-left:20px}.ur .c{grid-column:1;grid-row:3;padding-left:12px}.ur .go{grid-column:2;grid-row:1}.oc .dot{display:none}.h1{font-size:30px!important;line-height:36px!important}.bslot{flex-basis:100%}.bslot .bsl{display:none}.btrig{margin-left:-8px;max-width:100%}}
+@media (max-width:900px){.urow .ck{grid-column:1;grid-row:2;padding-left:20px}}
+@media (prefers-reduced-motion:reduce){.cell,.ur,.dchev,.disc>summary,.grp>summary{transition:none}}
+/* ── BATCH MENU (shared/batch-menu.tsx): the header names the batch on screen and opens the review's batches, each with
+   what it still needs from you. Enter: card 220ms, emphasized decelerate, from .98 and 4px up, origin top left; exit:
+   cardExit 160ms, accelerate. Reduced motion: opacity only (reduced 150ms). ── */
+.bslot{position:relative;display:inline-flex;align-items:center;gap:8px;min-width:0}
+.btrig{height:28px;max-width:min(360px,60vw);min-width:0;padding:0 8px;border:0;border-radius:6px;background:transparent;display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500;color:var(--ink);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.btrig:hover,.btrig[aria-expanded="true"]{background:var(--raised)}
+.btrig .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bmenu{position:absolute;left:0;top:calc(100% + 6px);z-index:30;box-sizing:border-box;width:min(360px,calc(100vw - 32px));display:flex;flex-direction:column;gap:2px;padding:4px;border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card);transform-origin:top left;animation:bmIn var(--nv-dur-card) var(--nv-ease-emphasized-decelerate) both}
+@keyframes bmIn{from{opacity:0;transform:translateY(calc(-1 * var(--nv-offset-card))) scale(var(--nv-scale-enter))}to{opacity:1;transform:none}}
+.brow{display:grid;grid-template-columns:16px minmax(0,1fr);gap:2px 8px;align-items:start;padding:8px 10px;border-radius:10px;color:var(--ink);text-decoration:none;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.brow:hover,.brow:focus-visible{background:var(--raised);color:var(--ink);outline:none}
+.brow .ck{grid-row:span 2;height:20px;display:flex;align-items:center}
+.brow .bt{font-size:13px;line-height:20px;font-weight:500;text-wrap:pretty}
+@media (prefers-reduced-motion:reduce){.btrig,.brow{transition:none}.bmenu{animation:bmFade var(--nv-dur-reduced) var(--nv-ease-out) both}}
+@keyframes bmFade{from{opacity:0}to{opacity:1}}
+/* ── BATCH DIGEST (batch-hero.tsx): two short sections, What changed and What to check; a phrase that names a unit
+   links to it (ink, underlined in line-strong; the underline turns ink on hover). ── */
+.dsec{display:flex;flex-direction:column;gap:6px}
+.dsec h2{margin:0;font-size:13px;line-height:20px;font-weight:600;color:var(--ink)}
+.dsec p{margin:0;font-size:17px;line-height:27px;color:var(--ink2)}
+.ulink{color:var(--ink);text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px;transition:text-decoration-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.ulink:hover{color:var(--ink);text-decoration-color:var(--ink)}
+/* What to check: each ticket item across the batch's units (Obligations): its words in ink, its status over the units
+   that need it muted; under it its units by their own status, each a link to the unit. The digest names no lane. */
+.tix{margin:4px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:12px}
+.tix li{display:flex;flex-direction:column;gap:2px}
+.dsec .tix-i{margin:0;font-size:15px;line-height:22px;color:var(--ink2);text-wrap:pretty}
+.tix-t{color:var(--ink)}.tix-o{color:var(--muted)}
+.dsec .tix-u{margin:0;font-size:13px;line-height:20px;color:var(--muted);text-wrap:pretty}
+
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 1040px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+
+<header style="position: relative; z-index: 20; min-height: 56px; display: flex; align-items: center; gap: 16px; padding: 8px 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap; box-sizing: border-box">
+<span style="display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 17px; letter-spacing: -0.02em"><svg width="20" height="20" viewBox="0 0 306 306" aria-hidden="true" style="flex: 0 0 auto"><path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M274.399 177.261a14.268 14.268 0 0 1-.035 20.492l-43.099 42.02c-5.794 5.649-15.171 5.634-20.945-.035a14.27 14.27 0 0 1 .036-20.492l43.099-42.02c5.793-5.648 15.171-5.633 20.944.035Z M194.043 255.205a14.256 14.256 0 0 1 0 20.303l-.29.287c-5.663 5.607-14.844 5.607-20.506 0a14.255 14.255 0 0 1 0-20.303l.29-.287c5.663-5.607 14.843-5.607 20.506 0Z M235.26 142.126a14.222 14.222 0 0 1 .014 20.374L126.251 269.687c-5.726 5.629-15.017 5.636-20.751.012a14.222 14.222 0 0 1-.014-20.374L214.51 142.139c5.725-5.63 15.016-5.636 20.75-.013Z M274.754 102.932a14.256 14.256 0 0 1 0 20.303l-.29.286c-5.663 5.607-14.844 5.607-20.506 0a14.255 14.255 0 0 1 0-20.303l.29-.286c5.663-5.607 14.843-5.607 20.506 0Z M122.738 182.202a14.063 14.063 0 0 1-.037 20.203l-40.47 39.429c-5.716 5.568-14.967 5.553-20.662-.036a14.063 14.063 0 0 1 .037-20.203l40.47-39.429c5.717-5.568 14.967-5.553 20.662.036ZM246.931 60.217a14.208 14.208 0 0 1 0 20.359l-84.791 83.207c-5.729 5.623-15.017 5.623-20.746 0a14.205 14.205 0 0 1 0-20.358l84.791-83.209c5.729-5.622 15.017-5.622 20.746 0Z M53.063 177.205a14.256 14.256 0 0 1 0 20.303l-.29.287c-5.663 5.607-14.844 5.607-20.507 0a14.256 14.256 0 0 1 0-20.303l.29-.287c5.663-5.607 14.844-5.607 20.507 0Z M201.475 31.213a14.222 14.222 0 0 1 .014 20.374L92.466 158.774c-5.726 5.629-15.017 5.636-20.751.012a14.222 14.222 0 0 1-.014-20.374L180.724 31.226c5.726-5.63 15.017-5.636 20.751-.013ZM94.4 65.261a14.268 14.268 0 0 1-.036 20.492l-43.099 42.02c-5.794 5.649-15.171 5.634-20.945-.035a14.27 14.27 0 0 1 .036-20.492l43.099-42.02c5.793-5.648 15.17-5.633 20.945.035Z M130.832 31.205a14.255 14.255 0 0 1 0 20.303l-.29.287c-5.663 5.607-14.844 5.607-20.506 0a14.255 14.255 0 0 1 0-20.303l.29-.287c5.663-5.607 14.844-5.607 20.506 0Z"></path></svg>Neuve</span>
+<span style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font-size: 13px; color: var(--muted)"><span>acme/docs-app</span><span aria-hidden="true">/</span><b style="font-weight: 500; color: var(--ink)">shr-212-revoke-links</b><span class="mono" style="font-size: 11.5px; padding: 2px 8px; border-radius: 6px; background: var(--raised); color: var(--ink2)">a3f9c2e</span><span class="bslot"><span class="bsl" aria-hidden="true">/</span><button type="button" class="btrig" aria-expanded="{{menuOpen}}" aria-haspopup="menu" onClick="{{toggleMenu}}"><span class="t">Revoked share links stop working immediately</span><span class="sr">, batch 1 of 3</span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px; color: var(--muted)"><path d="m6 9 6 6 6-6"></path></svg></button><sc-if value="{{menuShown}}" hint-placeholder-val="{{false}}"><div class="bmenu" role="menu" aria-label="Batches in this review"><sc-for list="{{batches}}" as="b" hint-placeholder-count="3"><a href="Overview.dc.html" role="menuitem" class="brow" aria-current="{{b.current}}" onClick="{{closeMenu}}"><span class="ck"><sc-if value="{{b.isCurrent}}" hint-placeholder-val="{{true}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M20 6 9 17l-5-5"></path></svg></sc-if></span><span class="bt">{{b.title}}</span><span class="mono" style="font-size: 11px; color: var(--muted)"><sc-if value="{{b.needs}}" hint-placeholder-val="{{true}}"><span style="color: var(--req-fg)">{{b.needText}} · </span></sc-if>{{b.units}}</span></a></sc-for></div></sc-if></span></span>
+<div style="flex: 1 1 auto"></div>
+<a href="Header.dc.html" class="agents" aria-label="4 agents on this branch, 3 connected"><span style="display: inline-flex; align-items: center; gap: 5px" aria-hidden="true"><svg class="av agent impl s24" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I1</text></svg><svg class="av agent impl s24" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">I2</text></svg><svg class="av agent rev s24" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg><span class="more">+1</span></span>4 agents · 3 live</a>
+<button type="button" style="height: 32px; padding: 0 8px 0 10px; border: 0; border-radius: 8px; background: var(--raised); color: var(--muted); font-size: 12.5px; display: inline-flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>Find<span class="kbd">⌘K</span></button>
+<a href="DeliverySettings.dc.html" class="iconbtn" aria-label="Settings" title="Settings"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></a>
+<button type="button" class="iconbtn" onClick="{{toggleTheme}}" aria-label="{{themeLabel}}">
+<sc-if value="{{isLight}}" hint-placeholder-val="{{true}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg></sc-if>
+<sc-if value="{{isDark}}" hint-placeholder-val="{{false}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg></sc-if>
+</button>
+</header>
+
+<div style="max-width: 1180px; margin: 0 auto; padding: 56px 24px 96px; box-sizing: border-box; display: flex; flex-direction: column; gap: 56px">
+
+<section style="display: flex; flex-direction: column; gap: 20px; max-width: 760px">
+<sc-if value="{{newWork}}" hint-placeholder-val="{{false}}"><div class="notice"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 18px; height: 18px; color: var(--muted)"><circle cx="12" cy="12" r="3"></circle><path d="M3 12h6M15 12h6"></path></svg><span style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 15px; font-weight: 600">New work on <code class="mono" style="font-size: 14px">shr-212-revoke-links</code> since this review</span><span class="mono" style="font-size: 12px; color: var(--muted)">a3f9c2e → 9c41d07</span></span><button type="button" class="cta" style="height: 44px; min-width: 168px; padding: 0 18px; border: 0; border-radius: 10px; background: var(--ink); color: var(--bg); display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-size: 14px; font-weight: 500">Start a review<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></button></div></sc-if>
+<h1 class="h1" style="margin: 0; font-size: 40px; line-height: 46px; font-weight: 600; letter-spacing: -0.03em; text-wrap: balance">Revoked share links stop working immediately</h1>
+<div style="display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 13px; color: var(--muted)">
+<span class="meta"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"></path><path d="M13 5v2M13 17v2M13 11v2"></path></svg><span class="mono" style="font-size: 12.5px">SHR-212</span></span>
+<span class="meta"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v12"></path><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg><span class="mono" style="font-size: 12.5px">shr-212-revoke-links</span></span>
+<span class="meta"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M3 12h6M15 12h6"></path></svg><span class="mono" style="font-size: 12.5px">a3f9c2e</span></span>
+<span class="meta"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg>26 units</span>
+</div>
+<section aria-label="Your decisions" class="panel">
+<div class="panel-top">
+<div style="display: flex; flex-direction: column; gap: 12px; min-width: 0">
+<p class="headline" aria-live="polite"><sc-if value="{{settled}}" hint-placeholder-val="{{false}}"><span class="oc"><sc-if value="{{hasChanges}}" hint-placeholder-val="{{true}}"><span class="oc-i"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi vl" style="stroke: var(--req)"><path d="M18 6 6 18M6 6l12 12"></path></svg>{{changesText}}</span></sc-if><sc-if value="{{both}}" hint-placeholder-val="{{true}}"><span class="dot" aria-hidden="true" style="font-weight: 400; color: var(--faint)">·</span></sc-if><sc-if value="{{hasApproved}}" hint-placeholder-val="{{true}}"><span class="oc-i {{approvedCls}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi vl" style="stroke: var(--agt)"><path d="M20 6 9 17l-5-5"></path></svg>{{approvedText}}</span></sc-if></span></sc-if><sc-if value="{{notSettled}}" hint-placeholder-val="{{true}}">{{headline}}</sc-if></p>
+<ul class="cells" aria-label="Human-required units"><sc-for list="{{cells}}" as="c" hint-placeholder-count="4"><li><a href="Main.dc.html" class="cell {{c.cls}}" aria-label="{{c.label}}" title="{{c.title}}"><sc-if value="{{c.approved}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--agt)"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{c.changes}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--req)"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if><sc-if value="{{c.waiting}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--req)" stroke-width="1.4"></path></svg></sc-if></a></li></sc-for></ul>
+</div>
+<a href="Main.dc.html" class="cta {{ctaCls}}" style="height: 44px; padding: 0 18px; border-radius: 10px; background: var(--ink); color: var(--bg); text-decoration: none; display: inline-flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 500">{{ctaLabel}}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></a>
+</div>
+<sc-if value="{{settled}}" hint-placeholder-val="{{false}}"><div class="panel-foot"><ul aria-label="Units by lane" class="legend"><sc-for list="{{lanes}}" as="l" hint-placeholder-count="4"><li style="color: {{l.txt}}"><sc-if value="{{l.is_req}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg></sc-if><sc-if value="{{l.is_sug}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if><sc-if value="{{l.is_agt}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg></sc-if><sc-if value="{{l.is_sta}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.6" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg></sc-if>{{l.name}}<span class="mono" style="color: {{l.numFg}}">{{l.n}}</span></li></sc-for></ul></div></sc-if>
+</section>
+<sc-if value="{{notSettled}}" hint-placeholder-val="{{true}}"><div style="display: flex; flex-direction: column; gap: 20px">
+<section class="dsec" aria-labelledby="dg-changed"><h2 id="dg-changed">What changed</h2><p>Revoking now also ends open sessions, reversing a May decision that kept them alive. Revoke and <a href="Main.dc.html" class="ulink">session invalidation</a> ship together: reverting the helper alone reopens links for active viewers.</p></section>
+<section class="dsec" aria-labelledby="dg-check"><h2 id="dg-check">What to check</h2><p>Nothing yet opens a link from a session that was already open, so <a href="Main.dc.html" class="ulink">Revoke cuts off open sessions</a> is unproven where it matters; its only test checks the 204 response.</p><ul class="tix"><li><p class="tix-i"><span class="tix-t">Index writes retry when the database is busy</span><span class="tix-o"> · Done</span></p><p class="tix-u">Done: <a href="Main.dc.html" class="ulink">Index writes retry when the database is busy</a></p></li><li><p class="tix-i"><span class="tix-t">Cancelling a request stops index work</span><span class="tix-o"> · Not done</span></p><p class="tix-u">Not done: <a href="Main.dc.html" class="ulink">Index writes retry when the database is busy</a></p></li></ul></section>
+</div></sc-if>
+<sc-if value="{{settled}}" hint-placeholder-val="{{false}}"><details class="disc"><summary><svg class="ic dchev" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="m9 18 6-6-6-6"></path></svg>Briefing</summary><div style="padding: 4px 0 8px 10px"><div style="display: flex; flex-direction: column; gap: 20px">
+<section class="dsec" aria-labelledby="dg-changed2"><h2 id="dg-changed2">What changed</h2><p>Revoking now also ends open sessions, reversing a May decision that kept them alive. Revoke and <a href="Main.dc.html" class="ulink">session invalidation</a> ship together: reverting the helper alone reopens links for active viewers.</p></section>
+<section class="dsec" aria-labelledby="dg-check2"><h2 id="dg-check2">What to check</h2><p>Nothing yet opens a link from a session that was already open, so <a href="Main.dc.html" class="ulink">Revoke cuts off open sessions</a> is unproven where it matters; its only test checks the 204 response.</p><ul class="tix"><li><p class="tix-i"><span class="tix-t">Index writes retry when the database is busy</span><span class="tix-o"> · Done</span></p><p class="tix-u">Done: <a href="Main.dc.html" class="ulink">Index writes retry when the database is busy</a></p></li><li><p class="tix-i"><span class="tix-t">Cancelling a request stops index work</span><span class="tix-o"> · Not done</span></p><p class="tix-u">Not done: <a href="Main.dc.html" class="ulink">Index writes retry when the database is busy</a></p></li></ul></section>
+</div></div></details></sc-if>
+</section>
+
+<sc-if value="{{notSettled}}" hint-placeholder-val="{{true}}"><section aria-label="Review units by lane" onMouseLeave="{{resetLane}}" style="display: flex; flex-direction: column; gap: 10px">
+<div role="img" aria-label="{{laneSummary}}" style="display: flex; height: 10px; gap: 3px; overflow: hidden; border-radius: 5px">
+<sc-for list="{{lanes}}" as="l" hint-placeholder-count="4"><span class="lseg" onMouseEnter="{{l.pick}}" style="flex: {{l.flex}}; background: {{l.fill}}; opacity: {{l.op}}"></span></sc-for>
+</div>
+<ul aria-label="Lanes" class="legend">
+<sc-for list="{{lanes}}" as="l" hint-placeholder-count="4"><li onMouseEnter="{{l.pick}}" style="color: {{l.txt}}"><sc-if value="{{l.is_req}}" hint-placeholder-val="{{true}}"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg></sc-if><sc-if value="{{l.is_sug}}" hint-placeholder-val="{{false}}"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if><sc-if value="{{l.is_agt}}" hint-placeholder-val="{{false}}"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg></sc-if><sc-if value="{{l.is_sta}}" hint-placeholder-val="{{false}}"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.5" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg></sc-if>{{l.name}}<span class="mono" style="color: {{l.numFg}}">{{l.n}}</span><sc-if value="{{l.waiting}}" hint-placeholder-val="{{true}}"><span class="mono" style="font-size: 11px; color: var(--req-fg)">{{l.waitingText}}</span></sc-if></li></sc-for>
+</ul>
+</section></sc-if>
+
+<section aria-labelledby="units-h" style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px"><h2 id="units-h" style="margin: 0 0 4px; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">Units</h2></div>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<sc-if value="{{hasWaiting}}" hint-placeholder-val="{{true}}"><details class="grp" open><summary><svg class="ic dchev" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="m9 18 6-6-6-6"></path></svg><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg><h3>Needs your judgment</h3><span class="chip">{{waitingCount}}</span></summary><div role="table" aria-label="Units that need your decision" style="margin-top: 4px; border-radius: 14px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); overflow: hidden"><div role="row" class="urow urow-head" style="padding-top: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line2)">
+<span role="columnheader" class="lbl">Unit</span><span role="columnheader" class="lbl col">Scope</span><span role="columnheader" class="lbl col">Context</span><span role="columnheader" class="lbl col">Checkpoints</span><span></span>
+</div><sc-for list="{{judgment}}" as="u" hint-placeholder-count="2"><div role="rowgroup" class="jrow"><div role="row" class="urow live"><span role="cell" style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><span style="display: flex; align-items: center; gap: 10px; font-size: 15.5px; font-weight: 600; letter-spacing: -0.01em"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg><a href="Main.dc.html" class="rlink">{{u.title}}</a></span><sc-if value="{{u.conflict}}" hint-placeholder-val="{{false}}"><span class="stat" style="padding-left: 20px; color: var(--req-fg)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4M12 17h.01"></path></svg>{{u.signal}}</span></sc-if></span><span role="cell" class="stat col"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path></svg><span class="clip">{{u.scope}}</span></span><span role="cell" class="stat col"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"></path></svg><span class="clip">{{u.context}}</span></span><span role="cell" class="ck"><sc-if value="{{u.hasUnmet}}" hint-placeholder-val="{{true}}"><span class="unmet"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>{{u.unmetText}}<span class="sr"> {{u.unmetWord}}</span></span></sc-if></span><svg class="ic go" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></div></div></sc-for></div></details></sc-if>
+<sc-if value="{{decidedOpen}}" hint-placeholder-val="{{false}}"><details class="grp" open><summary><svg class="ic dchev" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="m9 18 6-6-6-6"></path></svg><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg><h3>Decided</h3><span class="chip">{{decidedCount}}</span></summary><ul class="rows"><sc-for list="{{decided}}" as="u" hint-placeholder-count="2"><li><div class="ur"><span style="display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 14px; font-weight: 500"><sc-if value="{{u.is_req}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg></sc-if><sc-if value="{{u.is_sug}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if><sc-if value="{{u.is_agt}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg></sc-if><sc-if value="{{u.is_sta}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.6" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg></sc-if><a href="Main.dc.html" class="rlink" style="text-wrap: pretty">{{u.title}}</a></span><span class="m" style="display: flex; justify-content: flex-end"><sc-if value="{{u.hasReview}}" hint-placeholder-val="{{true}}"><span class="mark"><sc-if value="{{u.isR1}}" hint-placeholder-val="{{false}}"><span class="avbox s16"><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg></span></sc-if><sc-if value="{{u.isR2}}" hint-placeholder-val="{{false}}"><span class="avbox s16"><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R2</text></svg></span></sc-if><sc-if value="{{u.byPerson}}" hint-placeholder-val="{{true}}"><span class="av person s16">{{u.initials}}</span></sc-if><sc-if value="{{u.approved}}" hint-placeholder-val="{{true}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--agt)"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{u.changes}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--req)"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if><span><b style="font-weight: 600">{{u.actor}}</b> {{u.verb}}</span></span></sc-if></span><span class="c" style="display: flex; justify-content: flex-end"><sc-if value="{{u.hasUnmet}}" hint-placeholder-val="{{true}}"><span class="unmet"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>{{u.unmetText}}<span class="sr"> {{u.unmetWord}}</span></span></sc-if></span><svg class="ic go" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></div></li></sc-for></ul></details></sc-if>
+<sc-if value="{{decidedClosed}}" hint-placeholder-val="{{true}}"><details class="grp"><summary><svg class="ic dchev" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="m9 18 6-6-6-6"></path></svg><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg><h3>Decided</h3><span class="chip">{{decidedCount}}</span></summary><ul class="rows"><sc-for list="{{decided}}" as="u" hint-placeholder-count="2"><li><div class="ur"><span style="display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 14px; font-weight: 500"><sc-if value="{{u.is_req}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg></sc-if><sc-if value="{{u.is_sug}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if><sc-if value="{{u.is_agt}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg></sc-if><sc-if value="{{u.is_sta}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.6" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg></sc-if><a href="Main.dc.html" class="rlink" style="text-wrap: pretty">{{u.title}}</a></span><span class="m" style="display: flex; justify-content: flex-end"><sc-if value="{{u.hasReview}}" hint-placeholder-val="{{true}}"><span class="mark"><sc-if value="{{u.isR1}}" hint-placeholder-val="{{false}}"><span class="avbox s16"><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg></span></sc-if><sc-if value="{{u.isR2}}" hint-placeholder-val="{{false}}"><span class="avbox s16"><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R2</text></svg></span></sc-if><sc-if value="{{u.byPerson}}" hint-placeholder-val="{{true}}"><span class="av person s16">{{u.initials}}</span></sc-if><sc-if value="{{u.approved}}" hint-placeholder-val="{{true}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--agt)"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{u.changes}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--req)"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if><span><b style="font-weight: 600">{{u.actor}}</b> {{u.verb}}</span></span></sc-if></span><span class="c" style="display: flex; justify-content: flex-end"><sc-if value="{{u.hasUnmet}}" hint-placeholder-val="{{true}}"><span class="unmet"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>{{u.unmetText}}<span class="sr"> {{u.unmetWord}}</span></span></sc-if></span><svg class="ic go" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></div></li></sc-for></ul></details></sc-if>
+<sc-for list="{{others}}" as="g" hint-placeholder-count="3"><details class="grp"><summary><svg class="ic dchev" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="m9 18 6-6-6-6"></path></svg><sc-if value="{{g.is_req}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg></sc-if><sc-if value="{{g.is_sug}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if><sc-if value="{{g.is_agt}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg></sc-if><sc-if value="{{g.is_sta}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.6" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg></sc-if><h3>{{g.name}}</h3><span class="chip">{{g.count}}</span></summary><ul class="rows"><sc-for list="{{g.units}}" as="u" hint-placeholder-count="3"><li><div class="ur"><span style="display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 14px; font-weight: 500"><sc-if value="{{u.is_req}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg></sc-if><sc-if value="{{u.is_sug}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if><sc-if value="{{u.is_agt}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg></sc-if><sc-if value="{{u.is_sta}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.6" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg></sc-if><a href="Main.dc.html" class="rlink" style="text-wrap: pretty">{{u.title}}</a></span><span class="m" style="display: flex; justify-content: flex-end"><sc-if value="{{u.hasReview}}" hint-placeholder-val="{{true}}"><span class="mark"><sc-if value="{{u.isR1}}" hint-placeholder-val="{{false}}"><span class="avbox s16"><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg></span></sc-if><sc-if value="{{u.isR2}}" hint-placeholder-val="{{false}}"><span class="avbox s16"><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R2</text></svg></span></sc-if><sc-if value="{{u.byPerson}}" hint-placeholder-val="{{true}}"><span class="av person s16">{{u.initials}}</span></sc-if><sc-if value="{{u.approved}}" hint-placeholder-val="{{true}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--agt)"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{u.changes}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--req)"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if><span><b style="font-weight: 600">{{u.actor}}</b> {{u.verb}}</span></span></sc-if></span><span class="c" style="display: flex; justify-content: flex-end"><sc-if value="{{u.hasUnmet}}" hint-placeholder-val="{{true}}"><span class="unmet"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>{{u.unmetText}}<span class="sr"> {{u.unmetWord}}</span></span></sc-if></span><svg class="ic go" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></div></li></sc-for></ul></details></sc-for>
+</div>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"state":{"editor":"enum","options":["waiting","partly","approved","changes","new-work"],"default":"partly"},"menu":{"editor":"enum","options":["closed","open"],"default":"closed"},"$preview":{"width":1440,"height":1340}}'>
+/* The acme batch at a real review's volume (decided-overview.fixtures.ts). The state lever picks who has decided what:
+   nothing yet, partly, all approved, changes requested, or the branch moved past the review. The menu lever opens the
+   batch menu, which lists the review's three batches (review-batch.fixtures.ts, several batches). Each unit carries how
+   many of its checkpoints are unmet (Records' rule: Missing, Out of date or Conflicting, 11.16 and 11.19). */
+var LANES = [
+  { key: 'req', name: 'Human-required', n: 4, fill: 'var(--req)' },
+  { key: 'sug', name: 'Human-suggested', n: 3, fill: 'var(--sug)' },
+  { key: 'agt', name: 'Agentic review', n: 7, fill: 'var(--agt)' },
+  { key: 'sta', name: 'Static automation', n: 12, fill: 'var(--sta)' }
+];
+var BATCHES = [
+  { title: 'Revoked share links stop working immediately', need: 4, units: 26 },
+  { title: 'The share dialog lists active links only', need: 1, units: 4 },
+  { title: 'Session lookup by link uses the new index', need: 0, units: 3 }
+];
+var REQUIRED = [
+  { id: 'revoke', title: 'Revoke cuts off open sessions', signal: 'Ticket and history disagree', conflict: true, scope: '3 hunks', context: '6 markers · 1 unapproved', unmet: 4 },
+  { id: 'admins', title: 'Workspace admins may revoke any link', scope: '2 hunks', context: '2 markers', unmet: 2 },
+  { id: 'go', title: 'Index writes retry when the database is busy', scope: '1 hunk', context: '4 markers', unmet: 1 },
+  { id: 'scope', title: 'Page requests check the share link again', scope: '1 hunk', context: '3 markers', unmet: 1 }
+];
+var R1 = { kind: 'agent', short: 'R1' }, R2 = { kind: 'agent', short: 'R2' };
+var YOU = { kind: 'person', short: 'You', initials: 'VD' }, ANA = { kind: 'person', short: 'Ana Lima', initials: 'AL' };
+var OTHERS = [
+  { key: 'sug', name: 'Human-suggested', units: [
+    { id: 'audit', title: 'Audit event for revocation', review: [R1, 'approved'], unmet: 1 },
+    { id: 'list', title: 'Link list shows revoked state', review: [R1, 'approved'], unmet: 0 },
+    { id: 'rate', title: 'Rate-limit the revoke endpoint', review: [R1, 'approved'], unmet: 0 }
+  ] },
+  { key: 'agt', name: 'Agentic review', units: [
+    { id: 'sessions', title: 'Session invalidation by link', review: [R2, 'changes'], unmet: 3 },
+    { id: 'cache', title: 'Link cache eviction', review: [R2, 'approved'], unmet: 0 },
+    { id: 'lookup', title: 'Session lookup by link id', review: [R2, 'approved'], unmet: 0 },
+    { id: 'errpage', title: 'Revoked-link error page', review: [R1, 'approved'], unmet: 0 },
+    { id: 'dialog', title: 'Dialog hides revoked links', review: [R1, 'approved'], unmet: 0 },
+    { id: 'version', title: 'Link version column', review: [R1, 'approved'], unmet: 0 },
+    { id: 'telemetry', title: 'Revoke telemetry event', review: [R1, 'approved'], unmet: 0 }
+  ] },
+  { key: 'sta', name: 'Static automation', units: ['Regenerated API client', 'Lockfile update', 'OpenAPI types', 'Route tree', 'Migration snapshot', 'Format src/sharing', 'Format src/sessions', 'Format docs/sharing', 'Import order', 'Error-code table', 'i18n keys for revoke', 'API mocks'].map(function (t, i) { return { id: 'sta' + i, title: t, unmet: 0 }; }) }
+];
+var DECISIONS = {
+  waiting: [null, null, null, null],
+  partly: [null, null, [YOU, 'changes'], [YOU, 'approved']],
+  approved: [[YOU, 'approved'], [YOU, 'approved'], [ANA, 'approved'], [YOU, 'approved']],
+  changes: [[YOU, 'changes'], [YOU, 'approved'], [ANA, 'changes'], [YOU, 'approved']],
+  'new-work': [[YOU, 'changes'], [YOU, 'approved'], [ANA, 'changes'], [YOU, 'approved']]
+};
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { lane: null, theme: null, menu: null };
+  }
+  renderVals() {
+    var self = this;
+    var theme = this.state.theme || this.props.theme || 'light';
+    var phase = this.props.state || 'partly';
+    var decisions = DECISIONS[phase] || DECISIONS.partly;
+    var cur = this.state.lane;
+    var menuOpen = this.state.menu === null ? this.props.menu === 'open' : this.state.menu;
+    var row = function (u, lane, review) {
+      var n = u.unmet || 0;
+      return {
+        title: u.title, is_req: lane === 'req', is_sug: lane === 'sug', is_agt: lane === 'agt', is_sta: lane === 'sta',
+        hasReview: !!review, isR1: !!review && review[0] === R1, isR2: !!review && review[0] === R2, byPerson: !!review && review[0].kind === 'person',
+        initials: review ? (review[0].initials || review[0].short) : '', actor: review ? review[0].short : '',
+        approved: !!review && review[1] === 'approved', changes: !!review && review[1] === 'changes',
+        verb: review ? (review[1] === 'approved' ? 'approved' : 'requested changes') : '',
+        // none unmet shows nothing, never "met"
+        hasUnmet: n > 0, unmetText: n + ' unmet', unmetWord: n === 1 ? 'checkpoint' : 'checkpoints',
+        signal: u.signal, conflict: !!u.conflict, scope: u.scope, context: u.context
+      };
+    };
+    var cells = REQUIRED.map(function (u, i) {
+      var d = decisions[i];
+      return { title: u.title, cls: d ? 'done' : 'wait', approved: !!d && d[1] === 'approved', changes: !!d && d[1] === 'changes', waiting: !d,
+        label: u.title + ', ' + (d ? (d[1] === 'approved' ? 'approved' : 'changes requested') : 'waiting on you') };
+    });
+    var waitingUnits = REQUIRED.filter(function (_, i) { return !decisions[i]; });
+    var decidedUnits = REQUIRED.filter(function (_, i) { return !!decisions[i]; });
+    var waiting = waitingUnits.length, decided = decidedUnits.length;
+    var changes = decisions.filter(function (d) { return d && d[1] === 'changes'; }).length;
+    var approvedN = decided - changes;
+    var settled = waiting === 0;
+    return {
+      theme: theme, isLight: theme === 'light', isDark: theme === 'dark',
+      themeLabel: theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme',
+      toggleTheme: function () { self.setState({ theme: theme === 'light' ? 'dark' : 'light' }); },
+      menuOpen: menuOpen ? 'true' : 'false', menuShown: !!menuOpen,
+      toggleMenu: function () { self.setState({ menu: !menuOpen }); },
+      closeMenu: function () { self.setState({ menu: false }); },
+      batches: BATCHES.map(function (b, i) {
+        var need = i === 0 ? waiting : b.need;
+        return { title: b.title, isCurrent: i === 0, current: i === 0 ? 'page' : null, needs: need > 0, needText: need + ' need you', units: b.units + ' units' };
+      }),
+      resetLane: function () { if (self.state.lane !== null) self.setState({ lane: null }); },
+      newWork: phase === 'new-work',
+      settled: settled, notSettled: !settled,
+      headline: decided === 0 ? waiting + ' need your judgment' : waiting + ' of ' + REQUIRED.length + ' still need you',
+      hasChanges: changes > 0, hasApproved: approvedN > 0, both: changes > 0 && approvedN > 0,
+      changesText: changes === decided && changes > 1 ? 'All ' + changes + ' changes requested' : changes + ' changes requested',
+      approvedText: changes === 0 && approvedN > 1 ? 'All ' + approvedN + ' approved' : approvedN + ' approved',
+      approvedCls: changes > 0 ? 'soft' : '',
+      cells: cells,
+      ctaLabel: settled ? 'Open review desk' : decided > 0 ? 'Continue review' : 'Start review',
+      ctaCls: settled ? 'quiet' : '',
+      hasWaiting: waiting > 0, waitingCount: waiting,
+      judgment: waitingUnits.map(function (u) { return row(u, 'req', null); }),
+      decidedOpen: decided > 0 && settled, decidedClosed: decided > 0 && !settled, decidedCount: decided,
+      decided: decidedUnits.map(function (u) { var i = REQUIRED.indexOf(u); return row(u, 'req', decisions[i]); }),
+      others: OTHERS.map(function (g) {
+        return { name: g.name, count: g.units.length, is_req: false, is_sug: g.key === 'sug', is_agt: g.key === 'agt', is_sta: g.key === 'sta',
+          units: g.units.map(function (u) { return row(u, g.key, u.review); }) };
+      }),
+      laneSummary: LANES.map(function (l) { return l.name + ' ' + l.n; }).join(', '),
+      lanes: LANES.map(function (l) {
+        var empty = l.n === 0;
+        return { key: l.key, name: l.name, n: l.n,
+          is_req: l.key === 'req', is_sug: l.key === 'sug', is_agt: l.key === 'agt', is_sta: l.key === 'sta',
+          flex: empty ? '0 0 6px' : l.n + ' 1 0', fill: empty ? 'var(--line-strong)' : l.fill,
+          op: cur === null || cur === l.key ? 1 : 'var(--nv-opacity-lane-dim)',
+          txt: empty ? 'var(--muted)' : 'var(--ink2)', numFg: empty ? 'var(--muted)' : 'var(--ink)',
+          waiting: l.key === 'req' && waiting > 0, waitingText: waiting + ' waiting on you',
+          pick: function () { if (self.state.lane !== l.key) self.setState({ lane: l.key }); } };
+      })
+    };
+  }
+}
+</script>
+
+</body>
+</html>

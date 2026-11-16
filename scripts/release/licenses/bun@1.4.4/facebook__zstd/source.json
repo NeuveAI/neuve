@@ -1,0 +1,18 @@
+{
+  "project": "facebook/zstd",
+  "source": "https://github.com/facebook/zstd",
+  "commit": "f8745da6ff1ad1e7bab384bd1f9d742439278e99",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/facebook/zstd/f8745da6ff1ad1e7bab384bd1f9d742439278e99/LICENSE",
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+    },
+    {
+      "name": "COPYING",
+      "url": "https://raw.githubusercontent.com/facebook/zstd/f8745da6ff1ad1e7bab384bd1f9d742439278e99/COPYING",
+      "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505"
+    }
+  ]
+}

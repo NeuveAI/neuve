@@ -1,0 +1,45 @@
+// Modified by Neuve AI in 2026: forward ranged review options. See NOTICE.md.
+
+import type { FileDiffOptions } from '../components/FileDiff';
+import type { DiffHunksRendererOptions } from '../renderers/DiffHunksRenderer';
+import { shouldUseTokenTransformer } from './shouldUseTokenTransformer';
+
+// Build the renderer option snapshot with direct property reads. CodeView item
+// options may inherit prototype getters, so object spread can miss values.
+export function getDiffHunksRendererOptions<LAnnotation, Caret>(
+  options: FileDiffOptions<LAnnotation, Caret> | undefined
+): DiffHunksRendererOptions {
+  return {
+    theme: options?.theme,
+    disableLineNumbers: options?.disableLineNumbers,
+    overflow: options?.overflow,
+    collapsed: options?.collapsed,
+    disableFileHeader: options?.disableFileHeader,
+    disableVirtualizationBuffers: options?.disableVirtualizationBuffers,
+    stickyHeader: options?.stickyHeader,
+    preferredHighlighter: options?.preferredHighlighter,
+    useCSSClasses: options?.useCSSClasses,
+    useTokenTransformer: shouldUseTokenTransformer<'diff'>(options),
+    tokenizeMaxLineLength: options?.tokenizeMaxLineLength,
+    tokenizeMaxLength: options?.tokenizeMaxLength,
+    diffStyle: options?.diffStyle,
+    diffIndicators: options?.diffIndicators,
+    disableBackground: options?.disableBackground,
+    hunkSeparators:
+      typeof options?.hunkSeparators === 'function'
+        ? 'custom'
+        : options?.hunkSeparators,
+    expandUnchanged: options?.expandUnchanged,
+    loadDiffFiles: options?.loadDiffFiles,
+    collapsedContextThreshold: options?.collapsedContextThreshold,
+    lineDiffType: options?.lineDiffType,
+    maxLineDiffLength: options?.maxLineDiffLength,
+    expansionLineCount: options?.expansionLineCount,
+    // NEUVE FORK: ranged review presentation.
+    unifiedLineNumbers: options?.unifiedLineNumbers,
+    hunkFolds: options?.hunkFolds,
+    hiddenGaps: options?.hiddenGaps,
+    headerRenderMode:
+      options?.renderCustomHeader != null ? 'custom' : 'default',
+  };
+}

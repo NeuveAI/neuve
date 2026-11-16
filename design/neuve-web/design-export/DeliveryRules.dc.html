@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Review delivery rules</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+h2{margin:0;font-size:20px;line-height:26px;font-weight:600;letter-spacing:-0.01em}
+.sec{display:flex;flex-direction:column;gap:20px}
+.sub{margin:0;font-size:14px;line-height:21px;color:var(--muted);max-width:640px}
+.card{border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line);padding:20px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;min-width:0}
+.cap{font-size:12.5px;line-height:18px;color:var(--muted)}
+.tbl{display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr);border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line);overflow:clip}
+.tbl>span{padding:12px 14px;border-bottom:1px solid var(--line2);font-size:13px;line-height:19px;min-width:0}
+.tbl>.th{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--bg)}
+.prop{font-family:'Geist Mono',ui-monospace,monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--sug-ink);background:var(--sug-tint);padding:1px 5px;border-radius:4px;margin-left:6px;vertical-align:1px}
+/* the delivery glyph (round 6): four ascending ticks, filled up to the stop; the rest hollow, in --line-strong on the page
+   and --nv-muted on a raised fill (3:1 or better either way). The same shape marks the stops inside the dial, smaller. */
+.ticks{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
+.ticks i{display:block;width:4px;box-sizing:border-box;border-radius:1px;box-shadow:inset 0 0 0 1px var(--line-strong)}
+.ticks i.f{background:currentColor;box-shadow:none}
+.ticks.sm{height:10px;gap:1.5px}.ticks.sm i{width:3px}
+.pdial .ticks i:not(.f),.glyph.hov .ticks i:not(.f),.glyph.foc .ticks i:not(.f),.glyph.open .ticks i:not(.f),.dial .ticks i:not(.f){box-shadow:inset 0 0 0 1px var(--nv-muted)}
+/* the glyph after the title, at rest and in its states (static specimens of Delivery.dc.html's .btrig) */
+.gtitle{font-size:22px;line-height:28px;font-weight:600;letter-spacing:-.02em}
+.glyph{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;color:var(--muted);vertical-align:-6px;margin-left:6px}
+.glyph.hov,.glyph.foc,.glyph.open{background:var(--raised);color:var(--ink2)}
+.glyph.foc{outline:2px solid var(--nv-engaged-ring);outline-offset:2px}
+.glyph .zone{position:absolute;left:50%;top:50%;width:44px;height:44px;box-sizing:border-box;transform:translate(-50%,-50%);border-radius:4px;border:1px dashed var(--nv-muted)}
+/* the specimens sit at the card's start, so their tooltip starts at the glyph's left edge and stays inside the card */
+.gtip{position:absolute;left:0;bottom:calc(100% + 6px);white-space:nowrap;padding:4px 8px;border-radius:6px;background:var(--nv-peek-bg);color:var(--nv-peek-fg);font-size:12px;line-height:16px;font-weight:500;letter-spacing:0}
+/* the dial as it opens from the glyph: a card, the chosen stop on a raised thumb ringed in --line */
+.pdial{position:relative;display:inline-grid;grid-template-columns:repeat(4,1fr);width:max-content;padding:3px;border-radius:10px;background:var(--surface);box-shadow:var(--nv-shadow-card);vertical-align:middle}
+.pdial .thumb{position:absolute;top:3px;left:3px;width:calc((100% - 6px) / 4);height:34px;border-radius:8px;background:var(--raised);box-shadow:inset 0 0 0 1px var(--line)}
+.pdial .stop{padding:0 9px}
+.gstate{display:flex;align-items:center;min-height:44px}
+.gstate.tipped{padding-top:28px}
+.gopen{margin-left:8px}
+/* reserved for later: set by the workspace, so locked (outline only, no thumb shadow) */
+.pdial.locked{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
+.pdial.locked .thumb{box-shadow:none}
+.pdial.locked .stop{color:var(--muted)}
+.pdial.locked .stop.on{color:var(--ink2)}
+/* phones: as the compact dial below sm (round-4.md "Dial anatomy"), the stops drop their ticks, the padding shrinks to 8px and the
+   tracks shrink rather than overflow; the open glyph state wraps its dial under the glyph */
+@media (max-width:639px){.pdial,.dial{max-width:100%;grid-template-columns:repeat(4,minmax(0,1fr))}.pdial .stop,.dial .stop{min-width:0;padding:0 8px}.stop .ticks.sm{display:none}.card{padding:16px}.gstate{flex-wrap:wrap;row-gap:8px}.gopen{margin-left:0!important;max-width:100%}}
+.dial{position:relative;display:grid;grid-template-columns:repeat(4,1fr);width:max-content;padding:3px;border-radius:10px;background:var(--raised);width:max-content}
+.dial .thumb{position:absolute;top:3px;left:3px;width:calc((100% - 6px) / 4);height:34px;border-radius:8px;background:var(--surface);box-shadow:var(--shadow-thumb)}
+.stop{position:relative;z-index:1;height:34px;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 12px;border-radius:8px;font-size:12.5px;color:var(--muted)}
+.stop.on{color:var(--ink);font-weight:500}
+.stop.hov{color:var(--ink2)}
+.stop.foc{outline:2px solid var(--nv-engaged-ring);outline-offset:1px}
+.dial.locked{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
+.dial.locked .thumb{background:var(--raised);box-shadow:none}
+.dial.locked .stop{color:var(--faint)}
+.dial.locked .stop.on{color:var(--muted)}
+.call{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:19px;color:var(--ink2)}
+.call b{flex:0 0 auto;width:20px;height:20px;border-radius:10px;background:var(--ink);color:var(--bg);font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
+.rule{display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px 12px;padding:14px 0;border-top:1px solid var(--line2)}
+.rule .n{font-family:'Geist Mono',ui-monospace,monospace;font-size:12px;color:var(--muted);padding-top:2px}
+.rule .t{font-size:15px;font-weight:600;line-height:22px}
+.rule .d{grid-column:2;font-size:13.5px;line-height:20px;color:var(--ink2);max-width:760px}
+.tl{display:grid;grid-template-columns:280px minmax(0,1fr);row-gap:8px;align-items:center}
+.tl .lane{font-size:12.5px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl .trk{position:relative;height:18px;border-radius:4px;background:var(--bg)}
+.tl .seg{position:absolute;top:3px;height:12px;border-radius:3px}
+.s-snap{background:var(--ink)}
+.s-enter{background:var(--accent)}
+.s-exit{background:var(--line-strong)}
+.s-stag{background:transparent;border:1.5px dashed var(--accent);box-sizing:border-box}
+.s-move{background:transparent;box-shadow:inset 0 0 0 1.5px var(--ink)}
+.axis{position:relative;height:16px}
+.axis span{position:absolute;top:0;transform:translateX(-50%);font-family:'Geist Mono',ui-monospace,monospace;font-size:10px;color:var(--muted)}
+.key{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.key i{display:inline-block;width:18px;height:8px;border-radius:2px}
+.bad{font-size:12.5px;line-height:18px;padding:10px 12px;border-radius:8px;background:var(--raised);color:var(--ink2)}
+.good{font-size:12.5px;line-height:18px;padding:10px 12px;border-radius:8px;background:var(--agt-tint);color:var(--ink)}
+.x{color:var(--req);font-family:'Geist Mono',ui-monospace,monospace;font-size:11px}
+.ok{color:var(--agt-fg);font-family:'Geist Mono',ui-monospace,monospace;font-size:11px}
+@media (max-width:1000px){.tbl{grid-template-columns:120px minmax(0,1fr)}.tbl>.c3,.tbl>.c4{display:none}.tl{grid-template-columns:110px minmax(0,1fr)}.g2,.g3{grid-template-columns:minmax(0,1fr)!important}}
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 2600px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<div style="max-width: 1240px; margin: 0 auto; padding: 64px 24px 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 72px">
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<span class="lbl">Neuve web · review delivery · proposal</span>
+<h1 style="margin: 0; font-size: 44px; line-height: 48px; letter-spacing: -0.025em; font-weight: 600">One dial, four stops</h1>
+<p class="sub" style="font-size: 16px; line-height: 24px">The facts stay fixed: every claim, citation and marker. Moving the dial adds or removes explanation around them, for reviewers working in code they don’t know well.</p>
+</div>
+
+<section class="sec">
+<h2>What each stop adds</h2>
+<div class="tbl">
+<span class="th">Stop</span><span class="th">Briefing</span><span class="th c3">Adds</span><span class="th c4">Review</span>
+<sc-for list="{{table}}" as="r" hint-placeholder-count="4">
+<span style="display: flex; align-items: center; gap: 8px; font-weight: 600"><span class="ticks" aria-hidden="true"><sc-for list="{{r.bars}}" as="b" hint-placeholder-count="4"><i class="{{b.cls}}" style="height: {{b.h}}px"></i></sc-for></span>{{r.stop}}</span>
+<span>{{r.brief}}<span class="mono" style="display: block; font-size: 11.5px; color: var(--muted); padding-top: 4px">{{r.budget}}</span></span>
+<span class="c3">{{r.adds}}</span>
+<span class="c4">{{r.disp}}</span>
+</sc-for>
+</div>
+<p class="cap">Word and item limits are proposed targets for the evals that tune generation length. They cap the text; they don’t require it.</p>
+</section>
+
+<section class="sec">
+<h2>The glyph and the dial</h2>
+<div class="g2" style="display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px">
+<div class="card" style="gap: 20px">
+<span class="lbl">Glyph</span>
+<div style="padding: 8px 0 4px"><span class="gtitle">Index writes retry when the database is busy</span><span class="glyph" style="margin-left: 8px" aria-hidden="true"><span class="ticks" aria-hidden="true"><i class="f" style="height: 5px"></i><i class="f" style="height: 8px"></i><i style="height: 11px"></i><i style="height: 14px"></i></span><span class="zone"></span></span></div>
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div class="call"><b>1</b><span>After the unit’s title, four ascending ticks show the stop: filled up to it, the rest hollow, so depth reads by shape as well as tone.</span></div>
+<div class="call"><b>2</b><span>A 32px button with a 44px hit area. Its name is the setting and the stop, “Review delivery: Briefed”, and hover or keyboard focus shows it as a tooltip.</span></div>
+<div class="call"><b>3</b><span>Pressing it opens the dial beside the title where there is room. Where there isn’t, the dial opens in flow below the title and pushes the briefing down. The ticks fill left to right or empty right to left as the stop changes, each starting when the one before has made 85% of its travel.</span></div>
+<div class="call"><b>4</b><span>The dial dismisses like any popover layer: a press outside it, Escape or moving focus away closes it, and the glyph opens and closes it. Choosing a stop keeps it open. Escape and the glyph return focus to the glyph.</span></div>
+</div>
+</div>
+<div class="card" style="gap: 14px">
+<span class="lbl">Glyph states</span>
+<sc-for list="{{gstates}}" as="s" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px">
+<div class="gstate {{s.gcls}}"><span class="glyph {{s.cls}}" style="margin-left: 0" aria-hidden="true"><span class="ticks" aria-hidden="true"><i class="f" style="height: 5px"></i><i class="f" style="height: 8px"></i><i style="height: 11px"></i><i style="height: 14px"></i></span><sc-if value="{{s.tip}}" hint-placeholder-val="{{false}}"><span class="gtip">Review delivery: Briefed</span></sc-if></span><sc-if value="{{s.open}}" hint-placeholder-val="{{false}}"><span class="gopen"><span class="pdial" aria-hidden="true"><span class="thumb" style="transform: translateX(100%)"></span><span class="stop"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i style="height: 6px"></i><i style="height: 8px"></i><i style="height: 10px"></i></span>Facts</span><span class="stop on"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i class="f" style="height: 6px"></i><i style="height: 8px"></i><i style="height: 10px"></i></span>Briefed</span><span class="stop"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i class="f" style="height: 6px"></i><i class="f" style="height: 8px"></i><i style="height: 10px"></i></span>Explained</span><span class="stop"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i class="f" style="height: 6px"></i><i class="f" style="height: 8px"></i><i class="f" style="height: 10px"></i></span>Guided</span></span></span></sc-if></div>
+<span class="cap"><b style="color: var(--ink); font-weight: 600">{{s.name}}</b> · {{s.note}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+<div class="g2" style="display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px">
+<div class="card" style="gap: 20px">
+<span class="lbl">Dial</span>
+<div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap"><span class="pdial" aria-hidden="true"><span class="thumb" style="transform: translateX(100%)"></span><span class="stop"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i style="height: 6px"></i><i style="height: 8px"></i><i style="height: 10px"></i></span>Facts</span><span class="stop on"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i class="f" style="height: 6px"></i><i style="height: 8px"></i><i style="height: 10px"></i></span>Briefed</span><span class="stop"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i class="f" style="height: 6px"></i><i class="f" style="height: 8px"></i><i style="height: 10px"></i></span>Explained</span><span class="stop"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i class="f" style="height: 6px"></i><i class="f" style="height: 8px"></i><i class="f" style="height: 10px"></i></span>Guided</span></span></div>
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div class="call"><b>1</b><span>Four detents, never a continuous slider. Each stop is a named contract the evals can test.</span></div>
+<div class="call"><b>2</b><span>Each stop carries the glyph’s ticks for its own depth, smaller, so the control shows what you get: more ticks, more layers.</span></div>
+<div class="call"><b>3</b><span>The thumb springs to the stop, with a slight overshoot that settles. Labels stay put; only the thumb travels.</span></div>
+<div class="call"><b>4</b><span>Native radio group: arrow keys move the stop, focus shows a full ring, and a screen reader announces “Review delivery, Briefed, 2 of 4”.</span></div>
+</div>
+</div>
+<div class="card" style="gap: 14px">
+<span class="lbl">Dial states</span>
+<sc-for list="{{states}}" as="s" hint-placeholder-count="4">
+<div style="display: flex; flex-direction: column; gap: 8px; padding-bottom: 6px">
+<div class="pdial {{s.dial}}" aria-hidden="true"><span class="thumb" style="transform: translateX(100%)"></span><span class="stop {{s.a}}"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i style="height: 6px"></i><i style="height: 8px"></i><i style="height: 10px"></i></span>Facts</span><span class="stop on {{s.b}}"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i class="f" style="height: 6px"></i><i style="height: 8px"></i><i style="height: 10px"></i></span>Briefed</span><span class="stop {{s.c}}"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i class="f" style="height: 6px"></i><i class="f" style="height: 8px"></i><i style="height: 10px"></i></span>Explained</span><span class="stop"><span class="ticks sm" aria-hidden="true"><i class="f" style="height: 4px"></i><i class="f" style="height: 6px"></i><i class="f" style="height: 8px"></i><i class="f" style="height: 10px"></i></span>Guided</span></div>
+<span class="cap"><b style="color: var(--ink); font-weight: 600">{{s.name}}</b> · {{s.note}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</section>
+
+<section class="sec">
+<h2>Rules</h2>
+<div>
+<sc-for list="{{rules}}" as="r" hint-placeholder-count="8">
+<div class="rule"><span class="n">{{r.n}}</span><span class="t">{{r.t}}</span><span class="d">{{r.d}}</span></div>
+</sc-for>
+</div>
+</section>
+
+<section class="sec">
+<div style="display: flex; flex-direction: column; gap: 6px"><h2>Motion: moving the dial</h2><p class="sub">One height movement per change. The blocks that leave fade out first, last block first and 27.5ms apart, while the height holds. Once the last of them is at 30% opacity, the height changes once, from the old total to the new one, on a curve that never overshoots. Then the arriving blocks fade in with a small rise, in reading order and 27.5ms apart, from 75% of that movement, so at Guided the suggested review still arrives after its reasons. The unit’s title, and on a joined unit each change’s title, stay still.</p></div>
+<div class="card" style="gap: 18px">
+<div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px"><span class="lbl">Explained → Guided · the code gives way to reasons</span><span style="display: flex; gap: 14px; flex-wrap: wrap"><span class="key"><i class="s-snap"></i>spring</span><span class="key"><i class="s-exit"></i>blocks leave, accelerate</span><span class="key"><i class="s-move"></i>one height move, standard</span><span class="key"><i class="s-stag"></i>blocks arrive, decelerate</span></span></div>
+<div class="tl">
+<span></span><div class="axis"><span style="left: 0%">0</span><span style="left: 25%">200</span><span style="left: 50%">400</span><span style="left: 75%">600</span><span style="left: 100%">800ms</span></div>
+<sc-for list="{{up}}" as="l" hint-placeholder-count="7">
+<span class="lane">{{l.name}}</span><div class="trk"><span class="seg {{l.cls}}" style="left: {{l.left}}; width: {{l.w}}"></span></div>
+</sc-for>
+</div>
+</div>
+<div class="card" style="gap: 18px">
+<span class="lbl">Guided → Explained · back to the code</span>
+<div class="tl">
+<span></span><div class="axis"><span style="left: 0%">0</span><span style="left: 25%">200</span><span style="left: 50%">400</span><span style="left: 75%">600</span><span style="left: 100%">800ms</span></div>
+<sc-for list="{{down}}" as="l" hint-placeholder-count="4">
+<span class="lane">{{l.name}}</span><div class="trk"><span class="seg {{l.cls}}" style="left: {{l.left}}; width: {{l.w}}"></span></div>
+</sc-for>
+</div>
+<p class="cap">The “Done when” card leaves verdict first, one block at a time, then the claims; the height moves once when its last block is at 30%; Before and After, the terms, toolbar and diff fade in from 75% of the move. The titles never move in either direction, so the reader keeps one fixed point.</p>
+</div>
+<div class="g3" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+<div class="card"><span class="lbl">Scroll anchoring</span><span class="cap">If the reader is down in the diff, the line they’re reading stays put while the stack changes height above it.</span></div>
+<div class="card"><span class="lbl">Rapid changes</span><span class="cap">A quick return reverses from where things are: blocks still on screen come straight back, and a moving height turns toward the new total. No queue, no replay.</span></div>
+<div class="card"><span class="lbl">Reduced motion</span><span class="cap">The thumb snaps; the height snaps once and blocks fade in place over the reduced 150ms, together, with no move, rise or stagger.</span></div>
+</div>
+</section>
+
+<section class="sec">
+<h2>Never</h2>
+<div class="g2" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+<sc-for list="{{nevers}}" as="v" hint-placeholder-count="6">
+<div class="card" style="gap: 10px"><span style="font-size: 13.5px; line-height: 20px; color: var(--ink2)">{{v.rule}}</span>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px"><div style="display: flex; flex-direction: column; gap: 4px"><span class="x">✕ not this</span><span class="bad">{{v.bad}}</span></div><div style="display: flex; flex-direction: column; gap: 4px"><span class="ok">✓ this</span><span class="good">{{v.good}}</span></div></div>
+</div>
+</sc-for>
+</div>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":2600}}'>
+function bars(i) { return [0, 1, 2, 3].map(function (b) { return { cls: b <= i ? 'f' : '', h: 5 + b * 3 }; }); }
+var TABLE = [
+  { stop: 'Facts', brief: 'One sentence. Every claim cited.', budget: '≤ 30 words', adds: 'Nothing. Diff and margin markers only.', disp: 'Dock only. The lane decides the actions.' },
+  { stop: 'Briefed', brief: 'Claims, one per line: what changed, why it matters, what is uncertain.', budget: '≤ 70 words · today’s briefing', adds: 'Nothing beyond the claims.', disp: 'Dock only.' },
+  { stop: 'Explained', brief: 'Before beside After; the Briefed claims fold into one line of their links.', budget: '+ Before and After · ≤ 3 terms', adds: 'Before and After: how the change behaves, built from the graph. Language terms: constructs from the owned lines, each with a line.', disp: 'Dock only.' },
+  { stop: 'Guided', brief: 'The Briefed claims, word for word.', budget: '+ 1 row per done-when item · 1 suggested review', adds: 'No code. The diff gives way to the ticket’s “Done when” items, each done, not done or without evidence and citing its sources, then the blast radius the margin found. A source pin opens only a short excerpt.', disp: 'The harness’s suggested review, reasoned from those rows. The dock sends it as yours, or lets you edit it or decide the other way.' }
+];
+var STATES = [
+  { name: 'Rest', note: 'The selected stop has the raised thumb; the others are muted.', dial: '', a: '', b: '', c: '' },
+  { name: 'Hover', note: 'Real pointer only. The hovered label darkens a step; the thumb doesn’t move until you pick.', dial: '', a: '', b: '', c: 'hov' },
+  { name: 'Focus', note: 'Keyboard focus shows a full ring on the stop; arrow keys move between stops.', dial: '', a: '', b: 'foc', c: '' },
+  { name: 'Set by workspace', note: 'Reserved for later. When reviewers can’t change it: outline only, no thumb shadow, and a tooltip names who set it.', dial: 'locked', a: '', b: '', c: '' }
+];
+var GSTATES = [
+  { name: 'Rest', note: 'Muted ticks after the title; nothing else on the page names the setting.', cls: '', gcls: '', tip: false, open: false },
+  { name: 'Hover', note: 'Real pointer only. A raised fill, and the tooltip names the setting and the stop.', cls: 'hov', gcls: 'tipped', tip: true, open: false },
+  { name: 'Keyboard focus', note: 'A full ring and the same tooltip. Enter or Space opens the dial on the chosen stop.', cls: 'foc', gcls: 'tipped', tip: true, open: false },
+  { name: 'Open', note: 'The dial opens beside the glyph, or in flow below the title where there is no room; the tooltip hides while it is open. The arrow keys choose a stop and it stays open; a press outside, Escape or moving focus away closes it.', cls: 'open', gcls: '', tip: false, open: true }
+];
+var RULES = [
+  { t: 'Facts are fixed', d: 'Moving the dial never changes a claim, a citation or a marker. Facts and Briefed are two lengths of the same cited facts; Guided reuses the Briefed claims word for word, and Explained keeps their links on one line.' },
+  { t: 'Every added line lands somewhere', d: 'Each term, phrase and check links to a line, symbol or marker, like a citation chip. Text that can’t be grounded isn’t shown.' },
+  { t: 'Explain what the unit touches', d: 'Language terms come from the owned lines only, at most three. It is not a tutorial on the language.' },
+  { t: 'Guided reasons from known facts', d: 'The suggested review follows from rows the reviewer can check: each item of the ticket’s “Done when” is done, not done or without evidence, citing the docs, tests, graph and source behind it. What the margin found beyond the ticket sits under “Blast radius”. A suggested review with no rows behind it isn’t shown.' },
+  { t: 'Guided describes; it doesn’t show code', d: 'At Guided the code isn’t the focal point. Changes are described in words; a source chip opens only the lines it cites, as a short excerpt.' },
+  { t: 'Suggested until sent', d: 'A suggestion is unrecorded until someone sends it. Its card is plain; the review mark carries the dashed edge, “Suggested · request changes”, with no avatar. Sending it records the reviewer as the actor: “You requested changes”, with their avatar and no edge. The card carries no line about who prepared it, and approving instead is always one step away.' },
+  { t: 'The lane decides the dock', d: 'Guided never adds Approve or Agree that the lane doesn’t offer. On human-suggested units Guided is an FYI: the agent’s review leads and the “Done when” card sits behind “Why”; agentic and static-automation units take comments only.' },
+  { t: 'Set by the workspace, by language', d: 'One workspace default, refined by the language the provider reports. A reviewer can move the dial for one unit from the glyph after its title; nothing else on the desk names the setting. Nobody else’s view changes, and review history doesn’t record it.' },
+  { t: 'Never assume the reader', d: 'Neuve doesn’t infer anyone’s skill in a language or framework, and doesn’t suggest a stop for a person. Defaults come only from the workspace setting.' },
+  { t: 'Language is data', d: 'A unit’s language is what the provider reports about it. The settings list shows the languages observed in the workspace; Neuve never ships a closed list, an allowlist of file types, or its own guess at a unit’s language. How a unit that spans several languages gets one is still open.' }
+].map(function (r, i) { return { n: String(i + 1).padStart(2, '0'), t: r.t, d: r.d }; });
+function seg(name, cls, from, to) { return { name: name, cls: cls, left: (from / 800 * 100) + '%', w: ((to - from) / 800 * 100) + '%' }; }
+/* The code's timing, read from ./tokens.css (lib/motion.ts TIMING, EASE and SHARE; delivery-choreography.ts composes
+   them): blocks fade over hint, one step apart (deliveryChildStagger / 2); the height moves once over card on EASE.standard,
+   starting when the last leaving block is at SHARE.morphStartOpacity; arriving blocks start at SHARE.contentStart of it. */
+var TOKENS = { snappySettle: 'spring-snappy-dur', card: 'dur-card', hint: 'dur-hint', childStagger: 'dur-delivery-child-stagger' };
+// the shares, with the code's values where this board's tokens.css predates them (lib/motion.ts SHARE)
+var SHARES = { contentStart: ['share-content-start', 0.75], morphStartOpacity: ['share-morph-start-opacity', 0.3] };
+function curve(css, name) { var p = (css.getPropertyValue('--nv-' + name).match(/-?[\d.]+/g) || []).map(Number); return p.length === 4 ? p : null; }
+// the share of a cubic-bezier's time at which it has made a share of its progress
+function timeAt(share, p) {
+  var B = function (s, a, b) { return 3 * (1 - s) * (1 - s) * s * a + 3 * (1 - s) * s * s * b + s * s * s; };
+  var lo = 0, hi = 1;
+  for (var i = 0; i < 40; i++) { var m = (lo + hi) / 2; if (B(m, p[1], p[3]) < share) lo = m; else hi = m; }
+  return B((lo + hi) / 2, p[0], p[2]);
+}
+/* null until the stylesheet has loaded */
+function readTiming() {
+  var css = getComputedStyle(document.documentElement), out = {};
+  for (var k in TOKENS) { var v = parseFloat(css.getPropertyValue('--nv-' + TOKENS[k])); if (isNaN(v)) return null; out[k] = v; }
+  for (var s in SHARES) { var x = parseFloat(css.getPropertyValue('--nv-' + SHARES[s][0])); out[s] = isNaN(x) ? SHARES[s][1] : x; }
+  out.std = curve(css, 'ease-standard'); out.accel = curve(css, 'ease-emphasized-accelerate');
+  return out.std && out.accel ? out : null;
+}
+// one change: nOut blocks in the longest leaving layer, nIn in the longest arriving one
+function plan(TM, nOut, nIn) {
+  var step = TM.childStagger / 2;
+  var overlap = TM.hint * (1 - timeAt(1 - TM.morphStartOpacity, TM.accel));
+  var outEnd = (nOut - 1) * step + TM.hint, move = Math.max(0, outEnd - overlap);
+  var content = TM.card * timeAt(TM.contentStart, TM.std);
+  return { step: step, outEnd: outEnd, move: move, arrive: move + content, inBy: move + content + (nIn - 1) * step + TM.hint };
+}
+function lanes(TM) {
+  if (!TM) return { up: [], down: [] };
+  var u = plan(TM, 4, 6), d = plan(TM, 6, 4);
+  return {
+    up: [
+      seg('Thumb · SPRING.snappy', 's-snap', 0, TM.snappySettle),
+      seg('Before and After, terms, toolbar, diff leave · last first', 's-exit', 0, u.outEnd),
+      seg('Height moves once · card', 's-move', u.move, u.move + TM.card),
+      seg('Claims, then “Done when” arrive · from 75%', 's-stag', u.arrive, u.inBy)
+    ],
+    down: [
+      seg('Thumb · SPRING.snappy', 's-snap', 0, TM.snappySettle),
+      seg('“Done when”, then claims leave · verdict first', 's-exit', 0, d.outEnd),
+      seg('Height moves once · card', 's-move', d.move, d.move + TM.card),
+      seg('Before and After, terms, toolbar, diff arrive · from 75%', 's-stag', d.arrive, d.inBy)
+    ]
+  };
+}
+var NEVERS = [
+  { rule: 'Rewriting the briefing at each stop. Readers lose their place and the facts appear to shift.', bad: 'Facts: “Commit retries…” → Explained: “This change introduces a retry loop that…”', good: 'The same cited claims at Briefed and Guided, their links kept at Explained; layers open beneath them.' },
+  { rule: 'A continuous slider or a 1–10 scale. Nobody can say what 6 means, and evals can’t test it.', bad: 'Detail ○────●────○ 62%', good: 'Facts · Briefed · Explained · Guided' },
+  { rule: 'A suggested review with no reasons behind it. It asks the reviewer to trust the harness instead of the facts.', bad: '“Suggested: Request changes”, nothing else', good: '2 of 3 “Done when” items not done, each citing the doc, test gap or lines behind it.' },
+  { rule: 'Guessing the reader’s skill, or nudging a person toward a stop.', bad: '“You haven’t reviewed Go in this repo · Explain this unit”', good: 'The workspace’s language setting picks the stop; nothing about the person.' },
+  { rule: 'A language primer. Terms the unit doesn’t use are noise.', bad: '“Go has goroutines, channels, interfaces…”', good: 'Three constructs from lines 29, 31 and 34, each landing on its line.' },
+  { rule: 'Fading the whole page on every change.', bad: 'Desk fades out and in when the dial moves', good: 'Only the layers that change move; the titles and the facts stay still.' },
+  { rule: 'Changing what other reviewers see, or recording the stop in review history.', bad: '“VD switched this unit to Guided” in the thread', good: 'The stop is a reading preference, like Stacked or Split.' }
+];
+
+class Component extends DCLogic {
+  componentDidMount() {
+    // The bars read the token variables. Until ./tokens.css has loaded, wait for it with no time cap:
+    // re-read when a stylesheet finishes loading (its load event) and on each frame until the vars resolve.
+    var self = this;
+    this.timed = !!readTiming();
+    if (this.timed) return;
+    this.onLoad = function () { self.check(); };
+    document.addEventListener('load', this.onLoad, true);
+    this.tick = function () { self.raf = 0; if (self.check()) return; self.raf = requestAnimationFrame(self.tick); };
+    this.raf = requestAnimationFrame(this.tick);
+  }
+  /* true once the tokens resolve; then stop waiting and draw the bars */
+  check() {
+    if (this.timed || !readTiming()) return this.timed;
+    this.timed = true;
+    this.stopWaiting();
+    this.setState({ timed: true });
+    return true;
+  }
+  stopWaiting() {
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    if (this.onLoad) document.removeEventListener('load', this.onLoad, true);
+    this.onLoad = null;
+  }
+  componentWillUnmount() {
+    this.stopWaiting();
+  }
+  renderVals() {
+    var tl = lanes(readTiming());
+    return {
+      theme: this.props.theme || 'light',
+      table: TABLE.map(function (r, i) { return Object.assign({ bars: bars(i) }, r); }),
+      states: STATES,
+      gstates: GSTATES,
+      rules: RULES,
+      up: tl.up,
+      down: tl.down,
+      nevers: NEVERS
+    };
+  }
+}
+</script>
+</body>
+</html>

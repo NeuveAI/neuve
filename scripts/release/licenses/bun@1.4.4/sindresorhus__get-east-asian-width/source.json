@@ -1,0 +1,13 @@
+{
+  "project": "sindresorhus/get-east-asian-width",
+  "source": "https://github.com/sindresorhus/get-east-asian-width",
+  "commit": "a1b1c31d2347d10667c4bcad34c58bc531db3b41",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "license",
+      "url": "https://raw.githubusercontent.com/sindresorhus/get-east-asian-width/a1b1c31d2347d10667c4bcad34c58bc531db3b41/license",
+      "sha256": "5c932d88256b4ab958f64a856fa48e8bd1f55bc1d96b8149c65689e0c61789d3"
+    }
+  ]
+}

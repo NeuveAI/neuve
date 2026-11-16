@@ -1,0 +1,319 @@
+/*
+ * GENERATED from src/lib/motion.ts by scripts/gen-motion-css.ts
+ * (`bun run tokens:motion`). Do not edit: test/foundations/motion-css.test.ts
+ * fails when this file and motion.ts disagree.
+ *
+ * Utilities: duration-<timing>, delay-<css delay>, ease-<ease>,
+ * ease-spring-<spring> with duration-spring-<spring>, animate-<loop>.
+ * EASE.out, inOut and linear are variables only (var(--nv-ease-out)):
+ * Tailwind's ease-out, ease-in-out and ease-linear keep their own curves.
+ */
+:root {
+  /* TIMING */
+  --nv-dur-surface-tone: 120ms;
+  --nv-dur-press-in: 80ms;
+  --nv-dur-hint: 140ms;
+  --nv-dur-nudge: 140ms;
+  --nv-dur-dim-others: 160ms;
+  --nv-dur-layer-shift: 200ms;
+  --nv-dur-line-tint: 140ms;
+  --nv-dur-card: 220ms;
+  --nv-dur-card-exit: 160ms;
+  --nv-dur-scrim: 160ms;
+  --nv-dur-sheet-exit: 200ms;
+  --nv-dur-pulse-delay: 280ms;
+  --nv-dur-pulse: 900ms;
+  --nv-dur-land-hold: 275ms;
+  --nv-dur-land-fade: 825ms;
+  --nv-dur-dock-rise: 240ms;
+  --nv-dur-dock-exit: 120ms;
+  --nv-dur-chevron: 200ms;
+  --nv-dur-lane-tone: 160ms;
+  --nv-dur-capture: 12000ms;
+  --nv-dur-linked: 160ms;
+  --nv-dur-swap: 180ms;
+  --nv-dur-notice: 360ms;
+  --nv-dur-notice-exit: 160ms;
+  --nv-dur-message: 260ms;
+  --nv-dur-working: 1100ms;
+  --nv-dur-detail: 240ms;
+  --nv-dur-working-stagger: 180ms;
+  --nv-dur-reduced: 150ms;
+  --nv-dur-content-fade: 160ms;
+  --nv-dur-skeleton: 1400ms;
+  --nv-dur-working-spin: 900ms;
+  --nv-dur-pending-spin: 1000ms;
+  --nv-dur-rail-tone: 160ms;
+  --nv-dur-tick: 200ms;
+  --nv-dur-switch-dim: 160ms;
+  --nv-dur-switch-wait: 150ms;
+  --nv-dur-stuck: 160ms;
+  --nv-dur-stuck-enter: 180ms;
+  --nv-dur-stuck-exit: 140ms;
+  --nv-dur-check: 140ms;
+  --nv-dur-delivery-layer: 60ms;
+  --nv-dur-delivery-guided: 120ms;
+  --nv-dur-delivery-children: 100ms;
+  --nv-dur-delivery-child-stagger: 55ms;
+  --nv-dur-delivery-node: 160ms;
+  --nv-dur-delivery-node-stagger: 70ms;
+  --nv-dur-delivery-mark: 220ms;
+  --nv-dur-delivery-mark-stagger: 90ms;
+  --nv-dur-delivery-verdict: 620ms;
+  --nv-dur-pin-ring: 140ms;
+  --nv-dur-pin-ring-exit: 100ms;
+  --nv-dur-delivery-exit: 200ms;
+  --nv-dur-delivery-excerpt: 220ms;
+  /* EASE */
+  --nv-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --nv-ease-standard-decelerate: cubic-bezier(0, 0, 0, 1);
+  --nv-ease-standard-accelerate: cubic-bezier(0.3, 0, 1, 1);
+  --nv-ease-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --nv-ease-emphasized-accelerate: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --nv-ease-ios-out: cubic-bezier(0.33, 1, 0.68, 1);
+  --nv-ease-out: cubic-bezier(0, 0, 0.58, 1);
+  --nv-ease-in-out: cubic-bezier(0.42, 0, 0.58, 1);
+  --nv-ease-linear: cubic-bezier(0, 0, 1, 1);
+  /* SPRING: a linear() easing and its settle time */
+  --nv-spring-snappy: linear(
+    0,
+    0.0523,
+    0.1673,
+    0.3245,
+    0.4702,
+    0.6042,
+    0.7195,
+    0.8132,
+    0.8859,
+    0.9349,
+    0.9738,
+    0.9994,
+    1.0148,
+    1.0227,
+    1.0254,
+    1.0248,
+    1.0222,
+    1.0187,
+    1.015,
+    1.0111,
+    1.008,
+    1.0054,
+    1.0034,
+    1.0019,
+    1.0008,
+    1.0001,
+    0.9997,
+    1
+  );
+  --nv-spring-snappy-dur: 450ms;
+  --nv-spring-responsive: linear(
+    0,
+    0.0403,
+    0.1326,
+    0.2655,
+    0.3956,
+    0.5222,
+    0.6378,
+    0.7383,
+    0.822,
+    0.8829,
+    0.9358,
+    0.9747,
+    1.0019,
+    1.0196,
+    1.0297,
+    1.0343,
+    1.035,
+    1.033,
+    1.0294,
+    1.0246,
+    1.02,
+    1.0157,
+    1.0117,
+    1.0084,
+    1.0056,
+    1.0034,
+    1.0017,
+    1.0005,
+    0.9997,
+    0.9992,
+    0.9989,
+    0.9988,
+    0.9988,
+    0.9989,
+    1
+  );
+  --nv-spring-responsive-dur: 567ms;
+  --nv-spring-gentle: linear(
+    0,
+    0.0276,
+    0.0936,
+    0.1938,
+    0.2978,
+    0.4054,
+    0.5104,
+    0.6086,
+    0.6972,
+    0.7676,
+    0.8347,
+    0.8905,
+    0.9354,
+    0.9705,
+    0.9969,
+    1.0159,
+    1.0287,
+    1.0364,
+    1.0401,
+    1.0409,
+    1.0393,
+    1.0363,
+    1.0324,
+    1.0281,
+    1.0237,
+    1.0194,
+    1.0155,
+    1.0119,
+    1.0088,
+    1.0062,
+    1.004,
+    1.0023,
+    1.0009,
+    0.9999,
+    0.9992,
+    0.9987,
+    0.9985,
+    0.9983,
+    0.9983,
+    0.9984,
+    0.9985,
+    0.9987,
+    0.9989,
+    0.999,
+    0.9992,
+    1
+  );
+  --nv-spring-gentle-dur: 750ms;
+  /* OFFSET */
+  --nv-offset-hint: 2px;
+  --nv-offset-nudge: 3px;
+  --nv-offset-stuck: 3px;
+  --nv-offset-label: 3px;
+  --nv-offset-card: 4px;
+  --nv-offset-rise: 6px;
+  --nv-offset-lift: 8px;
+  --nv-offset-notice: 12px;
+  --nv-offset-sheet: 24px;
+  /* SCALE */
+  --nv-scale-press: 0.97;
+  --nv-scale-enter: 0.98;
+  --nv-scale-pop: 0.96;
+  --nv-scale-collapse: 0.9;
+  --nv-scale-mark: 0.6;
+  /* OPACITY */
+  --nv-opacity-dim-others: 0.35;
+  --nv-opacity-lane-dim: 0.4;
+  --nv-opacity-switching: 0.45;
+  --nv-opacity-live-pulse: 0.35;
+  --nv-opacity-working-low: 0.3;
+  /* SHARE: shares of a movement */
+  --nv-share-content-start: 0.75;
+  --nv-share-chain-threshold: 0.85;
+  --nv-share-morph-start-opacity: 0.3;
+  --nv-share-fill-start: 0.9;
+  --nv-share-dock-bar-pace: 0.85;
+  /* PAGE: router view transitions */
+  --nv-vt-exit: 110ms;
+  --nv-vt-exit-offset: 4px;
+  --nv-vt-beat: 30ms;
+  --nv-vt-enter: 220ms;
+  --nv-vt-enter-last: 190ms;
+  --nv-vt-enter-offset: 8px;
+  --nv-vt-stagger: 45ms;
+  --nv-vt-rail: 170ms;
+  --nv-vt-rail-delay: 245ms;
+  --nv-vt-stage-1: 140ms;
+  --nv-vt-stage-2: 185ms;
+  --nv-vt-stage-3: 230ms;
+}
+
+@theme inline {
+  --transition-duration-surface-tone: var(--nv-dur-surface-tone);
+  --transition-duration-press-in: var(--nv-dur-press-in);
+  --transition-duration-hint: var(--nv-dur-hint);
+  --transition-duration-nudge: var(--nv-dur-nudge);
+  --transition-duration-dim-others: var(--nv-dur-dim-others);
+  --transition-duration-layer-shift: var(--nv-dur-layer-shift);
+  --transition-duration-line-tint: var(--nv-dur-line-tint);
+  --transition-duration-card: var(--nv-dur-card);
+  --transition-duration-card-exit: var(--nv-dur-card-exit);
+  --transition-duration-scrim: var(--nv-dur-scrim);
+  --transition-duration-sheet-exit: var(--nv-dur-sheet-exit);
+  --transition-duration-pulse-delay: var(--nv-dur-pulse-delay);
+  --transition-duration-pulse: var(--nv-dur-pulse);
+  --transition-duration-land-hold: var(--nv-dur-land-hold);
+  --transition-duration-land-fade: var(--nv-dur-land-fade);
+  --transition-duration-dock-rise: var(--nv-dur-dock-rise);
+  --transition-duration-dock-exit: var(--nv-dur-dock-exit);
+  --transition-duration-chevron: var(--nv-dur-chevron);
+  --transition-duration-lane-tone: var(--nv-dur-lane-tone);
+  --transition-duration-capture: var(--nv-dur-capture);
+  --transition-duration-linked: var(--nv-dur-linked);
+  --transition-duration-swap: var(--nv-dur-swap);
+  --transition-duration-notice: var(--nv-dur-notice);
+  --transition-duration-notice-exit: var(--nv-dur-notice-exit);
+  --transition-duration-message: var(--nv-dur-message);
+  --transition-duration-working: var(--nv-dur-working);
+  --transition-duration-detail: var(--nv-dur-detail);
+  --transition-duration-working-stagger: var(--nv-dur-working-stagger);
+  --transition-duration-reduced: var(--nv-dur-reduced);
+  --transition-duration-content-fade: var(--nv-dur-content-fade);
+  --transition-duration-skeleton: var(--nv-dur-skeleton);
+  --transition-duration-working-spin: var(--nv-dur-working-spin);
+  --transition-duration-pending-spin: var(--nv-dur-pending-spin);
+  --transition-duration-rail-tone: var(--nv-dur-rail-tone);
+  --transition-duration-tick: var(--nv-dur-tick);
+  --transition-duration-switch-dim: var(--nv-dur-switch-dim);
+  --transition-duration-switch-wait: var(--nv-dur-switch-wait);
+  --transition-duration-stuck: var(--nv-dur-stuck);
+  --transition-duration-stuck-enter: var(--nv-dur-stuck-enter);
+  --transition-duration-stuck-exit: var(--nv-dur-stuck-exit);
+  --transition-duration-check: var(--nv-dur-check);
+  --transition-duration-delivery-layer: var(--nv-dur-delivery-layer);
+  --transition-duration-delivery-guided: var(--nv-dur-delivery-guided);
+  --transition-duration-delivery-children: var(--nv-dur-delivery-children);
+  --transition-duration-delivery-child-stagger: var(
+    --nv-dur-delivery-child-stagger
+  );
+  --transition-duration-delivery-node: var(--nv-dur-delivery-node);
+  --transition-duration-delivery-node-stagger: var(
+    --nv-dur-delivery-node-stagger
+  );
+  --transition-duration-delivery-mark: var(--nv-dur-delivery-mark);
+  --transition-duration-delivery-mark-stagger: var(
+    --nv-dur-delivery-mark-stagger
+  );
+  --transition-duration-delivery-verdict: var(--nv-dur-delivery-verdict);
+  --transition-duration-pin-ring: var(--nv-dur-pin-ring);
+  --transition-duration-pin-ring-exit: var(--nv-dur-pin-ring-exit);
+  --transition-duration-delivery-exit: var(--nv-dur-delivery-exit);
+  --transition-duration-delivery-excerpt: var(--nv-dur-delivery-excerpt);
+  --transition-duration-spring-snappy: var(--nv-spring-snappy-dur);
+  --transition-duration-spring-responsive: var(--nv-spring-responsive-dur);
+  --transition-duration-spring-gentle: var(--nv-spring-gentle-dur);
+  --transition-delay-switch-wait: var(--nv-dur-switch-wait);
+  --ease-standard: var(--nv-ease-standard);
+  --ease-standard-decelerate: var(--nv-ease-standard-decelerate);
+  --ease-standard-accelerate: var(--nv-ease-standard-accelerate);
+  --ease-emphasized-decelerate: var(--nv-ease-emphasized-decelerate);
+  --ease-emphasized-accelerate: var(--nv-ease-emphasized-accelerate);
+  --ease-ios-out: var(--nv-ease-ios-out);
+  --ease-spring-snappy: var(--nv-spring-snappy);
+  --ease-spring-responsive: var(--nv-spring-responsive);
+  --ease-spring-gentle: var(--nv-spring-gentle);
+  --animate-skeleton: nv-skeleton var(--nv-dur-skeleton) var(--nv-ease-in-out)
+    infinite;
+  --animate-working-spin: nv-spin var(--nv-dur-working-spin)
+    var(--nv-ease-linear) infinite;
+  --animate-pending-spin: nv-spin var(--nv-dur-pending-spin)
+    var(--nv-ease-linear) infinite;
+}

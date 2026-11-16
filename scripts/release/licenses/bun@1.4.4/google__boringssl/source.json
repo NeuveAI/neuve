@@ -1,0 +1,13 @@
+{
+  "project": "google/boringssl",
+  "source": "https://github.com/oven-sh/boringssl",
+  "commit": "41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/oven-sh/boringssl/41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f/LICENSE",
+      "sha256": "827c8d8fc207c2392794eef9e00fe246f9f61fdcc132556c275be3dd8c3cd97f"
+    }
+  ]
+}

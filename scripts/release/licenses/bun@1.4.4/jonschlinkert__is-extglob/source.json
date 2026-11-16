@@ -1,0 +1,13 @@
+{
+  "project": "jonschlinkert/is-extglob",
+  "source": "https://github.com/jonschlinkert/is-extglob",
+  "commit": "d508f2ed92ddaf8deef6d64d2f749ca1322f883e",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/jonschlinkert/is-extglob/d508f2ed92ddaf8deef6d64d2f749ca1322f883e/LICENSE",
+      "sha256": "73b5283588baa142c5baaef5f56d3e8fdea7a30b214e8c5737e87640f882453a"
+    }
+  ]
+}

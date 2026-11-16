@@ -1,0 +1,13 @@
+{
+  "project": "ianvs/prettier-plugin-sort-imports",
+  "source": "https://github.com/ianvs/prettier-plugin-sort-imports",
+  "commit": "26bc50bd2f9846898fa3f8f4bac82cc1f55d7480",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/ianvs/prettier-plugin-sort-imports/26bc50bd2f9846898fa3f8f4bac82cc1f55d7480/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ]
+}

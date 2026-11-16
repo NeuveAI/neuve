@@ -1,0 +1,19 @@
+{
+  "name": "@neuve/records-schema",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "types": "./.types/src/index.d.ts",
+    "default": "./src/index.ts"
+  },
+  "dependencies": {
+    "zod": "4"
+  },
+  "scripts": {
+    "format": "prettier --write src package.json tsconfig.json",
+    "format:check": "prettier --check src package.json tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

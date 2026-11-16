@@ -1,0 +1,12 @@
+{
+  // Solution file: it compiles nothing itself. Each project below owns its
+  // scope and is checked on its own; editors use these references to find
+  // the project for a file. Shared options live in tsconfig.base.json.
+  "files": [],
+  "references": [
+    { "path": "./apps/web" },
+    { "path": "./packages/diffs" },
+    { "path": "./packages/ui" },
+    { "path": "./packages/ui/test" }
+  ]
+}

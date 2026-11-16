@@ -1,0 +1,10 @@
+{
+  "package": "standardwebhooks",
+  "version": "1.1.1",
+  "repository": "https://github.com/standard-webhooks/standard-webhooks",
+  "commit": "b4d2c14fc5b4ccff3ff271e3b087dff812254c59",
+  "path": "libraries/LICENSE",
+  "url": "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/b4d2c14fc5b4ccff3ff271e3b087dff812254c59/libraries/LICENSE",
+  "sha256": "5ec8c7b26b64d881a6706617bed25c049f97f2f35de034c756de8546fd6dbe27",
+  "note": "npm records b4d2c14f (on the branch tom/tmp2026-08-29) as the source of 1.1.1; the version bump on main is a7d19b45. libraries/LICENSE is byte-identical at both."
+}

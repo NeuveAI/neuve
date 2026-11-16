@@ -1,0 +1,13 @@
+{
+  "project": "microsoft/typescript-go",
+  "source": "https://github.com/microsoft/typescript-go",
+  "commit": "89d5d5b2849a0db0957065889ca58536fa6d2e4a",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/microsoft/typescript-go/89d5d5b2849a0db0957065889ca58536fa6d2e4a/LICENSE",
+      "sha256": "a7d00bfd54525bc694b6e32f64c7ebcf5e6b7ae3657be5cc12767bce74654a47"
+    }
+  ]
+}

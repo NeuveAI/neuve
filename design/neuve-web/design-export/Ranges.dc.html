@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Owned ranges with visible gaps</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+/* Board-only, no code token: */
+.theme-light{--hunk-hover:#EFEADF}
+.theme-dark{--hunk-hover:#2A2723}
+a{color:var(--ink)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.seg{display:inline-flex;padding:3px;border-radius:8px;background:var(--raised)}
+.seg button{border:0;background:transparent;padding:0 10px;height:26px;border-radius:6px;font-size:12px;color:var(--muted);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.kw{color:var(--kw)}.st{color:var(--st)}.fn{color:var(--fn)}.cm{color:var(--cm);font-style:italic}.nu{color:var(--nu)}.id{color:var(--id)}.pl{color:var(--pl)}
+
+/* ── FILE HEADER (diff-file.tsx FileHeader, round 3 #1–2; measured from review-desk-diff-file--owned-ranges). One block on
+   Ranges, Margin and Threads: keep the copies identical. 44px tall: the chevron folds the file (aria-expanded), the directory
+   in muted ink gives way before the basename (500), the +/− counts, the file's controls, then Viewed (aria-pressed; it marks
+   the file for the reader and folds it). Every control's hit area fills the header's 44px (::after). The unchecked box is
+   drawn in --line-strong (3.51:1 on the surface; 3.24:1 dark), not --faint as the code has it (3.01:1). ── */
+.fh{position:relative;height:44px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 8px 0 6px;background:var(--surface);border-bottom:1px solid var(--line2)}
+.fh.folded{border-bottom-color:transparent}
+.fbtn{position:relative;width:28px;height:28px;flex:0 0 auto;border:0;padding:0;border-radius:7px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.fbtn::after{content:"";position:absolute;top:-8px;bottom:-8px;left:-6px;right:-10px}
+.fbtn .chv{display:inline-flex;transition:transform var(--nv-dur-chevron) var(--nv-ease-standard)}
+.fh.folded .fbtn .chv{transform:rotate(-90deg)}
+.fpath{display:flex;align-items:baseline;min-width:0;overflow:hidden;white-space:nowrap;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px}
+.fpath .dir{min-width:0;flex-shrink:1000000;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.fpath .base{flex-shrink:0;font-weight:500;color:var(--ink)}
+.fh.viewed .fpath .base{color:var(--muted)}
+.fcnt{display:inline-flex;gap:8px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;white-space:nowrap}
+.fseg{display:inline-flex;flex:0 0 auto;padding:3px;border-radius:8px;background:var(--raised)}
+.fseg button{position:relative;border:0;background:transparent;height:30px;padding:0 8px;border-radius:6px;font-size:13px;color:var(--muted);white-space:nowrap;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.fseg button::after{content:"";position:absolute;top:-7px;bottom:-7px;left:0;right:0}
+.fseg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.vbtn{position:relative;height:28px;flex:0 0 auto;border:0;border-radius:7px;background:transparent;padding:0 10px 0 8px;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.vbtn::after{content:"";position:absolute;top:-8px;bottom:-8px;left:0;right:-8px}
+.vbox{width:14px;height:14px;flex:0 0 auto;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--line-strong);display:inline-flex;align-items:center;justify-content:center;color:#fff;transition:background-color var(--nv-dur-check) var(--nv-ease-standard)}
+.vbtn[aria-pressed="true"]{color:var(--agt-fg)}
+.vbtn[aria-pressed="true"] .vbox{background:var(--agt);box-shadow:none}
+@media (hover:hover){.fbtn:hover,.vbtn:hover{background:var(--raised);color:var(--ink)}.vbtn[aria-pressed="true"]:hover{color:var(--agt-fg)}.fseg button:hover{color:var(--ink)}}
+.fbtn:focus-visible,.vbtn:focus-visible,.fseg button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.fbtn,.vbtn,.vbox,.fseg button,.fbtn .chv{transition:none}}
+/* ── end FILE HEADER ── */
+/* ── DIFF ROW (the diff's gutter at HEAD, measured from review-desk-diff-file--owned-ranges). One block on Ranges, Margin and
+   Threads: keep the copies identical. One number cell holds the old and the new number (11.5px, --nw wide each, 10px apart;
+   14px in, 17px out) with the sign at its right edge (4px in, the diff colour); the code cell starts 7.5px in. --nw is the
+   widest number's width: 2 digits 14px, 3 digits 21px, 4 digits 28px. ── */
+.row{display:grid;grid-template-columns:calc(41px + var(--nw,21px) * 2) minmax(0,1fr);height:24px;align-items:center;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px;line-height:24px}
+.row>.ln{position:relative;height:24px;box-sizing:border-box;padding:0 17px 0 14px;display:grid;grid-template-columns:repeat(2,var(--nw,21px));column-gap:10px;justify-items:end;font-size:11.5px;color:var(--nv-ln);text-align:right}
+.row>.ln::after{content:attr(data-sign);position:absolute;right:4px;top:0}
+.row>.code{white-space:pre;overflow:hidden;padding:0 12px 0 7.5px}
+.k-ctx{background:var(--surface)}
+.k-add{background:var(--add-bg)}.k-add>.ln{background:var(--add-num);color:var(--add-ln)}.k-add>.ln::after{color:var(--add-fg)}
+.k-del{background:var(--del-bg)}.k-del>.ln{background:var(--del-num);color:var(--del-ln)}.k-del>.ln::after{color:var(--del-fg)}
+/* ── end DIFF ROW ── */
+/* unchanged context revealed from a gap: plain surface, quieter ink */
+.k-ctx.rev .code span{opacity:.78}
+/* sibling-owned lines: grayscale, same as the read-only neighbor; numbers in --nv-ro-ink (4.5:1 on these rows) */
+.ro .row,.ro.row{background:var(--ro-bg)}
+.ro .k-add{background:var(--ro-add)}.ro .k-del{background:var(--ro-del)}
+.ro .ln,.ro .k-add>.ln,.ro .k-del>.ln{background:transparent;color:var(--nv-ro-ink)}
+.ro .row>.ln::after{color:var(--nv-ro-ink)}
+.ro .code span{color:var(--ro-ink)}
+
+.gap{display:grid;grid-template-columns:88px minmax(0,1fr) auto;align-items:center;height:32px;background:var(--expand);font-size:12px;color:var(--muted)}
+.gap+.row,.row+.gap{box-shadow:none}
+.xbtn{width:88px;height:32px;border:0;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.gtext{border:0;background:transparent;height:32px;padding:0 10px;text-align:left;font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;color:var(--muted);display:inline-flex;align-items:center;gap:10px;transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.gtext .rng{color:var(--muted)}
+/* Other units' changed lines folded into the gap row: a quiet lock and count, never a row of their own (round 6). */
+.gtext .own{display:inline-flex;align-items:center;gap:4px;font-family:Geist,system-ui,sans-serif;font-size:11.5px;color:var(--muted);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (hover:hover){.xbtn:hover{background:var(--hunk-hover);color:var(--ink)}.gtext:hover{color:var(--ink)}}
+/* Gap rows, the parts they open and the painted tail appear in place, as in the code (the renderer re-renders them; a fade would replay). */
+/* the painting tail, as diff-file.tsx's skeleton: numbers at 60%, a bar 1ch in */
+.skel>.ln{color:var(--faint);opacity:.6}
+.skel .bar{margin-left:7.5px}
+.bar{display:block;height:8px;border-radius:4px;background:var(--skel)}
+.skel{animation:breathe var(--nv-dur-skeleton) var(--nv-ease-in-out) infinite alternate}
+@keyframes breathe{from{opacity:1}to{opacity:.55}}
+@media (prefers-reduced-motion:reduce){.skel{animation:none!important}}
+/* Margin (context-margin.tsx): a marker in lines the unit hides waits on its row as "N hidden" (round-3 #8); showing the
+   lines puts it back on its own line under its kind. 22px pins; the hit area fills 44px (::after). */
+.mg{position:relative;flex:0 0 220px}
+.pin{position:absolute;left:0;display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px 0 6px;box-sizing:border-box;border:0;border-radius:6px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;white-space:nowrap;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.pin::after{content:"";position:absolute;top:-11px;bottom:-11px;left:0;right:0}
+.pin .g{width:12px;height:12px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.pin .dash{stroke-dasharray:3.2 3.2}
+.pin .dots{display:inline-flex;gap:2px;margin-left:1px}.pin .dots i{width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.5}
+.t-hidden{background:transparent;box-shadow:inset 0 0 0 1px var(--line);color:var(--muted)}
+.t-neutral{background:var(--raised);color:var(--ink2)}.t-neutral .g{color:var(--muted)}
+.t-sug{background:var(--sug-tint);color:var(--sug-ink)}.t-sug .g{color:var(--sug)}
+@media (hover:hover){.t-hidden:hover{background:var(--raised)}.t-neutral:hover{background:var(--raised2)}.t-sug:hover{background:var(--sug-tint2)}}
+.pin:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+/* Owner chip (diff-file.tsx OwnerPin): on the first line of another unit's lines in view; lock, lane glyph, unit; opens it. */
+.t-owner{background:var(--ro-bg);box-shadow:inset 0 0 0 1px var(--line);color:var(--muted);font-family:Geist,system-ui,sans-serif;font-size:11.5px;max-width:220px;text-decoration:none}
+.t-owner .nm{min-width:0;overflow:hidden;text-overflow:ellipsis}
+@media (hover:hover){.t-owner:hover{background:var(--raised);color:var(--ink)}}
+@media (prefers-reduced-motion:reduce){.pin{transition:none}}
+@media (max-width:980px){.mg{display:none}}
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 900px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<div style="max-width: 1240px; margin: 0 auto; padding: 40px 24px 64px; box-sizing: border-box; display: flex; gap: 16px; align-items: flex-start">
+
+<div style="flex: 1 1 auto; min-width: 0; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); overflow: clip; --nw: 21px">
+<div class="fh {{fhCls}}">
+<button type="button" class="fbtn" aria-expanded="{{expanded}}" aria-controls="rng-body" aria-label="{{foldLabel}}" onClick="{{fold}}"><span class="chv" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+<span class="fpath" title="apps/neuve-web/apps/web/src/routes/index.tsx"><span class="dir">apps/neuve-web/apps/web/src/routes/</span><span class="base">index.tsx</span></span>
+<span class="fcnt"><span style="color: var(--add-fg)">+25</span><span style="color: var(--del-fg)">−4</span></span>
+<span style="flex: 1 1 auto"></span>
+<div class="fseg" role="radiogroup" aria-label="Lines shown">
+<button type="button" role="radio" class="{{ownedCls}}" aria-checked="{{isOwned}}" onClick="{{toOwned}}">Owned ranges</button>
+<button type="button" role="radio" class="{{wholeCls}}" aria-checked="{{isWhole}}" onClick="{{toWhole}}">Whole file</button>
+</div>
+<button type="button" class="vbtn" aria-pressed="{{viewed}}" onClick="{{toggleViewed}}"><span class="vbox" aria-hidden="true"><sc-if value="{{viewed}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></sc-if></span>Viewed</button>
+</div>
+
+<sc-if value="{{expandedB}}" hint-placeholder-val="{{true}}">
+<div id="rng-body">
+<sc-for list="{{blocks}}" as="b" hint-placeholder-count="6">
+
+<sc-if value="{{b.isRows}}" hint-placeholder-val="{{true}}">
+<div>
+<sc-for list="{{b.rows}}" as="r" hint-placeholder-count="4">
+<div class="row k-{{r.kind}} {{r.cls}}"><span class="ln" data-sign="{{r.sign}}"><span>{{r.o}}</span><span>{{r.n}}</span></span><span class="code"><sc-for list="{{r.toks}}" as="tk" hint-placeholder-count="4"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{b.isGap}}" hint-placeholder-val="{{false}}">
+<div>
+<sc-if value="{{b.shut}}" hint-placeholder-val="{{true}}">
+<div class="gap">
+<button type="button" class="xbtn" onClick="{{b.open}}" aria-label="{{b.aria}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"></path></svg></button>
+<button type="button" class="gtext" tabindex="-1" aria-hidden="true" onClick="{{b.open}}"><span>{{b.countText}}</span><span class="rng">{{b.range}}</span><sc-if value="{{b.hasOwners}}" hint-placeholder-val="{{false}}"><span class="own"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>{{b.owners}}</span></sc-if></button>
+<span></span>
+</div>
+</sc-if>
+<sc-if value="{{b.isOpen}}" hint-placeholder-val="{{false}}">
+<div class="reveal">
+<sc-for list="{{b.rows}}" as="r" hint-placeholder-count="4">
+<div class="row k-ctx rev"><span class="ln"><span>{{r.o}}</span><span>{{r.n}}</span></span><span class="code"><sc-for list="{{r.toks}}" as="tk" hint-placeholder-count="4"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{b.isSib}}" hint-placeholder-val="{{false}}">
+<div class="ro">
+<sc-for list="{{b.rows}}" as="r" hint-placeholder-count="3">
+<div class="row k-{{r.kind}}"><span class="ln" data-sign="{{r.sign}}"><span>{{r.o}}</span><span>{{r.n}}</span></span><span class="code"><sc-for list="{{r.toks}}" as="tk" hint-placeholder-count="4"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{b.isSkel}}" hint-placeholder-val="{{false}}">
+<div aria-busy="true" aria-label="Lines {{b.range}} loading">
+<sc-for list="{{b.rows}}" as="r" hint-placeholder-count="6">
+<div class="row k-ctx skel"><span class="ln"><span></span><span>{{r.no}}</span></span><span><span class="bar" style="width: {{r.w}}"></span></span></div>
+</sc-for>
+</div>
+</sc-if>
+
+</sc-for>
+</div>
+</sc-if>
+</div>
+
+<div class="mg" aria-label="Context margin" style="align-self: stretch">
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="1">
+<a href="#" class="pin t-owner" style="top: {{c.top}}px" aria-label="{{c.aria}}"><svg class="g" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width: 1.75"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style="flex: 0 0 auto"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg><span class="nm">{{c.unit}}</span></a>
+</sc-for>
+<sc-for list="{{pins}}" as="p" hint-placeholder-count="2">
+<button type="button" class="pin t-{{p.tone}}" style="top: {{p.top}}px" aria-label="{{p.aria}}" onClick="{{p.click}}"><sc-if value="{{p.isHidden}}" hint-placeholder-val="{{true}}"><svg class="g" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5"></path><path d="m7 9 5-5 5 5"></path></svg></sc-if><sc-if value="{{p.isGraph}}" hint-placeholder-val="{{false}}"><svg class="g" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{p.isGap}}" hint-placeholder-val="{{false}}"><svg class="g" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if>{{p.label}}<sc-if value="{{p.dot}}" hint-placeholder-val="{{false}}"><span class="dots" aria-hidden="true"><i></i></span></sc-if></button>
+</sc-for>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"tail":{"editor":"enum","options":["loading","painted"],"default":"loading"},"$preview":{"width":1440,"height":900}}'>
+var KW = /^(export|async|function|const|await|return|if|import|from|let|new|true|false|null|try|catch|type|typeof)$/;
+function tokenize(code) {
+  var out = [];
+  var re = /(\/\/.*$)|('[^']*'|"[^"]*"|`[^`]*`)|([A-Za-z_$][\w$]*)(?=\s*\()|([A-Za-z_$][\w$]*)|(\d+)|(\s+)|([^\sA-Za-z_$\d'"`]+)/g;
+  var m;
+  while ((m = re.exec(code))) {
+    if (m[1]) out.push({ t: m[1], c: 'cm' });
+    else if (m[2]) out.push({ t: m[2], c: 'st' });
+    else if (m[3]) out.push({ t: m[3], c: KW.test(m[3]) ? 'kw' : 'fn' });
+    else if (m[4]) out.push({ t: m[4], c: KW.test(m[4]) ? 'kw' : 'id' });
+    else if (m[5]) out.push({ t: m[5], c: 'nu' });
+    else out.push({ t: m[0], c: 'pl' });
+  }
+  return out;
+}
+function sign(k) { return k === 'add' ? '+' : (k === 'del' ? '−' : ''); }
+// Margin items in lines the unit hides (as owned-ranges.fixtures.ts: one in a gap, one on the folded sibling's lines).
+// They wait on their row as "1 hidden"; once those lines show, each sits on its own line under its kind.
+var KIND = {
+  graph: { tone: 'neutral', label: 'Graph', paths: ['M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9', 'M12 12v3'] },
+  gap: { tone: 'sug', label: 'Gap', paths: [], dash: true }
+};
+// One marker in a gap, one on the other unit's lines: each waits on its gap row as "1 hidden" until its part opens.
+var HIDDEN = [{ part: 'g1', kind: 'graph', line: 19 }, { part: 's1', kind: 'gap', line: 29 }];
+var HIDDEN_PATHS = ['m7 15 5 5 5-5', 'm7 9 5-5 5 5'];
+var H = { head: 44, row: 24, gap: 32 };
+var UNIT = 'Typed preparation failures and recovery messages';
+function rows(list, off) { off = off || 0; return list.map(function (r) { var k = r[0]; return { kind: k, o: k === 'add' ? '' : (k === 'del' ? r[1] : r[1] - off), n: k === 'del' ? '' : r[1], sign: sign(k), toks: tokenize(r[2]), cls: '' }; }); }
+function ctx(start, lines, off) { return lines.map(function (l, i) { return { o: start + i - off, n: start + i, toks: tokenize(l) }; }); }
+
+// Owned runs, and the stretches between them: unchanged gaps and the other unit's run, folded into one gap row that opens
+// part by part from the owned code outward (diff-model.ts stretches). Gap parts show sample lines, as before.
+var BLOCKS = [
+  { t: 'rows', rows: [['del', 2, 'import { atom, useAtom } from "jotai"'], ['add', 2, 'import { atom, useAtom, useStore } from "jotai"'], ['ctx', 3, 'import { createFileRoute, useRouter } from "@tanstack/react-router"'], ['del', 4, 'import { startReviewOperation } from "@/components/start-review-operation"'], ['add', 4, 'import {'], ['add', 5, '  startReviewOperation,'], ['add', 6, '  reviewStartNotice,'], ['add', 7, '  PreparedStartReview,'], ['add', 8, '} from "@/components/start-review-operation"']] },
+  { t: 'stretch', id: 'a', parts: [
+    { t: 'gap', id: 'g1', start: 9, end: 20, off: 4, rows: ['', 'export const Route = createFileRoute("/")({', '  loader: ({ context }) => context.queryClient.ensureQueryData(overviewQuery),', '  pendingComponent: OverviewSkeleton,', '  component: OverviewRoute,', '})', '', 'function OverviewRoute() {', '  const overview = Route.useLoaderData()', '  const router = useRouter()', '  const store = useStore()', '  const [pending, setPending] = useAtom(pendingAtom)'] }
+  ] },
+  { t: 'rows', off: 4, rows: [['add', 21, '  const [request, setRequest] = useAtom(requestAtom)'], ['add', 22, '  const [notice, setNotice] = useAtom(noticeAtom)']] },
+  { t: 'stretch', id: 'b', parts: [
+    { t: 'gap', id: 'g0', start: 23, end: 28, off: 6, rows: ['', '  async function start() {', '    if (!request) return', '    setPending(true)', '    const result = await startReviewOperation(request)', '    setNotice(reviewStartNotice(result))'] },
+    { t: 'sib', id: 's1', start: 29, end: 29, off: 6, unit: UNIT, rows: [['del', 23, '          disabled={pending}'], ['add', 29, '          disabled={pending || request !== null}']] },
+    { t: 'gap', id: 'g2', start: 30, end: 35, off: 6, rows: ['          onClick={start}', '        >', '          Start review', '        </Button>', '      </section>', '      <ReviewOverview overview={overview} />'] }
+  ] },
+  { t: 'rows', off: 11, rows: [['add', 36, '      {notice && ('], ['add', 37, '        <p role="status" className="mx-auto mb-4 max-w-5xl text-sm">'], ['add', 38, '          {notice}'], ['add', 39, '        </p>'], ['add', 40, '      )}'], ['del', 30, '    setNotice("Review started, but the view could not refresh.")'], ['add', 41, '    setNotice("The run acknowledgment is recorded, but the view could not refresh.")'], ['ctx', 42, '    await refreshOverview()'], ['add', 43, '    await router.invalidate()']] },
+  { t: 'skel', start: 44, n: 9, painted: [['add', 44, '  async function retry() {'], ['add', 45, '    if (!request) return'], ['add', 46, '    setPending(true)'], ['add', 47, '    const result = await startReviewOperation(request, {'], ['add', 48, '      register: registerRun,'], ['add', 49, '      refresh: refreshAfterStart,'], ['add', 50, '    })'], ['add', 51, '    setNotice(reviewStartNotice(result))'], ['add', 52, '  }']] }
+];
+var WIDTHS = ['46%', '28%', '34%', '62%', '30%', '38%', '12%', '52%', '8%'];
+function partRows(p) { return p.t === 'gap' ? ctx(p.start, p.rows, p.off) : rows(p.rows, p.off); }
+
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { theme: null, mode: 'owned', open: {}, folded: false, viewed: false }; }
+  renderVals() {
+    var self = this;
+    var st = this.state;
+    var whole = st.mode === 'whole';
+    var tail = this.props.tail || 'loading';
+    var blocks = [];
+    BLOCKS.forEach(function (b) {
+      if (b.t === 'rows') blocks.push({ isRows: true, isGap: false, isSib: false, isSkel: false, rows: rows(b.rows, b.off) });
+      if (b.t === 'stretch') {
+        // Parts opened so far (all of them in the whole file); the gap row sits on the next one and stands for the rest.
+        var opened = whole ? b.parts.length : (st.open[b.id] || 0);
+        b.parts.slice(0, opened).forEach(function (p) {
+          if (p.t === 'gap') blocks.push({ isRows: false, isGap: true, isSib: false, isSkel: false, shut: false, isOpen: true, part: p.id, rows: partRows(p) });
+          else blocks.push({ isRows: false, isGap: false, isSib: true, isSkel: false, part: p.id, unit: p.unit, start: p.start, end: p.end, rows: partRows(p) });
+        });
+        if (opened < b.parts.length) {
+          var rest = b.parts.slice(opened);
+          var from = rest[0].start, to = rest[rest.length - 1].end, count = to - from + 1;
+          var units = rest.filter(function (p) { return p.t === 'sib'; }).length;
+          var head = rest[0];
+          var step = function () { var o = Object.assign({}, st.open); o[b.id] = opened + 1; self.setState({ open: o }); };
+          var range = 'L' + from + '–' + to;
+          blocks.push({
+            isRows: false, isGap: true, isSib: false, isSkel: false, shut: true, isOpen: false, parts: rest.map(function (p) { return p.id; }),
+            countText: count + (units ? ' lines' : ' unchanged lines'), range: range, hasOwners: units > 0, owners: units + ' other unit' + (units === 1 ? '' : 's'),
+            aria: head.t === 'sib'
+              ? 'Show 2 changed lines owned by ' + head.unit + ', L' + head.start + (head.end > head.start ? '–' + head.end : '')
+              : (units ? 'Show ' + Math.min(20, head.end - head.start + 1) + ' of ' + count + ' lines, ' + range + ', including changes owned by ' + units + ' other unit' + (units === 1 ? '' : 's')
+                       : 'Show ' + Math.min(20, count) + ' of ' + count + ' unchanged lines, ' + range),
+            rows: [], open: step
+          });
+        }
+      }
+      if (b.t === 'skel') {
+        if (tail === 'painted') blocks.push({ isRows: true, isGap: false, isSib: false, isSkel: false, rows: rows(b.painted, 0).map(function (r) { r.cls = 'reveal'; return r; }) });
+        else blocks.push({ isRows: false, isGap: false, isSib: false, isSkel: true, range: 'L' + b.start + '–' + (b.start + b.n - 1), rows: WIDTHS.map(function (w, i) { return { no: b.start + i, w: w }; }) });
+      }
+    });
+    // margin: walk the rendered blocks for each item's row top (header 44, rows 24, gap rows 32)
+    var y = H.head, pins = [], chips = [];
+    blocks.forEach(function (bl) {
+      if (bl.isRows || bl.isSkel) { y += bl.rows.length * H.row; return; }
+      if (bl.isGap && bl.shut) {
+        var waiting = HIDDEN.filter(function (h) { return bl.parts.indexOf(h.part) >= 0; });
+        if (waiting.length) pins.push({ isHidden: true, tone: 'hidden', top: y + (H.gap - 22) / 2, label: waiting.length + ' hidden', paths: HIDDEN_PATHS, dash: false, dot: false, aria: waiting.length + ' marker' + (waiting.length === 1 ? '' : 's') + ' in hidden lines. Show the lines', click: bl.open });
+        y += H.gap;
+        return;
+      }
+      if (bl.isSib) chips.push({ top: y + 1, unit: bl.unit, aria: 'L' + bl.start + (bl.end > bl.start ? '–' + bl.end : '') + ' owned by ' + bl.unit + '. Open unit' });
+      bl.rows.forEach(function (r) {
+        HIDDEN.filter(function (h) { return h.part === bl.part && h.line === r.n; }).forEach(function (h) {
+          var k = KIND[h.kind];
+          // under the owner chip when they share a line
+          var top = bl.isSib && r === bl.rows[0] ? y + 25 : y + 1;
+          pins.push({ isGraph: h.kind === 'graph', isGap: h.kind === 'gap', tone: k.tone, top: top, label: k.label, paths: k.paths, dash: !!k.dash, dot: true, aria: k.label + ' on line ' + h.line, click: function () {} });
+        });
+        y += H.row;
+      });
+    });
+    var folded = st.folded;
+    var theme = st.theme || this.props.theme || 'light';
+    return {
+      theme: theme, blocks: blocks, pins: folded ? [] : pins, chips: folded ? [] : chips,
+      expanded: folded ? 'false' : 'true', expandedB: !folded, foldLabel: (folded ? 'Expand' : 'Collapse') + ' index.tsx',
+      fhCls: (folded ? 'folded' : '') + (st.viewed ? ' viewed' : ''), viewed: st.viewed,
+      fold: function () { self.setState({ folded: !self.state.folded }); },
+      // Viewed marks the file for this reader and folds it; clearing it unfolds (diff-file.tsx)
+      toggleViewed: function () { var v = !self.state.viewed; self.setState({ viewed: v, folded: v }); },
+      isOwned: !whole, isWhole: whole, ownedCls: whole ? '' : 'on', wholeCls: whole ? 'on' : '',
+      toOwned: function () { self.setState({ mode: 'owned', open: {} }); },
+      toWhole: function () { self.setState({ mode: 'whole' }); }
+    };
+  }
+}
+</script>
+</body>
+</html>

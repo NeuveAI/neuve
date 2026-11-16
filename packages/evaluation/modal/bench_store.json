@@ -1,0 +1,5 @@
+{
+  "store": "../../../validation/benchmarks/m4/.records/neuve",
+  "base-views": "../../../validation/benchmarks/m4/base-views.json",
+  "queries": "../../../validation/benchmarks/m4/queries.dev.json"
+}

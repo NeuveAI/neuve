@@ -1,0 +1,13 @@
+{
+  "project": "mathiasbynens/emoji-regex",
+  "source": "https://github.com/mathiasbynens/emoji-regex",
+  "commit": "28a10d9e23663582faed522853d2ddae38868ca9",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE-MIT.txt",
+      "url": "https://raw.githubusercontent.com/mathiasbynens/emoji-regex/28a10d9e23663582faed522853d2ddae38868ca9/LICENSE-MIT.txt",
+      "sha256": "483acb265f182907d1caf6cff9c16c96f31325ed23792832cc5d8b12d5f88c8a"
+    }
+  ]
+}

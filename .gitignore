@@ -1,0 +1,52 @@
+/dist/
+/apps/neuve-cli/dist/
+node_modules
+/.audit/
+# Transient working notes and handovers.
+.scratchpad/
+# Evidence runs are generated. Force-add a selected accepted run when needed.
+/validation/evidence/*/runs/
+
+# Local review ledger and captured artifacts (may contain private test data).
+/neuve/
+
+# Local development credentials.
+.env
+.env.*
+
+# Local operating-system and editor files.
+.DS_Store
+.idea/
+.vscode/
+
+# Local agent state.
+.codex/
+.claude/worktrees/
+.claude/settings.local.json
+
+# Generated logs and coverage; retain the checked-in evidence logs.
+*.log
+!/validation/evidence/dependency-investigation/2026-10-02/*.log
+!/validation/evidence/extraction-allocation/2026-10-02/*.log
+!/validation/evidence/parallel-investigation/2026-10-02/*.log
+coverage/
+
+# Stray root Records stores; nested SQLite fixtures remain available.
+/records.sqlite*
+
+# M4 benchmark store: chunk texts and later encodings (B1, B2). Rebuilt by bench:m4:views.
+/validation/benchmarks/m4/.records/
+
+# Python bytecode from the embedding-pipeline research scripts.
+/research/embedding-pipeline/**/__pycache__/
+
+# The replay's Modal orchestrator: local environments and bytecode.
+/research/pr-bench/replay/modal/.venv/
+/research/pr-bench/replay/modal/**/__pycache__/
+/research/pr-bench/replay/modal/.pytest_cache/
+
+# Checked Ace declarations are rebuilt before consumer typechecking.
+.types/
+
+# Finder writes these into any folder it shows; the release clean-tree guard counts untracked files.
+.DS_Store

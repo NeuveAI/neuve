@@ -1,0 +1,9 @@
+{
+	"extends": "../../tsconfig.ace.json",
+	"compilerOptions": {
+		"types": ["@cloudflare/workers-types"],
+		"lib": ["esnext"],
+		"skipLibCheck": true
+	},
+	"include": ["index.ts"]
+}

@@ -1,0 +1,13 @@
+{
+  "project": "inspect-js/is-core-module",
+  "source": "https://github.com/inspect-js/is-core-module",
+  "commit": "335346560808d35b44a2bded673c0cc3376e29bb",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/inspect-js/is-core-module/335346560808d35b44a2bded673c0cc3376e29bb/LICENSE",
+      "sha256": "5c496ce5ae47eb8e5ddcaa5e29c27c446a3855b19e3a66991b52f361bed22b28"
+    }
+  ]
+}

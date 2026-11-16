@@ -1,0 +1,156 @@
+{
+  "split": "dev",
+  "settings": {
+    "decideAt": "opus",
+    "comparisons": 6,
+    "resamples": 10000,
+    "seed": "neuve-m4-b4-bootstrap-v1"
+  },
+  "selection": {
+    "bestDense": "E3",
+    "bestFusion": "H3-E3",
+    "bestTopology": "E3@kind-quota"
+  },
+  "comparisons": {
+    "list": [],
+    "otherShare": []
+  },
+  "variants": {
+    "list": [
+      {
+        "arm": "V1(E3)",
+        "of": "E3",
+        "inputs": ["E3"],
+        "tuning": {
+          "chosen": {
+            "alpha": 0.25,
+            "m": 10
+          }
+        }
+      },
+      {
+        "arm": "V1(H3-E3)",
+        "of": "H3-E3",
+        "inputs": ["H3-E3"],
+        "tuning": {
+          "chosen": {
+            "alpha": 0.5,
+            "m": 3
+          }
+        }
+      },
+      {
+        "arm": "V1(L)",
+        "of": "L",
+        "inputs": ["L"],
+        "tuning": {
+          "chosen": {
+            "alpha": 0.25,
+            "m": 3
+          }
+        }
+      },
+      {
+        "arm": "V1(G-fork)",
+        "of": "G-fork",
+        "inputs": ["G-fork"],
+        "tuning": {
+          "chosen": {
+            "alpha": 1,
+            "m": 3
+          }
+        }
+      },
+      {
+        "arm": "V2(E3)",
+        "of": "E3",
+        "inputs": ["E3"],
+        "tuning": {
+          "chosen": {
+            "lambda": 0
+          }
+        }
+      },
+      {
+        "arm": "V2(H3-E3)",
+        "of": "H3-E3",
+        "inputs": ["H3-E3"],
+        "tuning": {
+          "chosen": {
+            "lambda": 0
+          }
+        }
+      },
+      {
+        "arm": "V2(L)",
+        "of": "L",
+        "inputs": ["L"],
+        "tuning": {
+          "chosen": {
+            "lambda": 0
+          }
+        }
+      },
+      {
+        "arm": "V2(G-fork)",
+        "of": "G-fork",
+        "inputs": ["G-fork"],
+        "tuning": {
+          "chosen": {
+            "lambda": 0.3
+          }
+        }
+      },
+      {
+        "arm": "V3a(R)",
+        "of": "R",
+        "inputs": ["R"],
+        "tuning": null
+      },
+      {
+        "arm": "V3b(E3)",
+        "of": "E3",
+        "inputs": ["E3"],
+        "tuning": {
+          "chosen": {
+            "alpha": 0.25,
+            "m": 10
+          }
+        }
+      },
+      {
+        "arm": "V3b(H3-E3)",
+        "of": "H3-E3",
+        "inputs": ["H3-E3"],
+        "tuning": {
+          "chosen": {
+            "alpha": 0.5,
+            "m": 3
+          }
+        }
+      },
+      {
+        "arm": "V3b(L)",
+        "of": "L",
+        "inputs": ["L"],
+        "tuning": {
+          "chosen": {
+            "alpha": 0.25,
+            "m": 3
+          }
+        }
+      },
+      {
+        "arm": "V4(E3)",
+        "of": "H3-E3",
+        "inputs": ["G-fork", "L", "E3"],
+        "tuning": {
+          "chosen": {
+            "weights": [0.7, 0.1, 0.2],
+            "beta": 0.5
+          }
+        }
+      }
+    ]
+  }
+}

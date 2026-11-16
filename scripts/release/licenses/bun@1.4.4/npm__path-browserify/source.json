@@ -1,0 +1,14 @@
+{
+  "project": "path-browserify",
+  "source": "https://registry.npmjs.org/path-browserify/-/path-browserify-1.0.1.tgz",
+  "version": "1.0.1",
+  "commit": "872fec31a8bac7b9b43be0e54ef3037e0202c5fb",
+  "pin": "Bun's src/node-fallbacks/path.js and path-browserify 1.0.x are both Node.js v8.11.1's path module; 1.0.0 and 1.0.1 have the same index.js",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/path-browserify/-/path-browserify-1.0.1.tgz#package/LICENSE",
+      "sha256": "a22b9d5763f574e5db347c30acc0b33eaf4846767c03d2e27d012e864e79a824"
+    }
+  ]
+}

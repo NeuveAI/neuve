@@ -1,0 +1,161 @@
+schema_version: 1
+case_id: neuve-effect-terminal-idempotency
+status: candidate
+language: TypeScript
+
+target:
+  positive_revision: 51961d1a055ea01ae1a6e331957481d10dc8ceaa
+  parent_revision: 8e0b9a517d9a1581d997acbc9c534d2a82c55d2d
+  file: apps/embeds/server/services/browsing-session.service.ts
+  symbol: resolveAlreadyTerminatingStopResult
+
+questions:
+  authoritative: >-
+    How does resolveAlreadyTerminatingStopResult return an
+    already_terminating result when the lifecycle manager has a terminal
+    phase, and which production caller and integration check establish
+    that behavior?
+  sensitivity_paraphrase: >-
+    Where does an existing terminal lifecycle phase become an
+    already_terminating stop result, and who calls and tests it?
+
+required_retrieval:
+  - role: target_bridge
+    path: apps/embeds/server/services/browsing-session.service.ts
+    symbol: resolveAlreadyTerminatingStopResult
+  - role: lifecycle_check
+    path: apps/embeds/server/services/browsing-session.service.ts
+    symbol: checkAlreadyTerminatingStop
+  - role: result_builder
+    path: apps/embeds/server/services/browsing-session.service.ts
+    symbol: buildAlreadyTerminatingStopResult
+  - role: production_caller
+    path: apps/embeds/server/services/browsing-session.service.ts
+    symbol: stopSession
+    kind: method
+    qualified_name: BrowsingSessionService.api.stopSession
+  - role: integration_check
+    path: apps/embeds/server/services/__tests__/browsing-session.terminal-manager-integration.test.ts
+    lines:
+      start: 13
+      end: 48
+
+required_relationships:
+  - id: bridge-calls-lifecycle-check
+    relation: CALLS
+    resolution: exact
+    from:
+      path: apps/embeds/server/services/browsing-session.service.ts
+      symbol: resolveAlreadyTerminatingStopResult
+    to:
+      path: apps/embeds/server/services/browsing-session.service.ts
+      symbol: checkAlreadyTerminatingStop
+  - id: bridge-calls-result-builder
+    relation: CALLS
+    resolution: exact
+    from:
+      path: apps/embeds/server/services/browsing-session.service.ts
+      symbol: resolveAlreadyTerminatingStopResult
+    to:
+      path: apps/embeds/server/services/browsing-session.service.ts
+      symbol: buildAlreadyTerminatingStopResult
+  - id: stop-session-calls-bridge
+    relation: CALLS
+    resolution: exact
+    from:
+      path: apps/embeds/server/services/browsing-session.service.ts
+      symbol: stopSession
+      kind: method
+      qualified_name: BrowsingSessionService.api.stopSession
+    to:
+      path: apps/embeds/server/services/browsing-session.service.ts
+      symbol: resolveAlreadyTerminatingStopResult
+
+behavioral_obligations:
+  - The pinned integration region calls resolveAlreadyTerminatingStopResult for terminal_pending and terminal_confirmed lifecycle phases.
+  - Both checks require an already_terminating result and retain the manager-owned terminal phase.
+  - The statically named api object owns stopSession at line 1855 in the positive and parent service blob; its anonymous generator contains the bridge call at line 1907. CALLS records that named lexical source dependency, not a claim that stopSession invokes the bridge synchronously.
+
+revision_controls:
+  - id: parent-before-integration-check
+    revision: 8e0b9a517d9a1581d997acbc9c534d2a82c55d2d
+    source_assertions:
+      - id: bridge-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-session.service.ts
+        region: { start: 390, end: 450 }
+        literal: export const resolveAlreadyTerminatingStopResult
+        expected: present
+      - id: integration-file
+        kind: file
+        path: apps/embeds/server/services/__tests__/browsing-session.terminal-manager-integration.test.ts
+        expected: absent
+      - id: production-property-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-session.service.ts
+        region: { start: 1855, end: 1863 }
+        literal: "stopSession: ("
+        expected: present
+      - id: production-bridge-call-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-session.service.ts
+        region: { start: 1905, end: 1911 }
+        literal: "yield* resolveAlreadyTerminatingStopResult("
+        expected: present
+    retrieval:
+      present:
+        [target_bridge, lifecycle_check, result_builder, production_caller]
+      absent: [integration_check]
+    relationships:
+      present:
+        - bridge-calls-lifecycle-check
+        - bridge-calls-result-builder
+        - stop-session-calls-bridge
+      absent: []
+  - id: structural-comparison-before-terminal-bridge
+    revision: 52c9adcd5f9744444e9f1320e45aaa13ac6d57de
+    source_assertions:
+      - id: bridge-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-session.service.ts
+        region: { start: 350, end: 470 }
+        literal: resolveAlreadyTerminatingStopResult
+        expected: absent
+      - id: lifecycle-check-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-session.service.ts
+        region: { start: 350, end: 470 }
+        literal: checkAlreadyTerminatingStop
+        expected: absent
+      - id: result-builder-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-session.service.ts
+        region: { start: 350, end: 470 }
+        literal: buildAlreadyTerminatingStopResult
+        expected: absent
+      - id: service-class-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-session.service.ts
+        region: { start: 380, end: 430 }
+        literal: export class BrowsingSessionService
+        expected: present
+      - id: production-property-literal
+        kind: literal
+        path: apps/embeds/server/services/browsing-session.service.ts
+        region: { start: 1825, end: 1833 }
+        literal: "stopSession: ("
+        expected: present
+    retrieval:
+      present: [production_caller]
+      absent:
+        [target_bridge, lifecycle_check, result_builder, integration_check]
+    relationships:
+      present: []
+      absent:
+        - bridge-calls-lifecycle-check
+        - bridge-calls-result-builder
+        - stop-session-calls-bridge
+
+known_lexical_baseline:
+  verdict: fail
+  reason: The current provider returns a large candidate set without a verified direct-support path.

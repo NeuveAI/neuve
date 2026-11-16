@@ -1,0 +1,28 @@
+{
+  "project": "oven-sh/bun",
+  "source": "https://github.com/oven-sh/bun",
+  "commit": "38afee6c84fcf48c0edb2466aa4b27d287a59c30",
+  "pin": "the tag bun-v1.4.4",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/oven-sh/bun/38afee6c84fcf48c0edb2466aa4b27d287a59c30/LICENSE.md",
+      "sha256": "362fe32c954ec829240bd7429c53d705eef08c6bfa45ffc2d02005f857cba4dd"
+    },
+    {
+      "name": "packages__bun-usockets__LICENSE",
+      "url": "https://raw.githubusercontent.com/oven-sh/bun/38afee6c84fcf48c0edb2466aa4b27d287a59c30/packages/bun-usockets/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "name": "packages__bun-uws__LICENSE",
+      "url": "https://raw.githubusercontent.com/oven-sh/bun/38afee6c84fcf48c0edb2466aa4b27d287a59c30/packages/bun-uws/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "name": "src__clap__LICENSE",
+      "url": "https://raw.githubusercontent.com/oven-sh/bun/38afee6c84fcf48c0edb2466aa4b27d287a59c30/src/clap/LICENSE",
+      "sha256": "88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd"
+    }
+  ]
+}

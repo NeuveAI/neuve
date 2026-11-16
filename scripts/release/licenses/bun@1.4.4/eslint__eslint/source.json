@@ -1,0 +1,13 @@
+{
+  "project": "eslint/eslint",
+  "source": "https://github.com/eslint/eslint",
+  "commit": "a2101d992ab8a5d49ab7c960e9f5f67707530703",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/eslint/eslint/a2101d992ab8a5d49ab7c960e9f5f67707530703/LICENSE",
+      "sha256": "3b6be04f862a077a4b97929dbf247299360824d9365f8603c263769303ace18c"
+    }
+  ]
+}

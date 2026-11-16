@@ -1,0 +1,13 @@
+{
+  "project": "eslint-community/eslint-plugin-promise",
+  "source": "https://github.com/eslint-community/eslint-plugin-promise",
+  "commit": "51c6308694dacaf338c42c4a3e5031583416b877",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/eslint-community/eslint-plugin-promise/51c6308694dacaf338c42c4a3e5031583416b877/LICENSE.md",
+      "sha256": "eb00384c4591335647e1b3eb22ca37a8935bd0f0783615dd8af5e219e7907f96"
+    }
+  ]
+}

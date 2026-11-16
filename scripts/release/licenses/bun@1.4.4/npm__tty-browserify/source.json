@@ -1,0 +1,14 @@
+{
+  "project": "tty-browserify",
+  "source": "https://registry.npmjs.org/tty-browserify/-/tty-browserify-0.0.1.tgz",
+  "version": "0.0.1",
+  "commit": "7e46e4796eeb123b05b9637b5a3e68e96252632b",
+  "pin": "the version whose index.js Bun's src/node-fallbacks/tty.js is closest to (of 0.0.0 and 0.0.1)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/tty-browserify/-/tty-browserify-0.0.1.tgz#package/LICENSE",
+      "sha256": "435a6722c786b0a56fbe7387028f1d9d3f3a2d0fb615bb8fee118727c3f59b7b"
+    }
+  ]
+}

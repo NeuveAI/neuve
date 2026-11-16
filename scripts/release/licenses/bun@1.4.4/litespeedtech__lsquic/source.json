@@ -1,0 +1,18 @@
+{
+  "project": "litespeedtech/lsquic",
+  "source": "https://github.com/litespeedtech/lsquic",
+  "commit": "f812ceb9529e26717df78c6064a2ff648b949f3e",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/litespeedtech/lsquic/f812ceb9529e26717df78c6064a2ff648b949f3e/LICENSE",
+      "sha256": "9bc22643b3ea2b55c547c83e332253d04ba3df4f26696091e6fa9f7a1ccc65ef"
+    },
+    {
+      "name": "LICENSE.chrome",
+      "url": "https://raw.githubusercontent.com/litespeedtech/lsquic/f812ceb9529e26717df78c6064a2ff648b949f3e/LICENSE.chrome",
+      "sha256": "85d5dcb0d30ea89fa5922451957ff2a1a2c3c24f1ad2bb9ab23b5d6080763fc9"
+    }
+  ]
+}

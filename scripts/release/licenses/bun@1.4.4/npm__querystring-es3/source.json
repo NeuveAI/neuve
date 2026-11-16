@@ -1,0 +1,14 @@
+{
+  "project": "querystring-es3",
+  "source": "https://registry.npmjs.org/querystring-es3/-/querystring-es3-1.0.0-0.tgz",
+  "version": "1.0.0-0",
+  "commit": "76baa10afbbc7a46461c06748e8c1b183802d105",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "License.md",
+      "url": "https://registry.npmjs.org/querystring-es3/-/querystring-es3-1.0.0-0.tgz#package/License.md",
+      "sha256": "a2d84514bf60e8dab31c3db9b25bf2fcb644171ec91f3a7463173f3e9ac6b8b4"
+    }
+  ]
+}

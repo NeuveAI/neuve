@@ -1,0 +1,46 @@
+schema_version: 1
+suite_id: neuve-effect-external-validation
+status: candidate
+language: TypeScript
+
+repositories:
+  target:
+    runtime_argument: required
+    local_default: /fixture/repository
+    source_view: pinned_committed_revision
+    ignore_current_worktree: true
+  engine:
+    runtime_argument: required
+    local_default: /fixture/repository
+    upstream_repository: git@github.com:entireio/entire-graph.git
+    upstream_baseline_revision: 5637039f7da7c8f35726eec22c230491a3f90b9f
+    neuve_owned_fork_required: true
+    required_fork_marker:
+      baseline_tag: neuve-upstream-baseline-2026-09-27
+      baseline_tag_target: 5637039f7da7c8f35726eec22c230491a3f90b9f
+      upstream_fetch_remote:
+        name: upstream
+        url: git@github.com:entireio/entire-graph.git
+      upstream_push: disabled
+      origin_remote:
+        name: origin
+        url: git@github.com:NeuveAI/neuve-graph.git
+    hosted_origin: git@github.com:NeuveAI/neuve-graph.git
+
+required_run_identities:
+  - neuve_source_revision
+  - neuve_binary_identity
+  - engine_source_revision
+  - engine_binary_identity
+  - engine_fork_marker
+  - target_repository_revision
+
+stage_results:
+  - public_query
+  - engine_query
+  - structured_observations
+
+cases:
+  - argument-roundtrip.yaml
+  - terminal-idempotency.yaml
+  - deterministic-watcher.yaml

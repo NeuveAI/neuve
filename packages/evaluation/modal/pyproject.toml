@@ -1,0 +1,31 @@
+[project]
+name = "neuve-bench-gpu"
+version = "0.1.0"
+description = "Runs the M4 benchmark's encoders on Modal GPUs"
+requires-python = ">=3.13,<3.14"
+# The local control environment: the Modal client and numpy for comparing vectors. No torch.
+dependencies = ["modal==1.6.1", "numpy==2.5.3"]
+
+[dependency-groups]
+# Installed only in the Modal GPU image (uv_sync with groups=["gpu"]), pinned to the versions of
+# the local encoder (src/retrieval-bench/encoder/requirements.txt) so local and remote run the same code.
+gpu = [
+  "torch==2.14.1",
+  "transformers==5.19.0",
+  "sentence-transformers==6.1.0",
+  "peft==0.21.2",
+  "accelerate==1.15.0",
+  "tokenizers==0.23.2",
+  "safetensors==0.8.0",
+  "huggingface_hub==1.33.0",
+  # EmbeddingGemma 2's processor imports these even when it loads text-only.
+  "pillow==12.3.0",
+  "torchvision==0.29.1",
+  "soundfile==0.14.0",
+]
+
+[tool.uv]
+package = false
+default-groups = []
+# Mirrors the workspace's 10-day minimum release age for npm packages.
+exclude-newer = "2026-10-07T00:00:00Z"

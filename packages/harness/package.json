@@ -1,0 +1,56 @@
+{
+  "name": "@neuve/harness",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./run-log": "./src/run-log.ts",
+    "./compiled": "./src/compiled.ts",
+    "./request": "./src/request.ts",
+    "./config": "./src/config.ts",
+    "./git-objects": "./src/git-objects.ts",
+    "./held-reviews": "./src/held-reviews.ts",
+    "./lane-rule": "./src/lane-rule.ts",
+    "./lane-context": "./src/lane-context.ts",
+    "./session-dump": "./src/session-dump.ts",
+    "./coding": "./src/coding.ts",
+    "./native-models-capture": "./src/pi/providers/native-models-capture.ts",
+    "./native-source-authority": "./src/pi/capture/native-source-authority.ts",
+    "./linear-planning": "./src/linear-planning.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.124.0",
+    "@earendil-works/chord": "1.0.0",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-durable": "1.0.0",
+    "@effect/ai-anthropic": "4.0.0",
+    "@effect/platform-bun": "4.0.0",
+    "@effect/sql-sqlite-bun": "4.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@neuve/graph-client": "workspace:*",
+    "@neuve/records-core": "workspace:*",
+    "@neuve/records-schema": "workspace:*",
+    "@neuve/review-rules": "workspace:*",
+    "@neuve/semantic-client": "workspace:*",
+    "@sigstore/bundle": "5.0.0",
+    "@sigstore/core": "4.0.1",
+    "@sigstore/protobuf-specs": "0.5.2",
+    "@sigstore/verify": "4.1.2",
+    "effect": "4.0.0",
+    "eventsource-parser": "3.1.1",
+    "openai": "7.19.0",
+    "zod": "4"
+  },
+  "devDependencies": {
+    "@ace/host": "workspace:*"
+  },
+  "scripts": {
+    "format": "prettier --write src tests package.json tsconfig.json",
+    "format:check": "prettier --check src tests package.json tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun ../../scripts/test-budget.ts --shards=4 --shard-timings=test-timings.json ./tests",
+    "timings": "bun ../../scripts/test-budget.ts --timings=test-timings.json --update-timings ./tests"
+  }
+}

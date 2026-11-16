@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Units by lane</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+
+a{color:var(--ink)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.iconbtn{width:36px;height:36px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.iconbtn:hover{background:var(--raised);color:var(--ink)}
+.tone{transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.tone:hover{background:var(--raised)}
+.seg{display:flex;padding:3px;border-radius:8px;background:var(--raised)}
+.seg button{border:0;background:transparent;padding:0 12px;height:30px;border-radius:6px;font-size:13px;color:var(--muted);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.kw{color:var(--kw)}.st{color:var(--st)}.fn{color:var(--fn)}.cm{color:var(--cm);font-style:italic}.nu{color:var(--nu)}.id{color:var(--id)}.pl{color:var(--pl)}
+.fade{animation:fadeUp var(--nv-dur-card) var(--nv-ease-emphasized-decelerate) both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(var(--nv-offset-rise))}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.lanein{animation:laneIn var(--nv-dur-detail) var(--nv-ease-emphasized-decelerate) both}
+@keyframes laneIn{from{opacity:0;transform:translateY(calc(var(--nv-offset-card) * -1))}to{opacity:1;transform:none}}
+.gate{display:inline-flex;gap:2px;margin-left:auto}.gate span{width:12px;height:4px;border-radius:2px;background:var(--req-tint2);transition:background-color var(--nv-dur-tick) var(--nv-ease-standard)}.gate span.on{background:var(--req)}
+.ev{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;padding:2px 7px;border-radius:5px;background:var(--raised);color:var(--ink2)}
+.dscope{display:inline-flex;align-items:center;gap:8px;padding-right:8px;font-size:13px;color:var(--dock-muted)}
+.dsep{width:1px;height:20px;background:var(--dock-line)}
+[data-surface="inverse"]{--focus:var(--focus-inverse)}
+.dbadge{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center}
+.dbadge.ok{background:var(--dock-ok-tint);color:var(--dock-ok)}.dbadge.no{background:var(--dock-req-tint);color:var(--dock-req)}.dbadge.cm{background:var(--dock-line);color:var(--dock-fg)}
+
+.grp{display:grid;grid-template-columns:14px minmax(0,1fr) auto 14px;gap:2px 10px;align-items:center;width:100%;text-align:left;border:0;background:transparent;border-radius:8px;padding:9px 10px;transition:background-color var(--nv-dur-rail-tone) var(--nv-ease-standard)}
+.grp:hover{background:var(--raised)}
+.grp .chev{transition:transform var(--nv-dur-chevron) var(--nv-ease-standard);color:var(--faint)}
+.grp.open .chev{transform:rotate(180deg)}
+.unit{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:transparent;border-radius:8px;padding:7px 10px 7px 34px;font-size:13px;transition:background-color var(--nv-dur-rail-tone) var(--nv-ease-standard)}
+.unit:hover{background:var(--raised)}
+.unit.on{background:var(--select);font-weight:500}
+.dock{display:flex;align-items:center;gap:6px;padding:6px 6px 6px 14px;border-radius:14px;background:var(--dock);color:var(--dock-fg);box-shadow:var(--shadow-dock);flex-wrap:wrap}
+.dbtn{height:36px;padding:0 14px;border:0;border-radius:9px;font-size:13.5px;font-weight:500;display:inline-flex;align-items:center;gap:8px}
+.dghost{background:transparent;color:var(--dock-fg)}.dghost:hover{background:var(--dock-hover)}
+.dprim{background:var(--accent);color:var(--accent-ink);text-decoration:none}.dprim:hover{background:var(--accent-hover)}
+.attr{display:flex;flex-direction:column;gap:8px;padding:14px 16px;border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.chk{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:10px;align-items:center;padding:11px 14px}
+.chk+.chk{border-top:1px solid var(--line2)}
+.ghostdiff{display:flex;flex-direction:column;gap:5px}
+.ghostdiff span{height:22px;border-radius:4px}
+.ghostbar{display:block;height:8px;border-radius:4px;background:var(--skel)}
+.rise{animation:rise var(--nv-dur-dock-rise) var(--nv-ease-emphasized-decelerate) both}
+@keyframes rise{from{opacity:0;transform:translateY(var(--nv-offset-lift)) scale(var(--nv-scale-enter))}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.fade,.rise{animation:none}.lanein{animation:fadeIn var(--nv-dur-reduced) var(--nv-ease-out) both}.grp,.unit,.grp .chev,.gate span{transition:none}}
+/* ── REVIEW IDENTITY (Verdicts.dc.html · round-4.md § Review identity). Identity is who: one avatar per actor,
+   never altered by placement or state. Placement changes size only (24 header · 20 cards, threads, margin · 16 rail).
+   State goes beside the avatar, never on it: no status dot, badge or tint. ── */
+.av{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-weight:600;line-height:1}
+.av.person{font-family:Geist,system-ui,sans-serif;border-radius:50% 50% 50% 14%;background:var(--raised2);color:var(--ink2)}
+.av.person.s16{width:16px;height:16px;font-size:7.5px}
+.av.person.s20{width:20px;height:20px;font-size:8.5px}
+.av.person.s24{width:24px;height:24px;font-size:9.5px}
+.av.agent{display:inline-block;overflow:visible;transform:translateY(-10%)}
+.av.agent.s24{width:24px;height:29.2px}
+.av.agent.s20{width:20px;height:24.33px}
+.av.agent.s16{width:16px;height:19.47px}
+.av.agent .body{stroke:none}
+.av.agent .edge{fill:none;stroke-width:1;stroke-linecap:butt;opacity:.5}
+.av.agent .ant{stroke-width:.85;stroke-linecap:round;fill:none}
+.av.agent .tip{stroke:none}
+.av.agent text{font-family:'Geist Mono',ui-monospace,monospace;font-size:8.6px;font-weight:600;text-anchor:middle;dominant-baseline:central}
+.av.agent.impl .body{fill:var(--agt-tint)} .av.agent.impl .edge,.av.agent.impl .ant{stroke:var(--agt-fg)} .av.agent.impl .tip,.av.agent.impl text{fill:var(--agt-fg)}
+.av.agent.rev .body{fill:var(--sug-tint)} .av.agent.rev .edge,.av.agent.rev .ant{stroke:var(--sug-ink)} .av.agent.rev .tip,.av.agent.rev text{fill:var(--sug-ink)}
+/* holds an agent's taller box (the antenna) to the bubble's square, so rows line up whoever it is */
+.avbox{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center}
+.avbox.s16{width:16px;height:16px}.avbox.s20{width:20px;height:20px}.avbox.s24{width:24px;height:24px}
+
+/* review mark: avatar, verdict icon (colour on the icon only), words in ink; no fill, no chip */
+.vi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke-width:2.8;stroke-linecap:round;stroke-linejoin:round}
+.vi.ok{stroke:var(--agt)} .vi.no{stroke:var(--req)}
+.mark{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--ink);white-space:nowrap}
+.mark b{font-weight:600}
+.mark.unsent{padding:2px 9px;border:1px dashed var(--line-strong);border-radius:7px}
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 960px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px; display: flex">
+
+<nav aria-label="Review units" style="flex: 0 0 280px; box-sizing: border-box; padding: 20px 12px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 22px">
+<section style="display: flex; flex-direction: column; gap: 2px">
+<span style="display: flex; align-items: center; gap: 8px; padding: 0 10px 8px"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg><span style="font-size: 12px; font-weight: 600; color: var(--req-fg)">Needs your decision</span><span class="gate" aria-hidden="true"><span></span><span></span><span></span><span></span></span><span class="mono" style="font-size: 11px; color: var(--muted)"><span class="sr">Decided </span>0/4</span></span>
+<span style="padding: 9px 10px; font-size: 13.5px; font-weight: 500">Revoke cuts off open sessions</span>
+<span style="padding: 9px 10px; font-size: 13.5px; font-weight: 500">Workspace admins may revoke any link</span>
+<span style="padding: 9px 10px; font-size: 13.5px; font-weight: 500">Index writes retry when the database is busy</span>
+<span style="padding: 9px 10px; font-size: 13.5px; font-weight: 500">Page requests check the share link again</span>
+</section>
+<section aria-label="Decided by agents and tools" style="display: flex; flex-direction: column; gap: 2px">
+<span class="lbl" style="padding: 0 10px 6px">Decided by agents and tools</span>
+<sc-for list="{{groups}}" as="g" hint-placeholder-count="3">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<button type="button" class="grp {{g.openCls}}" onClick="{{g.toggle}}" aria-expanded="{{g.open}}" aria-controls="lane-{{g.key}}">
+<span style="display: inline-flex"><sc-if value="{{g.is_sug}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if><sc-if value="{{g.is_agt}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg></sc-if><sc-if value="{{g.is_sta}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.5" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg></sc-if></span><span style="font-size: 13px">{{g.name}}</span><span class="mono" style="font-size: 11px; color: var(--muted)">{{g.n}}</span><svg class="ic chev" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+<sc-if value="{{g.open}}" hint-placeholder-val="{{false}}">
+<div class="lanein" id="lane-{{g.key}}" role="list" aria-label="{{g.name}} units" style="display: flex; flex-direction: column; gap: 1px">
+<sc-for list="{{g.units}}" as="u" hint-placeholder-count="2">
+<div role="listitem"><button type="button" class="unit {{u.onCls}}" onClick="{{u.pick}}" aria-current="{{u.on}}"><span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{u.title}}</span><sc-if value="{{u.hasReview}}" hint-placeholder-val="{{true}}"><span class="mark" style="flex: 0 0 auto"><sc-if value="{{u.byR1}}" hint-placeholder-val="{{true}}"><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg></sc-if><sc-if value="{{u.byR2}}" hint-placeholder-val="{{false}}"><svg class="av agent rev s16" viewBox="0 -1.2 24 29.2" aria-hidden="true"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R2</text></svg></sc-if><sc-if value="{{u.viOk}}" hint-placeholder-val="{{true}}"><svg class="vi ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{u.viNo}}" hint-placeholder-val="{{false}}"><svg class="vi no" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if><span class="sr">{{u.rv}} {{u.verb}}</span></span></sc-if><sc-if value="{{u.noReview}}" hint-placeholder-val="{{false}}"><span class="mono" style="flex: 0 0 auto; font-size: 10.5px; color: {{u.stFg}}">{{u.st}}</span></sc-if></button></div>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</sc-for>
+</section>
+</nav>
+
+<main style="flex: 1 1 auto; min-width: 0; padding: 32px 40px 48px; display: flex; flex-direction: column; gap: 18px; max-width: 900px">
+
+<sc-if value="{{isSug}}" hint-placeholder-val="{{true}}">
+<div class="fade" style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-direction: column; gap: 8px"><span style="display: flex; align-items: center; gap: 8px"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg><span class="lbl" style="color: var(--sug-fg)">Human-suggested · optional</span></span><h2 style="margin: 0; font-size: 26px; line-height: 32px; font-weight: 600; letter-spacing: -0.025em">{{unitTitle}}</h2></div>
+<div class="attr">
+<span class="mark"><span class="avbox s20" title="{{rv}} · reviewer agent · agentic review · a3f9c2e"><sc-if value="{{byR1}}" hint-placeholder-val="{{true}}"><svg class="av agent rev s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, reviewer agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg></sc-if><sc-if value="{{byR2}}" hint-placeholder-val="{{false}}"><svg class="av agent rev s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="R2, reviewer agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R2</text></svg></sc-if></span><sc-if value="{{viOk}}" hint-placeholder-val="{{true}}"><svg class="vi ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{viNo}}" hint-placeholder-val="{{false}}"><svg class="vi no" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if><span><b>{{rv}}</b> {{verb}}</span></span>
+<sc-if value="{{isSample}}" hint-placeholder-val="{{true}}"><span style="font-size: 13.5px; line-height: 20px; color: var(--ink2)">Writes link.revoked to the audit log on every revoke. The event omits the actor’s role.</span>
+<span style="display: flex; gap: 6px; flex-wrap: wrap; padding-top: 4px"><span class="ev">audit.test.ts ✓</span></span></sc-if><sc-if value="{{notSample}}" hint-placeholder-val="{{false}}"><span aria-hidden="true" style="display: flex; flex-direction: column; gap: 8px; padding: 4px 0 2px"><span class="ghostbar" style="width: 72%"></span><span class="ghostbar" style="width: 48%"></span></span></sc-if>
+</div>
+<div class="ghostdiff" aria-hidden="true"><span style="background: var(--surface); box-shadow: 0 0 0 1px var(--line)"></span><span style="background: var(--add-bg)"></span><span style="background: var(--add-bg)"></span></div>
+</div>
+</sc-if>
+
+<sc-if value="{{isAgt}}" hint-placeholder-val="{{false}}">
+<div class="fade" style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-direction: column; gap: 8px"><span style="display: flex; align-items: center; gap: 8px"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg><span class="lbl" style="color: var(--agt-fg)">Agentic review · decided by the agent</span></span><h2 style="margin: 0; font-size: 26px; line-height: 32px; font-weight: 600; letter-spacing: -0.025em">{{unitTitle}}</h2></div>
+<div class="attr">
+<span style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap"><span class="mark"><span class="avbox s20" title="{{rv}} · reviewer agent · agentic review · a3f9c2e"><sc-if value="{{byR1}}" hint-placeholder-val="{{true}}"><svg class="av agent rev s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="R1, reviewer agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R1</text></svg></sc-if><sc-if value="{{byR2}}" hint-placeholder-val="{{false}}"><svg class="av agent rev s20" viewBox="0 -1.2 24 29.2" role="img" aria-label="R2, reviewer agent"><line class="ant" x1="12" y1="1.4" x2="12" y2="6.4"></line><circle class="tip" cx="12" cy="1.2" r="1.7"></circle><rect class="body" x="2" y="6" width="20" height="20" rx="5.5"></rect><path class="edge" stroke-dasharray="2.619 1.964" d="M13.8 5.3H16.5A6.2 6.2 0 0 1 22.7 11.5V20.5A6.2 6.2 0 0 1 16.5 26.7H7.5A6.2 6.2 0 0 1 1.3 20.5V11.5A6.2 6.2 0 0 1 7.5 5.3H10.2"></path><text x="12" y="16.3">R2</text></svg></sc-if></span><sc-if value="{{viOk}}" hint-placeholder-val="{{true}}"><svg class="vi ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{viNo}}" hint-placeholder-val="{{false}}"><svg class="vi no" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if><span><b>{{rv}}</b> {{verb}}</span></span></span>
+<sc-if value="{{isSample}}" hint-placeholder-val="{{true}}"><span style="font-size: 13.5px; line-height: 20px; color: var(--ink2)">deleteWhere drops sessions for every link on the document, not just this one.</span></sc-if><sc-if value="{{notSample}}" hint-placeholder-val="{{false}}"><span aria-hidden="true" style="display: flex; flex-direction: column; gap: 8px; padding: 4px 0 2px"><span class="ghostbar" style="width: 72%"></span><span class="ghostbar" style="width: 48%"></span></span></sc-if>
+<sc-if value="{{viNo}}" hint-placeholder-val="{{true}}"><span style="display: flex; align-items: center; gap: 8px; padding-top: 4px; font-size: 12.5px; color: var(--muted)"><span style="width: 8px; height: 8px; border-radius: 4px; background: var(--accent)"></span>Waiting for the next revision</span></sc-if>
+</div>
+<sc-if value="{{isSample}}" hint-placeholder-val="{{true}}">
+<div style="display: flex; flex-direction: column; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line)">
+<div class="chk"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--req)"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg><span style="font-size: 13.5px">Over-broad delete in <span class="mono" style="font-size: 12.5px">sessions.ts:14</span></span><span class="mono" style="font-size: 11px; color: var(--req-fg)">blocking</span></div>
+<div class="chk"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--muted)"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><span style="font-size: 13.5px">No index on <span class="mono" style="font-size: 12.5px">sessions.linkId</span></span><span class="mono" style="font-size: 11px; color: var(--muted)">note</span></div>
+</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{isSta}}" hint-placeholder-val="{{false}}">
+<div class="fade" style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-direction: column; gap: 8px"><span style="display: flex; align-items: center; gap: 8px"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.5" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg><span class="lbl" style="color: var(--ink2)">Static automation · checked by tools</span></span><h2 style="margin: 0; font-size: 26px; line-height: 32px; font-weight: 600; letter-spacing: -0.025em">{{unitTitle}}</h2></div>
+<div style="display: flex; flex-direction: column; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line)">
+<sc-if value="{{isSample}}" hint-placeholder-val="{{true}}"><div class="chk"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--agt)"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13.5px">Matches openapi.yaml</span><span class="mono" style="font-size: 11px; color: var(--muted)">bun run gen:client --check</span></span><span class="mono" style="font-size: 11px; color: var(--muted)">2.1s</span></div>
+<div class="chk"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--agt)"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg><span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 13.5px">Types</span><span class="mono" style="font-size: 11px; color: var(--muted)">tsc --noEmit</span></span><span class="mono" style="font-size: 11px; color: var(--muted)">6.8s</span></div>
+</sc-if><sc-if value="{{notSample}}" hint-placeholder-val="{{false}}"><div class="chk" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--agt)"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg><span style="display: flex; flex-direction: column; gap: 6px"><span class="ghostbar" style="width: 40%"></span><span class="ghostbar" style="width: 28%; height: 6px"></span></span><span></span></div>
+<div class="chk" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--agt)"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg><span style="display: flex; flex-direction: column; gap: 6px"><span class="ghostbar" style="width: 24%"></span><span class="ghostbar" style="width: 20%; height: 6px"></span></span><span></span></div></sc-if>
+</div>
+<button type="button" style="align-self: flex-start; height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: var(--raised); font-size: 13px; display: inline-flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="m6 9 6 6 6-6"></path></svg>Show generated diff<sc-if value="{{isSample}}" hint-placeholder-val="{{true}}"><span class="mono" style="font-size: 11px; color: var(--muted)">312 lines</span></sc-if></button>
+</div>
+</sc-if>
+
+<div style="display: flex; justify-content: center; padding-top: 12px">
+<sc-if value="{{dockRest}}" hint-placeholder-val="{{true}}">
+<div class="dock rise" data-surface="inverse">
+<span class="dscope"><sc-if value="{{is_sug}}" hint-placeholder-val="{{true}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if><sc-if value="{{is_agt}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg></sc-if><sc-if value="{{is_sta}}" hint-placeholder-val="{{false}}"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.5" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg></sc-if>{{dockText}}</span><sc-if value="{{scoped}}" hint-placeholder-val="{{true}}"><span class="dsep" aria-hidden="true"></span></sc-if>
+<sc-if value="{{isSug}}" hint-placeholder-val="{{true}}"><button type="button" class="dbtn dghost" onClick="{{startComment}}">Request changes</button><button type="button" class="dbtn dprim" onClick="{{agree}}">Agree</button></sc-if>
+<sc-if value="{{notSug}}" hint-placeholder-val="{{false}}"><button type="button" class="dbtn dghost" onClick="{{startComment}}" style="box-shadow: inset 0 0 0 1px var(--dock-line)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg>Comment</button></sc-if>
+</div>
+</sc-if>
+<sc-if value="{{composing}}" hint-placeholder-val="{{false}}">
+<div class="rise" role="dialog" aria-label="Comment on this unit" style="width: 560px; max-width: 100%; box-sizing: border-box; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-dock); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+<span style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 14px; font-weight: 600">{{composeTitle}}</span><span style="font-size: 12px; color: var(--muted)">{{composeHint}}</span></span>
+<label for="c" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Comment</label>
+<textarea id="c" rows="3" placeholder="What should the next cycle know?" style="width: 100%; box-sizing: border-box; resize: none; border: 0; border-radius: 10px; background: var(--raised); color: var(--ink); padding: 10px 12px; font: inherit; font-size: 13.5px; line-height: 20px"></textarea>
+<span style="display: flex; justify-content: flex-end; gap: 8px"><button type="button" onClick="{{cancel}}" style="height: 34px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px">Cancel</button><button type="button" onClick="{{send}}" style="height: 34px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--ink); color: var(--bg); font-size: 13px; font-weight: 500">{{sendLabel}}</button></span>
+</div>
+</sc-if>
+<sc-if value="{{done}}" hint-placeholder-val="{{false}}">
+<div class="dock rise" role="status" data-surface="inverse" style="gap: 10px; padding-left: 8px"><sc-if value="{{doneOk}}" hint-placeholder-val="{{true}}"><span class="dbadge ok" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px; stroke-width: 2.25"><path d="M20 6 9 17l-5-5"></path></svg></span></sc-if><sc-if value="{{doneNo}}" hint-placeholder-val="{{false}}"><span class="dbadge no" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px; stroke-width: 2.25"><path d="M20 20v-7a4 4 0 0 0-4-4H4"></path><path d="M9 14 4 9l5-5"></path></svg></span></sc-if><sc-if value="{{doneCm}}" hint-placeholder-val="{{false}}"><span class="dbadge cm" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 12px; height: 12px; stroke-width: 2.25"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"></path></svg></span></sc-if><span style="font-size: 13px; font-weight: 500">{{doneText}}</span><span aria-hidden="true" style="width: 1px; height: 18px; background: var(--dock-line)"></span><button type="button" class="dbtn dghost" onClick="{{cancel}}">Undo</button><a href="Main.dc.html" class="dbtn dprim">Next unit<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg></a></div>
+</sc-if>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":960}}'>
+var GROUPS = [
+  { key: 'sug', name: 'Suggested', n: 3, units: [['audit', 'Audit event for revocation', 'agent ✓', 'R1', 'ok'], ['list', 'Link list shows revoked state', 'agent ✓', 'R1', 'ok'], ['rate', 'Rate-limit the revoke endpoint', 'agent ✓', 'R1', 'ok']] },
+  { key: 'agt', name: 'Agentic review', n: 7, units: [['sess', 'Session invalidation by link', 'changes', 'R2', 'no'], ['cache', 'Link cache eviction', 'agent ✓', 'R2', 'ok'], ['lookup', 'Session lookup by link id', 'agent ✓', 'R2', 'ok'], ['errpage', 'Revoked-link error page', 'agent ✓', 'R1', 'ok'], ['dialog', 'Dialog hides revoked links', 'agent ✓', 'R1', 'ok'], ['version', 'Link version column', 'agent ✓', 'R1', 'ok'], ['telemetry', 'Revoke telemetry event', 'agent ✓', 'R1', 'ok']] },
+  { key: 'sta', name: 'Static automation', n: 12, units: [['client', 'Regenerated API client', 'passed'], ['lock', 'Lockfile update', 'passed'], ['openapi', 'OpenAPI types', 'passed'], ['routes', 'Route tree', 'passed'], ['migration', 'Migration snapshot', 'passed'], ['fmt-sharing', 'Format src/sharing', 'passed'], ['fmt-sessions', 'Format src/sessions', 'passed'], ['fmt-docs', 'Format docs/sharing', 'passed'], ['imports', 'Import order', 'passed'], ['errcodes', 'Error-code table', 'passed'], ['i18n', 'i18n keys for revoke', 'passed'], ['mocks', 'API mocks', 'passed']] }
+];
+var LANE_OF = {};
+var UNIT = {};
+GROUPS.forEach(function (g) { g.units.forEach(function (u, i) { LANE_OF[u[0]] = g.key; UNIT[u[0]] = { title: u[1], reviewer: u[3] || null, verdict: u[4] || null, sample: i === 0, hunks: 1 }; }); });
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { unit: 'audit', open: { sug: true, agt: false, sta: false }, dock: 'rest', action: null }; }
+  renderVals() {
+    var self = this;
+    var lane = LANE_OF[this.state.unit];
+    var dock = this.state.dock;
+    var sug = lane === 'sug';
+    var unit = UNIT[this.state.unit];
+    return {
+      unitTitle: unit.title, isSample: unit.sample, notSample: !unit.sample,
+      rv: unit.reviewer || '', byR1: unit.reviewer === 'R1', byR2: unit.reviewer === 'R2',
+      viOk: unit.verdict === 'ok', viNo: unit.verdict === 'no', verb: unit.verdict === 'no' ? 'requested changes' : 'approved',
+
+      theme: this.props.theme ?? 'light',
+      groups: GROUPS.map(function (g) {
+        var open = !!self.state.open[g.key];
+        return { key: g.key, is_sug: g.key === 'sug', is_agt: g.key === 'agt', is_sta: g.key === 'sta', name: g.name, n: g.n, open: open, openCls: open ? 'open' : '',
+          toggle: function () { var o = Object.assign({}, self.state.open); o[g.key] = !open; self.setState({ open: o }); },
+          units: g.units.map(function (u) {
+            var on = self.state.unit === u[0];
+            return { title: u[1], st: u[2], stFg: u[2] === 'changes' ? 'var(--req-fg)' : 'var(--muted)', on: on, onCls: on ? 'on' : '',
+              hasReview: !!u[3], noReview: !u[3], rv: u[3] || '', byR1: u[3] === 'R1', byR2: u[3] === 'R2', viOk: u[4] === 'ok', viNo: u[4] === 'no', verb: u[4] === 'no' ? 'requested changes' : 'approved',
+              pick: function () { self.setState({ unit: u[0], dock: 'rest' }); } };
+          }) };
+      }),
+      isSug: sug, isAgt: lane === 'agt', isSta: lane === 'sta', notSug: !sug,
+      dockRest: dock === 'rest', composing: dock === 'composing', done: dock === 'done',
+      is_sug: sug, is_agt: lane === 'agt', is_sta: lane === 'sta', scoped: lane !== 'sta',
+      dockText: lane === 'sta' ? 'Passed static automation' : 'Covers ' + unit.hunks + (unit.hunks === 1 ? ' hunk' : ' hunks'),
+      composeTitle: sug ? 'Request changes on this unit' : 'Comment on this unit',
+      composeHint: sug ? 'Overrides the agent’s approval' : 'Adds context for this unit’s next cycle',
+      sendLabel: sug ? 'Send to implementer' : 'Add comment',
+      doneText: this.state.action === 'agree' ? 'You approved this unit' : (sug ? 'You requested changes' : 'Comment added as context'),
+      doneOk: this.state.action === 'agree', doneNo: this.state.action !== 'agree' && sug, doneCm: this.state.action !== 'agree' && !sug,
+      startComment: function () { self.setState({ dock: 'composing' }); },
+      agree: function () { self.setState({ dock: 'done', action: 'agree' }); },
+      send: function () { self.setState({ dock: 'done', action: 'comment' }); },
+      cancel: function () { self.setState({ dock: 'rest', action: null }); }
+    };
+  }
+}
+</script>
+</body>
+</html>

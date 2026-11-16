@@ -1,0 +1,14 @@
+{
+  "project": "stream-http",
+  "source": "https://registry.npmjs.org/stream-http/-/stream-http-3.2.0.tgz",
+  "version": "3.2.0",
+  "commit": "cd697901d132cc20ea698079ac400b7cc11a7999",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/stream-http/-/stream-http-3.2.0.tgz#package/LICENSE",
+      "sha256": "a0e6357a5e8ea65827addeb383e0948a1874d2f46bc7feaf6349b7a376ed6e98"
+    }
+  ]
+}

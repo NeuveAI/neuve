@@ -1,0 +1,13 @@
+{
+  "project": "jestjs/jest",
+  "source": "https://github.com/jestjs/jest",
+  "commit": "aa88f7cf0bfc7a3a2efbfcab97914886b22d4454",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/jestjs/jest/aa88f7cf0bfc7a3a2efbfcab97914886b22d4454/LICENSE",
+      "sha256": "9d5211db733ccdd26f9170bec24cdca84093f60415da6b769ee9cdf23d04e19f"
+    }
+  ]
+}

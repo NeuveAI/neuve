@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "case_id": "hybrid-context-bom",
+  "status": "draft_for_independent_evidence_review",
+  "purpose": "An exposed, bounded actual-code case for judging framing, selective multi-lead investigation, matched review-unit context, and cited batch/unit digests. This file is an evidence design, not an executed or scored result.",
+  "exposure": {
+    "classification": "exposed_development_case",
+    "known_source": {
+      "path": "process/dependency-investigation-plan.md",
+      "section": "Real source example, with unverified execution",
+      "why_it_matters": "The historical BOM change and suggested follow-ups were already described as development material; they cannot be relabeled held-out."
+    },
+    "candidate_or_model_exposure_beyond_that_plan": "unknown",
+    "held_out": false,
+    "scored_benchmark": false,
+    "dataset_or_cohort_qualification": false,
+    "model_or_native_run_for_this_case": "none"
+  },
+  "projection_rule": "Give the harness only candidate_visible. Keep curator_only and its literal answer material with the independent evaluator. This file itself is not a harness prompt.",
+  "candidate_visible": {
+    "request": "Prepare a source-cited review package for the exact changed work. Explain the work's provenance, possible delivery effects, verification status, remaining gaps, and the context matched to each proposed review unit. Provide a batch digest and a digest for each unit. Do not infer an original task, approval, executed check, or review lane from the commit title or test source.",
+    "repository": "neuve",
+    "source_pair": {
+      "base_revision": "6639ceabe37a57bd4c2635006700e9774fd93377",
+      "reviewed_revision": "76325e33e5fd1b9847e7d5a1cd08e9a420d7e582",
+      "relationship": "The base revision is the direct parent of the reviewed revision.",
+      "reviewed_commit_subject": "Preserve UTF-8 BOM bytes in source evidence"
+    },
+    "changed_work": [
+      {
+        "path": "apps/neuve-cli/src/source-evidence.ts",
+        "change": "modified",
+        "hunk": "@@ -137 +137,4 @@",
+        "old_range": { "start_line": 137, "end_line": 137 },
+        "new_range": { "start_line": 137, "end_line": 140 },
+        "old_original": {
+          "git_blob_oid": "09422c3a7e0904086650030216104a1f05feeb84",
+          "sha256": "a0c8d32d2c6c76db0af9e377f270b85826f79637e0e5a3de5857327f04c7dd21",
+          "byte_length": 4929,
+          "line_count": 179
+        },
+        "new_original": {
+          "git_blob_oid": "eb637276c46f7be6082ff5823061d7c14ec8b1ed",
+          "sha256": "0db1178a8ab64d5be4b3f26c40a1ce2081ab59583e3a5cfe50a4db0747ccbe0d",
+          "byte_length": 4993,
+          "line_count": 182
+        }
+      },
+      {
+        "path": "validation/fixtures/source-evidence/utf8-fidelity.test.ts",
+        "change": "added",
+        "hunk": "@@ -0,0 +1,209 @@",
+        "old_range": null,
+        "new_range": { "start_line": 1, "end_line": 209 },
+        "old_original": null,
+        "new_original": {
+          "git_blob_oid": "d9578f8c4b1268c32542a3efe3439ff19c8f7887",
+          "sha256": "9be1bd6d440833d5dcf2f203a8c4c45c35c6749233db60bbd153fba834bcf8c3",
+          "byte_length": 9358,
+          "line_count": 209
+        }
+      }
+    ],
+    "scope_sources": {
+      "commit_subject": "available as a historical change description, not an authoritative task or definition of done",
+      "versioned_original_task": "not supplied in this bounded case; existence and contents remain unknown",
+      "definition_of_done": "not supplied; unknown",
+      "validation_requirements": "not supplied as an authoritative task source; unknown",
+      "test_source": "The added test file contains assertions but no executed result is supplied.",
+      "test_execution": "unknown; no run receipt is supplied with this case"
+    },
+    "product_boundary": {
+      "full_visibility": "Source configuration describes purpose and provenance, not read permission. Declared actor is attribution, not identity proof.",
+      "remaining_checks": "Use exact revision, blob, range and content identity; preserve bounded computation, immutable results, transaction ownership and review responsibility.",
+      "source": {
+        "path": "process/dependency-investigation-plan.md",
+        "section": "Full access and visibility, corrected 2026-10-14",
+        "why_it_matters": "This owner correction supersedes older token, grant, protected-source and actor-based visibility proposals."
+      }
+    },
+    "execution_envelope": {
+      "status": "must be selected and frozen by engineering and independent review before any candidate run",
+      "dimensions": [
+        "per-operation iterations, elapsed time and resource use",
+        "overall iterations, elapsed time and resource use",
+        "source and response byte fit",
+        "model and tool configuration, if an actual harness run is later authorized"
+      ],
+      "universal_sufficiency_threshold": "none selected"
+    }
+  },
+  "curator_only": {
+    "inspection_method": "The historical parent/head pair was inspected with read-only git show, git rev-parse and zero-context git diff; SHA-256 covers each complete original byte sequence. The separate supplemental byte control was committed only after the independent review identified the missing actual original.",
+    "directly_cited_unchanged_consumer": {
+      "path": "apps/neuve-cli/src/mcp.ts",
+      "revision": "76325e33e5fd1b9847e7d5a1cd08e9a420d7e582",
+      "git_blob_oid": "c0dfb17d38da9ad132ad967d0bfda1ab391b8627",
+      "sha256": "70cbed9a2786396fa2d0d199d4236fe48b3ad8f939b68682cced2ac9d5d983a8",
+      "byte_length": 13491,
+      "line_count": 376,
+      "relevant_range": { "start_line": 154, "end_line": 174 },
+      "why_it_matters": "This unchanged caller places collected source evidence in the normalized MCP result; it is surrounding context, not changed work or proof that a reviewer received it."
+    },
+    "committed_supplemental_byte_control": {
+      "role": "Actual committed BOM-bearing original for a byte-fidelity control; supplemental to, and not a changed file in, the historical 6639ceab-to-76325e33 case.",
+      "commit": "0819afe8d71f1aeff64d59848b5a6391e1ea1df4",
+      "parent": "46340fc36aa17cdbd7aed7aad2481262f686dc19",
+      "tree": "eb6b6e5a25172739e8b28ff1bf64294f50acdac1",
+      "path": "validation/cases/hybrid-context-bom/source.note",
+      "tree_entry_mode": "100644",
+      "git_blob_oid": "f8eb06091092945802b4f6d660c8f8d630db3e33",
+      "sha256": "c0de0e4a790c952c8bd9b606af509db13c55d0abf39abe4774cfcdf6db62dd98",
+      "byte_length": 10,
+      "whole_blob_byte_range": { "start_byte": 0, "end_byte_exclusive": 10 },
+      "hex": "efbbbf610d0aceb20a7a",
+      "line_byte_ranges": [
+        { "line": 1, "start_byte": 0, "end_byte_exclusive": 6, "hex": "efbbbf610d0a", "decoded_text": "\uFEFFa\r\n" },
+        { "line": 2, "start_byte": 6, "end_byte_exclusive": 9, "hex": "ceb20a", "decoded_text": "β\n" },
+        { "line": 3, "start_byte": 9, "end_byte_exclusive": 10, "hex": "7a", "decoded_text": "z" }
+      ],
+      "evidence_limit": "The committed bytes establish a real original and literal ranges. They do not execute the historical fidelity test, prove a harness retrieved this source, or add a file to the historical change."
+    },
+    "literal_test_source_facts_not_run_results": {
+      "source_path": "validation/fixtures/source-evidence/utf8-fidelity.test.ts",
+      "revision": "76325e33e5fd1b9847e7d5a1cd08e9a420d7e582",
+      "sample_definition_range": { "start_line": 16, "end_line": 19 },
+      "bom_sample": {
+        "hex": "efbbbf610d0aceb20a7a",
+        "byte_length": 10,
+        "sha256": "c0de0e4a790c952c8bd9b606af509db13c55d0abf39abe4774cfcdf6db62dd98",
+        "matching_committed_supplemental_blob_oid": "f8eb06091092945802b4f6d660c8f8d630db3e33"
+      },
+      "assertion_ranges": [
+        { "start_line": 141, "end_line": 149, "meaning": "The source test expects exact initial BOM, CRLF and UTF-8 bytes for a ten-byte range." },
+        { "start_line": 165, "end_line": 177, "meaning": "The source test expects six bytes to admit the first line and five bytes to omit that whole range with an explicit budget limitation." },
+        { "start_line": 180, "end_line": 194, "meaning": "The source test expects explicit invalid-UTF-8 and unavailable-blob omissions." }
+      ],
+      "execution_receipt": "not supplied; these are assertions in committed test source, not observed passes"
+    },
+    "independent_literal_obligations": [
+      {
+        "id": "frame-and-source-limit",
+        "stage": "framing",
+        "required_observation": "Identify the exact two changed hunks and distinguish the commit subject from a versioned task, definition of done or validation requirement. State missing task meaning explicitly rather than inventing approved intent."
+      },
+      {
+        "id": "multiple-leads-with-provenance",
+        "stage": "discovery-and-adaptation",
+        "required_observation": "From an independently frozen lead set, retain selected and declined reasons for complementary code, caller, test and history leads. A duplicate must not count twice as distinct support. The parent-version decoder is historical, not current contradiction or current approval. Record original rank, source version and actual operation cost."
+      },
+      {
+        "id": "qualified-refinement",
+        "stage": "deterministic-source-and-structural-refinement",
+        "required_observation": "Read exact selected-revision originals and ranges. A semantic location is not a structural relationship result; claim an affected caller only after a separate matching-view, capability-qualified operation and readable endpoint. Otherwise leave caller coverage unresolved."
+      },
+      {
+        "id": "byte-boundary-and-contrary-limits",
+        "stage": "contradiction-and-applicability",
+        "required_observation": "Bind the separately committed ten-byte source.note original and its exact first-line byte range [0,6) to the source-test expectation that six bytes admit the first line while five omit the whole range. Keep that supplemental source outside the historical changed-work inventory. Preserve the parent/head decoder difference, and do not turn the test assertion or committed bytes into an executed result. A separate material current-source contradiction remains unknown until independently found."
+      },
+      {
+        "id": "rerank-with-accounting",
+        "stage": "context-reranking",
+        "required_observation": "Keep source-qualified material needed for the scoped obligation even when it ranks below the edited line; remove only redundant presentation while retaining discovery paths, omissions, contrary limits and measured costs. No fixed weights or source hierarchy are selected by this case."
+      },
+      {
+        "id": "complete-owned-hunks",
+        "stage": "review-unit-grouping",
+        "required_observation": "Account for both changed hunks exactly once under explicit review-unit ownership. A one-unit code-and-test grouping is possible but not imposed; any split needs a coherent responsibility rationale. The unchanged caller and parent revision remain attributed surrounding context and receive no disposition through this change."
+      },
+      {
+        "id": "supported-batch-and-unit-digests",
+        "stage": "reviewer-package",
+        "required_observation": "Emit a batch digest and each proposed unit digest with resolvable exact-source citations, owned-work versus surrounding-context distinction, actual verification status, limitations and unresolved obligations. Neither test source nor committed identity implies execution, review approval, a lane or complete impact."
+      },
+      {
+        "id": "both-cli-review-stages",
+        "stage": "reviewer-consumption",
+        "required_observation": "When implementation exists, inner and outer agentic CLI reviewers must inspect the same immutable matched package by reference without recomputation. Their comments and dispositions retain actual work, actor, stage and outer-cycle attribution; an inner iteration is not another outer cycle. This case supplies no human-web or CLI execution result."
+      }
+    ],
+    "scenario_controls_to_freeze_before_any_run": [
+      {
+        "id": "main-multi-lead",
+        "setup": "Expose the exact historical changed work with independently qualified complementary, duplicate, parent-version and byte-limit leads. The separately committed source.note is a supplemental current byte-control source, not a historical changed file. Do not hand the answer list or these curator obligations to the candidate.",
+        "outcome_to_judge": "Useful selection, explicit refusal or uncertainty, source-qualified reassessment, matched context and cited digests."
+      },
+      {
+        "id": "already-answered-no-gap",
+        "setup": "Ask only which decoder option the supplied exact diff added; the visible changed hunk fully answers that narrow question and carries no contrary current-source evidence.",
+        "outcome_to_judge": "Zero redundant follow-up operations and a scoped answer that does not claim runtime validation or approval."
+      },
+      {
+        "id": "verification-unavailable",
+        "setup": "Supply the committed test source but no executed test receipt or qualifying verification observation.",
+        "outcome_to_judge": "Report verification as unavailable, preserve the test's expected assertions and avoid a passing-check claim."
+      },
+      {
+        "id": "finite-budget-exhausted",
+        "setup": "Freeze finite per-operation and overall limits in the later candidate configuration, then stop before a material need is answered. The limits in this case are not universal policy values.",
+        "outcome_to_judge": "Retain completed evidence and measured work, name the unanswered need, and stop unresolved without inferring sufficiency or approval."
+      }
+    ],
+    "separate_later_decisions": [
+      "The whole-unit complexity/ease-of-validation quadrant and any review lane require their own evidence, policy and authority review.",
+      "NEU-24 matched scoring and NEU-23 joint adoption remain separate, with the owner's experiment and rubric veto intact.",
+      "This exposed case cannot qualify a held-out cohort or a training dataset."
+    ],
+    "required_next_review": {
+      "scope": "NEU-22 independent evidence-design and exact-source review of this JSON case before any candidate execution or use as an oracle",
+      "status": "pending",
+      "questions": [
+        "Are the Git pair, blob hashes, hunk inventory, source roles and known exposure exact?",
+        "Is the actual committed supplemental BOM original byte-for-byte pinned and clearly separate from the historical change and from an executed test result?",
+        "Are the candidate-visible input and curator-only answer material separated without leaking required source answers?",
+        "Do the literal controls distinguish test assertions, actual execution, source/view qualification, semantic usefulness, hunk ownership and digest support?",
+        "Are no-gap, unavailable and finite-budget stops independently judgeable without selecting a universal sufficiency rule or a lane?"
+      ]
+    }
+  }
+}

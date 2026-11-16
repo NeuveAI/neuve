@@ -1,0 +1,13 @@
+{
+  "project": "cvazac/eslint-plugin-react-perf",
+  "source": "https://github.com/cvazac/eslint-plugin-react-perf",
+  "commit": "811b182f60294377dbb8c7d671d15052e5b2b177",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/cvazac/eslint-plugin-react-perf/811b182f60294377dbb8c7d671d15052e5b2b177/LICENSE",
+      "sha256": "04ca9a8988de921a74aab5d04fd437d74ee204b67a781f3193c8d86550bb236c"
+    }
+  ]
+}

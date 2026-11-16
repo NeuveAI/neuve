@@ -1,0 +1,13 @@
+{
+  "project": "litespeedtech/ls-hpack",
+  "source": "https://github.com/litespeedtech/ls-hpack",
+  "commit": "cf0f70dd10b352194c97448eb5d00b4aa484f531",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/litespeedtech/ls-hpack/cf0f70dd10b352194c97448eb5d00b4aa484f531/LICENSE",
+      "sha256": "0490f9666828ad1b6b5503102e7ebbe491451b7174511f3b6255caa967caf955"
+    }
+  ]
+}

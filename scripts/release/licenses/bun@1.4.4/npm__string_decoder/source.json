@@ -1,0 +1,14 @@
+{
+  "project": "string_decoder",
+  "source": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.3.0.tgz",
+  "version": "1.3.0",
+  "commit": "60db81e031c126112039157ba9437484b1329dff",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.3.0.tgz#package/LICENSE",
+      "sha256": "11f2aafb37d06b3ee5bdaf06e9811141d0da05263c316f3d627f45c20d43261b"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+/** The faces text renders in (styles/neuve.css), so measured heights match what draws. */
+export const SANS = "'Geist Variable', sans-serif";
+export const MONO = "'Geist Mono Variable', ui-monospace, monospace";
+export const FONT = `14px ${SANS}`;
+export const SMALL_FONT = `12px ${SANS}`;
+export const CODE_FONT = `14px ${MONO}`;
+export const SMALL_CODE_FONT = `12px ${MONO}`;
+export const LINE_HEIGHT = 22;
+export const SMALL_LINE_HEIGHT = 18;
+export const EMOJI_SIZE = 18;
+export const SMALL_EMOJI_SIZE = 14;
+export const CODE_LINE_HEIGHT = 20;
+export const CODE_PADDING = 12;
+export const CODE_LABEL_HEIGHT = 16;
+export const INLINE_CODE_PADDING = 2;
+export const FILE_HEIGHT = 48;
+export const SYSTEM_HEIGHT = 32;
+export const LIST_INDENT = 20;
+export const QUOTE_INDENT = 8;
+export const QUOTE_BORDER = 2;

@@ -1,0 +1,13 @@
+{
+  "project": "kaelzhang/node-ignore",
+  "source": "https://github.com/kaelzhang/node-ignore",
+  "commit": "0a5a55087149a6178fece92a9d4946fd75480a80",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/kaelzhang/node-ignore/0a5a55087149a6178fece92a9d4946fd75480a80/LICENSE-MIT",
+      "sha256": "9c94db23dc4b1e9aaee5d195668b916afc71efed54af226b66cf0ccc4389c1c0"
+    }
+  ]
+}

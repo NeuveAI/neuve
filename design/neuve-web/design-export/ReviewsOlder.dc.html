@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Neuve reviews, page 2</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+a{color:var(--ink)}a:hover{color:var(--sug-fg)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.iconbtn{position:relative;width:36px;height:36px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;text-decoration:none;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.iconbtn::after{content:"";position:absolute;inset:-4px}
+.iconbtn:hover{background:var(--raised);color:var(--ink)}
+.kbd{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;padding:1px 5px;border-radius:4px;background:var(--raised2);color:var(--muted)}
+.crumb{color:var(--muted);text-decoration:none;border-radius:4px;transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.crumb:hover{color:var(--ink)}
+.cta .ic{transition:transform var(--nv-dur-nudge) var(--nv-ease-ios-out)}
+.cta:hover .ic{transform:translateX(var(--nv-offset-nudge))}
+/* ── WAITING ON YOU (the decision panel's shape, decision-panel.tsx): what the human gate holds across every review,
+   and one way in. Nothing waits: the headline says so and the button goes. ── */
+.notice{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:16px 20px;border-radius:14px;background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.panel{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px 24px;padding:20px;border-radius:16px;background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.headline{margin:0;font-size:22px;line-height:28px;font-weight:600;letter-spacing:-0.02em;text-wrap:pretty}
+/* ── FILTER (shared/segmented.tsx) ── */
+.seg{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:var(--raised)}
+.seg button{height:30px;padding:0 12px;border:0;border-radius:7px;background:transparent;color:var(--ink2);font-size:13px;display:inline-flex;align-items:center;gap:8px;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.seg button:hover{color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+.seg .n{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:var(--muted)}
+/* ── REVIEW ROWS: one per review, newest run first, under its day. The title is the first batch's (a running or
+   failed review has none yet: its commit's subject) and opens that batch; a review of several batches opens the
+   batch menu's list (shared/batch-menu.tsx). Lanes count the units (an unassessed unit reads as human-suggested,
+   10.100); the cells are the human-required units, as the decision panel draws them. ── */
+.rows{margin:0;padding:0;list-style:none;border-radius:14px;background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.rows>li+li{border-top:1px solid var(--line2)}
+.rv .foot{display:contents}
+.rv{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 132px 248px 16px 15px;gap:8px 24px;align-items:center;min-height:64px;padding:12px 20px;box-sizing:border-box;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.rows>li:first-child .rv{border-radius:14px 14px 0 0}.rows>li:last-child .rv{border-radius:0 0 14px 14px}.rows>li:only-child .rv{border-radius:14px}
+.rv.linked:hover{background:var(--raised)}
+.rv .go{color:var(--faint);transition:transform var(--nv-dur-nudge) var(--nv-ease-ios-out),color var(--nv-dur-nudge) var(--nv-ease-ios-out)}
+.rv.linked:hover .go{transform:translateX(var(--nv-offset-nudge));color:var(--ink)}
+.rv.linked:has(.rlink:focus-visible){outline:2px solid var(--focus);outline-offset:-2px}
+.rlink{color:var(--ink);text-decoration:none;outline:none}.rlink::after{content:"";position:absolute;inset:0}
+.rlink:hover{color:var(--ink)}
+.rv-main{display:flex;flex-direction:column;gap:4px;min-width:0}
+/* one line per title keeps every row the same height, so a page of ten reads at a steady rhythm */
+.rv-title{font-size:15.5px;line-height:22px;font-weight:600;letter-spacing:-0.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ── PAGES (shadcn Pagination's anatomy): ten reviews to a page, newest run first. Previous, the page numbers
+   (the current one outlined, an ellipsis between far pages) and Next; at phone width, arrows around "Page 1 of 4".
+   A new page swaps the ten rows in place with one fade (contentFade); the list stays one page tall.
+   The list bar stays in view while the list scrolls. ── */
+.listbar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin:-12px 0;padding:12px 0;background:var(--bg)}
+.more{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}
+.pager ul{margin:0;padding:0;list-style:none;display:flex;align-items:center;gap:4px}
+.pg{height:36px;min-width:36px;padding:0 10px;box-sizing:border-box;border:0;border-radius:8px;background:transparent;color:var(--ink);font-size:14px;font-weight:500;font-variant-numeric:tabular-nums;display:inline-flex;align-items:center;justify-content:center;gap:4px;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.pg:hover{background:var(--raised)}
+.pg[aria-current="page"]{background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.pg.prev{padding:0 12px 0 8px}.pg.next{padding:0 8px 0 12px}
+.pg[aria-disabled="true"]{color:var(--faint);cursor:default}.pg[aria-disabled="true"]:hover{background:transparent}
+.gap{display:inline-flex;width:36px;justify-content:center;color:var(--muted)}
+.pgof{display:none;padding:0 8px;font-size:13px;color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pageset{display:flex;flex-direction:column;gap:24px}
+.pageset.pa{animation:pgA var(--nv-dur-content-fade) var(--nv-ease-out) both}.pageset.pb{animation:pgB var(--nv-dur-content-fade) var(--nv-ease-out) both}
+@keyframes pgA{from{opacity:0}to{opacity:1}}@keyframes pgB{from{opacity:0}to{opacity:1}}
+.rv-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:12.5px;color:var(--muted)}
+.rv-meta .dot{color:var(--faint)}
+.st{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.st.warn{color:var(--warn)}
+.st.run{color:var(--ink2)}
+.spin{width:12px;height:12px;flex:0 0 auto;animation:spin var(--nv-dur-working-spin) linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.lanes{display:flex;min-width:0}
+.lnums{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12.5px;color:var(--ink2)}
+.lnums li{display:inline-flex;align-items:center;gap:6px}
+.you{display:flex;align-items:center;gap:10px;min-width:0}
+.cells{margin:0;padding:0;list-style:none;display:flex;gap:3px}
+.cell{width:16px;height:16px;border-radius:4px;display:flex;align-items:center;justify-content:center}
+.cell.done{background:var(--bg);box-shadow:0 0 0 1px var(--line)}
+.cell.wait{background:var(--req-tint);box-shadow:0 0 0 1px var(--req-tint2)}
+.cell.wait.sug{background:var(--sug-tint);box-shadow:0 0 0 1px var(--sug-tint2)}
+.more{display:flex;align-items:center;height:16px;padding-left:2px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.vi{width:9px;height:9px;flex:0 0 auto;fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.yt{font-size:13px;white-space:nowrap;color:var(--muted)}.yt.wait{color:var(--req-fg);font-weight:500}
+.fb{color:var(--muted);display:inline-flex}
+/* the batches trigger sits above the row's link */
+.bslot{position:relative;z-index:2;display:inline-flex}
+.bslot.open{z-index:40}
+.btrig{height:24px;padding:0 6px;margin:0 -6px;border:0;border-radius:6px;background:transparent;display:inline-flex;align-items:center;gap:4px;font-size:12.5px;color:var(--ink2);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.btrig:hover,.btrig[aria-expanded="true"]{background:var(--raised2);color:var(--ink)}
+.bmenu{position:absolute;left:-10px;top:calc(100% + 6px);z-index:30;box-sizing:border-box;width:min(380px,calc(100vw - 32px));max-height:min(360px,50vh);overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:2px;padding:4px;border-radius:14px;background:var(--surface);box-shadow:var(--shadow-card);transform-origin:top left;animation:bmIn var(--nv-dur-card) var(--nv-ease-emphasized-decelerate) both}
+@keyframes bmIn{from{opacity:0;transform:translateY(calc(-1 * var(--nv-offset-card))) scale(var(--nv-scale-enter))}to{opacity:1;transform:none}}
+.brow{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:10px;color:var(--ink);text-decoration:none;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.brow:hover,.brow:focus-visible{background:var(--raised);color:var(--ink);outline:none}
+.brow .bt{font-size:13px;line-height:20px;font-weight:500;text-wrap:pretty}
+.day{display:flex;flex-direction:column;gap:10px}
+@media (max-width:760px){
+  /* phone: the title and its line on top; lanes, decisions and feedback on one line under it that wraps
+     the decisions onto a second only when they don't fit (review-row.tsx) */
+  .rv{grid-template-columns:minmax(0,1fr) 16px;grid-template-areas:"main go" "foot foot";gap:10px 16px;padding:14px 16px}
+  .rv .foot{grid-area:foot;display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px}
+  .rv-title{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+  .rv-main{grid-area:main}
+  .rv .go{grid-area:go;align-self:start;margin-top:4px}
+  .rv .lnums{flex-wrap:nowrap}
+  .rv .fbc{margin-left:auto}
+  .rv .fbc:empty{display:none}
+  .rv .lanes:empty,.rv .you:empty{display:none}
+  .h1{font-size:30px!important;line-height:36px!important}
+  .findl{display:none}
+  .pg{height:44px;min-width:44px}.pgi,.pgl{display:none}.pgof{display:list-item;list-style:none}
+  .hdr{gap:8px!important;padding:8px 12px!important;flex-wrap:nowrap!important}
+}
+@media (prefers-reduced-motion:reduce){
+  .rv,.rv .go,.cta .ic,.iconbtn,.seg button,.btrig,.brow,.crumb,.pg{transition:none}
+  .pageset.pa,.pageset.pb{animation-duration:var(--nv-dur-reduced)}
+  .spin{animation:none}
+  .bmenu{animation:bmFade var(--nv-dur-reduced) var(--nv-ease-out) both}
+}
+@keyframes bmFade{from{opacity:0}to{opacity:1}}
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 100vh; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+
+<header class="hdr" style="position: relative; z-index: 20; min-height: 56px; display: flex; align-items: center; gap: 16px; padding: 8px 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap; box-sizing: border-box">
+<span style="display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 17px; letter-spacing: -0.02em"><svg width="20" height="20" viewBox="0 0 306 306" aria-hidden="true" style="flex: 0 0 auto"><path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M274.399 177.261a14.268 14.268 0 0 1-.035 20.492l-43.099 42.02c-5.794 5.649-15.171 5.634-20.945-.035a14.27 14.27 0 0 1 .036-20.492l43.099-42.02c5.793-5.648 15.171-5.633 20.944.035Z M194.043 255.205a14.256 14.256 0 0 1 0 20.303l-.29.287c-5.663 5.607-14.844 5.607-20.506 0a14.255 14.255 0 0 1 0-20.303l.29-.287c5.663-5.607 14.843-5.607 20.506 0Z M235.26 142.126a14.222 14.222 0 0 1 .014 20.374L126.251 269.687c-5.726 5.629-15.017 5.636-20.751.012a14.222 14.222 0 0 1-.014-20.374L214.51 142.139c5.725-5.63 15.016-5.636 20.75-.013Z M274.754 102.932a14.256 14.256 0 0 1 0 20.303l-.29.286c-5.663 5.607-14.844 5.607-20.506 0a14.255 14.255 0 0 1 0-20.303l.29-.286c5.663-5.607 14.843-5.607 20.506 0Z M122.738 182.202a14.063 14.063 0 0 1-.037 20.203l-40.47 39.429c-5.716 5.568-14.967 5.553-20.662-.036a14.063 14.063 0 0 1 .037-20.203l40.47-39.429c5.717-5.568 14.967-5.553 20.662.036ZM246.931 60.217a14.208 14.208 0 0 1 0 20.359l-84.791 83.207c-5.729 5.623-15.017 5.623-20.746 0a14.205 14.205 0 0 1 0-20.358l84.791-83.209c5.729-5.622 15.017-5.622 20.746 0Z M53.063 177.205a14.256 14.256 0 0 1 0 20.303l-.29.287c-5.663 5.607-14.844 5.607-20.507 0a14.256 14.256 0 0 1 0-20.303l.29-.287c5.663-5.607 14.844-5.607 20.507 0Z M201.475 31.213a14.222 14.222 0 0 1 .014 20.374L92.466 158.774c-5.726 5.629-15.017 5.636-20.751.012a14.222 14.222 0 0 1-.014-20.374L180.724 31.226c5.726-5.63 15.017-5.636 20.751-.013ZM94.4 65.261a14.268 14.268 0 0 1-.036 20.492l-43.099 42.02c-5.794 5.649-15.171 5.634-20.945-.035a14.27 14.27 0 0 1 .036-20.492l43.099-42.02c5.793-5.648 15.17-5.633 20.945.035Z M130.832 31.205a14.255 14.255 0 0 1 0 20.303l-.29.287c-5.663 5.607-14.844 5.607-20.506 0a14.255 14.255 0 0 1 0-20.303l.29-.287c5.663-5.607 14.844-5.607 20.506 0Z"></path></svg>Neuve</span>
+<nav aria-label="Breadcrumb" style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font-size: 13px; color: var(--muted)"><span>neuve</span><span aria-hidden="true">/</span><b aria-current="page" style="font-weight: 500; color: var(--ink)">Reviews</b></nav>
+<div style="flex: 1 1 auto"></div>
+<button type="button" aria-label="Find" style="height: 32px; padding: 0 8px 0 10px; border: 0; border-radius: 8px; background: var(--raised); color: var(--muted); font-size: 12.5px; display: inline-flex; align-items: center; gap: 8px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><span class="findl">Find</span><span class="kbd findl">⌘K</span></button>
+<a href="DeliverySettings.dc.html" class="iconbtn" aria-label="Settings" title="Settings"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg></a>
+<button type="button" class="iconbtn" onClick="{{toggleTheme}}" aria-label="{{themeLabel}}">
+<sc-if value="{{isLight}}" hint-placeholder-val="{{true}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg></sc-if>
+<sc-if value="{{isDark}}" hint-placeholder-val="{{false}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg></sc-if>
+</button>
+</header>
+
+<main style="max-width: 1180px; margin: 0 auto; padding: 56px 24px 96px; box-sizing: border-box; display: flex; flex-direction: column; gap: 40px">
+
+<sc-if value="{{empty}}" hint-placeholder-val="{{false}}"><section aria-labelledby="empty-h" style="display: flex; flex-direction: column; align-items: center; gap: 16px; max-width: 520px; margin: 48px auto 0; text-align: center"><span style="width: 40px; height: 40px; border-radius: 10px; background: var(--raised); display: inline-flex; align-items: center; justify-content: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 18px; height: 18px; color: var(--muted)"><circle cx="12" cy="12" r="3"></circle><path d="M3 12h6M15 12h6"></path></svg></span><h1 id="empty-h" style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em">No review batch yet</h1><p style="margin: 0; font-size: 14px; line-height: 22px; color: var(--muted)"><code class="mono">claude/elastic-jemison</code> · 3 commits ahead of <code class="mono">main</code></p><button type="button" class="cta" style="height: 44px; min-width: 168px; padding: 0 18px; border: 0; border-radius: 10px; background: var(--ink); color: var(--bg); display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-size: 14px; font-weight: 500">Start a review<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></button></section></sc-if>
+<sc-if value="{{hasReviews}}" hint-placeholder-val="{{true}}"><section style="display: flex; flex-direction: column; gap: 20px">
+<h1 class="h1" style="margin: 0; font-size: 40px; line-height: 46px; font-weight: 600; letter-spacing: -0.03em">Reviews</h1>
+<sc-if value="{{failedStart}}" hint-placeholder-val="{{false}}"><div class="notice"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 18px; height: 18px; color: var(--warn)"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg><span style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 15px; font-weight: 600">The newest review of <code class="mono" style="font-size: 14px">claude/elastic-jemison</code> failed</span><span class="mono" style="font-size: 12px; color: var(--muted)">6bacc79</span></span><span style="display: flex; flex-direction: column; align-items: center; gap: 10px"><button type="button" class="cta" style="height: 44px; min-width: 168px; padding: 0 18px; border: 0; border-radius: 10px; background: var(--ink); color: var(--bg); display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-size: 14px; font-weight: 500">Try again<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></button><span role="alert" style="font-size: 12.5px; line-height: 18px; color: var(--req-fg)">The run timed out before it published.</span></span></div></sc-if>
+<sc-if value="{{newWork}}" hint-placeholder-val="{{false}}"><div class="notice"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 18px; height: 18px; color: var(--muted)"><circle cx="12" cy="12" r="3"></circle><path d="M3 12h6M15 12h6"></path></svg><span style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 15px; font-weight: 600">New work on <code class="mono" style="font-size: 14px">claude/elastic-jemison</code> since the newest review</span><span class="mono" style="font-size: 12px; color: var(--muted)">5526c03 → 6bacc79</span></span><button type="button" class="cta" style="height: 44px; min-width: 168px; padding: 0 18px; border: 0; border-radius: 10px; background: var(--ink); color: var(--bg); display: inline-flex; align-items: center; justify-content: center; gap: 10px; font-size: 14px; font-weight: 500">Start a review<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></button></div></sc-if>
+<sc-if value="{{waits}}" hint-placeholder-val="{{true}}"><section aria-label="Waiting on you" class="panel">
+<div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+<p class="headline">{{waitHead}}</p>
+<p style="margin: 0; font-size: 13px; color: var(--muted)">{{waitSub}}</p>
+</div>
+<a href="Main.dc.html" class="cta" style="height: 44px; padding: 0 18px; border-radius: 10px; background: var(--ink); color: var(--bg); text-decoration: none; display: inline-flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 500">Open next<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></a>
+</section></sc-if>
+<sc-if value="{{settled}}" hint-placeholder-val="{{false}}"><section aria-label="Waiting on you" class="panel"><p class="headline">Nothing waits on you</p></section></sc-if>
+</section></sc-if>
+
+<sc-if value="{{hasReviews}}" hint-placeholder-val="{{true}}"><section aria-labelledby="list-h" style="display: flex; flex-direction: column; gap: 24px">
+<div class="listbar">
+<h2 id="list-h" style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">All reviews</h2>
+<div class="seg" role="group" aria-label="Show">
+<button type="button" aria-pressed="{{allPressed}}" onClick="{{showAll}}">All<span class="n">{{allCount}}</span></button>
+<button type="button" aria-pressed="{{waitPressed}}" onClick="{{showWaiting}}">Waiting on you<span class="n">{{waitCount}}</span></button>
+</div>
+</div>
+<div class="pageset {{pageCls}}"><sc-for list="{{days}}" as="d" hint-placeholder-count="2"><section class="day" aria-label="{{d.label}}">
+<h3 class="lbl" style="margin: 0">{{d.label}}</h3>
+<ol class="rows"><sc-for list="{{d.reviews}}" as="r" hint-placeholder-count="3"><li><div class="rv {{r.cls}}">
+<div class="rv-main">
+<span class="rv-title"><sc-if value="{{r.linked}}" hint-placeholder-val="{{true}}"><a href="Overview.dc.html" class="rlink" title="{{r.title}}">{{r.title}}</a></sc-if><sc-if value="{{r.unlinked}}" hint-placeholder-val="{{false}}">{{r.title}}</sc-if></span>
+<span class="rv-meta">
+<span class="mono">{{r.range}}</span><span class="dot" aria-hidden="true">·</span><span class="mono">{{r.time}}</span><span class="dot" aria-hidden="true">·</span>
+<sc-if value="{{r.isRunning}}" hint-placeholder-val="{{false}}"><span class="st run"><svg class="spin" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.6" fill="none" stroke="var(--line-strong)" stroke-width="1.6"></circle><path d="M6 1.4a4.6 4.6 0 0 1 4.6 4.6" fill="none" stroke="var(--ink2)" stroke-width="1.6" stroke-linecap="round"></path></svg>Running</span></sc-if>
+<sc-if value="{{r.isDone}}" hint-placeholder-val="{{true}}"><span class="st">Completed</span></sc-if>
+<sc-if value="{{r.isTimedOut}}" hint-placeholder-val="{{false}}"><span class="st warn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>Timed out</span></sc-if>
+<sc-if value="{{r.isFailed}}" hint-placeholder-val="{{false}}"><span class="st warn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4M12 16h.01"></path></svg>Failed</span></sc-if>
+<sc-if value="{{r.multi}}" hint-placeholder-val="{{false}}"><span class="dot" aria-hidden="true">·</span><span class="bslot {{r.slotCls}}"><button type="button" class="btrig" aria-haspopup="menu" aria-expanded="{{r.open}}" onClick="{{r.toggle}}">{{r.batchCount}} batches<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px; color: var(--muted)"><path d="m6 9 6 6 6-6"></path></svg></button><sc-if value="{{r.open}}" hint-placeholder-val="{{false}}"><div class="bmenu" role="menu" aria-label="Batches in this review"><sc-for list="{{r.batches}}" as="b" hint-placeholder-count="3"><a href="Overview.dc.html" role="menuitem" class="brow"><span class="bt">{{b.title}}</span><span class="mono" style="font-size: 11px; color: var(--muted)"><sc-if value="{{b.needs}}" hint-placeholder-val="{{false}}"><span style="color: var(--req-fg)">{{b.needText}} · </span></sc-if>{{b.units}}</span></a></sc-for></div></sc-if></span></sc-if>
+</span>
+</div>
+<div class="foot"><div class="lanes"><sc-if value="{{r.hasLanes}}" hint-placeholder-val="{{true}}"><span class="sr">{{r.laneLabel}}</span><ul class="lnums" aria-hidden="true"><sc-for list="{{r.lanes}}" as="l" hint-placeholder-count="3"><li title="{{l.name}}"><sc-if value="{{l.is_req}}" hint-placeholder-val="{{true}}"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg></sc-if><sc-if value="{{l.is_sug}}" hint-placeholder-val="{{false}}"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if><sc-if value="{{l.is_agt}}" hint-placeholder-val="{{false}}"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></svg></sc-if><sc-if value="{{l.is_sta}}" hint-placeholder-val="{{false}}"><svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.2" y="1.2" width="7.6" height="7.6" rx="1.5" fill="none" stroke="var(--sta)" stroke-width="1.5"></rect></svg></sc-if><span class="mono">{{l.n}}</span></li></sc-for></ul></sc-if></div>
+<div class="you"><sc-if value="{{r.hasReq}}" hint-placeholder-val="{{true}}"><ul class="cells" aria-label="{{r.cellsLabel}}"><sc-for list="{{r.cells}}" as="c" hint-placeholder-count="3"><li class="cell {{c.cls}}"><sc-if value="{{c.approved}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--agt)"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{c.changes}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" aria-hidden="true" class="vi" style="stroke: var(--req)"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if><sc-if value="{{c.waiting}}" hint-placeholder-val="{{true}}"><svg width="8" height="8" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--req)" stroke-width="1.6"></path></svg></sc-if><sc-if value="{{c.suggested}}" hint-placeholder-val="{{false}}"><svg width="8" height="8" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="none" stroke="var(--sug)" stroke-width="1.4"></path><path d="M5 .8V9.2L.8 5z" fill="var(--sug)"></path></svg></sc-if></li></sc-for><sc-if value="{{r.hasMore}}" hint-placeholder-val="{{false}}"><li class="more" aria-hidden="true">{{r.more}}</li></sc-if></ul><span class="yt {{r.youCls}}">{{r.youText}}</span></sc-if></div>
+<span class="fbc"><sc-if value="{{r.feedback}}" hint-placeholder-val="{{false}}"><span class="fb" title="Feedback given"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg><span class="sr">Feedback given</span></span></sc-if></span></div>
+<sc-if value="{{r.linked}}" hint-placeholder-val="{{true}}"><svg class="ic go" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"></path></svg></sc-if><sc-if value="{{r.unlinked}}" hint-placeholder-val="{{false}}"><span></span></sc-if>
+</div></li></sc-for></ol>
+</section></sc-for></div>
+<div class="more"><span class="mono" style="font-size: 12.5px; color: var(--muted)">{{countText}}</span><sc-if value="{{multiPage}}" hint-placeholder-val="{{true}}"><nav aria-label="Pages of reviews" class="pager"><ul><li><button type="button" class="pg prev" aria-disabled="{{prevDisabled}}" aria-label="Previous page" onClick="{{prev}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 15px; height: 15px"><path d="m15 18-6-6 6-6"></path></svg><span class="pgl">Previous</span></button></li><sc-for list="{{pageItems}}" as="p" hint-placeholder-count="2"><li class="pgi"><sc-if value="{{p.isPage}}" hint-placeholder-val="{{true}}"><button type="button" class="pg" aria-current="{{p.current}}" aria-label="{{p.label}}" onClick="{{p.go}}">{{p.n}}</button></sc-if><sc-if value="{{p.isGap}}" hint-placeholder-val="{{false}}"><span class="gap" aria-hidden="true">…</span></sc-if></li></sc-for><li class="pgof" aria-hidden="true">{{pageOf}}</li><li><button type="button" class="pg next" aria-disabled="{{nextDisabled}}" aria-label="Next page" onClick="{{next}}"><span class="pgl">Next</span><svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 15px; height: 15px"><path d="m9 18 6-6-6-6"></path></svg></button></li></ul></nav></sc-if></div>
+</section></sc-if>
+
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"state":{"editor":"enum","options":["today","running","failed","failed-start","nothing-waits","new-work","empty"],"default":"running"},"menu":{"editor":"enum","options":["closed","open"],"default":"closed"},"filter":{"editor":"enum","options":["all","waiting"],"default":"all"},"page":{"editor":"enum","options":["1","2"],"default":"2"},"$preview":{"width":1440,"height":1100}}'>
+/* The repository's real reviews as Records held them on 25 October 2026: each cycle's standing packet, its newest
+   run's outcome and time, its units by lane, people's decisions on its human-required and human-suggested units
+   (A approved, X changes requested, w and s waiting in either lane; any person's decision counts) and whether anyone
+   gave feedback. The state lever adds a review that is running or that failed (from the branch's real commits),
+   settles every human unit, or empties the list. The menu lever opens the first review's batches; the filter
+   lever shows only the reviews that wait on you. The pages show ten reviews each; the page lever opens the second. */
+var REVIEWS = [{"t":"Normalize store usage and validate cache declaration receipts","r":"cc3c570..5526c03","d":"Today","h":"13:37","s":"completed","l":[3,1,9,0],"c":"AAsX","f":true,"b":[["Normalize store usage and validate cache declaration receipts",6,0],["Execute cache declarations through the Graph boundary",3,0],["Keep validated engine copies active without defeating identity reuse",4,1]]},{"t":"Shared preparation executable and validated service receipts","r":"d000a78..7ea8031","d":"Today","h":"13:33","s":"completed","l":[1,2,8,0],"c":"sAs","f":true,"b":[["Shared preparation executable and validated service receipts",8,1],["Preparation CPU selection and once-only search attribution",3,1]]},{"t":"Web integration tests run independently of the owner's home and configuration","r":"a3a7bd3..08443d4","d":"Today","h":"13:30","s":"completed","l":[0,2,4,0],"c":"ss","f":true,"b":[["Web integration tests run independently of the owner's home and configuration",6,2]]},{"t":"Checkpoint pins show once per section and briefing rows reach visible pins","r":"4657f6a..ff872ff","d":"Today","h":"13:27","s":"completed","l":[2,1,7,0],"c":"XsA","f":true,"b":[["Checkpoint pins show once per section and briefing rows reach visible pins",10,1]]},{"t":"Hybrid model calls survive idle gaps and failed or interrupted processes","r":"53956e6..db59b68","d":"Today","h":"13:21","s":"completed","l":[1,3,5,0],"c":"Xsss","f":true,"b":[["Hybrid model calls survive idle gaps and failed or interrupted processes",3,0],["Limit Apple GPU encoder requests and match parity batching",3,1],["Release Apple GPU worker caches and update encoder identity",3,2]]},{"t":"Stage hybrid encoding and safely manage model residency","r":"3a71658..f446ab0","d":"Today","h":"01:52","s":"completed","l":[3,1,11,0],"c":"wwsw","f":false,"b":[["Stage hybrid encoding and safely manage model residency",10,3],["Pause hybrid preparation under resource pressure and preserve completed work",5,1]]},{"t":"Bounded callers use Graph's queue and disclose deadline fallback","r":"ab20edd..9ddc491","d":"Yesterday","h":"03:23","s":"completed","l":[8,2,23,0],"c":"sAAAAAAAsA","f":false,"b":[["Bounded callers use Graph's queue and disclose deadline fallback",25,2],["Concurrent Graph reads expose validated service receipts",6,0],["Harness spans identify shared CPU estimates",1,0],["Engine-copy path test respects resolved repository roots",1,0]]},{"t":"Share the store's Graph cache while keeping mutable clones separate","r":"66f8836..ab20edd","d":"Yesterday","h":"02:16","s":"timed-out","l":[0,71,0,0],"c":"sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss","f":false,"b":[["Share the store's Graph cache while keeping mutable clones separate",19,19],["Engine calls converge on one safe build identity, path and environment",21,21],["Validate bounded-store receipts and preserve their usage measurements",20,20],["The worker declares the full set of Graph bases still needed",9,9],["Parser formatting only",2,2]]},{"t":"Ticket-change activities identify both compared texts","r":"a6228f4..ca26d01","d":"Yesterday","h":"00:28","s":"completed","l":[2,4,20,0],"c":"Xsssws","f":true,"b":[["Ticket-change activities identify both compared texts",1,0],["Ticket-change judgements receive safe title and heading context",3,1],["Kept refreshes retain their originally stored source",6,3],["Every untied ticket item survives as a Missing checkpoint",5,1],["Test-run exemptions require an explicit no with a reason",11,0]]},{"t":"Graph measures survive attempt completion without losing active-attempt exports","r":"b870e01..3fefda1","d":"Friday 23 October","h":"23:41","s":"completed","l":[4,2,7,0],"c":"wswwws","f":false,"b":[["Graph measures survive attempt completion without losing active-attempt exports",10,4],["Unfinished base preparations keep the worker alive",3,2]]},{"t":"Prioritize waited-on searches while background leads continue","r":"0d11df6..0f51895","d":"Friday 23 October","h":"20:35","s":"completed","l":[5,2,11,0],"c":"swwswww","f":false,"b":[["Prioritize waited-on searches while background leads continue",14,5],["Start the Graph run deadline only after slot acquisition",2,1],["Reserve commit job time for the final Graph search",1,1],["Manifest identity includes the fallback retriever's configuration",1,0]]},{"t":"Commit preparation isolates Graph files and preserves reusable leads","r":"6b71a9b..522ea22","d":"Friday 23 October","h":"19:05","s":"completed","l":[8,0,6,0],"c":"wwwwwwww","f":false,"b":[["Commit preparation isolates Graph files and preserves reusable leads",5,2],["Commit preparation reserves time for its final search and base preparation",1,1],["Graph busy time counts overlapping waits and searches only once",5,3],["Engine startup cannot escape interruption cleanup",2,2],["Absent Graph stats remain exactly empty",1,0]]},{"t":"Overview uses review decisions, not pending assessments","r":"6b1b971..e00b80f","d":"Friday 23 October","h":"18:27","s":"completed","l":[0,2,25,0],"c":"ss","f":false,"b":[["Overview uses review decisions, not pending assessments",13,1],["Judgment rows hide internal metrics and retain conflict signals",11,1],["Overview hero drops advisory scope",3,0]]},{"t":"Overview reflects decisions, standing reviews and verification by unit","r":"3c879a8..cfdee96","d":"Friday 23 October","h":"11:41","s":"timed-out","l":[0,121,0,0],"c":"sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss","f":false,"b":[["Overview reflects decisions, standing reviews and verification by unit",43,43],["Offer another review only for work beyond the reviewed head",6,6],["Return from margin cards and threads to their marker group",25,25],["Source sheets open in view without moving the underlying page",2,2],["Gap expansion focuses removed lines at the end of a stretch",7,7],["Unit feedback uses an explicit Give feedback affordance",5,5],["Publish only checked context and trim unchecked preloaded leads first",32,32],["Reposition a design-canvas frame",1,1]]},{"t":"Offer line commenting only within the unit's owned ranges","r":"c0c47ce..5fa1ba9","d":"Thursday 22 October","h":"18:34","s":"completed","l":[7,0,15,0],"c":"XXAAXAX","f":false,"b":[["Offer line commenting only within the unit's owned ranges",22,0]]},{"t":"Freeze committed-base versus unapproved current-batch validation baseline","r":"d7eaae9..ab47511","d":"Thursday 22 October","h":"16:43","s":"completed","l":[1,0,3,0],"c":"A","f":false,"b":[["Freeze committed-base versus unapproved current-batch validation baseline",4,0]]}];
+var LANES = [
+  { key: 'req', name: 'Human-required', fill: 'var(--req)' },
+  { key: 'sug', name: 'Human-suggested', fill: 'var(--sug)' },
+  { key: 'agt', name: 'Agentic review', fill: 'var(--agt)' },
+  { key: 'sta', name: 'Static automation', fill: 'var(--sta)' }
+];
+var LIVE = {
+  running: { t: 'Adjudicated human-required units are guarded; splits show what stays', r: '1b07d0f..45951c5', d: 'Today', h: '14:02', s: 'running', l: [0, 0, 0, 0], c: '', f: false, b: [] },
+  failed: { t: 'The lanes guard tells a unit wholly lower from a split', r: '7949549..1b07d0f', d: 'Today', h: '13:58', s: 'failed', l: [0, 0, 0, 0], c: '', f: false, b: [] }
+};
+/* Ten reviews to a page: Records reads them newest run first, ten at a time. */
+var PAGE = 10;
+function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { theme: null, filter: null, open: null, page: null };
+  }
+  renderVals() {
+    var self = this;
+    var theme = this.state.theme || this.props.theme || 'light';
+    var mode = this.props.state || 'running';
+    var list = mode === 'empty' ? [] : REVIEWS.slice();
+    if (LIVE[mode === 'failed-start' ? 'failed' : mode]) list.unshift(LIVE[mode === 'failed-start' ? 'failed' : mode]);
+    if (mode === 'nothing-waits') list = list.map(function (r) { return Object.assign({}, r, { c: r.c.replace(/[ws]/g, 'A'), b: r.b.map(function (b) { return [b[0], b[1], 0]; }) }); });
+    var waitingOf = function (r) { return (r.c.match(/[ws]/g) || []).length; };
+    var waitUnits = 0, waitReviews = 0;
+    list.forEach(function (r) { var w = waitingOf(r); waitUnits += w; if (w) waitReviews += 1; });
+    var filter = this.state.filter || this.props.filter || 'all';
+    var shown = filter === 'waiting' ? list.filter(function (r) { return waitingOf(r) > 0; }) : list;
+    var pageCount = Math.max(1, Math.ceil(shown.length / PAGE));
+    var page = Math.min(pageCount, this.state.page || Number(this.props.page) || 1);
+    var visible = shown.slice((page - 1) * PAGE, page * PAGE);
+    var go = function (n) {
+      if (n < 1 || n > pageCount || n === page) return;
+      self.setState({ page: n, open: '' });
+      // A new page starts at its top: bring the list back under the list bar when it has scrolled away.
+      var heading = document.getElementById('list-h');
+      if (heading && heading.getBoundingClientRect().top < 0) {
+        var still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        heading.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+      }
+    };
+    var pageItems = [];
+    for (var n = 1; n <= pageCount; n += 1) {
+      var near = n === 1 || n === pageCount || Math.abs(n - page) <= 1;
+      if (near) pageItems.push({ isPage: true, isGap: false, n: n, current: n === page ? 'page' : 'false', label: 'Page ' + n, go: (function (k) { return function () { go(k); }; })(n) });
+      else if (pageItems.length && pageItems[pageItems.length - 1].isPage) pageItems.push({ isPage: false, isGap: true });
+    }
+    var first = (page - 1) * PAGE + 1;
+    var firstMulti = (visible.filter(function (r) { return r.b.length > 1; })[0] || {}).r;
+    var days = [];
+    visible.forEach(function (r, i) {
+      var id = r.r;
+      var w = waitingOf(r);
+      var total = r.l[0] + r.l[1] + r.l[2] + r.l[3];
+      var linked = r.b.length > 0;
+      var open = self.state.open === null ? self.props.menu === 'open' && id === firstMulti : self.state.open === id;
+      var lanes = LANES.map(function (l, k) { return { name: l.name, fill: l.fill, n: r.l[k], flex: r.l[k] + ' 1 0', is_req: l.key === 'req', is_sug: l.key === 'sug', is_agt: l.key === 'agt', is_sta: l.key === 'sta' }; }).filter(function (l) { return l.n > 0; });
+      // One row of squares: past eight, six and "+N" (review-row.tsx).
+      var marks = r.c.length > 8 ? r.c.slice(0, 6) : r.c;
+      var cells = marks.split('').map(function (c) { return { cls: c === 'w' ? 'wait' : c === 's' ? 'wait sug' : 'done', approved: c === 'A', changes: c === 'X', waiting: c === 'w', suggested: c === 's' }; });
+      var decided = r.c.length - w;
+      var view = {
+        title: r.t, range: r.r, time: r.h,
+        cls: linked ? 'linked' : '', linked: linked, unlinked: !linked,
+        isRunning: r.s === 'running', isDone: r.s === 'completed', isTimedOut: r.s === 'timed-out', isFailed: r.s === 'failed',
+        multi: r.b.length > 1, batchCount: r.b.length, open: open, slotCls: open ? 'open' : '',
+        toggle: function () { self.setState({ open: open ? '' : id }); },
+        batches: r.b.map(function (b) { return { title: b[0], units: plural(b[1], 'unit', 'units'), needs: b[2] > 0, needText: b[2] + ' to decide' }; }),
+        hasLanes: total > 0, lanes: lanes,
+        laneLabel: lanes.map(function (l) { return l.n + ' ' + l.name.toLowerCase(); }).join(', '),
+        hasReq: r.c.length > 0, cells: cells,
+        cellsLabel: 'Human review: ' + decided + ' of ' + r.c.length + ' decided',
+        hasMore: r.c.length > marks.length, more: '+' + (r.c.length - marks.length),
+        youText: w > 0 ? w + ' to decide' : 'Decided', youCls: w > 0 ? 'wait' : '',
+        feedback: r.f
+      };
+      var day = days.length ? days[days.length - 1] : null;
+      if (!day || day.label !== r.d) { day = { label: r.d, reviews: [] }; days.push(day); }
+      day.reviews.push(view);
+    });
+    return {
+      theme: theme, isLight: theme === 'light', isDark: theme === 'dark',
+      themeLabel: theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme',
+      toggleTheme: function () { self.setState({ theme: theme === 'light' ? 'dark' : 'light' }); },
+      empty: list.length === 0, hasReviews: list.length > 0, newWork: mode === 'new-work', failedStart: mode === 'failed-start',
+      waits: waitUnits > 0, settled: list.length > 0 && waitUnits === 0,
+      waitHead: plural(waitUnits, 'unit waits on you', 'units wait on you'),
+      waitSub: 'in ' + plural(waitReviews, 'review', 'reviews'),
+      allCount: list.length, waitCount: waitReviews,
+      allPressed: filter === 'all', waitPressed: filter === 'waiting',
+      showAll: function () { self.setState({ filter: 'all', open: '', page: 1 }); },
+      showWaiting: function () { self.setState({ filter: 'waiting', open: '', page: 1 }); },
+      countText: shown.length === 0 ? 'No reviews' : first + '–' + (first + visible.length - 1) + ' of ' + plural(shown.length, 'review', 'reviews'),
+      multiPage: pageCount > 1, pageItems: pageItems, pageOf: 'Page ' + page + ' of ' + pageCount,
+      pageCls: this.state.page === null ? '' : page % 2 ? 'pa' : 'pb',
+      prevDisabled: page === 1 ? 'true' : 'false', nextDisabled: page === pageCount ? 'true' : 'false',
+      prev: function () { go(page - 1); }, next: function () { go(page + 1); },
+      days: days
+    };
+  }
+}
+</script>
+</body>
+</html>

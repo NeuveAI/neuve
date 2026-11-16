@@ -1,0 +1,13 @@
+{
+  "project": "c-ares/c-ares",
+  "source": "https://github.com/c-ares/c-ares",
+  "commit": "c7a3138dcfe3bb0eaaf10c0c24c36dc66dc790ab",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/c-ares/c-ares/c7a3138dcfe3bb0eaaf10c0c24c36dc66dc790ab/LICENSE.md",
+      "sha256": "460f5e768fda3752ca2169a95df062578a10fb126bfd65f3b9b1a1bed2f84807"
+    }
+  ]
+}

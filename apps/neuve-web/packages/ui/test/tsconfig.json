@@ -1,0 +1,12 @@
+{
+  // Tests only: Bun's types (bun:test, globals) stay out of the browser
+  // program in ../tsconfig.json, which excludes this directory. ESLint's
+  // `project: true` picks this file for everything under test/.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["bun"]
+  },
+  // vite/client: the source under test imports `?worker` modules.
+  "include": [".", "../.storybook/env.d.ts"],
+  "exclude": []
+}

@@ -1,0 +1,13 @@
+{
+  "project": "prettier/prettier-linter-helpers",
+  "source": "https://github.com/prettier/prettier-linter-helpers",
+  "commit": "f29e489a48ad57b8efd518673d1796bbf282ac03",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/prettier/prettier-linter-helpers/f29e489a48ad57b8efd518673d1796bbf282ac03/LICENSE.md",
+      "sha256": "20e80c18f6f0a93b7aa35170293eca4f2adc1e357aa20b534c8768081e836f89"
+    }
+  ]
+}

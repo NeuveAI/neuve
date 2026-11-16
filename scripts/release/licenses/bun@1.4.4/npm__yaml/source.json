@@ -1,0 +1,14 @@
+{
+  "project": "yaml",
+  "source": "https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz",
+  "version": "2.9.0",
+  "commit": "ddb21b04cb889722cec8f89dc1b67f19d62d7f7d",
+  "pin": "Prettier 3.9.9's yarn.lock (prettier/prettier at cdd17f2288b28b170a76416c72dac56e3ea5daff), the release Bun's src/format/CLAUDE.md names as the target of its port",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz#package/LICENSE",
+      "sha256": "5bba27375d93e9119f76c1015f7672cf9ad5f70952296e0842fb2243d6376869"
+    }
+  ]
+}

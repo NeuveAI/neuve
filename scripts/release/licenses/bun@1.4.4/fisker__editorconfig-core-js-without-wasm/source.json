@@ -1,0 +1,13 @@
+{
+  "project": "fisker/editorconfig-core-js-without-wasm",
+  "source": "https://github.com/fisker/editorconfig-core-js-without-wasm",
+  "commit": "4808f7b4371a87c473a995b0b6daf3be156a28fc",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/fisker/editorconfig-core-js-without-wasm/4808f7b4371a87c473a995b0b6daf3be156a28fc/LICENSE",
+      "sha256": "bc6944d7fe185cc5185998482def16aeaa83f96405599bfd388a5611718139a5"
+    }
+  ]
+}

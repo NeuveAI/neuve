@@ -1,0 +1,554 @@
+/*
+ * GENERATED for the Claude Design canvas by packages/ui/scripts/gen-motion-css.ts
+ * (`bun run tokens:motion`) from styles/globals.css and lib/motion.ts.
+ * Do not edit: packages/ui/test/foundations/motion-css.test.ts fails when it drifts.
+ * Boards link it from <helmet> and set class="theme-{{theme}}".
+ */
+
+/* Colours and shadows, light (the code's :root). */
+:root,
+.theme-light {
+  color-scheme: light;
+  --nv-bg: #faf8f3;
+  --nv-surface: #ffffff;
+  --nv-raised: #f3efe6;
+  --nv-raised-2: #eae4d6;
+  --nv-select: #efeadd;
+  --nv-line: #e6e0d4;
+  --nv-line-2: #eee9df;
+  --nv-line-strong: #8f887b;
+  --nv-warn: #b7791f;
+  --nv-shadow-stuck: 0 1px 0 #e6e0d4, 0 8px 18px -10px rgba(28, 26, 22, 0.22);
+  --nv-shadow-thumb: 0 0 0 1px rgba(28, 26, 22, 0.06), 0 1px 3px rgba(28, 26, 22, 0.14);
+  --nv-skel: #ede8dd;
+  --nv-land: rgba(226, 202, 94, 0.42);
+  --nv-lit: rgba(226, 202, 94, 0.3);
+  --nv-range-strong: color-mix(in oklab, var(--nv-accent) 28%, transparent);
+  --nv-ink: #1c1a16;
+  --nv-ink-2: #45413a;
+  --nv-muted: #6b665c;
+  --nv-faint: #9a9488;
+  --nv-add-bg: #eaf6ee;
+  --nv-add-num: #ddf0e3;
+  --nv-add-fg: #156b42;
+  --nv-ln: #6c665c;
+  --nv-ln-select: #6f5717;
+  --nv-add-ln: #35684a;
+  --nv-del-bg: #fcedeb;
+  --nv-del-num: #f7deda;
+  --nv-del-fg: #a1352a;
+  --nv-del-ln: #8f443b;
+  --nv-hunk: #fbfaf6;
+  --nv-expand: #f6f3ec;
+  --nv-syn-kw: #8e265f;
+  --nv-syn-st: #0c6944;
+  --nv-syn-fn: #1f4f8f;
+  --nv-syn-cm: #655f56;
+  --nv-syn-nu: #845617;
+  --nv-syn-id: #1c1a16;
+  --nv-syn-pl: #45413a;
+  --nv-req: #c63d8e;
+  --nv-req-fg: #ac2973;
+  --nv-req-tint: #fce8f7;
+  --nv-req-tint-2: #f6d4ec;
+  --nv-req-ink: #8e265f;
+  --nv-on-req: #ffffff;
+  --nv-sug: #ad7c1c;
+  --nv-sug-fg: #8b5b18;
+  --nv-sug-tint: #f5f0ca;
+  --nv-sug-tint-2: #ece09a;
+  --nv-sug-ink: #734a20;
+  --nv-agt: #148252;
+  --nv-agt-fg: #0c6944;
+  --nv-agt-tint: #edfcf2;
+  --nv-agt-tint-2: #b3e8c8;
+  --nv-agt-ink: #0a452e;
+  --nv-sta: #78736a;
+  --nv-sta-fill: #e6e0d4;
+  --nv-sta-ink: #45413a;
+  --nv-accent: #d2a62b;
+  --nv-accent-hover: #d7b33a;
+  --nv-accent-ink: #3a200d;
+  --nv-focus: #866400;
+  --nv-focus-inverse: #e2ca5e;
+  --nv-open-line: #e2ca5e;
+  --nv-engaged-ring: #946f00;
+  --nv-dock: #1c1a16;
+  --nv-dock-fg: #faf8f3;
+  --nv-dock-muted: #b3ac9e;
+  --nv-dock-hover: #2d2a25;
+  --nv-dock-line: #3a362f;
+  --nv-dock-ok: #8fdcb2;
+  --nv-dock-ok-tint: rgb(68 190 130 / 0.22);
+  --nv-dock-req: #efb1dc;
+  --nv-dock-req-tint: rgb(230 128 197 / 0.22);
+  --nv-ro-bg: #f4f1ea;
+  --nv-ro-row: #f4f1ea;
+  --nv-ro-add: #ece8df;
+  --nv-ro-del: #efebe4;
+  --nv-ro-ink: #6c675f;
+  --nv-peek-bg: #1c1a16;
+  --nv-peek-fg: #faf8f3;
+  --nv-shadow-card: 0 0 0 1px rgba(28, 26, 22, 0.06), 0 12px 32px rgba(28, 26, 22, 0.14);
+  --nv-shadow-dock: 0 0 0 1px rgba(28, 26, 22, 0.08), 0 16px 40px rgba(28, 26, 22, 0.2);
+  --nv-dock-ring: rgba(28, 26, 22, 0.16);
+  --nv-dock-drop: rgba(28, 26, 22, 0.2);
+  --nv-shadow-peek: 0 8px 24px rgba(0, 0, 0, 0.18);
+  --nv-scrim: rgba(28, 26, 22, 0.18);
+  --nv-player-bg: #0e0d0c;
+  --nv-player-fg: #edeae3;
+  --nv-player-ink: #141311;
+  --nv-player-muted: #b3ac9e;
+  --nv-player-badge: #3a1a2e;
+  --nv-player-badge-fg: #f6d4ec;
+  --nv-player-progress: #e2ca5e;
+}
+
+/* Dark (the code's .dark). */
+.theme-dark {
+  color-scheme: dark;
+  --nv-bg: #141311;
+  --nv-surface: #1b1a17;
+  --nv-raised: #23211e;
+  --nv-raised-2: #2c2925;
+  --nv-select: #2a2723;
+  --nv-line: #2e2b27;
+  --nv-line-2: #262420;
+  --nv-line-strong: #6f6a60;
+  --nv-warn: #e2b04a;
+  --nv-shadow-stuck: 0 1px 0 #2e2b27, 0 10px 20px -10px rgba(0, 0, 0, 0.7);
+  --nv-shadow-thumb: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.5);
+  --nv-skel: #262420;
+  --nv-land: rgba(226, 202, 94, 0.2);
+  --nv-lit: rgba(226, 202, 94, 0.18);
+  --nv-range-strong: color-mix(in oklab, var(--nv-accent) 21%, transparent);
+  --nv-ink: #edeae3;
+  --nv-ink-2: #c9c4b8;
+  --nv-muted: #9c968a;
+  --nv-faint: #6f6a60;
+  --nv-add-bg: #15281c;
+  --nv-add-num: #1a3323;
+  --nv-add-fg: #74d7a0;
+  --nv-ln: #b2aea6;
+  --nv-ln-select: #ebd787;
+  --nv-add-ln: #a4cdb2;
+  --nv-del-bg: #2d1a18;
+  --nv-del-num: #3a201d;
+  --nv-del-fg: #ffa49b;
+  --nv-del-ln: #e0b1ac;
+  --nv-hunk: #1e1c19;
+  --nv-expand: #211f1b;
+  --nv-syn-kw: #efa0d3;
+  --nv-syn-st: #8fdcb2;
+  --nv-syn-fn: #9dbdf2;
+  --nv-syn-cm: #bdbab2;
+  --nv-syn-nu: #e8cf70;
+  --nv-syn-id: #edeae3;
+  --nv-syn-pl: #c9c4b8;
+  --nv-req: #e680c5;
+  --nv-req-fg: #efb1dc;
+  --nv-req-tint: #3a1a2e;
+  --nv-req-tint-2: #4a2139;
+  --nv-req-ink: #f6d4ec;
+  --nv-on-req: #2a0f1f;
+  --nv-sug: #e2ca5e;
+  --nv-sug-fg: #ece09a;
+  --nv-sug-tint: #332a10;
+  --nv-sug-tint-2: #45391a;
+  --nv-sug-ink: #f5f0ca;
+  --nv-agt: #44be82;
+  --nv-agt-fg: #8fdcb2;
+  --nv-agt-tint: #132a1e;
+  --nv-agt-tint-2: #1f4a33;
+  --nv-agt-ink: #d7f4e1;
+  --nv-sta: #9a9488;
+  --nv-sta-fill: #2e2b27;
+  --nv-sta-ink: #c9c4b8;
+  --nv-accent: #e2ca5e;
+  --nv-accent-hover: #ecd878;
+  --nv-accent-ink: #2a1a08;
+  --nv-focus: #e2ca5e;
+  --nv-open-line: #8b6e1e;
+  --nv-engaged-ring: #c9a83a;
+  --nv-dock: #2c2925;
+  --nv-dock-fg: #edeae3;
+  --nv-dock-muted: #a8a195;
+  --nv-dock-hover: #38342f;
+  --nv-dock-line: #45403a;
+  --nv-dock-ok: #8fdcb2;
+  --nv-dock-ok-tint: rgb(68 190 130 / 0.22);
+  --nv-dock-req: #efb1dc;
+  --nv-dock-req-tint: rgb(230 128 197 / 0.22);
+  --nv-ro-bg: #262420;
+  --nv-ro-row: #262420;
+  --nv-ro-add: #2e2b27;
+  --nv-ro-del: #2b2925;
+  --nv-ro-ink: #97928b;
+  --nv-peek-bg: #edeae3;
+  --nv-peek-fg: #1b1a17;
+  --nv-shadow-card: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 16px 40px rgba(0, 0, 0, 0.55);
+  --nv-shadow-dock: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 16px 40px rgba(0, 0, 0, 0.6);
+  --nv-dock-ring: rgba(255, 255, 255, 0.16);
+  --nv-dock-drop: rgba(0, 0, 0, 0.6);
+  --nv-scrim: rgba(0, 0, 0, 0.45);
+}
+
+/* Radius, fonts and motion: the same in both themes. */
+:root,
+.theme-light,
+.theme-dark {
+  --radius: 0.625rem;
+  --font-sans: "Geist Variable", "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  --spacing: 0.25rem; /* Tailwind's step: p-2.5 = calc(var(--spacing) * 2.5) */
+  /* TIMING */
+  --nv-dur-surface-tone: 120ms;
+  --nv-dur-press-in: 80ms;
+  --nv-dur-hint: 140ms;
+  --nv-dur-nudge: 140ms;
+  --nv-dur-dim-others: 160ms;
+  --nv-dur-layer-shift: 200ms;
+  --nv-dur-line-tint: 140ms;
+  --nv-dur-card: 220ms;
+  --nv-dur-card-exit: 160ms;
+  --nv-dur-scrim: 160ms;
+  --nv-dur-sheet-exit: 200ms;
+  --nv-dur-pulse-delay: 280ms;
+  --nv-dur-pulse: 900ms;
+  --nv-dur-land-hold: 275ms;
+  --nv-dur-land-fade: 825ms;
+  --nv-dur-dock-rise: 240ms;
+  --nv-dur-dock-exit: 120ms;
+  --nv-dur-chevron: 200ms;
+  --nv-dur-lane-tone: 160ms;
+  --nv-dur-capture: 12000ms;
+  --nv-dur-linked: 160ms;
+  --nv-dur-swap: 180ms;
+  --nv-dur-notice: 360ms;
+  --nv-dur-notice-exit: 160ms;
+  --nv-dur-message: 260ms;
+  --nv-dur-working: 1100ms;
+  --nv-dur-detail: 240ms;
+  --nv-dur-working-stagger: 180ms;
+  --nv-dur-reduced: 150ms;
+  --nv-dur-content-fade: 160ms;
+  --nv-dur-skeleton: 1400ms;
+  --nv-dur-working-spin: 900ms;
+  --nv-dur-pending-spin: 1000ms;
+  --nv-dur-rail-tone: 160ms;
+  --nv-dur-tick: 200ms;
+  --nv-dur-switch-dim: 160ms;
+  --nv-dur-switch-wait: 150ms;
+  --nv-dur-stuck: 160ms;
+  --nv-dur-stuck-enter: 180ms;
+  --nv-dur-stuck-exit: 140ms;
+  --nv-dur-check: 140ms;
+  --nv-dur-delivery-layer: 60ms;
+  --nv-dur-delivery-guided: 120ms;
+  --nv-dur-delivery-children: 100ms;
+  --nv-dur-delivery-child-stagger: 55ms;
+  --nv-dur-delivery-node: 160ms;
+  --nv-dur-delivery-node-stagger: 70ms;
+  --nv-dur-delivery-mark: 220ms;
+  --nv-dur-delivery-mark-stagger: 90ms;
+  --nv-dur-delivery-verdict: 620ms;
+  --nv-dur-pin-ring: 140ms;
+  --nv-dur-pin-ring-exit: 100ms;
+  --nv-dur-delivery-exit: 200ms;
+  --nv-dur-delivery-excerpt: 220ms;
+  /* EASE */
+  --nv-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --nv-ease-standard-decelerate: cubic-bezier(0, 0, 0, 1);
+  --nv-ease-standard-accelerate: cubic-bezier(0.3, 0, 1, 1);
+  --nv-ease-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --nv-ease-emphasized-accelerate: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --nv-ease-ios-out: cubic-bezier(0.33, 1, 0.68, 1);
+  --nv-ease-out: cubic-bezier(0, 0, 0.58, 1);
+  --nv-ease-in-out: cubic-bezier(0.42, 0, 0.58, 1);
+  --nv-ease-linear: cubic-bezier(0, 0, 1, 1);
+  /* SPRING: a linear() easing and its settle time */
+  --nv-spring-snappy: linear(
+    0,
+    0.0523,
+    0.1673,
+    0.3245,
+    0.4702,
+    0.6042,
+    0.7195,
+    0.8132,
+    0.8859,
+    0.9349,
+    0.9738,
+    0.9994,
+    1.0148,
+    1.0227,
+    1.0254,
+    1.0248,
+    1.0222,
+    1.0187,
+    1.015,
+    1.0111,
+    1.008,
+    1.0054,
+    1.0034,
+    1.0019,
+    1.0008,
+    1.0001,
+    0.9997,
+    1
+  );
+  --nv-spring-snappy-dur: 450ms;
+  --nv-spring-responsive: linear(
+    0,
+    0.0403,
+    0.1326,
+    0.2655,
+    0.3956,
+    0.5222,
+    0.6378,
+    0.7383,
+    0.822,
+    0.8829,
+    0.9358,
+    0.9747,
+    1.0019,
+    1.0196,
+    1.0297,
+    1.0343,
+    1.035,
+    1.033,
+    1.0294,
+    1.0246,
+    1.02,
+    1.0157,
+    1.0117,
+    1.0084,
+    1.0056,
+    1.0034,
+    1.0017,
+    1.0005,
+    0.9997,
+    0.9992,
+    0.9989,
+    0.9988,
+    0.9988,
+    0.9989,
+    1
+  );
+  --nv-spring-responsive-dur: 567ms;
+  --nv-spring-gentle: linear(
+    0,
+    0.0276,
+    0.0936,
+    0.1938,
+    0.2978,
+    0.4054,
+    0.5104,
+    0.6086,
+    0.6972,
+    0.7676,
+    0.8347,
+    0.8905,
+    0.9354,
+    0.9705,
+    0.9969,
+    1.0159,
+    1.0287,
+    1.0364,
+    1.0401,
+    1.0409,
+    1.0393,
+    1.0363,
+    1.0324,
+    1.0281,
+    1.0237,
+    1.0194,
+    1.0155,
+    1.0119,
+    1.0088,
+    1.0062,
+    1.004,
+    1.0023,
+    1.0009,
+    0.9999,
+    0.9992,
+    0.9987,
+    0.9985,
+    0.9983,
+    0.9983,
+    0.9984,
+    0.9985,
+    0.9987,
+    0.9989,
+    0.999,
+    0.9992,
+    1
+  );
+  --nv-spring-gentle-dur: 750ms;
+  /* OFFSET */
+  --nv-offset-hint: 2px;
+  --nv-offset-nudge: 3px;
+  --nv-offset-stuck: 3px;
+  --nv-offset-label: 3px;
+  --nv-offset-card: 4px;
+  --nv-offset-rise: 6px;
+  --nv-offset-lift: 8px;
+  --nv-offset-notice: 12px;
+  --nv-offset-sheet: 24px;
+  /* SCALE */
+  --nv-scale-press: 0.97;
+  --nv-scale-enter: 0.98;
+  --nv-scale-pop: 0.96;
+  --nv-scale-collapse: 0.9;
+  --nv-scale-mark: 0.6;
+  /* OPACITY */
+  --nv-opacity-dim-others: 0.35;
+  --nv-opacity-lane-dim: 0.4;
+  --nv-opacity-switching: 0.45;
+  --nv-opacity-live-pulse: 0.35;
+  --nv-opacity-working-low: 0.3;
+  /* SHARE: shares of a movement */
+  --nv-share-content-start: 0.75;
+  --nv-share-chain-threshold: 0.85;
+  --nv-share-morph-start-opacity: 0.3;
+  --nv-share-fill-start: 0.9;
+  --nv-share-dock-bar-pace: 0.85;
+  /* PAGE: router view transitions */
+  --nv-vt-exit: 110ms;
+  --nv-vt-exit-offset: 4px;
+  --nv-vt-beat: 30ms;
+  --nv-vt-enter: 220ms;
+  --nv-vt-enter-last: 190ms;
+  --nv-vt-enter-offset: 8px;
+  --nv-vt-stagger: 45ms;
+  --nv-vt-rail: 170ms;
+  --nv-vt-rail-delay: 245ms;
+  --nv-vt-stage-1: 140ms;
+  --nv-vt-stage-2: 185ms;
+  --nv-vt-stage-3: 230ms;
+}
+
+/*
+ * Temporary: the names boards were drawn with, mapped onto the code tokens.
+ * Declared on each theme element so they follow its theme. Delete once
+ * every board reads --nv-* directly.
+ */
+:root,
+.theme-light,
+.theme-dark {
+  --bg: var(--nv-bg);
+  --surface: var(--nv-surface);
+  --raised: var(--nv-raised);
+  --raised-2: var(--nv-raised-2);
+  --select: var(--nv-select);
+  --line: var(--nv-line);
+  --line-2: var(--nv-line-2);
+  --line-strong: var(--nv-line-strong);
+  --warn: var(--nv-warn);
+  --shadow-stuck: var(--nv-shadow-stuck);
+  --shadow-thumb: var(--nv-shadow-thumb);
+  --skel: var(--nv-skel);
+  --land: var(--nv-land);
+  --lit: var(--nv-lit);
+  --range-strong: var(--nv-range-strong);
+  --ink: var(--nv-ink);
+  --ink-2: var(--nv-ink-2);
+  --muted: var(--nv-muted);
+  --faint: var(--nv-faint);
+  --add-bg: var(--nv-add-bg);
+  --add-num: var(--nv-add-num);
+  --add-fg: var(--nv-add-fg);
+  --ln: var(--nv-ln);
+  --ln-select: var(--nv-ln-select);
+  --add-ln: var(--nv-add-ln);
+  --del-bg: var(--nv-del-bg);
+  --del-num: var(--nv-del-num);
+  --del-fg: var(--nv-del-fg);
+  --del-ln: var(--nv-del-ln);
+  --hunk: var(--nv-hunk);
+  --expand: var(--nv-expand);
+  --syn-kw: var(--nv-syn-kw);
+  --syn-st: var(--nv-syn-st);
+  --syn-fn: var(--nv-syn-fn);
+  --syn-cm: var(--nv-syn-cm);
+  --syn-nu: var(--nv-syn-nu);
+  --syn-id: var(--nv-syn-id);
+  --syn-pl: var(--nv-syn-pl);
+  --req: var(--nv-req);
+  --req-fg: var(--nv-req-fg);
+  --req-tint: var(--nv-req-tint);
+  --req-tint-2: var(--nv-req-tint-2);
+  --req-ink: var(--nv-req-ink);
+  --on-req: var(--nv-on-req);
+  --sug: var(--nv-sug);
+  --sug-fg: var(--nv-sug-fg);
+  --sug-tint: var(--nv-sug-tint);
+  --sug-tint-2: var(--nv-sug-tint-2);
+  --sug-ink: var(--nv-sug-ink);
+  --agt: var(--nv-agt);
+  --agt-fg: var(--nv-agt-fg);
+  --agt-tint: var(--nv-agt-tint);
+  --agt-tint-2: var(--nv-agt-tint-2);
+  --agt-ink: var(--nv-agt-ink);
+  --sta: var(--nv-sta);
+  --sta-fill: var(--nv-sta-fill);
+  --sta-ink: var(--nv-sta-ink);
+  --accent: var(--nv-accent);
+  --accent-hover: var(--nv-accent-hover);
+  --accent-ink: var(--nv-accent-ink);
+  --focus: var(--nv-focus);
+  --focus-inverse: var(--nv-focus-inverse);
+  --open-line: var(--nv-open-line);
+  --engaged-ring: var(--nv-engaged-ring);
+  --dock: var(--nv-dock);
+  --dock-fg: var(--nv-dock-fg);
+  --dock-muted: var(--nv-dock-muted);
+  --dock-hover: var(--nv-dock-hover);
+  --dock-line: var(--nv-dock-line);
+  --dock-ok: var(--nv-dock-ok);
+  --dock-ok-tint: var(--nv-dock-ok-tint);
+  --dock-req: var(--nv-dock-req);
+  --dock-req-tint: var(--nv-dock-req-tint);
+  --ro-bg: var(--nv-ro-bg);
+  --ro-row: var(--nv-ro-row);
+  --ro-add: var(--nv-ro-add);
+  --ro-del: var(--nv-ro-del);
+  --ro-ink: var(--nv-ro-ink);
+  --peek-bg: var(--nv-peek-bg);
+  --peek-fg: var(--nv-peek-fg);
+  --shadow-card: var(--nv-shadow-card);
+  --shadow-dock: var(--nv-shadow-dock);
+  --dock-ring: var(--nv-dock-ring);
+  --dock-drop: var(--nv-dock-drop);
+  --shadow-peek: var(--nv-shadow-peek);
+  --scrim: var(--nv-scrim);
+  --player-bg: var(--nv-player-bg);
+  --player-fg: var(--nv-player-fg);
+  --player-ink: var(--nv-player-ink);
+  --player-muted: var(--nv-player-muted);
+  --player-badge: var(--nv-player-badge);
+  --player-badge-fg: var(--nv-player-badge-fg);
+  --player-progress: var(--nv-player-progress);
+  --raised2: var(--nv-raised-2);
+  --line2: var(--nv-line-2);
+  --ink2: var(--nv-ink-2);
+  --req-tint2: var(--nv-req-tint-2);
+  --sug-tint2: var(--nv-sug-tint-2);
+  --agt-tint2: var(--nv-agt-tint-2);
+  --kw: var(--nv-syn-kw);
+  --st: var(--nv-syn-st);
+  --fn: var(--nv-syn-fn);
+  --cm: var(--nv-syn-cm);
+  --nu: var(--nv-syn-nu);
+  --id: var(--nv-syn-id);
+  --pl: var(--nv-syn-pl);
+  --stuck-shadow: var(--nv-shadow-stuck);
+  --peek: var(--nv-peek-bg);
+}

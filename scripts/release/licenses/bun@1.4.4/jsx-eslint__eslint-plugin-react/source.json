@@ -1,0 +1,13 @@
+{
+  "project": "jsx-eslint/eslint-plugin-react",
+  "source": "https://github.com/jsx-eslint/eslint-plugin-react",
+  "commit": "61b91b612eed65386e1d2bda39b9afeb7c92c708",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/jsx-eslint/eslint-plugin-react/61b91b612eed65386e1d2bda39b9afeb7c92c708/LICENSE",
+      "sha256": "d500a9547fec26f52544f5f2fe52dec4b0c9bdf78177c79f202c98bd13d7c37c"
+    }
+  ]
+}

@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Other units' ranges at real volume</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+/* Board-only, no code token: */
+.theme-light{--hunk-hover:#EFEADF}
+.theme-dark{--hunk-hover:#2A2723}
+a{color:var(--ink)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.seg{display:inline-flex;padding:3px;border-radius:8px;background:var(--raised)}
+.seg button{border:0;background:transparent;padding:0 10px;height:26px;border-radius:6px;font-size:12px;color:var(--muted);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.kw{color:var(--kw)}.st{color:var(--st)}.fn{color:var(--fn)}.cm{color:var(--cm);font-style:italic}.nu{color:var(--nu)}.id{color:var(--id)}.pl{color:var(--pl)}
+
+/* ── FILE HEADER (diff-file.tsx FileHeader, round 3 #1–2; measured from review-desk-diff-file--owned-ranges). One block on
+   Ranges, Margin and Threads: keep the copies identical. 44px tall: the chevron folds the file (aria-expanded), the directory
+   in muted ink gives way before the basename (500), the +/− counts, the file's controls, then Viewed (aria-pressed; it marks
+   the file for the reader and folds it). Every control's hit area fills the header's 44px (::after). The unchecked box is
+   drawn in --line-strong (3.51:1 on the surface; 3.24:1 dark), not --faint as the code has it (3.01:1). ── */
+.fh{position:relative;height:44px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 8px 0 6px;background:var(--surface);border-bottom:1px solid var(--line2)}
+.fh.folded{border-bottom-color:transparent}
+.fbtn{position:relative;width:28px;height:28px;flex:0 0 auto;border:0;padding:0;border-radius:7px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.fbtn::after{content:"";position:absolute;top:-8px;bottom:-8px;left:-6px;right:-10px}
+.fbtn .chv{display:inline-flex;transition:transform var(--nv-dur-chevron) var(--nv-ease-standard)}
+.fh.folded .fbtn .chv{transform:rotate(-90deg)}
+.fpath{display:flex;align-items:baseline;min-width:0;overflow:hidden;white-space:nowrap;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px}
+.fpath .dir{min-width:0;flex-shrink:1000000;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.fpath .base{flex-shrink:0;font-weight:500;color:var(--ink)}
+.fh.viewed .fpath .base{color:var(--muted)}
+.fcnt{display:inline-flex;gap:8px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;white-space:nowrap}
+.fseg{display:inline-flex;flex:0 0 auto;padding:3px;border-radius:8px;background:var(--raised)}
+.fseg button{position:relative;border:0;background:transparent;height:30px;padding:0 8px;border-radius:6px;font-size:13px;color:var(--muted);white-space:nowrap;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.fseg button::after{content:"";position:absolute;top:-7px;bottom:-7px;left:0;right:0}
+.fseg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.vbtn{position:relative;height:28px;flex:0 0 auto;border:0;border-radius:7px;background:transparent;padding:0 10px 0 8px;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.vbtn::after{content:"";position:absolute;top:-8px;bottom:-8px;left:0;right:-8px}
+.vbox{width:14px;height:14px;flex:0 0 auto;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--line-strong);display:inline-flex;align-items:center;justify-content:center;color:#fff;transition:background-color var(--nv-dur-check) var(--nv-ease-standard)}
+.vbtn[aria-pressed="true"]{color:var(--agt-fg)}
+.vbtn[aria-pressed="true"] .vbox{background:var(--agt);box-shadow:none}
+@media (hover:hover){.fbtn:hover,.vbtn:hover{background:var(--raised);color:var(--ink)}.vbtn[aria-pressed="true"]:hover{color:var(--agt-fg)}.fseg button:hover{color:var(--ink)}}
+.fbtn:focus-visible,.vbtn:focus-visible,.fseg button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.fbtn,.vbtn,.vbox,.fseg button,.fbtn .chv{transition:none}}
+/* ── end FILE HEADER ── */
+/* ── DIFF ROW (the diff's gutter at HEAD, measured from review-desk-diff-file--owned-ranges). One block on Ranges, Margin and
+   Threads: keep the copies identical. One number cell holds the old and the new number (11.5px, --nw wide each, 10px apart;
+   14px in, 17px out) with the sign at its right edge (4px in, the diff colour); the code cell starts 7.5px in. --nw is the
+   widest number's width: 2 digits 14px, 3 digits 21px, 4 digits 28px. ── */
+.row{display:grid;grid-template-columns:calc(41px + var(--nw,21px) * 2) minmax(0,1fr);height:24px;align-items:center;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px;line-height:24px}
+.row>.ln{position:relative;height:24px;box-sizing:border-box;padding:0 17px 0 14px;display:grid;grid-template-columns:repeat(2,var(--nw,21px));column-gap:10px;justify-items:end;font-size:11.5px;color:var(--nv-ln);text-align:right}
+.row>.ln::after{content:attr(data-sign);position:absolute;right:4px;top:0}
+.row>.code{white-space:pre;overflow:hidden;padding:0 12px 0 7.5px}
+.k-ctx{background:var(--surface)}
+.k-add{background:var(--add-bg)}.k-add>.ln{background:var(--add-num);color:var(--add-ln)}.k-add>.ln::after{color:var(--add-fg)}
+.k-del{background:var(--del-bg)}.k-del>.ln{background:var(--del-num);color:var(--del-ln)}.k-del>.ln::after{color:var(--del-fg)}
+/* ── end DIFF ROW ── */
+/* unchanged context revealed from a gap: plain surface, quieter ink */
+.k-ctx.rev .code span{opacity:.78}
+/* other units' lines: grayscale, as the read-only neighbor; numbers in --nv-ro-ink (4.5:1 on these rows) */
+.row.ro{background:var(--ro-bg)}.row.ro.k-add{background:var(--ro-add)}.row.ro.k-del{background:var(--ro-del)}
+.row.ro>.ln,.row.ro.k-add>.ln,.row.ro.k-del>.ln{background:transparent;color:var(--nv-ro-ink)}
+.row.ro>.ln::after{color:var(--nv-ro-ink)}
+.row.ro .code span{color:var(--ro-ink)}
+.row{position:relative}
+/* gap row (diff-file.tsx GapRows): one per stretch still folded; 32px, --expand */
+.gap{display:grid;grid-template-columns:calc(41px + var(--nw,21px) * 2) minmax(0,1fr);align-items:center;height:32px;background:var(--expand);font-size:12px;color:var(--muted)}
+.xbtn{width:100%;height:32px;border:0;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.gtext{border:0;background:transparent;height:32px;padding:0 10px;min-width:0;max-width:100%;overflow:hidden;justify-self:start;text-align:left;font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;color:var(--muted);display:inline-flex;align-items:center;gap:10px;transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.gtext .rng{flex:0 0 auto}
+.gtext .own{display:inline-flex;align-items:center;gap:4px;min-width:0;font-family:Geist,system-ui,sans-serif;font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gtext .own .nm{overflow:hidden;text-overflow:ellipsis}
+@media (hover:hover){.xbtn:hover{background:var(--hunk-hover);color:var(--ink)}.gtext:hover{color:var(--ink)}}
+/* owner chip (diff-file.tsx OwnerPin): lock, lane glyph, unit; opens it */
+.chip{font-family:Geist,system-ui,sans-serif;line-height:normal;display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;box-sizing:border-box;max-width:220px;border-radius:6px;background:var(--ro-bg);box-shadow:inset 0 0 0 1px var(--line);color:var(--muted);font-size:11.5px;white-space:nowrap;text-decoration:none;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.chip .nm{min-width:0;overflow:hidden;text-overflow:ellipsis}
+@media (hover:hover){.chip:hover{background:var(--raised);color:var(--ink)}}
+.chip:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mg{position:relative;flex:0 0 232px}
+.mg .chip{position:absolute;left:0}
+/* inline variant: the chip at the end of the run's first row, in the code column */
+.ichip{position:absolute;right:8px;top:1px}
+.lane{width:10px;height:10px;flex:0 0 auto}
+.lk{width:12px;height:12px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+@media (max-width:980px){.mg{display:none}}
+@media (prefers-reduced-motion:reduce){.xbtn,.gtext,.chip{transition:none}}
+
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 900px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<div style="max-width: 1240px; margin: 0 auto; padding: 40px 24px 64px; box-sizing: border-box; display: flex; gap: 16px; align-items: flex-start">
+
+<div style="flex: 1 1 auto; min-width: 0; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); overflow: clip; --nw: 21px">
+<div class="fh">
+<button type="button" class="fbtn" aria-expanded="true" aria-label="Collapse InteractionManager.ts"><span class="chv" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+<span class="fpath" title="apps/neuve-web/packages/diffs/src/managers/InteractionManager.ts"><span class="dir">apps/neuve-web/packages/diffs/src/managers/</span><span class="base">InteractionManager.ts</span></span>
+<span class="fcnt"><span style="color: var(--add-fg)">+{{adds}}</span><span style="color: var(--del-fg)">−{{dels}}</span></span>
+<span style="flex: 1 1 auto"></span>
+<div class="fseg" role="radiogroup" aria-label="Lines shown">
+<button type="button" role="radio" class="{{ownedCls}}" aria-checked="{{isOwned}}" onClick="{{toOwned}}">Owned ranges</button>
+<button type="button" role="radio" class="{{wholeCls}}" aria-checked="{{isWhole}}" onClick="{{toWhole}}">Whole file</button>
+</div>
+<button type="button" class="vbtn" aria-pressed="false"><span class="vbox" aria-hidden="true"></span>Viewed</button>
+</div>
+
+<sc-for list="{{items}}" as="it" hint-placeholder-count="12">
+<sc-if value="{{it.isRow}}" hint-placeholder-val="{{true}}">
+<div class="row k-{{it.kind}} {{it.cls}}"><span class="ln" data-sign="{{it.sign}}"><span>{{it.o}}</span><span>{{it.n}}</span></span><span class="code"><sc-for list="{{it.toks}}" as="tk" hint-placeholder-count="4"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span><sc-if value="{{it.inline}}" hint-placeholder-val="{{false}}"><a href="#" class="chip ichip" aria-label="{{it.chip.aria}}"><svg class="lk" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><svg class="lane" viewBox="0 0 10 10" aria-hidden="true"><sc-if value="{{it.chip.diamond}}" hint-placeholder-val="{{true}}"><path d="M5 1 9 5 5 9 1 5Z" fill="{{it.chip.fill}}" stroke="{{it.chip.stroke}}" stroke-width="1.4"></path></sc-if><sc-if value="{{it.chip.ring}}" hint-placeholder-val="{{false}}"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></sc-if></svg><span class="nm">{{it.chip.unit}}</span></a></sc-if></div>
+</sc-if>
+<sc-if value="{{it.isGap}}" hint-placeholder-val="{{false}}">
+<div class="gap">
+<button type="button" class="xbtn" onClick="{{it.open}}" aria-label="{{it.aria}}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4M8 15l4 4 4-4"></path></svg></button>
+<button type="button" class="gtext" tabindex="-1" aria-hidden="true" onClick="{{it.open}}"><span>{{it.countText}}</span><span class="rng">{{it.range}}</span><sc-if value="{{it.hasOwners}}" hint-placeholder-val="{{false}}"><span class="own"><svg class="lk" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span class="nm">{{it.owners}}</span></span></sc-if></button>
+</div>
+</sc-if>
+</sc-for>
+</div>
+
+<div class="mg" aria-label="Context margin" style="align-self: stretch">
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="3">
+<a href="#" class="chip" style="top: {{c.top}}px" aria-label="{{c.aria}}"><svg class="lk" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><svg class="lane" viewBox="0 0 10 10" aria-hidden="true"><sc-if value="{{c.diamond}}" hint-placeholder-val="{{true}}"><path d="M5 1 9 5 5 9 1 5Z" fill="{{c.fill}}" stroke="{{c.stroke}}" stroke-width="1.4"></path></sc-if><sc-if value="{{c.ring}}" hint-placeholder-val="{{false}}"><circle cx="5" cy="5" r="3.9" fill="none" stroke="var(--agt)" stroke-width="1.6"></circle></sc-if></svg><span class="nm">{{c.unit}}</span></a>
+</sc-for>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"owners":{"editor":"enum","options":["count","names","lock"],"default":"count","section":"Gap row"},"chip":{"editor":"enum","options":["margin","inline"],"default":"margin","section":"Whole file"},"$preview":{"width":1440,"height":1400}}'>
+var KW = /^(export|async|function|const|await|return|if|import|from|let|new|true|false|null|try|catch|type|typeof)$/;
+function tokenize(code) {
+  var out = [];
+  var re = /(\/\/.*$)|('[^']*'|"[^"]*"|`[^`]*`)|([A-Za-z_$][\w$]*)(?=\s*\()|([A-Za-z_$][\w$]*)|(\d+)|(\s+)|([^\sA-Za-z_$\d'"`]+)/g;
+  var m;
+  while ((m = re.exec(code))) {
+    if (m[1]) out.push({ t: m[1], c: 'cm' });
+    else if (m[2]) out.push({ t: m[2], c: 'st' });
+    else if (m[3]) out.push({ t: m[3], c: KW.test(m[3]) ? 'kw' : 'fn' });
+    else if (m[4]) out.push({ t: m[4], c: KW.test(m[4]) ? 'kw' : 'id' });
+    else if (m[5]) out.push({ t: m[5], c: 'nu' });
+    else out.push({ t: m[0], c: 'pl' });
+  }
+  return out;
+}
+
+function sign(k) { return k === 'add' ? '+' : (k === 'del' ? '−' : ''); }
+var H = { head: 44, row: 24, gap: 32 };
+var CHUNK = 20;
+
+// The owner's InteractionManager.ts case, as owned-ranges.fixtures.ts crowdedRangedFile: a 700-line file; this unit owns
+// 4 runs, 6 other units own 12 (one before its first run, two a line apart, one removal-only, three after its last).
+var TEMPLATE = [
+  function (i) { return '  private clampSelection' + i + '(anchor: SelectionPoint, point: SelectionPoint) {'; },
+  function () { return '    if (!this.canComment(point)) return'; },
+  function (i) { return '    const end = this.commentableEnd(anchor, point, ' + i + ')'; },
+  function () { return '    this.setSelection(this.buildSelectedLineRange(anchor, end))'; },
+  function (i) { return '    this.notify("selection", { line: ' + i + ' })'; },
+  function () { return '  }'; },
+  function () { return ''; }
+];
+var OLD = []; for (var i = 1; i <= 700; i++) OLD.push(TEMPLATE[(i - 1) % TEMPLATE.length](i));
+var UNITS = {
+  eligibility: { unit: 'Centralize line eligibility and contiguous endpoint clamping', lane: 'req' },
+  gutter: { unit: 'Clamp gutter utility gesture commits to commentable lines', lane: 'req' },
+  pointer: { unit: 'Clamp pointer and touch selection updates', lane: 'req' },
+  predicate: { unit: 'Track predicate presence and initialize the eligibility callback ref', lane: 'sug' },
+  bridge: { unit: 'Bridge renderer selection points to desk comment eligibility', lane: 'agt' },
+  sync: { unit: 'Include eligibility in committed callback synchronization', lane: 'agt' }
+};
+var CHANGES = [
+  [40, 1, 1, 'predicate'], [120, 0, 3, 'eligibility'], [250, 2, 3, 'own'], [258, 1, 1, 'gutter'], [260, 1, 1, 'pointer'],
+  [300, 1, 2, 'own'], [340, 3, 0, 'bridge'], [360, 1, 1, 'sync'], [380, 1, 1, 'own'], [383, 1, 1, 'eligibility'],
+  [450, 1, 1, 'gutter'], [470, 1, 1, 'pointer'], [520, 2, 2, 'own'], [600, 4, 6, 'eligibility'], [640, 1, 1, 'predicate'], [690, 1, 1, 'sync']
+];
+
+// Parts in line order: gaps (unchanged lines, old and new numbers) and runs (one owner's changed lines).
+var PARTS = [], ADDS = 0, DELS = 0;
+(function () {
+  var o = 1, n = 1;
+  function gap(to) { var rows = []; while (o < to) { rows.push({ kind: 'ctx', o: o, n: n, text: OLD[o - 1] }); o++; n++; } if (rows.length) PARTS.push({ t: 'gap', id: 'g' + PARTS.length, rows: rows }); }
+  CHANGES.forEach(function (c, k) {
+    gap(c[0]);
+    var rows = [];
+    for (var d = 0; d < c[1]; d++) { rows.push({ kind: 'del', o: o, n: '', text: OLD[o - 1] }); o++; DELS++; }
+    for (var a = 0; a < c[2]; a++) {
+      rows.push({ kind: 'add', o: '', n: n, text: c[3] === 'own' ? '    if (!this.isLineCommentable(point' + (a ? ' + ' + a : '') + ')) return this.keepFocus()' : '    this.selection = clampToEligible(this.selection, ' + (c[0] + a) + ')' });
+      n++; ADDS++;
+    }
+    PARTS.push({ t: 'run', id: 'r' + k, own: c[3] === 'own', owner: c[3], rows: rows });
+  });
+  gap(OLD.length + 1);
+})();
+// Stretches: what lies between owned runs; the one before the first owned run opens upward, from the code below it.
+var STRETCHES = [];
+(function () {
+  var cur = [], seen = false;
+  PARTS.forEach(function (p) {
+    if (p.t === 'run' && p.own) { if (cur.length) STRETCHES.push({ parts: cur, upward: !seen }); cur = []; seen = true; return; }
+    cur.push(p);
+  });
+  if (cur.length) STRETCHES.push({ parts: cur, upward: false });
+  STRETCHES.forEach(function (s) { s.parts.forEach(function (p) { p.stretch = s; }); });
+})();
+function newSpan(rows) { var ns = rows.filter(function (r) { return r.n !== ''; }).map(function (r) { return r.n; }); return ns.length ? [ns[0], ns[ns.length - 1]] : null; }
+function label(a, b) { return a === b ? 'L' + a : 'L' + a + '–' + b; }
+function chipOf(p) {
+  var u = UNITS[p.owner], span = newSpan(p.rows), first = p.rows[0];
+  var lines = span ? label(span[0], span[1]) : 'L−' + first.o + (p.rows.length > 1 ? '–' + p.rows[p.rows.length - 1].o : '');
+  return { unit: u.unit, aria: lines + ' owned by ' + u.unit + '. Open unit', diamond: u.lane !== 'agt', ring: u.lane === 'agt',
+    fill: u.lane === 'req' ? 'var(--req)' : 'none', stroke: u.lane === 'req' ? 'var(--req)' : 'var(--sug)' };
+}
+
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { theme: null, mode: 'owned', open: {} }; }
+  renderVals() {
+    var self = this, st = this.state, whole = st.mode === 'whole';
+    var ownersStyle = this.props.owners || 'count', chipStyle = this.props.chip || 'margin';
+    var open = st.open; // gap id → { top, bottom } lines revealed; run id → true
+    function remaining(p) { var r = open[p.id] || { top: 0, bottom: 0 }; return p.rows.length - r.top - r.bottom; }
+    function isOpen(p) { return p.t === 'run' ? !!open[p.id] : (p.rows.length <= 1 || remaining(p) <= 0); }
+    var items = [], chips = [], y = H.head;
+    function pushRows(p, rows) {
+      rows.forEach(function (r, i) {
+        var ro = p.t === 'run' && !p.own, chip = ro && i === 0 ? chipOf(p) : null;
+        if (chip && chipStyle === 'margin') chips.push({ top: y + 1, unit: chip.unit, aria: chip.aria, diamond: chip.diamond, ring: chip.ring, fill: chip.fill, stroke: chip.stroke });
+        items.push({ isRow: true, isGap: false, kind: r.kind, o: r.o, n: r.n, sign: sign(r.kind), toks: tokenize(r.text),
+          cls: (ro ? 'ro' : '') + (p.t === 'gap' ? ' rev' : ''), inline: !!chip && chipStyle === 'inline', chip: chip || {} });
+        y += H.row;
+      });
+    }
+    PARTS.forEach(function (p) {
+      if (p.t === 'run' && p.own) { pushRows(p, p.rows); return; }
+      if (whole) { pushRows(p, p.rows); return; }
+      var s = p.stretch, order = s.upward ? s.parts.slice().reverse() : s.parts;
+      var at = -1; for (var k = 0; k < order.length; k++) if (!isOpen(order[k])) { at = k; break; }
+      var pos = order.indexOf(p);
+      if (at < 0 || pos < at) { pushRows(p, p.rows); return; }
+      if (pos > at) return; // folded behind the gap row
+      // p is the head: the gap row sits here, with what's open of p on the code side of it
+      var r = open[p.id] || { top: 0, bottom: 0 };
+      if (p.t === 'gap' && !s.upward) pushRows(p, p.rows.slice(0, r.top));
+      var behind = order.slice(at), lines = [], units = {}, runs = [];
+      behind.forEach(function (q) {
+        var rows = q === p && q.t === 'gap' ? q.rows.slice(r.top, q.rows.length - r.bottom) : q.rows;
+        rows.forEach(function (x) { if (x.n !== '') lines.push(x.n); });
+        if (q.t === 'run') { units[q.owner] = true; runs.push(q); }
+      });
+      lines.sort(function (a, b) { return a - b; });
+      var count = lines.length, range = count ? label(lines[0], lines[count - 1]) : '', ukeys = Object.keys(units);
+      var names = ukeys.map(function (k) { return UNITS[k].unit; });
+      var owners = ownersStyle === 'names' ? names.join(' · ') : (ownersStyle === 'count' ? ukeys.length + ' other unit' + (ukeys.length === 1 ? '' : 's') : '');
+      var step = function () {
+        var o2 = Object.assign({}, self.state.open);
+        if (p.t === 'run') o2[p.id] = true;
+        else { var cur = Object.assign({ top: 0, bottom: 0 }, o2[p.id]); var left = p.rows.length - cur.top - cur.bottom, take = Math.min(CHUNK, left); if (s.upward) cur.bottom += take; else cur.top += take; o2[p.id] = cur; }
+        self.setState({ open: o2 });
+      };
+      var aria = p.t === 'run'
+        ? 'Show ' + p.rows.length + ' changed line' + (p.rows.length === 1 ? '' : 's') + ' owned by ' + UNITS[p.owner].unit
+        : 'Show ' + Math.min(CHUNK, remaining(p)) + ' of ' + count + (ukeys.length ? ' lines, ' + range + ', including changes owned by ' + ukeys.length + ' other unit' + (ukeys.length === 1 ? '' : 's') : ' unchanged lines, ' + range);
+      items.push({ isRow: false, isGap: true, open: step, aria: aria, countText: count ? count + (ukeys.length ? ' lines' : ' unchanged lines') : '', range: range,
+        hasOwners: ukeys.length > 0, owners: owners });
+      y += H.gap;
+      if (p.t === 'gap' && s.upward) pushRows(p, p.rows.slice(p.rows.length - r.bottom));
+    });
+    var theme = st.theme || this.props.theme || 'light';
+    return {
+      theme: theme, items: items, chips: chips, adds: ADDS, dels: DELS,
+      isOwned: !whole, isWhole: whole, ownedCls: whole ? '' : 'on', wholeCls: whole ? 'on' : '',
+      toOwned: function () { self.setState({ mode: 'owned', open: {} }); },
+      toWhole: function () { self.setState({ mode: 'whole' }); }
+    };
+  }
+}
+</script>
+</body>
+</html>

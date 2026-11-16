@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in Neuve doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Write in your own words, and keep it short. Security problems go through the [security policy](https://github.com/NeuveAI/neuve/blob/main/SECURITY.md), never here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce it
+      description: The exact commands, in order. A small public repository and commit range that shows it is the best reproduction.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The full output of the failing command. Remove anything private, such as keys, tokens or file contents you can't share.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Neuve version
+      description: The output of `neuve --version`, and the commit you built from (`git rev-parse --short HEAD` in your Neuve checkout).
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system and version, `bun --version`, `go version`, and the review route (`anthropic` or `openai`).
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and this isn't one of them.
+          required: true
+        - label: It still happens on the latest `main`.
+          required: true

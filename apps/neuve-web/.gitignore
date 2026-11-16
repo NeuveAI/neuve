@@ -1,0 +1,39 @@
+node_modules
+.DS_Store
+dist
+dist-ssr
+*.local
+.env*
+.nitro
+.tanstack
+.wrangler
+.output
+.vinxi
+__unconfig*
+todos.json
+
+# turbo
+.turbo
+
+# typescript
+*.tsbuildinfo
+
+# storybook
+storybook-static
+*.log
+
+# local agent scratch (kept on disk, never committed)
+.scratchpad/
+
+# Local review records and agent runtime
+.data/
+**/.data/
+
+# Retained local proofs include session payloads and continuation cursors.
+# Commit scoped verification summaries, not raw protocol captures.
+/validation/backend/
+/validation/native/acp-account/
+/validation/native/submitted-hunks-boundary/
+
+# A stray empty SQLite file; the Records store lives in .git/neuve/.
+/records.sqlite

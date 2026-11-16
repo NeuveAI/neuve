@@ -1,0 +1,13 @@
+{
+  "project": "oxc-project/tsgolint",
+  "source": "https://github.com/oxc-project/tsgolint",
+  "commit": "3c3441597fd823d4d3174d02a32b6f6c03a1df16",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/oxc-project/tsgolint/3c3441597fd823d4d3174d02a32b6f6c03a1df16/LICENSE",
+      "sha256": "c211cc5336d2d47f21322aca35c8149699de621edc447294b617048d05a745ce"
+    }
+  ]
+}

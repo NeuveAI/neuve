@@ -1,0 +1,13 @@
+{
+  "project": "prettier/eslint-plugin-prettier",
+  "source": "https://github.com/prettier/eslint-plugin-prettier",
+  "commit": "e6dd27a4e4015748b2e87c646be2c1a530789343",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/prettier/eslint-plugin-prettier/e6dd27a4e4015748b2e87c646be2c1a530789343/LICENSE.md",
+      "sha256": "20e80c18f6f0a93b7aa35170293eca4f2adc1e357aa20b534c8768081e836f89"
+    }
+  ]
+}

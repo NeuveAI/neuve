@@ -1,0 +1,13 @@
+{
+  "project": "angular/angular",
+  "source": "https://github.com/angular/angular",
+  "commit": "1e6afa4cb84c9194d72d946ba9c22bf740360d9c",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/angular/angular/1e6afa4cb84c9194d72d946ba9c22bf740360d9c/LICENSE",
+      "sha256": "15e77c4692114f87c2020353626c868472c23954a4ed37ecc4c1522d14be1eb7"
+    }
+  ]
+}

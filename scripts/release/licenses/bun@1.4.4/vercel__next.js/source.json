@@ -1,0 +1,13 @@
+{
+  "project": "vercel/next.js",
+  "source": "https://github.com/vercel/next.js",
+  "commit": "df7104dd90e003f71177251010822bbdacb7a561",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "license.md",
+      "url": "https://raw.githubusercontent.com/vercel/next.js/df7104dd90e003f71177251010822bbdacb7a561/license.md",
+      "sha256": "ee765244e2d59f5234d474f62e0766fa0c8b99af967fdd4c0cb8dcb0c76ea224"
+    }
+  ]
+}

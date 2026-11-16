@@ -1,0 +1,83 @@
+schema_version: 1
+case_id: committed-base-current-batch
+status: candidate_baseline
+language: TypeScript
+purpose: >-
+  Freeze the distinction between the durable committed graph and the
+  unapproved current review batch before implementing the batch overlay.
+
+fixture:
+  committed_base:
+    role: committed_graph_input
+    history_ingested: false
+    files:
+      - src/review.ts
+      - src/summary.ts
+  current_review_batch:
+    fixture_batch_identity: fixture-batch-a
+    production_identity_mechanics: deferred
+    review_units:
+      - unit_id: staged-caller
+        path: src/review.ts
+        worktree_state: staged
+        approval_state: unapproved
+      - unit_id: unstaged-sibling
+        path: src/summary.ts
+        worktree_state: unstaged
+        approval_state: unapproved
+      - unit_id: newly-added-context
+        path: src/context.ts
+        worktree_state: untracked
+        approval_state: unapproved
+    required_relationships:
+      - from_unit: staged-caller
+        to_unit: unstaged-sibling
+        kind: call
+        context_class: same_batch_unapproved
+      - from_unit: unstaged-sibling
+        to_unit: newly-added-context
+        kind: call
+        context_class: same_batch_unapproved
+
+  second_review_batch:
+    fixture_batch_identity: fixture-batch-b
+    purpose: Prove that a marker captured for fixture-batch-a is rejected in a different batch.
+
+phase_1_oracle:
+  canonical_json_required: true
+  candidate_evidence_only: true
+  public_query_schema_unchanged: true
+  required_observations:
+    - The base revision and committed blob identities are recorded separately from batch content identities.
+    - Git reports one staged artifact, one unstaged artifact, and one untracked artifact.
+    - Staged, unstaged, and synthesized added-file Git patches are captured with exact hunk ranges and deterministic hunk identities.
+    - Each artifact forms a separate unapproved review unit whose hunks come from its captured patch.
+    - A marker carrying fixture-batch-a identity is rejected when presented to fixture-batch-b.
+
+phase_2_obligations:
+  - id: sibling-same-batch-context
+    rule: A transient marker from one unit can contextualize a sibling unit in the same batch.
+  - id: unapproved-label
+    rule: Every transient marker is visibly labeled unapproved and same-batch.
+  - id: no-disposition-transfer
+    rule: Context sharing never transfers approval or a request for changes between units.
+  - id: batch-isolation
+    rule: Transient context cannot be reused as current context by another batch.
+  - id: content-change-identity
+    rule: Changing source bytes creates a new transient content identity and makes the old marker stale for the current batch.
+  - id: commit-lineage
+    rule: Committing batch content creates durable nodes with explicit lineage instead of rewriting transient nodes as historical facts; the commit does not confer approval.
+  - id: abandonment
+    rule: Abandoning a batch removes its active transient context without deleting its audit record.
+  - id: staging-is-not-approval
+    rule: Moving work between unstaged and staged states does not confer approval or committed attribution.
+
+phase_2_negative_controls:
+  - cross_batch_marker_reuse
+  - inherited_prior_approval
+  - transferred_sibling_disposition
+  - stale_content_identity
+  - mixed_batch_capture
+  - abandoned_batch_as_active_context
+  - staging_transition_confers_approval
+  - commit_without_review_confers_approval

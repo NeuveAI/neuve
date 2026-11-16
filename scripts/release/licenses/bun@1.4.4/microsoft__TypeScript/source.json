@@ -1,0 +1,13 @@
+{
+  "project": "microsoft/TypeScript",
+  "source": "https://github.com/microsoft/TypeScript",
+  "commit": "6bdcb54d23f41bc7098c1f3488ac599c75b852ca",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/microsoft/TypeScript/6bdcb54d23f41bc7098c1f3488ac599c75b852ca/LICENSE.txt",
+      "sha256": "a5e9f9b1575301c7a7a03508fdaa2e05a918cc17fd21c6e898096a96d6a34f61"
+    }
+  ]
+}

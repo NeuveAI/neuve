@@ -1,0 +1,14 @@
+{
+  "project": "narrow-emojis",
+  "source": "https://registry.npmjs.org/narrow-emojis/-/narrow-emojis-0.0.3.tgz",
+  "version": "0.0.3",
+  "commit": "02eb9226088ce593b37a73fe547794495a7e4aa1",
+  "pin": "Prettier 3.9.9's yarn.lock (prettier/prettier at cdd17f2288b28b170a76416c72dac56e3ea5daff), the release Bun's src/format/CLAUDE.md names as the target of its port",
+  "files": [
+    {
+      "name": "license",
+      "url": "https://registry.npmjs.org/narrow-emojis/-/narrow-emojis-0.0.3.tgz#package/license",
+      "sha256": "a4062b09c0c9f2c837997f22ebd4840bffe712ab262f5dfa231226131f41ef3f"
+    }
+  ]
+}

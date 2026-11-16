@@ -1,0 +1,14 @@
+{
+  "project": "util",
+  "source": "https://registry.npmjs.org/util/-/util-0.12.5.tgz",
+  "version": "0.12.5",
+  "commit": "ef984721db7150f651800e051de4314c9517d42c",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/util/-/util-0.12.5.tgz#package/LICENSE",
+      "sha256": "6239c6144c31e58cf925c34483606969c555574d64ffa96518ab5d7f45c75d43"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+@reference "../../shadcn.css";
+
+.composer\:body::before {
+	@apply squircle;
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	border-radius: var(--r-xl);
+	border: 1px solid transparent;
+	pointer-events: none;
+	transition: border-color 300ms ease;
+}
+
+.composer\:body[data-beam="ace"]::before {
+	border-color: oklch(from var(--primary) l c h / 0.55);
+}
+
+button[data-beam] {
+	transition: background-color 300ms ease, color 300ms ease, box-shadow 300ms ease;
+}
+
+/* Ace mode is shown with a still fill and glow: any motion on the submit button reads as a send in flight (#491). Disabled keeps its muted color. */
+button[data-beam="ace"]:not(:disabled) {
+	background: var(--primary);
+	color: var(--primary-foreground);
+	box-shadow: 0 0 12px 0 oklch(0.6 0.17 140 / 0.55);
+}
+
+.dark button[data-beam="ace"]:not(:disabled) {
+	box-shadow: 0 0 10px -2px oklch(0.86 0.2 140 / 0.55);
+}

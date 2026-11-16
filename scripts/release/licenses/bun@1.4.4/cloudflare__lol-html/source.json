@@ -1,0 +1,13 @@
+{
+  "project": "cloudflare/lol-html",
+  "source": "https://github.com/oven-sh/lol-html",
+  "commit": "725ce499aa9b71e38b7a2d0a9fbb6d7294a4079e",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/oven-sh/lol-html/725ce499aa9b71e38b7a2d0a9fbb6d7294a4079e/LICENSE",
+      "sha256": "e4ddaa9d7391bb9536fcb8c59b570a8b85a0bf6da54df5b3b26f098f6f99c9cc"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "project": "jacobsandlund/uucode",
+  "source": "https://github.com/jacobsandlund/uucode",
+  "commit": "1fb73433bba5d93366c57f23ff2e9d7939746500",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/jacobsandlund/uucode/1fb73433bba5d93366c57f23ff2e9d7939746500/LICENSE.md",
+      "sha256": "312e901e142be2477b4ca859e9311f9e3f80d33372991759b7921c1893605f33"
+    }
+  ]
+}

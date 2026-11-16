@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Contextual marker identity</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+h2{margin:0;font-size:20px;line-height:26px;font-weight:600;letter-spacing:-0.01em}
+.sec{display:flex;flex-direction:column;gap:20px}
+.sub{margin:0;font-size:14px;line-height:21px;color:var(--muted);max-width:620px}
+
+.pin{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px 0 6px;box-sizing:border-box;border-radius:6px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;white-space:nowrap;max-width:220px;vertical-align:middle}
+.pi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.pin .lab{overflow:hidden;text-overflow:ellipsis}
+.pin .tgt{color:var(--faint);overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pin .n{min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;border-radius:4px;background:var(--surface);color:var(--ink2);font-size:10.5px;line-height:16px;text-align:center}
+.pin .dots{display:inline-flex;gap:2px;margin-left:1px}
+.pin .dots i{width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.5}
+.f-neutral{background:var(--raised);color:var(--ink2)}.f-neutral .pi{color:var(--muted)}
+.f-req{background:var(--req-tint);color:var(--req-ink)}.f-req .pi{color:var(--req)}
+.f-sug{background:var(--sug-tint);color:var(--sug-ink)}.f-sug .pi{color:var(--sug)}
+.f-transient{background:transparent;border:1px dashed var(--line-strong);color:var(--muted)}
+.f-human{width:22px;padding:0;justify-content:center;border-radius:50% 50% 50% 14%;background:transparent;color:var(--ink2)} /* a comment pin is its author's avatar (round-4.md § Comment pins) */
+.f-draft{width:22px;padding:0;justify-content:center;border-radius:11px 11px 11px 3px;background:transparent;border:1px dashed var(--line-strong);color:var(--muted)}
+.dash{stroke-dasharray:3.2 3.2}
+.s-hover.f-neutral{background:var(--raised2)}.s-hover.f-req{background:var(--req-tint2)}.s-hover.f-sug{background:var(--sug-tint2)}.s-hover.f-transient{background:var(--raised)}
+.s-focus{outline:2px solid var(--focus);outline-offset:2px}
+.s-open{background:var(--ink)!important;color:var(--bg)!important;border-color:transparent!important}.s-open .pi{color:var(--bg)!important}
+.s-muted{background:transparent!important;box-shadow:inset 0 0 0 1px var(--line);color:var(--faint)!important}.s-muted .pi{color:var(--faint)!important}
+
+.tbl{display:grid;grid-template-columns:200px 150px minmax(0,1fr) 150px minmax(0,1.1fr);border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line);overflow:clip}
+.tbl>span{padding:10px 14px;border-bottom:1px solid var(--line2);font-size:13px;line-height:19px;display:flex;align-items:center;min-width:0}
+.tbl>.th{padding:10px 14px;font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);background:var(--bg)}
+.fam{font-size:12px;color:var(--muted)}
+.code{font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;color:var(--ink2)}
+.chg{color:var(--req-ink);background:var(--req-tint);padding:0 5px;border-radius:4px;margin-left:6px;font-size:10.5px}
+
+.card{border-radius:12px;background:var(--surface);box-shadow:0 0 0 1px var(--line);padding:20px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;min-width:0}
+.cap{font-size:12.5px;line-height:18px;color:var(--muted)}
+.row{display:grid;grid-template-columns:44px 18px minmax(0,1fr);height:24px;align-items:center;font-family:'Geist Mono',ui-monospace,monospace;font-size:12px;background:var(--add-bg);position:relative}
+.row .ln{color:var(--add-ln);text-align:right;padding-right:8px;font-size:11px;background:var(--add-num);height:24px;line-height:24px}
+.row.lit::after{content:"";position:absolute;inset:0;background:var(--lit)}
+/* States: a pin's lines (round 5). Engaged, while its card or list is open (lib/diffs.ts [data-overlay-engaged]): the code
+   cells keep the hover tint (--nv-lit) inside a 2px --nv-engaged-ring outline round the range (sides on every row, the top on
+   the first, the bottom on the last); the number cells sit outside it with the open tint (--nv-range-strong). Landed, after
+   a pin, phrase or chip is activated: the line's cells take --nv-land, hold (--nv-dur-land-hold), then fade
+   (--nv-dur-land-fade); under reduced motion the tint stays until the next action. Shown here at the hold. */
+.srow{display:grid;grid-template-columns:44px minmax(0,1fr);height:24px;align-items:center;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;background:var(--add-bg)}
+.srow .ln{height:24px;line-height:24px;text-align:right;padding-right:8px;background:var(--add-num);color:var(--add-ln)}
+.srow .cc{height:24px;display:flex;align-items:center;padding-left:12px;box-sizing:border-box}
+.srow.eng .ln{box-shadow:inset 0 0 0 100vmax var(--nv-range-strong)}
+.srow.eng .cc{--ring:var(--nv-engaged-ring);box-shadow:inset 2px 0 0 var(--ring),inset -2px 0 0 var(--ring),inset 0 0 0 100vmax var(--nv-lit)}
+.srow.eng.first .cc{box-shadow:inset 2px 0 0 var(--ring),inset -2px 0 0 var(--ring),inset 0 2px 0 var(--ring),inset 0 0 0 100vmax var(--nv-lit)}
+.srow.eng.last .cc{box-shadow:inset 2px 0 0 var(--ring),inset -2px 0 0 var(--ring),inset 0 -2px 0 var(--ring),inset 0 0 0 100vmax var(--nv-lit)}
+.srow.land .ln,.srow.land .cc{box-shadow:inset 0 0 0 100vmax var(--nv-land)}
+.bar{display:block;height:7px;border-radius:4px;background:color-mix(in srgb,var(--nv-add-fg) 16%,transparent)}
+.x{color:var(--req);font-family:'Geist Mono',ui-monospace,monospace;font-size:11px}
+.ok{color:var(--agt-fg);font-family:'Geist Mono',ui-monospace,monospace;font-size:11px}
+@media (max-width:1000px){.tbl{grid-template-columns:170px minmax(0,1fr)}.tbl>.c3,.tbl>.c4,.tbl>.c5{display:none}.g3{grid-template-columns:minmax(0,1fr)!important}}
+/* ── REVIEW IDENTITY (Verdicts.dc.html · round-4.md § Review identity). Identity is who: one avatar per actor,
+   never altered by placement or state. Placement changes size only (24 header · 20 cards, threads, margin · 16 rail).
+   State goes beside the avatar, never on it: no status dot, badge or tint. ── */
+.av{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-weight:600;line-height:1}
+.av.person{font-family:Geist,system-ui,sans-serif;border-radius:50% 50% 50% 14%;background:var(--raised2);color:var(--ink2)}
+.av.person.s16{width:16px;height:16px;font-size:7.5px}
+.av.person.s20{width:20px;height:20px;font-size:8.5px}
+.av.person.s24{width:24px;height:24px;font-size:9.5px}
+.av.agent{display:inline-block;overflow:visible;transform:translateY(-10%)}
+.av.agent.s24{width:24px;height:29.2px}
+.av.agent.s20{width:20px;height:24.33px}
+.av.agent.s16{width:16px;height:19.47px}
+.av.agent .body{stroke:none}
+.av.agent .edge{fill:none;stroke-width:1;stroke-linecap:butt;opacity:.5}
+.av.agent .ant{stroke-width:.85;stroke-linecap:round;fill:none}
+.av.agent .tip{stroke:none}
+.av.agent text{font-family:'Geist Mono',ui-monospace,monospace;font-size:8.6px;font-weight:600;text-anchor:middle;dominant-baseline:central}
+.av.agent.impl .body{fill:var(--agt-tint)} .av.agent.impl .edge,.av.agent.impl .ant{stroke:var(--agt-fg)} .av.agent.impl .tip,.av.agent.impl text{fill:var(--agt-fg)}
+.av.agent.rev .body{fill:var(--sug-tint)} .av.agent.rev .edge,.av.agent.rev .ant{stroke:var(--sug-ink)} .av.agent.rev .tip,.av.agent.rev text{fill:var(--sug-ink)}
+/* holds an agent's taller box (the antenna) to the bubble's square, so rows line up whoever it is */
+.avbox{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center}
+.avbox.s16{width:16px;height:16px}.avbox.s20{width:20px;height:20px}.avbox.s24{width:24px;height:24px}
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 2400px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<div style="max-width: 1240px; margin: 0 auto; padding: 64px 24px 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 72px">
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<span class="lbl">Neuve web · identity</span>
+<h1 style="margin: 0; font-size: 44px; line-height: 48px; letter-spacing: -0.025em; font-weight: 600">Contextual markers</h1>
+<p class="sub" style="font-size: 16px; line-height: 24px">One pin per line. The icon says what kind it is, colour says it needs you, a dashed edge says it isn't committed.</p>
+<div style="display: flex; gap: 10px; flex-wrap: wrap; padding-top: 8px">
+<sc-for list="{{kinds}}" as="k" hint-placeholder-count="10"><span class="pin f-{{k.fam}}" title="{{k.label}}"><sc-if value="{{k.isIcon}}" hint-placeholder-val="{{true}}"><sc-if value="{{k.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{k.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{k.ic.unavailable}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9l6 6"></path><path d="M15 9l-6 6"></path><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{k.ic.draft}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6 3 20l1.4-4.4Z"></path></svg></sc-if><sc-if value="{{k.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if><sc-if value="{{k.ic.decision}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><path d="M4 22v-7"></path></svg></sc-if><sc-if value="{{k.ic.signal}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></sc-if><sc-if value="{{k.ic.test}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></svg></sc-if><sc-if value="{{k.ic.failed}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="m2 2 20 20"></path></svg></sc-if><sc-if value="{{k.ic.source}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{k.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{k.ic.history}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></sc-if><sc-if value="{{k.ic.doc}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{k.ic.hidden}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg></sc-if><span class="lab">{{k.label}}</span></sc-if><sc-if value="{{k.isHuman}}" hint-placeholder-val="{{false}}"><span class="av person s20" role="img" aria-label="Review comment by VD">VD</span></sc-if><sc-if value="{{k.isDraft}}" hint-placeholder-val="{{false}}"><sc-if value="{{k.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{k.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"></svg></sc-if><sc-if value="{{k.ic.unavailable}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9l6 6"></path><path d="M15 9l-6 6"></path></svg></sc-if><sc-if value="{{k.ic.draft}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6 3 20l1.4-4.4Z"></path></svg></sc-if><sc-if value="{{k.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if><sc-if value="{{k.ic.decision}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><path d="M4 22v-7"></path></svg></sc-if><sc-if value="{{k.ic.signal}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></sc-if><sc-if value="{{k.ic.test}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></svg></sc-if><sc-if value="{{k.ic.failed}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="m2 2 20 20"></path></svg></sc-if><sc-if value="{{k.ic.source}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{k.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{k.ic.history}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></sc-if><sc-if value="{{k.ic.doc}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{k.ic.hidden}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg></sc-if></sc-if></span></sc-for>
+</div>
+</div>
+
+<section class="sec">
+<h2>Three channels, one job each</h2>
+<div class="g3" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+<div class="card"><span class="lbl">Icon · what it is</span>
+<div style="display: flex; gap: 8px; flex-wrap: wrap"><sc-for list="{{neutral}}" as="k" hint-placeholder-count="4"><span class="pin f-neutral"><sc-if value="{{k.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{k.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"></svg></sc-if><sc-if value="{{k.ic.unavailable}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9l6 6"></path><path d="M15 9l-6 6"></path></svg></sc-if><sc-if value="{{k.ic.draft}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6 3 20l1.4-4.4Z"></path></svg></sc-if><sc-if value="{{k.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if><sc-if value="{{k.ic.decision}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><path d="M4 22v-7"></path></svg></sc-if><sc-if value="{{k.ic.signal}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></sc-if><sc-if value="{{k.ic.test}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></svg></sc-if><sc-if value="{{k.ic.failed}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="m2 2 20 20"></path></svg></sc-if><sc-if value="{{k.ic.source}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{k.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{k.ic.history}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></sc-if><sc-if value="{{k.ic.doc}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{k.ic.hidden}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg></sc-if><span class="lab">{{k.label}}</span></span></sc-for></div>
+<span class="cap">Pictographic Lucide icons at 12px. Never the lane primitives ◆ ◐ ○ □, which belong to lanes.</span></div>
+<div class="card"><span class="lbl">Colour · it needs you</span>
+<div style="display: flex; gap: 8px; flex-wrap: wrap"><sc-for list="{{asks}}" as="k" hint-placeholder-count="2"><span class="pin f-{{k.fam}}"><sc-if value="{{k.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{k.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{k.ic.unavailable}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9l6 6"></path><path d="M15 9l-6 6"></path><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{k.ic.draft}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6 3 20l1.4-4.4Z"></path></svg></sc-if><sc-if value="{{k.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if><sc-if value="{{k.ic.decision}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><path d="M4 22v-7"></path></svg></sc-if><sc-if value="{{k.ic.signal}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></sc-if><sc-if value="{{k.ic.test}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></svg></sc-if><sc-if value="{{k.ic.failed}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="m2 2 20 20"></path></svg></sc-if><sc-if value="{{k.ic.source}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{k.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{k.ic.history}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></sc-if><sc-if value="{{k.ic.doc}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{k.ic.hidden}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg></sc-if><span class="lab">{{k.label}}</span></span></sc-for></div>
+<span class="cap">Magenta: it needs your decision (conflict, decision signal). Amber: evidence is missing or failed. Everything that only informs stays neutral.</span></div>
+<div class="card"><span class="lbl">Edge · where it comes from</span>
+<div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+<span class="pin f-neutral"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg><span class="lab">Source</span></span>
+<span class="pin f-transient"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg><span class="lab">Same batch</span></span>
+<span class="pin f-human"><span class="av person s20" role="img" aria-label="Review comment by VD">VD</span></span><span class="pin f-draft"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6 3 20l1.4-4.4Z"></path></svg></span>
+</div>
+<span class="cap">Filled: committed and retrieved. Dashed: transient or unsaved. Speech bubble: written by a person.</span></div>
+</div>
+</section>
+
+<section class="sec">
+<h2>Kinds</h2>
+<p class="sub">Listed in priority order. When several items share a line, the pin takes the highest kind and counts the rest. Review comments and drafts share the margin and the anatomy, but they are not contextual markers.</p>
+<div class="tbl">
+<span class="th">Pin</span><span class="th">Family</span><span class="th c3">L2 kind label</span><span class="th c4">Lucide icon</span><span class="th c5">Data today → identity</span>
+<sc-for list="{{kinds}}" as="k" hint-placeholder-count="12">
+<span><span class="pin f-{{k.fam}}"><sc-if value="{{k.isIcon}}" hint-placeholder-val="{{true}}"><sc-if value="{{k.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{k.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{k.ic.unavailable}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9l6 6"></path><path d="M15 9l-6 6"></path><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{k.ic.draft}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6 3 20l1.4-4.4Z"></path></svg></sc-if><sc-if value="{{k.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if><sc-if value="{{k.ic.decision}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><path d="M4 22v-7"></path></svg></sc-if><sc-if value="{{k.ic.signal}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></sc-if><sc-if value="{{k.ic.test}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></svg></sc-if><sc-if value="{{k.ic.failed}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="m2 2 20 20"></path></svg></sc-if><sc-if value="{{k.ic.source}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{k.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{k.ic.history}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></sc-if><sc-if value="{{k.ic.doc}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{k.ic.hidden}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg></sc-if><span class="lab">{{k.label}}</span></sc-if><sc-if value="{{k.isHuman}}" hint-placeholder-val="{{false}}"><span class="av person s20" role="img" aria-label="Review comment by VD">VD</span></sc-if><sc-if value="{{k.isDraft}}" hint-placeholder-val="{{false}}"><sc-if value="{{k.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{k.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"></svg></sc-if><sc-if value="{{k.ic.unavailable}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9l6 6"></path><path d="M15 9l-6 6"></path></svg></sc-if><sc-if value="{{k.ic.draft}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6 3 20l1.4-4.4Z"></path></svg></sc-if><sc-if value="{{k.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if><sc-if value="{{k.ic.decision}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><path d="M4 22v-7"></path></svg></sc-if><sc-if value="{{k.ic.signal}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></sc-if><sc-if value="{{k.ic.test}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></svg></sc-if><sc-if value="{{k.ic.failed}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="m2 2 20 20"></path></svg></sc-if><sc-if value="{{k.ic.source}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{k.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{k.ic.history}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></sc-if><sc-if value="{{k.ic.doc}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{k.ic.hidden}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg></sc-if></sc-if></span></span>
+<span class="fam">{{k.famName}}</span>
+<span class="c3">{{k.card}}</span>
+<span class="code c4">{{k.lucide}}</span>
+<span class="code c5">{{k.data}}<sc-if value="{{k.changed}}" hint-placeholder-val="{{false}}"><span class="chg">change</span></sc-if></span>
+</sc-for>
+</div>
+</section>
+
+<section class="sec">
+<h2>Anatomy</h2>
+<div class="g3" style="display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px">
+<div class="card" style="align-items: flex-start; justify-content: center; gap: 28px; padding: 40px">
+<div style="zoom: 2.4"><span class="pin f-sug"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg><span class="lab">Gap</span><span class="tgt">live-review.test.ts</span><span class="n">2</span><span class="dots" aria-hidden="true"><i></i><i></i></span></span></div>
+<div style="display: grid; grid-template-columns: repeat(5, auto); gap: 6px 22px; font-size: 12px; color: var(--muted)">
+<span class="mono" style="color: var(--ink)">① icon</span><span class="mono" style="color: var(--ink)">② kind</span><span class="mono" style="color: var(--ink)">③ target</span><span class="mono" style="color: var(--ink)">④ count</span><span class="mono" style="color: var(--ink)">⑤ shared</span>
+<span>12px, stroke 2.2</span><span>Geist Mono 11</span><span>other file only</span><span>more on this line</span><span>1 dot per other unit, ≤3</span>
+</div>
+</div>
+<div class="card">
+<span class="lbl">Measures</span>
+<div style="display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 10px 16px; font-size: 13px">
+<span class="mono" style="font-size: 12px; color: var(--muted)">height</span><span>22px; sits on the anchored row's first line (rows are 24)</span>
+<span class="mono" style="font-size: 12px; color: var(--muted)">radius</span><span>6px; comment bubbles 11 11 11 3</span>
+<span class="mono" style="font-size: 12px; color: var(--muted)">padding · gap</span><span>0 8 0 6 · 5</span>
+<span class="mono" style="font-size: 12px; color: var(--muted)">max width</span><span>220px; the target truncates first, then the kind</span>
+<span class="mono" style="font-size: 12px; color: var(--muted)">column</span><span>300px margin, pins flush left</span>
+<span class="mono" style="font-size: 12px; color: var(--muted)">hit area</span><span>pin plus 4px; whole row of the margin opposite the line on touch</span>
+<span class="mono" style="font-size: 12px; color: var(--muted)">accessible name</span><span>"Gap on line 1179, 2 markers, shared with 2 units"</span>
+</div>
+</div>
+</div>
+</section>
+
+<section class="sec">
+<h2>States</h2>
+<div class="g3" style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+<sc-for list="{{states}}" as="s" hint-placeholder-count="8">
+<div class="card" style="gap: 12px; padding: 16px">
+<span class="lbl" style="font-size: 10.5px">{{s.name}}</span>
+<div style="display: flex; flex-direction: column; gap: 10px; align-items: flex-start">
+<span class="pin f-neutral {{s.cls}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg><span class="lab">Source</span></span>
+<span class="pin f-req {{s.cls}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg><span class="lab">Conflict</span></span>
+</div>
+<sc-if value="{{s.lines}}" hint-placeholder-val="{{false}}">
+<div aria-hidden="true" style="border-radius: 6px; overflow: clip; box-shadow: 0 0 0 1px var(--line2)">
+<div class="srow"><span class="ln">21</span><span class="cc"><span class="bar" style="width: 58%"></span></span></div>
+<div class="srow {{s.rowCls}} first"><span class="ln">22</span><span class="cc"><span class="bar" style="width: 84%"></span></span></div>
+<div class="srow {{s.rowCls}} last"><span class="ln">23</span><span class="cc"><span class="bar" style="width: 66%"></span></span></div>
+<div class="srow"><span class="ln">24</span><span class="cc"><span class="bar" style="width: 32%"></span></span></div>
+</div>
+</sc-if>
+<span class="cap">{{s.note}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section class="sec">
+<h2>One pin per line</h2>
+<div class="g3" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px">
+<div class="card"><span class="lbl">Single</span>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; align-items: center">
+<div><div class="row lit"><span class="ln">1165</span><span></span><span class="bar" style="width: 74%"></span></div><div class="row"><span class="ln">1166</span><span></span><span class="bar" style="width: 18%"></span></div></div>
+<div style="align-self: start"><span class="pin f-neutral s-hover"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg><span class="lab">Source</span><span class="tgt">start-review-op…</span></span></div>
+</div>
+<span class="cap">Hovering tints exactly the lines it is about.</span></div>
+<div class="card"><span class="lbl">Shared line</span>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; align-items: center">
+<div><div class="row"><span class="ln">1169</span><span></span><span class="bar" style="width: 82%"></span></div><div class="row"><span class="ln">1170</span><span></span><span class="bar" style="width: 66%"></span></div></div>
+<div style="align-self: start"><span class="pin f-transient"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg><span class="lab">Same batch</span><span class="n">3</span></span></div>
+</div>
+<span class="cap">Same batch outranks Graph and Source, so it leads; the count opens the list.</span></div>
+<div class="card"><span class="lbl">Hidden lines</span>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; align-items: center">
+<div style="height: 32px; border-radius: 4px; background: var(--raised); font-family: 'Geist Mono', ui-monospace, monospace; font-size: 11px; color: var(--muted); display: flex; align-items: center; padding: 0 10px">⋯ 1,152 lines</div>
+<span class="pin f-transient" style="border-style: solid; border-color: var(--line)"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg><span class="lab">2 hidden</span></span>
+</div>
+<span class="cap">Markers in collapsed lines wait on the gap row; clicking opens the gap.</span></div>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap"><span class="lbl" style="margin-right: 6px">Priority</span>
+<sc-for list="{{prio}}" as="p" hint-placeholder-count="8"><span class="mono" style="font-size: 12px; color: var(--ink2)">{{p.label}}</span><sc-if value="{{p.more}}" hint-placeholder-val="{{true}}"><span style="color: var(--faint)">›</span></sc-if></sc-for>
+</div>
+</section>
+
+<section class="sec">
+<h2>The same mark at every depth</h2>
+<p class="sub">The icon follows the marker from the margin to the source sheet and into the briefing, so it is recognised before it is read.</p>
+<div class="g3" style="display: grid; grid-template-columns: 160px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; align-items: start">
+<div class="card" style="padding: 16px"><span class="lbl" style="font-size: 10.5px">L0 · pin</span><span class="pin f-sug"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg><span class="lab">Gap</span></span></div>
+<div class="card" style="padding: 8px"><span class="lbl" style="font-size: 10.5px; padding: 8px 8px 0">L1 · peek</span>
+<div style="display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 2px 8px; padding: 8px; border-radius: 7px; background: var(--raised)"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--sug); margin-top: 3px"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg><span style="font-size: 12px; font-weight: 600">Evidence gap</span><span style="grid-column: 2; font-size: 12px; line-height: 17px; color: var(--muted)">No test reaches the launch-error refusal.</span></div></div>
+<div class="card" style="padding: 14px; gap: 10px"><span class="lbl" style="font-size: 10.5px">L2 · card header</span>
+<div style="display: flex; align-items: center; gap: 8px"><span style="width: 24px; height: 24px; border-radius: 6px; background: var(--sug-tint); color: var(--sug); display: inline-flex; align-items: center; justify-content: center"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></span><span class="lbl">Evidence gap</span></div>
+<span style="font-size: 14px; font-weight: 600">No test for ReviewLaunchError</span></div>
+<div class="card" style="padding: 14px; gap: 10px"><span class="lbl" style="font-size: 10.5px">L3 · source sheet</span>
+<div style="display: flex; align-items: center; gap: 10px"><span style="width: 32px; height: 32px; border-radius: 8px; background: var(--sug-tint); color: var(--sug); display: inline-flex; align-items: center; justify-content: center"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true" style="width: 15px; height: 15px"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></span><span style="display: flex; flex-direction: column; gap: 2px"><span class="lbl" style="font-size: 10.5px">Evidence gap · unresolved</span><span style="font-size: 15px; font-weight: 600">live-review.test.ts</span></span></div></div>
+<div class="card" style="padding: 14px; gap: 10px"><span class="lbl" style="font-size: 10.5px">Briefing citation</span>
+<p style="margin: 0; font-size: 14px; line-height: 22px; color: var(--ink2)">Refusal must mean nothing was recorded <span role="img" aria-label="Gap, live-review.test.ts" title="Gap, live-review.test.ts" style="display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; box-sizing: border-box; border-radius: 5px; background: var(--sug-tint); color: var(--sug-ink); vertical-align: 1px"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true" style="width: 11px; height: 11px; color: var(--sug)"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></span></p></div>
+</div>
+</section>
+
+<section class="sec">
+<h2>Never</h2>
+<div style="display: grid; grid-template-columns: minmax(0, 1.3fr) 220px 220px; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); overflow: clip">
+<sc-for list="{{nevers}}" as="n" hint-placeholder-count="6">
+<span style="padding: 14px 16px; border-bottom: 1px solid var(--line2); font-size: 13px; line-height: 19px">{{n.rule}}</span>
+<span style="padding: 14px 16px; border-bottom: 1px solid var(--line2); display: flex; flex-direction: column; gap: 6px; align-items: flex-start"><span class="x">✕ now</span><span class="mono" style="font-size: 11px; padding: 3px 8px; border-radius: 6px; background: {{n.badBg}}; color: {{n.badFg}}; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{n.bad}}</span></span>
+<span style="padding: 14px 16px; border-bottom: 1px solid var(--line2); display: flex; flex-direction: column; gap: 6px; align-items: flex-start"><span class="ok">✓ instead</span><span class="pin f-{{n.fam}}"><sc-if value="{{n.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{n.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{n.ic.unavailable}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9l6 6"></path><path d="M15 9l-6 6"></path><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{n.ic.draft}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6 3 20l1.4-4.4Z"></path></svg></sc-if><sc-if value="{{n.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if><sc-if value="{{n.ic.decision}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><path d="M4 22v-7"></path></svg></sc-if><sc-if value="{{n.ic.signal}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg></sc-if><sc-if value="{{n.ic.test}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></svg></sc-if><sc-if value="{{n.ic.failed}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2"></path><path d="M8.5 2h7"></path><path d="m2 2 20 20"></path></svg></sc-if><sc-if value="{{n.ic.source}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{n.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{n.ic.history}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg></sc-if><sc-if value="{{n.ic.doc}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{n.ic.hidden}}" hint-placeholder-val="{{false}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg></sc-if><span class="lab">{{n.good}}</span></span></span>
+</sc-for>
+</div>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":2400}}'>
+var P = {
+  conflict: ['m16 3 4 4-4 4', 'M20 7H4', 'm8 21-4-4 4-4', 'M4 17h16'],
+  gap: [],
+  unavailable: ['M9 9l6 6', 'M15 9l-6 6'],
+  draft: ['M12 20h9', 'M16.4 3.6a2.1 2.1 0 0 1 3 3L7.4 18.6 3 20l1.4-4.4Z'],
+  batch: ['M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z', 'm22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65'],
+  decision: ['M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z', 'M4 22v-7'],
+  signal: ['M22 12h-4l-3 9L9 3l-3 9H2'],
+  test: ['M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2', 'M8.5 2h7', 'M7 16h10'],
+  failed: ['M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2', 'M8.5 2h7', 'm2 2 20 20'],
+  source: ['m16 18 6-6-6-6', 'm8 6-6 6 6 6'],
+  graph: ['M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9', 'M12 12v3'],
+  history: ['M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8', 'M3 3v5h5', 'M12 7v5l4 2'],
+  doc: ['M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z', 'M14 2v4a2 2 0 0 0 2 2h4', 'M16 13H8', 'M16 17H8']
+};
+var FAM = { req: 'Asks you · magenta', sug: 'Asks you · amber', human: 'Person · not a marker', draft: 'Person · unsaved · not a marker', transient: 'Transient', neutral: 'Informs' };
+var KINDS = [
+  { id: 'conflict', label: 'Conflict', fam: 'req', card: 'Conflict', lucide: 'arrow-right-left', data: 'conflict', changed: false },
+  { id: 'decision', label: 'Decision', fam: 'req', card: 'Recorded decision signal', lucide: 'flag', data: 'conflict "Decision" → decision', changed: true },
+  { id: 'failed', label: 'Failed', fam: 'sug', card: 'Failed / invalidated check', lucide: 'flask-conical-off', data: 'test "Check" (not usable) → failed', changed: true },
+  { id: 'gap', label: 'Gap', fam: 'sug', card: 'Reported assessment gap', lucide: 'circle-dashed', data: 'test "Gap" → gap', changed: true },
+  { id: 'unavailable', label: 'Unavailable', fam: 'sug', card: 'Linked evidence unavailable', lucide: 'circle-dashed + x', data: 'test "Check" (missing) → unavailable', changed: true },
+  { id: 'comment', label: 'VD', fam: 'human', card: 'Review comment · author', lucide: 'bubble with initials', data: 'comment (margin item)', changed: false },
+  { id: 'draft', label: 'Draft', fam: 'draft', card: 'Draft comment', lucide: 'pencil-line', data: 'UI only (parked draft)', changed: false },
+  { id: 'batch', label: 'Same batch', fam: 'transient', card: 'Same batch · unreviewed', lucide: 'layers', data: 'batch', changed: false },
+  { id: 'signal', label: 'Signal', fam: 'neutral', card: 'Recorded contextual signal', lucide: 'activity', data: 'history "Context" → signal', changed: true },
+  { id: 'test', label: 'Test', fam: 'neutral', card: 'Test / native check · usable', lucide: 'flask-conical', data: 'test (usable)', changed: false },
+  { id: 'source', label: 'Source', fam: 'neutral', card: 'Captured source', lucide: 'code', data: 'graph + file name → source', changed: true },
+  { id: 'graph', label: 'Graph', fam: 'neutral', card: 'Graph · blast radius', lucide: 'git-fork', data: 'graph', changed: false },
+  { id: 'history', label: 'History', fam: 'neutral', card: 'Unit history', lucide: 'history', data: 'history', changed: false },
+  { id: 'doc', label: 'Doc', fam: 'neutral', card: 'Doc / ticket', lucide: 'file-text', data: 'doc', changed: false }
+];
+// which literal icon an item draws (the template holds one SVG per kind; no templated path data)
+function icOf(id) { var o = {}; o[id] = true; return o; }
+function view(k) {
+  return { label: k.label, fam: k.fam, famName: FAM[k.fam], card: k.card, lucide: k.lucide, data: k.data, changed: k.changed,
+    paths: P[k.id] || [], isGap: k.id === 'gap' || k.id === 'unavailable', ic: icOf(k.id),
+    isIcon: k.fam !== 'human' && k.fam !== 'draft', isHuman: k.fam === 'human', isDraft: k.fam === 'draft' };
+}
+var STATES = [
+  { name: 'Rest', cls: '', note: 'Kind tint only.' },
+  { name: 'Hover', cls: 's-hover', note: 'Real pointer only. One tint step; its lines tint.' },
+  { name: 'Focus', cls: 's-focus', note: 'Keyboard focus-visible ring; same peek as hover.' },
+  { name: 'Open', cls: 's-open', note: 'Ink fill while its card is open.' },
+  { name: 'Engaged', cls: 's-open', lines: true, rowCls: 'eng', note: 'While its card or list is open, its lines keep the hover tint inside a 2px ring; the numbers take the open tint.' },
+  { name: 'Landed', cls: '', lines: true, rowCls: 'land', note: 'Opening it brings its lines into view and tints them once, then fades. Reduced motion: the tint stays until the next action.' },
+  { name: 'Read-only', cls: 's-muted', note: 'In a read-only neighbor: outline, no colour.' },
+  { name: 'Resolved', cls: 's-muted', note: 'Comments only; hidden behind "N resolved".' }
+];
+var NEVERS = [
+  { rule: 'A file name as the label. It hides the kind and repeats the file header.', bad: 'start-review-operation.ts', badBg: 'var(--raised)', badFg: 'var(--ink2)', k: 'source', good: 'Source' },
+  { rule: 'Kinds told apart by colour alone. Doc, Graph and History were the same grey chip.', bad: 'Doc   Graph   History', badBg: 'var(--raised)', badFg: 'var(--ink2)', k: 'graph', good: 'Graph' },
+  { rule: 'Lane primitives as marker icons. A diamond already means human-required.', bad: '◆ Conflict', badBg: 'var(--req-tint)', badFg: 'var(--req-ink)', k: 'conflict', good: 'Conflict' },
+  { rule: 'A failed check in the same grey as a passing one. Failure asks you; it takes amber.', bad: 'Check', badBg: 'var(--raised)', badFg: 'var(--ink2)', k: 'failed', good: 'Failed' },
+  { rule: 'Loose line numbers for markers outside the rendered rows.', bad: '+71   +73', badBg: 'transparent', badFg: 'var(--muted)', k: 'hidden', good: '2 hidden' },
+  { rule: 'A grey translucent tooltip as the preview. Use the light peek card.', bad: 'This excerpt establishes…', badBg: 'rgba(80,76,70,.85)', badFg: '#fff', k: 'gap', good: 'Gap' }
+];
+
+class Component extends DCLogic {
+  renderVals() {
+    var kinds = KINDS.map(view);
+    return {
+      theme: this.props.theme || 'light',
+      kinds: kinds,
+      neutral: KINDS.filter(function (k) { return ['source', 'graph', 'history', 'doc'].indexOf(k.id) >= 0; }).map(view),
+      asks: KINDS.filter(function (k) { return ['conflict', 'decision', 'failed', 'gap'].indexOf(k.id) >= 0; }).map(view),
+      states: STATES,
+      prio: KINDS.filter(function (k) { return k.id !== 'unavailable' && k.id !== 'draft'; }).map(function (k, i, a) { return { label: k.id === 'comment' ? 'Comment' : k.label, more: i < a.length - 1 }; }),
+      nevers: NEVERS.map(function (n) {
+        var k = KINDS.filter(function (x) { return x.id === n.k; })[0];
+        return { rule: n.rule, bad: n.bad, badBg: n.badBg, badFg: n.badFg, good: n.good,
+          fam: k ? k.fam : 'transient', paths: k ? P[k.id] : ['m8 9 4-4 4 4', 'm8 15 4 4 4-4'], isGap: n.k === 'gap', ic: icOf(k ? k.id : 'hidden') };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

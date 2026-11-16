@@ -1,0 +1,13 @@
+{
+  "project": "google/diff-match-patch",
+  "source": "https://github.com/google/diff-match-patch",
+  "commit": "62f2e689f498f9c92dbc588c58750addec9b1654",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/google/diff-match-patch/62f2e689f498f9c92dbc588c58750addec9b1654/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    }
+  ]
+}

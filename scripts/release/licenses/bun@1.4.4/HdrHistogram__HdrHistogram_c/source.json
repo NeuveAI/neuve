@@ -1,0 +1,18 @@
+{
+  "project": "HdrHistogram/HdrHistogram_c",
+  "source": "https://github.com/HdrHistogram/HdrHistogram_c",
+  "commit": "18c7a324383dded1451d15621cd018b0048057d0",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/HdrHistogram/HdrHistogram_c/18c7a324383dded1451d15621cd018b0048057d0/LICENSE.txt",
+      "sha256": "93a583ec58cd981232ec6fab797ff6f17f350c97b83ae0700b2d9350c91028af"
+    },
+    {
+      "name": "COPYING.txt",
+      "url": "https://raw.githubusercontent.com/HdrHistogram/HdrHistogram_c/18c7a324383dded1451d15621cd018b0048057d0/COPYING.txt",
+      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+    }
+  ]
+}

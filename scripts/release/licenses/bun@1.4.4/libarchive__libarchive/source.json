@@ -1,0 +1,18 @@
+{
+  "project": "libarchive/libarchive",
+  "source": "https://github.com/libarchive/libarchive",
+  "commit": "27cbc7827172698143e440801fc0ba39ccb4f1f5",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "COPYING",
+      "url": "https://raw.githubusercontent.com/libarchive/libarchive/27cbc7827172698143e440801fc0ba39ccb4f1f5/COPYING",
+      "sha256": "30e556b3959e3985d66efefec5eaac51d4995053caa1d3cffe6eb916f146f229"
+    },
+    {
+      "name": "libarchive__archive_write_add_filter_compress.c.L26-L57",
+      "url": "https://raw.githubusercontent.com/libarchive/libarchive/27cbc7827172698143e440801fc0ba39ccb4f1f5/libarchive/archive_write_add_filter_compress.c#L26-L57",
+      "sha256": "097301804244a0e45ed9cde5070bf8b96e5a466a866972d5284dd612c7b5fa11"
+    }
+  ]
+}

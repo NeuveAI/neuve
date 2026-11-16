@@ -1,0 +1,13 @@
+{
+  "project": "import-js/eslint-plugin-import",
+  "source": "https://github.com/import-js/eslint-plugin-import",
+  "commit": "a60d71548b0d12b750f7a7040285774fed25975a",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/import-js/eslint-plugin-import/a60d71548b0d12b750f7a7040285774fed25975a/LICENSE",
+      "sha256": "7829efc4266fad5f57f7fc489429a3b35d0c62183c0bd617ef6591f64c980c92"
+    }
+  ]
+}

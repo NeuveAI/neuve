@@ -1,0 +1,113 @@
+{
+	"name": "@ace/host",
+	"private": true,
+	"type": "module",
+	"license": "MIT",
+	"scripts": {
+		"types": "tsgo --noEmit",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "NEUVE_TEST_SUITE_TIMEOUT_MS=300000 bun ../../scripts/test-budget.ts --timeout 60000 ./tests"
+	},
+	"dependencies": {
+		"@ace/channel": "workspace:*",
+		"@ace/directory": "workspace:*",
+		"@githubnext/desktop-tools": "github:githubnext/desktop-tools#c3e08eb55958ba87ca65e12f735d795bd2b921eb",
+		"@earendil-works/chord": "1.0.0",
+		"@earendil-works/pi-ai": "1.0.0",
+		"@earendil-works/pi-durable": "1.0.0",
+		"zod": "4.6.5",
+		"ws": "8.22.0",
+		"@neuve/records-schema": "workspace:*",
+		"@neuve/records-core": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "1.4.4",
+		"@types/ws": "8.18.2"
+	},
+	"exports": {
+		"./judgement-hooks": {
+			"types": "./.types/src/judgement-hooks.d.ts",
+			"default": "./src/judgement-hooks.ts"
+		},
+		"./protocol": {
+			"types": "./.types/src/protocol.d.ts",
+			"default": "./src/protocol.ts"
+		},
+		"./gateway-client": {
+			"types": "./.types/src/gateway-client.d.ts",
+			"default": "./src/gateway-client.ts"
+		},
+		"./config": {
+			"types": "./.types/src/config.d.ts",
+			"default": "./src/config.ts"
+		},
+		"./auth": {
+			"types": "./.types/src/auth.d.ts",
+			"default": "./src/auth.ts"
+		},
+		"./health": {
+			"types": "./.types/src/health.d.ts",
+			"default": "./src/health.ts"
+		},
+		"./host": {
+			"types": "./.types/src/host.d.ts",
+			"default": "./src/host.ts"
+		},
+		"./worker-runtime": {
+			"types": "./.types/src/worker-runtime.d.ts",
+			"default": "./src/worker-runtime.ts"
+		},
+		"./host-config": {
+			"types": "./.types/src/host-config.d.ts",
+			"default": "./src/host-config.ts"
+		},
+		"./planning": {
+			"types": "./.types/src/planning.d.ts",
+			"default": "./src/planning.ts"
+		},
+		"./native-review": {
+			"types": "./.types/src/native-review.d.ts",
+			"default": "./src/native-review.ts"
+		},
+		"./parse": {
+			"types": "./.types/src/parse.d.ts",
+			"default": "./src/parse.ts"
+		},
+		"./app-gateway": {
+			"types": "./.types/src/app-gateway.d.ts",
+			"default": "./src/app-gateway.ts"
+		},
+		"./private-gateway-client": {
+			"types": "./.types/src/private-gateway-client.d.ts",
+			"default": "./src/private-gateway-client.ts"
+		},
+		"./extension-protocol": {
+			"types": "./.types/src/extension-protocol.d.ts",
+			"default": "./src/extension-protocol.ts"
+		},
+		"./review-protocol": {
+			"types": "./.types/src/review-protocol.d.ts",
+			"default": "./src/review-protocol.ts"
+		},
+		"./runtime-hooks": {
+			"types": "./.types/src/runtime-hooks.d.ts",
+			"default": "./src/runtime-hooks.ts"
+		},
+		"./worker": {
+			"types": "./.types/src/worker-runtime.d.ts",
+			"default": "./src/worker-runtime.ts"
+		},
+		"./cli": {
+			"types": "./.types/src/cli.d.ts",
+			"default": "./src/cli.ts"
+		},
+		"./native-source-lifecycle": {
+			"types": "./.types/src/native-source-lifecycle.d.ts",
+			"default": "./src/native-source-lifecycle.ts"
+		},
+		"./native-source-protocol": {
+			"types": "./.types/src/native-source-protocol.d.ts",
+			"default": "./src/native-source-protocol.ts"
+		}
+	}
+}

@@ -1,0 +1,14 @@
+[install]
+# The global ~/.bunfig.toml enforces a 10-day minimumReleaseAge.
+# Manually approved exceptions (user-approved 2026-10-03):
+#   effect — v4.0.0 (published 2026-10-01) is required for the Effect backend.
+minimumReleaseAgeExcludes = ["effect"]
+
+[run]
+# Bun only: run package bins (vite, storybook, tsc, …) on the Bun runtime even when
+# they declare a node shebang. Needed for bun:sqlite in the BFF's SSR, and the project
+# rule is "use bun exclusively".
+bun = true
+
+[test]
+preload = ["./scripts/test-budget.ts"]

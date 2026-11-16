@@ -1,0 +1,22 @@
+{
+  "name": "@ace/channel-service",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "tsgo --noEmit",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@ace/channel": "workspace:*",
+    "@ace/directory": "workspace:*",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-durable": "1.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260925.2",
+    "wrangler": "4.140.0"
+  }
+}

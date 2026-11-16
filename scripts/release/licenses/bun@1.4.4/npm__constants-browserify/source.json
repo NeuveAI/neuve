@@ -1,0 +1,14 @@
+{
+  "project": "constants-browserify",
+  "source": "https://registry.npmjs.org/constants-browserify/-/constants-browserify-1.0.0.tgz",
+  "version": "1.0.0",
+  "commit": "e0ee990c75f3a0b3275e6bb2e3ff4d5d169d1b9d",
+  "pin": "the version whose constants.json Bun's src/node-fallbacks/constants.js is closest to (of 0.0.0, 0.0.1, 1.0.0)",
+  "files": [
+    {
+      "name": "README.md.L34-L54",
+      "url": "https://registry.npmjs.org/constants-browserify/-/constants-browserify-1.0.0.tgz#package/README.md:L34-L54",
+      "sha256": "53d5a4d4ca32e79b1295ee95e99f31e8e29b653599457e6fa7ed602f723ba282"
+    }
+  ]
+}

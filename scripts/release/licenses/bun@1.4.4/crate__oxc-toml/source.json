@@ -1,0 +1,13 @@
+{
+  "project": "oxc-toml",
+  "source": "https://static.crates.io/crates/oxc-toml/oxc-toml-0.15.1.crate",
+  "version": "0.15.1",
+  "pin": "Bun names no version; the version current on crates.io when bun-v1.4.4 was tagged (22 October 2026)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://static.crates.io/crates/oxc-toml/oxc-toml-0.15.1.crate#oxc-toml-0.15.1/LICENSE",
+      "sha256": "ae497db130b5396e915129c36d70aa7a66a2d89d0713cfd503e5accb97eadf26"
+    }
+  ]
+}

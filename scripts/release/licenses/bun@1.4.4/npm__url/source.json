@@ -1,0 +1,14 @@
+{
+  "project": "url",
+  "source": "https://registry.npmjs.org/url/-/url-0.11.0.tgz",
+  "version": "0.11.0",
+  "commit": "7f82d6b09acba099163fede09b4226b4e55a5377",
+  "pin": "the version whose url.js Bun's src/node-fallbacks/url.js is closest to, of all eleven",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/url/-/url-0.11.0.tgz#package/LICENSE",
+      "sha256": "97f780d3c79a42236f2b3435860f284c0ac6b958622f6bc9f1ac43fd49689b7b"
+    }
+  ]
+}

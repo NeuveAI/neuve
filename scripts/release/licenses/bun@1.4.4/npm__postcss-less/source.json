@@ -1,0 +1,14 @@
+{
+  "project": "postcss-less",
+  "source": "https://registry.npmjs.org/postcss-less/-/postcss-less-6.0.0.tgz",
+  "version": "6.0.0",
+  "commit": "984f4901aced4b74535d96b04242681d538d628b",
+  "pin": "Prettier 3.9.9's yarn.lock (prettier/prettier at cdd17f2288b28b170a76416c72dac56e3ea5daff), the release Bun's src/format/CLAUDE.md names as the target of its port",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/postcss-less/-/postcss-less-6.0.0.tgz#package/LICENSE",
+      "sha256": "ce4ef9c48a45bbfc480671256a45a191ece0622d78061599b09b0ee60cf517d6"
+    }
+  ]
+}

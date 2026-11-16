@@ -1,0 +1,11 @@
+{
+  "status": "passed",
+  "caseCount": 25,
+  "fileCount": 978,
+  "retainedBytes": 63144867,
+  "failures": [],
+  "limitations": [
+    "Local bytes and source/index consistency only.",
+    "No semantic gold, historical completeness, source replay, rights clearance or product review approval established."
+  ]
+}

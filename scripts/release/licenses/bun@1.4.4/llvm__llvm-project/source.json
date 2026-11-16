@@ -1,0 +1,13 @@
+{
+  "project": "llvm/llvm-project",
+  "source": "https://github.com/llvm/llvm-project",
+  "commit": "a4bf6cd7cfb1a1421ba92bca9d017b49936c55e4",
+  "pin": "the tag Bun's LICENSE.md links (llvmorg-19.1.0^{})",
+  "files": [
+    {
+      "name": "libcxxabi__LICENSE.TXT",
+      "url": "https://raw.githubusercontent.com/llvm/llvm-project/a4bf6cd7cfb1a1421ba92bca9d017b49936c55e4/libcxxabi/LICENSE.TXT",
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+    }
+  ]
+}

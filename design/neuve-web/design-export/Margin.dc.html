@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Margin pins, grouped per line</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+/* Board-only, no code token: */
+.theme-light{--hunk-hover:#EFEADF;--gra:#1F4F8F;--gra-tint:#E9F0FB;--gra-ink:#1A3F72}
+.theme-dark{--hunk-hover:#2A2723;--gra:#9DBDF2;--gra-tint:#17233A;--gra-ink:#D3E2FA}
+a{color:var(--ink)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.kw{color:var(--kw)}.st{color:var(--st)}.fn{color:var(--fn)}.cm{color:var(--cm);font-style:italic}.nu{color:var(--nu)}.id{color:var(--id)}.pl{color:var(--pl)}
+/* ── FILE HEADER (diff-file.tsx FileHeader, round 3 #1–2; measured from review-desk-diff-file--owned-ranges). One block on
+   Ranges, Margin and Threads: keep the copies identical. 44px tall: the chevron folds the file (aria-expanded), the directory
+   in muted ink gives way before the basename (500), the +/− counts, the file's controls, then Viewed (aria-pressed; it marks
+   the file for the reader and folds it). Every control's hit area fills the header's 44px (::after). The unchecked box is
+   drawn in --line-strong (3.51:1 on the surface; 3.24:1 dark), not --faint as the code has it (3.01:1). ── */
+.fh{position:relative;height:44px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 8px 0 6px;background:var(--surface);border-bottom:1px solid var(--line2)}
+.fh.folded{border-bottom-color:transparent}
+.fbtn{position:relative;width:28px;height:28px;flex:0 0 auto;border:0;padding:0;border-radius:7px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.fbtn::after{content:"";position:absolute;top:-8px;bottom:-8px;left:-6px;right:-10px}
+.fbtn .chv{display:inline-flex;transition:transform var(--nv-dur-chevron) var(--nv-ease-standard)}
+.fh.folded .fbtn .chv{transform:rotate(-90deg)}
+.fpath{display:flex;align-items:baseline;min-width:0;overflow:hidden;white-space:nowrap;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px}
+.fpath .dir{min-width:0;flex-shrink:1000000;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.fpath .base{flex-shrink:0;font-weight:500;color:var(--ink)}
+.fh.viewed .fpath .base{color:var(--muted)}
+.fcnt{display:inline-flex;gap:8px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;white-space:nowrap}
+.fseg{display:inline-flex;flex:0 0 auto;padding:3px;border-radius:8px;background:var(--raised)}
+.fseg button{position:relative;border:0;background:transparent;height:30px;padding:0 8px;border-radius:6px;font-size:13px;color:var(--muted);white-space:nowrap;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.fseg button::after{content:"";position:absolute;top:-7px;bottom:-7px;left:0;right:0}
+.fseg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.vbtn{position:relative;height:28px;flex:0 0 auto;border:0;border-radius:7px;background:transparent;padding:0 10px 0 8px;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.vbtn::after{content:"";position:absolute;top:-8px;bottom:-8px;left:0;right:-8px}
+.vbox{width:14px;height:14px;flex:0 0 auto;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--line-strong);display:inline-flex;align-items:center;justify-content:center;color:#fff;transition:background-color var(--nv-dur-check) var(--nv-ease-standard)}
+.vbtn[aria-pressed="true"]{color:var(--agt-fg)}
+.vbtn[aria-pressed="true"] .vbox{background:var(--agt);box-shadow:none}
+@media (hover:hover){.fbtn:hover,.vbtn:hover{background:var(--raised);color:var(--ink)}.vbtn[aria-pressed="true"]:hover{color:var(--agt-fg)}.fseg button:hover{color:var(--ink)}}
+.fbtn:focus-visible,.vbtn:focus-visible,.fseg button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.fbtn,.vbtn,.vbox,.fseg button,.fbtn .chv{transition:none}}
+/* ── end FILE HEADER ── */
+/* ── DIFF ROW (the diff's gutter at HEAD, measured from review-desk-diff-file--owned-ranges). One block on Ranges, Margin and
+   Threads: keep the copies identical. One number cell holds the old and the new number (11.5px, --nw wide each, 10px apart;
+   14px in, 17px out) with the sign at its right edge (4px in, the diff colour); the code cell starts 7.5px in. --nw is the
+   widest number's width: 2 digits 14px, 3 digits 21px, 4 digits 28px. ── */
+.row{display:grid;grid-template-columns:calc(41px + var(--nw,21px) * 2) minmax(0,1fr);height:24px;align-items:center;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px;line-height:24px}
+.row>.ln{position:relative;height:24px;box-sizing:border-box;padding:0 17px 0 14px;display:grid;grid-template-columns:repeat(2,var(--nw,21px));column-gap:10px;justify-items:end;font-size:11.5px;color:var(--nv-ln);text-align:right}
+.row>.ln::after{content:attr(data-sign);position:absolute;right:4px;top:0}
+.row>.code{white-space:pre;overflow:hidden;padding:0 12px 0 7.5px}
+.k-ctx{background:var(--surface)}
+.k-add{background:var(--add-bg)}.k-add>.ln{background:var(--add-num);color:var(--add-ln)}.k-add>.ln::after{color:var(--add-fg)}
+.k-del{background:var(--del-bg)}.k-del>.ln{background:var(--del-num);color:var(--del-ln)}.k-del>.ln::after{color:var(--del-fg)}
+/* ── end DIFF ROW ── */
+.row{position:relative}
+.ln{transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+/* a pin's lines: lit under the code text, the shared treatment (BRIEFING LINKS block) — on hover or focus through the
+   pin's go-tN class, and while its card is open through .lit; the number ink darkens with them */
+/* the open card's or pinned list's lines: the engaged treatment in the shared block (data-engaged) */
+@media (hover:hover){.lscope:has(.go-t1:hover) .lrow.t1 .ln,.lscope:has(.go-t2:hover) .lrow.t2 .ln,.lscope:has(.go-t3:hover) .lrow.t3 .ln,.lscope:has(.go-t4:hover) .lrow.t4 .ln,.lscope:has(.go-t5:hover) .lrow.t5 .ln{color:var(--ink)}}
+.lscope:has(.go-t1:focus-visible) .lrow.t1 .ln,.lscope:has(.go-t2:focus-visible) .lrow.t2 .ln,.lscope:has(.go-t3:focus-visible) .lrow.t3 .ln,.lscope:has(.go-t4:focus-visible) .lrow.t4 .ln,.lscope:has(.go-t5:focus-visible) .lrow.t5 .ln{color:var(--ink)}
+/* gap row (diff-file.tsx, round-3 #5): chevrons-up-down in the 88px number column, then the count and the range */
+.gap{display:grid;grid-template-columns:88px minmax(0,1fr);align-items:center;height:32px;background:var(--expand);color:var(--muted)}
+.gap .xb{width:88px;height:32px;border:0;padding:0;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.gap .gt{justify-self:start;height:32px;border:0;background:transparent;padding:0 10px;display:inline-flex;align-items:center;gap:10px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;color:var(--muted);transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.gap .xb:hover{background:var(--raised);color:var(--ink)}.gap .gt:hover{color:var(--ink)}}
+.gap .xb:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+
+.mg{position:relative;flex:0 0 300px}
+.pin{position:absolute;left:0;display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border:0;border-radius:6px;background:var(--raised);font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:var(--ink2);white-space:nowrap;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard),box-shadow var(--nv-dur-surface-tone) var(--nv-ease-standard),opacity var(--nv-dur-dim-others) var(--nv-ease-standard)}
+/* 22px pins; each hit area fills 44px (pins sit three or more rows apart here) */
+button.pin::after{content:"";position:absolute;top:-12px;bottom:-12px;left:-1px;right:-1px}
+.pin .g,.gi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.dash{stroke-dasharray:3.2 3.2}
+.pin .n{min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;border-radius:4px;background:var(--surface);color:var(--ink2);font-size:10.5px;line-height:16px;text-align:center}
+.pin .tgt{color:var(--faint)}
+.pin{padding:0 8px 0 6px;gap:5px}
+.t-neutral{background:var(--raised)}.t-neutral .g{color:var(--muted)}
+.t-req{background:var(--req-tint);color:var(--req-ink)}.t-req .g{color:var(--req)}
+.t-sug{background:var(--sug-tint);color:var(--sug-ink)}.t-sug .g{color:var(--sug)}
+.t-transient{background:transparent;box-shadow:none;border:1px dashed var(--line-strong);color:var(--muted)}
+.t-hidden{background:transparent;box-shadow:inset 0 0 0 1px var(--line);color:var(--muted)}
+.pin.on .g{color:var(--bg)}
+@media (hover:hover){.pin:hover{box-shadow:inset 0 0 0 1px var(--line),0 1px 2px rgba(0,0,0,.06)}}
+.pin.on{background:var(--ink);color:var(--bg)}
+/* isolation, as Main and the code (diff-file.tsx, [data-overlay-item][inert]): while a card is open the other pins are inert,
+   dimmed, out of reach of the pointer (no hover lighting; a press only closes, through the outside listener) and out of the tab order.
+   The peek only shows when no card is open, so its items are never reachable then. */
+.pin.iso{opacity:var(--nv-opacity-dim-others);pointer-events:none}
+.pin.on .tgt{color:var(--bg);opacity:.7}
+.pin.on .n{background:rgba(255,255,255,.18);color:var(--bg)}
+
+.peek{position:absolute;left:0;width:300px;z-index:5;background:var(--surface);border-radius:10px;box-shadow:var(--shadow-card);padding:6px;box-sizing:border-box;animation:peek var(--nv-dur-hint) var(--nv-ease-ios-out) both}
+@keyframes peek{from{opacity:0;transform:translateY(calc(var(--nv-offset-hint) * -1))}to{opacity:1;transform:none}}
+.item{display:grid;grid-template-columns:14px minmax(0,1fr);gap:2px 8px;align-items:start;width:100%;border:0;background:transparent;border-radius:7px;padding:8px;text-align:left;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.item:hover{background:var(--raised)}}
+.item .k{font-size:12px;font-weight:600;color:var(--ink)}
+.item .w{grid-column:2;font-size:12px;line-height:17px;color:var(--muted)}
+.item .m{grid-column:2;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:var(--faint)}
+.card{position:absolute;left:0;width:300px;z-index:6;background:var(--surface);border-radius:12px;box-shadow:var(--shadow-card);box-sizing:border-box;animation:card var(--nv-dur-card) var(--nv-ease-emphasized-decelerate) both}
+@keyframes card{from{opacity:0;transform:translateY(calc(var(--nv-offset-card) * -1)) scale(var(--nv-scale-enter))}to{opacity:1;transform:none}}
+.qbtn{border:0;background:transparent;height:28px;padding:0 8px;border-radius:7px;font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:6px;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard);text-decoration:none}
+@media (hover:hover){.qbtn:hover{background:var(--raised);color:var(--ink)}}
+.qbtn .arr{transition:transform var(--nv-dur-nudge) var(--nv-ease-ios-out)}
+@media (hover:hover){.qbtn:hover .arr{transform:translateX(3px)}}
+@media (prefers-reduced-motion:reduce){.peek,.card{animation:none}.pin{transition:none}}
+@media (max-width:980px){.mg{display:none}}
+/* ── BRIEFING LINKS (round-5.md, option B). One block on Briefing, Main, Delivery, Margin and Threads: keep the copies identical. ──
+   A phrase that describes part of the change is the link: ink, a quiet underline that turns ink on real hover, the focus
+   ring on keyboard focus (criteria-card.tsx REVIEW_LINK). An anchor, so a long phrase wraps with its sentence.
+   In the briefing a citation chip shows only its marker-kind icon; its name and tooltip say the kind and the target
+   (marker-kind.tsx CitationChip, iconOnly), kept on one line with the punctuation after it. One treatment for every entry
+   point to lines (round-5.md, follow-up decisions): hover or keyboard focus on a phrase, a chip or a margin pin (.go-tN,
+   comment pins too) lights exactly its lines (--nv-lit); activating any of them lands: a tint (--nv-land) that holds (landHold), then fades (landFade, emphasized
+   accelerate). Both tints are an inset shadow on the line's cells (never the pin margin), under the code text, as the diff draws them. */
+.lk{font:inherit;color:var(--nv-ink);background:transparent;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit;
+  text-decoration:underline;text-decoration-color:var(--nv-muted);text-decoration-thickness:1px;text-underline-offset:3px;border-radius:3px;
+  transition:text-decoration-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.lk:hover{text-decoration-color:var(--nv-ink)}}
+.lk:focus-visible{outline:2px solid var(--nv-focus);outline-offset:2px}
+.lk:focus:not(:focus-visible){outline:none}
+.lk .lsr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 6px 0 5px;box-sizing:border-box;border:0;border-radius:5px;vertical-align:1px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;line-height:20px;white-space:nowrap;cursor:pointer;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.chip.ico{width:20px;padding:0;justify-content:center}
+.lglue{white-space:nowrap}
+.chip:focus-visible{outline:2px solid var(--nv-focus);outline-offset:2px}
+.chip:focus:not(:focus-visible){outline:none}
+.chip .ci{width:11px;height:11px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.chip .dash{stroke-dasharray:3.2 3.2}
+.c-neutral{background:var(--nv-raised);color:var(--nv-ink-2)}.c-neutral .ci{color:var(--nv-muted)}
+.c-sug{background:var(--nv-sug-tint);color:var(--nv-sug-ink)}.c-sug .ci{color:var(--nv-sug)}
+.c-req{background:var(--nv-req-tint);color:var(--nv-req-ink)}.c-req .ci{color:var(--nv-req)}
+.c-transient{background:transparent;border:1px dashed var(--nv-line-strong);color:var(--nv-muted)}.c-transient .ci{color:var(--nv-muted)}
+@media (hover:hover){.c-neutral:hover{background:var(--nv-raised-2)}.c-sug:hover{background:var(--nv-sug-tint-2)}.c-req:hover{background:var(--nv-req-tint-2)}.c-transient:hover{background:var(--nv-raised)}}
+.lrow>span:not(.mg),.lrow>.half>span{transition:box-shadow var(--nv-dur-line-tint) var(--nv-ease-standard),color var(--nv-dur-line-tint) var(--nv-ease-standard)}
+@media (hover:hover){
+.lscope:has(.go-t1:hover) .lrow.t1>span:not(.mg),.lscope:has(.go-t1:hover) .lrow.t1>.half>span,
+.lscope:has(.go-t2:hover) .lrow.t2>span:not(.mg),.lscope:has(.go-t2:hover) .lrow.t2>.half>span,
+.lscope:has(.go-t3:hover) .lrow.t3>span:not(.mg),.lscope:has(.go-t3:hover) .lrow.t3>.half>span,
+.lscope:has(.go-t4:hover) .lrow.t4>span:not(.mg),.lscope:has(.go-t4:hover) .lrow.t4>.half>span,
+.lscope:has(.go-t5:hover) .lrow.t5>span:not(.mg),.lscope:has(.go-t5:hover) .lrow.t5>.half>span,
+.lscope:has(.go-t6:hover) .lrow.t6>span:not(.mg),.lscope:has(.go-t6:hover) .lrow.t6>.half>span,
+.lscope:has(.go-t7:hover) .lrow.t7>span:not(.mg),.lscope:has(.go-t7:hover) .lrow.t7>.half>span,
+.lscope:has(.go-t8:hover) .lrow.t8>span:not(.mg),.lscope:has(.go-t8:hover) .lrow.t8>.half>span,
+.lscope:has(.go-t9:hover) .lrow.t9>span:not(.mg),.lscope:has(.go-t9:hover) .lrow.t9>.half>span,
+.lscope:has(.go-t10:hover) .lrow.t10>span:not(.mg),.lscope:has(.go-t10:hover) .lrow.t10>.half>span{box-shadow:inset 0 0 0 100vmax var(--nv-lit)}
+}
+.lscope:has(.go-t1:focus-visible) .lrow.t1>span:not(.mg),.lscope:has(.go-t1:focus-visible) .lrow.t1>.half>span,
+.lscope:has(.go-t2:focus-visible) .lrow.t2>span:not(.mg),.lscope:has(.go-t2:focus-visible) .lrow.t2>.half>span,
+.lscope:has(.go-t3:focus-visible) .lrow.t3>span:not(.mg),.lscope:has(.go-t3:focus-visible) .lrow.t3>.half>span,
+.lscope:has(.go-t4:focus-visible) .lrow.t4>span:not(.mg),.lscope:has(.go-t4:focus-visible) .lrow.t4>.half>span,
+.lscope:has(.go-t5:focus-visible) .lrow.t5>span:not(.mg),.lscope:has(.go-t5:focus-visible) .lrow.t5>.half>span,
+.lscope:has(.go-t6:focus-visible) .lrow.t6>span:not(.mg),.lscope:has(.go-t6:focus-visible) .lrow.t6>.half>span,
+.lscope:has(.go-t7:focus-visible) .lrow.t7>span:not(.mg),.lscope:has(.go-t7:focus-visible) .lrow.t7>.half>span,
+.lscope:has(.go-t8:focus-visible) .lrow.t8>span:not(.mg),.lscope:has(.go-t8:focus-visible) .lrow.t8>.half>span,
+.lscope:has(.go-t9:focus-visible) .lrow.t9>span:not(.mg),.lscope:has(.go-t9:focus-visible) .lrow.t9>.half>span,
+.lscope:has(.go-t10:focus-visible) .lrow.t10>span:not(.mg),.lscope:has(.go-t10:focus-visible) .lrow.t10>.half>span{box-shadow:inset 0 0 0 100vmax var(--nv-lit)}
+.lrow.landed>span:not(.mg),.lrow.landed>.half>span{box-shadow:inset 0 0 0 100vmax var(--nv-land)!important;transition:none!important}
+.lrow.landed.fading>span:not(.mg),.lrow.landed.fading>.half>span{box-shadow:inset 0 0 0 100vmax transparent!important;transition:box-shadow var(--nv-dur-land-fade) var(--nv-ease-emphasized-accelerate)!important}
+@media (prefers-reduced-motion:reduce){.lrow>span:not(.mg),.lrow>.half>span,.lk,.chip{transition:none}}
+.rm .lrow>span:not(.mg),.rm .lrow>.half>span,.rm .lk,.rm .chip{transition:none}
+/* Engaged pin (round-5.md, 2026-10-15): while a pin's list or one of its cards is open, whichever entry point opened it,
+   its lines show it. The board names those lines on its scope: data-engaged="tN". As the code (lib/diffs.ts): the code cells keep
+   the hover tint (--nv-lit) under the text and carry a 2px outline in --nv-engaged-ring round the range (sides on every row, the top
+   on the first, the bottom on the last; inset on the code cell, so the sticky gutter never covers it); the number cells sit outside
+   the outline with the stronger open tint (--nv-range-strong: accent 28%, 21% in dark) and their own number colour
+   (--nv-ln, --nv-add-ln, --nv-del-ln). In a split row only the side that holds the line is engaged: the new side, the right half.
+   The outline eases in with the line tint and, like it, is instant under reduced motion. A landing on engaged lines keeps the
+   outline and fades back to the engaged tint, not to nothing. Selectors are raised ([data-lscope], .lrow.lrow) to stay above the
+   hover rules on the same lines. */
+.lscope{--eng-num:var(--nv-range-strong);--eng-ring:var(--nv-engaged-ring)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10{--eng-top:transparent;--eng-bot:transparent}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1:not(.lrow.t1 + .lrow.lrow.t1),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2:not(.lrow.t2 + .lrow.lrow.t2),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3:not(.lrow.t3 + .lrow.lrow.t3),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4:not(.lrow.t4 + .lrow.lrow.t4),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5:not(.lrow.t5 + .lrow.lrow.t5),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6:not(.lrow.t6 + .lrow.lrow.t6),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7:not(.lrow.t7 + .lrow.lrow.t7),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8:not(.lrow.t8 + .lrow.lrow.t8),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9:not(.lrow.t9 + .lrow.lrow.t9),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10:not(.lrow.t10 + .lrow.lrow.t10){--eng-top:var(--eng-ring)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1:not(:has(+ .lrow.lrow.t1)),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2:not(:has(+ .lrow.lrow.t2)),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3:not(:has(+ .lrow.lrow.t3)),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4:not(:has(+ .lrow.lrow.t4)),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5:not(:has(+ .lrow.lrow.t5)),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6:not(:has(+ .lrow.lrow.t6)),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7:not(:has(+ .lrow.lrow.t7)),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8:not(:has(+ .lrow.lrow.t8)),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9:not(:has(+ .lrow.lrow.t9)),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10:not(:has(+ .lrow.lrow.t10)){--eng-bot:var(--eng-ring)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.half:last-child>span:not(.ln):not(.code){box-shadow:inset 0 0 0 100vmax var(--nv-lit)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.code,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.half:last-child>.code{box-shadow:inset 2px 0 0 var(--eng-ring),inset -2px 0 0 var(--eng-ring),inset 0 2px 0 var(--eng-top),inset 0 -2px 0 var(--eng-bot),inset 0 0 0 100vmax var(--nv-lit)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.ln,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.half:last-child>.ln{box-shadow:inset 0 0 0 100vmax var(--eng-num)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed>.code,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed>.half:last-child>.code{box-shadow:inset 2px 0 0 var(--eng-ring),inset -2px 0 0 var(--eng-ring),inset 0 2px 0 var(--eng-top),inset 0 -2px 0 var(--eng-bot),inset 0 0 0 100vmax var(--nv-land)!important}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.half:last-child>span:not(.ln):not(.code){box-shadow:inset 0 0 0 100vmax var(--nv-lit)!important}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.half:last-child>.code{box-shadow:inset 2px 0 0 var(--eng-ring),inset -2px 0 0 var(--eng-ring),inset 0 2px 0 var(--eng-top),inset 0 -2px 0 var(--eng-bot),inset 0 0 0 100vmax var(--nv-lit)!important}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.half:last-child>.ln{box-shadow:inset 0 0 0 100vmax var(--eng-num)!important}
+/* ── end BRIEFING LINKS ── */
+</style>
+</helmet>
+<div class="theme-{{theme}} lscope" data-lscope="margin" data-engaged="{{engaged}}" style="min-height: 900px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<div style="max-width: 1240px; margin: 0 auto; padding: 40px 24px 160px; box-sizing: border-box; display: flex; gap: 16px; align-items: flex-start">
+
+<div style="flex: 1 1 auto; min-width: 0; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); overflow: clip; --nw: 28px">
+<div class="fh {{fhCls}}">
+<button type="button" class="fbtn" aria-expanded="{{expanded}}" aria-controls="mg-body" aria-label="{{foldLabel}}" onClick="{{fold}}"><span class="chv" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></svg></span></button>
+<span class="fpath" title="apps/neuve-web/apps/web/src/server/live-review.ts"><span class="dir">apps/neuve-web/apps/web/src/server/</span><span class="base">live-review.ts</span></span>
+<span class="fcnt"><span style="color: var(--add-fg)">+40</span><span style="color: var(--del-fg)">−14</span></span>
+<span style="flex: 1 1 auto"></span>
+<button type="button" class="vbtn" aria-pressed="{{viewed}}" onClick="{{toggleViewed}}"><span class="vbox" aria-hidden="true"><sc-if value="{{viewed}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></sc-if></span>Viewed</button>
+</div>
+<sc-if value="{{open}}" hint-placeholder-val="{{true}}">
+<div id="mg-body">
+<div class="gap"><button type="button" class="xb" aria-label="Show 20 of 1152 unchanged lines, L12–1163"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5 5 5-5"></path><path d="m7 9 5-5 5 5"></path></svg></button><button type="button" class="gt" tabIndex="-1" aria-hidden="true"><span>1152 unchanged lines</span><span>L12–1163</span></button></div>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="18">
+<div class="row lrow k-{{r.kind}} {{r.lit}} {{r.tc}}"><span class="ln" data-sign="{{r.sign}}"><span>{{r.o}}</span><span>{{r.no}}</span></span><span class="code"><sc-for list="{{r.toks}}" as="tk" hint-placeholder-count="4"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div>
+</sc-for>
+</div>
+</sc-if>
+</div>
+
+<div class="mg" aria-label="Context margin" style="align-self: stretch" onMouseLeave="{{leave}}">
+<sc-if value="{{open}}" hint-placeholder-val="{{true}}"><span class="pin t-hidden" style="top: 49px"><svg class="g" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4-4 4 4"></path><path d="m8 15 4 4 4-4"></path></svg>2 hidden</span></sc-if>
+<sc-for list="{{pins}}" as="p" hint-placeholder-count="5">
+<button type="button" class="pin t-{{p.tone}} {{p.on}} {{p.iso}} {{p.go}}" style="top: {{p.top}}px" tabIndex="{{p.tab}}" onMouseEnter="{{p.enter}}" onFocus="{{p.focus}}" onBlur="{{p.blur}}" onClick="{{p.click}}" aria-expanded="{{p.expanded}}" aria-label="{{p.aria}}">
+<sc-if value="{{p.ic.source}}" hint-placeholder-val="{{false}}"><svg class="g" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{p.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="g" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{p.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="g" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{p.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="g" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{p.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="g" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if>{{p.label}}<sc-if value="{{p.hasTgt}}" hint-placeholder-val="{{false}}"><span class="tgt">{{p.tgt}}</span></sc-if><sc-if value="{{p.multi}}" hint-placeholder-val="{{false}}"><span class="n">{{p.count}}</span></sc-if>
+</button>
+</sc-for>
+
+<sc-if value="{{showPeek}}" hint-placeholder-val="{{false}}">
+<div class="peek" role="dialog" aria-label="{{peek.aria}}" style="top: {{peek.top}}px" onMouseEnter="{{keep}}">
+<sc-for list="{{peek.items}}" as="it" hint-placeholder-count="2">
+<button type="button" class="item" onClick="{{it.open}}">
+<span style="margin-top: 3px; color: {{it.color}}; display: inline-flex"><sc-if value="{{it.ic.source}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{it.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{it.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{it.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{it.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if></span>
+<span class="k">{{it.kind}}</span>
+<span class="w">{{it.why}}</span>
+<span class="m">{{it.meta}}</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{showCard}}" hint-placeholder-val="{{false}}">
+<div class="card" role="dialog" aria-label="{{card.kind}}" style="top: {{card.top}}px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 12px 8px 0 14px">
+<span style="width: 24px; height: 24px; border-radius: 6px; background: {{card.tile}}; display: inline-flex; align-items: center; justify-content: center; color: {{card.color}}"><sc-if value="{{card.ic.source}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{card.ic.graph}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if><sc-if value="{{card.ic.conflict}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></svg></sc-if><sc-if value="{{card.ic.gap}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{card.ic.batch}}" hint-placeholder-val="{{false}}"><svg class="gi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg></sc-if></span>
+<span class="lbl" style="flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{card.kind}}</span>
+<button type="button" class="qbtn" onClick="{{close}}" aria-label="Close" style="width: 28px; padding: 0; justify-content: center"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg></button>
+</div>
+<div style="padding: 8px 14px 4px; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 14px; font-weight: 600; line-height: 19px">{{card.title}}</span>
+<span class="mono" style="font-size: 11px; color: var(--faint)">{{card.meta}}</span>
+<span style="font-size: 12.5px; line-height: 18px; color: var(--ink2)">{{card.why}}</span>
+</div>
+<div style="display: flex; justify-content: flex-end; padding: 4px 8px 8px"><a href="#" class="qbtn">Open source<svg class="ic arr" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a></div>
+</div>
+</sc-if>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":900}}'>
+var KW = /^(export|async|function|const|await|return|if|import|from|let|new|true|false|null|try|catch|type|typeof|instanceof)$/;
+function tokenize(code) {
+  var out = [];
+  var re = /(\/\/.*$)|('[^']*'|"[^"]*"|`[^`]*`)|([A-Za-z_$][\w$]*)(?=\s*\()|([A-Za-z_$][\w$]*)|(\d+)|(\s+)|([^\sA-Za-z_$\d'"`]+)/g;
+  var m;
+  while ((m = re.exec(code))) {
+    if (m[1]) out.push({ t: m[1], c: 'cm' });
+    else if (m[2]) out.push({ t: m[2], c: 'st' });
+    else if (m[3]) out.push({ t: m[3], c: KW.test(m[3]) ? 'kw' : 'fn' });
+    else if (m[4]) out.push({ t: m[4], c: KW.test(m[4]) ? 'kw' : 'id' });
+    else if (m[5]) out.push({ t: m[5], c: 'nu' });
+    else out.push({ t: m[0], c: 'pl' });
+  }
+  return out;
+}
+var ROWS = [
+  ['ctx', 1164, '  .inputValidator((data: unknown) =>'],
+  ['add', 1165, '    Schema.decodeUnknownSync(PreparedStartReview)(data)'],
+  ['ctx', 1166, '  )'],
+  ['add', 1167, '  .handler(async ({ data }): Promise<StartReviewResponse> => {'],
+  ['add', 1168, '    try {'],
+  ['add', 1169, '      const payload: unknown = await humanRequest("start-review", "POST", data)'],
+  ['add', 1170, '      const { run } = Schema.decodeUnknownSync(Schema.Struct({ run: ReviewRun }))(payload)'],
+  ['add', 1171, '      if ('],
+  ['add', 1172, '        run.commandId !== data.commandId ||'],
+  ['add', 1173, '        run.harnessId !== data.harnessId ||'],
+  ['add', 1174, '        run.submission.branch !== data.branch'],
+  ['add', 1175, '      )'],
+  ['add', 1176, '        return { kind: "uncertain", message: uncertainStartMessage }'],
+  ['add', 1177, '      return { kind: "accepted", run: toAcknowledgment(run) }'],
+  ['add', 1178, '    } catch (cause) {'],
+  ['add', 1179, '      if (cause instanceof ReviewOperationError && cause.code !== "RecordsCommandUncertain")'],
+  ['add', 1180, '        return { kind: "refused", message: cause.message }'],
+  ['add', 1181, '      return { kind: "uncertain", message: uncertainStartMessage }'],
+  ['add', 1182, '    }'],
+  ['add', 1183, '  })']
+];
+var K = {
+  source: { fam: 'neutral', label: 'Source', paths: ['m16 18 6-6-6-6', 'm8 6-6 6 6 6'] },
+  graph: { fam: 'neutral', label: 'Graph', paths: ['M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9', 'M12 12v3'] },
+  conflict: { fam: 'req', label: 'Conflict', paths: ['m16 3 4 4-4 4', 'M20 7H4', 'm8 21-4-4 4-4', 'M4 17h16'] },
+  gap: { fam: 'sug', label: 'Gap', paths: [], dash: true },
+  batch: { fam: 'transient', label: 'Same batch', paths: ['M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z', 'm22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65'] }
+};
+// which literal icon an item draws (the template holds one SVG per kind; no templated path data)
+function icOf(id) { var o = {}; o[id] = true; return o; }
+var PRIO = ['conflict', 'gap', 'batch', 'graph', 'source'];
+var C = { source: 'var(--muted)', graph: 'var(--muted)', conflict: 'var(--req)', gap: 'var(--sug)', batch: 'var(--muted)' };
+var TILE = { source: 'var(--raised)', graph: 'var(--raised)', conflict: 'var(--req-tint)', gap: 'var(--sug-tint)', batch: 'var(--raised)' };
+var PINS = [
+  { id: 'p1', row: 1165, span: [1165, 1165], items: [
+    { tone: 'source', kind: 'Captured source', tgt: 'start-review-operation.ts', title: 'PreparedStartReview', meta: 'start-review-operation.ts:5–8 · 4fc76f5', why: 'The server decodes the same struct the client prepares, so both sides agree on the read policy.' }] },
+  { id: 'p2', row: 1169, span: [1169, 1170], items: [
+    { tone: 'graph', kind: 'Graph · 4 readers', tgt: '', title: 'humanRequest', meta: 'http.ts:22 · read by 4 handlers', why: 'Throws ReviewOperationError for non-OK responses; every caller inherits the refusal path.' },
+    { tone: 'source', kind: 'Captured source', tgt: 'review-errors.ts', title: 'ReviewOperationError', meta: 'review-errors.ts:12–31', why: 'Defines the codes this handler sorts into refused or uncertain.' },
+    { tone: 'batch', kind: 'Same batch · unreviewed', tgt: '', title: 'Typed preparation failures and recovery messages', meta: 'agentic review · 2 hunks', why: 'Changes the errors this line can throw.' }] },
+  { id: 'p3', row: 1172, span: [1171, 1176], items: [
+    { tone: 'conflict', kind: 'Conflict', tgt: '', title: 'Client checks fewer fields', meta: 'routes/index.tsx:243 vs live-review.ts:1172', why: 'The server also compares harness and base branch; the client only compares command and branch.' }] },
+  { id: 'p4', row: 1179, span: [1179, 1180], items: [
+    { tone: 'gap', kind: 'Evidence gap', tgt: '', title: 'No test for ReviewLaunchError', meta: 'live-review.test.ts', why: 'A launch error after recording would be shown as refused; nothing exercises that path.' }] }
+];
+var HEAD = 44 + 32;
+var ROWNO = {}; ROWS.forEach(function (r, i) { ROWNO[r[1]] = i; });
+function topFor(n) { return HEAD + ROWNO[n] * 24 + 1; }
+
+// ── BRIEFING LINKS (round-5.md, option B). One script on Briefing, Main, Delivery, Margin and Threads: keep the copies identical. ──
+// A phrase or chip lands on its lines: they scroll in below the sticky file header (unless already in view), tint,
+// hold (--nv-dur-land-hold), then fade (--nv-dur-land-fade). Reduced motion: an instant scroll, and the tint stays
+// until the next action. The phase is kept per scope ([data-lscope]), so a re-render repaints it (landPaint).
+var LAND = {};
+function landMs(el, name) { var v = parseFloat(getComputedStyle(el).getPropertyValue(name)); return isNaN(v) ? 0 : v; }
+function landScope(key) { return document.querySelector('[data-lscope="' + key + '"]'); }
+function landRows(key, tgt) { var s = landScope(key); return s ? Array.prototype.slice.call(s.querySelectorAll('.lrow.' + tgt)) : []; }
+function landPaint(key) {
+  var s = landScope(key);
+  if (!s) return;
+  s.querySelectorAll('.lrow.landed').forEach(function (r) { r.classList.remove('landed', 'fading'); });
+  var l = LAND[key];
+  if (!l || !l.phase) return;
+  landRows(key, l.tgt).forEach(function (r) { r.classList.add('landed'); if (l.phase === 'fading') r.classList.add('fading'); });
+}
+function landPaintAll() { Object.keys(LAND).forEach(landPaint); }
+function landClear(key) {
+  var l = LAND[key];
+  if (l) { l.timers.forEach(function (t) { clearTimeout(t); }); if (l.off) l.off(); }
+  LAND[key] = null;
+  landPaint(key);
+}
+function landScroller(el) {
+  for (var n = el.parentElement; n; n = n.parentElement) {
+    var o = getComputedStyle(n).overflowY;
+    if ((o === 'auto' || o === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+  }
+  return null;
+}
+function landReduced(props) {
+  return !!(props && props.reducedMotion) || (typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+function land(key, tgt, reduced) {
+  landClear(key);
+  // only lines on screen: a view that hides the code (Guided) has nothing to land on
+  var rows = landRows(key, tgt).filter(function (r) { return r.getClientRects().length && getComputedStyle(r).visibility !== 'hidden'; });
+  if (!rows.length) return;
+  // the timings are read now, from the connected scope: a re-render may replace it before the hold ends
+  var scope = landScope(key) || document.documentElement;
+  var l = LAND[key] = { tgt: tgt, phase: null, timers: [], off: null,
+    hold: landMs(scope, '--nv-dur-land-hold'), fade: landMs(scope, '--nv-dur-land-fade') };
+  var sc = landScroller(rows[0]);
+  var headEl = sc ? sc.querySelector('[data-land-head]') : null;
+  var top = (sc ? sc.getBoundingClientRect().top : 0) + (headEl ? headEl.offsetHeight : 0);
+  var bottom = sc ? sc.getBoundingClientRect().top + sc.clientHeight : window.innerHeight;
+  var a = rows[0].getBoundingClientRect(), b = rows[rows.length - 1].getBoundingClientRect();
+  var arrive = function () {
+    if (LAND[key] !== l) return;
+    l.phase = 'landed';
+    landPaint(key);
+    if (reduced) {
+      var off = function () { landClear(key); };
+      var evs = ['pointerdown', 'keydown', 'wheel'];
+      l.timers.push(setTimeout(function () { evs.forEach(function (e) { document.addEventListener(e, off, { capture: true, once: true }); }); }, 0));
+      l.off = function () { evs.forEach(function (e) { document.removeEventListener(e, off, { capture: true }); }); };
+      return;
+    }
+    l.timers.push(setTimeout(function () {
+      l.phase = 'fading';
+      landPaint(key);
+      l.timers.push(setTimeout(function () { if (LAND[key] === l) { LAND[key] = null; landPaint(key); } }, l.fade));
+    }, l.hold));
+  };
+  if (a.top >= top && b.bottom <= bottom) { arrive(); return; }
+  var box = sc || document.scrollingElement || document.documentElement;
+  var dest = Math.max(0, Math.min(box.scrollTop + (a.top - top) - 8, box.scrollHeight - (sc ? sc.clientHeight : window.innerHeight)));
+  if (reduced) { box.scrollTop = dest; arrive(); return; }
+  var done = false;
+  var bus = sc || window;
+  var go = function () { if (done) return; done = true; bus.removeEventListener('scrollend', ended); arrive(); };
+  // only the end of this scroll counts, not a scrollend left over from an earlier one
+  var ended = function () { if (Math.abs(box.scrollTop - dest) <= 2) go(); };
+  bus.addEventListener('scrollend', ended);
+  l.timers.push(setTimeout(go, 700)); // browsers without scrollend
+  (sc || window).scrollTo({ top: dest, behavior: 'smooth' });
+}
+// A chip keeps the punctuation that follows it (".", ",") on its own line: the punctuation moves into the chip's
+// segment as g.after, so a paragraph never strands a lone "." after an icon.
+function glue(segs) {
+  var out = segs.map(function (g) { return Object.assign({}, g); });
+  out.forEach(function (g, i) {
+    var next = out[i + 1];
+    if (!g.isChip || !next || !next.isText) return;
+    var m = /^[.,;:!?)]+/.exec(next.t);
+    if (m) { g.after = m[0]; next.t = next.t.slice(m[0].length); }
+  });
+  return out.filter(function (g) { return !g.isText || g.t !== ''; });
+}
+// Decision B, with a document listener as floating.tsx's onPointerDownOutside (no covering layer, so hover still reaches
+// the briefing): while a card is open, a press outside it closes it. On a briefing phrase or chip the click then follows the
+// link; any other press is stopped, its pointerdown and its click, so nothing underneath reacts (as the code's
+// OutsidePressDismiss). A mouse closes on pointerdown; touch and pen close on the tap (the click), so a scroll gesture that
+// starts outside the card (pointerdown, then pointercancel, no click) leaves it open. Escape closes it too and returns focus
+// to its pin. A non-modal layer (nonModal() true: a pinned list, which doesn't isolate) closes on the press the same way but
+// lets that press through, so the pin pressed opens its card or list in one click, as the code's popover does.
+// Attach once; isOpen and nonModal are asked each time.
+function outsideCloser(isOpen, insideSel, close, nonModal) {
+  var swallow = false, tap = false;
+  var outside = function (e) {
+    if (!isOpen()) return null;
+    var t = e.target;
+    if (t.closest && t.closest(insideSel)) return null;
+    return { link: !!(t.closest && t.closest('[data-lscope] p .lk, [data-lscope] p .chip')) };
+  };
+  var stop = function (e) { e.preventDefault(); e.stopPropagation(); };
+  var down = function (e) {
+    swallow = false;
+    tap = e.pointerType === 'touch' || e.pointerType === 'pen';
+    if (tap) return;
+    var o = outside(e);
+    if (!o) return;
+    swallow = !o.link && !(nonModal && nonModal());
+    if (swallow) stop(e);
+    close();
+  };
+  var cancel = function () { tap = false; };
+  // Escape closes and, as floating.tsx, returns focus to the pin whose card or list was open (found again by its key after
+  // the board re-renders).
+  var key = function (e) {
+    if (e.key !== 'Escape' || !isOpen()) return;
+    var pin = document.querySelector('[data-lscope] .pin[aria-expanded="true"]');
+    var sel = !pin ? null : pin.getAttribute('data-mk-pin') ? '[data-mk-pin="' + pin.getAttribute('data-mk-pin') + '"]'
+      : pin.getAttribute('aria-label') ? '.pin[aria-label="' + CSS.escape(pin.getAttribute('aria-label')) + '"]' : null;
+    close();
+    if (pin) setTimeout(function () { var el = (sel && document.querySelector(sel)) || pin; if (el && el.isConnected && el.focus) el.focus({ preventScroll: true }); }, 0);
+  };
+  var click = function (e) {
+    if (swallow) { swallow = false; stop(e); return; }
+    if (!tap) return;
+    tap = false;
+    var o = outside(e);
+    if (!o) return;
+    if (!o.link && !(nonModal && nonModal())) stop(e);
+    close();
+  };
+  return {
+    on: function () { document.addEventListener('pointerdown', down, true); document.addEventListener('pointercancel', cancel, true); document.addEventListener('click', click, true); document.addEventListener('keydown', key); },
+    off: function () { document.removeEventListener('pointerdown', down, true); document.removeEventListener('pointercancel', cancel, true); document.removeEventListener('click', click, true); document.removeEventListener('keydown', key); }
+  };
+}
+function landOn(key, tgt, props, before) {
+  return function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (before) before();
+    // after the board's own update (a card opening) has rendered
+    setTimeout(function () { land(key, tgt, landReduced(props)); }, 0);
+  };
+}
+// ── end BRIEFING LINKS ──
+// Round-5 follow-up: opening a pin's card lands on its lines, as a briefing chip does.
+function pinTgt(p) { return 't' + (PINS.indexOf(p) + 1); }
+
+class Component extends DCLogic {
+  componentDidUpdate() { landPaintAll(); }
+  componentDidMount() {
+    var self = this;
+    // as Main and Delivery: a press outside the open card closes it (a briefing link would go through)
+    // a pinned list is a non-modal popover (no isolation): a press elsewhere closes it and reaches what it pressed; its own pin
+    // counts as inside, so pressing it only closes it (the pin's toggle). A card stays modal: the press only closes it.
+    this.outside = outsideCloser(function () { return !!(self.state.open || self.state.pinned); }, '.card, .peek, .pin[aria-expanded="true"]', function () { self.setState({ open: null, pinned: null, hover: null }); }, function () { return !self.state.open && !!self.state.pinned; });
+    this.outside.on();
+  }
+  componentWillUnmount() { if (this.outside) this.outside.off(); }
+  constructor(props) { super(props); this.state = { theme: null, hover: null, open: null, pinned: null, item: 0, folded: false, viewed: false }; }
+  renderVals() {
+    var self = this;
+    var st = this.state;
+    // engaged: a card open, or a multi-marker list pinned open by a click (it stays when the pointer leaves)
+    var held = st.open || st.pinned;
+    var active = held || st.hover;
+    var activePin = PINS.filter(function (p) { return p.id === active; })[0];
+    var adds = 0;
+    var rows = ROWS.map(function (r) {
+      // old numbers: the hunk starts level (no change above it in view), additions push the new side on
+      var o = r[0] === 'add' ? '' : r[1] - adds; if (r[0] === 'add') adds++;
+      // each pin's lines, for its landing (t1… in pin order)
+      var tc = PINS.map(function (p, i) { return r[1] >= p.span[0] && r[1] <= p.span[1] ? 't' + (i + 1) : ''; }).filter(Boolean).join(' ');
+      return { kind: r[0], o: o, no: r[0] === 'del' ? '' : r[1], sign: r[0] === 'add' ? '+' : (r[0] === 'del' ? '−' : ''), toks: tokenize(r[2]), lit: '', tc: tc };
+    });
+    var pins = PINS.map(function (p) {
+      var first = p.items[0];
+      var multi = p.items.length > 1;
+      var lead = p.items.slice().sort(function (a, b) { return PRIO.indexOf(a.tone) - PRIO.indexOf(b.tone); })[0];
+      return {
+        top: topFor(p.row), lt: pinTgt(p), tone: K[lead.tone].fam, paths: K[lead.tone].paths, dash: !!K[lead.tone].dash, ic: icOf(lead.tone),
+        label: K[lead.tone].label, hasTgt: !multi && !!first.tgt, tgt: first.tgt,
+        multi: multi, count: p.items.length, on: held === p.id ? 'on' : '',
+        // only an open CARD isolates the other pins (isolatingAtom): a pinned list engages its lines but leaves them usable
+        iso: st.open && st.open !== p.id ? 'iso' : '', go: st.open && st.open !== p.id ? '' : 'go-' + pinTgt(p), // isolation drops the hint (hintGroup && !isolating)
+        tab: st.open && st.open !== p.id ? -1 : 0, expanded: held === p.id ? 'true' : 'false',
+        aria: K[lead.tone].label + ' on line ' + p.row + (multi ? ', ' + p.items.length + ' markers' : ''),
+        enter: function () { if (!self.state.open && !self.state.pinned && self.state.hover !== p.id) self.setState({ hover: p.id }); },
+        focus: function (e) { if (e && e.target && e.target.matches && e.target.matches(':focus-visible') && !self.state.open && !self.state.pinned && self.state.hover !== p.id) self.setState({ hover: p.id }); },
+        blur: function () { if (!self.state.open && !self.state.pinned && self.state.hover !== null) self.setState({ hover: null }); },
+        click: function () {
+          if (self.state.open === p.id) self.setState({ open: null, hover: null });
+          else if (self.state.pinned === p.id) self.setState({ pinned: null, hover: null });
+          else if (multi) self.setState({ pinned: p.id, hover: null, open: null });
+          else { self.setState({ open: p.id, item: 0, hover: null }); landOn('margin', pinTgt(p), self.props)(); }
+        }
+      };
+    });
+    var peekPin = !st.open && (st.pinned || st.hover) ? activePin : null;
+    var peek = peekPin ? {
+      top: topFor(peekPin.row) + 28, aria: peekPin.items.length + ' markers',
+      items: peekPin.items.map(function (it, i) {
+        return { kind: it.kind, why: it.why, meta: it.meta, paths: K[it.tone].paths, dash: !!K[it.tone].dash, ic: icOf(it.tone), color: C[it.tone], open: function () { self.setState({ open: peekPin.id, item: i, hover: null, pinned: null }); landOn('margin', pinTgt(peekPin), self.props)(); } };
+      })
+    } : null;
+    var openPin = st.open ? activePin : null;
+    var ci = openPin ? openPin.items[st.item] : null;
+    var card = ci ? { top: topFor(openPin.row) + 28, kind: ci.kind, title: ci.title, meta: ci.meta, why: ci.why, paths: K[ci.tone].paths, dash: !!K[ci.tone].dash, ic: icOf(ci.tone), color: C[ci.tone], tile: TILE[ci.tone] } : null;
+    var theme = st.theme || this.props.theme || 'light';
+    var folded = st.folded;
+    return {
+      open: !folded, expanded: folded ? 'false' : 'true', foldLabel: (folded ? 'Expand' : 'Collapse') + ' live-review.ts',
+      fhCls: (folded ? 'folded' : '') + (st.viewed ? ' viewed' : ''), viewed: st.viewed,
+      fold: function () { self.setState({ folded: !self.state.folded, open: null, pinned: null, hover: null }); },
+      toggleViewed: function () { var v = !self.state.viewed; self.setState({ viewed: v, folded: v, open: null, pinned: null, hover: null }); },
+      theme: theme, rows: rows, pins: folded ? [] : pins, engaged: held ? pinTgt(activePin) : '',
+      showPeek: !!peek, peek: peek || { items: [] }, showCard: !!card, card: card || {},
+      keep: function () {},
+      leave: function () { if (!self.state.open && !self.state.pinned && self.state.hover !== null) self.setState({ hover: null }); },
+      close: function () { self.setState({ open: null, hover: null }); },
+      noop: function () {}
+    };
+  }
+}
+</script>
+</body>
+</html>

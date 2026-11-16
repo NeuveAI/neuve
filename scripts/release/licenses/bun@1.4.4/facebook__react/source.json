@@ -1,0 +1,13 @@
+{
+  "project": "facebook/react",
+  "source": "https://github.com/facebook/react",
+  "commit": "1825990c5608f0ab0c1475b4292218a508a171c9",
+  "pin": "the commit npm records for react-refresh 0.17.0, the version Bun's src/node-fallbacks/package.json pins",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/facebook/react/1825990c5608f0ab0c1475b4292218a508a171c9/LICENSE",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "@neuve/cli",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@neuve/semantic-client": "workspace:*",
+    "effect": "4.0.0",
+    "@neuve/graph-client": "workspace:*",
+    "zod": "4",
+    "@neuve/records-core": "workspace:*",
+    "@neuve/records-schema": "workspace:*",
+    "@effect/platform-bun": "4.0.0",
+    "@neuve/harness": "workspace:*",
+    "@ace/host": "workspace:*",
+    "@ace/channel": "workspace:*",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-durable": "1.0.0",
+    "@earendil-works/chord": "1.0.0"
+  },
+  "bin": {
+    "neuve": "./dist/neuve"
+  },
+  "scripts": {
+    "build": "bun ./scripts/build.ts",
+    "format": "prettier --write src tests scripts package.json tsconfig.json",
+    "format:check": "prettier --check src tests scripts package.json tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun ../../scripts/test-budget.ts ./tests"
+  }
+}

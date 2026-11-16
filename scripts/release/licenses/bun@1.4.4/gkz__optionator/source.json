@@ -1,0 +1,13 @@
+{
+  "project": "gkz/optionator",
+  "source": "https://github.com/gkz/optionator",
+  "commit": "4babe25432de186943d78f8f69875d1255802f72",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/gkz/optionator/4babe25432de186943d78f8f69875d1255802f72/LICENSE",
+      "sha256": "b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c"
+    }
+  ]
+}

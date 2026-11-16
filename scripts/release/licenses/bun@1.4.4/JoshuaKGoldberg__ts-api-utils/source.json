@@ -1,0 +1,13 @@
+{
+  "project": "JoshuaKGoldberg/ts-api-utils",
+  "source": "https://github.com/JoshuaKGoldberg/ts-api-utils",
+  "commit": "0bf77242f323a9f42cd17beac98da63ccdb4d1a7",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/JoshuaKGoldberg/ts-api-utils/0bf77242f323a9f42cd17beac98da63ccdb4d1a7/LICENSE.md",
+      "sha256": "76c9d5f5ea942054715c026f33f8717c9e24603196a3737b8899afa216bcbdab"
+    }
+  ]
+}

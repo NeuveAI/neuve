@@ -1,0 +1,13 @@
+{
+  "project": "eslint/js",
+  "source": "https://github.com/eslint/js",
+  "commit": "f32d8a61bb5a50b09754afdf079343e5d747a444",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "packages__espree__LICENSE",
+      "url": "https://raw.githubusercontent.com/eslint/js/f32d8a61bb5a50b09754afdf079343e5d747a444/packages/espree/LICENSE",
+      "sha256": "26c95937762a3dc17a3934a0a2773c70259ba4bf28dab713c225e4af8eb9d349"
+    }
+  ]
+}

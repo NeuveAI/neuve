@@ -1,0 +1,13 @@
+{
+  "project": "postcss/postcss",
+  "source": "https://github.com/postcss/postcss",
+  "commit": "b6316e5d61e5cc26c32d050eeb8d856cb410d8be",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/postcss/postcss/b6316e5d61e5cc26c32d050eeb8d856cb410d8be/LICENSE",
+      "sha256": "5be1f3465bba68a626777f984878814aaf35e7ef8e9fd314d469bcf887050fb8"
+    }
+  ]
+}

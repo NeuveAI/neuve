@@ -1,0 +1,30 @@
+{
+  "//": "Compiler options follow the web app's (apps/neuve-web/apps/web), because tsc also checks the @workspace/ui files the site imports, and they are written to those options. The diffs declaration file is reached that way too.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "bun"],
+    "paths": {
+      "@workspace/ui/*": ["../neuve-web/packages/ui/src/*"]
+    },
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "vite.config.ts",
+    "../neuve-web/packages/diffs/src/components/VirtulizerDevelopment.d.ts"
+  ]
+}

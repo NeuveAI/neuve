@@ -1,0 +1,13 @@
+{
+  "project": "fisker/git-hooks-list",
+  "source": "https://github.com/fisker/git-hooks-list",
+  "commit": "79ffa6ce10ef9b5b1c7f898de19cedffd36b7e93",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "license",
+      "url": "https://raw.githubusercontent.com/fisker/git-hooks-list/79ffa6ce10ef9b5b1c7f898de19cedffd36b7e93/license",
+      "sha256": "a4062b09c0c9f2c837997f22ebd4840bffe712ab262f5dfa231226131f41ef3f"
+    }
+  ]
+}

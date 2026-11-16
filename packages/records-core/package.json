@@ -1,0 +1,37 @@
+{
+  "name": "@neuve/records-core",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./file-lock": "./src/file-lock.ts",
+    "./read-only": "./src/read-only.ts",
+    "./spool": "./src/spool.ts",
+    "./capture": "./src/capture.ts",
+    "./shared-work": "./src/shared-work.ts",
+    "./shared-work-effect": "./src/shared-work-effect.ts",
+    "./shared-work-protocol": "./src/shared-work-protocol.ts",
+    "./shared-work-socket": "./src/shared-work-socket.ts",
+    "./shared-work-host": "./src/shared-work-host.ts",
+    "./budget-directory": "./src/budget-directory.ts",
+    "./xdg-path": "./src/xdg-path.ts"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "4.0.0",
+    "@effect/sql-sqlite-bun": "4.0.0",
+    "@neuve/records-schema": "workspace:*",
+    "@scure/bip39": "2.4.0",
+    "canonicalize": "5.1.0",
+    "effect": "4.0.0",
+    "ulid": "3.0.2",
+    "zod": "4"
+  },
+  "scripts": {
+    "format": "prettier --write src tests package.json tsconfig.json",
+    "format:check": "prettier --check src tests package.json tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun ../../scripts/test-budget.ts ./tests"
+  }
+}

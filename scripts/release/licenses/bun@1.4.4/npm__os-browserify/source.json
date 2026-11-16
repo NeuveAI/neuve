@@ -1,0 +1,14 @@
+{
+  "project": "os-browserify",
+  "source": "https://registry.npmjs.org/os-browserify/-/os-browserify-0.3.0.tgz",
+  "version": "0.3.0",
+  "commit": "9e931aec1131f02a582f715b23c8f6d157622554",
+  "pin": "the version whose browser.js Bun's src/node-fallbacks/os.js is closest to, of all six",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/os-browserify/-/os-browserify-0.3.0.tgz#package/LICENSE",
+      "sha256": "d25d1d6d28c35cb6f358e2833e405c4e53fec2fa24d156323ddea5cd438d3407"
+    }
+  ]
+}

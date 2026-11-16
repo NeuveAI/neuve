@@ -1,0 +1,109 @@
+{
+  "graphWriterCommit": "2fddab744ec7f970f12f31d93458dbb2f40bfc04",
+  "writerCommit": "b1295ebe5524090afdfcb93d61137f20e282ad3a",
+  "tree": "1456a8284bbab3c224a1f32c8a761798a2cf4c08",
+  "files": {
+    "one.ts": "export const one = 1;\n"
+  },
+  "sourceSha256": {
+    "packages/harness/src/chunker.ts": "e9e2eeb7aa4f9735961241cd60c19e3ad010db25f024003086ab2905f93201e9",
+    "packages/harness/src/stack/index-store.ts": "9feac5b386ccebede703eec3aa3550e05106a58946d5e64909e0404b5f9a3a7b",
+    "packages/harness/src/search-index.ts": "7c98f199df436c5d06830fe3c1c74bf0bac94fc53d97b2598dd62f09fada1da8"
+  },
+  "variants": {
+    "available": {
+      "recipe": {
+        "id": "neuve-stack-index-v1",
+        "chunker": {
+          "recipe": "neuve-chunk-v1",
+          "implementations": ["oxc-parser@0.127.0", "atx-headings-1-3-v1"]
+        },
+        "bounds": {
+          "id": "neuve-index-bounds-v1",
+          "maxFileBytes": 1048576
+        },
+        "bm25": {
+          "k1": 1.2,
+          "b": 0.75,
+          "recipe": "bm25-path-body-identifier-parts-v1"
+        },
+        "postings": "u32le-doc-tf-length-16-dictionary-buckets-v1"
+      },
+      "key": "51cc36c5599cf79b3448830206c19358",
+      "metadata": {
+        "recipe": "51cc36c5599cf79b3448830206c19358",
+        "tree": "1456a8284bbab3c224a1f32c8a761798a2cf4c08",
+        "docs": 1,
+        "totalLength": 6,
+        "files": 1,
+        "excluded": {},
+        "builtAt": "2026-11-10T17:11:42.450Z"
+      }
+    },
+    "unavailable": {
+      "recipe": {
+        "id": "neuve-stack-index-v1",
+        "chunker": {
+          "recipe": "neuve-chunk-v1",
+          "implementations": [
+            "oxc-parser unavailable in this build",
+            "atx-headings-1-3-v1"
+          ]
+        },
+        "bounds": {
+          "id": "neuve-index-bounds-v1",
+          "maxFileBytes": 1048576
+        },
+        "bm25": {
+          "k1": 1.2,
+          "b": 0.75,
+          "recipe": "bm25-path-body-identifier-parts-v1"
+        },
+        "postings": "u32le-doc-tf-length-16-dictionary-buckets-v1"
+      },
+      "key": "a9d09dccaf9188a1c524c73e04c31f1b",
+      "metadata": {
+        "recipe": "a9d09dccaf9188a1c524c73e04c31f1b",
+        "tree": "1456a8284bbab3c224a1f32c8a761798a2cf4c08",
+        "docs": 1,
+        "totalLength": 6,
+        "files": 1,
+        "excluded": {},
+        "builtAt": "2026-11-10T17:11:42.492Z"
+      }
+    },
+    "source-bound-graph": {
+      "recipe": {
+        "id": "neuve-stack-index-v2",
+        "chunker": {
+          "recipe": "neuve-graph-chunk-v6",
+          "source": {
+            "sha256": "4f328ec65a576e190f3ecb641327f1f17dc7d0a443c4a8aa7d530e8f94f470f0"
+          }
+        },
+        "bounds": {
+          "id": "neuve-index-bounds-v1",
+          "maxFileBytes": 1048576
+        },
+        "bm25": {
+          "k1": 1.2,
+          "b": 0.75,
+          "recipe": "bm25-path-body-identifier-parts-v1"
+        },
+        "postings": "u32le-doc-tf-length-16-dictionary-buckets-v1"
+      },
+      "key": "5dd388c2a679812f64d0b677be1f49a4",
+      "metadata": {
+        "recipe": "5dd388c2a679812f64d0b677be1f49a4",
+        "retryable": false,
+        "tree": "1456a8284bbab3c224a1f32c8a761798a2cf4c08",
+        "docs": 1,
+        "totalLength": 6,
+        "files": 1,
+        "excluded": {},
+        "builtAt": "2026-11-10T17:11:43.827Z"
+      }
+    }
+  },
+  "method": "Available: direct import of the read-only old writer. Unavailable: Bun bundles the unchanged old writer and relative modules into an isolated directory without oxc-parser; dependencies remain absolute externals. Its original createRequire(import.meta.url) reaches its own unavailable-parser fallback."
+}

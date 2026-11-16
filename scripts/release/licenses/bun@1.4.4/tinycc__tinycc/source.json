@@ -1,0 +1,13 @@
+{
+  "project": "tinycc/tinycc",
+  "source": "https://github.com/oven-sh/tinycc",
+  "commit": "05f0fafaa3be31e31d7b4b5c17dc60f62c991171",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "COPYING",
+      "url": "https://raw.githubusercontent.com/oven-sh/tinycc/05f0fafaa3be31e31d7b4b5c17dc60f62c991171/COPYING",
+      "sha256": "512d2d21b6b3384ba64781abb0208a1b87740bc31e2df48e2b206ddb7e4d5779"
+    }
+  ]
+}

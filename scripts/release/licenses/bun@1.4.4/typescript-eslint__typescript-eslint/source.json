@@ -1,0 +1,13 @@
+{
+  "project": "typescript-eslint/typescript-eslint",
+  "source": "https://github.com/typescript-eslint/typescript-eslint",
+  "commit": "2838b498d03ef3a3808fa714f43ea653f4e589b0",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/typescript-eslint/typescript-eslint/2838b498d03ef3a3808fa714f43ea653f4e589b0/LICENSE",
+      "sha256": "2eb5c7a0bba9deb77a98c81bf6b9d3fb1c67118eebf968b6b1a787b3f8928ee0"
+    }
+  ]
+}

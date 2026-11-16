@@ -1,0 +1,128 @@
+# Keep upstream detection and constrain exceptions to known fixture values.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deliberately fake Claude sign-in tokens"
+regexTarget = "secret"
+regexes = ['''^sk-ant-(?:oat01|api03)-fake-[A-Za-z0-9_-]+$''']
+
+[[allowlists]]
+description = "Captured review marker identifiers in UI fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)apps/neuve-web/packages/ui/src/fixtures/real-(?:briefing|packet|sections)\.fixtures\.ts$''']
+regexTarget = "match"
+regexes = ['''^(?:markerKey|key)": "01M5[0-9A-HJKMNP-TV-Z]{22}"$''']
+
+[[allowlists]]
+description = "Synthetic auth ID token"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)apps/neuve\-cli/tests/auth\-cli\.test\.ts$''']
+regexTarget = "match"
+regexes = ['''^idToken: "eyJhbGciOi\.eyJzdWIiOi\.c2lnbmF0dXJl"$''']
+
+[[allowlists]]
+description = "Synthetic snapshot private key"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/harness/tests/index\-snapshot\-compatibility\.test\.ts$''']
+regexTarget = "match"
+regexes = ['''^privateKey = "neu130privateidentifier"$''']
+
+[[allowlists]]
+description = "Synthetic JWT used by redaction tests"
+targetRules = ["jwt"]
+condition = "AND"
+paths = ['''(?:^|/)packages/evaluation/tests/pr\-replay\-redact\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJGQUtFLVVTRVItMDAxIn0\.FAKEsignatureFAKEsignature0123$''']
+
+[[allowlists]]
+description = "Fixed route budget identity digest"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/harness/tests/route\-budget\-identity\.test\.ts$''']
+regexTarget = "match"
+regexes = ['''^key: "3152a32cfaac265bc9c7314895750ea9c86e7fb956a29ad1205aacad3a9e5563"$''']
+
+[[allowlists]]
+description = "Fake keychain service name"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/harness/tests/pi/providers/native\-worker\-capture\.test\.ts$''']
+regexTarget = "match"
+regexes = ['''^ACE_KEYCHAIN_SERVICE: "synthetic\-r8\-private"$''']
+
+[[allowlists]]
+description = "Field name compared by the score serializer"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/evaluation/src/harness\-compare/score\.ts$''']
+regexTarget = "match"
+regexes = ['''^key === "identicalTop3"$''']
+
+[[allowlists]]
+description = "Batch key in the redesigned desk fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)apps/neuve\-web/packages/ui/src/fixtures/redesigned\-desk\.fixtures\.ts$''']
+regexTarget = "secret"
+regexes = ['''^01M7C5G7NR000D79S1ZJCY4XSB$''']
+
+[[allowlists]]
+description = "Reading group, decision and section digests in the readings gate fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/evaluation/tests/harness\-compare\-readings\-gate\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^02cb5d767546be6e1b8b99557e7b9453809ada202b52331b0c3aa1acba2d8ac8$''', '''^26d13a2d885c802cefb0593c33fb946f59ddf780a2b0b5b9a021186a31ba43c4$''', '''^3854be78c6b7c53fa705d550a6fa03833b5c73101dc7ec4b45aa792fe78f2848$''', '''^7b0dd660a0346dd6c32ebfc0d629c62e919fd9e3c4a17cdea19ae0db1def4b16$''', '''^83092e7821e9b491356068f1833e467cff156271a3f91f9324cf472128ea8c2c$''', '''^b388863bd5834d8574c939282f989cc13d87c4d0dbe5ab89a36c6459fef1057a$''', '''^e2256a69a30fc951e105df8ffbf670113957fc169b6fc1dc93dac6c135218f70$''']
+
+[[allowlists]]
+description = "Blob structure cache key digest"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/harness/tests/blob\-structure\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^cb2d8fd200eed1ae68e6bd989c9a164998a41c8445415e24e494fab69f33cb1c$''']
+
+[[allowlists]]
+description = "Legacy index provenance keys"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/harness/tests/fixtures/stack/legacy\-index/provenance\.json$''']
+regexTarget = "secret"
+regexes = ['''^5dd388c2a679812f64d0b677be1f49a4$''', '''^a9d09dccaf9188a1c524c73e04c31f1b$''']
+
+[[allowlists]]
+description = "Readings run key digest"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/harness/tests/readings\-evidence\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^eb644e039b6bd267141e4fac4fd924486e3867fc70fdc0a37ce2a046631c5419$''']
+
+[[allowlists]]
+description = "Readings plan key digest"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/harness/tests/readings\-rule\-skips\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^a5347245418f436f5bb200833adf79d1068bcfd7846707900d5fe9da74713119$''']
+
+[[allowlists]]
+description = "Section key digests before and after the flip"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(?:^|/)packages/harness/tests/responsibility\-sections\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c$''', '''^808a7d376028db0de6bb41c9c12400c9e55748345dd7c750186abd894bad7d85$''']
+
+[[allowlists]]
+description = "Fake GitHub token sent only to the release test's local servers"
+targetRules = ["github-pat"]
+condition = "AND"
+paths = ['''(?:^|/)tests/release/private\-fetch\.test\.ts$''']
+regexTarget = "secret"
+regexes = ['''^ghp_fakeTokenForTheReleaseTests012345678$''']

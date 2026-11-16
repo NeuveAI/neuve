@@ -1,0 +1,13 @@
+{
+  "project": "estools/esquery",
+  "source": "https://github.com/estools/esquery",
+  "commit": "444da2c9b1f973555102b0e3a2c62f5d607dc6fe",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "license.txt",
+      "url": "https://raw.githubusercontent.com/estools/esquery/444da2c9b1f973555102b0e3a2c62f5d607dc6fe/license.txt",
+      "sha256": "ac68116ae73740de4190892f334992e449a124600924ec761e64319d3aac9e6e"
+    }
+  ]
+}

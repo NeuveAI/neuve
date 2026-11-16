@@ -1,0 +1,5 @@
+.venv/
+.runs/
+__pycache__/
+# The Modal CLI skill (modal skills install) is vendor docs; install it user-level with -g.
+.agents/

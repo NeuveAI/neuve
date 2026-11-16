@@ -1,0 +1,13 @@
+{
+  "project": "jsx-eslint/jsx-ast-utils",
+  "source": "https://github.com/jsx-eslint/jsx-ast-utils",
+  "commit": "7cc40c4d2b88f221eae5ec2868754d31a85d8d71",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/jsx-eslint/jsx-ast-utils/7cc40c4d2b88f221eae5ec2868754d31a85d8d71/LICENSE.md",
+      "sha256": "82b19019e25e266a310ef46800b3af726136a3cee79af8812dc83ca0b045afae"
+    }
+  ]
+}

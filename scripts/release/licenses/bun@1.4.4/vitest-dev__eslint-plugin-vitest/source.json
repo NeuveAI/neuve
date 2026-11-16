@@ -1,0 +1,13 @@
+{
+  "project": "vitest-dev/eslint-plugin-vitest",
+  "source": "https://github.com/vitest-dev/eslint-plugin-vitest",
+  "commit": "c5df1054a25044a7ca5baf07461b7aee1f15f5f2",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/vitest-dev/eslint-plugin-vitest/c5df1054a25044a7ca5baf07461b7aee1f15f5f2/LICENSE",
+      "sha256": "9a5663b6ae3e7554d0652faf7de109aca19d13defac22b2a230d5a4f2980b4b8"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "project": "zlib-ng/zlib-ng",
+  "source": "https://github.com/zlib-ng/zlib-ng",
+  "commit": "12731092979c6d07f42da27da673a9f6c7b13586",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/zlib-ng/zlib-ng/12731092979c6d07f42da27da673a9f6c7b13586/LICENSE.md",
+      "sha256": "6c9f0d975b41afaa34d22f55bb8986ce69e5cb7ad327cb2b28820cd425edf5ee"
+    }
+  ]
+}

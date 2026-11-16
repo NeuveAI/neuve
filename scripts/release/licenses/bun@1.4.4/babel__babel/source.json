@@ -1,0 +1,13 @@
+{
+  "project": "babel/babel",
+  "source": "https://github.com/babel/babel",
+  "commit": "ed208fe7429a80f4899ddad13f1d1b341a0a684d",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/babel/babel/ed208fe7429a80f4899ddad13f1d1b341a0a684d/LICENSE",
+      "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76"
+    }
+  ]
+}

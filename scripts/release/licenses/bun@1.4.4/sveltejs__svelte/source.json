@@ -1,0 +1,13 @@
+{
+  "project": "sveltejs/svelte",
+  "source": "https://github.com/sveltejs/svelte",
+  "commit": "0156c5fe38b53b72675e2a7f04535de015fdeed1",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/sveltejs/svelte/0156c5fe38b53b72675e2a7f04535de015fdeed1/LICENSE.md",
+      "sha256": "06257f4847b13a49a039efb17b944c141e71b12fd8d231b362d86919067d77a3"
+    }
+  ]
+}

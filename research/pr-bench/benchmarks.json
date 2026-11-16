@@ -1,0 +1,433 @@
+{
+  "schema_version": 1,
+  "captured_on": "2026-10-06",
+  "scope": "Primary-source survey for future Neuve PR Bench. Research observations and proposals, not adopted evaluation policy.",
+  "verification": "Publisher claims are identified separately from artifact checks. No model evaluation was reproduced. GitHub and Hugging Face revision IDs were read through public APIs.",
+  "entries": [
+    {
+      "id": "codereviewer",
+      "name": "CodeReviewer",
+      "publisher": "Microsoft research authors",
+      "publication": "2022-03-17 preprint; ESEC/FSE 2022 camera-ready v2 2022-10-11",
+      "sources": [
+        "https://arxiv.org/abs/2203.09095v2",
+        "https://arxiv.org/html/2203.09095",
+        "https://github.com/microsoft/CodeBERT/blob/master/CodeReviewer/README.md"
+      ],
+      "reported_size": {
+        "pretraining_examples_without_comments_approx": 4311000,
+        "pretraining_examples_with_comments_approx": 2481000,
+        "test_quality_estimation_approx": 31000,
+        "test_comment_generation_approx": 10000,
+        "test_refinement_approx": 13000
+      },
+      "input": "Local diff for quality estimation/comment generation; code plus review comment for refinement. Nine languages are corpus coverage, not Neuve eligibility rules.",
+      "oracle": "Mined review activity and reference human comments/edits; classification, BLEU/exact match and human study depending on task.",
+      "availability_license": "Model, scripts, dataset download pointers public; CodeBERT repository MIT. Data redistribution terms require separate verification.",
+      "revision": {
+        "repository": "c0de43d3aaf38e89290f1efb771f8de845e7a489"
+      },
+      "limits": [
+        "Local text similarity does not establish defect correctness or complete PR review.",
+        "Old public OSS data creates contamination and near-duplicate risks.",
+        "A human comment is an observed action, not exhaustive truth."
+      ],
+      "reuse": [
+        "Separate quality estimation, comment generation, and contributor revision tasks."
+      ]
+    },
+    {
+      "id": "nutanix-cr-bench",
+      "name": "CR-Bench / CR-Bench-Verified",
+      "publisher": "Nutanix research authors",
+      "publication": "2026-03-10 preprint; ICLR 2026 Agents in the Wild workshop paper",
+      "sources": [
+        "https://arxiv.org/abs/2603.11078",
+        "https://arxiv.org/html/2603.11078v1",
+        "https://openreview.net/attachment?id=6RmpFMEeOX&name=pdf"
+      ],
+      "reported_size": {
+        "tasks": 584,
+        "verified_tasks": 174
+      },
+      "input": "Original defect-introducing PR and base repository recovered by blame from a SWE-bench fixing patch.",
+      "oracle": "Later issue description paraphrased into defect reference, with LLM detectability filter; verified subset manually checked. Claude Sonnet 4.5 classifies bug hit, valid suggestion, or noise.",
+      "availability_license": "Paper and prompts public. No dataset/harness download and corresponding data license confirmed in inspected primary sources. Paper CC BY 4.0 is not a dataset license.",
+      "limits": [
+        "Retrospective bug selection is not naturally observed review feedback.",
+        "Known defects are explicitly incomplete.",
+        "Blame attribution can confuse introduction with later edits; requires case audit.",
+        "SWE-bench overlap and future fixes require temporal isolation."
+      ],
+      "reuse": [
+        "Measure useful additional suggestions separately from incorrect or irrelevant findings."
+      ]
+    },
+    {
+      "id": "martian-code-review-bench",
+      "name": "Code Review Bench",
+      "publisher": "Martian",
+      "publication": "2026 project; no peer-reviewed paper confirmed",
+      "sources": [
+        "https://github.com/withmartian/code-review-benchmark",
+        "https://codereview.withmartian.com/"
+      ],
+      "reported_size": {
+        "offline_prs": 50,
+        "offline_golden_comments": 173,
+        "repositories": 5
+      },
+      "input": "Frozen forked PRs for offline tools; fresh bot-reviewed PR timelines and later contributor commits for online observational analysis.",
+      "oracle": "Offline human-curated golden comments with category profiles and three judge models; online match between bot suggestions and subsequent fixes.",
+      "availability_license": "Public dataset, prompts, pipeline and per-judge outputs; repository MIT, upstream content licenses remain relevant.",
+      "revision": {
+        "repository": "e616e849755441da38f18bf3adba2c9583b03803"
+      },
+      "limits": [
+        "Offline references are public and small.",
+        "Online accepted fixes do not prove correctness, causality, or exhaustive recall.",
+        "Freshness reduces contamination but is not proof of no training exposure.",
+        "Scoring profile, judge, deduplication and F-beta must be pinned."
+      ],
+      "reuse": [
+        "Publish extracted findings, duplicate groups, judge prompts, and per-judge scores.",
+        "Retain observational acceptance separately from independently validated correctness."
+      ]
+    },
+    {
+      "id": "kodus-codereviewbench",
+      "name": "CodeReviewBench",
+      "publisher": "Kodus",
+      "publication": "2026 project; noise analysis published 2026-08-22",
+      "sources": [
+        "https://www.codereviewbench.com/",
+        "https://www.codereviewbench.com/blog/one-run-is-not-a-measurement",
+        "https://github.com/kodustech/codereviewbench"
+      ],
+      "reported_size": {
+        "prs": 30,
+        "golden_bugs": 95,
+        "repositories": 5
+      },
+      "artifact_check": {
+        "source": "https://raw.githubusercontent.com/kodustech/codereviewbench/531297bf50e5f065e3888d7e07b55dcacbf8df64/goldens.json",
+        "cases": 30,
+        "goldens": 95,
+        "method": "Parsed JSON mapping; counted keys and array entries."
+      },
+      "input": "Frozen repository tool-response replay inside Kodus review agent.",
+      "oracle": "Human-authored golden findings matched by Claude Haiku 4.5; micro precision, recall and F1.",
+      "availability_license": "Public goldens, submissions, scorecards and scripts. No explicit repository license detected through GitHub API or root listing.",
+      "revision": {
+        "repository": "531297bf50e5f065e3888d7e07b55dcacbf8df64"
+      },
+      "limits": [
+        "One review-generation run per model; judge reruns do not measure agent run variance.",
+        "30 PR sampling intervals overlap.",
+        "Existing leaderboard compares models within one vendor harness.",
+        "Same five repository families as Martian; independence must not be assumed."
+      ],
+      "reuse": [
+        "Frozen tool replay, versioned submissions and paired uncertainty estimates."
+      ]
+    },
+    {
+      "id": "swe-prbench",
+      "name": "SWE-PRBench",
+      "publisher": "Deepak Kumar / FoundryHQ",
+      "publication": "2026-03-27 preprint",
+      "sources": [
+        "https://arxiv.org/abs/2603.26130",
+        "https://arxiv.org/html/2603.26130v1",
+        "https://huggingface.co/datasets/foundry-ai/swe-prbench",
+        "https://github.com/FoundryHQ-AI/swe-prbench"
+      ],
+      "reported_size": {
+        "prs": 350,
+        "repositories": 65,
+        "paper_evaluated_prs": 100
+      },
+      "input": "Frozen config_A/B/C contexts with increasing semantic layers, approximate budgets 2000/2200/2500 tokens; base and head SHA retained.",
+      "oracle": "Mined human review comments and GPT-5.2 judge; reported kappa 0.75 on validation subset.",
+      "availability_license": "Public contexts and annotations; HF data CC BY 4.0 and harness MIT.",
+      "revision": {
+        "repository": "379f0bfd8978a1734cd8399e115d04d4fdceeb89",
+        "huggingface": "b87f5797aef3ed2c3153bb1304ea4d801d36ba6e",
+        "reported_pipeline": "v0.4.1"
+      },
+      "reported_result": "Eight-model paper run reports lower scores for B/C than A. Not independently reproduced here.",
+      "limits": [
+        "Config C is bounded generated context, not complete live repository investigation.",
+        "Changed layers, summaries, allocation and budgets confound a universal causal claim about attention.",
+        "Human comment absence is not proof that a new finding is false.",
+        "Merged-only, substantive-comment filters introduce selection bias."
+      ],
+      "reuse": [
+        "Freeze context variants and record allocation losses; evaluate retrieval separately from downstream review."
+      ]
+    },
+    {
+      "id": "contextcrbench",
+      "name": "ContextCRBench",
+      "publisher": "Hu et al.; HIT Shenzhen / ByteDance",
+      "publication": "2025-11-10 preprint",
+      "sources": [
+        "https://arxiv.org/abs/2511.07017",
+        "https://arxiv.org/html/2511.07017v1",
+        "https://github.com/kinesiatricssxilm14/ContextCRBench"
+      ],
+      "reported_size": {
+        "quality_estimation_entries": 67910,
+        "defect_localization_entries": 13512,
+        "review_comment_generation_entries": 13512,
+        "paper_evaluation_entries": 1080,
+        "languages": 9
+      },
+      "input": "Hunk-level quality estimation (67,910 entries); line-level defect localization and review comment generation (13,512 entries each), with linked issue/PR text and before/after function or class context.",
+      "oracle": "Mined review comment/line; quality classification, top-k localization, ROUGE and edit similarity for generated comments.",
+      "availability_license": "Public scripts and Google Drive links for 1.56 GB data / 6.16 GB raw data. Bulk downloads not tested; no explicit repository/data license confirmed. Paper license does not cover dataset automatically.",
+      "revision": {
+        "repository": "ade378c6339729ae72884b429ab229b8ead2d6e1"
+      },
+      "reported_result": "Paper reports textual-context benefit and industrial relative improvement; neither reproduced here.",
+      "limits": [
+        "Label and filtering choices can remove difficult historical/outdated anchors relevant to Neuve.",
+        "Similarity/localization does not prove semantic correctness.",
+        "Subset evaluation is not an evaluation of all 67,910 entries.",
+        "Related issue descriptions and before/after versions need timestamp isolation."
+      ],
+      "reuse": [
+        "Separate review need, precise attribution and explanation tasks; preserve historical anchors rather than discard outdated comments."
+      ]
+    },
+    {
+      "id": "swe-care",
+      "name": "SWE-CARE / CodeFuse-CR-Bench",
+      "publisher": "inclusionAI / CodeFuse research authors",
+      "publication": "2025-09-18 preprint; HF v0.2.0 2025-10",
+      "sources": [
+        "https://arxiv.org/abs/2509.14856",
+        "https://arxiv.org/html/2509.14856v1",
+        "https://huggingface.co/datasets/inclusionAI/SWE-CARE",
+        "https://github.com/inclusionAI/SWE-CARE"
+      ],
+      "reported_size": {
+        "original_paper_test": 601,
+        "current_test": 671,
+        "dev": 7086,
+        "original_paper_projects": 70
+      },
+      "input": "Problem statement, exact commit to review, base/merged patches and comments, plus none/BM25/oracle/all file-context conditions.",
+      "oracle": "Human review references with rule/location matching and model judges; original paper manually curated instances.",
+      "availability_license": "Public data and pipeline Apache-2.0. Underlying source content retains its own terms.",
+      "revision": {
+        "repository": "d0b419cf9ab3ddeceaf8c3e6d55450b1e81ae61c",
+        "huggingface": "3b3a625ef26bd497a3a13485c0dc9ece537f24d0"
+      },
+      "limits": [
+        "Original paper selects Python projects; corpus coverage must not define Neuve language scope.",
+        "Oracle files use future merged changes and are an upper-bound experiment, not deployable retrieval.",
+        "Reward data positive/negative heuristic uses changed lines plus resolved threads; those are not disposition truth.",
+        "Original filters remove images/external references, losing UI and documentary context."
+      ],
+      "reuse": [
+        "Compare BM25 against graph-backed evidence at equal input budgets; separate oracle condition."
+      ]
+    },
+    {
+      "id": "swrbench",
+      "name": "SWRBench / SWR-Bench",
+      "publisher": "Zeng et al.; repository ZZR0/SWRench",
+      "publication": "2025-09-01 preprint; v2 revised 2026-06-05",
+      "sources": [
+        "https://arxiv.org/abs/2509.01494",
+        "https://arxiv.org/html/2509.01494v2",
+        "https://github.com/ZZR0/SWRench"
+      ],
+      "reported_size": {
+        "prs": 1000,
+        "issue_bearing_prs": 500,
+        "clean_labeled_prs": 500,
+        "projects": 12
+      },
+      "input": "Solver case is the PR state immediately before its first manual review: title, description, pr_commits before that cutoff, base/codebase checkpoint and repository context. Released pr_timeline and all_commits retain construction/history evidence; they are not unrestricted solver inputs.",
+      "oracle": "Manually verified structured change points with LLM-assisted extraction and judge matching; functional/evolvability categories.",
+      "availability_license": "Public JSONL, construction and evaluation code; MIT repository.",
+      "revision": {
+        "repository": "67ae1d4395ac05f800d62b0e13678eadeb9fa5c7"
+      },
+      "reported_result": "Paper reports approximately 90% judge/human agreement; not independently validated here.",
+      "limits": [
+        "Clean labels establish no retained issue, not proof of complete defect absence.",
+        "Released pr_timeline and all_commits can expose future-answer fields if reused as solver context; preserve the paper first-manual-review cutoff and keep label/history fields outside that input.",
+        "Python-only source projects and balanced prevalence differ from deployment.",
+        "A requested design change need not be a functional bug."
+      ],
+      "reuse": [
+        "Include clean-labeled controls and report PR-level abstention independently from per-finding precision."
+      ]
+    },
+    {
+      "id": "mcr-bench",
+      "name": "MCR-Bench",
+      "publisher": "Zheng et al.; DeepSoftwareAnalytics",
+      "publication": "2026-08-27 preprint; preprint identifies ISSTA 2026 acceptance",
+      "sources": [
+        "https://arxiv.org/abs/2608.27442",
+        "https://arxiv.org/html/2608.27442v1",
+        "https://github.com/DeepSoftwareAnalytics/MCR-bench"
+      ],
+      "reported_size": {
+        "multi_round_tasks": 2269,
+        "languages": 5
+      },
+      "artifact_check": {
+        "revision": "fa88b72ca94b928560afd5573aaf715f64b7210b",
+        "directory": "MCR-bench/dataset",
+        "valid_rows": {
+          "csharp": 454,
+          "java": 556,
+          "js": 407,
+          "py": 410,
+          "ts": 440
+        },
+        "total_valid_rows": 2267,
+        "js_nonempty_physical_lines": 415,
+        "invalid_js_physical_lines": [
+          304,
+          305,
+          306,
+          307,
+          308,
+          309,
+          310,
+          311
+        ],
+        "method": "Downloaded pinned raw JSONL files and parsed each nonblank physical line with Python json.loads; no repair."
+      },
+      "input": "Round-specific diffs, PR intent, linked issues and events_up_to_round.",
+      "oracle": "Defect cards with new/open/resolved/reopened state, LLM extraction/linking repeated three times plus reported manual cross-checking; model judge.",
+      "availability_license": "Public construction/evaluation code and data; repository Apache-2.0.",
+      "revision": {
+        "repository": "fa88b72ca94b928560afd5573aaf715f64b7210b"
+      },
+      "limits": [
+        "Actual JS release fails strict JSONL parsing; reported task count not independently confirmed.",
+        "Tasks are round instances, not necessarily distinct PRs.",
+        "Annotation uses complete future history; solver inputs must use a strict cutoff.",
+        "Merged-only and latent-bug exclusions remove important failed-review/regression cases.",
+        "State accuracy is conditioned on correctly detected defects."
+      ],
+      "reuse": [
+        "Evaluate historical attribution and unresolved-obligation continuity across revisions; retain round-to-PR identity without equating external rounds to Neuve review cycles."
+      ]
+    },
+    {
+      "id": "c-crab",
+      "name": "c-CRAB / Code Review Agent Benchmark",
+      "publisher": "Code Review Agent Benchmark authors",
+      "publication": "2026-03-24 preprint; latest inspected v3 2026-04-07",
+      "sources": [
+        "https://arxiv.org/abs/2603.23448",
+        "https://arxiv.org/html/2603.23448v3",
+        "https://github.com/c-CRAB-Benchmark/dataset"
+      ],
+      "reported_size": {
+        "source_swe_care_test": 671,
+        "released_filtered_instances": 410,
+        "final_validated_instances": 184,
+        "final_oracles": 234
+      },
+      "input": "SWE-CARE-derived review task in per-case executable environment; generated review guides a coding agent that attempts a correction.",
+      "oracle": "Human-comment-derived tests must fail before and pass after original fix, then be solvable by a coding agent guided by reference comment; final score tests the guided correction.",
+      "availability_license": "Public data, funnel, outputs, scripts; no explicit repository license detected. Upstream SWE-CARE Apache-2.0 does not settle new artifact rights.",
+      "revision": {
+        "repository": "856dfa3102b8996d168c4f195217b7603e1d1bc6"
+      },
+      "limits": [
+        "Final outcome combines reviewer and fixer capability.",
+        "Testability/solvability filters bias selection; most retained tests are structural.",
+        "Paper stage-3 table says 481 comments, release README says 485; paper repository count is internally inconsistent (67 table, 56 threats section).",
+        "184 final validated cases must not be confused with 410 filtered released rows."
+      ],
+      "reuse": [
+        "Retain fail-before/pass-after evidence and independent correction reproduction for objectively testable findings."
+      ]
+    },
+    {
+      "id": "swe-bench-verified",
+      "name": "SWE-bench Verified",
+      "publisher": "SWE-bench team / OpenAI curation",
+      "publication": "2024-08 human-filtered release; OpenAI reliability audit 2026",
+      "sources": [
+        "https://www.swebench.com/",
+        "https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified",
+        "https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/"
+      ],
+      "reported_size": {
+        "tasks": 500,
+        "openai_targeted_audit_tasks": 138
+      },
+      "input": "Pre-fix repository and issue description; solver writes patch.",
+      "oracle": "Fail-to-pass and pass-to-pass test suites in reproducible environment.",
+      "availability_license": "Public data, images and MIT evaluation harness. HF card/API does not specify dataset license; upstream task licenses require inspection.",
+      "revision": {
+        "huggingface": "78f471bf655a3137b2e8a75af1501690ec009ec3",
+        "harness": "02e7a74ffd0b707aab73d203fe87bdc7c76afc8e"
+      },
+      "limits": [
+        "Patch-generation success is not review quality.",
+        "OpenAI reports 59.4% material issues among targeted 138 difficult tasks, not 59.4% of all 500.",
+        "Public exposure and reproduced gold-patch details provide contamination evidence for some cases.",
+        "Tests can enforce unstated implementation details."
+      ],
+      "reuse": [
+        "Reuse environment/log discipline and oracle sanity checks, not leaderboard scores as a review measure."
+      ]
+    },
+    {
+      "id": "swe-bench-visual-and-pro",
+      "name": "SWE-bench Multimodal and SWE-bench Pro",
+      "publisher": "SWE-bench team; separately Scale AI for Pro",
+      "publication": "Multimodal preprint 2024-10-04, ICLR 2025; V2 2026-09-01. Pro preprint 2025-09-21; V2 2026-09-22.",
+      "sources": [
+        "https://arxiv.org/abs/2410.03859",
+        "https://www.swebench.com/multimodal.html",
+        "https://huggingface.co/datasets/SWE-bench/SWE-bench_Multimodal",
+        "https://arxiv.org/abs/2509.16941",
+        "https://huggingface.co/datasets/ScaleAI/SWE-bench_Pro",
+        "https://github.com/scaleapi/SWE-bench_Pro-os",
+        "https://openai.com/index/separating-signal-from-noise-coding-evaluations/",
+        "https://arxiv.org/html/2410.03859v1"
+      ],
+      "reported_size": {
+        "multimodal_v2": 480,
+        "pro_original_public": 731,
+        "pro_v2_public": 642,
+        "pro_v2_hard": 51,
+        "multimodal_original_abstract": 617,
+        "multimodal_original_body_total": 619,
+        "multimodal_original_dev": 102,
+        "multimodal_original_test": 517
+      },
+      "input": "Multimodal issue text/image assets and repository; Pro long-horizon task requirements/interfaces and base repository. Both request patches.",
+      "oracle": "Executable issue-resolution tests; V2 releases report stronger environment/verification controls.",
+      "availability_license": "Public current data and tooling; harnesses MIT. Pro card explicitly retains upstream task licenses. Multimodal HF card/API license unspecified.",
+      "revision": {
+        "multimodal_huggingface": "4e6662d51c48e475f7f346e4fa09a6f8b31fcaa5",
+        "pro_huggingface": "2d52cb3df914a3fcf80c7f66738b3a88ae37fc50",
+        "pro_repository": "66f92766bba642462d4bbe5479e83f91f9211862"
+      },
+      "limits": [
+        "Original Multimodal body reports 619 total = 517 test + 102 dev, but abstract says 617. Site original 517 is test scope; preserve abstract/body discrepancy.",
+        "OpenAI July 2026 audit estimates about 30% broken Pro v1 tasks, with 200 agent-audited/249 human-labeled tasks among 731; not a validation of later V2.",
+        "Public tests/reference patches require answer-access isolation.",
+        "Passing visual-domain tests does not validate UI design judgment."
+      ],
+      "reuse": [
+        "UI cases must retain image references and captured rendering evidence.",
+        "Pin release and environment digest; audit test/prompt alignment and empty/reference patch controls."
+      ]
+    }
+  ]
+}

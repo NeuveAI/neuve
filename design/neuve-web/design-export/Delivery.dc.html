@@ -1,0 +1,1350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Review delivery dial on the desk</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,textarea:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+
+/* ── the delivery dial: B, a glyph after the title (DialTitle.dc.html, decided in round 6). The trigger, ticks, tooltip
+   and popover rules are DialTitle's B rules; keep the two copies identical. The dial dismisses like any popover layer: a
+   press outside it, Escape or focus moving away folds it, the glyph toggles it, and choosing a stop keeps it open. ── */
+.titleline{line-height:34px}
+.dttitle{display:inline;margin:0;font-size:28px;line-height:34px;font-weight:600;letter-spacing:-.025em}
+.dttrig{position:relative;display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;cursor:pointer;border-radius:6px;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard),transform var(--nv-dur-press-in) var(--nv-ease-standard)}
+.dttrig::after{content:"";position:absolute;left:50%;top:50%;width:max(100%,44px);height:44px;transform:translate(-50%,-50%)}
+/* the bars glyph doesn't compress on press: a popup trigger anchors its dial */
+.dttrig:not(.btrig):active{transform:scale(var(--nv-scale-press))}
+.dttrig:focus-visible{outline:2px solid var(--dt-ring);outline-offset:2px}
+.dttrig:focus:not(:focus-visible){outline:none}
+.dtslot{position:relative;display:inline-flex;align-items:center;gap:2px}
+.dstop{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;white-space:nowrap;
+  transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard),background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.dstop input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer}
+.dstop::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+.dstop:has(input:focus-visible){outline:2px solid var(--dt-ring);outline-offset:1px}
+.bslot{vertical-align:4px;margin-left:8px}
+.btrig{justify-content:center;width:32px;height:32px;padding:0;color:var(--muted)}
+.btrig:hover,.btrig:focus-visible,.btrig[aria-expanded="true"]{background:var(--raised);color:var(--ink2)}
+.ticks{display:flex;align-items:flex-end;gap:2px;height:14px}
+/* filled ticks are solid; the rest are hollow in --line-strong (at least 3:1), so depth reads by shape as well as tone */
+.ticks i{position:relative;display:block;width:4px;box-sizing:border-box;border-radius:1px;box-shadow:inset 0 0 0 1px var(--line-strong)}
+/* the fill grows from the bar's base, chained at 85% of --nv-spring-snappy (--dt-chain, read off the curve; see dtChain) */
+.ticks i b{position:absolute;inset:0;border-radius:1px;background:currentColor;transform-origin:50% 100%;transform:scaleY(0);opacity:0;
+  transition:transform var(--nv-spring-snappy-dur) var(--nv-spring-snappy) calc(var(--k,0) * var(--dt-chain,0ms)),opacity var(--nv-dur-hint) var(--nv-ease-standard) calc(var(--k,0) * var(--dt-chain,0ms))}
+.ticks i b.f{transform:none;opacity:1}
+/* on the glyph's raised fill (hover, focus, open) the hollow outline steps to --nv-muted to keep 3:1 */
+.btrig:hover .ticks i,.btrig:focus-visible .ticks i,.btrig[aria-expanded="true"] .ticks i{box-shadow:inset 0 0 0 1px var(--nv-muted)}
+/* one glyph language: each stop in the dial shows its depth with the same ticks, smaller and static */
+.ticks.sm{height:10px;gap:1.5px}
+.ticks.sm i{width:3px}
+.ticks.sm i b{transition:none}
+.bstop.on .ticks i{box-shadow:inset 0 0 0 1px var(--nv-muted)}
+.btip{position:absolute;left:50%;bottom:calc(100% + 6px);transform:translate(-50%,var(--nv-offset-hint));opacity:0;pointer-events:none;white-space:nowrap;
+  padding:4px 8px;border-radius:6px;background:var(--peek-bg,var(--nv-peek-bg));color:var(--nv-peek-fg);font-size:12px;line-height:16px;font-weight:500;letter-spacing:0;z-index:7;
+  transition:opacity var(--nv-dur-hint) var(--nv-ease-ios-out),transform var(--nv-dur-hint) var(--nv-ease-ios-out)}
+.bslot:not(.open) .btrig:hover+.btip,.bslot:not(.open) .btrig:focus-visible+.btip{opacity:1;transform:translate(-50%,0)}
+/* near the board's right edge (a wrapped title on a phone) the tooltip ends at the glyph's right edge instead of centring
+   on it, so it never leaves the board (set by placeTip) */
+.btip[data-align="end"]{left:auto;right:0;transform:translate(0,var(--nv-offset-hint))}
+.bslot:not(.open) .btrig:hover+.btip[data-align="end"],.bslot:not(.open) .btrig:focus-visible+.btip[data-align="end"]{transform:none}
+.btip[data-align="start"]{left:0;transform:translate(0,var(--nv-offset-hint))}
+.bslot:not(.open) .btrig:hover+.btip[data-align="start"],.bslot:not(.open) .btrig:focus-visible+.btip[data-align="start"]{transform:none}
+.bdial{position:absolute;left:calc(100% + 8px);top:50%;z-index:6;display:grid;grid-template-columns:repeat(4,1fr);width:max-content;padding:3px;border-radius:10px;
+  background:var(--surface);box-shadow:var(--nv-shadow-card);transform-origin:-24px 50%;line-height:normal;font-size:12.5px;letter-spacing:0;font-weight:400;
+  animation:bIn var(--nv-spring-responsive-dur) var(--nv-spring-responsive) both,dtFade var(--nv-dur-card) var(--nv-ease-standard-decelerate) both}
+.bdial.closing{animation:bFold var(--nv-dur-card-exit) var(--nv-ease-emphasized-accelerate) both}
+@keyframes dtFade{from{opacity:0}to{opacity:1}}
+@keyframes bIn{from{transform:translateY(-50%) scale(var(--nv-scale-collapse))}to{transform:translateY(-50%)}}
+@keyframes bFold{from{opacity:1;transform:translateY(-50%)}to{opacity:0;transform:translateY(-50%) scale(var(--nv-scale-collapse))}}
+@keyframes bOut{from{opacity:1}to{opacity:0}}
+.bdial:not([data-side="inline"]){transform:translateY(-50%)}
+/* where the title has no room beside it, the dial opens in flow below the title and pushes the briefing down with one height
+   movement: its row opens on --nv-ease-standard over --nv-dur-card (monotonic), then its stops fade in from 75% of it
+   (--dt-content). Folding reverses it: the stops fade out, and the row closes once they have 30% left (--dt-overlap). The slot
+   lays out with display: contents so the dial can sit on its own line; the bars keep their place. */
+.bslot.open:has(> .bdial[data-side="inline"]){display:contents}
+.bslot.open:has(> .bdial[data-side="inline"]) > .btrig{margin-left:8px;vertical-align:4px}
+.bdial[data-side="inline"]{position:relative;left:auto;top:auto;margin-top:8px;height:34px;overflow:clip;overflow-clip-margin:4px;box-shadow:inset 0 0 0 1px var(--line);
+  transform:none;animation:bRowIn var(--nv-dur-card) var(--nv-ease-standard) both}
+.bdial[data-side="inline"]>.dstop,.bdial[data-side="inline"]>.bthumb{animation:dtFade var(--nv-dur-hint) var(--nv-ease-standard-decelerate) var(--dt-content,0ms) both}
+.bdial[data-side="inline"].closing{animation:bRowOut var(--nv-dur-card) var(--nv-ease-standard) calc(var(--nv-dur-hint) - var(--dt-overlap,0ms)) both}
+.bdial[data-side="inline"].closing>.dstop,.bdial[data-side="inline"].closing>.bthumb{animation:bOut var(--nv-dur-hint) var(--nv-ease-emphasized-accelerate) both}
+.bdial[data-side="inline"]{box-sizing:border-box;height:40px;max-width:100%;grid-template-columns:repeat(4,minmax(0,1fr))}
+.bdial[data-side="inline"]>.dstop{min-width:0}
+@keyframes bRowIn{from{height:0;padding-top:0;padding-bottom:0;margin-top:0}}
+@keyframes bRowOut{to{height:0;padding-top:0;padding-bottom:0;margin-top:0}}
+.bthumb{position:absolute;top:3px;left:3px;width:calc((100% - 6px) / 4);height:34px;border-radius:8px;background:var(--raised);box-shadow:inset 0 0 0 1px var(--line);
+  transition:transform var(--nv-spring-snappy-dur) var(--nv-spring-snappy)}
+.bstop{z-index:1;height:34px;padding:0 9px;border-radius:8px;font-size:12.5px;color:var(--muted)}
+.bstop:hover{color:var(--ink2)}
+.bstop.on{color:var(--ink);font-weight:500}
+.blbl{display:inline-grid}
+.blbl::after{content:attr(data-text);visibility:hidden;height:0;overflow:hidden;font-weight:500}
+/* phones: the stops drop their ticks and the padding shrinks to 8px, so the dial fits a 311px column (as the compact dial
+   does below sm, round-4.md "Dial anatomy") */
+@media (max-width:639px){.bstop .ticks.sm{display:none}.bstop{padding:0 8px}}
+
+/* ── layers ── As the code at HEAD (delivery-layers.tsx, delivery-motion.ts TODAY): a layer takes or gives up its height at
+   once (AnimatePresence popLayout), with no height animation. What enters fades in on the card timing from its delay (--d);
+   cards rise (.kid), flow boxes slide (.node), marks pop (.mark). TODO(merge with DialTitle): the layout FLIP that slides the
+   content below a changing layer, and the phased choreography once approved, come from the DialTitle rebuild. */
+.lay{display:grid;grid-template-rows:0fr;opacity:0;visibility:hidden}
+.lay>.in{overflow:hidden;min-height:0}
+.lay.on{grid-template-rows:1fr;opacity:1;visibility:visible;transition:opacity var(--nv-dur-card) var(--nv-ease-standard-decelerate) var(--d,0ms)}
+/* Facts ⇄ Briefed: the sentence and the paragraph cross-fade in place at 0ms with no rise (briefing.tsx, keyed motion.div);
+   the one leaving is lifted out of flow while it fades (popLayout) */
+.xf{position:relative}
+.xf>.para{margin:0;padding-top:0;max-width:660px;font-size:15px;line-height:24px;color:var(--ink2);opacity:1;visibility:visible;transition:opacity var(--nv-dur-card) var(--nv-ease-standard-decelerate)}
+.xf>.para.off{position:absolute;top:0;left:0;right:0;opacity:0;visibility:hidden;pointer-events:none;transition:opacity var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate),visibility 0s linear var(--nv-dur-delivery-exit)}
+.kid{transform:translateY(var(--nv-offset-rise));opacity:0;transition:transform var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate),opacity var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate)}
+.lay.on .kid{transform:none;opacity:1;transition:transform var(--nv-spring-responsive-dur) var(--nv-spring-responsive) calc(var(--d,0ms) + var(--nv-dur-delivery-children) + var(--k,0) * var(--nv-dur-delivery-child-stagger)),opacity var(--nv-dur-card) var(--nv-ease-standard-decelerate) calc(var(--d,0ms) + var(--nv-dur-delivery-children) + var(--k,0) * var(--nv-dur-delivery-child-stagger))}
+.node{opacity:0;transform:translateX(calc(var(--nv-offset-rise) * -1));transition:opacity var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate),transform var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate)}
+.lay.on .node{opacity:1;transform:none;transition:opacity var(--nv-dur-card) var(--nv-ease-standard-decelerate) calc(var(--d,0ms) + var(--nv-dur-delivery-node) + var(--k,0) * var(--nv-dur-delivery-node-stagger)),transform var(--nv-spring-responsive-dur) var(--nv-spring-responsive) calc(var(--d,0ms) + var(--nv-dur-delivery-node) + var(--k,0) * var(--nv-dur-delivery-node-stagger))}
+.mark{transform:scale(var(--nv-scale-mark));opacity:0;transition:transform var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate),opacity var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate)}
+.lay.on .mark{transform:none;opacity:1;transition:transform var(--nv-spring-snappy-dur) var(--nv-spring-snappy) calc(var(--d,0ms) + var(--nv-dur-delivery-mark) + var(--k,0) * var(--nv-dur-delivery-mark-stagger)),opacity var(--nv-dur-card) var(--nv-ease-standard-decelerate) calc(var(--d,0ms) + var(--nv-dur-delivery-mark) + var(--k,0) * var(--nv-dur-delivery-mark-stagger))}
+
+.card{background:var(--surface);border-radius:12px;box-shadow:0 0 0 1px var(--line);padding:16px 18px;box-sizing:border-box}
+/* line chip (flow-card.tsx LINE_CHIP_BUTTON): neutral, since it cites lines and not a marker; "↓" while it lands in the diff */
+.lc{position:relative;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 6px;border:0;border-radius:5px;background:var(--raised);color:var(--ink2);font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;line-height:20px;white-space:nowrap;cursor:pointer;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.lc::after{content:"";position:absolute;left:50%;top:50%;width:max(100%,44px);height:44px;transform:translate(-50%,-50%)}
+@media (hover:hover){.lc:hover{background:var(--raised2)}}
+.lc:focus-visible{outline:2px solid var(--dt-ring);outline-offset:2px}
+.nd{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:7px;background:var(--raised);font-family:'Geist Mono',ui-monospace,monospace;font-size:12px;color:var(--ink2);white-space:nowrap}
+.nd.bad{background:var(--del-bg);color:var(--del-fg)}
+.nd.end{background:var(--raised2);color:var(--ink)}
+button.nd{position:relative;border:0;cursor:pointer;transition:box-shadow var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+button.nd::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+@media (hover:hover){button.nd:hover{box-shadow:inset 0 0 0 1px var(--line-strong)}}
+button.nd:focus-visible{outline:2px solid var(--dt-ring);outline-offset:2px}
+.edge{display:inline-flex;align-items:center;gap:4px;font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;color:var(--muted);white-space:nowrap}
+.term{display:inline-flex;align-items:center;min-height:22px;max-width:100%;padding:0 7px;border-radius:5px;background:var(--raised);font-family:'Geist Mono',ui-monospace,monospace;font-size:12px;color:var(--kw);overflow-wrap:anywhere}
+
+/* ── diff ─────────────────────────────────────────────── */
+.row{display:grid;grid-template-columns:44px 44px 18px minmax(0,1fr);height:24px;align-items:center;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px;line-height:24px;position:relative}
+.row .ln{color:var(--nv-ln);text-align:right;padding-right:8px;font-size:11.5px;height:24px}
+.row .sg{text-align:center;color:var(--faint)}
+.row .code{white-space:pre;tab-size:4;overflow:hidden;text-overflow:ellipsis;padding-right:16px}
+.r-ctx{background:var(--surface)}
+.r-add{background:var(--add-bg)}.r-add .ln{background:var(--add-num);color:var(--add-ln)}.r-add .sg{color:var(--add-fg)}
+.r-del{background:var(--del-bg)}.r-del .ln{background:var(--del-num);color:var(--del-ln)}.r-del .sg{color:var(--del-fg)}
+/* criteria range: the same tint under the text as every other line highlight; the shared .lrow cell transition (and its reduced-motion rule) applies */
+.row.lit>span{box-shadow:inset 0 0 0 100vmax var(--lit)}
+.kw{color:var(--kw)}.fn{color:var(--fn)}.pl{color:var(--pl)}.cm{color:var(--cm)}
+
+/* ── marker pins (identity) ───────────────────────────── */
+.pin{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px 0 6px;box-sizing:border-box;border-radius:6px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;white-space:nowrap;border:0;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.pi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.dash{stroke-dasharray:3.2 3.2}
+.f-neutral{background:var(--raised);color:var(--ink2)}.f-neutral .pi{color:var(--muted)}.f-neutral:hover{background:var(--raised2)}
+.f-sug{background:var(--sug-tint);color:var(--sug-ink)}.f-sug .pi{color:var(--sug)}.f-sug:hover{background:var(--sug-tint2)}
+.f-req{background:var(--req-tint);color:var(--req-ink)}.f-req .pi{color:var(--req)}.f-req:hover{background:var(--req-tint2)}
+/* the target is --muted here (the code's text-faint is under 4.5:1 on the tints) */
+.pin .tgt{color:var(--muted)}
+.pin .cnt{display:inline-flex;align-items:center;justify-content:center;height:16px;min-width:16px;padding:0 4px;box-sizing:border-box;border-radius:4px;background:var(--surface);color:var(--ink2);font-size:10.5px}
+.pin.on .cnt{background:color-mix(in srgb,var(--bg) 20%,transparent);color:var(--bg)}
+.mgcol .pin{position:relative}
+.mgcol .pin::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+.mgcol{flex:0 0 200px;padding-top:44px}
+/* isolation, as Main and the code (diff-file.tsx, [data-overlay-item][inert]): while a card is open the other pins are inert,
+   dimmed, out of reach of the pointer (so no hover lighting; a press reaches the outside listener and only closes) and out of the tab order */
+.mgcol .pin{transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),opacity var(--nv-dur-dim-others) var(--nv-ease-standard)}
+.mgcol.has-open .pin:not(.on){opacity:var(--nv-opacity-dim-others);pointer-events:none}
+@media (max-width:900px){.mgcol{display:none}}
+
+/* ── guided: done-criteria and verdict ────────────────── */
+.dod{display:grid;grid-template-columns:28px minmax(0,1fr);gap:4px 12px;padding:14px 0;border-top:1px solid var(--line2)}
+.dod:first-of-type{border-top:0}
+.dod.radius{border-top:0;padding-top:8px}
+.mk{width:22px;height:22px;border-radius:11px;display:flex;align-items:center;justify-content:center}
+.mk-met{background:var(--agt-tint);color:var(--agt-fg)}
+.mk-not{background:var(--req-tint);color:var(--req)}
+.mk-none{background:var(--sug-tint);color:var(--sug)}
+.crit{font-size:14px;font-weight:600;line-height:22px}
+.state{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;margin-left:8px;font-weight:500}
+.does{grid-column:2;font-size:13.5px;line-height:20px;color:var(--ink2);max-width:720px}
+.ev{grid-column:2;display:flex;gap:6px;flex-wrap:wrap;padding-top:4px}
+.snip{grid-column:2;border-radius:8px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line2);padding:6px 0;font-family:'Geist Mono',ui-monospace,monospace;font-size:12px;line-height:22px;white-space:pre;overflow-x:auto;animation:snipIn var(--nv-dur-delivery-excerpt) var(--nv-ease-emphasized-decelerate) both}
+.snip span{display:block;padding:0 12px}
+@keyframes snipIn{from{opacity:0;transform:translateY(calc(var(--nv-offset-card) * -1))}to{opacity:1;transform:none}}
+.vrise{opacity:0;transform:translateY(var(--nv-offset-lift));transition:opacity var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate),transform var(--nv-dur-delivery-exit) var(--nv-ease-emphasized-accelerate)}
+.lay.on .vrise{opacity:1;transform:none;transition:opacity var(--nv-dur-card) var(--nv-ease-standard-decelerate) calc(var(--d,0ms) + var(--nv-dur-delivery-verdict)),transform var(--nv-spring-responsive-dur) var(--nv-spring-responsive) calc(var(--d,0ms) + var(--nv-dur-delivery-verdict))}
+.rm .vrise,.rm .lay.on .vrise{transform:none;transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}
+@media (prefers-reduced-motion:reduce){.vrise,.lay.on .vrise{transform:none;transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}}
+.verdict{border-radius:12px;box-shadow:0 0 0 1px var(--line);padding:14px 16px;display:flex;flex-direction:column;gap:8px;background:var(--surface)}
+
+.btn{height:34px;padding:0 12px;border-radius:8px;border:0;font-size:13px;font-weight:500;display:inline-flex;align-items:center;gap:6px;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),transform var(--nv-dur-press-in) var(--nv-ease-standard)}
+.btn:active{transform:scale(var(--nv-scale-press))}
+.btn-text{background:transparent;color:var(--muted)}.btn-text:hover{background:var(--raised);color:var(--ink)}
+.dock-btn{height:36px;padding:0 14px;border:0;border-radius:9px;font-size:13.5px;font-weight:500;display:inline-flex;align-items:center;gap:8px;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),transform var(--nv-dur-press-in) var(--nv-ease-standard)}
+.dock-btn:active{transform:scale(var(--nv-scale-press))}
+.dock-btn,.btn{position:relative}
+.dock-btn::after,.btn::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+.dock-btn:focus-visible,.btn:focus-visible{outline:2px solid var(--dt-ring);outline-offset:2px}
+.dock-ghost{background:transparent;color:var(--dock-fg)}.dock-ghost:hover{background:var(--dock-hover)}
+.dock-primary{background:var(--accent);color:var(--accent-ink)}.dock-primary:hover{background:var(--accent-hover)}
+.rise{animation:rise var(--nv-dur-dock-rise) var(--nv-ease-emphasized-decelerate) both}
+@keyframes rise{from{opacity:0;transform:translateY(var(--nv-offset-lift)) scale(var(--nv-scale-enter))}to{opacity:1;transform:none}}
+
+/* ── diff toolbar (review-desk-screen.tsx DiffToolbarControls; round 6 keeps only "N/M viewed" as meta) ── */
+.dttool{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding-top:4px}
+.tico{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.dtseg{display:inline-flex;padding:2px;border-radius:8px;background:var(--raised)}
+.dtseg button,.dtwrap,.dtquiet,.ib,.vw,.gaprow{position:relative}
+.dtseg button::after,.dtwrap::after,.dtquiet::after,.ib::after,.vw::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+.ib::after{left:50%;width:44px;transform:translate(-50%,-50%)}
+.dtseg button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:0;border-radius:6px;background:transparent;font-size:12.5px;color:var(--muted);transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard),background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.dtseg button:hover{color:var(--ink)}
+.dtseg button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-thumb)}
+.dtwrap{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:0;border-radius:7px;background:transparent;font-size:12.5px;color:var(--muted);transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard),background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.dtwrap:hover{background:var(--raised);color:var(--ink)}
+.dtwrap.on{background:var(--raised);color:var(--ink)}
+.dtviewed{font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;color:var(--muted)}
+.dtquiet{height:30px;padding:0 10px;border:0;border-radius:7px;background:transparent;font-size:12.5px;color:var(--muted)}
+.dtquiet:disabled{cursor:default;color:var(--faint)}
+.dtseg button:focus-visible,.dtwrap:focus-visible,.dtquiet:focus-visible,.ib:focus-visible,.vw:focus-visible{outline:2px solid var(--dt-ring);outline-offset:2px}
+/* ── file header (diff-file.tsx FileHeader, at rest; the stuck variant lives on Sticky) ── */
+.fh{display:flex;align-items:center;gap:8px;height:44px;padding:0 8px 0 6px;box-sizing:border-box;background:var(--surface);border-bottom:1px solid var(--line2)}
+.fh.folded{border-bottom-color:transparent}
+.ib{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:0 0 auto;border:0;border-radius:7px;background:transparent;color:var(--muted);transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard),background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.ib:hover{background:var(--raised);color:var(--ink)}
+.ib .chev{transition:transform var(--nv-dur-chevron) var(--nv-ease-standard)}
+.ib[aria-expanded="false"] .chev{transform:rotate(-90deg)}
+.fpath{display:flex;min-width:0;align-items:baseline;overflow:hidden;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px}
+.fpath .dir{min-width:0;flex-shrink:1000000;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.fpath .base{flex-shrink:0;font-weight:500;color:var(--ink)}
+.fpath .base.seen{color:var(--muted)}
+.fcount{display:inline-flex;gap:8px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;white-space:nowrap}
+.fcount .a{color:var(--add-fg)}.fcount .d{color:var(--del-fg)}
+/* copy path: shown on real hover or focus within the header (diff-file.tsx .nv-copy) */
+@media (hover:hover){.fh .cp{width:0;opacity:0;overflow:hidden;transition:opacity var(--nv-dur-surface-tone) var(--nv-ease-standard)}.fh:hover .cp,.fh:focus-within .cp{width:28px;opacity:1}}
+.vw{display:inline-flex;align-items:center;gap:6px;height:28px;flex:0 0 auto;padding:0 10px 0 8px;border:0;border-radius:7px;background:transparent;font-size:12.5px;color:var(--muted);transition:color var(--nv-dur-surface-tone) var(--nv-ease-standard),background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.vw:hover{background:var(--raised);color:var(--ink)}
+.vw[aria-pressed="true"]{color:var(--agt-fg)}
+/* the empty box is ringed in --line-strong (the code's --faint ring is under 3:1) */
+.vbox{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--line-strong);transition:background-color var(--nv-dur-check) var(--nv-ease-standard)}
+.vw[aria-pressed="true"] .vbox{background:var(--agt);color:#fff;box-shadow:none}
+/* gap row: collapsed unchanged lines, opened in place (the diff's line-info separator on --nv-expand) */
+.gaprow{display:grid;grid-template-columns:88px auto auto 1fr;gap:12px;align-items:center;width:100%;height:32px;padding:0;border:0;background:var(--expand);font-family:'Geist Mono',ui-monospace,monospace;font-size:12px;color:var(--muted);text-align:left;cursor:pointer;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.gaprow:hover{background:var(--raised)}
+.gaprow:focus-visible{outline:2px solid var(--dt-ring);outline-offset:-2px}
+.gaprow .gic{display:inline-flex;justify-content:center}
+/* ── decision dock (decision-dock.tsx) ── */
+.dockbar{display:flex;align-items:center;gap:6px;padding:6px 6px 6px 14px;border-radius:14px;background:var(--dock);color:var(--dock-fg);box-shadow:var(--shadow-dock);flex-wrap:wrap}
+.dscope{position:relative;display:inline-flex;align-items:center;gap:8px;padding-right:8px;font-size:13px;color:var(--dock-muted);border-radius:4px}
+.dscope:focus-visible{outline:2px solid var(--dt-ring);outline-offset:2px}
+.dnote{position:absolute;bottom:34px;left:-8px;z-index:2;width:232px;padding:8px 10px;border-radius:8px;background:var(--nv-peek-bg);color:var(--nv-peek-fg);font-size:12px;line-height:17px;white-space:normal;pointer-events:none;opacity:0;transform:translateY(var(--nv-offset-hint));transition:opacity var(--nv-dur-hint) var(--nv-ease-ios-out),transform var(--nv-dur-hint) var(--nv-ease-ios-out)}
+.dscope:hover .dnote,.dscope:focus-within .dnote{opacity:1;transform:none}
+.dtile{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px}
+.dtile.ok{background:var(--dock-ok-tint);color:var(--dock-ok)}.dtile.no{background:var(--dock-req-tint);color:var(--dock-req)}
+.composer{width:min(620px,100%);box-sizing:border-box;background:var(--surface);border-radius:14px;box-shadow:var(--shadow-dock);padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.draftbtn{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:0;border-radius:10px;background:var(--bg);text-align:left;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.draftbtn:hover{background:var(--raised)}
+.dtag{padding:2px 6px;border-radius:4px;background:var(--sug-tint);color:var(--sug-ink);font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;white-space:nowrap}
+.att{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 4px 0 10px;border-radius:6px;background:var(--raised);font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;color:var(--ink2)}
+.att button{position:relative;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--muted)}
+.att button::after{content:"";position:absolute;inset:-11px}
+.att button:hover{background:var(--raised2);color:var(--ink)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* reduced motion: opacity only, no travel, no height animation */
+.rm .lay.on,.rm .xf>.para{transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}
+.rm .xf>.para.off{transition:opacity var(--nv-dur-reduced) var(--nv-ease-out),visibility 0s linear var(--nv-dur-reduced)}
+.rm .kid,.rm .lay.on .kid,.rm .node,.rm .lay.on .node,.rm .mark,.rm .lay.on .mark{transform:none;transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}
+.rm .rise,.rm .snip{animation:none}
+.rm .bdial{animation:dtFade var(--nv-dur-reduced) var(--nv-ease-out) both}
+.rm .bdial.closing{animation:bOut var(--nv-dur-reduced) var(--nv-ease-out) both}
+.rm .bthumb,.rm .btip,.rm .ib .chev{transition:none}
+.rm .ticks i b{transform:none;transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}
+.rm .dttrig:active{transform:none}
+.rm .bdial[data-side="inline"]{animation:dtFade var(--nv-dur-reduced) var(--nv-ease-out) both}
+.rm .bdial[data-side="inline"].closing{animation:bOut var(--nv-dur-reduced) var(--nv-ease-out) both}
+.rm .bdial[data-side="inline"]>.dstop,.rm .bdial[data-side="inline"]>.bthumb{animation:none}
+@media (prefers-reduced-motion:reduce){.bdial[data-side="inline"]{animation:dtFade var(--nv-dur-reduced) var(--nv-ease-out) both}
+  .bdial[data-side="inline"].closing{animation:bOut var(--nv-dur-reduced) var(--nv-ease-out) both}
+  .bdial[data-side="inline"]>.dstop,.bdial[data-side="inline"]>.bthumb{animation:none}}
+@media (prefers-reduced-motion:reduce){.lay.on,.xf>.para{transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}.xf>.para.off{transition:opacity var(--nv-dur-reduced) var(--nv-ease-out),visibility 0s linear var(--nv-dur-reduced)}.kid,.lay.on .kid,.node,.lay.on .node,.mark,.lay.on .mark{transform:none;transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}.rise,.snip{animation:none}
+  .bdial{animation:dtFade var(--nv-dur-reduced) var(--nv-ease-out) both}.bdial.closing{animation:bOut var(--nv-dur-reduced) var(--nv-ease-out) both}
+  .bthumb,.btip,.ib .chev{transition:none}.dttrig:active{transform:none}.ticks i b{transform:none;transition:opacity var(--nv-dur-reduced) var(--nv-ease-out)}}
+/* ── REVIEW IDENTITY (Verdicts.dc.html · round-4.md § Review identity). Identity is who: one avatar per actor,
+   never altered by placement or state. Placement changes size only (24 header · 20 cards, threads, margin · 16 rail).
+   State goes beside the avatar, never on it: no status dot, badge or tint. ── */
+.av{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;font-weight:600;line-height:1}
+.av.person{font-family:Geist,system-ui,sans-serif;border-radius:50% 50% 50% 14%;background:var(--raised2);color:var(--ink2)}
+.av.person.s16{width:16px;height:16px;font-size:7.5px}
+.av.person.s20{width:20px;height:20px;font-size:8.5px}
+.av.person.s24{width:24px;height:24px;font-size:9.5px}
+.av.agent{display:inline-block;overflow:visible;transform:translateY(-10%)}
+.av.agent.s24{width:24px;height:29.2px}
+.av.agent.s20{width:20px;height:24.33px}
+.av.agent.s16{width:16px;height:19.47px}
+.av.agent .body{stroke:none}
+.av.agent .edge{fill:none;stroke-width:1;stroke-linecap:butt;opacity:.5}
+.av.agent .ant{stroke-width:.85;stroke-linecap:round;fill:none}
+.av.agent .tip{stroke:none}
+.av.agent text{font-family:'Geist Mono',ui-monospace,monospace;font-size:8.6px;font-weight:600;text-anchor:middle;dominant-baseline:central}
+.av.agent.impl .body{fill:var(--agt-tint)} .av.agent.impl .edge,.av.agent.impl .ant{stroke:var(--agt-fg)} .av.agent.impl .tip,.av.agent.impl text{fill:var(--agt-fg)}
+.av.agent.rev .body{fill:var(--sug-tint)} .av.agent.rev .edge,.av.agent.rev .ant{stroke:var(--sug-ink)} .av.agent.rev .tip,.av.agent.rev text{fill:var(--sug-ink)}
+/* holds an agent's taller box (the antenna) to the bubble's square, so rows line up whoever it is */
+.avbox{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center}
+.avbox.s16{width:16px;height:16px}.avbox.s20{width:20px;height:20px}.avbox.s24{width:24px;height:24px}
+
+/* review mark: avatar, verdict icon (colour on the icon only), words in ink; no fill, no chip */
+.vi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke-width:2.8;stroke-linecap:round;stroke-linejoin:round}
+.vi.ok{stroke:var(--agt)} .vi.no{stroke:var(--req)}
+.rmark{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--ink);white-space:nowrap}
+.rmark b{font-weight:600}
+.rmark.unsent{padding:2px 9px;border:1px dashed var(--line-strong);border-radius:7px}
+/* ── marker card opened from the briefing (briefing.tsx cite: openCitation, or the source at Guided) ── */
+.mkcard{box-sizing:border-box;border-radius:12px;background:var(--surface);box-shadow:var(--shadow-card);padding:12px 14px 14px;display:flex;flex-direction:column;gap:6px;animation:mkIn var(--nv-dur-card) var(--nv-ease-emphasized-decelerate) both}
+@keyframes mkIn{from{opacity:0;transform:translateY(calc(var(--nv-offset-card) * -1))}to{opacity:1;transform:none}}
+/* the margin card (L2) floats on the board, outside the clipped code layer, like floating.tsx's portal: placed from its
+   pin (placeMk), below it, start aligned, 6px away, 300px wide; it flips above only when the frame has no room below.
+   It enters on the card timing from its pin: from -4px below, from +4px when flipped. */
+.mkfloat{position:absolute;z-index:40;box-sizing:border-box;max-width:calc(100% - 16px)}
+.mkfloat:not([data-side]){visibility:hidden;animation:none}
+.mkfloat[data-side="bottom"]{animation:mkIn var(--nv-dur-card) var(--nv-ease-emphasized-decelerate) both}
+.mkfloat[data-side="top"]{animation:mkUp var(--nv-dur-card) var(--nv-ease-emphasized-decelerate) both}
+@keyframes mkUp{from{opacity:0;transform:translateY(var(--nv-offset-card))}to{opacity:1;transform:none}}
+.mkinline{margin-top:14px;max-width:660px;box-shadow:0 0 0 1px var(--line)}
+.mkhead{display:flex;align-items:center;gap:8px}
+.mktile{width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+.mktile.t-neutral{background:var(--raised);color:var(--muted)}.mktile.t-sug{background:var(--sug-tint);color:var(--sug)}.mktile.t-req{background:var(--req-tint);color:var(--req)}
+.mktile .ci{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.mktile .dash{stroke-dasharray:3.2 3.2}
+.mkx{position:relative;margin-left:auto;width:26px;height:26px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.mkx::after{content:"";position:absolute;inset:-9px}
+.mkx:hover{background:var(--raised);color:var(--ink)}
+.mkx:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mktitle{font-size:14px;line-height:19px;font-weight:600;overflow-wrap:anywhere}
+.mkmeta{font-family:'Geist Mono',ui-monospace,monospace;font-size:10.5px;color:var(--muted);overflow-wrap:anywhere}
+.mkapplies{margin:0;font-size:12.5px;line-height:18px;color:var(--ink2)}
+.mkcard .snip{grid-column:auto;margin-top:2px;white-space:pre-wrap}
+.mkfloat .snip{font-size:11.5px;line-height:17px;padding:6px 0}.mkfloat .snip span{padding:0 10px}
+.pin.on{background:var(--ink)!important;color:var(--bg)!important}.pin.on .pi{color:var(--bg)!important}.pin.on .tgt{color:inherit;opacity:.7}
+/* reduced motion (the setting, or the board's prop): an opacity-only fade, as floating.tsx (nv-fade-in) */
+@keyframes mkFade{from{opacity:0}to{opacity:1}}
+.rm .mkcard,.rm .mkfloat[data-side]{animation:mkFade var(--nv-dur-reduced) var(--nv-ease-out) both}
+@media (prefers-reduced-motion:reduce){.mkcard,.mkfloat[data-side]{animation:mkFade var(--nv-dur-reduced) var(--nv-ease-out) both}}
+/* ── BRIEFING LINKS (round-5.md, option B). One block on Briefing, Main, Delivery, Margin and Threads: keep the copies identical. ──
+   A phrase that describes part of the change is the link: ink, a quiet underline that turns ink on real hover, the focus
+   ring on keyboard focus (criteria-card.tsx REVIEW_LINK). An anchor, so a long phrase wraps with its sentence.
+   In the briefing a citation chip shows only its marker-kind icon; its name and tooltip say the kind and the target
+   (marker-kind.tsx CitationChip, iconOnly), kept on one line with the punctuation after it. One treatment for every entry
+   point to lines (round-5.md, follow-up decisions): hover or keyboard focus on a phrase, a chip or a margin pin (.go-tN,
+   comment pins too) lights exactly its lines (--nv-lit); activating any of them lands: a tint (--nv-land) that holds (landHold), then fades (landFade, emphasized
+   accelerate). Both tints are an inset shadow on the line's cells (never the pin margin), under the code text, as the diff draws them. */
+.lk{font:inherit;color:var(--nv-ink);background:transparent;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit;
+  text-decoration:underline;text-decoration-color:var(--nv-muted);text-decoration-thickness:1px;text-underline-offset:3px;border-radius:3px;
+  transition:text-decoration-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.lk:hover{text-decoration-color:var(--nv-ink)}}
+.lk:focus-visible{outline:2px solid var(--nv-focus);outline-offset:2px}
+.lk:focus:not(:focus-visible){outline:none}
+.lk .lsr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 6px 0 5px;box-sizing:border-box;border:0;border-radius:5px;vertical-align:1px;font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;line-height:20px;white-space:nowrap;cursor:pointer;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.chip.ico{width:20px;padding:0;justify-content:center}
+.lglue{white-space:nowrap}
+.chip:focus-visible{outline:2px solid var(--nv-focus);outline-offset:2px}
+.chip:focus:not(:focus-visible){outline:none}
+.chip .ci{width:11px;height:11px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.chip .dash{stroke-dasharray:3.2 3.2}
+.c-neutral{background:var(--nv-raised);color:var(--nv-ink-2)}.c-neutral .ci{color:var(--nv-muted)}
+.c-sug{background:var(--nv-sug-tint);color:var(--nv-sug-ink)}.c-sug .ci{color:var(--nv-sug)}
+.c-req{background:var(--nv-req-tint);color:var(--nv-req-ink)}.c-req .ci{color:var(--nv-req)}
+.c-transient{background:transparent;border:1px dashed var(--nv-line-strong);color:var(--nv-muted)}.c-transient .ci{color:var(--nv-muted)}
+@media (hover:hover){.c-neutral:hover{background:var(--nv-raised-2)}.c-sug:hover{background:var(--nv-sug-tint-2)}.c-req:hover{background:var(--nv-req-tint-2)}.c-transient:hover{background:var(--nv-raised)}}
+.lrow>span:not(.mg),.lrow>.half>span{transition:box-shadow var(--nv-dur-line-tint) var(--nv-ease-standard),color var(--nv-dur-line-tint) var(--nv-ease-standard)}
+@media (hover:hover){
+.lscope:has(.go-t1:hover) .lrow.t1>span:not(.mg),.lscope:has(.go-t1:hover) .lrow.t1>.half>span,
+.lscope:has(.go-t2:hover) .lrow.t2>span:not(.mg),.lscope:has(.go-t2:hover) .lrow.t2>.half>span,
+.lscope:has(.go-t3:hover) .lrow.t3>span:not(.mg),.lscope:has(.go-t3:hover) .lrow.t3>.half>span,
+.lscope:has(.go-t4:hover) .lrow.t4>span:not(.mg),.lscope:has(.go-t4:hover) .lrow.t4>.half>span,
+.lscope:has(.go-t5:hover) .lrow.t5>span:not(.mg),.lscope:has(.go-t5:hover) .lrow.t5>.half>span,
+.lscope:has(.go-t6:hover) .lrow.t6>span:not(.mg),.lscope:has(.go-t6:hover) .lrow.t6>.half>span,
+.lscope:has(.go-t7:hover) .lrow.t7>span:not(.mg),.lscope:has(.go-t7:hover) .lrow.t7>.half>span,
+.lscope:has(.go-t8:hover) .lrow.t8>span:not(.mg),.lscope:has(.go-t8:hover) .lrow.t8>.half>span,
+.lscope:has(.go-t9:hover) .lrow.t9>span:not(.mg),.lscope:has(.go-t9:hover) .lrow.t9>.half>span,
+.lscope:has(.go-t10:hover) .lrow.t10>span:not(.mg),.lscope:has(.go-t10:hover) .lrow.t10>.half>span{box-shadow:inset 0 0 0 100vmax var(--nv-lit)}
+}
+.lscope:has(.go-t1:focus-visible) .lrow.t1>span:not(.mg),.lscope:has(.go-t1:focus-visible) .lrow.t1>.half>span,
+.lscope:has(.go-t2:focus-visible) .lrow.t2>span:not(.mg),.lscope:has(.go-t2:focus-visible) .lrow.t2>.half>span,
+.lscope:has(.go-t3:focus-visible) .lrow.t3>span:not(.mg),.lscope:has(.go-t3:focus-visible) .lrow.t3>.half>span,
+.lscope:has(.go-t4:focus-visible) .lrow.t4>span:not(.mg),.lscope:has(.go-t4:focus-visible) .lrow.t4>.half>span,
+.lscope:has(.go-t5:focus-visible) .lrow.t5>span:not(.mg),.lscope:has(.go-t5:focus-visible) .lrow.t5>.half>span,
+.lscope:has(.go-t6:focus-visible) .lrow.t6>span:not(.mg),.lscope:has(.go-t6:focus-visible) .lrow.t6>.half>span,
+.lscope:has(.go-t7:focus-visible) .lrow.t7>span:not(.mg),.lscope:has(.go-t7:focus-visible) .lrow.t7>.half>span,
+.lscope:has(.go-t8:focus-visible) .lrow.t8>span:not(.mg),.lscope:has(.go-t8:focus-visible) .lrow.t8>.half>span,
+.lscope:has(.go-t9:focus-visible) .lrow.t9>span:not(.mg),.lscope:has(.go-t9:focus-visible) .lrow.t9>.half>span,
+.lscope:has(.go-t10:focus-visible) .lrow.t10>span:not(.mg),.lscope:has(.go-t10:focus-visible) .lrow.t10>.half>span{box-shadow:inset 0 0 0 100vmax var(--nv-lit)}
+.lrow.landed>span:not(.mg),.lrow.landed>.half>span{box-shadow:inset 0 0 0 100vmax var(--nv-land)!important;transition:none!important}
+.lrow.landed.fading>span:not(.mg),.lrow.landed.fading>.half>span{box-shadow:inset 0 0 0 100vmax transparent!important;transition:box-shadow var(--nv-dur-land-fade) var(--nv-ease-emphasized-accelerate)!important}
+@media (prefers-reduced-motion:reduce){.lrow>span:not(.mg),.lrow>.half>span,.lk,.chip{transition:none}}
+.rm .lrow>span:not(.mg),.rm .lrow>.half>span,.rm .lk,.rm .chip{transition:none}
+/* Engaged pin (round-5.md, 2026-10-15): while a pin's list or one of its cards is open, whichever entry point opened it,
+   its lines show it. The board names those lines on its scope: data-engaged="tN". As the code (lib/diffs.ts): the code cells keep
+   the hover tint (--nv-lit) under the text and carry a 2px outline in --nv-engaged-ring round the range (sides on every row, the top
+   on the first, the bottom on the last; inset on the code cell, so the sticky gutter never covers it); the number cells sit outside
+   the outline with the stronger open tint (--nv-range-strong: accent 28%, 21% in dark) and their own number colour
+   (--nv-ln, --nv-add-ln, --nv-del-ln). In a split row only the side that holds the line is engaged: the new side, the right half.
+   The outline eases in with the line tint and, like it, is instant under reduced motion. A landing on engaged lines keeps the
+   outline and fades back to the engaged tint, not to nothing. Selectors are raised ([data-lscope], .lrow.lrow) to stay above the
+   hover rules on the same lines. */
+.lscope{--eng-num:var(--nv-range-strong);--eng-ring:var(--nv-engaged-ring)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10{--eng-top:transparent;--eng-bot:transparent}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1:not(.lrow.t1 + .lrow.lrow.t1),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2:not(.lrow.t2 + .lrow.lrow.t2),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3:not(.lrow.t3 + .lrow.lrow.t3),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4:not(.lrow.t4 + .lrow.lrow.t4),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5:not(.lrow.t5 + .lrow.lrow.t5),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6:not(.lrow.t6 + .lrow.lrow.t6),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7:not(.lrow.t7 + .lrow.lrow.t7),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8:not(.lrow.t8 + .lrow.lrow.t8),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9:not(.lrow.t9 + .lrow.lrow.t9),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10:not(.lrow.t10 + .lrow.lrow.t10){--eng-top:var(--eng-ring)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1:not(:has(+ .lrow.lrow.t1)),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2:not(:has(+ .lrow.lrow.t2)),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3:not(:has(+ .lrow.lrow.t3)),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4:not(:has(+ .lrow.lrow.t4)),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5:not(:has(+ .lrow.lrow.t5)),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6:not(:has(+ .lrow.lrow.t6)),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7:not(:has(+ .lrow.lrow.t7)),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8:not(:has(+ .lrow.lrow.t8)),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9:not(:has(+ .lrow.lrow.t9)),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10:not(:has(+ .lrow.lrow.t10)){--eng-bot:var(--eng-ring)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.half:last-child>span:not(.ln):not(.code){box-shadow:inset 0 0 0 100vmax var(--nv-lit)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.code,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.half:last-child>.code{box-shadow:inset 2px 0 0 var(--eng-ring),inset -2px 0 0 var(--eng-ring),inset 0 2px 0 var(--eng-top),inset 0 -2px 0 var(--eng-bot),inset 0 0 0 100vmax var(--nv-lit)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.ln,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10>.half:last-child>.ln{box-shadow:inset 0 0 0 100vmax var(--eng-num)}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed>.code,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed>.half:last-child>.code{box-shadow:inset 2px 0 0 var(--eng-ring),inset -2px 0 0 var(--eng-ring),inset 0 2px 0 var(--eng-top),inset 0 -2px 0 var(--eng-bot),inset 0 0 0 100vmax var(--nv-land)!important}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.half:last-child>span:not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>span:not(.mg):not(.ln):not(.code),
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.half:last-child>span:not(.ln):not(.code){box-shadow:inset 0 0 0 100vmax var(--nv-lit)!important}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.half:last-child>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.code,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.half:last-child>.code{box-shadow:inset 2px 0 0 var(--eng-ring),inset -2px 0 0 var(--eng-ring),inset 0 2px 0 var(--eng-top),inset 0 -2px 0 var(--eng-bot),inset 0 0 0 100vmax var(--nv-lit)!important}
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t1"] .lrow.lrow.t1.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t2"] .lrow.lrow.t2.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t3"] .lrow.lrow.t3.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t4"] .lrow.lrow.t4.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t5"] .lrow.lrow.t5.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t6"] .lrow.lrow.t6.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t7"] .lrow.lrow.t7.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t8"] .lrow.lrow.t8.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t9"] .lrow.lrow.t9.landed.fading>.half:last-child>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.ln,
+[data-lscope].lscope[data-engaged~="t10"] .lrow.lrow.t10.landed.fading>.half:last-child>.ln{box-shadow:inset 0 0 0 100vmax var(--eng-num)!important}
+/* ── end BRIEFING LINKS ── */
+/* ── EXPLAINED AS PROSE (delivery/explained-prose.tsx · 10.60): real units carry the harness's before and after
+   paragraphs and its terms, and no flow; the card takes the flow card's place at Explained, in its own row up to 700px.
+   Lever "explained": flow (the designed unit) or prose (as real units read). ── */
+.xrows{display:grid;grid-template-columns:52px minmax(0,1fr);gap:12px}
+.xterm{display:grid;grid-template-columns:minmax(0,180px) minmax(0,1fr);gap:4px 12px;align-items:baseline}
+@media (max-width:640px){.xrows{grid-template-columns:minmax(0,1fr);gap:4px}.xterm{grid-template-columns:minmax(0,1fr)}}
+/* the briefing's claims, one per line (UnitBriefing.dc.html, approved 25 October 2026) */
+.claims{list-style:none;margin:0;padding-left:0;display:flex;flex-direction:column;gap:5px;max-width:820px;font-size:15px;line-height:22px;color:var(--ink2)}
+.claims>li{position:relative;padding-left:16px;text-wrap:pretty}
+.xf>.para.claims{max-width:820px;line-height:22px}
+.claims>li::before{content:"";position:absolute;left:3px;top:9px;width:4px;height:4px;border-radius:50%;background:var(--faint)}
+</style>
+</helmet>
+<div class="theme-{{theme}} {{rmCls}} lscope" data-lscope="delivery" data-engaged="{{engaged}}" style="--dt-chain: {{chain}}; --dt-content: {{dtContent}}; --dt-overlap: {{dtOverlap}}; --dt-ring: var(--nv-engaged-ring); position: relative; min-height: 1400px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<div style="max-width: 1180px; margin: 0 auto; padding: 32px 24px 48px; box-sizing: border-box; display: flex; flex-direction: column">
+
+<div style="display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: center; gap: 8px; min-height: 18px">
+<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg>
+<span class="lbl" style="color: var(--req-fg)">{{laneLine}}</span>
+</div>
+<div class="titleline"><h1 class="dttitle">{{unitTitle}}</h1><span class="dtslot bslot {{slotCls}}" data-slot="delivery"><button type="button" class="dttrig btrig" data-trig="delivery" aria-expanded="{{expanded}}" aria-controls="delivery-dial" aria-label="{{trigName}}" onClick="{{toggle}}" onKeyDown="{{trigKey}}"><span class="ticks" aria-hidden="true"><sc-for list="{{ticks}}" as="t" hint-placeholder-count="4"><i style="height: {{t.h}}px; --k: {{t.k}}"><b class="{{t.cls}}"></b></i></sc-for></span></button><span class="btip" aria-hidden="true">{{trigName}}</span><sc-if value="{{dialShown}}" hint-placeholder-val="{{false}}"><span role="radiogroup" aria-label="Review delivery" id="delivery-dial" class="bdial {{dialCls}}" onKeyDown="{{dialKey}}"><span class="bthumb" aria-hidden="true" style="transform: translateX(calc({{idx}} * 100%))"></span><sc-for list="{{stops}}" as="s" hint-placeholder-count="4"><label class="dstop bstop {{s.cls}}"><input type="radio" name="delivery" value="{{s.id}}" checked="{{s.on}}" onChange="{{s.pick}}"><span class="ticks sm" aria-hidden="true"><sc-for list="{{s.ticks}}" as="t" hint-placeholder-count="4"><i style="height: {{t.h}}px"><b class="{{t.cls}}"></b></i></sc-for></span><span class="blbl" data-text="{{s.label}}">{{s.label}}</span></label></sc-for></span></sc-if></span></div>
+<div class="xf">
+<p class="para {{factsCls}}"><sc-for list="{{factsBrief}}" as="g" hint-placeholder-count="7"><sc-if value="{{g.isText}}" hint-placeholder-val="{{true}}">{{g.t}}</sc-if><sc-if value="{{g.isLink}}" hint-placeholder-val="{{false}}"><a class="lk go-{{g.tgt}}" href="#d-{{g.anchor}}" onClick="{{g.go}}">{{g.t}}<span class="lsr"> ({{g.where}})</span></a></sc-if><sc-if value="{{g.isChip}}" hint-placeholder-val="{{false}}"><span class="lglue"><button type="button" class="chip ico go-{{g.tgt}} {{g.fam}}" onClick="{{g.go}}" aria-label="{{g.name}}" title="{{g.name}}"><sc-if value="{{g.k_source}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{g.k_doc}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{g.k_gap}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if></button>{{g.after}}</span></sc-if></sc-for></p>
+<ul class="para {{briefCls}} claims"><sc-for list="{{fullClaims}}" as="cl" hint-placeholder-count="4"><li><sc-for list="{{cl.segs}}" as="g" hint-placeholder-count="7"><sc-if value="{{g.isText}}" hint-placeholder-val="{{true}}">{{g.t}}</sc-if><sc-if value="{{g.isLink}}" hint-placeholder-val="{{false}}"><a class="lk go-{{g.tgt}}" href="#d-{{g.anchor}}" onClick="{{g.go}}">{{g.t}}<span class="lsr"> ({{g.where}})</span></a></sc-if><sc-if value="{{g.isChip}}" hint-placeholder-val="{{false}}"><span class="lglue"><button type="button" class="chip ico go-{{g.tgt}} {{g.fam}}" onClick="{{g.go}}" aria-label="{{g.name}}" title="{{g.name}}"><sc-if value="{{g.k_source}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{g.k_doc}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{g.k_gap}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if></button>{{g.after}}</span></sc-if></sc-for></li></sc-for></ul>
+</div>
+</div>
+<sc-if value="{{mkGuided}}" hint-placeholder-val="{{false}}"><div class="mkcard mkinline" role="region" aria-label="{{mk.region}}" style=""><div class="mkhead"><span class="mktile {{mk.tile}}" aria-hidden="true"><sc-if value="{{mk.k_source}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{mk.k_doc}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{mk.k_gap}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{mk.k_graph}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if></span><span class="lbl" style="font-size: 10.5px">{{mk.kind}}</span><button type="button" class="mkx" onClick="{{closeMk}}" aria-label="Close {{mk.kind}}"><svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"></path></svg></button></div><span class="mktitle">{{mk.title}}</span><span class="mkmeta">{{mk.meta}}</span><p class="mkapplies">{{mk.applies}}</p><sc-if value="{{mk.showQuote}}" hint-placeholder-val="{{false}}"><div class="snip"><sc-for list="{{mk.quote}}" as="l" hint-placeholder-count="2"><span>{{l}}</span></sc-for></div></sc-if></div></sc-if>
+
+<div style="height: 20px" aria-hidden="true"></div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 0 12px; max-width: 980px">
+<div class="lay {{flowOn}}" style="--d: var(--nv-dur-delivery-layer)">
+<div class="in"><section class="card kid" aria-label="{{flowTitle}}" style="--k: 0; margin-top: 18px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px"><h2 class="lbl" style="margin: 0; font-weight: 400">{{flowTitle}}</h2><button type="button" class="lc" onClick="{{flowChip.go}}" aria-label="{{flowChip.aria}}">{{flowChip.label}}<sc-if value="{{lands}}" hint-placeholder-val="{{true}}"><span aria-hidden="true">↓</span></sc-if></button></div>
+<div style="display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px 8px; align-items: center">
+<sc-for list="{{flowRows}}" as="fr" hint-placeholder-count="2">
+<span class="lbl" style="font-size: 10px">{{fr.label}}</span>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap"><sc-for list="{{fr.items}}" as="it" hint-placeholder-count="5"><li class="node" style="--k: {{it.k}}; display: inline-flex"><sc-if value="{{it.isButton}}" hint-placeholder-val="{{true}}"><button type="button" class="nd {{it.tone}}" onClick="{{it.go}}" aria-label="{{it.aria}}">{{it.label}}</button></sc-if><sc-if value="{{it.isPlain}}" hint-placeholder-val="{{false}}"><span class="nd {{it.tone}}">{{it.label}}</span></sc-if><sc-if value="{{it.isEdge}}" hint-placeholder-val="{{false}}"><span class="edge"><sc-if value="{{it.loop}}" hint-placeholder-val="{{false}}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg></sc-if><sc-if value="{{it.hasLabel}}" hint-placeholder-val="{{false}}"><span>{{it.label}}</span></sc-if><span aria-hidden="true">→</span></span></sc-if></li></sc-for></ol>
+</sc-for>
+</div>
+</section></div>
+</div>
+<div class="lay {{termsOn}}" style="--d: var(--nv-dur-delivery-layer)">
+<div class="in"><section class="card kid" aria-label="{{termsTitle}}" style="--k: 1; margin-top: 18px; display: flex; flex-direction: column; gap: 10px">
+<h2 class="lbl" style="margin: 0; font-weight: 400">{{termsTitle}}</h2>
+<dl style="margin: 0; display: flex; flex-direction: column; gap: 10px"><sc-for list="{{terms}}" as="g" hint-placeholder-count="3"><div style="display: flex; flex-direction: column; gap: 4px"><dt style="display: flex; align-items: flex-start; justify-content: space-between; gap: 10px"><span class="term">{{g.term}}</span><button type="button" class="lc" onClick="{{g.go}}" aria-label="{{g.aria}}">{{g.line}}<span aria-hidden="true">↓</span></button></dt><dd style="margin: 0; font-size: 13px; line-height: 19px; color: var(--ink2)">{{g.say}}</dd></div></sc-for></dl>
+</section></div>
+</div>
+</div>
+
+<div class="lay {{proseOn}}" style="--d: var(--nv-dur-delivery-layer)">
+<div class="in"><section class="card kid" aria-label="How it changes" style="--k: 0; margin-top: 18px; max-width: 700px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px">
+<div class="xrows"><sc-for list="{{proseRows}}" as="r" hint-placeholder-count="2"><span class="lbl" style="font-size: 10px; padding-top: 3px">{{r.label}}</span><p style="margin: 0; font-size: 14px; line-height: 21px; color: var(--ink2)">{{r.text}}</p></sc-for></div>
+<dl style="margin: 0; padding-top: 12px; border-top: 1px solid var(--line2); display: flex; flex-direction: column; gap: 10px"><sc-for list="{{proseTerms}}" as="t" hint-placeholder-count="3"><div class="xterm"><dt style="min-width: 0"><span class="mono" style="display: inline-flex; align-items: center; min-height: 22px; max-width: 100%; padding: 0 7px; border-radius: 5px; background: var(--raised); font-size: 12px; color: var(--syn-kw); overflow-wrap: anywhere">{{t.term}}</span></dt><dd style="margin: 0; font-size: 13px; line-height: 19px; color: var(--ink2)">{{t.meaning}}</dd></div></sc-for></dl>
+</section></div>
+</div>
+
+<div class="lay {{guideOn}}" style="--d: var(--nv-dur-delivery-guided)">
+<div class="in"><div class="card kid" style="--k: 0; margin-top: 18px; max-width: 980px; padding: 6px 20px 18px">
+<div style="padding: 14px 0 8px; display: flex; flex-direction: column; gap: 4px"><span class="lbl">Done when</span><span style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap"><span style="font-size: 15px; font-weight: 600">{{ticketTitle}}</span><span class="mono" style="font-size: 11.5px; color: var(--muted)">{{ticketId}}</span></span></div>
+<sc-for list="{{dod}}" as="c" hint-placeholder-count="4">
+<sc-if value="{{c.radiusHead}}" hint-placeholder-val="{{false}}"><div style="padding: 16px 0 2px; border-top: 1px solid var(--line2)"><span class="lbl">Blast radius</span></div></sc-if>
+<div class="dod {{c.rowCls}}">
+<span class="mk mark {{c.mkCls}}" style="--k: {{c.k}}" aria-hidden="true"><sc-if value="{{c.met}}" hint-placeholder-val="{{true}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{c.not}}" hint-placeholder-val="{{false}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if><sc-if value="{{c.none}}" hint-placeholder-val="{{false}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><circle class="dash" cx="12" cy="12" r="7"></circle></svg></sc-if><sc-if value="{{c.extra}}" hint-placeholder-val="{{false}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 8v5M12 16.5v.01"></path></svg></sc-if></span>
+<span class="crit">{{c.crit}}<sc-if value="{{c.hasState}}" hint-placeholder-val="{{true}}"><span class="state" style="color: {{c.stateFg}}">{{c.state}}</span></sc-if></span>
+<span class="does">{{c.does}}</span>
+<span class="ev"><sc-for list="{{c.ev}}" as="e" hint-placeholder-count="2"><button type="button" class="pin {{e.fam}}" onClick="{{e.open}}" aria-expanded="{{e.expanded}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><sc-if value="{{e.k_source}}" hint-placeholder-val="{{false}}"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></sc-if><sc-if value="{{e.k_doc}}" hint-placeholder-val="{{false}}"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></sc-if><sc-if value="{{e.k_graph}}" hint-placeholder-val="{{false}}"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></sc-if><sc-if value="{{e.k_gap}}" hint-placeholder-val="{{false}}"><circle class="dash" cx="12" cy="12" r="8.5"></circle></sc-if></svg>{{e.kind}}<span class="tgt">{{e.tgt}}</span></button></sc-for></span>
+<sc-if value="{{c.hasSnip}}" hint-placeholder-val="{{false}}"><div class="snip"><sc-for list="{{c.snip}}" as="l" hint-placeholder-count="2"><span>{{l}}</span></sc-for></div></sc-if>
+</div>
+</sc-for>
+<div class="verdict vrise" role="region" aria-label="Suggested review" style="margin-top: 4px">
+<div style="display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap"><sc-if value="{{unsentReq}}" hint-placeholder-val="{{true}}"><span class="rmark unsent"><svg class="vi no" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg><span><b>Suggested</b> · request changes</span></span></sc-if><sc-if value="{{unsentApp}}" hint-placeholder-val="{{false}}"><span class="rmark unsent"><svg class="vi ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span><b>Suggested</b> · approve</span></span></sc-if><sc-if value="{{sentReq}}" hint-placeholder-val="{{false}}"><span class="rmark"><span class="av person s20" role="img" aria-label="You">YO</span><svg class="vi no" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg><span><b>You</b> requested changes</span></span></sc-if><sc-if value="{{sentApp}}" hint-placeholder-val="{{false}}"><span class="rmark"><span class="av person s20" role="img" aria-label="You">YO</span><svg class="vi ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span><b>You</b> approved</span></span></sc-if><span style="font-size: 13.5px; color: var(--ink2)">· {{conclusion}}</span></div>
+<p style="margin: 0; font-size: 13.5px; line-height: 20px; color: var(--ink2); white-space: pre-line">{{draftText}}</p>
+</div>
+</div></div>
+</div>
+
+<div class="lay {{codeOn}}" style="--d: 0ms">
+<div class="in"><div class="dttool">
+<span class="dtseg" role="group" aria-label="Diff layout"><button type="button" class="{{stackedCls}}" aria-pressed="{{stacked}}" onClick="{{toStacked}}"><svg class="tico" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 12h18"></path></svg>Stacked</button><button type="button" class="{{splitCls}}" aria-pressed="{{split}}" onClick="{{toSplit}}"><svg class="tico" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M12 3v18"></path></svg>Split</button></span>
+<button type="button" class="dtwrap {{wrapCls}}" aria-pressed="{{wrap}}" aria-label="Wrap long lines" onClick="{{toggleWrap}}"><svg class="tico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M3 12h15a3 3 0 1 1 0 6h-4"></path><path d="m16 16-2 2 2 2"></path><path d="M3 18h7"></path></svg>Wrap</button>
+<span class="dtviewed">{{viewed}}</span>
+<span style="flex: 1 1 auto"></span>
+<button type="button" class="dtquiet" disabled>Show comments</button>
+</div></div>
+</div>
+<div class="lay {{codeOn}}" style="--d: 0ms">
+<div class="in"><div style="display: flex; gap: 16px; align-items: flex-start; padding-top: 12px">
+<div style="flex: 1 1 auto; min-width: 0; background: var(--surface); border-radius: 10px; box-shadow: 0 0 0 1px var(--line); overflow: hidden">
+<div class="fh {{fhCls}}" data-land-head>
+<button type="button" class="ib" aria-expanded="{{fileOpen}}" aria-controls="delivery-file" aria-label="{{foldName}}" onClick="{{toggleFold}}"><svg class="tico chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+<span class="fpath" title="{{filePath}}"><span class="dir">{{fileDir}}</span><span class="base {{baseCls}}">{{fileBase}}</span></span>
+<span class="fcount"><span class="a">{{fileAdd}}</span><span class="d">{{fileDel}}</span></span>
+<button type="button" class="ib cp" aria-label="{{copyName}}" onClick="{{copyPath}}"><sc-if value="{{copied}}" hint-placeholder-val="{{false}}"><svg class="tico" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--agt-fg)"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{notCopied}}" hint-placeholder-val="{{true}}"><svg class="tico" viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg></sc-if></button>
+<span style="flex: 1 1 auto"></span>
+<button type="button" class="vw" aria-pressed="{{viewedPressed}}" onClick="{{toggleViewed}}"><span class="vbox" aria-hidden="true"><sc-if value="{{isViewed}}" hint-placeholder-val="{{false}}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></sc-if></span>Viewed</button>
+</div>
+<sc-if value="{{fileShown}}" hint-placeholder-val="{{true}}"><div id="delivery-file">
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="20">
+<sc-if value="{{r.isGap}}" hint-placeholder-val="{{false}}"><button type="button" class="gaprow" onClick="{{r.expand}}" aria-label="{{r.name}}"><span class="gic"><svg class="tico" viewBox="0 0 24 24" aria-hidden="true"><sc-if value="{{r.up}}" hint-placeholder-val="{{true}}"><path d="m18 15-6-6-6 6"></path></sc-if><sc-if value="{{r.down}}" hint-placeholder-val="{{false}}"><path d="m6 9 6 6 6-6"></path></sc-if></svg></span><span>{{r.count}} unchanged lines</span><span>{{r.span}}</span><span></span></button></sc-if>
+<sc-if value="{{r.isLine}}" hint-placeholder-val="{{true}}"><div class="row lrow r-{{r.k}} {{r.t}}" id="{{r.id}}"><span class="ln">{{r.o}}</span><span class="ln">{{r.n}}</span><span class="sg">{{r.sg}}</span><span class="code"><sc-for list="{{r.segs}}" as="t" hint-placeholder-count="3"><span class="{{t.c}}">{{t.t}}</span></sc-for></span></div></sc-if>
+</sc-for>
+</div></sc-if>
+</div>
+<div class="mgcol {{mgMode}}" aria-label="Context margin">
+<sc-if value="{{fileShown}}" hint-placeholder-val="{{true}}"><sc-for list="{{rows}}" as="r" hint-placeholder-count="20">
+<sc-if value="{{r.isGap}}" hint-placeholder-val="{{false}}"><div style="height: 32px"></div></sc-if>
+<sc-if value="{{r.isLine}}" hint-placeholder-val="{{true}}"><div data-mk-row="{{r.n}}" style="height: 24px; display: flex; align-items: center"><sc-if value="{{r.hasPin}}" hint-placeholder-val="{{false}}"><button type="button" class="pin {{r.pin.fam}} {{r.pin.go}} {{r.pin.on}}" data-mk-pin="{{r.pin.key}}" onClick="{{r.pin.open}}" tabIndex="{{r.pin.tab}}" aria-expanded="{{r.pin.exp}}" aria-label="{{r.pin.name}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><sc-if value="{{r.pin.k_source}}" hint-placeholder-val="{{false}}"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></sc-if><sc-if value="{{r.pin.k_doc}}" hint-placeholder-val="{{false}}"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></sc-if><sc-if value="{{r.pin.k_graph}}" hint-placeholder-val="{{false}}"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></sc-if><sc-if value="{{r.pin.k_gap}}" hint-placeholder-val="{{false}}"><circle class="dash" cx="12" cy="12" r="8.5"></circle></sc-if></svg>{{r.pin.label}}<sc-if value="{{r.pin.hasTarget}}" hint-placeholder-val="{{false}}"><span class="tgt">{{r.pin.target}}</span></sc-if><sc-if value="{{r.pin.many}}" hint-placeholder-val="{{false}}"><span class="cnt" aria-hidden="true">{{r.pin.count}}</span></sc-if></button></sc-if></div></sc-if>
+</sc-for></sc-if>
+</div>
+</div></div>
+</div>
+
+<div style="position: sticky; bottom: 16px; padding-top: 24px; display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 5">
+<sc-if value="{{dockRest}}" hint-placeholder-val="{{true}}">
+<div class="dockbar">
+<span class="dscope" tabindex="0" aria-describedby="dock-scope-note"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--req)"></path></svg><span>Covers {{covers}}</span><span id="dock-scope-note" role="tooltip" class="dnote">{{scopeNote}}</span></span>
+<span aria-hidden="true" style="width: 1px; height: 20px; background: var(--dock-line)"></span>
+<sc-if value="{{guidedReq}}" hint-placeholder-val="{{false}}">
+<button type="button" class="dock-btn dock-ghost" onClick="{{approveInstead}}">Approve</button>
+<button type="button" class="dock-btn dock-ghost" onClick="{{editDraft}}">Edit request</button>
+<button type="button" class="dock-btn dock-primary" onClick="{{sendDraft}}">Request changes<span class="mono" style="font-size: 11px; opacity: .7">⌘↵</span></button>
+</sc-if>
+<sc-if value="{{guidedApp}}" hint-placeholder-val="{{false}}">
+<button type="button" class="dock-btn dock-ghost" onClick="{{requestInstead}}">Request changes</button>
+<button type="button" class="dock-btn dock-primary" onClick="{{sendApprove}}">Approve<span class="mono" style="font-size: 11px; opacity: .7">⌘↵</span></button>
+</sc-if>
+<sc-if value="{{notGuided}}" hint-placeholder-val="{{true}}">
+<button type="button" class="dock-btn dock-ghost" onClick="{{compose}}">Request changes</button>
+<button type="button" class="dock-btn dock-primary" onClick="{{approve}}">Approve<span class="mono" style="font-size: 11px; opacity: .7">⌘↵</span></button>
+</sc-if>
+</div>
+</sc-if>
+<sc-if value="{{composing}}" hint-placeholder-val="{{false}}">
+<div class="rise composer" role="dialog" aria-label="Request changes">
+<div style="display: flex; align-items: center; gap: 10px"><span style="font-size: 14px; font-weight: 600">Request changes</span><span class="mono" style="font-size: 11px; color: var(--muted)">{{covers}}</span><span style="flex: 1 1 auto"></span><sc-if value="{{fromDraft}}" hint-placeholder-val="{{true}}"><span class="mono" style="font-size: 11px; color: var(--muted); padding: 2px 6px; border-radius: 4px; border: 1px dashed var(--line-strong)">from the suggested review</span></sc-if><button type="button" class="mkx" style="margin-left: 0" aria-label="Cancel" onClick="{{cancel}}"><svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"></path></svg></button></div>
+<sc-if value="{{showDraft}}" hint-placeholder-val="{{true}}"><button type="button" class="draftbtn" onClick="{{useDraft}}"><span class="dtag">Draft</span><span style="flex: 1 1 auto; font-size: 13px; line-height: 19px; color: var(--ink2)">{{draftSuggestion}}</span><span style="font-size: 12.5px; white-space: nowrap; color: var(--muted)">Use ↵</span></button></sc-if>
+<label class="sr" for="dock-comment">What needs to change</label><textarea id="dock-comment" rows="3" placeholder="What needs to change?" value="{{composeText}}" onChange="{{typed}}" style="min-height: 76px; resize: vertical; font: inherit; font-size: 14px; line-height: 21px; color: var(--ink); background: var(--raised); border: 0; border-radius: 10px; padding: 12px"></textarea>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px"><sc-if value="{{attached}}" hint-placeholder-val="{{false}}"><span class="att"><span>{{attachedLabel}} attached</span><button type="button" aria-label="Remove attached context" onClick="{{detach}}"><svg width="9" height="9" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"></path></svg></button></span></sc-if><span style="flex: 1 1 auto"></span><button type="button" class="btn btn-text" onClick="{{cancel}}">Cancel</button><button type="button" class="btn" style="background: var(--ink); color: var(--bg)" onClick="{{send}}">Send to implementer<span class="mono" style="font-size: 11px; opacity: .7">⌘↵</span></button></div>
+</div>
+</sc-if>
+<sc-if value="{{decided}}" hint-placeholder-val="{{false}}">
+<div class="rise dockbar" role="status" style="gap: 10px; padding-left: 8px; flex-wrap: nowrap">
+<span class="dtile {{decTile}}" aria-hidden="true"><sc-if value="{{decOk}}" hint-placeholder-val="{{true}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></sc-if><sc-if value="{{decNo}}" hint-placeholder-val="{{false}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"></path><path d="M20 20v-7a4 4 0 0 0-4-4H4"></path></svg></sc-if></span>
+<span style="font-size: 13px; font-weight: 500">{{decidedText}}</span>
+<span aria-hidden="true" style="width: 1px; height: 18px; background: var(--dock-line)"></span>
+<button type="button" class="dock-btn dock-ghost" onClick="{{undo}}">Undo</button>
+<button type="button" class="dock-btn dock-primary">Next unit<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg></button>
+</div>
+</sc-if>
+</div>
+
+</div>
+<sc-if value="{{mkMargin}}" hint-placeholder-val="{{false}}"><div class="mkcard mkfloat" role="region" aria-label="{{mk.region}}"><div class="mkhead"><span class="mktile {{mk.tile}}" aria-hidden="true"><sc-if value="{{mk.k_source}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path></svg></sc-if><sc-if value="{{mk.k_doc}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg></sc-if><sc-if value="{{mk.k_gap}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><circle class="dash" cx="12" cy="12" r="8.5"></circle></svg></sc-if><sc-if value="{{mk.k_graph}}" hint-placeholder-val="{{false}}"><svg class="ci" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></svg></sc-if></span><span class="lbl" style="font-size: 10.5px">{{mk.kind}}</span><button type="button" class="mkx" onClick="{{closeMk}}" aria-label="Close {{mk.kind}}"><svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"></path></svg></button></div><span class="mktitle">{{mk.title}}</span><span class="mkmeta">{{mk.meta}}</span><p class="mkapplies">{{mk.applies}}</p><sc-if value="{{mk.showQuote}}" hint-placeholder-val="{{false}}"><div class="snip"><sc-for list="{{mk.quote}}" as="l" hint-placeholder-count="2"><span>{{l}}</span></sc-for></div></sc-if></div></sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"stop":{"editor":"enum","options":["facts","briefed","explained","guided"],"default":"explained"},"reducedMotion":{"editor":"boolean","default":false},"suggestion":{"editor":"enum","options":["request_changes","approve"],"default":"request_changes"},"explained":{"editor":"enum","options":["flow","prose"],"default":"flow"},"$preview":{"width":1440,"height":1400}}'>
+/* FIXTURE:go-delivery */
+// generated by canvas-t5/edits/gen-fixture.ts from packages/ui/src (fixtures and shared/delivery.ts) — do not edit by hand
+var FX_GO_DELIVERY = {"file":{"path":"internal/index/writer.go","dir":"internal/index/","base":"writer.go","additions":12,"deletions":1},"rows":[{"gap":true,"side":"before","count":23,"from":1,"to":23,"rows":[{"o":1,"n":1,"k":"ctx","s":[{"c":"kw","t":"package"},{"c":"pl","t":" index"}],"t":""},{"o":2,"n":2,"k":"ctx","s":[{"c":"pl","t":" "}],"t":""},{"o":3,"n":3,"k":"ctx","s":[{"c":"kw","t":"import"},{"c":"pl","t":" ("}],"t":""},{"o":4,"n":4,"k":"ctx","s":[{"c":"pl","t":"\t\"context\""}],"t":""},{"o":5,"n":5,"k":"ctx","s":[{"c":"pl","t":"\t\"errors\""}],"t":""},{"o":6,"n":6,"k":"ctx","s":[{"c":"pl","t":"\t\"time\""}],"t":""},{"o":7,"n":7,"k":"ctx","s":[{"c":"pl","t":" "}],"t":""},{"o":8,"n":8,"k":"ctx","s":[{"c":"pl","t":"\t\"neuve.dev/graph/internal/sqlite\""}],"t":""},{"o":9,"n":9,"k":"ctx","s":[{"c":"pl","t":")"}],"t":""},{"o":10,"n":10,"k":"ctx","s":[{"c":"pl","t":" "}],"t":""},{"o":11,"n":11,"k":"ctx","s":[{"c":"cm","t":"// ErrIndexBusy is returned when the index database stays busy after every attempt."}],"t":""},{"o":12,"n":12,"k":"ctx","s":[{"c":"kw","t":"var"},{"c":"pl","t":" ErrIndexBusy = errors."},{"c":"fn","t":"New"},{"c":"pl","t":"(\"index: database busy\")"}],"t":""},{"o":13,"n":13,"k":"ctx","s":[{"c":"pl","t":" "}],"t":""},{"o":14,"n":14,"k":"ctx","s":[{"c":"kw","t":"const"},{"c":"pl","t":" maxAttempts = 3"}],"t":""},{"o":15,"n":15,"k":"ctx","s":[{"c":"pl","t":" "}],"t":""},{"o":16,"n":16,"k":"ctx","s":[{"c":"cm","t":"// Writer commits batches of graph rows to the index database."}],"t":""},{"o":17,"n":17,"k":"ctx","s":[{"c":"kw","t":"type"},{"c":"pl","t":" Writer "},{"c":"kw","t":"struct"},{"c":"pl","t":" {"}],"t":""},{"o":18,"n":18,"k":"ctx","s":[{"c":"pl","t":"\tdb *sqlite.DB"}],"t":""},{"o":19,"n":19,"k":"ctx","s":[{"c":"pl","t":"}"}],"t":""},{"o":20,"n":20,"k":"ctx","s":[{"c":"pl","t":" "}],"t":""},{"o":21,"n":21,"k":"ctx","s":[{"c":"cm","t":"// backoff waits a little longer after each busy attempt."}],"t":""},{"o":22,"n":22,"k":"ctx","s":[{"c":"kw","t":"func"},{"c":"pl","t":" "},{"c":"fn","t":"backoff"},{"c":"pl","t":"(attempt int) time.Duration {"}],"t":""},{"o":23,"n":23,"k":"ctx","s":[{"c":"pl","t":"\t"},{"c":"kw","t":"return"},{"c":"pl","t":" time."},{"c":"fn","t":"Duration"},{"c":"pl","t":"(50<<attempt) * time.Millisecond"}],"t":""}]},{"o":24,"n":24,"k":"ctx","s":[{"c":"pl","t":"}"}],"t":""},{"o":25,"n":25,"k":"ctx","s":[{"c":"pl","t":" "}],"t":""},{"o":26,"n":26,"k":"ctx","s":[{"c":"cm","t":"// Commit writes one batch in a single transaction."}],"t":""},{"o":27,"n":"","k":"del","s":[{"c":"cm","t":"// It returns the database error unchanged."}],"t":""},{"o":"","n":27,"k":"add","s":[{"c":"cm","t":"// A busy database is retried, then reported as ErrIndexBusy."}],"t":""},{"o":28,"n":28,"k":"ctx","s":[{"c":"kw","t":"func"},{"c":"pl","t":" (w *Writer) "},{"c":"fn","t":"Commit"},{"c":"pl","t":"(ctx context.Context, b Batch) "},{"c":"kw","t":"error"},{"c":"pl","t":" {"}],"t":"t5"},{"o":"","n":29,"k":"add","s":[{"c":"pl","t":"\t"},{"c":"kw","t":"for"},{"c":"pl","t":" attempt := "},{"c":"kw","t":"range"},{"c":"pl","t":" maxAttempts {"}],"t":"t1 t3"},{"o":"","n":30,"k":"add","s":[{"c":"pl","t":"\t\terr := w."},{"c":"fn","t":"commitOnce"},{"c":"pl","t":"(ctx, b)"}],"t":"t1"},{"o":"","n":31,"k":"add","s":[{"c":"pl","t":"\t\t"},{"c":"kw","t":"if"},{"c":"pl","t":" !errors."},{"c":"fn","t":"Is"},{"c":"pl","t":"(err, sqlite.ErrBusy) {"}],"t":"t1 t9"},{"o":"","n":32,"k":"add","s":[{"c":"pl","t":"\t\t\t"},{"c":"kw","t":"return"},{"c":"pl","t":" err"}],"t":"t1"},{"o":"","n":33,"k":"add","s":[{"c":"pl","t":"\t\t}"}],"t":"t1"},{"o":"","n":34,"k":"add","s":[{"c":"pl","t":"\t\ttime."},{"c":"fn","t":"Sleep"},{"c":"pl","t":"("},{"c":"fn","t":"backoff"},{"c":"pl","t":"(attempt))"}],"t":"t1 t2"},{"o":"","n":35,"k":"add","s":[{"c":"pl","t":"\t}"}],"t":"t1"},{"o":"","n":36,"k":"add","s":[{"c":"pl","t":"\t"},{"c":"kw","t":"return"},{"c":"pl","t":" ErrIndexBusy"}],"t":"t1 t4"},{"o":"","n":37,"k":"add","s":[{"c":"pl","t":"}"}],"t":""},{"o":"","n":38,"k":"add","s":[{"c":"pl","t":" "}],"t":""},{"o":"","n":39,"k":"add","s":[{"c":"kw","t":"func"},{"c":"pl","t":" (w *Writer) "},{"c":"fn","t":"commitOnce"},{"c":"pl","t":"(ctx context.Context, b Batch) "},{"c":"kw","t":"error"},{"c":"pl","t":" {"}],"t":"t8"},{"o":29,"n":40,"k":"ctx","s":[{"c":"pl","t":"\ttx, err := w.db."},{"c":"fn","t":"BeginTx"},{"c":"pl","t":"(ctx, "},{"c":"kw","t":"nil"},{"c":"pl","t":")"}],"t":"t6"},{"o":30,"n":41,"k":"ctx","s":[{"c":"pl","t":"\t"},{"c":"kw","t":"if"},{"c":"pl","t":" err != "},{"c":"kw","t":"nil"},{"c":"pl","t":" {"}],"t":""},{"o":31,"n":42,"k":"ctx","s":[{"c":"pl","t":"\t\t"},{"c":"kw","t":"return"},{"c":"pl","t":" err"}],"t":"t7"},{"gap":true,"side":"after","count":16,"from":43,"to":58,"rows":[{"o":32,"n":43,"k":"ctx","s":[{"c":"pl","t":"\t}"}],"t":""},{"o":33,"n":44,"k":"ctx","s":[{"c":"pl","t":"\t"},{"c":"kw","t":"defer"},{"c":"pl","t":" tx."},{"c":"fn","t":"Rollback"},{"c":"pl","t":"()"}],"t":""},{"o":34,"n":45,"k":"ctx","s":[{"c":"pl","t":"\t"},{"c":"kw","t":"if"},{"c":"pl","t":" err := w."},{"c":"fn","t":"write"},{"c":"pl","t":"(tx, b); err != "},{"c":"kw","t":"nil"},{"c":"pl","t":" {"}],"t":""},{"o":35,"n":46,"k":"ctx","s":[{"c":"pl","t":"\t\t"},{"c":"kw","t":"return"},{"c":"pl","t":" err"}],"t":""},{"o":36,"n":47,"k":"ctx","s":[{"c":"pl","t":"\t}"}],"t":""},{"o":37,"n":48,"k":"ctx","s":[{"c":"pl","t":"\t"},{"c":"kw","t":"return"},{"c":"pl","t":" tx."},{"c":"fn","t":"Commit"},{"c":"pl","t":"()"}],"t":""},{"o":38,"n":49,"k":"ctx","s":[{"c":"pl","t":"}"}],"t":""},{"o":39,"n":50,"k":"ctx","s":[{"c":"pl","t":" "}],"t":""},{"o":40,"n":51,"k":"ctx","s":[{"c":"kw","t":"func"},{"c":"pl","t":" (w *Writer) "},{"c":"fn","t":"write"},{"c":"pl","t":"(tx *sqlite.Tx, b Batch) "},{"c":"kw","t":"error"},{"c":"pl","t":" {"}],"t":""},{"o":41,"n":52,"k":"ctx","s":[{"c":"pl","t":"\t"},{"c":"kw","t":"for"},{"c":"pl","t":" _, row := "},{"c":"kw","t":"range"},{"c":"pl","t":" b.Rows {"}],"t":""},{"o":42,"n":53,"k":"ctx","s":[{"c":"pl","t":"\t\t"},{"c":"kw","t":"if"},{"c":"pl","t":" _, err := tx."},{"c":"fn","t":"Exec"},{"c":"pl","t":"(insertRow, row."},{"c":"fn","t":"Args"},{"c":"pl","t":"()...); err != "},{"c":"kw","t":"nil"},{"c":"pl","t":" {"}],"t":""},{"o":43,"n":54,"k":"ctx","s":[{"c":"pl","t":"\t\t\t"},{"c":"kw","t":"return"},{"c":"pl","t":" err"}],"t":""},{"o":44,"n":55,"k":"ctx","s":[{"c":"pl","t":"\t\t}"}],"t":""},{"o":45,"n":56,"k":"ctx","s":[{"c":"pl","t":"\t}"}],"t":""},{"o":46,"n":57,"k":"ctx","s":[{"c":"pl","t":"\t"},{"c":"kw","t":"return"},{"c":"pl","t":" "},{"c":"kw","t":"nil"}],"t":""},{"o":47,"n":58,"k":"ctx","s":[{"c":"pl","t":"}"}],"t":""}]}],"targets":{"t1":{"start":29,"end":36,"side":"additions"},"t2":{"start":34,"end":34,"side":"additions"},"t3":{"start":29,"end":29,"side":"additions"},"t4":{"start":36,"end":36,"side":"additions"},"t5":{"start":28,"end":28,"side":"additions"},"t6":{"start":40,"end":40,"side":"additions"},"t7":{"start":42,"end":42,"side":"additions"},"t8":{"start":39,"end":39,"side":"additions"},"t9":{"start":31,"end":31,"side":"additions"}},"pins":{"29":{"key":"go-gap","kind":"gap","label":"Gap","fam":"f-sug","count":2,"target":"","tgt":"t3","name":"Gap on line 29, 2 markers"},"34":{"key":"go-doc","kind":"doc","label":"Doc","fam":"f-neutral","count":0,"target":"","tgt":"t2","name":"Doc on line 34"},"36":{"key":"go-graph","kind":"graph","label":"Graph","fam":"f-neutral","count":0,"target":"3 callers","tgt":"t4","name":"Graph on line 36"}},"markers":{"go-retry":{"key":"go-retry","kind":"source","label":"Source","kindLabel":"Source · this unit","fam":"f-neutral","chip":"c-neutral","tile":"t-neutral","title":"Commit's retry loop","meta":"internal/index/writer.go · lines 29–36","applies":"The loop is the whole behaviour change of this unit.","quote":["for attempt := range maxAttempts { … } return ErrIndexBusy"],"check":"","peek":"Commit retries a busy write up to three times, then returns ErrIndexBusy.","line":29,"tgt":"t1"},"go-gap":{"key":"go-gap","kind":"gap","label":"Gap","kindLabel":"Evidence gap","fam":"f-sug","chip":"c-sug","tile":"t-sug","title":"No test reaches the busy path","meta":"internal/index/writer_test.go","applies":"The retry and the final ErrIndexBusy have never run under test.","quote":["No test makes the database report busy."],"check":"Ask for a test that forces ErrBusy and expects three attempts.","peek":"No test makes the database report busy.","line":29,"tgt":"t3"},"go-doc":{"key":"go-doc","kind":"doc","label":"Doc","kindLabel":"Doc · committed","fam":"f-neutral","chip":"c-neutral","tile":"t-neutral","title":"internal/index/README.md","meta":"§ Writers · 51d0c8e","applies":"Line 34 sleeps between attempts without watching ctx.Done().","quote":["Writers must return as soon as ctx is done. Never sleep without watching ctx.Done()."],"check":"A cancelled request still waits up to 350ms here.","peek":"Index writers return as soon as their context is done.","line":34,"tgt":"t2"},"go-graph":{"key":"go-graph","kind":"graph","label":"Graph","kindLabel":"Graph · callers","fam":"f-neutral","chip":"c-neutral","tile":"t-neutral","title":"Callers of Writer.Commit","meta":"incoming CALLS · 1 hop · a3f9c2e","applies":"ErrIndexBusy is a new error every caller now receives.","quote":["Three functions call Commit."],"check":"sync.go stops a whole sync on any error, including ErrIndexBusy.","peek":"Three functions call Commit; sync.go treats every error as fatal.","line":36,"tgt":"t4"}},"facts":[{"isText":true,"t":"Commit retries busy writes three times, then returns ErrIndexBusy "},{"isChip":true,"k":"source","tgt":"t1","name":"Source, lines 29–36","fam":"c-neutral","mk":"go-retry"},{"isText":true,"t":". The busy path is untested "},{"isChip":true,"k":"gap","tgt":"t3","name":"Gap, line 29","fam":"c-sug","mk":"go-gap"},{"isText":true,"t":"."}],"briefing":[{"isText":true,"t":"Commit used to fail on the first lock clash. It now "},{"isLink":true,"t":"retries up to three times with growing waits, then returns ErrIndexBusy","tgt":"t1","anchor":"L29","where":"lines 29–36","mk":null},{"isText":true,"t":" "},{"isChip":true,"k":"source","tgt":"t1","name":"Source, lines 29–36","fam":"c-neutral","mk":"go-retry"},{"isText":true,"t":". "},{"isLink":true,"t":"The wait ignores cancellation","tgt":"t2","anchor":"L34","where":"line 34","mk":null},{"isText":true,"t":", so a cancelled request still sleeps "},{"isChip":true,"k":"doc","tgt":"t2","name":"Doc, line 34","fam":"c-neutral","mk":"go-doc"},{"isText":true,"t":". "},{"isLink":true,"t":"No test forces the busy path","tgt":"t3","anchor":"L29","where":"Gap, line 29","mk":"go-gap"},{"isText":true,"t":" "},{"isChip":true,"k":"gap","tgt":"t3","name":"Gap, line 29","fam":"c-sug","mk":"go-gap"},{"isText":true,"t":"."}],"flow":{"title":"How Commit changes","chip":{"label":"29–36","tgt":"t1","aria":"Land on lines 29 to 36"},"rows":[{"label":"Before","items":[{"node":true,"label":"Commit","tone":"plain","tgt":"t5","aria":"Commit: land on line 28"},{"edge":true,"label":"","loop":false},{"node":true,"label":"BeginTx","tone":"plain","tgt":"t6","aria":"BeginTx: land on line 40"},{"edge":true,"label":"busy","loop":false},{"node":true,"label":"fails","tone":"fails","tgt":"t7","aria":"fails: land on line 42"}]},{"label":"After","items":[{"node":true,"label":"Commit","tone":"plain","tgt":"t5","aria":"Commit: land on line 28"},{"edge":true,"label":"","loop":false},{"node":true,"label":"commitOnce","tone":"plain","tgt":"t8","aria":"commitOnce: land on line 39"},{"edge":true,"label":"busy","loop":false},{"node":true,"label":"wait, retry","tone":"plain","tgt":"t2","aria":"wait, retry: land on line 34"},{"edge":true,"label":"×3","loop":true},{"node":true,"label":"ErrIndexBusy","tone":"end","tgt":"t4","aria":"ErrIndexBusy: land on line 36"}]}],"sources":{"t1":{"title":"How Commit changes","meta":"internal/index/writer.go · lines 29 to 36","applies":"Cited by the flow of this change.","quote":["    for attempt := range maxAttempts {","        err := w.commitOnce(ctx, b)","        if !errors.Is(err, sqlite.ErrBusy) {","            return err","        }","        time.Sleep(backoff(attempt))","    }","    return ErrIndexBusy"]},"t5":{"title":"How Commit changes","meta":"internal/index/writer.go · line 28","applies":"Cited by the flow of this change.","quote":["func (w *Writer) Commit(ctx context.Context, b Batch) error {"]},"t6":{"title":"How Commit changes","meta":"internal/index/writer.go · line 40","applies":"Cited by the flow of this change.","quote":["    tx, err := w.db.BeginTx(ctx, nil)"]},"t7":{"title":"How Commit changes","meta":"internal/index/writer.go · line 42","applies":"Cited by the flow of this change.","quote":["        return err"]},"t8":{"title":"How Commit changes","meta":"internal/index/writer.go · line 39","applies":"Cited by the flow of this change.","quote":["func (w *Writer) commitOnce(ctx context.Context, b Batch) error {"]},"t2":{"title":"How Commit changes","meta":"internal/index/writer.go · line 34","applies":"Cited by the flow of this change.","quote":["        time.Sleep(backoff(attempt))"]},"t4":{"title":"How Commit changes","meta":"internal/index/writer.go · line 36","applies":"Cited by the flow of this change.","quote":["    return ErrIndexBusy"]}}},"terms":{"title":"Go in this unit","items":[{"term":"for attempt := range maxAttempts","say":"Counts attempt from 0 up to maxAttempts − 1. Ranging over an integer is new in Go 1.22.","line":"29","aria":"Land on line 29","tgt":"t3"},{"term":"errors.Is(err, sqlite.ErrBusy)","say":"True when err is ErrBusy or wraps it, so a wrapped busy error still retries.","line":"31","aria":"Land on line 31","tgt":"t9"},{"term":"time.Sleep(backoff(attempt))","say":"Pauses the goroutine for the whole wait. Nothing can interrupt it, including a cancelled ctx.","line":"34","aria":"Land on line 34","tgt":"t2"}]},"check":{"ticket":{"id":"SHR-318","title":"Index writes fail when the database is busy"},"basis":"done-when","criteria":[{"id":"retry","crit":"Index writes retry when the database is busy","status":"met","does":"Commit now tries up to three times, waiting a little longer each time, then returns ErrIndexBusy instead of the raw database error.","ev":[{"kind":"Source","icon":"source","fam":"f-neutral","tgt":"lines 29–36","mk":"go-retry","snip":["for attempt := range maxAttempts {","    err := w.commitOnce(ctx, b)","    …","return ErrIndexBusy"]}]},{"id":"cancel","crit":"Cancelling a request stops index work","status":"not","does":"Between attempts the code sleeps without watching for cancellation, so a cancelled request still waits up to 350ms before it returns.","ev":[{"kind":"Source","icon":"source","fam":"f-neutral","tgt":"line 34","mk":null,"snip":["time.Sleep(backoff(attempt))"]},{"kind":"Doc","icon":"doc","fam":"f-neutral","tgt":"index/README · writers return when ctx is done","mk":"go-doc","snip":null}]},{"id":"test","crit":"The busy path is covered by a test","status":"none","does":"No test makes the database report busy, so the retry and the final ErrIndexBusy have never run under test.","ev":[{"kind":"Gap","icon":"gap","fam":"f-sug","tgt":"busy path","mk":"go-gap","snip":null}]},{"id":"callers","crit":"Callers see a new error","status":"extra","does":"Three functions call Commit. Two already treat ErrIndexBusy as retryable; sync.go treats any error as fatal and will stop a sync on a busy index.","ev":[{"kind":"Graph","icon":"graph","fam":"f-neutral","tgt":"3 callers · sync.go","mk":"go-graph","snip":null}]}],"suggestion":{"decision":"request_changes","message":"Not done yet:\n1. A cancelled request keeps waiting: the retry sleeps with time.Sleep. Wait on a timer and ctx.Done() together, as the index README asks.\n2. No test forces ErrBusy. Add one that expects three attempts, then ErrIndexBusy."}},"unit":{"title":"Index writes retry when the database is busy","lane":"human-required","laneLabel":"Human-required","position":"3 of 4","covers":"1 hunk","scopeNote":"Only this unit’s human-required hunk in internal/index/writer.go.","stats":"1 file · 1 hunk · 4 markers","draftSuggestion":"Wait on ctx.Done() between attempts, and add a test that forces ErrBusy.","viewedOf":1,"language":"Go"}};
+/* end FIXTURE:go-delivery */
+/* FIXTURE:go-delivery-approve */
+// generated by canvas-t5/edits/gen-fixture.ts from packages/ui/src (fixtures and shared/delivery.ts) — do not edit by hand
+var FX_GO_DELIVERY_APPROVE = {"check":{"ticket":{"id":"SHR-318","title":"Index writes fail when the database is busy"},"basis":"done-when","criteria":[{"id":"retry","crit":"Index writes retry when the database is busy","status":"met","does":"Commit now tries up to three times, waiting a little longer each time, then returns ErrIndexBusy instead of the raw database error.","ev":[{"kind":"Source","icon":"source","fam":"f-neutral","tgt":"lines 29–36","mk":"go-retry","snip":["for attempt := range maxAttempts {","    err := w.commitOnce(ctx, b)","    …","return ErrIndexBusy"]}]},{"id":"cancel","crit":"Cancelling a request stops index work","status":"met","does":"Between attempts the code waits on a timer and ctx.Done() together, so a cancelled request returns at once.","ev":[{"kind":"Source","icon":"source","fam":"f-neutral","tgt":"line 34","mk":null,"snip":["time.Sleep(backoff(attempt))"]},{"kind":"Doc","icon":"doc","fam":"f-neutral","tgt":"index/README · writers return when ctx is done","mk":"go-doc","snip":null}]},{"id":"test","crit":"The busy path is covered by a test","status":"met","does":"A test makes the database report busy and expects three attempts, then ErrIndexBusy.","ev":[{"kind":"Gap","icon":"gap","fam":"f-sug","tgt":"busy path","mk":"go-gap","snip":null}]},{"id":"callers","crit":"Callers see a new error","status":"extra","does":"Three functions call Commit. Two already treat ErrIndexBusy as retryable; sync.go treats any error as fatal and will stop a sync on a busy index.","ev":[{"kind":"Graph","icon":"graph","fam":"f-neutral","tgt":"3 callers · sync.go","mk":"go-graph","snip":null}]}],"suggestion":{"decision":"approve","message":"Approved: the retry, cancellation and busy-path test all hold."}}};
+/* end FIXTURE:go-delivery-approve */
+// Everything the unit shows comes from the app's fixture (delivery.fixtures.ts goWriterFile, goMarkers, goDeliveryUnit,
+// goDeliveryPayload) through edits/gen-fixture.ts: diff rows, targets, pins, the briefing, the flow, the terms and the check.
+var FX = FX_GO_DELIVERY;
+var STOPS = [
+  { id: 'facts', label: 'Facts' },
+  { id: 'briefed', label: 'Briefed' },
+  { id: 'explained', label: 'Explained' },
+  { id: 'guided', label: 'Guided' }
+];
+var WORKSPACE_STOP = 'explained';
+var STATUS = {
+  met: { label: 'Done', fg: 'var(--agt-fg)', cls: 'mk-met' },
+  not: { label: 'Not done', fg: 'var(--req-fg)', cls: 'mk-not' },
+  none: { label: 'No evidence', fg: 'var(--sug-ink)', cls: 'mk-none' },
+  extra: { label: '', fg: 'var(--muted)', cls: 'mk-none' }
+};
+// The cards a chip, a marker phrase or a pin opens (the fixture's markers), plus, at Guided, the source a flow box or the
+// flow's range opens (flow-card.tsx flowSourceMarkers). On the board the source opens as the inline card (a stand-in for the
+// source sheet, accepted in review-canvas-r9.md R9-1).
+var MK = {};
+Object.keys(FX.markers).forEach(function (k) { var m = FX.markers[k]; MK[k] = { kind: m.label, icon: m.kind, tile: m.tile, title: m.title, meta: m.meta, applies: m.applies, quote: m.quote, row: m.line, tgt: m.tgt }; });
+Object.keys(FX.flow.sources).forEach(function (t) { var x = FX.flow.sources[t]; MK['flow:' + t] = { kind: 'Source', icon: 'source', tile: 't-neutral', title: x.title, meta: x.meta, applies: x.applies, quote: x.quote, row: FX.targets[t].start, tgt: t }; });
+var DRAFT = FX.check.suggestion.message;
+// the check the board draws: the fixture's own (its suggestion requests changes), or the approving revision's (prop suggestion)
+function checkFor(props) { return props && props.suggestion === 'approve' ? FX_GO_DELIVERY_APPROVE.check : FX.check; }
+var ATTACH = 'go-gap'; // goDeliveryUnit.defaultAttachment: Request changes attaches it
+
+// ── the glyph (DialTitle.dc.html B; keep these helpers identical to DialTitle's) ──
+var DT_CHAIN_AT = 0.85;
+function dtRoot() { return typeof document === 'undefined' ? null : (document.querySelector('[data-lscope="delivery"]') || document.documentElement); }
+function dtMs(name) { var el = dtRoot(); if (!el) return 0; var v = parseFloat(getComputedStyle(el).getPropertyValue(name)); return isNaN(v) ? 0 : v; }
+// the bar chain: the next bar starts when the previous fill has covered 85% of its travel on --nv-spring-snappy
+function dtChain() {
+  var el = dtRoot(); if (!el) return 0;
+  var pts = getComputedStyle(el).getPropertyValue('--nv-spring-snappy').replace(/linear\(|\)/g, '').split(',').map(function (x) { return parseFloat(x); }).filter(function (x) { return !isNaN(x); });
+  var dur = parseFloat(getComputedStyle(el).getPropertyValue('--nv-spring-snappy-dur')) || 0;
+  for (var i = 1; i < pts.length; i++) if (pts[i] >= DT_CHAIN_AT) { var f = (DT_CHAIN_AT - pts[i - 1]) / ((pts[i] - pts[i - 1]) || 1); return Math.round(dur * (i - 1 + f) / (pts.length - 1)); }
+  return dur;
+}
+// one change's bar order, from what is on screen now: up left to right, down right to left; a bar in motion reverses at once
+function dtBarPlan(from, to) {
+  var k = [0, 0, 0, 0];
+  if (typeof document === 'undefined' || from === to) return k;
+  var bs = document.querySelectorAll('[data-lscope="delivery"] .btrig .ticks i b');
+  var order = to > from ? [0, 1, 2, 3] : [3, 2, 1, 0], n = 0;
+  order.forEach(function (b) {
+    var el = bs[b], want = b <= to;
+    if (!el) { k[b] = n++; return; }
+    var moving = el.getAnimations().some(function (a) { return a.transitionProperty === 'transform' && a.playState === 'running' && a.currentTime >= (a.effect.getTiming().delay || 0); });
+    var mtx = getComputedStyle(el).transform, sy = mtx && mtx !== 'none' ? parseFloat(mtx.split(',')[3]) : 1;
+    if (moving) { k[b] = 0; n++; }
+    else if ((sy > 0.5) !== want) k[b] = n++;
+  });
+  return k;
+}
+function dtVisible(e) { return !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden'; }
+function dtFocus(sel) {
+  setTimeout(function () {
+    var el = Array.prototype.filter.call(document.querySelectorAll(sel), dtVisible)[0];
+    if (el && el.focus) el.focus({ preventScroll: true });
+  }, 0);
+}
+// the movement's curve and the content start and overlap read off it (DialTitle phBezier, phTimeAt, phDefaults, phContentAt)
+function phBezier(name) {
+  var el = dtRoot(); var v = el ? getComputedStyle(el).getPropertyValue(name) : '';
+  var p = (v.match(/-?[\d.]+/g) || []).map(Number);
+  return p.length === 4 ? p : [0.2, 0, 0, 1];
+}
+function phTimeAt(share, p) {
+  var B = function (s, a, b) { return 3 * (1 - s) * (1 - s) * s * a + 3 * (1 - s) * s * s * b + s * s * s; };
+  var lo = 0, hi = 1;
+  for (var i = 0; i < 40; i++) { var m = (lo + hi) / 2; if (B(m, p[1], p[3]) < share) lo = m; else hi = m; }
+  return B((lo + hi) / 2, p[0], p[2]);
+}
+var PH_GONE_AT = 0.3;
+function phDefaults() {
+  var fade = dtMs('--nv-dur-hint') || 140;
+  // the overlap: the share of the exit fade left once a block is down to 30% opacity (--nv-ease-emphasized-accelerate reaches
+  // 0.7 at 91% of its time, so 13ms of 140ms)
+  var overlap = Math.round(fade * (1 - phTimeAt(1 - PH_GONE_AT, phBezier('--nv-ease-emphasized-accelerate'))));
+  return { content: 75, overlap: overlap };
+}
+function phMorphMs() { return dtMs('--nv-dur-card') || 220; }
+function phContentAt(t) { return Math.round(phMorphMs() * phTimeAt(t.content / 100, phBezier('--nv-ease-standard'))); }
+function ticksFor(i) { return [0, 1, 2, 3].map(function (b) { return { cls: b <= i ? 'f' : '', h: 5 + b * 3 }; }); }
+function smallTicks(i) { return [0, 1, 2, 3].map(function (b) { return { cls: b <= i ? 'f' : '', h: 4 + b * 2 }; }); }
+
+// ── BRIEFING LINKS (round-5.md, option B). One script on Briefing, Main, Delivery, Margin and Threads: keep the copies identical. ──
+// A phrase or chip lands on its lines: they scroll in below the sticky file header (unless already in view), tint,
+// hold (--nv-dur-land-hold), then fade (--nv-dur-land-fade). Reduced motion: an instant scroll, and the tint stays
+// until the next action. The phase is kept per scope ([data-lscope]), so a re-render repaints it (landPaint).
+var LAND = {};
+function landMs(el, name) { var v = parseFloat(getComputedStyle(el).getPropertyValue(name)); return isNaN(v) ? 0 : v; }
+function landScope(key) { return document.querySelector('[data-lscope="' + key + '"]'); }
+function landRows(key, tgt) { var s = landScope(key); return s ? Array.prototype.slice.call(s.querySelectorAll('.lrow.' + tgt)) : []; }
+function landPaint(key) {
+  var s = landScope(key);
+  if (!s) return;
+  s.querySelectorAll('.lrow.landed').forEach(function (r) { r.classList.remove('landed', 'fading'); });
+  var l = LAND[key];
+  if (!l || !l.phase) return;
+  landRows(key, l.tgt).forEach(function (r) { r.classList.add('landed'); if (l.phase === 'fading') r.classList.add('fading'); });
+}
+function landPaintAll() { Object.keys(LAND).forEach(landPaint); }
+function landClear(key) {
+  var l = LAND[key];
+  if (l) { l.timers.forEach(function (t) { clearTimeout(t); }); if (l.off) l.off(); }
+  LAND[key] = null;
+  landPaint(key);
+}
+function landScroller(el) {
+  for (var n = el.parentElement; n; n = n.parentElement) {
+    var o = getComputedStyle(n).overflowY;
+    if ((o === 'auto' || o === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+  }
+  return null;
+}
+function landReduced(props) {
+  return !!(props && props.reducedMotion) || (typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+function land(key, tgt, reduced) {
+  landClear(key);
+  // only lines on screen: a view that hides the code (Guided) has nothing to land on
+  var rows = landRows(key, tgt).filter(function (r) { return r.getClientRects().length && getComputedStyle(r).visibility !== 'hidden'; });
+  if (!rows.length) return;
+  // the timings are read now, from the connected scope: a re-render may replace it before the hold ends
+  var scope = landScope(key) || document.documentElement;
+  var l = LAND[key] = { tgt: tgt, phase: null, timers: [], off: null,
+    hold: landMs(scope, '--nv-dur-land-hold'), fade: landMs(scope, '--nv-dur-land-fade') };
+  var sc = landScroller(rows[0]);
+  var headEl = sc ? sc.querySelector('[data-land-head]') : null;
+  var top = (sc ? sc.getBoundingClientRect().top : 0) + (headEl ? headEl.offsetHeight : 0);
+  var bottom = sc ? sc.getBoundingClientRect().top + sc.clientHeight : window.innerHeight;
+  var a = rows[0].getBoundingClientRect(), b = rows[rows.length - 1].getBoundingClientRect();
+  var arrive = function () {
+    if (LAND[key] !== l) return;
+    l.phase = 'landed';
+    landPaint(key);
+    if (reduced) {
+      var off = function () { landClear(key); };
+      var evs = ['pointerdown', 'keydown', 'wheel'];
+      l.timers.push(setTimeout(function () { evs.forEach(function (e) { document.addEventListener(e, off, { capture: true, once: true }); }); }, 0));
+      l.off = function () { evs.forEach(function (e) { document.removeEventListener(e, off, { capture: true }); }); };
+      return;
+    }
+    l.timers.push(setTimeout(function () {
+      l.phase = 'fading';
+      landPaint(key);
+      l.timers.push(setTimeout(function () { if (LAND[key] === l) { LAND[key] = null; landPaint(key); } }, l.fade));
+    }, l.hold));
+  };
+  if (a.top >= top && b.bottom <= bottom) { arrive(); return; }
+  var box = sc || document.scrollingElement || document.documentElement;
+  var dest = Math.max(0, Math.min(box.scrollTop + (a.top - top) - 8, box.scrollHeight - (sc ? sc.clientHeight : window.innerHeight)));
+  if (reduced) { box.scrollTop = dest; arrive(); return; }
+  var done = false;
+  var bus = sc || window;
+  var go = function () { if (done) return; done = true; bus.removeEventListener('scrollend', ended); arrive(); };
+  // only the end of this scroll counts, not a scrollend left over from an earlier one
+  var ended = function () { if (Math.abs(box.scrollTop - dest) <= 2) go(); };
+  bus.addEventListener('scrollend', ended);
+  l.timers.push(setTimeout(go, 700)); // browsers without scrollend
+  (sc || window).scrollTo({ top: dest, behavior: 'smooth' });
+}
+// A chip keeps the punctuation that follows it (".", ",") on its own line: the punctuation moves into the chip's
+// segment as g.after, so a paragraph never strands a lone "." after an icon.
+// One claim per line (the merged briefing, approved 25 October 2026; briefing-claims.ts): split the glued briefing
+// segments into sentences. A sentence ends at . ! or ? before a capital, or with the punctuation glued after a chip.
+function claimsOf(segs, lead) {
+  var out = [[]];
+  segs.forEach(function (g) {
+    if (g.isText) {
+      g.t.split(/(?<=[.!?])\s+(?=[A-Z0-9“"‘'(\[])/).forEach(function (p, i) { if (i) out.push([]); if (p) out[out.length - 1].push(Object.assign({}, g, { t: p })); });
+      if (/[.!?]\s+$/.test(g.t)) out.push([]);
+    } else {
+      out[out.length - 1].push(g);
+      if (g.isChip && /[.!?]$/.test(g.after || '')) out.push([]);
+    }
+  });
+  return out.map(function (c) {
+    var k = c.slice();
+    while (k.length && k[0].isText && !k[0].t.trim()) k.shift();
+    while (k.length && k[k.length - 1].isText && !k[k.length - 1].t.trim()) k.pop();
+    if (k.length && k[0].isText) k[0] = Object.assign({}, k[0], { t: k[0].t.replace(/^\s+/, '') });
+    if (k.length && k[k.length - 1].isText) k[k.length - 1] = Object.assign({}, k[k.length - 1], { t: k[k.length - 1].t.replace(/\s+$/, '') });
+    return k;
+  }).filter(function (k) { return k.length; }).map(function (k, i) { return { segs: k, lead: !!lead && i === 0 }; });
+}
+function glue(segs) {
+  var out = segs.map(function (g) { return Object.assign({}, g); });
+  out.forEach(function (g, i) {
+    var next = out[i + 1];
+    if (!g.isChip || !next || !next.isText) return;
+    var m = /^[.,;:!?)]+/.exec(next.t);
+    if (m) { g.after = m[0]; next.t = next.t.slice(m[0].length); }
+  });
+  return out.filter(function (g) { return !g.isText || g.t !== ''; });
+}
+// Decision B, with a document listener as floating.tsx's onPointerDownOutside (no covering layer, so hover still reaches
+// the briefing): while a card is open, a press outside it closes it. On a briefing phrase or chip the click then follows the
+// link; any other press is stopped, its pointerdown and its click, so nothing underneath reacts (as the code's
+// OutsidePressDismiss). A mouse closes on pointerdown; touch and pen close on the tap (the click), so a scroll gesture that
+// starts outside the card (pointerdown, then pointercancel, no click) leaves it open. Escape closes it too and returns focus
+// to its pin. A non-modal layer (nonModal() true: a pinned list, which doesn't isolate) closes on the press the same way but
+// lets that press through, so the pin pressed opens its card or list in one click, as the code's popover does.
+// Attach once; isOpen and nonModal are asked each time.
+function outsideCloser(isOpen, insideSel, close, nonModal) {
+  var swallow = false, tap = false;
+  var outside = function (e) {
+    if (!isOpen()) return null;
+    var t = e.target;
+    if (t.closest && t.closest(insideSel)) return null;
+    return { link: !!(t.closest && t.closest('[data-lscope] p .lk, [data-lscope] p .chip')) };
+  };
+  var stop = function (e) { e.preventDefault(); e.stopPropagation(); };
+  var down = function (e) {
+    swallow = false;
+    tap = e.pointerType === 'touch' || e.pointerType === 'pen';
+    if (tap) return;
+    var o = outside(e);
+    if (!o) return;
+    swallow = !o.link && !(nonModal && nonModal());
+    if (swallow) stop(e);
+    close();
+  };
+  var cancel = function () { tap = false; };
+  // Escape closes and, as floating.tsx, returns focus to the pin whose card or list was open (found again by its key after
+  // the board re-renders).
+  var key = function (e) {
+    if (e.key !== 'Escape' || !isOpen()) return;
+    var pin = document.querySelector('[data-lscope] .pin[aria-expanded="true"]');
+    var sel = !pin ? null : pin.getAttribute('data-mk-pin') ? '[data-mk-pin="' + pin.getAttribute('data-mk-pin') + '"]'
+      : pin.getAttribute('aria-label') ? '.pin[aria-label="' + CSS.escape(pin.getAttribute('aria-label')) + '"]' : null;
+    close();
+    if (pin) setTimeout(function () { var el = (sel && document.querySelector(sel)) || pin; if (el && el.isConnected && el.focus) el.focus({ preventScroll: true }); }, 0);
+  };
+  var click = function (e) {
+    if (swallow) { swallow = false; stop(e); return; }
+    if (!tap) return;
+    tap = false;
+    var o = outside(e);
+    if (!o) return;
+    if (!o.link && !(nonModal && nonModal())) stop(e);
+    close();
+  };
+  return {
+    on: function () { document.addEventListener('pointerdown', down, true); document.addEventListener('pointercancel', cancel, true); document.addEventListener('click', click, true); document.addEventListener('keydown', key); },
+    off: function () { document.removeEventListener('pointerdown', down, true); document.removeEventListener('pointercancel', cancel, true); document.removeEventListener('click', click, true); document.removeEventListener('keydown', key); }
+  };
+}
+function landOn(key, tgt, props, before) {
+  return function (e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (before) before();
+    // after the board's own update (a card opening) has rendered
+    setTimeout(function () { land(key, tgt, landReduced(props)); }, 0);
+  };
+}
+// ── end BRIEFING LINKS ──
+
+class Component extends DCLogic {
+  componentDidMount() {
+    var self = this;
+    this.onResize = function () { self.placeMk(); self.sideB(); self.placeTip(); };
+    if (typeof window !== 'undefined') { window.addEventListener('resize', this.onResize); window.addEventListener('scroll', this.onResize, { passive: true }); }
+    // The margin card closes on a pointerdown outside it; a briefing phrase or chip then follows its link (B).
+    this.outside = outsideCloser(function () { return !!self.state.mk && !!document.querySelector('[data-lscope="delivery"] .mkfloat'); }, '.mkfloat', function () { self.setState({ mk: null }); });
+    this.outside.on();
+    // the dial, like any popover layer: a press outside its slot or focus moving out of it folds it (focus stays where it went);
+    // Escape anywhere folds it and returns focus to the glyph, before any other layer's Escape
+    this.dialOut = function (e) {
+      if (self.state.open !== 'open') return;
+      var slot = e.target && e.target.closest ? e.target.closest('[data-slot="delivery"]') : null;
+      if (!slot) self.fold(false);
+    };
+    this.dialEsc = function (e) {
+      if (e.key !== 'Escape' || self.state.open !== 'open') return;
+      e.preventDefault(); e.stopImmediatePropagation(); self.fold(true);
+    };
+    document.addEventListener('pointerdown', this.dialOut, true);
+    document.addEventListener('focusin', this.dialOut, true);
+    document.addEventListener('keydown', this.dialEsc, true);
+    this.placeMk(); this.sideB(); this.placeTip();
+    if (typeof ResizeObserver !== 'undefined') {
+      this.ro = new ResizeObserver(function () { self.placeTip(); self.sideB(); self.refreshTiming(); });
+      var rt = document.querySelector('[data-lscope="delivery"]'), tp = rt && rt.querySelector('.btip');
+      if (rt) this.ro.observe(rt);
+      if (tp) this.ro.observe(tp);
+    }
+    // the glyph moves when the title's font arrives (no size change to observe): place again once fonts load
+    if (typeof document !== 'undefined' && document.fonts) {
+      this.onFonts = function () { self.placeTip(); self.sideB(); self.refreshTiming(); };
+      document.fonts.addEventListener('loadingdone', this.onFonts);
+      document.fonts.ready.then(this.onFonts);
+    }
+    this.refreshTiming();
+    if (typeof window !== 'undefined' && document.readyState !== 'complete') { this.onLoad = function () { self.refreshTiming(); }; window.addEventListener('load', this.onLoad); }
+  }
+  componentWillUnmount() { if (typeof window !== 'undefined') { window.removeEventListener('resize', this.onResize); window.removeEventListener('scroll', this.onResize); } if (this.outside) this.outside.off(); clearTimeout(this.copyT); if (this.ro) this.ro.disconnect(); if (this.onLoad) window.removeEventListener('load', this.onLoad); document.removeEventListener('pointerdown', this.dialOut, true); document.removeEventListener('focusin', this.dialOut, true); document.removeEventListener('keydown', this.dialEsc, true); if (this.onFonts && document.fonts) document.fonts.removeEventListener('loadingdone', this.onFonts); }
+  componentDidUpdate() { landPaintAll(); this.placeMk(); this.sideB(); this.placeTip(); }
+  // the timing read off the tokens (the bar chain, the content start, the overlap), read again when the board settles: the
+  // first mount can come before ./tokens.css applies
+  refreshTiming() {
+    var t = { chain: dtChain(), dtContent: phContentAt(phDefaults()), dtOverlap: phDefaults().overlap };
+    if (t.chain !== this.state.chain || t.dtContent !== this.state.dtContent || t.dtOverlap !== this.state.dtOverlap) this.setState(t);
+  }
+  // the glyph's tooltip: centred on the glyph, or end- or start-aligned near an edge
+  placeTip() {
+    if (typeof document === 'undefined') return;
+    var root = document.querySelector('[data-lscope="delivery"]');
+    var tip = root && root.querySelector('.btip'), trig = root && root.querySelector('.btrig');
+    if (!tip || !trig) return;
+    var rr = root.getBoundingClientRect(), tr = trig.getBoundingClientRect();
+    // centred on the glyph unless that would cross the board's or the window's edge (8px inside): then it ends at the
+    // glyph's right edge, or starts at its left edge, whichever fits; inside the window when the board is too narrow
+    var mid = tr.left + tr.width / 2, half = tip.offsetWidth / 2;
+    var opts = [['', mid - half, mid + half], ['end', tr.right - 2 * half, tr.right], ['start', tr.left, tr.left + 2 * half]];
+    var pick = function (lo, hi) { for (var i = 0; i < opts.length; i++) if (opts[i][1] >= lo && opts[i][2] <= hi) return opts[i][0]; return null; };
+    var align = pick(Math.max(rr.left, 0) + 8, Math.min(rr.right, window.innerWidth) - 8);
+    if (align === null) align = pick(8, window.innerWidth - 8);
+    if (align === null) align = mid + half > window.innerWidth - 8 ? 'end' : 'start';
+    if ((tip.getAttribute('data-align') || '') !== align) { if (align) tip.setAttribute('data-align', align); else tip.removeAttribute('data-align'); }
+  }
+  // B: the dial opens beside the title; where the board has no room on the right it opens in flow below the title
+  sideB() {
+    if (typeof document === 'undefined') return;
+    var d = document.querySelector('[data-lscope="delivery"] .bdial'); if (!d) return;
+    var root = d.closest('[data-lscope]'), trig = root.querySelector('.btrig');
+    if (!trig) return;
+    // beside the title where it fits; otherwise in flow below the title, pushing the briefing down (never over content).
+    // The bars' own box is read, since an inline dial lays its slot out with display: contents
+    var need = trig.getBoundingClientRect().right + 8 + d.offsetWidth;
+    var side = need > root.getBoundingClientRect().right - 8 ? 'inline' : 'beside';
+    if (d.getAttribute('data-side') !== side) d.setAttribute('data-side', side);
+  }
+  // floating.tsx: below the pin, start aligned, FLOATING_OFFSET 6, 8px inside the frame, flipped above only when the
+  // frame (the board, within the viewport) has no room below. Re-entering on a new marker replays the entrance.
+  placeMk() {
+    if (typeof document === 'undefined') return;
+    var root = document.querySelector('[data-lscope="delivery"]');
+    var card = root && root.querySelector('.mkfloat');
+    var key = this.state.mk;
+    if (!card || !key) { this.placed = null; return; }
+    var anchor = root.querySelector('[data-mk-pin="' + key + '"]') || root.querySelector('[data-mk-row="' + MK[key].row + '"]');
+    if (!anchor) return;
+    var rr = root.getBoundingClientRect(), ar = anchor.getBoundingClientRect();
+    var width = Math.min(300, rr.width - 16);
+    card.style.width = width + 'px';
+    var height = card.offsetHeight;
+    var floor = Math.min(rr.bottom, window.innerHeight) - 8;
+    var side = ar.bottom + 6 + height <= floor ? 'bottom' : 'top';
+    card.style.left = Math.max(8, Math.min(ar.left - rr.left, rr.width - width - 8)) + 'px';
+    card.style.top = (side === 'bottom' ? ar.bottom - rr.top + 6 : ar.top - rr.top - 6 - height) + 'px';
+    if (this.placed !== key || card.getAttribute('data-side') !== side) {
+      card.removeAttribute('data-side');
+      void card.offsetWidth;
+      card.setAttribute('data-side', side);
+    }
+    this.placed = key;
+  }
+  constructor(props) {
+    super(props);
+    this.state = { stop: null, snip: null, dock: 'rest', origin: null, mk: null, open: false, split: false, wrap: true, viewed: false, folded: false, opened: {}, attached: null, text: '', copied: false, chain: 0 };
+    this.mem = null;
+    this.text = '';
+  }
+  fold(back) {
+    var self = this;
+    if (!this.state.open || this.state.open === 'closing') return;
+    this.setState({ open: 'closing' });
+    var reduced = landReduced(this.props);
+    var ms = reduced ? dtMs('--nv-dur-reduced') : dtMs('--nv-dur-card-exit');
+    // the inline dial folds in two steps: its stops fade out, then its row closes (one height movement)
+    if (!reduced && typeof document !== 'undefined' && document.querySelector('#delivery-dial[data-side="inline"]'))
+      ms = (dtMs('--nv-dur-hint') || 140) - phDefaults().overlap + (dtMs('--nv-dur-card') || 220);
+    // focus goes back to the glyph at once, so a quick press on it reopens the dial normally
+    if (back) dtFocus('[data-lscope="delivery"] [data-trig="delivery"]');
+    setTimeout(function () {
+      if (self.state.open === 'closing') self.setState({ open: false });
+    }, ms);
+  }
+  renderVals() {
+    var self = this;
+    var props = this.props;
+    var base = props.stop || WORKSPACE_STOP;
+    var stopId = this.state.stop || base;
+    var idx = STOPS.map(function (s) { return s.id; }).indexOf(stopId);
+    if (idx < 0) idx = 2;
+    var guided = idx === 3;
+    var lands = !guided;
+    var on = function (b) { return b ? 'on' : ''; };
+    var dock = this.state.dock;
+    var snipOpen = this.state.snip;
+    var mk = this.state.mk;
+    var open = this.state.open;
+    // A line phrase lands on its lines and closes any card; a chip or a marker phrase opens its marker's card and lands
+    // (briefing.tsx cite). At Guided the diff is gone: line phrases read as text, and the rest open the marker's source.
+    var brief = function (segs) {
+      return glue(segs).map(function (g) {
+        var out = Object.assign({}, g);
+        if (g.isChip) { out['k_' + g.k] = true; }
+        if (g.isLink && !g.mk && guided) return { isText: true, t: g.t };
+        if (g.isLink || g.isChip) {
+          var openMk = function () { self.setState({ mk: g.mk || null }); };
+          out.go = landOn('delivery', g.tgt, props, openMk);
+          if (g.isLink && guided) out.where = 'opens its source';
+        }
+        return out;
+      });
+    };
+    // a flow box or a line chip lands in the diff; at Guided (no diff) it opens its lines' source
+    var lineGo = function (tgt) { return lands ? landOn('delivery', tgt, props, function () { self.setState({ mk: null }); }) : function () { self.setState({ mk: 'flow:' + tgt }); }; };
+    var pinOpen = function (key, tgt) {
+      return function () {
+        var opening = self.state.mk !== key;
+        self.setState({ mk: opening ? key : null });
+        if (opening) landOn('delivery', tgt, props)();
+      };
+    };
+    var mkOpen = mk ? MK[mk] : null;
+    var mkView = mkOpen ? { kind: mkOpen.kind, tile: mkOpen.tile, title: mkOpen.title, meta: mkOpen.meta, applies: mkOpen.applies,
+      region: mkOpen.kind + ' · ' + mkOpen.title, quote: mkOpen.quote || [], showQuote: !!(mkOpen.quote && mkOpen.quote.length),
+      k_source: mkOpen.icon === 'source', k_doc: mkOpen.icon === 'doc', k_gap: mkOpen.icon === 'gap', k_graph: mkOpen.icon === 'graph' } : null;
+    // the glyph's bars: a change plans its chain from what is on screen now (dtBarPlan)
+    var m = this.mem || (this.mem = { last: idx, bars: null });
+    if (m.last !== idx) { m.bars = dtBarPlan(m.last, idx); m.last = idx; }
+    var label = STOPS[idx].label;
+    // flow rows: each item gets its box index (an edge shares the index of the box it leads to), continuing row to row
+    var box = -1;
+    var flowRows = FX.flow.rows.map(function (row) {
+      return { label: row.label, items: row.items.map(function (it, i) {
+        if (it.node) { box += 1; return { isButton: !!it.tgt, isPlain: !it.tgt, label: it.label, tone: it.tone === 'fails' ? 'bad' : it.tone === 'end' ? 'end' : '', k: box,
+          aria: lands ? it.aria : it.label + ': open ' + (FX.targets[it.tgt] ? (FX.targets[it.tgt].start === FX.targets[it.tgt].end ? 'line ' + FX.targets[it.tgt].start : 'lines ' + FX.targets[it.tgt].start + ' to ' + FX.targets[it.tgt].end) : '') + ' in the source',
+          go: it.tgt ? lineGo(it.tgt) : null }; }
+        return { isEdge: true, loop: it.loop, hasLabel: !!it.label, label: it.label, k: box + 1 };
+      }) };
+    });
+    // rows: the hunk, with its gap rows opened in place on demand
+    var rows = [];
+    FX.rows.forEach(function (r, gi) {
+      if (r.gap && !self.state.opened[gi]) {
+        rows.push({ isGap: true, isLine: false, count: r.count, span: 'L' + r.from + '–' + r.to, up: r.side === 'before', down: r.side !== 'before',
+          name: 'Show ' + r.count + ' unchanged lines, ' + r.from + ' to ' + r.to,
+          expand: function () { var o = Object.assign({}, self.state.opened); o[gi] = true; self.setState({ opened: o }); } });
+        return;
+      }
+      (r.gap ? r.rows : [r]).forEach(function (x) {
+        var p = x.n !== '' ? FX.pins[x.n] : null;
+        var pin = null;
+        if (p) {
+          var mine = mk === p.key;
+          pin = { key: p.key, fam: p.fam, label: p.label, name: p.name, target: p.target, hasTarget: !!p.target, many: p.count > 1, count: p.count,
+            on: mine ? 'on' : '',
+            // isolation also drops the pin's hint, as the code's hintGroup && !isolating
+            go: mk && !mine ? '' : 'go-' + p.tgt, tab: mk && !mine ? -1 : 0, exp: mine ? 'true' : 'false', open: pinOpen(p.key, p.tgt) };
+        }
+        if (pin) pin['k_' + p.kind] = true;
+        rows.push({ isGap: false, isLine: true, o: x.o, n: x.n, k: x.k, t: x.t, segs: x.s, sg: x.k === 'add' ? '+' : (x.k === 'del' ? '−' : ''),
+          id: x.n !== '' ? 'd-L' + x.n : 'd-O' + x.o, hasPin: !!pin, pin: pin || {} });
+      });
+    });
+    var check = checkFor(props);
+    var requests = check.suggestion.decision !== 'approve';
+    var counted = check.criteria.filter(function (c) { return c.status !== 'extra'; });
+    var openCount = counted.filter(function (c) { return c.status !== 'met'; }).length;
+    var decidedApproved = dock === 'approved';
+    // decision-dock.tsx DECIDED, and ORIGIN_TEXT where the decision started from the suggested review
+    var ORIGIN = { suggestion: { changes: 'Changes requested · suggested by the harness, sent by you', approved: 'Approved · suggested by the harness, sent by you' },
+      against: { changes: 'Changes requested · against the suggested review', approved: 'Approved · against the suggested review' } };
+    var origin = this.state.origin;
+    var decidedText = (origin && ORIGIN[origin][dock]) || (decidedApproved ? 'You approved this unit' : 'You requested changes');
+    var viewedFolded = this.state.viewed || this.state.folded;
+    var att = this.state.attached ? MK[this.state.attached] : null;
+    return {
+      theme: props.theme || 'light',
+      rmCls: props.reducedMotion ? 'rm' : '',
+      chain: (this.state.chain || 0) + 'ms', dtContent: (this.state.dtContent || 0) + 'ms', dtOverlap: (this.state.dtOverlap || 0) + 'ms',
+      laneLine: FX.unit.laneLabel + ' · ' + FX.unit.position,
+      unitTitle: FX.unit.title,
+      // the title glyph and its dial
+      idx: idx,
+      ticks: [0, 1, 2, 3].map(function (b) { return { cls: b <= idx ? 'f' : '', h: 5 + b * 3, k: (m.bars && m.bars[b]) || 0 }; }),
+      trigName: 'Review delivery: ' + label,
+      expanded: open === 'open' ? 'true' : 'false',
+      dialShown: !!open, dialCls: open === 'closing' ? 'closing' : '', slotCls: open ? 'open' : '',
+      stops: STOPS.map(function (s, i) {
+        return { id: s.id, label: s.label, on: i === idx, cls: i === idx ? 'on' : '', ticks: smallTicks(i),
+          pick: function () { self.setState({ stop: s.id === base ? null : s.id }); dtFocus('#delivery-dial .dstop.on input'); } };
+      }),
+      toggle: function () {
+        if (self.state.open === 'open') { self.fold(true); return; }
+        self.setState({ open: 'open' });
+        dtFocus('#delivery-dial .dstop.on input');
+      },
+      // Escape is handled at the document (dialEsc), from the glyph, the dial or anywhere else
+      trigKey: function () {},
+      dialKey: function () {},
+      // the briefing
+      factsCls: idx === 0 ? '' : 'off',
+      briefCls: idx >= 1 ? '' : 'off',
+      factsBrief: brief(FX.facts),
+      fullBrief: brief(FX.briefing),
+      fullClaims: claimsOf(brief(FX.briefing)),
+      // layers
+      // prose, as real units carry it: in the flow card's place at Explained only (delivery-layers.tsx showProse)
+      flowOn: on(idx >= 2 && this.props.explained !== 'prose'),
+      termsOn: on(idx === 2 && this.props.explained !== 'prose'),
+      proseOn: on(idx === 2 && this.props.explained === 'prose'),
+      proseRows: [
+        { label: 'Before', text: 'Commit opened its write transaction once. When the database was busy, BeginTx failed and Commit returned that error to its caller.' },
+        { label: 'After', text: 'Commit tries commitOnce up to three times. A busy error, wrapped or not, waits for the backoff and tries again; after the third busy attempt Commit returns ErrIndexBusy. A cancelled context does not cut the wait short, and no test covers the busy path.' }
+      ],
+      proseTerms: [
+        { term: 'for attempt := range maxAttempts', meaning: 'Counts attempt from 0 up to maxAttempts \u2212 1. Ranging over an integer is new in Go 1.22.' },
+        { term: 'errors.Is(err, sqlite.ErrBusy)', meaning: 'True when err is ErrBusy or wraps it, so a wrapped busy error still retries.' },
+        { term: 'time.Sleep(backoff(attempt))', meaning: 'Pauses the goroutine for the whole wait. Nothing can interrupt it, including a cancelled ctx.' }
+      ],
+      guideOn: on(guided),
+      codeOn: on(!guided),
+      lands: lands,
+      flowTitle: FX.flow.title,
+      flowChip: { label: FX.flow.chip.label, aria: lands ? FX.flow.chip.aria : 'Open ' + FX.flow.chip.aria.replace(/^Land on /, '') + ' in the source', go: lineGo(FX.flow.chip.tgt) },
+      flowRows: flowRows,
+      termsTitle: FX.terms.title,
+      terms: FX.terms.items.map(function (t) { return { term: t.term, say: t.say, line: t.line, aria: t.aria, go: lineGo(t.tgt) }; }),
+      ticketTitle: check.ticket.title, ticketId: check.ticket.id,
+      mk: mkView || {}, mkMargin: !!mkView && !guided, mkGuided: !!mkView && guided,
+      // the open marker's lines stay engaged (shared block), whichever entry point opened its card: pin, chip or phrase
+      engaged: (mk && !guided && MK[mk] && !/^flow:/.test(mk) && MK[mk].tgt) || '',
+      closeMk: function () { self.setState({ mk: null }); },
+      dod: check.criteria.map(function (c, i) {
+        var st = STATUS[c.status];
+        var snip = null;
+        var ev = c.ev.map(function (e, j) {
+          var key = c.id + ':' + j;
+          if (snipOpen === key && e.snip) { snip = e.snip; }
+          var ev0 = { kind: e.kind, fam: e.fam, tgt: e.tgt,
+            expanded: snipOpen === key ? 'true' : 'false',
+            open: function () { self.setState({ snip: snipOpen === key ? null : key }); } };
+          ev0['k_' + e.icon] = true;
+          return ev0;
+        });
+        return { k: i, crit: c.crit, does: c.does, state: st.label, stateFg: st.fg, mkCls: st.cls, hasState: !!st.label,
+          radiusHead: c.status === 'extra' && (i === 0 || check.criteria[i - 1].status !== 'extra'), rowCls: c.status === 'extra' ? 'radius' : '',
+          met: c.status === 'met', not: c.status === 'not', none: c.status === 'none', extra: c.status === 'extra',
+          ev: ev, hasSnip: !!snip, snip: snip || [] };
+      }),
+      draftText: check.suggestion.message,
+      conclusion: openCount === 0 ? 'everything is done' : openCount + ' of ' + counted.length + ' not done',
+      // toolbar: round 6 keeps only "N/M viewed" as meta; no toolbar at Guided
+      stacked: this.state.split ? 'false' : 'true', split: this.state.split ? 'true' : 'false',
+      stackedCls: this.state.split ? '' : 'on', splitCls: this.state.split ? 'on' : '',
+      toStacked: function () { self.setState({ split: false }); }, toSplit: function () { self.setState({ split: true }); },
+      wrap: this.state.wrap ? 'true' : 'false', wrapCls: this.state.wrap ? 'on' : '',
+      toggleWrap: function () { self.setState({ wrap: !self.state.wrap }); },
+      viewed: (this.state.viewed ? 1 : 0) + '/' + FX.unit.viewedOf + ' viewed',
+      // file header: the chevron folds; Viewed records it for you and folds the file (Mark viewed)
+      fhCls: viewedFolded ? 'folded' : '', fileOpen: viewedFolded ? 'false' : 'true', fileShown: !viewedFolded,
+      foldName: (viewedFolded ? 'Expand ' : 'Collapse ') + FX.file.base,
+      toggleFold: function () { if (self.state.viewed) self.setState({ viewed: false, folded: false }); else self.setState({ folded: !self.state.folded }); },
+      filePath: FX.file.path, fileDir: FX.file.dir, fileBase: FX.file.base, baseCls: this.state.viewed ? 'seen' : '',
+      fileAdd: '+' + FX.file.additions, fileDel: '−' + FX.file.deletions,
+      copied: this.state.copied, notCopied: !this.state.copied, copyName: (this.state.copied ? 'Copied ' : 'Copy path ') + FX.file.path,
+      copyPath: function () { try { navigator.clipboard.writeText(FX.file.path); } catch (e) {} self.setState({ copied: true }); clearTimeout(self.copyT); self.copyT = setTimeout(function () { self.setState({ copied: false }); }, 1200); },
+      viewedPressed: this.state.viewed ? 'true' : 'false', isViewed: this.state.viewed,
+      toggleViewed: function () { self.setState({ viewed: !self.state.viewed, folded: false, mk: null }); },
+      rows: rows,
+      mgMode: mk ? 'has-open' : '',
+      // the dock
+      covers: FX.unit.covers, scopeNote: FX.unit.scopeNote,
+      guided: guided,
+      notGuided: !guided,
+      sendDraft: function () { self.setState({ dock: 'changes', origin: 'suggestion' }); },
+      editDraft: function () { self.text = check.suggestion.message; self.setState({ dock: 'composing', origin: 'suggestion', text: check.suggestion.message, attached: null }); },
+      // a suggested approval: sent as yours, or Request changes against it (an empty composer; decision-dock.tsx requestInsteadAtom)
+      sendApprove: function () { self.setState({ dock: 'approved', origin: 'suggestion' }); },
+      requestInstead: function () { self.text = ''; self.setState({ dock: 'composing', origin: 'against', text: '', attached: null }); },
+      guidedReq: guided && requests, guidedApp: guided && !requests,
+      approveInstead: function () { self.setState({ dock: 'approved', origin: 'against' }); },
+      compose: function () { self.text = ''; self.setState({ dock: 'composing', origin: null, text: '', attached: ATTACH }); },
+      approve: function () { self.setState({ dock: 'approved', origin: null }); },
+      cancel: function () { self.setState({ dock: 'rest', origin: null }); },
+      send: function () { self.setState({ dock: 'changes' }); },
+      undo: function () { self.setState({ dock: 'rest', origin: null }); },
+      typed: function (e) { var v = e && e.target ? e.target.value : self.text; self.text = v; self.setState({ text: v }); },
+      useDraft: function () { self.text = FX.unit.draftSuggestion; self.setState({ text: FX.unit.draftSuggestion }); },
+      detach: function () { self.setState({ attached: null }); },
+      dockRest: dock === 'rest',
+      composing: dock === 'composing',
+      decided: dock === 'approved' || dock === 'changes',
+      decTile: decidedApproved ? 'ok' : 'no', decOk: decidedApproved, decNo: !decidedApproved,
+      // sent through the suggestion: "You requested changes" with your avatar; Undo makes it a suggestion again
+      sentReq: requests && dock === 'changes' && origin === 'suggestion',
+      unsentReq: requests && !(dock === 'changes' && origin === 'suggestion'),
+      sentApp: !requests && dock === 'approved' && origin === 'suggestion',
+      unsentApp: !requests && !(dock === 'approved' && origin === 'suggestion'),
+      fromDraft: origin === 'suggestion',
+      showDraft: !this.state.text && origin !== 'suggestion',
+      draftSuggestion: FX.unit.draftSuggestion,
+      composeText: this.state.text,
+      attached: !!att, attachedLabel: att ? att.kind : '',
+      decidedText: decidedText
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "project": "tildeio/simple-html-tokenizer",
+  "source": "https://github.com/tildeio/simple-html-tokenizer",
+  "commit": "f6190ebf9296154bbf065894e768eaa0795cd119",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/tildeio/simple-html-tokenizer/f6190ebf9296154bbf065894e768eaa0795cd119/LICENSE",
+      "sha256": "c41881de2a9f2200936648343500524be154eb79f649582f9582dd251b051b11"
+    }
+  ]
+}

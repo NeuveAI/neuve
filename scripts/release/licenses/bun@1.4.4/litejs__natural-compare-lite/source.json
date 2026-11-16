@@ -1,0 +1,13 @@
+{
+  "project": "litejs/natural-compare-lite",
+  "source": "https://github.com/litejs/natural-compare-lite",
+  "commit": "a8e1e32c85713ba7d079445207a808ce6f4852f9",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/litejs/natural-compare-lite/a8e1e32c85713ba7d079445207a808ce6f4852f9/LICENSE",
+      "sha256": "353fe762ba595bf1ffe786acf0f5984bb164205901d74f258af195fc8228c67d"
+    }
+  ]
+}

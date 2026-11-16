@@ -1,0 +1,18 @@
+{
+  "project": "webmproject/libwebp",
+  "source": "https://github.com/webmproject/libwebp",
+  "commit": "4fa21912338357f89e4fd51cf2368325b59e9bd9",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "COPYING",
+      "url": "https://raw.githubusercontent.com/webmproject/libwebp/4fa21912338357f89e4fd51cf2368325b59e9bd9/COPYING",
+      "sha256": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf"
+    },
+    {
+      "name": "PATENTS",
+      "url": "https://raw.githubusercontent.com/webmproject/libwebp/4fa21912338357f89e4fd51cf2368325b59e9bd9/PATENTS",
+      "sha256": "cc3273e0694ea5896145e0677699b53471b03ea43021ddc50e7923fbb9f5023c"
+    }
+  ]
+}

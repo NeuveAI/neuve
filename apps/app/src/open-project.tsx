@@ -1,0 +1,207 @@
+import { useEffect, useId, useState } from "react";
+
+import {
+	Button,
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+	Input,
+} from "@ace/ui";
+import { IconArrowDownToLine, IconBranch, IconFolderSearch } from "@ace/ui/icons";
+
+import { desktop } from "./desktop";
+import { host } from "./host";
+import { Copyable } from "./team-setup";
+
+export function EmptyProjects({ onOpen, onClone, disabled }: {
+	onOpen: () => void;
+	onClone: () => void;
+	disabled: boolean;
+}) {
+	return (
+		<div className="mx-auto flex min-h-full w-full max-w-[42rem] flex-col justify-center px-5 py-10">
+			<div className="flex flex-col items-center gap-5 text-center">
+				<div className="grid size-10 place-items-center rounded-md border border-border/70 bg-muted/40 text-muted-foreground">
+					<IconFolderSearch className="size-5" aria-hidden />
+				</div>
+				<div className="flex flex-col gap-2">
+					<h1 className="text-xl font-medium tracking-normal">Open a project</h1>
+					<p className="text-sm leading-6 text-muted-foreground">
+						Choose a folder or clone a GitHub repository to get started.
+					</p>
+				</div>
+				<div className="flex flex-wrap justify-center gap-2">
+					<Button onClick={onOpen} disabled={disabled}>
+						<IconFolderSearch aria-hidden data-icon="inline-start" />
+						Open folder…
+						{desktop && <kbd className="ml-2 text-xs opacity-60">⌘O</kbd>}
+					</Button>
+					<Button variant="outline" onClick={onClone} disabled={disabled}>
+						<IconArrowDownToLine aria-hidden data-icon="inline-start" />
+						Clone from URL…
+					</Button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+/** Lanes are Git worktrees, so a folder needs a commit before it can start channels. */
+export function InitGit({ path, name, empty, ignored, disabled, onInit }: {
+	path: string;
+	name: string;
+	/** The folder is already a Git repository and needs only its first commit. */
+	empty?: boolean;
+	/** Ace won't commit under a folder's own `.gitignore`, so the person commits it themselves. */
+	ignored?: boolean;
+	disabled: boolean;
+	onInit: () => Promise<void>;
+}) {
+	const [busy, setBusy] = useState(false);
+	// A commit made outside Ace, say in a terminal, shows once the host reads the folder again, as
+	// opening it does; listings alone don't.
+	useEffect(() => {
+		if (disabled) return;
+		const check = () => void host.request({ op: "project-open", path }).catch(() => {});
+		check();
+		addEventListener("focus", check);
+		return () => removeEventListener("focus", check);
+	}, [path, disabled]);
+
+	async function init() {
+		setBusy(true);
+		try {
+			await onInit();
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	const folder = `'${path.replaceAll("'", `'\\''`)}'`;
+	const commands = `cd ${folder} && ${
+		empty ? "" : "git init && "
+	}git add -A && git commit -m "Initial commit"`;
+	const lanes = empty
+		? `Channels work in lanes, which are Git worktrees, and ${name} has no commit yet.`
+		: "Channels work in lanes, which are Git worktrees.";
+	return (
+		<div className="flex w-full flex-col items-center gap-3 rounded-lg border border-border/70 bg-muted/30 px-5 py-6 text-center">
+			<IconBranch className="size-5 text-muted-foreground" aria-hidden />
+			<h2 className="text-sm font-medium">
+				{empty
+					? "Make the first commit to get started"
+					: "Initialize a Git repository to get started"}
+			</h2>
+			{ignored
+				? (
+					<>
+						<p className="max-w-[30rem] text-pretty text-xs leading-5 text-muted-foreground">
+							{lanes} {name} already has a{" "}
+							<code>.gitignore</code>, so Neuve won't commit under its rules. {empty ? "Commit" : (
+								<>
+									Run <code>git init</code> and commit
+								</>
+							)} its files yourself, such as in a terminal, then channels can start here.
+						</p>
+						<div className="w-full max-w-[30rem] text-left">
+							<Copyable value={commands} />
+						</div>
+					</>
+				)
+				: (
+					<>
+						<p className="max-w-[30rem] text-pretty text-xs leading-5 text-muted-foreground">
+							{lanes} Neuve will {empty ? "add" : (
+								<>
+									run <code>git init</code> in {name}, add
+								</>
+							)} a <code>.gitignore</code> that leaves out secrets such as{" "}
+							<code>.env</code>, dependencies, and build output, and commit the rest.
+						</p>
+						<Button
+							disabled={disabled || busy}
+							onClick={() => void init()}
+						>
+							{busy
+								? empty ? "Committing…" : "Initializing…"
+								: empty
+								? "Make first commit"
+								: "Initialize Git"}
+						</Button>
+					</>
+				)}
+		</div>
+	);
+}
+
+/** Browsers cannot pick a host directory; the desktop uses the native folder dialog. */
+export function OpenProject({ onOpen, onClose }: {
+	onOpen: (path: string) => Promise<void>;
+	onClose: () => void;
+}) {
+	const id = useId();
+	const [path, setPath] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState("");
+
+	async function open() {
+		if (busy || !path.trim()) return;
+		setBusy(true);
+		setError("");
+		try {
+			await onOpen(path.trim());
+			onClose();
+		} catch (error) {
+			setError((error as Error).message);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<Dialog
+			open
+			onOpenChange={(value) => {
+				if (!value) onClose();
+			}}
+		>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Open a folder</DialogTitle>
+					<DialogDescription>Enter the folder’s path on this host.</DialogDescription>
+				</DialogHeader>
+				<form
+					id={id}
+					onSubmit={(event) => {
+						event.preventDefault();
+						void open();
+					}}
+				>
+					<Input
+						autoFocus
+						aria-label="Project folder"
+						placeholder="~/code/project"
+						value={path}
+						disabled={busy}
+						onChange={(event) => {
+							setPath(event.target.value);
+							setError("");
+						}}
+					/>
+					{error && (
+						<p role="alert" className="mt-2 text-xs text-destructive wrap-anywhere">{error}</p>
+					)}
+				</form>
+				<DialogFooter>
+					<Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
+					<Button type="submit" form={id} disabled={busy || !path.trim()}>
+						{busy ? "Opening…" : "Open folder"}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}

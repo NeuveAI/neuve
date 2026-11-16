@@ -1,0 +1,108 @@
+{
+	"name": "@ace/channel",
+	"private": true,
+	"type": "module",
+	"license": "MIT",
+	"exports": {
+		".": {
+			"types": "./.types/src/index.d.ts",
+			"default": "./src/index.ts"
+		},
+		"./browser": {
+			"types": "./.types/src/browser.d.ts",
+			"default": "./src/browser.ts"
+		},
+		"./desktop": {
+			"types": "./.types/src/desktop.d.ts",
+			"default": "./src/desktop.ts"
+		},
+		"./images": {
+			"types": "./.types/src/images.d.ts",
+			"default": "./src/images.ts"
+		},
+		"./models": {
+			"types": "./.types/src/models.d.ts",
+			"default": "./src/models.ts"
+		},
+		"./protocol": {
+			"types": "./.types/src/protocol.d.ts",
+			"default": "./src/protocol.ts"
+		},
+		"./tabs": {
+			"types": "./.types/src/tabs.d.ts",
+			"default": "./src/tabs.ts"
+		},
+		"./transfer": {
+			"types": "./.types/src/transfer.d.ts",
+			"default": "./src/transfer.ts"
+		},
+		"./workspace": {
+			"types": "./.types/src/workspace.d.ts",
+			"default": "./src/workspace.ts"
+		},
+		"./parse": {
+			"types": "./.types/src/parse.d.ts",
+			"default": "./src/parse.ts"
+		},
+		"./frame": {
+			"types": "./.types/src/frame.d.ts",
+			"default": "./src/frame.ts"
+		},
+		"./planning": {
+			"types": "./.types/src/planning.d.ts",
+			"default": "./src/planning.ts"
+		},
+		"./planning-protocol": {
+			"types": "./.types/src/planning-protocol.d.ts",
+			"default": "./src/planning-protocol.ts"
+		},
+		"./review": {
+			"types": "./.types/src/review.d.ts",
+			"default": "./src/review.ts"
+		},
+		"./review-protocol": {
+			"types": "./.types/src/review-protocol.d.ts",
+			"default": "./src/review-protocol.ts"
+		},
+		"./external-ref": {
+			"types": "./.types/src/external-ref.d.ts",
+			"default": "./src/external-ref.ts"
+		},
+		"./extensions": {
+			"types": "./.types/src/extensions.d.ts",
+			"default": "./src/extensions.ts"
+		},
+		"./operations": {
+			"types": "./.types/src/operations.d.ts",
+			"default": "./src/operations.ts"
+		},
+		"./github": {
+			"types": "./.types/src/github.d.ts",
+			"default": "./src/github.ts"
+		},
+		"./external-lanes": {
+			"types": "./.types/src/external-lanes.d.ts",
+			"default": "./src/external-lanes.ts"
+		},
+		"./operations-protocol": {
+			"types": "./.types/src/operations-protocol.d.ts",
+			"default": "./src/operations-protocol.ts"
+		},
+		"./review-cards": {
+			"types": "./.types/src/review-cards.d.ts",
+			"default": "./src/review-cards.ts"
+		}
+	},
+	"scripts": {
+		"types": "tsgo --noEmit",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "bun test --timeout 60000 ./tests"
+	},
+	"dependencies": {
+		"@githubnext/desktop-tools": "github:githubnext/desktop-tools#c3e08eb55958ba87ca65e12f735d795bd2b921eb",
+		"@earendil-works/chord": "1.0.0",
+		"@earendil-works/pi-ai": "1.0.0",
+		"@earendil-works/pi-durable": "1.0.0",
+		"zod": "4.6.5"
+	}
+}

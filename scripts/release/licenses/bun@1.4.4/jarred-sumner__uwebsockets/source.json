@@ -1,0 +1,13 @@
+{
+  "project": "jarred-sumner/uwebsockets",
+  "source": "https://github.com/jarred-sumner/uwebsockets",
+  "commit": "8b4206edb96799df8c5fc01d43a4e51373064162",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/jarred-sumner/uwebsockets/8b4206edb96799df8c5fc01d43a4e51373064162/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ]
+}

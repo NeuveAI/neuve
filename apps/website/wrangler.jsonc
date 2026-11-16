@@ -1,0 +1,11 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	// Neuve's public landing page: static files only, no Worker code and no data.
+	// dist/ is the output of `bun run build`; dist/_headers sets the CSP and caching.
+	"name": "neuve-website",
+	"compatibility_date": "2026-11-01",
+	"assets": {
+		"directory": "./dist",
+		"not_found_handling": "404-page",
+	},
+}

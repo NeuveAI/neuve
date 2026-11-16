@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="980" viewBox="0 0 1500 980" role="img" aria-labelledby="title desc">
+  <title id="title">Neuve architecture, ownership, and base-unit boundaries</title>
+  <desc id="desc">Layered architecture showing experience and callers, Neuve review-domain responsibilities, the implemented CLI and graph-client boundary, the Neuve Graph semantic engine, evaluation, and data sources. A lower panel contrasts product decision units with engine evidence units and lists forbidden responsibility crossings.</desc>
+  <defs>
+    <style>
+      :root { color-scheme: light dark; }
+      .bg { fill:#fbfaf7; }
+      .group { fill:none; stroke:#aab1b8; stroke-width:1.5; stroke-dasharray:7 6; }
+      .product { fill:#fff2d8; stroke:#b98934; }
+      .implemented { fill:#eee8fb; stroke:#7b61b5; }
+      .engine { fill:#eaf6f8; stroke:#4d99a7; }
+      .source { fill:#edf5eb; stroke:#5b8f58; }
+      .risk { fill:#fbe9e7; stroke:#b55d55; }
+      .line { stroke:#7d8791; stroke-width:2; fill:none; marker-end:url(#arrow); }
+      .title { fill:#20252b; font:600 28px system-ui,sans-serif; }
+      .subtitle { fill:#5f6975; font:400 15px system-ui,sans-serif; }
+      .groupTitle { fill:#5f6975; font:600 12px system-ui,sans-serif; letter-spacing:1px; }
+      .label { fill:#20252b; font:600 15px system-ui,sans-serif; }
+      .copy { fill:#5f6975; font:400 12px system-ui,sans-serif; }
+      .boundary { fill:#9a4c45; font:600 12px system-ui,sans-serif; }
+    </style>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 z" fill="#7d8791"/></marker>
+  </defs>
+  <rect class="bg" width="1500" height="980"/>
+  <text class="title" x="50" y="48">Architecture — repository facts support, but do not define, review decisions</text>
+  <text class="subtitle" x="50" y="76">Amber is Neuve product authority, purple is implemented Neuve substrate, cyan is the semantic engine, and green is source state.</text>
+
+  <rect class="group" x="44" y="104" width="304" height="432" rx="12"/>
+  <text class="groupTitle" x="62" y="130">EXPERIENCE AND CALLERS</text>
+  <rect class="product" x="68" y="154" width="256" height="120" rx="10"/>
+  <text class="label" x="86" y="181">Review experience</text>
+  <text class="copy" x="86" y="205">Future UI, IDE and agent skills</text><text class="copy" x="86" y="224">show units and briefings, collect</text><text class="copy" x="86" y="243">human and agent dispositions.</text>
+  <rect class="implemented" x="68" y="300" width="256" height="150" rx="10"/>
+  <text class="label" x="86" y="327">apps/neuve-cli</text>
+  <text class="copy" x="86" y="351">Public v2 arguments and results</text><text class="copy" x="86" y="370">Retrieval-first ordered events</text><text class="copy" x="86" y="389">Explicit relationship plan</text><text class="copy" x="86" y="408">No English intent heuristic</text><text class="copy" x="86" y="427">No provider fallback</text>
+
+  <rect class="group" x="386" y="104" width="416" height="432" rx="12"/>
+  <text class="groupTitle" x="404" y="130">NEUVE PRODUCT AND TRUST AUTHORITY</text>
+  <rect class="product" x="410" y="154" width="368" height="150" rx="10"/>
+  <text class="label" x="428" y="181">Review-domain core · planned</text>
+  <text class="copy" x="428" y="205">Current-batch capture and hunk units</text><text class="copy" x="428" y="224">Marker applicability and transient labels</text><text class="copy" x="428" y="243">Lanes, dispositions and review cycles</text><text class="copy" x="428" y="262">History, invalidation and product metrics</text>
+  <rect class="implemented" x="410" y="330" width="368" height="174" rx="10"/>
+  <text class="label" x="428" y="357">packages/graph-client · implemented</text>
+  <text class="copy" x="428" y="381">Pins revision and creates isolated view</text><text class="copy" x="428" y="400">Validates Graph identity and capabilities</text><text class="copy" x="428" y="419">Qualifies paths, ranges and provenance</text><text class="copy" x="428" y="438">Preserves limitations and partial failures</text><text class="copy" x="428" y="457">Owns cleanup and terminal ordering</text>
+
+  <rect class="group" x="840" y="104" width="304" height="432" rx="12"/>
+  <text class="groupTitle" x="858" y="130">REPOSITORY SEMANTIC AUTHORITY</text>
+  <rect class="engine" x="864" y="154" width="256" height="220" rx="10"/>
+  <text class="label" x="882" y="181">apps/neuve-graph</text>
+  <text class="copy" x="882" y="205">Natural-language retrieval</text><text class="copy" x="882" y="224">Language-specific parsing</text><text class="copy" x="882" y="243">Symbols, aliases and identities</text><text class="copy" x="882" y="262">Relationship extraction</text><text class="copy" x="882" y="281">Confidence and coverage</text><text class="copy" x="882" y="300">Engine-owned snapshots and indexes</text>
+  <rect class="risk" x="864" y="400" width="256" height="104" rx="10"/>
+  <text class="label" x="882" y="427">Must not decide</text>
+  <text class="copy" x="882" y="451">Approval, trust, lane, disposition</text><text class="copy" x="882" y="470">or product review-unit identity.</text>
+
+  <rect class="group" x="1182" y="104" width="274" height="432" rx="12"/>
+  <text class="groupTitle" x="1200" y="130">SOURCES AND EVALUATION</text>
+  <rect class="source" x="1206" y="154" width="226" height="140" rx="10"/>
+  <text class="label" x="1224" y="181">Source pillars</text>
+  <text class="copy" x="1224" y="205">Committed Git state · current</text><text class="copy" x="1224" y="224">Review batch · Phase 5</text><text class="copy" x="1224" y="243">Tickets and docs · ingestion open</text>
+  <rect class="implemented" x="1206" y="320" width="226" height="184" rx="10"/>
+  <text class="label" x="1224" y="347">packages/evaluation</text>
+  <text class="copy" x="1224" y="371">Pinned cases and revisions</text><text class="copy" x="1224" y="390">Independent expected outcomes</text><text class="copy" x="1224" y="409">Reproducible builds and reports</text><text class="copy" x="1224" y="428">Negative and sensitivity controls</text><text class="copy" x="1224" y="447">Never production authority</text>
+
+  <path class="line" d="M324 375 H402"/>
+  <path class="line" d="M778 417 H856"/>
+  <path class="line" d="M1120 264 H1198"/>
+  <path class="line" d="M1206 412 H1128"/>
+
+  <text class="groupTitle" x="50" y="586">BASE-UNIT BOUNDARY</text>
+  <rect class="product" x="50" y="608" width="650" height="210" rx="12"/>
+  <text class="label" x="70" y="638">Product decision chain</text>
+  <text class="copy" x="70" y="668">HUNK</text><path class="line" d="M122 664 H180"/>
+  <text class="copy" x="192" y="668">REVIEW UNIT</text><path class="line" d="M285 664 H343"/>
+  <text class="copy" x="355" y="668">LANE</text><path class="line" d="M400 664 H458"/>
+  <text class="copy" x="470" y="668">DISPOSITION</text><path class="line" d="M560 664 H618"/>
+  <text class="copy" x="630" y="668">HISTORY</text>
+  <text class="copy" x="70" y="710">Contextual markers and briefings inform the chain.</text><text class="copy" x="70" y="730">They do not become approval boundaries or receive shared dispositions.</text><text class="copy" x="70" y="750">A new cycle reclusters changed work while preserving linked history.</text>
+
+  <rect class="engine" x="750" y="608" width="700" height="210" rx="12"/>
+  <text class="label" x="770" y="638">Engine evidence chain</text>
+  <text class="copy" x="770" y="668">FILE / RANGE</text><path class="line" d="M858 664 H916"/>
+  <text class="copy" x="928" y="668">SYMBOL</text><path class="line" d="M984 664 H1042"/>
+  <text class="copy" x="1054" y="668">RELATION</text><path class="line" d="M1123 664 H1181"/>
+  <text class="copy" x="1193" y="668">EVIDENCE</text><path class="line" d="M1268 664 H1326"/>
+  <text class="copy" x="1338" y="668">LIMITS</text>
+  <text class="copy" x="770" y="710">These observations can corroborate marker attribution and impact.</text><text class="copy" x="770" y="730">They cannot establish product intent, approval, or disposition.</text><text class="copy" x="770" y="750">Language is qualified observation data, never Neuve product scope.</text>
+
+  <rect class="risk" x="50" y="850" width="1400" height="92" rx="10"/>
+  <text class="boundary" x="70" y="878">FORBIDDEN CROSSINGS</text>
+  <text class="copy" x="70" y="904">Provider chooses trust or approval</text><text class="copy" x="320" y="904">• Neuve duplicates parser/compiler semantics</text><text class="copy" x="694" y="904">• Evaluator becomes production authority</text><text class="copy" x="1052" y="904">• File or symbol silently replaces the review unit</text>
+  <text class="copy" x="70" y="926">The architecture is sound only while these boundaries remain explicit in code, tests, reports and user-facing language.</text>
+</svg>

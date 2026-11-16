@@ -1,0 +1,21 @@
+{
+  "name": "@neuve/semantic-client",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./runtime-inspection": "./src/runtime-inspection.ts",
+    "./source-index": "./src/source-index.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.0"
+  },
+  "scripts": {
+    "format": "prettier --write src tests package.json tsconfig.json",
+    "format:check": "prettier --check src tests package.json tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun ../../scripts/test-budget.ts ./tests"
+  }
+}

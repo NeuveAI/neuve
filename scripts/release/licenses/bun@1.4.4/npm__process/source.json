@@ -1,0 +1,14 @@
+{
+  "project": "process",
+  "source": "https://registry.npmjs.org/process/-/process-0.11.10.tgz",
+  "version": "0.11.10",
+  "commit": "557aa46f283caccce603dbb9c376b3d81067c510",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/process/-/process-0.11.10.tgz#package/LICENSE",
+      "sha256": "59a400d04c5078579acc27ddd6452c1bdf763f9506e01364700935fbb1a7c91b"
+    }
+  ]
+}

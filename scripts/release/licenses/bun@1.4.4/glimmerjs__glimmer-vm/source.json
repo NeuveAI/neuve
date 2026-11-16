@@ -1,0 +1,13 @@
+{
+  "project": "glimmerjs/glimmer-vm",
+  "source": "https://github.com/glimmerjs/glimmer-vm",
+  "commit": "3c206686cea0c2dafad98eb4c3a8dc65cc572318",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/glimmerjs/glimmer-vm/3c206686cea0c2dafad98eb4c3a8dc65cc572318/LICENSE",
+      "sha256": "442701046d7dec92b0a3760d4ccb045acb750c99c6c43092b050a487e1f69dbf"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "package": "@sigstore/verify",
+  "version": "4.1.2",
+  "repository": "https://github.com/sigstore/sigstore-js",
+  "commit": "769a53d8713248a8bf49edfc2a5d1955b0dcc24d",
+  "path": "LICENSE",
+  "url": "https://raw.githubusercontent.com/sigstore/sigstore-js/769a53d8713248a8bf49edfc2a5d1955b0dcc24d/LICENSE",
+  "sha256": "364a130d2ca340bd56eb1e6d045fc6929bb0f9d0aa018f2c1949b29517e1cdd0"
+}

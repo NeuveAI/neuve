@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stacked and split diff</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+body{margin:0}
+/* Colour, shadow and motion tokens: ./tokens.css (generated from the code). */
+/* Board-only, no code token: */
+.theme-light{--sta-tint:#F1EEE8}
+.theme-dark{--sta-tint:#23211E}
+
+a{color:var(--ink)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.lbl{font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.ic{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.iconbtn{width:36px;height:36px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.iconbtn:hover{background:var(--raised);color:var(--ink)}
+.tone{transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.tone:hover{background:var(--raised)}
+.seg{display:flex;padding:3px;border-radius:8px;background:var(--raised)}
+.seg button{border:0;background:transparent;padding:0 12px;height:30px;border-radius:6px;font-size:13px;color:var(--muted);transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.kw{color:var(--kw)}.st{color:var(--st)}.fn{color:var(--fn)}.cm{color:var(--cm);font-style:italic}.nu{color:var(--nu)}.id{color:var(--id)}.pl{color:var(--pl)}
+.fade{animation:fadeUp var(--nv-dur-card) var(--nv-ease-emphasized-decelerate) both}
+@keyframes fadeUp{from{opacity:0;transform:translateY(var(--nv-offset-rise))}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* Diff rows (diff-file.tsx): stacked rows carry one 69px gutter (old, new, sign); a split side carries 44px (number, sign).
+   Wrap is on by default, so long lines wrap in both layouts (round-2 #7). */
+.row{display:grid;grid-template-columns:69px minmax(0,1fr);min-height:24px;align-items:start;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px;line-height:24px}
+.ln{display:grid;grid-template-columns:27px 25px 17px;align-self:stretch;color:var(--nv-ln);text-align:right;font-size:11.5px}
+.ln i{font-style:normal}.ln b{font-weight:400;text-align:center}
+.half .ln{grid-template-columns:27px 17px}
+.code{white-space:pre-wrap;overflow-wrap:anywhere;padding:0 12px 0 8px}
+.nowrap .code{white-space:pre;overflow:hidden}
+.k-ctx{background:var(--surface)}
+.k-add{background:var(--add-bg)}.k-add .ln{background:var(--add-num);color:var(--add-ln)}
+.k-del{background:var(--del-bg)}.k-del .ln{background:var(--del-num);color:var(--del-ln)}
+.k-empty{background:var(--hunk)}
+.u .code{text-decoration:underline dotted var(--accent);text-decoration-thickness:1.5px;text-underline-offset:5px}
+.splitrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px;line-height:24px}
+.half{display:grid;grid-template-columns:44px minmax(0,1fr);min-height:24px;align-items:start;min-width:0}
+.splitrow .half+.half{box-shadow:inset 1px 0 0 var(--line2)}
+/* ── MARGIN PINS (Markers.dc.html anatomy · context-margin.tsx MarginPin). One block on Main, Split and Sticky: keep the
+   copies identical. One pin per line: the line's highest-priority kind leads with its Lucide icon (12px, stroke 2.2) and label,
+   a count chip when the line holds more, a target only when it is another file, one dot per other unit (at most 3).
+   Colour says it asks you (magenta decision, amber evidence); a dashed edge says same batch. Open: ink fill. ── */
+.pin{position:relative;display:inline-flex;align-items:center;gap:5px;height:22px;max-width:220px;padding:0 8px 0 6px;box-sizing:border-box;border:0;border-radius:6px;
+  font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;white-space:nowrap;vertical-align:middle;cursor:pointer;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),transform var(--nv-dur-press-in) var(--nv-ease-standard)}
+.pin::after{content:"";position:absolute;left:0;right:0;top:50%;height:24px;transform:translateY(-50%)} /* the row pitch: each pin owns exactly its row */
+.pin:active{transform:scale(var(--nv-scale-press))}
+.pin:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.pin:focus:not(:focus-visible){outline:none}
+.pin .pi{width:12px;height:12px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.pin .pi .dash{stroke-dasharray:3.2 3.2}
+.pin .tgt{color:var(--muted);overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pin .n{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;box-sizing:border-box;border-radius:4px;background:var(--surface);color:var(--ink2);font-size:10.5px;line-height:16px}
+.pin .dots{display:inline-flex;gap:2px;margin-left:1px}
+.pin .dots i{width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.75} /* the code's 50% measures 2.1–2.5:1 on light tints; .75 keeps 3:1 */
+.f-neutral{background:var(--raised);color:var(--ink2)}.f-neutral .pi{color:var(--muted)}
+.f-req{background:var(--req-tint);color:var(--req-ink)}.f-req .pi{color:var(--req)}
+.f-sug{background:var(--sug-tint);color:var(--sug-ink)}.f-sug .pi{color:var(--sug)}
+.f-transient{background:transparent;border:1px dashed var(--line-strong);color:var(--muted)}.f-transient .pi{color:var(--muted)}
+@media (hover:hover){.f-neutral:hover{background:var(--raised2)}.f-req:hover{background:var(--req-tint2)}.f-sug:hover{background:var(--sug-tint2)}.f-transient:hover{background:var(--raised)}}
+.pin.on,.pin.on:hover{background:var(--ink);color:var(--bg);border-color:transparent}.pin.on .pi{color:var(--bg)}
+.pin.on .n{background:color-mix(in srgb,var(--bg) 20%,transparent);color:var(--bg)}.pin.on .tgt{color:color-mix(in srgb,var(--bg) 70%,transparent)}
+@media (prefers-reduced-motion:reduce){.pin{transition:none}.pin:active{transform:none}}
+/* ── end MARGIN PINS ── */
+/* ── FILE HEADER (diff-file.tsx, round-3 #1–2). One block on Main, Split and Sticky. Chevron folds the file; the directory is
+   muted and the basename weight 500; the copy button shows on real hover or focus; Viewed is the reader's own progress. ── */
+.fh-in{height:44px;display:flex;align-items:center;gap:8px;padding:0 8px 0 6px;box-sizing:border-box;background:var(--surface);border-bottom:1px solid var(--line2)}
+.fbtn{position:relative;width:28px;height:28px;flex:0 0 auto;border:0;border-radius:7px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.fbtn::after,.viewed::after{content:"";position:absolute;left:50%;top:50%;width:max(100%,44px);height:44px;transform:translate(-50%,-50%)}
+@media (hover:hover){.fbtn:hover{background:var(--raised);color:var(--ink)}}
+.fbtn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.fbtn .chev{transition:transform var(--nv-dur-chevron) var(--nv-ease-standard)}
+.fpath{display:flex;align-items:baseline;min-width:0;overflow:hidden;font-family:'Geist Mono',ui-monospace,monospace;font-size:12.5px}
+.fpath .dir{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1000000 auto}
+.fpath .base{color:var(--ink);font-weight:500;white-space:nowrap;flex:0 0 auto}
+.fcount{font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;white-space:nowrap}
+.fcopy{opacity:1}
+@media (hover:hover){.fcopy{opacity:0;transition:opacity var(--nv-dur-surface-tone) var(--nv-ease-standard)}.fh-in:hover .fcopy,.fh-in:focus-within .fcopy{opacity:1}}
+.viewed{position:relative;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px 0 8px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-size:12.5px;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.viewed:hover{background:var(--raised);color:var(--ink)}}
+.viewed .box{width:14px;height:14px;box-sizing:border-box;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--line-strong);display:inline-flex;align-items:center;justify-content:center;
+  transition:background-color var(--nv-dur-check) var(--nv-ease-standard),box-shadow var(--nv-dur-check) var(--nv-ease-standard)}
+.viewed.on{color:var(--agt-fg)}.viewed.on .box{background:var(--agt);box-shadow:none;color:#fff}
+.is-viewed .fpath .base{color:var(--muted)}
+@media (prefers-reduced-motion:reduce){.fbtn,.fbtn .chev,.fcopy,.viewed,.viewed .box{transition:none}}
+/* ── end FILE HEADER ── */
+/* ── GAP ROW (round-3 #5). Collapsed unchanged lines: the expand control sits in the number gutter, then the count and range. ── */
+.gaprow{display:grid;grid-template-columns:69px minmax(0,1fr);align-items:center;height:32px;background:var(--expand);font-family:'Geist Mono',ui-monospace,monospace;font-size:11.5px;color:var(--ink2)}
+.gaprow .gx{position:relative;justify-self:end;margin-right:10px;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+.gaprow .gx::after{content:"";position:absolute;left:50%;top:50%;width:44px;height:32px;transform:translate(-50%,-50%)} /* the gap row's height */
+@media (hover:hover){.gaprow .gx:hover{background:var(--raised2);color:var(--ink)}}
+.gaprow .gx svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.gaprow .gt{padding-left:28px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gaprow .gr{margin-left:8px;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){.gaprow .gx{transition:none}}
+/* ── end GAP ROW ── */
+.seg button{position:relative}
+.seg button::after,.tgl::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+.seg button[aria-disabled="true"]{cursor:not-allowed}
+.tgl{position:relative;height:30px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-size:12.5px;display:inline-flex;align-items:center;gap:6px;
+  transition:background-color var(--nv-dur-surface-tone) var(--nv-ease-standard),color var(--nv-dur-surface-tone) var(--nv-ease-standard)}
+@media (hover:hover){.tgl:hover{background:var(--raised);color:var(--ink)}}
+.tgl.on{background:var(--raised);color:var(--ink)}
+.tgl:disabled{opacity:.5;cursor:not-allowed;background:transparent} /* the code's OverlayToggle, disabled with nothing to show */
+.tgl svg,.tbi{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.tbi{width:13px;height:13px}
+.npin{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;box-sizing:border-box;border-radius:6px;background:transparent;box-shadow:inset 0 0 0 1px var(--line);font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;color:var(--muted)}
+.npin .dot{width:6px;height:6px;border-radius:2px;background:var(--line-strong)}
+.ro .row,.ro .half{background:var(--ro-row)}
+.ro .k-add,.ro .k-add .half{background:var(--ro-add)}.ro .k-del{background:var(--ro-del)}
+.ro .ln,.ro .k-add .ln,.ro .k-del .ln{background:transparent;color:var(--nv-ro-ink)}
+.ro .code span{color:var(--ro-ink)}
+.mg{position:relative;flex:0 0 240px}
+.mgi{position:absolute;left:0;right:0;display:flex;gap:6px;flex-wrap:wrap}
+.swap{animation:fadeIn var(--nv-dur-swap) var(--nv-ease-standard) both}
+.open{animation:fadeUp var(--nv-dur-dock-rise) var(--nv-ease-emphasized-decelerate) both}
+@media (max-width:980px){.mg{display:none}}
+@media (prefers-reduced-motion:reduce){.swap,.open{animation:none}.tgl{transition:none}}
+</style>
+</helmet>
+<div class="theme-{{theme}}" style="min-height: 900px; background: var(--bg); color: var(--ink); font-family: Geist, system-ui, sans-serif; font-size: 14px">
+<div data-unitcol="1" style="max-width: 1240px; margin: 0 auto; padding: 32px 24px 64px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+
+<div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
+<div class="seg" role="radiogroup" aria-label="Diff layout">
+<button type="button" class="{{stackedCls}}" role="radio" aria-checked="{{isStacked}}" onClick="{{toStacked}}" style="display: inline-flex; align-items: center; gap: 6px"><svg class="tbi" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 12h18"></path></svg>Stacked</button>
+<button type="button" class="{{splitCls}}" role="radio" aria-checked="{{isSplit}}" aria-disabled="{{splitOff}}" title="{{splitTitle}}" onClick="{{toSplit}}" style="display: inline-flex; align-items: center; gap: 6px"><svg class="tbi" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M12 3v18"></path></svg>Split</button>
+</div>
+<button type="button" class="tgl {{wrapCls}}" onClick="{{toggleWrap}}" aria-pressed="{{wrap}}" aria-label="Wrap long lines"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m16 16-3 3 3 3"></path><path d="M3 12h14.5a1 1 0 0 1 0 7H13"></path><path d="M3 19h6"></path><path d="M3 5h18"></path></svg>Wrap</button>
+<span role="status" class="mono" style="font-size: 11px; color: var(--muted)">{{splitFallbackText}}</span>
+<span class="mono" style="font-size: 11.5px; color: var(--muted)">{{viewedCount}}/2 viewed</span>
+<span style="flex: 1 1 auto"></span>
+<button type="button" class="tgl" disabled>Show comments</button>
+</div>
+
+<sc-for list="{{files}}" as="f" hint-placeholder-count="2">
+<div style="display: flex; gap: 16px; align-items: flex-start">
+<div class="{{f.viewCls}} {{wrapBox}}" style="position: relative; flex: 1 1 auto; min-width: 0; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); overflow: hidden">
+<div class="fh-in" style="border-bottom-color: {{f.fhLine}}">
+<button type="button" class="fbtn" onClick="{{f.toggle}}" aria-expanded="{{f.open}}" aria-label="{{f.toggleLabel}}"><svg class="chev" viewBox="0 0 24 24" aria-hidden="true" style="transform: {{f.chev}}"><path d="m6 9 6 6 6-6"></path></svg></button>
+<span class="fpath" title="{{f.path}}"><span class="dir">{{f.dir}}</span><span class="base">{{f.base}}</span></span>
+<span class="fcount" style="color: var(--add-fg)">+{{f.add}}</span><span class="fcount" style="color: var(--del-fg)">−{{f.del}}</span>
+<button type="button" class="fbtn fcopy" aria-label="Copy path {{f.path}}"><svg viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg></button>
+<span style="flex: 1 1 auto"></span>
+<button type="button" class="viewed {{f.viewedCls}}" onClick="{{f.markViewed}}" aria-pressed="{{f.viewed}}"><span class="box" aria-hidden="true"><sc-if value="{{f.viewed}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></sc-if></span>Viewed</button>
+</div>
+<sc-if value="{{f.open}}" hint-placeholder-val="{{true}}">
+<div class="gaprow"><button type="button" class="gx" aria-label="Expand unchanged lines below"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 10.5 5-5 5 5"></path></svg></button><span class="gt">{{f.gap}} unchanged lines<span class="gr">L1–{{f.gap}}</span></span></div>
+<sc-if value="{{isStacked}}" hint-placeholder-val="{{false}}"><div class="swap"><sc-for list="{{f.stacked}}" as="r" hint-placeholder-count="10"><div class="row k-{{r.kind}} {{r.u}}" data-anchor="{{r.anchor}}"><span class="ln"><i>{{r.o}}</i><i>{{r.n}}</i><b>{{r.sign}}</b></span><span class="code"><sc-for list="{{r.toks}}" as="tk" hint-placeholder-count="4"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div></sc-for></div></sc-if>
+<sc-if value="{{isSplit}}" hint-placeholder-val="{{true}}"><div class="swap"><sc-for list="{{f.split}}" as="p" hint-placeholder-count="8"><div class="splitrow" data-anchor="{{p.anchor}}"><div class="half k-{{p.l.kind}}"><span class="ln"><i>{{p.l.no}}</i><b>{{p.l.sign}}</b></span><span class="code"><sc-for list="{{p.l.toks}}" as="tk" hint-placeholder-count="3"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div><div class="half k-{{p.r.kind}} {{p.r.u}}"><span class="ln"><i>{{p.r.no}}</i><b>{{p.r.sign}}</b></span><span class="code"><sc-for list="{{p.r.toks}}" as="tk" hint-placeholder-count="3"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div></div></sc-for></div></sc-if>
+</sc-if>
+</div>
+<div class="mg" style="align-self: stretch">
+<sc-if value="{{f.open}}" hint-placeholder-val="{{true}}">
+<sc-for list="{{f.pins}}" as="m" hint-placeholder-count="4">
+<div class="mgi swap" style="top: {{m.top}}px"><span class="pin f-{{m.pin.fam}}" role="img" aria-label="{{m.pin.aria}}"><svg class="pi" viewBox="0 0 24 24" aria-hidden="true"><sc-if value="{{m.pin.k_conflict}}" hint-placeholder-val="{{false}}"><path d="m16 3 4 4-4 4"></path><path d="M20 7H4"></path><path d="m8 21-4-4 4-4"></path><path d="M4 17h16"></path></sc-if><sc-if value="{{m.pin.k_gap}}" hint-placeholder-val="{{false}}"><circle class="dash" cx="12" cy="12" r="8.5"></circle></sc-if><sc-if value="{{m.pin.k_graph}}" hint-placeholder-val="{{false}}"><path d="M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6"></path><path d="M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9"></path><path d="M12 12v3"></path></sc-if><sc-if value="{{m.pin.k_history}}" hint-placeholder-val="{{false}}"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></sc-if><sc-if value="{{m.pin.k_doc}}" hint-placeholder-val="{{false}}"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></sc-if><sc-if value="{{m.pin.k_batch}}" hint-placeholder-val="{{false}}"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></sc-if></svg><span>{{m.pin.label}}</span><sc-if value="{{m.pin.tgt}}" hint-placeholder-val="{{false}}"><span class="tgt">{{m.pin.tgt}}</span></sc-if><sc-if value="{{m.pin.many}}" hint-placeholder-val="{{false}}"><span class="n" aria-hidden="true">{{m.pin.count}}</span></sc-if><sc-if value="{{m.pin.hasDots}}" hint-placeholder-val="{{false}}"><span class="dots" aria-hidden="true"><sc-for list="{{m.pin.dots}}" as="dt" hint-placeholder-count="1"><i></i></sc-for></span></sc-if></span></div>
+</sc-for>
+</sc-if>
+</div>
+</div>
+</sc-for>
+
+<div style="display: flex; gap: 16px; align-items: flex-start">
+<div class="ro" style="flex: 1 1 auto; min-width: 0; border-radius: 10px; background: var(--ro-bg); overflow: hidden">
+<button type="button" onClick="{{toggleNeighbor}}" aria-expanded="{{neighborOpen}}" style="width: 100%; height: 44px; border: 0; background: transparent; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 14px; text-align: left">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px; color: var(--faint)"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
+<span class="mono" style="font-size: 12px; color: var(--muted); white-space: nowrap">src/gen/api-client.ts</span>
+<span style="font-size: 12px; color: var(--muted); white-space: nowrap">Read-only · static automation ✓</span>
+<span style="flex: 1 1 auto"></span>
+<span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted)"><span class="mono" style="font-size: 11px; padding: 1px 6px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line)">2 context</span>{{neighborLabel}}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px; transform: {{chev}}; transition: transform var(--nv-dur-chevron) var(--nv-ease-standard)"><path d="m6 9 6 6 6-6"></path></svg></span>
+</button>
+<sc-if value="{{neighborOpen}}" hint-placeholder-val="{{false}}">
+<div class="open">
+<div class="gaprow" style="background: transparent"><button type="button" class="gx" aria-label="Expand unchanged lines below"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 10.5 5-5 5 5"></path></svg></button><span class="gt">87 unchanged lines<span class="gr">L1–87</span></span></div>
+<div class="stacked">
+<sc-for list="{{neighborRows}}" as="r" hint-placeholder-count="5">
+<div class="row k-{{r.kind}}"><span class="ln"><i>{{r.o}}</i><i>{{r.n}}</i><b>{{r.sign}}</b></span><span class="code"><sc-for list="{{r.toks}}" as="tk" hint-placeholder-count="4"><span class="{{tk.c}}">{{tk.t}}</span></sc-for></span></div>
+</sc-for>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 12px; color: var(--muted)">
+<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" style="width: 13px; height: 13px"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg>You can comment here. Its decision stays with static automation.<a href="#" aria-label="Open full unit for src/gen/api-client.ts" style="color: var(--ink2); text-underline-offset: 3px">Open full unit</a>
+</div>
+</div>
+</sc-if>
+</div>
+<div class="mg" style="align-self: stretch">
+<sc-if value="{{neighborOpen}}" hint-placeholder-val="{{false}}">
+<div class="ro">
+<div class="mgi open" style="top: 77px; flex-direction: column; align-items: flex-start; gap: 4px">
+<span class="npin"><span class="dot" aria-hidden="true"></span>Doc</span>
+<span style="font-size: 11.5px; line-height: 16px; color: var(--muted); max-width: 220px">Generated from openapi.yaml · same batch</span>
+<span class="npin" style="margin-top: 4px"><span class="dot" aria-hidden="true"></span>Test</span>
+<span style="font-size: 11.5px; line-height: 16px; color: var(--muted); max-width: 220px">Client regen check passed on a3f9c2e</span>
+</div>
+</div>
+</sc-if>
+</div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"layout":{"editor":"enum","options":["stacked","split"],"default":"split"},"$preview":{"width":1440,"height":900}}'>
+var KW = /^(export|async|function|const|await|return|if|import|from|let|new|true|false|null|expect)$/;
+function tokenize(code) {
+  var out = [];
+  var re = /(\/\/.*$)|('[^']*'|"[^"]*"|`[^`]*`)|([A-Za-z_$][\w$]*)(?=\s*\()|([A-Za-z_$][\w$]*)|(\d+)|(\s+)|([^\sA-Za-z_$\d'"`]+)/g;
+  var m;
+  while ((m = re.exec(code))) {
+    if (m[1]) out.push({ t: m[1], c: 'cm' });
+    else if (m[2]) out.push({ t: m[2], c: 'st' });
+    else if (m[3]) out.push({ t: m[3], c: KW.test(m[3]) ? 'kw' : 'fn' });
+    else if (m[4]) out.push({ t: m[4], c: KW.test(m[4]) ? 'kw' : 'id' });
+    else if (m[5]) out.push({ t: m[5], c: 'nu' });
+    else out.push({ t: m[0], c: 'pl' });
+  }
+  return out;
+}
+
+/* FIXTURE:revoke-files · review-batch.fixtures.ts (FILES): gap rows replace the hunk header (round-3 #5); deletions come
+   before additions; each row's markers by kind, as the fixture anchors them. */
+var FILES = [
+  { path: 'src/sharing/revoke.ts', dir: 'src/sharing/', base: 'revoke.ts', add: 4, del: 2, gap: 17, rows: [
+      ['ctx', 18, 18, 'export async function revokeShareLink(linkId: LinkId, actor: Actor) {'],
+      ['ctx', 19, 19, '  const link = await links.find(linkId);'],
+      ['del', 20, '', '  if (!link) return { status: 404 };'],
+      ['del', 21, '', '  await links.update(linkId, { revokedAt: now() });'],
+      ['add', '', 20, '  if (!link) return notFound();'],
+      ['add', '', 21, '  await policy.assertCanManage(actor, link.documentId);', [['doc', ['adm']]]],
+      ['add', '', 22, '  await links.update(linkId, { revokedAt: now(), version: link.version + 1 });', [['graph', ['list', 'audit']]]],
+      ['add', '', 23, '  await sessions.invalidateByLink(linkId);', [['conflict', ['sess']], ['batch', ['sess']]]],
+      ['ctx', 22, 24, '  return { status: 204 };', [['gap', ['audit']]]],
+      ['ctx', 23, 25, '}']
+    ] },
+  { path: 'src/sharing/access-policy.ts', dir: 'src/sharing/', base: 'access-policy.ts', add: 2, del: 1, gap: 40, rows: [
+      ['ctx', 41, 41, 'export function canOpen(link: ShareLink, viewer: Viewer) {'],
+      ['del', 42, '', '  return link.active;'],
+      ['add', '', 42, '  if (link.revokedAt) return false;', [['history', []]]],
+      ['add', '', 43, '  return link.active && viewer.linkVersion >= link.version;'],
+      ['ctx', 43, 44, '}']
+    ] }
+];
+var NEIGHBOR = [
+  ['ctx', 88, 88, '  revokeShareLink(id: string) {'],
+  ['del', 89, '', '    return this.post(`/links/${id}/revoke`);'],
+  ['add', '', 89, '    return this.post(`/links/${id}/revoke`, { expect: [204, 404] });'],
+  ['ctx', 90, 90, '  }'],
+  ['ctx', 91, 91, '}']
+];
+/* end FIXTURE:revoke-files */
+// ── MARGIN PINS (Markers.dc.html anatomy). One block on Main, Split and Sticky: keep the copies identical. ──
+var PIN_PATHS = {
+  conflict: ['m16 3 4 4-4 4', 'M20 7H4', 'm8 21-4-4 4-4', 'M4 17h16'],
+  decision: ['M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z', 'M4 22v-7'],
+  failed: ['M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2', 'M8.5 2h7', 'm2 2 20 20'],
+  gap: [], unavailable: ['M9 9l6 6', 'M15 9l-6 6'],
+  batch: ['M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z', 'm22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65'],
+  signal: ['M22 12h-4l-3 9L9 3l-3 9H2'],
+  test: ['M10 2v7.5L4.7 20.5a1 1 0 0 0 .9 1.5h12.8a1 1 0 0 0 .9-1.5L14 9.5V2', 'M8.5 2h7', 'M7 16h10'],
+  source: ['m16 18 6-6-6-6', 'm8 6-6 6 6 6'],
+  graph: ['M12 15a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M6 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 3a3 3 0 1 1 0 6a3 3 0 1 1 0-6', 'M18 9v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9', 'M12 12v3'],
+  history: ['M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8', 'M3 3v5h5', 'M12 7v5l4 2'],
+  doc: ['M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z', 'M14 2v4a2 2 0 0 0 2 2h4', 'M16 13H8', 'M16 17H8']
+};
+// priority order (marker-kind.tsx MARKER_KINDS): a shared line's pin shows the first kind present and counts the rest
+var PIN_PRIO = ['conflict', 'decision', 'failed', 'gap', 'unavailable', 'comment', 'draft', 'batch', 'signal', 'test', 'source', 'graph', 'history', 'doc'];
+var PIN_FAM = { conflict: 'req', decision: 'req', failed: 'sug', gap: 'sug', unavailable: 'sug', comment: 'human', draft: 'draft', batch: 'transient' };
+var PIN_LABEL = { conflict: 'Conflict', decision: 'Decision', failed: 'Failed', gap: 'Gap', unavailable: 'Unavailable', batch: 'Same batch', signal: 'Signal', test: 'Test', source: 'Source', graph: 'Graph', history: 'History', doc: 'Doc', draft: 'Draft' };
+function pinFam(kind) { return PIN_FAM[kind] || 'neutral'; }
+function pinSort(kinds) { return kinds.slice().sort(function (a, b) { return PIN_PRIO.indexOf(a.kind) - PIN_PRIO.indexOf(b.kind); }); }
+function pinKind(kind) { var o = { kind: kind, fam: pinFam(kind), label: PIN_LABEL[kind] || kind, isGap: kind === 'gap' || kind === 'unavailable' }; o['k_' + kind] = true; return o; }
+// ── end MARGIN PINS ──
+var HEAD = 44 + 32; // file header + gap row
+function sign(k) { return k === 'add' ? '+' : (k === 'del' ? '−' : ''); }
+function side(r, which) {
+  if (!r) return { kind: 'empty', no: '', sign: '', toks: [], u: '' };
+  var no = which === 'old' ? r[1] : r[2];
+  return { kind: r[0], no: no, sign: sign(r[0]), toks: tokenize(r[3]), u: r[4] && which === 'new' ? 'u' : '' };
+}
+function pairUp(rows) {
+  var out = [];
+  var i = 0;
+  while (i < rows.length) {
+    if (rows[i][0] === 'ctx') { out.push({ l: side(rows[i], 'old'), r: side(rows[i], 'new'), src: rows[i] }); i++; continue; }
+    var dels = []; var adds = [];
+    while (i < rows.length && rows[i][0] !== 'ctx') { (rows[i][0] === 'del' ? dels : adds).push(rows[i]); i++; }
+    var n = Math.max(dels.length, adds.length);
+    for (var j = 0; j < n; j++) out.push({ l: side(dels[j], 'old'), r: side(adds[j], 'new'), src: adds[j] || null });
+  }
+  return out;
+}
+// one pin per line: the highest-priority kind, a count for the rest, one dot per other unit
+function pinOf(r) {
+  var items = pinSort(r[4].map(function (x) { return { kind: x[0], units: x[1] }; }));
+  var units = {}; items.forEach(function (x) { x.units.forEach(function (u) { units[u] = 1; }); });
+  var nShared = Object.keys(units).length;
+  var lead = pinKind(items[0].kind);
+  return Object.assign(lead, { many: items.length > 1, count: items.length, tgt: '', hasDots: nShared > 0,
+    dots: new Array(Math.min(nShared, 3)).fill(0).map(function () { return {}; }),
+    aria: [lead.label + ' on line ' + (r[2] || r[1]), items.length > 1 ? items.length + ' markers' : '', nShared ? 'shared with ' + nShared + ' unit' + (nShared > 1 ? 's' : '') : ''].filter(Boolean).join(', ') });
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { layout: null, theme: null, neighbor: true, wrap: true, narrow: false, viewed: {}, closed: {}, tops: {} };
+  }
+  componentDidMount() {
+    var self = this;
+    this.onResize = function () { self.measure(); };
+    if (typeof window !== 'undefined') { window.addEventListener('resize', this.onResize); this.raf = window.requestAnimationFrame(function () { self.measure(); }); }
+  }
+  componentDidUpdate() { this.measure(); }
+  componentWillUnmount() { if (typeof window !== 'undefined') { window.removeEventListener('resize', this.onResize); window.cancelAnimationFrame(this.raf); } }
+  // Split needs a unit column of 980px (review-desk-screen.tsx useSplitFit); pins follow their wrapped rows
+  measure() {
+    if (typeof document === 'undefined') return;
+    var col = document.querySelector('[data-unitcol]');
+    var narrow = !!col && col.getBoundingClientRect().width - 48 < 980;
+    if (narrow !== this.state.narrow) { this.setState({ narrow: narrow }); return; }
+    var tops = {};
+    var els = document.querySelectorAll('[data-anchor]');
+    for (var i = 0; i < els.length; i++) tops[els[i].getAttribute('data-anchor')] = els[i].offsetTop;
+    var prev = this.state.tops, keys = Object.keys(tops);
+    if (keys.length !== Object.keys(prev).length || keys.some(function (k) { return prev[k] !== tops[k]; })) this.setState({ tops: tops });
+  }
+  renderVals() {
+    var self = this, st = this.state;
+    var layout = st.layout || this.props.layout || 'split';
+    var split = layout === 'split' && !st.narrow;
+    var viewedCount = 0;
+    var files = FILES.map(function (f, fi) {
+      var viewed = !!st.viewed[fi];
+      if (viewed) viewedCount++;
+      var open = st.closed[fi] === undefined ? !viewed : !st.closed[fi];
+      var pairs = pairUp(f.rows);
+      var pins = [];
+      var seq = split ? pairs.map(function (p) { return p.src; }) : f.rows;
+      seq.forEach(function (r, i) {
+        var anchor = 'a' + fi + '-' + i;
+        if (r && r[4]) { var m = st.tops[anchor]; pins.push({ top: (m != null ? m : HEAD + i * 24) + 1, pin: pinOf(r) }); }
+      });
+      return { path: f.path, dir: f.dir, base: f.base, add: f.add, del: f.del, gap: f.gap,
+        open: open, viewed: viewed, viewedCls: viewed ? 'on' : '', viewCls: viewed ? 'is-viewed' : '', fhLine: open ? 'var(--line2)' : 'transparent',
+        chev: open ? 'none' : 'rotate(-90deg)', toggleLabel: (open ? 'Collapse ' : 'Expand ') + f.base,
+        toggle: function () { var c = Object.assign({}, self.state.closed); c[fi] = open; self.setState({ closed: c, tops: {} }); },
+        markViewed: function () { var v = Object.assign({}, self.state.viewed); v[fi] = !viewed; var c = Object.assign({}, self.state.closed); c[fi] = !viewed; self.setState({ viewed: v, closed: c, tops: {} }); },
+        stacked: f.rows.map(function (r, i) { return { anchor: 'a' + fi + '-' + i, kind: r[0], o: r[1], n: r[2], sign: sign(r[0]), toks: tokenize(r[3]), u: r[4] ? 'u' : '' }; }),
+        split: pairs.map(function (p, i) { return Object.assign({ anchor: 'a' + fi + '-' + i }, p); }),
+        pins: pins };
+    });
+    return {
+      theme: st.theme || this.props.theme || 'light',
+      isSplit: split, isStacked: !split,
+      splitCls: split ? 'on' : '', stackedCls: split ? '' : 'on',
+      splitOff: st.narrow ? 'true' : 'false', splitTitle: st.narrow ? 'Split needs a column of 980px' : null,
+      splitFallback: layout === 'split' && st.narrow,
+      splitFallbackText: layout === 'split' && st.narrow ? 'Split shows as stacked below 980px' : '',
+      toSplit: function () { if (!self.state.narrow) self.setState({ layout: 'split', tops: {} }); },
+      toStacked: function () { self.setState({ layout: 'stacked', tops: {} }); },
+      wrap: st.wrap, wrapCls: st.wrap ? 'on' : '', wrapBox: st.wrap ? '' : 'nowrap',
+      toggleWrap: function () { self.setState({ wrap: !self.state.wrap, tops: {} }); },
+      viewedCount: viewedCount,
+      files: files,
+      neighborOpen: st.neighbor,
+      neighborLabel: st.neighbor ? 'Hide' : 'Show',
+      chev: st.neighbor ? 'rotate(180deg)' : 'none',
+      toggleNeighbor: function () { self.setState({ neighbor: !self.state.neighbor }); },
+      neighborRows: NEIGHBOR.map(function (r) { return { kind: r[0], o: r[1], n: r[2], sign: sign(r[0]), toks: tokenize(r[3]) }; })
+    };
+  }
+}
+</script>
+</body>
+</html>

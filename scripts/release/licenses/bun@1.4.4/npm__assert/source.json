@@ -1,0 +1,14 @@
+{
+  "project": "assert",
+  "source": "https://registry.npmjs.org/assert/-/assert-2.1.0.tgz",
+  "version": "2.1.0",
+  "commit": "fc65923fdbbc3ae72de1ddb15ee54088d201b4f9",
+  "pin": "the version Bun 1.4.4's src/node-fallbacks/bun.lock resolves",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://registry.npmjs.org/assert/-/assert-2.1.0.tgz#package/LICENSE",
+      "sha256": "6239c6144c31e58cf925c34483606969c555574d64ffa96518ab5d7f45c75d43"
+    }
+  ]
+}

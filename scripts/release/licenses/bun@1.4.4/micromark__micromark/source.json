@@ -1,0 +1,13 @@
+{
+  "project": "micromark/micromark",
+  "source": "https://github.com/micromark/micromark",
+  "commit": "6577c200155e9c6b85a42b26d298f8affc348f2f",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "license",
+      "url": "https://raw.githubusercontent.com/micromark/micromark/6577c200155e9c6b85a42b26d298f8affc348f2f/license",
+      "sha256": "dd1081884a92952802f4803110a6bb543acea9a814c786d58605b4c1219b5ebb"
+    }
+  ]
+}

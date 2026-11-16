@@ -1,0 +1,13 @@
+{
+  "project": "oxc-project/oxc",
+  "source": "https://github.com/oxc-project/oxc",
+  "commit": "2958ebd2e39f668f891ff2169805f152cca4210b",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/oxc-project/oxc/2958ebd2e39f668f891ff2169805f152cca4210b/LICENSE",
+      "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3"
+    }
+  ]
+}

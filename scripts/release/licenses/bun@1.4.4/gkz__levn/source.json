@@ -1,0 +1,13 @@
+{
+  "project": "gkz/levn",
+  "source": "https://github.com/gkz/levn",
+  "commit": "bfe5bbd351804304d12adc0de70e512b5f7709f3",
+  "pin": "decided: Bun names no version for it, so its licence file at the default branch when fetched, commit recorded",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/gkz/levn/bfe5bbd351804304d12adc0de70e512b5f7709f3/LICENSE",
+      "sha256": "b9eb082c39fe245e38793699074c394c43a722c51fce031c3c165cb92a31035c"
+    }
+  ]
+}

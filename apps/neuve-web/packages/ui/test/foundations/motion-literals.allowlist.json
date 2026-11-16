@@ -1,0 +1,15 @@
+{
+  "$comment": [
+    "Motion literals allowed to stay, by owner: file → literal text → count. test/foundations/motion-css.test.ts fails on any literal not listed here, and on any listed count the source no longer reaches.",
+    "Only code Neuve does not own belongs here. Neuve code, the shadcn primitives (vendored, ours) and the NEUVE FORK rules in packages/diffs/src/style.css read lib/motion.ts tokens instead.",
+    "pierreUpstream: Pierre's editor stylesheet, kept as upstream wrote it (caret blink, search button tone)."
+  ],
+  "pierreUpstream": {
+    "packages/diffs/src/editor/editor.css": {
+      "0.1s": 2,
+      "0.8s": 1,
+      "1.2s": 1,
+      "ease-in-out": 2
+    }
+  }
+}

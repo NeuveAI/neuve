@@ -1,0 +1,13 @@
+{
+  "project": "google/brotli",
+  "source": "https://github.com/google/brotli",
+  "commit": "db24a98aed38a16de78cc05ca15cdd8dc2a0d92d",
+  "pin": "the commit Bun 1.4.4 builds from (scripts/build/deps at bun-v1.4.4)",
+  "files": [
+    {
+      "name": "LICENSE",
+      "url": "https://raw.githubusercontent.com/google/brotli/db24a98aed38a16de78cc05ca15cdd8dc2a0d92d/LICENSE",
+      "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94"
+    }
+  ]
+}
