@@ -48,10 +48,10 @@ The post's headline and lead come from the image strings in [social](social.md#b
 
 ## 5. Where it's heading
 
-**Job:** the design, clearly apart from today's runs.
+**Job:** how agents and people share the work, as `main` does it.
 
 - How agents and people share the work: the four review lanes. Agents decide agentic work. On human-suggested work a decision the agents have made stands unless a person steps in, and human-required work waits for a person ([vocabulary](../../../vocabulary.md#responsibility-and-review-flow)). A rule in code maps a cited assessment to a lane ([`lane-rule.ts`](../../../packages/harness/src/lane-rule.ts)).
-- Today's runs put every part in human-suggested, and the agents only request changes or comment, so each part still comes to a person ([record 0007](../../../architecture/decisions/0007-batches-units-lanes-and-cycles.md#fixed-shape-trial)).
+- Agents approve agentic and human-suggested parts or request changes on them; on human-required parts they write a suggested review, and only a person approves ([`disposition.ts`](../../../packages/harness/src/disposition.ts), `applyLane`). Anything no agent could judge goes to a person, with a note saying so ([`publish-sections.ts`](../../../packages/harness/src/publish-sections.ts)).
 - **Owner to choose** which next steps to name. Current scope lives in Linear.
 
 ## 6. Built with itself

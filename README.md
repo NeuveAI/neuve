@@ -17,7 +17,7 @@ Focus only on parts that require human attention or approval, with the certainty
 
 Neuve is open-source code review, MIT-licensed, for code that agents write. Give it a commit range. It states what the change is for and splits it into batches, and each batch into smaller parts. Four agents look for problems (scope fit, correctness, risky edges and tests), and each finding is checked again in a fresh context before you see it. Each batch's summary says why the batch exists and links findings to the parts that hold them, and each finding cites the code it rests on. The diff is there whenever you want to read it, and you record your review in the review desk. Today it runs on your machine, and model calls go to the provider you set up. Neuve posts no reviews or comments to GitHub.
 
-How agents and people share the work: Neuve is designed to put each part of a change in one of four review lanes. Agents decide agentic work. On human-suggested work, a decision the agents have made stands unless a person steps in, and human-required work waits for a person. Today's runs put every part in human-suggested, and the agents only request changes or comment, so each part still comes to a person.
+How agents and people share the work: Neuve puts each part of a change in one of four review lanes. Agents decide agentic work. On human-suggested work, a decision the agents have made stands unless a person steps in, and human-required work waits for a person. Anything no agent could judge goes to a person, with a note saying so.
 
 ## Why
 

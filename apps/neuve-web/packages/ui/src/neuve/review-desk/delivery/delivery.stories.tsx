@@ -531,6 +531,13 @@ export const GuidedHumanSuggestedNoDisposition: Story = {
     )
     await expect(card.queryByText(/Passed static automation/)).toBeNull()
     await expect(card.queryByText(/The agent/)).toBeNull()
+    // The dock follows the lane, not the outcome: no agent decided this
+    // human-suggested unit, and nothing on the desk reads as a static pass.
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByText("No agent decision in this run")
+    ).toBeInTheDocument()
+    await expect(canvas.queryByText(/Passed static automation/)).toBeNull()
   },
 }
 
@@ -1153,7 +1160,8 @@ export const GuidedCheckMissing: Story = {
 /**
  * Agentic review: the agent's review card says the verdict once ("R2
  * requested changes"); the check's rows follow as reasons, with no
- * suggested review; the dock says what it covers and offers comments only.
+ * suggested review; the dock says what it covers and offers Comment and
+ * Request changes, never an approval (13.25).
  */
 export const GuidedAgentic: Story = {
   args: {
@@ -1167,13 +1175,20 @@ export const GuidedAgentic: Story = {
     await expect(canvas.queryByText(/Agent requested changes/)).toBeNull()
     await expect(canvas.getByText(/Covers 1 hunk/)).toBeInTheDocument()
     await visible(canvas.getByRole("button", { name: "Comment" }))
+    await visible(canvas.getByRole("button", { name: "Request changes" }))
+    await expect(
+      canvas.queryByRole("button", { name: /^(Approve|Agree)/ })
+    ).toBeNull()
     await expect(
       canvas.queryByRole("region", { name: "Suggested review" })
     ).toBeNull()
   },
 }
 
-/** Static automation: no agent review; the dock keeps its status, once. */
+/**
+ * Static automation: no agent review; the dock shows the check's result,
+ * once, with no action (13.25).
+ */
 export const GuidedStatic: Story = {
   args: {
     data: goDeliveryInLane("static-automation"),
@@ -1184,6 +1199,11 @@ export const GuidedStatic: Story = {
       within(canvasElement).getByRole("region", { name: DONE_WHEN })
     )
     await saidOnce(canvasElement, /Passed static automation/)
+    await expect(
+      within(canvasElement).queryByRole("button", {
+        name: /^(Approve|Agree|Comment|Request changes)/,
+      })
+    ).toBeNull()
   },
 }
 

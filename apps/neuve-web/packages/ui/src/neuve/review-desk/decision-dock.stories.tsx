@@ -9,6 +9,7 @@ import {
   agenticUnitFixture,
   goDeliveryDeskFixture,
   reviewDeskFixture,
+  staticUnitFixture,
   suggestedUnitFixture,
 } from "@workspace/ui/fixtures/review-batch.fixtures"
 import {
@@ -55,9 +56,20 @@ export const ComposingWithDraft: Story = {
   ],
 }
 
-/** Attachment removed. */
+/**
+ * Attachment removed. With no words either there is nothing to send, so
+ * Send stays off (10.69; review F5).
+ */
 export const ComposingDetached: Story = {
   decorators: [withReviewDeskState({ dock: "composing", attachment: null })],
+  play: async ({ canvas }) => {
+    const send = await waitFor(() =>
+      canvas.getByRole("button", { name: /^Send to implementer/ })
+    )
+    await expect(send).toBeDisabled()
+    await userEvent.type(canvas.getByRole("textbox"), "Add a test.")
+    await expect(send).toBeEnabled()
+  },
 }
 
 /** After a decision: what you did, Undo, and the next undecided unit. */
@@ -111,6 +123,213 @@ export const Agreed: Story = {
 export const Commented: Story = {
   args: { unit: agenticUnitFixture.unit, nextUnitId: ADMINS_UNIT_ID },
   decorators: [withReviewDeskState({ dock: "commented" })],
+}
+
+/* ── Actions per lane (13.25) ────────────────────────────── */
+
+/** A suggested unit no agent has reviewed yet. */
+const unreviewedSuggestedUnit = {
+  ...suggestedUnitFixture.unit,
+  attribution: undefined,
+}
+
+/**
+ * Before the agent decides, a suggested unit takes Request changes and
+ * Approve. No agent outcome means no Agree, and the dock says no agent
+ * decided the unit in this run (13.23).
+ */
+export const SuggestedRestBeforeAgentReview: Story = {
+  args: { unit: unreviewedSuggestedUnit },
+  decorators: [withReviewDeskState()],
+  play: async ({ canvas }) => {
+    await waitFor(() =>
+      expect(canvas.getByRole("button", { name: "Approve" })).toBeVisible()
+    )
+    await expect(
+      canvas.getByRole("button", { name: "Request changes" })
+    ).toBeVisible()
+    await expect(canvas.queryByRole("button", { name: "Agree" })).toBeNull()
+    await expect(
+      canvas.getByText("No agent decision in this run")
+    ).toBeInTheDocument()
+  },
+}
+
+/** Approving before the agent decides records your approval. */
+export const SuggestedApprovedBeforeAgentReview: Story = {
+  args: { unit: unreviewedSuggestedUnit, nextUnitId: ADMINS_UNIT_ID },
+  decorators: [withReviewDeskState()],
+  play: async ({ canvas }) => {
+    await userEvent.click(
+      await waitFor(() => canvas.getByRole("button", { name: "Approve" }))
+    )
+    await waitFor(() =>
+      expect(canvas.getByRole("status")).toHaveTextContent(
+        "You approved this unit"
+      )
+    )
+  },
+}
+
+/** An agentic unit the agent approved. */
+const approvedAgenticUnit = {
+  ...agenticUnitFixture.unit,
+  attribution: agenticUnitFixture.unit.attribution && {
+    ...agenticUnitFixture.unit.attribution,
+    outcome: "approved" as const,
+  },
+}
+
+/**
+ * Agentic: Comment and Request changes. Approvals there are the agent's, so
+ * there is no Approve or Agree, even when the agent approved.
+ */
+export const AgenticRest: Story = {
+  args: { unit: approvedAgenticUnit },
+  decorators: [withReviewDeskState()],
+  play: async ({ canvas }) => {
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("button", { name: "Request changes" })
+      ).toBeVisible()
+    )
+    await expect(canvas.getByRole("button", { name: "Comment" })).toBeVisible()
+    await expect(
+      canvas.queryByRole("button", { name: /^(Approve|Agree)/ })
+    ).toBeNull()
+  },
+}
+
+/** Request changes on an agentic unit the agent approved overrides it. */
+export const AgenticRequestChanges: Story = {
+  args: { unit: approvedAgenticUnit, nextUnitId: ADMINS_UNIT_ID },
+  decorators: [withReviewDeskState()],
+  play: async ({ canvas }) => {
+    await userEvent.click(
+      await waitFor(() =>
+        canvas.getByRole("button", { name: "Request changes" })
+      )
+    )
+    const composer = await canvas.findByRole("dialog", {
+      name: "Request changes on this unit",
+    })
+    await expect(
+      within(composer).getByText("Overrides the agent’s approval")
+    ).toBeInTheDocument()
+    await userEvent.type(
+      within(composer).getByRole("textbox", { name: "What needs to change" }),
+      "The retry loop never ends."
+    )
+    await userEvent.click(
+      within(composer).getByRole("button", { name: "Send to implementer" })
+    )
+    await waitFor(() =>
+      expect(canvas.getByRole("status")).toHaveTextContent(
+        "You requested changes"
+      )
+    )
+  },
+}
+
+/** A request says what to change: Send stays off while the text is blank. */
+export const AgenticRequestNeedsText: Story = {
+  args: { unit: approvedAgenticUnit, nextUnitId: ADMINS_UNIT_ID },
+  decorators: [withReviewDeskState()],
+  play: async ({ canvas }) => {
+    await userEvent.click(
+      await waitFor(() =>
+        canvas.getByRole("button", { name: "Request changes" })
+      )
+    )
+    const composer = await canvas.findByRole("dialog", {
+      name: "Request changes on this unit",
+    })
+    const send = within(composer).getByRole("button", {
+      name: "Send to implementer",
+    })
+    await expect(send).toBeDisabled()
+    const text = within(composer).getByRole("textbox", {
+      name: "What needs to change",
+    })
+    await userEvent.type(text, "   ")
+    await expect(send).toBeDisabled()
+    await userEvent.type(text, "The retry loop never ends.")
+    await expect(send).toBeEnabled()
+  },
+}
+
+/** An agentic unit no agent has decided in this run. */
+export const AgenticNoDecision: Story = {
+  args: {
+    unit: { ...agenticUnitFixture.unit, attribution: undefined },
+  },
+  decorators: [withReviewDeskState()],
+  play: async ({ canvas }) => {
+    await waitFor(() =>
+      expect(
+        canvas.getByText("No agent decision in this run")
+      ).toBeInTheDocument()
+    )
+    // The dock fades in: wait for the button, as the sibling stories do.
+    await waitFor(() =>
+      expect(
+        canvas.getByRole("button", { name: "Request changes" })
+      ).toBeVisible()
+    )
+    await expect(
+      canvas.queryByRole("button", { name: /^(Approve|Agree)/ })
+    ).toBeNull()
+  },
+}
+
+/** Static automation: the check's result only, with no action. */
+export const StaticPassed: Story = {
+  args: { unit: staticUnitFixture.unit },
+  decorators: [withReviewDeskState()],
+  play: async ({ canvas }) => {
+    await waitFor(() =>
+      expect(canvas.getByRole("status")).toHaveTextContent(
+        "Passed static automation"
+      )
+    )
+    await expect(canvas.queryByRole("button")).toBeNull()
+  },
+}
+
+/** A failed check is the red status. */
+export const StaticFailed: Story = {
+  args: {
+    unit: {
+      ...staticUnitFixture.unit,
+      attribution: staticUnitFixture.unit.attribution && {
+        ...staticUnitFixture.unit.attribution,
+        outcome: "changes-requested",
+      },
+    },
+  },
+  decorators: [withReviewDeskState()],
+  play: async ({ canvas }) => {
+    await waitFor(() =>
+      expect(canvas.getByRole("status")).toHaveTextContent(
+        "Failed static automation"
+      )
+    )
+    await expect(canvas.queryByRole("button")).toBeNull()
+  },
+}
+
+/** No check result in this run: still no action. */
+export const StaticNoResult: Story = {
+  args: { unit: { ...staticUnitFixture.unit, attribution: undefined } },
+  decorators: [withReviewDeskState()],
+  play: async ({ canvas }) => {
+    await waitFor(() =>
+      expect(canvas.getByRole("status")).toHaveTextContent(
+        "No check result in this run"
+      )
+    )
+    await expect(canvas.queryByRole("button")).toBeNull()
+  },
 }
 
 /* ── Focus across dock states ─────────────────────────────

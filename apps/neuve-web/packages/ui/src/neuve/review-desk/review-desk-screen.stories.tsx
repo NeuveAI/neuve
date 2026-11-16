@@ -934,13 +934,51 @@ export const SuggestedRequestingChanges: Story = {
   args: deskAt("suggested", { dock: "composing" }),
 }
 
-/** Agentic review: the agent sent it back; you can only Comment. */
+/**
+ * Agentic review: the agent sent it back. You can Comment or Request
+ * changes, never approve: approvals there are the agent's (13.25).
+ */
 export const AgenticUnit: Story = {
   args: deskAt("agentic"),
 }
 
 export const AgenticCommenting: Story = {
-  args: deskAt("agentic", { dock: "composing" }),
+  args: deskAt("agentic", {
+    dock: "composing",
+    state: { feedbackKind: "comment" },
+  }),
+}
+
+/**
+ * ⌘↵ in an agentic unit's Request changes composer sends the request, as
+ * its Send to implementer button does, not a comment.
+ */
+export const AgenticRequestByKeyboard: Story = {
+  args: deskAt("agentic"),
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(
+      await waitFor(() =>
+        canvas.getByRole("button", { name: "Request changes" })
+      )
+    )
+    const text = await canvas.findByRole("textbox", {
+      name: "What needs to change",
+    })
+    // Blank, ⌘↵ sends nothing: a request says what to change (10.69).
+    text.focus()
+    await userEvent.keyboard("{Meta>}{Enter}{/Meta}")
+    await expect(
+      canvas.getByRole("dialog", { name: "Request changes on this unit" })
+    ).toBeInTheDocument()
+    await expect(canvas.queryByText("You requested changes")).toBeNull()
+    await expect(text).toHaveFocus()
+    await userEvent.type(text, "The retry loop never ends.")
+    await userEvent.keyboard("{Meta>}{Enter}{/Meta}")
+    await waitFor(() =>
+      expect(canvas.getByText("You requested changes")).toBeInTheDocument()
+    )
+    await expect(canvas.queryByText("Comment added as context")).toBeNull()
+  },
 }
 
 export const AgenticCommented: Story = {
@@ -1571,7 +1609,10 @@ const longAgenticDesk = {
  * Typing scrolls nothing and moves nothing around it.
  */
 export const DockTypingHoldsTheDesk: Story = {
-  args: deskAt(longAgenticDesk, { dock: "composing" }),
+  args: deskAt(longAgenticDesk, {
+    dock: "composing",
+    state: { feedbackKind: "comment" },
+  }),
   play: async ({ canvas, canvasElement, userEvent }) => {
     const text = await canvas.findByRole("textbox", { name: "Comment" })
     await expectTypingHoldsStill(
@@ -1651,7 +1692,10 @@ export const DockTypingHoldsGuidedEdit: Story = {
  * view.
  */
 export const DockTypingGrowsInView: Story = {
-  args: deskAt(longAgenticDesk, { dock: "composing" }),
+  args: deskAt(longAgenticDesk, {
+    dock: "composing",
+    state: { feedbackKind: "comment" },
+  }),
   play: async ({ canvas, canvasElement, userEvent }) => {
     const text = await canvas.findByRole<HTMLTextAreaElement>("textbox", {
       name: "Comment",
@@ -2091,7 +2135,10 @@ export const DockTabHoldsTheDesk: Story = {
 
 /** "Comment on this unit" on a long unit: its Cancel and Comment. */
 export const DockTabHoldsTheLaneComposer: Story = {
-  args: deskAt(longAgenticDesk, { dock: "composing" }),
+  args: deskAt(longAgenticDesk, {
+    dock: "composing",
+    state: { feedbackKind: "comment" },
+  }),
   play: async ({ canvas, canvasElement, userEvent }) => {
     const text = await canvas.findByRole("textbox", { name: "Comment" })
     await expectTabbingHoldsTheDesk(canvasElement, userEvent, text)

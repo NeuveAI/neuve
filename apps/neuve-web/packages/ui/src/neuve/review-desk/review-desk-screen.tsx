@@ -244,11 +244,13 @@ function useDeskShortcuts(
           store.set(approveAtom)
         } else if (dock === "composing") {
           event.preventDefault()
+          // The open composer's kind decides what ⌘↵ sends, as its own
+          // button does: an agentic unit's composer is a request for
+          // changes or a comment (13.25).
           if (
             lane === "human-required" ||
             lane === "human-suggested" ||
-            (lane === undefined &&
-              store.get(unitFeedbackKindAtom) === "request-changes")
+            store.get(unitFeedbackKindAtom) === "request-changes"
           ) {
             store.set(sendChangesAtom)
           } else {
