@@ -31,19 +31,27 @@ One line installs the `neuve` command on Macs with Apple silicon, on Linux with 
 curl -fsSL https://neuve.ai/install.sh | sh
 ```
 
-Reviews run on your own model account: an Anthropic API key or a ChatGPT subscription. To use an Anthropic API key, put it in the shell you run `neuve review` in:
+Reviews run on your own model account. Choose one of three:
 
-```sh
-export ANTHROPIC_API_KEY=...
-```
+- **An Anthropic API key**, the default. Put it in the shell you run `neuve review` in:
 
-Reviews use the Anthropic route by default. To use a ChatGPT subscription instead, set `review.route` to `openai` in your [review settings](apps/neuve-cli/SETUP.md#review-settings), then sign in:
+  ```sh
+  export ANTHROPIC_API_KEY=...
+  ```
 
-```sh
-neuve auth login openai
-```
+- **A Claude subscription**, through the Claude Code you have installed. Sign in with Claude Code's own login if you haven't yet. Neuve runs reviews through Claude Code and never reads your sign-in. Name the route when you start a review: `neuve review main..my-branch --route claude`.
 
-Run `neuve setup` in your repository. It ends by checking that your provider's key or sign-in is available. `neuve doctor` names anything that's missing and how to fix it.
+  ```sh
+  claude auth login
+  ```
+
+- **A ChatGPT subscription.** Set `review.route` to `openai` in your [review settings](apps/neuve-cli/SETUP.md#review-settings), then sign in:
+
+  ```sh
+  neuve auth login openai
+  ```
+
+Run `neuve setup` in your repository. It ends by checking that your API key or ChatGPT sign-in is available. `neuve doctor` names anything that's missing and how to fix it. Neither checks a Claude sign-in yet: `neuve auth status claude --check` does, without spending usage.
 
 ```sh
 cd /path/to/your/repository
