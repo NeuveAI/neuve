@@ -284,7 +284,7 @@ export type QuadKey = "le" | "lh" | "he" | "hh";
 export const HEADING = {
   eyebrow: "Where it's heading",
   title: "The right reviewer for each part of a change",
-  body: "Some parts of a change matter more than others. Neuve is designed to put each part in one of four review lanes: static automation, agentic review, human-suggested review and human-required review. Its complexity and how easy it is to validate set the lane, and history, outages and blast radius can move it. In that design, agents decide agentic work. On human-suggested work, a decision the agents have made stands unless a person steps in. Human-required work waits for a person.",
+  body: "Some parts of a change matter more than others. Neuve puts each part in one of four review lanes: static automation, agentic review, human-suggested review and human-required review. Its complexity and how easy it is to validate set the lane. Agents decide agentic work. On human-suggested work, a decision the agents have made stands unless a person steps in. Human-required work waits for a person.",
   axes: {
     easy: "Easy to validate",
     hard: "Hard to validate",
@@ -324,7 +324,7 @@ export const HEADING = {
   }>,
   today: "Today",
   todayText:
-    "Runs put every part in human-suggested review, and the agents only request changes or comment, so each part still comes to you with the verified findings attached.",
+    "Agents approve agentic parts or request changes on them. A part no agent could judge comes to you, with a note saying so.",
   ledgerLabel: "Why this review lane",
   rows: {
     cx: "Complexity",

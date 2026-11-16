@@ -37,11 +37,11 @@ The [review lanes](../../../vocabulary.md#responsibility-and-review-flow) are ho
 - **Human-suggested:** the work can arrive with the agents' decision already made. A person can add judgment or request changes, and without that, the agents' decision stands.
 - **Human-required:** a person decides. Agents prepare a suggested review and comments, and may request changes, but never approve.
 
-A unit's complexity and how easy it is to validate set its lane, and history, outages and blast radius can move it.
+A unit's complexity and how easy it is to validate set its lane. In the design, history, outages and blast radius can move it too; on `main` only a kept finding or a confirmed request for changes moves it, and blast radius moves nothing until it is measured ([`lane-rule.ts`](../../../packages/harness/src/lane-rule.ts), 14.22, 14.28, 14.34). Public copy doesn't say what moves a lane.
 
-**What's true of `main` today.** A rule in code ([`lane-rule.ts`](../../../packages/harness/src/lane-rule.ts)) maps a unit's cited assessment to its lane. The assessment that feeds it isn't part of today's trial, so today's runs record every unit as human-suggested and not assessed, and the agents only request changes or comment ([record 0007](../../../architecture/decisions/0007-batches-units-lanes-and-cycles.md#fixed-shape-trial)). So every part still comes to a person, with the verified findings attached. Body copy that describes the lanes says so once. The owner's lines stand as written.
+**What's true of `main` today.** A rule in code ([`lane-rule.ts`](../../../packages/harness/src/lane-rule.ts)) maps a unit's cited assessment to its lane. Each review assesses every unit and assigns it a lane (13.17, Area 14). Agents approve agentic and human-suggested work or request changes on it; on human-required work they write a suggested review, and only a person approves ([`disposition.ts`](../../../packages/harness/src/disposition.ts), `applyLane`). Work no agent could judge goes to a person, with a note that no agent decided it (14.4, [`publish-sections.ts`](../../../packages/harness/src/publish-sections.ts)). The owner's lines stand as written.
 
-**Launch limits (NEU-148, early warning, 11 November).** The checks-only lane may be empty at launch, and on very large reviews some units get a lane but no agent decision. Until NEU-148 sends its plain launch paragraph, the copy doesn't claim that every unit is decided by an agent or a person, and doesn't name the static-automation lane as working. That paragraph becomes the fact-check source for these sentences.
+**Launch limits (NEU-148, on `main` since 16 November).** Static automation needs recorded proof, so it may be empty at launch, and the copy doesn't name it as working (14.13). The lanes stay cautious at launch (14.13). The copy doesn't quote lane counts from any run (rule 11).
 
 **Taglines:**
 
@@ -90,7 +90,6 @@ This is the owner's view, condensed from the article. It's the source for the vo
 
 ## Where it's heading
 
-- **The assessment that sets each unit's lane,** described above. Today's runs record every unit as human-suggested.
 - **Change attributed to its context, for people and agents.** Some pieces are true today:
   - Verified findings cite their source locations.
   - Hooks link commits to the agent session that made them, where that session can be identified.
@@ -131,7 +130,9 @@ An independent Codex reviewer checked each row against `main`: three passes in r
 | Neuve's host and channel packages (`@ace/host` in `apps/neuve-host`, `@ace/channel` in `packages/channel`) are adapted from GitHub Next's Ace at commit fe66277 (MIT). Neuve Graph forks Entire Graph (MIT), and the review desk's diffs render with a modified copy of Pierre's `@pierre/diffs` (Apache-2.0) | [`apps/neuve-host/NOTICE`](../../../apps/neuve-host/NOTICE), [`packages/channel/NOTICE`](../../../packages/channel/NOTICE), the `LICENSE` in the `apps/neuve-graph` submodule, [`apps/neuve-web/packages/diffs/NOTICE.md`](../../../apps/neuve-web/packages/diffs/NOTICE.md) |
 | The review desk shows each review unit's diff, with review comments, including the agents' verified findings, on the lines they're about | [`diff-file.tsx`](../../../apps/neuve-web/packages/ui/src/neuve/review-desk/diff-file.tsx), [`review-comments/record.ts`](../../../apps/neuve-web/packages/ui/src/neuve/review-comments/record.ts) |
 | Each batch's digest states the change's goal, why the batch exists and how many units it has. It links verified findings to the review units that hold them, up to the digest's length limit. Findings past the limit stay in their units' comments, and the digest's limitations say how many | [`link.ts`](../../../packages/harness/src/link.ts) (`groupDigest`) |
-| Today's runs record every review unit as human-suggested and not assessed, so every unit comes to a person | [Record 0007](../../../architecture/decisions/0007-batches-units-lanes-and-cycles.md#fixed-shape-trial), [`compose.ts`](../../../packages/harness/src/compose.ts) |
+| Each review assesses every unit and assigns it a review lane. Agents approve agentic and human-suggested units or request changes on them; on human-required units they write a suggested review, and only a person approves | [`lane-rule.ts`](../../../packages/harness/src/lane-rule.ts), [`disposition.ts`](../../../packages/harness/src/disposition.ts) (`applyLane`) |
+| On human-suggested work, an agent's disposition closes the unit unless a person records another | [`dispositions.ts`](../../../packages/records-core/src/dispositions.ts), 14.33 |
+| A unit no agent decided goes to a person, with a note saying so | [`publish-sections.ts`](../../../packages/harness/src/publish-sections.ts) |
 
 **The owner's statements, not product claims:** the owner's two pairs of lines, "built for almost a year", the article's argument, and that readers are overloaded or reviewing languages and platforms they don't know well.
 
@@ -148,7 +149,7 @@ An independent Codex reviewer checked each row against `main`: three passes in r
 4. **No "agents never approve".** Agents and people review together: agents decide agentic work, and a decision they've made on human-suggested work stands unless a person steps in. Don't present agents as never approving. Copy can say that on human-required work only a person approves.
 5. **"Review units" stays internal.** Keep it out of headlines, leads, images and posts, and say "parts" there. Docs use it only where a reader needs the term.
 6. **No promise of reading it all.** Don't promise "every change", "every finding" or "every line". Completeness can be a reason to trust the review ("no changed line is left out").
-7. **Body claims are true of `main`.** The owner's lines stand as written. Every concrete feature claim in body text has a source in the proof points. Where body copy describes the review lanes, it says once that today's runs put every part in human-suggested.
+7. **Body claims are true of `main`.** The owner's lines stand as written. Every concrete feature claim in body text has a source in the proof points.
 8. **Never say Neuve proves a change correct,** teaches a language or explains code in plain words.
 9. **Common terms for readers** (13.24). Reader-facing explanations use common words, or link a product term visibly to what it names: "parts" for review units, "summary" for a batch's digest, "what done means" for done-when conditions, "an overview of the change, one batch of related work at a time" for the batch overview. Where the copy does use a product term, use it exactly as [the vocabulary](../../../vocabulary.md) defines it, and never coin a product noun.
 10. **Don't name or knock other tools.** Describe Neuve directly.
@@ -161,7 +162,7 @@ An independent Codex reviewer checked each row against `main`: three passes in r
 - **Licence:** MIT, "Copyright (c) 2026 Neuve AI" (13.8). The strings say MIT, but none of them ships until the `LICENSE` file is on `main`.
 - **Install:** a one-line install at launch: `curl -fsSL https://neuve.ai/install.sh | sh`, then `neuve setup` (13.5). Until `oss-dist` ships it, it's labelled "Coming with the first release", and "Get started" doesn't point at it.
 - **Domain:** neuve.ai. **Conduct contact:** support@neuve.ai (13.6).
-- **The four review lanes** are how agents and people share the work. Body copy that describes them says once that today's runs put every part in human-suggested.
+- **The four review lanes** are how agents and people share the work, and `main` routes every unit into one (13.17, Area 14). Copy doesn't name static automation as working.
 - **Review only** (13.9, 11 November): the first release is Neuve on its own. The copy shows `neuve setup`, `neuve review`, the batch overview and the review desk. `neuve workspace`, `@neuve` in a coding chat and Ace's coding app are left out. The host and channel packages adapted from Ace ship as part of Neuve (13.9 as corrected on 11 November), so GitHub Next's Ace keeps its credit for them. The credit isn't presented as a feature.
 - **The current folder** (13.10): a review runs on the current folder, after `neuve setup` has run there. The copy orders the steps that way and doesn't claim that a review stops when setup hasn't run, because that isn't on `main` yet.
 - **Approving any human-required unit** (13.11): settled. The copy says so only once it's on `main`.

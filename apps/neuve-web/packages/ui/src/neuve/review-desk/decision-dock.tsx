@@ -26,7 +26,7 @@ import {
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
-import { NeuveLink, useNeuveMode } from "@workspace/ui/neuve/shared/nav-link"
+import { NeuveLink } from "@workspace/ui/neuve/shared/nav-link"
 import type { NeuveDestination } from "@workspace/ui/neuve/shared/nav-link"
 import { Button } from "@workspace/ui/components/button"
 import { Textarea } from "@workspace/ui/components/textarea"
@@ -61,6 +61,7 @@ import {
   decisionReceiptAtom,
   decisionPendingAtom,
   decisionErrorAtom,
+  requestSendableAtom,
   sendChangesAtom,
   startChangesAtom,
   unitFeedbackKindAtom,
@@ -91,6 +92,16 @@ const DOCK = {
 /** The send shortcut, drawn at full strength in its button (at 70% it fell
  * to 3.65:1 on the light accent). */
 const SHORTCUT = "⌘↵"
+
+/**
+ * A human-suggested or agentic unit with no agent disposition in this run,
+ * whether or not an agent commented (13.23). NEU-148's lane review uses the
+ * same words for a unit it can't reach.
+ */
+export const NO_AGENT_DECISION = "No agent decision in this run"
+
+/** A static-automation unit with no check result in this run. */
+export const NO_CHECK_RESULT = "No check result in this run"
 
 function DockMotion({
   children,
@@ -140,12 +151,26 @@ const dockFocusAtom = atom<{
   to: DockKind
 } | null>(null)
 
-/** Asks `to`, the next state on `unitId`, to take focus. */
+/**
+ * Asks `to`, the next state on `unitId`, to take focus. The step's own
+ * handler runs within the same event: a decision sets pending before its
+ * first await, and an opener changes the dock state. A hand-off that is
+ * still waiting once the event is done, with nothing pending and the dock
+ * not at `to`, belonged to a step that did nothing (a request with nothing
+ * to send, a blank suggestion), so no later state may take focus for it
+ * (review F3, F5, F6).
+ */
 function handOff(
   store: ReturnType<typeof useStore>,
   hand: { keyboard: boolean; unitId: string; to: DockKind }
 ) {
   store.set(dockFocusAtom, hand)
+  setTimeout(() => {
+    if (store.get(dockFocusAtom) !== hand) return
+    if (store.get(decisionPendingAtom)) return
+    if (kindOf(store.get(dockAtom)) === hand.to) return
+    store.set(dockFocusAtom, null)
+  }, 0)
 }
 
 /** What kind of dock state `dock` is. */
@@ -544,6 +569,9 @@ function DockComposer({
   const detach = useSetAtom(detachAtom)
   const cancel = useSetAtom(resetDockAtom)
   const send = useSetAtom(sendChangesAtom)
+  // A request with nothing to send can't be sent, so its click hands focus
+  // nowhere either (review F5).
+  const sendable = useAtomValue(requestSendableAtom)
   const origin = useAtomValue(dockOriginAtom)
   const attached = attachment ? markers[attachment] : undefined
   const landing = useComposerRoot(
@@ -658,6 +686,7 @@ function DockComposer({
           type="button"
           variant="ink"
           size="dock"
+          disabled={!sendable}
           data-dock-step="decided"
           onClick={send}
         >
@@ -674,13 +703,88 @@ function DockComposer({
  * agent recorded a review, that review is said once, in the briefing's
  * review card; the dock says what the decision covers ("Covers 1 hunk"),
  * as the human dock does (Option A, round 4.2; review F8 for the agentic
- * lane). Without an agent review (static automation, or still waiting) the
- * dock keeps its status line.
+ * lane). Without an agent decision the dock says so (13.23).
+ *
+ * Actions follow the lane (13.25):
+ *
+ *   human-suggested   Request changes · [Approve | Agree], at any time
+ *   agentic           Comment · Request changes (approvals are the agent's)
+ *   static            the check's result only, green or red
  */
 function DockLaneRest({
   unit,
   deliveryGlyph,
 }: { unit: ReviewDeskData["unit"] } & DeliveryGlyph) {
+  const outcome = unit.attribution?.outcome
+  const landing = useRestLanding(unit.id)
+  if (unit.lane === "static-automation")
+    return (
+      <DockMotion
+        key="rest"
+        ref={landing}
+        role="status"
+        data-surface="inverse"
+        className={DOCK_BAR}
+      >
+        <DockBody />
+        {deliveryGlyph}
+        <DockCheckResult outcome={outcome} />
+      </DockMotion>
+    )
+  return (
+    <DockLaneDecision
+      unit={unit}
+      deliveryGlyph={deliveryGlyph}
+      landing={landing}
+    />
+  )
+}
+
+/**
+ * A static-automation unit's check result: green when it passed, red when it
+ * failed, and a plain line when the run has none.
+ */
+function DockCheckResult({
+  outcome,
+}: {
+  outcome:
+    NonNullable<ReviewDeskData["unit"]["attribution"]>["outcome"] | undefined
+}) {
+  if (outcome === undefined)
+    return (
+      <span className="inline-flex min-h-[22px] items-center gap-2 pr-2 text-[13px] text-dock-muted">
+        <LaneGlyph lane="static-automation" />
+        {NO_CHECK_RESULT}
+      </span>
+    )
+  const failed = outcome === "changes-requested"
+  const Icon = failed ? XIcon : CheckIcon
+  return (
+    <span className="inline-flex items-center gap-2.5 pr-2 pl-0.5">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "inline-flex size-[22px] items-center justify-center rounded-md",
+          failed ? DOCK_TONE.changes : DOCK_TONE.approved
+        )}
+      >
+        <Icon className="size-3" strokeWidth={2.25} />
+      </span>
+      <span className="text-[13px] font-medium">
+        {failed ? "Failed static automation" : "Passed static automation"}
+      </span>
+    </span>
+  )
+}
+
+/** Rest for human-suggested and agentic units (13.25). */
+function DockLaneDecision({
+  unit,
+  deliveryGlyph,
+  landing,
+}: { unit: ReviewDeskData["unit"] } & DeliveryGlyph & {
+    landing: (root: HTMLElement | null) => void
+  }) {
   const startChanges = useSetAtom(startChangesAtom)
   const startComment = useSetAtom(startUnitCommentAtom)
   const agree = useSetAtom(agreeAtom)
@@ -688,23 +792,16 @@ function DockLaneRest({
   const suggested = unit.lane === "human-suggested"
   const outcome = unit.attribution?.outcome
   const reviewed = outcome === "approved" || outcome === "changes-requested"
-  const text =
-    outcome === "passed"
-      ? "Passed static automation"
-      : unit.lane === "static-automation"
-        ? "Awaiting static automation"
-        : "Awaiting agent review"
-  const landing = useRestLanding(unit.id)
   return (
     <DockMotion
       key="rest"
       ref={landing}
       data-surface="inverse"
-      className={cn(DOCK_BAR, (suggested || reviewed) && "flex-wrap")}
+      className={cn(DOCK_BAR, "flex-wrap")}
     >
       <DockBody />
       {deliveryGlyph}
-      {suggested || reviewed ? (
+      {reviewed ? (
         <>
           <DockScope unit={unit} />
           <span aria-hidden="true" className="h-5 w-px bg-dock-line" />
@@ -716,35 +813,10 @@ function DockLaneRest({
           ) : (
             <InfoIcon aria-hidden="true" className="size-4" />
           )}
-          {text}
+          {NO_AGENT_DECISION}
         </span>
       )}
-      {suggested ? (
-        <>
-          <Button
-            type="button"
-            variant="dock-ghost"
-            size="dock"
-            data-dock-step="composing"
-            data-dock-opener="request-changes"
-            onClick={() => startChanges(unit.defaultAttachment)}
-          >
-            Request changes
-          </Button>
-          {(outcome === "approved" || outcome === "changes-requested") && (
-            <Button
-              type="button"
-              variant="dock-primary"
-              size="dock"
-              data-dock-step="decided"
-              data-dock-opener="approve"
-              onClick={outcome === "approved" ? agree : approve}
-            >
-              {outcome === "approved" ? "Agree" : "Approve"}
-            </Button>
-          )}
-        </>
-      ) : (
+      {!suggested && (
         <Button
           type="button"
           variant="dock-ghost"
@@ -758,26 +830,54 @@ function DockLaneRest({
           Comment
         </Button>
       )}
+      <Button
+        type="button"
+        variant="dock-ghost"
+        size="dock"
+        data-dock-step="composing"
+        data-dock-opener="request-changes"
+        onClick={() => startChanges(unit.defaultAttachment)}
+        // Beside Comment on an agentic unit it takes Comment's outline, so
+        // both read as buttons, also when it wraps to its own row.
+        className={cn(
+          !suggested && "shadow-[inset_0_0_0_1px_var(--nv-dock-line)]"
+        )}
+      >
+        Request changes
+      </Button>
+      {suggested && (
+        <Button
+          type="button"
+          variant="dock-primary"
+          size="dock"
+          data-dock-step="decided"
+          data-dock-opener="approve"
+          onClick={outcome === "approved" ? agree : approve}
+        >
+          {outcome === "approved" ? "Agree" : "Approve"}
+        </Button>
+      )}
     </DockMotion>
   )
 }
 
 /**
  * Composer for units outside the human-required lane: Request changes on a
- * suggested unit (overrides the agent's approval, goes to the implementer)
- * or a Comment on an agentic or static unit (context for its next cycle).
+ * suggested or agentic unit (overrides the agent's approval, goes to the
+ * implementer) or a Comment on an agentic unit (context for its next cycle).
  */
 function DockLaneComposer({ unit }: { unit: ReviewDeskData["unit"] }) {
-  const mode = useNeuveMode()
-  const pending = useAtomValue(decisionPendingAtom)
   const draft = useAtomValue(draftAtom)
   const setDraft = useSetAtom(draftAtom)
   const cancel = useSetAtom(resetDockAtom)
   const sendChanges = useSetAtom(sendChangesAtom)
   const sendComment = useSetAtom(sendUnitCommentAtom)
-  const suggested = unit.lane === "human-suggested"
-  const liveStatic = mode === "live" && unit.lane === "static-automation"
-  const title = suggested
+  // A suggested unit's composer is always a request; an agentic unit's is
+  // what its opener started, as ⌘↵ reads it (review-desk-screen.tsx).
+  const kind = useAtomValue(unitFeedbackKindAtom)
+  const changes = unit.lane === "human-suggested" || kind === "request-changes"
+  const sendable = useAtomValue(requestSendableAtom)
+  const title = changes
     ? "Request changes on this unit"
     : "Comment on this unit"
   const landing = useComposerRoot(
@@ -799,7 +899,7 @@ function DockLaneComposer({ unit }: { unit: ReviewDeskData["unit"] }) {
       <span className="flex items-baseline gap-2">
         <span className="text-sm font-semibold">{title}</span>
         <span className="text-xs text-ink-muted">
-          {suggested
+          {changes
             ? unit.attribution?.outcome === "approved"
               ? "Overrides the agent’s approval"
               : "Adds your request for changes"
@@ -807,14 +907,16 @@ function DockLaneComposer({ unit }: { unit: ReviewDeskData["unit"] }) {
         </span>
       </span>
       <label htmlFor="dock-lane-comment" className="sr-only">
-        {suggested ? "What needs to change" : "Comment"}
+        {changes ? "What needs to change" : "Comment"}
       </label>
       <Textarea
         id="dock-lane-comment"
         rows={3}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder="What should the next cycle know?"
+        placeholder={
+          changes ? "What needs to change?" : "What should the next cycle know?"
+        }
         aria-keyshortcuts="Meta+Enter"
         className={cn(
           DOCK_TEXT,
@@ -832,29 +934,17 @@ function DockLaneComposer({ unit }: { unit: ReviewDeskData["unit"] }) {
         >
           Cancel
         </Button>
-        {liveStatic && (
-          <Button
-            type="button"
-            variant="quiet"
-            size="dock"
-            className="h-[34px] px-3 font-normal"
-            disabled={pending}
-            data-dock-step="decided"
-            onClick={sendChanges}
-          >
-            Request changes
-          </Button>
-        )}
         <Button
           type="button"
           variant="ink"
           size="dock"
           className="h-[34px]"
-          disabled={liveStatic && pending}
+          // A request needs words saying what to change (10.69).
+          disabled={changes && !sendable}
           data-dock-step="decided"
-          onClick={suggested ? sendChanges : sendComment}
+          onClick={changes ? sendChanges : sendComment}
         >
-          {suggested ? "Send to implementer" : "Add comment"}
+          {changes ? "Send to implementer" : "Add comment"}
         </Button>
       </span>
     </DockMotion>
@@ -1086,8 +1176,10 @@ const DOCK_TRANSITION = regionTransition("desk-dock", 3)
 /**
  * Sticky decision dock at the bottom of the unit. It is the only place a
  * disposition is made, always per unit (never per lane), and it states its
- * scope: this unit's hunks, never the read-only neighbor. Suggested units
- * take Agree / Request changes; agentic and static units take a Comment.
+ * scope: this unit's hunks, never the read-only neighbor. Per lane (13.25):
+ * suggested units take Request changes and Approve (Agree when the agent
+ * approved); agentic units take Request changes or a Comment; static units
+ * show their check result only.
  *
  * It stays in flow at the end of the unit, so when the unit is scrolled to
  * its end the last code line sits a 24px gap above it (the content's bottom

@@ -58,10 +58,12 @@ import type {
  */
 
 /**
- * Decision dock. Human-required units: approve or request changes.
- * Suggested units: agree or request changes (overrides the agent's
- * approval). Agentic and static units: comment (context for the unit's
- * next cycle). Decisions are always per unit, never per lane.
+ * Decision dock (13.25). Human-required units: approve or request changes.
+ * Suggested units: approve or request changes at any time; approve is
+ * agree when the agent approved, and the person's decision overrides the
+ * agent's. Agentic units: request changes, or a comment (context for the
+ * unit's next cycle); approvals there are the agent's. Static units: their
+ * check result only. Decisions are always per unit, never per lane.
  */
 export type DockState =
   | "rest"
@@ -129,6 +131,8 @@ export interface ReviewDeskState {
   pendingUnit: string | null
   /** Seeds the per-viewer stored value (stories only). */
   railCollapsed?: boolean
+  /** What an open lane composer records (stories only; it defaults to a request). */
+  feedbackKind?: "request-changes" | "comment"
 }
 
 export const INITIAL_REVIEW_DESK_STATE: ReviewDeskState = {
@@ -322,6 +326,7 @@ export function reviewDeskHydration(state: Partial<ReviewDeskState>) {
     [generatedOpenAtom, s.generatedOpen],
     [openLanesAtom, s.openLanes],
     [pendingUnitAtom, s.pendingUnit],
+    [unitFeedbackKindAtom, s.feedbackKind ?? "request-changes"],
   ] as const
 }
 
@@ -544,17 +549,29 @@ export const approveAtom = atom(null, (_get, set) =>
     "approved"
   )
 )
+/** The attached marker a request sends; only the human-required composer shows one. */
+const requestAttachmentAtom = atom((get) =>
+  get(currentResponsibilityAtom)?.lane === "human-required"
+    ? get(attachmentAtom) || null
+    : null
+)
+/**
+ * Whether the open request has something to send. A request rests on a
+ * comment saying what to change (10.69): with no words and no attached
+ * comment there is nothing to send, and ⌘↵ hands focus nowhere.
+ */
+export const requestSendableAtom = atom(
+  (get) => get(draftAtom).trim() !== "" || get(requestAttachmentAtom) !== null
+)
 export const sendChangesAtom = atom(null, (get, set) => {
-  // Only the human-required composer shows an attached marker (decision dock).
-  const attachment =
-    get(currentResponsibilityAtom)?.lane === "human-required"
-      ? get(attachmentAtom)
-      : null
+  const attachment = get(requestAttachmentAtom)
+  const body = get(draftAtom).trim()
+  if (!get(requestSendableAtom)) return
   return set(
     submitDecisionAtom,
     {
       kind: "request-changes",
-      body: get(draftAtom).trim(),
+      body,
       ...(attachment ? { attachment } : {}),
     },
     "changes-requested"

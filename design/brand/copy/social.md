@@ -24,7 +24,7 @@ About 210 words.
 >
 > Today I'm open-sourcing Neuve, which I've been building for almost a year. Set it up in a repository, then give it a commit range. It states the change's goal and what done means, then splits the change into batches and smaller parts. Four agents look for problems: scope fit, correctness, risky edges and tests. Each finding is checked again in a fresh context before you see it, and each one you see cites the code it rests on. Each batch's summary links findings to the parts that hold them. You record your review in the review desk, with the code there whenever you want to read it.
 >
-> The point is agents and people working together, with people focusing only on the important parts. Today every part still comes to a person, with the agents' verified findings attached.
+> The point is agents and people working together, with people focusing only on the important parts. Agents decide the parts that don't need a person, and the parts that do come to one, with the agents' verified findings attached.
 >
 > It's early and MIT-licensed. It runs on macOS and Linux, and on Windows through WSL. Today, reviews run on your machine, with your own Anthropic or ChatGPT account. I'm curious to hear where code review hurts for you.
 >
@@ -43,7 +43,7 @@ About 210 words.
 >
 > Records are an append-only SQLite log in the repo's shared Git directory. Model calls go to your Anthropic API key or ChatGPT subscription. Neuve is MIT-licensed. Its host and channel packages are adapted from GitHub Next's Ace, and its graph engine is a fork of Entire Graph, both MIT-licensed too.
 >
-> How the work is shared: each part is meant to go to one of four review lanes, set by its complexity and how easy it is to validate, and moved by history and blast radius. Agents decide agentic work. On human-suggested work a decision the agents have made stands unless a person steps in, and human-required work waits for a person. That assessment isn't in today's runs: every part goes to human-suggested, the agents only request changes or comment, and each part still comes to a person.
+> How the work is shared: each part goes to one of four review lanes, set by its complexity and how easy it is to validate. Agents decide agentic work. On human-suggested work, a decision the agents have made stands unless a person steps in, and human-required work waits for a person. Anything no agent could judge goes to a person, with a note saying so.
 >
 > It's early. It runs on macOS and Linux, and on Windows through WSL, and review quality is still being tuned. We use Neuve to review Neuve. I'd most like to hear where it missed something you'd have caught, or flagged something that didn't matter.
 

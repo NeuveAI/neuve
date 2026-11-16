@@ -58,7 +58,8 @@ neuve review show --run <run-id> # read a finished review
 ## Where it's heading
 
 - **Heading:** The right reviewer for each part of a change
-- **Body:** Some parts of a change matter more than others. Neuve is designed to put each part in one of four review lanes: static automation, agentic review, human-suggested and human-required. Its complexity and how easy it is to validate set the lane, and history, outages and blast radius can move it. Agents decide agentic work. On human-suggested work, a decision the agents have made stands unless a person steps in. Human-required work waits for a person. Today's runs put every part in human-suggested, and the agents only request changes or comment, so each part still comes to you with the verified findings attached.
+- **Body:** Some parts of a change matter more than others. Neuve puts each part in one of four review lanes: static automation, agentic review, human-suggested review and human-required review. Its complexity and how easy it is to validate set the lane. Agents decide agentic work. On human-suggested work, a decision the agents have made stands unless a person steps in. Human-required work waits for a person.
+- **Today line** (beside the lane matrix): Agents approve agentic parts or request changes on them. A part no agent could judge comes to you, with a note saying so.
 
 ## Open source
 
