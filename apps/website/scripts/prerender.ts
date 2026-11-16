@@ -1,12 +1,14 @@
 /**
  * Fills dist/index.html with the rendered page, the meta tags and the inline
- * theme script, then writes dist/_headers with a CSP that allows that script
- * by its hash. Runs after `vite build` and `vite build --ssr`.
+ * theme script, writes dist/404.html, and copies the repository's installer to
+ * dist/install.sh. Runs after `vite build` and `vite build --ssr`. The CSP that
+ * allows the theme script by its hash is a load-balancer header, which
+ * scripts/deploy-gcp.ts checks before it uploads.
  */
 import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { headersFile } from "../src/build/csp";
 import { fill } from "../src/build/html";
+import { copyInstaller } from "../src/build/installer";
 
 const root = join(import.meta.dir, "..");
 const dist = join(root, "dist");
@@ -39,9 +41,9 @@ if (import.meta.main) {
   const html = fill(template, render(), firstScreenFonts());
   await Bun.write(join(dist, "index.html"), html);
   await Bun.write(join(dist, "404.html"), html);
-  await Bun.write(join(dist, "_headers"), headersFile(html));
+  copyInstaller(dist);
   rmSync(ssr, { recursive: true, force: true });
   console.log(
-    `prerendered dist/index.html (${html.length} bytes) and dist/_headers`,
+    `prerendered dist/index.html (${html.length} bytes) and dist/404.html, and copied dist/install.sh`,
   );
 }

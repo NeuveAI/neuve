@@ -38,20 +38,25 @@ export function csp(html: string): string {
   ].join("; ");
 }
 
-/** dist/_headers for Cloudflare's static assets. */
-export function headersFile(html: string): string {
+/**
+ * The headers every response carries. Cloud Storage can't set them on objects,
+ * so the load balancer's backend bucket adds them; scripts/deploy-gcp.ts checks
+ * them before each upload. Caching and content types are object metadata
+ * instead, which that script sets per file.
+ */
+export function securityHeaders(
+  html: string,
+): Array<[name: string, value: string]> {
   return [
-    "/*",
-    `  Content-Security-Policy: ${csp(html)}`,
-    "  X-Content-Type-Options: nosniff",
-    "  Referrer-Policy: strict-origin-when-cross-origin",
-    "  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()",
-    "  Cross-Origin-Opener-Policy: same-origin",
+    ["Content-Security-Policy", csp(html)],
+    ["X-Content-Type-Options", "nosniff"],
+    ["Referrer-Policy", "strict-origin-when-cross-origin"],
+    [
+      "Permissions-Policy",
+      "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    ],
+    ["Cross-Origin-Opener-Policy", "same-origin"],
     // For browsers that predate CSP frame-ancestors.
-    "  X-Frame-Options: DENY",
-    "",
-    "/assets/*",
-    "  Cache-Control: public, max-age=31536000, immutable",
-    "",
-  ].join("\n");
+    ["X-Frame-Options", "DENY"],
+  ];
 }

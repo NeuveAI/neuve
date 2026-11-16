@@ -8,6 +8,7 @@
     "dev": "bun --bun vite",
     "build": "bun --bun vite build && bun --bun vite build --ssr src/entry-server.tsx --outDir dist-ssr && bun scripts/prerender.ts",
     "preview": "bun --bun vite preview",
+    "deploy:gcp": "bun scripts/deploy-gcp.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun ../../scripts/test-budget.ts ./tests",
     "format": "prettier --write src tests scripts package.json tsconfig.json vite.config.ts index.html",

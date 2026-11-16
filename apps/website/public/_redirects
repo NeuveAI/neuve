@@ -1,4 +1,0 @@
-# Cloudflare static assets redirects (wrangler.jsonc serves dist/, which Vite copies this into).
-# The README's install line, `curl -fsSL https://neuve.ai/install.sh | sh`, fetches the installer
-# from the latest GitHub release; curl -L follows the 302.
-/install.sh https://github.com/NeuveAI/neuve/releases/latest/download/install.sh 302
