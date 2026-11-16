@@ -49,6 +49,12 @@ import {
 
 import { Effect } from "effect";
 import {
+  setup,
+  submit,
+  usage,
+} from "../../harness/tests/pi/stages/contract-fixture.ts";
+import { ContractContextCapture } from "../../harness/src/pi/capture/contract-types.ts";
+import {
   exportSnapshot,
   exportCapturedDump,
   captureRunDump,
@@ -673,6 +679,30 @@ test("the reader comes from its public export or says it is unavailable", async 
   });
 });
 
+// Why: a complete declaration without provider wire evidence must never enter scoring.
+for (const captureVersion of [undefined, 1, 2])
+  test(`contract capture version ${String(captureVersion)} is refused before scoring`, async () => {
+    const dump = restored(RUN_A);
+    const contexts = ["find", "verify"].map((stage) => ({
+      ...(captureVersion === undefined ? {} : { captureVersion }),
+      coverage: "no-wire-capture",
+      state: { contextKey: `${RUN_A}:1:${stage}` },
+    }));
+    const read = await readCandidateCapture(
+      `/x/portable/scored/${RUN_A}/s1`,
+      { runId: RUN_A, redaction: "portable" },
+      readerOf({
+        [RUN_A]: { ...dump, run: { ...dump.run, contractContexts: contexts } },
+      }),
+    );
+    const why =
+      captureVersion === 2
+        ? `unsupported contract capture version: ${RUN_A}:1:find (version 2), ${RUN_A}:1:verify (version 2); this adapter reads version 1`
+        : `no-wire-capture: contract contexts ${RUN_A}:1:find, ${RUN_A}:1:verify have no provider wire evidence; scoring refused`;
+    expect(read).toEqual({ status: "refused", why });
+    expect(captureBlockers(read)).toEqual([`capture refused: ${why}`]);
+  });
+
 /** Four sample cases: one each that compares, that runs another policy, whose baseline timed out, and a control whose capture is incomplete. */
 const writeCorpus = () => {
   // Case 1: the baseline caught t1 and missed t2; the candidate caught both. A repeat ran it too.
@@ -759,6 +789,83 @@ const manifests = async (
   );
   return { baseline, candidate, candidateSummary };
 };
+
+// Why: the typed refusal must reach the manifest's scoring eligibility, not just its capture field.
+test("a no-wire contract capture leaves no scorable candidate run", async () => {
+  writeCorpus();
+  writeCandidates();
+  process.env["NEUVE_TREATMENT_ROOT"] = treatment;
+  const sample = writeSample();
+  const baseline = join(base, "contract-baseline.json");
+  const candidate = join(base, "contract-candidate.json");
+  const dump = restored(RUN_B);
+  const why = `no-wire-capture: contract contexts ${RUN_B}:1:find have no provider wire evidence; scoring refused`;
+  const reader = readerOf({
+    [RUN_B]: {
+      ...dump,
+      run: {
+        ...dump.run,
+        contractContexts: [
+          {
+            captureVersion: 1,
+            coverage: "no-wire-capture",
+            state: { contextKey: `${RUN_B}:1:find` },
+          },
+        ],
+      },
+    },
+  });
+  const summary = await candidateMain(
+    [
+      "manifest",
+      "candidate",
+      "--sample",
+      sample,
+      "--run",
+      "candidate-1",
+      "--out",
+      candidate,
+    ],
+    { reader: async () => reader },
+  );
+  const manifest = Manifest.parse(JSON.parse(readFileSync(candidate, "utf8")));
+  expect(manifest.cases[0]?.runs[0]?.capture).toEqual({
+    status: "refused",
+    why,
+  });
+  expect(manifest.cases[0]?.runs[0]?.blockers).toEqual([
+    `capture refused: ${why}`,
+  ]);
+  expect(
+    manifest.cases
+      .flatMap((row) => row.runs)
+      .filter((run) => run.blockers.length === 0),
+  ).toEqual([]);
+  expect(summary).toContain('"scorable": 0');
+  await candidateMain([
+    "manifest",
+    "baseline",
+    "--sample",
+    sample,
+    "--floor",
+    "first:cloud-2",
+    "--out",
+    baseline,
+  ]);
+  const out = join(base, "contract-comparison");
+  await candidateMain(
+    ["compare", "--baseline", baseline, "--candidate", candidate, "--out", out],
+    { reader: async () => reader },
+  );
+  const report = JSON.parse(readFileSync(join(out, "compare.json"), "utf8"));
+  expect(report.tokens.ratios).toEqual({ read: null, output: null });
+  expect(report.parity.failed).toContainEqual(
+    expect.objectContaining({
+      caseId: "github:pingdotgg/t3code:1",
+      run: "candidate-1",
+    }),
+  );
+});
 
 const writeEffortCandidate = (
   effort: "low" | "medium",
@@ -1461,7 +1568,7 @@ test("a dangling output ancestor is refused without creating its research target
   expect(readdirSync(research)).toEqual(["cases"]);
 });
 
-const publicCaptureFixture = async () => {
+const publicCaptureFixture = async (nativeDatabase?: string) => {
   writeLabels(1, join(caseDir(1), "labels"), writeCase(1), ["t1"]);
   writeFirst(1, receipt(RUN_A));
   process.env["NEUVE_TREATMENT_ROOT"] = treatment;
@@ -1497,7 +1604,9 @@ const publicCaptureFixture = async () => {
   capture.close();
   const location = storeLocationIn(join(base, "capture-records"));
   const inStore = runIn(location);
-  const raw = value(await inStore(captureRunDump({ runId: RUN_B, journal })));
+  const raw = value(
+    await inStore(captureRunDump({ runId: RUN_B, journal, nativeDatabase })),
+  );
   value(await inStore(scanCaptures(location)));
   const dumped = value(
     await inStore(
@@ -1561,6 +1670,44 @@ const publicCaptureFixture = async () => {
   const restored = await Effect.runPromise(readSessionDump(dumped.directory));
   return { folder, directory: dumped.directory, restored, baseline, candidate };
 };
+
+// Why: inspection still needs the durable observations that scoring refuses.
+test("the public reader retains a contract capture that the evaluator refuses", async () => {
+  const w = await setup("evaluation-inspection", [
+    async (turn) => {
+      const call = submit(`submit-${turn.turnId}`, 2);
+      await turn.message([call], { usage });
+      await turn.charge(usage);
+      await turn.invoke(call, turn.signal);
+    },
+  ]);
+  try {
+    await w.start();
+    const { directory, restored } = await publicCaptureFixture(w.run.database);
+    const contexts = restored.run.contractContexts;
+    expect(contexts).toHaveLength(1);
+    expect(contexts?.[0]).toMatchObject({
+      captureVersion: 1,
+      coverage: "no-wire-capture",
+    });
+    const { captureVersion: _, ...legacy } = ContractContextCapture.parse(
+      contexts?.[0],
+    );
+    expect(ContractContextCapture.parse(legacy).captureVersion).toBe(1);
+    const reader = await loadSessionDumpReader();
+    const read = await readCandidateCapture(
+      directory,
+      { runId: RUN_B, redaction: "restricted" },
+      reader,
+    );
+    expect(read).toEqual({
+      status: "refused",
+      why: `no-wire-capture: contract contexts ${contexts?.[0]?.state.contextKey} have no provider wire evidence; scoring refused`,
+    });
+  } finally {
+    await w.close();
+  }
+});
 
 test("an unchanged public export with its normal tar verifies and retains its incomplete case", async () => {
   const { candidate, baseline } = await publicCaptureFixture();

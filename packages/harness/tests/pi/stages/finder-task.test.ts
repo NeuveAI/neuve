@@ -158,6 +158,7 @@ const testWorld = async (
     const services: StageServices = {
       ctx: base.ctx,
       registry,
+      runtimes: base.runtime.registry,
       clients,
       integrations: { status: "absent", path: "(none)" },
       capture: (event) => {

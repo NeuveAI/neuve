@@ -57,6 +57,7 @@ const setup = async (name: string) => {
     integrations,
     clients,
     registry: createRegistry(),
+    runtimes: w.runtime.registry,
     routes: {
       bindAgentRoute: async () => {
         throw new Error("No agent is called by Precompute");

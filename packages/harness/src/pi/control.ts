@@ -1,3 +1,4 @@
+import { accountReadRefused } from "@neuve/runtime";
 import type { Context } from "@earendil-works/chord";
 import { withCancel } from "@earendil-works/chord/context";
 import {
@@ -11,7 +12,21 @@ import {
   type TaskRuntime,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { heldFailure } from "./failure-policy.ts";
+import { Effect } from "effect";
+import { canonicalJson } from "@neuve/records-core";
+import {
+  RuntimeFailure,
+  type AccountName,
+  type ContinuationIdentity,
+  type RuntimeRegistryShape,
+} from "@neuve/runtime";
+import { z } from "zod";
+import {
+  contractHoldCorruption,
+  contractHoldNeedsNewerBuild,
+  contractHoldRecoversWhenReadable,
+  heldFailure,
+} from "./failure-policy.ts";
 import type { RouteFailure, RouteFailureKind } from "./providers/failure.ts";
 
 /**
@@ -36,7 +51,8 @@ export type HoldRecovery =
   | { readonly kind: "credential-restored" };
 
 /** One held step: what failed, and the nonce that was current when it held. */
-export type HeldStep = {
+export type PiHeldStep = {
+  readonly engine?: never;
   readonly conversationId: ConversationId;
   readonly failedSubmissionId: SubmissionId;
   readonly reason: string;
@@ -52,6 +68,68 @@ export type HeldStep = {
   /** Absent only in older persisted holds, which retain provider policy. */
   readonly recovery?: HoldRecovery;
 };
+
+const HeldRuntimeFailure = z.intersection(
+  RuntimeFailure,
+  z.record(z.string(), z.json()),
+);
+
+type ContractHeldPosition =
+  | {
+      readonly savedPhase: "open";
+      readonly continuation: ContinuationIdentity | null;
+    }
+  | {
+      readonly savedPhase: "running" | "final";
+      readonly continuation: ContinuationIdentity;
+    };
+
+export type ContractHeldStep = ContractHeldPosition & {
+  readonly engine: "contract";
+  /** Internal compatibility hold. Only a build able to preserve the context may resume it. */
+  readonly writeRefused?: true;
+  readonly conversationId?: never;
+  readonly failedSubmissionId?: never;
+  readonly failure: z.infer<typeof HeldRuntimeFailure>;
+  readonly account: AccountName;
+  readonly mode: "running" | "final";
+  readonly round: {
+    readonly id: string;
+    readonly prompt: string;
+    readonly attempt: number;
+  } | null;
+  readonly native: {
+    readonly sessionId: string;
+    readonly resumePoint: string | null;
+  } | null;
+  readonly reason: string;
+  readonly detail: string | null;
+  readonly nonceAtHold: string | null;
+  readonly recovery: { readonly kind: "explicit-account" | "provider-policy" };
+};
+export type HeldStep = PiHeldStep | ContractHeldStep;
+
+export async function enterContractHeld(
+  tx: Tx,
+  taskId: TaskId,
+  input: Omit<
+    ContractHeldStep,
+    "engine" | "nonceAtHold" | "failure" | "savedPhase" | "continuation"
+  > &
+    ContractHeldPosition & {
+      readonly failure: RuntimeFailure;
+    },
+) {
+  const doc = await tx.doc(RunControlDoc);
+  const held: ContractHeldStep = {
+    ...input,
+    failure: HeldRuntimeFailure.parse(input.failure),
+    engine: "contract",
+    nonceAtHold: doc.resumeNonce,
+  };
+  doc.held[String(taskId)] = held;
+  return held;
+}
 
 export type StopCause = "user-stop" | "cutoff" | "deadline" | "held-failure";
 
@@ -95,13 +173,13 @@ export const enterHeld = async (
     readonly settled: SettledSubmissionRecord;
     readonly failure?: RouteFailure | undefined;
   },
-): Promise<HeldStep> => {
+): Promise<PiHeldStep> => {
   if (input.settled.status !== "unanswered")
     throw new Error(
       `submission ${input.settled.id} was answered; there is nothing to hold for`,
     );
   const doc = await tx.doc(RunControlDoc);
-  const held: HeldStep = {
+  const held: PiHeldStep = {
     conversationId: input.conversationId,
     failedSubmissionId: input.settled.id,
     reason: input.settled.reason,
@@ -158,6 +236,9 @@ export const awaitResume = async (
   try {
     return await new Promise<Woken | "cutoff">((resolve, reject) => {
       const wake = (value: Readonly<RunControl> | null) => {
+        const current = value?.held[String(runtime.taskId)];
+        if (current !== undefined && contractHoldNeedsNewerBuild(current))
+          return;
         const nonce = value?.resumeNonce ?? null;
         if (nonce !== null && nonce !== held.nonceAtHold)
           resolve({ nonce, held });
@@ -165,7 +246,7 @@ export const awaitResume = async (
       wake(watch.value);
       watch.start(async (value) => wake(value));
       void watch.closed.then((end) => reject(new HeldWatchEnded(end.reason)));
-      if (until !== undefined)
+      if (until !== undefined && !contractHoldNeedsNewerBuild(held))
         runtime.sleep(until, timer.context).then(
           () => resolve("cutoff"),
           () => undefined,
@@ -194,30 +275,111 @@ export const resumeSubmission = (
  */
 export type ResumeAdmission = "none" | "committed" | "joined" | "blocked";
 
+// The stages bind their registry during restore, before the host admits an automatic resume.
+const resumeRuntimes = new WeakMap<
+  Pick<Harness, "commit">,
+  RuntimeRegistryShape
+>();
+export const registerResumeRuntimes = (
+  harness: Pick<Harness, "commit">,
+  runtimes: RuntimeRegistryShape,
+) => {
+  resumeRuntimes.set(harness, runtimes);
+};
+
 /**
  * The host's admission of one claim's resume nonce, before scheduling resumes. Every claim's nonce
  * is recorded, held steps or not, so a step that holds later in this claim records it and waits for
  * the next claim; reopening within the same claim wakes nothing. Steps whose task already ended (a
  * cut-off or an abort reached them while held) are dropped first.
  */
-export const admitResume = (
+export const admitResume = async (
   harness: Pick<Harness, "commit">,
   nonce: string,
   context: Context,
-): Promise<ResumeAdmission> =>
-  harness.commit(async (tx) => {
+  explicit?: { readonly runtimes: RuntimeRegistryShape },
+): Promise<ResumeAdmission> => {
+  const checked = new Map<string, string>();
+  const refused = new Map<string, string>();
+  const runtimes = explicit?.runtimes ?? resumeRuntimes.get(harness);
+  if (runtimes !== undefined) {
+    const held = await harness.commit(async (tx) => {
+      const entries = Object.entries((await tx.doc(RunControlDoc)).held);
+      for (const [, step] of entries) {
+        const corrupt = contractHoldCorruption(step);
+        if (corrupt !== undefined) throw corrupt;
+      }
+      return entries.flatMap(([id, step]) =>
+        step.engine === "contract" && !contractHoldNeedsNewerBuild(step)
+          ? [
+              {
+                id,
+                account: step.account,
+                fingerprint: canonicalJson(step),
+                explicit:
+                  step.recovery.kind === "explicit-account" &&
+                  !contractHoldRecoversWhenReadable(step),
+              },
+            ]
+          : [],
+      );
+    }, context);
+    for (const step of held) {
+      const capability = await Effect.runPromise(
+        runtimes.capabilities(step.account).pipe(Effect.result),
+        context.abortSignal === undefined
+          ? undefined
+          : { signal: context.abortSignal },
+      );
+      if (
+        capability._tag === "Failure" &&
+        accountReadRefused(capability.failure)
+      ) {
+        refused.set(step.id, step.fingerprint);
+        continue;
+      }
+      if (explicit === undefined || !step.explicit) continue;
+      const since = Date.now();
+      const result = await Effect.runPromise(
+        runtimes.probe(step.account).pipe(Effect.result),
+        context.abortSignal === undefined
+          ? undefined
+          : { signal: context.abortSignal },
+      );
+      if (result._tag === "Failure") continue;
+      const status = result.success;
+      if (
+        status.name !== step.account ||
+        Date.parse(status.checkedAt) < since ||
+        status.signIn.state !== "signed-in" ||
+        status.limits.some((limit) => limit.status === "rejected")
+      )
+        continue;
+      checked.set(step.id, step.fingerprint);
+    }
+  }
+  return harness.commit(async (tx) => {
     const doc = await tx.doc(RunControlDoc);
     for (const key of Object.keys(doc.held)) {
       const task = await tx.task(Number(key) as TaskId);
       if (task === undefined || task.state.status === "terminal")
         delete doc.held[key];
     }
+    for (const held of Object.values(doc.held)) {
+      const corrupt = contractHoldCorruption(held);
+      if (corrupt !== undefined) throw corrupt;
+    }
     if (doc.resumeNonce === nonce) return "joined";
     if (
-      Object.values(doc.held).some(
-        (held) =>
-          held.recovery?.kind !== "credential-restored" &&
-          !heldFailure([held]).retryable,
+      Object.entries(doc.held).some(([id, held]) =>
+        held.engine === "contract"
+          ? contractHoldNeedsNewerBuild(held) ||
+            refused.get(id) === canonicalJson(held) ||
+            (held.recovery.kind === "explicit-account" &&
+              !contractHoldRecoversWhenReadable(held) &&
+              checked.get(id) !== canonicalJson(held))
+          : held.recovery?.kind !== "credential-restored" &&
+            !heldFailure([held]).retryable,
       )
     )
       return "blocked";
@@ -225,6 +387,7 @@ export const admitResume = (
     doc.resumeNonce = nonce;
     return Object.keys(doc.held).length === 0 ? "none" : "committed";
   }, context);
+};
 
 /** The steps held in the current claim: they wait for the next one. */
 export const heldNow = (
@@ -233,7 +396,11 @@ export const heldNow = (
   control === null || control === undefined
     ? []
     : Object.entries(control.held)
-        .filter(([, held]) => held.nonceAtHold === control.resumeNonce)
+        .filter(
+          ([, held]) =>
+            held.nonceAtHold === control.resumeNonce ||
+            contractHoldNeedsNewerBuild(held),
+        )
         .map(([taskId, held]) => ({
           ...held,
           taskId: Number(taskId) as TaskId,
@@ -253,5 +420,6 @@ export const credentialLost = (
   harness.commit(async (tx) => {
     const doc = await tx.doc(RunControlDoc);
     for (const [id, held] of Object.entries(doc.held))
-      doc.held[id] = { ...held, recovery: { kind: "credential-restored" } };
+      if (held.engine !== "contract")
+        doc.held[id] = { ...held, recovery: { kind: "credential-restored" } };
   }, context);

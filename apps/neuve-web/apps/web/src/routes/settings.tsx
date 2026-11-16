@@ -1,3 +1,4 @@
+import { loadAccounts } from "@/server/accounts"
 import { createFileRoute } from "@tanstack/react-router"
 
 import { sampleWorkspaceLanguages } from "@workspace/ui/fixtures/delivery-languages.fixtures"
@@ -10,13 +11,18 @@ import { SettingsScreen } from "@workspace/ui/neuve/settings/settings-screen"
  * observes in the workspace until the backend carries them.
  */
 export const Route = createFileRoute("/settings")({
-  loader: () => ({ languages: sampleWorkspaceLanguages }),
+  loader: async () => ({
+    languages: sampleWorkspaceLanguages,
+    accounts: await loadAccounts(),
+  }),
   head: () => ({ meta: [{ title: "Review delivery · Settings · Neuve" }] }),
   component: SettingsRoute,
 })
 
 function SettingsRoute() {
-  const { languages } = Route.useLoaderData()
+  const { languages, accounts } = Route.useLoaderData()
   // The list is the sample fixture until the workspace reports its own.
-  return <SettingsScreen languages={languages} sampleLanguages />
+  return (
+    <SettingsScreen languages={languages} sampleLanguages accounts={accounts} />
+  )
 }

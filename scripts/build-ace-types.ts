@@ -29,6 +29,7 @@ const compiler = join(
 try {
   for (const path of [
     "packages/records-schema",
+    "packages/runtime",
     "services/directory",
     "packages/channel",
     "apps/neuve-host",

@@ -43,15 +43,16 @@ See [0002](decisions/0002-event-driven-processes.md) for the process model and [
 | [0005](decisions/0005-harness-pipeline.md)                        | The fixed review-shape trial: Frame, Map, four finders, Verify, code fill, Link and Publish, with bounded work and full range coverage.                                                       |
 | [0006](decisions/0006-hybrid-retrieval-and-context-references.md) | The semantic layer, then procedural enrichment, then agentic refinement, with one context-reference contract feeding the context margin. |
 | [0007](decisions/0007-batches-units-lanes-and-cycles.md)          | The established batch and lane policy, with the fixed-shape trial's proximity units, unassessed coverage and defect-only dispositions.                                                        |
-| [0008](decisions/0008-model-routes-and-budgets.md) | Sol 6.1 through ACP to Codex, or Opus 5.5 through the Anthropic API. Windows come from provider metadata. |
+| [0008](decisions/0008-model-routes-and-budgets.md) | Anthropic API and ChatGPT subscription routes freeze accounts and budgets while preserving legacy keys. Run configurations admit the Claude subscription route. |
 | [0009](decisions/0009-identity-without-auth.md) | No auth. Agents are identified by fingerprint and alias, and git credentials are enough. |
 | [0010](decisions/0010-release-and-distribution.md) | A binary distribution installed on the PATH. Tests never touch the installed binary, and end-to-end runs test the release. |
 | [0011](decisions/0011-zod-schemas.md) | Zod is the one schema library, and Effect consumes it. |
 | [0012](decisions/0012-stack-store.md) | A third kind of persistence: a user-level stack store of third-party sources and their indexes, outside Records, rebuildable and evicted. |
 | [0013](decisions/0013-graph-search-service.md) | Graph search runs in one shared instance per machine that schedules keyed units, prepares few bases and bounds its cache; the harness is its client and never waits on Graph without a bound. |
-| [0014](decisions/0014-ace-style-pi-harness.md)                    | Ace-style pi tasks and owned conversations within Effect and Bun, including the fixed-shape review graph, Records, Graph and retained evaluation baseline.                                    |
+| [0014](decisions/0014-ace-style-pi-harness.md)                    | Ace-style tasks within Effect and Bun, with pi conversations and isolated Claude Code loops behind the runtime contract. Claude stages are enabled.                                         |
 | [0015](decisions/0015-range-snapshot-and-git-reader.md) | A review reads a range snapshot that the Git reader makes; hunk text comes from Git rather than durable records. Accepted as the reference; not built. |
 | [0016](decisions/0016-shared-work.md) | Work more than one caller can ask for runs once per idempotency key, and every other caller subscribes to its response. The only design for it; not built across processes. |
+| [0017](decisions/0017-runtime-contract-and-accounts.md) | Named accounts and isolated runtime loops, with shared tools and stage policy. Claude stages are enabled; account removal and file-watch gaps stay explicit. |
 
 ## Keeping these records true
 

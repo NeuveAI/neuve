@@ -1,13 +1,14 @@
 import { OPENAI_BASE_URL } from "../../provider-urls.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { AnyRouteConfig } from "../../route.ts";
+import { requireDirectRoute, type DirectRouteConfig } from "../../route.ts";
 
 /**
  * The physical route's native descriptor, shared by registration and the coding host.
  * The ChatGPT plan has no token price. Its mandatory numeric rates are placeholders;
  * display prices only when `route.price !== null`, and account with Neuve's `costOf`.
  */
-export const routeModel = (route: AnyRouteConfig): Model<Api> => {
+export const routeModel = (configured: DirectRouteConfig): Model<Api> => {
+  const route = requireDirectRoute(configured);
   const common = {
     id: route.model,
     name: route.model,

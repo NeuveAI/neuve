@@ -1,3 +1,5 @@
+import { AccountStatus } from "@neuve/runtime/status"
+import { accountsAtom } from "@workspace/ui/neuve/settings/accounts-atoms"
 import * as React from "react"
 import {
   HeadContent,
@@ -133,6 +135,7 @@ function useLiveRecords(enabled: boolean) {
   const setStatus = useSetAtom(liveStatusAtom)
   const setMark = useSetAtom(liveMarkAtom)
   const setChange = useSetAtom(liveChangeAtom)
+  const setAccounts = useSetAtom(accountsAtom)
   // Effect: subscribes to the BFF's event stream, an external system, while the page shows Records.
   React.useEffect(() => {
     if (!enabled) {
@@ -171,6 +174,15 @@ function useLiveRecords(enabled: boolean) {
         setMark(live)
         setStatus({ kind: "live" })
       })
+      stream.addEventListener("accounts", (event) => {
+        listen()
+        try {
+          const parsed = AccountStatus.array().safeParse(JSON.parse(event.data))
+          if (parsed.success) setAccounts(parsed.data)
+        } catch {
+          // Keep the last full set when the event is not JSON.
+        }
+      })
       stream.addEventListener("heartbeat", listen)
       stream.addEventListener("error", drop)
     }
@@ -200,7 +212,7 @@ function useLiveRecords(enabled: boolean) {
       window.removeEventListener("online", resume)
       document.removeEventListener("visibilitychange", visible)
     }
-  }, [enabled, setChange, setMark, setStatus])
+  }, [enabled, setChange, setMark, setStatus, setAccounts])
 }
 
 /**

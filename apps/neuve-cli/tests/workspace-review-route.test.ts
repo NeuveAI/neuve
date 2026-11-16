@@ -59,7 +59,7 @@ for (const mode of ["hosted", "floor"]) {
         ROLLDOWN_WORKER_THREADS: process.env.ROLLDOWN_WORKER_THREADS ?? "4",
         RAYON_NUM_THREADS: process.env.RAYON_NUM_THREADS ?? "4",
         HOME: home,
-        TMPDIR: tmpdir(),
+        TMPDIR: directory,
         XDG_CONFIG_HOME: home,
         NEUVE_REPOSITORY: repository,
         NEUVE_BUDGET_DIRECTORY: budget,

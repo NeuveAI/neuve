@@ -44,6 +44,7 @@ const readerRoots = async () => {
       "@neuve/records-schema": ["packages/records-schema/src/index.ts"],
       "@neuve/records-core": ["packages/records-core/src/index.ts"],
       "@neuve/records-core/*": ["packages/records-core/src/*"],
+      "@neuve/runtime": ["packages/runtime/src/index.ts"],
       "@neuve/harness": ["packages/harness/src/index.ts"],
       "@neuve/harness/*": ["packages/harness/src/*"],
     },

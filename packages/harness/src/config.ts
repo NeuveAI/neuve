@@ -10,9 +10,17 @@ import {
   contextCeiling,
   runCutoff,
 } from "./budget.ts";
-import { Duration } from "effect";
+import { Duration, Effect } from "effect";
+import type { RuntimeRegistryShape } from "@neuve/runtime";
 import { ManifestSettings, defaultManifestSettings } from "./manifest.ts";
-import { OPUS_ROUTE, RouteConfig, computationRoute } from "./route.ts";
+import {
+  OPUS_ROUTE,
+  RouteConfig,
+  computationRoute,
+  routeAccount,
+  routeRuntimeError,
+  type AnyRouteConfig,
+} from "./route.ts";
 import type { RetrieverConfig } from "./retriever.ts";
 import { GRAPH_DEADLINE_MS, SearchConfig } from "./search-config.ts";
 import { BLOB_STRUCTURE_RECIPE, SECTIONS_RECIPE } from "./sections.ts";
@@ -170,6 +178,20 @@ export const PipelineConfig = z.strictObject({
 });
 export type PipelineConfig = z.infer<typeof PipelineConfig>;
 
+/** Refuse a frozen route whose account would run it through a different provider loop. */
+export const routeOwnsLoop = (
+  route: RouteConfig,
+  runtimes: Pick<RuntimeRegistryShape, "capabilities">,
+) =>
+  Effect.gen(function* () {
+    const account = routeAccount(route);
+    if (account === undefined) return false;
+    const { ownsLoop } = yield* runtimes.capabilities(account.name);
+    const error = routeRuntimeError(route, ownsLoop);
+    if (error !== undefined) return yield* error;
+    return ownsLoop;
+  });
+
 /**
  * The configuration a run of `generation` runs with, from the one its request froze: the test hold
  * applies only to a first run (generation 0). A follow-on's request copies its request's payload
@@ -242,6 +264,23 @@ export const defaultConfig = (
 export const precomputeSettings = (config: PipelineConfig) =>
   config.precompute ?? defaultManifestSettings(config.route.window);
 
+// Naming the account its credential already implies must preserve completed runs' keys.
+const keyedRoute = (route: AnyRouteConfig) => {
+  if (route.provider === "claude") return route;
+  const { account, ...legacy } = route;
+  const implied = routeAccount(legacy);
+  return account?.name === implied?.name && account?.kind === implied?.kind
+    ? legacy
+    : route;
+};
+
+/**
+ * The run configuration a published manifest stores, with the route keyed as the run key keys it:
+ * a route naming only the account its credential implies publishes the bytes an earlier build wrote.
+ */
+export const publishedConfig = (config: PipelineConfig): unknown =>
+  JSON.parse(JSON.stringify({ ...config, route: keyedRoute(config.route) }));
+
 /**
  * The run's computation key (proposal §1): the range's OIDs (never its branch name), the pipeline
  * version, the configuration and the route. It is the `review.run` job's key, with the generation.
@@ -257,7 +296,7 @@ export const runSpec = (
     JSON.stringify({
       budgets: config.budgets,
       stub: keyedStub(config.stub),
-      route: config.route,
+      route: keyedRoute(config.route),
       ...(config.precompute === undefined
         ? {}
         : { precompute: config.precompute }),

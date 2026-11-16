@@ -100,6 +100,7 @@ import {
   laneReviewStep,
 } from "../src/readings/steps.ts";
 import { mixedRange } from "./fixtures/readings.ts";
+import { testRuntimes } from "./pi/stages/fixture.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "pi-readings-task-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -396,6 +397,7 @@ const world = async (name: string, policy: Policy, wire?: Wire) => {
   }> = [];
   const services: StageServices = {
     ctx,
+    runtimes: testRuntimes().registry,
     routes: {
       bindAgentRoute: (input, c) => {
         binds.push({

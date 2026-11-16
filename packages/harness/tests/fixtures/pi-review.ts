@@ -1,3 +1,4 @@
+import { testRuntimes } from "../pi/stages/fixture.ts";
 import { runStageOutputs } from "../../src/stage-view.ts";
 // Boundary proof: real native tasks, git objects, Records and publisher; only the model is stubbed.
 import {
@@ -335,6 +336,7 @@ export const runReview = async (options: {
       events.push(event);
     },
     registry,
+    runtimes: testRuntimes().registry,
     integrations,
     clients,
     run: (effect, signal) =>

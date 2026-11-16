@@ -34,7 +34,7 @@ import {
 } from "node:fs";
 import { resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
-import { Cause, Effect, Layer, Logger, Option } from "effect";
+import { Cause, Effect, Layer, Logger, ManagedRuntime, Option } from "effect";
 import { z } from "zod";
 import { ReceiptLists, Ulid } from "@neuve/records-schema";
 import {
@@ -73,6 +73,8 @@ import {
   exportCapturedDump,
   readCapturedDump,
 } from "@neuve/harness/session-dump";
+import { AccountDirectory, RuntimeRegistry } from "@neuve/runtime";
+import { harnessRuntimes, workerRuntimeOptions } from "@neuve/harness/runtimes";
 import { execute, withStore, write } from "./records-cli.ts";
 import { startCaptureWorker } from "./worker-cli.ts";
 import { deskLinkLine } from "./review-desk-claim.ts";
@@ -81,7 +83,7 @@ import { requireRepositorySetup } from "./setup-status.ts";
 import { gitAvailability, gitRefusal } from "./git-available.ts";
 
 export const REVIEW_HELP = `Usage:
-  neuve review <base>..<head> [--route anthropic|openai] [--leads bm25|hybrid] [--detach] [--repo <path>]
+  neuve review <base>..<head> [--route <name>] [--leads bm25|hybrid] [--detach] [--repo <path>]
               Request a review of a commit range and follow its run. The request opens the
               range's review cycle (or joins it) and queues one review.run job; the worker runs
               it in the background, so closing the terminal does not stop it. --detach returns
@@ -152,9 +154,10 @@ its receipt. They are refused unless NEUVE_DEV_STUBS=1 is set:
   --stub-measure                  also record the provider measurements in the run log
 
 
---route picks the run's route: anthropic (${Route.OPUS_ROUTE.model}, the key from ${Route.OPUS_ROUTE.credentialVariable} in
-the worker's environment) or openai (${Route.SOL_ROUTE.model} on your ChatGPT plan, after neuve auth login openai).
-Without it, the route is the "review.route" in your Neuve settings, else anthropic. Either route
+--route picks the run's route: anthropic (${Route.OPUS_ROUTE.model}, the key from ${Route.routeCredentialVariable(Route.OPUS_ROUTE)} in
+the worker's environment), openai (${Route.SOL_ROUTE.model} on your ChatGPT plan, after neuve auth login openai),
+or the name of a Claude subscription account (Opus through its Claude Code sign-in).
+Without it, the route is the "review.route" in your Neuve settings, else anthropic. Every route
 runs at the "review.effort" in your Neuve settings (low, medium or high), else medium. A kind of
 step named in "review.stepEffort" (frame, map, find, verify, assess, lane-review or brief) runs at the
 effort given there instead. With the section readings on, Assess and Lane review that
@@ -981,106 +984,126 @@ export const requestRangeReview = async (
       : { turnLimit: Number(values["stub-turn-limit"]) }),
     ...(values["stub-measure"] === true ? { measure: true } : {}),
   });
-  // --route, else the user's settings, else the Anthropic route, at the settings' effort: the rule
-  // the web app's requests share through the request subpath (10.85).
-  const route = values.frozenConfig
-    ? values.frozenConfig.route
-    : values.route === undefined
-      ? Request.settingsRoute()
-      : Request.namedRoute(Route.RouteName.parse(values.route));
-  // --leads: keyword leads (the default while the lanes climb runs) or hybrid leads (10.119).
-  const leadsChoice = z.enum(["bm25", "hybrid"]).safeParse(values.leads);
-  if (values.leads !== undefined && !leadsChoice.success)
-    throw new Error(
-      `--leads takes bm25 or hybrid, not ${JSON.stringify(values.leads)}`,
-    );
-  const leads = leadsChoice.success ? leadsChoice.data : undefined;
-  const location = await execute(resolveStoreLocation(repository));
-  const admitted = await execute(
-    withStore(repository, "create", (store) =>
+  const runtimeOptions = workerRuntimeOptions();
+  const runtime = ManagedRuntime.make(
+    harnessRuntimes(runtimeOptions).pipe(
+      Layer.provideMerge(runtimeOptions.accountDirectory),
+    ),
+  );
+  try {
+    const { directory, registry } = await runtime.runPromise(
       Effect.gen(function* () {
-        const request = yield* Request.requestReview({
-          location: store,
-          repository,
-          range: rangeText,
-          ...(values.requestId ? { requestId: values.requestId } : {}),
-          ...(values.frozenConfig ? { frozenConfig: values.frozenConfig } : {}),
-          ...(values.scopeSource ? { scopeSource: values.scopeSource } : {}),
-          ...(values.origin ? { origin: values.origin } : {}),
-          ...(values.externalSources
-            ? { externalSources: values.externalSources }
-            : {}),
-          requester: values.requester ?? (yield* requester(store, repository)),
-          stub,
-          route,
-          ...(leads === undefined ? {} : { leads }),
-        });
-        const queue = yield* JobQueue.JobQueue;
-        const jobs = yield* queue.list({
-          states: ["waiting", "delayed", "active", "completed", "failed"],
-          limit: 10_000,
-        });
-        const job = jobs.find(
-          (candidate) => candidate.dedupeKey === request.dedupeKey,
-        );
-        if (job === undefined) {
-          // A newer build queued this range's review under its own job kind (8.19).
-          const newer = yield* JobQueue.newerJob({
-            dedupeKey: request.dedupeKey,
+        return {
+          directory: yield* AccountDirectory,
+          registry: yield* RuntimeRegistry,
+        };
+      }),
+    );
+    const route = values.frozenConfig
+      ? values.frozenConfig.route
+      : values.route === undefined
+        ? Request.settingsRoute()
+        : await execute(Request.resolveNamedRoute(values.route, directory));
+    // --leads: keyword leads (the default while the lanes climb runs) or hybrid leads (10.119).
+    const leadsChoice = z.enum(["bm25", "hybrid"]).safeParse(values.leads);
+    if (values.leads !== undefined && !leadsChoice.success)
+      throw new Error(
+        `--leads takes bm25 or hybrid, not ${JSON.stringify(values.leads)}`,
+      );
+    const leads = leadsChoice.success ? leadsChoice.data : undefined;
+    const location = await execute(resolveStoreLocation(repository));
+    const admitted = await execute(
+      withStore(repository, "create", (store) =>
+        Effect.gen(function* () {
+          const request = yield* Request.requestReview({
+            runtimes: registry,
+            location: store,
+            repository,
+            range: rangeText,
+            ...(values.requestId ? { requestId: values.requestId } : {}),
+            ...(values.frozenConfig
+              ? { frozenConfig: values.frozenConfig }
+              : {}),
+            ...(values.scopeSource ? { scopeSource: values.scopeSource } : {}),
+            ...(values.origin ? { origin: values.origin } : {}),
+            ...(values.externalSources
+              ? { externalSources: values.externalSources }
+              : {}),
+            requester:
+              values.requester ?? (yield* requester(store, repository)),
+            stub,
+            route,
+            ...(leads === undefined ? {} : { leads }),
           });
-          if (Option.isNone(newer))
-            return yield* Effect.die(
-              new Error(`no job with key ${request.dedupeKey}`),
-            );
-          return { request, job: newer.value, newer: true as const };
-        }
-        // Hybrid leads still being prepared for the range's commits (a measured review waits for 0).
-        // The request is already recorded: a count that cannot be read never fails it.
-        const hybrid =
-          Config.precomputeSettings(request.config).retriever.id === "hybrid"
-            ? yield* Effect.result(
-                HarnessCommitHybrid.pendingHybrid(repository, request.range),
-              )
-            : undefined;
-        return { request, job, hybrid, newer: false as const };
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            JobQueue.layer,
-            Computations.layer.pipe(Layer.provideMerge(Blobs.layer(store))),
+          const queue = yield* JobQueue.JobQueue;
+          const jobs = yield* queue.list({
+            states: ["waiting", "delayed", "active", "completed", "failed"],
+            limit: 10_000,
+          });
+          const job = jobs.find(
+            (candidate) => candidate.dedupeKey === request.dedupeKey,
+          );
+          if (job === undefined) {
+            // A newer build queued this range's review under its own job kind (8.19).
+            const newer = yield* JobQueue.newerJob({
+              dedupeKey: request.dedupeKey,
+            });
+            if (Option.isNone(newer))
+              return yield* Effect.die(
+                new Error(`no job with key ${request.dedupeKey}`),
+              );
+            return { request, job: newer.value, newer: true as const };
+          }
+          // Hybrid leads still being prepared for the range's commits (a measured review waits for 0).
+          // The request is already recorded: a count that cannot be read never fails it.
+          const hybrid =
+            Config.precomputeSettings(request.config).retriever.id === "hybrid"
+              ? yield* Effect.result(
+                  HarnessCommitHybrid.pendingHybrid(repository, request.range),
+                )
+              : undefined;
+          return { request, job, hybrid, newer: false as const };
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              JobQueue.layer,
+              Computations.layer.pipe(Layer.provideMerge(Blobs.layer(store))),
+            ),
           ),
         ),
       ),
-    ),
-  );
-  if (admitted.newer) return { ...admitted, location, route };
-  const { request } = admitted;
-  const { job, hybrid } = admitted;
-  const runId = job.eventId ?? "?";
-  const started =
-    job.state === "completed" || job.state === "failed"
-      ? undefined
-      : RouteProvider.credentialPresent(route)
-        ? await Effect.runPromise(
-            Effect.result(
-              Starter.ensureWorker({
-                repository,
-                command: Starter.currentCliCommand(),
-                deferReady: true,
-              }),
-            ),
-          )
-        : undefined;
-  return {
-    request,
-    job,
-    hybrid,
-    location,
-    route,
-    runId,
-    started,
-    newer: false as const,
-  };
+    );
+    if (admitted.newer) return { ...admitted, location, route };
+    const { request } = admitted;
+    const { job, hybrid } = admitted;
+    const runId = job.eventId ?? "?";
+    const started =
+      job.state === "completed" || job.state === "failed"
+        ? undefined
+        : route.provider === "claude" || RouteProvider.credentialPresent(route)
+          ? await Effect.runPromise(
+              Effect.result(
+                Starter.ensureWorker({
+                  repository,
+                  command: Starter.currentCliCommand(),
+                  deferReady: true,
+                }),
+              ),
+            )
+          : undefined;
+    return {
+      request,
+      job,
+      hybrid,
+      location,
+      route,
+      runId,
+      started,
+      newer: false as const,
+    };
+  } finally {
+    await runtime.dispose();
+  }
 };
 
 const runRequest = async (

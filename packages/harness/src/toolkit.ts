@@ -1,4 +1,11 @@
 import type { Effect } from "effect";
+import type {
+  ToolCall,
+  ToolHints,
+  ToolOutcome as RuntimeToolOutcome,
+  ToolSpec as RuntimeToolSpec,
+} from "@neuve/runtime";
+export type { ToolHints } from "@neuve/runtime";
 import { z } from "zod";
 import {
   BUDGET_LINE_BYTES,
@@ -10,14 +17,6 @@ import {
 } from "./budget.ts";
 
 /** Shared tool specifications and provider schemas used by pi's native tool registrations. */
-
-/** The four MCP behaviour hints, always set. */
-export interface ToolHints {
-  readonly readOnly: boolean;
-  readonly destructive: boolean;
-  readonly idempotent: boolean;
-  readonly openWorld: boolean;
-}
 
 /** A read-only lookup at a fixed revision: the same arguments always give the same result. */
 export const READ_ONLY: ToolHints = {
@@ -60,13 +59,11 @@ export interface ChildRequest {
   readonly inputs: Readonly<Record<string, string>>;
 }
 
-/** What a tool handler returns: text for the agent, plus what telemetry records about it. */
-export interface ToolOutcome {
-  readonly text: string;
-  readonly paged?: boolean | undefined;
-  readonly empty?: boolean | undefined;
-  readonly error?: string | undefined;
-  /** A child task the call's answer starts (`ChildRequest`). */
+/**
+ * What a tool handler returns: the runtime contract's outcome (`@neuve/runtime`), plus a child task
+ * the call's answer starts (`ChildRequest`), which only the harness's own tools ask for.
+ */
+export interface ToolOutcome extends RuntimeToolOutcome {
   readonly child?: ChildRequest | undefined;
 }
 
@@ -85,22 +82,14 @@ export const READ_MANY_CAP = {
 /** The caps a tool result can have: no other size can be declared without a constant here. */
 export type ResultCap = typeof TOOL_RESULT_CAP | typeof READ_MANY_CAP;
 
-export interface ToolSpec<I = unknown> {
-  readonly name: string;
-  readonly description: string;
-  /** Absent for a tool that takes no input. */
-  readonly input?: z.ZodType<I> | undefined;
-  readonly hints: ToolHints;
-  readonly handle: (input: I) => Effect.Effect<ToolOutcome>;
+/** The runtime contract's tool (`@neuve/runtime`), with the harness's outcome and result cap. */
+export interface ToolSpec<I = unknown> extends Omit<
+  RuntimeToolSpec<I>,
+  "handle"
+> {
+  readonly handle: (input: I, call?: ToolCall) => Effect.Effect<ToolOutcome>;
   /** A larger result cap the tool declares (`ResultCap`); absent, 10.18's `TOOL_RESULT_CAP`. */
   readonly resultCap?: ResultCap | undefined;
-  /**
-   * Whether the provider enforces the input schema (strict tool use). Only submit tools are strict:
-   * the provider caps how many optional and union-typed parameters strict tools may hold together
-   * ("Schema is too complex"), and every other tool's input is parsed with zod anyway, an invalid
-   * input answered as data the agent can correct.
-   */
-  readonly strict?: boolean | undefined;
 }
 
 export const defineTool = <I>(spec: ToolSpec<I>): ToolSpec<unknown> =>

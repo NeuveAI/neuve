@@ -17,6 +17,13 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { nativeReviewCallbacks } from "./workspace-native-review";
 import { rearmWaitingReviews, keepWorkerFor } from "./review-worker";
 import { workspaceNativeSources } from "./workspace-native-sources.ts";
+import {
+  workspaceChatRuntime,
+  workspaceChatModels,
+  productionChatSources,
+  type ChatRuntimeSources,
+  type WorkerChatRuntime,
+} from "./workspace-chat-runtime.ts";
 import { configureRuntime } from "@ace/host/runtime-hooks";
 import { checkpointNativeAuthority } from "@neuve/harness/native-source-authority";
 import {
@@ -129,7 +136,10 @@ export function codingWorkerSetup(
     RouteModelsOptions,
     "auth" | "baseUrl" | "fetch" | "stallLimits"
   > = {},
+  chatSources?: ChatRuntimeSources,
 ): WorkerSetup {
+  const chatRuntimes = new Map<string, WorkerChatRuntime>();
+  const openingChats = new Map<string, Promise<WorkerChatRuntime>>();
   configureReviewPreparation(async (project, range) => {
     const job = await CommitPrepare.requestRangePreparation(project, range);
     await keepWorkerFor({ project, job });
@@ -333,8 +343,12 @@ export function codingWorkerSetup(
         throw error;
       }
     },
-    models(worker, defaults) {
-      return workspaceCaptureModels(defaults, {
+    async models(worker, defaults) {
+      const existing = chatRuntimes.get(worker.sessionId);
+      if (existing) return existing.models;
+      const pending = openingChats.get(worker.sessionId);
+      if (pending) return (await pending).models;
+      const models = workspaceCaptureModels(defaults, {
         ...transport,
         route,
         admission: admission(worker),
@@ -343,6 +357,22 @@ export function codingWorkerSetup(
         runId: worker.sessionId,
         sessionAffinity: worker.sessionId,
       });
+      const opening = workspaceChatRuntime(
+        models,
+        worker.stateDirectory,
+        chatSources,
+      );
+      openingChats.set(worker.sessionId, opening);
+      const runtime = await opening;
+      chatRuntimes.set(worker.sessionId, runtime);
+      return runtime.models;
+    },
+    extensions(worker) {
+      const runtime = chatRuntimes.get(worker.sessionId);
+      return {
+        extensions: runtime?.extensions ?? [],
+        ...(runtime ? { attach: runtime.attach } : {}),
+      };
     },
     nonTurnModels(worker, purpose, conversationId, defaults) {
       return workspaceCaptureModels(defaults, {
@@ -364,9 +394,11 @@ export function codingWorkerSetup(
       });
     },
     priced: (model) =>
-      model.provider === route.provider && model.modelId === route.model
-        ? route.price !== null
-        : true,
+      [...chatRuntimes.values()].some((runtime) => runtime.owns(model.provider))
+        ? false
+        : model.provider === route.provider && model.modelId === route.model
+          ? route.price !== null
+          : true,
     tool(worker, tool) {
       const prepare = routeToolArguments(route);
       return {
@@ -418,6 +450,14 @@ export function codingWorkerSetup(
       };
     },
     async close({ worker, reads }) {
+      const runtime =
+        chatRuntimes.get(worker.sessionId) ??
+        (await openingChats.get(worker.sessionId)?.catch(() => undefined));
+      await runtime?.close();
+      chatRuntimes.delete(worker.sessionId);
+      openingChats.delete(worker.sessionId);
+      if (!chatRuntimes.size && !openingChats.size)
+        await chatSources?.close?.();
       reviewSessions.get(worker.sessionId)?.close();
       reviewSessions.delete(worker.sessionId);
       const planning = planningSessions.get(worker.sessionId);
@@ -519,7 +559,18 @@ async function workspace(args: readonly string[]): Promise<number> {
     if (source === undefined)
       throw new Error("A workspace worker requires its launcher configuration");
     const storage = await validateStorageProfile(profile, { checkout: source });
-    await runWorker(codingWorkerSetup(storage));
+    await runWorker(
+      codingWorkerSetup(
+        storage,
+        undefined,
+        undefined,
+        productionChatSources({
+          home:
+            configuration.environment.HOME ??
+            (await import("node:os")).homedir(),
+        }),
+      ),
+    );
     return 0;
   }
   const remaining = [...args];
@@ -845,6 +896,17 @@ async function workspace(args: readonly string[]): Promise<number> {
       nativeSources: workspaceNativeSources(storage),
       channelProvenance: true,
     });
+    const chatSources = productionChatSources({
+      home: (await import("node:os")).homedir(),
+    });
+    const chatModels = await workspaceChatModels(undefined, chatSources);
+    abort.signal.addEventListener(
+      "abort",
+      () => void chatModels.close().finally(() => chatSources.close()),
+      {
+        once: true,
+      },
+    );
     host = await startHost({
       loopback: values.loopback ?? false,
       ...nativeReviewCallbacks(
@@ -876,8 +938,12 @@ async function workspace(args: readonly string[]): Promise<number> {
         {
           provider: route.provider,
           modelId: route.model,
-          efforts: getSupportedThinkingLevels(routeModel(route)),
+          efforts:
+            route.provider === "claude"
+              ? []
+              : getSupportedThinkingLevels(routeModel(route)),
         },
+        ...chatModels.current(),
       ],
       planningConnections() {
         const integrations = readIntegrations();

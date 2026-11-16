@@ -21,7 +21,8 @@
     "uqr": "0.1.3",
     "@ace/channel": "workspace:*",
     "@ace/host": "workspace:*",
-    "@ace/desktop": "workspace:*"
+    "@ace/desktop": "workspace:*",
+    "@neuve/runtime": "workspace:*"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.0",

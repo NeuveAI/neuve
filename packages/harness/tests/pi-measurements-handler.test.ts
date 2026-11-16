@@ -38,7 +38,12 @@ test("held, repeated and resumed handler claims count only their own calls and e
       join(import.meta.dir, "fixtures", "pi-handler-held.ts"),
     ],
     {
-      env: { ...env, HOME: join(root, "home"), SCENARIO_ROOT: root },
+      env: {
+        ...env,
+        HOME: join(root, "home"),
+        TMPDIR: root,
+        SCENARIO_ROOT: root,
+      },
       timeout: 110_000,
     },
   );

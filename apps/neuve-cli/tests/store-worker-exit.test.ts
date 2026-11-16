@@ -27,7 +27,11 @@ for (const mode of ["idle", "signal", "failure"] as const)
         "--idle-seconds",
         mode === "signal" ? "60" : "1",
       ],
-      { env: { ...process.env }, stdout: "pipe", stderr: "pipe" },
+      {
+        env: { ...process.env, HOME: root, TMPDIR: root },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
     );
     const out = new Response(child.stdout).text();
     const err = new Response(child.stderr).text();

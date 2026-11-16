@@ -1,10 +1,23 @@
 import { parseArgs } from "node:util";
-import { Effect } from "effect";
+import { homedir } from "node:os";
+import { Effect, Layer } from "effect";
+import {
+  AccountDirectory,
+  type AccountDirectoryShape,
+  type AccountStore,
+  type AccountStatus,
+  type RuntimeShape,
+  type SignInHint,
+} from "@neuve/runtime";
 import { Route, RouteProvider } from "@neuve/harness";
+import {
+  defaultClaudeWorkingFolder,
+  harnessRuntimes,
+} from "@neuve/harness/runtimes";
 import { write } from "./records-cli.ts";
 
 /**
- * `neuve auth`: the sign-in a model route needs (10.85). Only `openai` exists: OpenAI's "Sign in
+ * `neuve auth`: the sign-in a model route needs (10.85). `openai` keeps OpenAI's "Sign in
  * with ChatGPT", so the OpenAI route spends the owner's ChatGPT plan. The owner signs in in their
  * own browser; this command never sees a password, and never prints a token. `status` shows the
  * account and expiry only.
@@ -32,6 +45,19 @@ export const AUTH_HELP = `Usage:
               refuses to print to a terminal. It exits 75 when a later attempt can succeed. A
               machine with no sign-in of its own runs reviews with NEUVE_OPENAI_TOKEN_COMMAND set
               to the absolute path of a program that prints such a lease, kept in memory only.
+
+  neuve auth list [--check] [--json]
+              Show each account's sign-in state and limits. --check checks without spending usage.
+  neuve auth status <account> [--check] [--json]
+              Show one account's saved state, or check it now.
+  neuve auth add claude <name>
+  neuve auth add chatgpt <name>
+              Add a separate sign-in and print the command to sign in.
+  neuve auth login <account> [--print]
+              Sign in using the account's own command. --print only shows the command.
+  neuve auth remove <account> [--force]
+              Stop use, sign out, then remove the sign-in. --force allows removal when
+              Claude Code is missing; its sign-in may remain in the Keychain.
 
 Usage limits and the apps allowed to use your plan are at https://chatgpt.com/settings/usage.`;
 
@@ -75,7 +101,288 @@ const expectOpenAi = (provider: string | undefined, required: boolean) => {
     );
 };
 
-export const runAuthCli = async (args: readonly string[]): Promise<number> => {
+/** Auth uses the harness's runtime registration with this store and CLI home. */
+export const authRuntimes = ({
+  directory,
+  home,
+}: {
+  readonly directory: AccountDirectoryShape;
+  readonly home: string;
+}) =>
+  harnessRuntimes({
+    accountDirectory: Layer.succeed(AccountDirectory, directory),
+    claude: { cwd: defaultClaudeWorkingFolder(home) },
+  });
+
+export interface AuthCliOptions {
+  readonly runtimes?: ReadonlyArray<RuntimeShape>;
+  readonly home?: string;
+}
+
+/** Fixed argv and inherited streams keep Claude Code's sign-in bytes out of Neuve. */
+export const claudeLoginOptions = (
+  hint: Extract<SignInHint, { command: "claude auth login" }>,
+) =>
+  ({
+    env: { ...process.env, ...hint.environment },
+    stdio: ["inherit", "inherit", "inherit"],
+  }) satisfies {
+    env: NodeJS.ProcessEnv;
+    stdio: ["inherit", "inherit", "inherit"];
+  };
+const accountDescription = (status: AccountStatus) => {
+  const signIn = status.signIn;
+  const state =
+    signIn.state === "signed-in" && signIn.sourceMatchesAccount === false
+      ? "signed in through another source, not this account's folder"
+      : signIn.state === "runtime-unavailable" || signIn.state === "unknown"
+        ? `${signIn.state}: ${signIn.reason}`
+        : signIn.state;
+  return `${status.name}  ${status.kind}  ${state}${status.limits
+    .map(
+      (limit) =>
+        `  ${limit.window}${limit.model === undefined ? "" : ` (${limit.model})`}: ${limit.status}${limit.utilization === undefined ? "" : ` ${Math.round(limit.utilization * 100)}%`}${limit.resetsAt === undefined ? "" : `, resets ${limit.resetsAt}`}`,
+    )
+    .join("")}`;
+};
+const removalMessages: Record<AccountStore.RemovalStep, string> = {
+  "admission-closed": "Stopped new use of the account.",
+  "sessions-closed": "Stopped this process's use of the account.",
+  "signed-out": "Signed out.",
+  "sign-out-skipped":
+    "Skipped sign-out because Claude Code is missing. The sign-in may remain in the Keychain.",
+  "folder-deleted": "Removed the account's folder.",
+  "record-dropped": "Removed the account.",
+};
+
+const runAccountCommand = async (
+  command: string,
+  positionals: string[],
+  values: {
+    check?: boolean;
+    json?: boolean;
+    print?: boolean;
+    force?: boolean;
+    "no-browser"?: boolean;
+  },
+  options: AuthCliOptions,
+) => {
+  const {
+    AccountName,
+    AccountStore,
+    RuntimeRegistry,
+    runtimeRegistryLayer,
+    signInCommand,
+  } = await import("@neuve/runtime");
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const home = options.home ?? homedir();
+        const store = yield* AccountStore.make(home);
+        return yield* Effect.gen(function* () {
+          const registry = yield* RuntimeRegistry;
+          const statuses = yield* AccountStore.makeStatuses(home, registry);
+          const output = (value: string) => Effect.promise(() => write(value));
+          if (command === "add") {
+            const kind = positionals[0];
+            const name = positionals[1];
+            if (
+              (kind !== "claude" && kind !== "chatgpt") ||
+              name === undefined ||
+              positionals.length !== 2
+            )
+              return yield* new AccountStore.StoreError({
+                message:
+                  "Use neuve auth add claude <name> or neuve auth add chatgpt <name>.",
+              });
+            const account = yield* store.add(kind, name);
+            yield* output(
+              signInCommand(
+                account.credential.kind === "claude-config-folder" &&
+                  account.credential.folder !== undefined
+                  ? {
+                      kind: "command",
+                      command: "claude auth login",
+                      environment: {
+                        CLAUDE_CONFIG_DIR: account.credential.folder,
+                      },
+                    }
+                  : {
+                      kind: "command",
+                      command: "neuve auth login",
+                      account: account.name,
+                    },
+              ) ?? "Set the key in Settings.",
+            );
+            return 0;
+          }
+          if (command === "list") {
+            const all = yield* values.check === true
+              ? statuses.checkAll
+              : statuses.read;
+            yield* output(
+              values.json === true
+                ? JSON.stringify(all)
+                : all.map(accountDescription).join("\n"),
+            );
+            return 0;
+          }
+          const name = AccountName.safeParse(positionals[0]);
+          if (!name.success)
+            return yield* new AccountStore.StoreError({
+              message: "Use a valid account name.",
+            });
+          if (command === "remove") {
+            yield* store.remove(name.data, registry, {
+              force: values.force === true,
+              onStep: (step) => output(removalMessages[step]),
+            });
+            return 0;
+          }
+          const account = yield* store.directory.lookup(name.data, "use");
+          if (account === undefined)
+            return yield* new AccountStore.StoreError({
+              message: "Account not found.",
+            });
+          const status =
+            values.check === true || command === "login"
+              ? yield* statuses.check(name.data)
+              : (yield* statuses.read).find(
+                  (status) => status.name === name.data,
+                );
+          if (status === undefined)
+            return yield* new AccountStore.StoreError({
+              message: "Account not found.",
+            });
+          if (command === "status") {
+            yield* output(
+              values.json === true
+                ? JSON.stringify(status)
+                : accountDescription(status),
+            );
+            return 0;
+          }
+          if (status.signIn.state === "signed-in") {
+            yield* output(accountDescription(status));
+            return 0;
+          }
+          if (status.signIn.state === "runtime-unavailable") {
+            // Key accounts still have no sign-in flow, as the original openai-only command reports.
+            if (
+              account.kind === "anthropic-api-key" ||
+              account.kind === "openai-api-key"
+            )
+              expectOpenAi(account.name, true);
+            yield* output(
+              status.signIn.reason === "not-installed"
+                ? "Claude Code isn't installed."
+                : accountDescription(status),
+            );
+            return 1;
+          }
+          const hint = "hint" in status.signIn ? status.signIn.hint : undefined;
+          if (hint === undefined) {
+            yield* output(accountDescription(status));
+            return 1;
+          }
+          if (
+            hint.kind === "settings" ||
+            values.print === true ||
+            process.stdin.isTTY !== true
+          ) {
+            yield* output(signInCommand(hint) ?? "Set the key in Settings.");
+            return 0;
+          }
+          if (hint.command === "claude auth login") {
+            const code = yield* Effect.acquireUseRelease(
+              Effect.try({
+                try: () =>
+                  Bun.spawn(
+                    ["claude", "auth", "login"],
+                    claudeLoginOptions(hint),
+                  ),
+                catch: () =>
+                  new AccountStore.StoreError({
+                    message: "Claude Code isn't installed or could not start.",
+                  }),
+              }),
+              (child) => Effect.promise(() => child.exited),
+              (child) =>
+                Effect.promise(async () => {
+                  if (child.exitCode !== null) return;
+                  child.kill("SIGTERM");
+                  const deadline = setTimeout(
+                    () => child.kill("SIGKILL"),
+                    2000,
+                  );
+                  try {
+                    await child.exited;
+                  } finally {
+                    clearTimeout(deadline);
+                  }
+                }),
+            );
+            const after = yield* statuses.check(name.data);
+            yield* output(accountDescription(after));
+            return code !== 0
+              ? code
+              : after.signIn.state === "signed-in"
+                ? 0
+                : 1;
+          }
+          if (
+            account.credential.kind !== "neuve-sign-in" ||
+            hint.account !== account.name
+          )
+            return yield* new AccountStore.StoreError({
+              message: "The sign-in command does not match the account.",
+            });
+          const authOptions = RouteProvider.OpenAiAuth.authOptionsFor(
+            account.credential,
+          );
+          const signedIn = yield* Effect.tryPromise({
+            try: () =>
+              RouteProvider.OpenAiAuth.signIn({
+                ...authOptions,
+                openBrowser: async (url) => {
+                  const opened =
+                    values["no-browser"] === true
+                      ? false
+                      : await openBrowser(url);
+                  await write(
+                    opened
+                      ? `Opened the browser to sign in with ChatGPT. If it did not open, visit:\n${url}\nWaiting for the browser (5 minutes)...`
+                      : `Visit this link to sign in with ChatGPT:\n${url}\nWaiting for the browser (5 minutes)...`,
+                  );
+                },
+              }),
+            catch: () =>
+              new AccountStore.StoreError({
+                message: "Could not finish signing in with ChatGPT.",
+              }),
+          });
+          yield* output(accountDescription(yield* statuses.check(name.data)));
+          return signedIn.planUsage ? 0 : 1;
+        }).pipe(
+          Effect.provide(
+            options.runtimes === undefined
+              ? authRuntimes({ directory: store.directory, home })
+              : runtimeRegistryLayer(options.runtimes).pipe(
+                  Layer.provide(
+                    Layer.succeed(AccountDirectory, store.directory),
+                  ),
+                ),
+          ),
+        );
+      }),
+    ),
+  );
+};
+
+export const runAuthCli = async (
+  args: readonly string[],
+  options: AuthCliOptions = {},
+): Promise<number> => {
   const [command, ...rest] = args;
   if (command === undefined || command === "--help" || command === "help") {
     await write(AUTH_HELP);
@@ -88,9 +395,26 @@ export const runAuthCli = async (args: readonly string[]): Promise<number> => {
       "no-browser": { type: "boolean" },
       check: { type: "boolean" },
       json: { type: "boolean" },
+      print: { type: "boolean" },
+      force: { type: "boolean" },
     },
   });
   const provider = positionals[0];
+  if (
+    command === "login" &&
+    provider === "anthropic" &&
+    options.runtimes === undefined
+  )
+    expectOpenAi(provider, true);
+  if (
+    command === "list" ||
+    command === "add" ||
+    command === "remove" ||
+    ((command === "status" || command === "login") &&
+      provider !== undefined &&
+      provider !== "openai")
+  )
+    return runAccountCommand(command, positionals, values, options);
   if (command === "login") {
     expectOpenAi(provider, true);
     const status = await RouteProvider.OpenAiAuth.signIn({

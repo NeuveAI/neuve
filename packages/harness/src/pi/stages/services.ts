@@ -9,6 +9,8 @@ import type { Blobs, Computations } from "@neuve/records-core";
 import type { Integrations } from "../../integrations.ts";
 import { McpClients } from "../../mcp-client.ts";
 import type { RunContext } from "../../pipeline.ts";
+import type { RuntimeRegistryShape } from "@neuve/runtime";
+import type { ContractSessionSlots } from "../session-slots.ts";
 import type { Capture } from "../capture/types.ts";
 import type { AgentRouteRuntime } from "../contracts.ts";
 
@@ -64,6 +66,9 @@ export interface StageServices {
   readonly capture: Capture;
   /** The harness's registry: the stages install one tool extension per agent kind in it. */
   readonly registry: Registry;
+  /** Account runtime capabilities, shared by every step in this attempt. */
+  readonly runtimes: RuntimeRegistryShape;
+  readonly contractSessions?: ContractSessionSlots;
   readonly integrations: Integrations;
   /** The run's MCP connections, one per server, closed by the runtime when the run ends (10.51). */
   readonly clients: McpClients["Service"];

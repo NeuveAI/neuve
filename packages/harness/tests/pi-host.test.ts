@@ -1005,7 +1005,9 @@ test("a provider failure holds the step across close; the same claim never wakes
     stages: { frame: "agent" },
   });
   const stillHeld = await again.host.ended(context);
-  const step = await again.host.harness.getTask(held.steps[0]!.taskId, context);
+  const piHeld = held.steps[0]!;
+  if (piHeld.engine === "contract") throw new Error("Expected a pi hold");
+  const step = await again.host.harness.getTask(piHeld.taskId, context);
   await again.host.close("held", context);
 
   expect([
@@ -1015,8 +1017,8 @@ test("a provider failure holds the step across close; the same claim never wakes
   ]).toEqual(["joined", "joined", "held"]);
   expect(step?.state.status !== "terminal" && step?.state.checkpoint).toEqual({
     phase: "held",
-    conversationId: held.steps[0]!.conversationId,
-    failedSubmissionId: held.steps[0]!.failedSubmissionId,
+    conversationId: piHeld.conversationId,
+    failedSubmissionId: piHeld.failedSubmissionId,
   });
   expect(requests.length).toBe(1);
 
@@ -1029,7 +1031,7 @@ test("a provider failure holds the step across close; the same claim never wakes
   });
   const done = await next.host.ended(context);
   const submissions = await next.storage.scanSubmissions(
-    { conversationId: held.steps[0]!.conversationId },
+    { conversationId: piHeld.conversationId },
     10,
     undefined,
     context,

@@ -96,6 +96,7 @@ import { indexOf } from "../src/retrievers.ts";
 import { searchRuntimeFrom } from "../src/search-config.ts";
 import { storedOutput } from "../src/search-index.ts";
 import { Settings } from "../src/settings.ts";
+import { testRuntimes } from "./pi/stages/fixture.ts";
 
 const ENGINE = "NEUVE_GRAPH_OUTLINE_EXECUTABLE";
 const engineBefore = process.env[ENGINE];
@@ -377,6 +378,7 @@ const setup = async (
   const noAgents = () => Promise.reject(new Error("no agents in this test"));
   const services: StageServices = {
     ctx,
+    runtimes: testRuntimes().registry,
     routes: { bindAgentRoute: noAgents, prepareFinalGeneration: noAgents },
     capture: () => {},
     registry,

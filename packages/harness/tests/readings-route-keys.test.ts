@@ -60,6 +60,7 @@ import {
   type RouteEffort,
 } from "../src/route.ts";
 import { mixedRange } from "./fixtures/readings.ts";
+import { testRuntimes } from "./pi/stages/fixture.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "readings-route-keys-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -213,6 +214,7 @@ const review = async (
       });
     const services: StageServices = {
       ctx,
+      runtimes: testRuntimes().registry,
       routes: {
         bindAgentRoute: (input, c) => routes().bindAgentRoute(input, c),
         prepareFinalGeneration: (input, c) =>

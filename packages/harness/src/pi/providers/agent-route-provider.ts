@@ -1,4 +1,8 @@
 import { logTimed } from "../../log-span.ts";
+import {
+  ClaudeSubscriptionTokenRefused,
+  isClaudeSubscriptionToken,
+} from "../../subscription-token.ts";
 import { CallTelemetry } from "../../call-telemetry.ts";
 import type { RunLog } from "../../run-log.ts";
 import { tokensOf } from "../capture/usage.ts";
@@ -50,6 +54,7 @@ import {
   signInProblem,
   type AuthOptions,
 } from "../../openai-auth.ts";
+import { requireDirectRoute, routeCredentialVariable } from "../../route.ts";
 import type {
   AnthropicRouteConfig,
   AnyRouteConfig,
@@ -210,10 +215,12 @@ const routeProvider = (
   options: RouteTransportOptions,
   id: string,
   dispatchOf: DispatchOf,
-): Provider =>
-  options.route.provider === "openai"
-    ? openAiProvider(options.route, options, id, dispatchOf)
-    : anthropicProvider(options.route, options, id, dispatchOf);
+): Provider => {
+  const route = requireDirectRoute(options.route);
+  return route.provider === "openai"
+    ? openAiProvider(route, options, id, dispatchOf)
+    : anthropicProvider(route, options, id, dispatchOf);
+};
 
 /** The provider to register with `Models.setProvider` for one agent conversation. */
 export const createAgentRouteProvider = (
@@ -245,6 +252,7 @@ export const createAgentRouteProvider = (
 export const createRouteModels = (
   options: RouteModelsOptions,
 ): MutableModels => {
+  requireDirectRoute(options.route);
   if (options.purpose !== undefined) {
     AuxiliaryPurpose.parse(options.purpose);
     CaptureScopeSchema.required({ conversationId: true }).parse({
@@ -1526,7 +1534,9 @@ const anthropicProvider = (
   dispatchOf: DispatchOf,
 ) => {
   const base = options.fetch ?? globalThis.fetch;
-  const variable = route.credentialVariable;
+  const variable = routeCredentialVariable(route);
+  if (isClaudeSubscriptionToken(process.env[variable]))
+    throw new ClaudeSubscriptionTokenRefused(variable);
   const descriptor = routeModel(route);
   const model = {
     ...descriptor,
@@ -1538,8 +1548,22 @@ const anthropicProvider = (
     context: TranscriptContext,
     streamOptions?: AnthropicOptions,
     requested: string | undefined = streamOptions?.effort,
-  ) =>
-    runCall({
+  ) => {
+    const headers = new Headers();
+    for (const [name, value] of Object.entries({
+      ...target.headers,
+      ...streamOptions?.headers,
+    }))
+      if (value !== null) headers.set(name, value);
+    if (
+      isClaudeSubscriptionToken(streamOptions?.apiKey) ||
+      isClaudeSubscriptionToken(headers.get("x-api-key") ?? undefined) ||
+      isClaudeSubscriptionToken(
+        headers.get("authorization")?.replace(/^Bearer\s+/i, ""),
+      )
+    )
+      throw new ClaudeSubscriptionTokenRefused(variable);
+    return runCall({
       log: options.log,
       route,
       model: target,
@@ -1558,9 +1582,7 @@ const anthropicProvider = (
           const invocation = {
             version: 1,
             api: "anthropic-messages",
-            authMode: streamOptions?.apiKey?.includes("sk-ant-oat")
-              ? "oauth"
-              : "non-oauth",
+            authMode: "non-oauth",
             options: {
               maxTokens: route.maxOutputTokens,
               cacheRetention: "long",
@@ -1630,6 +1652,7 @@ const anthropicProvider = (
         return { scope: dispatch.scope, open };
       },
     });
+  };
   const streams: ProviderStreams = {
     stream,
     streamSimple: (target, context, options?: SimpleStreamOptions) =>
@@ -1643,12 +1666,16 @@ const anthropicProvider = (
         name: variable,
         check: async ({ ctx }) => {
           const value = await ctx.env(variable);
+          if (isClaudeSubscriptionToken(value))
+            throw new ClaudeSubscriptionTokenRefused(variable);
           return value === undefined || value.trim() === ""
             ? undefined
             : { source: variable, type: "api_key" };
         },
         resolve: async ({ ctx }) => {
           const value = await ctx.env(variable);
+          if (isClaudeSubscriptionToken(value))
+            throw new ClaudeSubscriptionTokenRefused(variable);
           return value === undefined || value.trim() === ""
             ? undefined
             : { auth: { apiKey: value }, source: variable };

@@ -1,3 +1,4 @@
+import { accountReadRefused } from "@neuve/runtime";
 import { safeRead } from "@neuve/records-schema";
 import { readData } from "@neuve/records-core";
 import { randomUUID } from "node:crypto";
@@ -9,6 +10,8 @@ import {
 } from "../../stage-policy.ts";
 import {
   definePolicyTask as defineTask,
+  runtimeFailurePolicy,
+  contractHoldNeedsNewerBuild,
   heldFailure,
   isAccountFailure,
 } from "../failure-policy.ts";
@@ -31,6 +34,12 @@ import { Effect, Metric, Option } from "effect";
 import { z } from "zod";
 import { Computations } from "@neuve/records-core";
 import {
+  JsonSchema,
+  RuntimeFailure,
+  runtimeErrorToFailure,
+  runtimeFailureToError,
+} from "@neuve/runtime";
+import {
   MAX_CONTINUATIONS,
   MAX_INVALID_SUBMISSIONS,
   estimateTokens,
@@ -48,7 +57,17 @@ import {
   type StageRecord,
 } from "../../pipeline.ts";
 import { StepName } from "../../reader-text.ts";
-import { costOf, stepEffortOf, storedUsage } from "../../route.ts";
+import {
+  costOf,
+  routeAccount,
+  routeAtEffort,
+  stepEffortOf,
+  storedUsage,
+  zeroUsage,
+  routeRuntimeError,
+  type AnyRouteConfig,
+  type RouteAccount,
+} from "../../route.ts";
 import { METRICS } from "../../telemetry.ts";
 import { wireSchema } from "../../toolkit.ts";
 import {
@@ -57,7 +76,10 @@ import {
 } from "../providers/failure.ts";
 import {
   awaitResume,
+  RunControlDoc,
   enterHeld,
+  enterContractHeld,
+  type ContractHeldStep,
   holds,
   leaveHeld,
   resumeSubmission,
@@ -68,9 +90,11 @@ import {
   continueText,
   finalText,
   isRefusal,
+  MARK,
   outcomeOf,
   refusedText,
   scanSubmissions,
+  submissionOfError,
   submitNameOf,
   transcriptFacts,
   type AgentResult,
@@ -80,18 +104,14 @@ import {
 } from "./agent.ts";
 import {
   AgentContextDoc,
+  ContractContextDoc,
+  ContractPartialsDoc,
   AgentKind,
   RunToolsDoc,
   ToolState,
   type ToolDeclaration,
 } from "./docs.ts";
 import type { StageServices } from "./services.ts";
-import {
-  INTERRUPTED,
-  stepClaims,
-  type ClaimEnd,
-  type StepClaims,
-} from "./step-claim.ts";
 import {
   compareDeclarations,
   offeredTools,
@@ -101,6 +121,32 @@ import {
   wireTool,
   type ResolvedAgent,
 } from "./tools.ts";
+
+import {
+  ContractRecoveryFailed,
+  physicalTurnId,
+  retryContractRound,
+} from "./contract-recovery.ts";
+import { contractStep } from "./contract-step.ts";
+import {
+  INTERRUPTED,
+  stepClaims,
+  type ClaimEnd,
+  type StepClaims,
+} from "./step-claim.ts";
+import {
+  ContractState,
+  contractFacts,
+  contractStore,
+  ContractWriteRefused,
+  preserveContractState,
+} from "./contract-state.ts";
+
+export { RouteRuntimeMismatch } from "../../route.ts";
+
+/** Check provider agreement before selecting the stage's generation path. */
+export const stageRouteError = (route: AnyRouteConfig, ownsLoop: boolean) =>
+  routeRuntimeError(route, ownsLoop);
 
 /**
  * One agent context of a review stage as a native pi task (0014). It keys the step and reuses a
@@ -145,11 +191,27 @@ export type AgentStepInput = {
 type Estimate = { readonly estimated: number; readonly counted: number | null };
 
 type Running = {
+  readonly engine?: undefined;
   readonly startedAt: number;
   readonly conversationId: number;
   readonly estimate: Estimate | null;
   /** Turns the conversation held when this process first took the step up again. */
   readonly resumedTurns: number;
+};
+
+type ContractRunning = {
+  readonly engine: "contract";
+  readonly startedAt: number;
+  readonly estimate: Estimate | null;
+  readonly resumedTurns: number;
+  readonly conversationId?: undefined;
+};
+
+type ContractCheckpoint = ContractRunning & {
+  readonly phase: "contract";
+  readonly account: RouteAccount["name"];
+  readonly opening?: boolean;
+  readonly internalRetries?: boolean;
 };
 
 /** The submission the context is answering: its request ID and input, to find it again. */
@@ -182,11 +244,20 @@ export type AgentStepCheckpoint =
       readonly conversationId: number;
       readonly estimate: Estimate | null;
     }
+  | ContractCheckpoint
+  | {
+      readonly phase: "provider-held";
+      readonly engine: "contract";
+      readonly from: ContractCheckpoint;
+      readonly held: ContractHeldStep;
+      readonly failure: RuntimeFailure;
+    }
   | RunningCheckpoint
   | FinalCheckpoint
   | {
       /** Held for the provider (`control.ts`): `from` is the phase it resumes in, final mode kept. */
       readonly phase: "provider-held";
+      readonly engine?: undefined;
       readonly from: RunningCheckpoint | FinalCheckpoint;
       readonly failedSubmissionId: number;
       /** Why the provider did not answer, as the route recorded it on the failed turn. */
@@ -405,6 +476,31 @@ export const agentStepTask = (
     };
   };
 
+  const contractConversationOf = async (runtime: Runtime, context: Context) => {
+    const snapshot = await runtime.snapshot(
+      ContractContextDoc,
+      runtime.taskId,
+      context,
+    );
+    if (snapshot?.data == null)
+      return {
+        facts: transcriptFacts({
+          engine: "contract",
+          messages: [],
+          usage: zeroUsage,
+          eligibleCalls: new Set(),
+        }),
+        state: undefined,
+        doc: undefined,
+      };
+    const doc = await contractStore(runtime, context).read();
+    return {
+      facts: contractFacts(doc),
+      state: doc.toolState ?? undefined,
+      doc,
+    };
+  };
+
   /** The step's estimate of its first request (UN9, 10.35), with the route's count where it has one. */
   const estimate = async (
     agent: ResolvedAgent,
@@ -459,7 +555,7 @@ export const agentStepTask = (
   const finish = async (
     runtime: Runtime,
     step: Step,
-    at: Running,
+    at: Running | ContractRunning,
     ending: {
       readonly status: AgentResult<unknown>["status"];
       readonly endedBy: EndedBy;
@@ -471,26 +567,40 @@ export const agentStepTask = (
     },
     context: Context,
   ) => {
-    const conversation = await conversationOf(
-      runtime,
-      at.conversationId,
-      context,
-    );
+    const conversation =
+      at.engine === "contract"
+        ? await contractConversationOf(runtime, context)
+        : await conversationOf(runtime, at.conversationId, context);
     const { facts, state } = conversation;
     // The tools' state as the context left it, for the backstop, the partial and the composition.
     step.spec.state?.load(state, facts.turns);
     // What the step answered at the time, as recorded with each answer: each call of the submit
     // tool, then each final answer it refused and the one it ended on.
-    const answers = [
-      ...submitLabels(
-        step,
-        conversation.facts.calls,
-        (id) => conversation.applied[id]?.submission,
-      ),
-      ...((at as Running & Pick<Partial<FinalCheckpoint>, "refused">).refused ??
-        []),
-      ...(ending.answered === undefined ? [] : [ending.answered]),
-    ];
+    const answers =
+      "applied" in conversation
+        ? [
+            ...submitLabels(
+              step,
+              conversation.facts.calls,
+              (id) => conversation.applied[id]?.submission,
+            ),
+            ...((at as Running & Pick<Partial<FinalCheckpoint>, "refused">)
+              .refused ?? []),
+            ...(ending.answered === undefined ? [] : [ending.answered]),
+          ]
+        : [
+            ...submitLabels(step, conversation.facts.calls, (id) => {
+              const call = conversation.doc?.calls[id];
+              return call?.status === "completed"
+                ? submissionOfError(call.outcome.error)
+                : undefined;
+            }),
+            ...contractFinalOutcomes(
+              step,
+              conversation.doc,
+              ending.status !== "interrupted" && ending.finalGeneration,
+            ),
+          ];
     const output = ending.output;
     const result: AgentResult<unknown> = {
       agent: step.spec.agent,
@@ -502,7 +612,8 @@ export const agentStepTask = (
       turnLimit: step.spec.turnLimit,
       finalGeneration: ending.finalGeneration,
       usage: facts.usage,
-      costUsd: costOf(ctx.config.route, facts.usage),
+      costUsd:
+        at.engine === "contract" ? null : costOf(ctx.config.route, facts.usage),
       resumedTurns: at.resumedTurns,
       restarted: false,
       modelCalls: facts.turns,
@@ -594,18 +705,49 @@ export const agentStepTask = (
             : "completed",
       ...(record.note === undefined ? {} : { reason: record.note }),
     });
-    await runtime.commit(async (tx) => {
-      await leaveHeld(tx, runtime.taskId);
-      return record.status === "interrupted"
-        ? {
-            status: "terminal",
-            outcome: { status: "aborted", reason: cause, result: record },
+    const contract =
+      conversationId === undefined
+        ? await runtime.snapshot(ContractContextDoc, runtime.taskId, context)
+        : undefined;
+    await contractWrite(
+      runtime,
+      async (tx) => {
+        if (contract?.data != null) {
+          const state = readData(ContractState, contract.data, {
+            source: "neuve.contract-context",
+          });
+          const round = state.rounds.at(-1);
+          if (record.status === "interrupted" && round?.dispatched) {
+            state.settlements[physicalTurnId(round)] ??= round.outcome ?? {
+              status: "interrupted",
+            };
+            for (const [id, call] of Object.entries(state.calls))
+              if (call.status === "observed")
+                state.calls[id] = { status: "cancelled", eligible: false };
           }
-        : {
-            status: "terminal",
-            outcome: { status: "completed", result: record },
-          };
-    }, context);
+          (await tx.doc(ContractPartialsDoc)).contexts[String(runtime.taskId)] =
+            copyJson(
+              preserveContractState(
+                copyJson(
+                  (await tx.doc(ContractContextDoc, runtime.taskId)).data,
+                ),
+                state,
+              ),
+            );
+        }
+        await leaveHeld(tx, runtime.taskId);
+        return record.status === "interrupted"
+          ? {
+              status: "terminal",
+              outcome: { status: "aborted", reason: cause, result: record },
+            }
+          : {
+              status: "terminal",
+              outcome: { status: "completed", result: record },
+            };
+      },
+      context,
+    );
   };
 
   const fail = async (
@@ -616,9 +758,11 @@ export const agentStepTask = (
       readonly message: string;
       readonly retryable: boolean;
       readonly failure?: RouteFailure | undefined;
+      readonly reason?: string | undefined;
     },
     context: Context,
     conversationId?: number,
+    partial?: ContractState,
   ) => {
     // The work failed: waiters get this failure with the step's own retryability.
     await endClaim(runtime.taskId, {
@@ -632,19 +776,54 @@ export const agentStepTask = (
       status: "failed",
       reason: `${error.tag}: ${error.message}`.slice(0, 500),
     });
-    await runtime.commit(async (tx) => {
-      await leaveHeld(tx, runtime.taskId);
-      return {
-        status: "terminal",
-        outcome: {
-          status: "failed",
-          error: {
-            message: `${error.tag}: ${error.message}`,
-            detail: copyJson(error),
+    await contractWrite(
+      runtime,
+      async (tx) => {
+        if (partial !== undefined) {
+          const stored = (await tx.doc(ContractContextDoc, runtime.taskId))
+            .data;
+          (await tx.doc(ContractPartialsDoc)).contexts[String(runtime.taskId)] =
+            copyJson(preserveContractState(copyJson(stored), partial));
+        }
+        await leaveHeld(tx, runtime.taskId);
+        return {
+          status: "terminal",
+          outcome: {
+            status: "failed",
+            error: {
+              message: `${error.tag}: ${error.message}`,
+              detail: copyJson(error),
+            },
           },
-        },
-      };
-    }, context);
+        };
+      },
+      context,
+    );
+  };
+
+  const failContract = async (
+    runtime: Runtime,
+    step: Step,
+    error: Parameters<typeof fail>[2],
+    context: Context,
+  ) => {
+    const snapshot = await runtime.snapshot(
+      ContractContextDoc,
+      runtime.taskId,
+      context,
+    );
+    return fail(
+      runtime,
+      step,
+      error,
+      context,
+      undefined,
+      snapshot?.data == null
+        ? undefined
+        : readData(ContractState, snapshot.data, {
+            source: "neuve.contract-context",
+          }),
+    );
   };
 
   /**
@@ -655,7 +834,7 @@ export const agentStepTask = (
   const interrupted = async (
     runtime: Runtime,
     step: Step,
-    at: Running,
+    at: Running | ContractRunning,
     context: Context,
     cause: Interruption = "cutoff",
   ) => {
@@ -669,11 +848,13 @@ export const agentStepTask = (
         : {
             disclosure: `${StepName(step.spec.stage, step.spec.agent)} was stopped before it finished, so its part of the review is incomplete.`,
           };
-    const conversation = await runtime.conversation(
-      at.conversationId as ConversationId,
-      context,
-    );
-    await conversation?.abort(context);
+    if (at.engine !== "contract") {
+      const conversation = await runtime.conversation(
+        at.conversationId as ConversationId,
+        context,
+      );
+      await conversation?.abort(context);
+    }
     // Released only once the conversation is aborted, so no new holder starts beside its call.
     await endClaim(runtime.taskId, {
       tag: INTERRUPTED,
@@ -1034,7 +1215,7 @@ export const agentStepTask = (
     step: Step,
     startedAt: number,
     context: Context,
-    at: { readonly conversationId?: number } = {},
+    at: { readonly conversationId?: number; readonly contract?: true } = {},
   ) => {
     if (claims.holds(runtime.taskId)) return true;
     let answer = await claims.begin(
@@ -1089,7 +1270,9 @@ export const agentStepTask = (
       message: answer.message,
       retryable: answer.retryable,
     };
-    await fail(runtime, step, error, context, at.conversationId);
+    await (at.contract
+      ? failContract(runtime, step, error, context)
+      : fail(runtime, step, error, context, at.conversationId));
     return false;
   };
 
@@ -1201,6 +1384,133 @@ export const agentStepTask = (
             context,
           );
         await open(runtime, agent, task.state.checkpoint.startedAt, context);
+      },
+      contract: async (task, runtime, context) => {
+        const held = (await runtime.snapshot(RunControlDoc, context))?.held[
+          String(runtime.taskId)
+        ];
+        if (held !== undefined && contractHoldNeedsNewerBuild(held)) {
+          await awaitResume(runtime, context);
+          return;
+        }
+        const agent = await prepared(task, runtime, context);
+        const { step } = agent;
+        if (
+          !(await claimed(
+            runtime,
+            step,
+            task.state.checkpoint.startedAt,
+            context,
+            { contract: true },
+          ))
+        )
+          return;
+        if (task.state.checkpoint.opening)
+          return open(runtime, agent, task.state.checkpoint.startedAt, context);
+        const own = offeredTools(agent);
+        const kept = { frozen: own };
+        await runtime.commit(async (tx) => {
+          const tools = await tx.doc(RunToolsDoc);
+          const held = tools.kinds[task.input.kind];
+          if (held === undefined)
+            tools.kinds[task.input.kind] = {
+              step: runtime.taskId,
+              tools: [...own],
+            };
+          else
+            kept.frozen = held.tools.map((tool) => ({
+              ...tool,
+              parameters: z
+                .record(z.string(), z.json())
+                .parse(copyJson(tool.parameters)),
+            }));
+        }, context);
+        const compared = compareDeclarations(kept.frozen, own);
+        if (compared.status === "differs")
+          return failContract(
+            runtime,
+            step,
+            { tag: "ToolsDiffer", message: compared.detail, retryable: false },
+            context,
+          );
+        if (compared.status === "external")
+          ctx.log.write({
+            type: "gap",
+            kind: "integration-tools-changed",
+            agent: step.spec.agent,
+            detail: "The step retains the run's frozen integration tools.",
+            cause: compared.changed.join(", "),
+          });
+        let ending;
+        try {
+          // The contract engine's dispatch gate: every runtime turn starts inside `contractStep`,
+          // which runs only in this phase and only while this process holds the step's claim.
+          await claims.granted(runtime.taskId, runtime.signal);
+          ending = await contractStep({
+            port: runtime,
+            context,
+            agent,
+            kind: task.input.kind,
+            frozen: kept.frozen,
+            account: task.state.checkpoint.account,
+            services,
+            // At the step's effort, as its key is (`agentStageSpec`), so its requests follow it.
+            route: routeAtEffort(
+              ctx.config.route,
+              stepEffortOf(ctx.config.route, step.spec.stage, step.spec.effort),
+            ),
+            startedAt: task.state.checkpoint.startedAt,
+            cutoffAt: task.input.cutoffAt,
+          });
+        } catch (error) {
+          if (error instanceof ContractWriteRefused)
+            return holdContractWrite(runtime, context);
+          if (runtime.signal.aborted) throw error;
+          if (error instanceof ContractRecoveryFailed)
+            return failContract(
+              runtime,
+              step,
+              {
+                tag: error._tag,
+                reason: error.reason,
+                message: error.message,
+                retryable: false,
+              },
+              context,
+            );
+          const failure = RuntimeFailure.safeParse(
+            typeof error === "object" && error !== null ? { ...error } : error,
+          );
+          if (
+            failure.success &&
+            runtimeFailurePolicy(failure.data).action === "hold"
+          )
+            return holdContract(
+              runtime,
+              agent,
+              task.state.checkpoint,
+              failure.data,
+              context,
+            );
+          return failContract(
+            runtime,
+            step,
+            {
+              ...(failure.success ? failure.data : {}),
+              tag: failure.success
+                ? failure.data._tag
+                : "ContractProtocolFailure",
+              message: failure.success
+                ? runtimeFailureToError(failure.data).message
+                : "the runtime failed unexpectedly",
+              retryable: false,
+            },
+            context,
+          );
+        }
+        if (ending.status === "interrupted")
+          return interrupted(runtime, step, task.state.checkpoint, context);
+        return store(runtime, step, task.state.checkpoint, ending, context);
       },
       bind: async (task, runtime, context) => {
         using phaseSpan = scopedLogSpan(ctx.log, "harness.pi.phase", {
@@ -1643,6 +1953,35 @@ export const agentStepTask = (
         });
 
         const { step } = await prepared(task, runtime, context);
+        if (task.state.checkpoint.engine === "contract") {
+          const { from } = task.state.checkpoint;
+          const woken = await awaitResume(
+            runtime,
+            context,
+            task.input.cutoffAt,
+          );
+          if (woken === "cutoff")
+            return interrupted(runtime, step, from, context);
+          await contractWrite(
+            runtime,
+            async (tx) => {
+              const doc = await tx.doc(ContractContextDoc, runtime.taskId);
+              if (doc.data !== null) {
+                const state = readData(ContractState, doc.data, {
+                  source: "neuve.contract-context",
+                });
+                retryContractRound(state);
+                doc.data = copyJson(
+                  preserveContractState(copyJson(doc.data), state),
+                );
+              }
+              await leaveHeld(tx, runtime.taskId);
+              return { status: "running", checkpoint: from };
+            },
+            context,
+          );
+          return;
+        }
         const { from, failedSubmissionId } = task.state.checkpoint;
         const woken = await awaitResume(runtime, context, task.input.cutoffAt);
         if (woken === "cutoff")
@@ -1673,11 +2012,20 @@ export const agentStepTask = (
      * committed.
      */
     abort: async (task, runtime, context) => {
+      const held = (await runtime.snapshot(RunControlDoc, context))?.held[
+        String(runtime.taskId)
+      ];
+      if (held !== undefined && contractHoldNeedsNewerBuild(held)) {
+        await awaitResume(runtime, context);
+        return;
+      }
       const checkpoint = task.state.checkpoint;
       const { step } = await prepared(task, runtime, context);
       // What stopped it: the run's cut-off once it passed, otherwise its owner's abort.
       const cause: Interruption =
         runtime.now() >= task.input.cutoffAt ? "cutoff" : "aborted";
+      if (checkpoint.phase === "contract")
+        return interrupted(runtime, step, checkpoint, context, cause);
       if (checkpoint.phase === "running" || checkpoint.phase === "final")
         return interrupted(runtime, step, checkpoint, context, cause);
       if (checkpoint.phase === "provider-held")
@@ -1716,6 +2064,206 @@ export const agentStepTask = (
     },
   });
 
+  async function contractWrite(
+    runtime: Runtime,
+    change: Parameters<Runtime["commit"]>[0],
+    context: Context,
+  ) {
+    try {
+      await runtime.commit(change, context);
+    } catch (error) {
+      if (!(error instanceof ContractWriteRefused)) throw error;
+      await holdContractWrite(runtime, context);
+    }
+  }
+
+  async function holdContractWrite(runtime: Runtime, context: Context) {
+    // Held for a newer build: no verdict on the work, so its waiters claim again.
+    await endClaim(runtime.taskId, {
+      tag: "ContractWriteRefused",
+      message: "held for a newer build that can preserve this context",
+      retryable: false,
+      released: true,
+    });
+    await runtime.commit(async (tx, current) => {
+      const at = current.state.checkpoint;
+      const from = at.phase === "provider-held" ? at.from : at;
+      if (from.phase !== "contract")
+        throw new Error("A contract write requires a contract checkpoint");
+      const control = await tx.doc(RunControlDoc);
+      const existing = control.held[String(runtime.taskId)];
+      // A newer build's hold is opaque. Even its nonce must stay byte for byte.
+      if (existing !== undefined && contractHoldNeedsNewerBuild(existing))
+        return undefined;
+      const state = readData(
+        ContractState,
+        (await tx.doc(ContractContextDoc, runtime.taskId)).data,
+        { source: "neuve.contract-context" },
+      );
+      const round = state.rounds.at(-1);
+      const held =
+        existing?.engine === "contract"
+          ? { ...existing, writeRefused: true as const }
+          : await enterContractHeld(tx, runtime.taskId, {
+              writeRefused: true,
+              account: state.account,
+              continuation: state.continuation,
+              savedPhase: state.final ? "final" : "running",
+              mode: state.final ? "final" : "running",
+              round:
+                round === undefined
+                  ? null
+                  : {
+                      id: round.id,
+                      prompt: round.prompt,
+                      attempt: round.attempt,
+                    },
+              native: state.native,
+              failure: {
+                _tag: "TurnFailed",
+                account: state.account,
+                reason: "protocol-error",
+              },
+              reason: "contract-write-refused",
+              detail:
+                "This update cannot preserve newer fields; leave it to a newer build",
+              recovery: { kind: "provider-policy" },
+            });
+      control.held[String(runtime.taskId)] = held;
+      return {
+        status: "running",
+        checkpoint: {
+          phase: "provider-held",
+          engine: "contract",
+          from,
+          held,
+          failure: held.failure,
+        },
+      };
+    }, context);
+    // Abort handlers must also stay live until the host closes held. Returning would fault them.
+    await awaitResume(runtime, context);
+  }
+
+  async function holdContract(
+    runtime: Runtime,
+    agent: ResolvedAgent,
+    from: ContractCheckpoint,
+    failure: RuntimeFailure,
+    context: Context,
+    internalRetries?: boolean,
+  ) {
+    const snapshot = await runtime.snapshot(
+      ContractContextDoc,
+      runtime.taskId,
+      context,
+    );
+    const state =
+      snapshot?.data == null
+        ? undefined
+        : readData(ContractState, snapshot.data, {
+            source: "neuve.contract-context",
+          });
+    const position =
+      state === undefined && accountReadRefused(failure)
+        ? { savedPhase: "open" as const, continuation: null }
+        : {
+            savedPhase: from.opening
+              ? ("open" as const)
+              : state?.final
+                ? ("final" as const)
+                : ("running" as const),
+            continuation:
+              state?.continuation ??
+              (await services.run(
+                services.runtimes.continuation(from.account),
+                runtime.signal,
+              )),
+          };
+    const internallyRetried =
+      from.internalRetries ??
+      internalRetries ??
+      ((failure._tag === "TurnFailed" &&
+        (failure.reason === "provider-failed" ||
+          failure.reason === "provider-unavailable")) ||
+      (failure._tag === "RuntimeUnavailable" &&
+        failure.reason === "start-failed")
+        ? await services.run(
+            services.runtimes
+              .capabilities(from.account)
+              .pipe(Effect.map((capabilities) => capabilities.internalRetries)),
+            runtime.signal,
+          )
+        : false);
+    const policy = runtimeFailurePolicy(
+      failure,
+      state?.final,
+      internallyRetried,
+    );
+    // A step whose spec ends failed on an unanswered call holds only for the account.
+    if (
+      policy.action === "hold" &&
+      agent.step.spec.unanswered === "fail" &&
+      !isAccountFailure(failure)
+    )
+      return failContract(
+        runtime,
+        agent.step,
+        {
+          ...failure,
+          tag: failure._tag,
+          message: runtimeFailureToError(failure).message,
+          retryable: policy.retryable,
+        },
+        context,
+      );
+    // A hold may outlast this process, so it releases the claim (no verdict on the work). A
+    // failure ends it with the retryability the thrown error gets (`definePolicyTask`).
+    const thrown = runtimeFailureToError(failure);
+    await endClaim(runtime.taskId, {
+      tag: failure._tag,
+      message: thrown.message,
+      retryable:
+        policy.action === "hold"
+          ? policy.retryable
+          : !("retryable" in thrown) || thrown.retryable !== false,
+      released: policy.action === "hold",
+    });
+    if (policy.action !== "hold") throw thrown;
+    await runtime.commit(async (tx) => {
+      const round = state?.rounds.at(-1);
+      const held = await enterContractHeld(tx, runtime.taskId, {
+        failure,
+        account: from.account,
+        ...position,
+        mode: state?.final ? "final" : "running",
+        round:
+          round === undefined
+            ? null
+            : { id: round.id, prompt: round.prompt, attempt: round.attempt },
+        native: state?.native ?? null,
+        reason: failure._tag,
+        detail: runtimeFailureToError(failure).message,
+        recovery: {
+          kind:
+            policy.retryable || accountReadRefused(failure)
+              ? "provider-policy"
+              : "explicit-account",
+        },
+      });
+      return {
+        status: "running",
+        checkpoint: {
+          phase: "provider-held",
+          engine: "contract",
+          from,
+          held,
+          failure,
+        },
+      };
+    }, context);
+  }
+
   /** Creates the step's conversation, owned by it, and estimates its first request. */
   async function open(
     runtime: Runtime,
@@ -1733,6 +2281,79 @@ export const agentStepTask = (
       message: `${agent.step.spec.agent}: started`,
     });
     taken.add(runtime.taskId);
+    const route = ctx.config.route;
+    const account = routeAccount(route);
+    if (account !== undefined) {
+      const resolved = await services.run(
+        services.runtimes.capabilities(account.name).pipe(Effect.result),
+        runtime.signal,
+      );
+      if (resolved._tag === "Failure") {
+        const error = resolved.failure;
+        if (
+          account.kind === "claude-subscription" &&
+          runtimeFailurePolicy(runtimeErrorToFailure(error)).action === "hold"
+        )
+          return holdContract(
+            runtime,
+            agent,
+            {
+              phase: "contract",
+              engine: "contract",
+              startedAt,
+              estimate: null,
+              resumedTurns: 0,
+              account: account.name,
+              opening: true,
+            },
+            runtimeErrorToFailure(error),
+            context,
+            false, // Capability lookup failed before any session or request.
+          );
+        return fail(
+          runtime,
+          agent.step,
+          {
+            ...runtimeErrorToFailure(error),
+            tag: error._tag,
+            message: error.message,
+            retryable: false,
+          },
+          context,
+        );
+      }
+      const { ownsLoop } = resolved.success;
+      const error = stageRouteError(route, ownsLoop);
+      if (error !== undefined)
+        return fail(
+          runtime,
+          agent.step,
+          {
+            ...error,
+            tag: error._tag,
+            message: error.message,
+          },
+          context,
+        );
+      if (ownsLoop) {
+        await runtime.commit(
+          () => ({
+            status: "running",
+            checkpoint: {
+              phase: "contract",
+              engine: "contract",
+              startedAt,
+              estimate: null,
+              resumedTurns: 0,
+              account: account.name,
+              internalRetries: resolved.success.internalRetries,
+            },
+          }),
+          context,
+        );
+        return;
+      }
+    }
     const estimated = await estimate(agent, runtime.signal);
     await runtime.commit(async (tx) => {
       const conversation = await tx.createConversation({
@@ -1754,7 +2375,7 @@ export const agentStepTask = (
   async function store(
     runtime: Runtime,
     step: Step,
-    at: Running,
+    at: Running | ContractRunning,
     ending: Parameters<typeof finish>[3],
     context: Context,
   ) {
@@ -1801,6 +2422,38 @@ const submitLabels = (
       call.name === submitNameOf(step.spec) ? label(call.id) : undefined;
     return found === undefined ? [] : [found];
   });
+
+/**
+ * The contract engine's final answers, from its rounds: each final round a refusal round
+ * followed, then the last when the step `ended` on it, judged again as `contractStep` judged them.
+ */
+const contractFinalOutcomes = (
+  step: Step,
+  state: ContractState | undefined,
+  ended: boolean,
+) => {
+  if (state === undefined) return [];
+  const schema = JsonSchema.parse(wireSchema(step.spec.submit.schema).schema);
+  const judged = (round: ContractState["rounds"][number]) =>
+    outcomeOf(
+      parseOutput(step.spec)(
+        dropAddedNulls(
+          schema,
+          round.outcome?.status === "completed"
+            ? round.outcome.structuredOutput
+            : undefined,
+        ),
+      ),
+    );
+  const { rounds } = state;
+  return rounds.flatMap((round, index) =>
+    round.final &&
+    (rounds[index + 1]?.prompt.startsWith(MARK.invalid) === true ||
+      (ended && index === rounds.length - 1))
+      ? [judged(round)]
+      : [],
+  );
+};
 
 /** A stored summary as a stage record carries it; an older or foreign one is left out. */
 const StoredSummary = z

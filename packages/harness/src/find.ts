@@ -1,8 +1,18 @@
 import {
-  FindingAbout,
-  FindingKind,
-  FindingSignal,
-} from "@neuve/records-schema";
+  Finding,
+  ScopeFitSubmission,
+  type Anchor,
+  type HeadRead,
+  type FindSubmission,
+} from "./find-schema.ts";
+export {
+  Anchor,
+  Finding,
+  FinderSubmission,
+  ScopeFitSubmission,
+  FindSubmission,
+  HeadRead,
+} from "./find-schema.ts";
 import { createHash } from "node:crypto";
 import { Effect } from "effect";
 import { z } from "zod";
@@ -22,44 +32,6 @@ export const FINDERS = [
 export const Lens = z.enum(FINDERS);
 export type Lens = z.infer<typeof Lens>;
 export const FIND_READING_CHARS = 200_000;
-export const Anchor = z.strictObject({
-  path: z.string().min(1).max(4096),
-  side: z.enum(["old", "new"]),
-  startLine: z.int().min(1),
-  endLine: z.int().min(1),
-});
-export type Anchor = z.infer<typeof Anchor>;
-export const Finding = z.strictObject({
-  claim: z.string().min(1).max(300),
-  kind: FindingKind,
-  about: FindingAbout,
-  signal: FindingSignal.nullable(),
-  critical: z.boolean(),
-  anchors: z.array(Anchor).min(1).max(4),
-  doneWhen: z.string().max(8).nullable(),
-  evidence: z.array(z.string().max(160)).max(8),
-});
-export type Finding = z.infer<typeof Finding>;
-export const FinderSubmission = z.strictObject({
-  findings: z.array(Finding).max(5),
-  notes: z.array(z.string().min(1).max(300)).max(3),
-});
-export type FinderSubmission = z.infer<typeof FinderSubmission>;
-export const ScopeFitSubmission = FinderSubmission.extend({
-  conditions: z
-    .array(
-      z.strictObject({
-        doneWhen: z.string().max(8),
-        verdict: z.enum(["met", "not-met", "needs-human"]),
-        anchors: z.array(Anchor).max(4),
-        note: z.string().min(1).max(300),
-      }),
-    )
-    .max(5),
-});
-export type ScopeFitSubmission = z.infer<typeof ScopeFitSubmission>;
-export const FindSubmission = ScopeFitSubmission.partial({ conditions: true });
-export type FindSubmission = z.infer<typeof FindSubmission>;
 /** A finding as Find stores it: its position, lens and primary hunk, set by code. */
 export const FoundFinding = Finding.extend({
   id: z.string(),
@@ -524,13 +496,6 @@ export const dedupeFindings = (
       kindRank[a.kind] - kindRank[b.kind],
   );
 };
-
-export const HeadRead = z.strictObject({
-  path: z.string(),
-  startLine: z.int(),
-  endLine: z.int(),
-});
-export type HeadRead = z.infer<typeof HeadRead>;
 
 /**
  * `read` recording the head lines it showed, which then count as read (`contextAnchor`). The lines

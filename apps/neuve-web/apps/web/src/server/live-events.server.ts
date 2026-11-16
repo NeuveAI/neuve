@@ -1,3 +1,6 @@
+import type { AccountStatus } from "@neuve/runtime"
+
+import { subscribeAccounts } from "./accounts.server"
 import { Effect, Option } from "effect"
 import { Log, ReviewProgress, Worker } from "@neuve/records-core"
 import type { StoreLocation } from "@neuve/records-core"
@@ -30,6 +33,7 @@ import type { RecordsChanges } from "./records-changes.server"
  * stream is state, not a log: each event carries an `id`, but the server reads no
  * `Last-Event-ID` and replays nothing. Every connection, first or reconnecting, starts with the
  * current mark, which is all a tab needs to catch up.
+ * Account sets follow the first mark.
  */
 
 /** A named heartbeat, so the page notices a connection that went quiet. It reads nothing. */
@@ -263,6 +267,13 @@ export function liveEvents(options: {
   readonly reader: () => MarkReader
   /** This process's own commits (`records.server.ts`). */
   readonly local?: (changed: () => void) => () => void
+  /**
+   * The account sets each tab follows (`accounts.server.ts`), sent after the tab's first mark;
+   * absent, a stream carries Records' marks only.
+   */
+  readonly accounts?: (
+    listener: (statuses: readonly AccountStatus[]) => void
+  ) => () => void
 }) {
   const listeners = new Set<Listener>()
   let session: Session | undefined
@@ -351,6 +362,10 @@ export function liveEvents(options: {
     let stop = () => {}
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
+        if (request.signal.aborted) {
+          controller.close()
+          return
+        }
         let open = true
         const send = (text: string) => {
           if (!open) return
@@ -360,11 +375,26 @@ export function liveEvents(options: {
             stop()
           }
         }
+        let firstMarkSent = false
+        let waitingAccounts: string | undefined
+        const stopAccounts =
+          options.accounts?.((accounts) => {
+            if (!open) return
+            const event = `event: accounts\ndata: ${JSON.stringify(accounts)}\n\n`
+            if (firstMarkSent) send(event)
+            else waitingAccounts = event
+          }) ?? (() => {})
         const unsubscribe = subscribe({
-          mark: (event) =>
+          mark: (event) => {
             send(
               `id: ${event.sequence}\nevent: records\ndata: ${JSON.stringify(event)}\n\n`
-            ),
+            )
+            firstMarkSent = true
+            if (waitingAccounts !== undefined) {
+              send(waitingAccounts)
+              waitingAccounts = undefined
+            }
+          },
           end: () => stop(),
         })
         // A transport keepalive: it reads nothing.
@@ -375,8 +405,10 @@ export function liveEvents(options: {
         stop = () => {
           if (!open) return
           open = false
+          waitingAccounts = undefined
           clearInterval(heartbeat)
           unsubscribe()
+          stopAccounts()
           try {
             controller.close()
           } catch {
@@ -405,6 +437,7 @@ export function liveEvents(options: {
 const live = liveEvents({
   changes: localRecordsChanges(storeLocation),
   reader: () => heldMarkReader(),
+  accounts: subscribeAccounts,
 })
 
 /** The event stream for one tab (`src/routes/api/events.ts`). */

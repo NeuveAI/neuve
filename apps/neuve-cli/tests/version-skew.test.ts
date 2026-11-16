@@ -69,6 +69,7 @@ const scratch = async () => {
 const scratchEnv = (home: string) => ({
   ...process.env,
   HOME: home,
+  TMPDIR: home,
   NEUVE_INSTALL_PREFIX: join(home, ".local"),
 });
 

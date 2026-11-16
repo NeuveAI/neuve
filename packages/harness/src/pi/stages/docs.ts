@@ -1,10 +1,9 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { defineDoc, type JsonObject } from "@earendil-works/pi-durable";
 import type { SubmissionOutcome } from "./agent.ts";
-import { z } from "zod";
-import { HeadRead } from "../../find.ts";
-import { FindSubmission } from "../../find.ts";
-import { HandleRegistryState } from "../../lookups.ts";
+import type { AgentKind } from "./contract-schema.ts";
+
+export { ToolState, AGENT_KINDS, AgentKind } from "./contract-schema.ts";
 
 /**
  * The review stages' durable state in pi's storage (0004, 0014). pi keeps every transcript entry
@@ -21,37 +20,6 @@ export type AppliedCall = {
   readonly terminate: boolean;
   readonly submission?: SubmissionOutcome;
 };
-
-/**
- * What an agent context's tools hold between calls: its handles, recorded findings, reading budget
- * and head reads. Validated when read back, so a stored value that no longer parses
- * fails the call instead of answering from a wrong registry.
- */
-export const ToolState = z.strictObject({
-  handles: HandleRegistryState.optional(),
-  reading: z.strictObject({ used: z.int().min(0) }).optional(),
-  findings: FindSubmission.optional(),
-  headReads: z.array(HeadRead).optional(),
-});
-export type ToolState = z.infer<typeof ToolState>;
-
-/** The agent kinds of the review, one tool extension each (tools.ts). */
-export const AGENT_KINDS = [
-  "scope-change",
-  "frame",
-  "map",
-  "find",
-  "verify",
-  // The section readings (NEU-148), and the check of a Lane review's defect claim: its own kind,
-  // since a kind's tool declarations are frozen by its first step and a claim's check has no tools.
-  "assess",
-  "lane-review",
-  "verify-claim",
-  // The briefing (NEU-148 round 27): a part of a reading group's sections, or a batch's digest.
-  "brief",
-] as const;
-export const AgentKind = z.enum(AGENT_KINDS);
-export type AgentKind = z.infer<typeof AgentKind>;
 
 /**
  * One agent conversation's own state, written by its agent step when it binds the conversation.
@@ -151,4 +119,22 @@ export const RunSetupDoc = defineDoc<{
   version: 1,
   scope: "session",
   initial: () => ({ setup: null, additions: [] }),
+});
+
+/** Contract execution stays in the owning task's SQLite document, with no pi conversation. */
+export const ContractContextDoc = defineDoc<{ data: JsonValue }>({
+  kind: "neuve.contract-context",
+  version: 1,
+  scope: "task",
+  initial: () => ({ data: null }),
+});
+
+/** Terminal contract contexts, including failed partials, outlive task-document retirement. */
+export const ContractPartialsDoc = defineDoc<{
+  contexts: { [taskId: string]: JsonValue };
+}>({
+  kind: "neuve.contract-partials",
+  version: 1,
+  scope: "session",
+  initial: () => ({ contexts: {} }),
 });

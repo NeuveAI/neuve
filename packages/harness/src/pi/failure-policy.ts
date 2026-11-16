@@ -1,3 +1,4 @@
+import { accountReadRefused } from "@neuve/runtime";
 import type { Context } from "@earendil-works/chord";
 import {
   defineTask,
@@ -6,6 +7,9 @@ import {
   type TaskRuntime,
 } from "@earendil-works/pi-durable";
 import { z } from "zod";
+import { RuntimeFailure } from "@neuve/runtime";
+import { safeRead } from "@neuve/records-schema";
+import { CorruptRecord } from "@neuve/records-core";
 import type { HeldStep } from "./control.ts";
 import type { RouteFailure, RouteFailureKind } from "./providers/failure.ts";
 
@@ -37,6 +41,116 @@ const POLICY: Readonly<
   aborted: { tag: "Aborted", retryable: true },
 };
 
+export type RuntimePolicy =
+  | { readonly action: "hold"; readonly retryable: boolean }
+  | { readonly action: "fail"; readonly retryable: false }
+  | { readonly action: "final"; readonly endedBy: "turn-limit" | "overflow" }
+  | { readonly action: "refuse" };
+
+class CorruptRuntimeFailure extends CorruptRecord {
+  readonly retryable = false;
+}
+
+const FailureDiscriminator = z.object({
+  _tag: z.string(),
+  reason: z.unknown().optional(),
+});
+
+const FailureWithFutureReason = z.union(
+  RuntimeFailure.options.map((variant) =>
+    "reason" in variant.shape
+      ? variant.extend({ reason: z.string() })
+      : variant,
+  ),
+);
+
+/** Only new discriminator or reason values are newer variants. Other schema failures are corrupt. */
+const readRuntimeFailure = (input: unknown) => {
+  const header = FailureDiscriminator.safeParse(input);
+  if (header.success) {
+    const variant = RuntimeFailure.options.find(
+      (option) => option.shape._tag.safeParse(header.data._tag).success,
+    );
+    if (variant === undefined) return { kind: "newer" } as const;
+    if (
+      "reason" in variant.shape &&
+      typeof header.data.reason === "string" &&
+      !variant.shape.reason.safeParse(header.data.reason).success &&
+      // A future reason does not excuse corruption in any other known field.
+      safeRead(FailureWithFutureReason, input, {
+        source: "neuve.run-control.held.failure",
+      }).success
+    )
+      return { kind: "newer" } as const;
+  }
+  const read = safeRead(RuntimeFailure, input, {
+    source: "neuve.run-control.held.failure",
+  });
+  return read.success
+    ? ({ kind: "known", failure: read.data } as const)
+    : ({
+        kind: "corrupt",
+        error: new CorruptRuntimeFailure({
+          message: `neuve.run-control.held.failure: ${read.error.message}`,
+        }),
+      } as const);
+};
+
+/** Native failures follow stage mode, never provider prose or a guessed HTTP status. */
+export function runtimeFailurePolicy(
+  input: unknown,
+  final = false,
+  internalRetries = false,
+): RuntimePolicy {
+  const read = readRuntimeFailure(input);
+  if (read.kind === "newer") return { action: "hold", retryable: false };
+  if (read.kind === "corrupt") throw read.error;
+  const failure = read.failure;
+  switch (failure._tag) {
+    case "SignInRequired":
+    case "AccountRejected":
+    case "UsageLimitReached":
+      return { action: "hold", retryable: false };
+    case "AccountStoreRefused":
+    case "AccountNeedsNewerBuild":
+      return { action: "hold", retryable: false };
+    case "RuntimeUnavailable":
+      return failure.reason === "start-failed"
+        ? { action: "hold", retryable: !internalRetries }
+        : { action: "fail", retryable: false };
+    case "AccountNotFound":
+    case "CapabilityUnsupported":
+      return { action: "fail", retryable: false };
+    case "TurnFailed":
+      switch (failure.reason) {
+        case "provider-failed":
+        case "provider-unavailable":
+          return { action: "hold", retryable: !internalRetries };
+        case "turn-limit-reached":
+        case "context-overflow":
+          return final
+            ? { action: "fail", retryable: false }
+            : {
+                action: "final",
+                endedBy:
+                  failure.reason === "context-overflow"
+                    ? "overflow"
+                    : "turn-limit",
+              };
+        case "structured-output-missing":
+        case "structured-output-invalid":
+          return final
+            ? { action: "refuse" }
+            : { action: "fail", retryable: false };
+        case "no-output-schema":
+        case "protocol-error":
+        case "session-stopped":
+        case "previous-turn-active":
+          return { action: "fail", retryable: false };
+      }
+  }
+}
+
 /**
  * The route failures that are the worker's own access to the account, why each is here:
  * - `auth`: the provider refused the credential or the plan's access;
@@ -54,13 +168,58 @@ const ACCOUNT_KINDS: ReadonlySet<RouteFailureKind> = new Set<RouteFailureKind>([
 /**
  * Whether a failure is the worker's own access to the account, so no later call of the run can
  * succeed: a step that ends failed on an unanswered call (`AgentSpec.unanswered`) still holds for
- * it. A failed turn that recorded no route failure is not.
+ * it, in both engines. A runtime failure is the account's when its policy holds, except the turn
+ * the provider failed or could not serve and the session that failed to start, which a later call
+ * can get past. So `SignInRequired`, `AccountRejected`, `UsageLimitReached`, `AccountStoreRefused`,
+ * `AccountNeedsNewerBuild` and a newer build's failure, never inferred, are. A failed turn that
+ * recorded no route failure is not.
  */
 export const isAccountFailure = (
-  failure: Pick<RouteFailure, "kind"> | undefined,
+  failure: Pick<RouteFailure, "kind"> | { readonly _tag: string } | undefined,
 ): boolean => {
   if (failure === undefined) return false;
-  return ACCOUNT_KINDS.has(failure.kind);
+  if (!("_tag" in failure)) return ACCOUNT_KINDS.has(failure.kind);
+  const read = readRuntimeFailure(failure);
+  if (read.kind !== "known") return true;
+  const known = read.failure;
+  return (
+    runtimeFailurePolicy(known).action === "hold" &&
+    !(
+      (known._tag === "TurnFailed" &&
+        (known.reason === "provider-failed" ||
+          known.reason === "provider-unavailable")) ||
+      (known._tag === "RuntimeUnavailable" && known.reason === "start-failed")
+    )
+  );
+};
+
+/** Raw persisted holds can belong to a newer build. Never infer their recovery policy. */
+export const contractHoldNeedsNewerBuild = (step: HeldStep): boolean => {
+  if (step.engine !== "contract") return false;
+  const read = readRuntimeFailure(step.failure);
+  return (
+    read.kind !== "corrupt" &&
+    (step.writeRefused === true ||
+      (step.recovery.kind !== "explicit-account" &&
+        step.recovery.kind !== "provider-policy") ||
+      read.kind === "newer")
+  );
+};
+
+/** A known account refusal recovers when the directory reads it again, including older explicit holds. */
+export const contractHoldRecoversWhenReadable = (
+  step: Pick<HeldStep, "engine" | "failure">,
+): boolean => {
+  if (step.engine !== "contract") return false;
+  const read = readRuntimeFailure(step.failure);
+  return read.kind === "known" && accountReadRefused(read.failure);
+};
+
+/** Callers reject corruption before a probe, capability lookup or resume can spend usage. */
+export const contractHoldCorruption = (step: HeldStep) => {
+  if (step.engine !== "contract") return undefined;
+  const read = readRuntimeFailure(step.failure);
+  return read.kind === "corrupt" ? read.error : undefined;
 };
 
 export type HeldFailure = {
@@ -72,17 +231,50 @@ export type HeldFailure = {
 
 /** The attempt's failure for the steps held in it: the first that no attempt can recover from wins. */
 export const heldFailure = (
-  steps: ReadonlyArray<Pick<HeldStep, "failure">>,
+  steps: ReadonlyArray<
+    Pick<HeldStep, "failure"> & {
+      readonly engine?: HeldStep["engine"];
+      readonly recovery?: HeldStep["recovery"];
+      readonly writeRefused?: true;
+    }
+  >,
 ): HeldFailure => {
-  const failures = steps.map(({ failure }): HeldFailure =>
-    failure === null
-      ? {
-          tag: "ModelError",
-          retryable: true,
-          unclassified:
-            "the failed turn recorded no route failure, so its kind is unknown",
-        }
-      : POLICY[failure.kind],
+  const failures = steps.map(
+    ({ engine, failure, recovery, writeRefused }): HeldFailure => {
+      if (engine === "contract") {
+        const read = readRuntimeFailure(failure);
+        if (read.kind === "corrupt")
+          return { tag: read.error._tag, retryable: false };
+        if (writeRefused)
+          return { tag: "ContractWriteRefused", retryable: false };
+        if (
+          recovery !== undefined &&
+          recovery.kind !== "explicit-account" &&
+          recovery.kind !== "provider-policy"
+        )
+          return { tag: "ContractHoldUnknown", retryable: false };
+        if (read.kind === "newer")
+          return { tag: "ContractHoldUnknown", retryable: false };
+      }
+      if (failure !== null && "_tag" in failure) {
+        const policy = runtimeFailurePolicy(failure);
+        return {
+          tag: failure._tag,
+          retryable:
+            (recovery === undefined || recovery.kind === "provider-policy") &&
+            policy.action === "hold" &&
+            policy.retryable,
+        };
+      }
+      return failure === null
+        ? {
+            tag: "ModelError",
+            retryable: true,
+            unclassified:
+              "the failed turn recorded no route failure, so its kind is unknown",
+          }
+        : POLICY[failure.kind];
+    },
   );
   return (
     failures.find((failure) => !failure.retryable) ??

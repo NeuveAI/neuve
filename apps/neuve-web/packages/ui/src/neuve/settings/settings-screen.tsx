@@ -1,4 +1,8 @@
-import { Provider } from "jotai"
+import { Provider, useAtomValue } from "jotai"
+import type { AccountStatus } from "@neuve/runtime/status"
+import { accountsAtom } from "./accounts-atoms"
+import { AccountsSection } from "./accounts-section"
+import { accountsCopy } from "./accounts-copy"
 import { useHydrateAtoms } from "jotai/utils"
 import { MotionConfig } from "motion/react"
 
@@ -19,6 +23,9 @@ export interface SettingsScreenProps {
   sampleLanguages: boolean
   /** Stories: the row the preview starts on (the workspace default otherwise). */
   initialPreview?: PreviewTarget
+  accounts?: readonly AccountStatus[]
+  /** Fixture routes never follow the live stream. */
+  fixtureAccounts?: boolean
 }
 
 const NO_AGENTS = { agents: [], configured: [], connections: {} }
@@ -44,7 +51,11 @@ export function SettingsScreen({
   languages,
   sampleLanguages,
   initialPreview,
+  accounts = [],
+  fixtureAccounts = false,
 }: SettingsScreenProps) {
+  const pushed = useAtomValue(accountsAtom)
+  const shownAccounts = fixtureAccounts ? accounts : (pushed ?? accounts)
   return (
     <Provider>
       <MotionConfig reducedMotion="user">
@@ -80,6 +91,14 @@ export function SettingsScreen({
                       Feedback
                     </a>
                   </li>
+                  <li>
+                    <a
+                      href="#accounts"
+                      className="rounded-[4px] text-ink-muted no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus focus-visible:outline-solid pointer-fine:hover:text-ink"
+                    >
+                      {accountsCopy.title}
+                    </a>
+                  </li>
                 </ul>
               </nav>
               <ReviewDeliverySection
@@ -88,6 +107,9 @@ export function SettingsScreen({
               />
               <div className="mt-12">
                 <FeedbackSection />
+              </div>
+              <div className="mt-12">
+                <AccountsSection accounts={shownAccounts} />
               </div>
             </main>
           </div>

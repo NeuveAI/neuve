@@ -1,4 +1,5 @@
 import {extendModels} from "./model-availability";
+import { ClaudeSubscriptionTokenRefused, isClaudeSubscriptionToken } from "../../../packages/harness/src/subscription-token.ts";
 import type { ModelRef } from "@ace/channel/protocol";
 import { available } from "@ace/channel/models";
 
@@ -77,6 +78,9 @@ export async function settings(fresh?: boolean): Promise<Settings> {
 class Rejected extends Error {}
 
 async function check(id: ProviderId, value: string): Promise<void> {
+	if (id === "anthropic" && isClaudeSubscriptionToken(value)) {
+		throw new ClaudeSubscriptionTokenRefused("ANTHROPIC_API_KEY");
+	}
 	const selected = provider(id);
 	const headers: Record<string, string> = id === "anthropic"
 		? { "x-api-key": value, "anthropic-version": "2023-06-01" }

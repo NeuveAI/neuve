@@ -131,14 +131,29 @@ export const RunReceipt = z.strictObject({
         .optional(),
       /** Or the Neuve sign-in the route's token came from (10.85), never its value. */
       credentialSource: z.literal("neuve-sign-in").optional(),
+      account: z
+        .strictObject({
+          name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+          kind: z.enum([
+            "claude-subscription",
+            "anthropic-api-key",
+            "chatgpt-subscription",
+            "openai-api-key",
+          ]),
+        })
+        .optional(),
       organization: shortText.nullable(),
       price: z.record(z.string().min(1).max(64), z.number().min(0)),
     })
     .refine(
       (route) =>
+        (route.provider === "claude" &&
+          route.account?.kind === "claude-subscription" &&
+          route.credentialVariable === undefined &&
+          route.credentialSource === undefined) ||
         (route.credentialVariable === undefined) !==
-        (route.credentialSource === undefined),
-      "a route names exactly one credential: its key variable or the Neuve sign-in",
+          (route.credentialSource === undefined),
+      "a route names exactly one credential or its Claude subscription account",
     ),
   outcome: z.enum(["completed", "timed-out"]),
   timeout: z.strictObject({

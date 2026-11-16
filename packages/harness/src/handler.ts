@@ -1,3 +1,4 @@
+import { accountReadRefused } from "@neuve/runtime";
 import { z } from "zod";
 import { safeRead } from "@neuve/records-schema";
 import { readData } from "@neuve/records-core";
@@ -63,7 +64,12 @@ import { openAttempt, type OpenedAttempt } from "./pi/attempt.ts";
 import type { CloseReceipt } from "./pi/capture/close.ts";
 import type { StageStatus } from "./pi/capture/types.ts";
 import { claimNonce, HostOpenFailed, type QueueClaim } from "./pi/host.ts";
-import { heldFailure } from "./pi/failure-policy.ts";
+import {
+  contractHoldCorruption,
+  contractHoldNeedsNewerBuild,
+  contractHoldRecoversWhenReadable,
+  heldFailure,
+} from "./pi/failure-policy.ts";
 import {
   beginNativeMeasurements,
   writeNativeMeasurements,
@@ -77,7 +83,17 @@ import {
   recordReceipt,
 } from "./receipt.ts";
 import { credentialName } from "./route.ts";
-import { credentialPresent } from "./route-provider.ts";
+import {
+  claudeUnavailableReason,
+  routeReadiness,
+  statusNeedsNewerBuild,
+} from "./route-provider.ts";
+import {
+  AccountNeedsNewerBuild,
+  AccountStoreRefused,
+  RuntimeUnavailable,
+} from "@neuve/runtime";
+import { processRuntimes, processReadinessStatuses } from "./runtimes.ts";
 import {
   captureFolder,
   deleteRunFolder,
@@ -574,6 +590,19 @@ export const reviewRunHandler =
             catch: (error) => {
               if (error instanceof HostOpenFailed)
                 keep = `the harness did not close after a failed open: ${publicCloseReason(error)}`;
+              if (
+                error instanceof AccountNeedsNewerBuild ||
+                error instanceof AccountStoreRefused
+              )
+                return new JobHeld({ message: error.message, hold: true });
+              if (
+                config.route.provider === "claude" &&
+                error instanceof RuntimeUnavailable
+              )
+                return new JobHeld({
+                  message: claudeUnavailableReason(error.account, error.reason),
+                  hold: true,
+                });
               return error;
             },
           }).pipe(
@@ -654,17 +683,106 @@ export const reviewRunHandler =
           const detail = end.steps
             .map((step) => step.detail ?? step.reason)
             .join("; ");
-          // One read of the credential decides (10.17): a run whose route lost it is held by the
-          // worker (`JobHeld`), never recorded as failed. A recompose reads no credential.
-          if (
-            options.recompose === undefined &&
-            !credentialPresent(config.route)
-          ) {
+          const corrupt = end.steps
+            .map(contractHoldCorruption)
+            .find((error) => error !== undefined);
+          if (corrupt !== undefined) {
+            yield* close(opened, "ended", "failed", "held-failure");
+            return yield* new RunFailed({
+              stageError: corrupt._tag,
+              retryable: false,
+              message: corrupt.message,
+            });
+          }
+          if (end.steps.some(contractHoldNeedsNewerBuild)) {
             yield* close(opened, "held");
             return yield* new JobHeld({
-              message: `${credentialName(config.route)} became unavailable during the run; the job waits for a worker that has it`,
+              message: "This hold is not understood; leave it to a newer build",
               hold: true,
             });
+          }
+          // Even explicit provider holds must distinguish a refused account from an absent one.
+          for (const step of end.steps) {
+            if (step.engine !== "contract") continue;
+            const result = yield* (yield* Effect.promise(processRuntimes))
+              .capabilities(step.account)
+              .pipe(Effect.result);
+            if (
+              result._tag === "Failure" &&
+              accountReadRefused(result.failure)
+            ) {
+              yield* close(opened, "held");
+              return yield* new JobHeld({
+                message: result.failure.message,
+                hold: true,
+              });
+            }
+          }
+          if (end.steps.some(contractHoldRecoversWhenReadable)) {
+            yield* close(opened, "held");
+            return yield* new JobHeld({
+              message: "The job waits for the next claim.",
+              hold: true,
+            });
+          }
+          // One read of the credential decides (10.17): a run whose route lost it is held by the
+          // worker (`JobHeld`), never recorded as failed. A recompose reads no credential.
+          const explicitProviderHold = end.steps.some(
+            (step) =>
+              step.engine === "contract" &&
+              step.recovery.kind === "explicit-account" &&
+              ((step.failure._tag === "TurnFailed" &&
+                (step.failure.reason === "provider-failed" ||
+                  step.failure.reason === "provider-unavailable")) ||
+                (step.failure._tag === "RuntimeUnavailable" &&
+                  step.failure.reason === "start-failed")),
+          );
+          if (explicitProviderHold) {
+            const read = yield* processReadinessStatuses().pipe(
+              Effect.flatMap(({ service }) => service.read),
+              Effect.result,
+            );
+            if (read._tag === "Failure") {
+              yield* close(opened, "held");
+              return yield* new JobHeld({
+                message: "Neuve could not read account status.",
+                hold: true,
+              });
+            }
+            for (const status of read.success) {
+              if (
+                !end.steps.some(
+                  (step) =>
+                    step.engine === "contract" && step.account === status.name,
+                )
+              )
+                continue;
+              const newerBuild = statusNeedsNewerBuild(status);
+              if (newerBuild !== undefined) {
+                yield* close(opened, "held");
+                return yield* new JobHeld({
+                  message: newerBuild.message,
+                  hold: true,
+                });
+              }
+            }
+          }
+          if (options.recompose === undefined && !explicitProviderHold) {
+            const readiness = yield* routeReadiness(
+              config.route,
+              yield* Effect.promise(processRuntimes),
+              processReadinessStatuses(),
+            );
+            if (!readiness.ready) {
+              yield* close(opened, "held");
+              return yield* new JobHeld({
+                message:
+                  config.route.provider === "claude"
+                    ? readiness.credential
+                    : `${credentialName(config.route)} became unavailable during the run; the job waits for a worker that has it`,
+                hold: true,
+              });
+            }
           }
           // The provider refused a credential this worker has, or failed after pi's own retries:
           // the kind it recorded on the failed turn decides, by the incumbent policy.
@@ -1232,33 +1350,43 @@ const frozenRoute = (job: JobQueue.Job) =>
  * reason; a worker that has the credential (a shell with the key, or after `neuve auth login
  * openai`) picks it up. A job whose request cannot be read is admitted, so its handler reports why.
  */
-export const admitReview = (location: StoreLocation) => (job: JobQueue.Job) =>
-  Effect.gen(function* () {
-    if (!isReviewRun(job.kind)) return true;
-    const route = yield* frozenRoute(job);
-    if (route === undefined) return true;
-    const ready = credentialPresent(route);
-    const others = readHeldReviews(location).filter(
-      (entry) => entry.pid === process.pid && entry.seq !== job.seq,
-    );
-    writeHeldReviews(
-      location,
-      ready
-        ? others
-        : [
-            ...others,
-            {
-              seq: job.seq,
-              pid: process.pid,
-              at: new Date().toISOString(),
-              provider: route.provider,
-              route: `${route.provider}/${route.model}`,
-              credential: credentialName(route),
-            },
-          ],
-    );
-    return ready;
-  });
+export const admitReview =
+  (
+    location: StoreLocation,
+    runtimes?: import("@neuve/runtime").RuntimeRegistryShape,
+    statuses = processReadinessStatuses(),
+  ) =>
+  (job: JobQueue.Job) =>
+    Effect.gen(function* () {
+      if (!isReviewRun(job.kind)) return true;
+      const route = yield* frozenRoute(job);
+      if (route === undefined) return true;
+      const { ready, credential } = yield* routeReadiness(
+        route,
+        runtimes ?? (yield* Effect.promise(processRuntimes)),
+        statuses,
+      );
+      const others = readHeldReviews(location).filter(
+        (entry) => entry.pid === process.pid && entry.seq !== job.seq,
+      );
+      writeHeldReviews(
+        location,
+        ready
+          ? others
+          : [
+              ...others,
+              {
+                seq: job.seq,
+                pid: process.pid,
+                at: new Date().toISOString(),
+                provider: route.provider,
+                route: `${route.provider}/${route.model}`,
+                credential,
+              },
+            ],
+      );
+      return ready;
+    });
 
 /**
  * The handlers the harness adds to a worker. Both review kinds are always registered: `review.run@2`

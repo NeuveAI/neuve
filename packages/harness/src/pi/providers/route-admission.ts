@@ -18,7 +18,11 @@ import {
   TOKEN_COMMAND_VARIABLE,
   type AuthOptions,
 } from "../../openai-auth.ts";
-import type { AnyRouteConfig } from "../../route.ts";
+import {
+  requireDirectRoute,
+  routeCredentialVariable,
+  type AnyRouteConfig,
+} from "../../route.ts";
 import { retryAfterAt } from "./retry-admission.ts";
 import { routeModel } from "./route-model.ts";
 
@@ -46,6 +50,7 @@ export interface RouteAdmissionInput {
 }
 
 const routeIdentity = (input: Omit<RouteAdmissionInput, "path">) => {
+  const route = requireDirectRoute(input.route);
   const auth = input.auth ?? {};
   const command =
     auth.tokenCommand === null ||
@@ -53,14 +58,14 @@ const routeIdentity = (input: Omit<RouteAdmissionInput, "path">) => {
       ? undefined
       : (auth.tokenCommand ?? process.env[TOKEN_COMMAND_VARIABLE]);
   const source =
-    input.route.provider === "anthropic"
-      ? ["variable", input.route.credentialVariable]
+    route.provider === "anthropic"
+      ? ["variable", routeCredentialVariable(route)]
       : command
         ? ["command", command]
         : ["directory", auth.directory ?? authDirectory()];
   return {
-    provider: input.route.provider,
-    baseUrl: input.baseUrl ?? routeModel(input.route).baseUrl,
+    provider: route.provider,
+    baseUrl: input.baseUrl ?? routeModel(route).baseUrl,
     source,
   };
 };
@@ -69,6 +74,7 @@ const routeIdentity = (input: Omit<RouteAdmissionInput, "path">) => {
 export const providerAccountKey = (
   input: Omit<RouteAdmissionInput, "path">,
 ): string => {
+  requireDirectRoute(input.route);
   const identity = routeIdentity(input);
   return createHash("sha256")
     .update(
@@ -81,6 +87,7 @@ export const providerAccountKey = (
 export const openRouteAdmission = (
   input: RouteAdmissionInput,
 ): RouteAdmission => {
+  requireDirectRoute(input.route);
   const identity = routeIdentity(input);
   // Keep the original persisted gate identity, independently of the shared capacity identity.
   const key = createHash("sha256")

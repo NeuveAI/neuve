@@ -1,3 +1,4 @@
+import { testRuntimes } from "../pi/stages/fixture.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
@@ -170,6 +171,7 @@ export const runFront = async (
   const services: StageServices = {
     ctx,
     registry,
+    runtimes: testRuntimes().registry,
     integrations,
     clients,
     run: stageRunner(ctx, clients),

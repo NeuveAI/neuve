@@ -138,6 +138,7 @@ import {
   oidOf,
   symbolStructure,
 } from "./fixtures/readings.ts";
+import { testRuntimes } from "./pi/stages/fixture.ts";
 
 // ---------------------------------------------------------------------------------------------
 // A range of four files, and a relations index built by hand through the graph lane's builder
@@ -4962,6 +4963,7 @@ const gatedWorld = async (
   });
   const services = (of: typeof at): StageServices => ({
     ctx: of.ctx,
+    runtimes: testRuntimes().registry,
     routes: {
       bindAgentRoute: () => {
         throw new Error("no model step runs here");

@@ -18,7 +18,8 @@
 		"zod": "4.6.5",
 		"ws": "8.22.0",
 		"@neuve/records-schema": "workspace:*",
-		"@neuve/records-core": "workspace:*"
+		"@neuve/records-core": "workspace:*",
+		"@neuve/runtime": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "1.4.4",

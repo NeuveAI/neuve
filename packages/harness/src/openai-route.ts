@@ -2,6 +2,7 @@ import { Data, Effect } from "effect";
 import {
   OpenAiAuthError,
   accessToken,
+  authOptionsFor,
   rejectedToken,
   signInProblem,
 } from "./openai-auth.ts";
@@ -12,6 +13,7 @@ import type { OpenAiRouteConfig } from "./route.ts";
 export class SignInRequired extends Data.TaggedError("SignInRequired")<{
   readonly message: string;
   readonly retryable: false;
+  readonly account?: string | undefined;
 }> {}
 
 /** The cheap route check before a run failed: the account, the model or the service. */
@@ -32,23 +34,40 @@ export interface SessionOptions {
  * (`GET /v1/models`). It spends no plan usage; there is no free token count on this route, so UN9's
  * estimates stand.
  */
-export const checkRoute = (route: OpenAiRouteConfig, options: SessionOptions) =>
+export const checkRoute = (
+  route: OpenAiRouteConfig,
+  options: SessionOptions,
+  account?: {
+    readonly name: string;
+    readonly credential: Parameters<typeof authOptionsFor>[0];
+  },
+) =>
   Effect.gen(function* () {
-    const problem = signInProblem(options.auth ?? {});
-    if (problem !== undefined)
-      return yield* new SignInRequired({ message: problem, retryable: false });
+    const auth =
+      account === undefined
+        ? (options.auth ?? {})
+        : { ...options.auth, ...authOptionsFor(account.credential) };
+    const required = (message: string) =>
+      new SignInRequired({
+        message:
+          account === undefined
+            ? message
+            : `Sign in to ${account.name} with neuve auth login ${account.name}.`,
+        retryable: false,
+        ...(account === undefined ? {} : { account: account.name }),
+      });
+    const problem = signInProblem(auth);
+    if (problem !== undefined) return yield* required(problem);
     const token = yield* Effect.tryPromise({
-      try: () => accessToken(options.auth ?? {}),
+      try: () => accessToken(auth),
       catch: (error) =>
         error instanceof OpenAiAuthError && error.transient
           ? new RouteUnavailable({ message: error.message, retryable: true })
-          : new SignInRequired({
-              message:
-                error instanceof OpenAiAuthError
-                  ? error.message
-                  : "the OpenAI sign-in could not be read",
-              retryable: false,
-            }),
+          : required(
+              error instanceof OpenAiAuthError
+                ? error.message
+                : "the OpenAI sign-in could not be read",
+            ),
     });
     const listed = yield* Effect.tryPromise({
       try: async (signal) => {

@@ -1,10 +1,19 @@
+import { Data } from "effect";
 import { z } from "zod";
+import { AccountKind, AccountName } from "@neuve/runtime";
 
 /**
  * The route's configuration and accounting: what a run freezes, how its usage is read and priced.
  * The provider clients and the sign-in are in `route-provider.ts`, so a module that only freezes a
  * route (the review request) links no provider code.
  */
+
+/** The account identity frozen with a route, without its credential reference. */
+export const RouteAccount = z.strictObject({
+  name: AccountName,
+  kind: AccountKind,
+});
+export type RouteAccount = z.infer<typeof RouteAccount>;
 
 /**
  * The kinds of review step an effort can be set for (12 November): the four agent stages, and the
@@ -33,8 +42,8 @@ export type StepEffort = z.infer<typeof StepEffort>;
 
 /**
  * A model route frozen into each run's configuration (0008): the provider, the model, its effort,
- * its window and output cap from the provider's own documentation, where the credential comes from
- * (named, never its value: 10.5, 10.16) and the price table cost is computed from (10.32).
+ * its window and output cap from the provider's own documentation, the account and legacy credential
+ * reference (never its value: 10.5, 10.16) and the price table cost is computed from (10.32).
  */
 export const AnthropicRouteConfig = z.strictObject({
   provider: z.literal("anthropic"),
@@ -43,6 +52,10 @@ export const AnthropicRouteConfig = z.strictObject({
   window: z.int().min(1),
   maxOutputTokens: z.int().min(1),
   credentialVariable: z.string().regex(/^[A-Z][A-Z0-9_]*$/),
+  /** Optional only for routes frozen before accounts were named. */
+  account: RouteAccount.extend({
+    kind: z.literal("anthropic-api-key"),
+  }).optional(),
   /** USD per million tokens; cache writes and reads as multiples of the input price. */
   price: z.strictObject({
     input: z.number().min(0),
@@ -69,6 +82,10 @@ export const OpenAiRouteConfig = z.strictObject({
   window: z.int().min(1),
   maxOutputTokens: z.int().min(1),
   credentialSource: z.literal("neuve-sign-in"),
+  /** Optional only for routes frozen before accounts were named. */
+  account: RouteAccount.extend({
+    kind: z.literal("chatgpt-subscription"),
+  }).optional(),
   price: z.null(),
   /**
    * Telemetry only: ask for the model's reasoning summary on every call, so each stored turn
@@ -82,16 +99,64 @@ export const OpenAiRouteConfig = z.strictObject({
 });
 export type OpenAiRouteConfig = z.infer<typeof OpenAiRouteConfig>;
 
-/** Every route the harness can run. */
-export const AnyRouteConfig = z.discriminatedUnion("provider", [
+/** Routes executed by pi through a direct provider transport. */
+export const DirectRouteConfig = z.discriminatedUnion("provider", [
   AnthropicRouteConfig,
   OpenAiRouteConfig,
 ]);
+export type DirectRouteConfig = z.infer<typeof DirectRouteConfig>;
+
+/** A Claude Code route uses only its named subscription account's sign-in. */
+export const ClaudeRouteConfig = z.strictObject({
+  provider: z.literal("claude"),
+  account: RouteAccount.extend({ kind: z.literal("claude-subscription") }),
+  model: z.string().min(1),
+  effort: z.enum(["low", "medium", "high"]),
+  window: z.int().min(1),
+  maxOutputTokens: z.int().min(1),
+  price: z.null(),
+  /** As on the Anthropic route. */
+  stepEffort: StepEffort.optional(),
+});
+export type ClaudeRouteConfig = z.infer<typeof ClaudeRouteConfig>;
+
+/** Direct routes and routes executed by an account's loop-owning runtime. */
+export const AnyRouteConfig = z.discriminatedUnion("provider", [
+  AnthropicRouteConfig,
+  OpenAiRouteConfig,
+  ClaudeRouteConfig,
+]);
 export type AnyRouteConfig = z.infer<typeof AnyRouteConfig>;
 
-/** The route a run's configuration accepts: either provider (10.85). */
+/** The route a run's configuration accepts. */
 export const RouteConfig = AnyRouteConfig;
 export type RouteConfig = z.infer<typeof RouteConfig>;
+
+export class RouteRuntimeMismatch extends Data.TaggedError(
+  "RouteRuntimeMismatch",
+)<{
+  readonly account: RouteAccount["name"];
+  readonly provider: AnyRouteConfig["provider"];
+  readonly retryable: false;
+}> {
+  constructor(
+    account: RouteAccount["name"],
+    provider: AnyRouteConfig["provider"],
+  ) {
+    super({ account, provider, retryable: false });
+  }
+  override get message() {
+    return `Account ${this.account}'s runtime disagrees with route provider ${this.provider}.`;
+  }
+}
+
+/** The same agreement applies when a request freezes and when its stage opens. */
+export const routeRuntimeError = (route: AnyRouteConfig, ownsLoop: boolean) => {
+  const account = routeAccount(route);
+  return account !== undefined && ownsLoop !== (route.provider === "claude")
+    ? new RouteRuntimeMismatch(account.name, route.provider)
+    : undefined;
+};
 
 /**
  * Opus 5.5 through the Anthropic API (2.12): 1,000,000 input tokens and 128,000 output tokens; 4 and
@@ -105,6 +170,7 @@ export const OPUS_ROUTE: AnthropicRouteConfig = {
   window: 1_000_000,
   maxOutputTokens: 128_000,
   credentialVariable: "ANTHROPIC_API_KEY",
+  account: { name: AccountName.parse("anthropic"), kind: "anthropic-api-key" },
   price: {
     input: 4,
     output: 20,
@@ -126,6 +192,7 @@ export const SOL_ROUTE: OpenAiRouteConfig = {
   window: 1_050_000,
   maxOutputTokens: 128_000,
   credentialSource: "neuve-sign-in",
+  account: { name: AccountName.parse("chatgpt"), kind: "chatgpt-subscription" },
   price: null,
 };
 
@@ -150,7 +217,7 @@ export const routeByName = (
   effort?: RouteEffort | undefined,
   reasoningSummaries?: boolean | undefined,
   stepEffort?: StepEffort | undefined,
-): AnyRouteConfig => {
+): DirectRouteConfig => {
   const route = ROUTES[name ?? "anthropic"];
   const atEffort = effort === undefined ? route : { ...route, effort };
   const withSteps =
@@ -160,6 +227,21 @@ export const routeByName = (
   return reasoningSummaries === true && withSteps.provider === "openai"
     ? { ...withSteps, reasoningSummary: "detailed" }
     : withSteps;
+};
+
+/** The frozen account, or the default implied by a legacy route's credential reference. */
+export const routeAccount = (
+  route: AnyRouteConfig,
+): RouteAccount | undefined => {
+  if (route.account !== undefined) return route.account;
+  if (route.provider === "anthropic")
+    return route.credentialVariable === "ANTHROPIC_API_KEY"
+      ? OPUS_ROUTE.account
+      : undefined;
+  return route.provider === "openai" &&
+    route.credentialSource === "neuve-sign-in"
+    ? SOL_ROUTE.account
+    : undefined;
 };
 
 /**
@@ -185,9 +267,48 @@ export const routeAtEffort = <R extends AnyRouteConfig>(
 export const credentialName = (route: AnyRouteConfig) =>
   route.provider === "anthropic"
     ? route.credentialVariable
-    : "the Neuve sign-in (neuve auth login openai)";
+    : route.provider === "claude"
+      ? `the Claude Code sign-in of account ${route.account.name}`
+      : "the Neuve sign-in (neuve auth login openai)";
 
-/** The route as the computation store keys it (proposal §3: provider, model, reasoning setting). */
+export class SubscriptionRouteRequiresRuntime extends Data.TaggedError(
+  "SubscriptionRouteRequiresRuntime",
+)<{ readonly account: RouteAccount["name"]; readonly retryable: false }> {
+  constructor(account: RouteAccount["name"]) {
+    super({ account, retryable: false });
+  }
+  override get message() {
+    return `Claude subscription account ${this.account} requires its runtime.`;
+  }
+}
+
+/** Refuse subscription routes before any direct transport or credential operation. */
+export const requireDirectRoute = (
+  route: AnyRouteConfig,
+): DirectRouteConfig => {
+  if (route.provider === "claude")
+    throw new SubscriptionRouteRequiresRuntime(route.account.name);
+  return route;
+};
+
+/** The direct API's environment reference; OpenAI uses its sign-in instead. */
+export function routeCredentialVariable(route: AnthropicRouteConfig): string;
+export function routeCredentialVariable(
+  route: AnyRouteConfig,
+): string | undefined;
+export function routeCredentialVariable(
+  route: AnyRouteConfig,
+): string | undefined {
+  const direct = requireDirectRoute(route);
+  return direct.provider === "anthropic"
+    ? direct.credentialVariable
+    : undefined;
+}
+
+/**
+ * The route as the computation store keys it (proposal §3: provider, model, reasoning setting).
+ * Stage keys omit the account and credential so the same computation is reused across accounts.
+ */
 export const computationRoute = (route: AnyRouteConfig) => ({
   provider: route.provider,
   model: route.model,

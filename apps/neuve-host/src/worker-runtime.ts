@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
-import type { ConversationId, Storage, ToolRegistration } from "@earendil-works/pi-durable";
+import type { ConversationId, Storage, ToolRegistration, Extension, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Channel, type Options, type ModelRef } from "@ace/channel";
 import { channelOperations, ExtensionRequestSchema, MUTATING } from "@ace/channel/operations";
@@ -32,6 +32,7 @@ export type WorkerContext = {
 
 /** What root's worker entry provides: the provider lane's models, built in the worker's process. */
 export type WorkerSetup = {
+	extensions?(context: WorkerContext): { extensions: readonly Extension[]; attach?(harness: Harness): void | Promise<void> };
 	checkpoint?(context: WorkerContext, request: NativeSourceRequest): Promise<NativeAuthorityReceipt>;
 	/** Acquire the source before any mutable native storage opens. Cleanup follows a confirmed native close. */
 	openSource?(context: WorkerContext): (() => void) | Promise<() => void>;
@@ -134,6 +135,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 	const storage = options.storage;
 	try {
 		const models = await setup.models(worker, options.models);
+		const additional = await setup.extensions?.(worker);
 		const operations = channelOperations({log: options.log,
 			...(setup.review ? {review: await setup.review(worker)} : {}),
 			...(setup.planning ? {planning: await setup.planning(worker)} : {}),
@@ -141,7 +143,11 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		const extension = {
 			environment: (cwd: string) => isPlaced(cwd, options.project),
 			...operations.extension,
-			extensions: [...operations.extension.extensions, externalLanes({name: options.prefix || options.name, project: options.project, lanes: catalogLanes(options.id), env: options.env})],
+			extensions: [...operations.extension.extensions, externalLanes({name: options.prefix || options.name, project: options.project, lanes: catalogLanes(options.id), env: options.env}), ...(additional?.extensions ?? [])],
+			attach: async (harness: Harness, admission: import("@ace/channel/extensions").Admission) => {
+				await operations.extension.attach?.(harness, admission);
+				await additional?.attach?.(harness);
+			},
 			...(setup.tool ? {tool: (tool: ToolRegistration) => setup.tool!(worker, tool)} : {}),
 			...(setup.onConversation ? {onConversation: (id: ConversationId) => setup.onConversation!(worker, id)} : {}),
 			...(setup.priced ? {priced: setup.priced} : {}),

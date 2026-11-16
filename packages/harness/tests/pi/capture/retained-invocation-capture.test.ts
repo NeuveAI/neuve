@@ -1,5 +1,5 @@
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
-import { expect, test } from "bun:test";
+import { expect, mock, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import {
   type ModelCaptureEvent,
 } from "../../../src/pi/capture/types.ts";
 import { SOL_ROUTE, OPUS_ROUTE } from "../../../src/route.ts";
+import { ClaudeSubscriptionTokenRefused } from "../../../src/subscription-token.ts";
 import { tokenCommand, sse } from "../providers/fixture.ts";
 
 test("abort capture records observed callback count and safe reason without inventing a replay boundary", () => {
@@ -43,16 +44,11 @@ test("abort capture records observed callback count and safe reason without inve
 for (const route of [
   SOL_ROUTE,
   { ...OPUS_ROUTE, credentialVariable: "NEUVE_INVOCATION_FIXTURE_KEY" },
-  { ...OPUS_ROUTE, credentialVariable: "NEUVE_INVOCATION_OAUTH_FIXTURE_KEY" },
 ])
   test(`${route.provider} captures options actually passed to public SDK and terminal callback provenance`, async () => {
     const root = mkdtempSync(join(tmpdir(), "invocation-capture-"));
     const captured: ModelCaptureEvent[] = [];
-    const syntheticKey =
-      route.provider === "anthropic" &&
-      route.credentialVariable.includes("OAUTH")
-        ? "sk-ant-oat-synthetic-invocation-key"
-        : "synthetic-invocation-key";
+    const syntheticKey = "synthetic-invocation-key";
     const frames =
       route.provider === "openai"
         ? [
@@ -99,10 +95,7 @@ for (const route of [
           ];
     try {
       if (route.provider === "anthropic")
-        process.env[route.credentialVariable] =
-          route.credentialVariable.includes("OAUTH")
-            ? "sk-ant-oat-synthetic-invocation-key"
-            : "synthetic-invocation-key";
+        process.env[route.credentialVariable] = syntheticKey;
       const models = createRouteModels({
         route,
         runId: "invocation-fixture",
@@ -142,9 +135,7 @@ for (const route of [
           : {
               version: 1,
               api: "anthropic-messages",
-              authMode: syntheticKey.includes("sk-ant-oat")
-                ? "oauth"
-                : "non-oauth",
+              authMode: "non-oauth",
               options: {
                 maxTokens: route.maxOutputTokens,
                 cacheRetention: "long",
@@ -175,6 +166,43 @@ for (const route of [
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+test("capture never sees a Claude subscription token request", () => {
+  const variable = "NEUVE_INVOCATION_OAUTH_FIXTURE_KEY";
+  const previous = process.env[variable];
+  const syntheticKey = "sk-ant-oat-synthetic-invocation-key";
+  const captured: ModelCaptureEvent[] = [];
+  const fetch = mock(async () => sse([]));
+  try {
+    process.env[variable] = syntheticKey;
+    let refusal: unknown;
+    try {
+      createRouteModels({
+        route: { ...OPUS_ROUTE, credentialVariable: variable },
+        runId: "invocation-refusal-fixture",
+        sessionAffinity: "fixture",
+        credentialInspection: "ephemeral",
+        capture: (event) => captured.push(event),
+        fetch: Object.assign(fetch, { preconnect() {} }),
+      });
+    } catch (cause) {
+      refusal = cause;
+    }
+    expect(refusal).toBeInstanceOf(ClaudeSubscriptionTokenRefused);
+    if (!(refusal instanceof ClaudeSubscriptionTokenRefused))
+      throw Error("fixture subscription refusal missing");
+    expect(refusal._tag).toBe("ClaudeSubscriptionTokenRefused");
+    expect(refusal.message).toContain(variable);
+    expect(refusal.message).not.toContain(syntheticKey);
+    expect(fetch).toHaveBeenCalledTimes(0);
+    expect(
+      captured.filter((event) => event.type === "model.request"),
+    ).toHaveLength(0);
+  } finally {
+    if (previous === undefined) delete process.env[variable];
+    else process.env[variable] = previous;
+  }
+});
 
 test("actual signal abort provenance uses the credential masking pipeline", async () => {
   const controller = new AbortController();

@@ -145,7 +145,12 @@ test("dynamic workspace host chooses explicit free HTTPS while respecting config
     ]);
     const child = Bun.spawn(dynamic.worker, {
       cwd: project,
-      env: { ...process.env, NEUVE_WORKER_PROJECT_FIXTURE: undefined },
+      env: {
+        ...process.env,
+        HOME: root,
+        TMPDIR: root,
+        NEUVE_WORKER_PROJECT_FIXTURE: undefined,
+      },
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",

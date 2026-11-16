@@ -49,7 +49,12 @@ test("a lapsed credential holds the run, the same claim wakes nothing, and the n
       join(import.meta.dir, "fixtures", "pi-handler-held.ts"),
     ],
     {
-      env: { ...env, HOME: join(root, "home"), SCENARIO_ROOT: root },
+      env: {
+        ...env,
+        HOME: join(root, "home"),
+        TMPDIR: root,
+        SCENARIO_ROOT: root,
+      },
       timeout: 110_000,
     },
   );
@@ -218,6 +223,7 @@ test.each([
         env: {
           ...env,
           HOME: join(directory, "home"),
+          TMPDIR: directory,
           SCENARIO_ROOT: directory,
           SCENARIO_POLICY: policy,
         },
@@ -346,6 +352,7 @@ test.each([
             ...env,
             NEUVE_BUDGET_DIRECTORY: budgetDirectory,
             HOME: join(directory, "home"),
+            TMPDIR: directory,
             SCENARIO_ROOT: directory,
             SCENARIO_POLICY: policy,
           },

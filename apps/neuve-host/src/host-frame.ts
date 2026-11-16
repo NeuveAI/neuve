@@ -1,3 +1,4 @@
+import { AccountStatus } from "@neuve/runtime/status";
 import {z} from "zod";
 import {FrameSchema} from "@ace/channel/frame";
 import {ModelRefSchema} from "@ace/channel/parse";
@@ -11,6 +12,7 @@ const listing = z.object({
 });
 
 const HostFrameSchema = z.union([
+	z.object({ accounts: z.array(AccountStatus) }),
 	FrameSchema,
 	z.object({ hello: z.object({ user: z.string(), host: z.string(), github: z.string().optional(), team: z.string().optional(), directory: z.string().optional() }) }),
 	z.object({ people: z.record(z.string(), z.string()) }),

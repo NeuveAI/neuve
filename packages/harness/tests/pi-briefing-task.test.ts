@@ -85,6 +85,7 @@ import {
   settle,
   structures as fixtureStructures,
 } from "./fixtures/briefing.ts";
+import { testRuntimes } from "./pi/stages/fixture.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "pi-briefing-task-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -337,6 +338,7 @@ const world = async (
   const prepared: Array<AgentStepInput> = [];
   const services = (): StageServices => ({
     ctx,
+    runtimes: testRuntimes().registry,
     routes: {
       bindAgentRoute: (input, c) => {
         binds.push({ agent: input.agent, reading: input.reading });

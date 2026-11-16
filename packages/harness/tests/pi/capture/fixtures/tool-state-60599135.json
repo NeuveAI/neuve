@@ -1,0 +1,110 @@
+{
+  "handles": {
+    "handles": [
+      [
+        "h1",
+        {
+          "base": {
+            "rev": "head",
+            "path": "path",
+            "blob": "blob",
+            "commit": "commit",
+            "startLine": 1,
+            "endLine": 2
+          },
+          "sightings": [
+            {
+              "turn": 1,
+              "lookup": "lookup",
+              "args": {
+                "kind": "head",
+                "nested": ["ann@example.com"]
+              },
+              "parent": "parent",
+              "retrieval": {
+                "retriever": "query",
+                "querySha256": "blob",
+                "rank": 1,
+                "score": 0.5
+              }
+            }
+          ]
+        }
+      ]
+    ],
+    "seen": [
+      [
+        "g1",
+        [
+          {
+            "turn": 1,
+            "lookup": "lookup",
+            "args": {
+              "kind": "head",
+              "nested": ["ann@example.com"]
+            },
+            "parent": "parent",
+            "retrieval": {
+              "retriever": "query",
+              "querySha256": "blob",
+              "rank": 1,
+              "score": 0.5
+            }
+          }
+        ]
+      ]
+    ]
+  },
+  "reading": {
+    "used": 17
+  },
+  "findings": {
+    "findings": [
+      {
+        "claim": "headheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadhead",
+        "kind": "defect",
+        "about": "proof",
+        "signal": "forged",
+        "critical": true,
+        "anchors": [
+          {
+            "path": "path",
+            "side": "new",
+            "startLine": 1,
+            "endLine": 2
+          }
+        ],
+        "doneWhen": "D1",
+        "group": "g1",
+        "evidence": [
+          "headheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadhead"
+        ]
+      }
+    ],
+    "notes": [
+      "headheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadhead"
+    ],
+    "conditions": [
+      {
+        "doneWhen": "D1",
+        "verdict": "met",
+        "anchors": [
+          {
+            "path": "path",
+            "side": "new",
+            "startLine": 1,
+            "endLine": 2
+          }
+        ],
+        "note": "headheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadheadhead"
+      }
+    ]
+  },
+  "headReads": [
+    {
+      "path": "path",
+      "startLine": 1,
+      "endLine": 2
+    }
+  ]
+}

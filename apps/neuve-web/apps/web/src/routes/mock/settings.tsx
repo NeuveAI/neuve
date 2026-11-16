@@ -1,3 +1,4 @@
+import { accountFixtures } from "@workspace/ui/fixtures/accounts.fixtures"
 import { createFileRoute } from "@tanstack/react-router"
 
 import { sampleWorkspaceLanguages } from "@workspace/ui/fixtures/delivery-languages.fixtures"
@@ -9,7 +10,10 @@ import { SettingsScreen } from "@workspace/ui/neuve/settings/settings-screen"
  * the real `/settings`.
  */
 export const Route = createFileRoute("/mock/settings")({
-  loader: () => ({ languages: sampleWorkspaceLanguages }),
+  loader: () => ({
+    languages: sampleWorkspaceLanguages,
+    accounts: accountFixtures.severalAccounts,
+  }),
   head: () => ({
     meta: [{ title: "Review delivery (sample) · Settings · Neuve" }],
   }),
@@ -17,6 +21,13 @@ export const Route = createFileRoute("/mock/settings")({
 })
 
 function MockSettingsRoute() {
-  const { languages } = Route.useLoaderData()
-  return <SettingsScreen languages={languages} sampleLanguages />
+  const { languages, accounts } = Route.useLoaderData()
+  return (
+    <SettingsScreen
+      languages={languages}
+      sampleLanguages
+      accounts={accounts}
+      fixtureAccounts
+    />
+  )
 }

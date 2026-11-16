@@ -114,6 +114,8 @@ async function setup(hosted = true, ready = true) {
         env: {
           ...process.env,
           ...env,
+          HOME: root,
+          TMPDIR: root,
           NEUVE_BUDGET_DIRECTORY: directory,
           NEUVE_SHARED_TEST: JSON.stringify({
             repository: path,

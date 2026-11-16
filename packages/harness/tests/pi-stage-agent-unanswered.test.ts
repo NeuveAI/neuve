@@ -1,7 +1,8 @@
 // Why: one refused reading call ended a real review. A step whose spec says `unanswered: "fail"`
 // must end failed on a model call the provider could not answer, so its caller records its part
 // as not done, and must still hold when the account itself failed. Each case says what it guards.
-// The production agent step runs on a real pi harness over SQLite (`pi/stages/fixture.ts`).
+// The production agent step runs on a real pi harness over SQLite (`pi/stages/fixture.ts`) and,
+// for the contract engine, the fake runtime of `pi/stages/contract-fixture.ts`.
 import { expect, test } from "bun:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
@@ -9,6 +10,11 @@ import {
   type AssistantMessage,
 } from "@earendil-works/pi-ai";
 import type { Harness, TaskId } from "@earendil-works/pi-durable";
+import {
+  RuntimeUnavailable,
+  SignInRequired,
+  type RuntimeFailure,
+} from "@neuve/runtime";
 import type { StageRecord } from "../src/pipeline.ts";
 import {
   routeFailureDiagnostic,
@@ -18,7 +24,8 @@ import {
 import { RunControlDoc } from "../src/pi/control.ts";
 import type { AgentStepCheckpoint } from "../src/pi/stages/agent-step.ts";
 import type { AgentStep } from "../src/pi/stages/agent.ts";
-import { world } from "./pi/stages/fixture.ts";
+import { testRuntimes, world } from "./pi/stages/fixture.ts";
+import { route, setup, waitHeld } from "./pi/stages/contract-fixture.ts";
 
 /** Words only the provider wrote: they must never reach the failed outcome. */
 const PROVIDER_WORDS = "PROVIDER-WORDS-5e1";
@@ -52,19 +59,10 @@ const failOption = (step: AgentStep<unknown, unknown>) => ({
 
 /** A pi-engine world whose step sets the option, or not. */
 const piWorld = (name: string, option: boolean, turnLimit = 6) =>
-  world(
-    name,
-    turnLimit,
-    false,
-    false,
-    "faux",
-    undefined,
-    false,
-    {},
-    {
-      ...(option ? { configure: failOption } : {}),
-    },
-  );
+  world(name, turnLimit, false, false, "faux", undefined, false, undefined, {
+    runtimes: testRuntimes().registry,
+    ...(option ? { configure: failOption } : {}),
+  });
 
 const outcomeOf = async (harness: Harness, id: TaskId<StageRecord>) =>
   (await harness.waitForTask(id, context)).state.outcome;
@@ -224,7 +222,8 @@ const holdOf = async (
     return {
       sent: run.sent.length,
       checkpoint:
-        checkpoint?.phase === "provider-held"
+        checkpoint?.phase === "provider-held" &&
+        checkpoint.engine !== "contract"
           ? {
               phase: checkpoint.phase,
               from: checkpoint.from.phase,
@@ -324,5 +323,106 @@ test("a second step waiting on the same key gets the first one's failure and mak
     ).toEqual({});
   } finally {
     await opened.harness.close(context);
+  }
+});
+
+const account = route.account.name;
+
+// Guards the contract engine's two hold sites (the contract phase's thrown failure and the open
+// phase's capability lookup): with the option, a provider failure ends failed with its tag and
+// reason and the policy's retryability; the account's own failures still hold.
+for (const internalRetries of [true, false])
+  test(`contract: TurnFailed provider-failed with the option ends failed (internal retries ${internalRetries})`, async () => {
+    const w = await setup(`unanswered-provider-failed-${internalRetries}`, [], {
+      configure: failOption,
+    });
+    w.fake.internalRetries(internalRetries);
+    w.fake.startError();
+    try {
+      const outcome = await w.start();
+      expect(outcome.status).toBe("failed");
+      if (outcome.status === "failed")
+        expect(outcome.error.detail).toEqual({
+          _tag: "TurnFailed",
+          account,
+          reason: "provider-failed",
+          tag: "TurnFailed",
+          message: "Turn failed: provider-failed.",
+          // The hold's own retryability: a runtime that retried internally is not retried again.
+          retryable: !internalRetries,
+        });
+      expect(
+        (await w.opened.harness.snapshot(RunControlDoc, context))?.held ?? {},
+      ).toEqual({});
+    } finally {
+      await w.close();
+    }
+  });
+
+test("contract: a session that failed to start, at the capability lookup, with the option ends failed", async () => {
+  const w = await setup("unanswered-start-failed", [], {
+    configure: failOption,
+  });
+  w.fake.capabilityError(
+    new RuntimeUnavailable({ account, reason: "start-failed" }),
+  );
+  try {
+    const outcome = await w.start();
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed")
+      expect(outcome.error.detail).toMatchObject({
+        _tag: "RuntimeUnavailable",
+        reason: "start-failed",
+        tag: "RuntimeUnavailable",
+        // The open site holds with internal retries off, so its hold was retryable.
+        retryable: true,
+      });
+    expect(w.fake.opens()).toBe(0);
+  } finally {
+    await w.close();
+  }
+});
+
+test("contract: UsageLimitReached from a turn still holds with the option", async () => {
+  const failure: RuntimeFailure = { _tag: "UsageLimitReached", account };
+  const w = await setup(
+    "unanswered-usage-limit",
+    [
+      async () => ({
+        status: "failed",
+        disposition: "broken",
+        failure,
+      }),
+    ],
+    { configure: failOption },
+  );
+  try {
+    await w.begin();
+    expect((await waitHeld(w.opened.harness)).failure).toEqual({
+      _tag: "UsageLimitReached",
+      account,
+    });
+  } finally {
+    await w.close();
+  }
+});
+
+test("contract: SignInRequired at the capability lookup still holds with the option", async () => {
+  const w = await setup("unanswered-sign-in", [], { configure: failOption });
+  w.fake.capabilityError(
+    new SignInRequired({
+      account,
+      hint: { kind: "settings", entry: "accounts" },
+    }),
+  );
+  try {
+    await w.begin();
+    expect(await waitHeld(w.opened.harness)).toMatchObject({
+      savedPhase: "open",
+      failure: { _tag: "SignInRequired", account },
+    });
+    expect(w.fake.opens()).toBe(0);
+  } finally {
+    await w.close();
   }
 });

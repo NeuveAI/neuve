@@ -13,6 +13,7 @@
     "@neuve/records-schema": "workspace:*",
     "@effect/platform-bun": "4.0.0",
     "@neuve/harness": "workspace:*",
+    "@neuve/runtime": "workspace:*",
     "@ace/host": "workspace:*",
     "@ace/channel": "workspace:*",
     "@earendil-works/pi-ai": "1.0.0",

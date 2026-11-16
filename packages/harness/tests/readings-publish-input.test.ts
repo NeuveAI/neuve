@@ -83,6 +83,7 @@ import type { RunLog, RunLogRecord } from "../src/run-log.ts";
 import { zeroUsage } from "../src/route.ts";
 import { frame } from "./fixtures/link.ts";
 import { eventsOf, inputOf, scratch } from "./publish-sections-fixtures.ts";
+import { testRuntimes } from "./pi/stages/fixture.ts";
 
 const ENGINE = "NEUVE_GRAPH_OUTLINE_EXECUTABLE";
 const source = captureOutlineSource();
@@ -667,6 +668,7 @@ const review = async (name: string, options: Options = {}) => {
   const registry = createRegistry();
   const services: StageServices = {
     ctx,
+    runtimes: testRuntimes().registry,
     routes: {
       bindAgentRoute: async () => {
         throw new Error("no model in this test");

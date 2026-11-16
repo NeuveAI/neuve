@@ -156,6 +156,7 @@ export class GatewayClient {
 		if ("people" in frame) { this.people = frame.people; return this.#emit(); }
 		if ("presence" in frame) { this.presence = frame.presence; return this.#emit(); }
 		if ("asks" in frame) { this.asks = frame.asks; return this.#emit(); }
+		if ("accounts" in frame) return;
 		if ("settings" in frame) { this.settingsVersion++; return this.#emit(); }
 		if ("rename" in frame) return;
 		if ("waiting" in frame) return;

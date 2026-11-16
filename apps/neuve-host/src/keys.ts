@@ -8,11 +8,16 @@ import { homedir } from "node:os";
 
 import type { MutableModels } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { ClaudeSubscriptionTokenRefused, isClaudeSubscriptionToken } from "../../../packages/harness/src/subscription-token.ts";
 
 import { config } from "./config";
 import type { CredentialStatus } from "./protocol";
 
 const sealed = new Map<string, string>();
+const subscriptionOnly = (name: string) => /^(ACE_)?ANTHROPIC_OAUTH_TOKEN$/.test(name);
+const refused = (name: string, value: string | undefined) =>
+	/^(ACE_)?ANTHROPIC_(API_KEY|AUTH_TOKEN)$/.test(name) && isClaudeSubscriptionToken(value);
+const usable = (name: string, value: string | undefined) => refused(name, value) ? undefined : value;
 
 /**
  * Agent shells inherit the worker's environment, and anyone admitted to a channel can run
@@ -24,7 +29,7 @@ const secret = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIALS?)$/;
 export function seal(): void {
 	for (const [name, value] of Object.entries(process.env)) {
 		if (!secret.test(name) || value === undefined) continue;
-		sealed.set(name, value);
+		if (!subscriptionOnly(name)) sealed.set(name, value);
 		delete process.env[name];
 	}
 }
@@ -71,7 +76,8 @@ function keychain(name: string): Promise<string | undefined> {
 }
 
 export async function key(name: string): Promise<string | undefined> {
-	return env(`ACE_${name}`) ?? env(name) ?? await keychain(name);
+	if (subscriptionOnly(name)) return undefined;
+	return usable(name, env(`ACE_${name}`) ?? env(name) ?? await keychain(name));
 }
 
 /** A read slower than this waited on something, usually a macOS prompt. */
@@ -117,6 +123,7 @@ export async function forget(name: string): Promise<boolean> {
 
 /** The environment variable that supplies `name` ahead of the keychain, if any. */
 export function overriding(name: string): string | undefined {
+	if (subscriptionOnly(name)) return undefined;
 	return env(`ACE_${name}`) ? `ACE_${name}` : env(name) ? name : undefined;
 }
 
@@ -132,6 +139,7 @@ let stuck = Promise.withResolvers<undefined>();
 let head: string | undefined;
 
 function look(name: string): Promise<Read> {
+	if (subscriptionOnly(name)) return Promise.resolve({});
 	let read = queued.get(name);
 	if (read) return read;
 	read = line.then(async () => {
@@ -169,7 +177,10 @@ function peek(name: string, fresh?: boolean): Promise<Read | undefined> {
 	return Promise.race([look(name), stuck.promise]);
 }
 
-function describe({ value, error }: Read, override?: string): CredentialStatus {
+function describe(name: string, { value, error }: Read, override?: string): CredentialStatus {
+	if (refused(name, override ? env(override) : value)) {
+		return { source: "unavailable", stored: !!value, ...(override ? {override} : {}), error: new ClaudeSubscriptionTokenRefused(override ?? name).message };
+	}
 	if (error) {
 		return { source: override ? "environment" : "unavailable", stored: null, override, error };
 	}
@@ -185,14 +196,18 @@ function describe({ value, error }: Read, override?: string): CredentialStatus {
  * marked `waiting` when that prompt is for this name or nothing has been read yet.
  */
 export async function latest(name: string, fresh?: boolean): Promise<CredentialStatus> {
+	if (subscriptionOnly(name)) return { source: "missing", stored: false };
 	const override = overriding(name);
+	if (override && refused(name, env(override))) {
+		return { source: "unavailable", stored: null, override, error: new ClaudeSubscriptionTokenRefused(override).message };
+	}
 	const read = await peek(name, fresh);
-	if (read) return describe(read, override);
+	if (read) return describe(name, read, override);
 	const last = known.get(name);
-	if (last && head !== name) return describe(last, override);
+	if (last && head !== name) return describe(name, last, override);
 	return {
 		...last
-			? describe(last, override)
+			? describe(name, last, override)
 			: { source: override ? "environment" : "unavailable", stored: null, override },
 		waiting: KEYCHAIN_WAITING,
 	};
@@ -227,11 +242,12 @@ export function settled(fresh?: boolean): { models: MutableModels; waiting(): bo
 	let waiting = false;
 	return {
 		models: catalog(async (name) => {
+			if (subscriptionOnly(name)) return undefined;
 			const found = env(`ACE_${name}`) ?? env(name);
-			if (found) return found;
+			if (found) return usable(name, found);
 			const read = await peek(name, fresh);
 			if (!read) waiting = true;
-			return (read ?? known.get(name))?.value;
+			return usable(name, (read ?? known.get(name))?.value);
 		}),
 		waiting: () => waiting,
 	};

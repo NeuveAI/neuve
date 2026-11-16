@@ -22,6 +22,7 @@ import {
 } from "@ace/ui/icons";
 import type { ProviderSettings, Settings as HostSettings } from "@ace/host/protocol";
 
+import { HostAccounts } from "./accounts";
 import { useCompute } from "./compute";
 import { desktop } from "./desktop";
 import { TeamSettings } from "./directory-settings";
@@ -562,6 +563,7 @@ export function Settings(
 						{visited.has("providers") && (
 							<div hidden={section !== "providers"}>
 								<Page>
+									<HostAccounts host={host} />
 									{/* Keychain unlocks and environment changes happen outside Ace. */}
 									<Group title="API keys" action={refresh("Refresh")}>
 										{result.settings?.providers.map((provider) => (

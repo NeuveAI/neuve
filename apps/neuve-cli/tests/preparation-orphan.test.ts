@@ -158,7 +158,11 @@ test.each([
         join(directory, "cache"),
         kind,
       ],
-      { env: { ...process.env }, stdout: "ignore", stderr: "ignore" },
+      {
+        env: { ...process.env, HOME: directory, TMPDIR: directory },
+        stdout: "ignore",
+        stderr: "ignore",
+      },
     );
     let engine: number | undefined;
     try {
@@ -209,7 +213,11 @@ test("prepare-commit stops Graph's engine while its finalizer waits on a lock", 
       join(directory, "cache"),
       "prepare-commit",
     ],
-    { env: { ...process.env }, stdout: "ignore", stderr: "ignore" },
+    {
+      env: { ...process.env, HOME: directory, TMPDIR: directory },
+      stdout: "ignore",
+      stderr: "ignore",
+    },
   );
   let engine: number | undefined;
   let release = () => {};
@@ -491,7 +499,12 @@ test.each([
                 stdin: "ignore",
                 stdout: "pipe",
                 stderr: "ignore",
-                env: { ...process.env, PREPARATION_PARENT_UNNAMED: unnamed },
+                env: {
+                  ...process.env,
+                  HOME: directory,
+                  TMPDIR: directory,
+                  PREPARATION_PARENT_UNNAMED: unnamed,
+                },
               },
             );
             let output = "";
@@ -527,6 +540,7 @@ test.each([
 );
 
 test("a child whose output has closed still exits with its failure", async () => {
+  const home = mkdtempSync(join(os.tmpdir(), "preparation-worker-home-"));
   const child = spawn(
     process.execPath,
     [
@@ -539,7 +553,10 @@ test("a child whose output has closed still exits with its failure", async () =>
       "--parent-pid",
       String(process.pid),
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    {
+      env: { ...process.env, HOME: home, TMPDIR: home },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
   );
   const exited = new Promise<number | null>((resolve) =>
     child.once("exit", (code) => resolve(code)),
@@ -551,6 +568,8 @@ test("a child whose output has closed still exits with its failure", async () =>
     expect(code).toBe(2);
   } finally {
     child.kill("SIGKILL");
+    await exited;
+    rmSync(home, { recursive: true, force: true });
   }
 }, 30000);
 
@@ -650,7 +669,11 @@ test("a preparation failure names its bounded cause chain on one line", async ()
       executable,
       join(directory, "cache"),
     ],
-    { stdout: "ignore", stderr: "pipe" },
+    {
+      env: { ...process.env, HOME: directory, TMPDIR: directory },
+      stdout: "ignore",
+      stderr: "pipe",
+    },
   );
   try {
     const [code, stderr] = await Promise.all([
@@ -750,7 +773,12 @@ test.skipIf(graphPrerequisite.skip).each(["prepare-code", "prepare-commit"])(
         kind,
       ],
       {
-        env: { ...process.env, ENTIRE_GRAPH_SERVICE: "off" },
+        env: {
+          ...process.env,
+          HOME: directory,
+          TMPDIR: directory,
+          ENTIRE_GRAPH_SERVICE: "off",
+        },
         stdout: "ignore",
         stderr: "pipe",
       },
@@ -821,7 +849,11 @@ test("a preparation failure retains nested causes on the same line", async () =>
       join(directory, "cache"),
       "failure-chain",
     ],
-    { stdout: "ignore", stderr: "pipe" },
+    {
+      env: { ...process.env, HOME: directory, TMPDIR: directory },
+      stdout: "ignore",
+      stderr: "pipe",
+    },
   );
   try {
     const [code, stderr] = await Promise.all([

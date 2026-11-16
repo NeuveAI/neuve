@@ -85,6 +85,8 @@ async function setup(prepare = true) {
         env: {
           ...process.env,
           ...env,
+          HOME: root,
+          TMPDIR: root,
           NEUVE_BUDGET_DIRECTORY: directory,
           NEUVE_SHARED_TEST: JSON.stringify({
             repository: path,
@@ -231,7 +233,12 @@ const cli = async (
       ...(json ? ["--json"] : []),
     ],
     {
-      env: { ...process.env, NEUVE_BUDGET_DIRECTORY: s.directory },
+      env: {
+        ...process.env,
+        HOME: s.root,
+        TMPDIR: s.root,
+        NEUVE_BUDGET_DIRECTORY: s.directory,
+      },
       stdout: "pipe",
       stderr: "pipe",
     },

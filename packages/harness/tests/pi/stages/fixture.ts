@@ -1,3 +1,9 @@
+import {
+  type AccountName,
+  type RuntimeError,
+  type RuntimeRegistryShape,
+  type RuntimeCapabilities,
+} from "@neuve/runtime";
 // Why (0014, the pi port's restart and policy boundaries): an agent step runs on pi's own generation
 // and tool tasks, so the stage's bounded policy has to hold through pi's native boundaries. These
 // run the production agent step, its kind's static extension and the runtime's route bindings on a
@@ -36,7 +42,7 @@ import {
   type TaskId,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { Context, Effect, Layer, Scope, Tracer } from "effect";
+import { Context, Effect, Layer, Scope, Stream, Tracer } from "effect";
 import { z } from "zod";
 import {
   Blobs,
@@ -46,7 +52,7 @@ import {
   storeLocationIn,
 } from "@neuve/records-core";
 import { defaultConfig } from "../../../src/config.ts";
-import type { RouteEffort } from "../../../src/route.ts";
+import type { DirectRouteConfig, RouteEffort } from "../../../src/route.ts";
 import { HandleRegistry } from "../../../src/lookups.ts";
 import { McpClients, mcpClientsLayer } from "../../../src/mcp-client.ts";
 import {
@@ -83,7 +89,57 @@ import {
   stageRunner,
   type StageServices,
 } from "../../../src/pi/stages/services.ts";
+import { Scheduler } from "../../../src/budget/scheduler.ts";
+import { contractSessionSlots } from "../../../src/pi/session-slots.ts";
+import {
+  exportingStorage,
+  type ExportOnClose,
+} from "../../../src/pi/storage.ts";
+import type { ContractPort } from "../../../src/pi/stages/contract-step.ts";
 import { toolState } from "../../../src/pi/stages/tool-state.ts";
+
+/** A stage's injected registry: unused operations fail instead of opening anything. */
+export const testRuntimes = () => {
+  const calls: AccountName[] = [];
+  let sessionOpens = 0;
+  const policy: { ownsLoop: boolean; error?: RuntimeError } = {
+    ownsLoop: false,
+  };
+  const capabilities: RuntimeCapabilities = {
+    ownsLoop: false,
+    resume: false,
+    fork: false,
+    interrupt: false,
+    modelSwitchInSession: false,
+    structuredOutput: false,
+    steering: false,
+    approvals: false,
+    perRequestTelemetry: false,
+    byteExactCapture: false,
+    nativeToolServer: false,
+    statusProbe: false,
+    internalRetries: false,
+  };
+  const unused = () => Effect.die(new Error("Unused registry operation"));
+  const registry: RuntimeRegistryShape = {
+    accountEvents: Stream.empty,
+    capabilities: (name) =>
+      Effect.suspend(() => {
+        calls.push(name);
+        return policy.error === undefined
+          ? Effect.succeed({ ...capabilities, ownsLoop: policy.ownsLoop })
+          : Effect.fail(policy.error);
+      }),
+    continuation: unused,
+    probe: unused,
+    signOut: unused,
+    openSession: () => {
+      sessionOpens++;
+      return unused();
+    },
+  };
+  return { registry, policy, calls, sessionOpens: () => sessionOpens };
+};
 
 const directory = mkdtempSync(join(tmpdir(), "pi-stage-agent-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -123,20 +179,31 @@ export const world = async (
   distinct = false,
   strictAnswer = false,
   api = "faux",
-  transport?: Pick<RouteTransportOptions, "route" | "fetch" | "auth">,
+  transport?: Pick<RouteTransportOptions, "fetch" | "auth"> & {
+    readonly route: DirectRouteConfig;
+  },
   durableCapture = false,
   extras: {
     /** More tools for the agent, built over its own handle registry. */
     readonly tools?: (handles: HandleRegistry) => ReadonlyArray<ToolSpec>;
     /** Whether the stage runner traces into the run log, so tool-call spans are written. */
     readonly traced?: boolean;
+    /** The route's token count the stage services offer, for a test that counts or must not. */
+    readonly countTokens?: StageServices["countTokens"];
   } = {},
   contract?: {
+    readonly capture?: import("../../../src/pi/capture/types.ts").Capture;
+    readonly onClose?: ExportOnClose<void>;
+    readonly runtimes?: RuntimeRegistryShape;
+    readonly sessions?: StageServices["contractSessions"];
+    readonly afterCommit?: (port: ContractPort) => Promise<void>;
+    readonly beforeCommit?: (port: ContractPort) => Promise<void>;
     readonly configure?: (
       step: AgentStep<unknown, unknown>,
     ) => AgentStep<unknown, unknown>;
   },
 ) => {
+  const runtime = testRuntimes();
   const root = join(directory, name);
   const location = storeLocationIn(root);
   const scope = await Effect.runPromise(Scope.make());
@@ -206,6 +273,7 @@ export const world = async (
   const capture = (event: CaptureEvent) => {
     events.push(event);
     journal?.capture(event);
+    contract?.capture?.(event);
   };
   journal?.capture({
     type: "run.start",
@@ -336,6 +404,15 @@ export const world = async (
         capture(event);
       },
       registry,
+      runtimes: contract?.runtimes ?? runtime.registry,
+      contractSessions:
+        contract?.sessions ??
+        contractSessionSlots(
+          new Scheduler(8, 8, 8),
+          ctx.config.budgets.callsInFlight,
+          runId,
+        ),
+      countTokens: extras.countTokens,
       integrations: { status: "absent", path: "(none)" },
       clients,
       run: extras.traced
@@ -401,9 +478,45 @@ export const world = async (
           },
         }
       : kinds.agentStep;
-    registry.install(defineExtension({ name: "neuve.stages", tasks: [step] }));
+    const contractPhase = step.definition.phases.contract;
+    const instrumentRuntime = (
+      runtime: Parameters<typeof contractPhase>[1],
+    ): typeof runtime => ({
+      ...runtime,
+      commit: async (...args) => {
+        await contract?.beforeCommit?.(runtime);
+        const result = await runtime.commit(...args);
+        await contract?.afterCommit?.(runtime);
+        return result;
+      },
+    });
+    const instrumented =
+      contract?.afterCommit === undefined &&
+      contract?.beforeCommit === undefined
+        ? step
+        : ({
+            definition: {
+              ...step.definition,
+              phases: {
+                ...step.definition.phases,
+                contract: async (task, runtime, c) =>
+                  contractPhase(task, instrumentRuntime(runtime), c),
+              },
+              abort: async (task, runtime, c) =>
+                step.definition.abort(task, instrumentRuntime(runtime), c),
+            },
+          } satisfies typeof step);
+    registry.install(
+      defineExtension({ name: "neuve.stages", tasks: [instrumented] }),
+    );
+    const storage = await openNodeSqliteStorage(database);
     harness = await Harness.open(
-      await openNodeSqliteStorage(database),
+      contract?.onClose === undefined
+        ? storage
+        : exportingStorage(storage, {
+            mode: () => "ended",
+            onClose: contract.onClose,
+          }).storage,
       {
         models,
         registry,
@@ -445,8 +558,11 @@ export const world = async (
 
   return {
     policy,
+    runtime,
     finalizationReplays: () => finalizationReplays,
     ctx,
+    clients,
+    agentFor,
     sent,
     script,
     probes,

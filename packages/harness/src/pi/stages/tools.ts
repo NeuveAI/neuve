@@ -596,7 +596,14 @@ const registration = (
  */
 export const roundEnds = (
   agent: AgentSpec<unknown>,
-  facts: ReturnType<typeof transcriptFacts>,
+  facts: {
+    readonly turns: number;
+    readonly lastInput: number;
+    readonly calls: ReadonlyArray<{
+      readonly name: string;
+      readonly arguments: unknown;
+    }>;
+  },
   ceiling: number,
   deadline?: number,
 ) => {
@@ -617,7 +624,7 @@ export const roundEnds = (
 };
 
 /** The budget line; a result whose tool declares a larger cap says that one is its own. */
-const budgetLine = (
+export const budgetLine = (
   agent: AgentSpec<unknown>,
   turn: number,
   cap?: ResultCap,
@@ -680,7 +687,7 @@ const answer = (applied: AppliedCall): ToolExecutionResult => ({
  * The submit tool's answer (§3.4, §8.4): code's checks, then its advice once per context, then
  * acceptance. The context's earlier submissions say whether the advice was already given.
  */
-const submitted = <O>(
+export const submitted = <O>(
   agent: AgentSpec<O>,
   output: O,
   earlier: ReadonlyArray<unknown>,

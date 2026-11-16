@@ -14,7 +14,7 @@ export const HeldReview = z.strictObject({
   seq: z.int(),
   pid: z.int(),
   at: z.string(),
-  provider: z.enum(["anthropic", "openai"]),
+  provider: z.enum(["anthropic", "openai", "claude"]),
   route: z.string(),
   credential: z.string(),
 });

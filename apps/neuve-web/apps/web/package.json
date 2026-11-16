@@ -29,7 +29,8 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwindcss": "^4",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "@neuve/runtime": "workspace:*"
   },
   "devDependencies": {
     "@tanstack/devtools-vite": "0.8.5",

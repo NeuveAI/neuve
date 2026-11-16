@@ -460,19 +460,22 @@ test("send all back reports a pruned capture and continues with the next failed 
       return jobs;
     }).pipe(Effect.provide(JobQueue.layer)),
   );
-  const result = Bun.spawnSync([
-    process.execPath,
-    "--no-env-file",
-    CLI,
-    "review",
-    "dead-letter",
-    "send-back",
-    "--all",
-    "--store",
-    location.directory,
-    "--repo",
-    join(base, "not-a-repository"),
-  ]);
+  const result = Bun.spawnSync(
+    [
+      process.execPath,
+      "--no-env-file",
+      CLI,
+      "review",
+      "dead-letter",
+      "send-back",
+      "--all",
+      "--store",
+      location.directory,
+      "--repo",
+      join(base, "not-a-repository"),
+    ],
+    { env: { ...process.env, HOME: base, TMPDIR: base } },
+  );
   try {
     expect(result.exitCode).toBe(0);
     const sent = JSON.parse(result.stdout.toString());

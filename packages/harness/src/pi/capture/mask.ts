@@ -3,13 +3,22 @@ import {
   encodeArtifactText,
 } from "./representation.ts";
 import { maskText } from "../../masking.ts";
+import { readData } from "@neuve/records-core";
 import type {
   CallRecord,
   RunDump,
   SessionDump,
   StoredDocument,
 } from "./dump.ts";
-import type { Json } from "./types.ts";
+import { Json } from "./types.ts";
+import { ContractState, type ToolState } from "../stages/contract-schema.ts";
+import {
+  Finding,
+  FinderSubmission,
+  ScopeFitSubmission,
+} from "../../find-schema.ts";
+import type { TurnOutcome } from "@neuve/runtime";
+import { z } from "zod";
 import {
   foldJson,
   isJsonObject as isObject,
@@ -554,26 +563,256 @@ const maskInbox = (value: Json, declared: ReadonlyArray<string>): Json => {
   };
 };
 
+const maskContractOutcome = (
+  outcome: TurnOutcome,
+  declared: ReadonlyArray<string>,
+): TurnOutcome => {
+  if (outcome.status === "failed") {
+    const failure = outcome.failure;
+    if (
+      (failure._tag === "SignInRequired" ||
+        failure._tag === "AccountRejected") &&
+      failure.hint?.kind === "command" &&
+      failure.hint.command === "claude auth login" &&
+      failure.hint.environment !== undefined
+    ) {
+      const folder = maskString(
+        failure.hint.environment.CLAUDE_CONFIG_DIR,
+        declared,
+      );
+      return {
+        ...outcome,
+        failure: {
+          ...failure,
+          hint: {
+            ...failure.hint,
+            environment: {
+              CLAUDE_CONFIG_DIR: folder.startsWith("/") ? folder : `/${folder}`,
+            },
+          },
+        },
+      };
+    }
+    return outcome;
+  }
+  return outcome.status === "completed" &&
+    outcome.structuredOutput !== undefined
+    ? {
+        ...outcome,
+        structuredOutput: z
+          .json()
+          .parse(maskJson(outcome.structuredOutput, declared)),
+      }
+    : outcome;
+};
+
+const maskToolState = (
+  state: ToolState,
+  declared: ReadonlyArray<string>,
+): ToolState => {
+  const narrative = (text: string, schema: z.ZodString) =>
+    maskString(text, declared).slice(0, schema.maxLength ?? undefined);
+  const sightings = (
+    items: NonNullable<ToolState["handles"]>["seen"][number][1],
+  ) =>
+    items.map((sighting) => ({
+      ...sighting,
+      args: z.json().parse(maskJson(sighting.args, declared)),
+    }));
+  return {
+    ...state,
+    ...(state.handles === undefined
+      ? {}
+      : {
+          handles: {
+            handles: state.handles.handles.map(([id, handle]) => [
+              id,
+              { ...handle, sightings: sightings(handle.sightings) },
+            ]),
+            seen: state.handles.seen.map(([id, items]) => [
+              id,
+              sightings(items),
+            ]),
+          },
+        }),
+    ...(state.findings === undefined
+      ? {}
+      : {
+          findings: {
+            ...state.findings,
+            findings: state.findings.findings.map((finding) => ({
+              ...finding,
+              claim: narrative(finding.claim, Finding.shape.claim),
+              evidence: finding.evidence.map((text) =>
+                narrative(text, Finding.shape.evidence.element),
+              ),
+            })),
+            notes: state.findings.notes.map((text) =>
+              narrative(text, FinderSubmission.shape.notes.element),
+            ),
+            ...(state.findings.conditions === undefined
+              ? {}
+              : {
+                  conditions: state.findings.conditions.map((condition) => ({
+                    ...condition,
+                    note: narrative(
+                      condition.note,
+                      ScopeFitSubmission.shape.conditions.element.shape.note,
+                    ),
+                  })),
+                }),
+          },
+        }),
+  };
+};
+
+/** Contract identities and policy tokens are protocol; inputs and returned values are content. */
+const maskContractState = (
+  state: ContractState,
+  declared: ReadonlyArray<string>,
+): ContractState => ({
+  ...state,
+  system: maskString(state.system, declared),
+  outputSchema: z
+    .record(z.string(), z.json())
+    .parse(walk(state.outputSchema, "schema", undefined, declared)),
+  declarations: state.declarations.map((tool) => ({
+    ...tool,
+    description: maskString(tool.description, declared),
+    parameters: z
+      .record(z.string(), z.json())
+      .parse(walk(tool.parameters, "schema", undefined, declared)),
+  })),
+  rounds: state.rounds.map((round) => ({
+    ...round,
+    prompt: maskString(round.prompt, declared),
+    recovery:
+      round.recovery === null ? null : maskString(round.recovery, declared),
+    outcome:
+      round.outcome === null
+        ? null
+        : maskContractOutcome(round.outcome, declared),
+  })),
+  events: state.events.map((event) =>
+    event.type === "message.finished"
+      ? {
+          ...event,
+          toolCalls: event.toolCalls.map((call) => ({
+            ...call,
+            input: z.json().parse(maskJson(call.input, declared)),
+          })),
+        }
+      : event.type === "turn.finished"
+        ? { ...event, outcome: maskContractOutcome(event.outcome, declared) }
+        : event.type === "text"
+          ? { ...event, text: maskString(event.text, declared) }
+          : event.type === "tool.started" || event.type === "approval.requested"
+            ? {
+                ...event,
+                input: z.json().parse(maskJson(event.input, declared)),
+              }
+            : event,
+  ),
+  settlements: Object.fromEntries(
+    Object.entries(state.settlements).map(([id, outcome]) => [
+      id,
+      maskContractOutcome(outcome, declared),
+    ]),
+  ),
+  calls: Object.fromEntries(
+    Object.entries(state.calls).map(([id, call]) => [
+      id,
+      call.status === "completed"
+        ? {
+            ...call,
+            outcome: {
+              ...call.outcome,
+              text: maskString(call.outcome.text, declared),
+              ...(call.outcome.error === undefined
+                ? {}
+                : { error: maskString(call.outcome.error, declared) }),
+            },
+          }
+        : call,
+    ]),
+  ),
+  toolState:
+    state.toolState === null ? null : maskToolState(state.toolState, declared),
+  ending:
+    state.ending === null
+      ? null
+      : {
+          ...state.ending,
+          ...(state.ending.output === undefined
+            ? {}
+            : {
+                output: z.json().parse(maskJson(state.ending.output, declared)),
+              }),
+          ...(state.ending.repairedFrom === undefined
+            ? {}
+            : {
+                repairedFrom: z
+                  .json()
+                  .parse(maskJson(state.ending.repairedFrom, declared)),
+              }),
+        },
+});
+
+const maskContractDocument = (
+  document: StoredDocument,
+  declared: ReadonlyArray<string>,
+): Json => {
+  // Drop unknown fields: this build cannot mask a newer build's fields for export.
+  if (document.kind === "neuve.contract-context") {
+    const value = z.object({ data: z.json() }).parse(document.value);
+    return value.data === null
+      ? value
+      : Json.parse({
+          data: maskContractState(
+            readData(ContractState, value.data, { source: document.kind }),
+            declared,
+          ),
+        });
+  }
+  const value = z
+    .object({ contexts: z.record(z.string(), z.json()) })
+    .parse(document.value);
+  return Json.parse({
+    contexts: Object.fromEntries(
+      Object.entries(value.contexts).map(([id, state]) => [
+        id,
+        maskContractState(
+          readData(ContractState, state, { source: document.kind }),
+          declared,
+        ),
+      ]),
+    ),
+  });
+};
+
 const maskDocument = (
   document: StoredDocument,
   declared: ReadonlyArray<string>,
 ): StoredDocument => ({
   ...document,
   value:
-    document.kind === "pi.agent" && isObject(document.value)
-      ? fromEntries(
-          Object.entries(document.value).map(([key, value]) => [
-            key,
-            key === "instructions" || key === "cwd"
-              ? maskJson(value, declared)
-              : value,
-          ]),
-        )
-      : document.kind === "pi.inbox"
-        ? maskInbox(document.value, declared)
-        : document.kind === "pi.live"
-          ? maskLive(document.value, declared)
-          : maskJson(document.value, declared),
+    document.kind === "neuve.contract-context" ||
+    document.kind === "neuve.contract-partials"
+      ? maskContractDocument(document, declared)
+      : document.kind === "pi.agent" && isObject(document.value)
+        ? fromEntries(
+            Object.entries(document.value).map(([key, value]) => [
+              key,
+              key === "instructions" || key === "cwd"
+                ? maskJson(value, declared)
+                : value,
+            ]),
+          )
+        : document.kind === "pi.inbox"
+          ? maskInbox(document.value, declared)
+          : document.kind === "pi.live"
+            ? maskLive(document.value, declared)
+            : maskJson(document.value, declared),
 });
 
 /** A call's restricted form: its body, events and error masked as content; its identities, route, model and outcome kept. */
@@ -652,6 +891,20 @@ export const restrictRun = (
   declared: ReadonlyArray<string>,
 ): RunDump => ({
   ...run,
+  ...(run.contractContexts === undefined
+    ? {}
+    : {
+        contractContexts: run.contractContexts.map((context) => ({
+          ...context,
+          state: maskContractState(context.state, declared),
+          settlements: Object.fromEntries(
+            Object.entries(context.settlements).map(([id, outcome]) => [
+              id,
+              maskContractOutcome(outcome, declared),
+            ]),
+          ),
+        })),
+      }),
   stages: run.stages.map((stage) =>
     stage.reason === undefined
       ? stage

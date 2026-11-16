@@ -2,7 +2,12 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { enqueueTelemetry, type RunLog } from "./run-log.ts";
-import { costOf, type AnyRouteConfig } from "./route.ts";
+import {
+  costOf,
+  requireDirectRoute,
+  type AnyRouteConfig,
+  type DirectRouteConfig,
+} from "./route.ts";
 import { isRefusal } from "./pi/providers/failure.ts";
 import { callUsageOf } from "./pi/providers/usage.ts";
 
@@ -44,10 +49,12 @@ export class CallTelemetry {
     reasoning: { deltas: 0, characters: 0 },
     toolArguments: { deltas: 0, characters: 0 },
   };
+  private readonly route: DirectRouteConfig;
   constructor(
     private readonly log: RunLog | undefined,
-    private readonly route: AnyRouteConfig,
+    route: AnyRouteConfig,
   ) {
+    this.route = requireDirectRoute(route);
     this.write("model.call.start");
   }
   bind(
@@ -126,34 +133,43 @@ export class CallTelemetry {
     // A failed decoder can return zero SDK usage after the provider has already reported billing.
     // Responses input_tokens includes reads and writes. Ordinary input subtracts both:
     // https://developers.openai.com/api/docs/guides/prompt-caching#monitor-cache-performance
-    const usage =
-      message.usage.totalTokens > 0 || raw === undefined
-        ? callUsageOf(message.usage)
-        : this.route.provider === "anthropic"
-          ? {
-              input: raw.input_tokens ?? 0,
-              output: raw.output_tokens ?? 0,
-              cacheWrite5m: Math.max(
-                0,
-                (raw.cache_creation_input_tokens ?? 0) -
-                  (raw.cache_creation?.ephemeral_1h_input_tokens ?? 0),
-              ),
-              cacheWrite1h: raw.cache_creation?.ephemeral_1h_input_tokens ?? 0,
-              cacheRead: raw.cache_read_input_tokens ?? 0,
-            }
-          : {
-              input: Math.max(
-                0,
-                (raw.input_tokens ?? 0) -
-                  (raw.input_tokens_details?.cached_tokens ?? 0) -
-                  (raw.input_tokens_details?.cache_write_tokens ?? 0),
-              ),
-              output: raw.output_tokens ?? 0,
-              cacheWrite5m: raw.input_tokens_details?.cache_write_tokens ?? 0,
-              cacheWrite1h: 0,
-              cacheRead: raw.input_tokens_details?.cached_tokens ?? 0,
-              thinking: raw.output_tokens_details?.reasoning_tokens ?? 0,
-            };
+    const usage = (() => {
+      if (message.usage.totalTokens > 0 || raw === undefined)
+        return callUsageOf(message.usage);
+      const route = this.route;
+      switch (route.provider) {
+        case "anthropic":
+          return {
+            input: raw.input_tokens ?? 0,
+            output: raw.output_tokens ?? 0,
+            cacheWrite5m: Math.max(
+              0,
+              (raw.cache_creation_input_tokens ?? 0) -
+                (raw.cache_creation?.ephemeral_1h_input_tokens ?? 0),
+            ),
+            cacheWrite1h: raw.cache_creation?.ephemeral_1h_input_tokens ?? 0,
+            cacheRead: raw.cache_read_input_tokens ?? 0,
+          };
+        case "openai":
+          return {
+            input: Math.max(
+              0,
+              (raw.input_tokens ?? 0) -
+                (raw.input_tokens_details?.cached_tokens ?? 0) -
+                (raw.input_tokens_details?.cache_write_tokens ?? 0),
+            ),
+            output: raw.output_tokens ?? 0,
+            cacheWrite5m: raw.input_tokens_details?.cache_write_tokens ?? 0,
+            cacheWrite1h: 0,
+            cacheRead: raw.input_tokens_details?.cached_tokens ?? 0,
+            thinking: raw.output_tokens_details?.reasoning_tokens ?? 0,
+          };
+        default: {
+          const exhaustive: never = route;
+          return exhaustive;
+        }
+      }
+    })();
     const reported =
       message.usage.totalTokens > 0 ||
       failureKind === undefined ||

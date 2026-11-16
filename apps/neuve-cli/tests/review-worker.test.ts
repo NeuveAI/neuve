@@ -18,6 +18,7 @@ import {
   JobQueue,
   Worker,
   resolveStoreLocation,
+  type StoreLocation,
 } from "@neuve/records-core";
 import { execute, withStore } from "../src/records-cli.ts";
 import {
@@ -27,6 +28,7 @@ import {
   WORKER_RECHECK_MS,
 } from "../src/review-worker.ts";
 
+import { stopStoreWorker } from "../../../packages/records-core/tests/worker-process.ts";
 import { workerSuite } from "../../../packages/records-core/tests/worker-suite.ts";
 
 const workers = workerSuite();
@@ -71,14 +73,31 @@ const FIXTURE = resolve(import.meta.dir, "fixtures/review-worker.ts");
 
 const directories: Array<string> = [];
 const children: Array<ReturnType<typeof Bun.spawn>> = [];
+const workerLocations: StoreLocation[] = [];
+const originalHome = process.env["HOME"];
+const originalTmpdir = process.env["TMPDIR"];
+beforeEach(async () => {
+  const home = await mkdtemp(join(tmpdir(), "review-worker-home-"));
+  directories.push(home);
+  process.env["HOME"] = home;
+  process.env["TMPDIR"] = home;
+});
 afterEach(async () => {
   spawnSpy.mockRestore();
   const owned = children.splice(0);
-  for (const child of owned) child.kill();
+  for (const child of owned) if (child.exitCode === null) child.kill();
   await Promise.all(owned.map((child) => child.exited));
+  for (const location of workerLocations.splice(0)) {
+    const socket = await Effect.runPromise(Worker.socketPathFor(location));
+    if (existsSync(socket)) await stopStoreWorker(location);
+  }
   await Promise.all(
     directories.splice(0).map((d) => rm(d, { recursive: true, force: true })),
   );
+  if (originalHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = originalHome;
+  if (originalTmpdir === undefined) delete process.env["TMPDIR"];
+  else process.env["TMPDIR"] = originalTmpdir;
 });
 
 const canBind = (() => {
@@ -114,6 +133,7 @@ const queued = async () => {
       ),
     ),
   );
+  workerLocations.push(await Effect.runPromise(resolveStoreLocation(repo)));
   const marker = join(root, "marker.log");
   await writeFile(marker, "");
   return { root, repo, seq: job.job.seq, marker };

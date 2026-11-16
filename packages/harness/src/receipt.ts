@@ -2,6 +2,11 @@ import { judgementCounts } from "./judgement-trace.ts";
 import { effectiveCutoffAt } from "./run-schedule.ts";
 
 import { z } from "zod";
+import {
+  CallUsage as RuntimeCallUsage,
+  type RuntimeEvent,
+} from "@neuve/runtime";
+import { contractUsage } from "./pi/stages/contract-schema.ts";
 
 import { Clock, Effect } from "effect";
 import {
@@ -26,7 +31,13 @@ import { type Stage } from "./budget.ts";
 import type { PipelineConfig } from "./config.ts";
 import type { FinderStatus } from "./pi/stages/finder-task.ts";
 import type { StageRecord } from "./pipeline.ts";
-import { addUsage, costOf, zeroUsage, type CallUsage } from "./route.ts";
+import {
+  routeAccount,
+  addUsage,
+  costOf,
+  zeroUsage,
+  type CallUsage,
+} from "./route.ts";
 import type { RunLog, RunLogRecord } from "./run-log.ts";
 
 /**
@@ -154,14 +165,52 @@ export const legacyStageTelemetry = ({
   ...stage
 }: StageCallTelemetry): StageTelemetry => stage;
 
-const usageOf = (records: ReadonlyArray<RunLogRecord>) =>
-  records
+const usageOf = (records: ReadonlyArray<RunLogRecord>, contract = false) => {
+  if (contract) {
+    const ledger = z.object({
+      contextKey: z.string(),
+      at: z.iso.datetime({ offset: true }),
+      turnId: z.string(),
+      model: z.string(),
+      scope: z.enum(["request", "turn"]),
+      revision: z.int().nonnegative(),
+      usage: RuntimeCallUsage,
+    });
+    const contexts = new Map<
+      string,
+      { revision: number; event: RuntimeEvent }[]
+    >();
+    for (const record of records) {
+      if (record.type !== "runtime.usage") continue;
+      const { contextKey, revision, ...usage } = ledger.parse(record);
+      const entries = contexts.get(contextKey) ?? [];
+      entries.push({
+        revision,
+        event: { type: "usage", costUsd: null, ...usage },
+      });
+      contexts.set(contextKey, entries);
+    }
+    return [...contexts.values()].reduce(
+      (sum, entries) =>
+        addUsage(
+          sum,
+          contractUsage({
+            events: entries
+              .sort((a, b) => a.revision - b.revision)
+              .map(({ event }) => event),
+          }),
+        ),
+      zeroUsage,
+    );
+  }
+  return records
     .filter((record) => record.type === "model.call")
     .reduce<CallUsage>(
       (sum, record) =>
         addUsage(sum, (record["usage"] as CallUsage | undefined) ?? zeroUsage),
       zeroUsage,
     );
+};
 
 /** Usage as Records stores it: thinking only when the provider reported it. */
 const tokenUsage = (usage: CallUsage): CallTokenUsage => ({
@@ -191,9 +240,14 @@ export const stageTelemetry = (
 ): StageCallTelemetry => {
   const agent = stage.agent ?? stage.stage;
   const own = records.filter(
-    (record) => record.type === "model.call" && record["agent"] === agent,
+    (record) =>
+      (record.type === "model.call" || record.type === "runtime.usage") &&
+      record["agent"] === agent,
   );
-  const usage = usageOf(own.filter(isCompletedModelCall));
+  const usage =
+    config.route.provider === "claude"
+      ? usageOf(own, true)
+      : usageOf(own.filter(isCompletedModelCall));
   const result = stage.agentResult;
   const limit =
     result === undefined
@@ -234,7 +288,9 @@ export const stageTelemetry = (
             restarted: result.restarted,
           },
         }),
-    ...attemptFields(own, config),
+    ...(config.route.provider === "claude"
+      ? modelCallCounts(own)
+      : attemptFields(own, config)),
     usage: tokenUsage(usage),
     costUsd: usd(config, usage),
     ...(stage.note === undefined ? {} : { note: stage.note.slice(0, 2_000) }),
@@ -381,9 +437,28 @@ export const buildReceipt = (input: ReceiptInput): Receipt => {
   const cutShort = (stage: StageRecord) =>
     stage.status === "interrupted" || stage.status === "skipped";
   const timedOut = input.stages.some(cutShort);
-  const usage = usageOf(calls.filter(isCompletedModelCall));
+  const usage =
+    config.route.provider === "claude"
+      ? usageOf(records, true)
+      : usageOf(calls.filter(isCompletedModelCall));
   const organization = preflight?.["organization"];
   const unitCounts = unitCountsOf(records);
+  const account = routeAccount(config.route);
+  const credential = (() => {
+    const route = config.route;
+    switch (route.provider) {
+      case "anthropic":
+        return { credentialVariable: route.credentialVariable };
+      case "openai":
+        return { credentialSource: route.credentialSource };
+      case "claude":
+        return {};
+      default: {
+        const exhaustive: never = route;
+        return exhaustive;
+      }
+    }
+  })();
   const findersLine = findersEndedLine(records);
   const limitLine = findersAtLimitLine(records);
   const unusedNote = unusedVerifyNote(input.stages, records);
@@ -396,6 +471,9 @@ export const buildReceipt = (input: ReceiptInput): Receipt => {
     generation: input.generation,
     jobSeq: input.jobSeq,
     route: {
+      ...(account === undefined
+        ? {}
+        : { account: { name: account.name, kind: account.kind } }),
       provider: config.route.provider,
       model: config.route.model,
       effort: config.route.effort,
@@ -410,9 +488,7 @@ export const buildReceipt = (input: ReceiptInput): Receipt => {
             configuredCallsInFlight: config.budgets.callsInFlight,
           }),
       ...(usedFloor ? { budgetFloor: true } : {}),
-      ...(config.route.provider === "anthropic"
-        ? { credentialVariable: config.route.credentialVariable }
-        : { credentialSource: config.route.credentialSource }),
+      ...credential,
       organization:
         typeof organization === "string" && organization !== ""
           ? organization
@@ -449,7 +525,9 @@ export const buildReceipt = (input: ReceiptInput): Receipt => {
     },
     stages: input.stages.map((stage) => stageTelemetry(stage, records, config)),
     totals: {
-      ...attemptFields(calls, config),
+      ...(config.route.provider === "claude"
+        ? modelCallCounts(calls)
+        : attemptFields(calls, config)),
       retries:
         records.filter(
           (record) =>
@@ -717,8 +795,13 @@ export const receiptFromEvent = <E, R>(
 
 const fmtUsd = (usd: number) => `$${usd.toFixed(4)}`;
 /** The cost, or that it is unknown when the route has no price table (the ChatGPT plan). */
-const fmtCost = (usd: number | null) =>
-  usd === null ? "USD unknown (ChatGPT plan usage)" : fmtUsd(usd);
+/** An unpriced cost names the plan by the route's account kind; a receipt without one is ChatGPT's, as before. */
+const fmtCost = (usd: number | null, kind?: string | undefined) =>
+  usd !== null
+    ? fmtUsd(usd)
+    : kind === "claude-subscription"
+      ? "USD unknown (Claude plan usage)"
+      : "USD unknown (ChatGPT plan usage)";
 const fmtMs = (ms: number | null | undefined) =>
   ms === null || ms === undefined
     ? "-"
@@ -734,9 +817,9 @@ export const formatReceipt = (receipt: Receipt) => {
     `Run ${receipt.runId} (generation ${receipt.generation}, job ${receipt.jobSeq}): ${receipt.outcome}`,
     `range      ${receipt.range.baseRef} ${receipt.range.baseOid.slice(0, 12)}..${receipt.range.headOid.slice(0, 12)}`,
     `route      ${receipt.route.provider}/${receipt.route.model}, effort ${receipt.route.effort}, output cap ${receipt.route.maxOutputTokens.toLocaleString("en")}, ceiling ${receipt.route.contextCeiling.toLocaleString("en")}, ${receipt.route.callsInFlight} calls in flight${receipt.route.callsInFlightMin === undefined ? "" : ` (observed ${receipt.route.callsInFlightMin} to ${receipt.route.callsInFlightMax})`}${receipt.route.budgetFloor ? "; recovery floor used" : ""}`,
-    `key from   ${receipt.route.credentialVariable ?? "the Neuve sign-in (neuve auth login openai)"} (value never recorded); organisation ${receipt.route.organization ?? "not named by the provider"}`,
+    `key from   ${receipt.route.provider === "claude" && receipt.route.account?.kind === "claude-subscription" ? `the Claude Code sign-in of account ${receipt.route.account.name}` : (receipt.route.credentialVariable ?? "the Neuve sign-in (neuve auth login openai)")} (value never recorded); organisation ${receipt.route.organization ?? "not named by the provider"}`,
     `time       ${fmtMs(receipt.timing.wallMs)} wall; queue wait ${fmtMs(receipt.timing.queueWaitMs)}; ${receipt.timing.attempts} attempt(s); cut-off ${receipt.timeout.cutoffAt}`,
-    `cost       ${fmtCost(receipt.totals.costUsd)} over ${receipt.totals.modelCalls} model call(s), ${receipt.totals.retries} retr${receipt.totals.retries === 1 ? "y" : "ies"}; ${fmtTokens(receipt.totals.usage)}`,
+    `cost       ${fmtCost(receipt.totals.costUsd, receipt.route.account?.kind)} over ${receipt.totals.modelCalls} model call(s), ${receipt.totals.retries} retr${receipt.totals.retries === 1 ? "y" : "ies"}; ${fmtTokens(receipt.totals.usage)}`,
     ...(receipt.totals.failedModelCalls || receipt.totals.abortedModelCalls
       ? [
           `attempts   ${receipt.totals.failedModelCalls ?? 0} failed, ${receipt.totals.abortedModelCalls ?? 0} aborted`,
@@ -758,7 +841,7 @@ export const formatReceipt = (receipt: Receipt) => {
     );
     if (stage.modelCalls > 0)
       lines.push(
-        `  ${"".padEnd(22)} ${stage.modelCalls} call(s), ${fmtCost(stage.costUsd)}; ${fmtTokens(stage.usage)}`,
+        `  ${"".padEnd(22)} ${stage.modelCalls} call(s), ${fmtCost(stage.costUsd, receipt.route.account?.kind)}; ${fmtTokens(stage.usage)}`,
       );
     if (stage.note !== undefined)
       lines.push(`  ${"".padEnd(22)} ${stage.note}`);

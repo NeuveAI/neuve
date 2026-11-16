@@ -2,7 +2,8 @@
 // model calls. A step's result now says what the step answered to each of its answers at the time,
 // as recorded with each answer: refused by the schema, refused by the checks, advised, or
 // accepted. Each case says what it guards. The production agent step runs on a real pi harness
-// over SQLite (`pi/stages/fixture.ts`).
+// over SQLite (`pi/stages/fixture.ts`) and, for the contract engine, the fake runtime of
+// `pi/stages/contract-fixture.ts`.
 import { expect, test } from "bun:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
@@ -19,9 +20,11 @@ import { RECORDS, defineTool } from "../src/toolkit.ts";
 import {
   agentConversation,
   settled,
+  testRuntimes,
   toolResults,
   world,
 } from "./pi/stages/fixture.ts";
+import { setup, submit, usage } from "./pi/stages/contract-fixture.ts";
 
 type Seen = Array<ReadonlyArray<SubmissionOutcome> | undefined>;
 
@@ -53,8 +56,9 @@ const recorded = async (
     "faux",
     undefined,
     false,
-    {},
+    undefined,
     {
+      runtimes: testRuntimes().registry,
       configure: (step) => recording(seen)(adjust(step)),
     },
   );
@@ -298,6 +302,47 @@ test("a composition that ignores the list stores and records exactly what it did
     expect(JSON.stringify(stored)).not.toContain("submissions");
   } finally {
     await opened.harness.close(context);
+  }
+});
+
+// Guards the contract engine, which reaches the same result through its own rounds: a submit call
+// the schema refused, then final answers refused by the schema and the checks, then accepted.
+test("contract: a refused submission, then final answers refused by the schema and the checks, then an accepted one", async () => {
+  const seen: Seen = [];
+  const refused = submit("refused", null);
+  const finalAnswer =
+    (structuredOutput: unknown) =>
+    async (turn: Parameters<Parameters<typeof setup>[1][number]>[0]) => {
+      expect(turn.final).toBe(true);
+      await turn.message();
+      await turn.charge(usage);
+      return {
+        status: "completed" as const,
+        structuredOutput: structuredOutput as never,
+      };
+    };
+  const w = await setup(
+    "submissions-contract",
+    [
+      async (turn) => {
+        await turn.message([refused]);
+        expect((await turn.invoke(refused)).error).toBe("InvalidInput");
+        await turn.charge(usage);
+      },
+      finalAnswer({ answer: "bad" }),
+      finalAnswer({ answer: 0 }),
+      finalAnswer({ answer: 4 }),
+    ],
+    { limit: 1, configure: recording(seen) },
+  );
+  try {
+    const outcome = await w.start();
+    expect(outcome.status).toBe("completed");
+    if (outcome.status === "completed")
+      expect(outcome.result.agentResult?.status).toBe("final-generation");
+    expect(seen).toEqual([["schema", "schema", "checks", "accepted"]]);
+  } finally {
+    await w.close();
   }
 });
 

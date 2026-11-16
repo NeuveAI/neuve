@@ -116,7 +116,11 @@ for (const first of [false, true])
             "--store",
             location.directory,
           ],
-          { stdout: "pipe", stderr: "pipe" },
+          {
+            env: { ...process.env, HOME: root, TMPDIR: root },
+            stdout: "pipe",
+            stderr: "pipe",
+          },
         );
         const [out, err, code] = await Promise.all([
           new Response(child.stdout).text(),
@@ -206,7 +210,11 @@ test("an older worker dead-letters a squatted bare first seal and send-back reco
         location.directory,
         cli,
       ],
-      { stdout: "pipe", stderr: "pipe" },
+      {
+        env: { ...process.env, HOME: root, TMPDIR: root },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
     );
     const [workerOut, workerErr, workerCode] = await Promise.all([
       new Response(worker.stdout).text(),
@@ -239,7 +247,11 @@ test("an older worker dead-letters a squatted bare first seal and send-back reco
         "--store",
         location.directory,
       ],
-      { stdout: "pipe", stderr: "pipe" },
+      {
+        env: { ...process.env, HOME: root, TMPDIR: root },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
     );
     const [out, err, code] = await Promise.all([
       new Response(child.stdout).text(),

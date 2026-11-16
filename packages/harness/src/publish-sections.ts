@@ -20,6 +20,7 @@ import {
   type RecordEvent,
 } from "@neuve/records-schema";
 import { verdictWordsIn } from "./compose.ts";
+import { publishedConfig } from "./config.ts";
 import {
   PublishClockRefused,
   clipText,
@@ -2514,7 +2515,7 @@ const publishCall = (
                 model: ctx.config.route.model,
                 effort: ctx.config.route.effort,
               },
-              config: JSON.parse(JSON.stringify(ctx.config)) as unknown,
+              config: publishedConfig(ctx.config),
             },
             batches: fresh,
             refused,

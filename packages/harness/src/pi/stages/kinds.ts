@@ -1,3 +1,4 @@
+import { accountReadRefused } from "@neuve/runtime";
 import { readData } from "@neuve/records-core";
 import type { Context } from "@earendil-works/chord";
 import type {
@@ -8,7 +9,13 @@ import type {
   TaskId,
 } from "@earendil-works/pi-durable";
 import type { z } from "zod";
+import { Effect } from "effect";
 import { withRecords, type StageRecord } from "../../pipeline.ts";
+import {
+  contractHoldCorruption,
+  contractHoldNeedsNewerBuild,
+} from "../failure-policy.ts";
+import { RunControlDoc, registerResumeRuntimes } from "../control.ts";
 import {
   AgentStepInput,
   agentStepTask,
@@ -38,9 +45,10 @@ export interface AgentKinds {
     object
   >;
   /**
-   * After `Harness.open` and the routes' restore, before `resume()`: installs every kind's
-   * extension from the run's frozen declarations and prepares the step that froze each, so its
-   * tools' zod schemas judge the calls a resumed generation makes. At most one step per kind.
+   * After `Harness.open` and the routes' restore, before resume admission or `resume()`:
+   * reclassifies saved contract provider holds, installs every kind's extension from the run's
+   * frozen declarations and prepares the step that froze each, so its tools' zod schemas judge
+   * the calls a resumed generation makes. At most one step per kind.
    */
   readonly restore: (harness: Harness, context: Context) => Promise<void>;
 }
@@ -129,6 +137,41 @@ export const agentKinds = (
   return {
     agentStep: agentStepTask({ services, prepare: prepared, install, claims }),
     restore: async (harness, context) => {
+      registerResumeRuntimes(harness, services.runtimes);
+      // Active runs restore kinds before admitting resumes or scheduling tasks.
+      const control = await harness.snapshot(RunControlDoc, context);
+      for (const held of Object.values(control?.held ?? {})) {
+        const corrupt = contractHoldCorruption(held);
+        if (corrupt !== undefined) throw corrupt;
+      }
+      for (const [id, held] of Object.entries(control?.held ?? {})) {
+        if (
+          held.engine !== "contract" ||
+          contractHoldNeedsNewerBuild(held) ||
+          held.recovery.kind !== "provider-policy" ||
+          !(
+            (held.failure._tag === "TurnFailed" &&
+              (held.failure.reason === "provider-failed" ||
+                held.failure.reason === "provider-unavailable")) ||
+            (held.failure._tag === "RuntimeUnavailable" &&
+              held.failure.reason === "start-failed")
+          )
+        )
+          continue;
+        const result = await services.run(
+          services.runtimes.capabilities(held.account).pipe(Effect.result),
+          context.abortSignal,
+        );
+        // A failed lookup means the account is gone or unusable; never send automatically.
+        if (result._tag === "Failure" && accountReadRefused(result.failure))
+          continue;
+        if (result._tag === "Success" && !result.success.internalRetries)
+          continue;
+        await harness.commit(async (tx) => {
+          const doc = await tx.doc(RunControlDoc);
+          doc.held[id] = { ...held, recovery: { kind: "explicit-account" } };
+        }, context);
+      }
       const doc = await harness.snapshot(RunToolsDoc, context);
       for (const [name, frozen] of Object.entries(doc?.kinds ?? {})) {
         const kind = AgentKind.parse(name);

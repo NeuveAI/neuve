@@ -108,6 +108,7 @@ import {
 import { frame, manifestOf, mapOf } from "./fixtures/link.ts";
 import { diff, mixedRange, oidOf, riskRange } from "./fixtures/readings.ts";
 import { noStructure, type BlobStructure } from "../src/sections.ts";
+import { testRuntimes } from "./pi/stages/fixture.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "readings-probe-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -281,6 +282,7 @@ const world = async (name: string, config = defaultConfig()) => {
   const registry = createRegistry();
   const services: StageServices = {
     ctx,
+    runtimes: testRuntimes().registry,
     routes: {
       bindAgentRoute: async () => {
         throw new Error("no model in this test");

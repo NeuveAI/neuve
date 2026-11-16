@@ -171,13 +171,12 @@ const otherCaller = (location: string, spec: Computations.ComputationSpec) => {
 /** A run, its step's key, and another caller already holding that key. */
 const contested = async (name: string) => {
   const run = await world(name, 6);
-  // The fixture's step key, as its `agentFor` builds the step (agent, turn limit, op and inputs);
-  // this branch's fixture does not hand the step out.
-  const spec = agentStageSpec(
-    run.ctx.config,
-    { stage: "frame", agent: "frame", turnLimit: 6 },
-    { op: `test.agent.${name}`, opVersion: 1, inputs: { run: run.ctx.runId } },
-  );
+  const { step } = run.agentFor();
+  const spec = agentStageSpec(run.ctx.config, step.spec, {
+    op: step.op,
+    opVersion: step.opVersion,
+    inputs: step.inputs as Record<string, unknown>,
+  });
   const other = otherCaller(run.root, spec);
   await other.ready;
   const attempts = () => {

@@ -237,6 +237,15 @@ export interface AuthOptions {
   readonly leaseRetryDelaysMs?: ReadonlyArray<number> | undefined;
 }
 
+/** A named sign-in never inherits the default account's external token command. */
+export const authOptionsFor = (credential: {
+  readonly kind: "neuve-sign-in";
+  readonly folder?: string | undefined;
+}): AuthOptions =>
+  credential.folder === undefined
+    ? {}
+    : { directory: credential.folder, tokenCommand: null };
+
 const resolve = (options: AuthOptions) => ({
   directory: options.directory ?? authDirectory(),
   issuer: (options.issuer ?? OPENAI_ISSUER).replace(/\/$/, ""),

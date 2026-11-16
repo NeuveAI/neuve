@@ -27,7 +27,7 @@ async function fixture() {
     PATH: process.env.PATH,
     HOME: directory,
     NEUVE_BUDGET_DIRECTORY: join(directory, "budget"),
-    TMPDIR: tmpdir(),
+    TMPDIR: directory,
     BUN_TMPDIR: tmpdir(),
   };
   const initialized = Bun.spawnSync(["git", "init", "-q", directory], {

@@ -135,3 +135,24 @@ test("a missing or malformed catalogue refuses the route, and a transport failur
     retryable: true,
   });
 });
+
+// Reason: named routes use their own sign-in and give the command for that account, never the default's token command.
+test("a named route resolves only its folder and names its own login command", async () => {
+  const result = await Effect.runPromise(
+    Effect.result(
+      checkRoute(SOL_ROUTE, options, {
+        name: "work",
+        credential: { kind: "neuve-sign-in", folder: join(scratch, "work") },
+      }),
+    ),
+  );
+  expect(result._tag).toBe("Failure");
+  if (result._tag !== "Failure")
+    throw new Error("expected missing named sign-in");
+  expect(result.failure).toMatchObject({
+    _tag: "SignInRequired",
+    account: "work",
+    retryable: false,
+    message: "Sign in to work with neuve auth login work.",
+  });
+});

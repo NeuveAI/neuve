@@ -717,6 +717,19 @@ test("concurrent discoveries share fetches, keep issuer keys separate and retry 
   expect(calls.filter((issuer) => issuer === issuerA)).toHaveLength(2);
 }, 60000);
 
+// Reason: only the default sign-in may inherit NEUVE_OPENAI_AUTH_DIR or a token command.
+test("authOptionsFor preserves default resolution and isolates added sign-ins", async () => {
+  const { authOptionsFor, authDirectory } =
+    await import("../src/openai-auth.ts");
+  expect(authOptionsFor({ kind: "neuve-sign-in" })).toEqual({});
+  expect(
+    authOptionsFor({ kind: "neuve-sign-in" }).directory ?? authDirectory(),
+  ).toBe(authDirectory());
+  expect(
+    authOptionsFor({ kind: "neuve-sign-in", folder: "/scratch/added" }),
+  ).toEqual({ directory: "/scratch/added", tokenCommand: null });
+});
+
 // Never strand a spent credential or block sign-out because an older reader dropped identity keys.
 test("refresh saves the rotated pair and keeps newer identity fields, and sign-out removes the whole session", async () => {
   const directory = join(scratch, "identity-newer");

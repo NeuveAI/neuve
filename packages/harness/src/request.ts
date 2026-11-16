@@ -32,6 +32,7 @@ import {
   defaultConfig,
   runKeyFor,
   PipelineConfig,
+  routeOwnsLoop,
   sectionsConfig,
   type SectionsConfig,
   type StubSettings,
@@ -45,7 +46,13 @@ import {
 import { readIntegrations, type Integrations } from "./integrations.ts";
 import { git, resolveCommit } from "./git.ts";
 import type { RetrieverConfig } from "./retriever.ts";
-import { RouteName, routeByName, type RouteConfig } from "./route.ts";
+import {
+  ClaudeRouteConfig,
+  OPUS_ROUTE,
+  RouteName,
+  routeByName,
+  type RouteConfig,
+} from "./route.ts";
 import { stackToolsConfig } from "./stack/frozen-state.ts";
 import type { StackToolsConfig } from "./stack/settings.ts";
 import {
@@ -66,6 +73,11 @@ import {
 } from "./settings.ts";
 import { keepExternalFetched } from "./scope-storage.ts";
 import { externalScopeText } from "./github-scope.ts";
+import {
+  AccountName,
+  type AccountDirectoryShape,
+  type RuntimeRegistryShape,
+} from "@neuve/runtime";
 
 /**
  * A review request as `neuve review <range>` makes it (10.13, proposal §1): the range resolved to
@@ -104,6 +116,41 @@ export const namedRoute = (
     reviewReasoningSummaries(settings),
     reviewStepEffort(settings),
   );
+
+/** Resolve a CLI route choice without probing, starting a child or reading a credential. */
+export const resolveNamedRoute = (
+  name: string,
+  directory: Pick<AccountDirectoryShape, "lookup">,
+  settings = readSettings(),
+) =>
+  Effect.gen(function* () {
+    const direct = RouteName.safeParse(name);
+    if (direct.success) return namedRoute(direct.data, settings);
+    const parsed = AccountName.safeParse(name);
+    const account = parsed.success
+      ? yield* directory.lookup(parsed.data, "use")
+      : undefined;
+    if (account?.kind !== "claude-subscription")
+      return yield* Effect.fail(
+        new Error(
+          `Unknown review route ${JSON.stringify(name)}. Choose anthropic, openai or a Claude subscription account name.`,
+        ),
+      );
+    // The per-kind step efforts only when they name a kind, as `routeByName` freezes them.
+    const stepEffort = reviewStepEffort(settings);
+    return ClaudeRouteConfig.parse({
+      provider: "claude",
+      account: { name: account.name, kind: account.kind },
+      model: OPUS_ROUTE.model,
+      window: OPUS_ROUTE.window,
+      maxOutputTokens: OPUS_ROUTE.maxOutputTokens,
+      effort: reviewEffort(settings) ?? OPUS_ROUTE.effort,
+      price: null,
+      ...(stepEffort === undefined || Object.keys(stepEffort).length === 0
+        ? {}
+        : { stepEffort }),
+    });
+  });
 
 /**
  * The route the user's settings name (`review.route`), else the Anthropic route, at the settings'
@@ -251,6 +298,7 @@ const attribution = (requester: Requester) => {
 };
 
 export type ReviewOptions = {
+  readonly runtimes?: Pick<RuntimeRegistryShape, "capabilities"> | undefined;
   readonly requestId?: string | undefined;
   readonly frozenConfig?: PipelineConfig | undefined;
   readonly location: StoreLocation;
@@ -309,6 +357,7 @@ export const prepareReviewConfig = (
     | "deadline"
     | "stub"
     | "route"
+    | "runtimes"
   > &
     Partial<Pick<ReviewOptions, "readings">>,
 ) =>
@@ -354,15 +403,20 @@ export const prepareReviewConfig = (
       "readings" in options
         ? options.readings
         : readingsConfig(yield* Effect.sync(() => readSettings()));
-    return defaultConfig(
-      options.stub,
-      options.route,
-      search,
-      stack,
-      deadline,
-      sections,
-      readings,
+    const config = PipelineConfig.parse(
+      defaultConfig(
+        options.stub,
+        options.route,
+        search,
+        stack,
+        deadline,
+        sections,
+        readings,
+      ),
     );
+    if (options.runtimes !== undefined)
+      yield* routeOwnsLoop(config.route, options.runtimes);
+    return config;
   });
 
 export const requestReview = (options: ReviewOptions) =>
@@ -421,6 +475,8 @@ export const requestReview = (options: ReviewOptions) =>
           ...(yield* prepareReviewConfig(options)),
           ...(contextIdentity ? { externalContext: contextIdentity } : {}),
         };
+    if (options.frozenConfig !== undefined && options.runtimes !== undefined)
+      yield* routeOwnsLoop(config.route, options.runtimes);
     if (config.externalContext !== contextIdentity)
       throw new Error(
         "Frozen review configuration does not match its external context",

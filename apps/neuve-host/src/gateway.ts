@@ -1,3 +1,4 @@
+import * as accounts from "./accounts";
 import { ReviewRefusalError, ReviewRefusalSchema } from "@ace/channel/review-protocol";
 import { runtimeHooks } from "./runtime-hooks";
 import { parseHostEnvelope, Refused } from "./parse";
@@ -408,6 +409,11 @@ function projectsChanged(): Promise<void> {
 		for (const socket of sockets) if (!socket.data.peer) socket.send(frame);
 		await lobbyProjects();
 	});
+}
+
+/** Account identity belongs to the owner and never reaches a peer. */
+function accountsChanged(): void {
+	for (const socket of sockets) if (!socket.data.peer) accounts.send(socket);
 }
 
 /** Only the local app can answer an ask, so only it is told about them. */
@@ -960,6 +966,7 @@ function websocket(): Bun.WebSocketHandler<Client> {
 			void queue(async () => {
 				socket.send(JSON.stringify({ projects: await projects.list() } satisfies HostFrame));
 				socket.send(JSON.stringify({ people: people() } satisfies HostFrame));
+				accounts.send(socket);
 				socket.send(JSON.stringify({ presence: present() } satisfies HostFrame));
 				if (socket.data.local) {
 					socket.send(JSON.stringify({ asks: asks.list() } satisfies HostFrame));
@@ -1292,6 +1299,7 @@ export async function start(port: number, loopback = false, script?: string, man
 	}
 	const servers = [server];
 	const cleanup: (() => void | Promise<void>)[] = [];
+	cleanup.push(accounts.onChange(accountsChanged));
 	// A blocked event loop fails the desktop's health check, which then cannot tell a busy helper from a stopped one.
 	let tick = performance.now();
 	const stalls = setInterval(() => {

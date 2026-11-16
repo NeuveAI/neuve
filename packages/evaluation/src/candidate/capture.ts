@@ -64,6 +64,15 @@ const RestoredView = z.object({
       }),
     ),
     totals: z.object({ tokens: DumpTokens }),
+    contractContexts: z
+      .array(
+        z.object({
+          captureVersion: z.int().positive().default(1),
+          coverage: z.string(),
+          state: z.object({ contextKey: z.string() }),
+        }),
+      )
+      .optional(),
     gaps: z.array(
       z.object({
         code: z.string(),
@@ -245,6 +254,23 @@ export const readCandidateCapture = async (
     return {
       status: "refused",
       why: `the dump is of run ${run.runId}, the receipt's is ${runId}`,
+    };
+  const unsupported =
+    run.contractContexts?.filter((context) => context.captureVersion !== 1) ??
+    [];
+  if (unsupported.length > 0)
+    return {
+      status: "refused",
+      why: `unsupported contract capture version: ${unsupported.map((context) => `${context.state.contextKey} (version ${context.captureVersion})`).join(", ")}; this adapter reads version 1`,
+    };
+  const noWire =
+    run.contractContexts?.filter(
+      (context) => context.coverage === "no-wire-capture",
+    ) ?? [];
+  if (noWire.length > 0)
+    return {
+      status: "refused",
+      why: `no-wire-capture: contract contexts ${noWire.map((context) => context.state.contextKey).join(", ")} have no provider wire evidence; scoring refused`,
     };
   const captureGaps = run.gaps.filter((gap) => gap.kind === "capture");
   if (run.complete !== (captureGaps.length === 0))

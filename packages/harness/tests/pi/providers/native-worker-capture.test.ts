@@ -144,7 +144,7 @@ test("actual non-route native worker keeps credential-masked raw reasoning and t
   const environment = Object.fromEntries(
     Object.entries({
       PATH: process.env["PATH"],
-      TMPDIR: process.env["TMPDIR"],
+      TMPDIR: root,
       TMP: process.env["TMP"],
       TEMP: process.env["TEMP"],
       BUN_TMPDIR: process.env["BUN_TMPDIR"],

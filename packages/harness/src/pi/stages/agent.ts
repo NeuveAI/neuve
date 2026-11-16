@@ -14,6 +14,7 @@ import {
 } from "../../route.ts";
 import type { ToolSpec } from "../../toolkit.ts";
 import { isRefusal } from "../providers/failure.ts";
+import type { RuntimeEvent } from "@neuve/runtime";
 import type { ToolState } from "./docs.ts";
 
 /**
@@ -340,9 +341,69 @@ export const assistantOf = (entry: EntryRecord) => {
 };
 
 /** What a conversation's entries, oldest first, say about its agent context. */
-export const transcriptFacts = (
+export type ContractMessage = Extract<
+  RuntimeEvent,
+  { type: "message.finished" }
+>;
+export interface ContractTranscript {
+  readonly engine: "contract";
+  readonly messages: ReadonlyArray<ContractMessage>;
+  readonly usage: CallUsage;
+  /** Only dispatched ordinary calls are submissions; final and suppressed calls are excluded. */
+  readonly eligibleCalls: ReadonlySet<string>;
+}
+export interface ContractTranscriptFacts extends Omit<
+  TranscriptFacts,
+  "last" | "calls"
+> {
+  readonly last: ContractMessage | undefined;
+  readonly calls: ReadonlyArray<{
+    readonly id: string;
+    readonly name: string;
+    readonly arguments: unknown;
+  }>;
+}
+
+export function transcriptFacts(
+  source: ContractTranscript,
+): ContractTranscriptFacts;
+export function transcriptFacts(
   entries: ReadonlyArray<EntryRecord>,
-): TranscriptFacts => {
+): TranscriptFacts;
+export function transcriptFacts(
+  entries: ReadonlyArray<EntryRecord> | ContractTranscript,
+): TranscriptFacts | ContractTranscriptFacts {
+  if ("engine" in entries) {
+    const unique = [
+      ...new Map(entries.messages.map((m) => [m.messageId, m])).values(),
+    ];
+    const inputs = unique.map((message) => {
+      const usage = message.usage;
+      if (usage === undefined)
+        throw new Error("TurnFailed: message usage is missing");
+      return (
+        usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h
+      );
+    });
+    return {
+      turns: unique.length,
+      lastInput: inputs.at(-1) ?? 0,
+      firstInput: inputs[0],
+      peakInput: Math.max(0, ...inputs),
+      usage: entries.usage,
+      calls: unique.flatMap((message) =>
+        message.toolCalls
+          .filter((call) => entries.eligibleCalls.has(call.callId))
+          .map((call) => ({
+            type: "toolCall" as const,
+            id: call.callId,
+            name: call.toolName,
+            arguments: call.input,
+          })),
+      ),
+      last: unique.at(-1),
+    };
+  }
   let turns = 0;
   let lastInput = 0;
   let firstInput: number | undefined;
@@ -364,7 +425,7 @@ export const transcriptFacts = (
       if (part.type === "toolCall") calls.push(part);
   }
   return { turns, lastInput, firstInput, peakInput, usage, calls, last };
-};
+}
 
 /** The text of an assistant answer: its text parts joined, as the final generation is read. */
 export const answerText = (message: AssistantMessage | undefined) =>

@@ -1,0 +1,364 @@
+{
+  "version": 1,
+  "sends": 1,
+  "frames": [
+    {
+      "type": "other",
+      "uuid": "uuid_1",
+      "session_id": "session_1"
+    },
+    {
+      "type": "other",
+      "uuid": "uuid_2",
+      "session_id": "session_1"
+    },
+    {
+      "type": "system",
+      "subtype": "init",
+      "uuid": "uuid_3",
+      "session_id": "session_1",
+      "user_message_uuids": ["send_1"]
+    },
+    {
+      "type": "system",
+      "subtype": "status",
+      "uuid": "uuid_4",
+      "session_id": "session_1",
+      "user_message_uuids": ["send_1"]
+    },
+    {
+      "type": "rate_limit_event",
+      "rate_limit_info": {
+        "status": "allowed"
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_5",
+      "session_id": "session_1",
+      "user_message_uuid": "send_1",
+      "user_message_uuids": ["send_1"],
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "message_start",
+        "message": {
+          "id": "msg_1",
+          "model": "claude-opus-5-5",
+          "stop_reason": null,
+          "content": [],
+          "usage": {
+            "input_tokens": 2,
+            "output_tokens": 24,
+            "cache_read_input_tokens": 1172,
+            "cache_creation_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_6",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "tool_use",
+          "id": "toolu_1",
+          "name": "mcp__neuve__note",
+          "input": {}
+        }
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_7",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": ""
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "uuid_8",
+      "session_id": "session_1",
+      "user_message_uuid": "send_1",
+      "user_message_uuids": ["send_1"],
+      "parent_tool_use_id": null,
+      "message": {
+        "id": "msg_1",
+        "model": "claude-opus-5-5",
+        "stop_reason": null,
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "mcp__neuve__note",
+            "input": {}
+          }
+        ],
+        "usage": {
+          "input_tokens": 2,
+          "output_tokens": 24,
+          "cache_read_input_tokens": 1172,
+          "cache_creation_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          }
+        }
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_9",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "content_block_stop",
+        "index": 0
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_10",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "message_delta",
+        "usage": {
+          "input_tokens": 2,
+          "output_tokens": 32,
+          "cache_read_input_tokens": 1172,
+          "cache_creation_input_tokens": 0,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          }
+        },
+        "delta": {
+          "stop_reason": "tool_use"
+        }
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_11",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "message_stop"
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "uuid_12",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "system",
+      "subtype": "status",
+      "uuid": "uuid_13",
+      "session_id": "session_1",
+      "user_message_uuids": ["send_1"]
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_14",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "message_start",
+        "message": {
+          "id": "msg_2",
+          "model": "claude-opus-5-5",
+          "stop_reason": null,
+          "content": [],
+          "usage": {
+            "input_tokens": 2,
+            "output_tokens": 24,
+            "cache_read_input_tokens": 1224,
+            "cache_creation_input_tokens": 0,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_15",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {
+          "type": "tool_use",
+          "id": "toolu_2",
+          "name": "mcp__neuve__note",
+          "input": {}
+        }
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_16",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": ""
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "uuid_17",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "message": {
+        "id": "msg_2",
+        "model": "claude-opus-5-5",
+        "stop_reason": null,
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_2",
+            "name": "mcp__neuve__note",
+            "input": {}
+          }
+        ],
+        "usage": {
+          "input_tokens": 2,
+          "output_tokens": 24,
+          "cache_read_input_tokens": 1224,
+          "cache_creation_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          }
+        }
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_18",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "content_block_stop",
+        "index": 0
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_19",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {
+          "type": "tool_use",
+          "id": "toolu_3",
+          "name": "mcp__neuve__note",
+          "input": {}
+        }
+      }
+    },
+    {
+      "type": "stream_event",
+      "uuid": "uuid_20",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "event": {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {
+          "type": "input_json_delta",
+          "partial_json": ""
+        }
+      }
+    },
+    {
+      "type": "user",
+      "uuid": "uuid_21",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "message": {
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_2",
+            "content": [
+              {
+                "type": "text",
+                "text": ""
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "uuid": "uuid_22",
+      "session_id": "session_1",
+      "parent_tool_use_id": null,
+      "message": {
+        "id": "msg_2",
+        "model": "claude-opus-5-5",
+        "stop_reason": null,
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "toolu_3",
+            "name": "mcp__neuve__note",
+            "input": {}
+          }
+        ],
+        "usage": {
+          "input_tokens": 2,
+          "output_tokens": 24,
+          "cache_read_input_tokens": 1224,
+          "cache_creation_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          }
+        }
+      }
+    }
+  ]
+}

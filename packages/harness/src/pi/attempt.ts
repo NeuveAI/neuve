@@ -5,6 +5,8 @@ import { createModels } from "@earendil-works/pi-ai";
 import { createRegistry } from "@earendil-works/pi-durable";
 import { openNativeStorage } from "./storage.ts";
 import { Effect } from "effect";
+import type { RuntimeRegistryShape } from "@neuve/runtime";
+import { processRuntimes } from "../runtimes.ts";
 import { clientBudget } from "../budget/local.ts";
 import type { Budget } from "../budget/scheduler.ts";
 import { providerAccountKey } from "./providers/route-admission.ts";
@@ -18,6 +20,12 @@ import {
   runFolder,
 } from "../run-folder.ts";
 import type { SourceOwnership } from "./source-ownership.ts";
+import { routeOwnsLoop } from "../config.ts";
+import { routeAccount } from "../route.ts";
+import {
+  continuationAccountKey,
+  contractSessionSlots,
+} from "./session-slots.ts";
 import { callSlots, type RunSlot } from "./call-slots.ts";
 import type { CloseReceipt } from "./capture/close.ts";
 import {
@@ -79,18 +87,25 @@ export const openAttempt = async (input: {
   /** Runs the call slots' waits under the attempt's telemetry. */
   readonly runSlot: RunSlot;
   readonly budget?: Budget;
+  readonly runtimes?: RuntimeRegistryShape;
   /** The route's requests' fetch, for a test's local endpoint; unset, the route's own host. */
   readonly fetch?: typeof globalThis.fetch | undefined;
 }): Promise<OpenedAttempt> => {
   const { ctx } = input;
   const { route } = ctx.config;
   const budget = input.budget ?? (await clientBudget());
-  const account = providerAccountKey({ route });
-  const admittedFetch = budgetFetch(
-    input.fetch ?? globalThis.fetch,
-    budget,
-    account,
-  );
+  const runtimes = input.runtimes ?? (await processRuntimes());
+  const ownsLoop = await Effect.runPromise(routeOwnsLoop(route, runtimes));
+  const namedAccount = routeAccount(route);
+  const account =
+    ownsLoop && namedAccount !== undefined
+      ? continuationAccountKey(
+          await Effect.runPromise(runtimes.continuation(namedAccount.name)),
+        )
+      : providerAccountKey({ route });
+  const admittedFetch = ownsLoop
+    ? undefined
+    : budgetFetch(input.fetch ?? globalThis.fetch, budget, account);
   input.ownership.assertSource(runFolder(ctx.location, ctx.runId));
   const inspection = openManagedCredentialInspection({
     ownership: input.ownership,
@@ -111,7 +126,7 @@ export const openAttempt = async (input: {
     inspectionClosed = true;
     inspection.close();
   };
-  const closeResources = () => {
+  const closeResources = async () => {
     endReview?.();
     endReview = undefined;
     const errors: unknown[] = [];
@@ -159,12 +174,18 @@ export const openAttempt = async (input: {
           openNativeStorage,
         ),
         models: createModels(),
-        createRouteProvider: bindingProvider(route, {
-          log: ctx.log,
-          capture: captured.capture,
-          credentialInspection: inspection,
-          fetch: admittedFetch,
-        }),
+        createRouteProvider: ownsLoop
+          ? () => {
+              throw new Error(
+                "A contract attempt cannot create a direct provider",
+              );
+            }
+          : bindingProvider(route, {
+              log: ctx.log,
+              capture: captured.capture,
+              credentialInspection: inspection,
+              fetch: admittedFetch,
+            }),
         registry,
         slots: callSlots(ctx.config.budgets.callsInFlight, input.runSlot, {
           budget,
@@ -192,6 +213,12 @@ export const openAttempt = async (input: {
             routes,
             capture: captured.capture,
             registry,
+            runtimes,
+            contractSessions: contractSessionSlots(
+              budget,
+              ctx.config.budgets.callsInFlight,
+              ctx.runId,
+            ),
             integrations: input.integrations,
             clients: input.clients,
             run: stageRunner(ctx, input.clients, budget),
@@ -211,20 +238,22 @@ export const openAttempt = async (input: {
             },
             // The route's free token count (§2.1, 10.35), where it has one: absent on the OpenAI route.
 
-            countTokens: (request, signal) =>
-              logTimed(
-                ctx.log,
-                "harness.count-tokens",
-                { "harness.agent": request.label },
-                () =>
-                  createCountTokens({
-                    route,
-                    runId: ctx.runId,
-                    capture: captured.capture,
-                    credentialInspection: inspection,
-                    fetch: admittedFetch,
-                  })(request, signal),
-              ),
+            countTokens: ownsLoop
+              ? async () => null
+              : (request, signal) =>
+                  logTimed(
+                    ctx.log,
+                    "harness.count-tokens",
+                    { "harness.agent": request.label },
+                    () =>
+                      createCountTokens({
+                        route,
+                        runId: ctx.runId,
+                        capture: captured.capture,
+                        credentialInspection: inspection,
+                        fetch: admittedFetch,
+                      })(request, signal),
+                  ),
           });
           return {
             port: {
@@ -239,6 +268,8 @@ export const openAttempt = async (input: {
         // Capture's hook ends the journal's session, then exports the raw storage and the native
         // backup into Records; the barrier closes the database after it either way.
         onClose: async (close) => {
+          // The scheduler joined contractStep's finally before reaching this storage barrier.
+          // Its session scope, event consumer, dispatch and tool handlers have all settled.
           let result: CloseReceipt;
           try {
             await writeNativeAttempts(ctx.log, close.reads, close.context);
@@ -255,7 +286,7 @@ export const openAttempt = async (input: {
             );
           } catch (error) {
             try {
-              closeResources();
+              await closeResources();
             } catch (cleanup) {
               throw new AggregateError(
                 [error, cleanup],
@@ -264,7 +295,7 @@ export const openAttempt = async (input: {
             }
             throw error;
           }
-          closeResources();
+          await closeResources();
           return result;
         },
         onReport: (error) =>
@@ -282,7 +313,7 @@ export const openAttempt = async (input: {
   } catch (error) {
     const errors: unknown[] = [error];
     try {
-      closeResources();
+      await closeResources();
     } catch (cleanup) {
       errors.push(cleanup);
     }

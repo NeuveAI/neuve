@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PiUsage } from "./usage.ts";
+import { ContractContextCapture } from "./contract-types.ts";
 import {
   AuxiliaryPurpose,
   CaptureScope,
@@ -432,6 +433,8 @@ export const RunDump = z.strictObject({
   /** pi's ledgers summed over every conversation. */
   totals: Totals,
   sessions: z.array(z.strictObject({ conversationId: PiId, file: z.string() })),
+  /** Declared contract observations, never byte-exact provider evidence. Absent on historical pi runs. */
+  contractContexts: z.array(ContractContextCapture).optional(),
   sessionDocuments: z.array(StoredDocument),
   leads: z.strictObject({
     /** How many fates each hand-off produced; a zero is a producer that emitted nothing. */

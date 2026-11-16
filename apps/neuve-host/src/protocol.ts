@@ -1,3 +1,4 @@
+import type { AccountStatus } from "@neuve/runtime/status";
 /** The host gateway's wire contract: JSON messages over one WebSocket per client. */
 import type {
 	ChannelInfo,
@@ -461,6 +462,7 @@ export type HostRequest =
 export type HostEnvelope = { id: number; trace?: string } & HostRequest;
 
 export type HostFrame =
+	| { accounts: AccountStatus[] }
 	| { id: number; ok: true; value: unknown }
 	| { id: number; ok: false; error: string }
 	| { id: number; event: Event }

@@ -79,7 +79,15 @@ const fixture = join(import.meta.dir, "fixtures", "stuck-worker.ts");
 const startWorker = (location: StoreLocation, ...args: Array<string>) => {
   const child = Bun.spawn(
     ["bun", fixture, dirname(location.directory), ...args],
-    { stdout: "pipe", stderr: "pipe" },
+    {
+      env: {
+        ...process.env,
+        HOME: dirname(location.directory),
+        TMPDIR: dirname(location.directory),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
   );
   return {
     child,

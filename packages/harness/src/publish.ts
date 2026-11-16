@@ -26,7 +26,7 @@ import {
   type CitationTarget,
   type Reference,
 } from "./compose.ts";
-import type { PipelineConfig } from "./config.ts";
+import { type PipelineConfig, publishedConfig } from "./config.ts";
 import type { GuidedBasis } from "@neuve/records-schema";
 import { LinkedReview } from "./disposition.ts";
 import {
@@ -45,6 +45,7 @@ import {
   harnessActor,
   harnessRegistration,
   stageTelemetry,
+  legacyStageTelemetry,
 } from "./receipt.ts";
 import type { RunLog } from "./run-log.ts";
 
@@ -1627,7 +1628,7 @@ export const publishPacket = (ctx: PublishContext, inputs: PublishInputs) =>
         model: ctx.config.route.model,
         effort: ctx.config.route.effort,
       },
-      config: JSON.parse(JSON.stringify(ctx.config)) as unknown,
+      config: publishedConfig(ctx.config),
       complete,
       supersedes: superseded ?? null,
       sources: inputs.sources,
@@ -1931,7 +1932,9 @@ export const recordPublishStage = (
         ...(manifest === null
           ? {}
           : { refs: [{ ref: `blob:${manifest}`, role: "manifest" }] }),
-        payload: stageTelemetry(record, ctx.log.read(), ctx.config),
+        payload: legacyStageTelemetry(
+          stageTelemetry(record, ctx.log.read(), ctx.config),
+        ),
       },
     ]);
   });

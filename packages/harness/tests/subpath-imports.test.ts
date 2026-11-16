@@ -36,7 +36,9 @@ const graphOf = (entry: string) => {
     if (seen.has(file)) continue;
     seen.add(file);
     if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(file)) continue;
-    for (const { path } of transpiler.scanImports(readFileSync(file, "utf8"))) {
+    // A leading `#!` line (the Agent SDK's sdk.mjs has one) isn't JavaScript the scanner accepts.
+    const source = readFileSync(file, "utf8").replace(/^#![^\n]*/, "");
+    for (const { path } of transpiler.scanImports(source)) {
       if (path.startsWith("node:") || path.startsWith("bun:")) continue;
       const resolved = Bun.resolveSync(path, dirname(file));
       if (resolved.startsWith("/")) queue.push(resolved);

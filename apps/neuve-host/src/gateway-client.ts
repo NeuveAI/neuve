@@ -1,3 +1,4 @@
+import type { AccountStatus } from "@neuve/runtime/status";
 import {parseHostFrame} from "./host-frame";
 import type { HostRequest } from "./extension-protocol";
 import type { ExtensionRequest } from "@ace/channel/operations-protocol";
@@ -64,6 +65,7 @@ export class GatewayClient {
 	channels: Listing[] = [];
 	/** Undefined until the host first sends them, so an app can tell loading from having none. */
 	projects?: Project[];
+	accounts?: AccountStatus[];
 	people: People = {};
 	/** Asks to join the team waiting for this host's owner; only the local app receives them. */
 	asks: TeamAsk[] = [];
@@ -145,6 +147,10 @@ export class GatewayClient {
 		if ("rename" in frame) return void this.#rename(frame.rename, socket);
 		if ("projects" in frame) {
 			this.projects = frame.projects;
+			return this.#emit();
+		}
+		if ("accounts" in frame) {
+			this.accounts = frame.accounts;
 			return this.#emit();
 		}
 		if ("asks" in frame) {

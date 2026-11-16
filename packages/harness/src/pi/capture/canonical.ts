@@ -1,4 +1,9 @@
 import type { InspectionBudget } from "./credential-detectors.ts";
+import {
+  contractContexts,
+  contractContextGaps,
+  contractTotals,
+} from "./contract-context.ts";
 import { withRetainedSdk } from "./retained-sdk.ts";
 import { z } from "zod";
 import { callsOf, outcomeOfStop } from "./call-lifecycle.ts";
@@ -241,6 +246,7 @@ export const deriveCapture = async (
   const review = start?.runKind !== "coding";
   const end = of("run.end").at(-1);
   const stageEnds = new Map(of("stage.end").map((e) => [e.scope.stage, e]));
+  const contracts = contractContexts(native);
   const binds = new Map(
     of("session.bind").map((e) => [e.scope.conversationId, e]),
   );
@@ -931,6 +937,7 @@ export const deriveCapture = async (
         s.binding?.stage === undefined ? [] : [s.binding.stage],
       ),
       ...stageEnds.keys(),
+      ...contracts.map((context) => context.state.stage),
     ]),
   ];
   const stages = stageNames.map((stage) => {
@@ -941,10 +948,15 @@ export const deriveCapture = async (
       status: ended?.status ?? ("unknown" as const),
       ...(ended?.reason === undefined ? {} : { reason: ended.reason }),
       sessions: members.map((s) => s.conversationId),
-      totals: members.reduce(
-        (sum, s) => addTotals(sum, sessionTotals(s)),
-        emptyTotals(),
-      ),
+      totals: contracts
+        .filter((context) => context.state.stage === stage)
+        .reduce(
+          (sum, context) => addTotals(sum, contractTotals(context)),
+          members.reduce(
+            (sum, s) => addTotals(sum, sessionTotals(s)),
+            emptyTotals(),
+          ),
+        ),
     };
   });
 
@@ -1026,7 +1038,9 @@ export const deriveCapture = async (
     : [];
   const unended = stageNames.filter(
     (stage) =>
-      !stageEnds.has(stage) && sessions.some((s) => s.binding?.stage === stage),
+      !stageEnds.has(stage) &&
+      (sessions.some((s) => s.binding?.stage === stage) ||
+        contracts.some((c) => c.state.stage === stage)),
   );
   const missingEdges = [
     ...[...binds.keys()]
@@ -1064,6 +1078,7 @@ export const deriveCapture = async (
   const ids = (items: ReadonlyArray<string | number>) => items.join(", ");
   // Each gap with how many times it occurs; a count of zero means it was not found.
   const found: ReadonlyArray<readonly [Gap["code"], number, string]> = [
+    ...contractContextGaps(contracts, native, runId),
     [
       "journal-torn",
       sources.tornLines,
@@ -1228,14 +1243,18 @@ export const deriveCapture = async (
         backup: sources.backup,
         journal: sources.journal,
         stages,
-        totals: sessions.reduce(
-          (sum, s) => addTotals(sum, sessionTotals(s)),
-          emptyTotals(),
+        totals: contracts.reduce(
+          (sum, context) => addTotals(sum, contractTotals(context)),
+          sessions.reduce(
+            (sum, s) => addTotals(sum, sessionTotals(s)),
+            emptyTotals(),
+          ),
         ),
         sessions: sessions.map((s) => ({
           conversationId: s.conversationId,
           file: `sessions/${s.conversationId}.json`,
         })),
+        ...(contracts.length === 0 ? {} : { contractContexts: contracts }),
         sessionDocuments: native.session,
         leads: { handoffs, ledger, open },
         artifacts,

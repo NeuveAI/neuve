@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import { AnthropicClient } from "@effect/ai-anthropic";
 import { Data, Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient, HttpClient } from "effect/http";
-import type { AnyRouteConfig } from "../../route.ts";
+import {
+  requireDirectRoute,
+  routeCredentialVariable,
+  type AnyRouteConfig,
+} from "../../route.ts";
+import {
+  ClaudeSubscriptionTokenRefused,
+  isClaudeSubscriptionToken,
+} from "../../subscription-token.ts";
 import {
   CREDENTIAL_INSPECTION_POLICY,
   type Capture,
@@ -85,15 +93,17 @@ const refusalText = (status: number, body: unknown) => {
   return `HTTP ${status}${typeof error?.type === "string" ? ` ${error.type}` : ""}${typeof error?.message === "string" ? `: ${error.message.slice(0, 300)}` : ""}`;
 };
 
-export const createCountTokens =
-  (options: CountTokensOptions) =>
-  async (
+export const createCountTokens = (options: CountTokensOptions) => {
+  const route = requireDirectRoute(options.route);
+  return async (
     request: CountTokensRequest,
     signal?: AbortSignal,
   ): Promise<number | null> => {
-    const { route } = options;
     if (route.provider !== "anthropic") return null;
-    const key = process.env[route.credentialVariable];
+    const variable = routeCredentialVariable(route);
+    const key = process.env[variable];
+    if (isClaudeSubscriptionToken(key))
+      throw new ClaudeSubscriptionTokenRefused(variable);
     let credentials = new Headers({ "x-api-key": key ?? "" });
     const failed = (reason: string, retryable: boolean, status?: number) =>
       new PreflightFailed({
@@ -107,7 +117,7 @@ export const createCountTokens =
     signal?.throwIfAborted();
     if (key === undefined || key.trim() === "")
       throw failed(
-        `${route.credentialVariable} is not set in this process's environment`,
+        `${variable} is not set in this process's environment`,
         false,
       );
 
@@ -315,3 +325,4 @@ export const createCountTokens =
       );
     }
   };
+};

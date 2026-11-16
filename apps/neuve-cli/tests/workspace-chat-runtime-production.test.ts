@@ -1,0 +1,665 @@
+import "../../neuve-host/tests/fixtures/memory-secrets.ts";
+import { expect, test, spyOn } from "bun:test";
+import { z } from "zod";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { join, basename } from "node:path";
+import { tmpdir } from "node:os";
+import { Effect, Stream } from "effect";
+import {
+  AccountName,
+  AccountStore,
+  TurnLimit,
+  type Account,
+  type SignInState,
+} from "@neuve/runtime";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { ROOT_CONVERSATION_ID, type Harness } from "@earendil-works/pi-durable";
+import {
+  createModels,
+  fauxAssistantMessage,
+  fauxProvider,
+} from "@earendil-works/pi-ai";
+import { HostConfigSchema, config } from "@ace/host/host-config";
+import { configureRuntime, runtimeHooks } from "@ace/host/runtime-hooks";
+import type { WorkerContext } from "@ace/host/worker-runtime";
+import type { Channel } from "@ace/channel";
+import {
+  productionChatSources,
+  workspaceChatModels,
+  workspaceChatRuntime,
+} from "../src/workspace-chat-runtime.ts";
+import { SOL_ROUTE } from "../../../packages/harness/src/route.ts";
+import { defaultClaudeWorkingFolder } from "@neuve/harness/runtimes";
+import { PI_TRANSITION_STORAGE_PROFILE } from "../../../scripts/pi-storage.ts";
+import {
+  assistant,
+  result,
+  textDelta,
+} from "../../../packages/runtime-claude/tests/frames.ts";
+import { until } from "../../../packages/harness/tests/chat-runtime/fixture.ts";
+
+const MarkerEvent = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("started"),
+    pid: z.number().int(),
+    cwd: z.string(),
+    folder: z.string().optional(),
+  }),
+  z.object({ type: z.literal("exited"), pid: z.number().int() }),
+  z.object({ type: z.literal("control"), subtype: z.string() }),
+  z.object({
+    type: z.literal("prompt"),
+    content: z.union([
+      z.string(),
+      z.array(z.object({ type: z.literal("text"), text: z.string() })),
+    ]),
+  }),
+]);
+const markerEvents = (path: string) =>
+  readFileSync(path, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => MarkerEvent.parse(JSON.parse(line)));
+
+function temporary() {
+  const root = mkdtempSync(join(tmpdir(), "chat-production-"));
+  const home = join(root, "home");
+  mkdirSync(home, { mode: 0o700 });
+  return {
+    root,
+    home,
+    close: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+function saveStatus(home: string, account: Account, signIn: SignInState) {
+  const path = AccountStore.statusesPath(home);
+  mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    path,
+    JSON.stringify({
+      version: 1,
+      accounts: [
+        {
+          name: account.name,
+          kind: account.kind,
+          identity:
+            "folder" in account.credential && account.credential.folder
+              ? basename(account.credential.folder)
+              : account.name,
+          signIn,
+          checkedAt: new Date().toISOString(),
+          limits: [],
+          models: [
+            {
+              id: "default",
+              displayName: "Test default",
+              description: "Fake model",
+            },
+          ],
+        },
+      ],
+    }),
+    { mode: 0o600 },
+  );
+}
+
+function fakeClaude(root: string) {
+  const executable = join(root, "fake-claude");
+  const marker = join(root, "fake-marker.jsonl");
+  const reply = assistant(undefined, "Reply from the fake Claude executable");
+  writeFileSync(
+    executable,
+    `#!${process.execPath}
+import { appendFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const marker = ${JSON.stringify(marker)};
+const record = (event) => appendFileSync(marker, JSON.stringify(event) + '\\n');
+const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+record({type:'started', pid:process.pid, cwd:process.cwd(), folder:process.env.CLAUDE_CONFIG_DIR});
+process.on('SIGTERM', () => process.exit(0));
+process.on('exit', () => record({type:'exited', pid:process.pid}));
+const session = process.argv[process.argv.indexOf('--session-id') + 1];
+for await (const line of createInterface({input:process.stdin})) {
+  const message = JSON.parse(line);
+  if (message.type === 'control_request') {
+    record({type:'control', subtype:message.request.subtype});
+    send({type:'control_response', response:{subtype:'success', request_id:message.request_id, response:message.request.subtype === 'initialize' ? {
+      commands:[], agents:[], account:{tokenSource:'none'},
+      models:[{value:'default', displayName:'Test default', description:'Fake model'}]
+    } : {}}});
+  } else if (message.type === 'user') {
+    record({type:'prompt', content:message.message.content});
+    send({type:'rate_limit_event', rate_limit_info:{status:'allowed_warning', rateLimitType:'five_hour', utilization:0.9, resetsAt:2000000000}, uuid:crypto.randomUUID(), session_id:session});
+    send({...${JSON.stringify(textDelta("Reply from the fake Claude executable"))}, session_id:session});
+    send({...${JSON.stringify(reply)}, session_id:session});
+    send({...${JSON.stringify(result())}, session_id:session});
+  }
+}
+`,
+    { mode: 0o700 },
+  );
+  return { executable, marker };
+}
+
+// Reason: a chat's first limit event must reach the saved account snapshot through production wiring.
+test("production sources save the default Claude account's chat limit", async () => {
+  const at = temporary();
+  const fake = fakeClaude(at.root);
+  const previousPath = process.env.PATH;
+  const bin = join(at.root, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
+  process.env.PATH = `${bin}:${previousPath}`;
+  const sources = productionChatSources({
+    home: at.home,
+    claude: { cwd: join(at.root, "work"), executable: fake.executable },
+  });
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* sources.registry.openSession(
+            AccountName.parse("claude"),
+            {
+              systemPrompt: "Local test",
+              tools: [],
+              approvalPolicy: "allow",
+              turnLimit: TurnLimit.parse(4),
+            },
+            { kind: "new" },
+          );
+          const events = yield* Stream.toPull(session.events);
+          yield* session.startTurn({ turnId: "limit", message: "Local turn" });
+          const seen = yield* Stream.fromPull(Effect.succeed(events)).pipe(
+            Stream.takeUntil((event) => event.type === "turn.finished"),
+            Stream.runCollect,
+          );
+          expect(
+            seen.find((event) => event.type === "turn.finished"),
+          ).toMatchObject({
+            outcome: { status: "completed" },
+          });
+          expect(
+            seen.filter((event) => event.type === "rate-limit"),
+          ).toHaveLength(1);
+        }),
+      ),
+    );
+    expect(
+      sources.statuses.current().find((status) => status.name === "claude")
+        ?.limits,
+    ).toEqual([
+      expect.objectContaining({
+        window: "five-hour",
+        status: "warning",
+        utilization: 0.9,
+        resetsAt: "2033-05-18T03:33:20.000Z",
+      }),
+    ]);
+  } finally {
+    await sources.close();
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    for (const event of existsSync(fake.marker)
+      ? markerEvents(fake.marker)
+      : [])
+      if (event.type === "started")
+        expect(() => process.kill(event.pid, 0)).toThrow();
+    at.close();
+  }
+});
+
+// Reason: the production registry and disk status source must drive the worker's real bridge, and sign-out must stop requests.
+test("production sources deliver a worker chat through a fake Claude executable and reject the signed-out account", async () => {
+  const at = temporary();
+  const previousConfig = { ...config };
+  const previousHooks = runtimeHooks();
+  const previousHome = process.env.HOME;
+  const previousPath = process.env.PATH;
+  const bin = join(at.root, "bin");
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, "tailscale"),
+    '#!/bin/sh\necho \'{"BackendState":"Stopped"}\'\n',
+    { mode: 0o700 },
+  );
+  // A lost explicit executable must fail locally, even on a machine with real Claude Code installed.
+  writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
+  process.env.HOME = at.home;
+  process.env.PATH = `${bin}:${previousPath}`;
+  const { codingWorkerSetup } = await import("../src/workspace-cli.ts");
+  const { openChannel, openWorkerStorage } =
+    await import("@ace/host/worker-runtime");
+  const fake = fakeClaude(at.root);
+  const account = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const store = yield* AccountStore.make(at.home);
+        return yield* store.add("claude", "worker-test");
+      }),
+    ),
+  );
+  saveStatus(at.home, account, { state: "signed-in" });
+  const sources = productionChatSources({
+    home: at.home,
+    claude: {
+      cwd: defaultClaudeWorkingFolder(at.home),
+      executable: fake.executable,
+    },
+  });
+  const paths = {
+    ...PI_TRANSITION_STORAGE_PROFILE.paths,
+    state: join(at.root, "state"),
+    captures: join(at.root, "captures"),
+    tmp: join(at.root, "tmp"),
+  };
+  const stateDirectory = join(paths.state, "worker");
+  const lanes = join(at.root, "lanes");
+  for (const path of [stateDirectory, paths.captures, paths.tmp, lanes])
+    mkdirSync(path, { recursive: true });
+  Object.assign(
+    config,
+    HostConfigSchema.parse({
+      home: paths.state,
+      lanes,
+      user: "person",
+      port: 0,
+      environment: { HOME: at.home },
+      worker: [process.execPath],
+    }),
+  );
+  const setup = codingWorkerSetup(
+    { paths },
+    SOL_ROUTE,
+    {
+      fetch: Object.assign(
+        async () => {
+          throw new Error("No model calls in the production-wiring test");
+        },
+        { preconnect: () => {} },
+      ),
+    },
+    sources,
+  );
+  let harness: Harness | undefined;
+  // Only the coding model/extension hooks are in this test's worker; no reviews or planning are requested.
+  configureRuntime({
+    worker: {
+      models: setup.models,
+      extensions: (worker) => {
+        const extension = setup.extensions?.(worker);
+        return {
+          extensions: extension?.extensions ?? [],
+          attach: async (attached) => {
+            harness = attached;
+            await extension?.attach?.(attached);
+          },
+        };
+      },
+      ...(setup.priced ? { priced: setup.priced } : {}),
+    },
+  });
+  const worker: WorkerContext = { sessionId: "worker", config, stateDirectory };
+  let channel: Channel | undefined;
+  let listing: Awaited<ReturnType<typeof workspaceChatModels>> | undefined;
+  const native = createModels();
+  const background = fauxProvider({
+    provider: "faux",
+    models: [{ id: "unused" }],
+  });
+  native.setProvider(background.provider);
+  try {
+    expect(existsSync(fake.marker)).toBe(false);
+    const storage = await openWorkerStorage(setup, worker, () =>
+      openNodeSqliteStorage(join(stateDirectory, "channel.sqlite")),
+    );
+    channel = await openChannel(
+      {
+        id: "worker",
+        name: "worker",
+        owner: "person",
+        project: at.root,
+        storage,
+        models: native,
+        resume: false,
+        env: (cwd) => new NodeExecutionEnv({ cwd }),
+        directory: {
+          self: { id: "worker", name: "worker" },
+          list: async () => [],
+          deliver: async () => {},
+        },
+        log: () => {},
+      },
+      stateDirectory,
+    );
+    await setup.models(worker, native);
+    listing = await workspaceChatModels(native, sources);
+    expect(listing.current()).toContainEqual({
+      provider: account.name,
+      modelId: "default",
+      efforts: [],
+    });
+    expect(existsSync(fake.marker)).toBe(false);
+    const observed: unknown[] = [];
+    await channel.handle({ op: "watch", chat: 1 }, (frame) =>
+      observed.push(frame),
+    );
+    await channel.handle(
+      {
+        op: "ask",
+        author: "person",
+        text: "Production worker turn",
+        model: { provider: account.name, modelId: "default" },
+      },
+      () => {},
+    );
+    if (!harness) throw new Error("Worker did not attach its Harness");
+    await harness.waitForIdle(BACKGROUND_CONTEXT);
+    await until(() => !channel!.busy);
+    const events = markerEvents(fake.marker);
+    expect(events.filter((event) => event.type === "started")).toHaveLength(1);
+    expect(events.find((event) => event.type === "started")).toMatchObject({
+      cwd: defaultClaudeWorkingFolder(at.home),
+      folder:
+        "folder" in account.credential ? account.credential.folder : undefined,
+    });
+    expect(events.filter((event) => event.type === "prompt")).toEqual([
+      {
+        type: "prompt",
+        content: [{ type: "text", text: "person: Production worker turn" }],
+      },
+    ]);
+    const conversation = await harness.conversation(
+      ROOT_CONVERSATION_ID,
+      BACKGROUND_CONTEXT,
+    );
+    expect(
+      (await conversation?.context(BACKGROUND_CONTEXT))?.messages
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.content),
+    ).toEqual([
+      [{ type: "text", text: "Reply from the fake Claude executable" }],
+    ]);
+    await until(() =>
+      JSON.stringify(observed).includes(
+        "Reply from the fake Claude executable",
+      ),
+    );
+    expect(setup.priced?.({ provider: account.name, modelId: "default" })).toBe(
+      false,
+    );
+    // Reason: the worker's production bridge must persist the same account limit as a direct session.
+    expect(
+      sources.statuses.current().find((status) => status.name === account.name)
+        ?.limits,
+    ).toEqual([
+      expect.objectContaining({
+        window: "five-hour",
+        status: "warning",
+        utilization: 0.9,
+      }),
+    ]);
+    saveStatus(at.home, account, {
+      state: "not-signed-in",
+      hint: {
+        kind: "command",
+        command: "neuve auth login",
+        account: account.name,
+      },
+    });
+    expect(listing.current()).toEqual([]);
+    await expect(
+      channel.handle(
+        {
+          op: "ask",
+          author: "person",
+          chat: 1,
+          text: "Do not send this",
+          model: { provider: account.name, modelId: "default" },
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(
+      "Sign in for worker-test. Run neuve auth login worker-test.",
+    );
+    expect(
+      markerEvents(fake.marker).filter((event) => event.type === "prompt"),
+    ).toHaveLength(1);
+  } finally {
+    await listing?.close();
+    // Exercise the production close hook, while suppressing its unrelated detached capture scanner.
+    const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
+      throw new Error("Capture scanner is outside this test");
+    });
+    try {
+      if (channel)
+        await expect(channel.close()).rejects.toThrow(
+          "capture worker could not start",
+        );
+    } finally {
+      spawn.mockRestore();
+      await sources.close();
+      for (const key of Object.keys(config))
+        Reflect.deleteProperty(config, key);
+      Object.assign(config, previousConfig);
+      const restoredHooks = { ...previousHooks };
+      Object.defineProperty(restoredHooks, "worker", {
+        value: previousHooks.worker,
+        enumerable: true,
+      });
+      configureRuntime(restoredHooks);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (existsSync(fake.marker)) {
+        const events = markerEvents(fake.marker);
+        for (const started of events.filter(
+          (event) => event.type === "started",
+        )) {
+          expect(
+            events.some(
+              (event) => event.type === "exited" && event.pid === started.pid,
+            ),
+          ).toBe(true);
+          expect(() => process.kill(started.pid, 0)).toThrow();
+        }
+      }
+      at.close();
+    }
+  }
+}, 20000);
+
+// Reason: a group-writable Neuve folder must leave native pi models usable and fail account selection with the existing copy.
+test("an unreadable production store leaves pi executable", async () => {
+  const at = temporary();
+  const folder = AccountStore.neuveFolder(at.home);
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  chmodSync(folder, 0o775);
+  const sources = productionChatSources({
+    home: at.home,
+    claude: {
+      cwd: join(at.root, "unused"),
+      executable: join(at.root, "missing-claude"),
+    },
+  });
+  const native = createModels();
+  const fake = fauxProvider({ provider: "faux", models: [{ id: "pi" }] });
+  fake.setResponses([fauxAssistantMessage("Pi still works")]);
+  native.setProvider(fake.provider);
+  let runtime: Awaited<ReturnType<typeof workspaceChatRuntime>> | undefined;
+  let listing: Awaited<ReturnType<typeof workspaceChatModels>> | undefined;
+  try {
+    runtime = await workspaceChatRuntime(
+      native,
+      join(at.root, "chat"),
+      sources,
+    );
+    listing = await workspaceChatModels(native, sources);
+    const model = runtime.models.getModel("faux", "pi");
+    if (!model) throw new Error("Missing pi fixture");
+    expect(
+      (await runtime.models.completeSimple(model, { messages: [] })).content,
+    ).toEqual([{ type: "text", text: "Pi still works" }]);
+    expect(() => runtime!.models.getModel("claude", "default")).toThrow(
+      "The selected account claude cannot run here.",
+    );
+    expect(listing.current()).toEqual([]);
+    expect(existsSync(join(at.root, "unused"))).toBe(false);
+  } finally {
+    await runtime?.close();
+    await listing?.close();
+    await sources.close();
+    at.close();
+  }
+});
+
+// Reason: constructing and closing unused process sources must not open the account store or create Claude's working folder.
+test("unused production sources stay lazy", async () => {
+  const at = temporary();
+  const sources = productionChatSources({ home: at.home });
+  try {
+    expect(existsSync(AccountStore.neuveFolder(at.home))).toBe(false);
+    await sources.close();
+    await sources.close();
+    expect(existsSync(AccountStore.neuveFolder(at.home))).toBe(false);
+  } finally {
+    await sources.close();
+    at.close();
+  }
+});
+
+// Reason: a refused status snapshot must not prevent pi accounts from resolving or launch Claude Code.
+test("an unreadable production status snapshot leaves the registry usable", async () => {
+  const at = temporary();
+  const path = AccountStore.statusesPath(at.home);
+  mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
+  writeFileSync(path, "invalid snapshot", { mode: 0o600 });
+  const fake = fakeClaude(at.root);
+  const sources = productionChatSources({
+    home: at.home,
+    claude: { cwd: join(at.root, "work"), executable: fake.executable },
+  });
+  try {
+    const result = await Effect.runPromise(
+      sources.registry.capabilities(AccountName.parse("anthropic")).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: (capabilities) => capabilities,
+        }),
+      ),
+    );
+    expect(result).toMatchObject({
+      ownsLoop: false,
+    });
+    expect(existsSync(fake.marker)).toBe(false);
+    expect(existsSync(join(at.root, "work"))).toBe(false);
+  } finally {
+    await sources.close();
+    at.close();
+  }
+});
+
+// Reason: resolving a missing Claude executable must neither launch a fallback nor prevent native pi turns.
+test("a missing Claude executable leaves pi executable", async () => {
+  const at = temporary();
+  const sources = productionChatSources({
+    home: at.home,
+    claude: {
+      cwd: join(at.root, "work"),
+      executable: join(at.root, "missing-claude"),
+    },
+  });
+  const native = createModels();
+  const fake = fauxProvider({ provider: "faux", models: [{ id: "pi" }] });
+  fake.setResponses([fauxAssistantMessage("Pi without Claude Code")]);
+  native.setProvider(fake.provider);
+  let runtime: Awaited<ReturnType<typeof workspaceChatRuntime>> | undefined;
+  try {
+    runtime = await workspaceChatRuntime(
+      native,
+      join(at.root, "chat"),
+      sources,
+    );
+    const model = runtime.models.getModel("faux", "pi");
+    if (!model) throw new Error("Missing pi fixture");
+    expect(
+      (await runtime.models.completeSimple(model, { messages: [] })).content,
+    ).toEqual([{ type: "text", text: "Pi without Claude Code" }]);
+    expect(runtime.owns("claude")).toBe(false);
+  } finally {
+    await runtime?.close();
+    await sources.close();
+    at.close();
+  }
+});
+
+// Reason: coding chats use the worker's recoverable directory, including every directory operation behind the registry.
+for (const startup of [true, false]) {
+  test(`production chats resolve defaults and recover a named account ${startup ? "refused at startup" : "refused after open"}`, async () => {
+    const at = temporary();
+    const name = AccountName.parse("work");
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* AccountStore.make(at.home);
+          yield* store.add("claude", name);
+        }),
+      ),
+    );
+    const folder = AccountStore.neuveFolder(at.home);
+    if (startup) chmodSync(folder, 0o775);
+    const sources = productionChatSources({
+      home: at.home,
+      claude: { cwd: join(at.root, "work"), executable: process.execPath },
+    });
+    try {
+      if (!startup)
+        expect(
+          (await Effect.runPromise(sources.registry.continuation(name)))
+            .runtime,
+        ).toBe("claude-code");
+      chmodSync(folder, 0o775);
+      for (const account of ["anthropic", "chatgpt"])
+        expect(
+          await Effect.runPromise(
+            sources.registry.capabilities(AccountName.parse(account)),
+          ),
+        ).toMatchObject({ ownsLoop: false });
+      const refused = await Effect.runPromise(
+        sources.registry.continuation(name).pipe(Effect.result),
+      );
+      expect(refused).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          _tag: "AccountStoreRefused",
+          folder,
+          problem: { kind: "writable-by-others" },
+        },
+      });
+      if (refused._tag !== "Failure") throw new Error("Expected refusal");
+      expect(refused.failure.message).toBe(
+        `${folder} is writable by other users. Neuve needs it writable only by you.`,
+      );
+      chmodSync(folder, 0o755);
+      expect(
+        (await Effect.runPromise(sources.registry.continuation(name))).runtime,
+      ).toBe("claude-code");
+      expect(existsSync(join(at.root, "work"))).toBe(false);
+    } finally {
+      await sources.close();
+      at.close();
+    }
+  });
+}

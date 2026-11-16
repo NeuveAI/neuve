@@ -67,6 +67,7 @@ import {
   Scope as HarnessScope,
   Stack as HarnessStack,
 } from "@neuve/harness";
+import * as HarnessRuntimes from "@neuve/harness/runtimes";
 import { readHeldReviews } from "@neuve/harness/held-reviews";
 import { execute, withStore, write } from "./records-cli.ts";
 import { prepareWorkerStore, warnIfPaused } from "./installed-copy.ts";
@@ -735,6 +736,9 @@ const runForeground = (
   idleSeconds: number,
 ): Promise<number> => {
   const program = Effect.gen(function* () {
+    HarnessRuntimes.configureProcessRuntimes(
+      HarnessRuntimes.workerRuntimeOptions(),
+    );
     yield* Effect.logInfo(
       `worker starting for ${repository} (idle exit after ${idleSeconds}s)`,
     );
@@ -1004,6 +1008,9 @@ export const runWorkerCli = async (
         .min(1)
         .parse(values["idle-seconds"] ?? 60);
       if (values.store !== undefined) {
+        HarnessRuntimes.configureProcessRuntimes(
+          HarnessRuntimes.workerRuntimeOptions(),
+        );
         const location = storeLocationIn(dirname(resolve(values.store)));
         const program = Effect.andThen(
           prepareWorkerStore(location),

@@ -1,19 +1,37 @@
 # 0008: Model routes and budgets
 
-Status: accepted, 16 October 2026. Source: decisions [2.9, 2.11, 10.5 and 10.16–10.19](../../process/decisions.md).
+Status: accepted on 16 October 2026, amended on 10 November 2026 for the local runtime contract and accounts. The [model and budget decisions](../../process/decisions.md#area-10-harness-m3-18-october-2026) set route accounting and limits. The [local runtime decision 12.59](../../process/decisions.md#area-12-ace-style-pi-transition-28-october-2026) adds isolated Claude subscription accounts. The [runtime and accounts proposal](../../process/proposals/claude-subscription-route.md#2-one-runtime-contract-and-an-account-registry) defines the account boundary. The [runtime contract record](0017-runtime-contract-and-accounts.md) states how review stages run on each kind of account.
 
 ## Decision
 
-| Route | Use | Context window | Output | Source of the numbers |
-| --- | --- | --- | --- | --- |
-| Sol 6.1 through ACP to Codex | First choice, if it can be set up properly | 500,000 tokens, 95% usable (about 475,000) | Not published by Codex; plan for 128,000 until measured | Codex's model metadata, `~/.codex/models_cache.json` |
-| Opus 5.5 through the Anthropic API | Fallback | 1,000,000 tokens | 128,000 tokens, including thinking | Anthropic's model documentation |
+| Route                              | Default account and kind          | Context window   | Output cap                             | Source of the numbers                                                                                                                               |
+| ---------------------------------- | --------------------------------- | ---------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Opus 5.5 through the Anthropic API | `anthropic`, `anthropic-api-key`  | 1,000,000 tokens | 128,000 tokens, including thinking     | Anthropic's model documentation, frozen in the [Anthropic route declaration](../../packages/harness/src/route.ts), which also holds the price table |
+| GPT-6.1 Sol on the ChatGPT plan    | `chatgpt`, `chatgpt-subscription` | 1,050,000 tokens | 128,000 tokens, checked after the call | OpenAI's model metadata, frozen in the [OpenAI route declaration](../../packages/harness/src/route.ts) so budgeting and reuse use the same numbers  |
 
-- **Current choice (17 October 2026, decision 2.12):** M3 builds on Opus 5.5. The ACP path to Codex stays runnable, and it switches to Sol 6.1 once a released Codex accepts `gpt-6.1-sol` and offers a true read-only mode ([0003](0003-effect-native-harness-runtime.md)).
-- The route and its numbers are frozen into each run's configuration, so a run can be reproduced and reused.
-- Credentials are the user's environment, read at the call and never stored (10.5). Every run receipt shows the route, the variable that supplied the key, tokens and cost by stage, and the organisation if the provider names it (10.16).
-- Each call sets the 128,000-token output cap; effort is `medium`, fixed per context; at most 3 calls are in flight per run; one context's ceiling is half the window (10.18, 10.19).
-- Every stage budget is derived from the route's window and counted in tokens, not bytes ([0005](0005-harness-pipeline.md)).
-- Output caps must actually reach the provider. Where a route cannot enforce one, usage is checked and recorded after the call.
-- The ChatGPT consumer-backend route through EVE is removed.
-- The old values (a 272,000-token window, and 131,072-byte, 64,000-token and 30-second frame limits) are discarded. They belonged to the previous Sol model and to a one-case development envelope.
+The Anthropic route remains the default when no route is selected. The ChatGPT subscription route follows the [accepted route decision 10.85](../../process/decisions.md#area-10-harness-m3-18-october-2026), which replaced the earlier ACP-first choice. The ChatGPT consumer-backend route through EVE remains removed.
+
+Routes freeze the account's name and kind alongside the provider, model, effort, context window, output cap, price table and legacy credential reference. Anthropic consumers read the environment reference through `routeCredentialVariable`; OpenAI uses the Neuve sign-in. The [credential presence check](../../packages/harness/src/route-provider.ts) follows those separate paths. The [receipt](../../packages/harness/src/receipt.ts) names the route's account beside its credential source, usage and cost by stage, and the organisation when reported; the legacy credential fields leave the default routes once nothing reads them. No credential value is stored in a route or receipt. Later consumer migration will resolve credentials through the [runtime contract and account directory](0017-runtime-contract-and-accounts.md), whose registry selects the account's runtime.
+
+The [default account declarations](../../packages/runtime/src/defaults.ts) name `anthropic` with an `ANTHROPIC_API_KEY` environment reference, `chatgpt` with Neuve's existing sign-in reference, and `claude` with Claude Code's default configuration reference. The [account store](../../packages/runtime/src/store/index.ts) supplies these defaults when no account file exists and owns additional accounts. Claude runtime integration uses Claude Code's own login. The [credential separation decision 12.59](../../process/decisions.md#area-12-ace-style-pi-transition-28-october-2026) requires direct API routes to refuse subscription tokens; the [subscription-token check](../../packages/harness/src/subscription-token.ts) does so before any request or token count.
+
+This migration is additive. The Anthropic route retains `credentialVariable`, and the OpenAI route retains `credentialSource`, until their consumers migrate. Both route schemas accept older frozen routes without `account` and leave their JSON unchanged on parse. For display, the legacy `ANTHROPIC_API_KEY` reference implies `anthropic`, and `neuve-sign-in` implies `chatgpt`. A custom legacy variable implies no account.
+
+The [run-key construction](../../packages/harness/src/config.ts) omits the account from the keyed route only when it is the default implied by that route's credential reference. Thus new requests using either default join the same completed runs as requests frozen before account metadata existed. Any other account stays in the keyed route. Stored request identity continues to compare its unchanged canonical JSON. Stage computation keys omit the account and credential. They use the provider, model and reasoning setting, plus `reasoningSummary` when requested on OpenAI, so equivalent accounts share stage computations.
+
+Effort defaults to `medium` and is frozen with the route when settings select another effort. One context's ceiling is half its route's window. Context and tool-result budgets are counted in tokens and follow the [review pipeline's limits](0005-harness-pipeline.md), so changing accounts does not invent a second budget policy. The [budget declarations](../../packages/harness/src/budget.ts) set eight calls in flight and the default ten-minute run lifetime.
+
+Output caps reach the provider where supported. Where a route cannot enforce a cap, usage is checked and recorded after the call. Cost uses the route's frozen price table. Subscription cost is unknown, represented by `null`, never zero. The old 272,000-token window and the one-case byte, token and frame-time limits remain discarded.
+
+## The Claude subscription route
+
+The [route declarations](../../packages/harness/src/route.ts) include `ClaudeRouteConfig` in `AnyRouteConfig`. Run configurations use `RouteConfig`, which is `AnyRouteConfig`, so they admit Claude routes. Stages on them run through the [runtime contract record's stage engine](0017-runtime-contract-and-accounts.md#how-review-stages-and-coding-chats-use-it), which defines how a Claude route's turns are counted, recovered and held.
+
+The declared route on a Claude subscription account has provider `claude`, a required account of kind `claude-subscription`, the model, effort, window and output cap, and `price: null`. It has no credential field, because the account says where the credential lives.
+
+- **Stage key.** `{ provider: "claude", model, reasoning }`, so its stage computations are kept apart from the Anthropic API's, while equivalent subscription accounts share them.
+- **Run key.** It keeps the account.
+- **Agreement with the runtime.** The `claude` provider requires an account whose runtime runs its own loop, and the direct providers require one that doesn't. The [stage admission branch](../../packages/harness/src/pi/stages/agent-step.ts) rejects a mismatch with `RouteRuntimeMismatch`. The same check runs at freeze time when the caller supplies the registry, through `routeOwnsLoop` in [request preparation](../../packages/harness/src/request.ts), and again when each attempt opens.
+- **Direct API paths.** The route provider, token counting, provider admission, credential presence check and model descriptor each refuse a Claude route before reading a credential.
+- **Window.** It must be the context window Claude Code itself uses, so that Claude Code doesn't compact before the stage reaches its ceiling at half the window.
+- **Cost.** Subscription usage is recorded with `null` cost, never priced at API rates.
