@@ -127,53 +127,46 @@ export const FINDINGS: ReadonlyArray<{
  * implicit. */
 export const STAGE = {
   findings: "verified findings",
+  // Step 3's placeholder while steps 1 and 2 play (the owner, 17 November).
+  waiting: "Waiting",
   checkedAgain: "Checked again in a fresh context",
   cites: "Cites",
   replay: "Replay",
 };
 
-/** "How it works" in three steps, one under each column of the stage: the
- * owner asked to consolidate the five round-6 steps, merging their text
- * without adding any. */
+/** "How it works" in three steps, one over each column of the stage. The
+ * owner (17 November): show, don't tell. The motion explains each step, so
+ * the legends under the columns are gone and only the step names stay. */
 export const STEPS = [
-  {
-    title: "Frame and split",
-    body: "Run neuve setup in your repository first. Then run neuve review there with a commit range. Neuve states the change's goal and what done means, from the ticket or plan it can fetch, and says when there isn't one. Then it splits the change into batches, and each batch into smaller parts. No changed line is left out.",
-  },
-  {
-    title: "Find and check",
-    body: "Four agents look at scope fit, correctness, risky edges and tests. Each finding is checked again in a fresh context, and one that can't be checked never becomes a comment.",
-  },
-  {
-    title: "Validate and decide",
-    body: "Each batch's summary says why the batch exists and links findings to the parts that hold them. Verified defects arrive as requests for changes, pinned to their lines. Risks and questions arrive as comments. Read as much of the code as you want, then record your review in the review desk.",
-  },
+  { title: "Frame and split" },
+  { title: "Find and check" },
+  { title: "Validate and decide" },
 ];
 // No fine print: the owner removed the pipeline limits (no internal numbers, 13.12).
 
 export const DESK = {
   title: "From the overview to the line",
-  /** Round 6.1, in common terms. Each callout's name is a link to its
-   * number on the capture, the way briefings cite code (the owner, 11 November). */
+  /** The owner's own wording (17 November), one paragraph per entry. Each
+   * callout's name is a link to its number on the capture, the way
+   * briefings cite code (the owner, 11 November). */
   body: [
-    {
-      text: "From the overview of a batch, open one of its parts to review it. ",
-    },
-    { text: "The facts", n: 1 },
-    { text: " say what changed. " },
-    { text: "The diff", n: 2 },
-    { text: " shows the code, as much of it as you want to read. " },
-    { text: "Findings sit beside the lines", n: 3 },
-    {
-      text: " they're about, each citing the code it rests on. Then record your review in ",
-    },
-    { text: "the decision dock", n: 4 },
-    { text: "." },
-  ] as ReadonlyArray<{ text: string; n?: number }>,
+    [{ text: "Quickly find what changed and why." }],
+    [
+      { text: "The facts", n: 1 },
+      { text: " inform what changed. " },
+      { text: "The diff", n: 2 },
+      { text: " shows the actual change, if you prefer to review it. " },
+      { text: "Findings sit beside the lines", n: 3 },
+      { text: " they're related to." },
+    ],
+    [
+      { text: "Once ready, record your decision in " },
+      { text: "the decision dock", n: 4 },
+      { text: "." },
+    ],
+  ] as ReadonlyArray<ReadonlyArray<{ text: string; n?: number }>>,
   alt: "A sample capture of the review desk on the part “Index writes retry when the database is busy”: its facts written as four claims, the diff of internal/index/writer.go, and pins in the margin",
-  // The capture is a design sample (the owner's, from the article); today a part's facts are a line count per file.
-  caption:
-    "Sample capture. Today a part's facts are a line count for each file. The linked claims, the review lane labels and groups, and the part names shown here are where the desk is heading.",
+  // No caption or legend under the capture: the owner removed them (17 November).
   altDark: "The review desk in the dark theme, on the same part",
   dock: {
     covers: "Covers 1 hunk",
@@ -185,28 +178,24 @@ export const DESK = {
     {
       n: 1,
       title: "The facts",
-      short: "What changed, citing its hunks.",
       text: "What changed, citing its hunks. Today that's a line count for each file. In this sample it's written as claims linked to their lines: “retries up to three times” lands on lines 29 to 37.",
       land: true,
     },
     {
       n: 2,
       title: "The diff",
-      short: "The code, whenever you want it.",
       text: "The lines this part holds. No changed line is left out of a part.",
       land: false,
     },
     {
       n: 3,
       title: "Findings beside their lines",
-      short: "Each one cites its source.",
       text: "Verified findings arrive pinned to the lines they're about, each citing its source. The Gap, Doc and Graph pins in this sample are context Neuve is designed to add.",
       land: false,
     },
     {
       n: 4,
       title: "The decision dock",
-      short: "Your call, recorded.",
       text: "Record your review. Today that's requesting changes, or approving to overrule an agent's request.",
       land: false,
     },
@@ -282,7 +271,7 @@ export type LaneKey =
 export type QuadKey = "le" | "lh" | "he" | "hh";
 
 export const HEADING = {
-  eyebrow: "Where it's heading",
+  // No eyebrow, and no "Today" note under the matrix: the owner removed both (17 November).
   title: "The right reviewer for each part of a change",
   body: "Some parts of a change matter more than others. Neuve puts each part in one of four review lanes: static automation, agentic review, human-suggested review and human-required review. Its complexity and how easy it is to validate set the lane. Agents decide agentic work. On human-suggested work, a decision the agents have made stands unless a person steps in. Human-required work waits for a person.",
   axes: {
@@ -322,9 +311,6 @@ export const HEADING = {
     label: string;
     axes: string;
   }>,
-  today: "Today",
-  todayText:
-    "Agents approve agentic parts or request changes on them. A part no agent could judge comes to you, with a note saying so.",
   ledgerLabel: "Why this review lane",
   rows: {
     cx: "Complexity",
@@ -449,7 +435,7 @@ export const CLOSE = {
 };
 
 export const FOOTER = {
-  tagline: `${HEADLINE}.`,
+  // No tagline: the owner removed it (17 November).
   line: "Copyright (c) 2026 Neuve AI · MIT License",
   markLabel: "The Neuve mark, drawn in diff glyphs",
   links: [

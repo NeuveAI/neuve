@@ -18,11 +18,19 @@ import {
  *    0ms   in view: glyphs gather into the mark from the dot grid,
  *          each at a hash of its cell, over 2.2s (emphasized
  *          decelerate)
- *  rest    still. Under a mouse the mark resolves to solid ink in a
- *          soft lens; nothing moves otherwise
+ *  rest    still. Under a mouse, or a finger or pen, the mark resolves
+ *          to solid ink in a soft lens; nothing moves otherwise. A touch
+ *          lens follows a sideways drag (vertical drags still scroll)
+ *          and lingers briefly after the finger lifts
  * reduced  the finished mark, no lens
  * ───────────────────────────────────────────────────────── */
-export const FOOT = { gather: 2200, lens: 110, height: 0.85, ratio: 1.25 };
+export const FOOT = {
+  gather: 2200,
+  lens: 110,
+  height: 0.85,
+  ratio: 1.25,
+  linger: 650, // a touch lens stays this long after the finger lifts
+};
 
 /** Gathers the mark again (the dev tuning panel's Replay). */
 export let replayFooterMark = () => {};
@@ -151,15 +159,42 @@ export function initFooterMark(frozen: boolean) {
     start = performance.now();
     kick();
   };
-  mf.addEventListener("pointermove", (e) => {
-    if (e.pointerType !== "mouse" || REDUCED) return;
+  // A mouse lights the lens by hovering. A finger or pen has no hover, so
+  // it lights the lens while pressed, and the lens fades a moment after it
+  // lifts. touch-action: pan-y keeps vertical scrolling; a scroll cancels
+  // the press, which lets the lens fade the same way.
+  let pressed = false,
+    release: ReturnType<typeof setTimeout> | undefined;
+  const aim = (e: PointerEvent) => {
     const r = mf.getBoundingClientRect();
     pointer = { x: e.clientX - r.left, y: e.clientY - r.top };
     kick();
+  };
+  const letGo = (delay: number) => {
+    pressed = false;
+    clearTimeout(release);
+    release = setTimeout(() => {
+      if (pressed) return;
+      pointer = null;
+      kick();
+    }, delay);
+  };
+  mf.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" || REDUCED) return;
+    pressed = true;
+    clearTimeout(release);
+    aim(e);
   });
-  mf.addEventListener("pointerleave", () => {
-    pointer = null;
-    kick();
+  mf.addEventListener("pointermove", (e) => {
+    if (REDUCED) return;
+    if (e.pointerType === "mouse" || pressed) aim(e);
+  });
+  for (const type of ["pointerup", "pointercancel"] as const)
+    mf.addEventListener(type, (e) => {
+      if (e.pointerType !== "mouse") letGo(FOOT.linger);
+    });
+  mf.addEventListener("pointerleave", (e) => {
+    if (e.pointerType === "mouse") letGo(0);
   });
   layout();
   draw(performance.now());

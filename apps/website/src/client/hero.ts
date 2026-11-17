@@ -50,6 +50,9 @@ import {
  *         that fades in (0.48s) and flashes --nv-lit (1.2s); the count
  *         ticks 0 → 9                                       step 3
  * 14.8s   at rest: all three steps lit
+ * waiting  a step whose phase hasn't begun is dimmed (.wait); until the
+ *          first finding lands, step 3 shows a "Waiting" status and
+ *          skeleton rows in place of its findings (the owner, 17 November)
  * reduced  the final state, drawn at once
  *
  * The values are tunable live in `vite dev` (client/tune.ts, DialKit).
@@ -172,6 +175,7 @@ export function initHero(freezeAt: number | null) {
   const steps = [...stage.querySelectorAll<HTMLElement>(".stage-steps > li")];
   const youN = byId("you-n");
   const foot = stage.querySelector<HTMLElement>(".you-f");
+  const you = byId("you");
   const { units, cells, marks, verified } = batch();
 
   let C: Record<string, RGB> = {};
@@ -414,18 +418,23 @@ export function initHero(freezeAt: number | null) {
       }
       if (!on) el.classList.remove("in");
     });
+    you.classList.toggle(
+      "waiting",
+      !rows.some((el) => el.classList.contains("in")),
+    );
     foot?.classList.toggle(
       "in",
       t > TIMING.you + verified.length * TIMING.youEach + TIMING.youDur,
     );
     const at = stepAt();
-    steps.forEach((li, i) =>
+    steps.forEach((li, i) => {
       li.classList.toggle(
         "on",
         t >= TIMING.end ||
           (t >= at[i]! && (i === at.length - 1 || t < at[i + 1]!)),
-      ),
-    );
+      );
+      li.classList.toggle("wait", t < at[i]! && t < TIMING.end);
+    });
   };
 
   let raf = 0,

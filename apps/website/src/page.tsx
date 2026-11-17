@@ -213,8 +213,9 @@ function Hero() {
         <span className="cap">{BATCH.meta}</span>
       </div>
       {/* "How it works" is the stage itself: three steps, each one a column
-          with its name above, the motion in the middle and its legend
-          below. The visuals share one grid row, so their bottoms align. */}
+          with its name above the motion. No legends: the motion shows each
+          step (the owner, 17 November). The visuals share one grid row, so
+          their bottoms align. */}
       <div className="stage" id="stage">
         <p className="sr">{BATCH.summary}</p>
         <canvas id="sort-canvas" aria-hidden="true" />
@@ -222,7 +223,6 @@ function Hero() {
           <li className="col step">
             <StepHead n={1} title={frame!.title} />
             <div className="field well" id="field" aria-hidden="true" />
-            <p className="legend">{frame!.body}</p>
           </li>
           <li className="col step">
             <StepHead n={2} title={find!.title} />
@@ -236,7 +236,6 @@ function Hero() {
                 </div>
               ))}
             </div>
-            <p className="legend">{find!.body}</p>
           </li>
           <li className="col step you-col">
             <StepHead n={3} title={decide!.title} />
@@ -245,8 +244,21 @@ function Hero() {
                 <b>
                   <span id="you-n">{verified}</span> {STAGE.findings}
                 </b>
+                <span className="you-st" aria-hidden="true">
+                  <i />
+                  {STAGE.waiting}
+                </span>
               </div>
               <div id="frows">
+                {/* Stands in for the rows until the first finding lands. */}
+                <div className="you-skel" aria-hidden="true">
+                  {FINDINGS.map((r) => (
+                    <span key={r.title}>
+                      <i />
+                      <i />
+                    </span>
+                  ))}
+                </div>
                 {FINDINGS.map((r, i) => (
                   <div className="frow" key={r.title}>
                     <button
@@ -294,7 +306,6 @@ function Hero() {
                 </button>
               </div>
             </div>
-            <p className="legend">{decide!.body}</p>
           </li>
         </ol>
       </div>
@@ -322,20 +333,24 @@ function Desk() {
       <div className="wrap">
         <div className="s-head">
           <h2 id="desk-h">{DESK.title}</h2>
-          <p>
-            {DESK.body.map((part, i) =>
-              part.n ? (
-                <span key={i} className="ref" data-n={part.n}>
-                  {part.text}
-                  <span className="ref-n" aria-hidden="true">
-                    {part.n}
-                  </span>
-                </span>
-              ) : (
-                <span key={i}>{part.text}</span>
-              ),
-            )}
-          </p>
+          <div className="s-body">
+            {DESK.body.map((para, j) => (
+              <p key={j}>
+                {para.map((part, i) =>
+                  part.n ? (
+                    <span key={i} className="ref" data-n={part.n}>
+                      {part.text}
+                      <span className="ref-n" aria-hidden="true">
+                        {part.n}
+                      </span>
+                    </span>
+                  ) : (
+                    <span key={i}>{part.text}</span>
+                  ),
+                )}
+              </p>
+            ))}
+          </div>
         </div>
         <div className="desk-fig" id="desk-fig">
           <div className="desk-frame" id="desk-frame">
@@ -398,24 +413,6 @@ function Desk() {
             </div>
             <p id="peek-text" />
           </div>
-        </div>
-        <p className="desk-caption">{DESK.caption}</p>
-        <div className="desk-legend" id="desk-legend">
-          {DESK.callouts.map((d) => (
-            <button
-              key={d.n}
-              type="button"
-              data-n={d.n}
-              aria-expanded="false"
-              aria-controls="peek"
-            >
-              <span className="num">{d.n}</span>
-              <span>
-                <b>{d.title}</b>
-                <span className="t">{d.short}</span>
-              </span>
-            </button>
-          ))}
         </div>
         <div className="desk-mini">
           <div className="card">
@@ -533,7 +530,7 @@ function Agents() {
           <div className="readers">
             {AGENTS.readers.map((r, i) => (
               <div className="reader" key={r.who}>
-                {icons[i]}
+                <span className="reader-ic">{icons[i]}</span>
                 <span>
                   <b>{r.who}</b>
                   {r.what}
@@ -610,7 +607,6 @@ function Heading() {
     <section className="s" id="heading" aria-labelledby="hd-h">
       <div className="wrap">
         <div className="s-head">
-          <span className="eyebrow">{HEADING.eyebrow}</span>
           <h2 id="hd-h">{HEADING.title}</h2>
           <p>{HEADING.body}</p>
         </div>
@@ -624,13 +620,6 @@ function Heading() {
                 <FragmentQuad key={q.key} index={i} quad={q} />
               ))}
             </div>
-            <p className="today">
-              <span className="tagchip">{HEADING.today}</span>
-              {HEADING.todayText}
-              <button className="replay" id="m-replay" type="button">
-                {HEADING.replay}
-              </button>
-            </p>
           </div>
           <aside className="ledger">
             <span className="eyebrow">{HEADING.ledgerLabel}</span>
@@ -653,6 +642,11 @@ function Heading() {
                   </span>
                 </dd>
               </dl>
+            </div>
+            <div className="ledger-f">
+              <button className="replay" id="m-replay" type="button">
+                {HEADING.replay}
+              </button>
             </div>
           </aside>
         </div>
@@ -761,7 +755,6 @@ function Footer() {
           <canvas id="mark-canvas" aria-hidden="true" />
           <Logo className="mark-static" />
         </div>
-        <p className="tagline">{FOOTER.tagline}</p>
         <div className="foot">
           <span>{FOOTER.line}</span>
           <nav aria-label={UI.footer}>

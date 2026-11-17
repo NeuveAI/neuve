@@ -69,8 +69,7 @@ export let replayDesk = () => {};
 
 export function initDesk() {
   const frame = byId("desk-frame"),
-    peek = byId("peek"),
-    legend = byId("desk-legend");
+    peek = byId("peek");
   const hots = [...frame.querySelectorAll<HTMLButtonElement>(".hot")];
   // The paragraph's links to the numbered callouts (round 6.1). They are
   // plain text until armed: only where the capture shows (wider than 640px)
@@ -82,9 +81,7 @@ export function initDesk() {
   let opener: HTMLElement | null = null; // focus goes back to whatever opened the card
   const lands = [...frame.querySelectorAll<HTMLElement>(".landrect")];
   const triggers = () =>
-    document.querySelectorAll<HTMLElement>(
-      ".hot, .ref.armed, #desk-legend button",
-    );
+    document.querySelectorAll<HTMLElement>(".hot, .ref.armed");
   let openN = 0;
 
   // `slow` is the scripted landing (DTIMING's hold and fade); a callout click
@@ -242,17 +239,16 @@ export function initDesk() {
       if (!restoring && live(hot) && hot.matches(":focus-visible")) show(hot);
     });
   });
-  // A card opened from the keyboard closes once focus leaves the callouts, the
-  // legend and the card (review 10, N1). The legend counts as part of the desk,
-  // or a tap on it would open its card and close it at once (review 11, B3).
-  [...hots, ...refs, peek, legend].forEach((el) =>
+  // A card opened from the keyboard closes once focus leaves the callouts and
+  // the card (review 10, N1).
+  [...hots, ...refs, peek].forEach((el) =>
     el.addEventListener("focusout", () =>
       setTimeout(() => {
         const a = document.activeElement;
         if (
           !peek.hidden &&
           !(a && peek.contains(a)) &&
-          !a?.closest(".hot, .ref.armed, #desk-legend")
+          !a?.closest(".hot, .ref.armed")
         )
           close();
       }),
@@ -325,22 +321,13 @@ export function initDesk() {
       toggle(ref);
     });
   });
-  legend.addEventListener("click", (e) =>
-    toggle((e.target as Element).closest("button")),
-  );
   byId("peek-close").addEventListener("click", () => close(true));
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") close(true);
   });
   document.addEventListener("pointerdown", (e) => {
     const t = e.target as Element;
-    if (
-      !peek.hidden &&
-      !peek.contains(t) &&
-      !t.closest(".hot, .ref") &&
-      !t.closest("#desk-legend")
-    )
-      close();
+    if (!peek.hidden && !peek.contains(t) && !t.closest(".hot, .ref")) close();
   });
   let timers: ReturnType<typeof setTimeout>[] = [];
   const play = () => {

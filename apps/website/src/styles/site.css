@@ -555,29 +555,31 @@ body::before {
 .stage {
   position: relative;
 }
-/* "How it works" is the stage: three steps, each a column with its name, its
- * visual and its legend. The columns share rows (subgrid), so the step names,
- * the visuals' bottoms and the legends line up. */
+/* "How it works" is the stage: three steps, each a column with its name and
+ * its visual. The columns share rows (subgrid), so the step names and the
+ * visuals' tops and bottoms line up. */
 .stage-steps {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
   grid-template-columns: minmax(0, 240px) minmax(0, 1fr) minmax(0, 420px);
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr;
   column-gap: 24px;
   row-gap: 14px;
 }
 .stage-steps > .col {
   display: grid;
-  grid-row: span 3;
+  grid-row: span 2;
   grid-template-rows: subgrid;
 }
-.legend {
-  margin: 0;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  color: var(--muted);
+/* A step whose phase hasn't begun waits, dimmed, so the eye follows the one
+ * that plays. The canvas sits above the columns, so what flies in stays lit. */
+.js .stage.live .step {
+  transition: opacity 400ms var(--e-std);
+}
+.js .stage.live .step.wait {
+  opacity: 0.4;
 }
 .stage canvas {
   position: absolute;
@@ -704,6 +706,83 @@ body::before {
   font-weight: 600;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
+}
+/* Step 3 before its first finding lands: a status and skeleton rows in the
+ * rows' place, so the card reads as waiting rather than empty. */
+.you-st {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  font: 0.75rem var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.you-st i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line-strong);
+}
+#frows {
+  position: relative;
+}
+.you-skel {
+  display: none;
+  position: absolute;
+  inset: 0;
+  grid-auto-rows: 1fr;
+  pointer-events: none;
+}
+.you-skel span {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 8px;
+  align-content: start;
+  padding: 14px 26px 0 0;
+  border-top: 1px solid var(--line-2);
+}
+.you-skel span::before {
+  content: "";
+  grid-row: span 2;
+  width: 8px;
+  height: 8px;
+  margin: 2px 0 0 2px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.2px var(--line-strong);
+}
+.you-skel i {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--raised);
+}
+.you-skel i:first-child {
+  width: 72%;
+}
+.you-skel i:last-child {
+  width: 44%;
+  height: 6px;
+}
+.you-skel span:nth-child(2) i:first-child {
+  width: 84%;
+}
+.you-skel span:nth-child(3) i:first-child {
+  width: 58%;
+}
+.js .stage.live .you.waiting .you-st {
+  display: inline-flex;
+}
+.js .stage.live .you.waiting .you-skel {
+  display: grid;
+}
+.js .stage.live .step.on .you.waiting .you-st i {
+  animation: waitpulse 1.4s var(--e-std) infinite alternate;
+}
+@keyframes waitpulse {
+  to {
+    background: var(--ink-2);
+  }
 }
 .frow {
   border-top: 1px solid var(--line-2);
@@ -903,6 +982,13 @@ section.s {
   font-size: 1.0625rem;
   color: var(--ink-2);
   max-width: 58ch;
+}
+.s-body {
+  display: grid;
+  gap: 10px;
+}
+.s-body p:first-child {
+  color: var(--ink);
 }
 @media (max-width: 47.5em) {
   section.s {
@@ -1163,58 +1249,11 @@ section.s {
   color: var(--ink-2);
   line-height: 1.5;
 }
-.desk-legend {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 20px;
-}
-.desk-legend button {
-  text-align: left;
-  border: 0;
-  background: transparent;
-  padding: 12px;
-  border-radius: 12px;
-  cursor: pointer;
-  display: grid;
-  grid-template-columns: 24px 1fr;
-  gap: 10px;
-  align-items: start;
-  transition: background-color 120ms var(--e-std);
-}
-.desk-legend button:hover,
-.desk-legend button[aria-expanded="true"] {
-  background: var(--raised);
-}
-.desk-legend .num {
-  width: 1.375rem;
-  height: 1.375rem;
-  border-radius: 50%;
-  background: var(--ink);
-  color: var(--bg);
-  font: 600 0.6875rem/1.375rem var(--mono);
-  text-align: center;
-}
-.desk-legend b {
-  font-size: 0.875rem;
-  display: block;
-}
-.desk-legend span.t {
-  font-size: 0.875rem;
-  color: var(--muted);
-  line-height: 1.45;
-}
 .desk-mini {
   display: none;
 }
-@media (max-width: 53.75em) {
-  .desk-legend {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
 @media (max-width: 40em) {
   .desk-frame,
-  .desk-legend,
   .peek {
     display: none !important;
   }
@@ -1300,29 +1339,52 @@ section.s {
 }
 
 /* agents */
+/* Two columns whose tops and bottoms meet: the heading lines up with the
+ * terminal's top, and the readers end on its bottom edge. */
 .split {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   gap: 64px;
-  align-items: center;
+  align-items: stretch;
+}
+.split > :first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
 }
 .readers {
   display: grid;
-  gap: 14px;
-  margin-top: 32px;
+  margin-top: auto;
+  border-bottom: 1px solid var(--line-2);
 }
 .reader {
   display: grid;
-  grid-template-columns: 28px 1fr;
-  gap: 12px;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 16px;
   align-items: start;
+  padding-block: 16px;
+  border-top: 1px solid var(--line-2);
   font-size: 0.875rem;
+  line-height: 1.5;
   color: var(--ink-2);
+}
+.reader-ic {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+}
+.reader-ic svg {
+  max-height: 28px;
 }
 .reader b {
   color: var(--ink);
   font-weight: 500;
   display: block;
+  margin-bottom: 2px;
+}
+.reader > span:last-child {
+  padding-top: 5px;
 }
 .term {
   /* Always dark, so its scrollbars are too. */
@@ -1386,23 +1448,30 @@ section.s {
 @media (max-width: 56.25em) {
   .split {
     grid-template-columns: minmax(0, 1fr);
-    gap: 32px;
+    gap: 40px;
   }
 }
 
 /* where it's heading */
+/* The matrix's axis column sits on the section's left edge, and the ledger's
+ * top and bottom meet the quadrants' (it skips the top axis row). */
 .matrix-wrap {
+  --axis-row: 28px;
+  --cell-gap: 8px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: 32px;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 24px;
   margin-top: 48px;
-  align-items: start;
+  align-items: stretch;
+}
+.matrix-wrap > div:first-child {
+  display: grid;
 }
 .matrix {
   display: grid;
-  grid-template-columns: 96px 1fr 1fr;
-  grid-template-rows: auto 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: 20px 1fr 1fr;
+  grid-template-rows: var(--axis-row) 1fr 1fr;
+  gap: var(--cell-gap);
 }
 .axis {
   font: 0.75rem var(--mono);
@@ -1413,7 +1482,8 @@ section.s {
   align-items: center;
 }
 .axis.top {
-  padding: 0 4px 4px;
+  align-items: flex-start;
+  padding: 0 14px;
 }
 .axis.side {
   writing-mode: vertical-rl;
@@ -1422,7 +1492,7 @@ section.s {
 }
 .quad {
   position: relative;
-  min-height: 200px;
+  min-height: 184px;
   border-radius: 14px;
   background: var(--surface);
   box-shadow: 0 0 0 1px var(--line);
@@ -1541,36 +1611,51 @@ section.s {
     transform 300ms var(--spring-snappy, var(--e-dec));
 }
 .ledger {
+  margin-top: calc(var(--axis-row) + var(--cell-gap));
   border-radius: 14px;
   background: var(--surface);
   box-shadow: 0 0 0 1px var(--line);
-  padding: 20px;
-  position: sticky;
-  top: 88px;
+  padding: 24px 24px 12px;
+  display: flex;
+  flex-direction: column;
 }
 .ledger h3 {
-  font-size: 1.0625rem;
-  line-height: 1.35;
-  letter-spacing: -0.01em;
-  margin: 10px 0 14px;
+  font-size: 1.125rem;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+  margin: 14px 0 20px;
 }
 .ledger dl {
   margin: 0;
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px 16px;
+  grid-template-columns: 108px minmax(0, 1fr);
   font-size: 0.875rem;
+  line-height: 1.45;
+}
+.ledger dt,
+.ledger dd {
+  padding-block: 10px;
+  border-top: 1px solid var(--line-2);
 }
 .ledger dt {
-  font: 0.75rem var(--mono);
+  font: 0.75rem/1.65 var(--mono);
   color: var(--muted);
-  padding-top: 2px;
 }
 .ledger dd {
   margin: 0;
+  padding-inline: 4px;
+  margin-inline: -4px 0;
   color: var(--ink-2);
   transition: background-color var(--ledger-flash, 1400ms) var(--e-dec);
-  border-radius: 4px;
+}
+.ledger-f {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.ledger-f .replay {
+  margin-right: -8px;
 }
 .ledger dd.changed {
   background: var(--lit);
@@ -1587,23 +1672,6 @@ section.s {
   width: 10px;
   height: 10px;
 }
-.today {
-  margin-top: 20px;
-  font-size: 0.875rem;
-  color: var(--ink-2);
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  flex-wrap: wrap;
-}
-.tagchip {
-  font: 500 0.75rem var(--mono);
-  color: var(--ink-2);
-  background: var(--raised);
-  padding: 3px 8px;
-  border-radius: 6px;
-  white-space: nowrap;
-}
 .qaxes {
   display: none;
   font: 0.75rem var(--mono);
@@ -1616,12 +1684,13 @@ section.s {
     grid-template-columns: minmax(0, 1fr);
   }
   .ledger {
-    position: static;
+    margin-top: 0;
   }
 }
 @media (max-width: 38.75em) {
   .matrix {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
   }
   .axis.side,
   .axis.top {
@@ -1675,20 +1744,18 @@ footer {
   position: relative;
   height: clamp(200px, 22vw, 280px);
   margin-top: 8px;
+  /* A finger lights the lens (footer-mark.ts); vertical drags still scroll. */
   touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .markfield canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-}
-footer .tagline {
-  margin: 24px 0 0;
-  max-width: 52ch;
-  font-size: 1.0625rem;
-  color: var(--ink-2);
-  text-wrap: pretty;
 }
 .foot {
   display: flex;
@@ -1730,11 +1797,6 @@ footer .tagline {
 }
 
 /* Review fixes, round 1 */
-.desk-caption {
-  margin-top: 12px;
-  font: 0.75rem/1.6 var(--mono);
-  color: var(--muted);
-}
 /* Replay needs the script; without it the button would do nothing. */
 .replay {
   display: none;
