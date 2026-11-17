@@ -58,7 +58,7 @@ test("a lapsed credential holds the run, the same claim wakes nothing, and the n
       timeout: 110_000,
     },
   );
-  expect(run.exitCode).toBe(0);
+  expect(run.exitCode, run.stderr.toString().slice(-4000)).toBe(0);
   const lines = run.stdout.toString().trim().split("\n");
   const observed = JSON.parse(lines[lines.length - 1]!);
 
@@ -146,7 +146,7 @@ test("with the readings on by default, a lapsed credential holds, resumes and pu
       timeout: 110_000,
     },
   );
-  expect(run.exitCode).toBe(0);
+  expect(run.exitCode, run.stderr.toString().slice(-4000)).toBe(0);
   const observed = JSON.parse(run.stdout.toString().trim().split("\n").at(-1)!);
   expect(observed.claims).toEqual({
     sameSeq: true,
@@ -229,7 +229,7 @@ test.each([
         },
       },
     );
-    expect(run.exitCode).toBe(0);
+    expect(run.exitCode, run.stderr.toString().slice(-4000)).toBe(0);
     const lines = run.stdout.toString().trim().split("\n");
     const observed = JSON.parse(lines.at(-1)!);
     if (policy === "preflight") {
@@ -376,7 +376,7 @@ test.each([
         .filter((line) => line !== expectedNotice)
         .join("\n"),
     ).toBe("");
-    expect(run.exitCode).toBe(0);
+    expect(run.exitCode, run.stderr.toString().slice(-4000)).toBe(0);
     const observed = JSON.parse(
       run.stdout.toString().trim().split("\n").at(-1)!,
     );

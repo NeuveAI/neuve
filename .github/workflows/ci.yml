@@ -21,6 +21,9 @@ jobs:
       ROLLDOWN_WORKER_THREADS: "4"
       RAYON_NUM_THREADS: "4"
       NEUVE_TEST_SUITE_TIMEOUT_MS: "3300000"
+      # This checkout has no Graph submodule, so tests gated on the built engine skip here and say
+      # so; without this, check mode fails them. `bun run check` builds Graph and runs them.
+      NEUVE_CHECK_WITHOUT_GRAPH: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -30,12 +33,20 @@ jobs:
         with:
           bun-version: "1.4.4"
       - name: Prepare isolated check directories
+        # The same folders run_modal.py gives the plan. They stay outside the runner's own home
+        # (/home/runner, which holds $RUNNER_TEMP), because tests that refuse to run in a real home
+        # treat every folder under it as one.
         run: |
-          mkdir -p "$RUNNER_TEMP/neuve-home" "$RUNNER_TEMP/neuve-tmp" "$RUNNER_TEMP/neuve-cache"
-          echo "HOME=$RUNNER_TEMP/neuve-home" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP/neuve-tmp" >> "$GITHUB_ENV"
-          echo "BUN_TMPDIR=$RUNNER_TEMP/neuve-tmp" >> "$GITHUB_ENV"
-          echo "BUN_RUNTIME_TRANSPILER_CACHE_PATH=$RUNNER_TEMP/neuve-cache/transpiler" >> "$GITHUB_ENV"
+          mkdir -p /tmp/check-home /tmp/check-tmp /tmp/check-cache
+          echo "HOME=/tmp/check-home" >> "$GITHUB_ENV"
+          echo "TMPDIR=/tmp/check-tmp" >> "$GITHUB_ENV"
+          echo "BUN_TMPDIR=/tmp/check-tmp" >> "$GITHUB_ENV"
+          echo "BUN_RUNTIME_TRANSPILER_CACHE_PATH=/tmp/check-cache/transpiler" >> "$GITHUB_ENV"
+          # One test shard per CPU, at most the four the plan's 15-second window was set for (four
+          # per four-CPU Modal sandbox). A private repository's runner has two CPUs, a public one's
+          # four; four shards on two CPUs starve the capture scan children past that window.
+          shards=$(nproc); [ "$shards" -gt 4 ] && shards=4
+          echo "NEUVE_TEST_SHARDS=$shards" >> "$GITHUB_ENV"
       - run: bun --no-env-file install --frozen-lockfile
       - run: bun --no-env-file run format:check
       - name: Build portable declarations
@@ -49,10 +60,12 @@ jobs:
       - name: Run the check:remote Linux plan
         # remotePlan owns package selection, Graph exclusions and the 15-second CLI/harness
         # test window. run_modal.py uses the same four native worker threads and 55-minute limit.
+        # Every part runs, so one run shows every failing part; the step fails if any part did.
         run: |
           bun --no-env-file --eval '
             import { remotePlan } from "./scripts/check-remote.ts";
             const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
+            const failed = [];
             for (const part of await remotePlan(process.cwd(), revision)) {
               console.log(`Running ${part.id}`);
               const child = Bun.spawn(part.command, {
@@ -60,6 +73,13 @@ jobs:
                 timeout: 3_300_000,
               });
               const code = await child.exited;
-              if (code !== 0) process.exit(code);
+              if (code !== 0) {
+                console.log(`::error::${part.id} exited ${code}`);
+                failed.push(part.id);
+              }
+            }
+            if (failed.length > 0) {
+              console.log(`Failed parts: ${failed.join(", ")}`);
+              process.exit(1);
             }
           '

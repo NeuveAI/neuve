@@ -1,0 +1,302 @@
+import type { Context } from "@earendil-works/chord";
+import {
+  defineTask,
+  type TaskDefinition,
+  type Task,
+  type TaskRuntime,
+} from "@earendil-works/pi-durable";
+import { z } from "zod";
+import { RuntimeFailure } from "@neuve/runtime";
+import { safeRead } from "@neuve/records-schema";
+import { CorruptRecord } from "@neuve/records-core";
+import type { HeldStep } from "./control.ts";
+import type { RouteFailureKind } from "./providers/failure.ts";
+
+/**
+ * How a provider failure a step held for ends the job's attempt, by the incumbent policy: each
+ * kind keeps the error tag and retryability its failure had on the route before the port (the
+ * route's `AiError` reasons, `SignInRequired`), so the queue retries what it retried and stops
+ * what it stopped. A credential this worker lacks is decided before this (10.17, `JobHeld`).
+ */
+const POLICY: Readonly<
+  Record<
+    RouteFailureKind,
+    { readonly tag: string; readonly retryable: boolean }
+  >
+> = {
+  auth: { tag: "AuthenticationError", retryable: false },
+  // The plan's usage limit resets after hours: the run stops instead of retrying.
+  plan_quota: { tag: "QuotaExhaustedError", retryable: false },
+  rate_limit: { tag: "RateLimitError", retryable: true },
+  context_overflow: { tag: "InvalidRequestError", retryable: false },
+  invalid_request: { tag: "InvalidRequestError", retryable: false },
+  server: { tag: "InternalProviderError", retryable: true },
+  provider: { tag: "UnknownError", retryable: true },
+  stream: { tag: "NetworkError", retryable: true },
+  stalled: { tag: "NetworkError", retryable: true },
+  sign_in: { tag: "SignInRequired", retryable: false },
+  binding: { tag: "AgentRouteMissing", retryable: false },
+  capture: { tag: "CaptureFailed", retryable: true },
+  aborted: { tag: "Aborted", retryable: true },
+};
+
+export type RuntimePolicy =
+  | { readonly action: "hold"; readonly retryable: boolean }
+  | { readonly action: "fail"; readonly retryable: false }
+  | { readonly action: "final"; readonly endedBy: "turn-limit" | "overflow" }
+  | { readonly action: "refuse" };
+
+class CorruptRuntimeFailure extends CorruptRecord {
+  readonly retryable = false;
+}
+
+const FailureDiscriminator = z.object({
+  _tag: z.string(),
+  reason: z.unknown().optional(),
+});
+
+const FailureWithFutureReason = z.union(
+  RuntimeFailure.options.map((variant) =>
+    "reason" in variant.shape
+      ? variant.extend({ reason: z.string() })
+      : variant,
+  ),
+);
+
+/** Only new discriminator or reason values are newer variants. Other schema failures are corrupt. */
+const readRuntimeFailure = (input: unknown) => {
+  const header = FailureDiscriminator.safeParse(input);
+  if (header.success) {
+    const variant = RuntimeFailure.options.find(
+      (option) => option.shape._tag.safeParse(header.data._tag).success,
+    );
+    if (variant === undefined) return { kind: "newer" } as const;
+    if (
+      "reason" in variant.shape &&
+      typeof header.data.reason === "string" &&
+      !variant.shape.reason.safeParse(header.data.reason).success &&
+      // A future reason does not excuse corruption in any other known field.
+      safeRead(FailureWithFutureReason, input, {
+        source: "neuve.run-control.held.failure",
+      }).success
+    )
+      return { kind: "newer" } as const;
+  }
+  const read = safeRead(RuntimeFailure, input, {
+    source: "neuve.run-control.held.failure",
+  });
+  return read.success
+    ? ({ kind: "known", failure: read.data } as const)
+    : ({
+        kind: "corrupt",
+        error: new CorruptRuntimeFailure({
+          message: `neuve.run-control.held.failure: ${read.error.message}`,
+        }),
+      } as const);
+};
+
+/** Native failures follow stage mode, never provider prose or a guessed HTTP status. */
+export function runtimeFailurePolicy(
+  input: unknown,
+  final = false,
+  internalRetries = false,
+): RuntimePolicy {
+  const read = readRuntimeFailure(input);
+  if (read.kind === "newer") return { action: "hold", retryable: false };
+  if (read.kind === "corrupt") throw read.error;
+  const failure = read.failure;
+  switch (failure._tag) {
+    case "SignInRequired":
+    case "AccountRejected":
+    case "UsageLimitReached":
+      return { action: "hold", retryable: false };
+    case "AccountNeedsNewerBuild":
+      return { action: "hold", retryable: false };
+    case "RuntimeUnavailable":
+      return failure.reason === "start-failed"
+        ? { action: "hold", retryable: !internalRetries }
+        : { action: "fail", retryable: false };
+    case "AccountNotFound":
+    case "CapabilityUnsupported":
+      return { action: "fail", retryable: false };
+    case "TurnFailed":
+      switch (failure.reason) {
+        case "provider-failed":
+        case "provider-unavailable":
+          return { action: "hold", retryable: !internalRetries };
+        case "turn-limit-reached":
+        case "context-overflow":
+          return final
+            ? { action: "fail", retryable: false }
+            : {
+                action: "final",
+                endedBy:
+                  failure.reason === "context-overflow"
+                    ? "overflow"
+                    : "turn-limit",
+              };
+        case "structured-output-missing":
+        case "structured-output-invalid":
+          return final
+            ? { action: "refuse" }
+            : { action: "fail", retryable: false };
+        case "no-output-schema":
+        case "protocol-error":
+        case "session-stopped":
+        case "previous-turn-active":
+          return { action: "fail", retryable: false };
+      }
+  }
+}
+
+/** Raw persisted holds can belong to a newer build. Never infer their recovery policy. */
+export const contractHoldNeedsNewerBuild = (step: HeldStep): boolean => {
+  if (step.engine !== "contract") return false;
+  const read = readRuntimeFailure(step.failure);
+  return (
+    read.kind !== "corrupt" &&
+    (step.writeRefused === true ||
+      (step.recovery.kind !== "explicit-account" &&
+        step.recovery.kind !== "provider-policy") ||
+      read.kind === "newer" ||
+      (read.kind === "known" && read.failure._tag === "AccountNeedsNewerBuild"))
+  );
+};
+
+/** Callers reject corruption before a probe, capability lookup or resume can spend usage. */
+export const contractHoldCorruption = (step: HeldStep) => {
+  if (step.engine !== "contract") return undefined;
+  const read = readRuntimeFailure(step.failure);
+  return read.kind === "corrupt" ? read.error : undefined;
+};
+
+export type HeldFailure = {
+  readonly tag: string;
+  readonly retryable: boolean;
+  /** Said when the failed turn recorded no route failure, so its kind is not known. */
+  readonly unclassified?: string | undefined;
+};
+
+/** The attempt's failure for the steps held in it: the first that no attempt can recover from wins. */
+export const heldFailure = (
+  steps: ReadonlyArray<
+    Pick<HeldStep, "failure"> & {
+      readonly engine?: HeldStep["engine"];
+      readonly recovery?: HeldStep["recovery"];
+      readonly writeRefused?: true;
+    }
+  >,
+): HeldFailure => {
+  const failures = steps.map(
+    ({ engine, failure, recovery, writeRefused }): HeldFailure => {
+      if (engine === "contract") {
+        const read = readRuntimeFailure(failure);
+        if (read.kind === "corrupt")
+          return { tag: read.error._tag, retryable: false };
+        if (writeRefused)
+          return { tag: "ContractWriteRefused", retryable: false };
+        if (
+          recovery !== undefined &&
+          recovery.kind !== "explicit-account" &&
+          recovery.kind !== "provider-policy"
+        )
+          return { tag: "ContractHoldUnknown", retryable: false };
+        if (read.kind === "newer")
+          return { tag: "ContractHoldUnknown", retryable: false };
+      }
+      if (failure !== null && "_tag" in failure) {
+        const policy = runtimeFailurePolicy(failure);
+        return {
+          tag: failure._tag,
+          retryable:
+            (recovery === undefined || recovery.kind === "provider-policy") &&
+            policy.action === "hold" &&
+            policy.retryable,
+        };
+      }
+      return failure === null
+        ? {
+            tag: "ModelError",
+            retryable: true,
+            unclassified:
+              "the failed turn recorded no route failure, so its kind is unknown",
+          }
+        : POLICY[failure.kind];
+    },
+  );
+  return (
+    failures.find((failure) => !failure.retryable) ??
+    failures[0] ?? { tag: "ModelError", retryable: true }
+  );
+};
+
+const ExpectedFailure = z.object({
+  _tag: z.string(),
+  message: z.string(),
+  retryable: z.boolean().optional(),
+  status: z.number().optional(),
+});
+
+/** Preserve expected domain failures before pi reduces an uncaught exception to a fault message. */
+export const definePolicyTask = <
+  I,
+  S extends { phase: string },
+  R,
+  H extends object = object,
+>(
+  definition: TaskDefinition<I, S, R, H>,
+): Task<I, S, R, H> => {
+  const phases: {
+    -readonly [P in keyof TaskDefinition<I, S, R, H>["phases"]]: TaskDefinition<
+      I,
+      S,
+      R,
+      H
+    >["phases"][P];
+  } = { ...definition.phases };
+  const preserve = async (
+    runtime: TaskRuntime<I, S, R, H>,
+    context: Context,
+    invoke: () => Promise<void>,
+  ) => {
+    try {
+      await invoke();
+    } catch (cause) {
+      if (runtime.signal.aborted) throw cause;
+      const parsed = ExpectedFailure.safeParse(cause);
+      if (!parsed.success) throw cause;
+      const error = parsed.data;
+      await runtime.commit(
+        () => ({
+          status: "terminal",
+          outcome: {
+            status: "failed",
+            error: {
+              message: error.message,
+              detail: {
+                tag: error._tag,
+                retryable: error.retryable ?? true,
+                ...(error.status === undefined ? {} : { status: error.status }),
+              },
+            },
+          },
+        }),
+        context,
+      );
+    }
+  };
+  const wrap = <P extends S["phase"]>(phase: P) => {
+    const invoke = definition.phases[phase];
+    phases[phase] = (task, runtime, context) =>
+      preserve(runtime, context, () => invoke(task, runtime, context));
+  };
+  for (const phase in phases) wrap(phase);
+  return defineTask({
+    ...definition,
+    phases,
+    abort: (task, runtime, context) =>
+      preserve(runtime, context, () =>
+        definition.abort(task, runtime, context),
+      ),
+  });
+};

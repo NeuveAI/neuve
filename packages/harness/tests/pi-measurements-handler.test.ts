@@ -47,7 +47,7 @@ test("held, repeated and resumed handler claims count only their own calls and e
       timeout: 110_000,
     },
   );
-  expect(run.exitCode).toBe(0);
+  expect(run.exitCode, run.stderr.toString().slice(-4000)).toBe(0);
   const stdout = run.stdout.toString().trim().split("\n");
   const observed = JSON.parse(stdout[stdout.length - 1]!);
   expect(observed.outcomes).toEqual(["JobHeld", "JobHeld", "completed"]);

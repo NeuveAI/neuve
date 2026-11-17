@@ -846,15 +846,16 @@ test("a receipt path that differs only in case from a skill file is refused, and
     h.run(["install", "--agents", "codex"], {
       source: async () => ({ found: true, location: "test", bundle: changed }),
     });
-  // Only where the volume ignores case is skill.md the same file as SKILL.md.
+  // Only where the volume ignores case is skill.md the same file as SKILL.md. Where it keeps case,
+  // the receipt names no SKILL.md, so the update refuses to replace a file Neuve didn't record.
   const caseInsensitive =
     (await lstat(join(folder, "skill.md")).catch(() => null)) !== null;
-  if (caseInsensitive) {
-    expect(await update()).toBe(1);
-    expect(h.output()).toContain(
-      `${join(folder, "skill.md")} differs only in case from ${join(folder, "SKILL.md")}`,
-    );
-  } else expect(await update()).toBe(0);
+  expect(await update()).toBe(1);
+  expect(h.output()).toContain(
+    caseInsensitive
+      ? `${join(folder, "skill.md")} differs only in case from ${join(folder, "SKILL.md")}`
+      : `${join(folder, "SKILL.md")} wasn't written by Neuve`,
+  );
   expect((await lstat(join(folder, "SKILL.md"))).isFile()).toBe(true);
 });
 

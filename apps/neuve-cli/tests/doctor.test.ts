@@ -14,7 +14,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { settingsPath } from "../../../packages/harness/src/settings.ts";
 import { markSetUp } from "./fixtures/set-up.ts";
 
 const CLI = resolve(import.meta.dir, "../src/cli.ts");
@@ -113,10 +114,7 @@ test("doctor names missing setup and sign-in with their fixes, exits 1 and write
     detail: `Neuve isn't set up in ${repository}`,
     fix: `neuve setup --repo '${repository}'`,
   });
-  const settings = join(
-    home,
-    "Library/Application Support/Neuve/settings.json",
-  );
+  const settings = settingsPath(home);
   expect(check("sign-in")).toMatchObject({
     status: "missing",
     detail: `Reviews use the Anthropic route (the default; ${settings} names none), and ANTHROPIC_API_KEY isn't set in this shell. A review waits until a worker has it`,
@@ -159,7 +157,7 @@ test("a key in the environment is named, never printed", async () => {
 
 test("the OpenAI route in the settings needs its sign-in, and unreadable settings are named", async () => {
   const { home, doctor } = await scratch();
-  const folder = join(home, "Library/Application Support/Neuve");
+  const folder = dirname(settingsPath(home));
   await mkdir(folder, { recursive: true });
   await writeFile(
     join(folder, "settings.json"),
@@ -187,7 +185,7 @@ test("the OpenAI route in the settings needs its sign-in, and unreadable setting
 // the sign-in; the claude it finds must never run.
 test("the Claude route names a missing Claude Code with its fix, and never opens one it finds", async () => {
   const { root, home, tools, doctor } = await scratch();
-  const folder = join(home, "Library/Application Support/Neuve");
+  const folder = dirname(settingsPath(home));
   await mkdir(folder, { recursive: true });
   const settings = join(folder, "settings.json");
   await writeFile(

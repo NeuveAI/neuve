@@ -352,9 +352,12 @@ test("one input's unusable model output is refused alone; all inputs failing is 
 // Why: a reranker that ignores the request to stop must not outlive its close (the reviewer's
 // note): it is killed after a short grace, as graph-client's commands are.
 test("closing a reranker that ignores SIGTERM kills it after the grace", async () => {
+  // The process says when it ignores SIGTERM. A close sent before then (a slow interpreter start
+  // on a loaded runner) ends it at once, and the grace is never exercised.
+  const ignoring = join(directory, "stubborn.ignoring");
   const stubborn = startupWorker(
     "stubborn",
-    `import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)`,
+    `import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nPath(${JSON.stringify(ignoring)}).touch()`,
   );
   const text = readFileSync(stubborn.worker, "utf8").replace(
     "for line in sys.stdin:",
@@ -367,7 +370,8 @@ test("closing a reranker that ignores SIGTERM kills it after the grace", async (
   });
   // Started: its first call waits on a process that never answers or exits on its own.
   const scored = process.score("q", ["d"]);
-  await Bun.sleep(300);
+  for (let i = 0; !existsSync(ignoring) && i < 1_000; i++) await Bun.sleep(10);
+  expect(existsSync(ignoring)).toBe(true);
   const pid = process.pid!;
   const started = performance.now();
   await process.close();

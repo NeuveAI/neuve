@@ -3,7 +3,7 @@ import { runLogTracer, type RunLogRecord } from "../src/run-log.ts";
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Effect, Exit, Option, Tracer } from "effect";
 import { CpuWork, cpuPool } from "../src/budget/cpu.ts";
@@ -224,12 +224,21 @@ import { existsSync, writeFileSync } from "node:fs";
 import { withCodeWork } from "../src/code-work.ts";
 import { storeLocationIn } from "@neuve/records-core";
 
+// A preparation asks for `availableParallelism()` permits (runPreparationChild) and a background
+// grant is capped at the host's backgroundCap, threads minus a quarter-reserve. With four threads
+// it holds three, and the review's two cannot fit beside them. A two-CPU runner asks for only two,
+// which would fit beside the review's two in four threads, so the host there has three threads
+// (background cap two, interactive cap two): the preparation still holds all it may, and the review
+// still cannot be admitted until it releases them.
+const machine = availableParallelism();
+const yieldThreads = machine >= 3 ? 4 : 3;
+const preparationPermits = Math.min(machine, yieldThreads - 1);
 test("a paused preparation releases its three permits before a review requests two, then re-admits", async () => {
   const directory = join(root, "yield-budget");
   const host = await hostBudget({
     directory,
-    threads: 4,
-    efficiency: 4,
+    threads: yieldThreads,
+    efficiency: yieldThreads,
     fixed: 4,
   });
   if (!host) throw new Error("No host");
@@ -264,7 +273,9 @@ test("a paused preparation releases its three permits before a review requests t
   try {
     for (let i = 0; !existsSync(started) && i < 500; i++) await Bun.sleep(10);
     expect(existsSync(started)).toBe(true);
-    expect((await host.scheduler.observe()).held).toBe(3);
+    expect((await host.scheduler.observe()).held).toBe(preparationPermits);
+    // The review's two do not fit beside the preparation's grant: only its release admits them.
+    expect(preparationPermits + 2).toBeGreaterThan(yieldThreads);
     await Effect.runPromise(
       withCodeWork(
         location,
@@ -300,7 +311,7 @@ test("a paused preparation releases its three permits before a review requests t
     expect(readFileSync(started, "utf8").trim().split("\n")).toHaveLength(2);
     writeFileSync(finish, "done");
     await child;
-    expect(requests).toEqual([3, 3]);
+    expect(requests).toEqual([preparationPermits, preparationPermits]);
     expect((await host.scheduler.observe()).held).toBe(0);
   } finally {
     controller.abort();

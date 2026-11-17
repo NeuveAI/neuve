@@ -19,6 +19,7 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
+import { settingsPath } from "../../../packages/harness/src/settings.ts";
 import { readInstallation, writeInstallation } from "../src/installation.ts";
 import { requireRepositorySetup } from "../src/setup-status.ts";
 import {
@@ -94,10 +95,7 @@ test.skipIf(prerequisite.skip)(
     git("worktree", "add", "-q", "--detach", worktree);
     expect(await readInstallation(worktree)).toMatchObject({ repository });
     expect(await requireRepositorySetup(worktree)).toBe(worktree);
-    const settings = join(
-      home,
-      "Library/Application Support/Neuve/settings.json",
-    );
+    const settings = settingsPath(home);
     const repo = ` --repo '${repository}'`;
     expect(existsSync(settings)).toBe(false);
     expect(stderr).toBe(
@@ -268,10 +266,7 @@ test.skipIf(prerequisite.skip)(
   async () => {
     prerequisite.require();
     const { repository, home, run, copy } = await scratch();
-    const settings = join(
-      home,
-      "Library/Application Support/Neuve/settings.json",
-    );
+    const settings = settingsPath(home);
     const setup = (route: string) =>
       run([
         process.execPath,

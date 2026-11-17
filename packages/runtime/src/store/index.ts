@@ -102,7 +102,8 @@ function readAccountEntries(home: string): ReadonlyArray<AccountEntry> {
   }));
   if (!existsSync(folder)) return entries;
   let unnameable = 0;
-  for (const name of readdirSync(folder)) {
+  // Sorted, so the accounts list in one order on every filesystem (directory order is the disk's).
+  for (const name of readdirSync(folder).sort()) {
     if (name.startsWith(".")) continue;
     const claim = join(folder, name);
     let invalid = claim;

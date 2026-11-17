@@ -5,6 +5,7 @@
 // are real Graph structures of small files (as the section facts' tests build them) and hunks as Git
 // prints them; two hunks are written by hand where Git's diff slides a line and the fixture's does
 // not. The stored computation runs on a small real repository built here.
+import { graphTestPrerequisite } from "../../../scripts/graph-test-prerequisite.ts";
 import { afterAll, expect, test } from "bun:test";
 import {
   chmodSync,
@@ -30,7 +31,11 @@ import {
 import { CpuWork } from "../src/budget/cpu.ts";
 import { Scheduler } from "../src/budget/scheduler.ts";
 import { CodeWork } from "../src/code-work.ts";
-import { captureOutlineSource, readOutlines } from "../src/graph-outline.ts";
+import {
+  captureOutlineSource,
+  readOutlines,
+  outlineExecutable,
+} from "../src/graph-outline.ts";
 import { LINGUIST_STANDARD } from "../src/linguist/index.ts";
 import type { ManifestHunk } from "../src/manifest.ts";
 import { computeSectionFacts } from "../src/section-facts.ts";
@@ -344,6 +349,14 @@ const generatedOf = (change: FileChange, signals?: FileSignals) => {
   return found;
 };
 
+// These cases read declarations from the built Graph engine; without it every structure is
+// unavailable, so they need it (`bun run build:graph`).
+const graphPrerequisite = graphTestPrerequisite({
+  available: existsSync(outlineExecutable()),
+  message:
+    "Graph engine is missing at apps/neuve-graph/entire-graph. Run `bun run build:graph` from the workspace root.",
+});
+
 test("a Linguist generated rule holds by the standard when the repository declares nothing (holds, by standard), carrying the standard as given", () => {
   const [judgement, ...rest] = generatedOf(lock);
   expect(rest).toEqual([]);
@@ -560,87 +573,107 @@ test("a path decoded lossily is not given to Linguist (not-evaluated, path-not-u
 
 // --- blank-rows-only ------------------------------------------------------------------------------
 
-test("a blank row beside an unchanged declaration, outside its symbol's lines, holds (holds)", () => {
-  const computed = rulesOf([
-    { path: "named.ts", before: NAMED_BASE, after: NAMED_HEAD },
-  ]);
-  const found = judgementsOf(computed, "blank-rows-only");
-  expect(
-    found.map((judgement) => [judgement.name, ...outcome(judgement)]),
-  ).toEqual([["b", "holds", null]]);
-  expect(found[0]!.inputs.rows).toEqual([
-    { side: "new", line: 8, blank: true },
-  ]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "a blank row beside an unchanged declaration, outside its symbol's lines, holds (holds)",
+  () => {
+    graphPrerequisite.require();
+    const computed = rulesOf([
+      { path: "named.ts", before: NAMED_BASE, after: NAMED_HEAD },
+    ]);
+    const found = judgementsOf(computed, "blank-rows-only");
+    expect(
+      found.map((judgement) => [judgement.name, ...outcome(judgement)]),
+    ).toEqual([["b", "holds", null]]);
+    expect(found[0]!.inputs.rows).toEqual([
+      { side: "new", line: 8, blank: true },
+    ]);
+  },
+);
 
-test("an unchanged declaration that owns a non-blank row is not held (owns-non-blank-rows): a slid closing line", () => {
-  // Git can slide the inserted function's first lines into the one before it.
-  const hunks = [
-    handHunk("slide.ts", SLIDE_BASE, SLIDE_HEAD, 1, 1, [
-      " export function a() {",
-      "+  return 1;",
-      "+}",
-      "+export function c() {",
-      "   return 1;",
-      " }",
-      " export function b() {",
-    ]),
-  ];
-  const found = judgementsOf(
-    rulesOf([
-      { path: "slide.ts", before: SLIDE_BASE, after: SLIDE_HEAD, hunks },
-    ]),
-    "blank-rows-only",
-  );
-  expect(
-    found.map((judgement) => [judgement.name, ...outcome(judgement)]),
-  ).toEqual([["a", "not-held", "owns-non-blank-rows"]]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "an unchanged declaration that owns a non-blank row is not held (owns-non-blank-rows): a slid closing line",
+  () => {
+    graphPrerequisite.require();
+    // Git can slide the inserted function's first lines into the one before it.
+    const hunks = [
+      handHunk("slide.ts", SLIDE_BASE, SLIDE_HEAD, 1, 1, [
+        " export function a() {",
+        "+  return 1;",
+        "+}",
+        "+export function c() {",
+        "   return 1;",
+        " }",
+        " export function b() {",
+      ]),
+    ];
+    const found = judgementsOf(
+      rulesOf([
+        { path: "slide.ts", before: SLIDE_BASE, after: SLIDE_HEAD, hunks },
+      ]),
+      "blank-rows-only",
+    );
+    expect(
+      found.map((judgement) => [judgement.name, ...outcome(judgement)]),
+    ).toEqual([["a", "not-held", "owns-non-blank-rows"]]);
+  },
+);
 
-test("a blank row inside the declaration's symbol lines is not held (row-inside-declaration): a blank line can be content", () => {
-  // One blank line slid within the function: removed above its twin, added below it.
-  const hunks = [
-    handHunk("inside.ts", INSIDE_TEXT, INSIDE_TEXT, 2, 2, [
-      "   const x = 1;",
-      "-",
-      " ",
-      "+",
-      "   return x;",
-    ]),
-  ];
-  const found = judgementsOf(
-    rulesOf([
-      { path: "inside.ts", before: INSIDE_TEXT, after: INSIDE_TEXT, hunks },
-    ]),
-    "blank-rows-only",
-  );
-  expect(
-    found.map((judgement) => [judgement.name, ...outcome(judgement)]),
-  ).toEqual([["a", "not-held", "row-inside-declaration"]]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "a blank row inside the declaration's symbol lines is not held (row-inside-declaration): a blank line can be content",
+  () => {
+    graphPrerequisite.require();
+    // One blank line slid within the function: removed above its twin, added below it.
+    const hunks = [
+      handHunk("inside.ts", INSIDE_TEXT, INSIDE_TEXT, 2, 2, [
+        "   const x = 1;",
+        "-",
+        " ",
+        "+",
+        "   return x;",
+      ]),
+    ];
+    const found = judgementsOf(
+      rulesOf([
+        { path: "inside.ts", before: INSIDE_TEXT, after: INSIDE_TEXT, hunks },
+      ]),
+      "blank-rows-only",
+    );
+    expect(
+      found.map((judgement) => [judgement.name, ...outcome(judgement)]),
+    ).toEqual([["a", "not-held", "row-inside-declaration"]]);
+  },
+);
 
-test("a blank row before a top-level statement holding a multi-line template is not evaluated (no-symbols): Graph gives the expression statement no symbols to tell its own lines by", () => {
-  const found = judgementsOf(
-    rulesOf([{ path: "blank.ts", before: BLANK_BASE, after: BLANK_HEAD }]),
-    "blank-rows-only",
-  );
-  expect(
-    found.map((judgement) => [judgement.name, ...outcome(judgement)]),
-  ).toEqual([[null, "not-evaluated", "no-symbols"]]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "a blank row before a top-level statement holding a multi-line template is not evaluated (no-symbols): Graph gives the expression statement no symbols to tell its own lines by",
+  () => {
+    graphPrerequisite.require();
+    const found = judgementsOf(
+      rulesOf([{ path: "blank.ts", before: BLANK_BASE, after: BLANK_HEAD }]),
+      "blank-rows-only",
+    );
+    expect(
+      found.map((judgement) => [judgement.name, ...outcome(judgement)]),
+    ).toEqual([[null, "not-evaluated", "no-symbols"]]);
+  },
+);
 
-test("a blank row added inside a neighbouring statement's multi-line template is no blank-rows judgement: the statement's text changed", () => {
-  const computed = rulesOf([
-    { path: "template.ts", before: TEMPLATE_BASE, after: TEMPLATE_HEAD },
-  ]);
-  expect(judgementsOf(computed, "blank-rows-only")).toEqual([]);
-  expect(
-    computed.result.sections.map((section) => [
-      section.kind,
-      section.name ?? null,
-    ]),
-  ).toEqual([["statement", null]]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "a blank row added inside a neighbouring statement's multi-line template is no blank-rows judgement: the statement's text changed",
+  () => {
+    graphPrerequisite.require();
+    const computed = rulesOf([
+      { path: "template.ts", before: TEMPLATE_BASE, after: TEMPLATE_HEAD },
+    ]);
+    expect(judgementsOf(computed, "blank-rows-only")).toEqual([]);
+    expect(
+      computed.result.sections.map((section) => [
+        section.kind,
+        section.name ?? null,
+      ]),
+    ).toEqual([["statement", null]]);
+  },
+);
 
 // --- moved-unchanged ------------------------------------------------------------------------------
 
@@ -655,46 +688,54 @@ const moveTo = (path: string): FileChange => ({
   after: HELPER,
 });
 
-test("a declaration removed from one path and added byte-identical in another hold as a pair, each naming the other (holds)", () => {
-  const computed = rulesOf([moveFrom("src/a.ts"), moveTo("src/b.ts")]);
-  const found = judgementsOf(computed, "moved-unchanged");
-  expect(
-    found.map((judgement) => [judgement.about.path, ...outcome(judgement)]),
-  ).toEqual([
-    ["src/a.ts", "holds", null],
-    ["src/b.ts", "holds", null],
-  ]);
-  expect((found[0]!.inputs.other as { path: string }).path).toBe("src/b.ts");
-  expect((found[1]!.inputs.other as { key: string }).key).toBe(
-    found[0]!.about.key,
-  );
-  expect(found[1]!.statement).toContain("removed from src/a.ts");
-  // The inputs carry what made each section a candidate, so "owns the whole declaration" can be
-  // told again from them: the fact, the span's size and the owned rows' sizes.
-  expect(found[0]!.inputs).toMatchObject({
-    fact: { "old-side-only": true },
-    span: { lines: 4 },
-  });
-  expect(found[1]!.inputs).toMatchObject({
-    fact: { declaration: "added" },
-    fileLines: 4,
-  });
-  expect((found[1]!.inputs.rows as Array<{ blank: boolean }>).length).toBe(4);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "a declaration removed from one path and added byte-identical in another hold as a pair, each naming the other (holds)",
+  () => {
+    graphPrerequisite.require();
+    const computed = rulesOf([moveFrom("src/a.ts"), moveTo("src/b.ts")]);
+    const found = judgementsOf(computed, "moved-unchanged");
+    expect(
+      found.map((judgement) => [judgement.about.path, ...outcome(judgement)]),
+    ).toEqual([
+      ["src/a.ts", "holds", null],
+      ["src/b.ts", "holds", null],
+    ]);
+    expect((found[0]!.inputs.other as { path: string }).path).toBe("src/b.ts");
+    expect((found[1]!.inputs.other as { key: string }).key).toBe(
+      found[0]!.about.key,
+    );
+    expect(found[1]!.statement).toContain("removed from src/a.ts");
+    // The inputs carry what made each section a candidate, so "owns the whole declaration" can be
+    // told again from them: the fact, the span's size and the owned rows' sizes.
+    expect(found[0]!.inputs).toMatchObject({
+      fact: { "old-side-only": true },
+      span: { lines: 4 },
+    });
+    expect(found[1]!.inputs).toMatchObject({
+      fact: { declaration: "added" },
+      fileLines: 4,
+    });
+    expect((found[1]!.inputs.rows as Array<{ blank: boolean }>).length).toBe(4);
+  },
+);
 
-test("two added and one removed of the same text are ambiguous for all three (not-held, ambiguous)", () => {
-  const found = judgementsOf(
-    rulesOf([moveFrom("src/a.ts"), moveTo("src/b.ts"), moveTo("src/c.ts")]),
-    "moved-unchanged",
-  );
-  expect(
-    found.map((judgement) => [judgement.about.path, ...outcome(judgement)]),
-  ).toEqual([
-    ["src/a.ts", "not-held", "ambiguous"],
-    ["src/b.ts", "not-held", "ambiguous"],
-    ["src/c.ts", "not-held", "ambiguous"],
-  ]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "two added and one removed of the same text are ambiguous for all three (not-held, ambiguous)",
+  () => {
+    graphPrerequisite.require();
+    const found = judgementsOf(
+      rulesOf([moveFrom("src/a.ts"), moveTo("src/b.ts"), moveTo("src/c.ts")]),
+      "moved-unchanged",
+    );
+    expect(
+      found.map((judgement) => [judgement.about.path, ...outcome(judgement)]),
+    ).toEqual([
+      ["src/a.ts", "not-held", "ambiguous"],
+      ["src/b.ts", "not-held", "ambiguous"],
+      ["src/c.ts", "not-held", "ambiguous"],
+    ]);
+  },
+);
 
 test("equal text under different names is no pair: the group is kind, name and text", () => {
   const computed = rulesOf([moveFrom("src/a.ts"), moveTo("src/b.ts")]);
@@ -718,42 +759,46 @@ test("equal text under different names is no pair: the group is kind, name and t
   ).toEqual([]);
 });
 
-test("a pair in one path is not held (same-path)", () => {
-  // A real diff cannot give this: one file's same declaration is its own counterpart. The input is
-  // the cross-file pair with the added file's sections and hunks put under the other path.
-  const computed = rulesOf([moveFrom("src/a.ts"), moveTo("src/b.ts")]);
-  const sections = computed.result.sections.map((section) =>
-    section.path === "src/b.ts"
-      ? {
-          ...section,
-          path: "src/a.ts",
-          key: section.key.replace(/^src\/b\.ts\0/, "src/a.ts\0"),
-        }
-      : section,
-  );
-  const identities = new Map(
-    [...computed.result.identities].map(([key, identity]) => [
-      key.replace(/^src\/b\.ts\0/, "src/a.ts\0"),
-      identity,
-    ]),
-  );
-  const hunks = computed.hunks.map((hunk) =>
-    hunk.path === "src/b.ts"
-      ? { ...hunk, path: "src/a.ts", newPath: "src/a.ts" }
-      : hunk,
-  );
-  const found = sectionRulesOf({
-    result: { ...computed.result, sections, identities },
-    hunks,
-    structures: computed.structures,
-    files: computed.files,
-    texts: computed.texts,
-  }).filter((judgement) => judgement.rule === "moved-unchanged");
-  expect(found.map(outcome)).toEqual([
-    ["not-held", "same-path"],
-    ["not-held", "same-path"],
-  ]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "a pair in one path is not held (same-path)",
+  () => {
+    graphPrerequisite.require();
+    // A real diff cannot give this: one file's same declaration is its own counterpart. The input is
+    // the cross-file pair with the added file's sections and hunks put under the other path.
+    const computed = rulesOf([moveFrom("src/a.ts"), moveTo("src/b.ts")]);
+    const sections = computed.result.sections.map((section) =>
+      section.path === "src/b.ts"
+        ? {
+            ...section,
+            path: "src/a.ts",
+            key: section.key.replace(/^src\/b\.ts\0/, "src/a.ts\0"),
+          }
+        : section,
+    );
+    const identities = new Map(
+      [...computed.result.identities].map(([key, identity]) => [
+        key.replace(/^src\/b\.ts\0/, "src/a.ts\0"),
+        identity,
+      ]),
+    );
+    const hunks = computed.hunks.map((hunk) =>
+      hunk.path === "src/b.ts"
+        ? { ...hunk, path: "src/a.ts", newPath: "src/a.ts" }
+        : hunk,
+    );
+    const found = sectionRulesOf({
+      result: { ...computed.result, sections, identities },
+      hunks,
+      structures: computed.structures,
+      files: computed.files,
+      texts: computed.texts,
+    }).filter((judgement) => judgement.rule === "moved-unchanged");
+    expect(found.map(outcome)).toEqual([
+      ["not-held", "same-path"],
+      ["not-held", "same-path"],
+    ]);
+  },
+);
 
 test("a declaration that only partly changed is no candidate, so its byte-identical twin removed elsewhere has no partner and no judgement", () => {
   // The added function's closing line is matched to an existing one.
@@ -973,46 +1018,52 @@ const everything: ReadonlyArray<FileChange> = [
   { path: "doc.md", before: "# T\n\nwords one\n", after: "# T\n\nwords two\n" },
 ];
 
-test("the same hunks in another order give the same judgements, every judgement parses with the schema, and a rule that does not apply gives none", () => {
-  const computed = rulesOf(everything);
-  const reversed = sectionRulesOf({
-    result: computeSectionFacts(
-      [...computed.hunks].reverse(),
-      new Map([...computed.structures].reverse()),
-    ),
-    hunks: [...computed.hunks].reverse(),
-    structures: new Map([...computed.structures].reverse()),
-    files: new Map([...computed.files].reverse()),
-    texts: new Map([...computed.texts].reverse()),
-  });
-  expect(reversed).toEqual(computed.rules);
-  for (const judgement of computed.rules)
-    expect(SectionRuleJudgement.parse(judgement)).toEqual(judgement);
-  // Per path: which rules gave judgements. A rule that does not apply to a section is absent.
-  const rulesByPath = new Map<string, Set<string>>();
-  for (const judgement of computed.rules)
-    rulesByPath.set(
-      judgement.about.path,
-      (rulesByPath.get(judgement.about.path) ?? new Set()).add(judgement.rule),
-    );
-  expect(
-    Object.fromEntries(
-      [...rulesByPath].map(([path, rules]) => [path, [...rules]]),
-    ),
-  ).toEqual({
-    "bun.lock": ["generated"],
-    "named.ts": ["blank-rows-only"],
-    "src/a.ts": ["moved-unchanged"],
-    "src/b.ts": ["moved-unchanged"],
-    "doc.md": ["markdown-prose"],
-  });
-  // The changed `c` and the blank row's neighbours have none: only `b`'s section is judged.
-  expect(
-    judgementsOf(computed, "blank-rows-only").map(
-      (judgement) => judgement.name,
-    ),
-  ).toEqual(["b"]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "the same hunks in another order give the same judgements, every judgement parses with the schema, and a rule that does not apply gives none",
+  () => {
+    graphPrerequisite.require();
+    const computed = rulesOf(everything);
+    const reversed = sectionRulesOf({
+      result: computeSectionFacts(
+        [...computed.hunks].reverse(),
+        new Map([...computed.structures].reverse()),
+      ),
+      hunks: [...computed.hunks].reverse(),
+      structures: new Map([...computed.structures].reverse()),
+      files: new Map([...computed.files].reverse()),
+      texts: new Map([...computed.texts].reverse()),
+    });
+    expect(reversed).toEqual(computed.rules);
+    for (const judgement of computed.rules)
+      expect(SectionRuleJudgement.parse(judgement)).toEqual(judgement);
+    // Per path: which rules gave judgements. A rule that does not apply to a section is absent.
+    const rulesByPath = new Map<string, Set<string>>();
+    for (const judgement of computed.rules)
+      rulesByPath.set(
+        judgement.about.path,
+        (rulesByPath.get(judgement.about.path) ?? new Set()).add(
+          judgement.rule,
+        ),
+      );
+    expect(
+      Object.fromEntries(
+        [...rulesByPath].map(([path, rules]) => [path, [...rules]]),
+      ),
+    ).toEqual({
+      "bun.lock": ["generated"],
+      "named.ts": ["blank-rows-only"],
+      "src/a.ts": ["moved-unchanged"],
+      "src/b.ts": ["moved-unchanged"],
+      "doc.md": ["markdown-prose"],
+    });
+    // The changed `c` and the blank row's neighbours have none: only `b`'s section is judged.
+    expect(
+      judgementsOf(computed, "blank-rows-only").map(
+        (judgement) => judgement.name,
+      ),
+    ).toEqual(["b"]);
+  },
+);
 
 // --- Stored ---------------------------------------------------------------------------------------
 

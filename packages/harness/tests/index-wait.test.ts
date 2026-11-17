@@ -1,4 +1,9 @@
-import { captureOutlineSource } from "../src/graph-outline.ts";
+import { existsSync } from "node:fs";
+import { graphTestPrerequisite } from "../../../scripts/graph-test-prerequisite.ts";
+import {
+  captureOutlineSource,
+  outlineExecutable,
+} from "../src/graph-outline.ts";
 // Why: a review's lookups once waited with no bound on the one shared build of a tree's search
 // index, and under load that wait outlasted the review (NEU-148, plant 108: 479 to 511 s per call).
 // Each lookup now waits at most a short bound, and the build is one shared run that must carry on
@@ -293,220 +298,243 @@ const spans = (records: Array<RunLogRecord>, name: string) =>
     .filter((record) => record.type === "span" && record["name"] === name)
     .map((span) => span["attributes"] as Record<string, unknown>);
 
-test("uses answers within its bounds while the build and a shown file's chunks are held, and both carry on", async () => {
-  const result = await traced("uses-layer", () =>
-    Effect.gen(function* () {
-      // The base is the later commit, whose index nothing has built.
-      const { ctx, hold, built } = yield* setup("uses", true);
-      // In neither the range nor an index built so far, so nothing stored its chunks: the call
-      // reads them itself. The other files' chunks are stored.
-      hold.chunkPath = "src/more.ts";
-      const tool = L.usesTool(ctx);
-      const uses = (params: Record<string, unknown>) =>
-        tool
-          .handle(tool.input?.parse(params))
-          .pipe(Effect.withSpan("harness.test.ask"));
-      // The tree's build is held inside its own run, and so is the one file's chunk computation;
-      // the lookup answers without either.
-      const started = Date.now();
-      const asked = yield* Effect.forkChild(
-        uses({ identifier: "widgetCount", rev: "base" }),
-        { startImmediately: true },
-      );
-      yield* step("build held", Deferred.await(hold.entered));
-      const held = yield* step("held answer", Fiber.join(asked));
-      const heldMs = Date.now() - started;
-      // The chunk computation the call stopped waiting on still runs, and is held.
-      yield* step("chunks held", Deferred.await(hold.chunkEntered));
-      const stillHeld =
-        !(yield* Deferred.isDone(hold.release)) &&
-        !(yield* Deferred.isDone(hold.chunkRelease));
-      const firstRead = hold.reads[0];
-      // Released, the same build and the same chunk computation end; joining starts no second one.
-      hold.holding = false;
-      yield* Deferred.succeed(hold.release, undefined);
-      yield* Deferred.succeed(hold.chunkRelease, undefined);
-      yield* step("build ended", built(ctx.base.tree));
-      const indexed = yield* step(
-        "later call",
-        uses({ identifier: "widgetCount", rev: "base" }),
-      );
-      const buildReads = hold.reads.filter((keys) => keys === firstRead);
-      // A failed build still answers by git grep, saying the index is unavailable (a base whose
-      // index the manifest's lead search has not built).
-      const other = yield* setup("uses-failed", true);
-      other.hold.holding = false;
-      other.hold.failing = true;
-      const otherTool = L.usesTool(other.ctx);
-      const failed = yield* otherTool.handle(
-        otherTool.input?.parse({ identifier: "more", rev: "base" }),
-      );
-      return {
-        held,
-        heldMs,
-        stillHeld,
-        indexed,
-        failed,
-        buildReads: buildReads.length,
-        chunkRuns: hold.chunkRuns,
-      };
-    }),
-  );
-  expect(result.stillHeld).toBe(true);
-  // Within the two bounds, with room for the grep and a loaded machine.
-  expect(result.heldMs).toBeLessThan(
-    L.USES_INDEX_WAIT_MS + L.USES_ENCLOSING_WAIT_MS + 5_000,
-  );
-  expect(result.held.error).toBeUndefined();
-  expect(result.indexed.error).toBeUndefined();
-  // The held file's match is the ten lines around it, with no capability or enclosing name, and
-  // one bracketed line says how many files were not ready; the later call names the region.
-  const NOTE =
-    "[enclosing regions not ready yet in 1 file(s): their matches show ten lines around them; ask again later for the enclosing symbol]";
-  expect(result.held.text).toMatch(
-    /\nsrc\/more\.ts\n {2}1 h[0-9a-z]+: import \{ widgetCount \} from '\.\/count';\n {2}3 h[0-9a-z]+: export const more = \(\) => widgetCount\(\) \* 2;\n/,
-  );
-  expect(result.held.text).toContain(NOTE);
-  expect(result.indexed.text).toMatch(
-    /\nsrc\/more\.ts \(parsed by [^)\n]+\)\n {2}1 [^\n]+\n {2}3 in more h[0-9a-z]+: export const more = \(\) => widgetCount\(\) \* 2;\n/,
-  );
-  expect(result.indexed.text).not.toContain("not ready yet");
-  // Every other file's lines are the same, byte for byte, with their enclosing regions. The data
-  // block's tag names a hash of its body, so it is left out with the held file's lines.
-  const others = (text: string) => {
-    let held = false;
-    return text.split("\n").filter((line) => {
-      if (!line.startsWith("  ")) held = line.startsWith("src/more.ts");
-      return !held && line !== NOTE && !/^<\/?data-/.test(line);
-    });
-  };
-  expect(others(result.held.text)).toEqual(others(result.indexed.text));
-  expect(result.held.text).toContain("src/count.ts (parsed by");
-  expect(result.held.text).toContain("1 in widgetCount");
-  // One build and one chunk computation, each run once and completed.
-  expect(result.buildReads).toBe(1);
-  expect(result.chunkRuns).toBe(1);
-  expect(spans(result.records, L.USES_SPAN)).toHaveLength(3);
-  expect(spans(result.records, L.USES_SPAN)[0]).toMatchObject({
-    "harness.lookup.route": "git-grep",
-    "harness.lookup.fallback_reason": "index-building",
-  });
-  expect(spans(result.records, L.USES_SPAN)[1]).toMatchObject({
-    "harness.lookup.route": "index",
-  });
-  expect(spans(result.records, L.USES_SPAN)[2]).toMatchObject({
-    "harness.lookup.route": "git-grep",
-    "harness.lookup.fallback_reason": "index-unavailable",
-  });
-  expect(spans(result.records, "harness.test.ask")[0]).toMatchObject({
-    "harness.lookup.enclosing_not_ready": 1,
-  });
-  expect(spans(result.records, "harness.test.ask")[1]).not.toHaveProperty(
-    "harness.lookup.enclosing_not_ready",
-  );
-  expect(result.failed.text).toContain("1 occurrence(s) of more");
-  expect(result.failed.text).toContain("src/more.ts");
-}, 90_000);
+// These cases read declarations from the built Graph engine; without it every structure is
+// unavailable, so they need it (`bun run build:graph`).
+const graphPrerequisite = graphTestPrerequisite({
+  available: existsSync(outlineExecutable()),
+  message:
+    "Graph engine is missing at apps/neuve-graph/entire-graph. Run `bun run build:graph` from the workspace root.",
+});
 
-test("uses with every shown file's chunks ready answers as before, on both routes", async () => {
-  const result = await traced("ready-layer", () =>
-    Effect.gen(function* () {
-      const { ctx, hold, built } = yield* setup("ready");
-      const tool = L.usesTool(ctx);
-      // Both files are in the range, so the manifest stored their chunks: nothing waits on Graph.
-      const uses = () =>
-        tool.handle(
-          tool.input?.parse({
-            identifier: "widgetCount",
-            paths: ["src/use.ts", "README.md"],
-          }),
+test.skipIf(graphPrerequisite.skip)(
+  "uses answers within its bounds while the build and a shown file's chunks are held, and both carry on",
+  async () => {
+    graphPrerequisite.require();
+    const result = await traced("uses-layer", () =>
+      Effect.gen(function* () {
+        // The base is the later commit, whose index nothing has built.
+        const { ctx, hold, built } = yield* setup("uses", true);
+        // In neither the range nor an index built so far, so nothing stored its chunks: the call
+        // reads them itself. The other files' chunks are stored.
+        hold.chunkPath = "src/more.ts";
+        const tool = L.usesTool(ctx);
+        const uses = (params: Record<string, unknown>) =>
+          tool
+            .handle(tool.input?.parse(params))
+            .pipe(Effect.withSpan("harness.test.ask"));
+        // The tree's build is held inside its own run, and so is the one file's chunk computation;
+        // the lookup answers without either.
+        const started = Date.now();
+        const asked = yield* Effect.forkChild(
+          uses({ identifier: "widgetCount", rev: "base" }),
+          { startImmediately: true },
         );
-      const asked = yield* Effect.forkChild(uses(), {
-        startImmediately: true,
+        yield* step("build held", Deferred.await(hold.entered));
+        const held = yield* step("held answer", Fiber.join(asked));
+        const heldMs = Date.now() - started;
+        // The chunk computation the call stopped waiting on still runs, and is held.
+        yield* step("chunks held", Deferred.await(hold.chunkEntered));
+        const stillHeld =
+          !(yield* Deferred.isDone(hold.release)) &&
+          !(yield* Deferred.isDone(hold.chunkRelease));
+        const firstRead = hold.reads[0];
+        // Released, the same build and the same chunk computation end; joining starts no second one.
+        hold.holding = false;
+        yield* Deferred.succeed(hold.release, undefined);
+        yield* Deferred.succeed(hold.chunkRelease, undefined);
+        yield* step("build ended", built(ctx.base.tree));
+        const indexed = yield* step(
+          "later call",
+          uses({ identifier: "widgetCount", rev: "base" }),
+        );
+        const buildReads = hold.reads.filter((keys) => keys === firstRead);
+        // A failed build still answers by git grep, saying the index is unavailable (a base whose
+        // index the manifest's lead search has not built).
+        const other = yield* setup("uses-failed", true);
+        other.hold.holding = false;
+        other.hold.failing = true;
+        const otherTool = L.usesTool(other.ctx);
+        const failed = yield* otherTool.handle(
+          otherTool.input?.parse({ identifier: "more", rev: "base" }),
+        );
+        return {
+          held,
+          heldMs,
+          stillHeld,
+          indexed,
+          failed,
+          buildReads: buildReads.length,
+          chunkRuns: hold.chunkRuns,
+        };
+      }),
+    );
+    expect(result.stillHeld).toBe(true);
+    // Within the two bounds, with room for the grep and a loaded machine.
+    expect(result.heldMs).toBeLessThan(
+      L.USES_INDEX_WAIT_MS + L.USES_ENCLOSING_WAIT_MS + 5_000,
+    );
+    expect(result.held.error).toBeUndefined();
+    expect(result.indexed.error).toBeUndefined();
+    // The held file's match is the ten lines around it, with no capability or enclosing name, and
+    // one bracketed line says how many files were not ready; the later call names the region.
+    const NOTE =
+      "[enclosing regions not ready yet in 1 file(s): their matches show ten lines around them; ask again later for the enclosing symbol]";
+    expect(result.held.text).toMatch(
+      /\nsrc\/more\.ts\n {2}1 h[0-9a-z]+: import \{ widgetCount \} from '\.\/count';\n {2}3 h[0-9a-z]+: export const more = \(\) => widgetCount\(\) \* 2;\n/,
+    );
+    expect(result.held.text).toContain(NOTE);
+    expect(result.indexed.text).toMatch(
+      /\nsrc\/more\.ts \(parsed by [^)\n]+\)\n {2}1 [^\n]+\n {2}3 in more h[0-9a-z]+: export const more = \(\) => widgetCount\(\) \* 2;\n/,
+    );
+    expect(result.indexed.text).not.toContain("not ready yet");
+    // Every other file's lines are the same, byte for byte, with their enclosing regions. The data
+    // block's tag names a hash of its body, so it is left out with the held file's lines.
+    const others = (text: string) => {
+      let held = false;
+      return text.split("\n").filter((line) => {
+        if (!line.startsWith("  ")) held = line.startsWith("src/more.ts");
+        return !held && line !== NOTE && !/^<\/?data-/.test(line);
       });
-      yield* step("build held", Deferred.await(hold.entered));
-      const grepped = yield* step("held answer", Fiber.join(asked));
-      hold.holding = false;
-      yield* Deferred.succeed(hold.release, undefined);
-      yield* step("build ended", built(ctx.head.tree));
-      const indexed = yield* step("later call", uses());
-      return { grepped, indexed };
-    }),
-  );
-  // What `a52a4846`, before the bound on enclosing regions, answered for this call on this fixture.
-  const before = {
-    text: [
-      '<data-315ba123e37cbf3e064ec1bc91a80d588937d9d2df27f0c0bff05f5649d3c595 kind="occurrences" identifier="widgetCount">',
-      "3 occurrence(s) of widgetCount in 2 file(s) at head a6ac8d465d2e:",
-      "README.md (parsed by markdown-sections)",
-      "  3 in Widgets for ready h0d8cd3c13: Call `widgetCount` for the count.",
-      "src/use.ts (parsed by graph-symbols)",
-      "  1 in total h5e4d02d4c: import { widgetCount } from './count';",
-      "  3 in total h5e4d02d4c: export const total = () => widgetCount() + 1;",
-      "</data-315ba123e37cbf3e064ec1bc91a80d588937d9d2df27f0c0bff05f5649d3c595>",
-    ].join("\n"),
-    paged: false,
-  };
-  expect(result.grepped).toEqual(before);
-  expect(result.indexed).toEqual(before);
-  expect(spans(result.records, L.USES_SPAN)).toHaveLength(2);
-  expect(spans(result.records, L.USES_SPAN)[0]).toMatchObject({
-    "harness.lookup.route": "git-grep",
-    "harness.lookup.fallback_reason": "index-building",
-  });
-  expect(spans(result.records, L.USES_SPAN)[1]).toMatchObject({
-    "harness.lookup.route": "index",
-  });
-}, 90_000);
+    };
+    expect(others(result.held.text)).toEqual(others(result.indexed.text));
+    expect(result.held.text).toContain("src/count.ts (parsed by");
+    expect(result.held.text).toContain("1 in widgetCount");
+    // One build and one chunk computation, each run once and completed.
+    expect(result.buildReads).toBe(1);
+    expect(result.chunkRuns).toBe(1);
+    expect(spans(result.records, L.USES_SPAN)).toHaveLength(3);
+    expect(spans(result.records, L.USES_SPAN)[0]).toMatchObject({
+      "harness.lookup.route": "git-grep",
+      "harness.lookup.fallback_reason": "index-building",
+    });
+    expect(spans(result.records, L.USES_SPAN)[1]).toMatchObject({
+      "harness.lookup.route": "index",
+    });
+    expect(spans(result.records, L.USES_SPAN)[2]).toMatchObject({
+      "harness.lookup.route": "git-grep",
+      "harness.lookup.fallback_reason": "index-unavailable",
+    });
+    expect(spans(result.records, "harness.test.ask")[0]).toMatchObject({
+      "harness.lookup.enclosing_not_ready": 1,
+    });
+    expect(spans(result.records, "harness.test.ask")[1]).not.toHaveProperty(
+      "harness.lookup.enclosing_not_ready",
+    );
+    expect(result.failed.text).toContain("1 occurrence(s) of more");
+    expect(result.failed.text).toContain("src/more.ts");
+  },
+  90_000,
+);
 
-test("defs answers a disclosed gap while the build runs, keeps it for the call, and answers in a later turn", async () => {
-  const result = await traced("defs-layer", () =>
-    Effect.gen(function* () {
-      const { ctx, hold, gaps, built } = yield* setup("defs");
-      const tool = L.defsTool(ctx);
-      const defs = () =>
-        tool
-          .handle(tool.input?.parse({ identifier: "widgetCount" }))
-          .pipe(Effect.withSpan("harness.test.ask"));
-      const asked = yield* Effect.forkChild(defs(), {
-        startImmediately: true,
-      });
-      yield* step("build held", Deferred.await(hold.entered));
-      const first = yield* step("held answer", Fiber.join(asked));
-      const stillHeld = !(yield* Deferred.isDone(hold.release));
-      hold.holding = false;
-      yield* Deferred.succeed(hold.release, undefined);
-      yield* step("build ended", built(ctx.head.tree));
-      // The same call in the same turn, after the build: what the model saw.
-      const again = yield* step("same call", defs());
-      ctx.handles.turn = 1;
-      const later = yield* step("later turn", defs());
-      return {
-        first,
-        again,
-        later,
-        stillHeld,
-        gaps: [...gaps],
-      };
-    }),
-  );
-  expect(result.stillHeld).toBe(true);
-  expect(result.first.error).toBe("IndexPending");
-  expect(result.first.text).toContain("is still being built");
-  expect(result.first.text).toContain("use uses");
-  expect(result.again).toEqual(result.first);
-  expect(result.later.error).toBeUndefined();
-  expect(result.later.text).toContain("1 declaration(s) of widgetCount");
-  expect(result.later.text).toContain("src/count.ts");
-  expect(result.gaps).toHaveLength(1);
-  expect(result.gaps[0]).toContain("defs: the index for head");
-  expect(spans(result.records, "harness.test.ask")[0]).toMatchObject({
-    "harness.lookup.fallback_reason": "index-building",
-  });
-  expect(spans(result.records, "harness.test.ask")[2]).not.toHaveProperty(
-    "harness.lookup.fallback_reason",
-  );
-}, 90_000);
+test.skipIf(graphPrerequisite.skip)(
+  "uses with every shown file's chunks ready answers as before, on both routes",
+  async () => {
+    graphPrerequisite.require();
+    const result = await traced("ready-layer", () =>
+      Effect.gen(function* () {
+        const { ctx, hold, built } = yield* setup("ready");
+        const tool = L.usesTool(ctx);
+        // Both files are in the range, so the manifest stored their chunks: nothing waits on Graph.
+        const uses = () =>
+          tool.handle(
+            tool.input?.parse({
+              identifier: "widgetCount",
+              paths: ["src/use.ts", "README.md"],
+            }),
+          );
+        const asked = yield* Effect.forkChild(uses(), {
+          startImmediately: true,
+        });
+        yield* step("build held", Deferred.await(hold.entered));
+        const grepped = yield* step("held answer", Fiber.join(asked));
+        hold.holding = false;
+        yield* Deferred.succeed(hold.release, undefined);
+        yield* step("build ended", built(ctx.head.tree));
+        const indexed = yield* step("later call", uses());
+        return { grepped, indexed };
+      }),
+    );
+    // What `a52a4846`, before the bound on enclosing regions, answered for this call on this fixture.
+    const before = {
+      text: [
+        '<data-315ba123e37cbf3e064ec1bc91a80d588937d9d2df27f0c0bff05f5649d3c595 kind="occurrences" identifier="widgetCount">',
+        "3 occurrence(s) of widgetCount in 2 file(s) at head a6ac8d465d2e:",
+        "README.md (parsed by markdown-sections)",
+        "  3 in Widgets for ready h0d8cd3c13: Call `widgetCount` for the count.",
+        "src/use.ts (parsed by graph-symbols)",
+        "  1 in total h5e4d02d4c: import { widgetCount } from './count';",
+        "  3 in total h5e4d02d4c: export const total = () => widgetCount() + 1;",
+        "</data-315ba123e37cbf3e064ec1bc91a80d588937d9d2df27f0c0bff05f5649d3c595>",
+      ].join("\n"),
+      paged: false,
+    };
+    expect(result.grepped).toEqual(before);
+    expect(result.indexed).toEqual(before);
+    expect(spans(result.records, L.USES_SPAN)).toHaveLength(2);
+    expect(spans(result.records, L.USES_SPAN)[0]).toMatchObject({
+      "harness.lookup.route": "git-grep",
+      "harness.lookup.fallback_reason": "index-building",
+    });
+    expect(spans(result.records, L.USES_SPAN)[1]).toMatchObject({
+      "harness.lookup.route": "index",
+    });
+  },
+  90_000,
+);
+
+test.skipIf(graphPrerequisite.skip)(
+  "defs answers a disclosed gap while the build runs, keeps it for the call, and answers in a later turn",
+  async () => {
+    graphPrerequisite.require();
+    const result = await traced("defs-layer", () =>
+      Effect.gen(function* () {
+        const { ctx, hold, gaps, built } = yield* setup("defs");
+        const tool = L.defsTool(ctx);
+        const defs = () =>
+          tool
+            .handle(tool.input?.parse({ identifier: "widgetCount" }))
+            .pipe(Effect.withSpan("harness.test.ask"));
+        const asked = yield* Effect.forkChild(defs(), {
+          startImmediately: true,
+        });
+        yield* step("build held", Deferred.await(hold.entered));
+        const first = yield* step("held answer", Fiber.join(asked));
+        const stillHeld = !(yield* Deferred.isDone(hold.release));
+        hold.holding = false;
+        yield* Deferred.succeed(hold.release, undefined);
+        yield* step("build ended", built(ctx.head.tree));
+        // The same call in the same turn, after the build: what the model saw.
+        const again = yield* step("same call", defs());
+        ctx.handles.turn = 1;
+        const later = yield* step("later turn", defs());
+        return {
+          first,
+          again,
+          later,
+          stillHeld,
+          gaps: [...gaps],
+        };
+      }),
+    );
+    expect(result.stillHeld).toBe(true);
+    expect(result.first.error).toBe("IndexPending");
+    expect(result.first.text).toContain("is still being built");
+    expect(result.first.text).toContain("use uses");
+    expect(result.again).toEqual(result.first);
+    expect(result.later.error).toBeUndefined();
+    expect(result.later.text).toContain("1 declaration(s) of widgetCount");
+    expect(result.later.text).toContain("src/count.ts");
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]).toContain("defs: the index for head");
+    expect(spans(result.records, "harness.test.ask")[0]).toMatchObject({
+      "harness.lookup.fallback_reason": "index-building",
+    });
+    expect(spans(result.records, "harness.test.ask")[2]).not.toHaveProperty(
+      "harness.lookup.fallback_reason",
+    );
+  },
+  90_000,
+);
 
 test("search answers a disclosed gap while the base build runs, keeps it for the call, and answers in a later turn", async () => {
   const result = await traced("search-layer", () =>
@@ -746,47 +774,52 @@ test("semantic_search answers a disclosed gap while the base build runs, gets th
   );
 }, 90_000);
 
-test("semantic_search with the index ready answers as before", async () => {
-  const result = await traced("e0-ready-layer", () =>
-    Effect.gen(function* () {
-      // The manifest's lead search built the base's index.
-      const { ctx, hold, built } = yield* setup("e0-ready");
-      hold.holding = false;
-      const { vectors, query } = e0("e0-ready");
-      const text = "where is the widget count";
-      const { index } = yield* built(ctx.base.tree);
-      const target = index.chunks.find(
-        (chunk) => chunk.path === "src/count.ts",
-      )!;
-      yield* vectors(index);
-      yield* query(ctx, text, target.textSha256);
-      const tool = L.semanticSearchTool(ctx, E0_RETRIEVER, {
-        withVectors: index.chunks.length,
-        chunks: index.chunks.length,
-      });
-      return {
-        answer: yield* step("ready", tool.handle({ query: text, k: 3 })),
-      };
-    }),
-  );
-  // What `f110188f`, which got the index a second time to build E0's retriever, answered for this
-  // call on this fixture.
-  const before = {
-    text: [
-      '<data-3bed925473a14b6751d24e083d884a2b83f63b7dfad92f1b2ce5bd8d2ffd00cf kind="results">',
-      "2 result(s) at base daf2b75fc549 from E0 over 2 chunks:",
-      "1. hb5623b001 src/count.ts:1-3 @base · symbol widgetCount · undeclared · TypeScript, parsed by graph-symbols · via e0, score 1.00 · 20 tokens · returned for 1 query this run",
-      "    identifiers (code-positions): widgetCount · callables: widgetCount",
-      "    | export function widgetCount() {",
-      "    |   return 1;",
-      "    | }",
-      "2. hfb4fa2e68 README.md:1-3 @base · section Widgets for e0-ready · undeclared · md, parsed by markdown-sections · via e0, score -0.01 · 17 tokens · returned for 1 query this run",
-      "    identifiers (word-tokens): Nothing, Widgets, for, ready, yet",
-      "    | # Widgets for e0-ready",
-      "    | Nothing yet.",
-      "</data-3bed925473a14b6751d24e083d884a2b83f63b7dfad92f1b2ce5bd8d2ffd00cf>",
-    ].join("\n"),
-    paged: false,
-  };
-  expect(result.answer).toEqual(before);
-}, 90_000);
+test.skipIf(graphPrerequisite.skip)(
+  "semantic_search with the index ready answers as before",
+  async () => {
+    graphPrerequisite.require();
+    const result = await traced("e0-ready-layer", () =>
+      Effect.gen(function* () {
+        // The manifest's lead search built the base's index.
+        const { ctx, hold, built } = yield* setup("e0-ready");
+        hold.holding = false;
+        const { vectors, query } = e0("e0-ready");
+        const text = "where is the widget count";
+        const { index } = yield* built(ctx.base.tree);
+        const target = index.chunks.find(
+          (chunk) => chunk.path === "src/count.ts",
+        )!;
+        yield* vectors(index);
+        yield* query(ctx, text, target.textSha256);
+        const tool = L.semanticSearchTool(ctx, E0_RETRIEVER, {
+          withVectors: index.chunks.length,
+          chunks: index.chunks.length,
+        });
+        return {
+          answer: yield* step("ready", tool.handle({ query: text, k: 3 })),
+        };
+      }),
+    );
+    // What `f110188f`, which got the index a second time to build E0's retriever, answered for this
+    // call on this fixture.
+    const before = {
+      text: [
+        '<data-3bed925473a14b6751d24e083d884a2b83f63b7dfad92f1b2ce5bd8d2ffd00cf kind="results">',
+        "2 result(s) at base daf2b75fc549 from E0 over 2 chunks:",
+        "1. hb5623b001 src/count.ts:1-3 @base · symbol widgetCount · undeclared · TypeScript, parsed by graph-symbols · via e0, score 1.00 · 20 tokens · returned for 1 query this run",
+        "    identifiers (code-positions): widgetCount · callables: widgetCount",
+        "    | export function widgetCount() {",
+        "    |   return 1;",
+        "    | }",
+        "2. hfb4fa2e68 README.md:1-3 @base · section Widgets for e0-ready · undeclared · md, parsed by markdown-sections · via e0, score -0.01 · 17 tokens · returned for 1 query this run",
+        "    identifiers (word-tokens): Nothing, Widgets, for, ready, yet",
+        "    | # Widgets for e0-ready",
+        "    | Nothing yet.",
+        "</data-3bed925473a14b6751d24e083d884a2b83f63b7dfad92f1b2ce5bd8d2ffd00cf>",
+      ].join("\n"),
+      paged: false,
+    };
+    expect(result.answer).toEqual(before);
+  },
+  90_000,
+);

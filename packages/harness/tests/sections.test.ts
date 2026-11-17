@@ -1,4 +1,9 @@
-import { captureOutlineSource } from "../src/graph-outline.ts";
+import { existsSync } from "node:fs";
+import { graphTestPrerequisite } from "../../../scripts/graph-test-prerequisite.ts";
+import {
+  captureOutlineSource,
+  outlineExecutable,
+} from "../src/graph-outline.ts";
 // Why (10.109): lanes are assigned per changed line range, grouped by responsibility, and a file is
 // one unit per lane. A mistake here is silent downstream: a new file judged as one thing, a line owned
 // by two sections or by none, or one file's same-lane changes split into several units would each pass
@@ -68,6 +73,14 @@ const structureOf = (path: string, text: string) =>
       ? fixtureOutline.context("links.test.ts")
       : { kind: "unavailable" },
   );
+
+// These cases read declarations from the built Graph engine; without it every structure is
+// unavailable, so they need it (`bun run build:graph`).
+const graphPrerequisite = graphTestPrerequisite({
+  available: existsSync(outlineExecutable()),
+  message:
+    "Graph engine is missing at apps/neuve-graph/entire-graph. Run `bun run build:graph` from the workspace root.",
+});
 
 test("a file's structure: imports as one block, a declaration with its namesake, a suite opened into its tests, a class kept whole", () => {
   const structure = structureOf("links.test.ts", SOURCE);
@@ -586,151 +599,178 @@ test("without structures, sections are exactly as at a96fc634 (with the switch o
   );
 });
 
-test("a block that deletes all of one declaration and adds a line to its neighbour gives the removal to the deleted declaration (it was credited to the neighbour)", () => {
-  const { sections } = paired(PAIRING_BASE, DELETED_INTO_NEIGHBOUR);
-  expect(shape(sections)).toEqual([
-    // The blank line Git removed after `beta` was `gamma`'s; `beta`'s own lines are on the old side.
-    ["gamma", "new", ["old:12+1", "new:8+1"]],
-    ["beta", "old", ["old:8+4"]],
-  ]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "a block that deletes all of one declaration and adds a line to its neighbour gives the removal to the deleted declaration (it was credited to the neighbour)",
+  () => {
+    graphPrerequisite.require();
+    const { sections } = paired(PAIRING_BASE, DELETED_INTO_NEIGHBOUR);
+    expect(shape(sections)).toEqual([
+      // The blank line Git removed after `beta` was `gamma`'s; `beta`'s own lines are on the old side.
+      ["gamma", "new", ["old:12+1", "new:8+1"]],
+      ["beta", "old", ["old:8+4"]],
+    ]);
+  },
+);
 
-test("a declaration renamed in place stays one section (the pairing must not split a replacement)", () => {
-  const { sections } = paired(PAIRING_BASE, RENAMED);
-  expect(shape(sections)).toEqual([
-    ["dagger", "new", ["old:17+1", "new:17+1"]],
-  ]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "a declaration renamed in place stays one section (the pairing must not split a replacement)",
+  () => {
+    graphPrerequisite.require();
+    const { sections } = paired(PAIRING_BASE, RENAMED);
+    expect(shape(sections)).toEqual([
+      ["dagger", "new", ["old:17+1", "new:17+1"]],
+    ]);
+  },
+);
 
-test("rows removed from inside a declaration with nothing added stay its own (the commonest removal)", () => {
-  const { sections } = paired(PAIRING_BASE, REMOVED_INSIDE);
-  expect(shape(sections)).toEqual([["alpha", "new", ["old:4+1"]]]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "rows removed from inside a declaration with nothing added stay its own (the commonest removal)",
+  () => {
+    graphPrerequisite.require();
+    const { sections } = paired(PAIRING_BASE, REMOVED_INSIDE);
+    expect(shape(sections)).toEqual([["alpha", "new", ["old:4+1"]]]);
+  },
+);
 
-test("every row the review rules own is in exactly one section, on a change mixing all of the above (ownership is the rules', 10.21)", () => {
-  const { hunks, sections } = paired(PAIRING_BASE, MIXED);
-  expect(shape(sections)).toEqual([
-    ["alpha", "new", ["old:4+1"]],
-    ["gamma", "new", ["old:12+1", "new:7+1"]],
-    ["beta", "old", ["old:8+4"]],
-    ["dagger", "new", ["old:17+1", "new:12+1"]],
-  ]);
-  const all = sections.flatMap((section) =>
-    owned(
-      section.ranges.map((range) => ({
-        ...range,
-        side: `${range.hunkId}:${range.side}`,
-      })),
-    ),
-  );
-  expect(new Set(all).size).toBe(all.length);
-  expect([...all].sort()).toEqual(
-    hunks
-      .flatMap((hunk) =>
-        owned(
-          hunk.ownedRanges.map((range) => ({
-            ...range,
-            side: `${hunk.hunkId}:${range.side}`,
-          })),
-        ),
-      )
-      .sort(),
-  );
-});
+test.skipIf(graphPrerequisite.skip)(
+  "every row the review rules own is in exactly one section, on a change mixing all of the above (ownership is the rules', 10.21)",
+  () => {
+    graphPrerequisite.require();
+    const { hunks, sections } = paired(PAIRING_BASE, MIXED);
+    expect(shape(sections)).toEqual([
+      ["alpha", "new", ["old:4+1"]],
+      ["gamma", "new", ["old:12+1", "new:7+1"]],
+      ["beta", "old", ["old:8+4"]],
+      ["dagger", "new", ["old:17+1", "new:12+1"]],
+    ]);
+    const all = sections.flatMap((section) =>
+      owned(
+        section.ranges.map((range) => ({
+          ...range,
+          side: `${range.hunkId}:${range.side}`,
+        })),
+      ),
+    );
+    expect(new Set(all).size).toBe(all.length);
+    expect([...all].sort()).toEqual(
+      hunks
+        .flatMap((hunk) =>
+          owned(
+            hunk.ownedRanges.map((range) => ({
+              ...range,
+              side: `${hunk.hunkId}:${range.side}`,
+            })),
+          ),
+        )
+        .sort(),
+    );
+  },
+);
 
-test("section identities are given for the new pairing's output: an old-side-only section, a renamed declaration, a renamed file and a mode change (two lanes read identities from it)", () => {
-  const { hunks, structures, sections } = paired(PAIRING_BASE, MIXED);
-  const moved = diff("src/moved.ts", PAIRING_BASE, RENAMED, {
-    status: "renamed",
-    oldPath: "src/was.ts",
-  });
-  const mode = manifestHunk({
-    path: "bin/run.sh",
-    kind: "metadata",
-    text: "old mode 100644\nnew mode 100755",
-    oldStart: 0,
-    newStart: 0,
-    oldOid: oidOf("run"),
-    newOid: oidOf("run"),
-    newMode: "100755",
-    ownedRanges: [],
-  });
-  const all = [...hunks, ...moved, mode];
-  structures.set(oidOf(RENAMED), storedOf(RENAMED));
-  const allSections = sectionsOf(
-    all,
-    new Map(
-      [...structures].map(([oid, structure]) => [oid, asStructure(structure)]),
-    ),
-  );
-  const identities = sectionIdentities(
-    allSections,
-    new Map(all.map((hunk) => [hunk.hunkId, hunk])),
-    structures,
-  );
-  expect(identities.size).toBe(allSections.length);
-  expect(allSections.length).toBe(sections.length + 2);
-  const beta = [...identities.values()].find(
-    (identity) => identity.parts.name === "beta",
-  )!;
-  expect([beta.parts.side, beta.where]).toEqual([
-    "old",
-    { startLine: 7, endLine: 11 },
-  ]);
-  const dagger = [...identities.values()].filter(
-    (identity) => identity.parts.name === "dagger",
-  );
-  expect(
-    dagger.map((identity) => [identity.parts.path, identity.renamedFrom]),
-  ).toEqual([
-    ["src/moved.ts", "src/was.ts"],
-    ["src/pairing.ts", null],
-  ]);
-  expect(
-    [...identities.values()].filter(
-      (identity) => identity.parts.kind === "nontext",
-    ),
-  ).toHaveLength(1);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "section identities are given for the new pairing's output: an old-side-only section, a renamed declaration, a renamed file and a mode change (two lanes read identities from it)",
+  () => {
+    graphPrerequisite.require();
+    const { hunks, structures, sections } = paired(PAIRING_BASE, MIXED);
+    const moved = diff("src/moved.ts", PAIRING_BASE, RENAMED, {
+      status: "renamed",
+      oldPath: "src/was.ts",
+    });
+    const mode = manifestHunk({
+      path: "bin/run.sh",
+      kind: "metadata",
+      text: "old mode 100644\nnew mode 100755",
+      oldStart: 0,
+      newStart: 0,
+      oldOid: oidOf("run"),
+      newOid: oidOf("run"),
+      newMode: "100755",
+      ownedRanges: [],
+    });
+    const all = [...hunks, ...moved, mode];
+    structures.set(oidOf(RENAMED), storedOf(RENAMED));
+    const allSections = sectionsOf(
+      all,
+      new Map(
+        [...structures].map(([oid, structure]) => [
+          oid,
+          asStructure(structure),
+        ]),
+      ),
+    );
+    const identities = sectionIdentities(
+      allSections,
+      new Map(all.map((hunk) => [hunk.hunkId, hunk])),
+      structures,
+    );
+    expect(identities.size).toBe(allSections.length);
+    expect(allSections.length).toBe(sections.length + 2);
+    const beta = [...identities.values()].find(
+      (identity) => identity.parts.name === "beta",
+    )!;
+    expect([beta.parts.side, beta.where]).toEqual([
+      "old",
+      { startLine: 7, endLine: 11 },
+    ]);
+    const dagger = [...identities.values()].filter(
+      (identity) => identity.parts.name === "dagger",
+    );
+    expect(
+      dagger.map((identity) => [identity.parts.path, identity.renamedFrom]),
+    ).toEqual([
+      ["src/moved.ts", "src/was.ts"],
+      ["src/pairing.ts", null],
+    ]);
+    expect(
+      [...identities.values()].filter(
+        (identity) => identity.parts.kind === "nontext",
+      ),
+    ).toHaveLength(1);
+  },
+);
 
-test("deleting one of two Rust functions whose bodies end alike gives the removal to the deleted function (spans were named after Graph's body block, `a` for both, so the pairing matched the other function)", async () => {
-  const before =
-    "fn first(a: i32) -> i32 {\n    let b = a + 1;\n    a\n}\n\nfn second(a: i32) -> i32 {\n    let b = a + 2;\n    a\n}\n";
-  const after = "fn second(a: i32) -> i32 {\n    let b = a + 2;\n    a\n}\n";
-  const outlines = await readOutlines(
-    [
-      { path: "base/lib.rs", bytes: new TextEncoder().encode(before) },
-      { path: "head/lib.rs", bytes: new TextEncoder().encode(after) },
-    ],
-    captureOutlineSource(),
-  );
-  const structures = new Map<string, Structure>([
-    [
-      oidOf(before),
-      graphStructureOf("lib.rs", before, outlines.context("base/lib.rs")),
-    ],
-    [
-      oidOf(after),
-      graphStructureOf("lib.rs", after, outlines.context("head/lib.rs")),
-    ],
-  ]);
-  const names = (text: string) => {
-    const structure = structures.get(oidOf(text))!;
-    return structure.capability === "none"
-      ? []
-      : structure.spans.map((span) => span.name);
-  };
-  expect([names(before), names(after)]).toEqual([
-    ["first", "second"],
-    ["second"],
-  ]);
-  const sections = sectionsOf(diff("src/lib.rs", before, after), structures);
-  // The blank line after `first` is the start of `second`'s span, so it stays `second`'s.
-  expect(shape(sections)).toEqual([
-    ["first", "old", ["old:1+4"]],
-    ["second", "new", ["old:5+1"]],
-  ]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "deleting one of two Rust functions whose bodies end alike gives the removal to the deleted function (spans were named after Graph's body block, `a` for both, so the pairing matched the other function)",
+  async () => {
+    graphPrerequisite.require();
+    const before =
+      "fn first(a: i32) -> i32 {\n    let b = a + 1;\n    a\n}\n\nfn second(a: i32) -> i32 {\n    let b = a + 2;\n    a\n}\n";
+    const after = "fn second(a: i32) -> i32 {\n    let b = a + 2;\n    a\n}\n";
+    const outlines = await readOutlines(
+      [
+        { path: "base/lib.rs", bytes: new TextEncoder().encode(before) },
+        { path: "head/lib.rs", bytes: new TextEncoder().encode(after) },
+      ],
+      captureOutlineSource(),
+    );
+    const structures = new Map<string, Structure>([
+      [
+        oidOf(before),
+        graphStructureOf("lib.rs", before, outlines.context("base/lib.rs")),
+      ],
+      [
+        oidOf(after),
+        graphStructureOf("lib.rs", after, outlines.context("head/lib.rs")),
+      ],
+    ]);
+    const names = (text: string) => {
+      const structure = structures.get(oidOf(text))!;
+      return structure.capability === "none"
+        ? []
+        : structure.spans.map((span) => span.name);
+    };
+    expect([names(before), names(after)]).toEqual([
+      ["first", "second"],
+      ["second"],
+    ]);
+    const sections = sectionsOf(diff("src/lib.rs", before, after), structures);
+    // The blank line after `first` is the start of `second`'s span, so it stays `second`'s.
+    expect(shape(sections)).toEqual([
+      ["first", "old", ["old:1+4"]],
+      ["second", "new", ["old:5+1"]],
+    ]);
+  },
+);
 
 /** The sections of one change in any language, with both sides' stored structures from Graph. */
 const pairedOnGraph = async (path: string, before: string, after: string) => {
@@ -760,8 +800,11 @@ const pairedOnGraph = async (path: string, before: string, after: string) => {
   return sectionsOf(diff(path, before, after), structures);
 };
 
-test("deleting a test from the first of two suites that both have a test of that name gives the rows to the deleted test, not to the other suite's (same-named declarations were matched by occurrence)", async () => {
-  const before = `describe("a", () => {
+test.skipIf(graphPrerequisite.skip)(
+  "deleting a test from the first of two suites that both have a test of that name gives the rows to the deleted test, not to the other suite's (same-named declarations were matched by occurrence)",
+  async () => {
+    graphPrerequisite.require();
+    const before = `describe("a", () => {
   it("works", () => {
     expect(1).toBe(1);
   });
@@ -775,16 +818,17 @@ describe("b", () => {
   });
 });
 `;
-  const after = before.replace(
-    `  it("works", () => {
+    const after = before.replace(
+      `  it("works", () => {
     expect(1).toBe(1);
   });
 `,
-    "",
-  );
-  const sections = await pairedOnGraph("suite.test.ts", before, after);
-  expect(shape(sections)).toEqual([['"works"', "old", ["old:2+3"]]]);
-});
+      "",
+    );
+    const sections = await pairedOnGraph("suite.test.ts", before, after);
+    expect(shape(sections)).toEqual([['"works"', "old", ["old:2+3"]]]);
+  },
+);
 
 test("deleting the first of two Markdown sections of one name gives the rows to the deleted one (they landed in the second)", () => {
   const before =
@@ -803,8 +847,11 @@ test("deleting the first of two Markdown sections of one name gives the rows to 
   expect(shape(sections)).toEqual([["Usage", "old", ["old:1+3"]]]);
 });
 
-test("deleting one of two Go methods of one name gives the rows to the deleted method (they landed in the other type's method)", async () => {
-  const before = `package p
+test.skipIf(graphPrerequisite.skip)(
+  "deleting one of two Go methods of one name gives the rows to the deleted method (they landed in the other type's method)",
+  async () => {
+    graphPrerequisite.require();
+    const before = `package p
 
 func (a A) String() string {
 	return "a"
@@ -816,7 +863,7 @@ func (b B) String() string {
 	return "b"
 }
 `;
-  const after = `package p
+    const after = `package p
 
 func other() {}
 
@@ -824,29 +871,34 @@ func (b B) String() string {
 	return "b"
 }
 `;
-  const sections = await pairedOnGraph("names.go", before, after);
-  // The blank line Git removed after the method is the start of `other`'s span.
-  expect(shape(sections)).toEqual([
-    ["other", "new", ["old:6+1"]],
-    ["String", "old", ["old:3+3"]],
-  ]);
-});
+    const sections = await pairedOnGraph("names.go", before, after);
+    // The blank line Git removed after the method is the start of `other`'s span.
+    expect(shape(sections)).toEqual([
+      ["other", "new", ["old:6+1"]],
+      ["String", "old", ["old:3+3"]],
+    ]);
+  },
+);
 
-test("a TypeScript declaration of several names is named after the first, as Graph orders them (the greatest extent renamed it after a later one)", async () => {
-  const text = "export const a = 1, b = () => {\n  return 1;\n};\n";
-  const outlines = await readOutlines(
-    [{ path: "names.ts", bytes: new TextEncoder().encode(text) }],
-    captureOutlineSource(),
-  );
-  const structure = graphStructureOf(
-    "names.ts",
-    text,
-    outlines.context("names.ts"),
-  );
-  expect(
-    structure.capability === "none" ? [] : structure.spans.map((s) => s.name),
-  ).toEqual(["a"]);
-});
+test.skipIf(graphPrerequisite.skip)(
+  "a TypeScript declaration of several names is named after the first, as Graph orders them (the greatest extent renamed it after a later one)",
+  async () => {
+    graphPrerequisite.require();
+    const text = "export const a = 1, b = () => {\n  return 1;\n};\n";
+    const outlines = await readOutlines(
+      [{ path: "names.ts", bytes: new TextEncoder().encode(text) }],
+      captureOutlineSource(),
+    );
+    const structure = graphStructureOf(
+      "names.ts",
+      text,
+      outlines.context("names.ts"),
+    );
+    expect(
+      structure.capability === "none" ? [] : structure.spans.map((s) => s.name),
+    ).toEqual(["a"]);
+  },
+);
 
 /** The sections of a Markdown change: its structure needs no Graph. */
 const pairedMarkdown = (before: string, after: string) => {

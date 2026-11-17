@@ -1209,7 +1209,10 @@ test("titles are bounded, lines are sanitised and missing commit file lists are 
   expect(odd.text.isWellFormed()).toBe(true);
 });
 
-// Why: one hostile range must not monopolize the finder event loop.
+// Why: one hostile range must not monopolize the finder event loop. The bound is on the render's
+// own CPU time: wall time also counts the time this process waits for a CPU behind other work (on
+// a two-CPU runner with four test shards, about six times the Mac's 1.3 s), which says nothing
+// about the render's cost; a super-linear rollup still shows in its CPU time.
 test("twenty thousand files render within a generous local bound", () => {
   const range = hunksOf(
     Array.from({ length: 20000 }, (_, i) =>
@@ -1225,9 +1228,10 @@ test("twenty thousand files render within a generous local bound", () => {
     subject: `change ${i}`,
     body: "",
   }));
-  const start = performance.now();
+  const start = process.cpuUsage();
   const result = renderOpening({ frame, hunks: range, commits: cs });
-  expect(performance.now() - start).toBeLessThan(5000);
+  const spent = process.cpuUsage(start);
+  expect((spent.user + spent.system) / 1000).toBeLessThan(5000);
   expect(result.counts.filesNamed + result.counts.filesFolded).toBe(20000);
   expect(result.text.length).toBeLessThanOrEqual(50000);
 }, 15000);

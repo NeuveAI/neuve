@@ -737,10 +737,19 @@ test("each script form declares the files its own roots hold", async () => {
     )?.mode,
   ).toBe("120000");
   const { tests, gaps } = await declaredTests(repository);
-  // The `malformed`, `deep` and `badtoml` rows' files are not valid TOML.
+  // The `malformed` and `badtoml` rows' files are not valid TOML. The `deep` row's is, but Bun's
+  // parser runs out of stack on it on macOS and reads it on Linux; the reader says what it says.
+  const deepParses = (() => {
+    try {
+      Bun.TOML.parse(deepToml);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
   expect(gaps).toEqual([
     ...DECLARATION_GAPS,
-    "package-scripts-bun-test: 3 bunfig.toml file(s) are not valid TOML; the test roots of the manifests beside them were not checked",
+    `package-scripts-bun-test: ${deepParses ? 2 : 3} bunfig.toml file(s) are not valid TOML; the test roots of the manifests beside them were not checked`,
   ]);
   for (const entry of cases) {
     const declared = [...tests.keys()].filter((path) =>

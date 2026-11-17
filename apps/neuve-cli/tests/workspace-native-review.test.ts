@@ -65,7 +65,12 @@ const head = git("rev-parse", "HEAD");
 const config = defaultConfig();
 if (config.route.provider !== "anthropic")
   throw new Error("Unexpected fixture route");
-config.route.credentialVariable = "NEUVE_FIXTURE_MISSING_REVIEW_KEY";
+// defaultConfig() hands out the shared OPUS_ROUTE: mutating it would change every later file's
+// default route in this test process, so the fixture's route is a copy.
+config.route = {
+  ...config.route,
+  credentialVariable: "NEUVE_FIXTURE_MISSING_REVIEW_KEY",
+};
 const link = async (_project: string, reference: string) =>
   `http://127.0.0.1:4040/?cycle=${reference}`;
 // Every queued or recovered review asks for a worker of this build; here they are recorded, so the
@@ -294,7 +299,10 @@ test("a recorded timed-out run remains timed-out without a published packet", as
   const changed = defaultConfig();
   if (changed.route.provider !== "anthropic")
     throw new Error("Unexpected fixture route");
-  changed.route.credentialVariable = "NEUVE_FIXTURE_MISSING_REVIEW_KEY";
+  changed.route = {
+    ...changed.route,
+    credentialVariable: "NEUVE_FIXTURE_MISSING_REVIEW_KEY",
+  };
   changed.budgets.lifetimeMs += 11;
   intent.config = z.json().parse(JSON.parse(JSON.stringify(changed)));
   const accepted = requireReview(
@@ -341,7 +349,10 @@ test("incomplete undecoded packet stays disclosed and a later standing packet is
   const ownConfig = defaultConfig();
   if (ownConfig.route.provider !== "anthropic")
     throw new Error("Unexpected fixture route");
-  ownConfig.route.credentialVariable = "NEUVE_FIXTURE_MISSING_REVIEW_KEY";
+  ownConfig.route = {
+    ...ownConfig.route,
+    credentialVariable: "NEUVE_FIXTURE_MISSING_REVIEW_KEY",
+  };
   ownConfig.budgets.lifetimeMs += 22;
   intent.config = z.json().parse(JSON.parse(JSON.stringify(ownConfig)));
   const accepted = requireReview(
@@ -428,7 +439,10 @@ const newIntent = (lifetime: number) => {
   const frozen = defaultConfig();
   if (frozen.route.provider !== "anthropic")
     throw new Error("Unexpected fixture route");
-  frozen.route.credentialVariable = "NEUVE_FIXTURE_MISSING_REVIEW_KEY";
+  frozen.route = {
+    ...frozen.route,
+    credentialVariable: "NEUVE_FIXTURE_MISSING_REVIEW_KEY",
+  };
   frozen.budgets.lifetimeMs += lifetime;
   intent.config = z.json().parse(JSON.parse(JSON.stringify(frozen)));
   intent.handoff.branch = "main";

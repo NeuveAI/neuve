@@ -52,6 +52,13 @@ import {
 } from "../../../packages/runtime-claude/tests/frames.ts";
 import { until } from "../../../packages/harness/tests/chat-runtime/fixture.ts";
 
+// The host's config is one object for the whole test process, and other test files fill it too:
+// each test here replaces every field rather than merging into what an earlier file left.
+const replaceConfig = (next: typeof config) => {
+  for (const key of Object.keys(config)) Reflect.deleteProperty(config, key);
+  Object.assign(config, next);
+};
+
 const MarkerEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("started"),
@@ -273,8 +280,7 @@ test("production sources deliver a worker chat through a fake Claude executable 
   const lanes = join(at.root, "lanes");
   for (const path of [stateDirectory, paths.captures, paths.tmp, lanes])
     mkdirSync(path, { recursive: true });
-  Object.assign(
-    config,
+  replaceConfig(
     HostConfigSchema.parse({
       home: paths.state,
       lanes,
@@ -455,9 +461,7 @@ test("production sources deliver a worker chat through a fake Claude executable 
     } finally {
       spawn.mockRestore();
       await sources.close();
-      for (const key of Object.keys(config))
-        Reflect.deleteProperty(config, key);
-      Object.assign(config, previousConfig);
+      replaceConfig(previousConfig);
       const restoredHooks = { ...previousHooks };
       Object.defineProperty(restoredHooks, "worker", {
         value: previousHooks.worker,
@@ -548,8 +552,7 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
   const lanes = join(at.root, "lanes");
   for (const path of [stateDirectory, paths.captures, paths.tmp, lanes])
     mkdirSync(path, { recursive: true });
-  Object.assign(
-    config,
+  replaceConfig(
     HostConfigSchema.parse({
       home: paths.state,
       lanes,
@@ -730,9 +733,7 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
     } finally {
       spawn.mockRestore();
       await sources.close();
-      for (const key of Object.keys(config))
-        Reflect.deleteProperty(config, key);
-      Object.assign(config, previousConfig);
+      replaceConfig(previousConfig);
       const restoredHooks = { ...previousHooks };
       Object.defineProperty(restoredHooks, "worker", {
         value: previousHooks.worker,

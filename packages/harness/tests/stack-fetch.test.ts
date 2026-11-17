@@ -613,9 +613,13 @@ describe("stack.fetch", () => {
       join(folder, "test/fixture.git"),
     ]) {
       const status = gitStatusIn(cwd);
-      // Discovery ends at the store's guard: not a repository, and nothing ran.
+      // Discovery ends at the store's guard: not a repository, and nothing ran. Git builds word the
+      // guard's refusal differently (Apple's Git: "not a git repository"; Ubuntu's: "gitfile does
+      // not point to a valid repository").
       expect(status.exitCode).not.toBe(0);
-      expect(status.stderr.toString()).toContain("not a git repository");
+      expect(status.stderr.toString()).toMatch(
+        /not a git repository|gitfile does not point to a valid repository/,
+      );
     }
     expect(existsSync(join(markers, "root-ran"))).toBe(false);
     expect(existsSync(join(markers, "fixture-ran"))).toBe(false);

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 // Why: pre-change provider holds must be reclassified before a reopened run can spend usage.
 import { expect, spyOn, test } from "bun:test";
@@ -632,28 +632,24 @@ test("cf0fe480 reads AccountStoreRefused as an opaque hold and keeps the persist
     target: string,
     replacements: Readonly<Record<string, string>>,
   ) => {
-    const result = Bun.spawnSync([
-      "git",
-      "-C",
-      repository,
-      "show",
-      `cf0fe480:${file}`,
-    ]);
-    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    // The file as cf0fe480 had it, kept beside this test: a checkout may have no history (a
+    // shallow CI clone, or the public repository, whose history starts after cf0fe480).
+    const kept = readFileSync(
+      join(import.meta.dir, "fixtures/cf0fe480", `${basename(file)}.fixture`),
+      "utf8",
+    );
     const original = pathToFileURL(join(repository, file));
-    const source = result.stdout
-      .toString()
-      .replace(
-        /(from\s+|import\s*)["']([^"']+)["']/g,
-        (whole, prefix: string, specifier: string) => {
-          const replacement =
-            replacements[specifier] ??
-            (specifier.startsWith(".")
-              ? new URL(specifier, original).href
-              : specifier);
-          return `${prefix}${JSON.stringify(replacement)}`;
-        },
-      );
+    const source = kept.replace(
+      /(from\s+|import\s*)["']([^"']+)["']/g,
+      (whole, prefix: string, specifier: string) => {
+        const replacement =
+          replacements[specifier] ??
+          (specifier.startsWith(".")
+            ? new URL(specifier, original).href
+            : specifier);
+        return `${prefix}${JSON.stringify(replacement)}`;
+      },
+    );
     const output = join(extracted, target);
     writeFileSync(output, source);
     return pathToFileURL(output).href;

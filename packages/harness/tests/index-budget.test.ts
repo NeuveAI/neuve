@@ -1,8 +1,12 @@
-import { captureOutlineSource } from "../src/graph-outline.ts";
+import {
+  captureOutlineSource,
+  outlineExecutable,
+} from "../src/graph-outline.ts";
+import { graphTestPrerequisite } from "../../../scripts/graph-test-prerequisite.ts";
 // Guard admission, sharing and review-yield boundaries with real chunk computations and Records.
 import { afterAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
@@ -12,7 +16,7 @@ import {
   Store,
   storeLocationIn,
 } from "@neuve/records-core";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Logger } from "effect";
 import { CpuWork, cpuPool } from "../src/budget/cpu.ts";
 import {
   Scheduler,
@@ -140,12 +144,21 @@ test("independent preparation clients share the host's CPU limit over real socke
   }
 }, 15000);
 
+// These two cases time real chunk computations, which read declarations from the built Graph
+// engine; without it they measure nothing (`bun run build:graph`).
+const graphPrerequisite = graphTestPrerequisite({
+  available: existsSync(outlineExecutable()),
+  message:
+    "Graph engine is missing at apps/neuve-graph/entire-graph. Run `bun run build:graph` from the workspace root.",
+});
+
 for (const holdBackground of [false, true])
-  test(
+  test.skipIf(graphPrerequisite.skip)(
     holdBackground
       ? "a foreground second admission overlaps a held background batch within the fairness bound"
       : "a foreground preparation overtakes a background build at its next batch release",
     async () => {
+      graphPrerequisite.require();
       const budget = new Scheduler(1);
       const started = Promise.withResolvers<void>();
       const queued = Promise.withResolvers<void>();
@@ -388,6 +401,11 @@ for (const holdBackground of [false, true])
   );
 
 // A marker arriving during a batch must not make a waiting checkpoint retain the CPU grant.
+// The batch that holds the grant when the marker lands gives it back at its end, and the rest of
+// its slice may still take one more bounded batch (cpuBatch re-admits them on the next tick, with
+// no checkpoint between): so "nothing held" is asserted once the preparation is parked at its
+// checkpoint, not at the instant of the first release, which raced that re-admission on a loaded
+// two-CPU runner.
 for (const lease of [false, true])
   test(`a review marker releases a background batch with IndexLease=${lease}`, async () => {
     const directory = join(root, `marker-${lease}`);
@@ -397,6 +415,9 @@ for (const lease of [false, true])
     const marked = Promise.withResolvers<void>();
     const released = Promise.withResolvers<void>();
     const yielded = Promise.withResolvers<void>();
+    // Without the lease the preparation waits in place at its checkpoint, which it logs.
+    const waiting = Promise.withResolvers<void>();
+    const parked = lease ? yielded : waiting;
     const admit = budget.admit.bind(budget);
     let admissions = 0;
     budget.admit = async (...args) => {
@@ -438,26 +459,45 @@ for (const lease of [false, true])
               Effect.gen(function* () {
                 marked.resolve();
                 yield* Effect.promise(() => released.promise);
-                expect(
-                  (yield* Effect.promise(() => budget.observe())).held,
-                ).toBe(0);
-                const grant = yield* Effect.promise(() =>
-                  budget.admit({
-                    owner: "review",
-                    priority: interactive,
-                    resource: { kind: "cpu", permits: 1 },
-                  }),
-                );
+                // The review is admitted while the preparation is unfinished: a checkpoint that
+                // kept the one permit would leave this waiting until the timeout.
+                const grant = yield* Effect.promise((signal) =>
+                  budget.admit(
+                    {
+                      owner: "review",
+                      priority: interactive,
+                      resource: { kind: "cpu", permits: 1 },
+                    },
+                    signal,
+                  ),
+                ).pipe(Effect.timeout("5 seconds"));
                 yield* Effect.promise(async () => {
                   await grant.release();
                 });
-                if (lease) yield* Effect.promise(() => yielded.promise);
+                yield* Effect.promise(() => parked.promise);
+                expect(
+                  (yield* Effect.promise(() => budget.observe())).held,
+                ).toBe(0);
               }),
             ),
           ),
         ],
         { concurrency: 2 },
-      ).pipe(Effect.provide(layerFor(directory))),
+      ).pipe(
+        Effect.provide(layerFor(directory)),
+        Effect.provide(
+          Logger.layer([
+            Logger.make(({ message }) => {
+              for (const item of [message].flat())
+                if (
+                  typeof item === "string" &&
+                  item.includes("yielding code work to review Precompute")
+                )
+                  waiting.resolve();
+            }),
+          ]),
+        ),
+      ),
     );
     if (lease) {
       expect(results[0]._tag).toBe("Failure");
