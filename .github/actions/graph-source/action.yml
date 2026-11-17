@@ -1,0 +1,17 @@
+name: Pinned public Graph source
+description: Check out the Graph gitlink over HTTPS without a deploy key.
+runs:
+  using: composite
+  steps:
+    - id: graph
+      shell: bash
+      run: |
+        revision=$(git ls-tree HEAD apps/neuve-graph | awk '{print $3}')
+        [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
+        echo "revision=$revision" >> "$GITHUB_OUTPUT"
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        repository: NeuveAI/neuve-graph
+        ref: ${{ steps.graph.outputs.revision }}
+        path: apps/neuve-graph
+        persist-credentials: false

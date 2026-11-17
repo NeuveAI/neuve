@@ -1,5 +1,5 @@
 // Why: a check that runs without the Graph engine must fail, so `bun run check` can't pass by
-// skipping Graph's cases; only a run that declares it has no Graph (the portable CI job) skips them.
+// skipping Graph's cases, including when an obsolete no-Graph declaration is set.
 import { afterEach, expect, test } from "bun:test";
 import { graphTestPrerequisite } from "../scripts/graph-test-prerequisite.ts";
 
@@ -29,7 +29,7 @@ test.each([
   ["a package test run", undefined, undefined, true],
   ["a check", "check", undefined, false],
   ["a check with another value of the declaration", "check", "true", false],
-  ["a check that declares it runs without Graph", "check", "1", true],
+  ["a check with the obsolete no-Graph declaration", "check", "1", false],
 ] as const)(
   "a missing engine in %s skips: %p",
   (_run, mode, withoutGraph, skip) => {

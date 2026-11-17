@@ -1,5 +1,6 @@
-# Linux portable is the required PR check. Graph coverage runs when the deploy key is available.
-# Release archive tests use five macOS runners only for installer/release changes or a manual run.
+# portable is the required PR check and includes release archives when release-scope selects them.
+# Graph is public; each native platform builds it once and shares it with every test shard.
+# Release archive tests use five macOS runners for release dependencies, main pushes or manual runs.
 # Mac storage/WAL lifetime and installed-copy checks remain local.
 name: Portable checks
 on:
@@ -11,7 +12,7 @@ permissions:
   contents: read
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   release-scope:
     runs-on: ubuntu-latest
@@ -27,15 +28,56 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
         run: |
-          if [ "$EVENT" = workflow_dispatch ]; then
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-          elif [ "$EVENT" = pull_request ] && git diff --name-only "$BASE" "$HEAD" -- scripts/install.sh 'scripts/release/**' 'tests/release/**' 'apps/neuve-cli/src/release*' | grep -q .; then
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ]; then
             echo 'changed=true' >> "$GITHUB_OUTPUT"
           else
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            paths=$(git diff --name-only "$BASE" "$HEAD" -- \
+              scripts/install.sh 'scripts/release/**' 'tests/release/**' \
+              'apps/neuve-cli/src/release*' apps/neuve-cli/src/install-manifest.ts \
+              apps/neuve-cli/src/worker-cli.ts apps/neuve-cli/src/upgrade-cli.ts \
+              apps/neuve-cli/src/installation.ts packages/records-core/src/systemd.ts \
+              packages/records-core/src/launchd.ts apps/neuve-graph package.json bun.lock '.github/**')
+            if [ -n "$paths" ]; then
+              echo 'changed=true' >> "$GITHUB_OUTPUT"
+            else
+              echo 'changed=false' >> "$GITHUB_OUTPUT"
+            fi
           fi
+  graph-build:
+    needs: release-scope
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["macos-15"]' || needs.release-scope.outputs.changed == 'true' && '["ubuntu-latest","macos-15"]' || '["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/graph-source
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: apps/neuve-graph/go.mod
+          cache-dependency-path: apps/neuve-graph/go.sum
+      - name: Build the native Graph artifact
+        # Match the release engine's flags. Graph's tree-sitter grammars require native CGO.
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go -C apps/neuve-graph build -trimpath -o entire-graph ./cmd/entire-graph
+          apps/neuve-graph/entire-graph version
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: graph-${{ matrix.runner }}
+          path: apps/neuve-graph/entire-graph
+          if-no-files-found: error
+          retention-days: 1
   portable-checks:
+    needs: graph-build
     if: github.event_name != 'workflow_dispatch'
     strategy:
       fail-fast: false
@@ -63,9 +105,6 @@ jobs:
       ROLLDOWN_WORKER_THREADS: "4"
       RAYON_NUM_THREADS: "4"
       NEUVE_TEST_SUITE_TIMEOUT_MS: "660000"
-      # Fork PRs cannot read the private Graph repository. A successful Graph build below clears
-      # this declaration, so missing prerequisites then fail instead of silently skipping.
-      NEUVE_CHECK_WITHOUT_GRAPH: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -74,50 +113,15 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.4"
-      - name: Read the pinned Graph source
-        id: graph
-        env:
-          GRAPH_KEY: ${{ secrets.NEUVE_GRAPH_DEPLOY_KEY }}
-          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-        shell: bash
-        run: |
-          if [ -z "$GRAPH_KEY" ]; then
-            if [ "$IS_FORK" != true ]; then
-              echo '::error::Trusted CI requires NEUVE_GRAPH_DEPLOY_KEY to test the pinned Graph engine.'
-              exit 1
-            fi
-            echo 'available=false' >> "$GITHUB_OUTPUT"
-            echo 'Graph unavailable: fork PRs do not receive the private submodule deploy key.'
-            exit 0
-          fi
-          echo 'available=true' >> "$GITHUB_OUTPUT"
-          revision=$(git ls-tree HEAD apps/neuve-graph | awk '{print $3}')
-          url=$(git config -f .gitmodules --get submodule.apps/neuve-graph.url)
-          repository=${url#git@github.com:}
-          repository=${repository#https://github.com/}
-          repository=${repository%.git}
-          [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || exit 1
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          echo "repository=$repository" >> "$GITHUB_OUTPUT"
-      - if: steps.graph.outputs.available == 'true'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: ./.github/actions/graph-source
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          repository: ${{ steps.graph.outputs.repository }}
-          ref: ${{ steps.graph.outputs.revision }}
+          name: graph-ubuntu-latest
           path: apps/neuve-graph
-          ssh-key: ${{ secrets.NEUVE_GRAPH_DEPLOY_KEY }}
-          persist-credentials: false
-      - if: steps.graph.outputs.available == 'true'
-        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
-        with:
-          go-version-file: apps/neuve-graph/go.mod
-          cache-dependency-path: apps/neuve-graph/go.sum
-      - name: Build Graph and enable its cases
-        if: steps.graph.outputs.available == 'true'
+      - name: Enable the native Graph artifact
         run: |
-          time bun run build:graph
-          echo 'NEUVE_CHECK_WITHOUT_GRAPH=0' >> "$GITHUB_ENV"
+          chmod +x apps/neuve-graph/entire-graph
+          apps/neuve-graph/entire-graph version
       - name: Prepare isolated check directories
         # The same folders run_modal.py gives the plan. They stay outside the runner's own home
         # (/home/runner, which holds $RUNNER_TEMP), because tests that refuse to run in a real home
@@ -160,16 +164,19 @@ jobs:
             import { remotePlan } from "./scripts/check-remote.ts";
             const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
             const failed = [];
-            const plan = await remotePlan(process.cwd(), revision, { graph: process.env.NEUVE_CHECK_WITHOUT_GRAPH === "0" });
+            const plan = await remotePlan(process.cwd(), revision, { graph: true });
             const group = process.env.NEUVE_CI_GROUP;
             const heavy = /^test-neuve-(cli|harness)$/;
             const parts = group === "packages"
               ? plan.filter(part => !heavy.test(part.id))
               : plan.filter(part => part.id === `test-neuve-${group.split("-")[0]}`);
+            if (parts.length === 0) throw new Error(`No check parts selected for ${group}`);
             for (const part of parts) {
+              if (group !== "packages" && part.testArguments === undefined)
+                throw new Error(`No test arguments for ${part.id}`);
               const command = group === "packages" ? part.command : [
                 process.execPath, "--no-env-file", `${process.cwd()}/scripts/test-budget.ts`,
-                "./tests", ...part.command.slice(4),
+                "./tests", ...part.testArguments,
                 `--shard=${group.split("-")[1]}/${group.startsWith("cli") ? 2 : 8}`,
                 ...(group.startsWith("harness") ? ["--timings=test-timings.json"] : []),
               ];
@@ -190,29 +197,39 @@ jobs:
             }
           '
   portable:
-    needs: portable-checks
+    needs: [portable-checks, release-scope, release-archive]
     if: always() && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - name: Require every portable group
+      - name: Require portable groups and selected release archives
+        shell: bash
         env:
-          RESULT: ${{ needs.portable-checks.result }}
-        run: test "$RESULT" = success
+          PORTABLE: ${{ needs.portable-checks.result }}
+          SCOPE: ${{ needs.release-scope.result }}
+          CHANGED: ${{ needs.release-scope.outputs.changed }}
+          ARCHIVE: ${{ needs.release-archive.result }}
+        run: |
+          test "$PORTABLE" = success
+          test "$SCOPE" = success
+          case "$CHANGED:$ARCHIVE" in
+            true:success|false:skipped) ;;
+            *) echo "::error::Unexpected release result: $CHANGED:$ARCHIVE"; exit 1 ;;
+          esac
   release-archive:
-    needs: release-scope
+    needs: [release-scope, graph-build]
     if: needs.release-scope.outputs.changed == 'true'
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4, 5]
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       NEUVE_MODE: check
       CI: "1"
       ROLLDOWN_WORKER_THREADS: "4"
       RAYON_NUM_THREADS: "4"
-      NEUVE_TEST_SUITE_TIMEOUT_MS: "1200000"
+      NEUVE_TEST_SUITE_TIMEOUT_MS: "1800000"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -221,45 +238,19 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.4"
-      - name: Read the pinned Graph source
-        id: graph
-        env:
-          GRAPH_KEY: ${{ secrets.NEUVE_GRAPH_DEPLOY_KEY }}
-          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-        shell: bash
-        run: |
-          if [ -z "$GRAPH_KEY" ]; then
-            if [ "$IS_FORK" != true ]; then
-              echo '::error::Trusted CI requires NEUVE_GRAPH_DEPLOY_KEY to test the pinned Graph engine.'
-              exit 1
-            fi
-            echo 'available=false' >> "$GITHUB_OUTPUT"
-            echo 'Graph unavailable: fork PRs do not receive the private submodule deploy key.'
-            exit 0
-          fi
-          echo 'available=true' >> "$GITHUB_OUTPUT"
-          revision=$(git ls-tree HEAD apps/neuve-graph | awk '{print $3}')
-          url=$(git config -f .gitmodules --get submodule.apps/neuve-graph.url)
-          repository=${url#git@github.com:}
-          repository=${repository#https://github.com/}
-          repository=${repository%.git}
-          [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || exit 1
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-          echo "repository=$repository" >> "$GITHUB_OUTPUT"
-      - if: steps.graph.outputs.available == 'true'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          repository: ${{ steps.graph.outputs.repository }}
-          ref: ${{ steps.graph.outputs.revision }}
-          path: apps/neuve-graph
-          ssh-key: ${{ secrets.NEUVE_GRAPH_DEPLOY_KEY }}
-          persist-credentials: false
-      - if: steps.graph.outputs.available == 'true'
-        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+      - uses: ./.github/actions/graph-source
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: apps/neuve-graph/go.mod
           cache-dependency-path: apps/neuve-graph/go.sum
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: graph-macos-15
+          path: apps/neuve-graph
+      - name: Enable the native Graph artifact
+        run: |
+          chmod +x apps/neuve-graph/entire-graph
+          apps/neuve-graph/entire-graph version
       - name: Prepare isolated release directories
         run: |
           echo "GOPATH=$(go env GOPATH)" >> "$GITHUB_ENV"
@@ -274,9 +265,6 @@ jobs:
           echo "BUN_TMPDIR=$check_root/neuve-tmp" >> "$GITHUB_ENV"
           echo "BUN_RUNTIME_TRANSPILER_CACHE_PATH=$check_root/neuve-cache/transpiler" >> "$GITHUB_ENV"
       - run: bun --no-env-file install --frozen-lockfile
-      - name: Build native Graph prerequisite
-        if: steps.graph.outputs.available == 'true'
-        run: bun run build:graph
       - name: Run release archive tests
         # Bun shards by file. The two large installer files divide their cases separately;
         # together these five jobs register every case once. All hosted launchd cases run after NEU-405.

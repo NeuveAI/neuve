@@ -63,9 +63,15 @@ describe.skipIf(!available)("the native release archive", () => {
     if (process.env.NEUVE_RELEASE_ARCHIVE)
       archive = resolve(process.env.NEUVE_RELEASE_ARCHIVE);
     else
-      // The engine is built here as the release builds it (with -trimpath), not taken from the
-      // checkout's development build, so the archive checked is the one a release ships.
-      archive = (await buildArchive({ version: VERSION, out })).archive;
+      // Actions provides an engine built once with the release flags, including -trimpath.
+      // Local runs still build the release engine here.
+      archive = (
+        await buildArchive({
+          version: VERSION,
+          out,
+          ...(process.env.GITHUB_ACTIONS === "true" ? { graph: engine } : {}),
+        })
+      ).archive;
     const assets = join(out, "assets");
     await mkdir(assets);
     await writeFile(join(assets, ASSET), await readFile(archive));

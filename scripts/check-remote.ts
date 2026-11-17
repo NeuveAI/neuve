@@ -312,6 +312,7 @@ const Part = z.object({
   id: z.string().regex(/^[a-zA-Z0-9-]+$/),
   cwd: z.string(),
   command: z.array(z.string()).min(1),
+  testArguments: z.array(z.string()).optional(),
 });
 type Part = z.infer<typeof Part>;
 export const graphLocalPart: Part = {
@@ -416,6 +417,16 @@ export const remotePlan = async (
             ).flatMap(({ names }) => names.map(escapeTestName))
           : [];
       if (excluded !== undefined) excludedNames.push(`${excluded}.*`);
+      const testArguments = [
+        ...(["@neuve/cli", "@neuve/harness", "@neuve/records-core"].includes(
+          pkg.name,
+        )
+          ? ["--timeout", "15000"]
+          : []),
+        ...(excludedNames.length === 0
+          ? []
+          : ["--test-name-pattern", `^(?!(?:${excludedNames.join("|")})$).*$`]),
+      ];
       plan.push({
         id: `${kind}-${pkg.name.replace("@", "").replace("/", "-")}`,
         cwd: posix.dirname(path),
@@ -424,19 +435,9 @@ export const remotePlan = async (
           "--no-env-file",
           "run",
           kind,
-          ...(kind === "test" &&
-          ["@neuve/cli", "@neuve/harness", "@neuve/records-core"].includes(
-            pkg.name,
-          )
-            ? ["--timeout", "15000"]
-            : []),
-          ...(excludedNames.length === 0
-            ? []
-            : [
-                "--test-name-pattern",
-                `^(?!(?:${excludedNames.join("|")})$).*$`,
-              ]),
+          ...(kind === "test" ? testArguments : []),
         ],
+        ...(kind === "test" ? { testArguments } : {}),
       });
     }
   }

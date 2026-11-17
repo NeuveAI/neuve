@@ -1,10 +1,12 @@
 # CI coverage gates
 
-The [PR workflow](../.github/workflows/ci.yml) builds the pinned Graph engine on trusted runs. The cold Linux build measured 94 seconds in [the first manual run](https://github.com/NeuveAI/neuve/actions/runs/44104230234), below the three-minute budget. Fork PRs cannot receive `NEUVE_GRAPH_DEPLOY_KEY`; only those runs declare `NEUVE_CHECK_WITHOUT_GRAPH=1`. Missing Graph on a trusted run fails the check.
+The [PR workflow](../.github/workflows/ci.yml) checks out the public pinned Graph source over HTTPS on every run, including fork PRs. It uses no deploy key. One build per native platform supplies a workflow artifact to all its test shards: Linux for portable checks and macOS when release archives run. Both use the release engine's `CGO_ENABLED=1` and `-trimpath` flags. Each build has a 20-minute job limit. Test shards restore execute permission and run the engine before testing; a missing or broken engine fails the job.
 
-## Graph without credentials
+The required check remains `portable`. It needs all Linux groups, `release-scope` and `release-archive`. It fails unless the Linux groups and scope job succeeded, and archives succeeded when selected or were skipped when `changed=false`. A failed scope diff fails its job. An empty portable plan selection fails its shard. Main pushes are never cancelled by a newer run.
 
-The following 118 unique cases require the private engine. This combines the prerequisite gates with the older remote-plan exclusions, deduplicating the cases present in both. The inherited handover counted seven setup-next-steps cases; the current base has nine, including full and partial old-Git clones. No new Graph coverage gate was added.
+## Graph cases
+
+The following 118 unique cases require the engine and now run on all PRs, including forks. This inventory combines the prerequisite gates with the older remote-plan exclusions, deduplicating cases present in both. The older remote runner still defaults to a plan without Graph; PR CI always requests the Graph plan. A local package test can skip unavailable Graph prerequisites, but check mode cannot.
 
 ### apps/neuve-cli/tests/setup-next-steps.test.ts
 
@@ -234,13 +236,20 @@ The observed Linux run also retains these existing environment gates:
 
 ## Release archives
 
-The five macOS jobs run only for the four path groups documented in [the development command table](development.md#commands), or on `workflow_dispatch`. This is a cost gate for the hour-long installer suite, not a portable test exclusion. Every distribution and systemd-installer registration belongs to exactly one runner; the other release files use Bun's file shards. The external-files matrix registers each shell and login-shell combination separately so its full 42 scenarios can be distributed too. Local `bun run test:release` still runs the whole suite.
+Five macOS jobs run when a PR changes any of these release dependencies:
 
-Without the Graph deploy key, the existing `available` gates in `archive.test.ts` and `distribution.test.ts` omit native archive cases because they cannot build an archive containing the private engine. Fixture installer and release-command cases still run. Linux-only systemd cases keep their existing platform gates on these Mac runners.
+- `scripts/install.sh`, `scripts/release/**` or `tests/release/**`.
+- `apps/neuve-cli/src/release*`, `install-manifest.ts`, `worker-cli.ts`, `upgrade-cli.ts` or `installation.ts` in that source folder.
+- `packages/records-core/src/systemd.ts` or `launchd.ts`.
+- The `apps/neuve-graph` gitlink, root `package.json`, `bun.lock` or `.github/**`, including workflows and the shared Graph checkout action.
+
+Main pushes and `workflow_dispatch` always run release archives as a backstop. Each job has a 40-minute limit, and each suite invocation has a 30-minute budget. The previous slowest job took 24m46s and its installer suite took 1177.51 seconds, so the previous 25-minute job and 1200-second suite limits had too little margin. Graph compilation now happens before these jobs.
+
+Every distribution and systemd-installer registration belongs to exactly one runner; the other release files use Bun's file shards. The external-files matrix registers each shell and login-shell combination separately so its full 42 scenarios can be distributed too. Local `bun run test:release` still runs the whole suite. Native archive cases use the shared macOS engine, built with the release flags, and no longer depend on a deploy key. Linux-only systemd cases keep their existing platform gates on these Mac runners.
 
 Main's NEU-405 correction removes the hosted launchd gate. All launchd handoff and rollback cases now run on Actions. The shared fixture command reader captures failed `plutil` output before trying `ProgramArguments.0`, with shell regressions for noisy failures.
 
-The [recorded installer durations](../tests/release/installer-case-timings.json) come from [run 44113180095](https://github.com/NeuveAI/neuve/actions/runs/44113180095) and [the rebased run](https://github.com/NeuveAI/neuve/actions/runs/44175620764). The [collector](../scripts/release/collect-case-timings.ts) refreshes them from downloaded job logs and prints each runner's measured work. The rebased run restored the launchd cases, including two rollback matrices taking over three minutes each. Three of four archive shards exhausted their suite budget and the fourth took about 24 minutes for the whole job, so CI now uses five archive runners with the same time limits. A [six-runner scheduling probe](https://github.com/NeuveAI/neuve/actions/runs/44180414010) started five macOS jobs and kept the sixth queued, so five avoids a second wave at the observed concurrency limit. The case divider assigns each registration to the least loaded runner using those estimates, with ten seconds for a new case. This replaces count-based assignment, which gave shard 1 enough work to exceed its twenty-minute suite budget. All registrations still belong to exactly one runner. Harness projection partitions now occupy separate files, with updated timing estimates and eight harness runners, because all four partitions in one file exceeded the Linux suite budget. Neither change adds a coverage gate.
+The [recorded installer durations](../tests/release/installer-case-timings.json) come from [run 44113180095](https://github.com/NeuveAI/neuve/actions/runs/44113180095) and [the rebased run](https://github.com/NeuveAI/neuve/actions/runs/44175620764). The [collector](../scripts/release/collect-case-timings.ts) refreshes them from downloaded job logs and prints each runner's measured work. The rebased run restored the launchd cases, including two rollback matrices taking over three minutes each. Three of four archive shards exhausted their suite budget and the fourth took about 24 minutes for the whole job, so CI uses five archive runners. This final fix round raises their limits as described above. A [six-runner scheduling probe](https://github.com/NeuveAI/neuve/actions/runs/44180414010) started five macOS jobs and kept the sixth queued, so five avoids a second wave at the observed concurrency limit. The case divider assigns each registration to the least loaded runner using those estimates, with ten seconds for a new case. This replaces count-based assignment, which gave shard 1 enough work to exceed its twenty-minute suite budget. All registrations still belong to exactly one runner. Harness projection partitions now occupy separate files, with updated timing estimates and eight harness runners, because all four partitions in one file exceeded the Linux suite budget. Neither change adds a coverage gate.
 
 Three pre-existing explicitly skipped distribution cases remain unchanged:
 
