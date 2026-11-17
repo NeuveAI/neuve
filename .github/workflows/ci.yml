@@ -3,6 +3,7 @@
 # describes the owner's installed binary. Those check:remote local parts do not run here.
 name: Portable checks
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
@@ -57,6 +58,9 @@ jobs:
           bun --no-env-file .remote-build-types.ts
           cd apps/neuve-web/packages/diffs
           bun --no-env-file node_modules/typescript/bin/tsc -p tsconfig.build.json
+      - name: Diagnose Linux observer
+        run: |
+          bun scripts/test-budget.ts apps/neuve-web/apps/web/src/server/live-events.test.ts --test-name-pattern 'an append from another process' --timeout 40000
       - name: Run the check:remote Linux plan
         # remotePlan owns package selection, Graph exclusions and the 15-second CLI/harness
         # test window. run_modal.py uses the same four native worker threads and 55-minute limit.
