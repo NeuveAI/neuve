@@ -30,6 +30,7 @@ import {
   ASSET,
   TARGET,
   install,
+  linkHostGit,
   removeAllScratch,
   root,
   run,
@@ -318,12 +319,17 @@ describe.skipIf(!available)("the native release archive", () => {
       ENTIRE_GRAPH_SERVICE: "off",
     };
     // Linux runners keep go in /usr/bin. A PATH of links to /usr/bin and /bin without bun or go
-    // keeps "neither Bun nor Go" true on every host.
-    const tools = join(context.directory, "tools");
-    await mkdir(tools);
+    // keeps "neither Bun nor Go" true on every host. Git is the host's first one, which may not be
+    // /usr/bin's (linkHostGit says why).
+    const tools = await linkHostGit(join(context.directory, "tools"));
     for (const folder of ["/usr/bin", "/bin"])
       for (const name of await readdir(folder).catch(() => []))
-        if (name !== "bun" && name !== "go" && name !== "gofmt")
+        if (
+          name !== "bun" &&
+          name !== "go" &&
+          name !== "gofmt" &&
+          name !== "git"
+        )
           await symlink(join(folder, name), join(tools, name)).catch(() => {});
     context.env = { ...context.env, PATH: tools };
     for (const tool of ["bun", "go"])

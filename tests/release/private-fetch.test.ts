@@ -18,6 +18,7 @@ import {
   readFile,
   readdir,
   realpath,
+  rename,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -31,11 +32,13 @@ import {
   scratch,
   snapshot,
   stubs,
+  TARGET,
   tinyRelease,
   type Scratch,
   type TinyRelease,
 } from "./release-fixture.ts";
 import { stampInstaller } from "../../scripts/release/release.ts";
+import { writeChecksums } from "../../scripts/release/checksums.ts";
 
 const TOKEN = "ghp_fakeTokenForTheReleaseTests0123456789";
 const REPO = "NeuveAI/neuve";
@@ -445,8 +448,13 @@ describe("the GitHub CLI route", () => {
       const before = await snapshot(context.home);
       const result = await install(context, undefined);
       expect(result.code).toBe(1);
+      // The token route runs on macOS only, so on Linux the hint names only the GitHub CLI.
+      const signIn =
+        process.platform === "darwin"
+          ? `sign in with the GitHub CLI (gh auth login), or set GH_TOKEN to a GitHub token that can read ${REPO}.`
+          : "sign in with the GitHub CLI (gh auth login).";
       expect(result.output).toContain(
-        `Can't find ${ASSET} for a release that isn't a preview in ${REPO}. If the repository is private, sign in with the GitHub CLI (gh auth login), or set GH_TOKEN to a GitHub token that can read ${REPO}.`,
+        `Can't find ${ASSET} for a release that isn't a preview in ${REPO}. If the repository is private, ${signIn}`,
       );
       expect(await snapshot(context.home)).toEqual(before);
       expect(await readdir(context.temporary)).toEqual([]);
@@ -498,6 +506,54 @@ describe("the public route", () => {
       `Can't find ${ASSET} for the release v9.9.9 in ${REPO}.`,
     );
     expect(await snapshot(context.home)).toEqual(before);
+  });
+
+  // v0.1.0 shipped for Macs only: a release can hold SHA256SUMS and no archive for this machine.
+  // The installer then says there's no build here yet, on the public and GitHub CLI routes alike,
+  // instead of suggesting a sign-in.
+  test("says plainly when a release has no build for this machine, and installs nothing", async () => {
+    const other = TARGET === "darwin-arm64" ? "linux-x64" : "darwin-arm64";
+    const otherBuild =
+      other === "darwin-arm64" ? "Macs with Apple silicon" : "Linux on x64";
+    const system = TARGET.startsWith("darwin") ? "macOS" : "Linux";
+    const release = await tinyRelease("0.3.0");
+    const assets = join(release.directory, "assets");
+    await rename(join(assets, ASSET), join(assets, `neuve-${other}.tar.gz`));
+    await writeChecksums(assets);
+    releases.set("v0.3.0", release);
+    try {
+      const publicRoute = await publicContext();
+      const ghRoute = await scratch();
+      const gh = await stubs({
+        gh: [
+          "#!/bin/sh",
+          'if [ "$1 $2" = "auth status" ]; then exit 0; fi',
+          'if [ "$1 $2" = "release download" ]; then',
+          '  dir=; while [ "$#" -gt 0 ]; do [ "$1" = --dir ] && dir=$2; shift; done',
+          `  cp "${join(assets, "SHA256SUMS")}" "$dir/"; exit 0`,
+          "fi",
+          "exit 1",
+          "",
+        ].join("\n"),
+      });
+      ghRoute.env = { ...ghRoute.env, PATH: `${gh}:${ghRoute.env.PATH}` };
+      for (const context of [publicRoute, ghRoute]) {
+        const before = await snapshot(context.home);
+        const result = await install(context, undefined, [
+          "--version",
+          "0.3.0",
+        ]);
+        expect(result.code).toBe(1);
+        expect(result.output).toContain(
+          `The release v0.3.0 of ${REPO} has no ${system} build for this machine yet (${ASSET}), so nothing was installed. It has builds for ${otherBuild} only.`,
+        );
+        expect(result.output).not.toContain("sign in");
+        expect(await snapshot(context.home)).toEqual(before);
+        expect(await readdir(context.temporary)).toEqual([]);
+      }
+    } finally {
+      releases.delete("v0.3.0");
+    }
   });
 
   // Review F2: Codespaces set GITHUB_TOKEN, and neuve upgrade passes the environment on. On Linux

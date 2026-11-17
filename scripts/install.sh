@@ -1265,11 +1265,31 @@ resolve_tag() {
     case "$tag" in v*) valid_version "${tag#v}" || fail "The newest release, $tag, has no version this installer understands." ;; *) fail "The newest release, $tag, has no version this installer understands." ;; esac
     latest_note=" (the newest release)"
 }
+# A release can ship without a build for some systems (v0.1.0 had Macs only). When its SHA256SUMS,
+# read from $1, lists archives but not this machine's, say plainly that there's no build here yet
+# and which systems have one. Returns when the list can't say that.
+no_build_here() {
+    [ -f "$1" ] || return 0
+    awk -v name="$asset" '$2 == name { found = 1 } END { exit found ? 0 : 1 }' "$1" && return 0
+    listed_builds=$(awk '$2 ~ /^neuve-.*\.tar\.gz$/ { name = $2; sub(/^neuve-/, "", name); sub(/\.tar\.gz$/, "", name)
+        if (name == "darwin-arm64") name = "Macs with Apple silicon"; else if (name == "linux-x64") name = "Linux on x64"; else if (name == "linux-arm64") name = "Linux on arm64"
+        list = list (list == "" ? "" : ", ") name } END { print list }' "$1")
+    [ -n "$listed_builds" ] || return 0
+    if [ -n "$tag" ]; then listed_what="The release $tag of $repo"; else listed_what="The newest release of $repo"; fi
+    if [ "$platform" = linux ]; then listed_system=Linux; else listed_system=macOS; fi
+    fail "$listed_what has no $listed_system build for this machine yet ($asset), so nothing was installed. It has builds for $listed_builds only."
+}
 public_get() {
     public_status=$(protected curl -q -sSL --proto '=https,http' --proto-redir '=https' -o "$2" -w '%{http_code}' "$1" 2>"$temporary/curl-error") || public_status=000
     case "$public_status" in
         200) ;;
         404)
+            # A missing archive in a release that is there: check its SHA256SUMS before suggesting a sign-in.
+            if [ "$3" = "$asset" ]; then
+                listed_status=$(protected curl -q -sSL --proto '=https,http' --proto-redir '=https' -o "$temporary/listed-sums" -w '%{http_code}' "${1%/*}/SHA256SUMS" 2>/dev/null) || listed_status=000
+                [ "$listed_status" != 200 ] || no_build_here "$temporary/listed-sums"
+                rm -f "$temporary/listed-sums"
+            fi
             if [ -n "$tag" ]; then what="the release $tag"; else what="a release that isn't a preview"; fi
             if [ "$platform" = darwin ]; then signin="sign in with the GitHub CLI (gh auth login), or set GH_TOKEN to a GitHub token that can read $repo"
             else signin="sign in with the GitHub CLI (gh auth login)"; fi
@@ -1288,7 +1308,7 @@ download_release() {
         public_get "$downloads/$repo/releases/$location/$asset" "$archive" "$asset"
         public_get "$downloads/$repo/releases/$location/SHA256SUMS" "$checksums" SHA256SUMS
     elif [ "$route" = gh ]; then
-        protected gh release download "$tag" --repo "$repo" --pattern "$asset" --pattern SHA256SUMS --dir "$download" 2>"$temporary/gh-error" || { show_error "$temporary/gh-error"; fail "Couldn't download $tag from $repo. Check the version, and that your GitHub account can read $repo."; }
+        protected gh release download "$tag" --repo "$repo" --pattern "$asset" --pattern SHA256SUMS --dir "$download" 2>"$temporary/gh-error" || { [ -f "$archive" ] || no_build_here "$checksums"; show_error "$temporary/gh-error"; fail "Couldn't download $tag from $repo. Check the version, and that your GitHub account can read $repo."; }
     else
         api_get "/repos/$repo/releases/tags/$tag" "$temporary/release.json"
         [ "$api_status" = 200 ] || github_error "$api_status" "the release $tag"
@@ -1307,6 +1327,7 @@ download_release() {
         api_asset "$archive_id" "$archive" "$asset"
         api_asset "$sums_id" "$checksums" SHA256SUMS
     fi
+    [ -f "$archive" ] || no_build_here "$checksums"
     [ -f "$archive" ] && [ -f "$checksums" ] || fail "The download of $tag from $repo is missing $asset or SHA256SUMS."
 }
 

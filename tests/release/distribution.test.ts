@@ -34,6 +34,7 @@ import {
   agentUnitPaths,
 } from "../../packages/records-core/src/systemd.ts";
 import { systemdFixture } from "./systemd-fixture.ts";
+import { linkHostGit } from "./release-fixture.ts";
 import { writeChecksums } from "../../scripts/release/checksums.ts";
 
 const root = resolve(import.meta.dir, "../..");
@@ -377,7 +378,7 @@ const fresh = async () => {
     SHELL: "/bin/zsh",
     ZDOTDIR: home,
     NEUVE_NO_MODIFY_PATH: "1",
-    PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
+    PATH: `${await linkHostGit(join(directory, "host-git"))}:${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
   };
   return {
     directory,
@@ -1048,10 +1049,12 @@ describe.skipIf(!available)(
       success(
         await run(["tar", "-xzf", archive, "-C", extracted], context.env),
       );
-      nextVersion =
-        releaseVersion === "0.1.0-test.upgrade"
-          ? "0.1.0-test.upgrade.2"
-          : "0.1.0-test.upgrade";
+      // B must be newer than A whatever A is: a tagged release is a plain version, and a prerelease
+      // of the same version sorts below it, so B takes the next patch.
+      const core = /^(\d+)\.(\d+)\.(\d+)/.exec(releaseVersion);
+      if (!core) throw new Error(`Release A has no version: ${releaseVersion}`);
+      nextVersion = `${core[1]}.${core[2]}.${Number(core[3]) + 1}-test.upgrade`;
+      expect(Bun.semver.order(nextVersion, releaseVersion)).toBe(1);
       const nextAssets = join(directory, "release-b");
       success(
         await run(

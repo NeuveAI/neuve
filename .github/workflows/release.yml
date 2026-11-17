@@ -3,6 +3,11 @@ name: Release archives
 # (ci.yml) only: a break in the release scripts shows when a tag or manual release runs.
 on:
   workflow_dispatch:
+    inputs:
+      rehearse_tag:
+        description: "Build with the CLI package's plain version, as a v-tag push does. Nothing is published."
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 permissions:
@@ -14,14 +19,17 @@ jobs:
   build:
     strategy:
       fail-fast: false
+      # Releases ship for Macs with Apple silicon only, from v0.1.0 (owner, 17 November 2026: "Just
+      # need to get Mac build out"). The installer on Linux says the release has no Linux build yet.
+      # The Linux steps below stay, so bringing Linux back is these two matrix rows:
+      #   - target: linux-x64
+      #     runner: ubuntu-22.04
+      #   - target: linux-arm64
+      #     runner: ubuntu-22.04-arm
       matrix:
         include:
           - target: darwin-arm64
             runner: macos-15
-          - target: linux-x64
-            runner: ubuntu-22.04
-          - target: linux-arm64
-            runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -75,10 +83,16 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          REHEARSE_TAG: ${{ inputs.rehearse_tag }}
+        # A tag build installs a plain version, which sorts above every prerelease of it, so the
+        # release tests' upgrade fixtures behave differently than under a -dev version. A rehearsal
+        # runs them as the tag will; only a pushed tag reaches publish.
         run: |
           version=$(bun --no-env-file -p 'require("./apps/neuve-cli/package.json").version')
           if [ "$REF_TYPE" = tag ]; then
             [ "$REF_NAME" = "v$version" ] || { echo 'Tag and CLI package version differ.'; exit 1; }
+          elif [ "$REHEARSE_TAG" = true ]; then
+            echo "Rehearsing the v$version tag build."
           else
             revision=$(git rev-parse HEAD)
             version="$version-dev.${revision:0:12}"

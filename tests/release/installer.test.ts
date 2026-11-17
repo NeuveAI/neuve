@@ -40,6 +40,17 @@ const refused = (result: Awaited<ReturnType<typeof run>>, message: string) => {
   expect(result.output).toContain(message);
 };
 const read = (path: string) => readFile(path, "utf8");
+// Renames bin/neuve to a member that climbs out of the release folder. bsdtar (macOS) renames with
+// -s; GNU tar (Linux) reads -s as --same-order, renames with --transform, and keeps the `..` only
+// with -P.
+const escapeMember = Bun.spawnSync(["tar", "--version"])
+  .stdout.toString()
+  .includes("GNU tar")
+  ? [
+      "-P",
+      `--transform=s,^neuve-${TARGET}/bin/neuve$,neuve-${TARGET}/../escape,`,
+    ]
+  : ["-s", `,^neuve-${TARGET}/bin/neuve$,neuve-${TARGET}/../escape,`];
 const MARKER = "# Added by the Neuve installer";
 
 describe.each(shells)("installer under %s", (shell) => {
@@ -153,10 +164,7 @@ describe.each(shells)("installer under %s", (shell) => {
       "The archive contains a link or special file.",
     );
     const traversal = await tinyRelease("0.1.0", {
-      tarArgs: [
-        "-s",
-        `,^neuve-${TARGET}/bin/neuve$,neuve-${TARGET}/../escape,`,
-      ],
+      tarArgs: escapeMember,
     });
     refused(
       await install(context, traversal, [], shell),

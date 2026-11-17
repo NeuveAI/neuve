@@ -25,7 +25,7 @@ I started out building agents for QA, and soon saw that teams weren't stuck on Q
 
 ## Quick start
 
-One line installs the `neuve` command on Macs with Apple silicon, on Linux with glibc 2.34 or later (x64 and arm64), and on Windows through WSL.
+One line installs the `neuve` command on Macs with Apple silicon. The first release has no Linux build yet, so the installer on Linux (and on Windows through WSL) says so and installs nothing.
 
 ```sh
 curl -fsSL https://neuve.ai/install.sh | sh

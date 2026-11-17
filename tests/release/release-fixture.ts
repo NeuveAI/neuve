@@ -13,6 +13,7 @@ import {
   readlink,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -57,6 +58,29 @@ export const removeAllScratch = async () => {
   for (const path of [...scratchRoots]) await removeScratch(path);
 };
 
+/**
+ * Links `folder/git` to the Git first on this test process's PATH, for a release test that runs
+ * `neuve setup` on a PATH built from /usr/bin. Neuve's Git reads start every command with
+ * `git --no-lazy-fetch` (Git 2.44 or newer) and refuse an older Git. GitHub's macOS 15 runners keep
+ * Apple Git 2.39.5 in /usr/bin and a newer Homebrew Git first on PATH, so without this link setup
+ * fails there with "Local Git preparation qualification refused". It refuses an older host Git.
+ */
+export const linkHostGit = async (folder: string) => {
+  const git = Bun.which("git");
+  if (!git) throw new Error("The release tests need git on PATH.");
+  const checked = Bun.spawnSync([git, "--no-lazy-fetch", "version"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  if (checked.exitCode !== 0)
+    throw new Error(
+      `The release tests need Git 2.44 or newer first on PATH (neuve runs git --no-lazy-fetch), and ${git} is older.`,
+    );
+  await mkdir(folder, { recursive: true });
+  await symlink(git, join(folder, "git"));
+  return folder;
+};
+
 export interface TinyRelease {
   readonly directory: string;
   readonly archive: string;
@@ -65,8 +89,9 @@ export interface TinyRelease {
 }
 
 /**
- * A release archive whose `neuve` answers `--version` and, when `skills` is set, `skills --help`
- * and `skills install --offer`, logging each call to `$NEUVE_TEST_LOG` when that is set.
+ * A release archive whose `neuve` answers `--version`, `worker uninstall-agent` (as the real CLI
+ * does with no timer registered) and, when `skills` is set, `skills --help` and
+ * `skills install --offer`, logging each call to `$NEUVE_TEST_LOG` when that is set.
  */
 export const tinyRelease = async (
   version: string,
@@ -85,6 +110,9 @@ export const tinyRelease = async (
     "#!/bin/sh",
     `[ -z "\${NEUVE_TEST_LOG:-}" ] || printf '%s\\n' "neuve ${version}: $*" >>"$NEUVE_TEST_LOG"`,
     `if [ "\${1:-}" = --version ]; then printf 'neuve ${version}\\n'; exit 0; fi`,
+    // A Linux uninstall always asks the CLI to remove its systemd timer, whatever NEUVE_NO_AGENT
+    // said at install, since a timer may have been registered later.
+    'if [ "${1:-}" = worker ] && [ "${2:-}" = uninstall-agent ]; then echo "There is no systemd timer dev.neuve.worker, so there was nothing to remove."; exit 0; fi',
     ...(options.skills
       ? [
           'if [ "${1:-}" = skills ] && [ "${2:-}" = --help ]; then exit 0; fi',
@@ -214,7 +242,7 @@ export const scratch = async (): Promise<Scratch> => {
       LANG: "C",
       NEUVE_TEST_LOG: log,
       // These fixtures test the download and install steps. The background agent has its own
-      // tests (distribution, systemd-installer), so a stand-in CLI without `worker` skips it.
+      // tests (distribution, systemd-installer), so a stand-in CLI that registers none skips it.
       NEUVE_NO_AGENT: "1",
       // A GitHub CLI already on the host (Linux runners have one in /usr/bin) keeps its state and
       // configuration here, outside the home the tests snapshot. Not signed in, it changes no route.
