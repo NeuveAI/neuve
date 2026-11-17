@@ -658,7 +658,7 @@ describe("neuve CLI boundary", () => {
   });
   test("reports its binary version", async () => {
     expect(await run(["--version"])).toEqual({
-      stdout: "neuve 0.2.0\n",
+      stdout: "neuve 0.2.1\n",
       stderr: "",
       exitCode: 0,
     });
