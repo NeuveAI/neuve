@@ -219,11 +219,11 @@ The following 118 unique cases require the private engine. This combines the pre
 The portable plan retains these existing platform boundaries. They are not new skips:
 
 - Root: `the generated protocol preserves SDK and native types`, which reads the Mac native SDK.
-- Records: names beginning `a process that can only read an older store`, which need macOS permission and WAL lifetime behavior. Local checks run them.
-- Web: names beginning `the web app and the CLI freeze the same run key`, which use the installed Mac CLI. Local checks run them.
+- Records: names beginning `a process that can only read an older store`, which use macOS `chflags uchg` to make the store immutable to its owner. Local checks run them.
+- Web: names beginning `the web app and the CLI freeze the same run key`, whose fixture still writes settings under the macOS `Library/Application Support` path. Local checks run them.
 - Evaluation: `the committed harness holds every snapshot marker the seam path needs`, which reads the owner's installed archive. Local checks run it.
-- CLI: names beginning `the worker this build starts loads neither the project's`, which inspect the installed process environment. Local checks run them.
-- The `@ace/host` suite stays outside the portable plan, as before. It exercises the Mac host runtime.
+- CLI: names beginning `the worker this build starts loads neither the project's`, which exercise this checkout's source worker environment. The legacy plan runs this test locally; a current macOS-only requirement has not been established. This exclusion is unchanged and needs reassessment when CI can run again.
+- The `@ace/host` suite stays outside the portable plan, as before. It includes the native host runtime and stays local in the legacy plan.
 
 The observed Linux run also retains these existing environment gates:
 
