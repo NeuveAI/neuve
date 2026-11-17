@@ -26,6 +26,7 @@ import { installLocalCli } from "../scripts/install-local.ts";
 import { claimDesk, deskSocket, liveDesk } from "../src/review-desk-claim.ts";
 import {
   deskManifestSchema,
+  reinstallFix,
   SOURCE_DESK_FIX,
 } from "../src/review-desk-config.ts";
 import { hashDesk } from "../src/review-desk-files.ts";
@@ -450,3 +451,15 @@ test("an installed desk serves any set-up repository without Bun, one desk per r
     await rm(root, { recursive: true, force: true });
   }
 }, 240_000);
+
+// Reason: release users must be able to repair the desk without installing the GitHub CLI.
+test("a release desk uses the public installer to force a reinstall", async () => {
+  const home = await mkdtemp(join(tmpdir(), "desk-release-home-"));
+  try {
+    expect(await reinstallFix(join(home, ".neuve"), home)).toBe(
+      "curl -fsSL https://neuve.ai/install.sh | sh -s -- --force",
+    );
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});

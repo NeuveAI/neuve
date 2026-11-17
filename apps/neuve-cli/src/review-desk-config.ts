@@ -31,7 +31,7 @@ export const releasePrefix = (home = homedir()) => join(home, ".neuve");
 
 /** How a release install is installed again, the same version included. */
 export const RELEASE_REINSTALL_FIX =
-  "gh release download --repo NeuveAI/neuve --pattern install.sh --clobber && sh install.sh --force";
+  "curl -fsSL https://neuve.ai/install.sh | sh -s -- --force";
 
 /** The command that installs this prefix again, as a person types it. */
 export const reinstallFix = async (prefix: string, home = homedir()) => {
