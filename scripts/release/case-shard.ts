@@ -10,11 +10,11 @@ const shard =
     ? undefined
     : z
         .string()
-        .regex(/^[1-6]\/6$/)
+        .regex(/^[1-5]\/5$/)
         .parse(configured)
         .charCodeAt(0) - 49;
 export const releaseTest = (test: typeof bunTest): typeof bunTest => {
-  const loads = [0, 0, 0, 0, 0, 0];
+  const loads = [0, 0, 0, 0, 0];
   const estimates: Readonly<Record<string, number>> = timings;
   const divide = (register: typeof bunTest): typeof bunTest =>
     new Proxy(register, {
