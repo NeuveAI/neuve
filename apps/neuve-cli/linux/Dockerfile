@@ -36,28 +36,15 @@ ARG NEUVE_DIRTY
 ARG NEUVE_GRAPH_REVISION
 RUN bun ./apps/neuve-cli/scripts/install-linux.ts --prefix /opt/neuve \
       --commit "$NEUVE_COMMIT" --dirty "$NEUVE_DIRTY" --graph-revision "$NEUVE_GRAPH_REVISION"
-# The oldest git Neuve's reads support, read from the one place that sets it (git-objects.ts's
-# MINIMUM_GIT) for the runtime's check below. A changed line fails the build rather than guess.
-RUN sed -nE 's/^const MINIMUM_GIT: readonly \[number, number\] = \[([0-9]+), ([0-9]+)\];$/\1.\2/p' \
-      packages/harness/src/git-objects.ts > /opt/git-minimum \
-  && grep -qxE '[0-9]+\.[0-9]+' /opt/git-minimum
 
 # The runtime stays root: Modal runs functions as root and mounts its volumes for root, and the
 # refresher writes the sign-in there. A machine that runs as another user needs the volume's
 # sign-in folder owned by that user.
-# Trixie for its git (2.47): Precompute reads attributes from a revision with --attr-source, which
-# needs git 2.42 or newer, and bookworm's is 2.39.
+# Neuve assesses the host's Git and uses an attribute fallback when needed.
 FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
-COPY --from=build /opt/git-minimum /tmp/git-minimum
-# Refuse an image whose git is older than Neuve's minimum.
-RUN need="$(cat /tmp/git-minimum)" \
-  && have="$(git --version | sed -nE 's/^git version ([0-9]+\.[0-9]+).*/\1/p')" \
-  && [ -n "$have" ] \
-  && [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -1)" = "$need" ] \
-  || { echo "git $(git --version) is older than Neuve's minimum $(cat /tmp/git-minimum)" >&2; exit 1; }
 COPY --from=build /opt/neuve /opt/neuve
 ENV PATH=/opt/neuve/bin:$PATH
 RUN neuve auth --help > /dev/null && /opt/neuve/lib/neuve/entire-graph version
