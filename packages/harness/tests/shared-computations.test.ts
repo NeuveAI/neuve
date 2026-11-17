@@ -1,4 +1,3 @@
-import { indexRecipe } from "../src/search-index.ts";
 import { captureOutlineSource } from "../src/graph-outline.ts";
 import { References } from "effect";
 import { expect, test } from "bun:test";
@@ -1045,21 +1044,12 @@ test("worker startup preserves a live computation and abandons ended ownership",
 test("preparation child skips hunks held by a review", async () => {
   const s = await setup();
   try {
-    const { indexRecipe } = await import("../src/search-index.ts");
-    const { QUERY_RECIPE } = await import("../src/hunks.ts");
+    const { commitHunksSpec } = await import("../src/commit-prepare.ts");
     const { emptyTree } = await import("../src/git-objects.ts");
     const tree = git("-C", s.repository, "rev-parse", "HEAD^{tree}");
     const oid = git("-C", s.repository, "rev-parse", "HEAD");
     const from = await Effect.runPromise(emptyTree(s.repository));
-    const spec = {
-      op: "harness.commit-hunks",
-      opVersion: 1,
-      inputs: { from: `git-tree:${from}`, to: `git-tree:${tree}` },
-      config: {
-        index: indexRecipe(captureOutlineSource()),
-        query: QUERY_RECIPE,
-      },
-    };
+    const spec = commitHunksSpec(from, tree, captureOutlineSource());
     const holder = s.spawn({ spec });
     await holder.wait("run");
     const preparation = s.spawn({
