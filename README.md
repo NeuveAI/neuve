@@ -27,6 +27,8 @@ I started out building agents for QA, and soon saw that teams weren't stuck on Q
 
 One line installs the `neuve` command on Macs with Apple silicon. The first release has no Linux build yet, so the installer on Linux (and on Windows through WSL) says so and installs nothing.
 
+Neuve needs Git 2.44 or later. The Git in older Xcode command-line tools can be older; `git --version` shows yours, and `brew install git` gets a current one.
+
 ```sh
 curl -fsSL https://neuve.ai/install.sh | sh
 ```
