@@ -1,4 +1,6 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test as bunTest } from "bun:test";
+import { releaseTest } from "../../scripts/release/case-shard.ts";
+const test = releaseTest(bunTest);
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {

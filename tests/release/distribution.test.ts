@@ -1,5 +1,13 @@
-import { afterAll, afterEach, beforeAll, describe, expect } from "bun:test";
-import { test } from "../../scripts/release/distribution-shard.ts";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  test as bunTest,
+} from "bun:test";
+import { releaseTest } from "../../scripts/release/case-shard.ts";
+const test = releaseTest(bunTest);
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -3818,168 +3826,171 @@ shift
     }, 120_000);
 
     // Every optional-file kind must preserve the pre-existing entry and any linked target.
-    test("preserves external files through install, failed install, upgrade and uninstall under sh and dash", async () => {
-      const kinds = [
-        "absent",
-        "file",
-        "readonly-file",
-        "link",
-        "dangling",
-        "directory",
-        "fifo",
-      ];
-      const scenarios = installerShells.flatMap((shell) =>
-        ["zsh", "bash", "fish"].flatMap((loginShell) =>
-          kinds.map((kind) => ({ shell, loginShell, kind })),
-        ),
-      );
-      // Independent homes and prefixes keep the complete matrix while bounding disk concurrency.
-      const batchSize = 4;
-      const completed: typeof scenarios = [];
-      const started = performance.now();
-      for (let offset = 0; offset < scenarios.length; offset += batchSize) {
-        const cases = await Promise.allSettled(
-          scenarios
-            .slice(offset, offset + batchSize)
-            .map(async ({ shell, loginShell, kind }) => {
-              await using context = await fresh();
-              context.env = {
-                ...context.env,
-                SHELL: `/bin/${loginShell}`,
-                NEUVE_NO_MODIFY_PATH: "0",
-                NEUVE_NO_AGENT: "0",
-              };
-              const selected =
-                loginShell === "zsh"
-                  ? ".zshrc"
-                  : loginShell === "fish"
-                    ? ".config/fish/conf.d/neuve.fish"
-                    : process.platform === "darwin"
-                      ? ".bash_profile"
-                      : ".bashrc";
-              const paths = [
-                ".zshrc",
-                ".bashrc",
-                ".bash_profile",
-                ".config/fish/conf.d/neuve.fish",
-                ...(process.platform === "darwin"
-                  ? ["Library/LaunchAgents/dev.neuve.worker.plist"]
-                  : [
-                      ".config/systemd/user/dev.neuve.worker.service",
-                      ".config/systemd/user/dev.neuve.worker.timer",
-                    ]),
-              ];
-              const original = "# managed configuration\nexport EXAMPLE=keep\n";
-              const entries: { path: string; target: string }[] = [];
-              const entryState = async (path: string, includeInode = true) => {
-                const entry = await lstat(path).catch(() => null);
-                if (entry === null) return null;
-                return {
-                  ino: includeInode ? entry.ino : undefined,
-                  mode: entry.mode,
-                  data: entry.isSymbolicLink()
-                    ? await readlink(path)
-                    : entry.isFile()
-                      ? await readFile(path, "utf8")
-                      : entry.isDirectory()
-                        ? await snapshot(path)
-                        : "special",
-                };
-              };
-              const makeEntry = async (
-                path: string,
-                contents: string,
-                target = `${path}.managed`,
-              ) => {
-                await mkdir(dirname(path), { recursive: true });
-                if (kind === "file" || kind === "readonly-file") {
-                  await writeFile(path, contents);
-                  if (kind === "readonly-file") await chmod(path, 0o444);
-                }
-                if (kind === "link" || kind === "dangling") {
-                  if (kind === "link") await writeFile(target, contents);
-                  await symlink(target, path);
-                }
-                if (kind === "directory") {
-                  await mkdir(path);
-                  await writeFile(join(path, "keep"), original);
-                }
-                if (kind === "fifo")
-                  success(await run(["mkfifo", path], context.env));
-                return { path, target };
-              };
-              for (const path of paths)
-                entries.push(
-                  await makeEntry(
-                    join(context.home, path),
-                    path.endsWith(".plist") && kind === "link"
-                      ? `<key>ProgramArguments</key>\n<array>\n<string>${context.cli}</string>\n</array>\n`
-                      : original,
-                  ),
-                );
-              const states = await Promise.all(
-                entries.map(async (entry) => ({
-                  entry: await entryState(entry.path),
-                  target: await entryState(entry.target),
-                })),
-              );
-              const assertExternal = async (
-                phase: "failed" | "installed" | "removed",
-              ) => {
-                for (let index = 0; index < entries.length; index++) {
-                  const entry = entries[index];
-                  const before = states[index];
-                  if (!entry || !before)
-                    throw new Error("Missing matrix fixture");
-                  const after = await entryState(entry.path);
-                  expect(
-                    await entryState(entry.target),
-                    `${shell}/${loginShell}/${kind}/${phase}: target`,
-                  ).toEqual(before.target);
-                  if (
-                    kind === "file" &&
-                    entry.path === join(context.home, selected) &&
-                    phase !== "failed"
-                  ) {
-                    expect(after?.ino).toBe(before.entry?.ino);
-                    expect(after?.mode).toBe(before.entry?.mode);
-                    const data = await readFile(entry.path, "utf8");
-                    expect(data.startsWith(original)).toBe(true);
-                    expect(
-                      data.split("# Added by the Neuve installer").length - 1,
-                    ).toBe(phase === "installed" ? 1 : 0);
-                  } else if (kind === "absent" && phase === "installed") {
-                    if (
-                      entry.path === join(context.home, selected) ||
-                      entry.path.endsWith(".plist") ||
-                      entry.path.endsWith(".service") ||
-                      entry.path.endsWith(".timer")
-                    )
-                      expect(after).not.toBeNull();
-                    else expect(after).toBeNull();
-                  } else if (
-                    kind === "absent" &&
-                    phase === "removed" &&
-                    entry.path === join(context.home, selected)
-                  ) {
-                    // The installer created it, and uninstall removes it once it is empty.
-                    expect(
-                      after,
-                      `${shell}/${loginShell}/${kind}/${phase}: ${entry.path}`,
-                    ).toBeNull();
-                  } else
-                    expect(
-                      after,
-                      `${shell}/${loginShell}/${kind}/${phase}: ${entry.path}`,
-                    ).toEqual(before.entry);
-                }
-              };
-              const failedInstall = async (upgrading: boolean) =>
-                run(
-                  [
-                    shell,
-                    "-c",
-                    `
+    for (const shell of installerShells)
+      for (const loginShell of ["zsh", "bash", "fish"])
+        test(`preserves external files through install, failed install, upgrade and uninstall: ${shell}/${loginShell}`, async () => {
+          const kinds = [
+            "absent",
+            "file",
+            "readonly-file",
+            "link",
+            "dangling",
+            "directory",
+            "fifo",
+          ];
+          const scenarios = kinds.map((kind) => ({ shell, loginShell, kind }));
+          // Independent homes and prefixes keep the complete matrix while bounding disk concurrency.
+          const batchSize = 4;
+          const completed: typeof scenarios = [];
+          const started = performance.now();
+          for (let offset = 0; offset < scenarios.length; offset += batchSize) {
+            const cases = await Promise.allSettled(
+              scenarios
+                .slice(offset, offset + batchSize)
+                .map(async ({ shell, loginShell, kind }) => {
+                  await using context = await fresh();
+                  context.env = {
+                    ...context.env,
+                    SHELL: `/bin/${loginShell}`,
+                    NEUVE_NO_MODIFY_PATH: "0",
+                    NEUVE_NO_AGENT: "0",
+                  };
+                  const selected =
+                    loginShell === "zsh"
+                      ? ".zshrc"
+                      : loginShell === "fish"
+                        ? ".config/fish/conf.d/neuve.fish"
+                        : process.platform === "darwin"
+                          ? ".bash_profile"
+                          : ".bashrc";
+                  const paths = [
+                    ".zshrc",
+                    ".bashrc",
+                    ".bash_profile",
+                    ".config/fish/conf.d/neuve.fish",
+                    ...(process.platform === "darwin"
+                      ? ["Library/LaunchAgents/dev.neuve.worker.plist"]
+                      : [
+                          ".config/systemd/user/dev.neuve.worker.service",
+                          ".config/systemd/user/dev.neuve.worker.timer",
+                        ]),
+                  ];
+                  const original =
+                    "# managed configuration\nexport EXAMPLE=keep\n";
+                  const entries: { path: string; target: string }[] = [];
+                  const entryState = async (
+                    path: string,
+                    includeInode = true,
+                  ) => {
+                    const entry = await lstat(path).catch(() => null);
+                    if (entry === null) return null;
+                    return {
+                      ino: includeInode ? entry.ino : undefined,
+                      mode: entry.mode,
+                      data: entry.isSymbolicLink()
+                        ? await readlink(path)
+                        : entry.isFile()
+                          ? await readFile(path, "utf8")
+                          : entry.isDirectory()
+                            ? await snapshot(path)
+                            : "special",
+                    };
+                  };
+                  const makeEntry = async (
+                    path: string,
+                    contents: string,
+                    target = `${path}.managed`,
+                  ) => {
+                    await mkdir(dirname(path), { recursive: true });
+                    if (kind === "file" || kind === "readonly-file") {
+                      await writeFile(path, contents);
+                      if (kind === "readonly-file") await chmod(path, 0o444);
+                    }
+                    if (kind === "link" || kind === "dangling") {
+                      if (kind === "link") await writeFile(target, contents);
+                      await symlink(target, path);
+                    }
+                    if (kind === "directory") {
+                      await mkdir(path);
+                      await writeFile(join(path, "keep"), original);
+                    }
+                    if (kind === "fifo")
+                      success(await run(["mkfifo", path], context.env));
+                    return { path, target };
+                  };
+                  for (const path of paths)
+                    entries.push(
+                      await makeEntry(
+                        join(context.home, path),
+                        path.endsWith(".plist") && kind === "link"
+                          ? `<key>ProgramArguments</key>\n<array>\n<string>${context.cli}</string>\n</array>\n`
+                          : original,
+                      ),
+                    );
+                  const states = await Promise.all(
+                    entries.map(async (entry) => ({
+                      entry: await entryState(entry.path),
+                      target: await entryState(entry.target),
+                    })),
+                  );
+                  const assertExternal = async (
+                    phase: "failed" | "installed" | "removed",
+                  ) => {
+                    for (let index = 0; index < entries.length; index++) {
+                      const entry = entries[index];
+                      const before = states[index];
+                      if (!entry || !before)
+                        throw new Error("Missing matrix fixture");
+                      const after = await entryState(entry.path);
+                      expect(
+                        await entryState(entry.target),
+                        `${shell}/${loginShell}/${kind}/${phase}: target`,
+                      ).toEqual(before.target);
+                      if (
+                        kind === "file" &&
+                        entry.path === join(context.home, selected) &&
+                        phase !== "failed"
+                      ) {
+                        expect(after?.ino).toBe(before.entry?.ino);
+                        expect(after?.mode).toBe(before.entry?.mode);
+                        const data = await readFile(entry.path, "utf8");
+                        expect(data.startsWith(original)).toBe(true);
+                        expect(
+                          data.split("# Added by the Neuve installer").length -
+                            1,
+                        ).toBe(phase === "installed" ? 1 : 0);
+                      } else if (kind === "absent" && phase === "installed") {
+                        if (
+                          entry.path === join(context.home, selected) ||
+                          entry.path.endsWith(".plist") ||
+                          entry.path.endsWith(".service") ||
+                          entry.path.endsWith(".timer")
+                        )
+                          expect(after).not.toBeNull();
+                        else expect(after).toBeNull();
+                      } else if (
+                        kind === "absent" &&
+                        phase === "removed" &&
+                        entry.path === join(context.home, selected)
+                      ) {
+                        // The installer created it, and uninstall removes it once it is empty.
+                        expect(
+                          after,
+                          `${shell}/${loginShell}/${kind}/${phase}: ${entry.path}`,
+                        ).toBeNull();
+                      } else
+                        expect(
+                          after,
+                          `${shell}/${loginShell}/${kind}/${phase}: ${entry.path}`,
+                        ).toEqual(before.entry);
+                    }
+                  };
+                  const failedInstall = async (upgrading: boolean) =>
+                    run(
+                      [
+                        shell,
+                        "-c",
+                        `
 printf() {
     command printf "$@"
     case "\${2:-}" in "Installed neuve "*) exit 61 ;; esac
@@ -3988,119 +3999,133 @@ script=$1
 shift
 . "$script"
 `,
-                    "matrix-failure",
-                    installer,
-                    "--prefix",
-                    context.prefix,
-                    "--archive",
-                    upgrading ? nextArchive : archive,
-                    "--checksums",
-                    upgrading ? nextSums : sums,
-                  ],
-                  context.env,
-                );
-              const failedFresh = await failedInstall(false);
-              expect(
-                failedFresh.code,
-                failedFresh.stdout + failedFresh.stderr,
-              ).toBe(61);
-              await assertExternal("failed");
-              expect(await lstat(context.prefix).catch(() => null)).toBeNull();
-              const installed = await install(context, [], shell);
-              success(installed);
-              await assertExternal("installed");
-              // The PATH record is inside the prefix, but a link can lead outside it.
-              const record = join(context.prefix, "lib/neuve/path-file");
-              const contents = await readFile(record, "utf8");
-              await rm(record);
-              const recordEntry = await makeEntry(
-                record,
-                contents,
-                join(context.home, "managed-path-record"),
-              );
-              const beforeRecord = await entryState(record, kind !== "file");
-              const beforeTarget = await entryState(recordEntry.target);
-              const oldCli = await hash(context.cli);
-              const failedUpgrade = await failedInstall(true);
-              expect(
-                failedUpgrade.code,
-                failedUpgrade.stdout + failedUpgrade.stderr,
-              ).toBe(61);
-              expect(await hash(context.cli)).toBe(oldCli);
-              expect(await entryState(record, kind !== "file")).toEqual(
-                beforeRecord,
-              );
-              expect(await entryState(recordEntry.target)).toEqual(
-                beforeTarget,
-              );
-              await assertExternal("installed");
-              const upgraded = await install(
-                context,
-                ["--archive", nextArchive, "--checksums", nextSums],
-                shell,
-              );
-              success(upgraded);
-              await assertExternal("installed");
-              if (kind !== "absent" && kind !== "file")
-                expect(await entryState(record, kind !== "file")).toEqual(
-                  beforeRecord,
-                );
-              expect(await entryState(recordEntry.target)).toEqual(
-                beforeTarget,
-              );
-              const removed = await install(context, ["--uninstall"], shell);
-              const retained =
-                (process.platform === "linux" && kind !== "absent") ||
-                (process.platform === "darwin" &&
-                  ["link", "dangling", "directory", "fifo"].includes(kind));
-              if (retained) {
-                // These unit fixtures are foreign or unsafe. Refusal must leave
-                // the CLI and startup files intact, just like the unit files.
-                expect(removed.code, removed.stdout + removed.stderr).toBe(1);
-                expect(removed.stderr).toContain(
-                  "neuve and its files were kept.",
-                );
-                await assertExternal("installed");
-              } else {
-                success(removed);
-                await assertExternal("removed");
-              }
-              if (
-                retained ||
-                (kind !== "absent" &&
-                  kind !== "file" &&
-                  kind !== "readonly-file")
-              )
-                expect(await entryState(record, kind !== "file")).toEqual(
-                  beforeRecord,
-                );
-              else expect(await entryState(record, kind !== "file")).toBeNull();
-              expect(await entryState(recordEntry.target)).toEqual(
-                beforeTarget,
-              );
-              expect(
-                await lstat(join(context.prefix, ".install.lock")).catch(
-                  () => null,
-                ),
-              ).toBeNull();
-              expect(
-                (await lstat(context.cli).catch(() => null)) !== null,
-              ).toBe(retained);
-              completed.push({ shell, loginShell, kind });
-            }),
-        );
-        for (const result of cases)
-          if (result.status === "rejected") throw result.reason;
-      }
-      const scenarioKey = (scenario: (typeof scenarios)[number]) =>
-        `${scenario.shell}/${scenario.loginShell}/${scenario.kind}`;
-      expect(completed.map(scenarioKey).sort()).toEqual(
-        scenarios.map(scenarioKey).sort(),
-      );
-      console.log(
-        `Filesystem matrix: ${completed.length}/${scenarios.length} scenarios in ${((performance.now() - started) / 1000).toFixed(2)} seconds`,
-      );
-    }, 900_000);
+                        "matrix-failure",
+                        installer,
+                        "--prefix",
+                        context.prefix,
+                        "--archive",
+                        upgrading ? nextArchive : archive,
+                        "--checksums",
+                        upgrading ? nextSums : sums,
+                      ],
+                      context.env,
+                    );
+                  const failedFresh = await failedInstall(false);
+                  expect(
+                    failedFresh.code,
+                    failedFresh.stdout + failedFresh.stderr,
+                  ).toBe(61);
+                  await assertExternal("failed");
+                  expect(
+                    await lstat(context.prefix).catch(() => null),
+                  ).toBeNull();
+                  const installed = await install(context, [], shell);
+                  success(installed);
+                  await assertExternal("installed");
+                  // The PATH record is inside the prefix, but a link can lead outside it.
+                  const record = join(context.prefix, "lib/neuve/path-file");
+                  const contents = await readFile(record, "utf8");
+                  await rm(record);
+                  const recordEntry = await makeEntry(
+                    record,
+                    contents,
+                    join(context.home, "managed-path-record"),
+                  );
+                  const beforeRecord = await entryState(
+                    record,
+                    kind !== "file",
+                  );
+                  const beforeTarget = await entryState(recordEntry.target);
+                  const oldCli = await hash(context.cli);
+                  const failedUpgrade = await failedInstall(true);
+                  expect(
+                    failedUpgrade.code,
+                    failedUpgrade.stdout + failedUpgrade.stderr,
+                  ).toBe(61);
+                  expect(await hash(context.cli)).toBe(oldCli);
+                  expect(await entryState(record, kind !== "file")).toEqual(
+                    beforeRecord,
+                  );
+                  expect(await entryState(recordEntry.target)).toEqual(
+                    beforeTarget,
+                  );
+                  await assertExternal("installed");
+                  const upgraded = await install(
+                    context,
+                    ["--archive", nextArchive, "--checksums", nextSums],
+                    shell,
+                  );
+                  success(upgraded);
+                  await assertExternal("installed");
+                  if (kind !== "absent" && kind !== "file")
+                    expect(await entryState(record, kind !== "file")).toEqual(
+                      beforeRecord,
+                    );
+                  expect(await entryState(recordEntry.target)).toEqual(
+                    beforeTarget,
+                  );
+                  const removed = await install(
+                    context,
+                    ["--uninstall"],
+                    shell,
+                  );
+                  const retained =
+                    (process.platform === "linux" && kind !== "absent") ||
+                    (process.platform === "darwin" &&
+                      ["link", "dangling", "directory", "fifo"].includes(kind));
+                  if (retained) {
+                    // These unit fixtures are foreign or unsafe. Refusal must leave
+                    // the CLI and startup files intact, just like the unit files.
+                    expect(removed.code, removed.stdout + removed.stderr).toBe(
+                      1,
+                    );
+                    expect(removed.stderr).toContain(
+                      "neuve and its files were kept.",
+                    );
+                    await assertExternal("installed");
+                  } else {
+                    success(removed);
+                    await assertExternal("removed");
+                  }
+                  if (
+                    retained ||
+                    (kind !== "absent" &&
+                      kind !== "file" &&
+                      kind !== "readonly-file")
+                  )
+                    expect(await entryState(record, kind !== "file")).toEqual(
+                      beforeRecord,
+                    );
+                  else
+                    expect(
+                      await entryState(record, kind !== "file"),
+                    ).toBeNull();
+                  expect(await entryState(recordEntry.target)).toEqual(
+                    beforeTarget,
+                  );
+                  expect(
+                    await lstat(join(context.prefix, ".install.lock")).catch(
+                      () => null,
+                    ),
+                  ).toBeNull();
+                  expect(
+                    (await lstat(context.cli).catch(() => null)) !== null,
+                  ).toBe(retained);
+                  completed.push({ shell, loginShell, kind });
+                }),
+            );
+            for (const result of cases)
+              if (result.status === "rejected") throw result.reason;
+          }
+          const scenarioKey = (scenario: (typeof scenarios)[number]) =>
+            `${scenario.shell}/${scenario.loginShell}/${scenario.kind}`;
+          expect(completed.map(scenarioKey).sort()).toEqual(
+            scenarios.map(scenarioKey).sort(),
+          );
+          console.log(
+            `Filesystem matrix: ${completed.length}/${scenarios.length} scenarios in ${((performance.now() - started) / 1000).toFixed(2)} seconds`,
+          );
+        }, 900_000);
 
     // Working linked ancestors are valid; rollback removes only directories this install created.
     test("preserves linked and read-only parents through failure, install, upgrade and uninstall", async () => {
@@ -5696,7 +5721,10 @@ esac
               const loaded =
                 rollback ||
                 !["missing-plist", "foreign-plist-loaded-ours"].includes(kind);
-              expect(await Bun.file(registered).exists()).toBe(loaded);
+              expect(
+                await Bun.file(registered).exists(),
+                `${result.stdout}${result.stderr}\nRegistration: ${await readFile(registered, "utf8").catch(() => "absent")}`,
+              ).toBe(loaded);
               expect(await Bun.file(plist).exists()).toBe(
                 (kept && !kind.startsWith("missing")) ||
                   (!rollback && kind === "foreign-plist-loaded-ours"),
@@ -5892,7 +5920,5 @@ test("only a v-tag push can publish, and only publish has write permissions", as
   expect(workflow.jobs.publish).toBeDefined();
   expect(workflow.jobs.build?.strategy?.matrix.include).toEqual([
     { target: "darwin-arm64", runner: "macos-15" },
-    { target: "linux-x64", runner: "ubuntu-22.04" },
-    { target: "linux-arm64", runner: "ubuntu-22.04-arm" },
   ]);
 });

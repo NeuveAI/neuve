@@ -35,15 +35,21 @@ jobs:
           else
             echo 'changed=false' >> "$GITHUB_OUTPUT"
           fi
-  portable:
+  portable-checks:
+    if: github.event_name != 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [packages, cli-1, cli-2, harness-1, harness-2, harness-3, harness-4]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
     env:
+      NEUVE_CI_GROUP: ${{ matrix.group }}
       NEUVE_MODE: check
       CI: "1"
       ROLLDOWN_WORKER_THREADS: "4"
       RAYON_NUM_THREADS: "4"
-      NEUVE_TEST_SUITE_TIMEOUT_MS: "3300000"
+      NEUVE_TEST_SUITE_TIMEOUT_MS: "660000"
       # Fork PRs cannot read the private Graph repository. A successful Graph build below clears
       # this declaration, so missing prerequisites then fail instead of silently skipping.
       NEUVE_CHECK_WITHOUT_GRAPH: "1"
@@ -104,14 +110,11 @@ jobs:
           echo "TMPDIR=/tmp/check-tmp" >> "$GITHUB_ENV"
           echo "BUN_TMPDIR=/tmp/check-tmp" >> "$GITHUB_ENV"
           echo "BUN_RUNTIME_TRANSPILER_CACHE_PATH=/tmp/check-cache/transpiler" >> "$GITHUB_ENV"
-          # One test shard per CPU, at most the four the plan's 15-second window was set for (four
-          # per four-CPU Modal sandbox). A private repository's runner has two CPUs, a public one's
-          # four; four shards on two CPUs starve the capture scan children past that window.
-          shards=$(nproc); [ "$shards" -gt 4 ] && shards=4
-          echo "NEUVE_TEST_SHARDS=$shards" >> "$GITHUB_ENV"
       - run: bun --no-env-file install --frozen-lockfile
-      - run: bun --no-env-file run format:check
+      - if: matrix.group == 'packages'
+        run: bun --no-env-file run format:check
       - name: Build portable declarations
+        if: matrix.group == 'packages'
         run: |
           cp scripts/remote-check/build-types.ts .remote-build-types.ts
           cp scripts/remote-check/check-ace.ts .remote-check-ace.ts
@@ -120,19 +123,31 @@ jobs:
           cd apps/neuve-web/packages/diffs
           bun --no-env-file node_modules/typescript/bin/tsc -p tsconfig.build.json
       - name: Run the check:remote Linux plan
-        # remotePlan owns package selection, Graph exclusions and the 15-second CLI/harness
-        # test window. run_modal.py uses the same four native worker threads and 55-minute limit.
-        # Every part runs, so one run shows every failing part; the step fails if any part did.
+        # Each heavy suite uses file shards on separate Linux runners, so one shard can use both
+        # CPUs without starving another shard's scan children. The packages group owns all other
+        # tests, typechecks and formatting. Every selected part runs even after a failure.
         run: |
           bun --no-env-file --eval '
             import { remotePlan } from "./scripts/check-remote.ts";
             const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
             const failed = [];
-            for (const part of await remotePlan(process.cwd(), revision, { graph: process.env.NEUVE_CHECK_WITHOUT_GRAPH === "0" })) {
+            const plan = await remotePlan(process.cwd(), revision, { graph: process.env.NEUVE_CHECK_WITHOUT_GRAPH === "0" });
+            const group = process.env.NEUVE_CI_GROUP;
+            const heavy = /^test-neuve-(cli|harness)$/;
+            const parts = group === "packages"
+              ? plan.filter(part => !heavy.test(part.id))
+              : plan.filter(part => part.id === `test-neuve-${group.split("-")[0]}`);
+            for (const part of parts) {
+              const command = group === "packages" ? part.command : [
+                process.execPath, "--no-env-file", `${process.cwd()}/scripts/test-budget.ts`,
+                "./tests", ...part.command.slice(4),
+                `--shard=${group.split("-")[1]}/${group.startsWith("cli") ? 2 : 4}`,
+                ...(group.startsWith("harness") ? ["--timings=test-timings.json"] : []),
+              ];
               console.log(`Running ${part.id}`);
-              const child = Bun.spawn(part.command, {
+              const child = Bun.spawn(command, {
                 cwd: part.cwd, stdin: "ignore", stdout: "inherit", stderr: "inherit",
-                timeout: 3_300_000,
+                timeout: 660_000,
               });
               const code = await child.exited;
               if (code !== 0) {
@@ -145,6 +160,15 @@ jobs:
               process.exit(1);
             }
           '
+  portable:
+    needs: portable-checks
+    if: always() && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every portable group
+        env:
+          RESULT: ${{ needs.portable-checks.result }}
+        run: test "$RESULT" = success
   release-archive:
     needs: release-scope
     if: needs.release-scope.outputs.changed == 'true'
@@ -206,20 +230,24 @@ jobs:
         run: |
           echo "GOPATH=$(go env GOPATH)" >> "$GITHUB_ENV"
           echo "GOMODCACHE=$(go env GOMODCACHE)" >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/neuve-home" "$RUNNER_TEMP/neuve-tmp" "$RUNNER_TEMP/neuve-cache"
-          echo "HOME=$RUNNER_TEMP/neuve-home" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP/neuve-tmp" >> "$GITHUB_ENV"
-          echo "BUN_TMPDIR=$RUNNER_TEMP/neuve-tmp" >> "$GITHUB_ENV"
-          echo "BUN_RUNTIME_TRANSPILER_CACHE_PATH=$RUNNER_TEMP/neuve-cache/transpiler" >> "$GITHUB_ENV"
+          # The installer records physical paths. A symlink spelling of HOME would make mocked
+          # launchctl registrations appear to belong to another command during uninstall.
+          check_root=$(cd "$RUNNER_TEMP" && pwd -P)
+          echo "Runner temp: $RUNNER_TEMP; physical temp: $check_root"
+          mkdir -p "$check_root/neuve-home" "$check_root/neuve-tmp" "$check_root/neuve-cache"
+          echo "HOME=$check_root/neuve-home" >> "$GITHUB_ENV"
+          echo "TMPDIR=$check_root/neuve-tmp" >> "$GITHUB_ENV"
+          echo "BUN_TMPDIR=$check_root/neuve-tmp" >> "$GITHUB_ENV"
+          echo "BUN_RUNTIME_TRANSPILER_CACHE_PATH=$check_root/neuve-cache/transpiler" >> "$GITHUB_ENV"
       - run: bun --no-env-file install --frozen-lockfile
       - name: Build native Graph prerequisite
         if: steps.graph.outputs.available == 'true'
         run: bun run build:graph
       - name: Run release archive tests
-        # Bun shards by file. The large distribution file therefore shards its cases separately;
+        # Bun shards by file. The two large installer files divide their cases separately;
         # together these four jobs register every case once. Existing NEU-405 launchd skips stay.
         env:
           RELEASE_SHARD: ${{ matrix.shard }}
         run: |
-          bun run test:release --shard="$RELEASE_SHARD/4" --path-ignore-patterns='tests/release/distribution.test.ts'
-          NEUVE_DISTRIBUTION_SHARD="$RELEASE_SHARD/4" bun scripts/test-budget.ts ./tests/release/distribution.test.ts
+          bun run test:release --shard="$RELEASE_SHARD/4" --path-ignore-patterns='tests/release/{distribution,systemd-installer}.test.ts'
+          NEUVE_RELEASE_CASE_SHARD="$RELEASE_SHARD/4" bun scripts/test-budget.ts ./tests/release/distribution.test.ts ./tests/release/systemd-installer.test.ts

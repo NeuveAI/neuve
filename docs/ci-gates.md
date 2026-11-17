@@ -227,7 +227,7 @@ The portable plan retains these existing platform boundaries. They are not new s
 
 ## Release archives
 
-The four macOS jobs run only for the four path groups documented in [the development command table](development.md#commands), or on `workflow_dispatch`. This is a cost gate for the hour-long installer suite, not a portable test exclusion. Every distribution registration belongs to exactly one runner; the other release files use Bun's file shards. Local `bun run test:release` still runs the whole suite.
+The four macOS jobs run only for the four path groups documented in [the development command table](development.md#commands), or on `workflow_dispatch`. This is a cost gate for the hour-long installer suite, not a portable test exclusion. Every distribution and systemd-installer registration belongs to exactly one runner; the other release files use Bun's file shards. The external-files matrix registers each shell and login-shell combination separately so its full 42 scenarios can be distributed too. Local `bun run test:release` still runs the whole suite.
 
 Without the Graph deploy key, the existing `available` gates in `archive.test.ts` and `distribution.test.ts` omit native archive cases because they cannot build an archive containing the private engine. Fixture installer and release-command cases still run. Linux-only systemd cases keep their existing platform gates on these Mac runners.
 
