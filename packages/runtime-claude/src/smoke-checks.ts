@@ -2,6 +2,7 @@ import { TurnLimit, type Account, type RuntimeShape } from "@neuve/runtime";
 import { Effect } from "effect";
 import { z } from "zod";
 import { collect, completed, protocolError, requests } from "./smoke-events.ts";
+import { FINAL_TURN_MESSAGES } from "./session.ts";
 
 export const checkProbe = (runtime: RuntimeShape, account: Account) =>
   Effect.gen(function* () {
@@ -117,6 +118,12 @@ export const checkNormalAndFinal = (
     }),
   );
 
+/**
+ * The full smoke's model requests: probe 0, normal and final 2, inputs 2, fork 1 (persistence and
+ * fork together 3), tools 2, and the refused round 1 with its final turn up to its backstop.
+ */
+export const EXPECTED_REQUESTS = 8 + 1 + FINAL_TURN_MESSAGES;
+
 export const checkRequestPlan = (
   steps: Readonly<Record<string, { readonly requests: number }>>,
 ) => {
@@ -124,5 +131,9 @@ export const checkRequestPlan = (
     (sum, step) => sum + step.requests,
     0,
   );
-  return { requests, expectedRequests: 8, withinPlan: requests <= 8 };
+  return {
+    requests,
+    expectedRequests: EXPECTED_REQUESTS,
+    withinPlan: requests <= EXPECTED_REQUESTS,
+  };
 };

@@ -189,6 +189,14 @@ const deny = (): PermissionResult => ({
   interrupt: true,
 });
 
+/**
+ * The message backstop of a final turn, in place of the policy's turnLimit. Claude Code often
+ * answers a final turn in text first and only then calls StructuredOutput, and it may retry an
+ * output that fails the schema: three messages allow one answer, the call and one retry. A fourth
+ * ends the turn failed with turn-limit-reached, as any turn past its backstop does.
+ */
+export const FINAL_TURN_MESSAGES = 3;
+
 // Result binding, sdk.d.ts:5991-5999:
 // Rule 1: plural stamps are authoritative, including the earlier prefix when capped at 64.
 // Rule 2: singular-only stamps consume their prefix; zero/absent queue depth also drains folded steers.
@@ -859,7 +867,12 @@ export const openClaudeSession = (
                         content: [
                           { type: "text" as const, text: outcome.text },
                         ],
-                        isError: outcome.error !== undefined,
+                        // Claude Code honours claude/endTurn only on a result that isn't an
+                        // error; it answers an errored one with a new response. The text keeps
+                        // the refusal, and tool.finished still reports it errored.
+                        isError:
+                          outcome.error !== undefined &&
+                          outcome.endTurn !== true,
                         ...(outcome.endTurn === true
                           ? { _meta: { "claude/endTurn": true } }
                           : {}),
@@ -1289,7 +1302,10 @@ export const openClaudeSession = (
                       }
                       if (
                         (turn.endTurn ||
-                          turn.completedMessages >= policy.turnLimit) &&
+                          turn.completedMessages >=
+                            (turn.final
+                              ? FINAL_TURN_MESSAGES
+                              : policy.turnLimit)) &&
                         turn.messages.isFurtherOutput(frame)
                       ) {
                         if (turn.endTurn) yield* closeCompletedLocked(turn);

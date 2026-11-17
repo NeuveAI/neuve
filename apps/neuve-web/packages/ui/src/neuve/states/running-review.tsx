@@ -153,6 +153,19 @@ export function StageList({ run }: { run: RunningReview }) {
   )
 }
 
+/** The worker's sentence with each `command` in it set as code. */
+function WithCommands({ text }: { text: string }) {
+  return text.split("`").map((part, index) =>
+    index % 2 === 1 ? (
+      <code key={index} translate="no">
+        {part}
+      </code>
+    ) : (
+      part
+    )
+  )
+}
+
 /** One line on where the review is; the held line keeps the CLI's own words (10.17). */
 function PhaseLine({ run }: { run: RunningReview }) {
   const { phase } = run
@@ -168,7 +181,13 @@ function PhaseLine({ run }: { run: RunningReview }) {
         </>
       )
     case "held":
-      return (
+      return phase.account ? (
+        <>
+          The running worker holds this job for{" "}
+          <code translate="no">{phase.route}</code>.{" "}
+          <WithCommands text={phase.credential} />.
+        </>
+      ) : (
         <>
           The running worker lacks {phase.credential} for{" "}
           <code translate="no">{phase.route}</code>, so it holds this job; a

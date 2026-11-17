@@ -19,6 +19,7 @@ import {
 } from "@neuve/runtime";
 import { Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect";
 import { makeRuntime } from "../src/runtime.ts";
+import { FINAL_TURN_MESSAGES } from "../src/session.ts";
 import { ClaudeExecutable, ClaudeProcess, ClaudeSdk } from "../src/services.ts";
 import { TOOL_USE_ID_INPUT, TOOL_USE_ID_META } from "../src/tools.ts";
 import { assistant, result, SESSION_ID, usage } from "./frames.ts";
@@ -1454,47 +1455,44 @@ test("R18 turnLimit one final message returns structured output", () =>
     },
   ));
 
-// Ruling 30: a final turn may settle its first message but cannot accept a second one.
-test("R18 turnLimit one final turn rejects a second assistant message", () =>
+const answer = (id: string, uuid: SDKAssistantMessage["uuid"]) => [
+  begin(id),
+  blockMessage(id, uuid),
+  end(),
+  stop(),
+];
+const structured = (id: string, uuid: SDKAssistantMessage["uuid"]) => [
+  begin(id),
+  blockMessage(id, uuid, [
+    { id: `${id}-call`, name: "StructuredOutput", input: { answer: 3 } },
+  ]),
+  end("tool_use"),
+  stop(),
+];
+const chainAt = (n: number): SDKAssistantMessage["uuid"] =>
+  `00000000-0000-4000-8000-${String(100 + n).padStart(12, "0")}`;
+
+// Why: live, Claude Code often answers a final turn in text and only then calls StructuredOutput,
+// so a final turn of a one-turn session must take that second message.
+test("R18 turnLimit one final turn takes a text answer, then its StructuredOutput call", () =>
   run(
     (f, s, events, next) =>
       Effect.gen(function* () {
         yield* s.startTurn({ ...start, final: true });
         yield* send(f, [
-          begin(),
-          blockMessage("message-1", chain, [
-            {
-              id: "structured",
-              name: "StructuredOutput",
-              input: { answer: 3 },
-            },
-          ]),
-          end("tool_use"),
-          stop(),
-          {
-            type: "rate_limit_event",
-            uuid: crypto.randomUUID(),
-            session_id: SESSION_ID,
-            rate_limit_info: { status: "allowed" },
-          },
+          ...answer("message-1", chain),
+          ...structured("message-2", lastChain),
+          result({
+            structured_output: { answer: 3 },
+            modelUsage: { "test-model": usage(11, 7) },
+          }),
         ]);
-        yield* next("rate-limit");
-        expect(
-          events.filter((event) => event.type === "turn.finished"),
-        ).toHaveLength(0);
-        const extra = blockMessage("forbidden-message", lastChain);
-        extra.message.stop_reason = "end_turn";
-        yield* send(f, [extra]);
         expect(yield* next("turn.finished")).toMatchObject({
-          outcome: {
-            status: "failed",
-            disposition: "reusable",
-            failure: { reason: "turn-limit-reached" },
-          },
+          outcome: { status: "completed", structuredOutput: { answer: 3 } },
         });
         expect(
           events.filter((event) => event.type === "message.finished"),
-        ).toHaveLength(1);
+        ).toHaveLength(2);
       }),
     {
       policy: {
@@ -1504,6 +1502,49 @@ test("R18 turnLimit one final turn rejects a second assistant message", () =>
       },
     },
   ));
+
+// Why: the final turn keeps a fixed backstop; output past it ends the turn typed, reusable and
+// with only the allowed messages published, whatever the session's turnLimit.
+for (const limit of [1, 8])
+  test(`R18 final turn at turnLimit ${limit} stops at its fixed message backstop`, () =>
+    run(
+      (f, s, events, next) =>
+        Effect.gen(function* () {
+          yield* s.startTurn({ ...start, final: true });
+          for (let n = 1; n <= FINAL_TURN_MESSAGES; n++)
+            yield* send(f, answer(`message-${n}`, chainAt(n)));
+          yield* send(f, [
+            {
+              type: "rate_limit_event",
+              uuid: crypto.randomUUID(),
+              session_id: SESSION_ID,
+              rate_limit_info: { status: "allowed" },
+            },
+          ]);
+          yield* next("rate-limit");
+          expect(
+            events.filter((event) => event.type === "turn.finished"),
+          ).toHaveLength(0);
+          yield* send(f, [begin("forbidden-message")]);
+          expect(yield* next("turn.finished")).toMatchObject({
+            outcome: {
+              status: "failed",
+              disposition: "reusable",
+              failure: { reason: "turn-limit-reached" },
+            },
+          });
+          expect(
+            events.filter((event) => event.type === "message.finished"),
+          ).toHaveLength(FINAL_TURN_MESSAGES);
+        }),
+      {
+        policy: {
+          ...policy,
+          turnLimit: TurnLimit.parse(limit),
+          outputSchema: { type: "object" },
+        },
+      },
+    ));
 
 // Ruling 30: further output must close all admitted calls and leave the session reusable.
 test("R18 turnLimit one rejects a second root after delivering a tool result", () => {

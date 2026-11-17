@@ -13,9 +13,10 @@ import {
   checkProbe,
   checkNormalAndFinal,
   checkRequestPlan,
+  EXPECTED_REQUESTS,
 } from "./smoke-checks.ts";
 import { checkPersistence } from "./smoke-resume.ts";
-import { checkTools } from "./smoke-tools.ts";
+import { checkRefusedEnd, checkTools } from "./smoke-tools.ts";
 import {
   diagnoseObservation,
   diagnoseRunState,
@@ -83,7 +84,16 @@ if (import.meta.main) {
       const { inputs, fork } = yield* checkPersistence(runtime, account);
       fullState.step("tools");
       const tools = yield* checkTools(runtime, account, observation);
-      const steps = { probe: probe.counts, turns, inputs, fork, tools };
+      fullState.step("refused");
+      const refused = yield* checkRefusedEnd(runtime, account, observation);
+      const steps = {
+        probe: probe.counts,
+        turns,
+        inputs,
+        fork,
+        tools,
+        refused,
+      };
       const plan = checkRequestPlan(steps);
       const checks = [
         plan.withinPlan,
@@ -143,13 +153,30 @@ if (import.meta.main) {
         noRequestAfterFinish: tools.noRequestAfterFinish,
         balancedTools: tools.balancedTools,
         toolsProtocolError: tools.protocolError,
+        refusedWithinPlan: refused.withinPlan,
+        refusedCompleted: refused.refusedCompleted,
+        refusedSubmitOnce: refused.refusedSubmitOnce,
+        refusedErrored: refused.refusedErrored,
+        refusedOneMessage: refused.refusedOneMessage,
+        noRequestAfterRefusal: refused.noRequestAfterRefusal,
+        refusedFinalStarted: refused.refusedFinalStarted,
+        refusedFinalCompleted: refused.refusedFinalCompleted,
+        refusedFinalWithinBackstop: refused.refusedFinalWithinBackstop,
+        refusedProtocolError: refused.protocolError,
         protocolError:
           turns.protocolError ||
           inputs.protocolError ||
           fork.protocolError ||
-          tools.protocolError,
+          tools.protocolError ||
+          refused.protocolError,
         toolsRequests: tools.requests,
-        events: turns.events + inputs.events + fork.events + tools.events,
+        refusedRequests: refused.requests,
+        events:
+          turns.events +
+          inputs.events +
+          fork.events +
+          tools.events +
+          refused.events,
         completed:
           Number(turns.normalCompleted) +
           Number(turns.finalCompleted && turns.structuredOutputParsed) +
@@ -225,7 +252,7 @@ if (import.meta.main) {
                 outcome: "failed",
                 step: "probe",
                 causeKind: "interrupt",
-                expectedRequests: 8,
+                expectedRequests: EXPECTED_REQUESTS,
                 ...fullState.counts(),
               }
             : fullState.failure(failureCause)),

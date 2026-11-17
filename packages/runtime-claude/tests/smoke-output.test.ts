@@ -51,7 +51,7 @@ test("full smoke prints typed final start failure", async () => {
     causeKind: "fail",
     errorTag: "RuntimeUnavailable",
     reason: "start-failed",
-    expectedRequests: 8,
+    expectedRequests: 12,
   });
   expect(stderr).toBe("");
   expect(line).not.toHaveProperty("message");

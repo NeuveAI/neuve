@@ -5,7 +5,18 @@ import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai/providers/faux";
-import { workspaceModels } from "../src/workspace-models.ts";
+import { Option } from "effect";
+import {
+  routeCodingDefaults,
+  routeHostModels,
+  workspaceModels,
+} from "../src/workspace-models.ts";
+import {
+  defaultConfig,
+  runKeyFor,
+} from "../../../packages/harness/src/config.ts";
+import { settingsRoute } from "../../../packages/harness/src/request.ts";
+import { Settings } from "../../../packages/harness/src/settings.ts";
 
 const context = { messages: [] };
 const text = async (models: Models, provider: string, id: string) => {
@@ -88,4 +99,53 @@ test("the actual pinned built-in catalog retains native providers and OpenAI mod
   expect(
     models.getProviders().filter((provider) => provider.id === "openai"),
   ).toHaveLength(1);
+});
+
+// Why: a Claude route has no fixed host model and no entry of its own in the host's model list
+// (its account's rows are listed instead); the direct routes must keep exactly the default model,
+// effort, list entry and run key they had.
+test("the direct routes keep their coding default, list entry and run key; a Claude route adds none", () => {
+  const route = (name?: "anthropic" | "openai" | "claude") =>
+    settingsRoute(
+      name === undefined
+        ? Option.none()
+        : Option.some(Settings.parse({ version: 1, review: { route: name } })),
+    );
+  const range = {
+    baseRef: "main",
+    baseOid: "a".repeat(40),
+    headOid: "b".repeat(40),
+  };
+  // The keys main gives these routes (route-accounts.test.ts pins the same).
+  for (const [name, provider, model, key] of [
+    [
+      undefined,
+      "anthropic",
+      "claude-opus-5-5",
+      "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c",
+    ],
+    [
+      "openai",
+      "openai",
+      "gpt-6.1-sol",
+      "c27221fd3a490479b60e0a89bb6bd544f5ee23a30db748cbe28f0eb4f16d813e",
+    ],
+  ] as const) {
+    const direct = route(name);
+    expect(routeCodingDefaults(direct)).toEqual({
+      model: { provider, modelId: model },
+      thinkingLevel: "medium",
+    });
+    expect(routeHostModels(direct, () => ["low", "high"])).toEqual([
+      { provider, modelId: model, efforts: ["low", "high"] },
+    ]);
+    expect(runKeyFor(range, defaultConfig(undefined, direct))).toBe(key);
+  }
+  const claude = route("claude");
+  expect(routeCodingDefaults(claude)).toEqual({ thinkingLevel: "medium" });
+  expect(
+    routeHostModels(claude, () => {
+      throw new Error("a Claude route has no direct model's efforts");
+    }),
+  ).toEqual([]);
 });

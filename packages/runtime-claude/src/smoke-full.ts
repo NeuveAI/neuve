@@ -2,9 +2,16 @@ import type { Cause } from "effect";
 import { Effect, Stream } from "effect";
 import { failureShape } from "./smoke-diagnose.ts";
 import { toolOutputObservation, type SmokeRuntime } from "./smoke-runtime.ts";
+import { EXPECTED_REQUESTS } from "./smoke-checks.ts";
 
 type FullStep =
-  "probe" | "normalTurn" | "finalTurn" | "persistence" | "fork" | "tools";
+  | "probe"
+  | "normalTurn"
+  | "finalTurn"
+  | "persistence"
+  | "fork"
+  | "tools"
+  | "refused";
 export const fullSmokeState = () => {
   let step: FullStep = "probe";
   let requestsStarted = 0;
@@ -45,7 +52,7 @@ export const fullSmokeState = () => {
       outcome: "failed" as const,
       step,
       ...failureShape(cause),
-      expectedRequests: 8,
+      expectedRequests: EXPECTED_REQUESTS,
       ...counts(),
     }),
     observe: (runtime: SmokeRuntime): SmokeRuntime => ({

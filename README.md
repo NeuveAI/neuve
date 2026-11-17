@@ -39,19 +39,19 @@ Reviews run on your own model account. Choose one of three:
   export ANTHROPIC_API_KEY=...
   ```
 
-- **A Claude subscription**, through the Claude Code you have installed. Sign in with Claude Code's own login if you haven't yet. Neuve runs reviews through Claude Code and never reads your sign-in. Name the route when you start a review: `neuve review main..my-branch --route claude`.
+- **A Claude subscription**, through Claude Code. Install Claude Code, then sign in with its own login if you haven't yet. Neuve runs reviews through Claude Code and never reads your sign-in. Choose it with `neuve setup --route claude`.
 
   ```sh
   claude auth login
   ```
 
-- **A ChatGPT subscription.** Set `review.route` to `openai` in your [review settings](apps/neuve-cli/SETUP.md#review-settings), then sign in:
+- **A ChatGPT subscription.** Choose it with `neuve setup --route openai`, then sign in:
 
   ```sh
   neuve auth login openai
   ```
 
-Run `neuve setup` in your repository. It ends by checking that your API key or ChatGPT sign-in is available. `neuve doctor` names anything that's missing and how to fix it. Neither checks a Claude sign-in yet: `neuve auth status claude --check` does, without spending usage.
+Run `neuve setup` in your repository. At a terminal it asks which of the three to use; `--route claude` or `--route openai` chooses without asking. It ends by checking that your sign-in is available. `neuve doctor` names anything that's missing and how to fix it. For a Claude subscription, doctor checks only that Claude Code is installed; `neuve auth status claude --check` checks the sign-in once Claude Code is installed, without spending usage.
 
 ```sh
 cd /path/to/your/repository

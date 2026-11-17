@@ -253,3 +253,35 @@ export async function workspaceChatModels(
     close: () => layer.close(),
   };
 }
+
+/**
+ * A coding session's default model on a Claude route: the account's model row that resolves to the
+ * route's model (Claude Code lists Opus as `opus`, resolving to `claude-opus-5-5`), so a chat with no
+ * model named runs what reviews run. Refused in plain words when the account isn't signed in or its
+ * Claude Code doesn't offer that model.
+ */
+export function claudeDefaultModel(
+  route: { account: { name: string }; model: string },
+  statuses: readonly AccountStatus[],
+): { provider: string; modelId: string } {
+  const name = route.account.name;
+  const check = `neuve auth status ${name} --check`;
+  const status = statuses.find((entry) => entry.name === name);
+  const state = status?.signIn.state;
+  if (state === "not-signed-in" || state === "credential-rejected")
+    throw new Error(
+      `Claude Code isn't signed in for account ${name}. Run claude auth login, then ${check}.`,
+    );
+  if (state !== "signed-in")
+    throw new Error(
+      `Neuve doesn't know yet whether Claude Code is signed in for account ${name}. Run ${check}.`,
+    );
+  const row =
+    status?.models?.find((entry) => entry.resolvedModel === route.model) ??
+    status?.models?.find((entry) => entry.id === route.model);
+  if (row === undefined)
+    throw new Error(
+      `Claude Code for account ${name} doesn't offer ${route.model}, the model reviews run on. Run ${check} to read its models again, or pick another model for this chat.`,
+    );
+  return { provider: name, modelId: row.id };
+}

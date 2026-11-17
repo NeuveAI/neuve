@@ -17,7 +17,9 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { nativeReviewCallbacks } from "./workspace-native-review";
 import { rearmWaitingReviews, keepWorkerFor } from "./review-worker";
 import { workspaceNativeSources } from "./workspace-native-sources.ts";
+import { routeHostModels } from "./workspace-models.ts";
 import {
+  claudeDefaultModel,
   workspaceChatRuntime,
   workspaceChatModels,
   productionChatSources,
@@ -166,7 +168,13 @@ export function codingWorkerSetup(
     return held.authority;
   };
   const admissions = new Map<string, RouteAdmission>();
-  const admission = (worker: WorkerContext) => {
+  // A Claude route runs through its account's Claude Code, which keeps its own limits: there is no
+  // direct provider's retry deadline to persist.
+  const admission = (worker: WorkerContext): { admission?: RouteAdmission } => {
+    if (route.provider === "claude") return {};
+    return { admission: directAdmission(worker) };
+  };
+  const directAdmission = (worker: WorkerContext) => {
     const known = admissions.get(worker.sessionId);
     if (known) return known;
     const opened = openRouteAdmission({
@@ -351,7 +359,7 @@ export function codingWorkerSetup(
       const models = workspaceCaptureModels(defaults, {
         ...transport,
         route,
-        admission: admission(worker),
+        ...admission(worker),
         capture: journal(worker).capture,
         credentialInspection: inspection(worker),
         runId: worker.sessionId,
@@ -367,6 +375,18 @@ export function codingWorkerSetup(
       chatRuntimes.set(worker.sessionId, runtime);
       return runtime.models;
     },
+    ...(route.provider === "claude"
+      ? {
+          // The host has no default on a Claude route (`routeCodingDefaults`): the account's row
+          // for the route's model is read when a chat with no model named runs.
+          async defaultModel() {
+            return claudeDefaultModel(
+              route,
+              chatSources?.statuses.current() ?? [],
+            );
+          },
+        }
+      : {}),
     extensions(worker) {
       const runtime = chatRuntimes.get(worker.sessionId);
       return {
@@ -378,7 +398,7 @@ export function codingWorkerSetup(
       return workspaceCaptureModels(defaults, {
         ...transport,
         route,
-        admission: admission(worker),
+        ...admission(worker),
         capture: journal(worker).capture,
         credentialInspection: inspection(worker),
         runId: worker.sessionId,
@@ -935,14 +955,11 @@ async function workspace(args: readonly string[]): Promise<number> {
         app,
       }),
       models: () => [
-        {
-          provider: route.provider,
-          modelId: route.model,
-          efforts:
-            route.provider === "claude"
-              ? []
-              : getSupportedThinkingLevels(routeModel(route)),
-        },
+        ...routeHostModels(route, () =>
+          route.provider === "claude"
+            ? []
+            : getSupportedThinkingLevels(routeModel(route)),
+        ),
         ...chatModels.current(),
       ],
       planningConnections() {

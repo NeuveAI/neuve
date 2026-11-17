@@ -102,12 +102,24 @@ test("a route over an existing one changes it; a route the schema refuses writes
       RouteRefused,
     );
   expect(await readFile(path, "utf8")).toBe(before);
-  // No file and a refused route: still no file.
+  // No file and a refused route: still no file. An added account's name is not a route.
   const none = await scratchHome();
-  await expect(writeRoute("claude", none.home)).rejects.toBeInstanceOf(
+  await expect(writeRoute("work", none.home)).rejects.toBeInstanceOf(
     RouteRefused,
   );
   expect(await Bun.file(none.path).exists()).toBe(false);
+});
+
+// Why: `neuve setup --route claude` is how a Claude subscriber skips `--route claude` on every
+// review; the harness's own schema must take what setup writes.
+test("the Claude route is written and read back like the others", async () => {
+  const { home, path } = await scratchHome();
+  await writeRoute("claude", home);
+  expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+    version: 1,
+    review: { route: "claude" },
+  });
+  expect(await settingsRoute(home)).toBe("claude");
 });
 
 // Why: settings kept in a dotfiles folder reach the settings path through a link. Renaming over

@@ -151,17 +151,22 @@ test("concurrent adds leave one private record and folder and reject duplicate a
               (entry) => entry.account.name === account.name,
             )?.state,
           ).toBe("active");
-          for (const name of [
-            "claude",
-            "chatgpt",
-            "anthropic",
-            "openai",
-            "Bad",
-            "../bad",
-          ])
+          for (const name of ["Bad", "../bad"])
             expect(
               (yield* one.add("claude", name).pipe(Effect.result))._tag,
             ).toBe("Failure");
+          // `neuve review --route <name>` reads these first, so the refusal says so.
+          for (const name of ["claude", "chatgpt", "anthropic", "openai"]) {
+            const refused = yield* one.add("chatgpt", name).pipe(Effect.result);
+            expect(
+              refused._tag === "Failure" ? refused.failure.message : "added",
+            ).toBe(
+              `${name} already names a built-in route or account, and neuve review --route ${name} reads that first. Choose another name.`,
+            );
+          }
+          expect(readdirSync(AccountStore.accountsPath(home))).toEqual([
+            "work",
+          ]);
         }),
       ),
     );

@@ -55,6 +55,22 @@ export const runningHeldFixture = running({
   credential: "the Neuve sign-in (neuve auth login openai)",
   route: "openai/gpt-6.1-sol",
 })
+/** On the Claude route, the worker's own sentence on the account and its fix. */
+export const runningHeldClaudeFixture: ReviewStart = {
+  status: "running",
+  run: {
+    subject: "stall-retry",
+    route: "claude/claude-opus-5-5",
+    phase: {
+      kind: "held",
+      credential:
+        "The Claude Code sign-in of account claude is not-signed-in; run `neuve auth login claude`",
+      route: "claude/claude-opus-5-5",
+      account: true,
+    },
+    recorded: [],
+  },
+}
 /**
  * Stages in the order a real run records their first completion: Link's
  * fill comes beside the finders, before any Find (measured over 250 runs).

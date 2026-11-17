@@ -68,7 +68,11 @@ import {
   SearchIndex,
   StageView,
 } from "@neuve/harness";
-import { readHeldReviews, type HeldReview } from "@neuve/harness/held-reviews";
+import {
+  heldForAccount,
+  readHeldReviews,
+  type HeldReview,
+} from "@neuve/harness/held-reviews";
 import {
   exportCapturedDump,
   readCapturedDump,
@@ -915,7 +919,9 @@ export const follow = async (
             if (Option.isSome(held)) {
               toldHeld = true;
               await write(
-                `Waiting: the running worker (pid ${held.value.pid}) lacks ${held.value.credential} for ${held.value.route}, so it holds this job; a worker that has it picks it up.`,
+                heldForAccount(held.value)
+                  ? `Waiting: the running worker (pid ${held.value.pid}) holds this job for ${held.value.route}. ${held.value.credential}.`
+                  : `Waiting: the running worker (pid ${held.value.pid}) lacks ${held.value.credential} for ${held.value.route}, so it holds this job; a worker that has it picks it up.`,
               );
             }
           }

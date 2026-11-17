@@ -11,6 +11,7 @@ import {
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import {
+  type ReviewRouteName,
   Settings,
   settingsPath,
 } from "../../../packages/harness/src/settings.ts";
@@ -21,7 +22,7 @@ import {
  * was. The result must pass the harness's own settings schema, so setup never writes a route a
  * review would refuse. A file that exists but can't be read is never overwritten.
  */
-export type RouteName = "openai" | "anthropic";
+export type RouteName = ReviewRouteName;
 
 export class SettingsUnreadable extends Error {}
 export class RouteRefused extends Error {}
@@ -207,7 +208,7 @@ export const writeRoute = async (route: string, home = homedir()) => {
   const checked = Settings.safeParse(JSON.parse(candidate));
   if (!checked.success || checked.data.review?.route !== route)
     throw new RouteRefused(
-      `neuve setup --route takes openai (ChatGPT) or anthropic (an Anthropic API key), not ${JSON.stringify(route)}.`,
+      `neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code), not ${JSON.stringify(route)}.`,
     );
   const file = existing?.file ?? path;
   await mkdir(dirname(file), { recursive: true, mode: 0o700 });

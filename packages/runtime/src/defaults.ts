@@ -21,3 +21,11 @@ export const DEFAULT_ACCOUNTS: ReadonlyArray<Account> = [
     credential: { kind: "claude-config-folder" },
   }),
 ];
+
+/**
+ * Names an added account can't take: `neuve review --route <name>` reads `anthropic` and `openai`
+ * as routes, and the built-in accounts' names as those accounts, before any added account.
+ */
+export const RESERVED_ACCOUNT_NAMES: ReadonlyArray<string> = [
+  ...new Set(["anthropic", "openai", ...DEFAULT_ACCOUNTS.map((a) => a.name)]),
+];

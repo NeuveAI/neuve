@@ -125,3 +125,33 @@ export function workspaceModels(
     classify: (...args) => native.classify(...args),
   };
 }
+
+/**
+ * What the configured review route supplies coding sessions: its model as the host's default and
+ * its default reasoning effort. A Claude route's model is offered under one of its account's model
+ * rows (an alias such as `opus`), which only the account's current status names, so its default
+ * is resolved per session (`claudeDefaultModel`) and the host is given none.
+ */
+export const routeCodingDefaults = (route: {
+  provider: string;
+  model: string;
+  effort: string;
+}) =>
+  route.provider === "claude"
+    ? { thinkingLevel: route.effort }
+    : {
+        model: { provider: route.provider, modelId: route.model },
+        thinkingLevel: route.effort,
+      };
+
+/**
+ * The route's own entry in the host's model list. A Claude route has none: its account's models
+ * are listed by the account chat runtime under the ids Claude Code gives them.
+ */
+export const routeHostModels = <E>(
+  route: { provider: string; model: string },
+  efforts: () => E[],
+) =>
+  route.provider === "claude"
+    ? []
+    : [{ provider: route.provider, modelId: route.model, efforts: efforts() }];

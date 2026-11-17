@@ -27,6 +27,8 @@ const resumedReply = assistant(undefined);
 resumedReply.message.id = "resumed";
 const forkReply = assistant(undefined);
 forkReply.message.id = "fork";
+const refusedFinalReply = assistant(undefined);
+refusedFinalReply.message.id = "refused-final";
 const modelUsage = { "test-model": usage(10) };
 const recall =
   "Return the remembered messageToken and steerToken in the requested schema.";
@@ -37,6 +39,15 @@ const schemas = {
     type: "object",
     properties: { steerToken: { type: "string" } },
     required: ["steerToken"],
+    additionalProperties: false,
+  },
+};
+const refusedSchemas = {
+  submit: {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    properties: { ok: { type: "boolean" } },
+    required: ["ok"],
     additionalProperties: false,
   },
 };
@@ -176,6 +187,40 @@ const entries: Entry[] = [
   }),
   inbound(mode === "tool-extra" ? assistant(undefined) : result()),
   out({ type: "query.close" }),
+  out({ type: "query.open" }),
+  out({
+    type: "prompt.offer",
+    message: "Call submit once with ok set to true.",
+  }),
+  {
+    type: "smoke.tool.calls",
+    schemas: refusedSchemas,
+    calls: [{ name: "submit", callId: "refused", input: { ok: true } }],
+  },
+  inbound({
+    type: "user",
+    uuid: crypto.randomUUID(),
+    session_id: SESSION_ID,
+    parent_tool_use_id: null,
+    message: {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "refused",
+          content: "fixture",
+          is_error: false,
+        },
+      ],
+    },
+  }),
+  inbound(result()),
+  out({ type: "query.close" }),
+  out({ type: "query.open" }),
+  out({ type: "prompt.offer", message: /turn limit/ }),
+  inbound(refusedFinalReply),
+  inbound(result({ modelUsage, structured_output: { ok: true } })),
+  out({ type: "query.close" }),
 ];
 
 if (mode === "fork-failure") {
@@ -196,14 +241,14 @@ if (mode === "options-guard") {
     if (entry.type !== "expect_outbound" || entry.frame.type !== "query.open")
       continue;
     const check = entry.frame.check;
-    const expected = index === 2 || index === 5 || index === 7;
+    const expected = index === 2 || index === 5 || index === 7 || index === 10;
     index++;
     entry.frame.check = (options) => {
       check?.(options);
       expect(options.outputFormat !== undefined).toBe(expected);
     };
   }
-  expect(index).toBe(9);
+  expect(index).toBe(11);
 }
 
 const replayScope = Effect.runSync(Scope.make());

@@ -182,6 +182,41 @@ test("the OpenAI route in the settings needs its sign-in, and unreadable setting
   });
 });
 
+// Why: doctor promises no network, and checking a Claude sign-in opens Claude Code, which can reach
+// it. So on the Claude route doctor only looks for claude on PATH and names the command that checks
+// the sign-in; the claude it finds must never run.
+test("the Claude route names a missing Claude Code with its fix, and never opens one it finds", async () => {
+  const { root, home, tools, doctor } = await scratch();
+  const folder = join(home, "Library/Application Support/Neuve");
+  await mkdir(folder, { recursive: true });
+  const settings = join(folder, "settings.json");
+  await writeFile(
+    settings,
+    JSON.stringify({ version: 1, review: { route: "claude" } }),
+  );
+  expect((await doctor()).check("sign-in")).toEqual({
+    check: "sign-in",
+    status: "missing",
+    detail: `Reviews use your Claude subscription through Claude Code (review.route in ${settings}), and Claude Code isn't installed: there's no claude on PATH. A review waits until a worker has it`,
+    fix: "install Claude Code, then run claude auth login && neuve auth status claude --check",
+  });
+  const ran = join(root, "claude-ran");
+  const claude = join(tools, "claude");
+  await writeFile(
+    claude,
+    `#!/bin/sh
+touch '${ran}'
+`,
+  );
+  await chmod(claude, 0o755);
+  expect((await doctor()).check("sign-in")).toEqual({
+    check: "sign-in",
+    status: "ok",
+    detail: `Reviews use your Claude subscription through Claude Code (review.route in ${settings}). Claude Code is at ${claude}. Doctor doesn't open it, so it doesn't check the sign-in: neuve auth status claude --check does, without spending usage`,
+  });
+  expect(await Bun.file(ran).exists()).toBe(false);
+});
+
 test("doctor names every neuve PATH could run, the release and the source install", async () => {
   const { root, home, tools, doctor } = await scratch();
   const copy = async (folder: string) => {

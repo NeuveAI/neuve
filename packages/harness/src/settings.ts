@@ -36,6 +36,10 @@ export const settingsPath = (home = homedir()) =>
     ? join(home, "Library", "Application Support", "Neuve", "settings.json")
     : join(home, ".config", "neuve", "settings.json");
 
+/** The routes `review.route` can name: the two direct routes and the built-in Claude account. */
+export const ReviewRouteName = z.enum(["anthropic", "openai", "claude"]);
+export type ReviewRouteName = z.infer<typeof ReviewRouteName>;
+
 export const Settings = z.strictObject({
   version: z.literal(1),
   telemetry: z
@@ -54,7 +58,10 @@ export const Settings = z.strictObject({
   stack: StackSettings.optional(),
   /**
    * `route`: the route a review runs on when `neuve review` names none, and the one a worker checks
-   * it can serve (10.85, 10.17); the Anthropic route when absent. `effort`: the effort every review
+   * it can serve (10.85, 10.17); the Anthropic route when absent. `claude` is the Claude
+   * subscription through Claude Code's own sign-in (12.59): the built-in `claude` account, exactly
+   * what `neuve review --route claude` freezes. Accounts added with `neuve auth add` are named only
+   * with `--route <name>`. `effort`: the effort every review
    * this user requests freezes into its route, whichever route it names; the route's own (`medium`,
    * 10.19) when absent. Research runs set `high` in a settings file of their own (10.126).
    * `deadline`: the lifetime in minutes every review this user requests freezes into its budgets,
@@ -77,7 +84,7 @@ export const Settings = z.strictObject({
    */
   review: z
     .strictObject({
-      route: z.enum(["anthropic", "openai"]).optional(),
+      route: ReviewRouteName.optional(),
       effort: z.enum(["low", "medium", "high"]).optional(),
       stepEffort: StepEffort.optional(),
       reasoningSummaries: z.boolean().optional(),

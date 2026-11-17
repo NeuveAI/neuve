@@ -41,3 +41,11 @@ export const readHeldReviews = (location: {
     return [];
   }
 };
+
+/**
+ * A Claude Code route's entry: its `credential` is not a credential's name but a sentence of its
+ * own (`routeReadiness`) naming the account's state and the command that fixes it, so readers
+ * quote it whole instead of saying the worker "lacks" it.
+ */
+export const heldForAccount = (entry: Pick<HeldReview, "provider">) =>
+  entry.provider === "claude";

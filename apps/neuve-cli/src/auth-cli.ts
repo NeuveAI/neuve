@@ -119,6 +119,44 @@ export interface AuthCliOptions {
   readonly home?: string;
 }
 
+/**
+ * The built-in Claude account's sign-in, checked as `neuve auth status claude --check` checks it:
+ * the account status service opens Claude Code with no prompt, so no usage is spent, and a check
+ * already running for the account is joined rather than repeated. Setup's closing check uses it.
+ */
+export const checkClaudeSignIn = async (
+  options: AuthCliOptions = {},
+): Promise<AccountStatus> => {
+  const { AccountName, AccountStore, RuntimeRegistry, runtimeRegistryLayer } =
+    await import("@neuve/runtime");
+  const name = AccountName.parse("claude");
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const home = options.home ?? homedir();
+        const store = yield* AccountStore.make(home);
+        return yield* Effect.gen(function* () {
+          const statuses = yield* AccountStore.makeStatuses(
+            home,
+            yield* RuntimeRegistry,
+          );
+          return yield* statuses.check(name);
+        }).pipe(
+          Effect.provide(
+            options.runtimes === undefined
+              ? authRuntimes({ directory: store.directory, home })
+              : runtimeRegistryLayer(options.runtimes).pipe(
+                  Layer.provide(
+                    Layer.succeed(AccountDirectory, store.directory),
+                  ),
+                ),
+          ),
+        );
+      }),
+    ),
+  );
+};
+
 /** Fixed argv and inherited streams keep Claude Code's sign-in bytes out of Neuve. */
 export const claudeLoginOptions = (
   hint: Extract<SignInHint, { command: "claude auth login" }>,

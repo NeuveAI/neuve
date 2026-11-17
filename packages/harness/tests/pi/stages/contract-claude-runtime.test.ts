@@ -392,6 +392,66 @@ test("Claude one-turn text stage returns its supplied final output", async () =>
   }
 });
 
+// Why: a one-turn stage whose only submit fails its check ends that round from the tool. Claude Code
+// ends a turn only on a result it isn't told is an error, so the refusal must reach it unflagged;
+// the stage then runs its final generation instead of failing the run.
+test("Claude one-turn stage with a refused submit returns its final generation", async () => {
+  const first = turn([
+    { callId: "refused-submit", name: "submit_frame", input: { answer: 0 } },
+  ]);
+  const final = turn([], { structured: { answer: 4 }, reopen: true });
+  const w = await setup("one-turn-refused", [first, final], 1);
+  try {
+    const id = await w.begin();
+    expect(
+      (await w.opened.harness.waitForTask(id, context)).state.outcome,
+    ).toMatchObject({
+      status: "completed",
+      result: {
+        agentResult: {
+          status: "final-generation",
+          endedBy: "turn-limit",
+          finalGeneration: true,
+        },
+      },
+    });
+    expect(w.state().ending?.output).toEqual({ answer: 4 });
+    expect(w.state().calls["refused-submit"]).toMatchObject({
+      status: "completed",
+      outcome: { error: "CheckFailed", endTurn: true },
+    });
+    const [reply] = await first.results;
+    expect(reply).toMatchObject({
+      isError: false,
+      _meta: { "claude/endTurn": true },
+    });
+    expect(JSON.stringify(reply)).toContain("answer must be positive");
+    expect(
+      w.runtimeEvents
+        .filter((event) => event.type === "tool.finished")
+        .map((event) => [event.callId, event.errored]),
+    ).toEqual([["refused-submit", true]]);
+    expect(
+      w.run.ctx.log
+        .read()
+        .filter((event) => event.type === "tool.call")
+        .map((event) => [event.tool, event.error]),
+    ).toEqual([["submit_frame", "CheckFailed"]]);
+    expect(w.state().rounds.map((round) => round.final)).toEqual([false, true]);
+    expect(
+      w.runtimeEvents
+        .filter((event) => event.type === "turn.finished")
+        .map((event) => event.outcome),
+    ).toEqual([
+      { status: "completed" },
+      { status: "completed", structuredOutput: { answer: 4 } },
+    ]);
+    expect(w.fake.opens).toHaveLength(2);
+  } finally {
+    await w.close();
+  }
+});
+
 // Why: allowing the limit's own message to settle must still reject further output and apply the final-generation policy.
 test("Claude one-turn backstop rejects further output and the engine runs its final generation", async () => {
   const first = turn([]);
@@ -730,8 +790,14 @@ test("Claude final-turn tools are refused and the turn ends cleanly", async () =
         endTurn: true,
       },
     });
+    // The refusal ends the turn, so it reaches Claude Code unflagged: Claude Code answers a flagged
+    // endTurn result with another response.
     expect(await final.results).toMatchObject([
-      { isError: true, content: [{ text: FINAL_TOOLS_UNAVAILABLE }] },
+      {
+        isError: false,
+        _meta: { "claude/endTurn": true },
+        content: [{ text: FINAL_TOOLS_UNAVAILABLE }],
+      },
     ]);
     expect(w.state().rounds.map((round) => round.final)).toEqual([
       false,

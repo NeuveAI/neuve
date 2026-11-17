@@ -13,6 +13,7 @@ import {
   deskBatchContextFixture,
 } from "@workspace/ui/fixtures/review-batch.fixtures"
 import {
+  runningHeldClaudeFixture,
   runningHeldFixture,
   RECORDED_ORDER,
   runningFindingFixture,
@@ -615,6 +616,25 @@ export const RunningHeld: Story = {
         )
       ).toBeVisible()
     )
+  },
+}
+
+/** On the Claude route the worker says what the account lacks and what to run. */
+export const RunningHeldClaude: Story = {
+  render: () => (
+    <BatchOverviewPage
+      load={{ status: "empty", reason: "no-batch" }}
+      start={runningHeldClaudeFixture}
+    />
+  ),
+  play: async ({ canvas }) => {
+    await waitFor(() =>
+      expect(
+        canvas.getByText(/The running worker holds this job for/)
+      ).toBeVisible()
+    )
+    await expect(canvas.getByText("neuve auth login claude")).toBeVisible()
+    await expect(canvas.queryByText(/lacks/)).toBeNull()
   },
 }
 

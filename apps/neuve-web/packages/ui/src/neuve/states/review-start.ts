@@ -46,8 +46,13 @@ export type RunningPhase =
   | { kind: "queued" }
   /** No worker is running for this repository. */
   | { kind: "no-worker" }
-  /** The running worker lacks the route's sign-in and holds the job (10.17). */
-  | { kind: "held"; credential: string; route: string }
+  /**
+   * The running worker lacks the route's sign-in and holds the job (10.17).
+   * `account` is set for a Claude Code route: `credential` is then the
+   * worker's own sentence on the account's state and the command that fixes
+   * it, shown whole.
+   */
+  | { kind: "held"; credential: string; route: string; account?: true }
   /** A worker runs it; its stages complete one by one. */
   | { kind: "working" }
 

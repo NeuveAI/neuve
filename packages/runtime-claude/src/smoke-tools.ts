@@ -4,10 +4,11 @@ import {
   type RuntimeEvent,
   type RuntimeSession,
 } from "@neuve/runtime";
-import { Deferred, Effect } from "effect";
+import { Deferred, Effect, Exit } from "effect";
 import { z } from "zod";
 import type { SmokeRuntime, ToolOutputObservation } from "./smoke-runtime.ts";
 import { collect, completed, protocolError, requests } from "./smoke-events.ts";
+import { FINAL_TURN_MESSAGES } from "./session.ts";
 
 const hints = {
   readOnly: true,
@@ -167,3 +168,88 @@ const balancedToolEvents = (events: readonly RuntimeEvent[]) => {
     )
   );
 };
+
+/**
+ * A one-turn round whose only tool call is refused and ends the turn, as a stage's last refused
+ * submit does, then the final generation on the same session. Claude Code must end the round at
+ * that result, and the session must still take the final turn within its message backstop.
+ */
+export const checkRefusedEnd = (
+  runtime: SmokeRuntime,
+  account: Account,
+  observation?: Omit<ToolOutputObservation, "offered" | "receive">,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      observation?.begin();
+      let submitCalls = 0;
+      const output = z.strictObject({ ok: z.boolean() });
+      const schema = z
+        .record(z.string(), z.json())
+        .parse(z.toJSONSchema(output));
+      const session = yield* runtime.openSession(
+        account,
+        {
+          systemPrompt:
+            "Call submit once with ok set to true. When asked for a final answer, return it in the requested schema.",
+          approvalPolicy: "allow",
+          turnLimit: TurnLimit.parse(1),
+          outputSchema: schema,
+          tools: [
+            {
+              name: "submit",
+              description: "Submit the answer. Ends the call.",
+              hints,
+              inputSchema: schema,
+              handle: () =>
+                Effect.sync(() => {
+                  submitCalls++;
+                  observation?.finish();
+                  return {
+                    text: "Not submitted. Fix these and call submit again:\n- The smoke refuses every submission.",
+                    error: "CheckFailed",
+                    endTurn: true,
+                  };
+                }),
+            },
+          ],
+        },
+        { kind: "new" },
+      );
+      yield* session.startTurn({
+        turnId: "smoke-refused",
+        message: "Call submit once with ok set to true.",
+      });
+      const refused = yield* collect(session);
+      const noRequestAfterRefusal = observation?.extraRequest !== true;
+      const start = yield* Effect.exit(
+        session.startTurn({
+          turnId: "smoke-refused-final",
+          message:
+            "You reached this stage's turn limit. Produce the stage's best-effort output now, as JSON matching the output schema. Tools are not available for this answer.",
+          final: true,
+        }),
+      );
+      const final = Exit.isSuccess(start) ? yield* collect(session) : [];
+      const end = final.findLast((event) => event.type === "turn.finished");
+      const events = [...refused, ...final];
+      return {
+        refusedCompleted: completed(refused),
+        refusedSubmitOnce: submitCalls === 1,
+        refusedErrored: refused.some(
+          (event) => event.type === "tool.finished" && event.errored,
+        ),
+        refusedOneMessage: requests(refused) === 1,
+        noRequestAfterRefusal,
+        refusedFinalStarted: Exit.isSuccess(start),
+        refusedFinalCompleted:
+          end?.outcome.status === "completed" &&
+          output.safeParse(end.outcome.structuredOutput).success,
+        refusedFinalWithinBackstop: requests(final) <= FINAL_TURN_MESSAGES,
+        protocolError: protocolError(events),
+        requests: requests(events),
+        withinPlan: requests(events) <= 1 + FINAL_TURN_MESSAGES,
+        events: events.length,
+      };
+    }),
+  );

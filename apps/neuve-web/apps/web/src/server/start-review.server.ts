@@ -1,7 +1,7 @@
 import { Effect, Option } from "effect"
 import { JobQueue, Log, ReviewProgress, Worker } from "@neuve/records-core"
 import type { StoreLocation } from "@neuve/records-core"
-import { readHeldReviews } from "@neuve/harness/held-reviews"
+import { heldForAccount, readHeldReviews } from "@neuve/harness/held-reviews"
 import { settingsRoute } from "@neuve/harness/request"
 import { REVIEW_STAGES } from "@workspace/ui/neuve/states/review-start"
 import type {
@@ -202,6 +202,7 @@ const newestJob = (location: StoreLocation) =>
           kind: "held",
           credential: held.credential,
           route: held.route,
+          ...(heldForAccount(held) ? { account: true as const } : {}),
         }
       else
         phase = (yield* workerLive(location))

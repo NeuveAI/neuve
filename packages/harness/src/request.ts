@@ -75,6 +75,7 @@ import { keepExternalFetched } from "./scope-storage.ts";
 import { externalScopeText } from "./github-scope.ts";
 import {
   AccountName,
+  DEFAULT_ACCOUNTS,
   type AccountDirectoryShape,
   type RuntimeRegistryShape,
 } from "@neuve/runtime";
@@ -136,30 +137,56 @@ export const resolveNamedRoute = (
           `Unknown review route ${JSON.stringify(name)}. Choose anthropic, openai or a Claude subscription account name.`,
         ),
       );
-    // The per-kind step efforts only when they name a kind, as `routeByName` freezes them.
-    const stepEffort = reviewStepEffort(settings);
-    return ClaudeRouteConfig.parse({
-      provider: "claude",
-      account: { name: account.name, kind: account.kind },
-      model: OPUS_ROUTE.model,
-      window: OPUS_ROUTE.window,
-      maxOutputTokens: OPUS_ROUTE.maxOutputTokens,
-      effort: reviewEffort(settings) ?? OPUS_ROUTE.effort,
-      price: null,
-      ...(stepEffort === undefined || Object.keys(stepEffort).length === 0
-        ? {}
-        : { stepEffort }),
-    });
+    return claudeRoute(account, settings);
   });
 
 /**
- * The route the user's settings name (`review.route`), else the Anthropic route, at the settings'
- * effort: what `neuve review` freezes when no `--route` is given (10.85). The web app passes it to
- * `requestReview`, so a request from the desk freezes the same route, configuration and run key as
- * one from the CLI.
+ * Claude Opus on a Claude subscription account, through Claude Code (12.59), at the settings'
+ * effort and per-kind step efforts: what `--route <account>` and `review.route: "claude"` freeze.
  */
-export const settingsRoute = (settings = readSettings()): RouteConfig =>
-  namedRoute(RouteName.parse(reviewRoute(settings) ?? "anthropic"), settings);
+export const claudeRoute = (
+  account: { readonly name: AccountName; readonly kind: "claude-subscription" },
+  settings: Option.Option<Settings>,
+): ClaudeRouteConfig => {
+  // The per-kind step efforts only when they name a kind, as `routeByName` freezes them.
+  const stepEffort = reviewStepEffort(settings);
+  return ClaudeRouteConfig.parse({
+    provider: "claude",
+    account: { name: account.name, kind: account.kind },
+    model: OPUS_ROUTE.model,
+    window: OPUS_ROUTE.window,
+    maxOutputTokens: OPUS_ROUTE.maxOutputTokens,
+    effort: reviewEffort(settings) ?? OPUS_ROUTE.effort,
+    price: null,
+    ...(stepEffort === undefined || Object.keys(stepEffort).length === 0
+      ? {}
+      : { stepEffort }),
+  });
+};
+
+/** The built-in Claude account (Claude Code's own sign-in), as `review.route: "claude"` names it. */
+const builtInClaude = (() => {
+  const account = DEFAULT_ACCOUNTS.find((entry) => entry.name === "claude");
+  if (account?.kind !== "claude-subscription")
+    throw new Error(
+      "The built-in claude account is missing from the defaults.",
+    );
+  return account;
+})();
+
+/**
+ * The route the user's settings name (`review.route`), else the Anthropic route, at the settings'
+ * effort: what `neuve review` freezes when no `--route` is given (10.85). `claude` is the built-in
+ * account's Claude route, built from the static default with no account-store read, so it is the
+ * route `--route claude` resolves to. The web app passes it to `requestReview`, so a request from
+ * the desk freezes the same route, configuration and run key as one from the CLI.
+ */
+export const settingsRoute = (settings = readSettings()): RouteConfig => {
+  const named = reviewRoute(settings) ?? "anthropic";
+  return named === "claude"
+    ? claudeRoute(builtInClaude, settings)
+    : namedRoute(RouteName.parse(named), settings);
+};
 
 /**
  * The section readings' block a review request freezes (NEU-148): unless the user's settings say

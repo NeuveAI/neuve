@@ -21,7 +21,7 @@ import {
   Stream,
 } from "effect";
 import { z } from "zod";
-import { DEFAULT_ACCOUNTS } from "../defaults.ts";
+import { DEFAULT_ACCOUNTS, RESERVED_ACCOUNT_NAMES } from "../defaults.ts";
 import { forgetStatus } from "./status.ts";
 import { Account, AccountName } from "../account.ts";
 import {
@@ -639,8 +639,11 @@ export const make = (
               message:
                 "Use an account name of 1 to 63 lowercase letters, numbers or hyphens, starting with a letter or number.",
             });
+          if (RESERVED_ACCOUNT_NAMES.includes(name))
+            throw new StoreError({
+              message: `${name} already names a built-in route or account, and neuve review --route ${name} reads that first. Choose another name.`,
+            });
           if (
-            name === "openai" ||
             (existsSync(claimPath(home, parsedName.data)) &&
               readdirSync(claimPath(home, parsedName.data)).some(
                 (file) => !file.startsWith("."),

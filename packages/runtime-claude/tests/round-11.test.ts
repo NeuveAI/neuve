@@ -502,3 +502,71 @@ for (const scenario of [
       },
     ));
 }
+
+// Why: live, Claude Code answers an endTurn result marked as an error with a new response, which
+// poisons the session for the next turn. An errored endTurn result goes out without the error flag
+// and keeps its text; the runtime still reports the call errored. An error that doesn't end the
+// turn keeps the flag so the model can correct it.
+for (const ending of [true, false])
+  test(`errored tool result ${ending ? "that ends the turn drops" : "that continues keeps"} the error flag`, () =>
+    run(
+      (f, s, events, next) =>
+        Effect.gen(function* () {
+          const client = yield* connect(f);
+          yield* s.startTurn(start);
+          yield* send(f, [
+            begin(),
+            blockMessage("message-1", chain, [
+              { id: "call-refused", name: "mcp__neuve__work", input: {} },
+            ]),
+            end("tool_use"),
+            stop(),
+          ]);
+          yield* next("tool.started");
+          const reply = yield* Effect.promise(() =>
+            client.callTool({
+              name: "work",
+              arguments: {},
+              _meta: { [TOOL_USE_ID_META]: "call-refused" },
+            }),
+          );
+          expect(reply).toEqual({
+            content: [{ type: "text", text: "Not submitted." }],
+            isError: !ending,
+            ...(ending ? { _meta: { "claude/endTurn": true } } : {}),
+          });
+          expect(yield* next("tool.finished")).toMatchObject({
+            callId: "call-refused",
+            errored: true,
+          });
+          if (!ending) return;
+          yield* send(f, [
+            result({
+              user_message_uuid: f.sends[0]!.uuid!,
+              user_message_uuids: [f.sends[0]!.uuid!],
+              queued_turn_count: 0,
+            }),
+          ]);
+          expect(yield* next("turn.finished")).toMatchObject({
+            outcome: { status: "completed" },
+          });
+          expect(f.sends).toHaveLength(1);
+          expect(
+            events.filter((event) => event.type === "message.finished"),
+          ).toHaveLength(1);
+        }),
+      {
+        policy: {
+          ...policy,
+          tools: [
+            definition(() =>
+              Effect.succeed({
+                text: "Not submitted.",
+                error: "CheckFailed",
+                ...(ending ? { endTurn: true as const } : {}),
+              }),
+            ),
+          ],
+        },
+      },
+    ));

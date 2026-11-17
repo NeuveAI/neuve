@@ -68,7 +68,7 @@ import {
   Stack as HarnessStack,
 } from "@neuve/harness";
 import * as HarnessRuntimes from "@neuve/harness/runtimes";
-import { readHeldReviews } from "@neuve/harness/held-reviews";
+import { heldForAccount, readHeldReviews } from "@neuve/harness/held-reviews";
 import { execute, withStore, write } from "./records-cli.ts";
 import { prepareWorkerStore, warnIfPaused } from "./installed-copy.ts";
 import { runStackFetchChild, runStackIndexChild } from "./stack-cli.ts";
@@ -274,7 +274,9 @@ const reviewNotes = (repository: string, jobs: ReadonlyArray<JobQueue.Job>) =>
         [
           range,
           job.state === "waiting" && heldBy.has(job.seq)
-            ? `held: worker pid ${holder} lacks ${heldBy.get(job.seq)!.credential} for ${heldBy.get(job.seq)!.route}; a worker that has it picks the job up`
+            ? heldForAccount(heldBy.get(job.seq)!)
+              ? `held: worker pid ${holder} holds it for ${heldBy.get(job.seq)!.route}. ${heldBy.get(job.seq)!.credential}`
+              : `held: worker pid ${holder} lacks ${heldBy.get(job.seq)!.credential} for ${heldBy.get(job.seq)!.route}; a worker that has it picks the job up`
             : undefined,
         ]
           .filter((part) => part !== undefined && part !== "")

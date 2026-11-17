@@ -98,11 +98,20 @@ const copyKind = async (path: string, home: string) => {
   return "another copy";
 };
 
-/** The review route the settings name, and whether this shell can use it. */
+/** Where `claude` is on PATH, as the Claude Code runtime finds it, or undefined. */
+export const findClaude = (path = process.env["PATH"] ?? "") =>
+  Bun.which("claude", { PATH: path }) ?? undefined;
+
+/**
+ * The review route the settings name, and whether this shell can use it. For the Claude route
+ * doctor only looks for `claude` on PATH: checking the sign-in opens Claude Code, which can reach
+ * the network, so that is left to `neuve auth status claude --check`.
+ */
 export const checkSignIn = (
   repository: string | undefined,
   home = homedir(),
   available = RouteProvider.credentialPresent,
+  claude: () => string | undefined = findClaude,
 ): DoctorCheck => {
   const path = Settings.settingsPath(home);
   let settings: Option.Option<Settings.Settings>;
@@ -118,11 +127,25 @@ export const checkSignIn = (
   }
   const route = settingsRoute(settings);
   const named = Settings.reviewRoute(settings);
-  const which = `${route.provider === "openai" ? "the OpenAI route" : "the Anthropic route"} (${named === undefined ? `the default; ${path} names none` : `review.route in ${path}`})`;
+  const which = `${route.provider === "openai" ? "the OpenAI route" : route.provider === "claude" ? "your Claude subscription through Claude Code" : "the Anthropic route"} (${named === undefined ? `the default; ${path} names none` : `review.route in ${path}`})`;
   const restart =
     repository === undefined
       ? "neuve worker stop && neuve worker start"
       : `neuve worker stop --repo ${quote(repository)} && neuve worker start --repo ${quote(repository)}`;
+  if (route.provider === "claude") {
+    const found = claude();
+    return found === undefined
+      ? {
+          check: "sign-in",
+          status: "missing",
+          detail: `Reviews use ${which}, and Claude Code isn't installed: there's no claude on PATH. A review waits until a worker has it`,
+          fix: "install Claude Code, then run claude auth login && neuve auth status claude --check",
+        }
+      : ok(
+          "sign-in",
+          `Reviews use ${which}. Claude Code is at ${found}. Doctor doesn't open it, so it doesn't check the sign-in: neuve auth status claude --check does, without spending usage`,
+        );
+  }
   if (available(route))
     return ok(
       "sign-in",
@@ -470,7 +493,11 @@ export const inspectDoctor = async (input: {
       );
     }
   }
-  checks.push(checkSignIn(repository, home));
+  checks.push(
+    checkSignIn(repository, home, RouteProvider.credentialPresent, () =>
+      findClaude(input.path ?? process.env["PATH"]),
+    ),
+  );
   if (repository !== undefined) checks.push(await checkWorker(repository));
   // The agent skill is optional: a warning only when an installed copy is older than this CLI,
   // didn't finish installing, or isn't safe to update; never "missing".

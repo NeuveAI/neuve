@@ -96,7 +96,7 @@ test.skipIf(prerequisite.skip)(
     expect(stderr).toBe(
       [
         // No terminal: nothing asked and nothing written about the route, one line on how to choose.
-        "Reviews sign in with ChatGPT or an Anthropic API key. Choose with neuve setup --route openai or neuve setup --route anthropic.",
+        "Reviews sign in with ChatGPT, an Anthropic API key or your Claude subscription through Claude Code. Choose with neuve setup --route openai, neuve setup --route anthropic or neuve setup --route claude.",
         `Neuve is set up in ${repository}.`,
         "",
         "Next steps:",
@@ -104,6 +104,8 @@ test.skipIf(prerequisite.skip)(
         "       neuve setup --route openai, then neuve auth login openai (ChatGPT)",
         "       neuve setup --route anthropic, then set ANTHROPIC_API_KEY to an Anthropic API key",
         "       (an API key: a Claude subscription token doesn't work here)",
+        "       neuve setup --route claude, then claude auth login (your Claude subscription,",
+        "       through Claude Code)",
         `     Not yet: Reviews use the Anthropic route (the default; ${settings} names none), and ANTHROPIC_API_KEY isn't set in this shell. A review waits until a worker has it.`,
         "  2. Request a review of a commit range, for example the last commit:",
         `       neuve review HEAD~1..HEAD${repo}`,
@@ -281,7 +283,7 @@ test.skipIf(prerequisite.skip)(
     const refused = await setup("chatgpt");
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain(
-      'neuve setup --route takes openai (ChatGPT) or anthropic (an Anthropic API key), not "chatgpt".',
+      'neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code), not "chatgpt".',
     );
     expect(existsSync(settings)).toBe(false);
     expect(existsSync(join(repository, ".git/neuve/setup"))).toBe(false);

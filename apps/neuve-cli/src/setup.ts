@@ -10,6 +10,7 @@ import {
   writeRoute,
   type RouteName,
 } from "./settings-route.ts";
+import type { AccountStatus } from "@neuve/runtime";
 import { constants } from "node:fs";
 import {
   access,
@@ -64,15 +65,16 @@ const flagsSchema = z
   })
   .strict();
 
-export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|anthropic] [--graph-binary <path>] [--cli-binary <path>] [--no-skills]
+export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|anthropic|claude] [--graph-binary <path>] [--cli-binary <path>] [--no-skills]
   Set Neuve up in a Git repository (the current one by default): record this neuve and the Graph
   engine beside it, and check that the engine can work on the repository. It keeps its state with
   the repository's Records, in <git common directory>/neuve/setup/, and writes nothing in the
   working tree. Run it once per repository; every worktree of the repository shares it. neuve
   review and neuve review desk need it.
   --route sets how reviews sign in, in your Neuve settings: openai (ChatGPT, then
-  neuve auth login openai) or anthropic (an Anthropic API key in ANTHROPIC_API_KEY). Without it,
-  setup asks on a terminal when no route is set yet, and changes nothing otherwise.
+  neuve auth login openai), anthropic (an Anthropic API key in ANTHROPIC_API_KEY) or claude
+  (your Claude subscription through Claude Code, after claude auth login). Without it, setup
+  asks on a terminal when no route is set yet, and changes nothing otherwise.
   --graph-binary and --cli-binary name other built executables.
   At a terminal, setup then offers the Neuve skill, which teaches Claude Code and Codex to use
   Neuve, once per repository (default no); --no-skills skips the offer.
@@ -360,13 +362,37 @@ const removeLegacySetup = async (repository: string, store: string) => {
  * terminal the person's answer, ChatGPT first. Without a terminal nothing is asked or written.
  * Setup never signs in itself; it names the next step.
  */
+/** The route each answer to setup's question picks, in the order the question lists them. */
+export const ROUTE_CHOICES = [
+  { route: "openai", label: "ChatGPT" },
+  { route: "anthropic", label: "An Anthropic API key" },
+  { route: "claude", label: "Your Claude subscription, through Claude Code" },
+] as const satisfies ReadonlyArray<{ route: RouteName; label: string }>;
+
+/** What setup asks on a terminal when no route is set yet. */
+export const ROUTE_QUESTION = `How should reviews sign in?\n${ROUTE_CHOICES.map((choice, index) => `  ${index + 1}. ${choice.label}`).join("\n")}\nType 1, 2 or 3: `;
+
+/** The route an answer to `ROUTE_QUESTION` picks, or undefined for anything else. */
+export const routeAnswer = (answer: string): RouteName | undefined =>
+  ROUTE_CHOICES[Number(answer.trim()) - 1]?.route;
+
+/** Said when setup can't ask (no terminal) or the answer picked nothing. */
+export const CHOOSE_ROUTE =
+  "Reviews sign in with ChatGPT, an Anthropic API key or your Claude subscription through Claude Code. Choose with neuve setup --route openai, neuve setup --route anthropic or neuve setup --route claude.";
+
+const routeLabel = (route: RouteName) =>
+  route === "openai"
+    ? "ChatGPT (the OpenAI route)"
+    : route === "claude"
+      ? "your Claude subscription, through Claude Code"
+      : "an Anthropic API key";
+
 const chooseRoute = async (
   flag: string | undefined,
 ): Promise<
   { refused: string } | { route: RouteName | undefined; line?: string }
 > => {
-  const name = (route: RouteName) =>
-    route === "openai" ? "ChatGPT (the OpenAI route)" : "an Anthropic API key";
+  const name = routeLabel;
   if (flag !== undefined) {
     try {
       const path = await writeRoute(flag);
@@ -388,21 +414,16 @@ const chooseRoute = async (
     return { route: undefined };
   }
   if (current !== undefined) return { route: current };
-  const choose =
-    "Reviews sign in with ChatGPT or an Anthropic API key. Choose with neuve setup --route openai or neuve setup --route anthropic.";
+  const choose = CHOOSE_ROUTE;
   if (!(process.stdin.isTTY === true && process.stderr.isTTY === true))
     return { route: undefined, line: choose };
-  await Bun.write(
-    Bun.stderr,
-    "Sign in with ChatGPT, or use an Anthropic API key?\n  1. ChatGPT\n  2. An Anthropic API key\nType 1 or 2: ",
-  );
+  await Bun.write(Bun.stderr, ROUTE_QUESTION);
   let answer = "";
   for await (const line of console) {
     answer = line.trim();
     break;
   }
-  const picked: RouteName | undefined =
-    answer === "1" ? "openai" : answer === "2" ? "anthropic" : undefined;
+  const picked = routeAnswer(answer);
   if (picked === undefined) return { route: undefined, line: choose };
   const path = await writeRoute(picked);
   return {
@@ -421,7 +442,11 @@ const nextSteps = async (
   const here = await realpath(process.cwd()).catch(() => process.cwd());
   const inside = here === repository || here.startsWith(`${repository}/`);
   const repo = inside ? "" : ` --repo ${quote(repository)}`;
-  const signIn = checkSignIn(repository);
+  const claude =
+    route === "claude"
+      ? claudeSignInStep(await claudeSignInStatus())
+      : undefined;
+  const signIn = claude ?? checkSignIn(repository);
   return [
     `Neuve is set up in ${repository}.`,
     "",
@@ -433,13 +458,22 @@ const nextSteps = async (
             "  1. Set ANTHROPIC_API_KEY to an Anthropic API key in the shell you run neuve from.",
             "     It must be an API key; a Claude subscription token doesn't work here.",
           ]
-        : [
-            "  1. Choose how reviews sign in, then sign in:",
-            "       neuve setup --route openai, then neuve auth login openai (ChatGPT)",
-            "       neuve setup --route anthropic, then set ANTHROPIC_API_KEY to an Anthropic API key",
-            "       (an API key: a Claude subscription token doesn't work here)",
-          ]),
-    `     ${signIn.status === "ok" ? "Ready:" : "Not yet:"} ${signIn.detail}.`,
+        : claude !== undefined
+          ? claude.lines
+          : [
+              "  1. Choose how reviews sign in, then sign in:",
+              "       neuve setup --route openai, then neuve auth login openai (ChatGPT)",
+              "       neuve setup --route anthropic, then set ANTHROPIC_API_KEY to an Anthropic API key",
+              "       (an API key: a Claude subscription token doesn't work here)",
+              "       neuve setup --route claude, then claude auth login (your Claude subscription,",
+              "       through Claude Code)",
+            ]),
+    // A signed-in Claude Code needs no step: its one line already says it's ready.
+    ...(claude?.status === "ok"
+      ? []
+      : [
+          `     ${signIn.status === "ok" ? "Ready:" : "Not yet:"} ${signIn.detail}.`,
+        ]),
     "  2. Request a review of a commit range, for example the last commit:",
     `       neuve review HEAD~1..HEAD${repo}`,
     "  3. Open the batch overview and the review desk:",
@@ -447,4 +481,62 @@ const nextSteps = async (
     "neuve doctor checks all of this and says how to fix what is missing.",
     "",
   ].join("\n");
+};
+
+/** The Claude account's status from its check, or undefined when the check couldn't run. */
+const claudeSignInStatus = async () => {
+  const { checkClaudeSignIn } = await import("./auth-cli.ts");
+  return checkClaudeSignIn().catch(() => undefined);
+};
+
+/**
+ * Setup's closing check for the Claude route, from the built-in account's checked status: the
+ * first step, which comes before the review, says to install Claude Code when it's missing, then
+ * to sign in with `claude auth login`.
+ */
+export const claudeSignInStep = (
+  status: AccountStatus | undefined,
+): {
+  status: "ok" | "missing";
+  detail: string;
+  lines: ReadonlyArray<string>;
+} => {
+  const signIn = ["       claude auth login"];
+  const missing = (detail: string, lines: ReadonlyArray<string>) => ({
+    status: "missing" as const,
+    detail,
+    lines,
+  });
+  const login = [
+    "  1. Sign in to Claude Code with your Claude subscription:",
+    ...signIn,
+  ];
+  const state = status?.signIn;
+  if (state === undefined || state.state === "unknown")
+    return missing(
+      "Neuve couldn't check the Claude Code sign-in. neuve auth status claude --check checks it again, without spending usage",
+      login,
+    );
+  if (state.state === "signed-in")
+    return {
+      status: "ok",
+      detail: "Claude Code is signed in",
+      lines: ["  1. Ready: Claude Code is signed in."],
+    };
+  if (state.state === "runtime-unavailable")
+    return state.reason === "not-installed"
+      ? missing("Claude Code isn't installed: there's no claude on PATH", [
+          "  1. Install Claude Code, then sign in to it with your Claude subscription:",
+          ...signIn,
+        ])
+      : missing(
+          `Claude Code couldn't start (${state.reason}). neuve auth status claude --check checks it again`,
+          login,
+        );
+  return missing(
+    state.state === "credential-rejected"
+      ? "Claude Code's sign-in was refused. Sign in again"
+      : "Claude Code isn't signed in",
+    login,
+  );
 };

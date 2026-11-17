@@ -6,7 +6,11 @@ import {
 import { captureNativeModels } from "@neuve/harness/native-models-capture";
 import { workspaceModels } from "./workspace-models.ts";
 
-/** Capture native dispatches independently of the configured Neuve subscription route. */
+/**
+ * Capture native dispatches independently of the configured Neuve subscription route. A Claude
+ * route has no direct transport to add: its model is the account's, which the account chat runtime
+ * (`workspace-chat-runtime.ts`) layers over these models, so only the captured native ones return.
+ */
 export function workspaceCaptureModels(
   native: Models,
   options: RouteModelsOptions,
@@ -22,5 +26,6 @@ export function workspaceCaptureModels(
     ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
+  if (options.route.provider === "claude") return captured;
   return workspaceModels(captured, createRouteModels(options), options.route);
 }

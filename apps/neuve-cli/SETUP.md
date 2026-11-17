@@ -33,10 +33,10 @@ Setup also settles how reviews sign in, kept as `review.route` in your Neuve set
 
 - `neuve setup --route openai` chooses ChatGPT; then sign in with `neuve auth login openai`.
 - `neuve setup --route anthropic` chooses an Anthropic API key; then set `ANTHROPIC_API_KEY` in the shell you run Neuve from. It must be an API key: a Claude subscription token doesn't work.
-- A Claude subscription isn't a setup choice yet. Sign in with Claude Code's own `claude auth login`, then name it on each review: `neuve review <base>..<head> --route claude`. `neuve auth status claude --check` checks that sign-in without spending usage.
-- Without `--route`, setup asks on a terminal when no route is set yet ("Sign in with ChatGPT, or use an Anthropic API key?"). With no terminal (a script or an agent) it asks nothing, writes nothing and says how to choose. A route already set is changed only with `--route`.
+- `neuve setup --route claude` chooses your Claude subscription, through Claude Code. Install Claude Code and sign in with its own `claude auth login` first; setup then checks that sign-in, as `neuve auth status claude --check` does, without spending usage. Both need Claude Code installed.
+- Without `--route`, setup asks on a terminal when no route is set yet ("How should reviews sign in?", with the three choices). With no terminal (a script or an agent) it asks nothing, writes nothing and says how to choose. A route already set is changed only with `--route`.
 
-Setup changes only `review.route`: every other setting stays as it was. It refuses a settings file it can't read rather than overwrite it. When the settings path is a link (settings kept in a dotfiles folder), it writes the file the link leads to and keeps the link; a link that doesn't lead to a file of yours is refused. It never signs in for you. `neuve doctor` shows the route and whether its sign-in is there, without reading the credential.
+Setup changes only `review.route`: every other setting stays as it was. It refuses a settings file it can't read rather than overwrite it. When the settings path is a link (settings kept in a dotfiles folder), it writes the file the link leads to and keeps the link; a link that doesn't lead to a file of yours is refused. It never signs in for you. `neuve doctor` shows the route and whether its sign-in is there, without reading the credential. For the Claude route it only checks that Claude Code is installed, because checking the sign-in opens Claude Code, which can use the network.
 
 `neuve review` and `neuve review desk` refuse a repository until setup has run there. Records live in `<git common directory>/neuve/` too; `neuve records --help` describes them. Graph's engine copy and the snapshots `neuve query` builds live in the machine's shared Graph cache, `<budget folder>/graph/cache/`, the one reviews use. `--graph-binary` and `--cli-binary` explicitly select built executables.
 
@@ -57,8 +57,9 @@ Your own [review settings](../../packages/harness/src/settings.ts) choose the mo
 | --- | --- | --- |
 | `anthropic` (the default) | Claude Opus 5.5 through the Anthropic API | `ANTHROPIC_API_KEY` in the environment of the worker that runs the review |
 | `openai` | GPT-6.1 Sol on your ChatGPT plan | `neuve auth login openai` once; `neuve auth status` shows the sign-in |
+| `claude` | Claude Opus 5.5 on your Claude subscription, through Claude Code | Claude Code installed and `claude auth login` once; `neuve auth status claude --check` checks the sign-in |
 
-`neuve review <base>..<head> --route claude` runs a review on Claude Opus 5.5 on your Claude subscription, through your installed Claude Code and its own sign-in (`claude auth login`). Neuve never reads that sign-in. `review.route` can't name it yet, so give `--route claude` on each review. `neuve auth add claude <name>` adds a second Claude sign-in in its own folder and prints the command to sign in; review on it with `--route <name>`.
+`claude` runs reviews through your installed Claude Code and its own sign-in. Neuve never reads that sign-in. `neuve review <base>..<head> --route claude` does the same for one review. `neuve auth add claude <name>` adds a second Claude sign-in in its own folder and prints the command to sign in; review on it with `--route <name>`. An added account can't take the name of a route or a built-in account (`anthropic`, `openai`, `claude`, `chatgpt`).
 
 `review.effort` is `low`, `medium` (the default) or `high`. A review queued where its route's credential is missing waits, and `neuve review` says so; start a worker from a shell that has the credential with `neuve worker start --repo <path>`.
 

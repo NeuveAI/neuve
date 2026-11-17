@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { z } from "zod";
 
-// Reason: the whole entrypoint must account for eight replies without disclosing model names, text, tokens or ids.
-test("smoke entrypoint reports all five steps and eight expected requests through the preloaded fake", async () => {
+// Reason: the whole entrypoint must account for every reply within its plan without disclosing model names, text, tokens or ids.
+test("smoke entrypoint reports all six steps within the planned requests through the preloaded fake", async () => {
   const child = Bun.spawn(
     [
       process.execPath,
@@ -71,16 +71,27 @@ test("smoke entrypoint reports all five steps and eight expected requests throug
       balancedTools: true,
       noRequestAfterFinish: true,
       toolsRequests: 2,
+      refusedCompleted: true,
+      refusedSubmitOnce: true,
+      refusedErrored: true,
+      refusedOneMessage: true,
+      noRequestAfterRefusal: true,
+      refusedFinalStarted: true,
+      refusedFinalCompleted: true,
+      refusedFinalWithinBackstop: true,
+      refusedProtocolError: false,
+      refusedRequests: 2,
       protocolError: false,
-      requests: 8,
-      requestsStarted: 8,
-      requestsCompleted: 8,
-      expectedRequests: 8,
+      requests: 10,
+      requestsStarted: 10,
+      requestsCompleted: 10,
+      expectedRequests: 12,
       withinPlan: true,
       turnsWithinPlan: true,
       inputsWithinPlan: true,
       forkWithinPlan: true,
       toolsWithinPlan: true,
+      refusedWithinPlan: true,
       discardedSteerAbsent: true,
       discardedSteers: 1,
       failures: 0,
@@ -125,7 +136,7 @@ test("R22c full smoke fork failure counts earlier requests", async () => {
       causeKind: "fail",
       errorTag: "RuntimeUnavailable",
       reason: "start-failed",
-      expectedRequests: 8,
+      expectedRequests: 12,
       requestsStarted: 5,
       requestsCompleted: 5,
     });
@@ -161,8 +172,8 @@ test("smoke entrypoint fails when the SDK emits another response after finish", 
     expect(JSON.parse(stdout)).toMatchObject({
       noRequestAfterFinish: false,
       toolsRequests: 2,
-      requests: 8,
-      expectedRequests: 8,
+      requests: 10,
+      expectedRequests: 12,
       failures: 1,
     });
   } finally {
@@ -197,11 +208,11 @@ for (const step of ["turns", "inputs", "fork", "tools", "total"] as const) {
       const counts = JSON.parse(stdout);
       expect(counts.withinPlan).toBe(step !== "total");
       if (step === "total") {
-        expect(counts.requests).toBeGreaterThan(8);
+        expect(counts.requests).toBeGreaterThan(12);
         for (const name of ["turns", "inputs", "fork", "tools"])
           expect(counts[`${name}WithinPlan`]).toBe(false);
       } else {
-        expect(counts.requests).toBe(8);
+        expect(counts.requests).toBe(10);
         expect(counts[`${step}WithinPlan`]).toBe(false);
       }
       expect(code).toBe(1);
@@ -213,7 +224,7 @@ for (const step of ["turns", "inputs", "fork", "tools", "total"] as const) {
 }
 
 // Reason: folding the steer into the first request is a passing run below the planned total.
-test("smoke entrypoint accepts seven responses with a folded steer", async () => {
+test("smoke entrypoint accepts one response fewer with a folded steer", async () => {
   const child = Bun.spawn(
     [
       process.execPath,
@@ -235,8 +246,8 @@ test("smoke entrypoint accepts seven responses with a folded steer", async () =>
     ]);
     expect(stderr).toBe("");
     expect(JSON.parse(stdout)).toMatchObject({
-      requests: 7,
-      expectedRequests: 8,
+      requests: 9,
+      expectedRequests: 12,
       withinPlan: true,
       completedInputsRequests: 2,
       inputsWithinPlan: true,

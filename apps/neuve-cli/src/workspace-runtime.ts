@@ -14,6 +14,7 @@ import { settingsRoute, type AnyRouteConfig } from "@neuve/harness/coding";
 import { Starter } from "@neuve/records-core";
 import { configureRuntime } from "@ace/host/runtime-hooks";
 import { workspaceNativeSources } from "./workspace-native-sources.ts";
+import { routeCodingDefaults } from "./workspace-models.ts";
 import {
   HostConfigSchema,
   configure,
@@ -129,8 +130,7 @@ export function workspaceConfiguration(input: {
       : input.port === 0
         ? { webPort: 0 }
         : {}),
-    model: { provider: input.route.provider, modelId: input.route.model },
-    thinkingLevel: input.route.effort,
+    ...routeCodingDefaults(input.route),
     workerCloseTimeoutMs: 130_000,
     worker: [...command, "workspace", "worker"],
     environment: {

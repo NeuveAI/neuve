@@ -12,9 +12,10 @@ import {
 } from "node:fs";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { Effect, Stream } from "effect";
+import { Effect, Option, Stream } from "effect";
 import {
   AccountName,
+  DEFAULT_ACCOUNTS,
   AccountStore,
   TurnLimit,
   type Account,
@@ -39,6 +40,9 @@ import {
   workspaceChatRuntime,
 } from "../src/workspace-chat-runtime.ts";
 import { SOL_ROUTE } from "../../../packages/harness/src/route.ts";
+import { settingsRoute } from "../../../packages/harness/src/request.ts";
+import { Settings } from "../../../packages/harness/src/settings.ts";
+import { routeCodingDefaults } from "../src/workspace-models.ts";
 import { defaultClaudeWorkingFolder } from "@neuve/harness/runtimes";
 import { PI_TRANSITION_STORAGE_PROFILE } from "../../../scripts/pi-storage.ts";
 import {
@@ -82,7 +86,14 @@ function temporary() {
   };
 }
 
-function saveStatus(home: string, account: Account, signIn: SignInState) {
+function saveStatus(
+  home: string,
+  account: Account,
+  signIn: SignInState,
+  models: ReadonlyArray<Record<string, unknown>> = [
+    { id: "default", displayName: "Test default", description: "Fake model" },
+  ],
+) {
   const path = AccountStore.statusesPath(home);
   mkdirSync(join(path, ".."), { recursive: true, mode: 0o700 });
   writeFileSync(
@@ -100,13 +111,7 @@ function saveStatus(home: string, account: Account, signIn: SignInState) {
           signIn,
           checkedAt: new Date().toISOString(),
           limits: [],
-          models: [
-            {
-              id: "default",
-              displayName: "Test default",
-              description: "Fake model",
-            },
-          ],
+          models,
         },
       ],
     }),
@@ -476,6 +481,251 @@ test("production sources deliver a worker chat through a fake Claude executable 
           expect(() => process.kill(started.pid, 0)).toThrow();
         }
       }
+      at.close();
+    }
+  }
+}, 20000);
+
+// Reason: with `review.route: "claude"` the workspace's coding sessions took their models from the
+// direct route transport, which refuses a Claude route ("requires its runtime"), so no session
+// could open. They must open, and a turn on one of the built-in account's models must run through
+// its Claude Code, here a fake one, with no direct route admission kept.
+test("a Claude review route opens coding sessions on the built-in account's Claude Code, defaulting to the route's model", async () => {
+  const at = temporary();
+  const previousConfig = { ...config };
+  const previousHooks = runtimeHooks();
+  const previousHome = process.env.HOME;
+  const previousPath = process.env.PATH;
+  const bin = join(at.root, "bin");
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, "tailscale"),
+    '#!/bin/sh\necho \'{"BackendState":"Stopped"}\'\n',
+    { mode: 0o700 },
+  );
+  writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
+  process.env.HOME = at.home;
+  process.env.PATH = `${bin}:${previousPath}`;
+  const { codingWorkerSetup } = await import("../src/workspace-cli.ts");
+  const { openChannel, openWorkerStorage } =
+    await import("@ace/host/worker-runtime");
+  const route = settingsRoute(
+    Option.some(Settings.parse({ version: 1, review: { route: "claude" } })),
+  );
+  expect(route).toMatchObject({
+    provider: "claude",
+    account: { name: "claude" },
+    model: "claude-opus-5-5",
+  });
+  const builtIn = DEFAULT_ACCOUNTS.find((entry) => entry.name === "claude")!;
+  const opus = {
+    id: "opus",
+    displayName: "Opus",
+    description: "Fake alias row",
+    resolvedModel: route.model,
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high"],
+  };
+  saveStatus(at.home, builtIn, { state: "signed-in" }, [opus]);
+  const fake = fakeClaude(at.root);
+  const sources = productionChatSources({
+    home: at.home,
+    claude: {
+      cwd: defaultClaudeWorkingFolder(at.home),
+      executable: fake.executable,
+    },
+  });
+  const paths = {
+    ...PI_TRANSITION_STORAGE_PROFILE.paths,
+    state: join(at.root, "state"),
+    captures: join(at.root, "captures"),
+    tmp: join(at.root, "tmp"),
+  };
+  const stateDirectory = join(paths.state, "worker");
+  const lanes = join(at.root, "lanes");
+  for (const path of [stateDirectory, paths.captures, paths.tmp, lanes])
+    mkdirSync(path, { recursive: true });
+  Object.assign(
+    config,
+    HostConfigSchema.parse({
+      home: paths.state,
+      lanes,
+      user: "person",
+      port: 0,
+      environment: { HOME: at.home },
+      worker: [process.execPath],
+      // As the workspace configures its host: no fixed model on a Claude route, its effort.
+      ...routeCodingDefaults(route),
+    }),
+  );
+  expect(config.model).toBeUndefined();
+  const setup = codingWorkerSetup(
+    { paths },
+    route,
+    {
+      fetch: Object.assign(
+        async () => {
+          throw new Error("No direct model calls on the Claude route");
+        },
+        { preconnect: () => {} },
+      ),
+    },
+    sources,
+  );
+  let harness: Harness | undefined;
+  configureRuntime({
+    worker: {
+      models: setup.models,
+      extensions: (worker) => {
+        const extension = setup.extensions?.(worker);
+        return {
+          extensions: extension?.extensions ?? [],
+          attach: async (attached) => {
+            harness = attached;
+            await extension?.attach?.(attached);
+          },
+        };
+      },
+      ...(setup.priced ? { priced: setup.priced } : {}),
+      ...(setup.defaultModel ? { defaultModel: setup.defaultModel } : {}),
+    },
+  });
+  const worker: WorkerContext = { sessionId: "worker", config, stateDirectory };
+  let channel: Channel | undefined;
+  const native = createModels();
+  try {
+    const storage = await openWorkerStorage(setup, worker, () =>
+      openNodeSqliteStorage(join(stateDirectory, "channel.sqlite")),
+    );
+    channel = await openChannel(
+      {
+        id: "worker",
+        name: "worker",
+        owner: "person",
+        project: at.root,
+        storage,
+        models: native,
+        resume: false,
+        env: (cwd) => new NodeExecutionEnv({ cwd }),
+        directory: {
+          self: { id: "worker", name: "worker" },
+          list: async () => [],
+          deliver: async () => {},
+        },
+        log: () => {},
+      },
+      stateDirectory,
+    );
+    const models = await setup.models(worker, native);
+    expect(models.getModel("claude", "opus")?.provider).toBe("claude");
+    expect(
+      setup.nonTurnModels?.(worker, "caption", ROOT_CONVERSATION_ID, native),
+    ).toBeDefined();
+    const observed: unknown[] = [];
+    await channel.handle({ op: "watch", chat: 1 }, (frame) =>
+      observed.push(frame),
+    );
+    await channel.handle(
+      {
+        op: "ask",
+        author: "person",
+        text: "Coding turn on the Claude route",
+      },
+      () => {},
+    );
+    if (!harness) throw new Error("Worker did not attach its Harness");
+    await harness.waitForIdle(BACKGROUND_CONTEXT);
+    await until(() => !channel!.busy);
+    expect(
+      markerEvents(fake.marker).filter((event) => event.type === "prompt"),
+    ).toEqual([
+      {
+        type: "prompt",
+        content: [
+          { type: "text", text: "person: Coding turn on the Claude route" },
+        ],
+      },
+    ]);
+    await until(() =>
+      JSON.stringify(observed).includes(
+        "Reply from the fake Claude executable",
+      ),
+    );
+    // The chat with no model named ran the account's row for the route's model, at its effort.
+    const agent = await (await harness.conversation(
+      ROOT_CONVERSATION_ID,
+      BACKGROUND_CONTEXT,
+    ))!.agent(BACKGROUND_CONTEXT);
+    expect(agent.model).toEqual({ provider: "claude", modelId: "opus" });
+    expect(agent.thinkingLevel).toBe(route.effort);
+    expect(setup.priced?.({ provider: "claude", modelId: "opus" })).toBe(false);
+    // Each refusal is the plain sentence, never a missing API key, and no prompt reaches Claude Code.
+    const refused = async (message: string) => {
+      const { chat } = (await channel!.handle(
+        { op: "chat", author: "person" },
+        () => {},
+      )) as { chat: number };
+      await expect(
+        channel!.handle(
+          { op: "ask", author: "person", chat, text: "Do not send this" },
+          () => {},
+        ),
+      ).rejects.toThrow(message);
+    };
+    saveStatus(at.home, builtIn, { state: "signed-in" }, [
+      { ...opus, id: "sonnet", resolvedModel: "claude-sonnet-5" },
+    ]);
+    await refused(
+      "Claude Code for account claude doesn't offer claude-opus-5-5, the model reviews run on. Run neuve auth status claude --check to read its models again, or pick another model for this chat.",
+    );
+    saveStatus(
+      at.home,
+      builtIn,
+      {
+        state: "not-signed-in",
+        hint: { kind: "command", command: "claude auth login" },
+      },
+      [opus],
+    );
+    await refused(
+      "Claude Code isn't signed in for account claude. Run claude auth login, then neuve auth status claude --check.",
+    );
+    expect(
+      markerEvents(fake.marker).filter((event) => event.type === "prompt"),
+    ).toHaveLength(1);
+    // No direct route ran, so no direct retry deadline was kept.
+    expect(existsSync(join(stateDirectory, "route-admission.json"))).toBe(
+      false,
+    );
+  } finally {
+    const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
+      throw new Error("Capture scanner is outside this test");
+    });
+    try {
+      if (channel)
+        await expect(channel.close()).rejects.toThrow(
+          "capture worker could not start",
+        );
+    } finally {
+      spawn.mockRestore();
+      await sources.close();
+      for (const key of Object.keys(config))
+        Reflect.deleteProperty(config, key);
+      Object.assign(config, previousConfig);
+      const restoredHooks = { ...previousHooks };
+      Object.defineProperty(restoredHooks, "worker", {
+        value: previousHooks.worker,
+        enumerable: true,
+      });
+      configureRuntime(restoredHooks);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (existsSync(fake.marker))
+        for (const event of markerEvents(fake.marker))
+          if (event.type === "started")
+            expect(() => process.kill(event.pid, 0)).toThrow();
       at.close();
     }
   }

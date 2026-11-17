@@ -3,7 +3,7 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { RuntimeEvent } from "@neuve/runtime";
 import { Effect, Stream } from "effect";
 import { toolOutputObservation } from "../src/smoke-runtime.ts";
-import { checkTools } from "../src/smoke-tools.ts";
+import { checkRefusedEnd, checkTools } from "../src/smoke-tools.ts";
 import { assistant, errorResult, result, SESSION_ID } from "./frames.ts";
 import { inbound, out, type Entry } from "./replay.ts";
 import { account, runReplay } from "./smoke-fixture.ts";
@@ -305,5 +305,84 @@ for (const mode of [
             ? 3
             : 2,
     );
+  });
+}
+
+// Reason: the refused step must pass only when Claude Code ends the round at the refusal and the
+// session then takes its final turn; a new response after the refusal is the live failure.
+for (const mode of ["valid", "request-after-refusal"] as const) {
+  test(`smoke refused end: ${mode}`, async () => {
+    const observation = toolOutputObservation();
+    const finalReply = assistant(undefined);
+    finalReply.message.id = "refused-final";
+    const entries: Entry[] = [
+      out({
+        type: "query.open",
+        check: (options) => expect(options.outputFormat).toBeUndefined(),
+      }),
+      out({
+        type: "prompt.offer",
+        message: "Call submit once with ok set to true.",
+      }),
+      {
+        type: "smoke.tool.calls",
+        schemas: {
+          submit: {
+            $schema: "https://json-schema.org/draft/2020-12/schema",
+            type: "object",
+            properties: { ok: { type: "boolean" } },
+            required: ["ok"],
+            additionalProperties: false,
+          },
+        },
+        calls: [{ name: "submit", callId: "refused", input: { ok: true } }],
+      },
+      inbound(carrier("refused")),
+      ...(mode === "valid"
+        ? [
+            inbound(result()),
+            out({ type: "query.close" }),
+            out({
+              type: "query.open",
+              check: (options) => expect(options.outputFormat).toBeDefined(),
+            }),
+            out({ type: "prompt.offer", message: /turn limit/ }),
+            inbound(finalReply),
+            inbound(result({ structured_output: { ok: true } })),
+          ]
+        : [inbound(assistant(undefined))]),
+      out({ type: "query.close" }),
+    ];
+    const counts = await runReplay(
+      entries,
+      (runtime) =>
+        checkRefusedEnd(
+          {
+            ...runtime,
+            openSession: (account, policy, start) => {
+              expect(Number(policy.turnLimit)).toBe(1);
+              expect(policy.tools.map((tool) => tool.name)).toEqual(["submit"]);
+              return runtime.openSession(account, policy, start);
+            },
+          },
+          account,
+          observation,
+        ),
+      observation,
+    );
+    const valid = mode === "valid";
+    expect(counts).toMatchObject({
+      refusedCompleted: true,
+      refusedSubmitOnce: true,
+      refusedErrored: true,
+      refusedOneMessage: true,
+      noRequestAfterRefusal: valid,
+      refusedFinalStarted: valid,
+      refusedFinalCompleted: valid,
+      refusedFinalWithinBackstop: true,
+      protocolError: false,
+      requests: valid ? 2 : 1,
+      withinPlan: true,
+    });
   });
 }
