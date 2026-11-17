@@ -230,6 +230,7 @@ export type RangeManifest = z.infer<typeof RangeManifest>;
 /**
  * The range manifest's computation. Version 2 holds no leads, no index and no retriever setting:
  * they moved to the range's leads (`rangeLeadsSpec`), which nothing on the review's path reads.
+ * Version 3 uses canonical Git diff settings, excluding previously config-dependent hunks.
  */
 export const manifestSpec = (
   range: { readonly baseOid: string; readonly headOid: string },
@@ -238,7 +239,7 @@ export const manifestSpec = (
   source: OutlineSource,
 ): Computations.ComputationSpec => ({
   op: "harness.range-manifest",
-  opVersion: 2,
+  opVersion: 3,
   inputs: {
     base: `git-commit:${range.baseOid}`,
     head: `git-commit:${range.headOid}`,

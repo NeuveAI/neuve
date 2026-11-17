@@ -40,6 +40,7 @@ import {
   mcpClientsLayer,
 } from "../../../packages/harness/src/mcp-client.ts";
 import { precomputeStage } from "../../../packages/harness/src/pipeline.ts";
+import { RangeManifest } from "../../../packages/harness/src/manifest.ts";
 import { PreparationPayload } from "@neuve/records-schema";
 import { readData } from "@neuve/records-core";
 import { DEFAULT_RETRIEVER } from "../../../packages/harness/src/retriever.ts";
@@ -60,7 +61,7 @@ const git = (repository: string, ...args: string[]) => {
   if (child.exitCode !== 0) throw new Error(child.stderr.toString());
   return child.stdout.toString().trim();
 };
-const setup = async (name: string) => {
+const setup = async (name: string, content?: (value: number) => string) => {
   const repository = join(root, name);
   git(root, "init", "-q", repository);
   git(repository, "config", "user.name", "Fixture");
@@ -75,10 +76,11 @@ const setup = async (name: string) => {
     for (let index = 0; index < 8; index++)
       writeFileSync(
         join(repository, `file-${index}.ts`),
-        Array.from(
-          { length: 40 },
-          (_, line) => `export const count${line} = ${value};\n`,
-        ).join(""),
+        content?.(value) ??
+          Array.from(
+            { length: 40 },
+            (_, line) => `export const count${line} = ${value};\n`,
+          ).join(""),
       );
   };
   sample(1);
@@ -312,6 +314,72 @@ test("a real post-commit hook enqueues one job and preparation output is reused 
   } finally {
     await cold.close();
     await prepared.close();
+  }
+}, 120_000);
+
+test("preparation under Myers equals a cold Precompute after switching to Histogram", async () => {
+  // Repeated lines give the algorithms different changed-line ownership, not just formatting.
+  const content = (value: number) =>
+    (value === 1
+      ? "a,c,a,c,a,a,b,a,d,a,b,a,c,c,a,d,d,a,a,c"
+      : "a,c,a,b,a,a,c,a,d,a,b,c,c,c,a,d,d,a,a,c"
+    )
+      .split(",")
+      .map((line) => `// ${line}\n`)
+      .join("");
+  const prepared = await setup("algorithm-prepared", content);
+  const cold = await setup("algorithm-cold", content);
+  try {
+    expect(prepared.headOid).toBe(cold.headOid);
+    const raw = (algorithm: string) =>
+      git(
+        prepared.repository,
+        "diff",
+        `--diff-algorithm=${algorithm}`,
+        prepared.baseOid,
+        prepared.headOid,
+      );
+    expect(raw("myers")).not.toBe(raw("histogram"));
+    git(prepared.repository, "config", "diff.algorithm", "myers");
+    await prepared.run(Ingest.ingestSpool(prepared.location));
+    expect(await prepared.drain()).toBe(1);
+    git(prepared.repository, "config", "diff.algorithm", "histogram");
+    git(cold.repository, "config", "diff.algorithm", "histogram");
+    const warmed = await prepared.review();
+    const baseline = await cold.review();
+    const warmedEntry = warmed.log.find(
+      (r) => r.type === "precompute.manifest",
+    );
+    const coldEntry = baseline.log.find(
+      (r) => r.type === "precompute.manifest",
+    );
+    expect(warmedEntry?.status).toBe("reused");
+    expect(coldEntry?.status).toBe("computed");
+    expect(warmedEntry?.key).toBe(coldEntry?.key);
+    const manifest = (fixture: typeof prepared, key: string) =>
+      fixture.run(
+        Effect.gen(function* () {
+          const store = yield* Computations.ComputationStore;
+          const saved = Option.getOrThrow(yield* store.lookup(key));
+          const blobs = yield* Blobs.BlobStore;
+          const value = yield* blobs.get(saved.outputHash);
+          if (value._tag !== "Present") throw new Error("Manifest was pruned");
+          return readData(
+            RangeManifest,
+            JSON.parse(new TextDecoder().decode(value.bytes)),
+          );
+        }),
+      );
+    const warmValue = await manifest(prepared, String(warmedEntry?.key));
+    const coldValue = await manifest(cold, String(coldEntry?.key));
+    expect(warmValue.hunks.length).toBeGreaterThan(0);
+    expect(warmValue).toEqual(coldValue);
+    expect(warmValue.hunks.map((hunk) => [hunk.added, hunk.deleted])).toEqual(
+      Array.from({ length: 8 }, () => [3, 3]),
+    );
+  } finally {
+    await prepared.close();
+    await cold.close();
   }
 }, 120_000);
 

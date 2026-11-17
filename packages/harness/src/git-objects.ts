@@ -1,7 +1,12 @@
 import { setPriority } from "node:os";
 import { Effect } from "effect";
 import { prepareLocalGitRead } from "@neuve/graph-client";
-import { GitFailed, git, withGitReadSession } from "./git.ts";
+import {
+  GitFailed,
+  git,
+  gitWithCanonicalConfig,
+  withGitReadSession,
+} from "./git.ts";
 
 /**
  * Git object reads for Precompute (proposal §5.2, 10.34): trees, blobs, merge bases, commit texts
@@ -355,23 +360,33 @@ const stripPrefix = (path: string) => {
 const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
 /**
- * The diff between two trees or commits: three context lines, renames found, full blob OIDs, no
- * external diff or text conversion, and fixed `a/` and `b/` prefixes whatever the user's config says.
+ * The canonical diff between two trees or commits. Only target-tree attributes and built-in
+ * drivers apply. Whitespace changes count; user and local configuration cannot change hunks.
+ * Changes to this recipe must invalidate both manifestSpec and commitHunksSpec.
  */
 export const diffTrees = (repository: string, from: string, to: string) =>
   Effect.map(
-    git(repository, [
+    gitWithCanonicalConfig(repository, [
       // Attributes (such as `-diff`) come from the new side's tree, never the working tree.
       `--attr-source=${to}`,
       "-c",
       "core.quotePath=true",
       "diff",
+      "--patch",
       "--no-color",
       "--no-ext-diff",
       "--no-textconv",
       "--full-index",
-      "--find-renames",
+      "--diff-algorithm=myers",
+      "--indent-heuristic",
+      "--find-renames=50%",
+      "-l1000",
       "-U3",
+      "--inter-hunk-context=0",
+      "--no-function-context",
+      "--no-relative",
+      "--ignore-submodules=none",
+      "--submodule=short",
       "--src-prefix=a/",
       "--dst-prefix=b/",
       from,

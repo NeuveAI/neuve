@@ -118,14 +118,14 @@ process.exit(Bun.spawnSync([${JSON.stringify(executable)}, ...args], { env: proc
           `
       import { Effect } from "effect";
       import { git, gitMeasured, gitWithInput } from "./src/git.ts";
-      import { lsTree, readBlobs } from "./src/git-objects.ts";
+      import { diffTrees, emptyTree, lsTree, readBlobs } from "./src/git-objects.ts";
       import { blobSizes } from "./src/hunks.ts";
       import { withGitReadSnapshot } from "./src/git-read-snapshot.ts";
       const repository = ${JSON.stringify(repository)}, oid = ${JSON.stringify(oid)}, commit = ${JSON.stringify(commit)};
       const reads = [];
       const original = Bun.spawn;
       Bun.spawn = new Proxy(original, { apply(target, self, args) {
-        if (args[0].some(a => ["cat-file", "ls-tree", "show", "grep"].includes(a))) reads.push({
+        if (args[0].some(a => ["cat-file", "ls-tree", "show", "grep", "diff"].includes(a))) reads.push({
           executable: args[0][0], flag: args[0].includes("--no-lazy-fetch"),
           configKey: args[1]?.env?.GIT_CONFIG_KEY_0, noLazyFetch: args[1]?.env?.GIT_NO_LAZY_FETCH,
         });
@@ -138,6 +138,7 @@ process.exit(Bun.spawnSync([${JSON.stringify(executable)}, ...args], { env: proc
           gitMeasured(repository, ["show", oid]), gitMeasured(repository, ["show", oid], { ...process.env }),
           gitWithInput(repository, ["cat-file", "--batch-check"], oid + "\\n"),
           git(repository, ["grep", "-F", "offline", commit]),
+          Effect.flatMap(emptyTree(repository), tree => diffTrees(repository, tree, commit)),
         ]) results.push(yield* op.pipe(Effect.match({
           onFailure: error => ({ error: error.message }),
           onSuccess: value => ({ size: value instanceof Map ? value.size : undefined }),

@@ -129,7 +129,7 @@ export const commitHunksSpec = (
   source: OutlineSource,
 ): Computations.ComputationSpec => ({
   op: "harness.commit-hunks",
-  opVersion: 1,
+  opVersion: 2,
   inputs: { from: `git-tree:${fromTree}`, to: `git-tree:${toTree}` },
   config: { index: indexRecipe(source), query: QUERY_RECIPE } as never,
 });

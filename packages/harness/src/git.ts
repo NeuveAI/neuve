@@ -1,5 +1,5 @@
 import { mkdtemp, realpath, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setPriority, tmpdir } from "node:os";
 import { Data, Effect, Option } from "effect";
 import { prepareLocalGitRead, type GitReadPolicy } from "@neuve/graph-client";
@@ -358,6 +358,94 @@ const runGitWithAttributes = (
   );
 };
 
+/**
+ * A tree diff must not inherit local diff drivers or info/attributes. Use only the source's
+ * objects in a temporary Git directory, retaining its assessed executable and offline policy.
+ * The empty template and isolated environment exclude system and user configuration too.
+ */
+export const gitWithCanonicalConfig = (
+  repository: string,
+  args: ReadonlyArray<string>,
+) => {
+  const read = Effect.gen(function* () {
+    const policy = yield* gitReadPolicy(repository);
+    const { stdout } = yield* runGitMeasured(
+      repository,
+      [
+        ...policy.commandPrefix,
+        "rev-parse",
+        "--show-object-format",
+        "--git-path",
+        "objects",
+      ],
+      policy.environment,
+      policy.executable,
+    );
+    const [format, ...path] = stdout.replace(/\n$/, "").split("\n");
+    if ((format !== "sha1" && format !== "sha256") || path.length === 0)
+      return yield* Effect.fail(
+        new GitFailed({
+          args,
+          exitCode: -1,
+          message: "Invalid Git object store",
+        }),
+      );
+    const objects = resolve(repository, path.join("\n"));
+    return yield* Effect.acquireUseRelease(
+      Effect.tryPromise({
+        try: () => mkdtemp(join(tmpdir(), "neuve-canonical-diff-")),
+        catch: (cause) =>
+          new GitFailed({ args, exitCode: -1, message: String(cause) }),
+      }),
+      (directory) =>
+        Effect.gen(function* () {
+          yield* runGitMeasured(
+            directory,
+            [
+              ...policy.commandPrefix,
+              "init",
+              "--bare",
+              "--quiet",
+              "--template=",
+              `--object-format=${format}`,
+            ],
+            policy.environment,
+            policy.executable,
+          );
+          const result = yield* runGitWithAttributes(
+            directory,
+            [
+              `--git-dir=${directory}`,
+              "-c",
+              "core.ignoreCase=false",
+              "-c",
+              "core.precomposeUnicode=false",
+              "-c",
+              "core.bigFileThreshold=512m",
+              ...args,
+            ],
+            {
+              ...policy,
+              environment: {
+                ...policy.environment,
+                GIT_OBJECT_DIRECTORY: objects,
+              },
+            },
+          );
+          return result.stdout;
+        }),
+      (directory) =>
+        Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    );
+  });
+  return memoizedGitRead(
+    repository,
+    args,
+    read,
+    JSON.stringify(["canonical-config", ...args]),
+  );
+};
+
 export const gitMeasured = (
   repository: string,
   args: ReadonlyArray<string>,
@@ -397,6 +485,21 @@ export const git = (
       gitMeasured(repository, args, environment),
       ({ stdout }) => stdout,
     );
+  return memoizedGitRead(
+    repository,
+    args,
+    Effect.map(gitMeasured(repository, args), ({ stdout }) => stdout),
+    JSON.stringify(args),
+  );
+};
+
+const memoizedGitRead = (
+  repository: string,
+  args: ReadonlyArray<string>,
+  read: Effect.Effect<string, GitFailed>,
+  key: string,
+) => {
+  if (!immutableCommand(args)) return read;
   return Effect.gen(function* () {
     const context = yield* Effect.context<never>();
     return yield* withGitReadSession(
@@ -405,14 +508,9 @@ export const git = (
         Effect.tryPromise({
           try: (signal) =>
             session.command(
-              JSON.stringify(args),
-              async (sharedSignal) => {
-                const { stdout } = await Effect.runPromiseWith(context)(
-                  gitMeasured(repository, args),
-                  { signal: sharedSignal },
-                );
-                return stdout;
-              },
+              key,
+              (sharedSignal) =>
+                Effect.runPromiseWith(context)(read, { signal: sharedSignal }),
               signal,
             ),
           catch: (cause) =>
@@ -424,7 +522,7 @@ export const git = (
                   message: "Git command snapshot failed or was cancelled",
                 }),
         }),
-      Effect.map(gitMeasured(repository, args), ({ stdout }) => stdout),
+      read,
     );
   });
 };
