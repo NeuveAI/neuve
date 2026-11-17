@@ -19,7 +19,7 @@ Neuve is built by coding agents under independent review, so we are glad to see 
 
 ## Build Neuve from a checkout
 
-This is how you work on Neuve, and how to install it before the first release. You need [Git](https://git-scm.com), [Bun](https://bun.sh) 1.4.4 and [Go](https://go.dev) 1.27 (an older Go downloads 1.27 on its first build). Today we run and test Neuve from a checkout on macOS. Linux, and Windows through WSL, come with the first release.
+This is how you work on Neuve. To use it, install a release with the [README's one-line install](README.md#quick-start) instead. You need [Git](https://git-scm.com), [Bun](https://bun.sh) 1.4.4 and [Go](https://go.dev) 1.27 (an older Go downloads 1.27 on its first build). Maintainers run Neuve from a checkout on macOS, and pull-request CI runs the contributor check below on Linux.
 
 ```sh
 git clone --recurse-submodules https://github.com/NeuveAI/neuve.git
@@ -48,7 +48,9 @@ The [architecture overview](architecture/README.md) explains how they fit togeth
 | [`packages/records-schema`](packages/records-schema), [`packages/records-core`](packages/records-core) | The system of records: its schemas, and the library over one SQLite file per repository |
 | [`packages/review-rules`](packages/review-rules) | The rules the harness and the web app share for what a review unit owns |
 | [`packages/graph-client`](packages/graph-client), [`packages/semantic-client`](packages/semantic-client) | The validated boundaries to Neuve Graph and to the semantic workers |
+| [`packages/runtime`](packages/runtime), [`packages/runtime-claude`](packages/runtime-claude) | The account and runtime contracts, and the runtime that runs reviews on a Claude subscription through Claude Code |
 | [`packages/evaluation`](packages/evaluation) | Evaluation cases and evaluators |
+| [`apps/website`](apps/website) | The neuve.ai site, which also serves the one-line installer from [`scripts/install.sh`](scripts/install.sh) |
 
 ## Check your change
 
@@ -60,7 +62,7 @@ The contributor check is three commands, and it needs only Git and Bun 1.4.4. Pu
 | `bun run typecheck` | Before every push |
 | `bun run test` | Before every push; it runs every package's tests, one package at a time |
 
-Tests that need the Neuve Graph engine skip when it isn't built. To run them too, install Go 1.27 and build it with `bun run build:graph`. Neuve Graph lives in [its own repository](https://github.com/NeuveAI/neuve-graph), mounted at `apps/neuve-graph`, with its own Go tooling and guide. `bun run check` and `check:remote` are the maintainers' full checks; you don't need them.
+Tests that need the Neuve Graph engine skip when it isn't built. To run them too, install Go 1.27 and build it with `bun run build:graph`. Neuve Graph lives in [its own repository](https://github.com/NeuveAI/neuve-graph), mounted at `apps/neuve-graph`, with its own Go tooling and guide. `bun run check` is the maintainers' full check; you don't need it.
 
 ## How review works
 

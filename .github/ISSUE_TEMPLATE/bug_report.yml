@@ -31,14 +31,14 @@ body:
     id: version
     attributes:
       label: Neuve version
-      description: The output of `neuve --version`, and the commit you built from (`git rev-parse --short HEAD` in your Neuve checkout).
+      description: The output of `neuve --version`. If you built Neuve from a checkout, add the commit (`git rev-parse --short HEAD` in it).
     validations:
       required: true
   - type: input
     id: environment
     attributes:
       label: Environment
-      description: Operating system and version, `bun --version`, `go version`, and the review route (`anthropic` or `openai`).
+      description: Operating system and version, how you installed Neuve (the one-line install or a checkout, with `bun --version` and `go version` for a checkout), and the review route (`anthropic`, `claude` or `openai`).
     validations:
       required: true
   - type: checkboxes
@@ -48,5 +48,5 @@ body:
       options:
         - label: I searched the existing issues and this isn't one of them.
           required: true
-        - label: It still happens on the latest `main`.
+        - label: It still happens on the latest release, or on the latest `main` for a checkout.
           required: true

@@ -45,6 +45,8 @@ Reviews run on your own model account. Choose one of three:
   claude auth login
   ```
 
+  If you installed Neuve before it offered this choice, update it first: run `neuve upgrade`, or the install line again if your `neuve` has no `upgrade`. An older `neuve` refuses a settings file that names `claude`.
+
 - **A ChatGPT subscription.** Choose it with `neuve setup --route openai`, then sign in:
 
   ```sh
@@ -65,7 +67,7 @@ neuve review main..my-branch
 neuve review desk
 ```
 
-`neuve review` starts a review and follows its run. A background worker runs the review, so closing the terminal doesn't stop it. Without `neuve setup`, `neuve review` and `neuve review desk` stop and print the setup command to run. `neuve review desk` prints the desk's address, such as `http://127.0.0.1:4141/`. The desk stays open until you press Ctrl-C. While it's open, `neuve review` also prints a link to the review. The [CLI guide](apps/neuve-cli/SETUP.md) covers everything else `neuve` does in a repository.
+`neuve review` starts a review and follows its run. A background worker runs the review, so closing the terminal doesn't stop it. Without `neuve setup`, `neuve review` and `neuve review desk` stop and print the setup command to run. `neuve review desk` prints the desk's address, such as `http://127.0.0.1:4141/`. The desk stays open until you press Ctrl-C. While it's open, `neuve review` also prints a link to the review. The [CLI guide](apps/neuve-cli/SETUP.md) covers setup, review settings, the desk and the other commands, and `neuve --help` lists them all.
 
 ### Upgrade and uninstall
 
@@ -118,7 +120,7 @@ The [product vocabulary](vocabulary.md) defines Neuve's terms, including the rev
 ## Documentation
 
 - [Contributing](CONTRIBUTING.md): building Neuve from a checkout, the contributor check and how review works
-- [CLI guide](apps/neuve-cli/SETUP.md): installing Neuve in a repository and everything `neuve` does there
+- [CLI guide](apps/neuve-cli/SETUP.md): setting Neuve up in a repository, review settings, the desk and the other `neuve` commands
 - [Architecture](architecture/README.md) and its records: how the system is built, and why
 - [Packages](CONTRIBUTING.md#packages): the repository's packages and what each one is
 - [Product vocabulary](vocabulary.md) and [foundations](foundations): what Neuve's terms and ideas mean

@@ -13,7 +13,7 @@
 
 A second request for the same range and configuration joins the same cycle and follows the same job; it never starts a second run. Requesting again is how you wait for a review someone else asked for.
 
-If the worker lacks the route's credential, the job waits and the command says which variable is missing. That is not an error: tell the person ([setup.md](setup.md)).
+If the worker lacks the route's credential, the job waits and the command says which sign-in or variable is missing. That is not an error: tell the person ([setup.md](setup.md)).
 
 ## Read the result
 

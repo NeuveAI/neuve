@@ -16,14 +16,15 @@ On a repository on an external disk, `neuve query --refresh-cache` keeps its tem
 
 ## The model sign-in
 
-A review runs on a model the person signs in to; Neuve keeps no credential of its own. There are two routes:
+A review runs on a model the person signs in to; Neuve keeps no credential of its own. There are three routes:
 
 - **If the person has ChatGPT:** `neuve setup --route openai` chooses the OpenAI route for reviews (it is kept in the person's Neuve settings), then the person runs `neuve auth login openai`, a sign-in with ChatGPT in the browser. `neuve auth status` shows the account. A single review can name its route with `neuve review <base>..<head> --route openai`.
+- **If the person has a Claude subscription:** `neuve setup --route claude` chooses it. Reviews run through the person's installed Claude Code and its own sign-in, which Neuve never reads. The person installs Claude Code and signs in with `claude auth login` first; setup then checks that sign-in without spending usage. A `neuve` older than this route refuses a settings file that names `claude`: if `neuve setup --help` doesn't list `claude`, tell the person to update it first with `neuve upgrade`, or with the one-line install again if their `neuve` has no `upgrade`.
 - **Otherwise:** `neuve setup --route anthropic`, then an Anthropic API key in `ANTHROPIC_API_KEY`, set in the shell that starts the background worker. It must be an API key from the Anthropic Console; a Claude subscription token must not go there.
 
 `neuve doctor` shows which route a review will use and whether its credential is present.
 
-Never sign in on the person's behalf. Don't ask for, type, copy or store a credential, and don't run `neuve auth login openai` for them. When one is missing, say which route needs what, give the command, and let the person run it.
+Never sign in on the person's behalf. Don't ask for, type, copy or store a credential, and don't run `neuve auth login openai` or `claude auth login` for them. When one is missing, say which route needs what, give the command, and let the person run it.
 
 ## Worked example
 

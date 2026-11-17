@@ -1,6 +1,8 @@
 # Neuve on cloud Linux machines
 
-The pull-request replays run on Modal, one machine per pull request ([decision 10.129](../../../process/decisions.md), the owner's call on moving the replay runs to the cloud). This folder builds the Linux image those machines start from. It also sets how they share one ChatGPT sign-in without signing each other out.
+This is maintainers' tooling, not part of a release. Release users install Neuve on Linux with the [README's one-line install](../../../README.md#quick-start).
+
+The pull-request replays ran on Modal, one machine per pull request ([decision 10.129](../../../process/decisions.md)), until Modal was retired on 12 November 2026 ([decision 14.10](../../../process/decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)). The image and the shared sign-in below are still in the code. This folder builds the Linux image those machines started from. It also sets how they share one ChatGPT sign-in without signing each other out.
 
 ## The image
 
@@ -35,7 +37,7 @@ Where this can still fail:
 
 The owner chose OpenAI's documented way for remote machines ([decision 10.131](../../../process/decisions.md), which amends 10.129's sign-in by code). Neuve's route has no sign-in by code. Codex's device endpoint refuses Neuve's registration client (`invalid_client`). It also carries no resource, scope or host ID.
 
-The owner runs these steps; agents never handle the credential files:
+A person runs these steps; agents never handle the credential files:
 
 1. On the Mac, sign in once into a fresh, empty folder. The sign-in registers its own client and host ID, separate from the everyday sign-in, which is never copied:
 

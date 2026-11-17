@@ -14,7 +14,7 @@ Start it from the monorepo root:
 bun run dev
 ```
 
-`bun run dev` ([`scripts/dev.ts`](../../scripts/dev.ts), its one configuration) starts the web BFF under Vite on `127.0.0.1:3000`; set `NEUVE_BFF_PORT` to use another port. There is no Records server: Records is a library ([decision 8.3](../../process/decisions.md)), and the on-demand worker arrives in M2 S4. Before starting, the command:
+`bun run dev` ([`scripts/dev.ts`](../../scripts/dev.ts), its one configuration) starts the web BFF under Vite on `127.0.0.1:3000`; set `NEUVE_BFF_PORT` to use another port. There is no Records server: Records is a library ([decision 8.3](../../process/decisions.md)), and reviews run in the repository's background worker, which `bun run dev` doesn't start. Before starting, the command:
 
 1. reads `neuve/dev/run.json`, where each run records the boot, its launcher and the web process group with their start times. A file from an earlier boot is discarded. It refuses to start while the recorded launcher is alive. When that launcher is gone, it stops only the recorded groups whose leader is alive with the recorded start time, naming each one. A recorded group that has lost its leader but still has members cannot be proven to be Neuve's, so it is reported, left running, and the command refuses until you have checked it and removed the file;
 2. refuses to start when the port is busy, naming the process (PID and command) that holds it. It never stops a process it did not record.
@@ -32,5 +32,3 @@ The BFF reads Records through `@neuve/records-core` (M5 S3). `/` opens the newes
 With the Feedback setting on (Settings, off by default and kept in this browser), the desk takes the owner's feedback (10.100): a call on the unit beside its lane label, a grade on each context card, a judgement on each agent finding and a rubric under each digest. Each answer is recorded in Records as the person git names, through `HumanCommands.recordFeedback`; a correction supersedes the earlier answer, and `neuve records feedback` exports them. Feedback changes nothing in the review.
 
 Storybook's "Screens/Real packet" stories show a real review through the same projection. Regenerate their fixture from a repository that holds one with `bun run --cwd apps/neuve-web/apps/web fixture:real-packet -- --repo <path>`.
-
-The former `apps/neuve-web/neuve/` directory and the files under `validation/` are local history from the standalone repository and the removed review stack. They are evidence, not inputs, and nothing reads them.

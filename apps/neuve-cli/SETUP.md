@@ -1,6 +1,6 @@
 # Install Neuve in a repository
 
-Build the current Graph source, then install copies of the public CLI, that Graph engine and the review desk from your Neuve checkout into a folder of your own, and put its `bin` on your `PATH`:
+Most people install a release with the [README's one-line install](../../README.md#quick-start), which puts `neuve` in `~/.neuve`, and go straight to [setup](#set-up-a-repository). To work from a Neuve checkout instead, build the current Graph source, then install copies of the public CLI, that Graph engine and the review desk from your Neuve checkout into a folder of your own, and put its `bin` on your `PATH`:
 
 ```sh
 bun run build:graph
@@ -10,7 +10,11 @@ export PATH="$HOME/.neuve-src/bin:$PATH"
 
 Keep a from-source copy out of `~/.neuve`, where the one-line installer puts release builds; it refuses a folder that holds a from-source install. Without `--prefix`, `install:cli` writes the machine's shared copy in `~/.local`, which every hook and terminal on the machine runs. That install is guarded: it takes only a clean integration branch such as `main`, after `bun run check` passed on that exact commit, so a half-tested build never replaces the copy other sessions use. Maintainers install that way; a copy in your own prefix skips those guards.
 
-Graph's `mise.toml` selects its Go toolchain. `mise run build` is the equivalent configured build when mise is installed. The [root command table](../../docs/development.md#commands) says where `install:cli` puts the copies and what it refuses to replace; rebuilding or testing the workspace does not change them. If its manifest `<prefix>/lib/neuve/install.json` is corrupt or incomplete, remove it, `<prefix>/bin/neuve` and `<prefix>/lib/neuve/entire-graph`, then install again. Then run the installed command against an existing Git repository:
+Graph's `mise.toml` selects its Go toolchain. `mise run build` is the equivalent configured build when mise is installed. The [root command table](../../docs/development.md#commands) says where `install:cli` puts the copies and what it refuses to replace; rebuilding or testing the workspace does not change them. If its manifest `<prefix>/lib/neuve/install.json` is corrupt or incomplete, remove it, `<prefix>/bin/neuve` and `<prefix>/lib/neuve/entire-graph`, then install again.
+
+## Set up a repository
+
+Run setup in an existing Git repository:
 
 ```sh
 neuve setup --repo /absolute/path/to/repository
@@ -61,6 +65,8 @@ Your own [review settings](../../packages/harness/src/settings.ts) choose the mo
 
 `claude` runs reviews through your installed Claude Code and its own sign-in. Neuve never reads that sign-in. `neuve review <base>..<head> --route claude` does the same for one review. `neuve auth add claude <name>` adds a second Claude sign-in in its own folder and prints the command to sign in; review on it with `--route <name>`. An added account can't take the name of a route or a built-in account (`anthropic`, `openai`, `claude`, `chatgpt`).
 
+If you installed Neuve before `claude` was a route, update it first (`neuve upgrade`, or the one-line install again if your `neuve` has no `upgrade`, or `install:cli` again for a checkout copy): an older `neuve` refuses a settings file that names `claude`.
+
 `review.effort` is `low`, `medium` (the default) or `high`. A review queued where its route's credential is missing waits, and `neuve review` says so; start a worker from a shell that has the credential with `neuve worker start --repo <path>`.
 
 ## Open the review desk
@@ -73,11 +79,11 @@ This opens the batch overview and the review desk for the repository you're in, 
 
 Each repository has one desk. If its desk is already open, `neuve review desk` prints that desk's address. While the desk is open, `neuve review` prints a link to the review. Otherwise it says to run `neuve review desk`.
 
-The desk is installed with the CLI, in `<prefix>/lib/neuve/desk/`, and runs inside `neuve`, so it needs no Bun. If that folder is missing, incomplete or from another version, the command stops and names the `install:cli` command that fixes it. To run `neuve` from a Neuve checkout without installing it, set `NEUVE_DESK_DIR` to a built desk folder, such as the `lib/neuve/desk` folder of an install.
+The desk is installed with the CLI, in `<prefix>/lib/neuve/desk/`, and runs inside `neuve`, so it needs no Bun. If that folder is missing, incomplete or from another version, the command stops and names the command that installs it again. To run `neuve` from a Neuve checkout without installing it, set `NEUVE_DESK_DIR` to a built desk folder, such as the `lib/neuve/desk` folder of an install.
 
 ## Check what's missing
 
-`neuve doctor [--repo <path>] [--json]` checks, without changing anything or using the network, what a first review needs: the CLI and the files its install recorded, `PATH`, the Graph engine, the Xcode command-line tools on a Mac, Git, the repository's setup, the review route's credential, the repository's worker and the review desk. Each line is `ok`, `missing` or `warning`; a missing or warning line ends with the command that fixes it. It names credentials, never their values. It exits 1 when something required is missing. `neuve setup` ends with the same credential check and the next command to run.
+`neuve doctor [--repo <path>] [--json]` checks, without changing anything or using the network, what a first review needs: the CLI and the files its install recorded, `PATH`, the Graph engine, the Xcode command-line tools on a Mac, Git, the repository's setup, the review route's credential, the repository's worker, the review desk, and whether the installed Neuve skill is older than this `neuve`. Each line is `ok`, `missing` or `warning`; a missing or warning line ends with the command that fixes it. It names credentials, never their values. It exits 1 when something required is missing. `neuve setup` ends with the same credential check and the next command to run.
 
 ## Capture commits and agent sessions
 
@@ -93,7 +99,7 @@ Pruning leaves a tombstone, so records that reference a capture stay intact. The
 
 An agent may say, once per session, what is making that session difficult ([venting ruling 8.8](../../process/decisions.md#area-8-records-rebuild-m2-17-october-2026)). A vent never changes the task or a review. `neuve vent "<text>"` records one from a shell command; `neuve vents [--since 7d] [--agent <alias>] [--run <id>] [--json]` lists them, with control characters and terminal escape sequences removed from what agents wrote. A vent is tied to its agent session the way commits are: through process ancestry, the session ID the harness declared, or `--session <harness>:<session id>` (or `NEUVE_SESSION`). With no session to tie it to, nothing is recorded and the command says why. A second vent in the same session is answered normally, and the first is kept. A harness that runs several agents under one session passes each review cycle's session ID as `--reconciliation-id <id>` (the MCP tool's `reconciliationId`), as the [vent-attribution ruling 8.16](../../process/decisions.md#area-8-records-rebuild-m2-17-october-2026) sets out. Vent text is pruned after 30 days ([vent-retention ruling 8.17](../../process/decisions.md#area-8-records-rebuild-m2-17-october-2026)), and `neuve vents` then shows it as pruned. Vents recorded with the earlier inline-text shape (`vent.recorded@1`, from the S6 build only) keep their text, because the log is append-only.
 
-`neuve mcp` serves the same `vent` tool over MCP on stdio. The harness starts it as a subprocess for each session and it exits when the session closes its input: no port and no daemon. Setup does not install it; add it yourself, once per user:
+`neuve mcp` serves the same `vent` tool, and `record_proof` for proof records, over MCP on stdio. The harness starts it as a subprocess for each session and it exits when the session closes its input: no port and no daemon. Setup does not install it; add it yourself, once per user:
 
 ```sh
 # Claude Code (user scope, every repository)
@@ -110,6 +116,21 @@ args = ["mcp"]
 The server works in the repository of its working directory, normally the one the harness was started in; pass `--repo <path>` to fix one. Each call is tied to the session whose agent process started the server, so the session's hooks (`neuve setup hooks`) must be installed for the repository. A server started outside a captured session answers each call that nothing was recorded.
 
 Queries use the Graph engine setup recorded while it runs, else the one beside the CLI. An explicit `NEUVE_GRAPH_BINARY` overrides both; provider cache environment variables don't change where the cache is.
+
+## Other commands
+
+`neuve --help` lists every command, and `neuve <command> --help` gives its options.
+
+| Command | What it does |
+| --- | --- |
+| `neuve upgrade [--version vX.Y.Z]` | Installs the latest release, or the given tag, through its checksum-checked install script |
+| `neuve skills list\|install\|uninstall` | Installs the Neuve skill, which teaches Claude Code and Codex to use Neuve, for your user or in the repository (`--scope user\|repo`) |
+| `neuve setup stack` and `neuve stack list` | Fetch, in the background, a read-only copy of the dependency sources the repository's lockfiles pin, and list what a revision pins |
+| `neuve proof record\|list <base>..<head>` | Records observed proof for a range (test runs, type checks, logs, telemetry, screenshots, video) and lists it |
+| `neuve worker start\|status\|stop` | Starts, inspects or stops the repository's background worker |
+| `neuve jobs [list\|inspect\|drop]` | Lists and inspects the worker's jobs, or drops a waiting one |
+| `neuve relations prepare <base>..<head>` | Stores the Graph relations of a range's two sides before its review |
+| `neuve review show [<base>..<head>]` | Prints a run's receipt: its batches, units and findings |
 
 ## Dogfood the Neuve monorepo
 

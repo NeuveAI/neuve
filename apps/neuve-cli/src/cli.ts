@@ -34,7 +34,7 @@ const VERSION = `neuve ${CLI_VERSION}`;
 const WORKSPACE_HELP = RELEASE_BUILD
   ? ""
   : `
-  workspace [--profile <pi-transition|profile.json>] [--repo <path>] [--port <n>] [--web-port <n>] [--loopback]
+  workspace [--profile <pi-transition|local|profile.json>] [--repo <path>] [--port <n>] [--web-port <n>] [--loopback]
               Start Neuve with its configured team connections and a loopback coding web app.`;
 
 const HELP = `Usage:
@@ -45,12 +45,13 @@ const HELP = `Usage:
 Commands:
   upgrade [--version vX.Y.Z]
               Upgrade to the latest release, or the --version tag, through its checksum-checked install script.
-  setup [--repo <path>] [--route openai|anthropic] [--graph-binary <path>] [--cli-binary <path>]
+  setup [--repo <path>] [--route openai|anthropic|claude] [--graph-binary <path>] [--cli-binary <path>]
     [--no-skills]
               Set Neuve up in a repository: record this neuve and its Graph engine, check that
-              the engine can work there, and choose how reviews sign in (ChatGPT or an
-              Anthropic API key). Run it once before neuve review. At a terminal it then offers
-              the Neuve skill once per repository; --no-skills skips the offer.
+              the engine can work there, and choose how reviews sign in (ChatGPT, an Anthropic
+              API key, or a Claude subscription through Claude Code). Run it once before neuve
+              review. At a terminal it then offers the Neuve skill once per repository;
+              --no-skills skips the offer.
   setup hooks [--repo <path>] [--agents claude-code,codex|none] [--dry-run]
               Capture commits and agent sessions in this repository. Run
               neuve setup hooks --help for the files it changes.
@@ -71,12 +72,14 @@ Commands:
               Run or inspect the repository's single background worker.
   jobs [list|inspect|drop|enqueue] [--json] [--repo <path>]
               List, inspect, drop or enqueue background jobs.
-  auth login|status|logout|lease openai
-              Sign in with ChatGPT for the OpenAI route. Run neuve auth --help for the options.
+  auth list|status|add|login|logout|remove|lease [<account>]
+              Sign in and manage the accounts reviews run on: ChatGPT (openai), your Claude
+              subscription (claude) and accounts added with auth add. Run neuve auth --help for
+              the options.
   doctor [--repo <path>] [--json]
               Check this machine and repository for what a review needs, and say how to fix
               what is missing. It only reads.${WORKSPACE_HELP}
-  review <base>..<head> [--detach] [--repo <path>]
+  review <base>..<head> [--route <name>] [--detach] [--repo <path>]
               Request a review of a commit range and follow its run in the background worker.
               Run neuve setup in the repository first.
   review ${REVIEW_DESK_COMMAND} [--repo <path>] [--port <n>]
