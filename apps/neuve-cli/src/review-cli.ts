@@ -1266,27 +1266,37 @@ const precomputed = (repository: string, runId: string, at?: StoreLocation) => {
           ];
           const store = yield* Computations.ComputationStore;
           const blobs = yield* Blobs.BlobStore;
-          const readOutput = <T>(key: string, schema: z.ZodType<T>) =>
+          const readStored = (key: string) =>
             Effect.gen(function* () {
               const held = yield* store.lookup(key);
               if (Option.isNone(held)) return undefined;
               const read = yield* blobs.get(held.value.outputHash);
               return read._tag === "Pruned"
                 ? undefined
-                : SearchIndex.decodeJson(read.bytes, schema);
+                : { bytes: read.bytes, opVersion: held.value.opVersion };
             });
+          const readOutput = <T>(key: string, schema: z.ZodType<T>) =>
+            Effect.map(readStored(key), (stored) =>
+              stored === undefined
+                ? undefined
+                : SearchIndex.decodeJson(stored.bytes, schema),
+            );
           let key = Computations.computationKey(spec).key;
           let storedManifest:
             Manifest.RangeManifest | Manifest.LegacyRangeManifest | undefined;
           for (const candidate of new Set(keys)) {
-            storedManifest = yield* readOutput(
-              candidate,
-              z.union([Manifest.RangeManifest, Manifest.LegacyRangeManifest]),
-            );
-            if (storedManifest !== undefined) {
-              key = candidate;
-              break;
-            }
+            const stored = yield* readStored(candidate);
+            if (stored === undefined) continue;
+            // Version 1 owns inline leads; select its reader before additive compatibility.
+            storedManifest =
+              stored.opVersion === 1
+                ? SearchIndex.decodeJson(
+                    stored.bytes,
+                    Manifest.LegacyRangeManifest,
+                  )
+                : SearchIndex.decodeJson(stored.bytes, Manifest.RangeManifest);
+            key = candidate;
+            break;
           }
           // A run from before the split holds its leads inside its manifest.
           const split =

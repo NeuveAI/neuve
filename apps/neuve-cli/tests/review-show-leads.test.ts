@@ -171,7 +171,7 @@ const manifestOf = (
   limitations: [],
 });
 
-test("review show reads an older run's manifest with each hunk's leads inside it", async () => {
+test("review show reads an older run's inline leads with additive fields from another build", async () => {
   const run = await requested();
   const lead = {
     source: "cached" as const,
@@ -179,6 +179,14 @@ test("review show reads an older run's manifest with each hunk's leads inside it
     querySha256: "0".repeat(64),
     results: [],
     millis: 1,
+  };
+  const legacy = {
+    ...manifestOf(run.range, run.merge),
+    settings: run.settings,
+    hunks: [{ ...hunk, leads: lead }],
+    index: null,
+    leads: { cached: 1, searched: 0, stale: 0 },
+    newerField: true,
   };
   await run.store(
     Manifest.legacyManifestSpec(
@@ -188,13 +196,7 @@ test("review show reads an older run's manifest with each hunk's leads inside it
       captureOutlineSource(),
     ),
     Manifest.LegacyRangeManifest,
-    {
-      ...manifestOf(run.range, run.merge),
-      settings: run.settings,
-      hunks: [{ ...hunk, leads: lead }],
-      index: null,
-      leads: { cached: 1, searched: 0, stale: 0 },
-    },
+    legacy,
   );
   expect(run.show(false)).toContain(
     "leads: 1 hunk(s) reused from commit preparation, 0 searched for the review",
