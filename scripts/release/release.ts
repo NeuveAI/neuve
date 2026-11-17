@@ -35,7 +35,8 @@ import { writeChecksums } from "./checksums.ts";
  * creates the tag `v<version>` on this commit and a release on GitHub with those files, through
  * `gh release create` with notes GitHub generates. A version with a prerelease part
  * (`0.1.0-preview.3`) is a prerelease; a plain version (`0.1.0`) is a full release marked latest,
- * which is what `https://neuve.ai/install.sh` and GitHub's `releases/latest/download/` resolve to.
+ * which GitHub's `releases/latest/download/` resolves to. The website build serves its own
+ * unstamped `install.sh` at `https://neuve.ai/install.sh`; that script finds the latest release.
  *
  * `--from <folder>` is how a measured archive ships: the build isn't byte-reproducible, so instead
  * of building it uploads the folder's files as they are. The same guards run, and then checks that
