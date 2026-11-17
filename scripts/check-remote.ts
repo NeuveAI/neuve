@@ -352,6 +352,7 @@ const Package = z.object({
 export const remotePlan = async (
   cwd: string,
   commit: string,
+  options: { readonly graph: boolean } = { graph: false },
 ): Promise<Part[]> => {
   const plan: Part[] = [
     {
@@ -409,7 +410,7 @@ export const remotePlan = async (
                   ? "the worker this build starts loads neither the project's"
                   : undefined;
       const excludedNames =
-        kind === "test" && process.env.NEUVE_CHECK_WITHOUT_GRAPH !== "0"
+        kind === "test" && !options.graph
           ? GRAPH_DEPENDENT_TESTS.filter(
               (test) => test.cwd === posix.dirname(path),
             ).flatMap(({ names }) => names.map(escapeTestName))

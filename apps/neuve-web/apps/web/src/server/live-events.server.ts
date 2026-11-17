@@ -155,24 +155,30 @@ export function heldMarkReader(): MarkReader {
         const read = await held.read("web.live.mark", (location) =>
           // A Linux WAL event can precede the commit's shared-memory publication. The store's
           // BEGIN IMMEDIATE waits for that writer, then holds one snapshot for mark and lineage.
-          Effect.flatMap(SqlClient, (sql) => sql.withTransaction(
-          Effect.gen(function* () {
-            const mark = yield* markOf(location)
-            const cycles =
-              after === undefined || mark.sequence < after.sequence
-                ? ("all" as const)
-                : mark.sequence === after.sequence
-                  ? []
-                  : yield* ReviewProgress.changedCycles(
-                      after.sequence,
-                      mark.sequence
-                    )
-            if (cycles === "all" || cycles.length === 0 || after === undefined)
-              return { mark, cycles }
-            const takenOver = yield* takenOverBy(cycles, after.sequence)
-            return { mark, cycles, takenOver }
-          })
-          ))
+          Effect.flatMap(SqlClient, (sql) =>
+            sql.withTransaction(
+              Effect.gen(function* () {
+                const mark = yield* markOf(location)
+                const cycles =
+                  after === undefined || mark.sequence < after.sequence
+                    ? ("all" as const)
+                    : mark.sequence === after.sequence
+                      ? []
+                      : yield* ReviewProgress.changedCycles(
+                          after.sequence,
+                          mark.sequence
+                        )
+                if (
+                  cycles === "all" ||
+                  cycles.length === 0 ||
+                  after === undefined
+                )
+                  return { mark, cycles }
+                const takenOver = yield* takenOverBy(cycles, after.sequence)
+                return { mark, cycles, takenOver }
+              })
+            )
+          )
         )
         return { ...read, source: held.connection() }
       } catch (error) {

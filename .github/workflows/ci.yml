@@ -128,7 +128,7 @@ jobs:
             import { remotePlan } from "./scripts/check-remote.ts";
             const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"]).stdout.toString().trim();
             const failed = [];
-            for (const part of await remotePlan(process.cwd(), revision)) {
+            for (const part of await remotePlan(process.cwd(), revision, { graph: process.env.NEUVE_CHECK_WITHOUT_GRAPH === "0" })) {
               console.log(`Running ${part.id}`);
               const child = Bun.spawn(part.command, {
                 cwd: part.cwd, stdin: "ignore", stdout: "inherit", stderr: "inherit",

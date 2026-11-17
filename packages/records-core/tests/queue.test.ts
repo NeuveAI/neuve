@@ -315,3 +315,66 @@ test("migration 3 turns S1 job rows into dial-2 rows", async () => {
     }),
   ]);
 });
+
+// Why: a WAL event may arrive before commit. The notification must wait for the in-flight writer,
+// even when the first committed snapshot has no notices; otherwise there is no second wake-up.
+test("a notice drain waits for the writer that raised its WAL event", async () => {
+  const location = freshLocation();
+  await runOn(
+    location,
+    withQueue((queue) =>
+      queue.enqueue({
+        kind: "worker.probe",
+        dedupeKey: "commit-fence",
+        payload: {},
+      }),
+    ),
+  );
+  await runOn(
+    location,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient;
+      const written = Promise.withResolvers<void>();
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "--no-env-file",
+          "--eval",
+          `
+      const { Database } = require("bun:sqlite");
+      const db = new Database(process.argv.at(-1));
+      db.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE");
+      db.exec("UPDATE jobs SET state='failed', run_at=NULL");
+      process.send("uncommitted");
+      setTimeout(() => { db.exec("COMMIT"); db.close(); process.exit(0); }, 250);
+    `,
+          location.database,
+        ],
+        {
+          stdout: "ignore",
+          stderr: "pipe",
+          ipc(message: unknown) {
+            if (message === "uncommitted") written.resolve();
+          },
+        },
+      );
+      const detail = new Response(child.stderr).text();
+      void child.exited.then(async (code) =>
+        written.reject(new Error(`writer exited ${code}: ${await detail}`)),
+      );
+      try {
+        yield* Effect.promise(() => written.promise);
+        yield* JobQueue.deliverJobNotices("/unused-test-socket");
+        const pending = yield* sql`SELECT job_seq FROM job_notices`;
+        expect(pending).toEqual([]);
+        expect(yield* sql`SELECT state FROM jobs`).toEqual([
+          { state: "failed" },
+        ]);
+        expect(yield* Effect.promise(() => child.exited)).toBe(0);
+      } finally {
+        child.kill();
+        yield* Effect.promise(() => child.exited);
+      }
+    }),
+  );
+});

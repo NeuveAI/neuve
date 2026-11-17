@@ -402,6 +402,20 @@ test("the remote plan excludes exactly the Graph cases and the local part select
     if (text === undefined) throw new Error(`Missing exclusion for ${id}`);
     return new RegExp(text);
   };
+  const withGraph = await remotePlan(repo, git(repo, "rev-parse", "HEAD"), {
+    graph: true,
+  });
+  for (const entry of GRAPH_DEPENDENT_TESTS) {
+    const part = withGraph.find(
+      (part) => part.cwd === entry.cwd && part.id.startsWith("test-"),
+    );
+    if (part === undefined)
+      throw new Error(`Missing test part for ${entry.cwd}`);
+    const at = part.command.indexOf("--test-name-pattern");
+    const selection = at === -1 ? undefined : part.command[at + 1];
+    const included = selection === undefined ? /.*/ : new RegExp(selection);
+    for (const name of entry.names) expect(included.test(name)).toBe(true);
+  }
   const harness = pattern("test-neuve-harness");
   const cli = pattern("test-neuve-cli");
   const localArgs = graphTestArguments();
