@@ -158,7 +158,8 @@ const manifestOf = (
   merge: string,
 ) => ({
   range: {
-    ...range,
+    baseOid: range.baseOid,
+    headOid: range.headOid,
     mergeBase: merge,
     baseTree: "c".repeat(40),
     headTree: "d".repeat(40),
@@ -203,6 +204,69 @@ test("review show reads an older run's manifest with each hunk's leads inside it
   expect(output.manifest.hunks[0].leads).toEqual(lead);
   expect(output.leads.counts).toEqual({ cached: 1, searched: 0, stale: 0 });
   expect(output.leads.hunks).toEqual([{ hunkId: "h1", leads: lead }]);
+}, 120_000);
+
+test("review show reads v2 manifests and leads, preferring the run's recorded key", async () => {
+  const run = await requested();
+  const source = captureOutlineSource();
+  const currentSpec = Manifest.manifestSpec(
+    run.range,
+    run.merge,
+    run.settings,
+    source,
+  );
+  const spec = { ...currentSpec, opVersion: 2 };
+  const key = Computations.computationKey(spec).key;
+  const manifest = {
+    ...manifestOf(run.range, run.merge),
+    settings: Manifest.frontSettings(run.settings),
+    hunks: [hunk],
+  };
+  const lead: Manifest.RangeLeads = {
+    manifest: key,
+    settings: Manifest.leadSettings(run.settings),
+    index: null,
+    counts: { cached: 1, searched: 0, stale: 0 },
+    hunks: [
+      {
+        hunkId: "h1",
+        leads: {
+          source: "cached",
+          tree: "c".repeat(40),
+          querySha256: "0".repeat(64),
+          results: [],
+          millis: 1,
+        },
+      },
+    ],
+  };
+  await run.store(spec, Manifest.RangeManifest, manifest);
+  await run.store(
+    Manifest.rangeLeadsSpec(key, lead.settings, source),
+    Manifest.RangeLeads,
+    lead,
+  );
+  expect(run.show(false)).toContain(
+    "leads: 1 hunk(s) reused from commit preparation, 0 searched for the review",
+  );
+  const output = JSON.parse(run.show(true));
+  expect(output.manifest).toEqual(manifest);
+  expect(output.leads).toEqual(lead);
+
+  // With no recorded key, readers prefer the newest stored version.
+  await run.store(currentSpec, Manifest.RangeManifest, {
+    ...manifest,
+    files: 2,
+  });
+  expect(JSON.parse(run.show(true)).manifest.files).toBe(2);
+  RunLog.openRunLog(run.location, run.runId).write({
+    type: "precompute.manifest",
+    key,
+    status: "reused",
+  });
+  const recorded = JSON.parse(run.show(true));
+  expect(recorded.manifest).toEqual(manifest);
+  expect(recorded.leads).toEqual(lead);
 }, 120_000);
 
 test("review show says a newer run's leads are not stored yet, or why they never were", async () => {

@@ -1244,50 +1244,85 @@ const precomputed = (repository: string, runId: string, at?: StoreLocation) => {
             settings,
             source,
           );
-          const key = Computations.computationKey(spec).key;
-          const current = yield* SearchIndex.storedOutput(
-            spec,
-            Manifest.RangeManifest,
-          );
-          // The leads are their own computation (NEU-148), stored when the run's leads task ends,
-          // so a run still going may not have them yet.
-          const leadsSpec = Manifest.rangeLeadsSpec(
-            key,
-            Manifest.leadSettings(settings),
-            source,
-          );
-          const leads = Option.isSome(current)
-            ? yield* SearchIndex.storedOutput(leadsSpec, Manifest.RangeLeads)
-            : Option.none<Manifest.RangeLeads>();
-          // A run from before the split holds its leads inside its manifest.
           const legacySpec = Manifest.legacyManifestSpec(
             range,
             merge.trim(),
             settings,
             source,
           );
-          const legacy = Option.isSome(current)
-            ? Option.none<Manifest.LegacyRangeManifest>()
-            : yield* SearchIndex.storedOutput(
-                legacySpec,
-                Manifest.LegacyRangeManifest,
-              );
-          const split = Option.map(legacy, (value) =>
-            Manifest.splitLegacyManifest(
-              Computations.computationKey(legacySpec).key,
-              value,
+          const log = RunLog.readRunLog(RunLog.runLogPath(location, runId));
+          const leadsRecord = log
+            .filter((record) => record.type === "range.leads")
+            .at(-1);
+          const recordedKey =
+            log
+              .filter((record) => record.type === "precompute.manifest")
+              .at(-1)?.["key"] ?? leadsRecord?.["manifest"];
+          const keys = [
+            ...(typeof recordedKey === "string" ? [recordedKey] : []),
+            ...[spec, { ...spec, opVersion: 2 }, legacySpec].map(
+              (spec) => Computations.computationKey(spec).key,
             ),
+          ];
+          const store = yield* Computations.ComputationStore;
+          const blobs = yield* Blobs.BlobStore;
+          const readOutput = <T>(key: string, schema: z.ZodType<T>) =>
+            Effect.gen(function* () {
+              const held = yield* store.lookup(key);
+              if (Option.isNone(held)) return undefined;
+              const read = yield* blobs.get(held.value.outputHash);
+              return read._tag === "Pruned"
+                ? undefined
+                : SearchIndex.decodeJson(read.bytes, schema);
+            });
+          let key = Computations.computationKey(spec).key;
+          let storedManifest:
+            Manifest.RangeManifest | Manifest.LegacyRangeManifest | undefined;
+          for (const candidate of new Set(keys)) {
+            storedManifest = yield* readOutput(
+              candidate,
+              z.union([Manifest.RangeManifest, Manifest.LegacyRangeManifest]),
+            );
+            if (storedManifest !== undefined) {
+              key = candidate;
+              break;
+            }
+          }
+          // A run from before the split holds its leads inside its manifest.
+          const split =
+            storedManifest !== undefined && "leads" in storedManifest
+              ? Manifest.splitLegacyManifest(key, storedManifest)
+              : undefined;
+          const manifest =
+            storedManifest === undefined || "leads" in storedManifest
+              ? split?.manifest
+              : storedManifest;
+          // Leads are keyed by the manifest this run used, even if a newer version exists.
+          const recordedLeadsKey = leadsRecord?.["key"];
+          const leadsSpec = Manifest.rangeLeadsSpec(
+            key,
+            Manifest.leadSettings(settings),
+            source,
           );
+          let leads = split?.leads;
+          if (split === undefined && storedManifest !== undefined) {
+            if (
+              typeof recordedLeadsKey === "string" &&
+              leadsRecord?.["manifest"] === key
+            )
+              leads = yield* readOutput(recordedLeadsKey, Manifest.RangeLeads);
+            leads ??= yield* readOutput(
+              Computations.computationKey(leadsSpec).key,
+              Manifest.RangeLeads,
+            );
+          }
           // How the run's leads task ended, from its last `range.leads` record, while the run log
           // is there: a run whose leads are not stored either still runs them or ended without.
-          const ended = RunLog.readRunLog(RunLog.runLogPath(location, runId))
-            .filter((record) => record.type === "range.leads")
-            .at(-1)?.["status"];
+          const ended = leadsRecord?.["status"];
           const leadsEnd = typeof ended === "string" ? ended : undefined;
           const scope = yield* Scope.storedSnapshot(cycleId);
           // The masked raw captures of fetched items (10.8): what a capture keeps, never the
           // unmasked text agents read.
-          const blobs = yield* Blobs.BlobStore;
           const captures = new Map<string, string>();
           for (const source of Option.isSome(scope) ? scope.value.sources : [])
             if (source.capture !== null) {
@@ -1299,28 +1334,16 @@ const precomputed = (repository: string, runId: string, at?: StoreLocation) => {
                   : "(pruned after 30 days)",
               );
             }
-          return Option.isSome(split)
-            ? {
-                manifest: split.value.manifest,
-                leads: split.value.leads,
-                // As stored: the older shape, with each hunk's leads inline.
-                storedManifest: legacy.pipe(Option.getOrUndefined),
-                retriever: settings.retriever.id,
-                leadsEnd: undefined,
-                scope: Option.getOrUndefined(scope),
-                captures,
-                key: Computations.computationKey(legacySpec).key,
-              }
-            : {
-                manifest: Option.getOrUndefined(current),
-                leads: Option.getOrUndefined(leads),
-                storedManifest: Option.getOrUndefined(current),
-                retriever: settings.retriever.id,
-                leadsEnd,
-                scope: Option.getOrUndefined(scope),
-                captures,
-                key,
-              };
+          return {
+            manifest,
+            leads,
+            storedManifest,
+            retriever: settings.retriever.id,
+            leadsEnd: split === undefined ? leadsEnd : undefined,
+            scope: Option.getOrUndefined(scope),
+            captures,
+            key,
+          };
         }).pipe(
           Effect.provide(
             Computations.layer.pipe(Layer.provideMerge(Blobs.layer(location))),
