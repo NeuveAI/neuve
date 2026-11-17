@@ -1,11 +1,5 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  test,
-} from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect } from "bun:test";
+import { test } from "../../scripts/release/distribution-shard.ts";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {

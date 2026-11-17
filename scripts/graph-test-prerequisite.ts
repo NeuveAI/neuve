@@ -1,7 +1,7 @@
 /**
  * Missing Graph prerequisites may skip package tests, but must fail checks. The one exception is a
- * check that declares it runs without Graph (`NEUVE_CHECK_WITHOUT_GRAPH=1`): the portable CI job,
- * which never checks out the separate Graph repository. Its Graph cases run in `bun run check`.
+ * check that declares it runs without Graph (`NEUVE_CHECK_WITHOUT_GRAPH=1`): fork pull requests,
+ * which cannot read the private Graph repository. Trusted CI and `bun run check` build Graph.
  */
 export const graphTestPrerequisite = (input: {
   available: boolean;

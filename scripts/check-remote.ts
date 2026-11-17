@@ -409,7 +409,7 @@ export const remotePlan = async (
                   ? "the worker this build starts loads neither the project's"
                   : undefined;
       const excludedNames =
-        kind === "test"
+        kind === "test" && process.env.NEUVE_CHECK_WITHOUT_GRAPH !== "0"
           ? GRAPH_DEPENDENT_TESTS.filter(
               (test) => test.cwd === posix.dirname(path),
             ).flatMap(({ names }) => names.map(escapeTestName))

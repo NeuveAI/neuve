@@ -1,7 +1,7 @@
 name: Release archives
 # The release workflow only builds, checksums and drafts the release; it runs no tests (owner,
 # 17 November 2026). Tests and integration belong in pull-request CI. It runs only for a v-tag push or
-# a manual run.
+# a manual run. Path-filtered release tests run in ci.yml on four macOS runners.
 on:
   workflow_dispatch:
     inputs:
