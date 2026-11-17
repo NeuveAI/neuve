@@ -526,7 +526,10 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high"],
   };
-  saveStatus(at.home, builtIn, { state: "signed-in" }, [opus]);
+  saveStatus(at.home, builtIn, { state: "signed-in" }, [
+    { ...opus, id: "default", displayName: "Default" },
+    opus,
+  ]);
   const fake = fakeClaude(at.root);
   const sources = productionChatSources({
     home: at.home,
@@ -689,6 +692,24 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
     );
     await refused(
       "Claude Code isn't signed in for account claude. Run claude auth login, then neuve auth status claude --check.",
+    );
+    saveStatus(
+      at.home,
+      builtIn,
+      { state: "runtime-unavailable", reason: "not-installed" },
+      [opus],
+    );
+    await refused(
+      "Claude Code isn't installed for account claude: there's no claude on PATH. Install Claude Code, run claude auth login, then neuve auth status claude --check.",
+    );
+    expect(
+      markerEvents(fake.marker).filter((event) => event.type === "prompt"),
+    ).toHaveLength(1);
+    saveStatus(at.home, builtIn, { state: "unknown", reason: "not-checked" }, [
+      opus,
+    ]);
+    await refused(
+      "Neuve doesn't know yet whether Claude Code is signed in for account claude. Run neuve auth status claude --check.",
     );
     expect(
       markerEvents(fake.marker).filter((event) => event.type === "prompt"),

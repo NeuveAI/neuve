@@ -119,7 +119,7 @@ export const checkNormalAndFinal = (
   );
 
 /**
- * The full smoke's model requests: probe 0, normal and final 2, inputs 2, fork 1 (persistence and
+ * The full smoke's model requests: probe 0, normal and final 2, inputs 3, fork 1 (persistence and
  * fork together 3), tools 2, and the refused round 1 with its final turn up to its backstop.
  */
 export const EXPECTED_REQUESTS = 8 + 1 + FINAL_TURN_MESSAGES;

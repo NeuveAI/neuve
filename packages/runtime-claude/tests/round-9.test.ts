@@ -1503,15 +1503,14 @@ test("R18 turnLimit one final turn takes a text answer, then its StructuredOutpu
     },
   ));
 
-// Why: the final turn keeps a fixed backstop; output past it ends the turn typed, reusable and
-// with only the allowed messages published, whatever the session's turnLimit.
-for (const limit of [1, 8])
-  test(`R18 final turn at turnLimit ${limit} stops at its fixed message backstop`, () =>
+// Why: short final turns allow structured-output retries, while longer stages retain their limit.
+for (const limit of [1, 3, 8])
+  test(`final turn at turnLimit ${limit} stops at its message backstop`, () =>
     run(
       (f, s, events, next) =>
         Effect.gen(function* () {
           yield* s.startTurn({ ...start, final: true });
-          for (let n = 1; n <= FINAL_TURN_MESSAGES; n++)
+          for (let n = 1; n <= Math.max(limit, FINAL_TURN_MESSAGES); n++)
             yield* send(f, answer(`message-${n}`, chainAt(n)));
           yield* send(f, [
             {
@@ -1535,7 +1534,7 @@ for (const limit of [1, 8])
           });
           expect(
             events.filter((event) => event.type === "message.finished"),
-          ).toHaveLength(FINAL_TURN_MESSAGES);
+          ).toHaveLength(Math.max(limit, FINAL_TURN_MESSAGES));
         }),
       {
         policy: {
@@ -1775,3 +1774,31 @@ test("R18b turnLimit one admits an endTurn handler before message_stop", () => {
     },
   );
 });
+
+// Why: a longer stage can reach structured output after the short-stage allowance is exhausted.
+test("final turn with a larger policy limit can submit structured output after three messages", () =>
+  run(
+    (f, s, events, next) =>
+      Effect.gen(function* () {
+        yield* s.startTurn({ ...start, final: true });
+        for (let n = 1; n <= FINAL_TURN_MESSAGES; n++)
+          yield* send(f, answer(`message-${n}`, chainAt(n)));
+        yield* send(f, [
+          ...structured("message-4", lastChain),
+          result({ structured_output: { answer: 3 } }),
+        ]);
+        expect(yield* next("turn.finished")).toMatchObject({
+          outcome: { status: "completed", structuredOutput: { answer: 3 } },
+        });
+        expect(
+          events.filter((event) => event.type === "message.finished"),
+        ).toHaveLength(4);
+      }),
+    {
+      policy: {
+        ...policy,
+        turnLimit: TurnLimit.parse(8),
+        outputSchema: { type: "object" },
+      },
+    },
+  ));

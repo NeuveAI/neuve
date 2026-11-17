@@ -207,3 +207,28 @@ test("Frame lists omitted scope without naming an unavailable tool", async () =>
   expect(text).toContain("base.s1");
   expect(text).not.toContain("scope_section");
 });
+
+// Why: a source and one of its sections must remain distinct citation kinds on every route.
+test("frame sourceIds cite the source containing a done-when section", () => {
+  const cited = source("S1", "plan-inside-range");
+  cited.sections[0]!.id = "S1.1";
+  const scoped = {
+    snapshot: { ...snapshot, sources: [cited] },
+    candidates: [],
+  };
+  const output: FrameSubmission = {
+    ...submission,
+    sourceIds: ["S1"],
+    doneWhen: [
+      {
+        text: "Preserve the saved value",
+        candidateId: null,
+        sectionId: "S1.1",
+      },
+    ],
+  };
+  expect(frameProblems(output, scoped)).toEqual([]);
+  expect(frameProblems({ ...output, sourceIds: ["S1.1"] }, scoped)).toEqual([
+    "Unknown source S1.1.",
+  ]);
+});

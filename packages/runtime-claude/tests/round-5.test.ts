@@ -489,7 +489,15 @@ for (const ending of ["failure", "interruption"] as const) {
         yield* Effect.promise(() => ready.promise);
         if (ending === "interruption")
           yield* session.interruptTurn({ turnId: "one", reason: "stop" });
-        expect((yield* Fiber.join(call)).isError).toBe(true);
+        expect(yield* Fiber.join(call)).toMatchObject({
+          isError: false,
+          content: [
+            {
+              type: "text",
+              text: "The tool stopped before returning a result.",
+            },
+          ],
+        });
         const event = yield* r.until("tool.finished");
         if (event.type !== "tool.finished") throw Error("fixture");
         const first = event.durationMs;

@@ -75,7 +75,8 @@ export const frameStep = (
         tools: [],
         submit: {
           schema: FrameSubmission,
-          description: "Submit the goal and done-when conditions.",
+          description:
+            "Submit the goal and done-when conditions. sourceIds takes source ids such as S1, not section ids. Each doneWhen item takes a sectionId such as S1.1 and, when quoting a candidate, its candidateId such as O1. Use null for uncited condition fields.",
         },
         check: (o) => frameProblems(o, checks),
         repair: (o) => repairFrame(o, checks),

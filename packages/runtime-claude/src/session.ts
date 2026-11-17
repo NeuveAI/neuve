@@ -190,10 +190,9 @@ const deny = (): PermissionResult => ({
 });
 
 /**
- * The message backstop of a final turn, in place of the policy's turnLimit. Claude Code often
- * answers a final turn in text first and only then calls StructuredOutput, and it may retry an
- * output that fails the schema: three messages allow one answer, the call and one retry. A fourth
- * ends the turn failed with turn-limit-reached, as any turn past its backstop does.
+ * The minimum message allowance for a final turn. Claude Code often answers in text first and
+ * only then calls StructuredOutput, and it may retry an output that fails the schema: three
+ * messages allow one answer, the call and one retry. Larger policy limits still apply.
  */
 export const FINAL_TURN_MESSAGES = 3;
 
@@ -867,12 +866,10 @@ export const openClaudeSession = (
                         content: [
                           { type: "text" as const, text: outcome.text },
                         ],
-                        // Claude Code honours claude/endTurn only on a result that isn't an
-                        // error; it answers an errored one with a new response. The text keeps
-                        // the refusal, and tool.finished still reports it errored.
-                        isError:
-                          outcome.error !== undefined &&
-                          outcome.endTurn !== true,
+                        // Any failed sibling can override claude/endTurn, even when it returned
+                        // before the ending call. Keep failures in text and tool.finished rather
+                        // than MCP's error flag, and preserve the ending call's marker.
+                        isError: false,
                         ...(outcome.endTurn === true
                           ? { _meta: { "claude/endTurn": true } }
                           : {}),
@@ -927,7 +924,7 @@ export const openClaudeSession = (
                           text: "The tool stopped before returning a result.",
                         },
                       ],
-                      isError: true,
+                      isError: false,
                     }),
                   ),
                 );
@@ -1304,7 +1301,7 @@ export const openClaudeSession = (
                         (turn.endTurn ||
                           turn.completedMessages >=
                             (turn.final
-                              ? FINAL_TURN_MESSAGES
+                              ? Math.max(FINAL_TURN_MESSAGES, policy.turnLimit)
                               : policy.turnLimit)) &&
                         turn.messages.isFurtherOutput(frame)
                       ) {

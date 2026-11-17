@@ -594,7 +594,7 @@ test("R13 interrupted handler aborts its signal before call settles", () => {
         const client = yield* connect(f);
         yield* s.startTurn(start);
         yield* publishCall(f, next);
-        expect(yield* invoke(client)).toMatchObject({ isError: true });
+        expect(yield* invoke(client)).toMatchObject({ isError: false });
         expect(signal?.aborted).toBe(true);
       }),
     {
@@ -676,7 +676,7 @@ for (const path of ["interruption", "defect", "error outcome"] as const) {
           const client = yield* connect(f);
           yield* s.startTurn(start);
           yield* publishCall(f, next);
-          expect(yield* invoke(client)).toMatchObject({ isError: true });
+          expect(yield* invoke(client)).toMatchObject({ isError: false });
           yield* send(f, [result()]);
           yield* next("turn.finished");
           expectBalanced(events, true);
@@ -912,7 +912,7 @@ for (const scenario of [
           yield* s.startTurn(start);
           yield* s.steerTurn({ turnId: "one", message: "held" });
           expect(yield* invoke(client)).toMatchObject({
-            isError: scenario.errored,
+            isError: false,
           });
           expect(f.sends).toHaveLength(1);
           yield* publishCall(f, next);

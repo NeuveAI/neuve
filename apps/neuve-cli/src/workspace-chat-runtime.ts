@@ -267,6 +267,13 @@ export function claudeDefaultModel(
   const name = route.account.name;
   const check = `neuve auth status ${name} --check`;
   const status = statuses.find((entry) => entry.name === name);
+  if (
+    status?.signIn.state === "runtime-unavailable" &&
+    status.signIn.reason === "not-installed"
+  )
+    throw new Error(
+      `Claude Code isn't installed for account ${name}: there's no claude on PATH. Install Claude Code, run claude auth login, then ${check}.`,
+    );
   const state = status?.signIn.state;
   if (state === "not-signed-in" || state === "credential-rejected")
     throw new Error(
@@ -277,8 +284,11 @@ export function claudeDefaultModel(
       `Neuve doesn't know yet whether Claude Code is signed in for account ${name}. Run ${check}.`,
     );
   const row =
-    status?.models?.find((entry) => entry.resolvedModel === route.model) ??
-    status?.models?.find((entry) => entry.id === route.model);
+    status?.models?.find(
+      (entry) => entry.id !== "default" && entry.resolvedModel === route.model,
+    ) ??
+    status?.models?.find((entry) => entry.id === route.model) ??
+    status?.models?.find((entry) => entry.resolvedModel === route.model);
   if (row === undefined)
     throw new Error(
       `Claude Code for account ${name} doesn't offer ${route.model}, the model reviews run on. Run ${check} to read its models again, or pick another model for this chat.`,

@@ -436,7 +436,7 @@ test("R10 message_delta does not publish before message_stop", () =>
     }),
   ));
 
-// A handler defect becomes an MCP error reply. It must settle the call group too.
+// A handler defect returns failure text without an MCP error flag and settles the call group.
 test("R10-F1 failed handler cannot strand a held steer", () =>
   run(
     (f, s, events, next) =>
@@ -460,7 +460,15 @@ test("R10-F1 failed handler cannot strand a held steer", () =>
             _meta: { [TOOL_USE_ID_META]: "failed-call" },
           }),
         );
-        expect(reply).toMatchObject({ isError: true });
+        expect(reply).toMatchObject({
+          isError: false,
+          content: [
+            {
+              type: "text",
+              text: "The tool stopped before returning a result.",
+            },
+          ],
+        });
         yield* send(f, [
           begin("message-2"),
           blockMessage("message-2", lastChain),

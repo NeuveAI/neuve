@@ -503,12 +503,10 @@ for (const scenario of [
     ));
 }
 
-// Why: live, Claude Code answers an endTurn result marked as an error with a new response, which
-// poisons the session for the next turn. An errored endTurn result goes out without the error flag
-// and keeps its text; the runtime still reports the call errored. An error that doesn't end the
-// turn keeps the flag so the model can correct it.
+// Why: any MCP error flag can override a sibling's endTurn. Tool failures stay in the text
+// and runtime events, while only the ending result carries the marker.
 for (const ending of [true, false])
-  test(`errored tool result ${ending ? "that ends the turn drops" : "that continues keeps"} the error flag`, () =>
+  test(`errored tool result ${ending ? "ending" : "continuing"} the turn omits the MCP error flag`, () =>
     run(
       (f, s, events, next) =>
         Effect.gen(function* () {
@@ -532,7 +530,7 @@ for (const ending of [true, false])
           );
           expect(reply).toEqual({
             content: [{ type: "text", text: "Not submitted." }],
-            isError: !ending,
+            isError: false,
             ...(ending ? { _meta: { "claude/endTurn": true } } : {}),
           });
           expect(yield* next("tool.finished")).toMatchObject({
@@ -565,6 +563,76 @@ for (const ending of [true, false])
                 error: "CheckFailed",
                 ...(ending ? { endTurn: true as const } : {}),
               }),
+            ),
+          ],
+        },
+      },
+    ));
+
+// Why: Claude Code lets any errored sibling override claude/endTurn, even if it returned first.
+for (const errorFirst of [true, false])
+  test(`end-turn survives a failed sibling returned ${errorFirst ? "before" : "after"} it`, () =>
+    run(
+      (f, s, events, next) =>
+        Effect.gen(function* () {
+          const client = yield* connect(f);
+          yield* s.startTurn(start);
+          yield* send(f, [
+            begin(),
+            blockMessage("message-1", chain, [
+              { id: "failed", name: "mcp__neuve__work", input: {} },
+              { id: "ending", name: "mcp__neuve__work", input: {} },
+            ]),
+            end("tool_use"),
+            stop(),
+          ]);
+          yield* next("message.finished");
+          for (const callId of errorFirst
+            ? ["failed", "ending"]
+            : ["ending", "failed"]) {
+            const reply = yield* Effect.promise(() =>
+              client.callTool({
+                name: "work",
+                arguments: {},
+                _meta: { [TOOL_USE_ID_META]: callId },
+              }),
+            );
+            expect(reply).toEqual({
+              content: [
+                {
+                  type: "text",
+                  text: callId === "failed" ? "Lookup refused." : "Submitted.",
+                },
+              ],
+              isError: false,
+              ...(callId === "ending"
+                ? { _meta: { "claude/endTurn": true } }
+                : {}),
+            });
+          }
+          yield* send(f, [result()]);
+          expect(yield* next("turn.finished")).toMatchObject({
+            outcome: { status: "completed" },
+          });
+          expect(
+            events.filter((event) => event.type === "tool.finished"),
+          ).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ callId: "failed", errored: true }),
+              expect.objectContaining({ callId: "ending", errored: false }),
+            ]),
+          );
+        }),
+      {
+        policy: {
+          ...policy,
+          tools: [
+            definition((_input, call) =>
+              Effect.succeed(
+                call?.callId === "failed"
+                  ? { text: "Lookup refused.", error: "LookupFailed" }
+                  : { text: "Submitted.", endTurn: true },
+              ),
             ),
           ],
         },
