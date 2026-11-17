@@ -4,6 +4,7 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, posix, relative, sep } from "node:path";
+import { withScriptHashes } from "./csp";
 import { INSTALLER } from "./installer";
 
 export const CACHE = {
@@ -112,21 +113,61 @@ export function builtFiles(dist: string): string[] {
   return found;
 }
 
-/**
- * The expected headers the backend bucket doesn't send with exactly this
- * value. `actual` is its customResponseHeaders, each "Name: value".
- */
-export function missingHeaders(
-  expected: Array<[string, string]>,
-  actual: string[],
-): Array<[string, string]> {
-  const sent = new Map(
+/** Read the backend bucket response at the external command boundary. */
+export function backendHeaders(json: string): string[] {
+  const described: unknown = JSON.parse(json);
+  if (
+    typeof described !== "object" ||
+    described === null ||
+    Array.isArray(described)
+  )
+    throw new Error("Expected a backend bucket object");
+  if (!("customResponseHeaders" in described)) return [];
+  const headers = described.customResponseHeaders;
+  if (
+    !Array.isArray(headers) ||
+    !headers.every((h): h is string => typeof h === "string")
+  )
+    throw new Error("Expected customResponseHeaders to be an array of strings");
+  return headers;
+}
+
+function headerValues(actual: string[]): Map<string, string> {
+  return new Map(
     actual.map((h) => {
       const at = h.indexOf(":");
       return [h.slice(0, at).trim().toLowerCase(), h.slice(at + 1).trim()];
     }),
   );
-  return expected.filter(
-    ([name, value]) => sent.get(name.toLowerCase()) !== value,
-  );
+}
+
+/** Preserve deployed script hashes in the replacement CSP, and use this build's other headers. */
+export function transitionHeaders(
+  expected: Array<[string, string]>,
+  actual: string[],
+): Array<[string, string]> {
+  const deployed = headerValues(actual).get("content-security-policy") ?? "";
+  return expected.map(([name, value]) => [
+    name,
+    name.toLowerCase() === "content-security-policy"
+      ? withScriptHashes(value, deployed)
+      : value,
+  ]);
+}
+
+/** Require this build's policy, permitting only additional SHA-256 script hashes. */
+export function missingHeaders(
+  expected: Array<[string, string]>,
+  actual: string[],
+): Array<[string, string]> {
+  const sent = headerValues(actual);
+  return expected.filter(([name, value]) => {
+    const present = sent.get(name.toLowerCase());
+    if (
+      name.toLowerCase() !== "content-security-policy" ||
+      present === undefined
+    )
+      return present !== value;
+    return withScriptHashes(present, "") !== withScriptHashes(value, present);
+  });
 }

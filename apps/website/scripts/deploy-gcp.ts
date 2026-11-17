@@ -24,13 +24,19 @@
  *   X-Frame-Options             DENY
  *
  * `headers <backend-bucket>` prints the gcloud command that sets them, with
- * the CSP for this build. Before uploading, a deploy reads the backend
- * bucket's headers and stops if any is missing or different, since a stale
- * CSP would block the theme script on the new page.
+ * the CSP for this build plus the deployed script hashes, so cached pages
+ * keep their theme. Before uploading, a deploy checks every header and
+ * requires this build's script hashes, allowing the retained hashes too.
  */
 import { join } from "node:path";
 import { securityHeaders } from "../src/build/csp";
-import { builtFiles, missingHeaders, uploads } from "../src/build/deploy";
+import {
+  backendHeaders,
+  builtFiles,
+  missingHeaders,
+  transitionHeaders,
+  uploads,
+} from "../src/build/deploy";
 
 const root = join(import.meta.dir, "..");
 const dist = join(root, "dist");
@@ -84,12 +90,8 @@ function headersCommand(backend: string, headers: Array<[string, string]>) {
   ];
 }
 
-async function deploy(bucket: string, backend: string, dryRun: boolean) {
-  await run(["bun", "run", "build"]);
-  const files = builtFiles(dist);
-  const expected = await pageHeaders();
-
-  const describe = [
+function describeCommand(backend: string) {
+  return [
     "gcloud",
     "compute",
     "backend-buckets",
@@ -97,21 +99,27 @@ async function deploy(bucket: string, backend: string, dryRun: boolean) {
     backend,
     "--format=json",
   ];
-  if (dryRun) show(describe);
+}
+
+async function readBackendHeaders(backend: string) {
+  return backendHeaders(await run(describeCommand(backend), true));
+}
+
+async function deploy(bucket: string, backend: string, dryRun: boolean) {
+  await run(["bun", "run", "build"]);
+  const files = builtFiles(dist);
+  const expected = await pageHeaders();
+
+  if (dryRun) show(describeCommand(backend));
   else {
-    const described = JSON.parse(await run(describe, true)) as {
-      customResponseHeaders?: string[];
-    };
-    const missing = missingHeaders(
-      expected,
-      described.customResponseHeaders ?? [],
-    );
+    const actual = await readBackendHeaders(backend);
+    const missing = missingHeaders(expected, actual);
     if (missing.length > 0) {
       console.error(
         `The backend bucket ${backend} doesn't send ${missing.map(([n]) => n).join(", ")} as this build needs. Set its headers, then deploy again:`,
       );
       console.error(
-        `  ${headersCommand(backend, expected).map(quote).join(" ")}`,
+        `  ${headersCommand(backend, transitionHeaders(expected, actual)).map(quote).join(" ")}`,
       );
       process.exit(1);
     }
@@ -154,7 +162,13 @@ if (import.meta.main) {
     await run(["bun", "run", "build"]);
     builtFiles(dist);
     console.log(
-      headersCommand(backend, await pageHeaders())
+      headersCommand(
+        backend,
+        transitionHeaders(
+          await pageHeaders(),
+          await readBackendHeaders(backend),
+        ),
+      )
         .map(quote)
         .join(" "),
     );

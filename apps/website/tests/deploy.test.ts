@@ -9,9 +9,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { securityHeaders } from "../src/build/csp";
+import { securityHeaders, sha256 } from "../src/build/csp";
 import {
   CACHE,
+  backendHeaders,
+  transitionHeaders,
   builtFiles,
   metadata,
   missingHeaders,
@@ -136,5 +138,85 @@ describe("the deploy", () => {
       "Content-Security-Policy",
     ]);
     expect(missingHeaders(expected, [])).toHaveLength(expected.length);
+  });
+});
+
+// Reason: replacing the CSP before uploading must allow cached pages and the new build,
+// while the deploy gate must still refuse a stale or weakened policy.
+describe("theme CSP transitions", () => {
+  const old = securityHeaders("<script>oldTheme()</script>");
+  const next = securityHeaders("<script>newTheme()</script>");
+  const lines = (headers: Array<[string, string]>) =>
+    headers.map(([n, v]) => `${n}: ${v}`);
+
+  test("allows both theme scripts and deduplicates repeated preparation", () => {
+    const transition = transitionHeaders(next, lines(old));
+    const policy = transition.find(
+      ([name]) => name === "Content-Security-Policy",
+    )?.[1];
+    expect(policy).toContain(sha256("oldTheme()"));
+    expect(policy).toContain(sha256("newTheme()"));
+    expect(transitionHeaders(next, lines(transition))).toEqual(transition);
+    expect(missingHeaders(old, lines(transition))).toEqual([]);
+    expect(missingHeaders(next, lines(transition))).toEqual([]);
+    expect(missingHeaders(next, lines(old)).map(([n]) => n)).toEqual([
+      "Content-Security-Policy",
+    ]);
+    expect(transitionHeaders(next, [])).toEqual(
+      transitionHeaders(next, lines(next)),
+    );
+  });
+
+  test("retains only hashes from the deployed script-src directive", () => {
+    const changed = lines(old).map((h) =>
+      h.startsWith("Content-Security-Policy:")
+        ? h
+            .replace(
+              "script-src 'self'",
+              "script-src 'self' 'unsafe-inline' https://example.com",
+            )
+            .replace("style-src 'self'", `style-src ${sha256("style")}`)
+        : h,
+    );
+    const transition = transitionHeaders(next, changed);
+    const policy = transition.find(
+      ([name]) => name === "Content-Security-Policy",
+    )?.[1];
+    expect(policy).not.toContain("unsafe-inline");
+    expect(policy).not.toContain("example.com");
+    expect(policy).not.toContain(sha256("style"));
+    expect(policy).toContain(sha256("oldTheme()"));
+    for (const mutation of [
+      (h: string) =>
+        h.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'"),
+      (h: string) => h.replace("style-src 'self'", "style-src 'unsafe-inline'"),
+      (h: string) => h.replace("connect-src 'none'", "connect-src *"),
+      (h: string) =>
+        h.replace("script-src 'self'", "script-src 'self' 'sha256-invalid'"),
+    ])
+      expect(
+        missingHeaders(next, lines(transition).map(mutation)).map(([n]) => n),
+      ).toEqual(["Content-Security-Policy"]);
+    expect(
+      missingHeaders(
+        next,
+        lines(transition).filter((h) => !h.startsWith("X-Frame-Options:")),
+      ),
+    ).toEqual([["X-Frame-Options", "DENY"]]);
+  });
+
+  test("validates the backend bucket's header response", () => {
+    expect(
+      backendHeaders(JSON.stringify({ customResponseHeaders: lines(old) })),
+    ).toEqual(lines(old));
+    expect(backendHeaders("{}")).toEqual([]);
+    for (const json of [
+      "null",
+      "[]",
+      '{"customResponseHeaders":[1]}',
+      '{"customResponseHeaders":null}',
+      "broken",
+    ])
+      expect(() => backendHeaders(json)).toThrow();
   });
 });
