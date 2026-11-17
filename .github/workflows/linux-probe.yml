@@ -1,0 +1,43 @@
+name: Linux observer diagnosis
+on:
+  push:
+    branches: [portable-ci]
+permissions:
+  contents: read
+jobs:
+  observer:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [original, inherit, child-log, parent-log]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      NEUVE_MODE: check
+      TMPDIR: /tmp/check-tmp
+      BUN_TMPDIR: /tmp/check-tmp
+      MODE: ${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.4.4"
+      - run: mkdir -p /tmp/check-tmp
+      - run: bun --no-env-file install --frozen-lockfile
+      - name: Isolate observer stdio and logging
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('packages/records-core/src/store-watch.ts');s=p.read_text()
+          if os.environ['MODE'] != 'inherit':
+            s=s.replace('stdout: "inherit",','stdout: "ignore",',1)
+          if os.environ['MODE'] != 'child-log':
+            s=s.replace('      console.log("watch", folder, event, file);\n','')
+          if os.environ['MODE'] != 'parent-log':
+            s=s.replace('        console.error("observer IPC", message);\n','')
+          p.write_text(s)
+          PY
+          for attempt in 1 2 3; do
+            bun scripts/test-budget.ts apps/neuve-web/apps/web/src/server/live-events.test.ts packages/harness/tests/shared-worker-delivery.test.ts --test-name-pattern 'an append from another process|older-sql wakes' --timeout 40000 || exit 1
+          done
