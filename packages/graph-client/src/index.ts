@@ -112,6 +112,8 @@ import {
   runQualifiedGit,
   gitReadText,
   recheckLocalGitRead,
+  prepareLocalGitRead,
+  type GitReadPolicy,
 } from "./git-read-qualification.ts";
 export {
   GitReadRefusal,
@@ -123,12 +125,14 @@ export {
   recheckLocalGitRead,
   readQualifiedGitBlob,
   assessLocalGitEnvironment,
+  prepareLocalGitRead,
   describeGitReadAssessment,
   requireOfflineGitRead,
   OFFLINE_GIT_FIX,
 } from "./git-read-qualification.ts";
 export type {
   GitReadAssessment,
+  GitReadPolicy,
   PhysicalGitScope,
   GitReadPreflight,
   QualifiedGitRead,
@@ -272,6 +276,7 @@ type Recorder = Readonly<{
   profile: GraphProfile;
   preparedQualification?: PreparedQualification;
   environment?: Readonly<Record<string, string>>;
+  gitPolicy?: GitReadPolicy;
   preparedState: { observed?: GraphPreparedRead };
   /** When this inspection's wait for the shared service ends (`serviceDeadlineMs`), epoch ms. */
   serviceDeadlineAt?: number;
@@ -532,6 +537,9 @@ const engineEnvironment = (recorder: Recorder): Record<string, string> => {
   const queued = service === "auto" || service === "require";
   return {
     ...engineBaseEnvironment(),
+    ...(recorder.environment?.PATH === undefined
+      ? {}
+      : { PATH: [recorder.environment.PATH, ...ENGINE_PATH].join(":") }),
     ...(threads === undefined
       ? {}
       : {
@@ -580,21 +588,21 @@ const startCommand = async (
     throw new DOMException("Graph inspection aborted.", "AbortError");
   }
   let abort: (() => void) | undefined;
+  const isGit = basename(argv[0] ?? "") === "git";
   const launch = () => {
     if (signal?.aborted)
       throw new DOMException("Graph inspection aborted.", "AbortError");
     const child = Bun.spawn([...argv], {
       cwd,
       // Kept open, unwritten and referenced by the tracked child. The OS closes it even on SIGKILL.
-      stdin: argv[0] === "git" ? "ignore" : "pipe",
+      stdin: isGit ? "ignore" : "pipe",
       stdout: "pipe",
       stderr: "pipe",
       // Its own process group, so cancellation can stop the command's children with it.
       detached: true,
-      env:
-        argv[0] === "git"
-          ? { ...(recorder.environment ?? globalThis.process.env) }
-          : engineEnvironment(recorder),
+      env: isGit
+        ? { ...(recorder.environment ?? globalThis.process.env) }
+        : engineEnvironment(recorder),
     });
     stopWithThisProcess(child);
     abort = () => terminateCommand(child);
@@ -636,6 +644,14 @@ const command = async (
     maxOutputBytes?: number;
   }> = {},
 ): Promise<InternalCommandReceipt> => {
+  if (argv[0] === "git" && argv[1] !== "init") {
+    const at = argv.indexOf("-C");
+    const policy =
+      recorder.gitPolicy ??
+      (await prepareLocalGitRead(at === -1 ? cwd : (argv[at + 1] ?? cwd)));
+    argv = [policy.executable, ...policy.commandPrefix, ...argv.slice(1)];
+    recorder = { ...recorder, environment: policy.environment };
+  }
   const signal = options.ignoreAbort ? undefined : recorder.signal;
   const { process, release } = await startCommand(
     argv,
@@ -1969,7 +1985,10 @@ export const prepareGraphSnapshot = (
             "Snapshot preparation requires an exact lowercase commit OID.",
         });
       const repository = resolve(request.repository) as RepositoryPath;
+      const gitPolicy = await prepareLocalGitRead(repository);
       const recorder: Recorder = {
+        gitPolicy,
+        environment: gitPolicy.environment,
         evidence: run,
         failures: [],
         signal,
@@ -3189,22 +3208,10 @@ const runInspection = async (
       : run.signal === undefined
         ? controller.signal
         : AbortSignal.any([run.signal, controller.signal]);
-  const environment =
-    request.cache !== "prepared"
-      ? undefined
-      : {
-          ...Object.fromEntries(
-            Object.entries(process.env).filter(
-              (entry): entry is [string, string] =>
-                !entry[0].startsWith("GIT_") && entry[1] !== undefined,
-            ),
-          ),
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          GIT_NO_REPLACE_OBJECTS: "1",
-          GIT_TERMINAL_PROMPT: "0",
-        };
+  const gitPolicy = await prepareLocalGitRead(resolve(request.repository));
+  const environment = gitPolicy.environment;
   let recorder: Recorder = {
+    gitPolicy,
     evidence: run,
     failures: [],
     cacheDirectory: resolve(

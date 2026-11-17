@@ -1801,9 +1801,8 @@ test("stored: paths go to check-attr as arguments as stdin carried them (a leadi
 
 // --- Fix round 2: what still reached the read -----------------------------------------------------
 
-test("stored: a partial clone's .gitattributes blob is fetched before the isolated read, so the first call already reads -linguist-generated (not-held, repository-declares-not-generated), and the second is reused", async () => {
-  // Why: the isolated directory has no remote; an attributes blob it cannot see reads as absent,
-  // and the answer would change once some other read fetched it.
+test("stored: a partial clone's missing .gitattributes blob fails the read without fetching or caching an answer", async () => {
+  // Why: missing attributes must be reported without fetching or treating their absence as a declaration.
   const source = scratchRepository("partial-source");
   source.run("config", "uploadpack.allowFilter", "true");
   source.commit({ "bun.lock": LOCK_BEFORE });
@@ -1832,16 +1831,12 @@ test("stored: a partial clone's .gitattributes blob is fetched before the isolat
       env: { ...GIT_ENV, GIT_NO_LAZY_FETCH: "1" },
     }).exitCode === 0;
   expect(present()).toBe(false);
-  const first = await storedRulesIn("partial", clone, revision, hunks);
-  const second = await storedRulesIn("partial", clone, revision, hunks);
-  expect(generatedByPathIn(first.rules)).toEqual({
-    "bun.lock": ["not-held", "repository-declares-not-generated"],
-  });
-  expect([second.rulesStatus, second.rulesKey]).toEqual([
-    "reused",
-    first.rulesKey,
-  ]);
-  expect(present()).toBe(true);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await expect(
+      storedRulesIn("partial", clone, revision, hunks),
+    ).rejects.toThrow("cannot see .gitattributes");
+    expect(present()).toBe(false);
+  }
 }, 120_000);
 
 test("stored: a .gitattributes blob the isolated read cannot see fails the call (AttributesUnreadable): an attributes file Git cannot find reads as absent, which must not answer", async () => {

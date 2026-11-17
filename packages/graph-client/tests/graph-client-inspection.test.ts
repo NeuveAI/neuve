@@ -1068,7 +1068,7 @@ describe("inspectGraph", () => {
     const realGit = run(["which", "git"], repository.root);
     await Bun.write(
       gitPath,
-      `#!/usr/bin/env bun
+      `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args.includes("worktree") && args.includes("remove")) {
   console.error("forced worktree removal failure");
@@ -1192,7 +1192,7 @@ console.log(JSON.stringify({
     const realGit = run(["which", "git"], repository.root);
     await Bun.write(
       gitPath,
-      `#!/usr/bin/env bun
+      `#!${process.execPath}
 process.on("SIGTERM", () => process.exit(143));
 const args = process.argv.slice(2);
 if (args.includes("worktree") && args.includes("add")) {
@@ -1283,7 +1283,7 @@ console.log(JSON.stringify({
     const realGit = run(["which", "git"], repository.root);
     await Bun.write(
       gitPath,
-      `#!/usr/bin/env bun
+      `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args.includes("worktree") && args.includes("add")) {
   console.error("forced worktree add failure");

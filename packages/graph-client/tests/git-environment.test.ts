@@ -37,8 +37,8 @@ const fixture = async (partial: boolean, supported: boolean) => {
     return result.stdout.toString().trim();
   };
   git(source, "init", "-q");
-  await Bun.write(join(source, "file"), "offline content\n");
-  git(source, "add", "file");
+  await Bun.write(join(source, "source.custom"), "offline content\n");
+  git(source, "add", "source.custom");
   git(
     source,
     "-c",
@@ -49,7 +49,7 @@ const fixture = async (partial: boolean, supported: boolean) => {
     "-qm",
     "first",
   );
-  const oid = git(source, "rev-parse", "HEAD:file");
+  const oid = git(source, "rev-parse", "HEAD:source.custom");
   let repository = source;
   if (partial) {
     git(source, "config", "uploadpack.allowFilter", "true");
@@ -128,7 +128,7 @@ for (const partial of [false, true])
       } catch (error) { console.log(error.message); }
       const reader = await GitReadSession.open(repository);
       try {
-        console.log("prepared " + await reader.prepare());
+        console.log("prepared " + (await reader.prepare()).suppression);
         const blobs = await reader.blobs([${JSON.stringify(f.oid)}], undefined, new AbortController().signal);
         console.log(blobs.size);
       } catch (error) { console.log(error.message); }
@@ -151,7 +151,9 @@ for (const partial of [false, true])
         expect(commands).not.toContain("cat-file");
       } else {
         expect(JSON.parse(stdout.split("\n")[1] ?? "")).toEqual(assessment);
-        expect(stdout).toContain("prepared true");
+        expect(stdout).toContain(
+          "prepared " + (partial ? "no-lazy-fetch-flag" : "none"),
+        );
         if (partial) {
           expect(stdout).toContain(
             "Local Git read refused (command: git-read)",
@@ -207,3 +209,120 @@ for (const { setting, values } of [
     expect(stdout).toContain("this repository is a partial clone");
   });
 }
+
+// Why: Git accepts more numeric booleans than 0/1, and old Git must still explain a partial clone.
+for (const supported of [false, true]) {
+  test(`Git boolean forms with ${supported ? "supported" : "old"} Git`, async () => {
+    const f = await fixture(false, supported);
+    for (const [value, expected] of [
+      ["2", true],
+      ["-1", true],
+      ["+2", true],
+      ["0x2", true],
+      ["010", true],
+      ["1k", true],
+      ["-2M", true],
+      ["1G", true],
+      ["-2147483648", true],
+      ["2147483647", true],
+      ["  +2", true],
+      ["yes", true],
+      ["ON", true],
+      ["0", false],
+      ["-0", false],
+      ["+0", false],
+      ["0x0", false],
+      ["000", false],
+      ["0g", false],
+      ["", false],
+      ["NO", false],
+      ["off", false],
+    ] as const) {
+      f.git(f.repository, "config", "remote.origin.promisor", value);
+      expect(
+        f.git(f.repository, "config", "--bool", "remote.origin.promisor"),
+      ).toBe(String(expected));
+      const stdout = await f.run(`
+        import { assessLocalGitEnvironment, preflightLocalGitRead, qualifyLocalGitRead } from ${JSON.stringify(qualification)};
+        const repository = ${JSON.stringify(f.repository)};
+        console.log(JSON.stringify(await assessLocalGitEnvironment(repository)));
+        try { console.log(JSON.stringify((await qualifyLocalGitRead(await preflightLocalGitRead({ repository }))).assessment)); }
+        catch (error) { console.log(error.message); }
+      `);
+      expect(JSON.parse(stdout.split("\n")[0] ?? "").partialClone, value).toBe(
+        expected,
+      );
+      if (expected && !supported) {
+        expect(stdout, value).toContain("git version 2.39.5");
+        expect(stdout, value).toContain("this repository is a partial clone");
+        expect(stdout, value).toContain("brew install git");
+      } else
+        expect(
+          JSON.parse(stdout.split("\n")[1] ?? "").partialClone,
+          value,
+        ).toBe(expected);
+    }
+    for (const value of [
+      "08",
+      "0b1",
+      "2z",
+      "2147483648",
+      "-2147483649",
+      "2g",
+      "1 ",
+      "truthy",
+      "true\n",
+      "2\n",
+    ]) {
+      f.git(f.repository, "config", "remote.origin.promisor", value);
+      const stdout = await f.run(`
+        import { assessLocalGitEnvironment, preflightLocalGitRead } from ${JSON.stringify(qualification)};
+        const repository = ${JSON.stringify(f.repository)};
+        for (const inspect of [() => assessLocalGitEnvironment(repository), () => preflightLocalGitRead({ repository })]) {
+          try { await inspect(); console.log("accepted"); }
+          catch (error) { console.log(error.message); }
+        }
+      `);
+      expect(stdout, value).not.toContain("accepted");
+      expect(stdout.match(/unsupported-config: boolean/g), value).toHaveLength(
+        2,
+      );
+    }
+  }, 60000);
+}
+
+// Why: query source validation uses native Git outside GitReadSession and must obey the same policy.
+test("native Graph source validation does not fetch a missing promisor blob", async () => {
+  const f = await fixture(true, true);
+  const commit = f.git(f.repository, "rev-parse", "HEAD");
+  await f.run(`
+    import { runGraphInspection } from ${JSON.stringify(resolve(import.meta.dir, "../src/index.ts"))};
+    import { fakeExecutable, request, removeRoots } from ${JSON.stringify(resolve(import.meta.dir, "graph-client-support.ts"))};
+    const executable = await fakeExecutable("prepared-valid");
+    try {
+      await runGraphInspection({ ...request(executable, ${JSON.stringify(f.repository)}, ${JSON.stringify(commit)}, false), cache: "prepared" }, {
+        cacheDirectory: ${JSON.stringify(join(f.root, "cache"))}, emit: async () => {},
+      });
+    } finally { await removeRoots(); }
+  `);
+  const commands: string[][] = (await readFile(f.log, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const reads = commands.filter(
+    (args) => args.includes("cat-file") && args.includes("blob"),
+  );
+  expect(reads.length).toBeGreaterThan(0);
+  for (const args of reads) expect(args).toContain("--no-lazy-fetch");
+  expect(
+    Bun.spawnSync([
+      "git",
+      "--no-lazy-fetch",
+      "-C",
+      f.repository,
+      "cat-file",
+      "-e",
+      f.oid,
+    ]).exitCode,
+  ).not.toBe(0);
+});

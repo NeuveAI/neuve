@@ -265,10 +265,12 @@ test("SHA-256 pipelining drains responses while commands flush", async () => {
     expect(result.get(object.oid)).toEqual(new Uint8Array(object.bytes));
 }, 60000);
 
-// Why: worker scopes and expired captured contexts must retain main's exact process path.
+// Why: worker scopes and expired captured contexts still need assessed native reads.
 test("no snapshot and a straggler after close use native processes", async () => {
   const f = fixture(),
     oid = f.blob("native");
+  const executable = Bun.which("git");
+  if (executable === null) throw new Error("Git unavailable");
   const original = Bun.spawn,
     calls: string[][] = [];
   Bun.spawn = new Proxy(original, {
@@ -279,7 +281,18 @@ test("no snapshot and a straggler after close use native processes", async () =>
   });
   try {
     await Effect.runPromise(Effect.scoped(readBlobs(f.root, [oid])));
-    expect(calls).toEqual([["git", "-C", f.root, "cat-file", "--batch"]]);
+    expect(calls.filter((args) => args.includes("cat-file"))).toEqual([
+      [
+        executable,
+        "--no-replace-objects",
+        "--no-optional-locks",
+        "--no-pager",
+        "-C",
+        f.root,
+        "cat-file",
+        "--batch",
+      ],
+    ]);
     const context = await Effect.runPromise(
       withGitReadSnapshot(
         f.root,
@@ -294,7 +307,18 @@ test("no snapshot and a straggler after close use native processes", async () =>
         ),
       ),
     ).toBe("native");
-    expect(calls).toEqual([["git", "-C", f.root, "cat-file", "--batch"]]);
+    expect(calls.filter((args) => args.includes("cat-file"))).toEqual([
+      [
+        executable,
+        "--no-replace-objects",
+        "--no-optional-locks",
+        "--no-pager",
+        "-C",
+        f.root,
+        "cat-file",
+        "--batch",
+      ],
+    ]);
   } finally {
     Bun.spawn = original;
   }
@@ -344,8 +368,8 @@ test("physical aliases share one source and foreign repositories use main", asyn
     expect(calls.filter((args) => args.includes("--batch"))).toHaveLength(1);
     const objectArgs =
       calls.find((args) => args.includes("--batch-command")) ?? [];
+    expect(objectArgs).not.toContain("--no-lazy-fetch");
     for (const option of [
-      "--no-lazy-fetch",
       "--no-replace-objects",
       "--no-optional-locks",
       "--no-pager",
@@ -507,8 +531,8 @@ test("native ownership refusal is preserved and global safe.directory approval w
   expect(await probe()).toBe(false);
 });
 
-// Why: only exact immutable argv are memoised and misses must use the user's native environment.
-test("commands memoise one answer by full argv, with native config and no attribute rechecks", async () => {
+// Why: only exact immutable argv are memoised, and native misses keep the same isolated policy.
+test("commands memoise one answer by full argv, with isolated config and no attribute rechecks", async () => {
   const f = fixture();
   writeFileSync(join(f.root, "file"), "one\n");
   const base = f.commit();
@@ -552,12 +576,12 @@ test("commands memoise one answer by full argv, with native config and no attrib
     expect(calls.filter((call) => call.args.includes("diff"))).toHaveLength(1);
     expect(calls.filter((call) => call.args.includes("HEAD"))).toHaveLength(2);
     expect(calls.filter((call) => call.args.includes("grep"))).toHaveLength(2);
-    for (const call of calls.filter(
-      (call) =>
-        !call.args.includes("--git-dir") &&
-        !call.args.includes("--no-lazy-fetch"),
-    ))
-      expect(call.env === undefined).toBe(true);
+    for (const call of calls.filter((call) => !call.args.includes("--git-dir")))
+      expect(call.env).toMatchObject({
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_NO_LAZY_FETCH: "1",
+        GIT_ALLOW_PROTOCOL: "",
+      });
   } finally {
     Bun.spawn = original;
     if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL;
@@ -1083,8 +1107,8 @@ test("live arrayBuffers stay within the map plus 64 MiB for a large call", async
   );
 }, 60000);
 
-// Why: old Git and wrappers cut off by isolated PATH must keep all reads on main's working path.
-test("unsupported isolated Git and env-bash wrappers fall back once probed", async () => {
+// Why: full clones use old Git without the flag; isolation failures must not bypass assessment.
+test("old Git uses assessed reads and unsupported isolated wrappers refuse", async () => {
   const f = fixture(),
     oid = f.blob("native shim");
   const executable = Bun.which("git");
@@ -1110,7 +1134,7 @@ test("unsupported isolated Git and env-bash wrappers fall back once probed", asy
       let probes = 0, sources = 0, commands = 0;
       const original = Bun.spawn;
       Bun.spawn = new Proxy(original, { apply(target, self, args) {
-        if (args[0][1] === "--no-lazy-fetch" && args[0][2] === "version") probes++;
+        if (args[0].includes("--no-lazy-fetch") && args[0].at(-1) === "version") probes++;
         if (args[0].includes("--batch-command")) sources++;
         if (args[0].includes("ls-tree")) commands++;
         return Reflect.apply(target, self, args);
@@ -1124,16 +1148,25 @@ test("unsupported isolated Git and env-bash wrappers fall back once probed", asy
         const held = yield* GitReadSnapshot;
         if (Option.isNone(held)) throw new Error("Missing snapshot");
         console.log(JSON.stringify({ probes, sources, commands, counters: held.value.counters }));
-      })));
+      })).pipe(Effect.catch(error => Effect.sync(() => console.log(JSON.stringify({ error: error.message, probes, sources, commands }))))));
     `,
       { ...process.env, PATH: dir + ":" + process.env.PATH },
     );
-    expect(result.probes).toBe(1);
-    expect(result.sources).toBe(0);
-    expect(result.commands).toBe(2);
-    expect(result.counters.nativeFallback).toBe(4);
-    expect(result.counters.requests).toBe(0);
-    expect(result.counters.sourceRestarts).toBe(0);
+    if (wrapper === "env-bash") {
+      expect(result.error).toContain("git-config");
+      expect(result.probes).toBe(0);
+      expect(result.sources).toBe(0);
+      expect(result.commands).toBe(0);
+    } else {
+      expect(result.error).toBeUndefined();
+      expect(result.probes).toBe(1);
+      expect(result.sources).toBe(1);
+      expect(result.commands).toBe(1);
+      expect(result.counters.nativeFallback).toBe(0);
+      expect(result.counters.requests).toBe(2);
+      expect(result.counters.hits).toBe(1);
+      expect(result.counters.sourceRestarts).toBe(0);
+    }
   }
 });
 

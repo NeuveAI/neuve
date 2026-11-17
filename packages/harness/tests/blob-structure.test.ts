@@ -747,7 +747,9 @@ const gitCommands = async <A>(work: () => Promise<A>) => {
     const value = await work();
     const commands = spawn.mock.calls
       .map(([command]) => (Array.isArray(command) ? command : []))
-      .filter((command) => command[0] === "git")
+      .filter(
+        (command) => command[0] === "git" || command[0] === Bun.which("git"),
+      )
       .map((command) => command.join(" "));
     return { value, commands };
   } finally {
@@ -794,8 +796,11 @@ test("misses with sizes unknown are sized first, and an over-size miss is never 
     run(blobStructures(repository, [large], source), "misses"),
   );
   // One size check, no content read.
-  expect(over.commands).toHaveLength(1);
-  expect(over.commands[0]).toContain("cat-file --batch-check");
+  const overReads = over.commands.filter((command) =>
+    command.includes(" cat-file "),
+  );
+  expect(overReads).toHaveLength(1);
+  expect(overReads[0]).toContain("cat-file --batch-check");
   expect(structureOf(over.value.value.structures, large)?.reason).toBe(
     "over-size",
   );
@@ -803,7 +808,9 @@ test("misses with sizes unknown are sized first, and an over-size miss is never 
     run(blobStructures(repository, [small], source), "misses"),
   );
   // One size check, then one content read.
-  expect(read.commands).toEqual([
+  expect(
+    read.commands.filter((command) => command.includes(" cat-file ")),
+  ).toEqual([
     expect.stringContaining("cat-file --batch-check"),
     expect.stringMatching(/ cat-file --batch$/),
   ]);

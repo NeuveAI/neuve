@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { setPriority } from "node:os";
 import {
-  assessLocalGitEnvironment,
-  requireOfflineGitRead,
-  isolatedGitReadEnvironment,
+  prepareLocalGitRead,
+  type GitReadPolicy,
 } from "./git-read-qualification.ts";
 
 // The 512 MiB covers 448 MiB retained plus 64 MiB for one object in flight.
@@ -115,24 +114,19 @@ export class GitBatchObjectSource implements GitObjectSource {
     private readonly repository: string,
     private readonly trusted: Promise<void>,
     private readonly prefixFullBytes: number,
+    private readonly policy?: Promise<GitReadPolicy>,
   ) {}
   private async start() {
     if (this.closed) throw new Error("Closed Git object source");
     await this.trusted;
     if (this.closed) throw new Error("Closed Git object source");
     if (this.child !== undefined) return;
-    const executable = Bun.which("git");
-    if (executable === null) throw new Error("Git executable unavailable");
-    const assessment = await assessLocalGitEnvironment(this.repository);
-    requireOfflineGitRead(assessment);
+    const policy = await (this.policy ?? prepareLocalGitRead(this.repository));
     if (this.closed) throw new Error("Closed Git object source");
     const child = Bun.spawn(
       [
-        executable,
-        ...(assessment.partialClone ? ["--no-lazy-fetch"] : []),
-        "--no-replace-objects",
-        "--no-optional-locks",
-        "--no-pager",
+        policy.executable,
+        ...policy.commandPrefix,
         "-C",
         this.repository,
         "-c",
@@ -143,7 +137,7 @@ export class GitBatchObjectSource implements GitObjectSource {
         "--batch-command",
       ],
       {
-        env: isolatedGitReadEnvironment(executable, this.repository),
+        env: policy.environment,
         stdin: "pipe",
         stdout: "pipe",
         stderr: "pipe",
@@ -277,7 +271,7 @@ export class GitReadSession {
   private closed = false;
   private closing: Promise<void> | undefined;
   private trust: Promise<void> | undefined;
-  private capability: Promise<boolean> | undefined;
+  private capability: Promise<GitReadPolicy> | undefined;
   private trustChild: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
   readonly counters: Record<GitReadCounter, number> = {
     requests: 0,
@@ -356,9 +350,9 @@ export class GitReadSession {
     await this.trusted();
     return (this.capability ??= (async () => {
       this.assertLive();
-      requireOfflineGitRead(await assessLocalGitEnvironment(this.repository));
+      const policy = await prepareLocalGitRead(this.repository);
       this.assertLive();
-      return true;
+      return policy;
     })());
   }
   private fits(key: string, size: number, previous = 0) {
@@ -405,7 +399,7 @@ export class GitReadSession {
     const operation = this.tail.then(async () => {
       signal.throwIfAborted();
       this.assertLive();
-      if (!(await this.prepare())) throw new Error("Native Git reads required");
+      await this.prepare();
       const unique = [...new Set(oids)];
       this.count("requests", oids.length);
       const out = new Map<string, Uint8Array>();
@@ -438,6 +432,7 @@ export class GitReadSession {
             this.repository,
             this.trusted(),
             this.options.prefixFullBytes ?? 1024 * 1024,
+            this.prepare(),
           );
         try {
           await this.source.read(

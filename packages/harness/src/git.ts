@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { setPriority } from "node:os";
 import { Data, Effect, Option } from "effect";
+import { prepareLocalGitRead } from "@neuve/graph-client";
 import { type GitReadSession } from "@neuve/graph-client/git-read-session";
 import { GitReadSnapshot } from "./git-read-snapshot.ts";
 
@@ -30,7 +31,7 @@ export const withGitReadSession = <A>(
         return yield* fallback;
       }
       if (session.isClosed) return yield* fallback;
-      const supported = yield* Effect.tryPromise({
+      yield* Effect.tryPromise({
         try: () => session.prepare(),
         catch: (cause) =>
           new GitFailed({
@@ -40,10 +41,6 @@ export const withGitReadSession = <A>(
           }),
       });
       if (session.isClosed) return yield* fallback;
-      if (!supported) {
-        session.count("nativeFallback", 1);
-        return yield* fallback;
-      }
       return yield* use(session);
     }).pipe(
       Effect.catch((error) =>
@@ -80,6 +77,7 @@ export const gitSubcommand = (args: ReadonlyArray<string>) => {
         "--no-replace-objects",
         "--no-optional-locks",
         "--no-pager",
+        "--literal-pathspecs",
       ].includes(arg)
     ) {
       index++;
@@ -98,6 +96,10 @@ export const gitSubcommand = (args: ReadonlyArray<string>) => {
       "cat-file",
       "for-each-ref",
       "hash-object",
+      "config",
+      "init",
+      "clone",
+      "rev-list",
     ].includes(arg)
       ? arg
       : "other";
@@ -131,6 +133,30 @@ const immutableCommand = (args: ReadonlyArray<string>) => {
     );
   return false;
 };
+
+/** Reuse the local snapshot's assessment; assess unscoped and foreign reads themselves. */
+const gitReadPolicy = (repository: string, environment?: NodeJS.ProcessEnv) =>
+  Effect.gen(function* () {
+    const snapshot = yield* GitReadSnapshot;
+    return yield* Effect.tryPromise({
+      try: async () => {
+        if (
+          environment === undefined &&
+          Option.isSome(snapshot) &&
+          !snapshot.value.isClosed &&
+          (await realpath(repository)) === snapshot.value.repository
+        )
+          return snapshot.value.prepare();
+        return prepareLocalGitRead(repository, environment);
+      },
+      catch: (cause) =>
+        new GitFailed({
+          args: [],
+          exitCode: -1,
+          message: String(cause).slice(0, 500),
+        }),
+    });
+  });
 
 /**
  * Git reads for the harness: always against object IDs, never the working tree, so untracked and
@@ -236,7 +262,18 @@ export const gitMeasured = (
   repository: string,
   args: ReadonlyArray<string>,
   environment?: NodeJS.ProcessEnv,
-) => runGitMeasured(repository, args, environment);
+) =>
+  Effect.gen(function* () {
+    if (["version", "config", "init", "clone"].includes(gitSubcommand(args)))
+      return yield* runGitMeasured(repository, args, environment);
+    const policy = yield* gitReadPolicy(repository, environment);
+    return yield* runGitMeasured(
+      repository,
+      [...policy.commandPrefix, ...args],
+      policy.environment,
+      policy.executable,
+    );
+  });
 
 /** Finite NUL-delimited attribute input, with stdout/stderr drained while writing. */
 export const gitWithInput = (
@@ -244,10 +281,17 @@ export const gitWithInput = (
   args: ReadonlyArray<string>,
   input: string,
 ) =>
-  Effect.map(
-    runGitMeasured(repository, args, undefined, "git", input),
-    ({ stdout }) => stdout,
-  );
+  Effect.gen(function* () {
+    const policy = yield* gitReadPolicy(repository);
+    const { stdout } = yield* runGitMeasured(
+      repository,
+      [...policy.commandPrefix, ...args],
+      policy.environment,
+      policy.executable,
+      input,
+    );
+    return stdout;
+  });
 
 export const git = (
   repository: string,

@@ -93,7 +93,7 @@ export type QualifiedGitRead = Readonly<
     kind: "qualified";
     assessment: GitReadAssessment;
     gitVersion: string;
-    suppression: "no-lazy-fetch-flag" | "full-clone";
+    suppression: GitReadPolicy["suppression"];
   }
 >;
 export type GitReadReceipt = Readonly<{
@@ -430,8 +430,26 @@ const parseConfig = (
   return values;
 };
 const boolean = (value: string) => {
-  if (/^(true|yes|on|1)$/i.test(value)) return true;
-  if (/^(false|no|off|0|)$/i.test(value)) return false;
+  if (["true", "yes", "on", "1"].includes(value.toLowerCase())) return true;
+  if (["false", "no", "off", "0", ""].includes(value.toLowerCase()))
+    return false;
+  // Git's git_parse_maybe_bool uses a signed int, base 0, with k/m/g suffixes.
+  const match =
+    /^[\t\n\v\f\r ]*([+-]?)(0x[\da-f]+|0[0-7]*|[1-9]\d*)([kmg]?)$/i.exec(value);
+  if (match?.[0] === value) {
+    const digits = match[2] ?? "";
+    const radix = /^0x/i.test(digits) ? 16 : digits.startsWith("0") ? 8 : 10;
+    const suffix = (match[3] ?? "").toLowerCase();
+    const factor = suffix === "" ? 1 : 1024 ** ("kmg".indexOf(suffix) + 1);
+    const number =
+      Number.parseInt(digits, radix) * factor * (match[1] === "-" ? -1 : 1);
+    if (
+      Number.isInteger(number) &&
+      number >= -2147483648 &&
+      number <= 2147483647
+    )
+      return number !== 0;
+  }
   throw new GitReadRefusal("unsupported-config", "boolean");
 };
 const last = (config: ReadonlyMap<string, readonly string[]>, key: string) =>
@@ -530,13 +548,20 @@ const retainQualification = <T extends GitReadPreflight | QualifiedGitRead>(
 export const isolatedGitReadEnvironment = (
   executablePath: string,
   workdir: string,
+  supplied?: NodeJS.ProcessEnv,
 ) => {
   const environment = Object.fromEntries(
-    Object.entries(process.env).filter(
+    Object.entries(supplied ?? process.env).filter(
       (entry): entry is [string, string] =>
         !entry[0].toUpperCase().startsWith("GIT_") && entry[1] !== undefined,
     ),
   );
+  // Explicit isolated object stores are used by the harness's attribute reader.
+  for (const key of [
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  ])
+    if (supplied?.[key] !== undefined) environment[key] = supplied[key];
   Object.assign(environment, {
     PATH: dirname(executablePath),
     GIT_CONFIG_NOSYSTEM: "1",
@@ -680,7 +705,7 @@ export const preflightLocalGitRead = async (
         : [gitCommonDirectory, gitDirectory],
       input.signal,
     );
-    const selected = Bun.which("git");
+    const selected = Bun.which("git", { PATH: process.env.PATH ?? "" });
     if (!selected || !isAbsolute(selected) || basename(selected) !== "git")
       throw new GitReadRefusal("executable-unavailable", "git");
     const executablePath = await realpath(selected);
@@ -1401,9 +1426,9 @@ export const qualifyLocalGitRead = async (
     kind: "qualified",
     assessment,
     gitVersion: assessment.gitVersion,
-    suppression: assessment.partialClone ? "no-lazy-fetch-flag" : "full-clone",
+    suppression: gitReadSuppression(assessment),
     commandPrefix: [
-      ...(assessment.partialClone ? ["--no-lazy-fetch"] : []),
+      ...gitReadSuppressionArgs(assessment),
       ...preflight.commandPrefix,
     ],
   });
@@ -1470,14 +1495,40 @@ export const requireOfflineGitRead = (assessment: GitReadAssessment) => {
 export const describeGitReadAssessment = (assessment: GitReadAssessment) =>
   `${assessment.gitVersion}; --no-lazy-fetch ${assessment.supportsNoLazyFetch ? "supported" : "unsupported"}; ${assessment.partialClone ? "partial clone" : "full clone"}`;
 
+export type GitReadPolicy = Readonly<{
+  assessment: GitReadAssessment;
+  executable: string;
+  environment: Readonly<Record<string, string>>;
+  suppression: "no-lazy-fetch-flag" | "none";
+  commandPrefix: readonly string[];
+}>;
+
+const gitReadSuppression = (
+  assessment: GitReadAssessment,
+): GitReadPolicy["suppression"] =>
+  assessment.partialClone && assessment.supportsNoLazyFetch
+    ? "no-lazy-fetch-flag"
+    : "none";
+const gitReadSuppressionArgs = (assessment: GitReadAssessment) =>
+  gitReadSuppression(assessment) === "no-lazy-fetch-flag"
+    ? ["--no-lazy-fetch"]
+    : [];
+
 /** Metadata commands only, including in a partial clone on an older Git. */
-export const assessLocalGitEnvironment = async (
+const inspectLocalGitEnvironment = async (
   repository: string,
-): Promise<GitReadAssessment> => {
-  const executable = Bun.which("git");
+  supplied?: NodeJS.ProcessEnv,
+): Promise<GitReadPolicy> => {
+  const executable = Bun.which("git", {
+    PATH: supplied?.PATH ?? process.env.PATH ?? "",
+  });
   if (executable === null)
     throw new GitReadRefusal("executable-unavailable", "git");
-  const environment = isolatedGitReadEnvironment(executable, repository);
+  const environment = isolatedGitReadEnvironment(
+    executable,
+    repository,
+    supplied,
+  );
   const run = async (args: readonly string[]) => {
     const child = Bun.spawn([executable, "-C", repository, ...args], {
       env: environment,
@@ -1504,7 +1555,35 @@ export const assessLocalGitEnvironment = async (
     const value = at === -1 ? "true" : entry.slice(at + 1);
     config.set(key, [...(config.get(key) ?? []), value]);
   }
-  return assessGitReadCapabilities(isPartialClone(config), (flag) =>
-    run(flag ? ["--no-lazy-fetch", "version"] : ["version"]),
+  const assessment = await assessGitReadCapabilities(
+    isPartialClone(config),
+    (flag) => run(flag ? ["--no-lazy-fetch", "version"] : ["version"]),
   );
+  return {
+    assessment,
+    executable,
+    environment,
+    suppression: gitReadSuppression(assessment),
+    commandPrefix: [
+      ...gitReadSuppressionArgs(assessment),
+      "--no-replace-objects",
+      "--no-optional-locks",
+      "--no-pager",
+    ],
+  };
+};
+
+export const assessLocalGitEnvironment = async (
+  repository: string,
+): Promise<GitReadAssessment> =>
+  (await inspectLocalGitEnvironment(repository)).assessment;
+
+/** Keep every read on the executable, environment and suppression policy assessed together. */
+export const prepareLocalGitRead = async (
+  repository: string,
+  environment?: NodeJS.ProcessEnv,
+): Promise<GitReadPolicy> => {
+  const policy = await inspectLocalGitEnvironment(repository, environment);
+  requireOfflineGitRead(policy.assessment);
+  return policy;
 };

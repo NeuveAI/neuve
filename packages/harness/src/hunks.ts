@@ -5,7 +5,7 @@ import { METRICS } from "./telemetry.ts";
 import { createHash } from "node:crypto";
 import { Effect, Metric } from "effect";
 import { z } from "zod";
-import { gitWithInput, withGitReadSession } from "./git.ts";
+import { gitWithInput } from "./git.ts";
 import { splitLines, WINDOW_RECIPE, fallbackLimitation } from "./chunker.ts";
 import {
   groupsBySize,
@@ -266,15 +266,10 @@ export const blobSizes = (repository: string, oids: ReadonlyArray<string>) =>
     const sizes = new Map<string, number>();
     if (oids.length === 0) return sizes;
     const input = oids.join("\n") + "\n";
-    const metadata = yield* withGitReadSession(
+    const metadata = yield* gitWithInput(
       repository,
-      () =>
-        gitWithInput(
-          repository,
-          ["--no-lazy-fetch", "cat-file", "--batch-check"],
-          input,
-        ),
-      gitWithInput(repository, ["cat-file", "--batch-check"], input),
+      ["cat-file", "--batch-check"],
+      input,
     );
     for (const row of metadata.trim().split("\n")) {
       const [oid, type, size] = row.split(" ");

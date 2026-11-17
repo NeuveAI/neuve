@@ -1,5 +1,6 @@
 import { setPriority } from "node:os";
 import { Data, Effect } from "effect";
+import { prepareLocalGitRead } from "@neuve/graph-client";
 import { GitFailed, git, withGitReadSession } from "./git.ts";
 
 /**
@@ -179,13 +180,22 @@ const catFileBatch = (
 ) =>
   Effect.tryPromise({
     try: async (signal) => {
+      const policy = await prepareLocalGitRead(repository);
       const child = Bun.spawn(
-        ["git", "-C", repository, "cat-file", "--batch"],
+        [
+          policy.executable,
+          ...policy.commandPrefix,
+          "-C",
+          repository,
+          "cat-file",
+          "--batch",
+        ],
         {
           stdin: "pipe",
           stdout: "pipe",
           stderr: "pipe",
           signal,
+          env: policy.environment,
         },
       );
       try {

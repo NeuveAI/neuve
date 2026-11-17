@@ -938,7 +938,7 @@ describe("committed cache boundary", () => {
     const realGit = Bun.which("git")!;
     await Bun.write(
       join(wrapper, "git"),
-      `#!/bin/sh\ncase " $* " in *" --git-common-dir "*) sleep 0.6;; esac\nexec ${realGit} "$@"\n`,
+      `#!/bin/sh\ncase " $* " in *" --git-common-dir "*) /bin/sleep 0.6;; esac\nexec ${realGit} "$@"\n`,
     );
     await chmod(join(wrapper, "git"), 0o755);
     const driver = join(root, "deadline-driver.ts");

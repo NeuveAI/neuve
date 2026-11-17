@@ -559,7 +559,7 @@ export const readCommitAttributes = (
     const blobs = [...new Set(files.map((entry) => entry.oid))].sort(
       byCodeUnits,
     );
-    // Sizes, and the fetch of what a partial clone is missing; a missing object is found below.
+    // Read local sizes only; a missing object is reported below.
     const sizes = new Map<string, number>();
     if (blobs.length > 0)
       for (const line of (yield* gitWithInput(
