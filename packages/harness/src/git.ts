@@ -1,7 +1,8 @@
-import { realpath } from "node:fs/promises";
-import { setPriority } from "node:os";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { setPriority, tmpdir } from "node:os";
 import { Data, Effect, Option } from "effect";
-import { prepareLocalGitRead } from "@neuve/graph-client";
+import { prepareLocalGitRead, type GitReadPolicy } from "@neuve/graph-client";
 import { type GitReadSession } from "@neuve/graph-client/git-read-session";
 import { GitReadSnapshot } from "./git-read-snapshot.ts";
 
@@ -216,12 +217,16 @@ const runGitMeasured = (
                 child.stdin.write(input);
                 await child.stdin.end();
               })();
-        const [stdout, stderr, exitCode] = await Promise.all([
+        const [stdout, stderr, exitCode, writeError] = await Promise.all([
           new Response(child.stdout).text(),
           new Response(child.stderr).text(),
           child.exited,
-          writing,
+          writing.then(
+            () => undefined,
+            (cause: unknown) => cause,
+          ),
         ]);
+        if (exitCode === 0 && writeError !== undefined) throw writeError;
         const usage = child.resourceUsage()?.cpuTime;
         const cpu: GitCpu | null =
           usage === undefined
@@ -258,6 +263,101 @@ const runGitMeasured = (
     }),
   );
 
+/** Older Git reads revision attributes from a private index and an empty worktree. */
+const runGitWithAttributes = (
+  repository: string,
+  args: ReadonlyArray<string>,
+  policy: GitReadPolicy,
+  input?: string,
+) => {
+  const run = (argv: ReadonlyArray<string>, environment = policy.environment) =>
+    runGitMeasured(
+      repository,
+      [...policy.commandPrefix, ...argv],
+      environment,
+      policy.executable,
+      input,
+    );
+  const source = args.find(
+    (arg) =>
+      arg.startsWith("--attr-source=") ||
+      (gitSubcommand(args) === "check-attr" && arg.startsWith("--source=")),
+  );
+  return run(args).pipe(
+    Effect.catchTag("GitFailed", (error) => {
+      if (
+        source === undefined ||
+        error.exitCode !== 129 ||
+        !error.message.includes("unknown option")
+      )
+        return Effect.fail(error);
+      const revision = source.slice(source.indexOf("=") + 1);
+      return Effect.acquireUseRelease(
+        Effect.tryPromise({
+          try: () => mkdtemp(join(tmpdir(), "neuve-attribute-index-")),
+          catch: (cause) =>
+            new GitFailed({ args, exitCode: -1, message: String(cause) }),
+        }),
+        (directory) =>
+          Effect.gen(function* () {
+            const environment = {
+              ...policy.environment,
+              GIT_INDEX_FILE: join(directory, "index"),
+            };
+            const { stdout: gitDirectory } = yield* runGitMeasured(
+              repository,
+              [...policy.commandPrefix, "rev-parse", "--absolute-git-dir"],
+              policy.environment,
+              policy.executable,
+            );
+            const options = [
+              `--git-dir=${gitDirectory.replace(/\n$/, "")}`,
+              `--work-tree=${directory}`,
+              "-c",
+              `safe.directory=${directory}`,
+              "-c",
+              "core.bare=false",
+              "-c",
+              "core.splitIndex=false",
+              "-c",
+              "core.sparseCheckout=false",
+              "-c",
+              "index.sparse=false",
+            ];
+            yield* runGitMeasured(
+              directory,
+              [
+                ...policy.commandPrefix,
+                ...options,
+                "read-tree",
+                "--no-sparse-checkout",
+                revision,
+              ],
+              environment,
+              policy.executable,
+            );
+            const translated = args.flatMap((arg) =>
+              arg === source
+                ? source.startsWith("--source=")
+                  ? ["--cached"]
+                  : []
+                : [arg],
+            );
+            return yield* runGitMeasured(
+              directory,
+              [...policy.commandPrefix, ...options, ...translated],
+              environment,
+              policy.executable,
+              input,
+            );
+          }),
+        (directory) =>
+          Effect.promise(() => rm(directory, { recursive: true, force: true })),
+      );
+    }),
+  );
+};
+
 export const gitMeasured = (
   repository: string,
   args: ReadonlyArray<string>,
@@ -267,12 +367,7 @@ export const gitMeasured = (
     if (["version", "config", "init", "clone"].includes(gitSubcommand(args)))
       return yield* runGitMeasured(repository, args, environment);
     const policy = yield* gitReadPolicy(repository, environment);
-    return yield* runGitMeasured(
-      repository,
-      [...policy.commandPrefix, ...args],
-      policy.environment,
-      policy.executable,
-    );
+    return yield* runGitWithAttributes(repository, args, policy);
   });
 
 /** Finite NUL-delimited attribute input, with stdout/stderr drained while writing. */
@@ -283,11 +378,10 @@ export const gitWithInput = (
 ) =>
   Effect.gen(function* () {
     const policy = yield* gitReadPolicy(repository);
-    const { stdout } = yield* runGitMeasured(
+    const { stdout } = yield* runGitWithAttributes(
       repository,
-      [...policy.commandPrefix, ...args],
-      policy.environment,
-      policy.executable,
+      args,
+      policy,
       input,
     );
     return stdout;

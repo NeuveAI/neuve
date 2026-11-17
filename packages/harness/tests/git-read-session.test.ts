@@ -284,6 +284,8 @@ test("no snapshot and a straggler after close use native processes", async () =>
     expect(calls.filter((args) => args.includes("cat-file"))).toEqual([
       [
         executable,
+        "-c",
+        `safe.directory=${f.root}`,
         "--no-replace-objects",
         "--no-optional-locks",
         "--no-pager",
@@ -310,6 +312,8 @@ test("no snapshot and a straggler after close use native processes", async () =>
     expect(calls.filter((args) => args.includes("cat-file"))).toEqual([
       [
         executable,
+        "-c",
+        `safe.directory=${f.root}`,
         "--no-replace-objects",
         "--no-optional-locks",
         "--no-pager",
@@ -364,7 +368,7 @@ test("physical aliases share one source and foreign repositories use main", asyn
     expect(
       calls.filter((args) => args.includes("--batch-command")),
     ).toHaveLength(1);
-    expect(calls.filter((args) => args.includes("--git-dir"))).toHaveLength(1);
+    expect(calls.filter((args) => args.includes("--git-dir"))).toHaveLength(3);
     expect(calls.filter((args) => args.includes("--batch"))).toHaveLength(1);
     const objectArgs =
       calls.find((args) => args.includes("--batch-command")) ?? [];
@@ -1219,7 +1223,7 @@ test("a failed trust check is retried on the next read", async () => {
     expect(
       decode((await reader.blobs([oid], undefined, signal())).get(oid)),
     ).toBe("retry trust");
-    expect(checks).toBe(2);
+    expect(checks).toBe(3);
     expect(reader.counters.uniqueObjectsRead).toBe(1);
     expect(reader.counters.nativeFallback).toBe(0);
   } finally {

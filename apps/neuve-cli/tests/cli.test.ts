@@ -6,7 +6,7 @@ import {
   expect,
   test,
 } from "bun:test";
-import { chmod, mkdtemp, realpath, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -225,6 +225,36 @@ const queryArgs = (
 ];
 
 describe("neuve CLI boundary", () => {
+  // Why: worktree creation for query must not execute the caller's post-checkout hook.
+  test("query works with a Husky-style env sh post-checkout hook", async () => {
+    const repository = await fixtureRepository();
+    const graph = await fakeGraph();
+    const hooks = join(repository.root, "hooks");
+    await mkdir(hooks);
+    const marker = join(repository.root, "hook-ran");
+    const hook = join(hooks, "post-checkout");
+    await Bun.write(hook, `#!/usr/bin/env sh\nprintf ran > '${marker}'\n`);
+    await chmod(hook, 0o755);
+    expect(
+      execute(["git", "config", "core.hooksPath", hooks], repository.root)
+        .exitCode,
+    ).toBe(0);
+    const result = await run(queryArgs(repository.root, repository.revision), {
+      NEUVE_GRAPH_BINARY: graph.executable,
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(
+      JSON.parse(result.stdout).structural_observations.length,
+    ).toBeGreaterThan(0);
+    expect(await Bun.file(marker).exists()).toBe(false);
+    expect(
+      execute(
+        ["git", "worktree", "list", "--porcelain"],
+        repository.root,
+      ).stdout.match(/^worktree /gm),
+    ).toHaveLength(1);
+  });
+
   test("prepared CLI returns confirmed scope and never sends an index command", async () => {
     const repository = await fixtureRepository();
     const graph = await fakeGraph("prepared");

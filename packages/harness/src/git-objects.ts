@@ -1,5 +1,5 @@
 import { setPriority } from "node:os";
-import { Data, Effect } from "effect";
+import { Effect } from "effect";
 import { prepareLocalGitRead } from "@neuve/graph-client";
 import { GitFailed, git, withGitReadSession } from "./git.ts";
 
@@ -287,47 +287,6 @@ const catFileBatch = (
     }),
   );
 
-/** The oldest git this module's reads support: `git --attr-source` (2.42). */
-const MINIMUM_GIT: readonly [number, number] = [2, 42];
-
-/** Git is too old for Precompute's attribute reads; no attempt can succeed until it is upgraded. */
-export class GitTooOld extends Data.TaggedError("GitTooOld")<{
-  readonly message: string;
-  readonly retryable: false;
-}> {}
-
-let gitSupported = false;
-
-/**
- * Checks, until it once succeeds in this process, that git reads attributes from a tree:
- * `git --attr-source` for diffs and `git check-attr --source` for declarations, so the working
- * tree's `.gitattributes` never decides anything about a reviewed revision (10.34).
- */
-export const requireGitVersion = (repository: string) =>
-  Effect.suspend(() =>
-    gitSupported
-      ? Effect.void
-      : Effect.flatMap(git(repository, ["version"]), (out) => {
-          const [major = 0, minor = 0] = (/(\d+)\.(\d+)/.exec(out) ?? [])
-            .slice(1)
-            .map(Number);
-          const [needMajor, needMinor] = MINIMUM_GIT;
-          if (
-            major > needMajor ||
-            (major === needMajor && minor >= needMinor)
-          ) {
-            gitSupported = true;
-            return Effect.void;
-          }
-          return Effect.fail(
-            new GitTooOld({
-              message: `Neuve's Precompute needs git ${needMajor}.${needMinor} or newer to read attributes from a revision (--attr-source); found ${out.trim()}`,
-              retryable: false,
-            }),
-          );
-        }),
-  );
-
 /** One file of a diff between two trees, with its hunks as git printed them. */
 export interface DiffFile {
   readonly status:
@@ -401,26 +360,23 @@ const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
  */
 export const diffTrees = (repository: string, from: string, to: string) =>
   Effect.map(
-    Effect.andThen(
-      requireGitVersion(repository),
-      git(repository, [
-        // Attributes (such as `-diff`) come from the new side's tree, never the working tree.
-        `--attr-source=${to}`,
-        "-c",
-        "core.quotePath=true",
-        "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--full-index",
-        "--find-renames",
-        "-U3",
-        "--src-prefix=a/",
-        "--dst-prefix=b/",
-        from,
-        to,
-      ]),
-    ),
+    git(repository, [
+      // Attributes (such as `-diff`) come from the new side's tree, never the working tree.
+      `--attr-source=${to}`,
+      "-c",
+      "core.quotePath=true",
+      "diff",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--full-index",
+      "--find-renames",
+      "-U3",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      from,
+      to,
+    ]),
     parseDiff,
   );
 

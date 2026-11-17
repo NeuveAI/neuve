@@ -2,7 +2,7 @@ import { posix } from "node:path";
 import { Effect } from "effect";
 import { z } from "zod";
 import { gitWithInput } from "./git.ts";
-import { readBlobs, requireGitVersion, type TreeEntry } from "./git-objects.ts";
+import { readBlobs, type TreeEntry } from "./git-objects.ts";
 import { LINGUIST_STANDARD } from "./linguist/index.ts";
 import {
   allUnspecified,
@@ -214,7 +214,6 @@ const attributes = (
   paths: ReadonlyArray<string>,
 ) =>
   Effect.gen(function* () {
-    yield* requireGitVersion(repository);
     const found = new Map<string, Array<Suggestion>>();
     const add = (path: string, suggestion: Suggestion) =>
       found.set(path, [...(found.get(path) ?? []), suggestion]);

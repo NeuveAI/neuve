@@ -18,7 +18,11 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
-const fixture = async (partial: boolean, supported: boolean) => {
+const fixture = async (
+  partial: boolean,
+  supported: boolean,
+  differentOwner = false,
+) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "neuve-host-git-")));
   roots.push(root);
   const source = join(root, "source");
@@ -74,6 +78,8 @@ const fixture = async (partial: boolean, supported: boolean) => {
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
+if (${differentOwner}) { process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = "1"; process.env.GIT_TRACE = ${JSON.stringify(log + ".trace")}; }
+if (!${supported}) delete process.env.GIT_NO_LAZY_FETCH;
 const flag = args.includes("--no-lazy-fetch");
 if (flag && !${supported}) { console.error("unknown option: --no-lazy-fetch"); process.exit(129); }
 if (args.at(-1) === "version" || args.at(-1) === "--version") { console.log("git version 2.39.5 (Apple Git-154)"); process.exit(0); }
@@ -83,12 +89,13 @@ process.exit(child.exitCode);
 `,
   );
   await chmod(wrapper, 0o755);
-  const run = async (body: string) => {
+  const run = async (body: string, environment: NodeJS.ProcessEnv = {}) => {
     const child = Bun.spawn([process.execPath, "--eval", body], {
       env: {
         ...process.env,
         PATH: `${tools}:${process.env.PATH}`,
         BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+        ...environment,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -326,3 +333,54 @@ test("native Graph source validation does not fetch a missing promisor blob", as
     ]).exitCode,
   ).not.toBe(0);
 });
+
+// Why: global trust approval must survive isolation without hiding the partial-clone config.
+for (const partial of [false, true]) {
+  test(`globally approved foreign-owned ${partial ? "partial" : "full"} clone on old Git`, async () => {
+    const f = await fixture(partial, false, true);
+    const global = join(f.root, "global-config");
+    await Bun.write(global, `[safe]\n\tdirectory = ${f.repository}\n`);
+    const stdout = await f.run(
+      `
+      import { prepareLocalGitRead } from ${JSON.stringify(qualification)};
+      import { GitReadSession } from ${JSON.stringify(session)};
+      import { Effect } from "effect";
+      import { lsTree } from ${JSON.stringify(resolve(import.meta.dir, "../../harness/src/git-objects.ts"))};
+      const repository = ${JSON.stringify(f.repository)};
+      try {
+        console.log(JSON.stringify((await prepareLocalGitRead(repository)).assessment));
+        console.log("tree " + (await Effect.runPromise(lsTree(repository, "HEAD"))).length);
+      } catch (error) { console.log(error.message); }
+      const reader = await GitReadSession.open(repository);
+      try { console.log("blobs " + (await reader.blobs([${JSON.stringify(f.oid)}], undefined, new AbortController().signal)).size); }
+      catch (error) { console.log(error.message); }
+      finally { await reader.close(); }
+    `,
+      { GIT_CONFIG_GLOBAL: global, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" },
+    );
+    if (partial) {
+      expect(stdout.match(/this repository is a partial clone/g)).toHaveLength(
+        2,
+      );
+      const commands = await readFile(f.log, "utf8");
+      expect(commands).not.toContain("cat-file");
+      expect(commands).not.toContain("ls-tree");
+      expect(await readFile(f.log + ".trace", "utf8")).not.toContain("fetch");
+      expect(
+        Bun.spawnSync([
+          "git",
+          "--no-lazy-fetch",
+          "-C",
+          f.repository,
+          "cat-file",
+          "-e",
+          f.oid,
+        ]).exitCode,
+      ).not.toBe(0);
+    } else {
+      expect(stdout).toContain('"partialClone":false');
+      expect(stdout).toContain("tree 1");
+      expect(stdout).toContain("blobs 1");
+    }
+  });
+}

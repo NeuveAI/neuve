@@ -579,6 +579,7 @@ export const isolatedGitReadEnvironment = (
   });
   const pins = [
     ["core.fsmonitor", "false"],
+    ["core.hooksPath", "/dev/null"],
     ["log.showSignature", "false"],
     ["core.excludesFile", ""],
     ["core.attributesFile", ""],
@@ -1524,19 +1525,44 @@ const inspectLocalGitEnvironment = async (
   });
   if (executable === null)
     throw new GitReadRefusal("executable-unavailable", "git");
+  const trustEnvironment = { ...(supplied ?? process.env) };
+  delete trustEnvironment.GIT_DIR;
+  delete trustEnvironment.GIT_WORK_TREE;
+  delete trustEnvironment.GIT_COMMON_DIR;
+  const trust = Bun.spawn(
+    [executable, "-C", repository, "rev-parse", "--git-dir"],
+    {
+      env: trustEnvironment,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 5000,
+    },
+  );
+  const [, trustError, trustExit] = await Promise.all([
+    new Response(trust.stdout).text(),
+    new Response(trust.stderr).text(),
+    trust.exited,
+  ]);
+  if (trustExit !== 0) throw new Error(trustError.trim());
   const environment = isolatedGitReadEnvironment(
     executable,
     repository,
     supplied,
   );
+  // Preserve the user's trust decision after isolating global configuration.
+  const trustedPrefix = ["-c", `safe.directory=${repository}`];
   const run = async (args: readonly string[]) => {
-    const child = Bun.spawn([executable, "-C", repository, ...args], {
-      env: environment,
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 5000,
-    });
+    const child = Bun.spawn(
+      [executable, ...trustedPrefix, "-C", repository, ...args],
+      {
+        env: environment,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 5000,
+      },
+    );
     const [bytes, , exitCode] = await Promise.all([
       new Response(child.stdout).bytes(),
       new Response(child.stderr).bytes(),
@@ -1565,6 +1591,7 @@ const inspectLocalGitEnvironment = async (
     environment,
     suppression: gitReadSuppression(assessment),
     commandPrefix: [
+      ...trustedPrefix,
       ...gitReadSuppressionArgs(assessment),
       "--no-replace-objects",
       "--no-optional-locks",

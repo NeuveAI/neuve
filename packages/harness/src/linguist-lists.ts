@@ -11,7 +11,7 @@ import {
   resolveCommit,
   type GitFailed,
 } from "./git.ts";
-import { groupsBySize, readBlobs, requireGitVersion } from "./git-objects.ts";
+import { groupsBySize, readBlobs } from "./git-objects.ts";
 import {
   LINGUIST_STANDARD,
   linguistMark,
@@ -517,7 +517,6 @@ export const readCommitAttributes = (
   paths: ReadonlyArray<string>,
 ) =>
   Effect.gen(function* () {
-    yield* requireGitVersion(repository);
     const values = new Map<string, ReadAttributes>();
     if (paths.length === 0)
       return {
