@@ -2,32 +2,39 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-1C1A16)](LICENSE)
 
-**Large code changes never felt so small**
-
-Focus only on parts that require human attention or approval, with the certainty your codebase deserves.
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./design/brand/assets/social/readme-hero-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="./design/brand/assets/social/readme-hero-light.png">
-  <img alt="Neuve's review desk: one part of a change, with its title, what the commit changes, and its checkpoints" src="./design/brand/assets/social/readme-hero-light.png">
+  <img alt="Large code changes never felt so small - Focus only on parts that require human attention or approval, with the certainty your codebase deserves." src="./design/brand/assets/social/readme-hero-light.png">
 </picture>
 
 > [!NOTE]
 > Neuve is early. Expect rough edges and changing commands.
 
-Neuve is open-source code review, MIT-licensed, for code that agents write. Give it a commit range. It states what the change is for and splits it into batches, and each batch into smaller parts. Four agents look for problems (scope fit, correctness, risky edges and tests), and each finding is checked again in a fresh context before you see it. Each batch's summary says why the batch exists and links findings to the parts that hold them, and each finding cites the code it rests on. The diff is there whenever you want to read it, and you record your review in the review desk. Today it runs on your machine, and model calls go to the provider you set up. Neuve posts no reviews or comments to GitHub.
+Neuve is an open-source code review tool that allows developers and agents ship code with more confidence.
 
-How agents and people share the work: Neuve puts each part of a change in one of four review lanes. Agents decide agentic work. On human-suggested work, a decision the agents have made stands unless a person steps in, and human-required work waits for a person. Anything no agent could judge goes to a person, with a note saying so.
+Neuve works using a hybrid agentic, graph and semantic layer on your code changes to abstract changes into different lanes.
+
+**Automation**: CI/CD covered code with low complexity.
+**Agentic**: Code that can easily be validated or its complexity does not require human attention or validation.
+**Human Suggested**: Code that have risen above of changes that could safely be assigned to agentic reviews, but does not warrant immediate human attention.
+**Human Required**: Code that either is difficult to validate through agentic checks, has high complexity score or has enough context signals that requires human attention.
+
+Today it runs on your machine, using your Codex or Claude Code local setup. Neuve posts no reviews or comments to GitHub at this moment.
+
+Neuve works by creating a review desk with changes assigned to one of four lanes as review units. Each range given to Neuve might come with more than one review desk, which is called a batch.
 
 ## Why
 
-I started out building agents for QA, and soon saw that teams weren't stuck on QA. They were stuck on code review. I wanted large changes to stop being something to be overwhelmed by or afraid of: a review that filters out the parts people aren't required to see, and attaches the right information to the parts that matter. I've been building Neuve for almost a year to be that review.
+I started out building agents for QA, and soon realized that the highest friction point wasn't on QA but much earlier in the SDLC. From scoping work, to ensuring the right work is respecting the scope planend and afterwards auditing and reviewing that work to a satisfactory status.
+
+As software engineers we used to say _done is better than perfect_ as a phrase to promote speed and avoid drawn out iterations. We now can get to **done** very easily and quickly, but getting to **good** is a challenge for mosts teams trying to operate at agentic speeds and volume.
+
+I wanted large changes to stop being something to be overwhelmed by or hard to process within teams, so decided to rethink reviews all together.
 
 ## Quick start
 
-One line installs the `neuve` command on Macs with Apple silicon. The first release has no Linux build yet, so the installer on Linux (and on Windows through WSL) says so and installs nothing.
-
-Full clones work with the Git already on your machine. Partial clones need Git that supports disabling lazy fetching, normally Git 2.45 or later. `neuve setup` and `neuve doctor` assess yours; `brew install git` installs a current version on macOS.
+One line installs the `neuve` command on Macs with Apple silicon (still working on Linux and Win builds).
 
 ```sh
 curl -fsSL https://neuve.ai/install.sh | sh
@@ -110,12 +117,12 @@ To build Neuve from source or work from a checkout, see [CONTRIBUTING.md](CONTRI
 commit range ─▶ goal, batches and parts ─▶ four agents look for problems ─▶ each finding checked again ─▶ you record your review in the review desk
 ```
 
-| Step | What happens |
-| --- | --- |
-| Goal, batches and parts | Neuve states the change's goal and what done means, from the ticket or plan it can fetch, and says when there isn't one. Each changed line belongs to one part, even when a run is cut off |
-| Looking for problems | Scope fit says whether the change meets what done means, or that a person must judge it. Correctness follows the changed code to a failure you could see. Risky edges checks data, auth and interfaces such as exports, config and wire formats. Tests checks whether tests or other proof show what done means |
-| Checking | The check runs against evidence that Neuve's code gathers, with no lookup tools for the model. A finding that couldn't be checked is counted, never shown as a comment |
-| Your call | From the overview of a batch, open one of its parts. The checked findings sit beside the lines they're about, and you record your review in the review desk |
+| Step                    | What happens                                                                                                                                                                                                                                                                                                    |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Goal, batches and parts | Neuve states the change's goal and what done means, from the ticket or plan it can fetch, and says when there isn't one. Each changed line belongs to one part, even when a run is cut off                                                                                                                      |
+| Looking for problems    | Scope fit says whether the change meets what done means, or that a person must judge it. Correctness follows the changed code to a failure you could see. Risky edges checks data, auth and interfaces such as exports, config and wire formats. Tests checks whether tests or other proof show what done means |
+| Checking                | The check runs against evidence that Neuve's code gathers, with no lookup tools for the model. A finding that couldn't be checked is counted, never shown as a comment                                                                                                                                          |
+| Your call               | From the overview of a batch, open one of its parts. The checked findings sit beside the lines they're about, and you record your review in the review desk                                                                                                                                                     |
 
 The [product vocabulary](vocabulary.md) defines Neuve's terms, including the review unit, its name for a part, and the [architecture overview](architecture/README.md) describes the six layers behind them: harness, system of records, graph, CLI, MCP and web app.
 
