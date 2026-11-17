@@ -238,10 +238,9 @@ The four macOS jobs run only for the four path groups documented in [the develop
 
 Without the Graph deploy key, the existing `available` gates in `archive.test.ts` and `distribution.test.ts` omit native archive cases because they cannot build an archive containing the private engine. Fixture installer and release-command cases still run. Linux-only systemd cases keep their existing platform gates on these Mac runners.
 
-NEU-405's `GITHUB_ACTIONS` gate stays in `distribution.test.ts`, as requested. These hosted launchctl fixtures previously reported the registered agent "runs another command". The command-reader correction has local coverage, but its full hosted rerun is blocked by Actions billing. These cases still run locally:
+Main's NEU-405 correction removes the hosted launchd gate. All launchd handoff and rollback cases now run on Actions. The shared fixture command reader captures failed `plutil` output before trying `ProgramArguments.0`, with shell regressions for noisy failures.
 
-- `launchd final state after handoff: ${shell}/${order}/${boundary}`, for each available shell (`sh`, `dash`), both orders (`A-B`, `B-A`), and boundaries `uninstall` and `rollback`. The `print` boundary still runs on Actions.
-- `rechecks the launchd file at each rollback step: ${shell}`, for each available shell.
+The [recorded distribution durations](../tests/release/distribution-timings.json) come from [run 44113180095](https://github.com/NeuveAI/neuve/actions/runs/44113180095). The case divider assigns each registration to the least loaded runner using those estimates, with ten seconds for a new case. This replaces count-based assignment, which gave shard 1 enough work to exceed its twenty-minute suite budget. All registrations still belong to exactly one runner. Harness projection partitions now occupy separate files, with updated timing estimates and eight harness runners, because all four partitions in one file exceeded the Linux suite budget. Neither change adds a coverage gate.
 
 Three pre-existing explicitly skipped distribution cases remain unchanged:
 

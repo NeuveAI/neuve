@@ -2,7 +2,7 @@ import { SharedWork } from "@neuve/records-core/shared-work";
 import { budgetDirectory } from "@neuve/records-core/budget-directory";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { createReadStream, realpathSync } from "node:fs";
+import { createReadStream, realpathSync, statSync } from "node:fs";
 import {
   chmod,
   copyFile,
@@ -535,11 +535,22 @@ const engineEnvironment = (recorder: Recorder): Record<string, string> => {
   // The queue's class and the caller's deadline are the call's own, never the service's identity,
   // and mean something only while the service setting is on.
   const queued = service === "auto" || service === "require";
+  const qualifiedPath = recorder.environment?.PATH;
+  const standardGit = Bun.which("git", { PATH: ENGINE_PATH.join(":") });
+  let gitPath = qualifiedPath;
+  if (qualifiedPath !== undefined && standardGit !== null) {
+    // Ubuntu installs git in bin and git-core as hard links. Their realpaths differ,
+    // but selecting either name must preserve one Graph service environment.
+    const qualified = statSync(join(qualifiedPath, "git"));
+    const standard = statSync(standardGit);
+    if (qualified.dev === standard.dev && qualified.ino === standard.ino)
+      gitPath = dirname(realpathSync(standardGit));
+  }
   return {
     ...engineBaseEnvironment(),
-    ...(recorder.environment?.PATH === undefined
+    ...(gitPath === undefined
       ? {}
-      : { PATH: [recorder.environment.PATH, ...ENGINE_PATH].join(":") }),
+      : { PATH: [gitPath, ...ENGINE_PATH].join(":") }),
     ...(threads === undefined
       ? {}
       : {

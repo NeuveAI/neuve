@@ -1,8 +1,9 @@
 import type { test as bunTest } from "bun:test";
 import { z } from "zod";
+import timings from "../../tests/release/distribution-timings.json";
 
 // Bun's --shard divides files. The two large installer files dominate the release suite, so CI
-// divides their registrations across runners too. No declaration means the ordinary local suite runs whole.
+// divides their registrations across runners using observed durations too. No declaration means the ordinary local suite runs whole.
 const configured = process.env.NEUVE_RELEASE_CASE_SHARD;
 const shard =
   configured === undefined
@@ -13,11 +14,15 @@ const shard =
         .parse(configured)
         .charCodeAt(0) - 49;
 export const releaseTest = (test: typeof bunTest): typeof bunTest => {
-  let index = 0;
+  const loads = [0, 0, 0, 0];
+  const estimates: Readonly<Record<string, number>> = timings;
   const divide = (register: typeof bunTest): typeof bunTest =>
     new Proxy(register, {
       apply(target, receiver, args) {
-        const assigned = index++ % 4;
+        const assigned = loads.indexOf(Math.min(...loads));
+        const name = args[0];
+        loads[assigned]! +=
+          typeof name === "string" ? (estimates[name] ?? 10_000) : 10_000;
         if (shard === undefined || shard === assigned)
           return Reflect.apply(target, receiver, args);
       },

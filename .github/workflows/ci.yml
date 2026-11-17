@@ -40,7 +40,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [packages, cli-1, cli-2, harness-1, harness-2, harness-3, harness-4]
+        group:
+          [
+            packages,
+            cli-1,
+            cli-2,
+            harness-1,
+            harness-2,
+            harness-3,
+            harness-4,
+            harness-5,
+            harness-6,
+            harness-7,
+            harness-8,
+          ]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -146,7 +159,7 @@ jobs:
               const command = group === "packages" ? part.command : [
                 process.execPath, "--no-env-file", `${process.cwd()}/scripts/test-budget.ts`,
                 "./tests", ...part.command.slice(4),
-                `--shard=${group.split("-")[1]}/${group.startsWith("cli") ? 2 : 4}`,
+                `--shard=${group.split("-")[1]}/${group.startsWith("cli") ? 2 : 8}`,
                 ...(group.startsWith("harness") ? ["--timings=test-timings.json"] : []),
               ];
               console.log(`Running ${part.id}`);
@@ -255,7 +268,7 @@ jobs:
         run: bun run build:graph
       - name: Run release archive tests
         # Bun shards by file. The two large installer files divide their cases separately;
-        # together these four jobs register every case once. Existing NEU-405 launchd skips stay.
+        # together these four jobs register every case once. All hosted launchd cases run after NEU-405.
         env:
           RELEASE_SHARD: ${{ matrix.shard }}
         run: |
