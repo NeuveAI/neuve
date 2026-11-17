@@ -2,7 +2,12 @@ import { SharedWork } from "@neuve/records-core/shared-work";
 import { budgetDirectory } from "@neuve/records-core/budget-directory";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { createReadStream, realpathSync, statSync } from "node:fs";
+import {
+  createReadStream,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import {
   chmod,
   copyFile,
@@ -516,6 +521,45 @@ const engineBaseEnvironment = (): Readonly<Record<string, string>> => {
   return fixedEngineEnvironment;
 };
 
+let normalizedGitDirectory:
+  Readonly<{ fingerprint: string; directory: string }> | undefined;
+
+const engineGitDirectory = (qualifiedPath: string): string => {
+  const standardGit = Bun.which("git", { PATH: ENGINE_PATH.join(":") });
+  if (standardGit === null) return qualifiedPath;
+  const qualifiedGit = join(qualifiedPath, "git");
+  const qualified = statSync(qualifiedGit);
+  const standard = statSync(standardGit);
+  const fingerprint = JSON.stringify([
+    qualifiedGit,
+    standardGit,
+    ...[qualified, standard].flatMap((file) => [
+      file.dev,
+      file.ino,
+      file.size,
+      file.mtimeMs,
+      file.ctimeMs,
+    ]),
+  ]);
+  if (normalizedGitDirectory?.fingerprint === fingerprint)
+    return normalizedGitDirectory.directory;
+  // The Linux runner's git-core and bin executables can be separate copies of the
+  // same build. A different dependency must keep its own PATH and service identity.
+  const digest = (path: string) =>
+    createHash("sha256").update(readFileSync(path)).digest("hex");
+  const sameFile =
+    qualified.dev === standard.dev && qualified.ino === standard.ino;
+  const sameBuild =
+    sameFile ||
+    (qualified.size === standard.size &&
+      digest(qualifiedGit) === digest(standardGit));
+  const directory = sameBuild
+    ? dirname(realpathSync(standardGit))
+    : qualifiedPath;
+  normalizedGitDirectory = { fingerprint, directory };
+  return directory;
+};
+
 /**
  * An engine command's environment: the fixed part, the git settings this boundary chose on
  * purpose (a qualified read's), and the service mode — the caller's, else the operator's
@@ -536,16 +580,8 @@ const engineEnvironment = (recorder: Recorder): Record<string, string> => {
   // and mean something only while the service setting is on.
   const queued = service === "auto" || service === "require";
   const qualifiedPath = recorder.environment?.PATH;
-  const standardGit = Bun.which("git", { PATH: ENGINE_PATH.join(":") });
-  let gitPath = qualifiedPath;
-  if (qualifiedPath !== undefined && standardGit !== null) {
-    // Ubuntu installs git in bin and git-core as hard links. Their realpaths differ,
-    // but selecting either name must preserve one Graph service environment.
-    const qualified = statSync(join(qualifiedPath, "git"));
-    const standard = statSync(standardGit);
-    if (qualified.dev === standard.dev && qualified.ino === standard.ino)
-      gitPath = dirname(realpathSync(standardGit));
-  }
+  const gitPath =
+    qualifiedPath === undefined ? undefined : engineGitDirectory(qualifiedPath);
   return {
     ...engineBaseEnvironment(),
     ...(gitPath === undefined
