@@ -1,3 +1,10 @@
+import {
+  assessLocalGitEnvironment,
+  describeGitReadAssessment,
+  requireOfflineGitRead,
+  GitReadRefusal,
+  OFFLINE_GIT_FIX,
+} from "@neuve/graph-client";
 import { constants, existsSync } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -460,6 +467,24 @@ export const inspectDoctor = async (input: {
       fix: "Run neuve doctor in the repository you want to review, or pass --repo <path>",
     });
   else {
+    try {
+      const assessment = await assessLocalGitEnvironment(repository);
+      requireOfflineGitRead(assessment);
+      checks.push(
+        ok("offline Git reads", describeGitReadAssessment(assessment)),
+      );
+    } catch (error) {
+      checks.push({
+        check: "offline Git reads",
+        status: "missing",
+        detail: error instanceof Error ? error.message : String(error),
+        fix:
+          error instanceof GitReadRefusal &&
+          error.reason === "unsupported-suppression"
+            ? OFFLINE_GIT_FIX
+            : "Fix the repository's Git configuration, then run neuve doctor again",
+      });
+    }
     const installation = await repositorySetup(repository);
     if (installation === undefined)
       checks.push({

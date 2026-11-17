@@ -122,8 +122,13 @@ export {
   gitReadText,
   recheckLocalGitRead,
   readQualifiedGitBlob,
+  assessLocalGitEnvironment,
+  describeGitReadAssessment,
+  requireOfflineGitRead,
+  OFFLINE_GIT_FIX,
 } from "./git-read-qualification.ts";
 export type {
+  GitReadAssessment,
   PhysicalGitScope,
   GitReadPreflight,
   QualifiedGitRead,
@@ -1157,7 +1162,10 @@ const preparationBoundary = async (
           : cause instanceof GitReadRefusal && cause.reason === "observer"
             ? "observer"
             : "source-unavailable",
-      message: "Local Git preparation qualification refused.",
+      message:
+        cause instanceof GitReadRefusal
+          ? `Local Git preparation qualification refused. ${cause.detail}`
+          : "Local Git preparation qualification refused.",
       cause,
     });
   }

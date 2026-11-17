@@ -73,6 +73,7 @@ export type GitReadPreflight = Readonly<{
   kind: "preflight";
   scope: PhysicalGitScope;
   objectFormat: "sha1" | "sha256";
+  partialClone: boolean;
   executable: Readonly<{ path: string; sha256: string }>;
   invocationPath: string;
   inspection: Readonly<{
@@ -90,8 +91,9 @@ export type GitReadPreflight = Readonly<{
 export type QualifiedGitRead = Readonly<
   Omit<GitReadPreflight, "kind"> & {
     kind: "qualified";
+    assessment: GitReadAssessment;
     gitVersion: string;
-    suppression: "no-lazy-fetch-flag";
+    suppression: "no-lazy-fetch-flag" | "full-clone";
   }
 >;
 export type GitReadReceipt = Readonly<{
@@ -133,7 +135,7 @@ export type GitReadRun = Readonly<{
   onObservation?: (observation: GitReadObservation) => void;
 }>;
 export type GitReadCommand =
-  | Readonly<{ kind: "version" }>
+  | Readonly<{ kind: "version"; probeNoLazyFetch?: boolean }>
   | Readonly<{
       kind: "owner";
       field:
@@ -435,21 +437,14 @@ const boolean = (value: string) => {
 const last = (config: ReadonlyMap<string, readonly string[]>, key: string) =>
   config.get(key)?.at(-1);
 const qualifyConfig = (config: ReadonlyMap<string, readonly string[]>) => {
-  for (const [key, values] of config) {
-    if (
-      key.startsWith("remote.") &&
-      (key.endsWith(".partialclonefilter") ||
-        (key.endsWith(".promisor") && values.some(boolean)))
-    )
-      throw new GitReadRefusal("unsupported-config", "promisor");
-    if (key === "extensions.partialclone")
-      throw new GitReadRefusal("unsupported-config", "partial-clone");
+  for (const [key] of config) {
     if (
       key.startsWith("extensions.") &&
       ![
         "extensions.objectformat",
         "extensions.refstorage",
         "extensions.worktreeconfig",
+        "extensions.partialclone",
       ].includes(key)
     )
       throw new GitReadRefusal("unsupported-config", "extension");
@@ -482,7 +477,8 @@ const structuralStore = async (
 ) => {
   const pending = [...roots];
   let entries = 0,
-    pathBytes = 0;
+    pathBytes = 0,
+    partialClone = false;
   while (pending.length) {
     checkAbort(signal);
     const directory = pending.pop();
@@ -504,8 +500,7 @@ const structuralStore = async (
           "unsupported-store",
           "redirect-or-special-file",
         );
-      if (entry.name.endsWith(".promisor"))
-        throw new GitReadRefusal("unsupported-store", "promisor-marker");
+      if (entry.name.endsWith(".promisor")) partialClone = true;
       if (stat.isDirectory()) pending.push(path);
     }
     const after = await lstat(directory);
@@ -516,7 +511,7 @@ const structuralStore = async (
     )
       throw new GitReadRefusal("source-moved", "directory-handle");
   }
-  return { entries, pathBytes };
+  return { entries, pathBytes, partialClone };
 };
 const admittedQualifications = new WeakSet<object>();
 const retainQualification = <T extends GitReadPreflight | QualifiedGitRead>(
@@ -711,6 +706,10 @@ export const preflightLocalGitRead = async (
       kind: "preflight",
       scope,
       objectFormat: format,
+      partialClone:
+        isPartialClone(config) ||
+        isPartialClone(worktreeConfig) ||
+        structural.partialClone,
       executable: { path: executablePath, sha256: executableSha256 },
       invocationPath: selected,
       inspection: {
@@ -722,7 +721,6 @@ export const preflightLocalGitRead = async (
       configurationSha256,
       configurationFiles: files,
       commandPrefix: [
-        "--no-lazy-fetch",
         "--no-replace-objects",
         "--no-optional-locks",
         "--no-pager",
@@ -743,7 +741,9 @@ export const preflightLocalGitRead = async (
 const argsFor = (command: GitReadCommand): readonly string[] => {
   switch (command.kind) {
     case "version":
-      return ["version"];
+      return command.probeNoLazyFetch
+        ? ["--no-lazy-fetch", "version"]
+        : ["version"];
     case "owner":
       return ["rev-parse", "--path-format=absolute", command.field];
     case "resolve-head":
@@ -1121,6 +1121,7 @@ export const runQualifiedGit = async (
     const commandRefusal =
       termination.kind === "exit" &&
       termination.code !== 0 &&
+      !(command.kind === "version" && command.probeNoLazyFetch) &&
       !(command.kind === "head-ref" && termination.code === 1)
         ? new GitReadRefusal(
             command.kind === "version" ? "unsupported-suppression" : "command",
@@ -1389,17 +1390,22 @@ export const qualifyLocalGitRead = async (
   preflight: GitReadPreflight,
   run: GitReadRun = {},
 ): Promise<QualifiedGitRead> => {
-  const version = await runQualifiedGit(preflight, { kind: "version" }, run);
-  if (version.exitCode !== 0)
-    throw new GitReadRefusal("unsupported-suppression", "flag-first-version");
-  const gitVersion = gitReadText(version);
-  if (!/^git version [0-9]+\.[0-9]+\.[0-9]+(?:[ .-].*)?$/.test(gitVersion))
-    throw new GitReadRefusal("unsupported-suppression", "version-protocol");
+  const assessment = await assessGitReadCapabilities(
+    preflight.partialClone,
+    (probeNoLazyFetch) =>
+      runQualifiedGit(preflight, { kind: "version", probeNoLazyFetch }, run),
+  );
+  requireOfflineGitRead(assessment);
   const git: QualifiedGitRead = retainQualification({
     ...preflight,
     kind: "qualified",
-    gitVersion,
-    suppression: "no-lazy-fetch-flag",
+    assessment,
+    gitVersion: assessment.gitVersion,
+    suppression: assessment.partialClone ? "no-lazy-fetch-flag" : "full-clone",
+    commandPrefix: [
+      ...(assessment.partialClone ? ["--no-lazy-fetch"] : []),
+      ...preflight.commandPrefix,
+    ],
   });
   for (const [field, expected] of [
     ["--show-toplevel", git.scope.repository],
@@ -1415,4 +1421,90 @@ export const qualifyLocalGitRead = async (
   }
   await recheckLocalGitRead(git, run);
   return git;
+};
+
+export type GitReadAssessment = Readonly<{
+  gitVersion: string;
+  supportsNoLazyFetch: boolean;
+  partialClone: boolean;
+}>;
+
+const isPartialClone = (config: ReadonlyMap<string, readonly string[]>) =>
+  [...config].some(
+    ([key, values]) =>
+      key === "extensions.partialclone" ||
+      (key.startsWith("remote.") &&
+        (key.endsWith(".partialclonefilter") ||
+          (key.endsWith(".promisor") && values.some(boolean)))),
+  );
+
+const assessGitReadCapabilities = async (
+  partialClone: boolean,
+  probe: (
+    noLazyFetch: boolean,
+  ) => Promise<{ bytes: Uint8Array; exitCode: number }>,
+): Promise<GitReadAssessment> => {
+  const gitVersion = gitReadText(await probe(false));
+  if (!/^git version [0-9]+\.[0-9]+\.[0-9]+(?:[ .-].*)?$/.test(gitVersion))
+    throw new GitReadRefusal("unsupported-suppression", "version-protocol");
+  const supported = await probe(true);
+  return Object.freeze({
+    gitVersion,
+    supportsNoLazyFetch:
+      supported.exitCode === 0 && gitReadText(supported) === gitVersion,
+    partialClone,
+  });
+};
+
+export const OFFLINE_GIT_FIX =
+  "Install Git 2.45 or later, for example with brew install git, or use a full clone.";
+
+export const requireOfflineGitRead = (assessment: GitReadAssessment) => {
+  if (assessment.partialClone && !assessment.supportsNoLazyFetch)
+    throw new GitReadRefusal(
+      "unsupported-suppression",
+      `${assessment.gitVersion}; this repository is a partial clone, and this Git cannot disable lazy fetching. ${OFFLINE_GIT_FIX}`,
+    );
+};
+
+export const describeGitReadAssessment = (assessment: GitReadAssessment) =>
+  `${assessment.gitVersion}; --no-lazy-fetch ${assessment.supportsNoLazyFetch ? "supported" : "unsupported"}; ${assessment.partialClone ? "partial clone" : "full clone"}`;
+
+/** Metadata commands only, including in a partial clone on an older Git. */
+export const assessLocalGitEnvironment = async (
+  repository: string,
+): Promise<GitReadAssessment> => {
+  const executable = Bun.which("git");
+  if (executable === null)
+    throw new GitReadRefusal("executable-unavailable", "git");
+  const environment = isolatedGitReadEnvironment(executable, repository);
+  const run = async (args: readonly string[]) => {
+    const child = Bun.spawn([executable, "-C", repository, ...args], {
+      env: environment,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 5000,
+    });
+    const [bytes, , exitCode] = await Promise.all([
+      new Response(child.stdout).bytes(),
+      new Response(child.stderr).bytes(),
+      child.exited,
+    ]);
+    return { bytes, exitCode };
+  };
+  const configuration = await run(["config", "--null", "--list", "--includes"]);
+  if (configuration.exitCode !== 0)
+    throw new GitReadRefusal("unsupported-config", "git-config");
+  const config = new Map<string, string[]>();
+  for (const entry of text(configuration.bytes).split("\0")) {
+    if (!entry) continue;
+    const at = entry.indexOf("\n");
+    const key = at === -1 ? entry : entry.slice(0, at);
+    const value = at === -1 ? "true" : entry.slice(at + 1);
+    config.set(key, [...(config.get(key) ?? []), value]);
+  }
+  return assessGitReadCapabilities(isPartialClone(config), (flag) =>
+    run(flag ? ["--no-lazy-fetch", "version"] : ["version"]),
+  );
 };

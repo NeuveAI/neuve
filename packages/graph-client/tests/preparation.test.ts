@@ -348,7 +348,7 @@ test("Git observation callback failure retains process observation and prevents 
 
 test.each([
   "\n[core]\nnotes = harmless # \\\n[include]\npath = absent-local-config\n",
-  '\n[remote "probe"]\npromisor = true\n',
+  '\n[remote "probe"]\npromisor = invalid\n',
 ])(
   "unsupported local config refuses before Git in plan and prepare: %s",
   async (configuration) => {

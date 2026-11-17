@@ -8,6 +8,7 @@
 import { afterAll, expect, test } from "bun:test";
 import {
   lstat,
+  chmod,
   mkdir,
   readFile,
   readdir,
@@ -52,6 +53,11 @@ test.skipIf(prerequisite.skip)(
         cliBinary: await realpath(copy),
         graphBinary: await realpath(ENGINE),
       },
+      git: {
+        gitVersion: expect.stringContaining("git version "),
+        supportsNoLazyFetch: expect.any(Boolean),
+        partialClone: false,
+      },
       workingTreeDirty: false,
       observation: join(store, "initial-index.json"),
     });
@@ -73,6 +79,7 @@ test.skipIf(prerequisite.skip)(
       JSON.parse(await readFile(join(store, "initial-index.json"), "utf8")),
     ).toMatchObject({
       check: "graph-engine",
+      git: JSON.parse(stdout).git,
       status: "ok",
       plan: "planned",
       revision: git("rev-parse", "HEAD"),
@@ -371,3 +378,55 @@ test.skipIf(prerequisite.skip)(
   },
   120_000,
 );
+
+for (const partialClone of [false, true]) {
+  test.skipIf(prerequisite.skip)(
+    `setup records old Git's assessment in a ${partialClone ? "partial" : "full"} clone`,
+    async () => {
+      prerequisite.require();
+      const { root, repository, git, setup } = await scratch();
+      if (partialClone) git("config", "remote.origin.promisor", "true");
+      const hostGit = Bun.which("git");
+      if (hostGit === null) throw new Error("Git unavailable");
+      const tools = join(root, "tools");
+      await mkdir(tools);
+      await writeFile(
+        join(tools, "git"),
+        `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args.includes("--no-lazy-fetch")) process.exit(129);
+if (args.at(-1) === "version" || args.at(-1) === "--version") { console.log("git version 2.39.5 (Apple Git-154)"); process.exit(0); }
+const result = Bun.spawnSync([${JSON.stringify(hostGit)}, ...args], { env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+process.exit(result.exitCode);
+`,
+      );
+      await chmod(join(tools, "git"), 0o755);
+      const { stdout, stderr, code } = await setup(ENGINE, {
+        PATH: `${tools}:${process.env.PATH}`,
+      });
+      expect(code, stderr).toBe(partialClone ? 1 : 0);
+      const assessment = {
+        gitVersion: "git version 2.39.5 (Apple Git-154)",
+        supportsNoLazyFetch: false,
+        partialClone,
+      };
+      expect(JSON.parse(stdout).git).toEqual(assessment);
+      const recorded = JSON.parse(
+        await readFile(
+          join(repository, ".git/neuve/setup/initial-index.json"),
+          "utf8",
+        ),
+      );
+      expect(recorded.git).toEqual(assessment);
+      expect(recorded.status).toBe(partialClone ? "error" : "ok");
+      if (partialClone) {
+        expect(stderr).toContain("git version 2.39.5 (Apple Git-154)");
+        expect(stderr).toContain("this repository is a partial clone");
+        expect(stderr).toContain(
+          "Install Git 2.45 or later, for example with brew install git, or use a full clone.",
+        );
+        expect(stderr).not.toContain("source-unavailable");
+      }
+    },
+  );
+}

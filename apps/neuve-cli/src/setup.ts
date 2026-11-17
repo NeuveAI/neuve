@@ -184,6 +184,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
         indexedSource:
           "nothing: the engine is checked, and reviews index what they read",
         initialIndexStatus: check.status,
+        git: check.git,
         observation: layout.initialIndex,
       },
       null,

@@ -319,3 +319,50 @@ test("setup --help, review show --help and stack list --help print their usage a
     expect(stdout).toContain(`neuve ${args.join(" ").replace(" --help", "")}`);
   }
 });
+
+// The diagnosis must describe this repository, rather than imposing a minimum on every Git.
+for (const partialClone of [false, true]) {
+  test(`doctor assesses old Git in a ${partialClone ? "partial" : "full"} clone`, async () => {
+    const { repository, tools, doctor } = await scratch();
+    if (partialClone) {
+      const result = Bun.spawnSync([
+        "git",
+        "-C",
+        repository,
+        "config",
+        "remote.origin.promisor",
+        "true",
+      ]);
+      expect(result.exitCode).toBe(0);
+    }
+    const hostGit = Bun.which("git");
+    if (hostGit === null) throw new Error("Git unavailable");
+    await rm(join(tools, "git"));
+    await writeFile(
+      join(tools, "git"),
+      `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args.includes("--no-lazy-fetch")) process.exit(129);
+if (args.at(-1) === "version" || args.at(-1) === "--version") { console.log("git version 2.39.5 (Apple Git-154)"); process.exit(0); }
+const result = Bun.spawnSync([${JSON.stringify(hostGit)}, ...args], { env: process.env, stdout: "inherit", stderr: "inherit" });
+process.exit(result.exitCode);
+`,
+    );
+    await chmod(join(tools, "git"), 0o755);
+    const { check } = await doctor();
+    const offline = check("offline Git reads");
+    expect(offline?.status).toBe(partialClone ? "missing" : "ok");
+    expect(offline?.detail).toContain("git version 2.39.5 (Apple Git-154)");
+    if (partialClone) {
+      expect(offline?.detail).toContain("this repository is a partial clone");
+      expect(offline?.fix).toBe(
+        "Install Git 2.45 or later, for example with brew install git, or use a full clone.",
+      );
+    } else {
+      expect(offline?.detail).toContain(
+        "--no-lazy-fetch unsupported; full clone",
+      );
+      expect(offline?.fix).toBeUndefined();
+    }
+  });
+}

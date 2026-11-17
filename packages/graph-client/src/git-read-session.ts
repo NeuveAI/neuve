@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { setPriority } from "node:os";
-import { isolatedGitReadEnvironment } from "./git-read-qualification.ts";
+import {
+  assessLocalGitEnvironment,
+  requireOfflineGitRead,
+  isolatedGitReadEnvironment,
+} from "./git-read-qualification.ts";
 
 // The 512 MiB covers 448 MiB retained plus 64 MiB for one object in flight.
 // Each call also caps its unretained object bodies at the same 64 MiB allowance.
@@ -119,10 +123,13 @@ export class GitBatchObjectSource implements GitObjectSource {
     if (this.child !== undefined) return;
     const executable = Bun.which("git");
     if (executable === null) throw new Error("Git executable unavailable");
+    const assessment = await assessLocalGitEnvironment(this.repository);
+    requireOfflineGitRead(assessment);
+    if (this.closed) throw new Error("Closed Git object source");
     const child = Bun.spawn(
       [
         executable,
-        "--no-lazy-fetch",
+        ...(assessment.partialClone ? ["--no-lazy-fetch"] : []),
         "--no-replace-objects",
         "--no-optional-locks",
         "--no-pager",
@@ -349,26 +356,9 @@ export class GitReadSession {
     await this.trusted();
     return (this.capability ??= (async () => {
       this.assertLive();
-      try {
-        const executable = Bun.which("git");
-        if (executable === null) return false;
-        const child = Bun.spawn([executable, "--no-lazy-fetch", "version"], {
-          env: isolatedGitReadEnvironment(executable, this.repository),
-          stdin: "ignore",
-          stdout: "pipe",
-          stderr: "pipe",
-        });
-        this.trustChild = child;
-        const [, , exit] = await Promise.all([
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-          child.exited,
-        ]);
-        // Old Git and wrappers unable to run in isolation keep main's lazy fetching.
-        return exit === 0;
-      } catch {
-        return false;
-      }
+      requireOfflineGitRead(await assessLocalGitEnvironment(this.repository));
+      this.assertLive();
+      return true;
     })());
   }
   private fits(key: string, size: number, previous = 0) {

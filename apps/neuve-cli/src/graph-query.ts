@@ -9,6 +9,8 @@ import { dirname, join, resolve } from "node:path";
 
 import {
   GitReadRefusal,
+  assessLocalGitEnvironment,
+  requireOfflineGitRead,
   observeGraphProvider,
   planGraphPreparation,
   runGraphInspection,
@@ -674,6 +676,20 @@ export const checkGraphEngine = async (
   executable: string,
   revision: string,
 ) => {
+  const git = await assessLocalGitEnvironment(repository);
+  try {
+    requireOfflineGitRead(git);
+  } catch (error) {
+    if (!(error instanceof GitReadRefusal)) throw error;
+    return {
+      schemaVersion: 1,
+      check: "graph-engine",
+      status: "error",
+      revision,
+      git,
+      error: error.detail,
+    } as const;
+  }
   const plan = await Effect.runPromise(
     Effect.result(
       planGraphPreparation(
@@ -691,6 +707,7 @@ export const checkGraphEngine = async (
       check: "graph-engine",
       status: "ok",
       revision,
+      git,
       plan,
       engine: {
         version: provider.version,
@@ -718,6 +735,7 @@ export const checkGraphEngine = async (
       check: "graph-engine",
       status: "error",
       revision,
+      git,
       error: String(
         (provider.failure as { message?: unknown }).message ?? provider.failure,
       ).slice(0, 500),
@@ -728,6 +746,7 @@ export const checkGraphEngine = async (
     check: "graph-engine",
     status: "error",
     revision,
+    git,
     error:
       `${String(failure.message ?? plan.failure)}${failure.reason === undefined ? "" : ` (${String(failure.reason)})`}`.slice(
         0,
