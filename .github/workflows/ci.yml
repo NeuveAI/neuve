@@ -65,9 +65,14 @@ jobs:
         id: graph
         env:
           GRAPH_KEY: ${{ secrets.NEUVE_GRAPH_DEPLOY_KEY }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: bash
         run: |
           if [ -z "$GRAPH_KEY" ]; then
+            if [ "$IS_FORK" != true ]; then
+              echo '::error::Trusted CI requires NEUVE_GRAPH_DEPLOY_KEY to test the pinned Graph engine.'
+              exit 1
+            fi
             echo 'available=false' >> "$GITHUB_OUTPUT"
             echo 'Graph unavailable: fork PRs do not receive the private submodule deploy key.'
             exit 0
@@ -196,9 +201,14 @@ jobs:
         id: graph
         env:
           GRAPH_KEY: ${{ secrets.NEUVE_GRAPH_DEPLOY_KEY }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         shell: bash
         run: |
           if [ -z "$GRAPH_KEY" ]; then
+            if [ "$IS_FORK" != true ]; then
+              echo '::error::Trusted CI requires NEUVE_GRAPH_DEPLOY_KEY to test the pinned Graph engine.'
+              exit 1
+            fi
             echo 'available=false' >> "$GITHUB_OUTPUT"
             echo 'Graph unavailable: fork PRs do not receive the private submodule deploy key.'
             exit 0
