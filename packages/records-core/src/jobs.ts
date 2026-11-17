@@ -26,6 +26,14 @@ export const jobsFor = (event: RecordEvent): ReadonlyArray<JobRequest> => {
           dedupeKey: `commit.prepare:${event.payload.oid}`,
         },
       ];
+    case "commit.rewritten@1":
+      return [
+        {
+          kind: "commit.prepare@2",
+          dedupeKey: `commit.prepare@2:rewrite:${event.idempotencyKey}`,
+          optionalForIntegrity: true,
+        },
+      ];
     case "turn.ended@1":
     case "session.ended@1":
       // Hooks before M2 S5 recorded no offset; such events have no segment to capture.

@@ -17,7 +17,7 @@ import {
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { stopHeavyChild, workerParentArgs } from "./heavy-child.ts";
 import { getPriority, setPriority } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Clock, Data, Effect, Exit, Option, Result } from "effect";
 import { z } from "zod";
 import { PreparationPayload } from "@neuve/records-schema";
@@ -30,6 +30,7 @@ import {
   Starter,
   JobQueue,
   resolveStoreLocation,
+  storeLocationIn,
 } from "@neuve/records-core";
 import { refreshOnCommit } from "./stack/handler.ts";
 import { enqueueHybrid } from "./commit-hybrid.ts";
@@ -41,6 +42,7 @@ import { hunkLeads } from "./leads.ts";
 import {
   defaultManifestSettings,
   fileHunks,
+  frontManifest,
   rangeManifest,
 } from "./manifest.ts";
 import { git } from "./git.ts";
@@ -164,6 +166,53 @@ export const commitHunks = (
       } satisfies CommitHunks;
     }),
   );
+
+/** Resolve exactly the settings an ordinary review freezes, without credentials or model calls. */
+const commitManifestSettings = (storeDirectory: string | undefined) =>
+  Effect.gen(function* () {
+    if (storeDirectory === undefined) return defaultManifestSettings(1_000_000);
+    // Loaded here for the same module cycle as commitRelations' request import below.
+    const { prepareReviewConfig, settingsRoute } = yield* Effect.tryPromise(
+      () => import("./request.ts"),
+    );
+    const config = yield* prepareReviewConfig({
+      location: storeLocationIn(dirname(storeDirectory)),
+      route: settingsRoute(),
+    });
+    return config.precompute ?? defaultManifestSettings(config.route.window);
+  });
+
+/** The first-parent range a review can read directly, without warming empty or root commits. */
+export const prepareCommitManifest = (
+  repository: string,
+  commit: {
+    readonly oid: string;
+    readonly parents: ReadonlyArray<string>;
+    readonly tree: string;
+  },
+  source: OutlineSource,
+  storeDirectory?: string,
+) =>
+  Effect.gen(function* () {
+    const parent = commit.parents[0];
+    if (parent === undefined) return Option.none();
+    if ((yield* treeOf(repository, parent)) === commit.tree)
+      return Option.none();
+    const manifest = yield* frontManifest(
+      repository,
+      { baseOid: parent, headOid: commit.oid },
+      yield* commitManifestSettings(storeDirectory),
+      source,
+    );
+    yield* Effect.logInfo({
+      type: "commit.prepare.manifest",
+      commit: commit.oid,
+      key: manifest.key,
+      status: manifest.status,
+      hunks: manifest.value.hunks.length,
+    });
+    return Option.some(manifest);
+  });
 
 /**
  * Graph's lead searches stop starting past this much of a preparation, so the job (10 minutes)
@@ -540,6 +589,16 @@ export const prepareCommit = (
       };
     }
     const hunks = step1.value.value.hunks;
+    yield* prepareCommitManifest(
+      repository,
+      commit,
+      source,
+      options.storeDirectory,
+    ).pipe(
+      Effect.catch((error) =>
+        error instanceof KeyHeld ? Effect.void : Effect.fail(error),
+      ),
+    );
     const queried = hunks.filter((hunk) => hunk.query !== null);
     const wanted = queried.slice(0, MAX_LEAD_HUNKS);
     let leads = { computed: 0, reused: 0, failed: 0, deferred: 0 };
@@ -843,6 +902,26 @@ export const runPreparationChild = (
  * This bounds job count, not elapsed time. */
 export const MAX_PREPARED_COMMITS = 58;
 
+const enqueueDiscoveredCommits = (records: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const queue = yield* JobQueue.JobQueue;
+    let queued = 0;
+    for (const record of records) {
+      const [oid, tree, parents] = record.trim().split("\0");
+      if (!oid || !tree) continue;
+      const result = yield* queue.enqueue({
+        kind: "commit.prepare@2",
+        dedupeKey: `commit.prepare@2:commit:${oid}`,
+        payload: {
+          kind: "commit",
+          commit: { oid, tree, parents: parents ? parents.split(" ") : [] },
+        },
+      });
+      if (result.status === "enqueued") queued++;
+    }
+    return queued;
+  });
+
 /** Discover commits without hooks, without changing commit or author attribution. */
 export const enqueueRangePreparation = (
   repository: string,
@@ -857,7 +936,6 @@ export const enqueueRangePreparation = (
       `${range.baseOid}..${range.headOid}`,
     ]);
     const queue = yield* JobQueue.JobQueue;
-    let queued = 0;
     const records = output
       .split("\x1e")
       .filter((record) => record.trim() !== "");
@@ -865,19 +943,9 @@ export const enqueueRangePreparation = (
       yield* Effect.logInfo(
         `commit.prepare: history exceeds ${MAX_PREPARED_COMMITS}-commit cap; preparing range facts only (${range.baseOid}..${range.headOid})`,
       );
-    for (const record of records.length > MAX_PREPARED_COMMITS ? [] : records) {
-      const [oid, tree, parents] = record.trim().split("\0");
-      if (!oid || !tree) continue;
-      const result = yield* queue.enqueue({
-        kind: "commit.prepare@2",
-        dedupeKey: `commit.prepare@2:commit:${oid}`,
-        payload: {
-          kind: "commit",
-          commit: { oid, tree, parents: parents ? parents.split(" ") : [] },
-        },
-      });
-      if (result.status === "enqueued") queued++;
-    }
+    const queued = yield* enqueueDiscoveredCommits(
+      records.length > MAX_PREPARED_COMMITS ? [] : records,
+    );
     yield* queue.enqueue({
       kind: "commit.prepare@2",
       dedupeKey: `commit.prepare@2:range:${range.baseOid}:${range.headOid}`,
@@ -941,6 +1009,21 @@ export const commitPrepareHandler =
         job.eventId === null ? Option.none() : yield* Log.get(job.eventId);
       const event = Option.getOrUndefined(stored)?.event;
       if (job.kind === "commit.prepare@2") {
+        if (event?.kind === "commit.rewritten@1") {
+          const replacements = [
+            ...new Set(event.payload.mappings.map(({ to }) => to)),
+          ];
+          const output = yield* git(options.repository, [
+            "log",
+            "--no-walk",
+            "--format=%H%x00%T%x00%P%x1e",
+            ...replacements,
+          ]);
+          yield* enqueueDiscoveredCommits(
+            output.split("\x1e").filter((record) => record.trim() !== ""),
+          ).pipe(Effect.provide(JobQueue.layer));
+          return;
+        }
         if (event?.kind === "review.requested@1") {
           yield* enqueueRangePreparation(
             options.repository,
@@ -1016,11 +1099,18 @@ export const prepareCode = (
         parent === undefined
           ? yield* emptyTree(repository)
           : yield* treeOf(repository, parent);
-      return yield* timePrecomputeItem(
+      const hunks = yield* timePrecomputeItem(
         "preparation.commit",
         commitHunks(repository, from, input.commit.tree, source),
         (result) => result.status,
       ).pipe(Effect.withSpan("harness.preparation.commit"));
+      yield* prepareCommitManifest(
+        repository,
+        input.commit,
+        source,
+        location.directory,
+      );
+      return hunks;
     }),
   ).pipe(
     (work) => cpuJob({ class: "preparation", position: "new", stage: 0 }, work),

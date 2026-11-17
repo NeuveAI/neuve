@@ -175,7 +175,7 @@ export const capturePostCommit = (
 
 /**
  * `post-rewrite amend|rebase`: the old-to-new mapping git passes on standard input. The rewritten
- * commits themselves arrive through `post-commit`, which git runs for every amend and rebase pick.
+ * commits are discovered by the worker, including rewrite paths that do not run `post-commit`.
  */
 export const capturePostRewrite = (
   repository: string,
