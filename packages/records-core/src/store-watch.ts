@@ -48,10 +48,9 @@ export const spawnObserver = <
       cwd: options.cwd,
       env: { BUN_BE_BUN: "1", TMPDIR: process.env.TMPDIR },
       stdin: "ignore",
-      stdout: "inherit",
+      stdout: "ignore",
       stderr: "pipe",
       ipc(message: unknown) {
-        console.error("observer IPC", message);
         if (closed) return;
         const value = Message.safeParse(message);
         if (!value.success) {
@@ -202,8 +201,7 @@ const sync = rel => {
     if (now === undefined) throw Object.assign(new Error("gone"), { code: "ENOENT" });
     const outside = rel === "" ? undefined : inside(folder);
     if (outside !== undefined) fail("the folder " + rel + " of a watched path resolves outside the store folder, to " + outside);
-    const watcher = watch(folder, (event, file) => {
-      console.log("watch", folder, event, file);
+    const watcher = watch(folder, (_, file) => {
       // A replaced folder's last events are not the new folder's.
       if (held.get(rel) !== entry) return;
       if (isProbe(file)) probed(folder, file);

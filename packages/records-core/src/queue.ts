@@ -412,8 +412,12 @@ export const LocalJobPublication = Context.Reference<
 export const deliverJobNotices = (path: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
-    // A quiet watch notification must stay read-only or the drain wakes itself forever.
-    const pending = yield* sql`SELECT job_seq FROM job_notices LIMIT 1`;
+    // Linux can report the WAL write before its writer publishes the commit in shared memory.
+    // BEGIN IMMEDIATE waits behind that writer before taking the read snapshot. With no DML,
+    // this transaction changes no bytes, so a quiet notification cannot wake its own drain.
+    const pending = yield* sql.withTransaction(
+      sql`SELECT job_seq FROM job_notices LIMIT 1`,
+    );
     const delivered =
       pending.length === 0
         ? 0

@@ -2,6 +2,7 @@ import type { AccountStatus } from "@neuve/runtime"
 
 import { subscribeAccounts } from "./accounts.server"
 import { Effect, Option } from "effect"
+import { SqlClient } from "effect/sql/SqlClient"
 import { Log, ReviewProgress, Worker } from "@neuve/records-core"
 import type { StoreLocation } from "@neuve/records-core"
 import { readHeldReviews } from "@neuve/harness/held-reviews"
@@ -152,6 +153,9 @@ export function heldMarkReader(): MarkReader {
     async read(after) {
       try {
         const read = await held.read("web.live.mark", (location) =>
+          // A Linux WAL event can precede the commit's shared-memory publication. The store's
+          // BEGIN IMMEDIATE waits for that writer, then holds one snapshot for mark and lineage.
+          Effect.flatMap(SqlClient, (sql) => sql.withTransaction(
           Effect.gen(function* () {
             const mark = yield* markOf(location)
             const cycles =
@@ -168,6 +172,7 @@ export function heldMarkReader(): MarkReader {
             const takenOver = yield* takenOverBy(cycles, after.sequence)
             return { mark, cycles, takenOver }
           })
+          ))
         )
         return { ...read, source: held.connection() }
       } catch (error) {
