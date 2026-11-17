@@ -1,6 +1,6 @@
 import type { test as bunTest } from "bun:test";
 import { z } from "zod";
-import timings from "../../tests/release/distribution-timings.json";
+import timings from "../../tests/release/installer-case-timings.json";
 
 // Bun's --shard divides files. The two large installer files dominate the release suite, so CI
 // divides their registrations across runners using observed durations too. No declaration means the ordinary local suite runs whole.
@@ -10,11 +10,11 @@ const shard =
     ? undefined
     : z
         .string()
-        .regex(/^[1-4]\/4$/)
+        .regex(/^[1-6]\/6$/)
         .parse(configured)
         .charCodeAt(0) - 49;
 export const releaseTest = (test: typeof bunTest): typeof bunTest => {
-  const loads = [0, 0, 0, 0];
+  const loads = [0, 0, 0, 0, 0, 0];
   const estimates: Readonly<Record<string, number>> = timings;
   const divide = (register: typeof bunTest): typeof bunTest =>
     new Proxy(register, {
