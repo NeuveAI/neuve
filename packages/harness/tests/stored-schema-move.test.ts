@@ -51,7 +51,7 @@ export const fingerprints = () => ({
 });
 const EXPECTED = {
   submissions: {
-    frame: "96c50d44e491bb7ad48697e0b39d89e646dc26e09dd72e23c53bf262a98ea5e8",
+    frame: "dfd44e8d8ba6f398da0b055c51bc1538e5138ac89ee946c87fd8fbcf44abd04b",
     map: "30f819efe9d22ab3bc778d9d2a9ed66eaaef577cd6872c21549de9f88a409a6e",
     find: "557bcaf0405fbe00c7b331d4a44061fcc20501947f8dc32ee241724655f07c58",
     verify: "5ef1c18762c6d38f7171c1cafa5bf895dc6e615b226424667fbb3a584ed88e6b",
@@ -66,7 +66,7 @@ const EXPECTED = {
       "838a4dc7b0e8a7dcf104201b1af0869f8826eb45bb107d2d33cbddc36c5f8430",
   },
   versions: {
-    FRAME_PROMPT_VERSION: 1,
+    FRAME_PROMPT_VERSION: 2,
     MAP_PROMPT_VERSION: 2,
     PUBLISH_VERSION: 7,
     PIPELINE_VERSION: 12,
