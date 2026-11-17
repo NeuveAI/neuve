@@ -4,7 +4,7 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, posix, relative, sep } from "node:path";
-import { withScriptHashes } from "./csp";
+import { withDeployedTheme } from "./csp";
 import { INSTALLER } from "./installer";
 
 export const CACHE = {
@@ -141,33 +141,26 @@ function headerValues(actual: string[]): Map<string, string> {
   );
 }
 
-/** Preserve deployed script hashes in the replacement CSP, and use this build's other headers. */
+/** Allow the deployed page's theme and this build's theme, with this build's other headers. */
 export function transitionHeaders(
   expected: Array<[string, string]>,
-  actual: string[],
+  deployedHtml: string,
 ): Array<[string, string]> {
-  const deployed = headerValues(actual).get("content-security-policy") ?? "";
   return expected.map(([name, value]) => [
     name,
     name.toLowerCase() === "content-security-policy"
-      ? withScriptHashes(value, deployed)
+      ? withDeployedTheme(value, deployedHtml)
       : value,
   ]);
 }
 
-/** Require this build's policy, permitting only additional SHA-256 script hashes. */
+/** Require the exact independently prepared policy and every other required header. */
 export function missingHeaders(
   expected: Array<[string, string]>,
   actual: string[],
 ): Array<[string, string]> {
   const sent = headerValues(actual);
-  return expected.filter(([name, value]) => {
-    const present = sent.get(name.toLowerCase());
-    if (
-      name.toLowerCase() !== "content-security-policy" ||
-      present === undefined
-    )
-      return present !== value;
-    return withScriptHashes(present, "") !== withScriptHashes(value, present);
-  });
+  return expected.filter(
+    ([name, value]) => sent.get(name.toLowerCase()) !== value,
+  );
 }

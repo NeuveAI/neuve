@@ -24,9 +24,9 @@
  *   X-Frame-Options             DENY
  *
  * `headers <backend-bucket>` prints the gcloud command that sets them, with
- * the CSP for this build plus the deployed script hashes, so cached pages
- * keep their theme. Before uploading, a deploy checks every header and
- * requires this build's script hashes, allowing the retained hashes too.
+ * the CSP for this build plus the theme hash read from the deployed index.html.
+ * Before uploading, a deploy checks every header against that exact policy.
+ * After deployment and cache expiry, run headers again to drop the old hash.
  */
 import { join } from "node:path";
 import { securityHeaders } from "../src/build/csp";
@@ -105,13 +105,31 @@ async function readBackendHeaders(backend: string) {
   return backendHeaders(await run(describeCommand(backend), true));
 }
 
+async function deployedPage(backend: string) {
+  const bucket = (
+    await run(
+      [...describeCommand(backend).slice(0, -1), "--format=value(bucketName)"],
+      true,
+    )
+  ).trim();
+  if (!NAME.test(bucket)) fail(`Invalid storage bucket for backend ${backend}`);
+  return run(["gcloud", "storage", "cat", `gs://${bucket}/index.html`], true);
+}
+
+function cleanupHint(backend: string) {
+  console.log(
+    `After deploying and waiting for cached pages to expire (Cache-Control: public, max-age=300), run bun run deploy:gcp headers ${backend} again and apply its command to drop the old theme hash.`,
+  );
+}
+
 async function deploy(bucket: string, backend: string, dryRun: boolean) {
   await run(["bun", "run", "build"]);
   const files = builtFiles(dist);
-  const expected = await pageHeaders();
+  const built = await pageHeaders();
 
   if (dryRun) show(describeCommand(backend));
   else {
+    const expected = transitionHeaders(built, await deployedPage(backend));
     const actual = await readBackendHeaders(backend);
     const missing = missingHeaders(expected, actual);
     if (missing.length > 0) {
@@ -119,8 +137,9 @@ async function deploy(bucket: string, backend: string, dryRun: boolean) {
         `The backend bucket ${backend} doesn't send ${missing.map(([n]) => n).join(", ")} as this build needs. Set its headers, then deploy again:`,
       );
       console.error(
-        `  ${headersCommand(backend, transitionHeaders(expected, actual)).map(quote).join(" ")}`,
+        `  ${headersCommand(backend, expected).map(quote).join(" ")}`,
       );
+      cleanupHint(backend);
       process.exit(1);
     }
   }
@@ -164,14 +183,12 @@ if (import.meta.main) {
     console.log(
       headersCommand(
         backend,
-        transitionHeaders(
-          await pageHeaders(),
-          await readBackendHeaders(backend),
-        ),
+        transitionHeaders(await pageHeaders(), await deployedPage(backend)),
       )
         .map(quote)
         .join(" "),
     );
+    cleanupHint(backend);
   } else {
     const dryRun = args.includes("--dry-run");
     const at = args.indexOf("--backend-bucket");

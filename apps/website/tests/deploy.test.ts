@@ -144,49 +144,65 @@ describe("the deploy", () => {
 // Reason: replacing the CSP before uploading must allow cached pages and the new build,
 // while the deploy gate must still refuse a stale or weakened policy.
 describe("theme CSP transitions", () => {
-  const old = securityHeaders("<script>oldTheme()</script>");
-  const next = securityHeaders("<script>newTheme()</script>");
+  const oldHtml = "<script>oldTheme()</script>";
+  const nextHtml = "<script>newTheme()</script>";
+  const old = securityHeaders(oldHtml);
+  const next = securityHeaders(nextHtml);
   const lines = (headers: Array<[string, string]>) =>
     headers.map(([n, v]) => `${n}: ${v}`);
+  const hashes = (headers: Array<[string, string]>) =>
+    [...(headers[0]?.[1].match(/'sha256-[^']+'/g) ?? [])].sort();
 
   test("allows both theme scripts and deduplicates repeated preparation", () => {
-    const transition = transitionHeaders(next, lines(old));
+    const transition = transitionHeaders(next, oldHtml);
     const policy = transition.find(
       ([name]) => name === "Content-Security-Policy",
     )?.[1];
     expect(policy).toContain(sha256("oldTheme()"));
     expect(policy).toContain(sha256("newTheme()"));
-    expect(transitionHeaders(next, lines(transition))).toEqual(transition);
-    expect(missingHeaders(old, lines(transition))).toEqual([]);
-    expect(missingHeaders(next, lines(transition))).toEqual([]);
-    expect(missingHeaders(next, lines(old)).map(([n]) => n)).toEqual([
+    expect(transitionHeaders(next, oldHtml)).toEqual(transition);
+    expect(missingHeaders(transition, lines(transition))).toEqual([]);
+    expect(missingHeaders(transition, lines(old)).map(([n]) => n)).toEqual([
       "Content-Security-Policy",
     ]);
-    expect(transitionHeaders(next, [])).toEqual(
-      transitionHeaders(next, lines(next)),
-    );
+    expect(transitionHeaders(next, nextHtml)).toEqual(next);
   });
 
-  test("retains only hashes from the deployed script-src directive", () => {
-    const changed = lines(old).map((h) =>
-      h.startsWith("Content-Security-Policy:")
-        ? h
-            .replace(
-              "script-src 'self'",
-              "script-src 'self' 'unsafe-inline' https://example.com",
-            )
-            .replace("style-src 'self'", `style-src ${sha256("style")}`)
-        : h,
+  // Reason: successive preparations must expire hashes instead of accumulating A+B+C.
+  test("allows only the deployed and new themes across A, B, and C", () => {
+    const third = securityHeaders("<script>thirdTheme()</script>");
+    const ab = transitionHeaders(next, oldHtml);
+    const ac = transitionHeaders(third, oldHtml);
+    const bc = transitionHeaders(third, nextHtml);
+    expect(hashes(ab)).toEqual(
+      [sha256("oldTheme()"), sha256("newTheme()")].sort(),
     );
-    const transition = transitionHeaders(next, changed);
-    const policy = transition.find(
-      ([name]) => name === "Content-Security-Policy",
-    )?.[1];
-    expect(policy).not.toContain("unsafe-inline");
-    expect(policy).not.toContain("example.com");
-    expect(policy).not.toContain(sha256("style"));
-    expect(policy).toContain(sha256("oldTheme()"));
+    expect(hashes(ac)).toEqual(
+      [sha256("oldTheme()"), sha256("thirdTheme()")].sort(),
+    );
+    expect(hashes(bc)).toEqual(
+      [sha256("newTheme()"), sha256("thirdTheme()")].sort(),
+    );
+    const accumulated = lines(bc).map((h) =>
+      h.replace(
+        "script-src 'self'",
+        `script-src 'self' ${sha256("oldTheme()")}`,
+      ),
+    );
+    expect(missingHeaders(bc, accumulated).map(([n]) => n)).toEqual([
+      "Content-Security-Policy",
+    ]);
+  });
+
+  // Reason: an unrelated valid hash must not authorize itself through the checked header.
+  test("rejects extra hashes and changes to other directives or headers", () => {
+    const transition = transitionHeaders(next, oldHtml);
     for (const mutation of [
+      (h: string) =>
+        h.replace(
+          "script-src 'self'",
+          `script-src 'self' ${sha256("unrelatedScript()")}`,
+        ),
       (h: string) =>
         h.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'"),
       (h: string) => h.replace("style-src 'self'", "style-src 'unsafe-inline'"),
@@ -195,14 +211,45 @@ describe("theme CSP transitions", () => {
         h.replace("script-src 'self'", "script-src 'self' 'sha256-invalid'"),
     ])
       expect(
-        missingHeaders(next, lines(transition).map(mutation)).map(([n]) => n),
+        missingHeaders(transition, lines(transition).map(mutation)).map(
+          ([n]) => n,
+        ),
       ).toEqual(["Content-Security-Policy"]);
     expect(
       missingHeaders(
-        next,
+        transition,
         lines(transition).filter((h) => !h.startsWith("X-Frame-Options:")),
       ),
     ).toEqual([["X-Frame-Options", "DENY"]]);
+    expect(
+      missingHeaders(
+        transition,
+        lines(transition).map((h) =>
+          h.replace("X-Frame-Options: DENY", "X-Frame-Options: SAMEORIGIN"),
+        ),
+      ),
+    ).toEqual([["X-Frame-Options", "DENY"]]);
+  });
+
+  // Reason: an absent CSP must not prevent preparation or bypass the deploy gate.
+  test("prepares from deployed HTML even when no CSP exists yet", () => {
+    const actual = backendHeaders("{}");
+    const prepared = transitionHeaders(next, oldHtml);
+    expect(actual).toEqual([]);
+    expect(hashes(prepared)).toEqual(
+      [sha256("oldTheme()"), sha256("newTheme()")].sort(),
+    );
+    expect(missingHeaders(prepared, actual)).toEqual(prepared);
+    expect(missingHeaders(prepared, lines(prepared))).toEqual([]);
+  });
+
+  test("refuses deployed HTML without exactly one inline theme script", () => {
+    for (const html of [
+      "",
+      '<script src="theme.js"></script>',
+      oldHtml + nextHtml,
+    ])
+      expect(() => transitionHeaders(next, html)).toThrow(/exactly one/);
   });
 
   test("validates the backend bucket's header response", () => {

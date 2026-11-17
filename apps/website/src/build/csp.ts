@@ -61,17 +61,22 @@ export function securityHeaders(
   ];
 }
 
-/** Keep deployed inline-script hashes while pages from the previous build are cached. */
-export function withScriptHashes(policy: string, deployed: string): string {
-  const script = /(?:^|;\s*)script-src\s+([^;]*)/.exec(deployed)?.[1] ?? "";
-  const hashes = script
-    .split(/\s+/)
-    .filter((token) => /^'sha256-[A-Za-z0-9+/]{43}='$/.test(token));
+/** Hash the deployed page itself, never the hashes in a transitional CSP. */
+export function withDeployedTheme(
+  policy: string,
+  deployedHtml: string,
+): string {
+  const scripts = inlineScripts(deployedHtml);
+  const [theme] = scripts;
+  if (scripts.length !== 1 || theme === undefined)
+    throw new Error(
+      "Expected exactly one inline theme script in deployed index.html",
+    );
   return policy.replace(
     /(^|;\s*)script-src\s+([^;]*)/,
     (_, prefix: string, sources: string) => {
       const tokens = sources.trim().split(/\s+/);
-      const all = [...new Set([...tokens, ...hashes])];
+      const all = [...new Set([...tokens, sha256(theme)])];
       const kept = all.filter(
         (token) => !/^'sha256-[A-Za-z0-9+/]{43}='$/.test(token),
       );
