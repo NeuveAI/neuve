@@ -36,7 +36,6 @@ import {
   sse,
   tokenCommand,
 } from "../providers/fixture.ts";
-import { rememberEphemeralCredentials } from "../../../src/pi/capture/safety.ts";
 import type { Json } from "../../../src/pi/capture/types.ts";
 
 type Path = ReadonlyArray<string | number>;

@@ -131,6 +131,17 @@ jobs:
       - run: bun --no-env-file install --frozen-lockfile
       - if: matrix.group == 'packages'
         run: bun --no-env-file run format:check
+      - name: Report Git prerequisite identities
+        if: matrix.group == 'packages'
+        run: |
+          for executable in "$(command -v git)" /usr/lib/git-core/git; do
+            if [ -x "$executable" ]; then
+              readlink -f "$executable"
+              stat -c '%d %i %s' "$executable"
+              sha256sum "$executable"
+              "$executable" version
+            fi
+          done
       - name: Build portable declarations
         if: matrix.group == 'packages'
         run: |

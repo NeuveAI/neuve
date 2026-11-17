@@ -735,10 +735,17 @@ describe("committed cache boundary", () => {
       cache: "prepared",
     });
     await mkdir(join(dirname(executable), "own-tmp"));
+    const git = Bun.which("git");
+    if (git === null) throw new Error("Git is required for this fixture");
+    // Vary the caller's PATH while keeping its Git dependency fixed. The runner's
+    // /usr/lib/git-core/git need not be the same executable as its default git.
+    const hookBin = join(dirname(executable), "hook-bin");
+    await mkdir(hookBin);
+    await symlink(await realpath(git), join(hookBin, "git"));
     const variants: Record<string, string>[] = [
       { GOMAXPROCS: "2", NEUVE_WORKER: "1" },
       {
-        PATH: `/usr/lib/git-core:${process.env.PATH}`,
+        PATH: `${hookBin}:${process.env.PATH}`,
         GIT_EXEC_PATH: "/usr/lib/git-core",
         GIT_INDEX_FILE: join(repository.root, ".git/index"),
         LANG: "fr_FR.UTF-8",
