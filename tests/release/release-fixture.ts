@@ -453,3 +453,11 @@ export const releaseCheckout = async (): Promise<Checkout> => {
     },
   };
 };
+
+// A failed plutil extraction may print to stdout. Capture each candidate separately so its
+// diagnostic cannot become part of the fallback command that the launchctl fixture reports.
+export const readLaunchdProgram = (path: string) => `
+program=$(plutil -extract Program raw -o - "${path}" 2>/dev/null) ||
+  program=$(plutil -extract ProgramArguments.0 raw -o - "${path}") || exit $?
+printf '%s' "$program"
+`;

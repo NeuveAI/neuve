@@ -17,6 +17,8 @@ import {
 import { join } from "node:path";
 import {
   ASSET,
+  readLaunchdProgram,
+  scratchDirectory,
   TARGET,
   install,
   installer,
@@ -719,3 +721,41 @@ test("help names both ways to start: the GitHub CLI and a token", async () => {
   // Once the repository is public, the one line needs no sign-in.
   expect(help.stdout).toContain("curl -fsSL https://neuve.ai/install.sh | sh");
 });
+
+// Why: a mock launchctl must report just its registered executable even if a failed plutil
+// lookup writes its diagnostic to stdout. Otherwise a valid registration looks foreign on CI.
+for (const shell of shells)
+  test(`launchd fixture discards a failed Program lookup's stdout under ${shell}`, async () => {
+    const directory = await scratchDirectory("neuve-plutil-");
+    await writeFile(
+      join(directory, "plutil"),
+      `#!/bin/sh
+if [ "$2" = Program ] || [ "\${FAIL_ALL:-0}" = 1 ]; then
+  printf '/fixture.plist: Could not extract value\\n'
+  exit 1
+fi
+printf '/fixture/bin/neuve\\n'
+`,
+      { mode: 0o755 },
+    );
+    const env = { PATH: directory, PLIST: "/fixture.plist" };
+    const executable = Bun.which(shell);
+    if (executable === null) throw new Error(`Missing shell: ${shell}`);
+    const result = await run(
+      [executable, "-c", readLaunchdProgram("$PLIST")],
+      env,
+    );
+    expect(result).toMatchObject({
+      code: 0,
+      stdout: "/fixture/bin/neuve",
+      stderr: "",
+    });
+    const refused = await run(
+      [executable, "-c", readLaunchdProgram("$PLIST")],
+      {
+        ...env,
+        FAIL_ALL: "1",
+      },
+    );
+    expect(refused).toMatchObject({ code: 1, stdout: "" });
+  });

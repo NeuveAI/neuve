@@ -7,7 +7,6 @@ import {
   test as bunTest,
 } from "bun:test";
 import { releaseTest } from "../../scripts/release/case-shard.ts";
-const test = releaseTest(bunTest);
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -36,9 +35,10 @@ import {
   agentUnitPaths,
 } from "../../packages/records-core/src/systemd.ts";
 import { systemdFixture } from "./systemd-fixture.ts";
-import { linkHostGit } from "./release-fixture.ts";
+import { linkHostGit, readLaunchdProgram } from "./release-fixture.ts";
 import { writeChecksums } from "../../scripts/release/checksums.ts";
 
+const test = releaseTest(bunTest);
 const root = resolve(import.meta.dir, "../..");
 const installer =
   process.env.NEUVE_TEST_INSTALLER ?? join(root, "scripts/install.sh");
@@ -1421,7 +1421,7 @@ if [ "$destination" = "$NEUVE_KILL_CLI" ]; then kill -KILL "$PPID"; fi
                 join(wrappers, "launchctl"),
                 `#!/bin/sh
 case "$1" in
- print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; result=0; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; result=113; fi ;;
+ print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; result=0; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; result=113; fi ;;
  bootout) rm -f "$NEUVE_REGISTERED"; result=0 ;;
  bootstrap) cp "$3" "$NEUVE_REGISTERED"; result=$? ;;
  *) exit 99 ;;
@@ -1521,7 +1521,7 @@ script=$1; shift; . "$script"
               `#!/bin/sh
 printf '%s\\n' "$*" >>"$NEUVE_CALLS"
 case "$1" in
-    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
+    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
     bootstrap) cp "$3" "$NEUVE_REGISTERED" ;;
     bootout) rm -f "$NEUVE_REGISTERED" ;;
 esac
@@ -1703,7 +1703,7 @@ script=$1; shift; . "$script"
                 `#!/bin/sh
 printf '%s\\n' "$*" >>"$NEUVE_CALLS"
 case "$1" in
-    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
+    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
     bootstrap) cp "$3" "$NEUVE_REGISTERED" ;;
     bootout)
         rm -f "$NEUVE_REGISTERED"
@@ -1851,7 +1851,7 @@ script=$1; shift; . "$script"
             `#!/bin/sh
 printf '%s\\n' "$*" >>"$NEUVE_CALLS"
 case "$1" in
-    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
+    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
     bootout)
         rm -f "$NEUVE_REGISTERED"
         if [ ! -f "$NEUVE_KILLED" ]; then
@@ -2041,7 +2041,7 @@ if [ "$destination" = "$NEUVE_KILL_FOLDER" ]; then kill -KILL "$PPID"; fi
             `#!/bin/sh
 printf '%s\\n' "$*" >>"$NEUVE_CALLS"
 case "$1" in
- print) if [ -f "$NEUVE_CALLS.registered" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_CALLS.registered" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_CALLS.registered")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
+ print) if [ -f "$NEUVE_CALLS.registered" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_CALLS.registered")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
  bootstrap) [ "\${NEUVE_FAIL_BOOTSTRAP:-0}" != 1 ] || exit 61; cp "$3" "$NEUVE_CALLS.registered" ;;
  bootout) rm -f "$NEUVE_CALLS.registered" ;;
  *) exit 99 ;;
@@ -2234,7 +2234,7 @@ fi
               `#!/bin/sh
 printf '%s\\n' "$*" >>"$NEUVE_CALLS"
 case "$1" in
-    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
+    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
     bootstrap)
         [ "\${NEUVE_FAIL_BOOTSTRAP:-0}" != 1 ] || exit 61
         cp "$3" "$NEUVE_REGISTERED" ;;
@@ -5097,7 +5097,7 @@ shift
             `#!/bin/sh
 printf '%s\\n' "$*" >>"$NEUVE_CALLS"
 case "$1" in
-    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
+    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
     bootstrap) [ "$NEUVE_BOOTSTRAP_SUCCESS" = 1 ] || exit 78; cp "$3" "$NEUVE_REGISTERED" ;;
     bootout) rm -f "$NEUVE_REGISTERED" ;;
     *) exit 1 ;;
@@ -5217,7 +5217,7 @@ script=$1; shift; . "$script"
           join(wrappers, "launchctl"),
           `#!/bin/sh
 printf '%s\\n' "$*" >>"$NEUVE_LAUNCHCTL_LOG"
-if [ "$1" = print ]; then if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi; exit 0; fi
+if [ "$1" = print ]; then if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi; exit 0; fi
 if [ "$NEUVE_FAIL_LAUNCHCTL" = 1 ]; then
     case "$1" in bootout|bootstrap) exit 78 ;; esac
 fi
@@ -5444,7 +5444,7 @@ if [ "$1" = bootout ] && [ "\${NEUVE_HANDOFF_ARMED:-0}" = 1 ] && [ ! -f "$NEUVE_
  NEUVE_HANDOFF_ARMED=0 "$NEUVE_SHELL" "$NEUVE_INSTALLER" --prefix "$NEUVE_OTHER" --archive "$NEUVE_ARCHIVE" --checksums "$NEUVE_SUMS" >"$NEUVE_SWAPPED.install" 2>&1 || exit 98
 fi
 case "$1" in
- print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
+ print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
  bootstrap) cp "$3" "$NEUVE_REGISTERED" ;;
  bootout) rm -f "$NEUVE_REGISTERED" ;;
  *) exit 99 ;;
@@ -5517,7 +5517,7 @@ esac
               join(wrappers, "launchctl"),
               `#!/bin/sh
 case "$1" in
- print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
+ print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
  bootstrap) cp "$3" "$NEUVE_REGISTERED" ;;
  bootout)
   case "\${NEUVE_BOOTOUT_KIND:-}" in
@@ -5632,7 +5632,7 @@ case "$1" in
    print-error-113) echo 'Could not communicate with launchd' >&2; exit 113 ;;
   esac; fi
   if [ -f "$NEUVE_REGISTERED" ]; then
-   command=$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED") || exit 91
+   command=$(${readLaunchdProgram("$NEUVE_REGISTERED")}) || exit 91
    case "\${NEUVE_FAILURE:-}" in missing-other|owned-loaded-other) command="$HOME/other/bin/neuve" ;; missing-foreign|owned-loaded-foreign) command=/usr/bin/false ;; missing-ambiguous) command='"'"$command"'"' ;; esac
    printf 'program = %s\\n' "$command"
   else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
@@ -5781,7 +5781,7 @@ esac
               `#!/bin/sh
 printf '%s\\n' "$*" >>"$NEUVE_CALLS"
 case "$1" in
-    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(program=$(plutil -extract Program raw -o - "$NEUVE_REGISTERED" 2>/dev/null) && printf '%s' "$program" || plutil -extract ProgramArguments.0 raw -o - "$NEUVE_REGISTERED")"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
+    print) if [ -f "$NEUVE_REGISTERED" ]; then printf 'program = %s\\n' "$(${readLaunchdProgram("$NEUVE_REGISTERED")})"; else echo 'Could not find service "dev.neuve.worker" in domain for user gui: 501' >&2; exit 113; fi ;;
     bootstrap) cp "$3" "$NEUVE_REGISTERED" ;;
     bootout) rm -f "$NEUVE_REGISTERED" ;;
     *) exit 1 ;;

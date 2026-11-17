@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, expect, test as bunTest } from "bun:test";
 import { releaseTest } from "../../scripts/release/case-shard.ts";
-const test = releaseTest(bunTest);
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -33,6 +32,7 @@ import {
 import { writeChecksums } from "../../scripts/release/checksums.ts";
 import { systemdFixture } from "./systemd-fixture.ts";
 
+const test = releaseTest(bunTest);
 const root = resolve(import.meta.dir, "../..");
 const installer = join(root, "scripts/install.sh");
 const shells: string[] = [];

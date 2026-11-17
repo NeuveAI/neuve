@@ -225,13 +225,20 @@ The portable plan retains these existing platform boundaries. They are not new s
 - CLI: names beginning `the worker this build starts loads neither the project's`, which inspect the installed process environment. Local checks run them.
 - The `@ace/host` suite stays outside the portable plan, as before. It exercises the Mac host runtime.
 
+The observed Linux run also retains these existing environment gates:
+
+- `macOS starts a real preparation child at nice 19, with no background class` requires macOS scheduling behavior.
+- `spawnEnvironment > the CLI, launched with it, prepares through paths with spaces and apostrophes and refuses another identity as JSON` needs a real disk identity from macOS DiskManagement. The other storage cases use stand-in identities when the host cannot identify a mount.
+- `the offer reads its answer from /dev/tty, as the installer gives it` requires `/usr/bin/expect`, which the Linux runner does not provide.
+- Shared-worker cases `a stopped older worker with a full backlog retains attempt one`, `drop notice survives a refused publication`, and `worker ${outcome} delivers with its own socket saturated` for `completed`, `failed` and `exhausted` require the Mac socket-backlog behavior. Those five existing platform skips are the skips in the successful Linux observer probe.
+
 ## Release archives
 
 The four macOS jobs run only for the four path groups documented in [the development command table](development.md#commands), or on `workflow_dispatch`. This is a cost gate for the hour-long installer suite, not a portable test exclusion. Every distribution and systemd-installer registration belongs to exactly one runner; the other release files use Bun's file shards. The external-files matrix registers each shell and login-shell combination separately so its full 42 scenarios can be distributed too. Local `bun run test:release` still runs the whole suite.
 
 Without the Graph deploy key, the existing `available` gates in `archive.test.ts` and `distribution.test.ts` omit native archive cases because they cannot build an archive containing the private engine. Fixture installer and release-command cases still run. Linux-only systemd cases keep their existing platform gates on these Mac runners.
 
-NEU-405's `GITHUB_ACTIONS` gate stays in `distribution.test.ts`. GitHub's hosted launchd manager reports the registered agent "runs another command" in these handoffs; they run locally:
+NEU-405's `GITHUB_ACTIONS` gate stays in `distribution.test.ts`, as requested. These hosted launchctl fixtures previously reported the registered agent "runs another command". The command-reader correction has local coverage, but its full hosted rerun is blocked by Actions billing. These cases still run locally:
 
 - `launchd final state after handoff: ${shell}/${order}/${boundary}`, for each available shell (`sh`, `dash`), both orders (`A-B`, `B-A`), and boundaries `uninstall` and `rollback`. The `print` boundary still runs on Actions.
 - `rechecks the launchd file at each rollback step: ${shell}`, for each available shell.

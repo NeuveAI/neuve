@@ -1,8 +1,8 @@
-import { test as bunTest } from "bun:test";
+import type { test as bunTest } from "bun:test";
 import { z } from "zod";
 
-// Bun's --shard divides files. The two large installer files dominate the release suite, so CI divides their
-// registrations across runners too. No declaration means the ordinary local suite runs whole.
+// Bun's --shard divides files. The two large installer files dominate the release suite, so CI
+// divides their registrations across runners too. No declaration means the ordinary local suite runs whole.
 const configured = process.env.NEUVE_RELEASE_CASE_SHARD;
 const shard =
   configured === undefined
