@@ -1,6 +1,7 @@
 name: Release archives
-# Release builds run only for a v-tag push or a manual run. Pull requests run the regular CI
-# (ci.yml) only: a break in the release scripts shows when a tag or manual release runs.
+# The release workflow only builds, checksums and drafts the release; it runs no tests (owner,
+# 17 November 2026). Tests and integration belong in pull-request CI. It runs only for a v-tag push or
+# a manual run.
 on:
   workflow_dispatch:
     inputs:
@@ -21,7 +22,7 @@ jobs:
       fail-fast: false
       # Releases ship for Macs with Apple silicon only, from v0.1.0 (owner, 17 November 2026: "Just
       # need to get Mac build out"). The installer on Linux says the release has no Linux build yet.
-      # The Linux steps below stay, so bringing Linux back is these two matrix rows:
+      # Bringing Linux back is these two matrix rows:
       #   - target: linux-x64
       #     runner: ubuntu-22.04
       #   - target: linux-arm64
@@ -31,11 +32,10 @@ jobs:
           - target: darwin-arm64
             runner: macos-15
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       NEUVE_MODE: check
       CI: "1"
-      NEUVE_TEST_SUITE_TIMEOUT_MS: "6600000"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -84,9 +84,7 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           REHEARSE_TAG: ${{ inputs.rehearse_tag }}
-        # A tag build installs a plain version, which sorts above every prerelease of it, so the
-        # release tests' upgrade fixtures behave differently than under a -dev version. A rehearsal
-        # runs them as the tag will; only a pushed tag reaches publish.
+        # A rehearsal builds with the plain version a tag would; only a pushed tag reaches publish.
         run: |
           version=$(bun --no-env-file -p 'require("./apps/neuve-cli/package.json").version')
           if [ "$REF_TYPE" = tag ]; then
@@ -104,38 +102,6 @@ jobs:
           RELEASE_TARGET: ${{ matrix.target }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: bun --no-env-file scripts/release/build.ts --target "$RELEASE_TARGET" --version "$RELEASE_VERSION" --out release-out --repository "$RELEASE_REPOSITORY"
-      - name: Install zsh for the installer's startup-file tests
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends zsh
-      - name: Show disk space and git versions before release tests
-        run: |
-          df -h "$GITHUB_WORKSPACE" "$TMPDIR"
-          /usr/bin/git --version
-          git --version
-      - name: Exercise the release archive
-        env:
-          NEUVE_RELEASE_ARCHIVE: ${{ github.workspace }}/release-out/neuve-${{ matrix.target }}.tar.gz
-        run: bun --no-env-file run test:release
-      - name: Show disk space after release tests
-        if: always()
-        run: df -h "$GITHUB_WORKSPACE" "$TMPDIR"
-      - name: Exercise the real Linux user manager
-        if: runner.os == 'Linux'
-        env:
-          NEUVE_RELEASE_ARCHIVE: ${{ github.workspace }}/release-out/neuve-${{ matrix.target }}.tar.gz
-        shell: bash
-        run: |
-          sudo loginctl enable-linger "$USER"
-          export XDG_RUNTIME_DIR=/run/user/$(id -u)
-          ready=0
-          deadline=$((SECONDS + 30))
-          while (( SECONDS < deadline )); do
-            state=$(timeout 1s systemctl --user is-system-running 2>/dev/null || true)
-            case "$state" in running|degraded) ready=1; break ;; esac
-            sleep 1
-          done
-          [ "$ready" = 1 ] || { echo 'The systemd user manager did not become ready within 30 seconds.'; exit 1; }
-          NEUVE_RELEASE_SYSTEMD=1 bun --no-env-file scripts/test-budget.ts ./tests/release/systemd-native.test.ts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: neuve-${{ matrix.target }}
