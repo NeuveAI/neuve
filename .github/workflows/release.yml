@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           LATEST_TAG=$(gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" \
-            --jq 'add | map(select(.draft == false and .published_at != null)) | max_by(.published_at) | .tag_name')
+            | jq -r 'add | map(select(.draft == false and .published_at != null)) | max_by(.published_at) | .tag_name')
           export LATEST_TAG
           bun --no-env-file run - <<'TS'
           import { appendFileSync, writeFileSync } from "node:fs";
