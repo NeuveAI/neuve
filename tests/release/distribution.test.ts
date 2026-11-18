@@ -5877,16 +5877,28 @@ esac
   },
 );
 
-// PR and manual builds must never receive the permissions or trigger needed to publish.
-test("only a v-tag push can publish, and only publish has write permissions", async () => {
+// A dry run exercises preparation and building without receiving publish permissions.
+test("release.yml only publishes main with a manual non-dry run", async () => {
   const permission = z.record(z.string(), z.string());
   const schema = z.object({
+    on: z.record(z.string(), z.unknown()),
+    concurrency: z.object({
+      group: z.string(),
+      "cancel-in-progress": z.boolean(),
+      queue: z.string(),
+    }),
     permissions: permission,
     jobs: z.record(
       z.string(),
       z.object({
         if: z.string().optional(),
         permissions: permission.optional(),
+        steps: z.array(
+          z.object({
+            id: z.string().optional(),
+            run: z.string().optional(),
+          }),
+        ),
         strategy: z
           .object({
             matrix: z.object({
@@ -5904,11 +5916,20 @@ test("only a v-tag push can publish, and only publish has write permissions", as
       await readFile(join(root, ".github/workflows/release.yml"), "utf8"),
     ),
   );
+  expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
+  expect(workflow.concurrency).toEqual({
+    group: "release",
+    "cancel-in-progress": false,
+    queue: "max",
+  });
+  expect(workflow.jobs.prepare?.if).toBe(
+    "${{ inputs.dry_run || github.ref == 'refs/heads/main' }}",
+  );
   expect(Object.values(workflow.permissions)).not.toContain("write");
   for (const [name, job] of Object.entries(workflow.jobs)) {
     if (name === "publish") {
       expect(job.if).toBe(
-        "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+        "${{ !inputs.dry_run && github.ref == 'refs/heads/main' }}",
       );
       expect(job.permissions).toEqual({
         contents: "write",
@@ -5921,4 +5942,149 @@ test("only a v-tag push can publish, and only publish has write permissions", as
   expect(workflow.jobs.build?.strategy?.matrix.include).toEqual([
     { target: "darwin-arm64", runner: "macos-15" },
   ]);
+
+  const preparation = workflow.jobs.prepare?.steps.find(
+    (step) => step.id === "prepare",
+  )?.run;
+  expect(preparation).toBeDefined();
+  if (!preparation) throw new Error("Missing preparation script");
+  const directory = await temporary();
+  const bin = join(directory, "bin");
+  await mkdir(bin);
+  // Only the remote release listing is substituted. The actual shell, jq, Bun and Git run.
+  await writeFile(join(bin, "gh"), '#!/bin/sh\ncat "$RELEASE_FIXTURE"\n', {
+    mode: 0o755,
+  });
+  const script = join(directory, "prepare.sh");
+  await writeFile(script, preparation);
+  const env = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_AUTHOR_NAME: "Neuve",
+    GIT_AUTHOR_EMAIL: "support@neuve.ai",
+    GIT_COMMITTER_NAME: "Neuve",
+    GIT_COMMITTER_EMAIL: "support@neuve.ai",
+    GH_REPO: "NeuveAI/neuve",
+    RELEASE_FIXTURE: join(directory, "releases.json"),
+    GITHUB_OUTPUT: join(directory, "outputs"),
+    GITHUB_STEP_SUMMARY: join(directory, "summary"),
+    BUMP: "patch",
+    VERSION: "",
+    DRY_RUN: "true",
+  };
+  success(await run(["git", "init", "-b", "main"], env, directory));
+  success(
+    await run(
+      [
+        "git",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "Initial release",
+      ],
+      env,
+      directory,
+    ),
+  );
+  success(await run(["git", "tag", "v0.2.0"], env, directory));
+  success(await run(["git", "tag", "v0.3.0-pre.1"], env, directory));
+  success(
+    await run(
+      ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+      env,
+      directory,
+    ),
+  );
+  const stable = {
+    tag_name: "v0.2.0",
+    draft: false,
+    published_at: "2026-11-18",
+  };
+  const prerelease = {
+    tag_name: "v0.3.0-pre.1",
+    prerelease: true,
+    draft: false,
+    published_at: "2026-11-01",
+  };
+  const prepare = async (
+    tags: object[][],
+    overrides: Partial<typeof env> = {},
+  ) => {
+    await writeFile(env.RELEASE_FIXTURE, JSON.stringify(tags));
+    await writeFile(env.GITHUB_OUTPUT, "");
+    await writeFile(env.GITHUB_STEP_SUMMARY, "");
+    return run(["bash", script], { ...env, ...overrides }, directory);
+  };
+  const releases = [
+    [prerelease],
+    [
+      stable,
+      { tag_name: "v9.0.0", draft: true, published_at: "2026-11-18" },
+      { tag_name: "v8.0.0", draft: false, published_at: null },
+      { tag_name: "unversioned", draft: false, published_at: "2026-11-18" },
+    ],
+  ];
+  success(await prepare(releases));
+  expect(await readFile(env.GITHUB_OUTPUT, "utf8")).toContain(
+    "version=0.3.0\n",
+  );
+  expect(await readFile(env.GITHUB_STEP_SUMMARY, "utf8")).toContain(
+    "Changes since v0.3.0-pre.1",
+  );
+  success(await prepare([[stable]]));
+  expect(await readFile(env.GITHUB_OUTPUT, "utf8")).toContain(
+    "version=0.2.1\n",
+  );
+  for (const [bump, version] of [
+    ["minor", "0.3.0"],
+    ["major", "1.0.0"],
+  ]) {
+    success(await prepare(releases, { BUMP: bump }));
+    expect(await readFile(env.GITHUB_OUTPUT, "utf8")).toContain(
+      `version=${version}\n`,
+    );
+  }
+  success(await prepare(releases, { VERSION: "0.3.0-pre.2" }));
+  expect(await readFile(env.GITHUB_OUTPUT, "utf8")).toContain(
+    "version=0.3.0-pre.2\n",
+  );
+  for (const version of ["0.2.1", "0.3.0-pre.1", "bad-version"]) {
+    expect((await prepare(releases, { VERSION: version })).code).not.toBe(0);
+  }
+  expect((await prepare([[stable]], { VERSION: "0.2.0" })).code).not.toBe(0);
+  expect((await prepare([[]])).code).not.toBe(0);
+  // Preparation alone never publishes, even when exercising the real-release ancestry guard.
+  success(await prepare(releases, { DRY_RUN: "" }));
+  success(await run(["git", "checkout", "-b", "feature"], env, directory));
+  success(
+    await run(
+      [
+        "git",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "Branch-only change",
+      ],
+      env,
+      directory,
+    ),
+  );
+  expect((await prepare(releases, { DRY_RUN: "" })).code).not.toBe(0);
+  expect(await readFile(env.GITHUB_OUTPUT, "utf8")).toBe("");
+  const dryRun = await prepare(releases);
+  success(dryRun);
+  expect(dryRun.stdout).toContain("publishing is disabled on every ref");
+  expect(await readFile(join(directory, "release-notes.md"), "utf8")).toBe(
+    "- Branch-only change (" +
+      (
+        await run(["git", "rev-parse", "--short", "HEAD"], env, directory)
+      ).stdout.trim() +
+      ")\n",
+  );
 });

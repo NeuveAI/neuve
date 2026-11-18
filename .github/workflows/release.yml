@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version bump from the latest published release
+        description: Version bump from the highest published version
         type: choice
         options: [patch, minor, major]
         default: patch
@@ -12,7 +12,7 @@ on:
         description: Optional X.Y.Z or X.Y.Z-pre.N version, overriding bump
         type: string
       ref:
-        description: Branch, tag or commit to release
+        description: Source on main to release (other sources allowed for dry runs)
         type: string
         default: main
       dry_run:
@@ -24,9 +24,11 @@ permissions:
 concurrency:
   group: release
   cancel-in-progress: false
+  # Keep pending runs too, up to GitHub's 100-run queue limit.
   queue: max
 jobs:
   prepare:
+    if: ${{ inputs.dry_run || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.prepare.outputs.version }}
@@ -50,11 +52,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
           BUMP: ${{ inputs.bump }}
           VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          LATEST_TAG=$(gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" \
-            | jq -r 'add | map(select(.draft == false and .published_at != null)) | max_by(.published_at) | .tag_name')
-          export LATEST_TAG
+          RELEASE_TAGS=$(gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" \
+            | jq -c 'add | map(select(.draft == false and .published_at != null) | .tag_name)')
+          export RELEASE_TAGS
           bun --no-env-file run - <<'TS'
           import { appendFileSync, writeFileSync } from "node:fs";
 
@@ -63,7 +66,6 @@ jobs:
             if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed`);
             return result.stdout.toString().trim();
           };
-          const latestTag = process.env.LATEST_TAG ?? "";
           const pattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+)\.(0|[1-9]\d*))?$/;
           const parse = (value: string) => {
             const match = pattern.exec(value);
@@ -72,7 +74,16 @@ jobs:
             }
             return match;
           };
-          if (!latestTag.startsWith("v")) throw new Error("No published v-version release found.");
+          const tags: unknown = JSON.parse(process.env.RELEASE_TAGS ?? "[]");
+          if (!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string")) {
+            throw new Error("Expected published release tags.");
+          }
+          const latestTag = tags.filter((tag): tag is string => {
+            if (typeof tag !== "string" || !tag.startsWith("v")) return false;
+            const match = pattern.exec(tag.slice(1));
+            return !!match && !(match[4] && /^0\d+$/.test(match[4]));
+          }).sort((a, b) => Bun.semver.order(b.slice(1), a.slice(1)))[0];
+          if (!latestTag) throw new Error("No published v-version release found.");
           const latest = latestTag.slice(1);
           const parts = parse(latest);
           let version = process.env.VERSION ?? "";
@@ -80,10 +91,11 @@ jobs:
             const major = BigInt(parts[1]!);
             const minor = BigInt(parts[2]!);
             const patch = BigInt(parts[3]!);
+            const prerelease = parts[4] !== undefined;
             switch (process.env.BUMP) {
-              case "major": version = `${major + 1n}.0.0`; break;
-              case "minor": version = `${major}.${minor + 1n}.0`; break;
-              case "patch": version = `${major}.${minor}.${patch + 1n}`; break;
+              case "major": version = `${major + (prerelease && minor === 0n && patch === 0n ? 0n : 1n)}.0.0`; break;
+              case "minor": version = `${major}.${minor + (prerelease && patch === 0n ? 0n : 1n)}.0`; break;
+              case "patch": version = `${major}.${minor}.${patch + (prerelease ? 0n : 1n)}`; break;
               default: throw new Error("Choose patch, minor or major.");
             }
           }
@@ -94,6 +106,9 @@ jobs:
           const tag = `v${version}`;
           if (git("tag", "--list", tag)) throw new Error(`${tag} already exists.`);
           const sha = git("rev-parse", "HEAD");
+          if (process.env.DRY_RUN !== "true") {
+            git("merge-base", "--is-ancestor", sha, "origin/main");
+          }
           git("merge-base", "--is-ancestor", latestTag, sha);
           const notes = git("log", "--no-merges", "--date-order", "--format=%s (%h)", `${latestTag}..${sha}`, "--")
             .split("\n")
@@ -104,6 +119,7 @@ jobs:
           const delimiter = crypto.randomUUID();
           appendFileSync(process.env.GITHUB_OUTPUT!, `version=${version}\nsha=${sha}\nnotes<<${delimiter}\n${notes}${delimiter}\n`);
           const summary = `## ${tag}\n\nCommit: ${sha}\n\nChanges since ${latestTag}:\n\n${notes}`;
+          if (process.env.DRY_RUN === "true") console.log("Dry run: build artifacts only; publishing is disabled on every ref.");
           appendFileSync(process.env.GITHUB_STEP_SUMMARY!, summary);
           console.log(summary);
           TS
@@ -197,7 +213,7 @@ jobs:
           retention-days: 14
   publish:
     needs: [prepare, checksums]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ !inputs.dry_run && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write
