@@ -6039,9 +6039,9 @@ test("release.yml only publishes main with a manual non-dry run", async () => {
   expect(await readFile(env.GITHUB_OUTPUT, "utf8")).toContain(
     "version=0.2.1\n",
   );
-  for (const [bump, version] of [
-    ["minor", "0.3.0"],
-    ["major", "1.0.0"],
+  for (const { bump, version } of [
+    { bump: "minor", version: "0.3.0" },
+    { bump: "major", version: "1.0.0" },
   ]) {
     success(await prepare(releases, { BUMP: bump }));
     expect(await readFile(env.GITHUB_OUTPUT, "utf8")).toContain(
