@@ -1,23 +1,120 @@
-name: Release archives
-# The release workflow only builds, checksums and drafts the release; it runs no tests (owner,
-# 17 November 2026). Tests and integration belong in pull-request CI. It runs only for a v-tag push or
-# a manual run. Path-filtered release tests run in ci.yml on five macOS runners.
+name: Release
+# This manual release path only prepares, builds, checksums and publishes. Tests stay in ci.yml.
 on:
   workflow_dispatch:
     inputs:
-      rehearse_tag:
-        description: "Build with the CLI package's plain version, as a v-tag push does. Nothing is published."
+      bump:
+        description: Version bump from the latest published release
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Optional X.Y.Z or X.Y.Z-pre.N version, overriding bump
+        type: string
+      ref:
+        description: Branch, tag or commit to release
+        type: string
+        default: main
+      dry_run:
+        description: Build and write notes without creating a tag or release
         type: boolean
         default: false
-  push:
-    tags: ["v*"]
 permissions:
   contents: read
 concurrency:
-  group: release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: release
+  cancel-in-progress: false
+  queue: max
 jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+      sha: ${{ steps.prepare.outputs.sha }}
+      notes: ${{ steps.prepare.outputs.notes }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.4"
+      - name: Prepare version and release notes
+        id: prepare
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          LATEST_TAG=$(gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" \
+            --jq 'add | map(select(.draft == false and .published_at != null)) | max_by(.published_at) | .tag_name')
+          export LATEST_TAG
+          bun --no-env-file run - <<'TS'
+          import { appendFileSync, writeFileSync } from "node:fs";
+
+          const git = (...args: string[]) => {
+            const result = Bun.spawnSync(["git", ...args], { stderr: "inherit" });
+            if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed`);
+            return result.stdout.toString().trim();
+          };
+          const latestTag = process.env.LATEST_TAG ?? "";
+          const pattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+)\.(0|[1-9]\d*))?$/;
+          const parse = (value: string) => {
+            const match = pattern.exec(value);
+            if (!match || (match[4] && /^0\d+$/.test(match[4]))) {
+              throw new Error(`Invalid version: ${value}. Use X.Y.Z or X.Y.Z-pre.N.`);
+            }
+            return match;
+          };
+          if (!latestTag.startsWith("v")) throw new Error("No published v-version release found.");
+          const latest = latestTag.slice(1);
+          const parts = parse(latest);
+          let version = process.env.VERSION ?? "";
+          if (!version) {
+            const major = BigInt(parts[1]!);
+            const minor = BigInt(parts[2]!);
+            const patch = BigInt(parts[3]!);
+            switch (process.env.BUMP) {
+              case "major": version = `${major + 1n}.0.0`; break;
+              case "minor": version = `${major}.${minor + 1n}.0`; break;
+              case "patch": version = `${major}.${minor}.${patch + 1n}`; break;
+              default: throw new Error("Choose patch, minor or major.");
+            }
+          }
+          parse(version);
+          if (Bun.semver.order(version, latest) <= 0) {
+            throw new Error(`${version} must be higher than ${latest}.`);
+          }
+          const tag = `v${version}`;
+          if (git("tag", "--list", tag)) throw new Error(`${tag} already exists.`);
+          const sha = git("rev-parse", "HEAD");
+          git("merge-base", "--is-ancestor", latestTag, sha);
+          const notes = git("log", "--no-merges", "--date-order", "--format=%s (%h)", `${latestTag}..${sha}`, "--")
+            .split("\n")
+            .filter((line) => line && !/^Release \d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)? \([0-9a-f]+\)$/.test(line))
+            .map((line) => `- ${line}`)
+            .join("\n") + "\n";
+          writeFileSync("release-notes.md", notes);
+          const delimiter = crypto.randomUUID();
+          appendFileSync(process.env.GITHUB_OUTPUT!, `version=${version}\nsha=${sha}\nnotes<<${delimiter}\n${notes}${delimiter}\n`);
+          const summary = `## ${tag}\n\nCommit: ${sha}\n\nChanges since ${latestTag}:\n\n${notes}`;
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY!, summary);
+          console.log(summary);
+          TS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+          retention-days: 14
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       # Releases ship for Macs with Apple silicon only, from v0.1.0 (owner, 17 November 2026: "Just
@@ -39,6 +136,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: false
           persist-credentials: false
       - uses: ./.github/actions/graph-source
@@ -58,28 +156,9 @@ jobs:
           echo "BUN_TMPDIR=$RUNNER_TEMP/neuve-tmp" >> "$GITHUB_ENV"
           echo "BUN_RUNTIME_TRANSPILER_CACHE_PATH=$RUNNER_TEMP/neuve-cache/transpiler" >> "$GITHUB_ENV"
       - run: bun --no-env-file install --frozen-lockfile
-      - name: Select the release version
-        id: version
-        shell: bash
-        env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-          REHEARSE_TAG: ${{ inputs.rehearse_tag }}
-        # A rehearsal builds with the plain version a tag would; only a pushed tag reaches publish.
-        run: |
-          version=$(bun --no-env-file -p 'require("./apps/neuve-cli/package.json").version')
-          if [ "$REF_TYPE" = tag ]; then
-            [ "$REF_NAME" = "v$version" ] || { echo 'Tag and CLI package version differ.'; exit 1; }
-          elif [ "$REHEARSE_TAG" = true ]; then
-            echo "Rehearsing the v$version tag build."
-          else
-            revision=$(git rev-parse HEAD)
-            version="$version-dev.${revision:0:12}"
-          fi
-          echo "value=$version" >> "$GITHUB_OUTPUT"
       - name: Build the native release
         env:
-          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_TARGET: ${{ matrix.target }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: bun --no-env-file scripts/release/build.ts --target "$RELEASE_TARGET" --version "$RELEASE_VERSION" --out release-out --repository "$RELEASE_REPOSITORY"
@@ -90,11 +169,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   checksums:
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: false
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -116,8 +196,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   publish:
-    needs: checksums
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare, checksums]
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -128,19 +208,31 @@ jobs:
         with:
           name: neuve-release
           path: release-out
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-notes
+          path: notes
       - name: Attest public release files
         if: github.event.repository.private == false
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: release-out/*
-      - name: Create the owner-reviewed draft
+      - name: Tag and publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        # A tag with a prerelease part (v0.1.0-preview.3) drafts a prerelease. Any other drafts a full
-        # release marked latest, which the one-line install (releases/latest/download) resolves to.
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+        # The main tags ruleset must allow GitHub Actions (integration 15368) to bypass creation.
         run: |
-          version=${RELEASE_TAG#v}
-          case "${version%%+*}" in *-*) kind=--prerelease ;; *) kind=--latest ;; esac
-          gh release create "$RELEASE_TAG" --draft "$kind" --verify-tag --generate-notes release-out/*
+          set -euo pipefail
+          tag="v$RELEASE_VERSION"
+          object=$(gh api "repos/$GH_REPO/git/tags" -f tag="$tag" -f message="Release $RELEASE_VERSION" \
+            -f object="$RELEASE_SHA" -f type=commit --jq .sha)
+          gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$tag" -f sha="$object"
+          case "$RELEASE_VERSION" in
+            *-*) kind=(--prerelease --latest=false) ;;
+            *) kind=(--latest) ;;
+          esac
+          gh release create "$tag" "${kind[@]}" --verify-tag --title "$tag" \
+            --notes-file notes/release-notes.md release-out/*
