@@ -1,6 +1,6 @@
 # One loop, one copy of the skills: proposal
 
-Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) leaves open ("moving the reviewer skills in `.agents/skills/` into what the CLI ships, so one copy serves both") and for its direction on scope retrieval. The owner ruled on it on 19 November 2026 ([14.36 to 14.47](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)); the rulings are listed first, below. Nothing here is built yet. The [decisions record](../decisions.md) wins wherever this text differs from it. Product words follow the [vocabulary](../../vocabulary.md); "leads" is the harness's internal word for the search results it stores per hunk ([`leads.ts`](../../packages/harness/src/leads.ts), lines 14–17) and is used here only in that sense.
+Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) leaves open ("moving the reviewer skills in `.agents/skills/` into what the CLI ships, so one copy serves both") and for its direction on scope retrieval. The owner ruled on it on 19 November 2026 ([14.36 to 14.50](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)); the rulings are listed first, below. Nothing here is built yet. The [decisions record](../decisions.md) wins wherever this text differs from it. Product words follow the [vocabulary](../../vocabulary.md); "leads" is the harness's internal word for the search results it stores per hunk ([`leads.ts`](../../packages/harness/src/leads.ts), lines 14–17) and is used here only in that sense.
 
 ## Rulings, 19 November 2026
 
@@ -295,8 +295,8 @@ Proposal, written 19 November 2026. Nothing here is built. It is the design of s
 
 | Kept thing | Rebuildable? | The check reads | It goes when |
 | --- | --- | --- | --- |
-| A cycle's unmasked scope copies (ticket text, named uncommitted files) | No. An external source is fetched once per cycle (14.37) and a scratchpad may be gone | Records: whether a later cycle is open on that cycle's branch, and whether any job of the cycle is queued or running | Both hold: the cycle is over, and no job of it is unfinished. Otherwise it stays, and the 7-day idle sweep remains the backstop |
-| Outputs keyed by a tree: the tree's keyword index, relations, stored query answers, scope-section searches | Yes | Each stored output's own inputs, which Records keeps beside its key, and the trees every open cycle can ask about: its base and its branch's commits | No open cycle's trees include the output's tree |
+| A cycle's unmasked scope copies (ticket text, named uncommitted files) | No. An external source is fetched once per cycle (14.37) and a scratchpad may be gone | Records: whether a later cycle is open on that cycle's branch, and whether any job of the cycle is queued or running | All three hold: the cycle is over, no job of it is unfinished, and every human-required unit of it is decided (14.48). Otherwise it stays. The 7-day idle sweep must not remove the copies of a cycle with an undecided human-required unit either |
+| Outputs keyed by a tree: the tree's keyword index, relations, stored query answers, scope-section searches | Yes | Nothing at the boundary | Never at the boundary. They stay under their byte cap (14.21, 14.48), so a branch cut later from the same base reuses them |
 | Outputs keyed by a blob: chunks, and leads by blob pair | Yes | Nothing at the boundary | Never at the boundary. They stay under their byte cap (14.21). Deciding whether any open tree still holds a blob would cost more than the output |
 
 What it builds on:
@@ -311,16 +311,13 @@ What it builds on:
 | Never removing what must stay | The store refuses to evict an output an event names or a model produced | [`evictable.ts`](../../packages/records-core/src/evictable.ts), lines 139–178 |
 | A reader that races a removal | `evictedMeanwhile`: the read is a miss, and the output is computed again under the same key | [`evictable.ts`](../../packages/records-core/src/evictable.ts), lines 255–273 |
 
-- **Two branches on one base.** Scope copies sit in a folder per cycle, never per base ([`scope-storage.ts`](../../packages/harness/src/scope-storage.ts), lines 19–21), so one branch's boundary can't touch another's copies. A tree-keyed output for the shared base stays while either branch's cycle is open, because the check asks about every open cycle, not only the one that just ended.
-- **A prune that races a reader.** No lock and no polling are added. For outputs, the existing contract holds: a reader that loses the race recomputes under the same key, through the shared-work helper, so two readers that both miss still make one run ([record 0016](../../architecture/decisions/0016-shared-work.md)). Each removal checks need again inside its own write transaction, so a cycle that opens meanwhile is either seen or opens afterwards and recomputes. For scope copies, the next cycle opens only after a run of the previous one has published (section 2), later requests join the new cycle, and a late reader discloses the missing copy.
+- **Two branches on one base.** Scope copies sit in a folder per cycle, never per base ([`scope-storage.ts`](../../packages/harness/src/scope-storage.ts), lines 19–21), so one branch's boundary can't touch another's copies. Content-keyed outputs for the shared base are not touched at the boundary at all (14.48).
+- **A prune that races a reader.** No lock and no polling are added. For outputs, the existing contract holds: a reader that loses the race recomputes under the same key, through the shared-work helper, so two readers that both miss still make one run ([record 0016](../../architecture/decisions/0016-shared-work.md)). That contract now matters only for eviction at the cap, since nothing content-keyed is removed at the boundary. For scope copies, the next cycle opens only after a run of the previous one has published (section 2), later requests join the new cycle, and a late reader discloses the missing copy.
 - **"Open cycle" is defined once**, in the function section 2 names: opened, not followed by a later cycle on its branch, and active within the idle limit the sweep already uses.
 - **Where it runs.** As a background job enqueued by the opening event, like the daily prune ([`jobs.ts`](../../packages/records-core/src/jobs.ts), lines 215–223), never inside the query's answer.
-- **One addition to Records:** evicting named outputs of a recomputable kind, beside today's oldest-past-the-cap rule. It uses the same transaction, the same refusals and the same reader contract.
+- **No addition to Records' eviction.** The owner ruled that content-keyed outputs go only at their caps (14.48), so the oldest-past-the-cap rule is all that is needed. The check adds one thing to read: whether a cycle still has an undecided human-required unit.
 
-**Asked of the owner**
-
-1. **Citations at the review desk.** 14.45 says the held copy is what citations rest on, through to the desk. A person may give a disposition on the previous cycle after the next cycle has begun. Should a cycle's copies also stay while any of its human-required units still waits for a decision?
-2. **An output no open cycle needs goes at once**, even though a branch cut tomorrow from the same base would have reused it. That is the coordinator's reading of 14.44. Confirm it, or keep such outputs under their cap only.
+**Ruled by the owner, 19 November 2026 (14.48):** a cycle's copies stay while any of its human-required units still waits for a decision; an output no open cycle needs goes only at its byte cap.
 
 **Not verified:** whether the review desk reads the unmasked copies or only what the review stored; the store's eviction triggers themselves (the migration was not read); what the log scan for "named by an event" costs on a large store; whether every tree-keyed kind names its tree as an input that can be selected on.
 
@@ -347,7 +344,7 @@ What a review does today: it reads the agent guide by a declared reader and foll
 
 **Asked of the owner**
 
-1. **What a found document counts for.** A named plan's "Done when" items can become validation requirements. Should a document Neuve found on its own count the same, or only as surrounding context until a person or the request confirms it? The design assumes context only, and that is product meaning the owner has not ruled.
+1. **What a found document counts for.** Ruled on 19 November 2026 (14.49): context only. Its "Done when" items become validation requirements only when a person or the request confirms it.
 2. **A constitution exception, not assumed.** Two shortcuts would find more and both trust names: reading other agents' guide files by their fixed names, and preferring files under conventionally named folders. Neither is in this design. If the owner wants either, it needs an exception to the [neutrality rule](../../CONSTITUTION.md#repository-language-neutrality) of the kind 14.18 and 14.24 are.
 3. **Prose by declared capability.** The keyword index decides which files it reads as prose by a capability that declares path suffixes. The design uses that only to split text into sections, never to decide what is scope. Say if even that use needs a ruling.
 
@@ -403,7 +400,7 @@ Moving, unlike today's export, removes the copy in Records. That amends record 0
 
 1. **The cap's size.** A fixed number, chosen after T1's measurement, as 14.21 chose 1 GiB.
 2. **What each state requires.** What makes a transcript "analysed", what a grade is measured against, and which labels exist are not designed here. Who may grade, and whether an agent may grade a session of its own lane, is product meaning the owner has not ruled.
-3. **Graded but not moved.** The design never lets the cap remove such a session. Confirm, or say the cap wins.
+3. **Graded but not moved.** Ruled on 19 November 2026 (14.50): the cap never removes such a session.
 4. **Review runs.** 14.46 names query and inner-loop sessions. A review run's session dump keeps 30 days and copy-only export. Say if those should follow the same path.
 
 **Not verified:** which stored field tells a transcript capture from any other raw capture; how large the transcripts on this machine are; whether the `neuve.session-dump` format can hold a hook-captured transcript as it is or needs a second kind beside it; whether the labelling code in `packages/evaluation/src/pr-replay` could be reused for grading; what NEU-54's pi session capture adds for sessions run through the coding home (its modules under `packages/harness/src/pi/capture/` were listed, and only `export.ts`'s imports were read).
