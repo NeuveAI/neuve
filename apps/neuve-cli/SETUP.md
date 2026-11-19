@@ -8,7 +8,7 @@ bun run install:cli --prefix ~/.neuve-src
 export PATH="$HOME/.neuve-src/bin:$PATH"
 ```
 
-Keep a from-source copy out of `~/.neuve`, where the one-line installer puts release builds; it refuses a folder that holds a from-source install. Without `--prefix`, `install:cli` writes the machine's shared copy in `~/.local`, which every hook and terminal on the machine runs. That install is guarded: it takes only a clean integration branch such as `main`, after `bun run check` passed on that exact commit, so a half-tested build never replaces the copy other sessions use. Maintainers install that way; a copy in your own prefix skips those guards.
+Keep a from-source copy out of `~/.neuve`, where the one-line installer puts release builds; it refuses a folder that holds a from-source install. Without `--prefix`, `install:cli` writes the machine's shared copy in `~/.local`, which every hook and terminal on the machine runs. That install is guarded: it takes only a clean integration branch such as `main`, after `bun run check` passed on that exact commit, so a half-tested build never replaces the copy other sessions use. A copy in your own prefix skips those guards. The maintainers' own machines run the released copy in `~/.neuve` and bring it up to date with `neuve upgrade`.
 
 Graph's `mise.toml` selects its Go toolchain. `mise run build` is the equivalent configured build when mise is installed. The [root command table](../../docs/development.md#commands) says where `install:cli` puts the copies and what it refuses to replace; rebuilding or testing the workspace does not change them. If its manifest `<prefix>/lib/neuve/install.json` is corrupt or incomplete, remove it, `<prefix>/bin/neuve` and `<prefix>/lib/neuve/entire-graph`, then install again.
 
