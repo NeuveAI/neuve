@@ -104,6 +104,7 @@ describe("the fetch watchdog", () => {
     const gitPath = join(root, "slow-git");
     writeFileSync(gitPath, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
     const controller = new AbortController();
+    const started = performance.now();
     const run = runGit(
       { gitPath, env: {}, signal: controller.signal },
       undefined,
@@ -115,11 +116,11 @@ describe("the fetch watchdog", () => {
       "HEAD",
     ]);
     setTimeout(() => controller.abort(), 50);
-    // The stand-in git sleeps 30 s and exits 0: only a stop makes the read fail.
     await Promise.all([
       run,
       expect(read).rejects.toThrow("git ls-tree failed"),
     ]);
+    expect(performance.now() - started).toBeLessThan(10_000);
   });
 
   test("stops a fetch that starts after its job was interrupted", async () => {
