@@ -21,8 +21,8 @@ node_modules
 
 # Local agent state.
 .codex/
-.claude/worktrees/
-.claude/settings.local.json
+.claude/
+
 
 # Generated logs and coverage; retain the checked-in evidence logs.
 *.log
