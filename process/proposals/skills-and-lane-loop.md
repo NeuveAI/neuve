@@ -1,6 +1,6 @@
 # One loop, one copy of the skills: proposal
 
-Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) leaves open ("moving the reviewer skills in `.agents/skills/` into what the CLI ships, so one copy serves both") and for its direction on scope retrieval. The owner ruled on it on 19 November 2026 ([14.36 to 14.39](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)); the rulings are listed first, below. Nothing here is built yet. The [decisions record](../decisions.md) wins wherever this text differs from it. Product words follow the [vocabulary](../../vocabulary.md); "leads" is the harness's internal word for the search results it stores per hunk ([`leads.ts`](../../packages/harness/src/leads.ts), lines 14–17) and is used here only in that sense.
+Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) leaves open ("moving the reviewer skills in `.agents/skills/` into what the CLI ships, so one copy serves both") and for its direction on scope retrieval. The owner ruled on it on 19 November 2026 ([14.36 to 14.41](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)); the rulings are listed first, below. Nothing here is built yet. The [decisions record](../decisions.md) wins wherever this text differs from it. Product words follow the [vocabulary](../../vocabulary.md); "leads" is the harness's internal word for the search results it stores per hunk ([`leads.ts`](../../packages/harness/src/leads.ts), lines 14–17) and is used here only in that sense.
 
 ## Rulings, 19 November 2026
 
@@ -14,8 +14,10 @@ Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../dec
 | How the reviewer gets the scope | It runs the same command itself and decides what more it needs, as Part 2's step 1 recommends | 14.37 |
 | What the reviewer's guidance must instil | Skepticism, reading first, results against the scope, planted problems to probe tests and validations, and a short loop | 14.38 |
 | What data is kept | Full session transcripts and timings, locally. Nothing is sent; sending will be opt-in, after anonymisation | 14.39 |
+| Which command reads the scope | `neuve query`, which fetches code and scope in parallel. No separate command for documents. Local sources are pre-processed; external ones are attributed and cited | 14.40 |
+| What is prepared in the background | As much as possible, so expensive work is never repeated. Snapshots stay in place and are pruned at the next checkpoint, within what the machine can hold | 14.41 |
 
-Still open: which command reads the scope itself (Part 2, question 2), and what is prepared in the background for the review's readers (Part 2, question 3).
+Still open: which boundary "the next checkpoint" names (14.41 records the coordinator's reading), and the design of scope reading inside `neuve query`, which is to be right from first principles before anything is built. Linear over MCP exists in the harness's scope snapshot and is tested against a fixture server only (14.40).
 
 ## At a glance
 
