@@ -4,7 +4,7 @@ The owner's pi-transition programme in Linear (NEU-50) now coordinates the Ace-s
 
 The [decisions record](decisions.md) sets what is true, and the [architecture records](../architecture/README.md) describe the target. The milestones and follow-ups below are historical correction-effort records. Current transition status lives only in Linear. The [README workspace entrypoint](../docs/development.md#open-the-workspace) documents source launch, storage requirements, and the links to capture and regression commands.
 
-Every milestone ends with something the owner can open and judge, and runs as lanes. Each lane has one implementer and one independent reviewer in separate Codex sessions, following [the review standard](adversarial-review-standard.md). Use Codex only and consult the owner before changing the execution model or platform, as [decision 12.6](decisions.md#area-12-ace-style-pi-transition-28-october-2026) requires. The pi transition uses separate external worktrees with disjoint ownership under the owner's latest direction. The coordinator commits.
+Every milestone ends with something the owner can open and judge, and runs as lanes. Who implements and who reviews a lane is in the [lane rules in `AGENTS.md`](../AGENTS.md#how-agents-build-neuve), which is the one place that names the models; reviews follow [the review standard](adversarial-review-standard.md). Consult the owner before changing the execution model or platform. The pi transition uses separate external worktrees with disjoint ownership under the owner's latest direction. The coordinator commits.
 
 ## Current review execution
 

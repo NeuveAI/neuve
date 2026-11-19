@@ -20,7 +20,7 @@ Lanes and who reviews them follow the [lane rules in `AGENTS.md`](../AGENTS.md#h
 
 The reviewer's brief shares only the task's definition of done and its scope, never the implementer's own account as a premise (7.1).
 
-A Neuve review cycle runs on the same range ([12.54](decisions.md#area-12-ace-style-pi-transition-28-october-2026)). Write your own findings first. Then give each of Neuve's findings and validation requirements a verdict: confirmed, refuted or unverified. The [lane loop](neuve-in-the-loop.md#the-loop) says where its receipt is and how to record the verdicts.
+No Neuve review runs inside the inner loop. Once you approve, you request one Neuve review of the lane's whole range, as the [lane loop](neuve-in-the-loop.md#the-loop) describes ([14.35](decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)). Its findings are information: the requests for changes that hold up start a new cycle, in which the fix comes back to you through the inner loop before the next final review. Say in your report which ones you sent back and why. Don't write a verdict on each finding.
 
 ## Placement and code quality
 
@@ -34,7 +34,7 @@ Code must be in good order (7.11). Check that:
 
 ## Time box
 
-About 30 minutes per review (7.1). Spend it on what could be wrong in ways that matter, not on completeness of ceremony.
+About 30 minutes per review (7.1). Spend it on what could be wrong in ways that matter, not on completeness of ceremony. Read the code and the scope before any account of the work, and plant a problem where that shows whether a test or a validation really catches it ([14.38](decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)). A dragged-out review costs time and metered usage.
 
 ## What blocks
 

@@ -44,4 +44,6 @@ Read the one you need, when you need it:
 | [references/proof.md](references/proof.md) | Recording proof for a range, and saying what makes your session hard |
 | [references/stack.md](references/stack.md) | Reading the pinned sources of the repository's frameworks and dependencies |
 
+**Where a review sits.** Neuve is the final review of finished work, not a check inside the loop that produces it. When a repository works with an implementer and a separate reviewer, those two finish first: the reviewer judges the work and requires corrections on its own. Once it approves, the reviewer requests one Neuve review of the whole range. The implementer doesn't request it, and nobody requests one per correction round.
+
 A typical pass, when the person asks for a review or the repository's instructions say to request one: check the work is committed (ask before committing it yourself), run `neuve review <base>..<head> --detach`, read it with `neuve review show <base>..<head>`, fix what the findings ask with the person's goal in mind, and tell the person which units need their decision.

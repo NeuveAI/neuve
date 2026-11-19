@@ -4,6 +4,7 @@
 
 - Request a review only when the person asks, or when the repository's instructions say to. It runs on the person's model account.
 - The work must be committed: a review reads a commit range, never the working tree, so uncommitted changes are in no review. If it isn't committed, ask the person; commit it yourself only when they ask you to or their instructions say so.
+- Request it once, on the whole of the work to be reviewed. If the work went through an implementer and a separate reviewer, the reviewer requests it after approving, not the implementer, and not once per correction round.
 - Pick the range: `<base>..<head>`, for example `main..HEAD` for a branch, or `HEAD~1..HEAD` for the last commit. Any revisions Git understands work. The same range always holds the same changes, so it names the review.
 - Neuve must be set up in the repository ([setup.md](setup.md)).
 
