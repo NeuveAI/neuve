@@ -1,12 +1,12 @@
 # 0016: Shared work: one run per request, and every caller subscribes
 
-Status: accepted, 7 November 2026. Not built across processes. Source: decisions [10.94 and 12.51](../../process/decisions.md), the shared-work section (section 5) of the [machine budget proposal](../../process/proposals/machine-budget.md), and the local claim of [0002](0002-event-driven-processes.md). This is the only design for work that more than one caller can ask for. **Don't put this choice to the owner again:** they settled it on 21 October and again on 7 November.
+Status: accepted, 7 November 2026. The shared helper is built in `packages/records-core/src/shared-work.ts` and the modules beside it; not every caller named below has moved onto it (checked by search on 19 November 2026). Source: decisions [10.94 and 12.51](../../process/decisions.md), the shared-work section (section 5) of the [machine budget proposal](../../process/proposals/machine-budget.md), and the local claim of [0002](0002-event-driven-processes.md). This is the only design for work that more than one caller can ask for. **Don't put this choice to the owner again:** they settled it on 21 October and again on 7 November.
 
 ## Context
 
 The owner set this rule on 21 October (10.94), and the design was accepted with it. Only the cross-process part was left unbuilt, so each new feature that met the problem solved it again by hand:
 
-- **Five hand-made in-process copies:** `shared` in `packages/harness/src/shared-build.ts`, `sharedTreeIndex` in `packages/harness/src/lookups.ts`, the keys in flight in `packages/records-core/src/computations.ts`, the queue entries in `packages/harness/src/graph-search.ts`, and the `webs` map in `apps/neuve-cli/src/workspace-cli.ts`.
+- **Five hand-made in-process copies:** `shared` in `packages/harness/src/shared-build.ts` (since removed), `sharedTreeIndex` in `packages/harness/src/lookups.ts`, the keys in flight in `packages/records-core/src/computations.ts`, the queue entries in `packages/harness/src/graph-search.ts`, and the `webs` map in `apps/neuve-cli/src/workspace-cli.ts`.
 - **A new cross-process claim for the review desk:** the desk build got its own claim in `apps/neuve-cli/src/workspace-review-build.ts`, made of a symlink, a socket, a SQLite file used as a lock and process-ID checks. It ran through three reviews, and a reviewer then suggested allowing duplicate builds to simplify it. The coordinator put that to the owner as a choice instead of reading 10.94.
 
 Code that doesn't exist can't be reused, and a rule that only lives in one decision row and a proposal isn't found. This record is the one place the rule is written down, and the code it names is the one place it's built.
@@ -38,7 +38,8 @@ A request is identified by its idempotency key: the operation, its version and i
 
 ## Consequences
 
-- **To build:** the budget host's claims and one helper for callers, which covers the in-process map and the cross-process claim together. The five copies and the desk's claim then move onto it. Once it's built, this record names its modules, and nothing else may claim keys.
-- **Until then:** new in-process work uses `shared` in `packages/harness/src/shared-build.ts`, and new cross-process work stops and asks the coordinator before writing a claim.
-- **The review desk:** it keeps its own claim until the helper exists (12.51). Its process-ID checks, its claim per project rather than per key, and its symlink are departures from this record, and they go when it moves onto the helper.
+- **Built:** one helper for callers, in `packages/records-core/src/shared-work.ts`, with its Effect wrapper, host, protocol and socket in the `shared-work-*.ts` modules beside it. New work that more than one caller can ask for uses it, and nothing else may claim keys.
+- **Moved onto it** (a search on 19 November 2026 finds the helper named in each): the keys in flight in `packages/records-core/src/computations.ts`, the queue entries in `packages/harness/src/graph-search.ts`, and the desk build in `apps/neuve-cli/src/workspace-review-build.ts`.
+- **Not found on it by that search:** `sharedTreeIndex` in `packages/harness/src/lookups.ts` and the `webs` map in `apps/neuve-cli/src/workspace-cli.ts`. Whether they still need to move has not been read through.
+- **The review desk:** its build names the helper now. Whether every departure listed here is gone has not been read through: its process-ID checks, its claim per project rather than per key, and its symlink are departures from this record, and any that remain are to be removed.
 - **Reviews:** under the [adversarial review standard](../../process/adversarial-review-standard.md), a change that departs from this record has a second authority, and that blocks.
