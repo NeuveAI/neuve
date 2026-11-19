@@ -1,6 +1,6 @@
 # One loop, one copy of the skills: proposal
 
-Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) leaves open ("moving the reviewer skills in `.agents/skills/` into what the CLI ships, so one copy serves both") and for its direction on scope retrieval. The owner ruled on it on 19 November 2026 ([14.36 to 14.50](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)); the rulings are listed first, below. Nothing here is built yet. The [decisions record](../decisions.md) wins wherever this text differs from it. Product words follow the [vocabulary](../../vocabulary.md); "leads" is the harness's internal word for the search results it stores per hunk ([`leads.ts`](../../packages/harness/src/leads.ts), lines 14–17) and is used here only in that sense.
+Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) leaves open ("moving the reviewer skills in `.agents/skills/` into what the CLI ships, so one copy serves both") and for its direction on scope retrieval. The owner ruled on it on 19 November 2026 ([14.36 to 14.51](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)); the rulings are listed first, below. Nothing here is built yet. The [decisions record](../decisions.md) wins wherever this text differs from it. Product words follow the [vocabulary](../../vocabulary.md); "leads" is the harness's internal word for the search results it stores per hunk ([`leads.ts`](../../packages/harness/src/leads.ts), lines 14–17) and is used here only in that sense.
 
 ## Rulings, 19 November 2026
 
@@ -398,10 +398,17 @@ Moving, unlike today's export, removes the copy in Records. That amends record 0
 
 **Asked of the owner**
 
-1. **The cap's size.** A fixed number, chosen after T1's measurement, as 14.21 chose 1 GiB.
-2. **What each state requires.** What makes a transcript "analysed", what a grade is measured against, and which labels exist are not designed here. Who may grade, and whether an agent may grade a session of its own lane, is product meaning the owner has not ruled.
-3. **Graded but not moved.** Ruled on 19 November 2026 (14.50): the cap never removes such a session.
-4. **Review runs.** 14.46 names query and inner-loop sessions. A review run's session dump keeps 30 days and copy-only export. Say if those should follow the same path.
+Ruled on 19 November 2026 (14.50, 14.51):
+
+| Question | Ruling |
+| --- | --- |
+| The cap's size | 5 GiB per store, fixed. T1's measurement corrects it if it shows otherwise |
+| Analysed | The facts code can derive, attached with no judgement: timings, tokens, tool calls, which Neuve commands ran, how the round ended |
+| Graded | A judgement against the session's scope. Implementer: whether the reviewer approved, and in how many rounds. Reviewer: whether its findings held up later |
+| Labelled | Categorical tags: role, kind of task, outcome, failure mode, dataset split |
+| Who may grade | An agent outside the session's lane. The owner adjudicates disagreements and a sample |
+| Graded but not moved | The cap never removes such a session |
+| Review runs | The same path, once the move works for query and inner-loop sessions. Until then: 30 days and copy-only export |
 
 **Not verified:** which stored field tells a transcript capture from any other raw capture; how large the transcripts on this machine are; whether the `neuve.session-dump` format can hold a hook-captured transcript as it is or needs a second kind beside it; whether the labelling code in `packages/evaluation/src/pr-replay` could be reused for grading; what NEU-54's pi session capture adds for sessions run through the coding home (its modules under `packages/harness/src/pi/capture/` were listed, and only `export.ts`'s imports were read).
 
