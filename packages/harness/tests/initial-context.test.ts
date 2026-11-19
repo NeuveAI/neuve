@@ -1249,8 +1249,8 @@ test("twenty thousand files render with work in proportion to the range", () => 
   expect(small.reads).toBeGreaterThan(5000);
   // Linear work is exactly 4 times; the margin allows a few reads that do not scale.
   expect(large.reads / small.reads).toBeLessThan(4.1);
-  expect(
-    large.result.counts.filesNamed + large.result.counts.filesFolded,
-  ).toBe(20000);
+  expect(large.result.counts.filesNamed + large.result.counts.filesFolded).toBe(
+    20000,
+  );
   expect(large.result.text.length).toBeLessThanOrEqual(50000);
 }, 15000);
