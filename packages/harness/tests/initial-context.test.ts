@@ -1209,29 +1209,48 @@ test("titles are bounded, lines are sanitised and missing commit file lists are 
   expect(odd.text.isWellFormed()).toBe(true);
 });
 
-// Why: one hostile range must not monopolize the finder event loop. The bound is on the render's
-// own CPU time: wall time also counts the time this process waits for a CPU behind other work (on
-// a two-CPU runner with four test shards, about six times the Mac's 1.3 s), which says nothing
-// about the render's cost; a super-linear rollup still shows in its CPU time.
-test("twenty thousand files render within a generous local bound", () => {
-  const range = hunksOf(
-    Array.from({ length: 20000 }, (_, i) =>
-      textHunk({
-        id: `h${i}`,
-        path: `packages/p${i % 50}/src/d${i % 100}/e${i % 1000}/f${i}.ts`,
-        lines: ["+x"],
-      }),
-    ),
-  );
-  const cs = Array.from({ length: 10000 }, (_, i) => ({
-    oid: i.toString(16).padStart(40, "0"),
-    subject: `change ${i}`,
-    body: "",
-  }));
-  const start = process.cpuUsage();
-  const result = renderOpening({ frame, hunks: range, commits: cs });
-  const spent = process.cpuUsage(start);
-  expect((spent.user + spent.system) / 1000).toBeLessThan(5000);
-  expect(result.counts.filesNamed + result.counts.filesFolded).toBe(20000);
-  expect(result.text.length).toBeLessThanOrEqual(50000);
+// Why: one hostile range must not monopolize the finder event loop. Elapsed and CPU time depend on
+// the machine and its load, so the check is on work, which does not: every property the render reads
+// from a hunk is counted, and four times the files must cost four times the reads. A pass over the
+// hunks inside the index's fit loop or its folder rollup multiplies the reads and fails here. Work
+// the render does on its own file rows (the folder rollup copies them) is not visible from outside.
+test("twenty thousand files render with work in proportion to the range", () => {
+  const measure = (count: number) => {
+    let reads = 0;
+    const range = hunksOf(
+      Array.from(
+        { length: count },
+        (_, i) =>
+          new Proxy(
+            textHunk({
+              id: `h${i}`,
+              path: `packages/p${i % 50}/src/d${i % 100}/e${i % 1000}/f${i}.ts`,
+              lines: ["+x"],
+            }),
+            {
+              get: (target, key, receiver) => {
+                reads++;
+                return Reflect.get(target, key, receiver);
+              },
+            },
+          ),
+      ),
+    );
+    const cs = Array.from({ length: count / 2 }, (_, i) => ({
+      oid: i.toString(16).padStart(40, "0"),
+      subject: `change ${i}`,
+      body: "",
+    }));
+    const result = renderOpening({ frame, hunks: range, commits: cs });
+    return { reads, result };
+  };
+  const small = measure(5000);
+  const large = measure(20000);
+  expect(small.reads).toBeGreaterThan(5000);
+  // Linear work is exactly 4 times; the margin allows a few reads that do not scale.
+  expect(large.reads / small.reads).toBeLessThan(4.1);
+  expect(
+    large.result.counts.filesNamed + large.result.counts.filesFolded,
+  ).toBe(20000);
+  expect(large.result.text.length).toBeLessThanOrEqual(50000);
 }, 15000);
