@@ -30,7 +30,7 @@ Worth keeping as ideas: append-only triggers (`packages/verification-ledger/src/
 | C1 | `AGENTS.md`: never add agent attribution trailers to commits in this repository or the graph submodule | A `Neuve-Session` trailer in user repositories, opt-in, never in this repository | 6 |
 | C2 | [0004](../../architecture/decisions/0004-persistence-and-range-immutability.md) and 5.5: fix the lease so it stays valid while owner and fence are unchanged | Remove time leases altogether | 5 |
 | C3 | [0001](../../architecture/decisions/0001-layers-and-responsibilities.md), [0002](../../architecture/decisions/0002-event-driven-processes.md) and the README flow "CLI → Records": Records as a layer with its own process boundary; 1.7: an event-driven web app | Records as a library inside the CLI, MCP, worker and BFF processes, with migrations and projectors running there and the BFF polling a sequence number | 1 |
-| C4 | [Plan](../plan.md): MCP moves to stdio in M3 | Add a stdio MCP server in M2, keep SSE until M3 | 8 |
+| C4 | Plan: MCP moves to stdio in M3 | Add a stdio MCP server in M2, keep SSE until M3 | 8 |
 | C5 | Plan: EVE and its patch leave in M3; "Start a review" is fixed in M5 | Deleting the old packages in M2 also removes EVE, "Start a review" and the old review commands now | 10 |
 | C6 | 5.6: git refs or a `.neuve` folder | A third place, `.git/neuve/`; durable records die with the clone until a mirror exists | 4 |
 | C7 | 5.5: the prepared package is transient | A small durable manifest of hashes per published package | 2 |
@@ -332,7 +332,7 @@ Each slice runs as one implementer and one independent reviewer. The new package
 | S5 | **Computations, blobs, transcripts.** Keys, attempts, inline and file blobs, `transcript.capture`, `turn.summarized` | `neuve records stats` after a day of dogfooding: transcripts as referenced blobs, token totals per agent, database size | S3, S4 |
 | S6 | **Retention and vent.** Pruner with tombstones; `neuve vent`, `neuve vents`; the stdio MCP server with `vent` | `neuve records prune --dry-run` output; lane agents' vents in `neuve vents` with the one-per-turn limit visible | S5 |
 
-Milestone exit ([plan](../plan.md)): after a week of dogfooding, `stats` shows the database growing with the number of events and no table holding state copies; `rebuild --verify` matches; `neuve agents` lists this repository's agents with aliases.
+Milestone exit (plan): after a week of dogfooding, `stats` shows the database growing with the number of events and no table holding state copies; `rebuild --verify` matches; `neuve agents` lists this repository's agents with aliases.
 
 ## 12. Decision list for the owner
 

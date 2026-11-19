@@ -2,7 +2,7 @@
 
 Historical proposal. Its review-stage graph and budgets are superseded by the [fixed-shape pipeline record](../../architecture/decisions/0005-harness-pipeline.md), which describes the NEU-111 trial. The [owner's decisions](../decisions.md) remain authoritative for accepted product meaning and the other topics below.
 
-Status: accepted on 17 October 2026 with [rulings 9.1–9.32](../decisions.md#area-9-benchmark-m4-17-october-2026), which change some recommendations below; where they differ, the rulings win. This file is the design record behind them, revised the same day after an independent fact-check. The [decision list](#8-decision-list-for-the-owner) at the end collects the choices the owner ruled on. It serves [decision 3.3](../decisions.md), "benchmark before committing to a strategy", and the pass 1 measurement in [decision 3.7](../decisions.md). The [living plan](../plan.md) names this benchmark as M4's first deliverable.
+Status: accepted on 17 October 2026 with [rulings 9.1–9.32](../decisions.md#area-9-benchmark-m4-17-october-2026), which change some recommendations below; where they differ, the rulings win. This file is the design record behind them, revised the same day after an independent fact-check. The [decision list](#8-decision-list-for-the-owner) at the end collects the choices the owner ruled on. It serves [decision 3.3](../decisions.md), "benchmark before committing to a strategy", and the pass 1 measurement in [decision 3.7](../decisions.md). The living plan names this benchmark as M4's first deliverable.
 
 Terms follow the [product vocabulary](../../vocabulary.md). **Surrounding context** is the supporting information used to assess a review unit ([vocabulary](../../vocabulary.md), line 16). A **contextual marker** is a retrieved piece of it, smaller than its source and traceable to it, linked per hunk (line 19). Markers appear in the **context margin** beside the diff (line 93). **Same-batch context** is work inside the selected range; work outside it carries its own review status ([decision 4.12](../decisions.md), line 78).
 
@@ -86,7 +86,7 @@ The benchmark answers two questions.
 - review findings, dispositions, lanes and digests;
 - the context-reference contract;
 - the correctness of structural operations;
-- Pass 2 sources: prior Records, git history and static analysis. They are designed here and run in M6, per the [plan](../plan.md), line 21.
+- Pass 2 sources: prior Records, git history and static analysis. They are designed here and run in M6, per the plan, line 21.
 
 A structural reference line, Graph `neighbors` at depth 1 from the changed symbols, is reported but is not a candidate.
 
@@ -428,7 +428,7 @@ Guard: in every comparison, the non-default arm's wrong-attribution share, read 
 
 ### Where results live
 
-The computation store and Records rebuild are M2 and have not started ([plan](../plan.md), line 17).
+The computation store and Records rebuild are M2 and have not started (plan, line 17).
 
 | Option | Notes |
 | --- | --- |

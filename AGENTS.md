@@ -8,7 +8,6 @@ Read these before product or architecture work:
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | [Design decisions](process/decisions.md)   | The owner's decisions from 16 October 2026. They override older text                                               |
 | [Architecture](architecture/README.md)     | The six layers and the architecture records that follow from the decisions                                         |
-| [Living plan](process/plan.md)             | Current milestones and lanes                                                                                       |
 | [Product vocabulary](vocabulary.md)        | Shared terms. Use them consistently. Never change it without the owner's explicit approval, and never invent terms |
 | [Foundations](foundations/)                | Product meaning that the decisions did not change                                                                  |
 | [Repository constitution](CONSTITUTION.md) | Its contextual-linkage rule: every link says what it refers to and why it matters                                  |
@@ -30,10 +29,10 @@ These rules come from [Area 7 of the design decisions](process/decisions.md#area
 - **Tests** (7.3): only when needed, with a stated reason. A test is never approval. Good tests verify the right things at the right boundaries, including error and input handling (11.2).
 - **Check.** Run `bun run check` ([what it runs](docs/development.md#commands)) before review; a pass is not approval.
 - **Dogfooding** (7.6, [12.54](process/decisions.md#area-12-ace-style-pi-transition-28-october-2026), amended by [14.35](process/decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)): every lane uses Neuve the way the [shipped `neuve` skill](apps/neuve-cli/skills/neuve/SKILL.md) tells its users to, and we gather telemetry and other data on those commands. In the inner loop the implementer opens with Neuve's scope retrieval and the reviewer works with Git and that same scope; no `neuve review` runs there. Once the reviewer approves, it requests one Neuve review of the lane's whole range, and the owner gets the desk link when there are human-required units. The coordinator never starts a review or copies its output. The [lane loop](process/neuve-in-the-loop.md) gives the steps.
-- **Scope** (7.12, 7.13): each workstream's scope lives once, in Linear; Linear upkeep runs in its own chat.
+- **Scope** (7.12, 7.13, 14.42, 14.43): each workstream's scope lives once, in Linear; its plan lives there too, and no plan is committed to the repository (14.43). Each workstream keeps its own Linear scope current, in a session of its own; there is no central Linear chat (14.42).
 - **Approval** comes only from review, never from ticket status, passing checks or transport completion.
 - **Damaged Git repositories.** A tight `add`/`commit`/`status` loop with plain Git and no Neuve code damaged scratch repositories on the Mac, with the cause not found. We don't act on it until it reaches real work. If `git fsck` reports missing trees or invalid reflog entries in a real repository, or agents start committing several times a second, keep the damaged copy and tell the owner.
-- **Scratchpads** are transient. Move accepted requirements into the decisions record, an architecture record or the workstream's Linear scope (7.12).
+- **Scratchpads** are transient: they belong to a session and are never committed (14.43). Move accepted requirements into the decisions record, an architecture record or the workstream's Linear scope (7.12).
 
 For UI work, use Interface Craft and preserve the existing design. Make focused corrections; no broad redesign is requested.
 

@@ -35,4 +35,4 @@ Users can begin working while background pre-population is still running. Neuve 
 - How do users actively add or refresh material, especially information outside the repository?
 - How are changes, deletions, and superseded planning decisions reflected in later retrieval?
 
-The [living plan](../process/plan.md) schedules the event queue, on-demand worker and launchd backstop as part of rebuilding Records.
+The Records rebuild's scope schedules the event queue, on-demand worker and launchd backstop as part of rebuilding Records.
