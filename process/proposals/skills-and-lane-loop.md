@@ -1,6 +1,6 @@
 # One loop, one copy of the skills: proposal
 
-Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) leaves open ("moving the reviewer skills in `.agents/skills/` into what the CLI ships, so one copy serves both") and for its direction on scope retrieval. The owner ruled on it on 19 November 2026 ([14.36 to 14.41](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)); the rulings are listed first, below. Nothing here is built yet. The [decisions record](../decisions.md) wins wherever this text differs from it. Product words follow the [vocabulary](../../vocabulary.md); "leads" is the harness's internal word for the search results it stores per hunk ([`leads.ts`](../../packages/harness/src/leads.ts), lines 14–17) and is used here only in that sense.
+Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) leaves open ("moving the reviewer skills in `.agents/skills/` into what the CLI ships, so one copy serves both") and for its direction on scope retrieval. The owner ruled on it on 19 November 2026 ([14.36 to 14.47](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)); the rulings are listed first, below. Nothing here is built yet. The [decisions record](../decisions.md) wins wherever this text differs from it. Product words follow the [vocabulary](../../vocabulary.md); "leads" is the harness's internal word for the search results it stores per hunk ([`leads.ts`](../../packages/harness/src/leads.ts), lines 14–17) and is used here only in that sense.
 
 ## Rulings, 19 November 2026
 
@@ -17,7 +17,7 @@ Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../dec
 | Which command reads the scope | `neuve query`, which fetches code and scope in parallel. No separate command for documents. Local sources are pre-processed; external ones are attributed and cited | 14.40 |
 | What is prepared in the background | As much as possible, so expensive work is never repeated. Snapshots stay in place and are pruned at the start of the next cycle, within what the machine can hold | 14.41 |
 
-The pruning boundary of 14.41 is the start of the next review cycle, confirmed by the owner on 19 November. The design that follows these rulings is [Part 2: design](#part-2-design), which is still for the owner to rule on and ends with its own open questions. Linear over MCP exists in the harness's scope snapshot and is tested against fixture servers only (14.40).
+The pruning boundary of 14.41 is the start of the next review cycle, confirmed by the owner on 19 November. The design that follows these rulings is [Part 2: design](#part-2-design), whose open questions the owner ruled on the same day (14.44 to 14.47); what is still to design is listed at its end. Linear over MCP exists in the harness's scope snapshot and is tested against fixture servers only (14.40).
 
 ## At a glance
 
@@ -231,7 +231,7 @@ The opening event enqueues jobs in its own append transaction, as every event do
 | The base's Graph relations | As `commitRelations` stores them | The computation a review's relations task reads ([`commit-prepare.ts`](../../packages/harness/src/commit-prepare.ts), lines 86–88 and 412) | Existing computation, new trigger |
 | The base's Graph snapshot | The repository and revision | Already made by the query itself in the shared Graph cache ([`graph-query.ts`](../../apps/neuve-cli/src/graph-query.ts), lines 635–638) | Nothing to add |
 | The query's own answer for the code | Revision, question, limits, relationship plan and the engine's identity | Nothing today: the answer is unrecorded (lines 597–600) | New. The reviewer's same command then reads it or subscribes |
-| Searches of the base from each scope section's text | Section hash, base tree and retriever recipe, shaped like a hunk's leads ([`leads.ts`](../../packages/harness/src/leads.ts), lines 69–85) | The retrievers `commit.prepare` uses | New, and last (slice 8) |
+| Searches of the base from each scope section's text | Section hash, base tree and retriever recipe, shaped like a hunk's leads ([`leads.ts`](../../packages/harness/src/leads.ts), lines 69–85) | The retrievers `commit.prepare` uses | New (slice 8); ruled in by 14.47 |
 
 - **Per commit, nothing changes.** `commit.prepare` keeps preparing hunks, chunks and leads as commits land ([`commit-prepare.ts`](../../packages/harness/src/commit-prepare.ts), lines 70–88).
 - **No model work.** The rulings ask that expensive computations not be repeated (14.41); none asks for model work in the background, and `commit.prepare` has none (line 72).
@@ -246,7 +246,7 @@ The opening event enqueues jobs in its own append transaction, as every event do
 | Unmasked text of tickets and uncommitted files | The cycle's scope folder | 10.79, 14.41 | At the pruning boundary. The 7-day idle sweep stays as the backstop for a cycle no one continues ([`scope.ts`](../../packages/harness/src/scope.ts), lines 964–973 and 1023–1024) |
 | Masked raw captures of fetched text | Blobs | 8.10 | 30 days, unchanged ([`retention.ts`](../../packages/records-core/src/retention.ts), line 26) |
 | The scope snapshot's record: sources, pins, section index | A stored computation | 8.10: an output the pipeline reuses | Kept. It holds no ticket text (`scope.ts`, line 79) |
-| Indexes, relations, stored query answers, scope-section searches | Stored computations keyed by content | 14.21: each kind is declared recomputable with a byte cap, and Records evicts the oldest past it ([`evictable.ts`](../../packages/records-core/src/evictable.ts), lines 7–13 and 186) | Under their caps, never at the boundary. A new cycle on the same base reuses them |
+| Indexes, relations, stored query answers, scope-section searches | Stored computations keyed by content | 14.21: each kind is declared recomputable with a byte cap, and Records evicts the oldest past it ([`evictable.ts`](../../packages/records-core/src/evictable.ts), lines 7–13 and 186) | At the boundary when the pruning check shows no open cycle can still reuse them (14.44); otherwise under their caps. A new cycle on the same base reuses them |
 | The base's Graph snapshot | The machine's shared Graph cache | Its own cache rules | Unchanged |
 
 **The pruning boundary is one named function.** The owner confirmed on 19 November 2026 that "the next checkpoint" of 14.41 is the start of the next review cycle: not the cycle's end, not each commit, not the merge. The design puts the boundary where section 2 decides the next cycle opens, and nowhere else. `deleteCycleScope` already exists for it and already expects a second caller ([`scope.ts`](../../packages/harness/src/scope.ts), lines 967–973).
@@ -274,16 +274,24 @@ Each slice is one implementer and one reviewer. Slices 1 to 5 run in order; 6 an
 | 4 | **Local scope in the answer.** Committed documents and named uncommitted files, with citations, in parallel with the code | The answer and the stream carry each source with its citation; an uncommitted file is hashed and copied into the cycle's folder; a missing path is a gap in the answer and the code still arrives; the skill's reference teaches it and `skill-drift.test.ts` passes |
 | 5 | **Tickets in the answer.** A named key, or one found in the branch or a local source, through the configured server; the change note against the previous cycle | Against the fixture server: pin, masked capture and gap cases pass, and a changed ticket is reported as changed in the next cycle. Against the real Linear: one recorded capture, run by the owner's sign-in |
 | 6 | **Base preparation.** The background job for the base tree's index and relations, and the stored code answer | After a first read, a review of that base finds each stored and computes none again; a query and the job asking at once make one run per key; the job stays inside its grant |
-| 7 | **The pruning boundary.** `deleteCycleScope` called from slice 2's function; new kinds declared recomputable with caps | Opening the next cycle removes the previous cycle's unmasked copies and nothing else; the snapshot record and the content-keyed outputs remain; the 7-day sweep still runs |
-| 8 | **Scope-section searches.** Stored searches from scope text, and whether the review's readers receive them | Open (below). To be measured before it is adopted |
+| 7 | **The pruning boundary.** `deleteCycleScope` and the pruning check (14.44) called from slice 2's function; new kinds declared recomputable with caps | Opening the next cycle removes the previous cycle's unmasked copies, and each content-keyed output the check shows no open cycle can reuse; nothing an open cycle still needs is removed; the snapshot record remains; the 7-day sweep still runs |
+| 8 | **Scope-section searches.** Stored searches from scope text, given to the review's readers (14.47) | A review of a cycle whose scope has sections finds a stored search per section and its readers receive them; a query and the job asking at once make one run per key |
 
-### Open, for the owner
+### Ruled by the owner, 19 November 2026
 
-1. **What goes at the pruning boundary.** The boundary itself is settled (14.41): the start of the next review cycle. Section 4 removes what belongs to the previous cycle alone, its unmasked scope copies, and keeps the content-keyed outputs under their caps, because the next cycle on the same base reuses them and 14.41 also says expensive work is never repeated. If the owner means those outputs go at the boundary too, section 4's fifth row changes.
-2. **Uncommitted files.** 14.37 names agents' scratchpads as scope. The harness's own rule is that it reads Git objects only and never an untracked file. This design reads one only when the request names it, hashes it and reviews from the kept copy. Is that the intended exception?
-3. **Transcripts.** 14.39 keeps full session transcripts locally for datasets. 8.10 expires raw captures, transcripts among them, after 30 days. Which holds for the query's and the inner loop's sessions?
-4. **Scope-section searches.** Whether the review's readers should be given code found from scope text (slice 8) changes what the harness reads. Not ruled.
-5. **Which sources are read without being named.** The design reads the agent guide and what it links, as a review does, and otherwise only what the request names or what those texts name. Whether Neuve should look further on its own, for example for a plan beside the code, is not ruled.
+| Question | Ruling | Row |
+| --- | --- | --- |
+| What goes at the pruning boundary | Whatever can or should be pruned, decided by a check that nothing still needs it. Not a fixed list. This replaces section 4's "never at the boundary" for content-keyed outputs: one goes when no open cycle can still reuse it, and otherwise stays under its cap | 14.44 |
+| Uncommitted files | Read only when the request names them, as designed. A copy of every external source is held as part of the scope and is what citations rest on, through the review to the review desk, which links out to the source where that fits. External means an integration such as Linear over MCP, and nothing else for now | 14.45 |
+| Transcripts | Kept locally under a size cap, not expired at 30 days. A transcript joins a dataset only after it is analysed, graded and labelled, and can then be moved there | 14.46 |
+| Scope-section searches | Yes: the review's readers receive them. Slice 8 is part of the work | 14.47 |
+| Sources nobody named | Yes: Neuve also looks for scope on its own, beyond the agent guide and what it links | 14.47 |
+
+### Still to design
+
+- **The pruning check** (14.44): what it reads to decide that nothing still needs a kept thing. Designed with slice 7.
+- **Finding scope nobody named** (14.47): how Neuve recognises such a document without trusting file names or extension lists, which the constitution's neutrality rule forbids.
+- **Transcripts** (14.46): the cap's size, and how analysing, grading, labelling and the move into a dataset work. Not part of these slices.
 
 ### Not verified
 
