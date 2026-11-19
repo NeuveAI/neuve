@@ -16,7 +16,9 @@ The decisions override older text. The architecture records describe how the sys
 
 ## Communicating with the owner
 
-Explanations for the owner follow the [show-don't-tell principle](foundations/10-show-dont-tell.md), which sets when to render a visual and keeps agent handovers, briefs and records short and plain (7.5). Use the [Explain from first principles skill](.agents/skills/explain-from-first-principles/SKILL.md) when the owner must judge a finding or a deeper change.
+Explanations for the owner follow the [show-don't-tell principle](foundations/10-show-dont-tell.md), which sets when to render a visual and keeps agent handovers, briefs and records short and plain (7.5). Use the [Explain from first principles skill](.agents/skills/explain-from-first-principles/SKILL.md) when the owner must judge a finding or a deeper change. Never communicate to a human using ids or list numbers (e.g.: A31 or 5.3). Always bring the conversation to a prodcut or engineering term, and always think and produce work using 'read first' and good design patterns. Building and maintaining code should always be product first at its core and following good first principles.
+
+Any change to the code base should be followed by a consideration of what it replaces or what could be consolidated into, a good change will introduce few lines, a great change will remove more than it introduces.
 
 ## How agents build Neuve
 
