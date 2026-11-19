@@ -70,7 +70,7 @@ Part 1 moves the reviewer's guidance into the one shipped skill. Part 2 makes th
 | `skill-drift.test.ts` | The fixed reference list grows by four. One new check: no shipped file holds a link that leaves the skill folder. The "Worked example" and "shows a command" rules either get met by each new reference or are narrowed to the command references; that is the implementer's call |
 | `skills-cli.test.ts` | No change |
 | The shipped `SKILL.md` | Its description, "When not to load it" and reference table gain the reviewer's case, so an agent asked to review an implementer's work loads it |
-| Our own process documents | The review standard, the lane loop and `AGENTS.md` link to the shipped references. A change to the reviewer's guidance reaches lanes when the coordinator reinstalls, as a CLI change does ([lane loop](../neuve-in-the-loop.md), lines 29–31) |
+| Our own process documents | The review standard, the lane loop and `AGENTS.md` link to the shipped references. A change to the reviewer's guidance reaches lanes with the next release, through `neuve upgrade`, as a CLI change does ([lane loop](../neuve-in-the-loop.md#which-neuve-runs)) |
 | The harness prompts (11.7) | Nothing breaks, because nothing reads the files today. When that part of 11.7 is built, the harness inlines the shipped references and the two internal skills at build time. This proposal doesn't build it |
 
 **Amends 11.7**, whose row says the skills "live in `.agents/skills/` as the single authority".
