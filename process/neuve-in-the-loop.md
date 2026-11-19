@@ -28,7 +28,7 @@ The per-round capture folders, impact records and ledger of 9 to 14 November are
 
 Lanes run the released `neuve`, installed and upgraded through the official channel: the release's install script puts it in `~/.neuve`, and `neuve upgrade` brings it to the latest release. Lanes never use a source checkout or a lane's own build: the build doing the review must not be the code under review, and its worker must not depend on a worktree that keeps changing.
 
-So a change to Neuve, the shipped skill included, reaches the lanes with the next release, not with a merge to main. The copy `bun run install:cli` builds from source into `~/.local` is no longer what lanes run, and `bun run check:installed` reports on that source-built copy only: with none installed it says so, which is not a failure.
+So a change to Neuve, the shipped skill included, reaches the lanes with the next release, not with a merge to main. The copy `bun run install:cli` builds from source into `~/.local` is no longer what lanes run, and `bun run check:installed`, which reports on that source-built copy only, is no longer part of `bun run check`.
 
 A review runs on whichever worker is already up for the store. `neuve review` hands its job to that worker, and `bun workspace` from the LaCie checkout starts one from source. Neither the run log nor the receipt names the worker's build yet.
 
