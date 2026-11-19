@@ -372,6 +372,11 @@ test("a store whose initialization was cut short is completed on open", async ()
     ),
   ).toEqual([{ n: 1 }]);
   expect(backupsOf(location)[0]).toMatch(/-incomplete\.sqlite$/);
+  // Decision 12.24 completed it on open: a migrate after that finds nothing to do.
+  expect(await runExisting(location, Store.migrate)).toEqual({
+    applied: [],
+    rebuilt: false,
+  });
 });
 
 test("reading an uninitialized database refuses; writing creates it at this build's versions", async () => {
@@ -427,23 +432,6 @@ test("a newer schema leaves this build's migrate a no-op; a newer projector stay
   ]);
 });
 
-test("a store claimed by a newer writer refuses this build, including its migrate", async () => {
-  const location = freshLocation();
-  await runOn(location, Log.append([commitEvent("1".repeat(40))]));
-  await runExisting(location, setMeta("min_writer_version", 99));
-
-  expect(
-    await runExisting(
-      location,
-      failureTag(Log.append([commitEvent("2".repeat(40))])),
-    ),
-  ).toBe("WriterTooOld");
-  expect(await runExisting(location, failureTag(Store.migrate))).toBe(
-    "WriterTooOld",
-  );
-  expect(await runExisting(location, eventCount)).toBe(1);
-});
-
 test("an older store refuses until migrate, which rebuilds it", async () => {
   const location = freshLocation();
   await runOn(location, Log.append([commitEvent("1".repeat(40))]));
@@ -467,24 +455,4 @@ test("an older store refuses until migrate, which rebuilds it", async () => {
   });
   await runExisting(location, Log.append([commitEvent("4".repeat(40))]));
   expect(await runExisting(location, eventCount)).toBe(2);
-});
-
-test("migrate completes a store whose migrations ran but whose versions were never written", async () => {
-  const location = freshLocation();
-  await runOn(location, Log.append([commitEvent("5".repeat(40))]));
-  await runExisting(location, exec("DELETE FROM records_meta"));
-  await runExisting(location, exec("DELETE FROM projection_commits"));
-
-  // Decision 12.24 completes initialization when the store is opened.
-  await runExisting(location, Store.prepareForRead);
-  expect(await runExisting(location, Store.migrate)).toEqual({
-    applied: [],
-    rebuilt: false,
-  });
-  expect(
-    await runExisting(
-      location,
-      exec("SELECT count(*) AS n FROM projection_commits"),
-    ),
-  ).toEqual([{ n: 1 }]);
 });

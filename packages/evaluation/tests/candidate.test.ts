@@ -440,8 +440,10 @@ const writeSample = () => {
   return path;
 };
 
-for (const run of ["candidate-1", "candidate-10", "candidate-123"]) {
-  test(`${run} uses its treatment for capture and labels`, () => {
+// One test for the three name lengths: a one-digit, a two-digit and a three-digit candidate.
+test("a candidate of any number uses its treatment for capture and labels", () => {
+  for (const run of ["candidate-1", "candidate-10", "candidate-123"]) {
+    delete process.env["NEUVE_TREATMENT_ROOT"];
     const directory = caseDir(7);
     expect(runFolder(directory, "cloud-2")).toBe(
       join(directory, "run", "cloud-2"),
@@ -471,8 +473,8 @@ for (const run of ["candidate-1", "candidate-10", "candidate-123"]) {
     expect(treatmentWrite(join(treatment, "cases"))).toBe(
       join(treatment, "cases"),
     );
-  });
-}
+  }
+});
 
 test("with a treatment set, the replay CLI runs only a candidate's labelling", () => {
   const cli = (...args: Array<string>) =>

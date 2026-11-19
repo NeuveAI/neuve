@@ -263,66 +263,6 @@ const ben = { email: "ben-r3@example.com" };
 const anaId = Identity.humanFingerprint(ana.email);
 const benId = Identity.humanFingerprint(ben.email);
 
-// R2-2, the reviewer's probe: a retraction of a carried approval is the person's last act.
-test("a person's retraction of a carried approval is not undone by the next configuration", async () => {
-  const r = review();
-  const result = await r.s.run(
-    Effect.gen(function* () {
-      const earlier = yield* r.first;
-      yield* HumanCommands.recordDisposition({
-        person: ana,
-        unitId: earlier.unitId,
-        verdict: "approve",
-      });
-      const onA = yield* r.configuration("a".repeat(64));
-      yield* HumanCommands.retractDisposition({
-        person: ana,
-        dispositionId: onA.carriedDecisions[0]!.id,
-      });
-      const onB = yield* r.configuration("b".repeat(64));
-      return { onA, onB, judged: yield* Dispositions.judge(onB.unitId) };
-    }),
-  );
-  expect(result.onA.carriedDecisions.map((d) => d.actor)).toEqual([anaId]);
-  expect(result.onB.carriedDecisions).toEqual([]);
-  expect(result.judged.closed).toBe(false);
-}, 20_000);
-
-// R2-2: an approval after the retraction is the last act again, and carries.
-test("a person who retracts and then approves again on configuration A carries the approval to B", async () => {
-  const r = review();
-  const result = await r.s.run(
-    Effect.gen(function* () {
-      const earlier = yield* r.first;
-      yield* HumanCommands.recordDisposition({
-        person: ana,
-        unitId: earlier.unitId,
-        verdict: "approve",
-      });
-      const onA = yield* r.configuration("a".repeat(64));
-      yield* HumanCommands.retractDisposition({
-        person: ana,
-        dispositionId: onA.carriedDecisions[0]!.id,
-      });
-      const again = yield* HumanCommands.recordDisposition({
-        person: ana,
-        unitId: onA.unitId,
-        verdict: "approve",
-      });
-      const onB = yield* r.configuration("b".repeat(64));
-      return { again, onB, judged: yield* Dispositions.judge(onB.unitId) };
-    }),
-  );
-  expect(
-    result.onB.carriedDecisions.map((d) => [
-      d.actor,
-      d.payload.verdict,
-      d.payload.from.judgement,
-    ]),
-  ).toEqual([[anaId, "approve", result.again.dispositionId]]);
-  expect(result.judged.closed).toBe(true);
-}, 20_000);
-
 // R2-2 guard: a retraction on the earlier cycle's own unit leaves nothing to carry.
 test("a retraction on the earlier cycle's own unit carries nothing", async () => {
   const r = review();

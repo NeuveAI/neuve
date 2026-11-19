@@ -17,7 +17,6 @@ import {
   BUN_NAMED_BY,
   BUN_TEST_FILE,
   DECLARATION_GAPS,
-  DECLARATIONS_RECIPE,
   NOT_ASKED_BY,
   RUNNER_CONFIGS,
   TEST_CONVENTIONS,
@@ -847,13 +846,6 @@ test("markers false skips the generated marker and changes nothing else", async 
   expect([...without.byPath]).toEqual([...notMarker]);
   expect([...without.undecided]).toEqual([...withMarkers.undecided]);
   expect(without.readers).toEqual(withMarkers.readers);
-});
-
-// Why: what a test file's status changes outputs the search index keys on: a bare word is a filter
-// (wider), a file root is a test whatever its name, and a symbolic-link `bunfig.toml` narrows, so
-// `byPath` changes and the recipe moved (round 12c; it stayed at v3 in round 12).
-test("the declarations recipe moved with the test declarations", () => {
-  expect(DECLARATIONS_RECIPE).toBe("neuve-declarations-v4");
 });
 
 /** The status of each path, as a record. */

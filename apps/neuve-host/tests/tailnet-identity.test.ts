@@ -3,6 +3,9 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// Why: catalog.ts reads identity() at module load, so output from `tailscale status --json`
+// that isn't JSON (Tailscale just after a restart exits 0 with plain text) crashed every command
+// that loads it, help included. Unreadable output must read as no Tailscale.
 const modulePath = new URL("../src/tailnet.ts", import.meta.url).href;
 
 for (const [name, output] of [

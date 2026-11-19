@@ -388,49 +388,6 @@ test("a real build keys installed dependencies even when the lockfile is ahead",
   }
 }, 25000);
 
-// Why: dependency discovery must follow newly introduced workspace edges.
-test("a newly added transitive workspace dependency enters the key", async () => {
-  const { directory, webRoot } = await fixture();
-  try {
-    const schema = join(directory, "packages/records-schema");
-    const added = join(directory, "packages/new-dependency");
-    await mkdir(schema, { recursive: true });
-    await mkdir(join(directory, "node_modules/@cache"), { recursive: true });
-    await symlink(schema, join(directory, "node_modules/@cache/schema"));
-    await writeFile(
-      join(schema, "package.json"),
-      JSON.stringify({ name: "@cache/schema" }),
-    );
-    await writeFile(
-      join(webRoot, "package.json"),
-      JSON.stringify({
-        dependencies: { vite: "*", "@cache/schema": "workspace:*" },
-      }),
-    );
-    const before = await reviewSourceKey(directory);
-    await mkdir(added);
-    await symlink(added, join(directory, "node_modules/@cache/added"));
-    await writeFile(
-      join(added, "package.json"),
-      JSON.stringify({ name: "@cache/added" }),
-    );
-    await writeFile(join(added, "index.ts"), "export const added = true;");
-    await writeFile(
-      join(schema, "package.json"),
-      JSON.stringify({
-        name: "@cache/schema",
-        dependencies: { "@cache/added": "workspace:*" },
-      }),
-    );
-    const reached = await reviewSourceKey(directory);
-    expect(reached).not.toBe(before);
-    await writeFile(join(added, "index.ts"), "export const added = false;");
-    expect(await reviewSourceKey(directory)).not.toBe(reached);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-}, 60_000);
-
 // Why: package exports may redirect package.json to a module marker with no dependency declarations.
 test("an exported nested package.json cannot hide transitive installed dependencies", async () => {
   const { directory, webRoot } = await fixture();

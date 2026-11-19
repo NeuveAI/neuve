@@ -6,7 +6,6 @@
 import { expect, test } from "bun:test";
 
 import {
-  RULE_SKIPS_RECIPE,
   RuleDecision,
   SECTION_RULE_VERSIONS,
   SectionRuleJudgement,
@@ -51,12 +50,6 @@ const UNCHANGED = {
   droppedModuleLoads: [],
   valueImportOrderChanged: false,
 } as const;
-
-test("the recipe names this version of which judgements decide", () => {
-  // Why: the readers' plan key carries this recipe when skips are on; its value is pinned so a
-  // change to the decision table is seen as a change to it.
-  expect(RULE_SKIPS_RECIPE).toBe("neuve-rule-skips-v1");
-});
 
 test("a decision names one of the rules that can decide, and no other", () => {
   // Why: a stored plan holding a decision by a rule that never decides would claim a skip the

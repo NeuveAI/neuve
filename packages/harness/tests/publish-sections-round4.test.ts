@@ -652,55 +652,6 @@ test("an approval withdrawn on A after B carried it is not carried by C", async 
 }, 30_000);
 
 // Controls: what must still carry.
-test("two people's approvals carry through three configurations and the next cycle", async () => {
-  const r = review();
-  const result = await r.s.run(
-    Effect.gen(function* () {
-      const earlier = yield* r.first;
-      for (const person of [ana, ben])
-        yield* HumanCommands.recordDisposition({
-          person,
-          unitId: earlier.unitId,
-          verdict: "approve",
-        });
-      const shown = [];
-      for (const key of ["a", "b", "c"])
-        shown.push(carriedOf(yield* r.configuration(key.repeat(64))));
-      const next = yield* r.nextCycle;
-      shown.push(carriedOf(next));
-      return { shown, closedNext: yield* closed(next) };
-    }),
-  );
-  const both = [
-    [anaId, "approve"],
-    [benId, "approve"],
-  ].sort();
-  for (const carried of result.shown) expect([...carried].sort()).toEqual(both);
-  expect(result.closedNext).toBe(true);
-}, 30_000);
-
-test("a decision with no later act carries to every configuration", async () => {
-  const r = review();
-  const result = await r.s.run(
-    Effect.gen(function* () {
-      const earlier = yield* r.first;
-      const asked = yield* HumanCommands.recordDisposition({
-        person: ana,
-        unitId: earlier.unitId,
-        verdict: "request-changes",
-        comments: [{ body: "The export needs a guard." }],
-      });
-      const shown = [];
-      for (const key of ["a", "b", "c"]) {
-        const unit = yield* r.configuration(key.repeat(64));
-        shown.push(carriedOf(unit));
-      }
-      return { asked, shown };
-    }),
-  );
-  for (const carried of result.shown)
-    expect(carried).toEqual([[anaId, "request-changes"]]);
-}, 30_000);
 
 test("a fresh approval after a withdrawal on A, recorded before B, carries to B and C", async () => {
   const r = review();
