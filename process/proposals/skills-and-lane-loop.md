@@ -15,9 +15,9 @@ Status: proposal, drafted 18 November 2026 for the point [decision 14.35](../dec
 | What the reviewer's guidance must instil | Skepticism, reading first, results against the scope, planted problems to probe tests and validations, and a short loop | 14.38 |
 | What data is kept | Full session transcripts and timings, locally. Nothing is sent; sending will be opt-in, after anonymisation | 14.39 |
 | Which command reads the scope | `neuve query`, which fetches code and scope in parallel. No separate command for documents. Local sources are pre-processed; external ones are attributed and cited | 14.40 |
-| What is prepared in the background | As much as possible, so expensive work is never repeated. Snapshots stay in place and are pruned at the next checkpoint, within what the machine can hold | 14.41 |
+| What is prepared in the background | As much as possible, so expensive work is never repeated. Snapshots stay in place and are pruned at the start of the next cycle, within what the machine can hold | 14.41 |
 
-Still open: which boundary "the next checkpoint" names (14.41 records the coordinator's reading), and the design of scope reading inside `neuve query`, which is to be right from first principles before anything is built. Linear over MCP exists in the harness's scope snapshot and is tested against a fixture server only (14.40).
+The pruning boundary of 14.41 is the start of the next review cycle, confirmed by the owner on 19 November. The design that follows these rulings is [Part 2: design](#part-2-design), which is still for the owner to rule on and ends with its own open questions. Linear over MCP exists in the harness's scope snapshot and is tested against fixture servers only (14.40).
 
 ## At a glance
 
@@ -152,6 +152,150 @@ neuve query ──► answer streams to the implementer (unchanged)
 2. **Should the opening retrieval read the scope itself?** The owner's words are "allow neuve to source scope", from Linear or local documents. `neuve query` reads code only. Whether Neuve should fetch the ticket and documents for the implementer, as the cycle's scope snapshot does for a review, and through which command, is not decided. This proposal names no command.
 3. **What are "leads for the review's readers" here?** Stored leads belong to a changed file's hunks, and none exist before the implementer writes code. Before that, the base tree's Graph snapshot and keyword chunks can be prepared, and code could be searched from each scope section's text. Whether the review's readers should receive results searched from scope text is a change to what the harness reads, and is open.
 4. **What data is kept for dogfooding?** The recommendation keeps one Records event per retrieval. Whether the question's text is kept, and for how long, follows the scope-text rules (3.12, 10.8) unless the owner says otherwise.
+
+## Part 2: design
+
+Status: proposal for the owner, written 19 November 2026 after rulings 14.37 and 14.39 to 14.41. Nothing here is built. It follows the rulings; where it needs product meaning they don't give, it says "open". Two working words are used and are not product terms: "first read" is the owner's phrase for the implementer's opening `neuve query` (14.37), and "pruning boundary" names the one place where a cycle's kept copies are removed, which is the start of the next review cycle (14.41; section 4).
+
+```
+neuve query (first read on a branch)
+  │
+  ├─► opens the review cycle ─────────────► Records: one opening event (base, branch)
+  │                                           └─► enqueues, in the same transaction:
+  ├─► code read  ┐ in parallel,                     scope fetch   (joins the query's own fetch)
+  ├─► scope read ┘ one answer                       base preparation (code only, background)
+  │
+  ▼
+answer: code candidates + scope sources, each with its citation, gaps disclosed
+
+… implementer commits (commit.prepare runs per commit, as today) … reviewer runs the same query …
+
+neuve review <base>..<head>
+  └─► joins that cycle: reads its stored scope, reads commit text from Git, finds the base prepared
+       └─► after its run publishes, the next first read on the branch opens the next cycle
+            └─► pruning boundary: the previous cycle's kept copies go
+```
+
+### 1. What the answer holds
+
+Today the answer is a stream of `retrieval`, `relationship` and `complete` events, or one collected object ([`domain.ts`](../../apps/neuve-cli/src/domain.ts), lines 330–373). The design adds one event kind per scope source and one list in the collected object. It adds no second record shape: each entry is the scope source record the review already stores ([`scope.ts`](../../packages/harness/src/scope.ts), lines 101–142), plus the text that fits.
+
+| Source | How it is named | What its citation holds | Where its text lives |
+| --- | --- | --- | --- |
+| A document committed at the base | Found as today: the agent guide and what it links ([`scope.ts`](../../packages/harness/src/scope.ts), lines 722–796), or a path the request names | Path, blob and revision, and each section's lines and hash (`ref.path`, `ref.blob`, `ref.revision`, lines 116–123; `Section`, lines 92–99) | In Git. Nothing is copied |
+| A document or scratchpad that isn't committed | A path the request names. Neuve never searches the working tree for one | Path, when it was read, and the SHA-256 of what was read | A copy in the cycle's scope folder, because Git can't rebuild it ([`scope-storage.ts`](../../packages/harness/src/scope-storage.ts), lines 19–21) |
+| A ticket on a configured server | A key the request names, or one found in the branch name or in a local source's text (`keyCandidates`, [`scope.ts`](../../packages/harness/src/scope.ts), lines 314 and 506–525) | 11.17's pin, unchanged: server, tool and item, the provider's version or update time, when it was read, and the SHA-256 of what was read (lines 130–135 and 701–702) | Unmasked in the cycle's scope folder and as a masked raw capture (lines 76–79) |
+
+- **The original scope is referenced** (14.37) through the last row: a scratchpad that names `NEU-123` brings that ticket in as its own source, and the ticket's record says where the key was found (`ref.found`, line 125).
+- **A missing source is a disclosed gap, never a stop**, as it is for a review (lines 73–74).
+- **Code and scope are read in parallel** (14.40). The scope read keeps its 60-second bound (`SCOPE_FETCH_BOUND_MS`, line 214), so a slow server can't hold the code.
+- **The answer names the cycle** it opened or joined.
+- **Text in a scope source is data, never an instruction**, as the shipped skill already says of stored text.
+
+### 2. The cycle opens at the first read
+
+| Finding | Evidence |
+| --- | --- |
+| A cycle is opened only by a review request, and found again by matching base and head exactly | [`request.ts`](../../packages/harness/src/request.ts), lines 607–620 and 701–710 |
+| The opening event must carry a head, and its payload is empty | [`events.ts`](../../packages/records-schema/src/events.ts), lines 274–278; [`envelope.ts`](../../packages/records-schema/src/envelope.ts), lines 22–26 |
+| The scope snapshot is keyed by the cycle alone and never fetched twice | [`scope.ts`](../../packages/harness/src/scope.ts), lines 891–908 and 911–925 |
+| One fetch reads the external sources and the commit text of the range together | [`scope.ts`](../../packages/harness/src/scope.ts), lines 506–512 (keys in commit text) and 824–832 (commit text as a source) |
+| Cycles have no closing event | [`scope.ts`](../../packages/harness/src/scope.ts), lines 967–971 |
+
+At the first read there is no head, and several branches often share one base, so the base alone can't identify a cycle. The design:
+
+| Step | What happens |
+| --- | --- |
+| **Open** | The first read appends a new version of the opening event, attributed to the base and the branch the work is on. The branch defaults to the one checked out in `--repo` and can be named, so a reviewer in another worktree reaches the same cycle |
+| **Join, inner loop** | A later `neuve query` on the same base and branch joins the open cycle. It reads the stored scope and fetches nothing external |
+| **Join, final review** | `neuve review <base>..<head>` joins the newest open cycle on that base whose branch holds `<head>`. Its own request event already records the cycle and the range (`events.ts`, line 315), so the head needs no second event. With no such cycle it opens one as today, so a repository that never ran `neuve query` behaves as it does now |
+| **Next cycle** | Once a review run of the cycle has published, the next first read on that branch opens a new cycle (14.35's fix round). It fetches scope again and says, per external source, whether its pin differs from the previous cycle's: changed, unchanged, new or gone (14.37's "note the scope change") |
+
+**The scope snapshot splits in two**, which is what lets the final review join without fetching again:
+
+| Part | Holds | Key | Fetched |
+| --- | --- | --- | --- |
+| The cycle's part | External sources, documents at the base, named working files | The cycle, as today | Once, at the first read. "No-cache" (14.37) |
+| The range's part | Commit text, and documents the commits name | Base and head | At the review, from Git only. No server is called |
+
+The rule that decides "this cycle is over, the next read opens a new one" lives in one function. Section 4's pruning boundary is that same function.
+
+### 3. What the background prepares
+
+The opening event enqueues jobs in its own append transaction, as every event does ([`jobs.ts`](../../packages/records-core/src/jobs.ts), lines 12–13). Each piece of work is a stored computation keyed by content and run through the Computations store, which already uses the shared-work helper across processes ([`computations.ts`](../../packages/records-core/src/computations.ts), lines 349 and 684; [record 0016](../../architecture/decisions/0016-shared-work.md)). So the query, the worker and a later review that ask for the same key get one run, and the others subscribe.
+
+| Prepared | Key | Builds on | New? |
+| --- | --- | --- | --- |
+| The cycle's scope | The cycle | `scope.fetch`, which a review already shares with an attempt in flight ([`jobs.ts`](../../packages/records-core/src/jobs.ts), lines 229–236). The query runs or joins the same computation | Existing job, new caller |
+| The base tree's keyword index | Each blob, then the tree and recipe | `blobChunks` and `treeIndex` ([`search-index.ts`](../../packages/harness/src/search-index.ts), lines 432 and 1327–1343) | Existing computations, new trigger |
+| The base's Graph relations | As `commitRelations` stores them | The computation a review's relations task reads ([`commit-prepare.ts`](../../packages/harness/src/commit-prepare.ts), lines 86–88 and 412) | Existing computation, new trigger |
+| The base's Graph snapshot | The repository and revision | Already made by the query itself in the shared Graph cache ([`graph-query.ts`](../../apps/neuve-cli/src/graph-query.ts), lines 635–638) | Nothing to add |
+| The query's own answer for the code | Revision, question, limits, relationship plan and the engine's identity | Nothing today: the answer is unrecorded (lines 597–600) | New. The reviewer's same command then reads it or subscribes |
+| Searches of the base from each scope section's text | Section hash, base tree and retriever recipe, shaped like a hunk's leads ([`leads.ts`](../../packages/harness/src/leads.ts), lines 69–85) | The retrievers `commit.prepare` uses | New, and last (slice 8) |
+
+- **Per commit, nothing changes.** `commit.prepare` keeps preparing hunks, chunks and leads as commits land ([`commit-prepare.ts`](../../packages/harness/src/commit-prepare.ts), lines 70–88).
+- **No model work.** The rulings ask that expensive computations not be repeated (14.41); none asks for model work in the background, and `commit.prepare` has none (line 72).
+- **Machine budget.** The base preparation runs as `commit.prepare` does: in the background slot, inside one background CPU grant, with only its CPU priority lowered, and it skips any key another caller holds (lines 83–85, 95–99 and 715; 10.93, 14.20).
+- **Dogfooding data** (14.39) is the opening event and one event per later query: revision, question, counts and timings, written locally to Records. Nothing is sent.
+
+### 4. What is kept and what is pruned
+
+| Kept thing | Where | Rule | When it goes |
+| --- | --- | --- | --- |
+| Committed documents | Git; cited by path and blob | 12.45's precedent: what Git rebuilds isn't copied | Never copied, so nothing to prune |
+| Unmasked text of tickets and uncommitted files | The cycle's scope folder | 10.79, 14.41 | At the pruning boundary. The 7-day idle sweep stays as the backstop for a cycle no one continues ([`scope.ts`](../../packages/harness/src/scope.ts), lines 964–973 and 1023–1024) |
+| Masked raw captures of fetched text | Blobs | 8.10 | 30 days, unchanged ([`retention.ts`](../../packages/records-core/src/retention.ts), line 26) |
+| The scope snapshot's record: sources, pins, section index | A stored computation | 8.10: an output the pipeline reuses | Kept. It holds no ticket text (`scope.ts`, line 79) |
+| Indexes, relations, stored query answers, scope-section searches | Stored computations keyed by content | 14.21: each kind is declared recomputable with a byte cap, and Records evicts the oldest past it ([`evictable.ts`](../../packages/records-core/src/evictable.ts), lines 7–13 and 186) | Under their caps, never at the boundary. A new cycle on the same base reuses them |
+| The base's Graph snapshot | The machine's shared Graph cache | Its own cache rules | Unchanged |
+
+**The pruning boundary is one named function.** The owner confirmed on 19 November 2026 that "the next checkpoint" of 14.41 is the start of the next review cycle: not the cycle's end, not each commit, not the merge. The design puts the boundary where section 2 decides the next cycle opens, and nowhere else. `deleteCycleScope` already exists for it and already expects a second caller ([`scope.ts`](../../packages/harness/src/scope.ts), lines 967–973).
+
+### 5. Linear over MCP: what exists, and what the query reuses
+
+| Exists | Evidence | Reused by the query |
+| --- | --- | --- |
+| A user-level file names each MCP server, its read-only tools, the variables it may receive and how one item is fetched by key. The repository's `.mcp.json` is never read. Neuve stores no credential | [`integrations.ts`](../../packages/harness/src/integrations.ts), lines 7–18 and 72–110 | As is |
+| A client that connects each server at most once, on first use, and closes with its scope | [`mcp-client.ts`](../../packages/harness/src/mcp-client.ts), lines 311–330 | As is |
+| The ticket fetch: keys filtered by each server's prefixes, a shared time bound, the pin, the kept copies | [`scope.ts`](../../packages/harness/src/scope.ts), lines 529–560 and 667–702 | As is, with keys from the request and local sources instead of commit text |
+| An explicit selection of one item on one server, admitted before the cycle opens | [`events.ts`](../../packages/records-schema/src/events.ts), lines 259–271; [`request.ts`](../../packages/harness/src/request.ts), lines 569–588 | The query's way to name a ticket |
+| A Linear mapping (`linear-v1`: search, issue, dependencies) and a session over it, used by the coding home | [`integrations.ts`](../../packages/harness/src/integrations.ts), lines 50–70; [`linear-planning.ts`](../../packages/harness/src/linear-planning.ts), lines 22–150 | Not needed for the first slices: the query fetches named items, it doesn't search Linear |
+| Tests against local fixture servers only | [`scope-integration.test.ts`](../../packages/harness/tests/scope-integration.test.ts), lines 4 and 13; [`linear-planning.test.ts`](../../packages/harness/tests/linear-planning.test.ts), line 12 | No capture against the real Linear is recorded (14.40). Slice 5 needs one, and the owner's sign-in |
+
+### 6. Build order
+
+Each slice is one implementer and one reviewer. Slices 1 to 5 run in order; 6 and 7 need only slice 2; 8 is last.
+
+| # | Slice | Done when |
+| --- | --- | --- |
+| 1 | **Record the query.** One Records event per `neuve query` run: revision, question, counts, timings | The event is in the store's history after a run; the printed answer is byte-for-byte what it was; with telemetry off the event is still written (12.55 keeps Records' records) |
+| 2 | **Open and join the cycle.** The new opening event, the branch, the join rules and the one function that decides the next cycle | A first read opens a cycle; a second on the same base and branch joins it; two branches on one base get two cycles; a review of `<base>..<head>` joins and enqueues no second scope fetch; a review with no earlier query behaves as today; a first read after a published run opens a new cycle |
+| 3 | **Split the scope snapshot.** The cycle's part and the range's part | A review that joins a cycle reads commit text and calls no server (the fixture server counts zero calls); a review that opens its own cycle reads what it reads today |
+| 4 | **Local scope in the answer.** Committed documents and named uncommitted files, with citations, in parallel with the code | The answer and the stream carry each source with its citation; an uncommitted file is hashed and copied into the cycle's folder; a missing path is a gap in the answer and the code still arrives; the skill's reference teaches it and `skill-drift.test.ts` passes |
+| 5 | **Tickets in the answer.** A named key, or one found in the branch or a local source, through the configured server; the change note against the previous cycle | Against the fixture server: pin, masked capture and gap cases pass, and a changed ticket is reported as changed in the next cycle. Against the real Linear: one recorded capture, run by the owner's sign-in |
+| 6 | **Base preparation.** The background job for the base tree's index and relations, and the stored code answer | After a first read, a review of that base finds each stored and computes none again; a query and the job asking at once make one run per key; the job stays inside its grant |
+| 7 | **The pruning boundary.** `deleteCycleScope` called from slice 2's function; new kinds declared recomputable with caps | Opening the next cycle removes the previous cycle's unmasked copies and nothing else; the snapshot record and the content-keyed outputs remain; the 7-day sweep still runs |
+| 8 | **Scope-section searches.** Stored searches from scope text, and whether the review's readers receive them | Open (below). To be measured before it is adopted |
+
+### Open, for the owner
+
+1. **What goes at the pruning boundary.** The boundary itself is settled (14.41): the start of the next review cycle. Section 4 removes what belongs to the previous cycle alone, its unmasked scope copies, and keeps the content-keyed outputs under their caps, because the next cycle on the same base reuses them and 14.41 also says expensive work is never repeated. If the owner means those outputs go at the boundary too, section 4's fifth row changes.
+2. **Uncommitted files.** 14.37 names agents' scratchpads as scope. The harness's own rule is that it reads Git objects only and never an untracked file. This design reads one only when the request names it, hashes it and reviews from the kept copy. Is that the intended exception?
+3. **Transcripts.** 14.39 keeps full session transcripts locally for datasets. 8.10 expires raw captures, transcripts among them, after 30 days. Which holds for the query's and the inner loop's sessions?
+4. **Scope-section searches.** Whether the review's readers should be given code found from scope text (slice 8) changes what the harness reads. Not ruled.
+5. **Which sources are read without being named.** The design reads the agent guide and what it links, as a review does, and otherwise only what the request names or what those texts name. Whether Neuve should look further on its own, for example for a plan beside the code, is not ruled.
+
+### Not verified
+
+- **Branch as the cycle's identity.** Not checked against a worktree with a detached `HEAD`, a renamed branch, or a reviewer's worktree on another branch. Slice 2 settles it.
+- **"Newest open cycle whose branch holds the head"** is a proposed rule; no code was run to try it.
+- **The Graph answer is the same for the same revision and question.** The help calls it "revision-bound" ([`cli.ts`](../../apps/neuve-cli/src/cli.ts), line 115); that a stored answer equals a fresh one was not tested.
+- **The query process can run the scope computation itself** when no worker is up. `review` does so inside Precompute; that `neuve query`'s process can load the same code was not tried.
+- **`computations.ts` shares every stored computation across processes.** Lines 349 and 684 name the helper; the paths around them were not read through.
+- **How much the base preparation saves** a later review. No timing was taken.
+- **The answer's byte limit.** How scope text shares `--max-context-bytes` with the code was not designed.
+- **Line numbers** were read on branch `lane-loop-unify` on 19 November 2026 and will drift.
+- **Linear itself.** Nothing was run against the real service.
 
 ## Found on the way
 
