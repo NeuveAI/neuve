@@ -482,7 +482,7 @@ describe("retries on a coding session", () => {
       maxRetries: 1,
       baseDelayMs: 20,
     });
-    const startedAt = performance.now();
+    // The route's Retry-After is in the year 2100: a session that waited for it never settles.
     const settled = await rate.ask("Go.");
     expect(settled).toMatchObject({
       status: "unanswered",
@@ -498,7 +498,6 @@ describe("retries on a coding session", () => {
       code: "rate_limit_exceeded",
       detail: "OpenAI API error (HTTP 429, rate_limit_exceeded): Slow down",
     });
-    expect(performance.now() - startedAt).toBeLessThan(5_000);
     expect(
       captured
         .filter(

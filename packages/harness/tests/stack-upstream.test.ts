@@ -51,7 +51,6 @@ describe("the fetch watchdog", () => {
   test("kills the whole process group once the directory passes its cap", async () => {
     const watch = join(root, "watched");
     const pidFile = join(root, "grandchild.pid");
-    const started = Date.now();
     let stopped: unknown;
     try {
       await runWatched(
@@ -75,9 +74,9 @@ describe("the fetch watchdog", () => {
     }
     expect(stopped).toBeInstanceOf(UpstreamFetchStopped);
     expect((stopped as UpstreamFetchStopped).reason).toBe("over-cap");
-    expect(Date.now() - started).toBeLessThan(10_000);
     const grandchild = Number(readFileSync(pidFile, "utf8").trim());
-    await Bun.sleep(700);
+    // The group is killed after the 500 ms grace; wait for that, not for a fixed time.
+    for (let i = 0; alive(grandchild) && i < 200; i++) await Bun.sleep(50);
     expect(alive(grandchild)).toBe(false);
   });
 
@@ -105,7 +104,6 @@ describe("the fetch watchdog", () => {
     const gitPath = join(root, "slow-git");
     writeFileSync(gitPath, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
     const controller = new AbortController();
-    const started = performance.now();
     const run = runGit(
       { gitPath, env: {}, signal: controller.signal },
       undefined,
@@ -117,11 +115,11 @@ describe("the fetch watchdog", () => {
       "HEAD",
     ]);
     setTimeout(() => controller.abort(), 50);
+    // The stand-in git sleeps 30 s and exits 0: only a stop makes the read fail.
     await Promise.all([
       run,
       expect(read).rejects.toThrow("git ls-tree failed"),
     ]);
-    expect(performance.now() - started).toBeLessThan(10_000);
   });
 
   test("stops a fetch that starts after its job was interrupted", async () => {

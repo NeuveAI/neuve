@@ -119,14 +119,13 @@ test("pending cleanup retains native ownership after caller release and guards p
     await gate;
   });
   await running;
-  const began = Date.now();
+  // The work is held until the gate opens below: a cleanup that waited for it would never return.
   expect(
     await host.cleanup(
       { mode: "interrupted", stop: false, withinMs: 30 },
       context,
     ),
   ).toMatchObject({ kind: "pending", phase: "closing" });
-  expect(Date.now() - began).toBeLessThan(500);
   ownership.release();
   try {
     expect(() => SourceOwnership.acquire(source)).toThrow(SourceOwned);

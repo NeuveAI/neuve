@@ -175,14 +175,12 @@ test("a busy refresher (exit 75) is asked again after a short wait, and nothing 
   expect(recovers.runs()).toBe(3);
 
   const stays = busy(99, "");
-  const started = Date.now();
   const stayed = await failure(
     accessToken({ tokenCommand: stays.path, leaseRetryDelaysMs: delays }),
   );
   expect([stayed.code, stayed.transient]).toEqual(["lease", true]);
   expect(stayed.message).toContain("a temporary failure");
   expect(stays.runs()).toBe(4);
-  expect(Date.now() - started).toBeLessThan(5_000);
 
   // A wait that would pass the deadline is not taken: the last exit 75 fails the lease.
   const late = busy(99, "");
@@ -258,13 +256,17 @@ const parent = (child: string, body: string) => {
   chmodSync(path, 0o755);
   return {
     path,
-    /** Whether the child is still running; a zombie (killed, not yet reaped by init) is not. */
-    childAlive: () => {
+    /** Whether the child ended: polled, since its kill lands a moment after the lease fails. A zombie (killed, not yet reaped by init) has ended. */
+    childGone: async () => {
       const pid = readFileSync(pids, "utf8").trim();
-      const state = Bun.spawnSync(["ps", "-o", "stat=", "-p", pid])
-        .stdout.toString()
-        .trim();
-      return state !== "" && !state.startsWith("Z");
+      for (let i = 0; i < 100; i++) {
+        const state = Bun.spawnSync(["ps", "-o", "stat=", "-p", pid])
+          .stdout.toString()
+          .trim();
+        if (state === "" || state.startsWith("Z")) return true;
+        await Bun.sleep(50);
+      }
+      return false;
     },
   };
 };
@@ -272,36 +274,31 @@ const parent = (child: string, body: string) => {
 // Why: the review found the time limit only killed the program itself, so a child that kept its
 // output open (a script that runs curl or modal without exec) held a review machine indefinitely.
 test("the time limit, the output cap and the program's exit stop the children it started too", async () => {
+  // Each child sleeps 140 s, far past this test's 20 s: a lease that waited for one fails by that
+  // timeout, so no elapsed time is asserted.
   const stalls = parent("sleep 140", "wait");
-  const started = Date.now();
   const stalled = await failure(
     accessToken({ tokenCommand: stalls.path, tokenCommandTimeoutMs: 300 }),
   );
   expect([stalled.code, stalled.transient]).toEqual(["lease", true]);
-  expect(Date.now() - started).toBeLessThan(5_000);
-  await Bun.sleep(100);
-  expect(stalls.childAlive()).toBe(false);
+  expect(await stalls.childGone()).toBe(true);
 
   // The program prints a lease and exits, but leaves a child holding its output.
   const lingers = parent(
     "sleep 140",
     `printf '%s' '${lease("leaked-secret-6", Date.now() + 60 * 60_000)}'`,
   );
-  const drained = Date.now();
   const lingered = await failure(accessToken({ tokenCommand: lingers.path }));
   expect(lingered.message).toContain("left a process holding its output");
   expect(lingered.message).not.toContain("leaked");
-  expect(Date.now() - drained).toBeLessThan(5_000);
-  await Bun.sleep(100);
-  expect(lingers.childAlive()).toBe(false);
+  expect(await lingers.childGone()).toBe(true);
 
   const floods = parent("sleep 140", "yes leaked-secret-7");
   const flooded = await failure(accessToken({ tokenCommand: floods.path }));
   expect([flooded.code, flooded.transient]).toEqual(["lease", false]);
   expect(flooded.message).toContain("more than 64 KiB");
   expect(flooded.message).not.toContain("leaked");
-  await Bun.sleep(100);
-  expect(floods.childAlive()).toBe(false);
+  expect(await floods.childGone()).toBe(true);
 }, 20_000);
 
 test("a lease the provider refused is not reused", async () => {

@@ -900,15 +900,14 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
       await fixture.compiled(1);
       const waiter = fixture.launcher("waiter");
       await fixture.subscribed(2);
-      const before = performance.now();
       owner.child.kill(signal);
+      // The bound on a prompt exit: a workspace still running then is killed, and its code is not 0.
       const deadline = setTimeout(() => owner.child.kill("SIGKILL"), 5000);
       try {
         const code = await owner.child.exited;
         if (code !== 0)
           throw new Error(`Workspace exited ${code}: ${await owner.errors}`);
         expect(code).toBe(0);
-        expect(performance.now() - before).toBeLessThan(5000);
       } finally {
         clearTimeout(deadline);
       }
