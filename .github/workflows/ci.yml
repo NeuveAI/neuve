@@ -37,8 +37,8 @@ jobs:
         run: |
           set -euo pipefail
           # Documentation only: every changed path is Markdown under a folder no build or test reads.
-          # Shipped skills, test fixtures, CONSTITUTION.md (a test reads it) and .github stay code.
-          docs='^(process|architecture|foundations|docs|design|research)/.*\.md$|^(AGENTS|README|CONTRIBUTING|vocabulary)\.md$'
+          # Shipped skills, test fixtures and .github stay code.
+          docs='^(process|architecture|foundations|docs|design|research)/.*\.md$|^(AGENTS|README|CONTRIBUTING|CONSTITUTION|vocabulary)\.md$'
           from=''; to=''
           if [ "$EVENT" = pull_request ]; then
             from=$BASE; to=$HEAD
