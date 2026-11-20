@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "codex": "0.171.0-alpha.13",
+  "note": "initialize and initialized only",
+  "entries": [
+    {
+      "direction": "out",
+      "message": {
+        "id": 0,
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "neuve",
+            "title": "Neuve",
+            "version": "0.1.0"
+          },
+          "capabilities": {
+            "experimentalApi": false,
+            "requestAttestation": false
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 0,
+        "result": {
+          "userAgent": "neuve/0.171.0-alpha.13 (<os>) unknown (neuve; 0.1.0)",
+          "codexHome": "<codex-home>",
+          "platformFamily": "unix",
+          "platformOs": "macos"
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "method": "initialized"
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "method": "remoteControl/status/changed",
+        "params": {
+          "status": "disabled",
+          "serverName": "<redacted>",
+          "installationId": "<redacted>",
+          "environmentId": null
+        },
+        "emittedAtMs": 0
+      }
+    }
+  ]
+}

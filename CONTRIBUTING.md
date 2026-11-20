@@ -48,7 +48,7 @@ The [architecture overview](architecture/README.md) explains how they fit togeth
 | [`packages/records-schema`](packages/records-schema), [`packages/records-core`](packages/records-core) | The system of records: its schemas, and the library over one SQLite file per repository |
 | [`packages/review-rules`](packages/review-rules) | The rules the harness and the web app share for what a review unit owns |
 | [`packages/graph-client`](packages/graph-client), [`packages/semantic-client`](packages/semantic-client) | The validated boundaries to Neuve Graph and to the semantic workers |
-| [`packages/runtime`](packages/runtime), [`packages/runtime-claude`](packages/runtime-claude) | The account and runtime contracts, and the runtime that runs reviews on a Claude subscription through Claude Code |
+| [`packages/runtime`](packages/runtime), [`packages/runtime-claude`](packages/runtime-claude), [`packages/runtime-codex`](packages/runtime-codex) | The account and runtime contracts, the runtime that runs reviews on a Claude subscription through Claude Code, and the client for Codex's app server that a Codex runtime is to be built on |
 | [`packages/evaluation`](packages/evaluation) | Evaluation cases and evaluators |
 | [`apps/website`](apps/website) | The neuve.ai site, which also serves the one-line installer from [`scripts/install.sh`](scripts/install.sh) |
 

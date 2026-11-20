@@ -347,6 +347,13 @@
         "zod": "4",
       },
     },
+    "packages/runtime-codex": {
+      "name": "@neuve/runtime-codex",
+      "version": "0.1.0",
+      "dependencies": {
+        "effect": "4.0.0",
+      },
+    },
     "packages/semantic-client": {
       "name": "@neuve/semantic-client",
       "version": "0.1.0",
@@ -920,6 +927,8 @@
     "@neuve/runtime": ["@neuve/runtime@workspace:packages/runtime"],
 
     "@neuve/runtime-claude": ["@neuve/runtime-claude@workspace:packages/runtime-claude"],
+
+    "@neuve/runtime-codex": ["@neuve/runtime-codex@workspace:packages/runtime-codex"],
 
     "@neuve/semantic-client": ["@neuve/semantic-client@workspace:packages/semantic-client"],
 
