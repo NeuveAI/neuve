@@ -1,8 +1,8 @@
 import { runIn, value, scanCaptures } from "../capture/fixture.ts";
 import { CaptureRecords } from "../../../src/session-dump.ts";
 import { Effect } from "effect";
-import { Worker, storeLocationIn } from "@neuve/records-core";
-import { afterEach, expect, test } from "bun:test";
+import { storeLocationIn } from "@neuve/records-core";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -29,6 +29,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { PI_TRANSITION_STORAGE_PROFILE } from "../../../../../scripts/pi-storage.ts";
 import { codingWorkerSetup } from "../../../../../apps/neuve-cli/src/workspace-cli.ts";
+import * as WorkerCli from "../../../../../apps/neuve-cli/src/worker-cli.ts";
 import { openWorkerStorage, type WorkerContext } from "@ace/host/worker";
 import {
   Fixture,
@@ -288,6 +289,11 @@ test("reopened native summarize reads persisted floor without a repeated compact
       chat: await harness.root(context, { agent: { model } }),
     };
   };
+  // The fixture drains the capture queue itself, so it owns every scan.
+  const startCaptureWorker = spyOn(
+    WorkerCli,
+    "startCaptureWorker",
+  ).mockReturnValue(Effect.void);
   try {
     const first = await open();
     for (const content of ["older material ".repeat(100), "recent material"])
@@ -469,15 +475,6 @@ test("reopened native summarize reads persisted floor without a repeated compact
     );
     expect(statSync(join(path, "channel.sqlite")).size).toBeGreaterThan(0);
     const location = storeLocationIn(join(captures, "coding"));
-    const socket = await Effect.runPromise(Worker.socketPathFor(location));
-    await Effect.runPromise(Worker.reachWorker(socket, "stop"));
-    for (
-      let i = 0;
-      i < 100 &&
-      Worker.isLive(await Effect.runPromise(Worker.reachWorker(socket)));
-      i++
-    )
-      await Bun.sleep(20);
     const run = runIn(location);
     value(await run(scanCaptures(location)));
     const filed = value(await run(CaptureRecords.rawCaptures()));
@@ -489,12 +486,10 @@ test("reopened native summarize reads persisted floor without a repeated compact
       ).toMatchObject({ status: "refused", reason: exportRefusal.reason });
     }
   } finally {
-    const socket = await Effect.runPromise(
-      Worker.socketPathFor(storeLocationIn(join(captures, "coding"))),
-    );
-    await Effect.runPromise(Worker.reachWorker(socket, "stop"));
+    startCaptureWorker.mockRestore();
     endpoint.stop();
     rmSync(path, { recursive: true, force: true });
+    rmSync(captures, { recursive: true, force: true });
   }
 }, 10000);
 
