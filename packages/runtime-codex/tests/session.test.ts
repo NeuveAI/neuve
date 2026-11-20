@@ -7,8 +7,9 @@ import {
   type SessionPolicy,
   type SessionStart,
 } from "@neuve/runtime";
-import { Effect, Exit, Fiber, Queue, Scope, Stream } from "effect";
+import { Effect, Exit, Fiber, Logger, Queue, Scope, Stream } from "effect";
 import { turnSettings } from "../src/launch.ts";
+import type { LogEntry } from "../src/log.ts";
 import { openCodexSession } from "../src/session.ts";
 import {
   codex,
@@ -92,7 +93,13 @@ function run(
     read: Effect.Success<ReturnType<typeof reader>>,
     scope: Scope.Closeable,
   ) => Effect.Effect<void, unknown>,
-  overrides: { policy?: SessionPolicy; start?: SessionStart } = {},
+  overrides: {
+    policy?: SessionPolicy;
+    start?: SessionStart;
+    stopWait?: `${number} millis`;
+    broken?: ReadonlyArray<string>;
+    log?: (entry: LogEntry) => void;
+  } = {},
 ) {
   return Effect.runPromise(
     Effect.gen(function* () {
@@ -101,11 +108,18 @@ function run(
         account,
         program: "/test/codex",
         cwd: "/work",
-        environment: { HOME: "/home", OPENAI_API_KEY: "sk-should-go" },
+        // An inherited Codex home must not reach Codex: the account names its own, or none.
+        environment: {
+          HOME: "/home",
+          OPENAI_API_KEY: "sk-should-go",
+          CODEX_HOME: "/inherited-home",
+        },
         policy: overrides.policy ?? policy,
         start: overrides.start ?? { kind: "new" },
         interruptWait: "50 millis",
-        stopWait: "10 millis",
+        stopWait: overrides.stopWait ?? "10 millis",
+        broken: overrides.broken,
+        log: overrides.log,
       }).pipe(Scope.provide(scope));
       const read = yield* reader(session);
       yield* body(session, read, scope).pipe(
@@ -670,7 +684,17 @@ describe("the mode table", () => {
           workspace: write,
         });
         yield* until(() => written(fake.current(), "turn/start").length > 0);
-        expect(fake.processes).toHaveLength(2);
+        // One process at a time: the refusal closed the person's Codex and read their settings
+        // again, so the write turn runs on a new one, and no clean process ever got a turn.
+        expect(fake.processes.map((p) => p.clean)).toEqual([
+          true,
+          false,
+          true,
+          false,
+        ]);
+        expect(
+          fake.processes.map((p) => written(p, "turn/start").length),
+        ).toEqual([0, 0, 0, 1]);
       }),
     );
   });
@@ -1411,5 +1435,307 @@ describe("what the first tests missed", () => {
     expect(JSON.stringify(exit)).toContain("start-failed");
     // Refused on the names alone, before a process with Neuve's server in it starts.
     expect(fake.processes).toHaveLength(1);
+  });
+});
+
+// Why: the third round of defects in one place, the hand-over from one process to the next (the
+// session's states in PROTOCOL.md). A process becomes current only once checked and with the thread
+// loaded; after every wait the session and the turn are re-checked; every process is closed at the
+// end. Each test is one of the outer reviewer's reproductions, now asserted.
+describe("handing the session from one process to the next", () => {
+  test("a read-only start abandoned in its clean check leaves no unchecked process current", async () => {
+    // Processes: 0 reads the settings, 1 is clean, 2 the person's own, 3 reads them again, 4 is
+    // the clean one whose check never finishes.
+    const fake = codex((message, process) =>
+      message.method === "hooks/list" && fake.processes.indexOf(process) === 4
+        ? SILENT
+        : undefined,
+    );
+    await run(fake, (session, read) =>
+      Effect.gen(function* () {
+        yield* startOn(fake, session);
+        fake.send("turn/completed", completed("completed"));
+        yield* read.next("turn.finished");
+        const abandoned = yield* session
+          .startTurn({ turnId: "r1", message: "go", workspace: readOnly })
+          .pipe(Effect.forkDetach);
+        yield* until(
+          () =>
+            fake.processes.length === 5 &&
+            written(fake.processes[4]!, "hooks/list").length > 0,
+        );
+        yield* Fiber.interrupt(abandoned);
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          outcome: { status: "interrupted" },
+        });
+        yield* session.startTurn({
+          turnId: "r2",
+          message: "go",
+          workspace: readOnly,
+        });
+        yield* until(() => written(fake.current(), "turn/start").length > 0);
+        const unchecked = fake.processes[4]!;
+        expect(written(unchecked, "turn/start")).toHaveLength(0);
+        expect(unchecked.io.exited()).toBe(true);
+        // The turn went to a process that passed its check and loaded the thread first.
+        const used = fake.current();
+        expect(fake.processes.indexOf(used)).toBe(6);
+        expect(used.clean).toBe(true);
+        expect(written(used, "mcpServerStatus/list")).toHaveLength(1);
+        expect(written(used, "thread/resume")).toHaveLength(1);
+      }),
+    );
+  });
+
+  test("a refused resume after a change of mode: that process is closed, and the next turn starts over", async () => {
+    // Processes: 0 reads the settings, 1 is clean, 2 the person's own and refuses the thread.
+    const fake = codex((message, process) =>
+      message.method === "thread/resume" &&
+      fake.processes.indexOf(process) === 2
+        ? new Error("thread not found")
+        : undefined,
+    );
+    await run(fake, (session, read) =>
+      Effect.gen(function* () {
+        yield* startOn(fake, session, readOnly);
+        fake.send("turn/completed", completed("completed"));
+        yield* read.next("turn.finished");
+        yield* session.startTurn({
+          turnId: "w1",
+          message: "go",
+          workspace: write,
+        });
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          outcome: { status: "failed", disposition: "reusable" },
+        });
+        const refused = fake.processes[2]!;
+        expect(written(refused, "turn/start")).toHaveLength(0);
+        yield* until(() => refused.io.exited());
+        yield* session.startTurn({
+          turnId: "w2",
+          message: "go",
+          workspace: write,
+        });
+        yield* until(() => written(fake.current(), "turn/start").length > 0);
+        const used = fake.current();
+        expect(fake.processes.indexOf(used)).toBe(3);
+        expect(written(used, "thread/resume")).toHaveLength(1);
+        expect(written(refused, "turn/start")).toHaveLength(0);
+      }),
+    );
+  });
+
+  test("the scope closes while a change of mode stops the old process: nothing starts after, and every process ends", async () => {
+    const fake = codex();
+    await run(
+      fake,
+      (session, read, scope) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session, readOnly);
+          fake.send("turn/completed", completed("completed"));
+          yield* read.next("turn.finished");
+          fake.current().io.ignoreTerm();
+          yield* session
+            .startTurn({ turnId: "w1", message: "go", workspace: write })
+            .pipe(Effect.forkDetach);
+          yield* Effect.sleep("20 millis");
+          yield* Scope.close(scope, Exit.void);
+          const started = fake.processes.length;
+          yield* Effect.sleep("300 millis");
+          expect(fake.processes).toHaveLength(started);
+          expect(fake.processes.every((p) => p.io.exited())).toBe(true);
+          expect(
+            fake.processes.map((p) => written(p, "turn/start").length),
+          ).toEqual(fake.processes.map((_, i) => (i === 1 ? 1 : 0)));
+          expect(read.finished().map((e) => e.outcome)).toEqual([
+            { status: "completed" },
+            { status: "interrupted", reason: "shutdown" },
+          ]);
+        }),
+      { stopWait: "200 millis" },
+    );
+  });
+
+  test("the scope closes while a turn's process is starting: it is closed, and turn/start is never sent", async () => {
+    // The person's own Codex never answers its handshake, so the write turn waits in its start.
+    const fake = codex((message, process) =>
+      message.method === "initialize" && !process.clean ? SILENT : undefined,
+    );
+    await run(fake, (session, read, scope) =>
+      Effect.gen(function* () {
+        yield* session
+          .startTurn({ turnId: "w1", message: "go", workspace: write })
+          .pipe(Effect.forkDetach);
+        yield* until(() => fake.processes.length === 3);
+        yield* Scope.close(scope, Exit.void);
+        yield* read.done;
+        yield* Effect.sleep("30 millis");
+        expect(fake.processes).toHaveLength(3);
+        expect(fake.processes.every((p) => p.io.exited())).toBe(true);
+        expect(
+          fake.processes.every((p) => written(p, "turn/start").length === 0),
+        ).toBe(true);
+      }),
+    );
+  });
+});
+
+// Why: faults planted in round three that no test caught; each is pinned here.
+describe("what the planted faults showed", () => {
+  test("a version marked broken is refused, with the reason in the log", async () => {
+    const fake = codex();
+    const logs: string[] = [];
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        openCodexSession({
+          account,
+          program: "/test/codex",
+          cwd: "/work",
+          environment: {},
+          policy,
+          start: { kind: "new" },
+          stopWait: "10 millis",
+          broken: ["0.171.0-alpha.13"],
+        }),
+      ).pipe(
+        Effect.provide(fake.layer),
+        Effect.provide(
+          Logger.layer([
+            Logger.make(({ message }) => logs.push(JSON.stringify(message))),
+          ]),
+        ),
+      ),
+    );
+    expect(JSON.stringify(exit)).toContain("unsupported-version");
+    expect(logs.join("\n")).toContain("marked broken");
+    expect(logs.join("\n")).toContain("0.171.0-alpha.13");
+    expect(fake.processes.every((p) => p.io.exited())).toBe(true);
+  });
+
+  for (const feature of ["hooks", "apps", "plugins"])
+    test(`a clean process that still has ${feature} on is refused for a read-only turn`, async () => {
+      const fake = codex((message, process) => {
+        if (message.method !== "config/read" || !process.clean) return;
+        return {
+          config: {
+            // Everything else reads back off, so only this switch can refuse the process.
+            mcp_servers: { "own-server": { enabled: false } },
+            features: {
+              hooks: false,
+              apps: false,
+              plugins: false,
+              [feature]: true,
+            },
+            web_search: "disabled",
+          },
+        };
+      });
+      const exit = await Effect.runPromiseExit(
+        Effect.scoped(
+          openCodexSession({
+            account,
+            program: "/test/codex",
+            cwd: "/work",
+            environment: {},
+            policy,
+            start: { kind: "new" },
+            stopWait: "10 millis",
+          }),
+        ).pipe(Effect.provide(fake.layer)),
+      );
+      expect(JSON.stringify(exit)).toContain("start-failed");
+    });
+
+  test("a clean process with one of the person's servers still enabled is refused, tools or none", async () => {
+    // The server lists no tools, as one that failed to start does; its switch is what is read.
+    const fake = codex((message, process) => {
+      if (!process.clean) return;
+      if (message.method === "config/read")
+        return {
+          config: {
+            mcp_servers: { "own-server": { enabled: true } },
+            features: { hooks: false, apps: false, plugins: false },
+            web_search: "disabled",
+          },
+        };
+      if (message.method === "mcpServerStatus/list")
+        return {
+          data: [{ name: "own-server", tools: {}, runtimeStatus: null }],
+          nextCursor: null,
+        };
+    });
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        openCodexSession({
+          account,
+          program: "/test/codex",
+          cwd: "/work",
+          environment: {},
+          policy,
+          start: { kind: "new" },
+          stopWait: "10 millis",
+        }),
+      ).pipe(Effect.provide(fake.layer)),
+    );
+    expect(JSON.stringify(exit)).toContain("start-failed");
+  });
+
+  test("a completion for another Codex turn does not end the open one", async () => {
+    const fake = codex();
+    await run(fake, (session, read) =>
+      Effect.gen(function* () {
+        yield* startOn(fake, session);
+        fake.send(
+          "turn/completed",
+          completed("completed", null, "another-turn"),
+        );
+        yield* Effect.sleep("20 millis");
+        expect(read.finished()).toHaveLength(0);
+        fake.send("turn/completed", completed("completed"));
+        yield* read.next("turn.finished");
+        expect(read.finished()).toHaveLength(1);
+      }),
+    );
+  });
+
+  test("Codex's own question tool is off in both configurations, and the token is never in the log", async () => {
+    const fake = codex();
+    const entries: LogEntry[] = [];
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session);
+          const token = fake.current().env.NEUVE_CODEX_TOOL_TOKEN!;
+          // Were a command ever to print the token, the log would still not hold it.
+          fake.send("item/completed", {
+            threadId: "thread-1",
+            turnId: "codex-turn",
+            completedAtMs: 0,
+            item: {
+              type: "commandExecution",
+              id: "c1",
+              command: "env",
+              cwd: "/work",
+              status: "completed",
+              aggregatedOutput: `NEUVE_CODEX_TOOL_TOKEN=${token}`,
+              exitCode: 0,
+              durationMs: 1,
+            },
+          });
+          fake.send("turn/completed", completed("completed"));
+          yield* read.next("turn.finished");
+          for (const p of fake.processes)
+            expect(p.args).toContain(
+              "tools.experimental_request_user_input.enabled=false",
+            );
+          expect(fake.processes.some((p) => p.clean)).toBe(true);
+          expect(fake.processes.some((p) => !p.clean)).toBe(true);
+          expect(token).toBeString();
+          expect(entries.length).toBeGreaterThan(0);
+          expect(JSON.stringify(entries)).not.toContain(token);
+        }),
+      { policy: withTool, log: (entry) => entries.push(entry) },
+    );
   });
 });

@@ -92,5 +92,6 @@ export const serveTools = (handler: (request: Request) => Promise<Response>) =>
     ),
     (server) => Effect.promise(() => server.stop(true)),
   ).pipe(
-    Effect.map((server) => `http://127.0.0.1:${server.port}/mcp`),
+    // The address is the one bound, so a test that reads it sees where the server listens.
+    Effect.map((server) => `http://${server.hostname}:${server.port}/mcp`),
   ) satisfies Effect.Effect<string, never, Scope.Scope>;

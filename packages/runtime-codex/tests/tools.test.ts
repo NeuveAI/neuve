@@ -102,6 +102,8 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
       ).pipe(Effect.forkDetach);
       const { args, env } = fake.current();
       const url = /mcp_servers\.neuve\.url="([^"]+)"/.exec(args.join(" "))![1]!;
+      // Bound to the loopback interface only: the address given is the one the server listens on.
+      expect(url).toStartWith("http://127.0.0.1:");
       const token = env.NEUVE_CODEX_TOOL_TOKEN!;
       expect(args).toContain(
         'mcp_servers.neuve.bearer_token_env_var="NEUVE_CODEX_TOOL_TOKEN"',
