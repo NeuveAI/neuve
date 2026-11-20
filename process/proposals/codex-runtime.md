@@ -1,0 +1,451 @@
+# A Codex runtime behind the runtime contract: proposal
+
+Status: proposal, drafted 20 November 2026. Its first slice, "Find a program", is built and lands with this text; nothing else is. The owner, shown that a build lane had started a Codex implementer from the program inside the ChatGPT desktop app, by a path written into the code: "wat??? I thought we used the official cdp or codex server. Observe how t3 code uses codex and lets create our abstraction on a similar fashion...this is not the way to go". Earlier the same day, on model selection ([decision 14.61](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)): "a user might use codex or claude code, or both for all we care. We should identify and use available models and vendors". Then, on this work: "consider that also part of the pre-work". It is pre-work for the planning mode build: the lane building the [planning mode proposal](planning-mode.md)'s plan mode is held until its implementer can be a Codex session that runs through this runtime. That hold is the coordinating session's, on the owner's word above; the planning mode proposal itself lists no such dependency. An independent reviewer approved the first design. The owner then ruled on it the same day ([decisions 14.63 to 14.68](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)), changing three things: the program is found and accepted by the conventions T3 Code and opencode use, Codex's own login is the primary sign-in, and installing is offered in setup, which stays a difference from T3 Code. This text is revised for those rulings. The [decisions record](../decisions.md) wins wherever this text differs from it. The Linear ticket is [NEU-425](https://linear.app/neuve/issue/NEU-425).
+
+**Words.** These are the implementation words of the [runtime and accounts proposal](claude-subscription-route.md), not product vocabulary: a _runtime_ is the program that runs an agent's loop, an _account_ is one sign-in or key, a _provider session_ is one running runtime process serving one session on one account. _Codex_ is OpenAI's open-source coding agent, the `codex` program. Its _app server_ is the mode of that program (`codex app-server`) that other programs drive.
+
+**What was read.** Neuve at `cd4b5c6`. T3 Code's public source ([pingdotgg/t3code](https://github.com/pingdotgg/t3code), MIT) at commit `898c22f9900b90f81daece0895b7e4f4198355f8` of 20 November 2026; every T3 Code path below is in that commit. opencode's public source ([sst/opencode](https://github.com/sst/opencode), MIT) at commit `bfee96a859aa0d225b845d67625d34ea6ae773d2` of the same day. OpenAI's Codex documentation as served on 20 November 2026 and Codex's source at tag `rust-v0.171.0`, the release of that day. No Codex program was run for this proposal, so every statement about Codex's behaviour is from documentation or from another project's source, and [Not verified](#not-verified) lists what a run must still establish.
+
+## At a glance
+
+```
+ TODAY                                             PROPOSED
+ ─────                                             ────────
+ review stages ─▶ Neuve's own loop (pi)            review stages ─▶ unchanged: Neuve's own loop,
+                  on Neuve's ChatGPT sign-in                        the only path that replays exactly
+
+ Ace's chats   ─▶ pi's built-in providers,         Ace's chats   ─┐
+                  one of them a ChatGPT route                     ├▶ the runtime contract ─▶ Codex runtime
+                  pi itself marks legacy           build lanes   ─┘   (beside Claude Code)       │
+                                                                                                 ▼
+ build lanes,  ─▶ the Codex program inside the                        the user's own Codex program, found by
+ labelling,       ChatGPT app, by a path written                      setup or on the PATH, run as its app
+ replay           into the code, run as a script                      server, on Codex's own login, with
+                                                                      Neuve's tools as its only tools
+
+                                                   replay judge  ─▶ stays a pinned, tool-less Codex run,
+                                                                    with no path written into the code
+```
+
+## The owner's question: which server is the official one
+
+| Interface | What it is | Status, in OpenAI's words or source |
+| --- | --- | --- |
+| **Codex app server** (`codex app-server`) | A long-lived process a client drives with requests and notifications: threads, turns, streamed items, approvals, models, account | The interface OpenAI builds its own rich clients on. Its documentation opens by naming the VS Code extension, and other pages name the desktop app and the Python SDK ([app server documentation](https://learn.chatgpt.com/docs/app-server)). This is "the Codex server" |
+| `codex exec` | One non-interactive run that prints events as lines of JSON | Supported for scripts and CI ([non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)). The TypeScript SDK wraps it ([`exec.ts`](https://github.com/openai/codex/blob/rust-v0.171.0/sdk/typescript/src/exec.ts)). This is what Neuve scripts today |
+| Agent Client Protocol (ACP) | Zed's editor-to-agent protocol | Codex does not speak it. An adapter outside OpenAI ([agentclientprotocol/codex-acp](https://github.com/agentclientprotocol/codex-acp)) starts the app server and translates. No OpenAI statement of support was found |
+| Codex as an MCP server | An older way to call Codex as a tool | Removed ([its page](https://learn.chatgpt.com/docs/mcp-server) says so) |
+| "CDP" | | Codex has no server or protocol of that name. In its documentation, and in one of its feature names (`browser_use_full_cdp_access`), the letters mean Chrome's DevTools protocol. Neuve's own early rulings named "ACP connected to Codex" as the route for Sol ([decisions 2.9 and 2.12](../decisions.md#area-2-harness-pipeline-16-october-2026)) and "the Codex server" for labelling ([9.15](../decisions.md#area-9-benchmark-m4-17-october-2026)), and the [architecture overview](../../architecture/README.md) still says ACP connects Neuve to Codex. This proposal reads the owner's "cdp" as ACP. That is an inference; either way the answer is the app server, which is also what the ACP adapter drives underneath |
+
+**How stable the app server is said to be.** OpenAI's own texts disagree, and the design is built for the cautious reading:
+
+- Its documentation describes a "stable API surface" when a client does not opt in to experimental methods, and says the generated type definitions match the version of the program that produced them.
+- The command reference says the app server "may change without notice" ([developer commands](https://learn.chatgpt.com/docs/developer-commands)), and the program's help marks the command experimental ([`main.rs`](https://github.com/openai/codex/blob/rust-v0.171.0/codex-rs/cli/src/main.rs)).
+- No written compatibility policy and no protocol version in the handshake were found.
+
+**What OpenAI says about sign-in.** The app server's own account section says: "App-server authentication has never been permitted for commercial or hosted services", that a local or open-source application "can continue using it", and that OpenAI recommends moving to Sign in with ChatGPT. OpenAI then documents exactly that combination: the application signs the person in, and starts the app server pointed at the public API with the application's own token ([Sign in with ChatGPT: Codex app-server](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server)). Neuve already has that sign-in ([`openai-auth.ts`](../../packages/harness/src/openai-auth.ts)). The owner, with this before them, ruled that Codex's own login is accepted and is the primary path, and that Neuve's sign-in stays for where it is needed.
+
+## What is there today
+
+Three unrelated ways reach OpenAI's models. This section describes the code at `cd4b5c6`, before this work, and its file and line citations were checked there. The first slice has since taken the written path out of the two evaluation files and moved the Claude runtime's lookup into a shared function.
+
+| Path | What it does | What is wrong with it, from first principles |
+| --- | --- | --- |
+| **Review stages: Neuve's own loop on Neuve's sign-in** | pi runs the loop and calls `https://api.openai.com/v1` with a token from Neuve's "Sign in with ChatGPT" ([`openai-auth.ts`](../../packages/harness/src/openai-auth.ts), lines 28–55; [`openai-route.ts`](../../packages/harness/src/openai-route.ts); [`pi/providers`](../../packages/harness/src/pi/providers/)). The account is `chatgpt`, kind `chatgpt-subscription`, runtime `pi` ([`defaults.ts`](../../packages/runtime/src/defaults.ts)) | Nothing. It is the supported sign-in, it keeps exact capture and Neuve's retry rules, and it runs no outside program. It is not a Codex path and stays |
+| **Ace's chats: pi's built-in providers** | The host hands pi its whole built-in catalogue ([`keys.ts`](../../apps/neuve-host/src/keys.ts), `catalog`, lines 216–235). That catalogue includes a provider pi names "OpenAI Codex (legacy)", which calls `https://chatgpt.com/backend-api` under Codex's own client identity (`@earendil-works/pi-ai` 1.0.0, `dist/providers/openai-codex.js`, `dist/auth/oauth/openai-codex.js` line 17). The channel's built-in lists name its models ([`captions.ts`](../../packages/channel/src/captions.ts), lines 32–49) | It imitates Codex to reach ChatGPT's own backend, which is the route [decision 10.85](../decisions.md#area-10-harness-m3-18-october-2026) called "unsupported and may change" and kept only as a fallback that was never needed. It is a second sign-in for one vendor that no part of Neuve manages. Whether a person can actually sign in to it from Ace was not established |
+| **Labelling, replay, and the build lane: the Codex program as a script** | Labelling and the replay judge run `codex exec` and parse its lines ([`labelling/routes.ts`](../../packages/evaluation/src/retrieval-bench/labelling/routes.ts), lines 38–40 and 103–150; [`pr-replay/codex.ts`](../../packages/evaluation/src/pr-replay/codex.ts), lines 101–103). The program is `NEUVE_CODEX_BINARY`, or else `/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`. On 20 November a build lane used the same path by hand | **The path.** It names one vendor's desktop app on one operating system, the app replaces the program in place, and it is not where a person who installs Codex has it; the source comment itself records that the `codex` on the `PATH` is an unrelated package. **Scripting.** A one-shot run has no approvals, no steering, no model list and no account state, and, by the lane's run log, it loaded the owner's personal Codex hooks and skills. **Three paths.** None of them is behind the [runtime contract](../../architecture/decisions/0017-runtime-contract-and-accounts.md), so Ace's model list, accounts and build lanes cannot see Codex as they see Claude Code |
+
+Two more facts shape the design:
+
+- **Claude Code is found by the convention the owner chose.** The Claude runtime takes a set path or the first `claude` on the `PATH` ([`production.ts`](../../packages/runtime-claude/src/production.ts), line 46), which is what T3 Code and opencode do. The lookup is private to that runtime; Codex needs the same one.
+- **The chat bridge is almost runtime-neutral.** It reads capabilities and events only ([`bridge.ts`](../../packages/harness/src/chat-runtime/bridge.ts)). Three places assume Claude Code: a model's context window falls back to pi's `anthropic` catalogue ([`models.ts`](../../packages/harness/src/chat-runtime/models.ts), lines 85–87); the bridge forks at a point inside a turn (`bridge.ts`, lines 503–510 and 961–988); and the stage route check reads "runs its own loop" as "is the `claude` provider" ([`route.ts`](../../packages/harness/src/route.ts), lines 154–158).
+
+## How T3 Code does it
+
+All from its source at the commit above; `Adapter` is `apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts` and `Provider` is `apps/server/src/provider/CodexProvider.ts`.
+
+| Question | What T3 Code does | Where |
+| --- | --- | --- |
+| Which protocol | The app server, over the child's standard input and output, one JSON message per line, with no `jsonrpc` field. No WebSocket, no ACP for Codex (it has an ACP client, used for other agents) | `packages/effect-codex-app-server/src/protocol.ts`, lines 107–111 and 557–574; `packages/effect-acp` |
+| Types | Generated from OpenAI's published schema at a pinned Codex commit and checked in. A few fields the schema omits are added by hand, and a notification that fails to decode is dropped with a warning | `packages/effect-codex-app-server/scripts/generate.ts`, lines 16–19; `src/client.ts`, lines 89–98 and 157–178 |
+| Finding Codex | A setting, default `codex`, resolved by the operating system through the `PATH`. In its "managed" mode it prefers a local `codex` and otherwise downloads a pinned release | `packages/contracts/src/settings.ts`, lines 716–722; `apps/server/src/provider/CodexInstallation.ts`, lines 68–110 and 470–520 |
+| Verifying it | For a program the user installed: only that it works. It starts the app server directly and reads the version from the handshake's answer; it runs `codex --version` only when that start fails, to say what it found. The version is looked up in a compatibility table kept as data: an unsupported version gets advice, and only one marked broken is refused. No signature, hash or ownership check. Its managed mode is stricter before it will use a local copy (version output of the right shape, `codex app-server --help`, a supported version), and checks a release it downloads itself against a SHA-256 written in its source | `Provider`, lines 756–757, 829–864 and 1078; `apps/server/src/provider/providerCompatibility.ts`, lines 92–160; `apps/server/src/provider/model-manifest.json`, lines 5–14; `CodexInstallation.ts`, lines 473–513 and 689–694 |
+| When it is missing | The provider's status says the program could not be started and names the setting. When the setting is the default, it adds that installing ChatGPT or Codex desktop "may not add codex to PATH" | `Provider`, lines 1097–1102 |
+| Starting it | `codex app-server -c thread_unload_delay_secs=0` plus the user's own arguments. One shared process per configured account serves all of that account's threads | `apps/server/src/provider/codexLaunchArgs.ts`, lines 16–21; `Adapter`, lines 265 and 1655–1657 |
+| Handshake | `initialize` with the client's name and version, then `initialized`, with a 30-second limit. It opts in to the experimental surface | `Adapter`, lines 257–261 and 2047–2093 |
+| Sign-in | Two modes. Existing: the person runs `codex login`; T3 Code only reads `account/read`, and watches the sign-in file for changes. Managed: T3 Code runs OpenAI's "Sign in with ChatGPT" itself, keeps the tokens, and points Codex at the public API with a token command that calls back into T3 Code | `Provider`, lines 759–760 and 1003–1005; `apps/server/src/provider/Drivers/CodexDriver.ts`, lines 406–415; `apps/server/src/provider/CodexManagedRuntime.ts`, lines 22–32 and 84–93 |
+| Models and effort | Read from Codex (`model/list`), with each model's supported effort levels and default. On top of that it writes display labels, one forced default effort for one model family, and a manifest of models that need a newer Codex | `Provider`, lines 252–297 and 518–534; `model-manifest.json` |
+| Threads and turns | T3 Code's ids are derived from Codex's thread, turn and item ids. Its transcript is its own record of the live stream: it asks Codex for a thread's turns but builds no messages from them | `packages/provider-core/src/server/IdAllocator.ts`, lines 235–316; `Adapter`, lines 8894–8915 |
+| Streaming | Codex's notifications are translated into T3 Code's own events, one or several each; text deltas are batched | `packages/provider-core/src/server/ProviderAdapter.ts`, lines 83–208; `Adapter`, lines 4900–5060 |
+| Approvals | Each of its four permission modes sets Codex's approval policy and sandbox on every turn. An approval request from Codex is shown to the person and answered when they decide | `Adapter`, lines 746–794 and 5924–5993 |
+| Its own tools | Served to Codex as an MCP server over HTTP on the local machine, with a per-thread bearer token, named in the thread's configuration. Codex keeps its own tools as well. The experimental "dynamic tools" channel is not used | `Adapter`, lines 1543–1581; `packages/provider-core/src/server/mcpSession.ts`, lines 10–23 |
+| Cancel, resume, crash | `turn/interrupt`, then up to 10 seconds for the turn to end. `thread/resume` by the stored thread id. When the process dies, pending requests fail, the session is released, and the next turn starts a fresh process and resumes the thread; there is no reconnect | `Adapter`, lines 2123–2136, 8060–8075 and 8744–8786 |
+| Logs | Decoded protocol messages, without streamed deltas and with secrets removed, written per thread | `Adapter`, lines 1726–1789; `apps/server/src/provider/EventNdjsonLogger.ts`, lines 54–64 |
+| One interface for many agents | A driver per agent program builds one instance per configured account. Each instance exposes the same session contract (open, start, steer and interrupt a turn, answer a request, one event stream) and a static capability record. Its documentation asks callers to branch on capabilities; its code still compares the driver's name to `codex` in places | `packages/provider-core/src/server/driver.ts`, lines 41–128; `ProviderAdapter.ts`, lines 700–836; `docs/internals/providers.md` |
+
+Neuve already adopted that last row: its runtime contract was modelled on T3 Code's ([runtime and accounts proposal](claude-subscription-route.md#1-what-t3code-and-ace-do)). So "our abstraction on a similar fashion" is a second runtime behind the contract Neuve has, not a new abstraction.
+
+**Licence.** T3 Code is MIT. This design borrows its structure and no code. The protocol types would be generated from OpenAI's schema, which is Apache-2.0; the slice that checks them in adds the notice to [`THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md).
+
+## How opencode does it
+
+[opencode](https://github.com/sst/opencode) (MIT) was read at commit `bfee96a859aa0d225b845d67625d34ea6ae773d2` of 20 November 2026; paths are in `packages/core/src` there unless they say otherwise. It does not drive Codex at all: it reaches GPT models with its own loop. It does drive Claude Code as a program, and that is the part to compare.
+
+| Question | What opencode does | Where |
+| --- | --- | --- |
+| Finding an agent program | An environment variable naming the program, else the first `claude` on the `PATH`. No setting in a file | `plugin/provider/claude-agent/claude/io.ts`, line 23 |
+| Checking it | Only its version: a minimum, read from the program's own start-up answer when a chat starts. No signature, hash or ownership check | `claude/probe.ts`, lines 22–32 |
+| When it is missing or signed out | "Claude Code is not installed. Install it, then run `claude auth login`." and "Claude Code is not logged in. Run `claude auth login` in a terminal." It never installs Claude Code | `claude-agent/integration.ts`, lines 51–56; `claude/probe.ts`, lines 115–120 |
+| Whose sign-in | Claude Code's own. "The plugin never sees a token": signed-in state is asked of the running program without sending a prompt. It refers to another tool's login and does not copy it, and does the same for Azure, AWS and Google | `claude-agent/integration.ts`, lines 13–26; `claude/probe.ts`, lines 43 and 111–113 |
+| ChatGPT plans | Its own "Sign in with ChatGPT", registered as its own client, sending requests to `https://api.openai.com/v1`: the same sign-in Neuve has. It never reads Codex's sign-in | `plugin/provider/chatgpt.ts`, lines 22–28 |
+| The program's own tools | Off. Claude Code is opened with no tools, its settings and hooks not loaded, and only opencode's tools allowed, served as one in-process MCP server. opencode runs each call through its own permission rules | `claude/query-options.ts`, lines 91–102; `claude-agent/tools/server.ts`, lines 27–33 |
+| Models and effort | For Claude Code, asked of the running program and saved | `claude-agent/provider.ts`, lines 50–51 and 88 |
+| What it installs | Never an agent program. It does fetch a search tool and formatters for itself without asking, the first against a hash written in its source | `ripgrep/binary.ts`, lines 15–54 |
+| Setup and upgrade | No setup or doctor command. `opencode upgrade` works out how it was installed and uses that. Changes a new version needs are named steps with a table of the ones already completed, applied when the data is opened; there is no "last version run" marker | `packages/cli/src/services/updater.ts`, lines 151–177; `database/migration.ts`, lines 57–63 |
+
+So the two projects agree on finding a program (a setting or the `PATH`, and a version check), on using the program's own sign-in by reference, and on listing models from the program. They differ on tools: T3 Code leaves Codex its own, and opencode turns Claude Code's off and serves only its own, which is what Neuve already does for Claude Code.
+
+## Each difference from T3 Code, adopted or kept
+
+The owner, on sign-in ([decision 14.65](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)): "ensure we have as much absorbed from t3code or opencode as possible for this so we avoid reinventing things that are already established". This proposal applies that to the whole design: each difference from T3 Code is adopted, or kept with its reason. Where the reason is a Neuve ruling the row names it; three rows rest on no ruling and say so.
+
+| T3 Code | Neuve | Adopted or kept, and why |
+| --- | --- | --- |
+| Takes the program from a setting or the `PATH`, and checks that it answers as Codex at a version not marked broken | The same at run time; setup also looks for it, below | **Adopted** ([decision 14.64](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)). The earlier draft's signature, ownership and folder checks, and the signer's identifier, are removed |
+| Uses the person's own Codex login | The same, as the primary path; Neuve's ChatGPT sign-in stays for where it is needed | **Adopted** (decision 14.65) |
+| Can download and install a pinned Codex release, checked against a hash in its source | Offers, in setup, to install OpenAI's public package, and only when the person says yes | **Kept different, by ruling** ([decision 14.66](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)): no pinned downloads and no tracking of Codex's releases |
+| Codex keeps its shell, file editing and web search, behind its own approvals and sandbox | Codex's own tools are off; Neuve's tools are the only tools | **Kept different.** [Decision 12.59](../decisions.md#area-12-ace-style-pi-transition-28-october-2026) puts one set of tools, with telemetry, receipts and stage policy, above the contract for every runtime, and [decision 12.28](../decisions.md#area-12-ace-style-pi-transition-28-october-2026) has a channel's commands run in that channel's sandbox, which Codex's own shell would not. It is also the established way for a program driven as a component: opencode does exactly this to Claude Code, and so does Neuve. Neither project shows it done to Codex, so that part is Neuve's own and unproved. If it cannot be proved, the fallback is T3 Code's way, and that choice would go to the owner |
+| One shared process per account | One process per session | **Kept different.** The contract ties a session's processes to the caller's scope ([record 0017](../../architecture/decisions/0017-runtime-contract-and-accounts.md)), which is also what T3 Code and opencode both do for Claude Code. Its cost is several processes refreshing one login, listed under Not verified |
+| Opts in to the app server's experimental surface | Does not, unless a named need forces it | **Kept different, on no ruling:** on OpenAI's own stability statements above. It costs nothing to revisit when a need appears |
+| Reads models and effort from Codex | The same | **Adopted** |
+| Keeps the person's own Codex settings in its sessions: their skills are listed and their configuration read | Switches them off for Neuve's sessions | **Kept different,** for the same rulings as the tools row, and because a person's hook runs commands outside the channel's sandbox. It is what opencode and Neuve do to Claude Code's settings |
+| A second account is a shadow home: its own login file, with links to the first home's threads | A second account is a named Codex home the person signs in to, as an added Claude account is a named folder | **Kept different for now, on no ruling.** Neuve's account store already works this way; T3 Code's shared threads are worth taking when a person asks to continue one conversation across two accounts |
+| Works out how Codex was installed and offers the matching update command | Shows the version and, when it is unsupported or broken, the vendor's page | **Kept different, by ruling** (decision 14.66): Neuve does not follow Codex's releases |
+| Watches Codex's login file to notice a sign-in or sign-out | Asks Codex at each status check and before a turn | **Kept different, on no ruling.** Codex may keep its login in the operating system's keyring and not in that file, so asking is the one way that always holds |
+| Decoded protocol messages logged per thread without deltas, secrets removed | The same, into the run's log | **Adopted** |
+
+## The design
+
+A new package, `packages/runtime-codex`, registers a third runtime beside pi and Claude Code. It starts the person's own Codex program as its app server, one process per session, and speaks the app server's protocol to it over the process's standard input and output. Callers do what they do today: name an account and read capabilities.
+
+### Accounts and sign-in
+
+A `chatgpt-subscription` account may run on pi, as today, or on Codex. On Codex its credential is one of two:
+
+| Credential | What it is | Who signs in, and how |
+| --- | --- | --- |
+| **A Codex home** (the primary path) | The folder Codex keeps its own login in: the person's own, or a named one for a second account | The person, with Codex's own `codex login`. A person already signed in to Codex does nothing more |
+| **Neuve's sign-in** (when needed) | The ChatGPT sign-in Neuve already has, with its one refresher | `neuve auth login <account>`, as today |
+
+- **The default account is `codex`,** on the person's own Codex home. This mirrors the default `claude` account, which is Claude Code's own configuration folder, written only by Claude Code ([`defaults.ts`](../../packages/runtime/src/defaults.ts)). Neuve refers to the login and never reads, copies or writes it, as T3 Code and opencode both do for the programs they drive.
+- **Signed-in state** is asked of Codex (`account/read`) by a short-lived probe process that sends no model request, as T3 Code does. Signed out, the account shows the command that fixes it: `codex login`, with the folder when it is not the default. The probe also gives the plan and, where Codex reports them, the usage limits.
+- **Codex refreshes its own login.** Nothing of the hour-long token and restart in the earlier draft applies to this path.
+- **The person's Codex settings are not Neuve's session.** Their hooks, skills, MCP servers and feature choices live in that same folder. For Neuve's sessions they are switched off on the command line, as the Claude runtime does with Claude Code's settings and hooks ([`runtime.ts`](../../packages/runtime-claude/src/runtime.ts), lines 146–155) and as opencode does. The person's own MCP servers are switched off by name, read by the probe. Their threads and Neuve's share Codex's thread folder; Neuve resumes only threads it started.
+- **Neuve's sign-in, when needed.** A person with no Codex login, or a machine where Codex's login cannot be used, can run the same account on Neuve's sign-in. Codex is then started with a model provider that points at `https://api.openai.com/v1` and reads an access token from one environment variable, the form [OpenAI's guide](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) shows, in a Codex home Neuve owns. The token lasts an hour: the process is restarted on a fresh one between turns and the thread resumed, and a single turn longer than the hour fails. This is a later slice, not part of the first build.
+- **What OpenAI says, which the owner has seen.** Its documentation states that app-server sign-in "has never been permitted for commercial or hosted services", that a local or open-source application "can continue using it", and that it recommends Sign in with ChatGPT. The owner ruled for Codex's own login with that before them (decision 14.65). Neuve's sign-in is the path that statement recommends, which is one reason it stays.
+- **Continuation identity** is the runtime kind plus the Codex home's path, since a thread can be resumed only from the folder that holds it.
+
+### Finding the program
+
+At run time, what T3 Code does for a Codex the person installed, and nothing more. Discovering one that is not on the `PATH` is setup's work, under [The probe](#the-probe), which neither project has:
+
+```
+ where it is taken from            what is checked                         what the person sees otherwise
+ ──────────────────────            ───────────────                         ──────────────────────────────
+ a path the person set for the     the app server starts and its           "Codex is not installed", with the
+ account; otherwise the name       handshake answers, giving the           install command and OpenAI's page
+ `codex`, resolved through the     version
+ PATH by the operating system                                              "Found <path>, which did not answer
+                                   that version is looked up in a          as Codex", with the same fix
+                                   table kept as data: a version
+                                   marked broken is refused, an            "Codex <version> does not work with
+                                   unsupported one gets advice             this Neuve", with the range
+```
+
+- **One small shared function** in `@neuve/runtime` finds a program by a set path or the `PATH`. The Claude runtime uses it in place of its own lookup, and nothing about how Claude Code is found or opened changes.
+- **Neuve does not judge whether an install is valid** (decision 14.64). No signature, owner or folder is checked. Whatever is found is started as the app server. When it does not answer, Neuve asks it for its version once, to tell the person what the file is, as T3 Code does.
+- **What that means, plainly.** Whatever `codex` comes first on the `PATH`, or is set, is run with the person's environment, is handed the session's token for Neuve's tool server, which is every Neuve tool for that session, and can read the person's Codex home. The owner accepted this with the convention.
+- **On the owner's machine today** the first `codex` on the `PATH` is an unrelated npm package of that name, and OpenAI's Codex is inside the ChatGPT desktop app, not on the `PATH`. Without a stored path the account says that it found that file and that it did not answer as Codex. Setup's [probe](#the-probe) is what finds the app's Codex and stores its path.
+- **Version.** The supported range is data, as in T3 Code, and the generated protocol types name the Codex release they came from. Only a version the table marks broken is refused, with the range; opencode refuses anything below its minimum, and T3 Code's gentler rule is taken because it is the one made for Codex. A newer one is used, and a message it sends that the types do not know is logged once and ignored, as the Claude runtime does for unknown frames.
+
+### Setup, install and upgrade
+
+Today `neuve setup` never looks for an agent program: it writes capture hooks and the skill for both Claude Code and Codex whether or not either is there ([`setup-hooks.ts`](../../apps/neuve-cli/src/capture/setup-hooks.ts), lines 346–357; [`skills-cli.ts`](../../apps/neuve-cli/src/skills-cli.ts), line 62). Upgrading replaces the installed copy and stops: the install script's last words are that repositories "keep their setup", and nothing records which setup steps a repository or machine has had. Neuve installs no program for anyone; it prints the command.
+
+The design extends what is there and adds no second mechanism:
+
+- **Setup identifies the agent programs on the machine.** One list of the programs the runtime contract knows, each with its name, how it is found and its sign-in command, replaces the two fixed lists. Setup finds each, shows what it found, and then:
+  - writes capture hooks and the skill only for the programs that are there;
+  - shows the account each one gives and whether it is signed in, with the command when it is not. The default accounts already exist in code, so there is nothing to create;
+  - `neuve doctor` reports the same findings with the same wording.
+- **Setup offers to install a missing program, and only that way.** When a program is missing and the person is at a terminal, setup asks, default no, in the same form the skill offer uses ([`skills-cli.ts`](../../apps/neuve-cli/src/skills-cli.ts), lines 867–920). On yes it runs the public registry's own install: for Codex, `npm install -g @openai/codex`, the package OpenAI's [README](https://github.com/openai/codex/blob/rust-v0.171.0/README.md) and documentation name; for Claude Code, `npm install -g @anthropic-ai/claude-code@latest`, which [Anthropic's setup page](https://code.claude.com/docs/en/setup) still documents. Neither vendor names npm first: OpenAI lists its own install script before npm and Homebrew, and Anthropic recommends its native installer and puts npm under advanced options. Those scripts are not registry packages, so under the ruling the offer is the npm package, and setup also prints the vendor's own page. Without npm, or without a terminal, it prints the command and installs nothing. Neuve pins no version, writes no hash and follows no release list (decision 14.66). On a machine where an unrelated package already owns the name `codex`, as on the owner's, what npm does is not established; setup reports npm's own result and changes nothing itself.
+- **Setup becomes named steps with a record of the ones applied.** Each step has a name, a check for "already done" and an action, the shape the skill install already has (a plan, then apply, with "nothing to do"). The names applied are recorded where setup already keeps its record: per repository in the setup folder's configuration, which gains the list beside its schema number ([`installation.ts`](../../apps/neuve-cli/src/installation.ts), lines 16–21), and per machine in a matching file for steps that are not a repository's. This is opencode's convention for the same problem: named migrations and a table of those completed, not a "last version" marker.
+- **Upgrade runs what the new version adds and prunes what it drops.** The install script already calls the new `neuve` at its end to offer the skill ([`install.sh`](../../scripts/install.sh), lines 1637–1649). It gains one more call, to the new copy's setup, which compares its own step names with those recorded and works out what to add and what to prune.
+  - **Nothing is written to an agent's configuration or to a repository without an offer.** The install script's own rule is that it "never writes any agent's configuration", and the skill is offered, never placed ([decision 14.27](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)). So a step is one of two kinds. A step that touches only Neuve's own files runs at once. A step that writes the person's Claude Code or Codex configuration, or anything in a repository, is shown as a plan and asked, default no, as the skill install is; without a terminal it is listed as waiting and `neuve doctor` shows it.
+  - **What pruning a step means is part of the step.** Each step says what undoing it does, and undoing removes only what Neuve wrote and can still recognise as its own: its hook entries carry a marker ([`setup-hooks.ts`](../../apps/neuve-cli/src/capture/setup-hooks.ts), lines 45–57) and its skill folder a receipt with a hash per file. Anything the person changed is left and reported.
+  - **Where repository steps run.** In a repository when a command next runs there, and from the upgrade for the repositories the machine knows, from the list Neuve already keeps of repositories with a Records store ([`registry.ts`](../../packages/records-core/src/registry.ts), lines 11–35). An entry whose folder is gone is skipped and said so.
+  - **An older Neuve after a newer one** leaves a record it does not understand alone and changes nothing.
+
+### The probe
+
+The owner's machine is the test case ([decision 14.68](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)): "It should be installed already as I have it running. But not through npm it's the downloadable installable of the main app. It should however be a good test for the setup script to probe and discover as t3 and opencode does".
+
+**A fact for the owner first: neither project discovers that install.** T3 Code takes a setting that defaults to `codex` and resolves it through the `PATH`; when that fails it tells the person that installing ChatGPT or Codex desktop "may not add codex to PATH" (`apps/server/src/provider/CodexProvider.ts`, lines 1097–1102). opencode does not drive Codex at all. So what follows is Neuve's own probe, built from what OpenAI ships and not borrowed.
+
+**What is on that machine,** read on 20 November 2026 without running anything:
+
+- The only OpenAI install is the ChatGPT desktop app. Inside it is a folder holding Codex and a manifest, `codex-package.json`: layout version 1, Codex version 0.169.1, the target, and an `entrypoint` naming the program inside that folder.
+- That manifest is the format of OpenAI's own Codex release packages: its repository builds them with a script named for it (`.github/scripts/build-codex-package-archive.sh` in [openai/codex](https://github.com/openai/codex/tree/rust-v0.171.0)), and T3 Code reads the same four fields from the releases it downloads (`apps/server/src/provider/CodexInstallation.ts`, lines 50–55).
+- The person is signed in to Codex: its home folder holds a login. Neuve did not read it.
+- The only `codex` on the `PATH` is the unrelated npm package.
+
+**What OpenAI documents, and what it does not.** The troubleshooting page of its [Codex documentation](https://learn.chatgpt.com/docs), under "Feature is working in the Codex CLI but not in the ChatGPT desktop app", names one path to the Codex inside the desktop app, and only for asking its version: "the retained `Codex.app` compatibility bundle path", `/Applications/Codex.app/Contents/Resources/codex`. That path does not exist on the owner's machine, where the app is ChatGPT. No documented action that puts the app's Codex on the command line was found, and nothing documents the folder or the manifest inside the app or promises they will stay. So the probe below reads an undocumented layout, and is written to fail plainly when it changes.
+
+**The probe, in setup:**
+
+```
+ candidates, in this order                       each candidate is asked           what the person sees
+ ─────────────────────────                       ─────────────────────           ────────────────────
+ 1. a path the person already set                the same question the runtime     "codex at ~/.nvm/…/bin/codex did
+ 2. every `codex` on the PATH, in order          asks: start it as the app          not answer as Codex: skipped"
+ 3. OpenAI's desktop apps, found by reading      server and read the version
+    the two Applications folders for apps        from the handshake                "Found Codex 0.169.1 in the
+    with OpenAI's identifiers, then reading                                        ChatGPT app. Using it for the
+    the manifest inside for the program it       the first that answers at a       codex account. Signed in."
+    declares                                     version not marked broken is
+ 4. the compatibility path OpenAI documents      stored as the account's
+                                                 program path, and the probe
+                                                 stops
+```
+
+- **No install location is written into run-time code.** The candidates are data in the one list of agent programs, read only by setup's probe: the program's name, the app identifiers, the manifest's file name and the documented compatibility path. At run time the runtime uses the stored path, or the `PATH` when nothing is stored, and asks its works-and-version question, exactly as in "Finding the program". The path into an app is a fact setup discovered on this machine and showed to the person, kept where the person's own setting is kept.
+- **The app is found by its identifier, in the two Applications folders.** The applications in the machine's and the person's own Applications folders are read for OpenAI's identifiers (the ChatGPT app on the owner's machine reports `com.openai.codex`). A copy in a downloads folder, on a mounted disk image or one the system is running from a temporary place is not looked at. When several carry the identifier, the machine's folder comes before the person's, then by name, and every one found is shown.
+- **The program inside is the one the manifest names,** and the rule for it is T3 Code's: layout version 1, and an entry point that is exactly the program in the package's own `bin` folder (`CodexInstallation.ts`, line 255), judged after links are followed. Anything else is reported as "a layout this Neuve does not know" and skipped. On the owner's machine that entry point is a small script that starts the program inside the app: the same program a lane once started by a written path.
+- **What that means, plainly.** Any application in those folders that carries the identifier has the program its manifest names run with the person's environment, the session's token and their Codex home, exactly as a `codex` on the `PATH` does. The app on the owner's machine is owned by the person, so anything running as them can change it. That is the same trust as the `PATH`, under the same ruling.
+- **A candidate that does not answer is reported and skipped,** and the probe goes on. Asking means running it. T3 Code asks only the one `codex` the `PATH` resolves to; asking every one, and then the desktop apps, is Neuve's own choice, made so that setup can get past the unrelated package on the owner's machine. It means setup starts that package once.
+- **Nothing is installed when something is found.** On the owner's machine there is no offer. The npm offer is only for a machine where every candidate failed.
+- **Re-probed, never trusted for long.** `neuve doctor` and an upgrade ask the stored path again and say when it no longer answers, and offer the probe. The desktop app replaces its Codex in place when it updates: the path stays and the version changes. The version question is asked again at every new session, so a new version is seen then. A session running through an update may carry on with the old copy or may die; if it dies it recovers like any other.
+- **How this differs from what the owner rejected.** The rejected way wrote the app's path into code and ran one-shot scripted commands. Here the location is discovered by setup from the system and the app's own manifest, shown to the person and stored as their setting, and the program is driven through its app server.
+
+### Starting it and speaking to it
+
+- **Process.** One per session, started in the caller's scope, with standard input and output as the transport and standard error kept as a short tail for failure reports. Closing the scope ends it. Its working folder is a folder Neuve owns, never the project: Codex runs no tools, so it has no need of the project's folder, and it then reads no project file of its own accord.
+- **Environment.** The person's own, as T3 Code gives Codex, because Codex needs their home folder to find its login. The Codex home is set from the account and never inherited, as T3 Code does, and OpenAI's key and base-address variables are removed so that Codex uses its login and not a key that happens to be set. The rest of the environment, an agent socket for example, stays; the earlier draft's short allowed list went with the Neuve-owned home. Codex is told to pass none of it on.
+- **What Neuve gives the Codex process.** One secret, in its environment and never on a command line or in a log: the bearer token for Neuve's tool server, made for that session and useless after it. On Neuve's sign-in there is a second, the hour-long access token. Nothing longer-lived comes from Neuve. Codex is configured to pass none of its environment to anything it starts, and with its own tools off it starts nothing.
+- **Configuration** is passed on the command line, which Codex documents, and holds no secret: Neuve's tool server and the name of the variable its bearer token is in, and the switches under [Tools](#tools-neuves-are-the-only-ones).
+- **Handshake.** `initialize` with Neuve's name and version, then `initialized`, without opting in to the experimental surface.
+- **Types.** Generated from OpenAI's published schema for a pinned Codex release and checked in, with a script that regenerates them. Incoming messages are decoded strictly for the fields Neuve consumes.
+
+### Sessions, turns and events
+
+| Contract | Codex app server | Notes |
+| --- | --- | --- |
+| `openSession`, new | Start the process, then `thread/start` with the model and Neuve's instructions | `nativeSessionId` is Codex's thread id |
+| `openSession`, resume | `thread/resume` with the stored thread id | A thread that is archived or closing is retried as T3 Code does |
+| `openSession`, fork | `thread/fork`, at a turn boundary | See the resume note below |
+| `startTurn` | `turn/start` with the message, model, effort and, on a final turn, the output schema | Codex accepts a schema per turn, so a final turn needs no second process |
+| `steerTurn` | `turn/steer` with the running turn's id | |
+| `interruptTurn` | `turn/interrupt`, then wait for the turn to end | If it does not end, the process is stopped and the turn finishes interrupted |
+| `setModel` | The next `turn/start` carries the new model and effort | |
+| `text` | `item/agentMessage/delta` | |
+| `tool.started`, `tool.finished` | A call arriving at Neuve's tool server, and its result | Named by Neuve's tool name, never a wire name |
+| `usage` | `thread/tokenUsage/updated` | Turn scope. Cost is `null`: a subscription is unpriced |
+| `rate-limit` | `account/rateLimits/updated`, as T3 Code reads it on Codex's own login | Not verified on Neuve's sign-in |
+| `retry` | Codex's `error` notification when it says it will retry | |
+| `turn.finished` | `turn/completed`: completed, interrupted or failed | Process exit finishes open turns as failed and broken, then ends the stream |
+| `message.finished` | No direct equivalent | See below |
+
+**Codex cannot do three things the contract today assumes of every runtime that runs its own loop.** Each is true of Claude Code. The contract's own text says so, and the design changes the contract and does not work around it.
+
+| The contract today | Codex | What changes |
+| --- | --- | --- |
+| A tool's result may end the turn with no further model request, and "a runtime that cannot honour this must not declare ownsLoop" ([`contract.ts`](../../packages/runtime/src/contract.ts), lines 76–82) | The app server has no such switch. Withholding the result and interrupting would leave the result outside Codex's thread, which the contract's rule on resume points forbids (lines 286–289) | Ending a turn from a tool becomes its own capability. Claude Code declares it; Codex does not. Review stages require it. Coding chats do not: the bridge never reads it, and holds each call open while pi runs the tool |
+| Every `message.finished` names a resume point "whose whole chain is in the native session", and the chat bridge records one at every tool call and forks there after a failure ([`bridge.ts`](../../packages/harness/src/chat-runtime/bridge.ts), lines 503–510 and 961–988) | Codex resumes and forks only between turns | Resuming mid-turn becomes a capability. Without it a message carries no resume point; the bridge records one only when a turn ends, and recovers an interrupted turn from the last completed turn, giving the model the lost part of the conversation as text. The bridge already builds such a hand-over for a change of account ([`handoff.ts`](../../packages/harness/src/chat-runtime/handoff.ts)) |
+| One `message.finished` per model response, listing all of its tool calls, with that request's usage "always" filled (lines 177–215) | The app server reports items, not responses, and usage per thread. What the runtime can prove is that a response has ended when a tool call reaches Neuve's tool server. Codex runs one MCP server's calls one at a time by default, but one response may still hold several | A message becomes "the unit a runtime can prove complete": for Codex, each tool call with the text before it, and a turn's closing text. Per-message usage becomes a capability, which review stages require for their context ceiling and chats do not |
+
+So the Codex runtime declares that it runs its own loop and does not declare the three new capabilities. Chats and build lanes need only the first. Review stages need all four, so they cannot run on Codex, and nothing in this proposal makes them. Two callers that read "runs its own loop" as "is Claude Code" are corrected by the same change: the chat models gate ([`models.ts`](../../packages/harness/src/chat-runtime/models.ts), line 121), which stays as it is, and the stage route check ([`route.ts`](../../packages/harness/src/route.ts), lines 154–158), which gains the three capabilities.
+
+### Tools: Neuve's are the only ones
+
+Neuve's tools reach Codex as one MCP server, the way they reach Claude Code and the way T3 Code serves its own. The server listens on the local machine only, on a port of its own per session, and requires that session's bearer token. Its tools are offered to the model directly, not through Codex's code mode or its tool search; OpenAI's guide says tool search fails on Neuve's sign-in, and one way of offering them serves both sign-ins.
+
+Codex's own tools are turned off, and so, for Neuve's sessions, are the hooks, skills and MCP servers the person has set up in their own Codex. **One thing guards that, and it must be proved before anything else is built on it:** before the first turn the runtime reads back, from the running program, its effective configuration and its feature list, and refuses to open the session unless every tool-bearing feature is off, none it does not know is on, Neuve's is the only tool server, and none of the person's hooks, skills, memories or connected apps is on. A hook matters most: it runs a command on the machine itself, outside any channel's sandbox, and the person's hooks loading into a lane's run is part of what started this work. Codex's configuration reference names a switch for each of these, and the app server can list hooks and skills, so the check reads them back and does not trust the switches. Hooks an administrator installed for the whole machine cannot be switched off by a user; where any exist the session is refused with a message that says so. The [replay judge's probe](../../packages/evaluation/src/pr-replay/codex.ts) (lines 47–61) is why this is a check and not a list of switches: it found that with the shell switched off the model was still offered a way to run code, and that a failed attempt left no trace in the event log. The list of features is shared with the replay judge's. A new Codex release that adds a tool fails closed, with a message that names the feature.
+
+Two more settings limit the damage if that check is ever wrong. They are not guards, and the design does not count on them:
+
+- **The sandbox is read-only.** A tool Codex still had could not write. It could still read, so this protects nothing that must stay private.
+- **Codex is told never to ask for approval,** so a write it attempts on its own fails inside Codex and does not wait on a person. A read still succeeds.
+
+One more signal costs nothing: Codex reports each command, file change and web search of its own as an item in the turn's events. Any such item fails the turn as a protocol error and closes the session. It tells Neuve after the fact that the check was wrong; it does not undo a read.
+
+Codex can still send the client a request during a turn. Each kind has a fixed answer, so no turn stalls on one:
+
+| Request from Codex | Answer |
+| --- | --- |
+| Approval of a command, a file change or wider permissions | Declined. With Codex told never to ask, none should arrive; one that does means a tool of Codex's own tried to run, so the turn fails as a protocol error and the session is closed |
+| Confirmation of a call to one of Neuve's own tools | Accepted. Neuve's tool server is configured so its tools are approved without asking; if Codex asks anyway, for a tool marked destructive, this is the answer |
+| A question for the person, or a confirmation for any other server | Cancelled, and logged |
+
+What follows from Neuve's tools being the only tools:
+
+- **Plan mode's read-only rule applies unchanged.** It is enforced inside each of Neuve's tools ([planning mode proposal](planning-mode.md#how-read-only-is-enforced-and-where-the-hook-sits)). Codex's own planning mode, which is experimental and a matter of instructions, is not used.
+- **The sandbox ruling applies unchanged** ([decision 12.28](../decisions.md#area-12-ace-style-pi-transition-28-october-2026)). File and shell calls go where the channel sends them, which is the channel's sandbox once it exists. The Codex process runs no commands and stays outside, like Claude Code's.
+- **What an agent can reach.** Through the tools, exactly what a pi or Claude Code chat can reach. An agent that has been given hostile text has no more than that, as long as the check at open holds.
+- **Approvals under Neuve's policy.** When a session's policy is "ask", the runtime raises the contract's approval request itself, before a tool's handler runs, and waits for the answer. Nothing of Codex's approval machinery is involved.
+- **Questions to the person** go through Neuve's own question tool.
+
+### Models and effort
+
+A status check lists what this account can use and never sends a model request:
+
+- **On Codex's own login,** models, each one's effort levels and its default all come from Codex's `model/list`, as T3 Code reads them. Neuve holds no token on this path, so it asks no one else.
+- **On Neuve's sign-in,** OpenAI's guide warns that the app server's own list is then a bundled catalogue and "not an entitlement check". Which models the account can use comes from the account's own catalogue on the public API, which Neuve already reads with its own token for the route check ([`openai-route.ts`](../../packages/harness/src/openai-route.ts), lines 72–110), joined by model name to Codex's list for the effort levels.
+- **Nothing built in.** No model name is written into the runtime. A model whose effort levels are unknown is shown without them, never guessed.
+
+The result fills the same model rows Claude Code's probe fills, so Ace's picker, each agent's line and "by prompting" selection ([decision 14.61](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026)) need no Codex case.
+
+### Cancel, resume and recovery
+
+- **Cancel** is `turn/interrupt`, and if the turn does not end, stopping the process. Either way the contract's one terminal event is emitted.
+- **The process dies.** Pending requests fail, open turns finish failed and broken, the stream ends. The next turn opens a new session and resumes the thread at its last completed turn. There is no reconnect, as in T3 Code.
+- **Neuve restarts.** Nothing of Codex survives it. The bridge's stored heads hold the thread id and last completed turn, and the next turn resumes from there.
+- **The sign-in is gone or rejected.** The turn ends with the contract's "sign-in required" or "account rejected", naming `codex login` for a Codex home, or `neuve auth login <account>` on Neuve's sign-in.
+- **On Neuve's sign-in, the token nears expiry.** Between turns, the process is restarted on a fresh token and the thread resumed. Mid-turn, the turn fails as reusable.
+- **A usage limit** ends the turn with "usage limit reached" for that account, and never moves to another account on its own.
+
+### Telemetry and capture
+
+| Capability | Codex runtime | Why |
+| --- | --- | --- |
+| Runs its own loop, resume, fork, interrupt, model switch, structured output, steering, approvals, native tool server, status probe, internal retries | Yes | As mapped above |
+| Ending a turn from a tool, resuming mid-turn, per-message usage | No | The three limits above |
+| Per-request telemetry | No | Usage arrives per turn |
+| Byte-exact capture | No | Neuve sees protocol messages, not the provider's wire |
+
+Shared telemetry, logs, receipts and budgets read the contract's events and need nothing new. Beyond them the runtime writes the decoded protocol messages, without text deltas and with secrets removed, to the run's log, as a second capture kind beside Claude Code's. Codex's own thread files, in the account's Codex home, are the native transcript.
+
+### What the contract gains
+
+Each is a change to the shared contract, used by every runtime, and none is a Codex case in a caller.
+
+| Change | Who else it serves |
+| --- | --- |
+| The runtime kinds gain `codex`, and a `chatgpt-subscription` account may name it | The same shape an Anthropic key already has |
+| A credential that is Codex's own home folder, written only by Codex, with `codex login` as its sign-in hint. It sits beside the Claude configuration folder and has the same shape; stored Claude accounts are untouched, so nothing is moved. Only an account on the Codex runtime may name it | The same idea the contract already has for Claude Code: a reference to the program's own login |
+| One function in `@neuve/runtime` that finds a program by a set path or the `PATH`, and an "unavailable" reason for a file that was found and did not answer as the program | Claude Code, whose lookup is private to its runtime today |
+| Three capabilities split out of "runs its own loop": ending a turn from a tool, resuming mid-turn, and per-message usage. The contract's text on `endTurn`, resume points and `message.finished` is reworded to match, and review stages check all three when a stage opens | Says in the contract what stages need and what chats need, which today is implied by there being one such runtime |
+| A model row may carry its context window and output limit as reported before any turn has run. The contract already reports both on a turn's usage, and the bridge already prefers those; the row replaces only the bridge's fallback to pi's `anthropic` catalogue ([`models.ts`](../../packages/harness/src/chat-runtime/models.ts), lines 85–87) | Any runtime whose models pi's Anthropic catalogue does not list |
+| The effort levels cover what runtimes report (Codex has levels below "low"); a level Neuve does not know is left out and logged, never a failed probe | Any future runtime |
+
+## What this replaces or consolidates
+
+| Today | After |
+| --- | --- |
+| A build lane starts the Codex program from the ChatGPT app by hand | Removed. A lane's Codex implementer is a chat on the `codex` account |
+| pi's "OpenAI Codex (legacy)" provider in Ace's catalogue, and its model names in the channel's built-in lists | Removed from the catalogue. The planning mode work already removes those lists; Codex's models come from the account's status check |
+| The Claude runtime's private lookup | One shared function, used by both runtimes |
+| The app-bundle path written into the two evaluation files and their tests | Removed. They take the program only from the explicit setting they already have |
+| pi's copy of Codex's sign-in, a third way to sign in to one vendor that nothing in Neuve manages | Gone. Two remain, each the vendor's own: Codex's login, and OpenAI's Sign in with ChatGPT through Neuve |
+| Two fixed lists of agent programs, in capture setup and in the skill install, used whether or not the program is there | One list, and setup acts on what it finds |
+
+What stays, and why:
+
+- **Review stages on pi.** They need exact capture and Neuve's own retry rules, and only pi replays byte for byte ([runtime and accounts proposal](claude-subscription-route.md#what-is-shared-and-what-each-runtime-keeps)). They also need the three capabilities Codex lacks.
+- **The replay judge's `codex exec` run.** It reads text written by anyone on the internet, so it must have no tools at all, and it proves that by refusing any Codex but one exact, hashed build with a known feature list and by auditing the run's event log ([`pr-replay/codex.ts`](../../packages/evaluation/src/pr-replay/codex.ts), lines 47–61, 105–111 and 563–740). A runtime whose purpose is to give an agent tools is the wrong instrument for that, and `codex exec` is a mode OpenAI supports for scripts. It keeps its own stricter checks and loses only the written path.
+- **Labelling's `codex exec` run** ([`labelling/routes.ts`](../../packages/evaluation/src/retrieval-bench/labelling/routes.ts)) is pinned evaluation machinery of the same kind. It could move to the runtime later, since the runtime offers structured output; nothing here needs it to, so it only loses the written path.
+
+So OpenAI's models are still reached three ways, each for a stated reason, with no path written into code in any of them.
+
+## How a build lane runs a Codex implementer
+
+**Once the first five slices exist.** On the owner's machine OpenAI's Codex is the one inside the ChatGPT desktop app, and the person is signed in to it. Until setup's probe is built, and once the owner confirms the first open question below, the probe's documented order is applied by hand and recorded: the `PATH` candidate is asked and skipped, the app is found by its identifier, its manifest names the program, and that path is stored as the account's. No path into the app is written into code, nothing is installed, and no login is read or copied. The coordinator then opens a workspace channel on the implementer's worktree, chooses a model from the `codex` account, and sends the brief, all through the workspace's existing command line (`new`, `model`, `ask`, `watch`; [`cli.ts`](../../apps/neuve-host/src/cli.ts)). The implementer is then an ordinary Ace chat: it has Ace's file and shell tools, its work is in the channel's transcript for the reviewers to read, and it runs on the person's own Codex login. The brief names the repository's guidance and the shipped `neuve` skill, as a lane's brief does today; Ace loading that skill by itself is separate work. That is also the path the planning mode build uses for its implementers, so the lane dogfoods it.
+
+**From an unmerged branch.** A lane does not have to wait for the merge. The workspace is started from a checkout's source (`bun workspace`, with `--repo` naming the project to work on; [Developing Neuve](../../docs/development.md#open-the-workspace)), so a workspace started from this branch's worktree runs this branch's runtime while the implementer's project is another worktree. That takes the branch's worktree with its dependencies installed and the Graph engine built or copied in, OpenAI's Codex signed in. This is read from the commands' documentation and was not run. The installed `neuve` is not involved, since the workspace is not part of a release.
+
+**Until then.** The paths the owner rejected are not used. A lane's implementer is an Opus session, which [`AGENTS.md`](../../AGENTS.md#how-agents-build-neuve) already allows. Review stages and chats that need Sol keep using Neuve's own loop on the `chatgpt` account, which is not a Codex path. A lane that waits for a Codex implementer waits for these slices.
+
+## Build slices
+
+Each is one implementer and one independent reviewer. They run in order in one lane, because each builds on the files of the one before. **The first five, from "Find a program" to "The account, and Ace", are the smallest set that lets a build lane run a Codex implementer.** The planning mode lane is waiting on them ([NEU-424](https://linear.app/neuve/issue/NEU-424)).
+
+| Slice | Needs | Replaces | Done when, including the failures |
+| --- | --- | --- | --- |
+| **Find a program.** One shared function that finds a program by a set path or the `PATH`, with the Claude runtime moved onto it, and the written app-bundle path taken out of both evaluation files and their tests | Nothing. It runs no Codex | The Claude runtime's own lookup; the written path | Claude Code is found and opens exactly as before, with existing tests changed only where the lookup moved. No source or test file names the ChatGPT app's bundle (documents that describe the old path as history still do), the two evaluation files say what to set when their explicit setting is absent, and the replay judge's gate still refuses any Codex but its pinned build |
+| **Speak the protocol, and prove the facts.** Generated types for a pinned Codex release with the third-party notice; the line-based client; a recorded-conversation replay for tests; and a table of the facts the runtime relies on, each proved against the person's Codex or marked unproved | Find a program. The proofs need OpenAI's Codex on the machine, signed in: on the owner's machine, the desktop app's. The proofs take the program's path as an explicit argument, found by the probe's order applied by hand, and the table of facts records that path, how it was found and the version that answered | Nothing | Without Codex on the machine: the client and its replay tests are complete, and malformed, oversized and unknown messages, a process that exits mid-request and a handshake that never answers each end in a typed failure; every fact in the table is marked unproved, and the lane stops here. With it: a handshake, a thread, a turn, a tool call from Neuve's server, an interrupt, a resume and a structured final answer are each recorded from the real program. The table says whether the check at open can see every tool-bearing feature and every one of the person's own settings. If it cannot, the build stops and this design is revised |
+| **The contract's three capabilities.** The split of "runs its own loop", the reworded contract text, the stage check, and the chat bridge recovering a turn on a runtime that resumes only between turns | Nothing; it can run beside the two above | The implied rule that a runtime with its own loop is Claude Code | Claude Code declares all three and every existing stage and chat test passes unchanged. A test runtime without them is listed for chats and refused for stages with a typed mismatch. On that runtime the bridge records no mid-turn head, and after a failure mid-turn it resumes at the last completed turn and gives the lost part as text, without running a completed call again |
+| **The runtime.** Sessions, turns and events mapped onto the contract; the version check and the handshake; Neuve's tools over the local tool server; Codex's own tools and the person's own settings off, with the check at open; the fixed answers to Codex's requests; cancel, resume and recovery; the protocol log | The three above | Nothing | The contract's conformance tests that the Claude runtime passes are passed here, for the capabilities declared. Exactly one terminal event per turn in each of: completion, interrupt, process death, scope closure, sign-in required, usage limit. A program that does not answer as Codex, or whose version the table marks broken, is refused with its own message; an unsupported version runs with advice. A Codex with a tool-bearing feature, one of the person's MCP servers, a hook or a skill still on is each refused at open, with a message that names it. An approval request for a command or file change is declined and fails the turn; a question or foreign confirmation is cancelled and the turn continues. The session's bearer token is in no log and on no command line |
+| **The account, and Ace.** The runtime kind, the Codex-home credential and the default `codex` account, with the place its program path is stored and shown; the status check with sign-in state, models and effort; registration in the review worker and the workspace; the model row's new fields with the bridge's Claude-only fallback removed | The runtime | The `anthropic` catalogue fallback in the bridge | `neuve auth status` and the workspace list the `codex` account with its state and its models and effort levels, none of them written in code. A person can set the account's program path with one `neuve auth` command, and it is then the one used and shown. A person signed in to Codex and not to Neuve gets a working account with no further sign-in. A workspace chat on it completes a turn that reads and edits a file through Ace's tools, is stopped mid-turn, and is resumed after the process is killed. Without Codex installed, with a file that does not answer as Codex, with a version marked broken, and signed out, the account shows that state with its fix and the chat fails with it; pi and Claude accounts are unaffected in each |
+| **Setup finds the agent programs.** The one list of agent programs; the probe, storing the program path it finds; setup and doctor reporting what is on the machine; capture hooks and the skill written only for what is there; the offer to install a missing program from the public registry | The account, and Ace | The two fixed lists of agent programs | On the owner's machine the probe reports the `PATH`'s `codex` as not answering as Codex and skipped, finds the Codex in the ChatGPT app through the app's identifier and manifest, stores its path, shows it with its version and sign-in state, and makes no install offer. A manifest of an unknown layout, an entry point outside its folder, and an app with no manifest are each reported and skipped. A stored path that stops answering is said so by doctor, which offers the probe. With only Claude Code present, no Codex hook or skill folder is written and setup says Codex was not found, with the offer at a terminal and the command without one. Answering no installs nothing. Answering yes runs the registry's own install and nothing else; when npm is absent or refuses, setup says so and the person's files are untouched. Doctor shows the same findings |
+| **Upgrade runs the new version's setup steps.** Setup as named steps with a record of those applied, per repository and per machine; the install script's call to the new copy's setup | Setup finds the agent programs | Setup's straight-line order; the upgrade that stops at the installed copy | A repository set up by an older version gains the steps a new version adds and loses the ones it drops, once, and a second run changes nothing. A step that writes an agent's configuration or a repository is offered and writes nothing on no, or without a terminal, where it shows as waiting. Pruning removes only what Neuve wrote and leaves and reports anything the person edited. A listed repository whose folder is gone is skipped. A record written by a newer version is left alone by an older one. An upgrade interrupted midway finishes on the next run |
+| **Neuve's sign-in on Codex.** The second credential, with the environment-variable token and the restart between turns | The account, and Ace | Nothing | A person with no Codex login runs the `codex` runtime on `neuve auth login`. A token renewed between turns restarts the process and resumes the thread; a turn that outlives its token fails as reusable; no token is in a log or on a command line |
+| **Remove the legacy provider.** pi's legacy ChatGPT provider out of Ace's catalogue | The account, and Ace; and the planning mode slice that removes the channel's model lists | That provider | Ace lists no model of the legacy provider, and a chat that had one selected says so and offers the account's models |
+
+None of the first five is visual work. "The account, and Ace" changes no screen; the account appears in the lists Ace already draws. Review stages on Codex are not a slice: they would need Codex to gain what it lacks, or a design of their own.
+
+**Staffing of the first five.** An Opus implementer, a separate Opus reviewer with fresh context in the inner loop, and a separate Fable reviewer with fresh context for the whole range, who requests the one Neuve review. No accepted Codex route exists until this is built, so the implementer cannot be a Codex session. This is the coordinator's decision of 20 November 2026 and not a ruling; [decision 14.9](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) names Opus reviewers since 13 November, so the Fable reviewer is for the owner to confirm or overrule.
+
+## Ruled by the owner, and settled from the owner's stated principles
+
+| Point | Settled as | From |
+| --- | --- | --- |
+| Which protocol, and the shape | The app server, over standard input and output, as a second runtime behind the existing contract | [Decision 14.63](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026): "the official ... codex server", "our abstraction on a similar fashion" |
+| Finding and accepting the program | A set path or the `PATH`, and a version check. No check of whether an install is valid | [Decision 14.64](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026): "We are not going to ensure what install is valid, we'll use conventions same as t3code and opencode" |
+| Sign-in | Codex's own login first; Neuve's ChatGPT sign-in when needed | [Decision 14.65](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026): "yes that is half of the point. We can still authenticate if needed" |
+| Installing Codex | Only when needed, only on a yes in setup, only the public registry's package | [Decision 14.66](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) |
+| Setup and upgrade | Setup identifies the agent programs; upgrade runs what a new version adds and prunes what it drops | Decision 14.64, as the coordinator read it |
+| Discovering an installed Codex | Setup probes the `PATH` and OpenAI's desktop apps, and stores what answers as the account's program path | [Decision 14.68](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026): "a good test for the setup script to probe and discover" |
+| Merging | The pull request is merged once both reviews approve and the checks pass | [Decision 14.67](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026): "merge it" |
+| Neuve's tools as the only tools | Kept | Decisions 12.59 and 12.28, and opencode's practice for the program it drives; see the table of differences |
+| pi's legacy ChatGPT-backend provider | Removed from Ace | [Decision 2.9](../decisions.md#area-2-harness-pipeline-16-october-2026) removed the consumer-backend route; [10.85](../decisions.md#area-10-harness-m3-18-october-2026) called this one unsupported |
+| Models and effort | Discovered from Codex, none written in code | [Decision 14.61](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026): "We should identify and use available models and vendors" |
+| Agents' flow | No cap, counter or coded stop is added. The only limits are on processes: a handshake that never answers, a turn that will not stop | [Decision 14.59](../decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026) |
+| Review stages | Stay on pi | [Record 0017](../../architecture/decisions/0017-runtime-contract-and-accounts.md) and exact replay |
+
+## Open questions for the owner
+
+Nothing blocks the first slice, which runs no Codex. The first row is to be confirmed before the protocol slice runs anything; the next three do not block; the last may come back:
+
+| Point | Recommendation |
+| --- | --- |
+| Whether a build lane may run the Codex inside the owner's ChatGPT app, found by the probe's order applied by hand, for the protocol slice's proofs. The owner's words were that it "should be installed already as I have it running" and that it is "a good test for the setup script to probe and discover"; that a lane may run it before the probe is built, and that the owner's first objection was not to this install, is the coordinating session's reading (decision 14.68) | Confirm. It is the same program the owner objected to a lane starting by a written path; what differs is how it is found and how it is driven |
+| The Fable reviewer for the whole range, against the ruling that names Opus reviewers | Confirm it for this work, or name Opus |
+| Whether Homebrew counts as a public registry for the install offer, beside npm; and whether a vendor's own install script, which both vendors recommend ahead of npm, may be offered | Offer npm only for now: it is a registry package for both programs, and the ruling's reason, not tracking a vendor's releases, holds for it. Print the vendor's page beside it |
+| Whether Neuve should also offer to put the app's Codex on the command line for the person, for example a link in their own bin folder | No. It would write outside Neuve's files for a convenience the stored path already gives Neuve; the person can do it themselves |
+| **May come back:** if the first real run cannot show that Codex is left with only Neuve's tools, the choice is between T3 Code's way (Codex keeps its own tools, under its own sandbox and approvals) and not offering Codex in Ace until it can | Not asked now. It is put to the owner only if the proof fails |
+
+## Not verified
+
+No Codex program was run. Everything about Codex's behaviour is from documentation, its source, or T3 Code's source.
+
+- **The app server's behaviour on the owner's machine.** Its Codex is the one inside the ChatGPT desktop app, version 0.169.1 by its manifest. It was not run for this proposal; the protocol slice's proofs run it.
+- **The probe:** which identifiers OpenAI's desktop apps carry beyond the one read; that the manifest's layout and its place inside the app stay as they are, which nothing documents; that the app's Codex uses the login in the person's Codex home; that it can be run from inside the app's bundle while the app is open; and whether the app, while updating, replaces or removes its bundle in a way that breaks a Codex that is running.
+- **Whether the check at open is sound:** that the running program's reported configuration and feature list reflect what is given on the command line, the person's own settings and a machine-wide configuration, and that they name every feature that gives the model a tool. The whole tools design rests on this.
+- **The tools-only configuration.** Which switches leave the model Neuve's MCP tools, offered directly, and nothing else, when the person's own Codex settings are in the same folder; and whether each of their MCP servers, hooks and skills can be switched off from the command line.
+- **Whether Codex asks for confirmation of Neuve's own tools** when they are marked destructive, in what form, and whether the server's approval setting or "never ask" stops or changes it.
+- **Call identity.** Whether a call arriving at Neuve's tool server can be tied to Codex's own item id for it.
+- **That a tool call arriving at the server proves the response that made it has ended,** and that a response's calls reach the server one at a time.
+- **Resuming and forking** at a turn boundary after a turn was interrupted or the process died, and what Codex keeps of the interrupted turn.
+- **Sharing the person's Codex home:** that Neuve's threads beside theirs cause no harm in Codex's own apps, and that several processes on one home refresh the login safely. One process per session makes several likely, where T3 Code has one per account; Codex appears to guard the refresh with a lock file, which was read about and not seen.
+- **That the check at open can read back hooks, skills, memories and connected apps** on the app server's stable surface, and what an administrator's hooks look like there.
+- **Usage and limits:** what `thread/tokenUsage/updated` carries, and whether rate-limit notifications arrive.
+- **That Codex passes none of its environment on,** and that a working folder that is not the project does not mislead the model about paths.
+- **The install offer:** how npm behaves when another package already owns the name `codex`, as on the owner's machine.
+- **Neuve's sign-in on Codex:** restarting on a renewed token, and how long a build lane's turns run against the token's hour.
+- **Windows,** which this proposal does not design for.
+- **Whether a person can sign in to pi's legacy provider from Ace today.** It is listed; nothing else was established.
+- **OpenAI's terms.** The sign-in statements are from developer documentation, not from a terms document.
+- **The app server's stability in practice.** The statements conflict, and no compatibility policy was found.
+- **What happened on the owner's machine on 20 November** (an old copy removed by the operating system, the lane's run loading the owner's personal Codex hooks) is from the coordinating session's account and the lane's run log, which are kept outside the repository; it was not re-checked here beyond the `PATH`.
+- **T3 Code and opencode:** the citations were checked against the files at the recorded commits, and their behaviour was read, not run. T3 Code's checked-in generated types were not confirmed to match the commit its generator names.
+
+**Removed after the owner's ruling.** An earlier draft verified the program before running it (its code signature and signer, its owner, its folders) and used only Neuve's sign-in. An independent reviewer had approved that draft. Decisions 14.64 and 14.65 replaced both, and the first slice was reworked by removing that code.
+
+## References
+
+- T3 Code, [pingdotgg/t3code](https://github.com/pingdotgg/t3code) at `898c22f9900b90f81daece0895b7e4f4198355f8`: the files named above, and `docs/internals/providers.md`.
+- opencode, [sst/opencode](https://github.com/sst/opencode) at `bfee96a859aa0d225b845d67625d34ea6ae773d2`: the files named above, and `specs/v2/claude-agent-provider.md`.
+- OpenAI, [Codex app server](https://learn.chatgpt.com/docs/app-server); [developer commands](https://learn.chatgpt.com/docs/developer-commands); [non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode); [authentication](https://learn.chatgpt.com/docs/auth); [MCP configuration](https://learn.chatgpt.com/docs/extend/mcp); the configuration reference on the same site. Read 20 November 2026.
+- OpenAI, [Sign in with ChatGPT](https://developers.openai.com/siwc), its [Codex app-server page](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) and its preview limitations. Read 20 November 2026.
+- OpenAI, [openai/codex](https://github.com/openai/codex) at tag `rust-v0.171.0`: `codex-rs/cli/src/main.rs`, `codex-rs/app-server-protocol/schema`, `sdk/typescript/src/exec.ts`, `.github/workflows/rust-release.yml`.
+- The Agent Client Protocol's [Codex adapter](https://github.com/agentclientprotocol/codex-acp).
+- Neuve: [record 0017](../../architecture/decisions/0017-runtime-contract-and-accounts.md), [record 0008](../../architecture/decisions/0008-model-routes-and-budgets.md), [record 0014](../../architecture/decisions/0014-ace-style-pi-harness.md), the [runtime and accounts proposal](claude-subscription-route.md), the [planning mode proposal](planning-mode.md), and the [Claude runtime's capability notes](../../packages/runtime-claude/SDK.md).

@@ -106,6 +106,7 @@ test("model processes get only the allowlisted environment", async () => {
       prompt: "",
       schemaFile: "output.schema.json",
       log: "/tmp/log",
+      binary: "/test/codex",
     }),
     claudePrintCommand("/tmp/run", "/tmp/snapshot", "{}"),
   ];
@@ -145,6 +146,7 @@ test("model processes get only the allowlisted environment", async () => {
     prompt: "",
     schemaFile: "output.schema.json",
     log: "/tmp/log",
+    binary: "/test/codex",
   });
   for (const name of CREDENTIAL_VARIABLES)
     expect(codex.env[name]).toBeUndefined();
@@ -1379,5 +1381,32 @@ test("a dying CLI takes its live model process groups with it", async () => {
     await cli.exited;
     await Bun.sleep(100);
     expect(alive(groups[0]!)).toBe(false);
+  }
+});
+
+// Why: labelling and the replay judge take Codex only from the explicit setting; unset, they must
+// say what to set instead of falling back to a written path.
+test("an unset NEUVE_CODEX_BINARY names the setting and looks nothing up", async () => {
+  const { codexBinary, codexCommand } =
+    await import("../src/retrieval-bench/labelling/routes.ts");
+  const saved = process.env["NEUVE_CODEX_BINARY"];
+  delete process.env["NEUVE_CODEX_BINARY"];
+  try {
+    const message =
+      "Set NEUVE_CODEX_BINARY to the absolute path of the Codex program to run: Neuve does not look one up";
+    expect(() => codexBinary()).toThrow(message);
+    expect(() =>
+      codexCommand({
+        runDir: "/tmp/run",
+        prompt: "",
+        schemaFile: "output.schema.json",
+        log: "/tmp/log",
+      }),
+    ).toThrow(message);
+    process.env["NEUVE_CODEX_BINARY"] = "/test/codex";
+    expect(codexBinary()).toBe("/test/codex");
+  } finally {
+    if (saved === undefined) delete process.env["NEUVE_CODEX_BINARY"];
+    else process.env["NEUVE_CODEX_BINARY"] = saved;
   }
 });
