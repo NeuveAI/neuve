@@ -105,6 +105,7 @@ export type Frame = {
   text?: string;
   calls?: Extract<RuntimeEvent, { type: "message.finished" }>["toolCalls"];
   failure?: import("@neuve/runtime").RuntimeFailure;
+  disposition?: "reusable" | "broken";
   delayHandler?: () => Promise<void>;
   resumePoint?: string;
   finishAfterResults?: string;
@@ -253,7 +254,7 @@ export class FakeSession {
           outcome: {
             status: "failed",
             failure: frame.failure,
-            disposition: "broken",
+            disposition: frame.disposition ?? "broken",
           },
         });
         return;
@@ -268,14 +269,32 @@ export class FakeSession {
         ...(inTurn ? { resumePoint: point } : {}),
         stopReason: frame.calls?.length ? "tool-use" : "end-turn",
         toolCalls: frame.calls ?? [],
-        usage: {
-          input: 10,
-          output: 4,
-          cacheRead: 2,
-          cacheWrite5m: 1,
-          cacheWrite1h: 0,
-        },
+        // A runtime without perMessageUsage reports usage only for the turn.
+        ...(this.fake.capabilities.perMessageUsage
+          ? {
+              usage: {
+                input: 10,
+                output: 4,
+                cacheRead: 2,
+                cacheWrite5m: 1,
+                cacheWrite1h: 0,
+              },
+            }
+          : {}),
       });
+      if (!this.fake.capabilities.perMessageUsage)
+        this.emit({
+          type: "usage",
+          scope: "turn",
+          usage: {
+            input: 10,
+            output: 4,
+            cacheRead: 2,
+            cacheWrite5m: 1,
+            cacheWrite1h: 0,
+          },
+          costUsd: null,
+        });
       if (frame.modelUsage) {
         this.emit({
           type: "usage",

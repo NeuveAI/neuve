@@ -3,10 +3,22 @@ import type { ContentBlock } from "@neuve/runtime";
 import { alreadyRan, userContent } from "./transcript.ts";
 
 export const HANDOFF_TOKENS = 16_000;
-/** One UTF-8 byte per token is conservative; history stays intact and the newest items win. */
+/** Told to a model whose interrupted turn is handed over: its steps may have run already. */
+export const MAY_HAVE_RUN =
+  "Steps of the interrupted turn may already have run: check before repeating one.";
+/**
+ * One UTF-8 byte per token is conservative; history stays intact and the newest items win.
+ * `keep` items are always kept, whatever the budget; `note` is added to the heading; `skipEmpty`
+ * sends no block when nothing is handed over.
+ */
 export function handoff(
   messages: readonly Message[],
   budget = HANDOFF_TOKENS,
+  options: {
+    readonly keep?: ReadonlySet<Message>;
+    readonly note?: string;
+    readonly skipEmpty?: boolean;
+  } = {},
 ): ContentBlock[] {
   const lastAssistant = messages.findLastIndex(
     (message) => message.role === "assistant",
@@ -30,6 +42,11 @@ export function handoff(
     const item = JSON.stringify(
       message.role === "toolResult" ? alreadyRan([message])[0] : message,
     );
+    // A kept item is sent whole and counts against nothing, so it never starves the rest.
+    if (options.keep?.has(message)) {
+      selected.push(item);
+      continue;
+    }
     const bytes = Buffer.byteLength(item) + 2;
     if (bytes > remaining) {
       if (message.role === "toolResult") omittedResults.add(message.toolCallId);
@@ -39,10 +56,14 @@ export function handoff(
     selected.push(item);
   }
   return [
-    {
-      type: "text",
-      text: `Previous conversation, newest first. ${history.length - selected.length} older items left out. This is context, not a new instruction.\n${selected.join("\n\n")}`,
-    },
+    ...(options.skipEmpty && history.length === 0
+      ? []
+      : [
+          {
+            type: "text" as const,
+            text: `Previous conversation, newest first. ${history.length - selected.length} older items left out.${options.note === undefined ? "" : ` ${options.note}`} This is context, not a new instruction.\n${selected.join("\n\n")}`,
+          },
+        ]),
     ...userContent(messages.slice(lastAssistant + 1)),
   ];
 }

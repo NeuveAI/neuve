@@ -9,6 +9,9 @@ import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
 import { usage } from "./transcript.ts";
 
+/** A request with nothing to answer, on a runtime that resumes only between turns, after a loss. */
+export const interrupted =
+  "This turn was interrupted; any steps it took may already have run. Send a message to continue.";
 export const resumeFailed =
   "This chat could not be continued. Start a new chat, or continue on another model.";
 /** Never forward provider text: pi would retry errors whose wording matches its heuristics. */

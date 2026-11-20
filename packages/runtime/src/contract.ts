@@ -190,8 +190,9 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     messageId: z.string().min(1),
     /**
      * The message's last assistant block, as an opaque resume.at for the same runtime; Claude Code
-     * uses its chain UUID. Present on every message of a runtime that declares resumeInTurn, and
-     * absent on a runtime that resumes only between turns.
+     * uses its chain UUID. A runtime that declares resumeInTurn sets it on every message: Claude
+     * Code's own type requires it, and review stages refuse a message without it. A runtime that
+     * resumes only between turns leaves it out.
      */
     resumePoint: z.string().min(1).optional(),
     stopReason: z.enum([
