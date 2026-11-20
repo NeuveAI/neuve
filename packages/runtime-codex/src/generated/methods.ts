@@ -27,6 +27,8 @@ import type { ThreadStartParams } from "./v2/ThreadStartParams";
 import type { ThreadStartResponse } from "./v2/ThreadStartResponse";
 import type { ThreadResumeParams } from "./v2/ThreadResumeParams";
 import type { ThreadResumeResponse } from "./v2/ThreadResumeResponse";
+import type { ThreadForkParams } from "./v2/ThreadForkParams";
+import type { ThreadForkResponse } from "./v2/ThreadForkResponse";
 import type { ThreadReadParams } from "./v2/ThreadReadParams";
 import type { ThreadReadResponse } from "./v2/ThreadReadResponse";
 import type { ThreadArchiveParams } from "./v2/ThreadArchiveParams";
@@ -63,15 +65,25 @@ import type { AccountUpdatedNotification } from "./v2/AccountUpdatedNotification
 import type { AccountRateLimitsUpdatedNotification } from "./v2/AccountRateLimitsUpdatedNotification";
 import type { ModelReroutedNotification } from "./v2/ModelReroutedNotification";
 import type { CommandExecutionRequestApprovalParams } from "./v2/CommandExecutionRequestApprovalParams";
+import type { CommandExecutionRequestApprovalResponse } from "./v2/CommandExecutionRequestApprovalResponse";
 import type { FileChangeRequestApprovalParams } from "./v2/FileChangeRequestApprovalParams";
+import type { FileChangeRequestApprovalResponse } from "./v2/FileChangeRequestApprovalResponse";
 import type { ToolRequestUserInputParams } from "./v2/ToolRequestUserInputParams";
+import type { ToolRequestUserInputResponse } from "./v2/ToolRequestUserInputResponse";
 import type { McpServerElicitationRequestParams } from "./v2/McpServerElicitationRequestParams";
+import type { McpServerElicitationRequestResponse } from "./v2/McpServerElicitationRequestResponse";
 import type { PermissionsRequestApprovalParams } from "./v2/PermissionsRequestApprovalParams";
+import type { PermissionsRequestApprovalResponse } from "./v2/PermissionsRequestApprovalResponse";
 import type { DynamicToolCallParams } from "./v2/DynamicToolCallParams";
+import type { DynamicToolCallResponse } from "./v2/DynamicToolCallResponse";
 import type { ChatgptAuthTokensRefreshParams } from "./v2/ChatgptAuthTokensRefreshParams";
+import type { ChatgptAuthTokensRefreshResponse } from "./v2/ChatgptAuthTokensRefreshResponse";
 import type { AttestationGenerateParams } from "./v2/AttestationGenerateParams";
+import type { AttestationGenerateResponse } from "./v2/AttestationGenerateResponse";
 import type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
+import type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
 import type { ExecCommandApprovalParams } from "./ExecCommandApprovalParams";
+import type { ExecCommandApprovalResponse } from "./ExecCommandApprovalResponse";
 
 export const RELEASE = "0.171.0-alpha.13";
 
@@ -90,6 +102,7 @@ export type ClientMethods = {
   "mcpServerStatus/list": { params: ListMcpServerStatusParams; response: ListMcpServerStatusResponse };
   "thread/start": { params: ThreadStartParams; response: ThreadStartResponse };
   "thread/resume": { params: ThreadResumeParams; response: ThreadResumeResponse };
+  "thread/fork": { params: ThreadForkParams; response: ThreadForkResponse };
   "thread/read": { params: ThreadReadParams; response: ThreadReadResponse };
   "thread/archive": { params: ThreadArchiveParams; response: ThreadArchiveResponse };
   "thread/delete": { params: ThreadDeleteParams; response: ThreadDeleteResponse };
@@ -138,6 +151,20 @@ export type ServerRequests = {
   "attestation/generate": AttestationGenerateParams;
   "applyPatchApproval": ApplyPatchApprovalParams;
   "execCommandApproval": ExecCommandApprovalParams;
+};
+
+/** The answer each server request takes, where the schema names one. */
+export type ServerResponses = {
+  "item/commandExecution/requestApproval": CommandExecutionRequestApprovalResponse;
+  "item/fileChange/requestApproval": FileChangeRequestApprovalResponse;
+  "item/tool/requestUserInput": ToolRequestUserInputResponse;
+  "mcpServer/elicitation/request": McpServerElicitationRequestResponse;
+  "item/permissions/requestApproval": PermissionsRequestApprovalResponse;
+  "item/tool/call": DynamicToolCallResponse;
+  "account/chatgptAuthTokens/refresh": ChatgptAuthTokensRefreshResponse;
+  "attestation/generate": AttestationGenerateResponse;
+  "applyPatchApproval": ApplyPatchApprovalResponse;
+  "execCommandApproval": ExecCommandApprovalResponse;
 };
 
 /** Every notification name this release's server has. */

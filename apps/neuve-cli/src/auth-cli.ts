@@ -323,8 +323,10 @@ const runAccountCommand = async (
             yield* output(accountDescription(status));
             return 1;
           }
+          // Codex's own sign-in is the person's to run, in their terminal.
           if (
             hint.kind === "settings" ||
+            hint.command === "codex login" ||
             values.print === true ||
             process.stdin.isTTY !== true
           ) {

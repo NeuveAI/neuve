@@ -264,6 +264,44 @@ describe("each failure ends in its own typed failure", () => {
     expect(io.exited()).toBe(true);
   });
 
+  // Notifications nobody reads would be held without limit; past the bound the connection ends,
+  // and the caller waiting on a request learns why.
+  test("a reader that stops reading", async () => {
+    const { value, io } = await connected(
+      onRequest("model/list", (_, io) => {
+        for (let i = 0; i < 4; i++) io.send(MARKER);
+      }),
+      (c) => Effect.flip(c.request("model/list", {})),
+      { maxQueued: 3 },
+    );
+    expect(value).toMatchObject({ _tag: "CodexBacklog", limit: 3 });
+    expect(io.exited()).toBe(true);
+  });
+
+  // The runtime's protocol log needs every line each way, the ones the client drops included.
+  test("every line is handed over, each way", async () => {
+    const lines: Array<unknown> = [];
+    await connected(
+      onRequest("model/list", (message, io) => {
+        io.send({ method: "remoteControl/status/changed", params: {} });
+        io.send({ id: message.id, result: { data: [] } });
+      }),
+      (c) => c.request("model/list", {}),
+      { onLine: (line) => lines.push(line) },
+    );
+    expect(lines).toMatchObject([
+      { direction: "out", message: { method: "initialize" } },
+      {
+        direction: "in",
+        message: { result: { userAgent: "neuve-test/0.0.0" } },
+      },
+      { direction: "out", message: { method: "initialized" } },
+      { direction: "out", message: { method: "model/list" } },
+      { direction: "in", message: { method: "remoteControl/status/changed" } },
+      { direction: "in", message: { result: { data: [] } } },
+    ]);
+  });
+
   // A newer Codex may send notifications this release does not have: logged once, then ignored,
   // and the connection carries on.
   test("an unknown notification", async () => {
@@ -632,7 +670,8 @@ describe("the client's own failures stay contained", () => {
     });
   });
 
-  // Input refused while the program still runs fails the request now, not at some later exit.
+  // Input refused while the program still runs loses what was not written, so it ends the
+  // connection now, not at some later exit, and the request fails with that ending.
   test("a request whose write is refused", async () => {
     const played = fake((message, io) => answerHandshake(message, io));
     const failure = await run(
@@ -643,7 +682,7 @@ describe("the client's own failures stay contained", () => {
       ),
     );
     expect(failure).toMatchObject({
-      _tag: "CodexClosed",
+      _tag: "CodexInputRefused",
       method: "model/list",
     });
     expect(played.io.stops).toEqual(["input", "SIGTERM"]);

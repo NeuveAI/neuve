@@ -58,6 +58,7 @@ const capabilities: RuntimeCapabilities = {
   steering: false,
   approvals: false,
   perRequestTelemetry: false,
+  ownTools: false,
   byteExactCapture: false,
   nativeToolServer: false,
   statusProbe: true,

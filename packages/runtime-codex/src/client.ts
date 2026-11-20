@@ -15,9 +15,11 @@ import {
   Stream,
 } from "effect";
 import {
+  CodexBacklog,
   CodexClosed,
   CodexExited,
   CodexHandshakeTimeout,
+  CodexInputRefused,
   CodexMalformedLine,
   CodexOutputEnded,
   CodexOversizedLine,
@@ -64,9 +66,19 @@ export const UNSUPPORTED = -32601;
 export const INTERNAL = -32603;
 /** A thread's history comes back whole in one line, so the limit is generous but finite. */
 export const MAX_LINE_BYTES = 64 * 1024 * 1024;
+/**
+ * Unread notifications held before the connection ends. A busy turn sends a few thousand; the
+ * bound is for a reader that has stopped, about 100 MB at the size of the reviewer's measurement.
+ */
+export const MAX_QUEUED_NOTIFICATIONS = 200_000;
 const STDERR_TAIL_CHARS = 4000;
 /** How long output that ended cleanly waits for the exit, which then ends the connection itself. */
 const EXIT_GRACE = "1 second";
+
+export interface Line {
+  readonly direction: "out" | "in";
+  readonly message: unknown;
+}
 
 export interface ConnectOptions {
   readonly program: string;
@@ -77,6 +89,12 @@ export interface ConnectOptions {
   readonly clientInfo: ClientInfo;
   readonly answer: (request: ServerRequest) => Effect.Effect<Answer>;
   readonly maxLineBytes?: number;
+  readonly maxQueued?: number;
+  /**
+   * Sees every line each way as it passes, parsed (or, for a line that is not JSON, its length),
+   * before anything else is done with it: the runtime's protocol log and the recorder use it.
+   */
+  readonly onLine?: (line: Line) => void;
   readonly handshakeTimeout?: Duration.Input;
   /** How long a program asked to stop has before it is killed; five seconds by default. */
   readonly stopWait?: Duration.Input;
@@ -91,10 +109,9 @@ export interface CodexConnection {
       : [ClientMethods[M]["params"]]
   ) => Effect.Effect<ClientMethods[M]["response"], CodexFailure>;
   /**
-   * The notifications the client reads, in the order they arrived; one reader. Not bounded: the
-   * one pipe carries responses too, so holding the reader back would also hold back the response
-   * a caller may be waiting for before it reads notifications. What bounds it in practice is that
-   * notifications come from the turns the caller starts and reads.
+   * The notifications the client reads, in the order they arrived; one reader. The reader is never
+   * held back, since the one pipe carries responses too and a caller may be waiting for one before
+   * it reads notifications. Past `maxQueued` unread, the connection ends with `CodexBacklog`.
    */
   readonly notifications: Stream.Stream<Notification, CodexTermination>;
   /**
@@ -120,6 +137,12 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
     { env: options.env, cwd: options.cwd },
   );
   const limit = options.maxLineBytes ?? MAX_LINE_BYTES;
+  const queueLimit = options.maxQueued ?? MAX_QUEUED_NOTIFICATIONS;
+  const seeLine = (direction: Line["direction"], message: unknown) => {
+    try {
+      options.onLine?.({ direction, message });
+    } catch {}
+  };
   const notifications = yield* Queue.unbounded<
     Notification,
     CodexTermination | Cause.Done
@@ -155,8 +178,6 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
         );
   };
 
-  const send = (message: Record<string, unknown>) =>
-    child.write(`${JSON.stringify(message)}\n`);
   /**
    * Stops the program the way a terminal would: input closed, then a request to stop, then, if it
    * is still running after the stop wait, a kill. The signal goes to the process the client
@@ -182,6 +203,20 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       pending.clear();
       yield* Queue.fail(notifications, failure());
     });
+  /** A write the program refuses ends the connection: what it did not take is lost. */
+  const send = (message: Record<string, unknown>): Effect.Effect<boolean> =>
+    Effect.sync(() => seeLine("out", message)).pipe(
+      Effect.andThen(child.write(`${JSON.stringify(message)}\n`)),
+      Effect.tap((written) =>
+        written
+          ? Effect.void
+          : end((method) =>
+              method === undefined
+                ? new CodexInputRefused({})
+                : new CodexInputRefused({ method }),
+            ),
+      ),
+    );
   // Suspended, so an answer that throws before it returns an effect is caught like one that fails.
   const answerOf = (request: ServerRequest) =>
     Effect.suspend(() => options.answer(request)).pipe(
@@ -219,11 +254,14 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       if (typeof method === "string" && id === undefined) {
         if (!SERVER_NOTIFICATIONS.has(method))
           yield* logOnce("notification", method);
-        else if (READ_NOTIFICATIONS.has(method))
+        else if (READ_NOTIFICATIONS.has(method)) {
+          if ((yield* Queue.size(notifications)) >= queueLimit)
+            return yield* end(() => new CodexBacklog({ limit: queueLimit }));
           yield* Queue.offer(notifications, {
             method,
             params: message.params,
           } as Notification);
+        }
         return;
       }
       if (
@@ -273,10 +311,12 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
     try {
       parsed = JSON.parse(text);
     } catch {
+      seeLine("in", { unparsed: bytes.length });
       return end(
         () => new CodexMalformedLine({ reason: "json", bytes: bytes.length }),
       );
     }
+    seeLine("in", parsed);
     return parsed !== null &&
       typeof parsed === "object" &&
       !Array.isArray(parsed)
@@ -389,7 +429,16 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       });
       if (!written) {
         pending.delete(key(id));
-        return yield* new CodexClosed({ method });
+        // The refusal has just ended the connection, which TypeScript cannot see from here.
+        const after = state as
+          | typeof state
+          | {
+              readonly kind: "ended";
+              readonly failure: (method: string) => CodexTermination;
+            };
+        return yield* after.kind === "ended"
+          ? after.failure(method)
+          : new CodexClosed({ method });
       }
       return (yield* Deferred.await(deferred).pipe(
         Effect.ensuring(Effect.sync(() => pending.delete(key(id)))),

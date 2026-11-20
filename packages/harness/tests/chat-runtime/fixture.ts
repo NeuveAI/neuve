@@ -92,6 +92,7 @@ export const caps: RuntimeCapabilities = {
   structuredOutput: false,
   approvals: false,
   perRequestTelemetry: true,
+  ownTools: false,
   byteExactCapture: false,
   nativeToolServer: true,
   statusProbe: true,

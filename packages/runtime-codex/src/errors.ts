@@ -110,8 +110,29 @@ export class CodexClosed extends Data.TaggedError("CodexClosed")<{
   readonly method: string;
 }> {}
 
+/**
+ * The program stopped taking input while it still ran. What was not written is lost, so the
+ * connection ends: nothing later can be known to follow it.
+ */
+export class CodexInputRefused extends Data.TaggedError("CodexInputRefused")<{
+  readonly method?: string;
+}> {}
+
+/**
+ * More notifications waited unread than the reader's bound: the reader has stopped keeping up, so
+ * the connection ends rather than hold them without limit.
+ */
+export class CodexBacklog extends Data.TaggedError("CodexBacklog")<{
+  readonly limit: number;
+}> {}
+
 /** What ends a connection on its own: every pending request fails with it. */
 export type CodexTermination =
-  CodexMalformedLine | CodexOversizedLine | CodexExited | CodexOutputEnded;
+  | CodexMalformedLine
+  | CodexOversizedLine
+  | CodexExited
+  | CodexOutputEnded
+  | CodexInputRefused
+  | CodexBacklog;
 
 export type CodexFailure = CodexTermination | CodexRequestFailed | CodexClosed;

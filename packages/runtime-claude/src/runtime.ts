@@ -61,6 +61,7 @@ export const capabilities: RuntimeCapabilities = {
   statusProbe: true,
   internalRetries: true,
   perRequestTelemetry: false,
+  ownTools: false,
   byteExactCapture: false,
 };
 export const makeRuntime = (config: InternalConfig) =>

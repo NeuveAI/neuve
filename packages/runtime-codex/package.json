@@ -6,7 +6,10 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
-    "effect": "4.0.0"
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@neuve/runtime": "workspace:*",
+    "effect": "4.0.0",
+    "zod": "4"
   },
   "scripts": {
     "format": "prettier --write src tests scripts package.json tsconfig.json",

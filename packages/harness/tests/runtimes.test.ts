@@ -176,6 +176,7 @@ test("pi cannot open sessions and capabilities need no credentials, so generatio
     steering: false,
     approvals: false,
     perRequestTelemetry: false,
+    ownTools: false,
     byteExactCapture: false,
     nativeToolServer: false,
     statusProbe: true,
