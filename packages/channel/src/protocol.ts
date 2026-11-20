@@ -86,11 +86,19 @@ export type ChannelInfo = Metadata & {
 	automatic?: ModelRef;
 };
 
+/**
+ * How a chat's agent works: `plan` is plan mode, read-only by the channel's own check; `ace` is
+ * the agent's ordinary mode. The ids are the composer's own mode ids.
+ */
+export type ChatMode = "plan" | "ace";
+
 export type Chat = {
 	id: ChatId;
 	/** The chat whose agent created this one as a subagent. */
 	parent?: ChatId;
 	busy: boolean;
+	/** The chat's stored mode; absent means `ace`. A change is announced by the `agent` event. */
+	mode?: ChatMode;
 	model?: ModelRef;
 	effort?: Effort;
 	lane?: string;
@@ -266,6 +274,13 @@ export type Request =
 		/** Without `model`, replace the chat's model with the channel's choice, as for a new chat. */
 		automatic?: boolean;
 		effort?: Effort;
+		/**
+		 * The mode the person sent this in, stored as the chat's. Absent leaves the chat's mode as it
+		 * is; one equal to it changes nothing. Changing a busy chat's mode, or a mode on a message an
+		 * agent authored, is refused as any `ask` is. Part of the digest that recognises a retried
+		 * `requestId`, so a retry cannot carry another mode.
+		 */
+		mode?: ChatMode;
 		requestId?: string;
 	}
 	/**
@@ -424,7 +439,7 @@ export type Event =
 	| { kind: "run"; chat: ChatId; state: "start" | "end" }
 	/** `author` stopped the run, whose aborted reply came before this. */
 	| { kind: "stopped"; chat: ChatId; at: number; author: string }
-	/** The chat's model or effort changed, so the next run uses these. */
+	/** The chat's model, effort or mode changed, so the next run uses these; `info` has the mode. */
 	| { kind: "agent"; chat: ChatId; model: ModelRef; effort: Effort }
 	/**
 	 * Channel-wide metadata, sent initially and whenever its name, summary, or settings change.
