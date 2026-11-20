@@ -1210,10 +1210,51 @@ test("titles are bounded, lines are sanitised and missing commit file lists are 
 });
 
 // Why: one hostile range must not monopolize the finder event loop. Elapsed and CPU time depend on
-// the machine and its load, so the check is on work, which does not: every property the render reads
-// from a hunk is counted, and four times the files must cost four times the reads. A pass over the
-// hunks inside the index's fit loop or its folder rollup multiplies the reads and fails here. Work
-// the render does on its own file rows (the folder rollup copies them) is not visible from outside.
+// the machine and its load, so the check is on work, counted from outside the render at two sizes:
+// every property it reads from a hunk, and every array element it walks (by iteration, which a
+// spread or a `for...of` uses, or by a method that visits each element). Four times the files must
+// cost about four times the work. The files sit in four folders, the case where a rollup that
+// copies a folder's list for each file it adds walks sixteen times the elements instead.
+const ARRAY_ITERATOR = Object.getPrototypeOf([][Symbol.iterator]()) as {
+  next: (this: unknown) => IteratorResult<unknown>;
+};
+const VISITING = [
+  "map",
+  "filter",
+  "reduce",
+  "forEach",
+  "some",
+  "every",
+  "flatMap",
+  "find",
+  "findIndex",
+  "sort",
+] as const;
+/** Runs `run` and counts the array elements it walks. The built-ins are put back before it returns. */
+const countingArrayWork = <T>(run: () => T) => {
+  let visits = 0;
+  const methods = Array.prototype as unknown as Record<
+    string,
+    (this: unknown[], ...args: unknown[]) => unknown
+  >;
+  const next = ARRAY_ITERATOR.next;
+  const saved = VISITING.map((name) => [name, methods[name]!] as const);
+  ARRAY_ITERATOR.next = function (this: unknown) {
+    visits++;
+    return next.call(this);
+  };
+  for (const [name, method] of saved)
+    methods[name] = function (this: unknown[], ...args: unknown[]) {
+      visits += this.length;
+      return method.apply(this, args);
+    };
+  try {
+    return { result: run(), visits };
+  } finally {
+    ARRAY_ITERATOR.next = next;
+    for (const [name, method] of saved) methods[name] = method;
+  }
+};
 test("twenty thousand files render with work in proportion to the range", () => {
   const measure = (count: number) => {
     let reads = 0;
@@ -1224,7 +1265,7 @@ test("twenty thousand files render with work in proportion to the range", () => 
           new Proxy(
             textHunk({
               id: `h${i}`,
-              path: `packages/p${i % 50}/src/d${i % 100}/e${i % 1000}/f${i}.ts`,
+              path: `packages/p${i % 4}/src/f${i}.ts`,
               lines: ["+x"],
             }),
             {
@@ -1241,14 +1282,20 @@ test("twenty thousand files render with work in proportion to the range", () => 
       subject: `change ${i}`,
       body: "",
     }));
-    const result = renderOpening({ frame, hunks: range, commits: cs });
-    return { reads, result };
+    const { result, visits } = countingArrayWork(() =>
+      renderOpening({ frame, hunks: range, commits: cs }),
+    );
+    return { reads, visits, result };
   };
   const small = measure(5000);
   const large = measure(20000);
   expect(small.reads).toBeGreaterThan(5000);
-  // Linear work is exactly 4 times; the margin allows a few reads that do not scale.
+  expect(small.visits).toBeGreaterThan(5000);
+  // Hunk reads are exactly linear: 4 times, with a margin for the few that do not scale.
   expect(large.reads / small.reads).toBeLessThan(4.1);
+  // Element visits are linear apart from the index's fit loop, which may take a round more or
+  // less: about 4.2 times here. Work that grows with the square of the files is 16 times.
+  expect(large.visits / small.visits).toBeLessThan(6);
   expect(large.result.counts.filesNamed + large.result.counts.filesFolded).toBe(
     20000,
   );

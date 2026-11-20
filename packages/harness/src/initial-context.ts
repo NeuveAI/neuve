@@ -520,7 +520,9 @@ const renderIndex = (
     const folders = new Map<string, ChangedFile[]>();
     for (const f of rest) {
       const key = folderAt(f.path, d);
-      folders.set(key, [...(folders.get(key) ?? []), f]);
+      const list = folders.get(key);
+      if (list) list.push(f);
+      else folders.set(key, [f]);
     }
     const rows = [...folders]
       .sort(([a], [b]) => compare(a, b))
