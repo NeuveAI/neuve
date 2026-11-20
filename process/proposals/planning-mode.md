@@ -1,0 +1,619 @@
+# Planning mode in Ace: proposal
+
+Status: proposal, drafted 20 November 2026 for the owner's ask of 7 November ("bring back the planning mode to ace and connect it to neuve"), corrected the same day after three independent reviews, revised that day for the owner's answers to its six questions, corrected again after a review of that revision, then recast on the owner's direction that judgment belongs to the agents and not to the flow, and revised once more for the owner's judgment of the screens. Those answers are recorded in the [decisions record](../decisions.md), which wins wherever this text differs from it. Nothing here is built. Product words follow the [vocabulary](../../vocabulary.md), which now holds the two names, plan mode and approved plan, and the one approved line, that approving a plan approves no work. "Open" and "agent-to-agent" are the owner's words for a channel's two surfaces and are used here as working words until the owner confirms them. What is still the owner's to decide is in [Still open for the owner](#still-open-for-the-owner); the rulings and tickets are listed once, in [References](#references).
+
+## The owner's answers, 20 November 2026
+
+| Asked | The owner's words | What follows |
+| --- | --- | --- |
+| A composer mode only, with no Plan tab yet | "why not? why are we settling for less?" | Plan returns as a composer mode and as a Plan tab. The owner confirmed the tab |
+| That more UI moves Ace's files further from upstream | "We will in deed derive further, but that's ok. We can absorb 'upstream' with rewrite tasks over time." | Distance from upstream is not a reason against a design choice here. The upstream files this design changes are still listed, for the rewrite tasks |
+| The inner development loop as a thin product flow | "yes, I want the channel to show the reviewer and implementer agents threads in its own view. We maybe have a new view / mode within the channel to show threads between agents. Basically having two different surfaces for messages in channels: 'open' which is the standard and 'agent-to-agent' which is this mode I'm mentioning. Humans don't interact directly with that mode, but can see it for auditing. We can '@' tag agents that are running in that channel, including the implementer and reviewer, or just '@' the main agent '@neuve'. Use the interface craft for this design and make it fit with the current patterns within ace." | The agents run in the planning channel. A channel has an open surface and an agent-to-agent surface. People mention working agents from the open one |
+| Approving a plan counts as the person's ask for the final review | "yes, our core value is about the reviewer's tax and that is not just on what we show on reviews...obvious continuations should not become a start-n-stop flow. HITL is for needs not simple asks." | Agents carry on through obvious continuations and ask the person only at a real need |
+| Whether that approval covers every cycle of the plan, fix rounds included | "Yes, it is a principle...c'mon" | It does. Obvious continuations never become a stop: this is a principle the design applies everywhere, so what follows plainly from it is decided here and not asked |
+| A count of unattended final reviews per plan, and what a person worried about usage would do | "no". Then: "again, think about what levers would a user do if he's concerned about his usage. On a regular repo using neuve...with all of the standard things available (agents.md or even just working memory of a session). Agentic systems are non-linear...so think about that". On the coordinator's reading: "there you go, you finally got it. This is why I was against us deciding to not automatically start the reviews. It makes no sense us caping our own tool when it is being used by agents and non-linear systems" | Neuve does not cap or gate its own tool. No count, detector or setting limits the final review. Judgment belongs to the agents; the person's preferences reach them as instructions; code enforces only what must not depend on judgment. This proposal is recast on that |
+| The plan lives in the host's storage, with a Linear issue as optional origin | "yes, that is a good thing and we can choose to commit the file to the repo with a micro-interaction as part of our design task for this." | As designed, plus one small control to keep a copy in the repository |
+| The names Plan, plan mode and approved plan | "sure" | In the vocabulary, with the line that approving a plan approves no work |
+| Running unattended before a sandbox for a one-person channel on their own device | "sure, but ensure that the foundations are shared. The core principles of this is not mode dependent." | One design for every channel. Only whether the unattended loop is available differs until the sandbox exists |
+| The mock of the screens | "overall the design looks solid, but unslop that design please. That 'people read here...' copy is horrible and unnecessary. Also lets enable the plan mode to have comments by highlight similar to what we have here and on the neuve review desk, but to be sent to the drafting agent." | The screens carry no copy that explains the interface. A person can select text in the plan, comment on it, and send the comments to the agent drafting it |
+| The shared-channel side | "Good stuff. Since we are building more into the multi-player parts lets also ensure that: we can visualize and choose which model and effort level we are using, either by just prompting or selecting on the implementer / reviewer / neuve lines. anyone on the channel can tag any of the agents present, but only the channel owner can change the model settings." | Every agent's line shows its model and effort. The channel's owner changes them on the line or by saying so; no one else can. Anyone the channel lets ask its agents can mention any agent present |
+| Which models and vendors | "lets please remember (for the model selection) that a user might use codex or claude code, or both for all we care. We should identify and use available models and vendors" | The lines and the picker show what this user has, from every vendor and account they are signed in to, discovered and never built in. Nothing in the design names or assumes a vendor |
+
+## At a glance
+
+```
+ THE PERSON                       AGENTS: their judgment, guided by      CODE GUARANTEES, and nothing more
+                                  the shipped skill
+ ──────────                       ─────────────────────────────────      ─────────────────────────────────
+ plans with the agent      ───▶   read, ask, write the plan              a planning chat cannot write
+ in Plan mode                                                            or read outside the project
+ approves the plan         ───▶   build it as they judge best:           only a person approves a plan
+ (the one act that is             implement, review independently,
+ theirs by construction)          split the work, reorder it, bring      a reviewer starts with fresh
+                                  in help, fix what a review sends       context and the approved plan,
+ says what they want in    ───▶   back, request the final review         never another agent's account
+ the agent guide, the plan        when the work is ready
+ or a message; can stop                                                  the review's scope is the plan
+ any agent at any time     ◀───   carry on through obvious               that was approved
+                                  continuations; ask the person
+ watches the agents work,         only at a real need, in their          people read the agents' surface
+ reads what they say to           own words                              and do not write there
+ each other
+```
+
+**What the picture shows.** This is not a sequence. The person plans and approves; that approval is the one act that is theirs by construction. After it, agents do the work the way the shipped skill teaches and their own judgment decides, and Neuve does not cap or gate them: the final review starts on its own whenever a cycle is ready, however the work got there. Code guarantees a short list of things that must not depend on judgment, shown on the right. Everything else a person wants, they say where they already talk to agents.
+
+**What the checks are worth today.** Until the sandbox exists they catch drift and mistakes, not a hostile or injected agent with a shell, which runs as the person's own user and can rewrite what the host compares. The [design](#what-these-checks-hold-against-until-the-sandbox-exists) says exactly what, and the owner's answer on running before a sandbox was given with this limit stated.
+
+Plan mode, the Plan tab and the plan's approval need nothing but building. What comes after approval waits on other work, listed in [Build slices](#build-slices). The screens are drawn in [The surfaces](#the-surfaces).
+
+## What is there today
+
+Every line below was read on 20 November 2026 on this branch.
+
+| Fact | Where |
+| --- | --- |
+| The composer offers two modes, Chat and the agent. The chosen mode is stored in the browser **per channel**, not per chat, and decides only whether a message invokes the agent | [`composer.tsx`](../../apps/app/src/composer.tsx), lines 34–44, 148–149 and 324 |
+| A message to the agent carries text, attachments, model and effort. It carries no mode | [`protocol.ts`](../../packages/channel/src/protocol.ts), lines 257–270 |
+| The tab choices are Chat, Diff, Terminal and Review. A comment says "The old app also offered Plan, Browse, and Browser Preview; they return when their backends do" | [`layout.tsx`](../../apps/app/src/layout/layout.tsx), lines 123–124 |
+| Every chat gets the same tools: shell, read, write and edit, installed once for the channel with no approval step before a command | [`channel.ts`](../../packages/channel/src/channel.ts), lines 229–261; the four tool names are pi's `CodingTools` |
+| The channel can already refuse a tool at each call from a channel setting: desktop tools are checked on "every dispatch, including child chats and calls from already-active runs" | [`channel.ts`](../../packages/channel/src/channel.ts), lines 236–250 |
+| The channel wraps every installed tool once, before the session opens, through one seam the host fills | [`extensions.ts`](../../packages/channel/src/extensions.ts), lines 16 and 23–29; [`worker-runtime.ts`](../../apps/neuve-host/src/worker-runtime.ts), line 151 |
+| pi stores a tool list per chat ("An array offers exactly these"), lets a tool's result add names to that list (`addTools`), and runs a hook before a tool call whose `block` stops the call. When it recovers an interrupted call that is safe to repeat, it runs the tool again without that hook | pi-durable 1.0.0, `AgentState.tools`, `ToolControl.addTools` and `ToolHooks.beforeTool` in `harness/types.d.ts`; the recovery path in `harness/tool.js`, lines 68–81; all read from the installed package |
+| pi's read tool resolves any absolute path, and the channel gives each chat the plain Node environment, so a chat can read any file the person's user can. Before resolving, the tool rewrites its argument: it drops a leading `@`, replaces Unicode spaces, then tries spelling variants and opens the first that exists | pi-durable `env/node.js`, lines 392–394; `tools/path-utils.js`, lines 4–24; `tools/read.js`, line 23; [`worker.ts`](../../apps/neuve-host/src/worker.ts), lines 97–101 |
+| pi reruns an interrupted call only for a tool declared safe to repeat. The four coding tools declare nothing; the subagent and worktree tools declare it, and the subagent tool finds the child it already made | pi-durable `harness/tool.js`, lines 68–81; [`agents.ts`](../../packages/channel/src/agents.ts), lines 54–60; [`lanes.ts`](../../packages/channel/src/lanes.ts), line 141 |
+| A new chat's working directory is the channel's project, the main checkout, where `.git` is a real directory inside the tree. The Records store is the `neuve` folder inside the Git common directory | [`channel.ts`](../../packages/channel/src/channel.ts), line 994; [`location.ts`](../../packages/records-core/src/location.ts), lines 13 and 21–22 |
+| The channel changes a chat's model and effort in one commit, skips that commit when neither changed, and refuses the change while the chat is busy. A retried message is recognised by a digest of its fields | [`channel.ts`](../../packages/channel/src/channel.ts), lines 954–957, 966–972 and 878 |
+| The channel installs before-tool hooks today for logging and for the Claude chat bridge | [`log.ts`](../../packages/channel/src/log.ts), lines 61–62; [`chat-runtime/extension.ts`](../../packages/harness/src/chat-runtime/extension.ts), lines 108–116 |
+| The host proves who a browser is with a token kept in a file only the person's user can read, and stamps that person as the author of every request | [`auth.ts`](../../apps/neuve-host/src/auth.ts), lines 9–19; [`gateway.ts`](../../apps/neuve-host/src/gateway.ts), lines 549–552 |
+| Records is a library over one SQLite file with no server, holding raw captures with prompts and tool output, and a cycle's held scope text is a plain file beside it | [`scope-storage.ts`](../../packages/harness/src/scope-storage.ts), lines 19–21; a chat's session state is a local SQLite file too, [`worker-runtime.ts`](../../apps/neuve-host/src/worker-runtime.ts), lines 198–200 |
+| On a Claude subscription chat, Claude Code is opened with no built-in tools, a strict tool-server configuration and only Neuve's own tools. Its tool calls are copied into pi's message, so pi runs them as its own tool calls | [`session.ts`](../../packages/runtime-claude/src/session.ts), lines 1063–1076; [`bridge.ts`](../../packages/harness/src/chat-runtime/bridge.ts), lines 965–976; [runtime record](../../architecture/decisions/0017-runtime-contract-and-accounts.md), line 81 ("The bridge makes Claude Code a component inside pi's loop") |
+| Ace's shared composer already knows a plan mode: a `plan` mode id with its own icon, a send button that changes its icon for it, a reserved `plan.md` reference in messages, and a colour and label for a Plan agent | [`chat-composer.tsx`](../../packages/ui/src/components/composer/chat-composer.tsx), lines 139–146, 175–176 and 562; [`composer-submit.tsx`](../../packages/ui/src/components/composer/composer-submit.tsx), lines 49–50 and 62; [`references.ts`](../../packages/ui/src/components/rich-text/references.ts), line 10; [`agent.ts`](../../packages/ui/src/lib/agent.ts), lines 17–30 |
+| A pane shows one chat, chosen by the address, and there is no list of a channel's chats to switch between. The channel does report every chat with the chat that started it, and the details sidebar already lists a chat's subagents with their state. A message from another agent is drawn like a person's, with initials | The chat record and its starter: [`protocol.ts`](../../packages/channel/src/protocol.ts), lines 84 and 89–92; the sidebar's subagents: [`channel.tsx`](../../apps/app/src/channel.tsx), lines 97–111 and 303; agent authors are named `agent@…`: [`room.ts`](../../packages/channel/src/room.ts), lines 50–52. The one-chat pane and the drawing of agent authors were read by a search agent in `apps/app/src/app.tsx` and `apps/app/src/timeline.ts` |
+| The review card is drawn "in the shell of Ace's question card": a bordered, rounded card with a title and small badge, a muted line under it, an optional body, and a footer with a status and small buttons. It is a copied shape, not a shared component | [`review.tsx`](../../packages/ui/src/components/requests/review.tsx), lines 675–735; [`question.tsx`](../../packages/ui/src/components/requests/question.tsx) |
+| On the review desk a person comments by selecting lines: a "Comment" chip appears at the selection, and the composer opens there. A saved comment opens a thread with the agent, whose states and card are already built. All of it lives in the review app's own UI package, which the coding app does not import | [`diff-file.tsx`](../../apps/neuve-web/packages/ui/src/neuve/review-desk/diff-file.tsx), lines 361–367; [`thread.ts`](../../apps/neuve-web/packages/ui/src/neuve/review-comments/thread.ts), lines 1–29; [`thread-card.tsx`](../../apps/neuve-web/packages/ui/src/neuve/review-desk/thread-card.tsx); [`neuve.css`](../../packages/ui/src/styles/neuve.css), lines 12–13, reaches that package by a relative path because it is not exported to Ace |
+| A review comment's anchor is exact lines of one submitted hunk, and the shared review rules accept it only when each line's text matches | [`submission.ts`](../../packages/records-schema/src/submission.ts), lines 67–85; [`comment-anchor.ts`](../../packages/review-rules/src/comment-anchor.ts), lines 6–14 |
+| The coding app has no way to comment on selected text today | A search of `apps/app/src` and `packages/ui/src` for text selection finds only the tab drag code |
+| Every chat's system prompt carries the channel's rolling summary of its purpose, progress, decisions and unresolved work, which the channel's first chat writes | [`room.ts`](../../packages/channel/src/room.ts), lines 218–240; [`metadata.ts`](../../packages/channel/src/metadata.ts), lines 40–48 |
+| In the shared composer a mode's leading mention is its marker: when a draft holds another mode's mention, the composer switches to that mode, and when the current mode's mention is gone it falls back to the first mode. A mention is found in a message by matching its text | [`chat-composer.tsx`](../../packages/ui/src/components/composer/chat-composer.tsx), lines 885–906 and 1115–1122; [`agent-mention.ts`](../../apps/app/src/agent-mention.ts), lines 4–18 |
+| A chat's model and effort are stored per chat and set either with a message or by a separate request that posts nothing. Anyone who may ask the channel's agents may set them today, not only the owner. They "apply to a whole run, never just its later turns", and a busy chat refuses the change. The composer shows the model and effort pickers only in the agent's mode | [`protocol.ts`](../../packages/channel/src/protocol.ts), lines 259–283; [`channel.ts`](../../packages/channel/src/channel.ts), lines 900–905, 919 and 954–957; [`composer.tsx`](../../apps/app/src/composer.tsx), lines 411–414 |
+| The channel already lists what this user has: every available model from every provider, each with the effort levels that model supports. A sign-in whose own program runs the loop, such as a Claude subscription through Claude Code, joins that list as a provider named after the account. The picker shows each model with its provider. A chat is not tied to a vendor: the runtime follows the model the chat is set to, and when a change of model moves a chat to another runtime, its conversation is handed over in condensed form. When a chat's own effort is not one the model supports, the channel falls back to the host's default or to none | [`models.ts`](../../packages/channel/src/models.ts), lines 8–20; [`chat-runtime/models.ts`](../../packages/harness/src/chat-runtime/models.ts), lines 84–128; [`composer.tsx`](../../apps/app/src/composer.tsx), lines 257–261; [`handoff.ts`](../../packages/harness/src/chat-runtime/handoff.ts), lines 5–7; [`channel.ts`](../../packages/channel/src/channel.ts), lines 942–950; the [runtime record](../../architecture/decisions/0017-runtime-contract-and-accounts.md), lines 90–95 |
+| The channel names models in three built-in lists. Its automatic choice prefers two named models and otherwise takes the first available; a host can supply its own default instead. The caption and the recap of a chat's work are each written by the first available model from a list of named vendor models, and by nothing when none of them is available. An account that joins the list under its own name, as a Claude subscription does, never matches those lists, so a user with only that sign-in gets no caption. A search of the channel, the app, the host and the shared UI for other lists of named models found only examples in help and error text | [`models.ts`](../../packages/channel/src/models.ts), lines 5 and 28–32; [`captions.ts`](../../packages/channel/src/captions.ts), lines 31–49 and 51–67; [`worker-runtime.ts`](../../apps/neuve-host/src/worker-runtime.ts), lines 47 and 170 |
+| One account is left out of the channel's list: an account whose name equals a built-in provider's id is skipped and logged | [`chat-runtime/models.ts`](../../packages/harness/src/chat-runtime/models.ts), lines 116–124 |
+| A tool's run is given its chat and task, not an author. The verified author exists when a message is admitted and afterwards only as the prefix of the input. A message to a busy chat joins the run in flight. Besides a message and the picker's request, a model is also set by the request that opens a new chat, by the flag that hands the choice back to the channel, and by the subagent tool, which takes a model from the agent that calls it. Anyone may post a message without the right to ask the agents, and agents read every message | [`channel.ts`](../../packages/channel/src/channel.ts), lines 820–845, 870–896, 932–935 and 990–996; [`room.ts`](../../packages/channel/src/room.ts), lines 55–58; [`protocol.ts`](../../packages/channel/src/protocol.ts), lines 267–284; [`agents.ts`](../../packages/channel/src/agents.ts), lines 47–52 |
+| The Diff tab asks the channel for a branch's changes when it needs them; nothing pushes them. The channel does announce when a chat's run starts and ends | [`protocol.ts`](../../packages/channel/src/protocol.ts), lines 307 and 424 |
+| A channel has one switch for who may ask its agents: "Whether participants other than the owner may invoke agents". With it off, only the owner and agents may, and a teammate's composer offers no agent mention | [`protocol.ts`](../../packages/channel/src/protocol.ts), lines 80–81; [`channel.ts`](../../packages/channel/src/channel.ts), lines 907–918; [`composer.tsx`](../../apps/app/src/composer.tsx), lines 151–158 |
+| The channel knows a channel's owner and whether it is shared; who its members are is the host's knowledge | [`channel.ts`](../../packages/channel/src/channel.ts), lines 999–1006 |
+| The cross-channel message tool takes a chat id, so another channel's agent can post into any chat of a channel. The host leaves a channel out of its own list, so an agent cannot use that tool on its own channel | [`agents.ts`](../../packages/channel/src/agents.ts), lines 171–173 and 196–203; [`worker.ts`](../../apps/neuve-host/src/worker.ts), line 104 |
+| An agent creates its own worktree after it starts, and a worktree may be written only by the chat that last took it while that chat is busy | [`lanes.ts`](../../packages/channel/src/lanes.ts), lines 16–19 and 120–160 |
+| The mention list holds the one agent and the channel's people. Only one agent can be mentioned | [`agent-mention.ts`](../../apps/app/src/agent-mention.ts), lines 1–9; [`composer.tsx`](../../apps/app/src/composer.tsx), line 157 |
+| A new chat in a channel can be started two ways: a person's request, which makes a chat nobody owns, and the subagent tool, which makes a child owned by the calling tool call that "does not see this chat" and keeps the full coding tools | [`channel.ts`](../../packages/channel/src/channel.ts), lines 990–997; [`agents.ts`](../../packages/channel/src/agents.ts), lines 39–64 |
+| Agents message each other across channels only: "Agents in different channels coordinate only by messaging each other's chats". The handoff interrupt is for "another channel's agent" | [`agents.ts`](../../packages/channel/src/agents.ts), lines 130 and 164–166; [`handoffs.ts`](../../packages/channel/src/handoffs.ts), lines 23–29 |
+| The agent can ask the people in the chat a multiple-choice question and wait | [`questions.ts`](../../packages/channel/src/questions.ts), lines 109–112 |
+| A Linear planning backend exists: three read tools (search, issue, dependencies), a per-chat selected issue with its pinned source, and an association to the review that used it | [`planning-protocol.ts`](../../packages/channel/src/planning-protocol.ts), lines 4–15 and 92–95; [`planning.ts`](../../packages/channel/src/planning.ts), lines 8–13 and 41–68; [`operations.ts`](../../packages/channel/src/operations.ts), lines 53–77; host side [`planning.ts`](../../apps/neuve-host/src/planning.ts), line 157; [`linear-planning.ts`](../../packages/harness/src/linear-planning.ts), line 22 |
+| No browser code calls the planning operations. The host does: a review reads the chat's selected issue, refuses on a mismatch, passes the issue as the review's source, and saves the association afterwards | A search of `apps/app/src`, `apps/neuve-web/apps` and `apps/neuve-web/packages` for `planning-` and `planning_` finds nothing; host [`review.ts`](../../apps/neuve-host/src/review.ts), lines 87–95 and 252–276; [`gateway-extensions.ts`](../../apps/neuve-host/src/gateway-extensions.ts), lines 148 and 162 |
+| The real-account setup and the planning entry in the app are recorded as deferred | [Developing Neuve](../../docs/development.md#linear-planning-integration), line 93 |
+| A review cycle opens when a review is requested: the request joins the last cycle opened on the same base and head commit, or opens one. Keying a cycle by base and branch is the scope-retrieval design, not today's code | [`request.ts`](../../packages/harness/src/request.ts), lines 607–620 and 704 |
+| A cycle's scope is a selected item on an integration (server, item, workspace). Opening a cycle queues the scope fetch | [`events.ts`](../../packages/records-schema/src/events.ts), lines 259–278; [`jobs.ts`](../../packages/records-core/src/jobs.ts), lines 80–81 |
+| Reviews start only from the agent's tools. The worktree review tool's own text says "only when the person explicitly asks", and reading a result says "when the person asks". Each start tool carries a flag "Set only when the person asks to be told" | [`review.ts`](../../packages/channel/src/review.ts), lines 41–45 and 313–400 |
+| The host wakes the chat when a review finishes only if that flag was set | [`native-review.ts`](../../apps/neuve-host/src/native-review.ts), line 299 |
+| Chats list skills from the checkout's `.agents/skills` and `.claude/skills` only | [`context.ts`](../../packages/channel/src/context.ts), line 7 |
+| No sandbox code: the only mentions in the host, channel and harness sources are five comments about running inside someone else's sandbox | A search for "sandbox" in `apps/neuve-host/src`, `packages/channel/src` and `packages/harness/src` |
+
+## What the previous version was
+
+**This repository.** Its history holds 93 commits across every branch and remote, 67 of them on this branch, and starts at one commit of 16 November 2026 (`da98d4d`, "Neuve"). The layout comment about Plan is already in that first commit. No commit message mentions a plan mode, panel or tab. The older commit the decisions record names for removed plans (`c8b73b41`) is not in this repository, and the pi transition branches are not reachable from it. So nothing of an earlier planning mode can be read here.
+
+**Ace upstream.** The channel and host notices name the source: `githubnext/ace` at `fe66277` ([channel `UPSTREAM.md`](../../packages/channel/UPSTREAM.md)). That repository is public; I cloned its history (1,119 commits) on 20 November and searched it.
+
+| What the upstream history says | Where |
+| --- | --- |
+| Its history starts on 2 October 2026 with "feat: start Ace on pi-durable channels". Whatever came before is not in it | commit `5a1f51a` |
+| Its first glossary defines a tab as "A view inside a channel: Chat, Plan, Diff, Browse, Terminal, or Browser Preview", and says tabs other than Chat "are views, not durable units" | `docs/terms.md` at `5a1f51a`, lines 48–50 |
+| The same day, the tabbed layout was ported with Diff and Terminal only, and the comment about the old app's Plan, Browse and Browser Preview was written then | commit `ede4ce6` |
+| On 14 October the glossary was corrected to "the app's actual tab kinds", and Plan left it | commit `debcfa2` |
+| At the pinned commit the composer's modes are Chat and Ace. There is no plan mode | `apps/app/src/composer.tsx` at `fe66277` |
+| No commit message in the whole history mentions a plan mode, and GitHub's commit search for "plan mode" finds nothing | `git log --all -i --grep=plan`; the search page |
+
+**What follows (my reading).** The previous Plan was a **tab**: a view beside the chat, in an app older than Ace's public history. It was not a composer mode, and nothing reachable says it stopped the agent from writing. What the owner now asks for (plan read-only, approve, then build and review) is a new design, not a restore. The Plan tab returns with it, as the owner's answer is read, so the new design has what the old app had and more.
+
+**Not found.** What the old Plan tab showed, and the old app's code. I did not scan every file version of the upstream for a leftover implementation; I searched commit messages, the glossary and the two files above.
+
+## What other coding agents do
+
+What each source says is in the table. What I take from them follows it, marked as mine.
+
+| Product | What its own page says | Source |
+| --- | --- | --- |
+| Claude Code | Plan mode: "Claude reads files, runs shell commands to explore, and writes a plan, but does not edit your source". "Permission rules are enforced by Claude Code, not by the model". Approval is a prompt whose choices include keep planning; approving switches the session's mode. Plans are kept in a folder under the user's home. A subagent "runs in its own context window", takes a tool allowlist, and "Plan mode holds for the subagents you define too" | [Permission modes](https://code.claude.com/docs/en/permission-modes), [Permissions](https://code.claude.com/docs/en/permissions), [Subagents](https://code.claude.com/docs/en/sub-agents), [Agent SDK permissions](https://code.claude.com/docs/en/agent-sdk/permissions) |
+| Gemini CLI | Plan mode lists "the only allowed tools". Writing is allowed only for Markdown files in the plans folder. "The built-in policy (Tier 1) enforces the read-only state". Plans live "in a managed temporary directory outside your project". Approval starts the implementation. With nobody present, leaving plan mode switches to accepting everything | [Plan mode](https://geminicli.com/docs/cli/plan-mode/) |
+| opencode | A built-in plan agent "explores and plans without editing normal project files"; permissions are allow, ask or deny per tool. "Subagents run with fresh context in their own child sessions" | [Agents](https://opencode.ai/docs/agents/) |
+| Cline | In Plan mode it "cannot modify any files or execute commands". The person switches to Act by hand | [Plan and Act](https://docs.cline.bot/features/plan-and-act) |
+| Cursor | Plan mode "creates detailed implementation plans before writing any code". "Plans are saved by default in your home directory". The person clicks to build | [Plan mode](https://cursor.com/docs/agent/plan-mode) |
+| Aider | Ask mode will "never make changes"; in architect mode one model proposes and another edits | [Chat modes](https://aider.chat/docs/usage/modes.html) |
+| Codex | Not read from OpenAI's own pages (they redirected to another host). Third-party descriptions say it separates what the operating system permits (a read-only sandbox by default, Seatbelt on macOS, Landlock on Linux) from when the agent must ask | [A mirror of its sandbox page](https://www.mintlify.com/openai/codex/concepts/sandboxing), unverified |
+
+Reports worth knowing, all second-hand: a tracker mirror lists Claude Code issues titled "Plan mode has no tool-level enforcement" and "Plan mode read-only enforcement breaks after ExitPlanMode rejection" ([one of them](https://claudeissues.com/issue/19874-critical-plan-mode-has-no-tool-level-enforcement-write-operations-execute-despit)), and a Cursor forum request says the agent could be talked into writing in plan mode ([thread](https://forum.cursor.com/t/better-access-management-when-agent-in-different-mode/159895)). I did not check whether they still hold.
+
+From the literature:
+
+| Source | What it says |
+| --- | --- |
+| [Plan-and-Solve prompting](https://arxiv.org/abs/2305.04091) (Wang et al., 2023) | Asking a model to devise a plan and then carry it out beat step-by-step prompting on its reasoning benchmarks |
+| [ReWOO](https://arxiv.org/abs/2305.18323) (Xu et al., 2023) | Separates a planner from workers and a solver, "detaching the reasoning process from external observations" |
+| [Plan-and-Act](https://arxiv.org/abs/2503.09572) (Erdogan et al., 2025) | A planner model writes high-level plans and a separate executor turns them into actions, for long tasks |
+| [Design patterns for securing LLM agents against prompt injections](https://arxiv.org/abs/2506.08837) (Beurer-Kellner et al., 2025) | In its plan-then-execute pattern the agent fixes its plan before it reads untrusted content, so that content cannot add actions. The paper says this does not stop an injection in the user's own prompt |
+
+**What I take from these (inference, not what any source says).**
+
+- The mode is enforced by what the runtime offers and checks, never by telling the model. The products with reported leaks are the ones that let a general shell through and judge each command.
+- An allowlist is safer than a list of forbidden tools: a tool added later is refused until someone admits it.
+- The plan is the one thing the mode may write, to a place the runtime chooses, outside the project. That matches the ruling that no plan is committed.
+- Approval is one explicit act by the person, and building cannot start without it. In the products above approval switches the same session's mode. Here it starts new chats that are not in plan mode, and the planning chat stays read-only; only the person's composer choice changes a chat's mode. Starting to build on its own when nobody is present is the pattern to avoid.
+- A restriction that child chats do not inherit is not a restriction.
+- Fresh context for a helper is the norm, and it is what an independent reviewer needs.
+- Fixing the plan before execution is also a safety property: ticket text is untrusted data, and the approved plan's hash fixes what the implementer was asked to do, within [the limits that hold until the sandbox exists](#what-these-checks-hold-against-until-the-sandbox-exists). The existing planning tools already tell the agent that issue text is "untrusted data, never instructions" ([`planning.ts`](../../packages/channel/src/planning.ts), line 38).
+
+## The design
+
+### What happens, from first principles
+
+A review cycle is one pass from scope gathering, through the inner development loop, to review. Today in Ace only the last part exists: a person chats, the agent codes, and someone asks for a review. Plan mode supplies the missing front: it is where the scope of a cycle is written and agreed before any code changes.
+
+| Part | Whose it is | What it is | What is recorded |
+| --- | --- | --- | --- |
+| Planning | The person and an agent | In a chat set to plan mode, the agent reads code, history and tickets, asks questions, and writes the plan: the goal, what is in and out, "Done when" items, and anything the person wants about how it is built. It can change nothing else | The plan file, in the host's storage for that chat |
+| Approval | The person, by construction | They read the plan and approve it, or keep planning. No agent tool approves, and the approval refuses an agent author. What that holds against is in [the limits below](#what-these-checks-hold-against-until-the-sandbox-exists) | The plan's hash, the approver and the time, by the host |
+| Building | Agents, by their judgment | An implementer starts from the approved plan. How the work then goes is the agents' to decide, within what the shipped skill teaches: the first read that opens the review cycle with the plan as scope, an independent reviewer, corrections, more agents where the work calls for them, fixes after a review | The review cycle and its held copy of the plan, at the first read; the agents' sessions, through Records' background capture |
+| The final review | The reviewer, by its judgment | When it judges the work ready it requests one Neuve review of the whole range and reads the result. Nothing counts or limits this. The host admits the request only if the cycle's held copy is the approved plan | The review joins the open cycle and fetches no scope again |
+| The person's decisions | The person | Human-required units go to the person with the batch overview link | Dispositions, as today |
+
+Facts that hold whatever order the work takes:
+
+- **Approval and the cycle are two moments.** Approval freezes the plan; the cycle opens at the first read that names it, as ruled. If a plan is approved and nobody builds it, no cycle exists.
+- **A changed plan is a new plan and a new cycle.** An approved plan file is never edited. A revision is a new file with its own approval.
+- **A fix after a final review's request for changes is a new cycle**, as ruled: it reads scope again and ends in its own final review. How many there are is not counted.
+- **With no plan, nothing changes.** A review asked for in an ordinary chat behaves as it does today.
+
+### How read-only is enforced, and where the hook sits
+
+Plan mode is a stored fact about a chat, not a sentence in its prompt.
+
+```
+a PERSON sends a message that carries a mode
+        │
+        ▼
+ channel stores the mode for that     ──▶  pi's tool list for the chat is set to
+ chat in a document of its own;            the plan-mode tools, so the model is
+ refused while the chat is busy            not shown shell, write or edit
+        │
+        ▼
+ the model asks for a tool
+        │
+        ▼
+ the check inside the tool's own run, ──▶  REFUSED when both hold: this chat, or
+ wrapped around every installed tool       the chat that started it, is in plan
+        │                                  mode, AND the tool is not on the
+        ▼                                  plan-mode list, or its path leaves
+ the tool runs                             the allowed places. The agent is told why
+```
+
+- **Where the check sits.** Inside each tool's own run, through the wrapper the channel already applies to every installed tool ([`extensions.ts`](../../packages/channel/src/extensions.ts), lines 23–29). That is where the desktop-tools precedent checks, on every dispatch "including child chats and calls from already-active runs". A before-tool hook alone is not enough: when pi recovers an interrupted call that is safe to repeat, it runs the tool again without the hook. A hook may be added for a cleaner refusal, but nothing rests on it.
+- **The offered list is a courtesy, not the guard.** Setting the chat's tool list keeps the model from asking for tools it cannot use. It cannot be relied on: pi lets a tool's result add names to a chat's list.
+- **The list is an allowlist:** read a file, the exploring tool below, the Linear read tools, ask the person a question, and write the plan. Starting a subagent or a worktree is not on it.
+- **Reads are confined.** pi's read tool resolves any absolute path, so without a rule a planning chat could read the host's token, other chats' storage and keys, and carry that text out through a Linear search or the plan itself. In plan mode a read is allowed only when the file it really opens, resolved through symlinks, is inside the chat's working tree, or is the plan file. Three further rules apply, and the exploring tool's path parameter follows all of them:
+  - **The Git directory is refused.** Any read that resolves into the repository's Git directory or its common directory is refused. On the main checkout that directory is inside the tree, and it holds the Records store, the unmasked scope copies and the repository's configuration. History and a file at a revision are reached through the exploring tool.
+  - **Ignored files are refused; untracked ones stay readable.** A file Git ignores is refused, because that is where a project keeps secrets such as an `.env`, and plan mode has ways to carry text out. A new file nobody has committed yet stays readable, because planning often starts from one. This costs one ignore check per read.
+  - **The check judges the path the tool really opens.** pi's read tool rewrites its argument before opening it, so a check on the raw argument would judge a different path. The check is therefore placed on the chat's file access itself, under the tool, so every rewritten form passes through it; it does not copy pi's rewriting rules.
+  - **The confinement is applied per chat and per call, never kept with the shared file access.** Today the channel asks for a chat's file access by working directory alone ([`channel.ts`](../../packages/channel/src/channel.ts), line 265), and the host keeps one per directory ([`worker.ts`](../../apps/neuve-host/src/worker.ts), lines 97–101), so a planning chat and an ordinary chat in the same directory share it. A rule stored there would either confine both or neither. The slice therefore passes the chat's identity through that request and decides on each call from the chat's stored mode.
+- **The mode has its own stored document per chat,** as the selected Linear issue has. It cannot ride the commit that stores model and effort: that commit is skipped when neither changed, and pi's own chat settings have no place for a mode.
+- **Changing a busy chat's mode is refused, in both directions,** as changing its model is today. Entering plan mode mid-run would leave a shell command already running free to keep writing, because the check runs when a call starts. Leaving it mid-run would hand write tools to a turn the person started as planning.
+- **Who can change a chat's mode.** Only a message a person sends. The mode travels on the message to the agent, which gains one field, and that field is part of the digest that recognises a retried message, so a retry cannot carry a different mode. The channel refuses a mode on any message an agent authored, whatever built the message. A message with no mode field changes nothing and runs in whatever mode the chat has: that covers an agent invoking a chat, the wake when a review finishes, steering a busy chat, and a Chat-mode message that mentions the agent.
+- **Plan mode has no mention as its marker, and a draft never changes the mode on its own.** Today the composer treats a mode's leading mention as its marker and switches mode when it sees another mode's mention in the draft. Left as it is, typing the main agent's mention in Plan mode would switch the composer to the agent's mode and take the chat out of plan mode silently. So Plan mode carries no leading mention (its messages invoke the planning agent because of their mode), and the marker logic changes so that a mention typed while in Plan mode never switches the mode. Only the mode menu does.
+- **Plan mode is inherited from the chat that started a chat, and the agents a plan starts have no starter.** The check blocks a chat whose starter is in plan mode, which is what stops a subagent of a planning chat from writing. An implementer or reviewer the host starts is ownerless and is found by its stored role, never as the planning chat's child; otherwise every write it made would be refused.
+- **A message's mode applies only to the chat whose composer sent it.** A mention that delivers the message's text to another agent carries no mode, so it can never change that agent's mode or be refused for it.
+- **Which person.** Anyone already allowed to invoke the agent in that channel, since leaving plan mode is asking the agent to write. This is one rule for every channel; it does not depend on how many people the channel has.
+- **The browser's remembered mode becomes per chat.** Today it is remembered per channel. Left that way, a composer left on Plan in the planning chat would put the next chat opened in that channel into plan mode.
+- **Where the code lives, and which of Ace's files change.** The new modules sit in the channel beside the Ace files. These upstream files change, and each change is added to the channel's or the app's upstream record so the later rewrite tasks can find it: the line in the channel that asks for a chat's file access gains the chat's identity; the message to the agent gains a mode field and a list of the agents it mentions; the channel's prompt section leaves the rolling summary out for a reviewer; the shared composer's mode-marker logic changes for Plan; the channel's built-in lists of named models for its automatic choice, captions and recaps are removed; a chat's model and effort can be changed only by the channel's owner, and a change on a busy chat is stored for its next run instead of refused; the app's composer and layout gain the Plan mode, the two tab kinds and the per-chat remembered mode; the shared review and question cards move onto one shell. The owner accepted moving further from upstream for this work, so none of these is weighed against the design.
+- **Claude subscription chats take the same check.** Claude Code is opened there with no tools of its own, and its calls to Neuve's tools are run by pi as its own tool calls. This is from reading the code, not from a run; the plan-mode slice proves it.
+
+**The shell and the exploring tool.** pi's coding tools are shell, read, write and edit, and the shell can write anything, so plan mode does not offer it. Exploring still needs listing, searching and history. Plan mode adds one tool for that, designed so the model never writes a Git option:
+
+| Rule | Why |
+| --- | --- |
+| The tool takes named parameters only: which of five actions (list files, search, history, show a file at a revision, compare two revisions), a pattern, a path, a revision, a count | Passing arguments as a list stops shell injection, but Git's own options can still write files (`--output`), run programs (`grep -O`, an external diff, a text-conversion filter, a leading `-c key=value`) and read outside the repository (`grep --no-index`) |
+| The host builds the argument list itself. A value is never placed where Git reads an option: patterns go after `-e`, revisions after `--end-of-options`, paths after `--`, and a revision or path that does not fit its expected shape is refused | The model supplies values, never flags |
+| Every run uses `--no-pager`, and where they apply `--no-ext-diff` and `--no-textconv`, with `GIT_OPTIONAL_LOCKS=0` in the environment | No configured program runs, and Git does not refresh the index as a side effect |
+| Paths are resolved through symlinks and must stay inside the chat's working tree, outside the Git directory, and off ignored files | Nothing outside the project's own files is read, by a direct path or through a link |
+
+A shell inside a read-only sandbox is the better long-term answer and belongs to the sandbox work. Judging each shell command by its text is the approach the leak reports above come from, and is not proposed. Whether repository configuration can still make these commands run a program (a file-watcher hook, for example) is for the slice to establish.
+
+**Scope retrieval is not offered in plan mode.** Once the first read opens a cycle, a retrieval run while planning would open a cycle before its scope exists. Whether a read can be asked not to open a cycle is for the scope-retrieval work to settle. Until then plan mode explores with files and Git.
+
+### Where the plan lives and how it is named as scope
+
+- **Where.** One Markdown file per plan, in the host's storage for the planning chat, outside the repository and its worktrees, as the owner confirmed. It is the copy of record: the first read names it and the review cites the held copy of it. Whether it goes when the planning chat goes or when its channel goes is [still open](#still-open-for-the-owner).
+- **A copy in the repository, when the person chooses.** One switch beside Approve; [the surfaces](#keeping-a-copy-of-the-plan-in-the-repository) show it. On, the implementer's brief asks it to commit the plan at the chosen path, and the implementer does so as agents commit anything. The host's file stays the copy of record. The committed copy adds one file to the reviewed range and may be found by the review as scope beside the plan; both are expected.
+- **Who writes it.** Only the plan-writing tool, and only to the path the host chooses. The agent never picks the path.
+- **Approval.** The person approves in the Plan tab or on the plan's card in the chat. The host records the file's SHA-256, the approver and the time in the chat's session state, the same kind of store that holds the selected Linear issue today. The agent does not ask for approval and wait: it says the plan is ready and its turn ends.
+- **Naming it as scope.** The implementer's brief gives the plan's absolute path. Its first read names that path, and Neuve reads it, hashes it and copies it into the cycle's scope folder, as already designed for a named uncommitted file. Nothing new is added to Records: no new scope source type.
+- **The check that the scope is the approved plan is new, and the host makes it once.** When the reviewer requests the final review, the host hashes the bytes of the cycle's held scope copy itself and compares the result with the hashes it took from each plan file's bytes at approval: every plan the person approved in that planning chat counts, not only the latest, so a review that is due on a cycle built from an earlier approved plan is still admitted. It does not trust a hash someone else stored. A mismatch, or a cycle whose scope names no plan, is an error shown plainly with its reason. A reviewer receives the plan's text and approved hash from the host.
+- **A plan revised while agents are building** is a new file with its own approval; what the agents then do is described [under what agents may do](#after-approval-what-agents-may-do-and-what-code-still-guarantees).
+- **Why one check, at admission.** An earlier check, when the cycle opens, would need the host to learn that the implementer's first read happened. Asking Records repeatedly is polling, which the shared-work record rules out, and subscribing the host to the cycle opening is new code for a check that admission makes anyway. Admission is a point the host already controls. The cost is that a wrong plan is found at the end of the loop, not at its start.
+- **The original scope.** When planning started from a Linear issue, the plan's head names the issue key, and the retrieval brings the ticket in as its own cited source, as designed. The plan refers to the ticket; it does not copy it.
+- **What the review cites.** The held copy, from the retrieval through the review to the review desk.
+
+### What these checks hold against until the sandbox exists
+
+Three statements in this design are true of honest agents and of mistakes, and not of a hostile or injected agent that has a shell:
+
+| Statement | What a chat with a shell can do today |
+| --- | --- |
+| The scope is the approved plan | Rewrite the held scope copy, the Records file and the approval record: all are files the person's user can write |
+| Only a person can approve a plan | Read the host's token and send the approval as the person |
+| Only a person can change a chat's mode | The same: send a mode-carrying message as the person |
+
+One more gap: an agent can run `neuve review` from its shell, and that review does not pass the host's admission check at all.
+
+The same limit applies in every channel; it does not depend on how many people a channel has. None of this is new to plan mode. Every Ace chat with a shell can do these things today, and the planning chat, which has no shell and confined reads, cannot. What closes the gap is the sandbox as ruled: it holds the chat's worktree and never the owner's sign-ins or the Records store, so the files above are out of an agent's reach. Until then the checks catch a plan that drifted, a wrong file named and a slip of the composer.
+
+### After approval: what agents may do, and what code still guarantees
+
+Approval starts one implementer in the planning channel, with the approved plan as its brief. That is the obvious continuation of approving, so nothing asks the person to confirm it. From there the design gives agents capabilities and does not script their use.
+
+**What agents may do.**
+
+| An agent may | With what | Notes |
+| --- | --- | --- |
+| Open with Neuve's scope retrieval, naming the plan | The shipped skill's opening step | The first such read opens the review cycle |
+| Ask for an independent reviewer | A new tool that asks the host to start one. It takes the role and, where there are several, a short name for the part. It takes no text for the reviewer's brief | The host writes the reviewer's brief; see the guarantee below |
+| Start another implementer, or a subagent, for part of the work | The same new tool for an agent that stays, which for an implementer also takes the brief the asking agent writes; the existing subagent tool for one that answers and ends | The vocabulary already allows several implementers and reviewers on a branch, each with its own part |
+| Say anything to another agent of the channel | Messages between chats of one channel, which is new; today agents message across channels only | Free text. These messages are what the agent-to-agent surface shows |
+| Ask the person a question and wait | The existing question tool | See [When an agent asks the person](#when-an-agent-asks-the-person) |
+| Request the final review, be told when it ends, and read it | The existing review tools, whose wording changes: an approved plan is the person's ask | The reviewer does this when it judges the work ready, and again after a fix if it judges so. As in Neuve's own lanes, that only a reviewer requests the review is guidance, not code |
+| Decide a finding was wrong, split or reorder a fix, change approach | Nothing new | This is judgment. No code counts rounds or compares findings |
+
+Nothing here is a sequence. Two agents exchanging "ready at this commit" and "two corrections" is the common case and the one the mock draws, not a protocol.
+
+**What code still guarantees.** The whole list. The owner's confirmed reading named two of these (a planning chat cannot write, and only a person approves); one more is the owner's later ruling (only the owner changes models); the other four are this proposal's design, each with the reason it cannot rest on judgment, and are [listed for the owner to confirm](#still-open-for-the-owner):
+
+| Guarantee | Why it cannot be left to judgment |
+| --- | --- |
+| A planning chat cannot write, and reads only the project's own files and the plan | The person chose a mode whose meaning is that nothing changes |
+| Only a person approves a plan; an approved plan cannot be edited | Approval is the person's authority over scope |
+| A reviewer starts in a new chat with fresh context, and its brief is written by the host from the approved plan. The tool that asks for a reviewer takes no text for the brief. A chat with the reviewer role is also rendered without the channel's rolling summary, which today every chat's prompt carries and which the planning chat writes | The first thing in a context shapes everything after it. Guidance tells a reviewer to read the code and the scope before any account of the work, but a brief and a prompt are read before any guidance can apply. So the accounts that could set a reviewer's premise before it reads anything are kept out by construction, and everything after that is the reviewer's judgment |
+| The final review is admitted only if the cycle's held scope copy is a plan the person approved in that planning chat | It ties what was reviewed to what was agreed. It cannot rest on judgment because it is the person's approval being checked, not the agents' work. A refusal is shown plainly as an error with its reason |
+| People read the agent-to-agent surface and do not write there; a role is a fact stored on the chat, never read from a message's author | The owner's ruling on that surface, and so that a message cannot claim a role. A person's mention is written on the open surface; the channel delivers its text into the agent's chat, where it is shown as the person's |
+| Only the channel's owner changes an agent's model or effort, on any line and on every route that sets one. The channel refuses the rest | The owner's ruling. It is the owner's spend and the owner's authority, so it cannot rest on an agent judging who asked |
+| Until the sandbox exists, the unattended build runs only in a channel with one person on their own device. What is checked: the channel's switch for who may ask its agents is off, so only the owner can, and the channel is not a cloud one. Teammates may still post there | The owner's ruling |
+
+The fixed shape an earlier draft gave the hand-over (a commit and nothing else) is gone. It was choreography, and it did not protect what it claimed to: a commit carries its message, its comments and its files. What protects the reviewer's independence is the fresh context and the host-written brief above, and then its guidance.
+
+**Smaller facts.**
+
+- **Starting agents is shared work.** The start uses the existing shared-work helper ([`shared-work.ts`](../../packages/records-core/src/shared-work.ts)). Approval first asks whether any agent of that planning chat's build is alive. If one is, the approved plan is delivered to them and nothing starts. If none is, an implementer is started under a key of the planning chat and the plan's hash, so a second click or a host restart finds what was started and starts nothing twice, and a later approval in the same chat, after a build's agents have ended, has a new hash and gets a new run, never the finished one's result. Each start is recorded durably as it is made. The check for a live agent and the start sit in one admission step for the planning chat, so two approvals of different revisions cannot both find no agent alive and each start one; this is for the slice to build that way.
+- **Worktrees.** Each agent that writes works in its own worktree, which it creates itself as agents do today. A reviewer needs one of its own because its guidance has it plant a problem and restore the code. Git will not check one branch out in two worktrees, so a reviewer's worktree sits on the implementer's commits without a branch of its own, and under the scope-retrieval design, not yet built, its read names the implementer's branch so that it joins the same cycle.
+- **Both load the shipped skill**, which is where the way of working lives; see [Where the default behaviour lives](#where-the-default-behaviour-lives).
+- **Stopping.** Stop halts one agent's run, as today. The build's card can stop all of a plan's agents at once. A stopped agent starts again on a message or a mention.
+- **A plan revised while agents are building.** Approving a revision does not start a second implementer: while that planning chat's agents are alive, the approved revision is delivered to them as the person's message, and they carry on under it. With no agent alive, approving starts one as usual. Because a cycle's scope is fixed at its first read, the skill has agents continue on a new branch cut from their last commit, which gets its own cycle; nothing is destroyed. A final review already due on the earlier branch is still admitted, because its scope is a plan the person approved; whether to run it or drop it is the agents' judgment.
+
+**What is new here.**
+
+| Point | State |
+| --- | --- |
+| The host starting a chat without a person's request, and storing a role on it | New |
+| A tool by which an agent asks the host to start a reviewer or another implementer | New. The existing subagent tool starts a child that ends with the call and whose brief the caller writes |
+| Messages between two chats of one channel | New. Today agents message each other across channels only |
+| Which review tool a reviewer calls from a worktree with no branch | For the slice: either the worktree review tool learns to review a named branch, or the branch tool is used |
+
+### The surfaces
+
+The screens are drawn as a static page built from Ace's own colours, type, radii, shadows and component shapes, in light and dark. They are in the design session's scratch folder and are not committed:
+
+| File | What it shows |
+| --- | --- |
+| `/private/tmp/claude-501/-Volumes-LaCie-Blu-code-neuve--claude-worktrees-neu-414-planning-mode-design-fa7c8c/ef6810b1-c813-4d31-ab74-1ae66937957f/scratchpad/planning-mode-mock/index.html` | The whole mock, with a light and dark switch |
+| `/private/tmp/claude-501/-Volumes-LaCie-Blu-code-neuve--claude-worktrees-neu-414-planning-mode-design-fa7c8c/ef6810b1-c813-4d31-ab74-1ae66937957f/scratchpad/planning-mode-mock/light.png`, `/private/tmp/claude-501/-Volumes-LaCie-Blu-code-neuve--claude-worktrees-neu-414-planning-mode-design-fa7c8c/ef6810b1-c813-4d31-ab74-1ae66937957f/scratchpad/planning-mode-mock/dark.png` | The whole page in each theme |
+| `/private/tmp/claude-501/-Volumes-LaCie-Blu-code-neuve--claude-worktrees-neu-414-planning-mode-design-fa7c8c/ef6810b1-c813-4d31-ab74-1ae66937957f/scratchpad/planning-mode-mock/light-1.png` to `light-5.png`, `dark-1.png` to `dark-5.png` | The same page in five readable parts |
+
+The mock was drawn by hand from the app's tokens and class strings, not by running its components, and its icons are approximations.
+
+**What a channel shows.**
+
+```
+ A CHANNEL PANE (tabs, as today: one strip per pane)
+ ┌ Chat ┬ Plan ┬ Agents ┬ Diff ┬ Terminal ┬ Review ┐
+ │      │      │        │
+ │      │      │        └ the agent-to-agent surface: the implementer's and the
+ │      │      │          reviewer's messages and their own working; people read
+ │      │      └ the plan: read it, approve it, keep a copy in the repository
+ │      └ the open surface: people and the main agent; one card per approved plan;
+ │        mentions reach any running agent
+```
+
+Two new tab kinds join the four the app has, and nothing else about the layout changes.
+
+#### Plan mode and the Plan tab
+
+- **The mode.** The composer's mode menu gains Plan between Chat and the agent. The shared composer already has the pieces: the `plan` mode id, its checklist icon, and a send button that takes that icon. Plan mode uses them as they are, in the tone Ace already keeps for a Plan agent. The agent's messages written in plan mode carry the small "Plan" label Ace already draws beside an agent's name. One care: that label's helper answers "Build" for anything it does not recognise, so the label is set from the chat's stored mode and shown only for Plan.
+- **The button says what it starts.** Approving also starts paid, unattended work, so the button reads "Approve and build", not "Approve".
+- **The tab.** The Plan tab opens beside the chat the first time the agent writes the plan, the way the Diff tab is opened for a chat today. It shows the plan as a document: its title, a state badge (Draft, Approved, or Replaced by a revision), the Linear issue it started from when there is one, and its sections. A tab is a view, not a durable thing, as in Ace's own glossary: closing it loses nothing.
+- **Reading and approving.** The plan is approved from the tab's footer, or from the plan's card in the chat without opening the tab. There is one primary button and no dialog. The agent ends its turn when the plan is ready; it does not ask and wait.
+- **A refused tool** reads as a refusal with its reason, in the tool row's own place.
+- **Referring to the plan.** The reserved `plan.md` reference the composer already recognises points at the chat's current plan and opens the Plan tab.
+
+#### Commenting on the plan
+
+- **The interaction is the review desk's: select, comment, send.** Selecting text in the plan shows a "Comment" chip at the selection; the composer opens under the passage; "Comment" keeps it with the plan and underlines the passage. Nothing is sent yet.
+- **One send.** The Plan tab's footer shows one button with the count, "Send 2 comments". It sends them together as one message from the person to the agent drafting the plan. Commenting never interrupts the agent once per comment.
+- **What the agent receives.** For each comment: where it is in the plan (the section and the lines), the quoted text, marked as quotation, and the comment. It goes to the drafting chat only, as the person's own message, and it carries Plan mode explicitly, so plan mode's rules apply to it as to any message: the agent can answer and can rewrite the plan, and nothing else. The message is never scanned for mentions, so plan text it quotes cannot address another agent. What the agent does with the comments is its judgment. Plan mode's tool list gains one small tool to answer a comment, which writes only into that comment's thread; an answer given that way shows under the comment.
+- **How a comment is anchored.** To exact lines of one version of the plan file, with each line's text and the quoted passage. This is a new rule beside the review desk's, which is specific to a diff's hunks and sides; it follows the same principle, that an anchor holds only where the stored text matches exactly. The plan's version is its hash.
+- **When the plan changes in answer.** The host checks each comment against the new version by its stored lines and its quote together, not by the quoted words alone, since the same words may occur elsewhere. If both still match, the comment stays where it is. If they do not, the passage shows what was removed and what replaced it, from a plain comparison of the two versions. If the match is ambiguous, the comment is shown at its section and marked as such. So for every comment the person sees whether its text changed, and what the agent said, if anything. Nothing computes "addressed"; that is the person's reading. To show what replaced a passage the host keeps each earlier draft that has comments on it.
+- **On an approved plan.** Comments work the same. An approved plan cannot be edited, so what the agent drafts in answer is a revision: a new plan that needs its own approval. Until then the approved plan and anything being built from it are untouched.
+- **Where comments live.** In the planning chat's session state, beside the approval record. They are not review comments and are not written to Records.
+- **One copy with the review desk.** Shared as it is: the interaction (select, a Comment chip, a composer at the passage) and the core of the thread, a comment and its replies with their delivery states. Not shared as it is: the desk's thread model also carries permission requests and commit steps that plan comments do not have, so the shared part is that core; and the anchor rule is new, added beside the diff anchor in the shared review rules, the one authority for anchors. What must move for there to be one copy: the thread model's core and the thread card sit in the review app's own UI package, which the coding app does not import, so they move to where both apps can import them.
+
+#### The agent-to-agent surface
+
+- **Where it sits.** A tab of the channel, beside Chat. It appears when a plan's agents start and carries the app's existing small dot when something new arrives. "Agents" is a working label; the owner chooses the name.
+- **What it shows.** At the top, one line per agent: the main agent and each agent working on the plan, with its role, what it says it is doing, and the model and effort it runs on. Choosing a line shows that agent's own working, drawn as any chat is, where its Stop is, as for any chat. Below, what the agents say to each other, in the order it was said. It shows no rounds and no stages, because the work has none: there may be one implementer or several, a reviewer or more than one, and helpers that come and go.
+- **What an agent says it is doing** is the caption Ace already writes for a chat's work. Nothing new summarises the agents.
+- **People read and cannot write, and the channel enforces it.** The surface has no composer, and nothing on it explains that. The same holds if a person opens one of these chats by its address in an ordinary Chat tab. Stop stays available: stopping a run is a control, not a message.
+- **What reaches the open chat.** One card per approved plan, in the shell the review card and the question card use, kept current by the host as the review card is. It lists the plan's agents with what each is doing, and its actions: open the agents' surface, and stop them all. It never carries the agents' conversation and carries no reassuring status. When a review finishes it shows what needs the person, with the batch overview first, as the review card does today. When something cannot proceed it says what, plainly.
+- **What it reuses.** The channel already reports every chat with the chat that started it, and the details sidebar already lists a chat's subagents with their state. The Agents tab reads the same record and takes the sidebar's state wording, and the sidebar's list links to it.
+- **What is new in the protocol.** A role stored on a chat the host starts, messages between two chats of a channel, and role avatars for agent authors, which today are drawn as a person with initials.
+
+#### Model and effort on each agent's line
+
+- **One line, three places.** An agent's line is the same small row wherever it appears: at the top of the Agents tab, in the build's card, and in the mention list. It always shows the model and effort that agent runs on. This is the review interface's agents control (implementers and reviewers, each with what it is doing) brought into the channel; nothing new is named.
+- **What the lines and the picker list.** What this user actually has: every model from every vendor and account they are signed in to, whether that is a ChatGPT sign-in, a Claude subscription, API keys, or several at once. The code already does this: the channel's list of models is built from the signed-in providers and accounts, and the picker shows each model with its provider. The design adds no list of its own and names no vendor. Two things in today's code fall short of "what this user has", and the slice fixes both: the built-in lists below, and an account whose name equals a built-in provider's id, which is left out of the list today and is a defect to fix.
+- **Choosing on the line.** For the channel's owner the model and effort on a line are a button that opens the picker the composer already has for the main agent: the same list of models, each with its provider, and the efforts the chosen model supports. There is one picker, opened from a line or from the composer. Nothing else on the screen says who may use it.
+- **A line names the vendor or account only where two could be confused,** that is, when the same model is available to this user from more than one. It uses the provider name the picker already shows.
+- **Effort comes from the model.** The valid levels are the ones the channel's list gives for that model; they differ by vendor and by model. A model with none shows its name alone, and the picker offers no effort for it. When a line's model changes to one that does not support the current effort, the effort falls back as the channel already does.
+- **Choosing by saying so.** "Run the reviewer on Fable, extra high effort", said to any agent. The agent that receives it changes the stored setting with one new tool that names the agent, the model and the effort; the host does not read the sentence. The agent's turn shows the change as a tool row, as any tool call is shown.
+- **Only the owner, on every route that sets a model.** The channel, not the browser, decides. These are refused unless the channel's owner is the author: the picker's request; a message's model and effort; the flag, on a message or a picker request, that hands the choice of model back to the channel; and the model named when a new chat is opened. The tool by which an agent asks the host for a reviewer or another implementer takes no model at all. The subagent tool's model is honoured only under the rule for the owner's message below; otherwise a subagent runs on its caller's model. One case stays allowed, because it is not a choice: when a chat's stored model has lost its key, a plain message from anyone still makes the channel pick a working one.
+- **By saying so: tied to the owner's message, not to the run.** A tool's run is not told who is asking, and a message to a busy agent joins the run already in flight, so "a run the owner started" would let a teammate's steer through and would refuse the owner's own mention to a busy implementer. So the channel does this instead, and it is new code. When it admits a message to a chat it records, on that chat, the latest message its owner authored, whether that message started the run or steered it, and it clears the record as soon as any other input is admitted to that chat: a teammate's message, an agent's, the host's brief, a review's wake. The tool that changes a model works only while that record stands, and only for what that message's own text names, matched against the channel's list of models and efforts. A message may name a model, an effort, or both; what it does not name stays as it is, and the tool cannot change it. The match is across every vendor and account the user has. If the owner wrote "the big model", nothing matches, the tool is refused, and the agent asks the owner to name it or use the line. If the name matches more than one, because the same model is available from two accounts, the tool is refused in the same way and the agent asks which; naming the account settles it.
+- **What a teammate sees.** The same lines with the same values, as plain text: no button, no caption.
+- **The default when nobody chose, in vendor-neutral terms.** A new agent inherits: it starts on the model and effort the planning chat had when the plan was approved, which is the owner's latest choice for this work. A reviewer inherits the implementer's. No default names a vendor. With one vendor only, everything runs on it. If the inherited model is no longer available when an agent starts, the channel picks among what the user has, as it does today for a chat whose model lost its key. Any agent can run any listed model, because the runtime follows the model and not the chat's role. The earlier open point, whether a reviewer must run on a different model, is the owner's choice per line; the default is the same model because a reviewer's independence comes from its fresh start, not from its model or its vendor.
+- **Implementer and reviewer may be on different vendors, and nothing depends on it.** What agents say to each other is text. A reviewer's brief is written by the host from the plan. The final review runs on the review's own configured route, not on any chat's model. One existing fact to know: moving an agent that has already worked to a model on another runtime hands its conversation over in condensed form, so such a change mid-work costs it detail.
+- **Three built-in lists in the code do name models, and the slice removes them.** The channel's automatic choice prefers two named models before taking the first available; it is replaced by the host's default or the owner's last choice. The caption and the recap of a chat's work are each written by the first available model from a list of named vendor models, and by nothing when none matches. That matters here: the caption is what every agent's line shows as what it is doing, and a user with only a subscription sign-in gets none today. The slice chooses the caption and recap model from the user's own list and falls back to the chat's own model, so a line always has a caption. With those gone, no part of model selection assumes a vendor.
+- **A busy agent.** Today a busy chat refuses a model change, since model and effort apply to a whole run. Refusing would make the owner wait and try again, which is a stop and start. So the change is kept in a pending record of its own on the chat, and applied in the same step that admits the first input of that agent's next run, whatever starts it: a message, a mention, another agent, a review's wake. While the two differ the line shows both, the running value and the pending one. The check the channel makes when a message is posted, that it fits the chat's model, is made against the pending model when there is one. If the pending model is no longer available when it comes to be applied, the channel picks among what the user has, as for an inherited one, and the line shows what it picked.
+- **The limit that remains, in full.** The check proves three things: the owner's message is the latest input to that chat, it names that model, and nothing else has been admitted since. It does not prove which agent the owner meant, so an agent that read "use it for the implementer too" in a file could apply the named model to another line. It does not tell the owner's own words from text the owner pasted into their message. And it does not reach past the chat: an agent that passes the request on to another chat in its own words is not the owner's message there. Every change is shown on the line and in the turn, and the owner can set it back.
+
+#### Mentioning agents from the open surface
+
+- **Who can be mentioned, and by whom.** `@neuve` for the main agent, as today, and each of the channel's working agents by its role: `@implementer`, `@reviewer`. With several of a role, each carries the short name of its part. The mention list gains them, each with its model and effort. Anyone the channel lets ask its agents can mention any agent present. This design reads the owner's "anyone on the channel" inside the channel's existing switch for who may ask its agents, not as replacing it: with the switch on, every participant may mention every agent; with it off, only the owner may, as today. That reading is [for the owner to confirm](#still-open-for-the-owner).
+- **What a mention does.** The message is posted in the open chat, and the channel, not the browser, delivers its text to that agent as the person's own message. The channel delivers only for a message a person authored and only for a mention the person typed as a mention: the composer already holds a typed mention as its own node, and the message gains a list of the agents it mentions, which is all the channel reads. Message text is never searched for mentions, so an agent's message, a message from another channel, or quoted text that contains "@reviewer" addresses no one. The delivery carries text only: no mode. A busy agent takes it as steering after its current step. The agent's final reply is shown in the open chat under the agent's role; its working stays on the agent-to-agent surface.  Mentioning a working agent needs the same right that mentioning the main agent needs, checked by the channel.
+- **A mention is one of the person's levers.** "Hold the final review until I am back", "use the smaller model for the rest", "stop after this fix and show me": the agent honours it as it honours any instruction. See [The person's levers](#the-persons-levers).
+- **Whether the main agent is invoked too.** In Chat mode a message invokes the main agent only when it mentions `@neuve`, as today, so a message that mentions only `@implementer` goes to the implementer and to no one else. In Plan mode and the agent's mode every message is for that chat's agent, so a message there that also mentions a working agent goes to both: the chat's agent acts on it in its own mode, and the mentioned agent receives the text.
+- **What a mentioned agent receives.** That one message, never the open chat around it. Each agent's context is its own chat.
+
+#### Keeping a copy of the plan in the repository
+
+- **Where it appears.** One switch in the Plan tab's footer, beside Approve. It is never a question and never a dialog.
+- **What it does.** On, the implementer's brief asks it to commit a copy of the approved plan at the chosen path as its first commit, and the implementer does so. No host code commits anything. The folder is remembered per repository and can be edited in place when the switch is on; the first time, the switch is off. The footer reads the branch at two moments that already exist, when the Plan tab is shown and when a run of one of the plan's agents ends, which the channel already announces. Nothing polls.
+- **States.** Off; on, with the path shown; and in the repository, when a read at one of those two moments finds a file at that path on the branch whose bytes are the approved plan's, with a link to the Diff tab. If the file is there but differs, the footer says so. None of these gates anything, and none is explained by a caption.
+- **After approval** the switch is no longer the way: the person asks the implementer in the open chat, as for anything else.
+- **Why it is not a stop.** It remembers the last choice for the repository, it sits where the person already is when they approve, and nothing waits on it.
+
+#### What the screens leave out
+
+The owner asked for the design to be unslopped. The rule applied to every screen: a word stays only when it is the content or a control's name. Copy that explains the interface to its reader, restates what is visible, or reassures is removed, and so is decoration that carries no information. Where something must be taught, Ace's existing patterns do it: an empty state, a tooltip, a disabled control's reason.
+
+| Removed | Why |
+| --- | --- |
+| The dashed box at the foot of the Agents tab ("People read here…") and its two mention buttons | A read-only surface shows it by having no composer |
+| "Nothing needs you", "Waiting for your approval", "Reviewer is waiting", "From the approved plan", "Sign in, then resume" | Reassurance, or a status that repeats the title, the badge or the button beside it |
+| The note under the composer about what a mentioned agent receives | It explained the interface. The behaviour is the same without it |
+| "reads, writes only the plan" in the mode menu, and "main agent" and the group label in the mention list | Helper text. The menu and the list name their items, as Ace's do today |
+| "to Reviewer", "replied from its thread" and "working" in bylines | The role and the row already say it; a recipient is shown only when there are more than two agents |
+| "Round 2", "Done" and "Error" badges, and the header's "Reviewer working" | A count the work does not have, and states the title or the row already carries |
+| The dividers "Approved plan · building started" and "Implementer started from the approved plan" | They repeated the cards beside them. "Reviewer started" stays: it is an event with nothing else to show it |
+| "4 done-when items", "approved by", "plan.md ·" in card lines | Filler around the facts. The ticket, the approver, the time and the hash stay |
+| The asked, unavailable and failed states of the repository switch | The switch is on or off; the copy is in the repository or it is not |
+| The mock's own "new" tags and captions under each example | Decoration and commentary on the mock |
+
+#### Motion
+
+All of it reuses the app's existing motion; nothing here adds a new curve.
+
+| Moment | Motion, in the house terms |
+| --- | --- |
+| A tab opens or is switched | The tab panel's existing enter: opacity and a short rise, 220 ms |
+| A card arrives in the chat, or a message arrives on the agents' surface | The existing message rise, 260 ms, emphasized decelerate |
+| A card changes state | Content swap, 180 ms, in place; the card does not move or resize with a bounce |
+| A badge or switch changes tone | Surface tone, 120 ms; the switch's thumb on the snappy spring |
+| The path's check mark appears when the copy is on the branch | The existing tick, 200 ms |
+| The mode menu, the mention list and the comment composer | The existing popover enter, 220 ms, and exit, 160 ms |
+| A passage is underlined when its comment is kept; a changed passage is marked | Line tint, 140 ms |
+| Reduced motion | Every item above becomes a 150 ms fade or nothing; no state is shown by motion alone |
+
+### When an agent asks the person
+
+The owner's rule has two halves. An obvious continuation never becomes a stop. And when a person is asked, it is for a need, raised by an agent in its own words, not by a gate the flow built.
+
+**The one act that is the person's by construction** is approving the plan. Code makes it theirs: no agent can do it.
+
+**Everything else is an agent's judgment.** An agent that meets something only the person can settle asks with the question tool it already has, in the open chat, and waits. The design lists no such moments, because it cannot know them. Examples of what a need looks like:
+
+| An agent might say | Why it is a need |
+| --- | --- |
+| "The plan does not say whether scheduled exports retry too." | Only the person knows what they meant |
+| "This is not converging: the review has sent the retry counter back twice and I think the plan's approach is wrong." | Only the person can change the plan. Noticing this is judgment; no code detects it |
+| "The fix needs a migration the plan put out of scope." | The scope is the person's |
+| "I disagree with the reviewer about this correction and neither of us will move." | Someone with authority has to decide |
+
+**What an agent does not ask.** Whether to start building after approval, whether to fix what a review sent back, whether to request the final review when the work is ready, whether to be told when it ends. Each is the obvious continuation of what the person already decided.
+
+**Errors are not stops.** A review that cannot run (an expired sign-in, a refused account, a used-up quota) and a final review the host's check refuses are errors. The build's card shows them plainly with their reason, as the review card shows a refusal today. Nothing about them is designed as a step.
+
+**Human-required units** after a review are the person's own decisions, as they always are, and reach them with the batch overview link.
+
+### The person's levers
+
+A person who wants the work run a certain way, or is concerned about their usage, does not look for a setting. They say so where they already talk to agents, and agents honour it as any instruction. Neuve builds none of this; it exists.
+
+| Lever | Example | Who honours it |
+| --- | --- | --- |
+| The repository's agent guide | "Run the final Neuve review once per plan. After that, ask me before another." | Every agent that works in the repository, in every plan |
+| The plan itself | A line under how to build it: "Hold the final review until I am back." or "One implementer only; do not split this." | The agents building that plan. The plan is their scope and their brief |
+| A message mid-flight | "@reviewer hold the final review until I'm back." or "@implementer stop after this fix and show me." | The agent it mentions, from its next step |
+| Stop (the coordinator's addition to the reading the owner confirmed) | The Stop control on an agent, or on the build's card for all of a plan's agents | Immediate. This one is code, as it is today |
+| The account's own quota | The plan or subscription the agents run on | The provider. It is the real ceiling on spend; a review held by a used-up quota is shown as an error |
+
+An instruction such as "hold the final review until I am back" is honoured by the reviewer because the reviewer reads it, not because code checks it. That is deliberate: these levers express things no cap could, such as "after this fix", "until I am back" or "unless the change is only tests".
+
+Neuve's own machine-wide capacity is not one of these levers: it counts threads and bounds how much of the machine Neuve's heavy work uses, not metered usage or spend.
+
+### Where the default behaviour lives
+
+In the one shipped skill, which both Neuve's own lanes and Ace's agents load:
+
+| What the guidance says | Where it goes |
+| --- | --- |
+| Carry on through obvious continuations: build after approval, fix what a review sent back, request the final review when the work is ready, and again after a fix | The skill's own rules, and its reference on requesting a review |
+| Ask the person only at a real need, in your own words, with the question tool; say what you tried and what you need from them | The skill's own rules |
+| A reviewer may notice that work is not converging and say so to the person; nothing detects this for it | The inner-loop reviewer's reference, which the work that moves the reviewer's guidance into the shipped skill creates |
+| Honour what the agent guide, the plan and the person's messages say about how to work, including holding or limiting reviews | The skill's own rules |
+| A changed plan means a new cycle: continue on a new branch from the last commit | The skill's reference on lanes and dispositions |
+
+The skill today has six references (setup, requesting a review, the desk, proof, lanes and dispositions, and the stack) and no guidance for a reviewer; that is the gap the other ticket fills. This design adds lines to it and no second copy anywhere.
+
+### One design for every channel
+
+The owner asked that the foundations be shared and not depend on the kind of channel. They are: plan mode's enforcement, the read rules, who may change a chat's mode, the plan file and its approval, the host's check at admission, the reviewer's fresh start, the two surfaces and mentions are identical whether a channel has one person or many. Nothing in the design asks how many people a channel has.
+
+One thing differs until the sandbox exists, and it is availability, not design: the unattended build runs only in a channel with one person on their own device, which the code reads as the channel's switch for who may ask its agents being off, so only the owner can, on a channel that is not a cloud one. That is not the same as one person being present: with the switch off a teammate can still post messages there, and agents read every message, so a teammate's words can reach an agent even though they cannot invoke one. The allowance is about whose commands run on whose machine, and this is the fact the code can read. In a shared channel, planning, the Plan tab, approval and the surfaces all work; the step that starts the implementer says the build waits for the sandbox. If the owner turns that switch on while agents are building, each agent finishes its current step and the card says the build is paused and why. This is an interim allowance: the ruling it sits under asks for every channel's commands to run in a sandbox, and this runs one kind of channel without one until that is built.
+
+### What this replaces or could fold in
+
+| Today | Proposed | Lines |
+| --- | --- | --- |
+| The layout comment promising Plan returns "when its backend does" | Removed: the Plan tab is one of the tab choices again | Removed |
+| The shared composer's unused plan pieces: the mode id, its icon, the send button's plan icon, the `plan.md` reference and the Plan agent's tone | Used as they are. Nothing new is drawn for the mode | None |
+| The card shape the question card has and the review card copies | Extracted once as a shared shell, which the review card, the question card, the plan's card and the build card all use. Two more copies would make four | Removed: one copy of the shape |
+| The review desk's comment thread model and card, kept in the review app's own UI package | Moved to where both apps import them, and used by the plan's comments. One copy | Moved, not added |
+| A separate way to list a channel's other chats | Not added: the agent-to-agent surface is that view |  None |
+| The browser's mode remembered per channel | Remembered per chat | Changed, not added |
+| Per-chat "selected Linear issue", its select and clear operations, the "reviewed" association, and the host code that reads the selection for a review and refuses on a mismatch | Candidates for removal once a plan names its original ticket and the first read opens the cycle. The host's review path uses them today, so they stay until a review with no earlier read no longer needs the selection | Removed later, and only after that check |
+| The three Linear read tools | Kept as they are: they become plan mode's way to read tickets | None |
+| The review cycle's selected scope source | Kept for reviews with no plan | None |
+| A new scope source type, and Neuve reviews inside the loop | Not proposed; the owner's later rulings dropped both | None |
+
+The new code is one field on the message, one stored document for a chat's mode, the check wrapped around every tool, the exploring tool, the plan-writing tool, the approval record, the host's start of an implementer and its check at admission, the tool that asks the host for a reviewer or another implementer, messages between chats of one channel, two tab kinds, the build card, the mention group for working agents, each agent's line with its model and effort, the tool that changes them for the owner, comments on the plan and the switch that asks for a copy of the plan. No code counts rounds, compares findings or limits reviews. Whether the removal of the selected-issue operations can really happen is **not verified**.
+
+## Build slices
+
+Each slice is one implementer and one independent reviewer. The first two need nothing but building. "Approval starts the build" and "The agent-to-agent surface" land together: no agent is started until agents of a channel can message each other and be seen. The rest wait on other work as their rows say. No slice builds a counter, a detector or a setting that limits reviews.
+
+| Slice | What it builds | Depends on | Replaces or consolidates | Done when |
+| --- | --- | --- | --- | --- |
+| **Plan mode** | The composer's third mode, the chat's identity on the request for its file access, the mode field on the message, the stored mode per chat, the check inside every tool's run, the allowlist, the confined reads and the exploring tool | Nothing | Uses the shared composer's existing plan mode id, icon and send-button state, and changes its mode-marker logic. The per-channel remembered mode becomes per chat. Reuses the wrapper already applied to every tool; adds one stored document, of the kind the selected Linear issue uses | A write, edit or shell call is refused in the planning chat, in any chat it started, on a Claude subscription chat, and when pi reruns an interrupted off-list call that is safe to repeat, such as starting a worktree or a subagent. Changing a busy chat's mode is refused in both directions. A read of a path outside the working tree is refused, and so is a read through a symlink that leaves it, a read of the Records file or the Git configuration from a chat on the main checkout, a read of an ignored file, and each of these again when written with a leading `@` or in one of the spelling variants the read tool tries; the plan file is the one exception. A draft in Plan mode never changes the composer's mode on its own, whatever mention is typed in it; only the mode menu does. A message with no mode, and any agent-authored message carrying one, leaves the chat's mode unchanged; a retry with a different mode under the same request is refused. A test passes option-shaped values to every parameter of the exploring tool (`--output=…`, `-O…`, `--ext-diff`, `-c …`, `--no-index`) and each is refused; after a planning session nothing is written in the working tree or outside it, and the index is untouched. The same behaviour holds in a channel with one person and in a shared one |
+| **The plan, the Plan tab and approval** | The plan-writing tool, the plan file, the Plan tab, the plan's card in the chat, the approval control and its record | Plan mode | Removes the layout's comment that Plan returns later. Extracts the card shape the review card copies from the question card into one shared shell and uses it; reuses the way the Diff tab is opened beside a chat, the reserved `plan.md` reference and the chat's session state | The plan is written only to the host's path. The Plan tab opens beside the chat when the plan is first written and shows Draft, Approved or Replaced. Approving from the tab or from the card records hash, approver and time, with the host hashing the file's bytes. An approved file cannot be edited, and a revision is a new file. No agent tool approves, and the approval operation refuses an agent author. The agent's turn ends when the plan is ready, with no question asked. The approving button says that it also starts the build. Light and dark match the mock |
+| **Comments on the plan** | Selection in the Plan tab, the comment composer, comments kept with a plan version, the one send to the drafting agent, re-anchoring when the plan changes, and the thread under a comment | The plan, the Plan tab and approval | One copy of the thread's core and its card for the review desk and the coding app, moved out of the review app's own UI package to where both import them; a new file-lines anchor rule beside the diff anchor in the shared review rules. No second comment design | Selecting text shows the Comment chip and opens the composer at the passage. Several comments are kept and sent with one action as one message; the agent is not invoked once per comment. The message goes to the drafting chat only, carries Plan mode explicitly, marks quoted plan text as quotation and is never scanned for mentions; it holds each comment's place, quoted text and words. After the plan changes, a comment whose stored lines and quote both still match stays on it; one whose text changed shows what was removed and what replaced it, from the kept earlier draft; and one whose quote occurs elsewhere but whose lines no longer match is shown as ambiguous, never as unchanged. The tool that answers a comment writes only into that comment's thread. A comment sent on an approved plan leads to a revision that needs its own approval and leaves the approved plan untouched. The review desk still passes its own comment tests on the shared copy |
+| **Keep a copy in the repository** | The switch, the remembered folder, the line it adds to the implementer's brief, and the footer's reading of whether the copy is on the branch | The plan, the Plan tab and approval; Approval starts the build | Nothing removed. No host code commits | The switch remembers its last value per repository. On, the implementer's brief asks for the copy at the chosen path. The footer shows the path with a link to the Diff tab when a file there on the branch has the approved plan's bytes, and says so when it differs. Nothing waits on the switch, and no dialog, question or caption appears |
+| **Linear in plan mode** | The existing Linear read tools offered in plan mode, and a real-account capture | Plan mode; the owner's Linear sign-in; the harness record's condition that Linear-backed planning follows the integrated port passing regression validation | Uses the existing three tools unchanged. Makes the deferred real-account setup real | The planning chat reads an issue and its dependencies from the real Linear once, recorded; the plan's head names the issue, and the Plan tab shows it |
+| **Approval starts the build** | The host's start of an implementer in the planning channel through the shared-work helper, keyed by the planning chat and the plan's hash after checking whether that chat's agents are alive; its brief from the approved plan; the role stored on the chat; the tool by which an agent asks the host for a reviewer or another implementer; the statement that the build waits for the sandbox in a shared channel | The plan, the Plan tab and approval; from the scope-retrieval work, the recorded query, the cycle that opens at the first read, and local scope in the answer | Takes over what the selected-issue operations do for a planned cycle, which is what later lets them go. Extends the subagent tool's idea of a fresh chat; adds no scheduler | A cycle opens at the first read that names the plan, with the plan as scope, cited from a held copy. Approving twice starts one implementer, and a host restart mid-start starts nothing twice. Nothing asks the person to confirm the start. A reviewer the host starts has a new chat, none of another agent's transcript, a prompt without the channel's rolling summary, and a brief the host wrote from the approved plan; the tool that asks for one takes a role and a short name and no brief text. The agents the host starts are ownerless and found by role, and can write though the planning chat stays in plan mode. Approving a revision while agents are alive delivers it to them and starts no one; a final review due on a cycle built from an earlier approved plan is admitted. An agent can start a second implementer for part of the work. In a shared channel no agent is started and the reason is shown; the owner turning on the switch for who may ask the agents mid-build pauses it with the reason shown. A plan approved after a build's agents have ended starts a new implementer. Two revisions approved at the same moment start one implementer, and the other is delivered to it. With no plan a review behaves as today |
+| **The agent-to-agent surface** | Messages between chats of one channel, the Agents tab with its conversation and per-agent views, and the build card in the open chat | Approval starts the build; the reviewer's guidance in the shipped skill, then Ace loading that skill | Replaces briefing chats by hand and reading them by address. Reuses the chat rows, the tab strip, the shared card shell, the existing dot, the caption Ace already writes for a chat's work, and the record the details sidebar's subagent list reads | The plan's agents list and load the shipped skill. An agent can message another agent of its channel in free text, and the message appears on the surface. The tab has no composer and no text explaining that; a chat of a plan's agent opened by its address is read-only too, and the channel refuses a person's direct message to it. The surface and the card show each agent's role and its own caption, with no round or stage. A person can stop one agent from the tab and all of a plan's agents from its card. The open chat holds one card per approved plan that the host keeps current without waking any agent |
+| **Model and effort on each agent's line** | The agent line used in the Agents tab, the build's card and the mention list; the composer's existing picker opened from a line; the tool that changes an agent's model and effort; the channel's record of the owner's latest message on a chat; the owner-only rule on every route that sets a model; the pending change for a busy agent | The agent-to-agent surface | One line component for three places and one picker for the composer and the lines; no second picker and no second list of models. Removes the three built-in lists of named models: the automatic choice's, and the caption's and the recap's. Tightens the existing request that sets a chat's model, which today anyone who may ask the agents can make | Every line shows the agent's model and effort, from the channel's own list of what the user has: with a ChatGPT sign-in only, a Claude subscription only, API keys only, and several at once, the picker lists exactly those models and no others. A line names the provider only when the same model is available from more than one. A model with no effort levels shows its name alone. An implementer and a reviewer on different vendors exchange messages and finish a build. The owner changes them from a line and by asking any agent, and the line updates at once. A change made while the agent is busy is kept as pending, the line shows the running and the pending value while they differ, and the pending one is applied when the next run's first input is admitted, whether that is a message, a mention, another agent or a review's wake. A new agent starts on the planning chat's model and effort, and a reviewer on the implementer's; when that model is no longer available the channel picks among what the user has, and no default names a vendor. The built-in lists of named models are gone from the automatic choice and from the choice of caption and recap model, which now come from the user's own list with the chat's model as the fallback: every agent's line shows a caption with a Claude subscription only and with a ChatGPT sign-in only. A pending model that is no longer available when applied is replaced by the channel's pick, and the line shows it. An account whose name equals a built-in provider's id appears in the list. The owner's steer to a busy agent that names a model is accepted. A message that names only a model leaves the effort as it is, and one that names only an effort leaves the model. Refused by the channel, with nothing changed: a teammate's picker request; a teammate's message carrying a model, an effort or the flag that hands the choice back; a new chat opened by a teammate with a model; a subagent started with a model when the owner's message is not the latest input or does not name it; a teammate's steer into a run the owner started; the tool after any other input was admitted to the chat; the tool for a model the owner's message does not name, or names in a way that matches none of the user's models or more than one; and the tool in an unattended build. The tool that asks the host for a reviewer or implementer accepts no model. Still allowed: a plain message from anyone makes the channel pick a model when the stored one lost its key. A teammate sees the values as text with no control and no caption |
+| **Mentioning working agents** | The mention group for a plan's agents, delivery of a mention's text to that agent, and its final reply in the open chat | The agent-to-agent surface | Extends the one-agent mention the app has; adds no second way to address an agent | A plan's agents appear in the mention list by role, each with what it is doing. The channel delivers a mention, and only from the message's list of mentioned agents on a message a person authored; text that merely contains an agent's name, in an agent's message, a cross-channel message or a quotation, is delivered to no one. With the channel's switch for who may ask its agents on, every participant can mention every agent present; with it off, only the owner can, and the channel refuses the rest. A mention delivers text only: sent from a composer in Plan mode it changes no other chat's mode and is not refused because the mentioned agent is busy. A message's mode is applied only to the chat whose composer sent it. In Chat mode a message that mentions only a working agent invokes no one else; in Plan mode and the agent's mode the chat's own agent also acts on it. A mention reaches a busy agent as steering after its current step, and the agent receives that message and nothing else from the open chat. The reply appears in the open chat under the agent's role. In a recorded run, a reviewer told "hold the final review until I am back" holds it |
+| **The final review** | The review tools' wording for an approved plan, the host's check at admission, the reviewer's being told, the card's review and error states, and the lines the shipped skill gains | The agent-to-agent surface; from the scope-retrieval work, the review joining the cycle and the split scope snapshot; the work that moves the reviewer's guidance into the shipped skill | Changes the wording of the existing review tools; adds no new tool unless the review-tool point needs one. Adds lines to the one shipped skill and no second copy of them | A reviewer requests the final review of the whole range when it judges the work ready, with no question to the person, and the review joins the cycle and fetches no scope again. After a fix, a further final review starts the same way; nothing in code counts or limits them. The host hashes the held copy itself; a plan changed after approval, or a cycle whose scope is another file, is an error shown with its reason. A review that cannot run for a sign-in, a refused account or a used-up quota is shown plainly on the card. The card shows the count of human-required units and the batch overview link. The shipped skill carries the guidance on continuing, on asking at a need and on honouring the person's instructions |
+
+**Is the Linear slice's condition met?** Still not established, and the owner's answers do not settle it. A ruling of 1 November let an isolated evidence run stand in for the owner's integrated run for that landing, and the Ace port is on main. The harness record still says its links "do not declare the source port accepted or a scored regression completed", and the development guide still records the planning entry as deferred. The owner or the coordinator should say whether the condition is met before this slice starts.
+
+Evidence for every slice but the Linear one is browser work, so code, tests where a boundary needs one, telemetry and logs, and Chrome DevTools screenshots and video of a real plan-to-review run must agree. Plan mode's refusals and the reviewer's fresh start are boundaries that need tests, because a missed case is silent. What agents choose to do is not tested as a sequence; it is seen in recorded runs.
+
+## Still open for the owner
+
+The owner's questions are answered. The same test was applied to what remained: anything that is an agent's judgment, or follows from a ruling, is settled in the design and listed here only so the owner can see it was decided.
+
+**For the owner.**
+
+| Point | What is asked | Suggested |
+| --- | --- | --- |
+| Committing a plan against the earlier rule | An earlier ruling says no plan is committed to the repository. The coordinator reads that as a rule for Neuve's own process, and keeping a copy as a choice a user makes for their own repository. Confirm or overrule | As read |
+| The names of the two surfaces | "Open" and "agent-to-agent" are the owner's words but not yet vocabulary. Confirm them as terms, and choose the tab's label: Agents, Agent threads, or Agent-to-agent | The owner's words as the terms; "Agents" on the tab |
+| The fuller wording of the two vocabulary entries | The vocabulary holds the two names and the one approved line. Whether to add that approving agrees the scope, that the approval carries the ask for the final review of every cycle of the plan, that plan mode is read-only by code, and that the cycle opens at the first read | Add them once the slices land |
+| The guarantees beyond the two the owner named | The reading the owner confirmed said code enforces that a planning chat cannot write and that only a person approves. This design also has code guarantee a reviewer's fresh start, that the review's scope is an approved plan, that people do not write on the agents' surface, and the sandbox wait | Confirm the four, each with its reason in the guarantees table |
+| Who "anyone on the channel" is | The owner said anyone on the channel can tag any agent present. The channel already has a switch for whether people other than the owner may ask its agents. This design reads the words inside that switch: on, everyone may mention every agent; off, only the owner | As read. The other reading removes the switch for mentions |
+| Whether agents may tag each other from the open surface | The owner said "we can '@' tag agents". This design reads "we" as people: agents message each other freely on their own surface, and only a person's typed mention is delivered from the open one | As read |
+| When the plan file goes | With the planning chat, or with its channel | With the channel, so an approved plan outlives a closed chat |
+| The Linear slice's condition | Whether the port's regression validation counts as passed | The owner or coordinator says |
+
+**Settled in the design, by the owner's principle or an existing ruling.**
+
+| Point | How it is settled |
+| --- | --- |
+| How many final reviews a plan may run | Not limited. The agents judge; the person's instructions and the account's own quota govern spend |
+| Whether the loop stops after some number of corrections | It does not. An agent asks the person when it judges it must |
+| Whether agents may address each other | They may, on their own surface: messages between agents of a channel are what it shows. Only a reviewer's first brief and prompt are kept from other agents' accounts |
+| How many implementers and reviewers a plan has, and whether helpers are used | The agents' judgment, as the vocabulary already allows several of each |
+| Which model a reviewer runs on | The owner's choice on the reviewer's line. It starts on the implementer's |
+| A revision approved while agents are building | It is delivered to them and starts no one new; they carry on under it, on a new branch for its new cycle. A review due on the earlier cycle is still admitted |
+| Which link the person gets after the review | The batch overview first, as the review card already does by an earlier ruling. The repository guidance's "desk link" wording is the one to correct |
+| Whether ignored files are readable in plan mode | Refused, since that is where secrets live |
+| Which review tool a reviewer calls from a worktree with no branch | Engineering, for the slice |
+
+## Not verified
+
+- The mock was drawn from the app's tokens and class strings, not by running its components; spacing and icons are approximations, and it was inspected as screenshots rendered by a headless browser, not inside the app.
+- That a pane shows one chat chosen by the address, that no list of a channel's chats exists, and that other agents' messages are drawn like a person's, came from a search agent's read of the app and were not re-read line by line.
+- Whether a message delivered to a busy chat from a mention can skip interrupting a running shell command, as an ordinary message does, was not exercised.
+- That a Claude subscription chat's tool calls pass the before-tool hook was read from the code and the runtime record, not run.
+- pi's per-chat tool list, its `addTools` control, its before-tool hook and its recovery path were read from the installed package, not exercised.
+- That the wrapper around every tool's run sees which chat is calling, and so can read that chat's mode, was inferred from other tools that do; not exercised.
+- Whether repository configuration can make the exploring tool's Git commands run a program despite the flags above.
+- Wrapping a chat's file access under pi's read tool was not tried. What was read: the channel requests it by working directory only, and the host shares one per directory, so the slice must pass the chat's identity through and apply the rule per chat and per call. Whether pi offers the chat's identity at that point was not checked.
+- Messages between two chats of one channel, the host starting a chat with no person's request, and a tool that asks the host for a reviewer are all new; nothing like them was found to build on beyond the cross-channel message tool, the subagent tool and the new-chat request.
+- Which existing review tool can review the implementer's branch from the reviewer's worktree.
+- Whether the selected-issue operations can be removed.
+- What the host can read of a held review's reason today, to show it on the card: the hold reasons are in the harness, and the review card's states seen were queued, running and stopped.
+- The review desk's comment code was read at its entry points only (the selection and composer in the diff file, the thread's states, the anchor rule); how much of the thread card depends on the desk's own state was not traced, so the cost of moving it is not known.
+- Re-anchoring a comment when its quoted text appears more than once in a plan, or moves between sections, is not designed beyond "still there or not".
+- Which stored fact says a channel is a cloud one was not read; the request that creates a channel carries a cloud flag.
+- The record of the owner's latest message on a chat, and clearing it on any other input, is new code at the admission step; that every kind of input to a chat passes that step was not traced.
+- Matching a model named in a message against the channel's list is not designed beyond exact names and ids.
+- The model and vendor names in the mock are examples; the list is whatever the channel's models request returns.
+- The host can supply its own models for captions and recaps; whether Neuve's host already does so in a way that covers a subscription-only user was not read.
+- The search for built-in lists of named models covered the channel, the app, the host and the shared UI, not the review harness, whose routes are configured separately.
+- How a ChatGPT sign-in appears in the channel's list was not traced; the Claude subscription's path was read, and the list itself is built from every registered provider.
+- That a role's agent can run any listed model was read from how the runtime follows the model; a build with the two agents on different runtimes was not run.
+- That agents will in practice honour an instruction in the agent guide, the plan or a message, such as holding the final review, is behaviour to be seen in recorded runs. Nothing in code makes it so, by design.
+- That the caption Ace writes for a chat's work is good enough to show as what an agent is doing was not checked against real captions.
+- That a new branch cut from the building agents' last commit, on the same base, gets its own cycle rests on the scope-retrieval design, which is not built.
+- Whether a retrieval can run without opening a cycle, and how the host finds a cycle's held scope copy to hash it. Both belong to the scope-retrieval design.
+- Whether the harness record's condition for Linear-backed planning is met.
+- What the old Plan tab showed. The upstream history says only that it was a tab.
+- OpenAI's own Codex pages, and whether the reported plan-mode leaks in Claude Code and Cursor still hold.
+- The sandbox tickets were not read; only their titles and the rulings behind them. One thing the sandbox work must answer for this design: the plan file sits in the host's storage, outside a sandbox that holds only the worktree, so the implementer's first read needs a way to reach it.
+
+## References
+
+| What the text rests on | Where |
+| --- | --- |
+| The scope, state and open questions of this work | Linear NEU-414 |
+| The owner's answers of 20 November 2026 | Decisions 14.52 to 14.61 |
+| Model and effort per agent; only the owner changes them; anyone on the channel can mention any agent; models and vendors are discovered, never built in | Decision 14.61; the [runtime contract and accounts record](../../architecture/decisions/0017-runtime-contract-and-accounts.md); the agents control in the [vocabulary](../../vocabulary.md#surfaces) |
+| Comments by highlight on the plan; no copy that explains the interface | Decision 14.60; the shared review rules, [`packages/review-rules`](../../packages/review-rules/src/index.ts) |
+| Neuve does not cap or gate its own tool; judgment belongs to the agents; the person's levers; code enforces only what must not depend on judgment | Decision 14.59, amending 14.54; the machine's capacity in the [vocabulary](../../vocabulary.md#runtime); no meters of Neuve's own, decision 14.38 |
+| The shipped skill and its references | [`SKILL.md`](../../apps/neuve-cli/skills/neuve/SKILL.md) and its `references/` folder |
+| Plan returns as a mode and a tab | Decision 14.52, amending 12.3 and record 0014, "Coding environment and design" |
+| The loop as a product flow; the two surfaces; mentions | Decision 14.53, amending 1.2 |
+| Approval is the ask for every cycle of its plan; obvious continuations are not stops | Decision 14.54, amending 12.20, 12.22 and 12.23; [reviewer's tax](../../foundations/05-reviewers-tax.md) |
+| Where the plan lives; keeping a copy; the tension with the earlier rule | Decisions 14.55 and 14.43 |
+| The names | Decision 14.56; [vocabulary](../../vocabulary.md#responsibility-and-review-flow) |
+| Running before the sandbox; shared foundations | Decision 14.57, applying 12.28 |
+| Neuve's look over Ace; primary buttons are ink; the batch overview first; a new review is offered, not started, after new commits | Decisions 12.15, 12.17, 12.23 |
+| The two places in the harness record that still say Plan panels stay absent | [Record 0014](../../architecture/decisions/0014-ace-style-pi-harness.md), lines 65 and 69 |
+| Scope retrieval, the cycle opening at the first read, local scope with citations | Linear NEU-411; decisions 14.37, 14.40, 14.41, 14.44 to 14.49 |
+| The reviewer's guidance in the one shipped skill; Ace loading it | Linear NEU-410, NEU-412; decisions 14.36, 14.38 |
+| The Linear planning backend, and its condition | Linear NEU-59; [harness record 0014](../../architecture/decisions/0014-ace-style-pi-harness.md#optional-linear-scope), lines 65 and 93; decision 12.25 |
+| One implementer and one independent reviewer; no Neuve review in the inner loop; the reviewer requests the final review; a fix round is a new cycle | Decision 14.35; [the lane loop](../neuve-in-the-loop.md) |
+| No plan is committed; scratchpads belong to a session | Decision 14.43 |
+| A named uncommitted file is read, hashed and copied; external means an integration | Decision 14.45; [the Part 2 design](skills-and-lane-loop.md#part-2-design) |
+| One run per key, and other callers follow it | [Shared-work record 0016](../../architecture/decisions/0016-shared-work.md) |
+| Reviews start from the agent's tools; the worktree tool only when asked; waking only when asked | Decisions 12.20, 12.21, 12.22 |
+| Where coding commands run; the sandbox holds the worktree and never the owner's sign-ins or the Records store | Decisions 12.28, 12.29, 12.58; Linear NEU-60, NEU-72 |
+| Moving further from Ace's upstream is accepted; upstream is absorbed by rewrite tasks; changed upstream files stay listed | Decision 14.58, amending 12.9 and 12.11; [channel `UPSTREAM.md`](../../packages/channel/UPSTREAM.md) |
+| Review cycle, inner development loop, human-required, batch overview, sandbox | [Vocabulary](../../vocabulary.md) |
+| Evidence that converges | Decisions 7.2, 11.1 |
