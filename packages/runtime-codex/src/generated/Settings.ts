@@ -1,4 +1,4 @@
-// From OpenAI's Codex, rust-v0.171.0-alpha.13 (tag object e0fd22a0e4e047a795d4bfa2b135fd3e6356eef2),
+// From OpenAI's Codex, rust-v0.171.0-alpha.13 (commit 581161ab41e643d942e1e1b5f561034060bf18e3),
 // codex-rs/app-server-protocol/schema/typescript/Settings.ts. Apache-2.0; see LICENSE here.
 // Regenerate with packages/runtime-codex/scripts/generate.ts; do not edit by hand.
 // GENERATED CODE! DO NOT MODIFY BY HAND!

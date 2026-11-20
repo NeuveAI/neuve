@@ -19,6 +19,7 @@ import {
   CodexExited,
   CodexHandshakeTimeout,
   CodexMalformedLine,
+  CodexOutputEnded,
   CodexOversizedLine,
   CodexRequestFailed,
   CodexUnknownMessage,
@@ -64,6 +65,8 @@ export const INTERNAL = -32603;
 /** A thread's history comes back whole in one line, so the limit is generous but finite. */
 export const MAX_LINE_BYTES = 64 * 1024 * 1024;
 const STDERR_TAIL_CHARS = 4000;
+/** How long output that ended cleanly waits for the exit, which then ends the connection itself. */
+const EXIT_GRACE = "1 second";
 
 export interface ConnectOptions {
   readonly program: string;
@@ -94,7 +97,10 @@ export interface CodexConnection {
    * notifications come from the turns the caller starts and reads.
    */
   readonly notifications: Stream.Stream<Notification, CodexTermination>;
-  /** Ends input and asks the program to stop, then stops it after a short wait. */
+  /**
+   * Ends input and asks the program to stop, then kills it if it is still running after the stop
+   * wait. Closing the scope does the same, whether the connection was open or had ended.
+   */
   readonly close: Effect.Effect<void>;
 }
 
@@ -176,8 +182,9 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       pending.clear();
       yield* Queue.fail(notifications, failure());
     });
+  // Suspended, so an answer that throws before it returns an effect is caught like one that fails.
   const answerOf = (request: ServerRequest) =>
-    options.answer(request).pipe(
+    Effect.suspend(() => options.answer(request)).pipe(
       Effect.catchCause(() =>
         Effect.succeed<Answer>({
           error: { code: INTERNAL, message: "the client could not answer" },
@@ -235,15 +242,16 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
         if (error !== undefined && error !== null)
           yield* Deferred.fail(
             entry.deferred,
-            new CodexRequestFailed({
-              method: entry.method,
-              code: typeof error.code === "number" ? error.code : 0,
-              message:
-                typeof error.message === "string"
-                  ? error.message.slice(0, 500)
-                  : "",
-              ...(typeof type === "string" ? { type: printable(type) } : {}),
-            }),
+            CodexRequestFailed.of(
+              {
+                method: entry.method,
+                code: typeof error.code === "number" ? error.code : 0,
+                ...(typeof type === "string" ? { type: printable(type) } : {}),
+              },
+              typeof error.message === "string"
+                ? error.message.slice(0, 500)
+                : "",
+            ),
           );
         else yield* Deferred.succeed(entry.deferred, message.result);
         return;
@@ -317,11 +325,34 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       ).slice(-STDERR_TAIL_CHARS);
     }),
   ).pipe(Effect.forkIn(scope));
-  // The exit ends the connection, whatever pipe a child of Codex may still hold open; the
-  // streams get a moment to drain first, so the tail holds the program's last words.
+  // The reader ending for any reason ends the connection, so no caller waits on output that will
+  // never come. Output that ended cleanly gives the exit a moment, since a program that exits
+  // closes its output first and the exit below then ends the connection with how it exited; output
+  // closing while the program lingers, or the reader failing, ends it here. Either way the program
+  // is stopped.
+  const outputEnded = (reason: CodexOutputEnded["reason"]) =>
+    end((method) =>
+      CodexOutputEnded.of(
+        { reason, ...(method === undefined ? {} : { method }) },
+        stderrTail,
+      ),
+    );
   const reader = yield* Stream.runForEach(child.stdout, onChunk).pipe(
+    Effect.exit,
+    Effect.flatMap((read) =>
+      read._tag === "Failure"
+        ? outputEnded("defect")
+        : child.exited.pipe(
+            Effect.timeoutOption(EXIT_GRACE),
+            Effect.flatMap((exited) =>
+              exited._tag === "Some" ? Effect.void : outputEnded("closed"),
+            ),
+          ),
+    ),
     Effect.forkIn(scope),
   );
+  // The exit ends the connection, whatever pipe a child of Codex may still hold open; the
+  // streams get a moment to drain first, so the tail holds the program's last words.
   yield* child.exited.pipe(
     Effect.tap(() =>
       Effect.all([Fiber.await(reader), Fiber.await(stderr)]).pipe(
@@ -378,7 +409,12 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
     yield* askToStop;
     yield* killIfStill;
   });
-  yield* Effect.addFinalizer(() => close);
+  // After a failure the program was asked to stop and a kill is waiting in the scope, which closing
+  // the scope would interrupt: the finalizer waits the same stop wait itself, so the program has
+  // time to stop its own children before the process service kills it.
+  yield* Effect.addFinalizer(() =>
+    state.kind === "open" ? close : killIfStill,
+  );
 
   const answered = yield* request("initialize", {
     clientInfo: options.clientInfo,

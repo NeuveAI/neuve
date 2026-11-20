@@ -29,25 +29,36 @@ export class CodexUnknownMessage extends Data.TaggedError(
 }> {}
 
 /**
+ * Text the program wrote, redacted, on a field that is not enumerable: a log line or a JSON dump of
+ * the failure leaves it out, and only a reader that asks for it gets it.
+ */
+const withText = <E extends object>(error: E, field: string, text: string) =>
+  Object.defineProperty(error, field, {
+    value: String(redact(text, [])),
+    enumerable: false,
+  });
+
+/**
  * Codex answered a request with an error. `type` is Codex's own reason from `error.data.type`
  * (such as `modelProviderNotConfigured`), which the runtime maps onto the contract's failures.
+ * `message` is Codex's own text, redacted and not enumerable.
  */
 export class CodexRequestFailed extends Data.TaggedError("CodexRequestFailed")<{
   readonly method: string;
   readonly code: number;
-  readonly message: string;
   readonly type?: string;
-}> {}
+}> {
+  declare readonly message: string;
+  static of(
+    fields: ConstructorParameters<typeof CodexRequestFailed>[0],
+    text: string,
+  ) {
+    return withText(new CodexRequestFailed(fields), "message", text);
+  }
+}
 
-/**
- * The program's last standard-error lines, redacted, on a field that is not enumerable: a log line
- * or a JSON dump of the failure leaves it out, and only a reader that asks for it gets it.
- */
 const withTail = <E extends object>(error: E, tail: string) =>
-  Object.defineProperty(error, "stderrTail", {
-    value: String(redact(tail, [])),
-    enumerable: false,
-  });
+  withText(error, "stderrTail", tail);
 
 /** The process ended while the client still needed it. */
 export class CodexExited extends Data.TaggedError("CodexExited")<{
@@ -61,6 +72,23 @@ export class CodexExited extends Data.TaggedError("CodexExited")<{
     tail: string,
   ) {
     return withTail(new CodexExited(fields), tail);
+  }
+}
+
+/**
+ * Standard output ended while the program still ran (`closed`), or reading it failed (`defect`):
+ * nothing more can be read, so the connection ends and the program is stopped.
+ */
+export class CodexOutputEnded extends Data.TaggedError("CodexOutputEnded")<{
+  readonly reason: "closed" | "defect";
+  readonly method?: string;
+}> {
+  declare readonly stderrTail: string;
+  static of(
+    fields: ConstructorParameters<typeof CodexOutputEnded>[0],
+    tail: string,
+  ) {
+    return withTail(new CodexOutputEnded(fields), tail);
   }
 }
 
@@ -84,6 +112,6 @@ export class CodexClosed extends Data.TaggedError("CodexClosed")<{
 
 /** What ends a connection on its own: every pending request fails with it. */
 export type CodexTermination =
-  CodexMalformedLine | CodexOversizedLine | CodexExited;
+  CodexMalformedLine | CodexOversizedLine | CodexExited | CodexOutputEnded;
 
 export type CodexFailure = CodexTermination | CodexRequestFailed | CodexClosed;

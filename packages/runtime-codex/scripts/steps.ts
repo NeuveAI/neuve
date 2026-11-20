@@ -6,8 +6,8 @@
  *    launch configuration switches off one by one. Nothing is recorded; the names go to `--out`.
  * 3. `read-only`: every read-only request, under the launch configuration, recorded.
  *
- * There is no turn step: the read-only step shows that the model would not be left with only a
- * client's tools (PROTOCOL.md, at the top).
+ * There is no turn step. These steps were written for the check at session open that the owner's
+ * ruling replaced (PROTOCOL.md, at the top); they stay to re-record the read-only facts.
  */
 import { readFileSync } from "node:fs";
 import { Effect } from "effect";
@@ -95,7 +95,10 @@ const key = (name: string) => {
   return name;
 };
 
-/** Arguments after `app-server` that should leave the model only a client's MCP tools. */
+/**
+ * Arguments after `app-server` that switch off every tool the read-back can name. Codex's own tools
+ * that no read-back names remain (PROTOCOL.md, at the top).
+ */
 export const launchConfiguration = (own: OwnSettings) =>
   [
     ...DISABLED_FEATURES.map((feature) => `features.${feature}=false`),

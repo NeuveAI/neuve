@@ -5,6 +5,8 @@ import { CodexProcess, type CodexExit } from "../src/services.ts";
 /** The test's side of a fake program: what it reads from the client and what it sends back. */
 export interface Fake {
   readonly written: Array<Record<string, unknown>>;
+  /** Lines the client tried to write after the program stopped taking input. */
+  readonly refused: Array<Record<string, unknown>>;
   readonly started: Array<ReadonlyArray<string>>;
   /** Raw text onto standard output as one chunk, newlines included by the caller. */
   readonly emit: (text: string) => void;
@@ -18,6 +20,10 @@ export interface Fake {
     options?: { readonly stderrOpen?: boolean },
   ) => void;
   readonly exited: () => boolean;
+  /** Closes standard output while the program keeps running. */
+  readonly closeOutput: () => void;
+  /** Makes reading standard output fail, as a broken pipe would. */
+  readonly breakOutput: () => void;
   /** How the program was asked to stop, in order: `input` for its input ending, or the signal. */
   readonly stops: Array<string>;
   /** From now on the program refuses input but keeps running. */
@@ -55,6 +61,7 @@ export const fake = (
   });
   const io: Fake = {
     written: [],
+    refused: [],
     started: [],
     emit: (text) => io.emitBytes(encoder.encode(text)),
     emitBytes: (bytes) => {
@@ -67,11 +74,15 @@ export const fake = (
     exit: (exit, options) => {
       if (ended !== undefined) return;
       ended = { exitCode: exit?.exitCode ?? 0, signal: exit?.signal ?? null };
-      out.controller.close();
+      try {
+        out.controller.close();
+      } catch {}
       if (options?.stderrOpen !== true) err.controller.close();
       resolveExit(ended);
     },
     exited: () => ended !== undefined,
+    closeOutput: () => out.controller.close(),
+    breakOutput: () => out.controller.error(new Error("broken pipe")),
     stops: [],
     refuseInput: () => {
       refusing = true;
@@ -91,12 +102,19 @@ export const fake = (
         io.started.push(command);
         let open = true;
         return {
-          stdout: bytes(out.readable),
+          // A failed read reaches the client as a defect, so a test can see the reader die.
+          stdout: Stream.fromReadableStream({
+            evaluate: () => out.readable,
+            onError: (error) => error,
+          }).pipe(Stream.orDie),
           stderr: bytes(err.readable),
           write: (line: string) =>
             Effect.sync(() => {
-              if (!open || refusing || ended !== undefined) return false;
               const message = JSON.parse(line) as Record<string, unknown>;
+              if (!open || refusing || ended !== undefined) {
+                io.refused.push(message);
+                return false;
+              }
               io.written.push(message);
               onWrite(message, io);
               return true;

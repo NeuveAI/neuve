@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { hostname } from "node:os";
 import { Effect, Fiber, Layer, Logger, Stream, type Scope } from "effect";
 import {
   connect,
@@ -67,13 +68,25 @@ const fixture = async (name: string) =>
     new URL(`./fixtures/${name}`, import.meta.url),
   ).json()) as Recording;
 
-/** Sends each recorded request of a fixture again, in order, keeping the answers by method. */
-const drive = (recording: Recording) =>
+const MARKER = { method: "turn/started", params: { marker: true } } as const;
+const isMarker = (n: { readonly params: unknown }) =>
+  (n.params as { marker?: unknown } | undefined)?.marker === true;
+
+/**
+ * Sends each recorded request of a fixture again, in order, keeping the answers by method. Before
+ * closing it waits until every recorded line was sent and then for a marker sent after them, so
+ * every notification the client delivers from the recording is in `seen`.
+ */
+const drive = (recording: Recording, played: ReturnType<typeof replay>) =>
   Effect.gen(function* () {
     const connection = yield* connect(options());
     const seen: Array<string> = [];
+    let marked = false;
     const reader = yield* Stream.runForEach(connection.notifications, (n) =>
-      Effect.sync(() => seen.push(n.method)),
+      Effect.sync(() => {
+        if (isMarker(n)) marked = true;
+        else seen.push(n.method);
+      }),
     ).pipe(Effect.forkScoped);
     const answers = new Map<string, Array<unknown>>();
     for (const { direction, message } of recording.entries) {
@@ -88,6 +101,9 @@ const drive = (recording: Recording) =>
         answer,
       ]);
     }
+    while (!played.done()) yield* Effect.sleep("1 millis");
+    played.io.send(MARKER);
+    while (!marked) yield* Effect.sleep("1 millis");
     yield* connection.close;
     yield* Fiber.join(reader);
     return { initialize: connection.initialize, answers, seen };
@@ -96,10 +112,11 @@ const drive = (recording: Recording) =>
 describe("recorded conversations with Codex", () => {
   // The real program's handshake, replayed through framing, id matching and the handshake.
   test("the handshake answers with the release the types came from", async () => {
-    const played = replay(await fixture("handshake.json"));
+    const recording = await fixture("handshake.json");
+    const played = replay(recording);
     const { initialize, seen } = await run(
       played.layer,
-      drive(await fixture("handshake.json")),
+      drive(recording, played),
     );
     expect(played.mismatches).toEqual([]);
     expect(played.done()).toBe(true);
@@ -109,7 +126,8 @@ describe("recorded conversations with Codex", () => {
       params: { capabilities: { experimentalApi: false } },
     });
     expect(played.io.written[1]).toEqual({ method: "initialized" });
-    // remoteControl/status/changed is known to the release and unread: neither delivered nor logged.
+    // remoteControl/status/changed is known to the release and unread: it arrived and was not
+    // delivered, and the marker after it shows the reader had read past it.
     expect(seen).toEqual([]);
   });
 
@@ -118,7 +136,7 @@ describe("recorded conversations with Codex", () => {
   test("the read-only requests read back the launch configuration", async () => {
     const recording = await fixture("read-only.json");
     const played = replay(recording);
-    const { answers, seen } = await run(played.layer, drive(recording));
+    const { answers, seen } = await run(played.layer, drive(recording, played));
     expect(played.mismatches).toEqual([]);
     expect(played.done()).toBe(true);
     const one = (method: string) => answers.get(method)?.[0] as any;
@@ -322,15 +340,19 @@ describe("each failure ends in its own typed failure", () => {
     });
   });
 
-  // Codex refusing a request is the caller's to handle, with Codex's code and message.
+  // Codex refusing a request is the caller's to handle, with Codex's code and message. The message
+  // is Codex's own text, which can name anything: it is redacted, and left out of anything that
+  // serialises the failure.
   test("a request answered with an error", async () => {
+    const raw =
+      "no such thread for a.person@example.org in /Users/someone/work/x, key sk-proj-abcdefgh12345678";
     const { value } = await connected(
       onRequest("thread/read", (message, io) =>
         io.send({
           id: message.id,
           error: {
             code: -32600,
-            message: "no such thread",
+            message: raw,
             data: { type: "threadNotFound", detail: "kept out" },
           },
         }),
@@ -341,9 +363,22 @@ describe("each failure ends in its own typed failure", () => {
       _tag: "CodexRequestFailed",
       method: "thread/read",
       code: -32600,
-      message: "no such thread",
       type: "threadNotFound",
     });
+    expect(value.message).toBe(
+      "no such thread for <email> in <path>, key <token>",
+    );
+    for (const shown of [
+      JSON.stringify(value),
+      String(value),
+      String((value as Error).stack),
+      Bun.inspect(value),
+    ]) {
+      expect(shown).not.toContain("a.person@example.org");
+      expect(shown).not.toContain("/Users/someone");
+      expect(shown).not.toContain("sk-proj");
+    }
+    expect(Object.keys(value)).not.toContain("message");
   });
 
   // The process dying under a pending request fails it with the exit and the stderr tail.
@@ -656,7 +691,11 @@ describe("the client's own failures stay contained", () => {
     const played = fake((message, io) => {
       answerHandshake(message, io);
       if (message.method === "model/list") {
-        io.stderr("signed in as a@b.co, home /Users/someone/.codex\n");
+        io.stderr(
+          `signed in as a@b.co, home /Users/someone/.codex on ${hostname()}\n` +
+            "key sk-proj-abcdefgh12345678 refresh rt_abcdefgh12345678\n" +
+            "Authorization: Bearer abcdefgh.ijk\n",
+        );
         io.exit({ exitCode: 1 });
       }
     });
@@ -671,6 +710,235 @@ describe("the client's own failures stay contained", () => {
     expect(tail).toContain("<email>");
     expect(tail).toContain("<path>");
     expect(tail).not.toContain("a@b.co");
+    for (const secret of [
+      hostname(),
+      "sk-proj",
+      "rt_abcdefgh",
+      "abcdefgh.ijk",
+      "/Users/someone",
+    ])
+      expect(tail).not.toContain(secret);
     expect(JSON.stringify(failure)).not.toContain("signed in");
+  });
+});
+
+describe("nothing a caller waits on is left hanging", () => {
+  const page = { data: [], nextCursor: null };
+  const elapsed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const started = Date.now();
+      const value = yield* effect;
+      return { value, ms: Date.now() - started };
+    });
+
+  // An answer that throws before it returns an effect must be caught like one that fails: else it
+  // kills the reader, Codex's request is never answered, and the response already sent for the
+  // caller's request is never read.
+  test("a caller's answer that throws is answered, and the connection carries on", async () => {
+    let asked = 0;
+    const played = fake((message, io) => {
+      answerHandshake(message, io);
+      if (message.method === "model/list") {
+        if (asked++ === 0)
+          io.send({ id: 7, method: "item/tool/requestUserInput", params: {} });
+        io.send({ id: message.id, result: page });
+      }
+    });
+    const value = await run(
+      played.layer,
+      connect(
+        options({
+          answer: () => {
+            throw new Error("boom");
+          },
+        }),
+      ).pipe(
+        Effect.flatMap((c) =>
+          c
+            .request("model/list", {})
+            .pipe(
+              Effect.andThen(writtenSoon(played.io, (m) => m.id === 7)),
+              Effect.andThen(c.request("model/list", {})),
+            ),
+        ),
+      ),
+    );
+    expect(value as unknown).toEqual(page);
+    expect(played.io.written).toContainEqual({
+      id: 7,
+      error: { code: INTERNAL, message: "the client could not answer" },
+    });
+  });
+
+  // Standard output closing while the program lingers: no response or notification can come, so
+  // the pending request and the notifications end with a typed failure, and the program is stopped.
+  test("output that closes while the program runs ends the connection", async () => {
+    const played = fake((message, io) => {
+      answerHandshake(message, io);
+      if (message.method === "model/list") io.closeOutput();
+    });
+    const value = await run(
+      played.layer,
+      connect(options()).pipe(
+        Effect.flatMap((c) =>
+          Effect.all([
+            Effect.flip(c.request("model/list", {})),
+            Effect.flip(Stream.runDrain(c.notifications)),
+          ]),
+        ),
+        Effect.map((failures) => ({ failures, stops: [...played.io.stops] })),
+      ),
+    );
+    for (const failure of value.failures)
+      expect(failure).toMatchObject({
+        _tag: "CodexOutputEnded",
+        reason: "closed",
+      });
+    expect(value.failures[0]).toMatchObject({ method: "model/list" });
+    expect(value.stops).toEqual(["input", "SIGTERM"]);
+  });
+
+  // The grace's purpose: a program that exits closes its output first, so output closing and then
+  // an exit inside the grace is reported with how the program exited, not as output that ended.
+  test("output that closes just before the exit is reported as the exit", async () => {
+    const played = fake((message, io) => {
+      answerHandshake(message, io);
+      if (message.method === "model/list") {
+        io.closeOutput();
+        setTimeout(() => io.exit({ exitCode: 4 }), 50);
+      }
+    });
+    const failure = await run(
+      played.layer,
+      connect(options()).pipe(
+        Effect.flatMap((c) => Effect.flip(c.request("model/list", {}))),
+      ),
+    );
+    expect(failure).toMatchObject({
+      _tag: "CodexExited",
+      method: "model/list",
+      exitCode: 4,
+    });
+  });
+
+  // The reader failing on a defect, here a broken pipe, ends the connection the same way, at once.
+  test("a reader that dies ends the connection", async () => {
+    const played = fake((message, io) => {
+      answerHandshake(message, io);
+      if (message.method === "model/list") io.breakOutput();
+    });
+    const value = await run(
+      played.layer,
+      connect(options()).pipe(
+        Effect.flatMap((c) => Effect.flip(c.request("model/list", {}))),
+        Effect.map((failure) => ({ failure, stops: [...played.io.stops] })),
+      ),
+    );
+    expect(value.failure).toMatchObject({
+      _tag: "CodexOutputEnded",
+      reason: "defect",
+      method: "model/list",
+    });
+    expect(value.stops).toEqual(["input", "SIGTERM"]);
+  });
+
+  // An answer that completes after the connection ended is not written: the program was asked to
+  // stop, and nothing is sent to it after that.
+  test("an answer after the connection ended is not sent", async () => {
+    const played = fake((message, io) => {
+      answerHandshake(message, io);
+      if (message.method === "model/list") {
+        io.ignoreTerm();
+        io.send({ id: 7, method: "item/tool/requestUserInput", params: {} });
+        io.emit("not json\n");
+      }
+    });
+    await run(
+      played.layer,
+      connect(
+        options({
+          answer: () =>
+            Effect.sleep("30 millis").pipe(Effect.as({ result: {} })),
+          stopWait: "200 millis",
+        }),
+      ).pipe(
+        Effect.flatMap((c) => Effect.flip(c.request("model/list", {}))),
+        Effect.andThen(Effect.sleep("60 millis")),
+      ),
+    );
+    expect([...played.io.written, ...played.io.refused]).not.toContainEqual(
+      expect.objectContaining({ id: 7 }),
+    );
+  });
+
+  // Close gives the program the stop wait to end on its own, so Codex can stop its own children:
+  // one that ends inside the wait is never killed.
+  test("close waits before it kills", async () => {
+    const played = fake((message, io) => answerHandshake(message, io));
+    const stops = await run(
+      played.layer,
+      connect(options({ stopWait: "500 millis" })).pipe(
+        Effect.flatMap((c) =>
+          Effect.gen(function* () {
+            played.io.ignoreTerm();
+            yield* Effect.forkScoped(
+              Effect.gen(function* () {
+                while (!played.io.stops.includes("SIGTERM"))
+                  yield* Effect.sleep("1 millis");
+                yield* Effect.sleep("30 millis");
+                played.io.exit({ exitCode: 0 });
+              }),
+            );
+            yield* c.close;
+            return [...played.io.stops];
+          }),
+        ),
+      ),
+    );
+    expect(stops).toEqual(["input", "SIGTERM"]);
+  });
+
+  // One that does not end inside the wait is killed, and only after it.
+  test("close kills a program that outlives the wait", async () => {
+    const played = fake((message, io) => answerHandshake(message, io));
+    const { value, ms } = await run(
+      played.layer,
+      connect(options({ stopWait: "100 millis" })).pipe(
+        Effect.flatMap((c) =>
+          elapsed(
+            Effect.sync(() => played.io.ignoreTerm()).pipe(
+              Effect.andThen(c.close),
+              Effect.map(() => [...played.io.stops]),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(value).toEqual(["input", "SIGTERM", "SIGKILL"]);
+    expect(ms).toBeGreaterThanOrEqual(90);
+  });
+
+  // After a failure the scope may close at once; the program still gets the stop wait before the
+  // kill, as on a clean close, instead of the kill waiting in the scope being interrupted.
+  test("a scope closed straight after a failure still waits, then kills", async () => {
+    const played = fake((message, io) => {
+      answerHandshake(message, io);
+      if (message.method === "model/list") {
+        io.ignoreTerm();
+        io.emit("not json\n");
+      }
+    });
+    const { ms } = await run(
+      played.layer,
+      elapsed(
+        Effect.scoped(
+          connect(options({ stopWait: "100 millis" })).pipe(
+            Effect.flatMap((c) => Effect.flip(c.request("model/list", {}))),
+          ),
+        ),
+      ),
+    );
+    expect(played.io.stops).toEqual(["input", "SIGTERM", "SIGKILL"]);
+    expect(ms).toBeGreaterThanOrEqual(90);
   });
 });
