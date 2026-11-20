@@ -29,7 +29,7 @@ import {
 	withoutLeadingAgentMention,
 } from "./agent-mention";
 import { useAgentAvatar } from "./agent-avatar";
-import { composerMode, forgetChannelMode, modeKey } from "./composer-mode";
+import { agentMode, askMode, useChatMode } from "./composer-mode";
 import { host } from "./host";
 import { attachments } from "./attachments";
 
@@ -46,9 +46,6 @@ const MODES = [
 	{ id: "plan", name: "Plan", placeholder: "Plan with the agent", color: "var(--agent-plan)" },
 	AGENT_MODE,
 ];
-/** The modes whose messages are for the chat's agent, carried as the chat's mode. */
-const asked = (mode: string): ChatMode | undefined =>
-	mode === "plan" || mode === "ace" ? mode : undefined;
 // A teammate the owner hasn't let invoke sees no @neuve; the stored mode brings it back with access.
 const BLOCKED_MODES = [{
 	id: "chat",
@@ -156,16 +153,14 @@ export function Composer(
 	const [attached, setAttached] = useState<Attachment[]>([]);
 	const scope = `/channels/${channel.id}`;
 	// Kept so a deliberate mode survives relaunch; until one is chosen here, the chat's own.
-	const [remembered, changeMode] = useLocalStorage<string | null>(modeKey(channel.id, id), null);
-	const stored = composerMode(remembered, chatMode);
-	useEffect(() => forgetChannelMode(channel.id), [channel.id]);
+	const [stored, changeMode] = useChatMode(channel.id, id, chatMode);
 	const [, setLast] = useLocalStorage(LAST_MODEL, "auto");
 	// The channel refuses a blocked teammate's ask, stop, and kill too.
 	const blocked = shared === false && channel.owner !== user;
 	// Agent mode only once a teammate's access is known to be on, as it isn't while their Mac is offline.
 	const agents = channel.owner === user || shared === true;
 	const mode = agents ? stored : "chat";
-	const agentic = !!asked(mode);
+	const agentic = !!agentMode(mode);
 	const avatar = useAgentAvatar();
 	const mentions = useMemo(
 		() => agents ? [{ name: AGENT_ALIAS.name, avatar }, ...members] : members,
@@ -339,9 +334,9 @@ export function Composer(
 			});
 			return;
 		}
-		// A Chat message that mentions the agent carries no mode, so it runs in the chat's own.
-		const carried = blocked ? undefined : asked(mode);
+		const carried = blocked ? undefined : agentMode(mode);
 		const invoke = !blocked && (!!carried || hasAgentMention(text));
+		const change = blocked ? undefined : askMode(mode, chatMode);
 		const body = text.trim();
 		if (!body && !attached.length) return;
 		// The channel would refuse it for want of a key; setup keeps the draft for sending after.
@@ -362,7 +357,7 @@ export function Composer(
 					author: user,
 					text: body,
 					...encoded,
-					...(carried ? { mode: carried } : {}),
+					...(change ? { mode: change } : {}),
 				});
 			} else {
 				await host.channel(channel.id, {

@@ -54,7 +54,7 @@ import { Waveform } from "../../ui/waveform";
 import { type Attachment, AttachmentList } from "./attachment-list";
 import { Composer } from "./composer";
 import { ComposerToolbar, type ComposerToolbarEvent } from "./composer-toolbar";
-import { held, markedMode } from "./mode-marker";
+import { held, nextMode } from "./mode-marker";
 import { canSendMessage } from "./send";
 import { mentionTokens } from "./mention-tokens";
 import { useAttachments } from "./use-attachments";
@@ -696,7 +696,8 @@ function useComposer({
 	let [emoji, setEmoji] = useState<EmojiState>(EMPTY_EMOJI);
 
 	let draft = useDraft(scope);
-	let restoredMode = useRef(draft.defaultValue ? curMode : undefined);
+	// The saved draft is the scope's and the mode the chat's, so a restored draft moves no mode.
+	let restoring = useRef(!!draft.defaultValue);
 	let history = useHistory(scope);
 	let mic = dictation && canDictate;
 	let analyser = useMic(mic && recording);
@@ -886,28 +887,38 @@ function useComposer({
 		},
 	}));
 
+	/** Drops other modes' markers: a leading one goes, a later one becomes plain text. */
+	function unmark(v: EditorView, mode: string) {
+		for (let m of latest.current.modes) {
+			if (m.id === mode || !m.mention) continue;
+			demoteMentions(v, m.mention, m.mentionAliases);
+		}
+	}
+
 	// Sync mention-modes: keep the doc in sync with the active mode.
+	let synced = useRef<string | undefined>(undefined);
 	useEffect(() => {
 		let v = view.current;
 		if (!v || !mentions?.length) return;
 		if (latest.current.editing) return;
-		// Preserve restored mentions until their inferred mode reaches the controlled prop.
-		if (restoredMode.current === curMode) return;
-		restoredMode.current = undefined;
 
-		for (let m of modes) {
-			if (m.id === curMode || !m.mention) continue;
-			demoteMentions(v, m.mention, m.mentionAliases);
-		}
+		// A held mode sheds markers when it is entered, so a mention typed in it later stays put.
+		let entered = synced.current !== curMode;
+		synced.current = curMode;
+		if (entered || !held(curMode)) unmark(v, curMode);
+		mark(v, curMode);
+	}, [curMode, mentions, modes]);
 
-		let target = modes.find(m => m.id === curMode);
+	/** Gives the draft the mode's own marker when it lacks one. */
+	function mark(v: EditorView, mode: string) {
+		let target = latest.current.modes.find(m => m.id === mode);
 		if (!target?.mention) return;
-		let entry = mentions.find(x => x.name === target.mention);
+		let entry = latest.current.mentions?.find(x => x.name === target.mention);
 		if (!entry || hasMention(v, entry.name, target.mentionAliases)) return;
 		if (promoteMention(v, entry, target.mentionAliases)) return;
 
 		insertModeMention(v, entry);
-	}, [curMode, mentions, modes]);
+	}
 
 	function run(cmd: Command) {
 		let v = view.current;
@@ -1064,27 +1075,21 @@ function useComposer({
 			cancel();
 			return true;
 		}
-		if (held(modeRef.current)) return history.handleKey(v, e, undefined, modeRef.current);
 		if (e.key === "Escape") {
 			if (e.repeat) return true;
 			let now = e.timeStamp;
 			let last = esc.current;
-			if (modeRef.current !== ms[0]!.id) {
+			let double = last > 0 && now - last <= ESCAPE_WINDOW;
+			let next = nextMode(ms, modeRef.current, { kind: "escape", double });
+			if (next !== modeRef.current) {
 				esc.current = 0;
 				e.preventDefault();
 				let cur = ms.find(m => m.id === modeRef.current);
-				updateMode(ms[0]!.id);
+				updateMode(next);
 				if (cur?.mention) {
 					demoteMentions(v, cur.mention, cur.mentionAliases)
 						|| demoteLeadingMention(v, cur.mention, cur.mentionAliases);
 				}
-				return true;
-			}
-			let ace = ms.find(m => m.id === "ace");
-			if (ace && last > 0 && now - last <= ESCAPE_WINDOW) {
-				esc.current = 0;
-				e.preventDefault();
-				updateMode(ace.id);
 				return true;
 			}
 			esc.current = now;
@@ -1095,14 +1100,23 @@ function useComposer({
 			}
 		}
 		if (e.key === "!" && !e.metaKey && !e.ctrlKey && !v.state.doc.textContent) {
-			let term = ms.find(m => m.kind === "terminal");
-			if (term && modeRef.current !== term.id) {
+			let next = nextMode(ms, modeRef.current, { kind: "bang" });
+			if (next !== modeRef.current) {
 				e.preventDefault();
-				updateMode(term.id);
+				updateMode(next);
 				return true;
 			}
 		}
-		return history.handleKey(v, e, m => updateMode(m || ms[0]!.id), modeRef.current);
+		// The recalled text lands first and may already move the mode; judge from the mode before.
+		let before = modeRef.current;
+		return history.handleKey(v, e, mode => {
+			let next = nextMode(ms, before, { kind: "recall", mode });
+			if (next !== modeRef.current) updateMode(next);
+			// Held, the recalled text sheds another mode's marker, as the mode itself shows none; a
+			// Plan message recalled into a mode with a marker takes that mode's marker.
+			if (held(next)) unmark(v, next);
+			else if (held(mode)) mark(v, next);
+		}, before);
 	}
 
 	function update(v: EditorView) {
@@ -1113,11 +1127,15 @@ function useComposer({
 		setEmpty(!value);
 		latest.current.onTextChange?.(text);
 
+		let restored = restoring.current;
+		restoring.current = false;
 		if (!latest.current.mentions?.length) return;
-		updateMode(markedMode(
+		updateMode(nextMode(
 			latest.current.modes,
 			modeRef.current,
-			m => !!m.mention && hasMention(v, m.mention, m.mentionAliases),
+			restored
+				? { kind: "restore" }
+				: { kind: "draft", has: m => !!m.mention && hasMention(v, m.mention, m.mentionAliases) },
 		));
 	}
 

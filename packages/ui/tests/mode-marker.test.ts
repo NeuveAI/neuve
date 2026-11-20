@@ -1,34 +1,64 @@
 import { expect, test } from "bun:test";
 
-import { held, markedMode } from "../src/components/composer/mode-marker";
+import { type Cause, nextMode } from "../src/components/composer/mode-marker";
 
-// Why this test exists: a draft that moved the composer out of Plan would send the next message
-// in the agent's mode and take the chat out of plan mode, and nothing on screen would say so.
+// Why: every change of mode other than the menu's goes through this rule. If a draft, a key or a
+// recalled message moved the composer out of Plan, the next message would take the chat out of
+// plan mode, and nothing on screen would say so.
 
-const chat = { id: "chat" };
-const plan = { id: "plan" };
-const agent = { id: "ace", mention: "neuve" };
-const modes = [chat, plan, agent];
-const drafts = {
-	empty: () => false,
-	"with the agent's mention": (mode: { mention?: string }) => mode.mention === "neuve",
+type Mode = { id: string; mention?: string; kind?: "chat" | "terminal" };
+// The app's modes for the owner, or a teammate the owner lets ask the agent.
+const modes: Mode[] = [{ id: "chat" }, { id: "plan" }, { id: "ace", mention: "neuve" }];
+// A teammate without access has Chat alone.
+const blocked: Mode[] = [{ id: "chat" }];
+const mentioning = (mode: Mode) => mode.mention === "neuve";
+const causes: Record<string, Cause<Mode>> = {
+	"a draft with the agent's mention": { kind: "draft", has: mentioning },
+	"a draft without it": { kind: "draft", has: () => false },
+	"a restored draft": { kind: "restore" },
+	Escape: { kind: "escape", double: false },
+	"a double Escape": { kind: "escape", double: true },
+	"!": { kind: "bang" },
+	"a recalled agent message": { kind: "recall", mode: "ace" },
+	"a recalled Chat message": { kind: "recall", mode: "chat" },
+	"a recalled message from before modes were stored": { kind: "recall" },
 };
 
-for (const [name, has] of Object.entries(drafts)) {
-	test(`a draft ${name} never moves Plan`, () => {
-		expect(markedMode(modes, "plan", has)).toBe("plan");
-		// A teammate's composer offers no agent mention, so its modes carry no marker at all.
-		expect(markedMode([chat, plan], "plan", has)).toBe("plan");
+for (const [name, cause] of Object.entries(causes)) {
+	test(`${name} never moves Plan`, () => {
+		expect(nextMode(modes, "plan", cause)).toBe("plan");
 	});
 }
 
-test("only Plan is held; the other modes keep today's markers", () => {
-	expect(held("plan")).toBe(true);
-	expect(held("chat")).toBe(false);
-	expect(held("ace")).toBe(false);
-	// Chat moves to the agent when the draft mentions it, and back when the marker goes.
-	expect(markedMode(modes, "chat", drafts["with the agent's mention"])).toBe("ace");
-	expect(markedMode(modes, "ace", drafts.empty)).toBe("chat");
-	expect(markedMode(modes, "ace", drafts["with the agent's mention"])).toBe("ace");
-	expect(markedMode(modes, "chat", drafts.empty)).toBe("chat");
+test("! never moves Plan, even where the composer has a terminal mode", () => {
+	const terminal = [...modes, { id: "term", kind: "terminal" as const }];
+	expect(nextMode(terminal, "plan", { kind: "bang" })).toBe("plan");
+	expect(nextMode(terminal, "chat", { kind: "bang" })).toBe("term");
+});
+
+test("a recalled Plan message never moves the other modes into Plan", () => {
+	expect(nextMode(modes, "chat", { kind: "recall", mode: "plan" })).toBe("chat");
+	expect(nextMode(modes, "ace", { kind: "recall", mode: "plan" })).toBe("ace");
+	expect(nextMode(blocked, "chat", { kind: "recall", mode: "plan" })).toBe("chat");
+});
+
+// Why: the saved draft is the channel's and the mode is each chat's. If a draft restored when a
+// chat opens set the mode, one chat's draft would overwrite another chat's remembered mode.
+test("a restored draft moves no mode", () => {
+	for (const mode of ["chat", "ace"]) expect(nextMode(modes, mode, { kind: "restore" })).toBe(mode);
+});
+
+// Why: Chat and the agent's mode must otherwise keep today's behaviour exactly.
+test("Chat and the agent's mode move as before", () => {
+	expect(nextMode(modes, "chat", causes["a draft with the agent's mention"]!)).toBe("ace");
+	expect(nextMode(modes, "ace", causes["a draft without it"]!)).toBe("chat");
+	expect(nextMode(modes, "ace", causes["a draft with the agent's mention"]!)).toBe("ace");
+	expect(nextMode(modes, "ace", causes.Escape!)).toBe("chat");
+	expect(nextMode(modes, "chat", causes.Escape!)).toBe("chat");
+	expect(nextMode(modes, "chat", causes["a double Escape"]!)).toBe("ace");
+	expect(nextMode(modes, "chat", causes["!"]!)).toBe("chat");
+	expect(nextMode(modes, "chat", causes["a recalled agent message"]!)).toBe("ace");
+	expect(nextMode(modes, "ace", causes["a recalled Chat message"]!)).toBe("chat");
+	expect(nextMode(modes, "ace", causes["a recalled message from before modes were stored"]!)).toBe("chat");
+	expect(nextMode(blocked, "chat", causes["a draft with the agent's mention"]!)).toBe("chat");
 });

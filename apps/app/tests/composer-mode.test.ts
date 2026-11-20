@@ -1,43 +1,56 @@
-import { expect, test } from "bun:test";
+import { expect, mock, test } from "bun:test";
 
-import { composerMode, forgetChannelMode, modeKey } from "../src/composer-mode";
+// The browser's storage, as the composer's own hook reads and writes it.
+const stored = new Map<string, string>();
+Object.assign(globalThis, {
+	localStorage: {
+		getItem: (key: string) => stored.get(key) ?? null,
+		setItem: (key: string, value: string) => void stored.set(key, value),
+		removeItem: (key: string) => void stored.delete(key),
+	},
+});
+mock.module("@ace/ui", () => ({
+	useLocalStorage<T>(key: string, fallback: T) {
+		const raw = stored.get(key);
+		return [raw === undefined ? fallback : JSON.parse(raw), (value: T) => stored.set(key, JSON.stringify(value))];
+	},
+}));
+const { askMode, useChatMode } = await import("../src/composer-mode");
 
-// Why this test exists: if two chats of a channel shared the remembered mode, a composer left on
-// Plan in the planning chat would open the channel's next chat in Plan, with nothing to say why.
-
-test("each chat of a channel remembers its own mode", () => {
-	expect(modeKey("c1", 1)).not.toBe(modeKey("c1", 2));
-	expect(modeKey("c1", 1)).not.toBe(modeKey("c2", 1));
-	// Not the key a channel's mode was kept under, which would bring it back to every chat.
-	expect(modeKey("c1", 1)).not.toBe("ace:mode:/channels/c1");
+// Why: if two chats of a channel shared the remembered mode, a composer left on Plan in the
+// planning chat would open the channel's next chat in Plan, and nothing would say why.
+test("a composer left on Plan in one chat leaves the channel's other chats be", () => {
+	const [, choose] = useChatMode("c1", 1, undefined);
+	choose("plan");
+	expect(useChatMode("c1", 1, undefined)[0]).toBe("plan");
+	expect(useChatMode("c1", 2, undefined)[0]).toBe("ace");
+	expect(useChatMode("c2", 1, undefined)[0]).toBe("ace");
 });
 
-// A browser that never chose a mode for a planning chat must open it in Plan, even when the chat's
-// mode is reported after the composer mounted; otherwise its next send would leave plan mode.
-test("a chat this browser hasn't remembered opens in its stored mode", () => {
-	expect(composerMode(null, "plan")).toBe("plan");
-	expect(composerMode(null, undefined)).toBe("ace");
-	expect(composerMode("chat", "plan")).toBe("chat");
-	expect(composerMode("plan", undefined)).toBe("plan");
+// Why: a browser that never chose a mode for a planning chat must not take it out of plan mode
+// on its next send, so it opens in the chat's stored mode until this browser chooses one.
+test("a chat this browser hasn't remembered opens in its stored mode, and a choice here wins", () => {
+	expect(useChatMode("c3", 1, "plan")[0]).toBe("plan");
+	useChatMode("c3", 1, "plan")[1]("chat");
+	expect(useChatMode("c3", 1, "plan")[0]).toBe("chat");
 });
 
-test("the channel's old mode is removed and every chat's stays", () => {
-	const stored = new Map([
-		["ace:mode:/channels/c1", '"chat"'],
-		[modeKey("c1", 1), '"plan"'],
-		[modeKey("c1", 2), '"ace"'],
-		["ace:mode:/channels/c2", '"ace"'],
-	]);
-	forgetChannelMode("c1", { removeItem: (key) => void stored.delete(key) });
-	expect([...stored.keys()]).toEqual([modeKey("c1", 1), modeKey("c1", 2), "ace:mode:/channels/c2"]);
+// Why: the old per-channel value, read by any chat, would bring one chat's mode back to all of them.
+test("the channel's old remembered mode is removed and each chat's stays", () => {
+	stored.set("ace:mode:/channels/c4", '"chat"');
+	stored.set("ace:mode:/channels/c4/1", '"plan"');
+	expect(useChatMode("c4", 2, undefined)[0]).toBe("ace");
+	expect(stored.has("ace:mode:/channels/c4")).toBe(false);
+	expect(useChatMode("c4", 1, undefined)[0]).toBe("plan");
 });
 
-test("storage that refuses access leaves the composer working", () => {
-	expect(() =>
-		forgetChannelMode("c1", {
-			removeItem: () => {
-				throw new Error("SecurityError");
-			},
-		})
-	).not.toThrow();
+// Why: a channel that predates the mode refuses a message carrying one, so a message in the mode
+// the chat already has must stay the plain ask; only a change of mode carries it.
+test("an ask carries a mode only when it changes the chat's", () => {
+	expect(askMode("ace", undefined)).toBeUndefined();
+	expect(askMode("ace", "ace")).toBeUndefined();
+	expect(askMode("plan", "plan")).toBeUndefined();
+	expect(askMode("plan", undefined)).toBe("plan");
+	expect(askMode("ace", "plan")).toBe("ace");
+	expect(askMode("chat", "plan")).toBeUndefined();
 });
