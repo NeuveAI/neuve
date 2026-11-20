@@ -1,0 +1,996 @@
+{
+  "version": 1,
+  "codex": "0.171.0-alpha.13",
+  "note": "read-only requests under the launch configuration",
+  "entries": [
+    {
+      "direction": "out",
+      "message": {
+        "id": 0,
+        "method": "initialize",
+        "params": {
+          "clientInfo": {
+            "name": "neuve",
+            "title": "Neuve",
+            "version": "0.1.0"
+          },
+          "capabilities": {
+            "experimentalApi": false,
+            "requestAttestation": false
+          }
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 0,
+        "result": {
+          "userAgent": "neuve/0.171.0-alpha.13 (<os>) unknown (neuve; 0.1.0)",
+          "codexHome": "<codex-home>",
+          "platformFamily": "unix",
+          "platformOs": "macos"
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "method": "initialized"
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 1,
+        "method": "config/read",
+        "params": {
+          "includeLayers": true,
+          "cwd": "<cwd>"
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "method": "remoteControl/status/changed",
+        "params": {
+          "status": "disabled",
+          "serverName": "<redacted>",
+          "installationId": "<redacted>",
+          "environmentId": null
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 1,
+        "result": {
+          "config": {
+            "features": {
+              "code_mode_host": false,
+              "sleep_tool": false,
+              "apps": false,
+              "browser_use": false,
+              "browser_use_external": false,
+              "browser_use_full_cdp_access": false,
+              "code_mode_host_grpc": false,
+              "code_mode_host_output_truncation": false,
+              "computer_use": false,
+              "deferred_tool_world_state": false,
+              "goals": false,
+              "guardian_include_additional_context": false,
+              "hooks": false,
+              "image_generation": false,
+              "in_app_browser": false,
+              "in_app_local_automation": false,
+              "incremental_tools_legacy": false,
+              "incremental_tools_legacy_gcp": false,
+              "memories": false,
+              "multi_agent": false,
+              "plugin_sharing": false,
+              "plugins": false,
+              "prediction_preserve_parent_tools": false,
+              "reasoning_effort_override": false,
+              "remote_plugin": false,
+              "retain_client_tool_outputs": false,
+              "shell_snapshot": false,
+              "shell_tool": false,
+              "skill_mcp_dependency_install": false,
+              "skill_search": false,
+              "tool_suggest": false,
+              "tui_workspace": false,
+              "unified_exec": false,
+              "unified_exec_tty": false,
+              "unified_image_budget": false,
+              "untrusted_as_tool_output": false,
+              "view_image": false,
+              "workspace_dependencies": false
+            },
+            "web_search": "disabled",
+            "tools": null,
+            "hooks": null,
+            "notify": [],
+            "approval_policy": "never",
+            "sandbox_mode": "read-only",
+            "project_doc_max_bytes": 0,
+            "memories": {
+              "use_memories": false,
+              "generate_memories": false
+            },
+            "agents": {
+              "enabled": false
+            },
+            "history": {
+              "persistence": "none"
+            },
+            "shell_environment_policy": {
+              "inherit": "none"
+            },
+            "skills": {
+              "bundled": {
+                "enabled": false
+              },
+              "include_instructions": false,
+              "config": [
+                {
+                  "name": "skill-1",
+                  "enabled": false
+                },
+                {
+                  "name": "skill-2",
+                  "enabled": false
+                }
+              ]
+            },
+            "mcp_servers": {
+              "server-1": {
+                "enabled": false
+              },
+              "server-2": {
+                "enabled": false
+              }
+            },
+            "plugins": {
+              "plugin-1": {
+                "enabled": false
+              },
+              "plugin-2": {
+                "enabled": false
+              }
+            },
+            "apps": {
+              "_default": {
+                "enabled": false
+              },
+              "app-1": {
+                "enabled": false
+              }
+            }
+          },
+          "origins": {},
+          "layers": [
+            {
+              "name": {
+                "type": "sessionFlags"
+              },
+              "version": "<version>",
+              "config": {
+                "features": {
+                  "tui_workspace": false,
+                  "shell_tool": false,
+                  "view_image": false,
+                  "sleep_tool": false,
+                  "unified_exec": false,
+                  "unified_exec_tty": false,
+                  "shell_snapshot": false,
+                  "untrusted_as_tool_output": false,
+                  "code_mode_host": false,
+                  "code_mode_host_grpc": false,
+                  "code_mode_host_output_truncation": false,
+                  "hooks": false,
+                  "multi_agent": false,
+                  "apps": false,
+                  "deferred_tool_world_state": false,
+                  "incremental_tools_legacy": false,
+                  "incremental_tools_legacy_gcp": false,
+                  "prediction_preserve_parent_tools": false,
+                  "tool_suggest": false,
+                  "plugins": false,
+                  "in_app_browser": false,
+                  "in_app_local_automation": false,
+                  "browser_use": false,
+                  "browser_use_full_cdp_access": false,
+                  "browser_use_external": false,
+                  "computer_use": false,
+                  "remote_plugin": false,
+                  "plugin_sharing": false,
+                  "image_generation": false,
+                  "unified_image_budget": false,
+                  "skill_mcp_dependency_install": false,
+                  "skill_search": false,
+                  "guardian_include_additional_context": false,
+                  "goals": false,
+                  "reasoning_effort_override": false,
+                  "retain_client_tool_outputs": false,
+                  "workspace_dependencies": false,
+                  "memories": false
+                },
+                "web_search": "disabled",
+                "notify": [],
+                "approval_policy": "never",
+                "sandbox_mode": "read-only",
+                "project_doc_max_bytes": 0,
+                "memories": {
+                  "use_memories": false,
+                  "generate_memories": false
+                },
+                "agents": {
+                  "enabled": false
+                },
+                "history": {
+                  "persistence": "none"
+                },
+                "shell_environment_policy": {
+                  "inherit": "none"
+                },
+                "skills": {
+                  "bundled": {
+                    "enabled": false
+                  },
+                  "include_instructions": false,
+                  "config": [
+                    {
+                      "name": "skill-1",
+                      "enabled": false
+                    },
+                    {
+                      "name": "skill-2",
+                      "enabled": false
+                    }
+                  ]
+                },
+                "mcp_servers": {
+                  "server-1": {
+                    "enabled": false
+                  },
+                  "server-2": {
+                    "enabled": false
+                  }
+                },
+                "plugins": {
+                  "plugin-1": {
+                    "enabled": false
+                  },
+                  "plugin-2": {
+                    "enabled": false
+                  }
+                },
+                "apps": {
+                  "app-1": {
+                    "enabled": false
+                  },
+                  "_default": {
+                    "enabled": false
+                  }
+                }
+              }
+            },
+            {
+              "name": {
+                "type": "user"
+              },
+              "version": "<version>",
+              "config": {}
+            },
+            {
+              "name": {
+                "type": "system"
+              },
+              "version": "<version>",
+              "config": {}
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 2,
+        "method": "configRequirements/read"
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 2,
+        "result": {
+          "supportsIndependentSpeedModes": true,
+          "requirements": null
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 3,
+        "method": "experimentalFeature/list",
+        "params": {
+          "cursor": null,
+          "limit": 200
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 3,
+        "result": {
+          "nextCursor": "200",
+          "data": [
+            {
+              "name": "tui_workspace",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "shell_tool",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "view_image",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "sleep_tool",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "unified_exec",
+              "stage": "stable",
+              "enabled": true,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "unified_exec_tty",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "shell_snapshot",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "untrusted_as_tool_output",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "code_mode_host",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "code_mode_host_grpc",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "code_mode_host_output_truncation",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "memories",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": false,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "hooks",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "multi_agent",
+              "stage": "deprecated",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "apps",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "deferred_tool_world_state",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "incremental_tools_legacy",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "incremental_tools_legacy_gcp",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "prediction_preserve_parent_tools",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "tool_suggest",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "plugins",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "in_app_browser",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "in_app_local_automation",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "browser_use",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "browser_use_full_cdp_access",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "browser_use_external",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "computer_use",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "remote_plugin",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "plugin_sharing",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "image_generation",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "unified_image_budget",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "skill_mcp_dependency_install",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "skill_search",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "guardian_include_additional_context",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "goals",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "reasoning_effort_override",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 4,
+        "method": "experimentalFeature/list",
+        "params": {
+          "cursor": "200",
+          "limit": 200
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 4,
+        "result": {
+          "nextCursor": null,
+          "data": [
+            {
+              "name": "retain_client_tool_outputs",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            },
+            {
+              "name": "workspace_dependencies",
+              "stage": "stable",
+              "enabled": false,
+              "defaultEnabled": true,
+              "displayName": null,
+              "description": null,
+              "announcement": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 5,
+        "method": "model/list",
+        "params": {
+          "includeHidden": true,
+          "limit": 200
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "method": "account/updated",
+        "params": {
+          "authMode": "chatgpt",
+          "reason": "workspaceRoutingReady"
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 5,
+        "result": {
+          "nextCursor": null,
+          "data": [
+            {
+              "id": "gpt-6.2-sol",
+              "model": "gpt-6.2-sol",
+              "displayName": "GPT-6.2-Sol",
+              "hidden": false,
+              "isDefault": true,
+              "defaultReasoningEffort": "low",
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "inputModalities": ["text", "image"],
+              "supportsPersonality": false,
+              "upgrade": null
+            },
+            {
+              "id": "gpt-6.2-astra",
+              "model": "gpt-6.2-astra",
+              "displayName": "GPT-6.2-Astra",
+              "hidden": false,
+              "isDefault": false,
+              "defaultReasoningEffort": "low",
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "inputModalities": ["text", "image"],
+              "supportsPersonality": false,
+              "upgrade": null
+            },
+            {
+              "id": "gpt-6.1-terra",
+              "model": "gpt-6.1-terra",
+              "displayName": "GPT-6.1 Terra",
+              "hidden": false,
+              "isDefault": false,
+              "defaultReasoningEffort": "low",
+              "supportedReasoningEfforts": [
+                {
+                  "reasoningEffort": "low",
+                  "description": "Fast responses with lighter reasoning"
+                },
+                {
+                  "reasoningEffort": "medium",
+                  "description": "Balances speed and reasoning depth for everyday tasks"
+                },
+                {
+                  "reasoningEffort": "high",
+                  "description": "Greater reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "xhigh",
+                  "description": "Extra high reasoning depth for complex problems"
+                },
+                {
+                  "reasoningEffort": "max",
+                  "description": "Maximum reasoning depth for the hardest problems"
+                },
+                {
+                  "reasoningEffort": "ultra",
+                  "description": "Maximum reasoning with automatic task delegation"
+                }
+              ],
+              "inputModalities": ["text", "image"],
+              "supportsPersonality": false,
+              "upgrade": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 6,
+        "method": "account/read",
+        "params": {
+          "refreshToken": false
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 6,
+        "result": {
+          "account": {
+            "type": "chatgpt",
+            "email": "<redacted>",
+            "workspaceName": null
+          },
+          "userId": "<redacted>",
+          "requiresOpenaiAuth": true,
+          "workspaceRouting": {
+            "chatgptAccountId": "<redacted>",
+            "backendOrigin": "https://chatgpt.com",
+            "accountRoutingOverride": "NO_CONSTRAINT"
+          }
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 7,
+        "method": "hooks/list",
+        "params": {
+          "cwds": ["<cwd>"]
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 7,
+        "result": {
+          "data": [
+            {
+              "cwd": "<cwd>",
+              "hooks": [],
+              "warnings": [],
+              "errors": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 8,
+        "method": "skills/list",
+        "params": {
+          "cwds": ["<cwd>"]
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 8,
+        "result": {
+          "data": [
+            {
+              "cwd": "<cwd>",
+              "skills": [
+                {
+                  "name": "skill-1",
+                  "description": "",
+                  "path": "<path>",
+                  "scope": "user",
+                  "enabled": false,
+                  "pluginId": null
+                },
+                {
+                  "name": "skill-2",
+                  "description": "",
+                  "path": "<path>",
+                  "scope": "user",
+                  "enabled": false,
+                  "pluginId": null
+                }
+              ],
+              "errors": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 9,
+        "method": "app/list",
+        "params": {
+          "limit": 200
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 9,
+        "result": {
+          "data": [],
+          "nextCursor": null
+        }
+      }
+    },
+    {
+      "direction": "out",
+      "message": {
+        "id": 10,
+        "method": "mcpServerStatus/list",
+        "params": {
+          "detail": "toolsAndAuthOnly"
+        }
+      }
+    },
+    {
+      "direction": "in",
+      "message": {
+        "id": 10,
+        "result": {
+          "nextCursor": null,
+          "data": [
+            {
+              "runtimeStatus": null,
+              "tools": {},
+              "authStatus": "unsupported",
+              "name": "server-1"
+            },
+            {
+              "runtimeStatus": null,
+              "tools": {},
+              "authStatus": "unsupported",
+              "name": "server-2"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
