@@ -262,7 +262,7 @@ describe("the Anthropic route's free count", () => {
     });
     const controller = new AbortController();
     const reason = new Error("run cut off");
-    const startedAt = performance.now();
+    // The endpoint answers only after `release()` below: a count that ignored the signal never settles.
     const counting = counter([])(REQUEST, controller.signal).catch(
       (error: unknown) => error,
     );
@@ -274,7 +274,6 @@ describe("the Anthropic route's free count", () => {
     release();
     await joined;
     expect(cancelled).toBe(reason);
-    expect(performance.now() - startedAt).toBeLessThan(1_500);
 
     const sent = endpoint.received.length;
     const before = await counter([])(REQUEST, controller.signal).catch(

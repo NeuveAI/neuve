@@ -178,16 +178,16 @@ test("R6-F4 Stop returns and finishes before a gated tool finalizer releases", a
             })
             .catch(() => undefined);
           yield* Deferred.await(started);
-          const began = performance.now();
           const stop = yield* session
             .interruptTurn({ turnId: "one", reason: "stop" })
             .pipe(Effect.forkScoped);
           yield* Effect.promise(() => finalizing.promise);
           expect(
-            (yield* Fiber.await(stop).pipe(Effect.timeoutOption(150)))._tag,
+            // The tool's finalizer is held until `release` below: a Stop that waited for it never
+            // settles, however long this waits.
+            (yield* Fiber.await(stop).pipe(Effect.timeoutOption(5_000)))._tag,
           ).toBe("Some");
           expect(childClosed).toBe(true);
-          expect(performance.now() - began).toBeLessThan(150);
           yield* Fiber.join(consumer).pipe(Effect.timeout(50));
           expect(
             events.filter((e) => e.type === "turn.finished"),

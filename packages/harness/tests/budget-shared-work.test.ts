@@ -303,50 +303,48 @@ function withdrawingHolder(
 
 // A delayed withdrawal reply must not let another process execute beside the old run.
 // A local caller queued behind withdrawal must reject promptly when its own signal aborts.
-for (const assertion of ["overlap", "cancellation"])
-  test(`withdrawal reply in flight: ${assertion}`, async () => {
-    const s = await setup();
-    const h = withdrawingHolder(s);
-    try {
-      const running = await h.started.promise;
-      h.abort.abort();
-      await h.result;
-      await h.withdrawn.promise;
-      const localAbort = new AbortController();
-      let localCancelled = false;
-      const local = h.work
-        .run({ ...h.options, signal: localAbort.signal })
-        .catch(() => {
-          localCancelled = true;
-        });
-      localAbort.abort();
-      const fresh = s.spawn();
-      const role = await fresh.wait(
-        (event) =>
-          event.event === "role" &&
-          ["holder", "takeover", "waiter"].includes(event.role ?? ""),
-      );
-      if (role.role !== "waiter") await fresh.event("run");
-      const observation = {
-        case: `withdrawal-reply-${assertion}`,
-        oldRunStillActive: !running.aborted,
-        newProcessStarted: fresh.events.some((event) => event.event === "run"),
-        hostConnections: s.host?.claims.size,
-        cancelledLocalCallerSettled: localCancelled,
-      };
-      console.info(JSON.stringify(observation));
-      if (assertion === "cancellation")
-        expect(observation.cancelledLocalCallerSettled).toBe(true);
-      else
-        expect(
-          observation.oldRunStillActive && observation.newProcessStarted,
-        ).toBe(false);
-      await local;
-    } finally {
-      await h.cleanup();
-      await s.close();
-    }
-  }, 30_000);
+// One run shows both: the scenario is the same, so it is not started twice.
+test("withdrawal reply in flight: no overlap, and the queued local caller is cancelled", async () => {
+  const s = await setup();
+  const h = withdrawingHolder(s);
+  try {
+    const running = await h.started.promise;
+    h.abort.abort();
+    await h.result;
+    await h.withdrawn.promise;
+    const localAbort = new AbortController();
+    let localCancelled = false;
+    const local = h.work
+      .run({ ...h.options, signal: localAbort.signal })
+      .catch(() => {
+        localCancelled = true;
+      });
+    localAbort.abort();
+    const fresh = s.spawn();
+    const role = await fresh.wait(
+      (event) =>
+        event.event === "role" &&
+        ["holder", "takeover", "waiter"].includes(event.role ?? ""),
+    );
+    if (role.role !== "waiter") await fresh.event("run");
+    const observation = {
+      case: "withdrawal-reply",
+      oldRunStillActive: !running.aborted,
+      newProcessStarted: fresh.events.some((event) => event.event === "run"),
+      hostConnections: s.host?.claims.size,
+      cancelledLocalCallerSettled: localCancelled,
+    };
+    console.info(JSON.stringify(observation));
+    expect(observation.cancelledLocalCallerSettled).toBe(true);
+    expect(observation.oldRunStillActive && observation.newProcessStarted).toBe(
+      false,
+    );
+    await local;
+  } finally {
+    await h.cleanup();
+    await s.close();
+  }
+}, 30_000);
 
 // Cancellation is cooperative, so a late waiter can take over only after the old execution ends.
 test("a waiter arriving after withdrawn waits for the old run to end", async () => {

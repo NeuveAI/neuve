@@ -477,8 +477,8 @@ test("a detached nested bun test with an inherited launcher marker finishes norm
 
 test("the suite watchdog names and kills a test process stuck outside its test body", async () => {
   const directory = mkdtempSync(join(tmpdir(), "test-process-"));
-  const started = performance.now();
   try {
+    // The process ignores SIGTERM and never exits: only the watchdog's kill ends it, with 124.
     expect(
       await runTestProcess(
         [
@@ -493,7 +493,6 @@ test("the suite watchdog names and kills a test process stuck outside its test b
         },
       ),
     ).toBe(124);
-    expect(performance.now() - started).toBeLessThan(2000);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

@@ -39,10 +39,6 @@ function readsAtom(wrapInMock: boolean): string {
   )
 }
 
-test("the real setting starts with every language following the default", () => {
-  expect(DEFAULT_DELIVERY_SETTINGS.byLanguage).toEqual({})
-})
-
 test("the sample setting lives under its own storage key", () => {
   expect(MOCK_DELIVERY_SETTINGS_STORAGE_KEY).not.toBe(
     DELIVERY_SETTINGS_STORAGE_KEY

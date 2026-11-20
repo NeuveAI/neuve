@@ -376,8 +376,9 @@ test("closing a reranker that ignores SIGTERM kills it after the grace", async (
   const started = performance.now();
   await process.close();
   await expect(scored).rejects.toThrow("closed");
+  // The grace was given. A close that never killed returns at its backstop with the process
+  // alive, which the last line catches; no upper bound on the time is needed.
   expect(performance.now() - started).toBeGreaterThanOrEqual(1_500);
-  expect(performance.now() - started).toBeLessThan(4_000);
   expect(() => globalThis.process.kill(pid, 0)).toThrow();
 }, 15_000);
 
@@ -390,6 +391,8 @@ test("closing a reranker that never spawned returns at once", async () => {
   });
   await expect(process.score("q", ["d"])).rejects.toThrow();
   expect(process.failed).toBe(true);
+  // A close that waited for an exit returns only at its 3 s backstop, so the bound is a deadline
+  // check that sits below the 2 s kill grace; a close with nothing to wait for takes no time.
   const started = performance.now();
   await process.close();
   expect(performance.now() - started).toBeLessThan(1_000);

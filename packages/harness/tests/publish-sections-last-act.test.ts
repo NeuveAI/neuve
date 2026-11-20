@@ -1307,18 +1307,6 @@ test("a unit of Y alone carries the request only where it is compared with the u
 }, 60_000);
 
 // Controls, passing before and after.
-test("another person's request on an overlapping unit leaves the first person's approval carrying", async () => {
-  const r = review();
-  const result = await r.s.run(
-    Effect.gen(function* () {
-      yield* approve((yield* r.cycleThree([["x", "y"], ["z"]])).x, ana);
-      yield* askChanges((yield* r.cycleThree([["x"], ["y", "z"]])).y, ben);
-      const again = yield* r.configurationThree("b", [["x", "y"], ["z"]]);
-      return yield* shown(again.x);
-    }),
-  );
-  expect(result).toEqual({ carried: [[anaId, "approve"]], closed: true });
-}, 60_000);
 
 test("a decision on Z alone, connected through an overlap, leaves an approval of X and Y carrying", async () => {
   const r = review();

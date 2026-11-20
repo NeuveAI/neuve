@@ -1581,7 +1581,10 @@ test("a declaration removed inside a merged replacement block keeps its gap; the
   const gone = merged.byName("gone");
   expect(gone.section.symbolRemoved).toBeNull();
   expect(gone.section.owned.every((range) => range.side === "old")).toBe(true);
-  expect(gone.state).not.toBe("shown");
+  // No evidence shown at the head stands for a removed declaration's callers. Its removal sits
+  // between head lines 1 and 2, both in f, and f has both rows: shown in part, never whole.
+  expect(gone.rows).toEqual(["caller of f", "test of f"]);
+  expect(gone.state).toBe("partial");
   expect(gone.gap).toBe(true);
   // f still exists at the head and lost no symbol; its replaced lines need its own evidence,
   // which it has.
@@ -1589,18 +1592,6 @@ test("a declaration removed inside a merged replacement block keeps its gap; the
   expect(f.section.symbolRemoved).toBe(false);
   expect(f.state).toBe("shown");
   expect(f.gap).toBe(false);
-});
-
-// Reason (round 6c, addition): no evidence shown at the head stands for a removed declaration's
-// callers, so even complete head evidence must not remove its gap. The same two rules decide it.
-test("a section that removes a declaration keeps its gap even when every head symbol it touches has both rows", async () => {
-  const gone = (await mergedCase()).byName("gone");
-  expect(gone.section.symbolRemoved).toBeNull();
-  // Its removal sits between head lines 1 and 2, both in f, and f has both rows: shown in part,
-  // never whole.
-  expect(gone.rows).toEqual(["caller of f", "test of f"]);
-  expect(gone.state).toBe("partial");
-  expect(gone.gap).toBe(true);
 });
 
 /** A class read as one section, its head symbols `Box` (1-5) and the method at lines 2-4. */

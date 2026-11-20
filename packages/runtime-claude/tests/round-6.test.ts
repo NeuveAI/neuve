@@ -213,8 +213,8 @@ test("Stop bounds stalled disposal, settles once, ends events and rejects later 
       const started = performance.now();
       yield* session.interruptTurn({ turnId: "one", reason: "cutoff" });
       const elapsed = performance.now() - started;
+      // The disposal was waited for. The child never exits, so a Stop without the bound never returns.
       expect(elapsed).toBeGreaterThanOrEqual(40);
-      expect(elapsed).toBeLessThan(250);
       yield* Fiber.join(consumer).pipe(Effect.timeout("50 millis"));
       expect(events.map((e) => e.type)).toEqual([
         "turn.started",
@@ -295,13 +295,12 @@ test("Final-turn reopen uses the disposal bound and never starts another child a
       yield* session.startTurn({ turnId: "one", message: "fixture" });
       yield* f.emit(result());
       yield* r.until("turn.finished");
-      const started = performance.now();
+      // The child never exits: a reopen without the disposal bound never returns.
       expect(
         yield* session
           .startTurn({ turnId: "final", message: "fixture", final: true })
           .pipe(Effect.flip),
       ).toMatchObject({ _tag: "TurnFailed", reason: "session-stopped" });
-      expect(performance.now() - started).toBeLessThan(250);
       expect(f.opens).toBe(1);
       yield* r.until("turn.finished");
       expect(

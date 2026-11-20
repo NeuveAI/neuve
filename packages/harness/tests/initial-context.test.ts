@@ -1209,29 +1209,69 @@ test("titles are bounded, lines are sanitised and missing commit file lists are 
   expect(odd.text.isWellFormed()).toBe(true);
 });
 
-// Why: one hostile range must not monopolize the finder event loop. The bound is on the render's
-// own CPU time: wall time also counts the time this process waits for a CPU behind other work (on
-// a two-CPU runner with four test shards, about six times the Mac's 1.3 s), which says nothing
-// about the render's cost; a super-linear rollup still shows in its CPU time.
-test("twenty thousand files render within a generous local bound", () => {
-  const range = hunksOf(
-    Array.from({ length: 20000 }, (_, i) =>
-      textHunk({
-        id: `h${i}`,
-        path: `packages/p${i % 50}/src/d${i % 100}/e${i % 1000}/f${i}.ts`,
-        lines: ["+x"],
-      }),
-    ),
+// Why: one hostile range must not monopolize the finder event loop. Elapsed and CPU time depend on
+// the machine and its load, so the check is on work, counted from outside the render at two sizes:
+// four times the files must cost about four times the work. `fixtures/opening-work.ts` does the
+// counting in a process of its own and says what it counts and what it cannot see.
+//
+// The work is compared at 2,500 and 10,000 files, not at twenty thousand, so that a render doing
+// sixteen times the work still finishes and fails on its count. A render that does not finish is
+// killed at `OPENING_WORK_LIMIT_MS` and fails as unfinished; a slow render that the counts do not
+// show is not caught. The twenty-thousand-file change itself is rendered last, here, with nothing
+// counted: every file is in the index and the opening stays inside its limit.
+const OPENING_WORK_LIMIT_MS = 45_000;
+test("twenty thousand files render with work in proportion to the range", () => {
+  const child = Bun.spawnSync(
+    [
+      process.execPath,
+      "--no-env-file",
+      fileURLToPath(new URL("./fixtures/opening-work.ts", import.meta.url)),
+      "2500",
+      "10000",
+    ],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: OPENING_WORK_LIMIT_MS,
+      killSignal: "SIGKILL",
+    },
   );
-  const cs = Array.from({ length: 10000 }, (_, i) => ({
-    oid: i.toString(16).padStart(40, "0"),
-    subject: `change ${i}`,
-    body: "",
-  }));
-  const start = process.cpuUsage();
-  const result = renderOpening({ frame, hunks: range, commits: cs });
-  const spent = process.cpuUsage(start);
-  expect((spent.user + spent.system) / 1000).toBeLessThan(5000);
-  expect(result.counts.filesNamed + result.counts.filesFolded).toBe(20000);
-  expect(result.text.length).toBeLessThanOrEqual(50000);
-}, 15000);
+  if (child.exitedDueToTimeout)
+    throw new Error(
+      `the opening render did not finish 2,500 and 10,000 files within ${OPENING_WORK_LIMIT_MS / 1000} s; its process was killed`,
+    );
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const [small, large] = JSON.parse(child.stdout.toString()) as Array<{
+    files: number;
+    reads: number;
+    visits: number;
+  }>;
+  expect([small!.files, large!.files]).toEqual([2500, 10000]);
+  expect(small!.reads).toBeGreaterThan(2500);
+  expect(small!.visits).toBeGreaterThan(2500);
+  // Hunk reads are exactly linear: 4 times, with a margin for the few that do not scale.
+  expect(large!.reads / small!.reads).toBeLessThan(4.1);
+  // Array work comes to 4.07 times. A rollup that copies or scans a folder's list for each file
+  // it adds comes to 16 times or more.
+  expect(large!.visits / small!.visits).toBeLessThan(6);
+
+  const whole = renderOpening({
+    frame,
+    hunks: hunksOf(
+      Array.from({ length: 20000 }, (_, i) =>
+        textHunk({
+          id: `h${i}`,
+          path: `packages/p${i % 50}/src/d${i % 100}/e${i % 1000}/f${i}.ts`,
+          lines: ["+x"],
+        }),
+      ),
+    ),
+    commits: Array.from({ length: 10000 }, (_, i) => ({
+      oid: i.toString(16).padStart(40, "0"),
+      subject: `change ${i}`,
+      body: "",
+    })),
+  });
+  expect(whole.counts.filesNamed + whole.counts.filesFolded).toBe(20000);
+  expect(whole.text.length).toBeLessThanOrEqual(50000);
+}, 60_000);

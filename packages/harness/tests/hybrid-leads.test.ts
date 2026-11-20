@@ -681,13 +681,12 @@ test("a job prepares its commit's Graph base for the next one, and never waits o
   expect(await outcome(() => Effect.fail(new Error("no engine")))).toBe(
     "failed",
   );
-  const started = performance.now();
+  // A job that waited for the preparation would answer "ready", not "started".
   expect(
     await outcome(() =>
       Effect.as(Effect.sleep("5 seconds"), { made: true, cache: "miss" }),
     ),
   ).toBe("started");
-  expect(performance.now() - started).toBeLessThan(2_500);
   // The first test's jobs asked for their own commits.
   expect(prepared.length).toBeGreaterThan(0);
 }, 30_000);
