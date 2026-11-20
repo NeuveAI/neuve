@@ -1211,93 +1211,37 @@ test("titles are bounded, lines are sanitised and missing commit file lists are 
 
 // Why: one hostile range must not monopolize the finder event loop. Elapsed and CPU time depend on
 // the machine and its load, so the check is on work, counted from outside the render at two sizes:
-// every property it reads from a hunk, and every array element it walks (by iteration, which a
-// spread or a `for...of` uses, or by a method that visits each element). Four times the files must
-// cost about four times the work. The files sit in four folders, the case where a rollup that
-// copies a folder's list for each file it adds walks sixteen times the elements instead.
-const ARRAY_ITERATOR = Object.getPrototypeOf([][Symbol.iterator]()) as {
-  next: (this: unknown) => IteratorResult<unknown>;
-};
-const VISITING = [
-  "map",
-  "filter",
-  "reduce",
-  "forEach",
-  "some",
-  "every",
-  "flatMap",
-  "find",
-  "findIndex",
-  "sort",
-] as const;
-/** Runs `run` and counts the array elements it walks. The built-ins are put back before it returns. */
-const countingArrayWork = <T>(run: () => T) => {
-  let visits = 0;
-  const methods = Array.prototype as unknown as Record<
-    string,
-    (this: unknown[], ...args: unknown[]) => unknown
-  >;
-  const next = ARRAY_ITERATOR.next;
-  const saved = VISITING.map((name) => [name, methods[name]!] as const);
-  ARRAY_ITERATOR.next = function (this: unknown) {
-    visits++;
-    return next.call(this);
-  };
-  for (const [name, method] of saved)
-    methods[name] = function (this: unknown[], ...args: unknown[]) {
-      visits += this.length;
-      return method.apply(this, args);
-    };
-  try {
-    return { result: run(), visits };
-  } finally {
-    ARRAY_ITERATOR.next = next;
-    for (const [name, method] of saved) methods[name] = method;
-  }
-};
+// four times the files must cost about four times the work. The counting replaces array built-ins,
+// which slows array work for the rest of a process, so it runs in a process of its own;
+// `fixtures/opening-work.ts` says what it counts and what it cannot see (indexed loops, and work on
+// a Map, a Set or a string).
 test("twenty thousand files render with work in proportion to the range", () => {
-  const measure = (count: number) => {
-    let reads = 0;
-    const range = hunksOf(
-      Array.from(
-        { length: count },
-        (_, i) =>
-          new Proxy(
-            textHunk({
-              id: `h${i}`,
-              path: `packages/p${i % 4}/src/f${i}.ts`,
-              lines: ["+x"],
-            }),
-            {
-              get: (target, key, receiver) => {
-                reads++;
-                return Reflect.get(target, key, receiver);
-              },
-            },
-          ),
-      ),
-    );
-    const cs = Array.from({ length: count / 2 }, (_, i) => ({
-      oid: i.toString(16).padStart(40, "0"),
-      subject: `change ${i}`,
-      body: "",
-    }));
-    const { result, visits } = countingArrayWork(() =>
-      renderOpening({ frame, hunks: range, commits: cs }),
-    );
-    return { reads, visits, result };
-  };
-  const small = measure(5000);
-  const large = measure(20000);
-  expect(small.reads).toBeGreaterThan(5000);
-  expect(small.visits).toBeGreaterThan(5000);
-  // Hunk reads are exactly linear: 4 times, with a margin for the few that do not scale.
-  expect(large.reads / small.reads).toBeLessThan(4.1);
-  // Element visits are linear apart from the index's fit loop, which may take a round more or
-  // less: about 4.2 times here. Work that grows with the square of the files is 16 times.
-  expect(large.visits / small.visits).toBeLessThan(6);
-  expect(large.result.counts.filesNamed + large.result.counts.filesFolded).toBe(
-    20000,
+  const child = Bun.spawnSync(
+    [
+      process.execPath,
+      "--no-env-file",
+      fileURLToPath(new URL("./fixtures/opening-work.ts", import.meta.url)),
+      "5000",
+      "20000",
+    ],
+    { stdout: "pipe", stderr: "pipe" },
   );
-  expect(large.result.text.length).toBeLessThanOrEqual(50000);
-}, 15000);
+  expect(child.exitCode, child.stderr.toString()).toBe(0);
+  const [small, large] = JSON.parse(child.stdout.toString()) as Array<{
+    files: number;
+    reads: number;
+    visits: number;
+    indexed: number;
+    characters: number;
+  }>;
+  expect([small!.files, large!.files]).toEqual([5000, 20000]);
+  expect(small!.reads).toBeGreaterThan(5000);
+  expect(small!.visits).toBeGreaterThan(5000);
+  // Hunk reads are exactly linear: 4 times, with a margin for the few that do not scale.
+  expect(large!.reads / small!.reads).toBeLessThan(4.1);
+  // Element visits come to 4.19 times: linear, plus the index's fit loop taking a round more. A
+  // rollup that copies or scans a folder's list for each file it adds comes to 21.8 times.
+  expect(large!.visits / small!.visits).toBeLessThan(6);
+  expect(large!.indexed).toBe(20000);
+  expect(large!.characters).toBeLessThanOrEqual(50000);
+}, 60_000);
