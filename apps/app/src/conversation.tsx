@@ -119,6 +119,7 @@ export function Conversation(
 					transcript.reactions,
 					(asker) => credit(asker, channel, user, people, senders),
 					reviews,
+					chat?.mode === "plan",
 				),
 				transcript.items,
 				reviews,
@@ -141,6 +142,7 @@ export function Conversation(
 			user,
 			reviews,
 			connected,
+			chat?.mode,
 		],
 	);
 	const review = useMemo(
@@ -398,6 +400,7 @@ export function Conversation(
 					<Composer
 						channel={channel}
 						chat={id}
+						chatMode={chat?.mode}
 						user={user}
 						current={model}
 						currentEffort={chat?.effort}

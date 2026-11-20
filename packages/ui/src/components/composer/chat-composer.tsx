@@ -2,6 +2,7 @@ import { pick } from "../../lib/emoji";
 import {
 	type ComponentPropsWithRef,
 	type ComponentType,
+	type CSSProperties,
 	Fragment,
 	type ReactNode,
 	type Ref,
@@ -53,6 +54,7 @@ import { Waveform } from "../../ui/waveform";
 import { type Attachment, AttachmentList } from "./attachment-list";
 import { Composer } from "./composer";
 import { ComposerToolbar, type ComposerToolbarEvent } from "./composer-toolbar";
+import { held, markedMode } from "./mode-marker";
 import { canSendMessage } from "./send";
 import { mentionTokens } from "./mention-tokens";
 import { useAttachments } from "./use-attachments";
@@ -99,6 +101,8 @@ type Mode = {
 	placeholder: string;
 	/** Optional icon shown in the mode picker. */
 	icon?: ComponentType<{ className?: string }>;
+	/** The icon's tone, as an agent's in the agent picker. */
+	color?: string;
 	/** If set, auto-inserts the named mention when this mode is active. */
 	mention?: string;
 	/** Earlier mention names recognized as the same mode, without advertising them. */
@@ -133,7 +137,7 @@ function text(model: Model) {
 	return [model.name, model.id, model.vendor].filter(Boolean).join(" ");
 }
 
-function glyph(mode?: Mode): ComponentType<{ className?: string }> {
+function glyph(mode?: Mode): ComponentType<{ className?: string; style?: CSSProperties }> {
 	if (mode?.icon) return mode.icon;
 	if (mode?.kind === "terminal") return IconConsoleMicro;
 	switch (mode?.id) {
@@ -565,7 +569,7 @@ function presentation({
 	let sendable = canSendMessage({ text: value, attachments: attach, enabled: canSend });
 	let stop = (canStop ?? busy) && !!onStop;
 	let showMode = modes.length > 1;
-	let showModel = !edit && ace && !!models?.length;
+	let showModel = !edit && (ace || planning) && !!models?.length;
 	let showAgent = !edit && ace && !!agents?.length;
 	let selectedAgent = agents?.find(item => item.id === curAgent) ?? agents?.[0];
 	let AgentIcon = selectedAgent?.icon
@@ -1060,6 +1064,7 @@ function useComposer({
 			cancel();
 			return true;
 		}
+		if (held(modeRef.current)) return history.handleKey(v, e, undefined, modeRef.current);
 		if (e.key === "Escape") {
 			if (e.repeat) return true;
 			let now = e.timeStamp;
@@ -1108,18 +1113,12 @@ function useComposer({
 		setEmpty(!value);
 		latest.current.onTextChange?.(text);
 
-		let ms = latest.current.modes;
-		let list = latest.current.mentions;
-		if (!list?.length) return;
-
-		for (let m of ms) {
-			if (!m.mention) continue;
-			if (hasMention(v, m.mention, m.mentionAliases) && modeRef.current !== m.id) {
-				return updateMode(m.id);
-			}
-		}
-		let cur = ms.find(m => m.id === modeRef.current);
-		if (cur?.mention && !hasMention(v, cur.mention, cur.mentionAliases)) updateMode(ms[0]!.id);
+		if (!latest.current.mentions?.length) return;
+		updateMode(markedMode(
+			latest.current.modes,
+			modeRef.current,
+			m => !!m.mention && hasMention(v, m.mention, m.mentionAliases),
+		));
 	}
 
 	let {
@@ -1372,7 +1371,7 @@ function ComposerMode({ state }: { state: ComposerState }) {
 					/>
 				}
 			>
-				<CurrentIcon className="size-3" />
+				<CurrentIcon className="size-3" style={{ color: current?.color }} />
 				{current?.name}
 				<IconChevronDownMicro className="size-3 transition-transform duration-150 group-data-[popup-open]/button:scale-y-[-1]" />
 			</DropdownMenuTrigger>
@@ -1387,7 +1386,10 @@ function ComposerMode({ state }: { state: ComposerState }) {
 								view.current?.focus();
 							}}
 						>
-							<Icon className="size-3 shrink-0 text-muted-foreground group-focus/dropdown-menu-item:text-popover-foreground" />
+							<Icon
+								className="size-3 shrink-0 text-muted-foreground group-focus/dropdown-menu-item:text-popover-foreground"
+								style={{ color: m.color }}
+							/>
 							<span className="min-w-0 flex-1 truncate">{m.name}</span>
 						</DropdownMenuItem>
 					);

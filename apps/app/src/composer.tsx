@@ -11,6 +11,7 @@ import {
 	useMedia,
 } from "@ace/ui";
 import {
+	type ChatMode,
 	type Effort,
 	MAX_IMAGES,
 	type ModelOption,
@@ -28,6 +29,7 @@ import {
 	withoutLeadingAgentMention,
 } from "./agent-mention";
 import { useAgentAvatar } from "./agent-avatar";
+import { composerMode, forgetChannelMode, modeKey } from "./composer-mode";
 import { host } from "./host";
 import { attachments } from "./attachments";
 
@@ -40,8 +42,13 @@ const AGENT_MODE = {
 };
 const MODES = [
 	{ id: "chat", name: "Chat", placeholder: "Mention @neuve to ask the agent" },
+	// No mention marks Plan: its messages are for the agent because of their mode.
+	{ id: "plan", name: "Plan", placeholder: "Plan with the agent", color: "var(--agent-plan)" },
 	AGENT_MODE,
 ];
+/** The modes whose messages are for the chat's agent, carried as the chat's mode. */
+const asked = (mode: string): ChatMode | undefined =>
+	mode === "plan" || mode === "ace" ? mode : undefined;
 // A teammate the owner hasn't let invoke sees no @neuve; the stored mode brings it back with access.
 const BLOCKED_MODES = [{
 	id: "chat",
@@ -81,6 +88,8 @@ const RETRY = "Try again.";
 type Props = {
 	channel: Listing;
 	chat: number;
+	/** The chat's stored mode, which a chat this browser hasn't remembered opens in. */
+	chatMode?: ChatMode;
 	user: string;
 	current?: ModelRef;
 	currentEffort?: Effort;
@@ -122,6 +131,7 @@ export function Composer(
 	{
 		channel,
 		chat: id,
+		chatMode,
 		user,
 		current,
 		currentEffort,
@@ -144,15 +154,18 @@ export function Composer(
 	const typed = useRef(0);
 	const [pending, setPending] = useState(false);
 	const [attached, setAttached] = useState<Attachment[]>([]);
-	// Kept beside the channel's draft so a deliberate mode survives relaunch.
 	const scope = `/channels/${channel.id}`;
-	const [stored, changeMode] = useLocalStorage(`ace:mode:${scope}`, "ace");
+	// Kept so a deliberate mode survives relaunch; until one is chosen here, the chat's own.
+	const [remembered, changeMode] = useLocalStorage<string | null>(modeKey(channel.id, id), null);
+	const stored = composerMode(remembered, chatMode);
+	useEffect(() => forgetChannelMode(channel.id), [channel.id]);
 	const [, setLast] = useLocalStorage(LAST_MODEL, "auto");
 	// The channel refuses a blocked teammate's ask, stop, and kill too.
 	const blocked = shared === false && channel.owner !== user;
 	// Agent mode only once a teammate's access is known to be on, as it isn't while their Mac is offline.
 	const agents = channel.owner === user || shared === true;
 	const mode = agents ? stored : "chat";
+	const agentic = !!asked(mode);
 	const avatar = useAgentAvatar();
 	const mentions = useMemo(
 		() => agents ? [{ name: AGENT_ALIAS.name, avatar }, ...members] : members,
@@ -162,9 +175,14 @@ export function Composer(
 	const [modelError, setModelError] = useState<string>();
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
 	const settingsVersion = useSyncExternalStore(host.subscribe, () => host.settingsVersion);
+	// An agent draft leads with the agent's mention, except in Plan, which has no marker.
+	const agentDraft = (text: string) =>
+		mode === "plan"
+			? withoutLeadingAgentMention(normalizeAgentDraft(text))
+			: withAgentMention(normalizeAgentDraft(text));
 	useEffect(() => {
 		if (!draft) return;
-		composer.current?.set(withAgentMention(normalizeAgentDraft(draft)));
+		composer.current?.set(agentDraft(draft));
 		onDraftLoaded();
 	}, [draft, onDraftLoaded]);
 	// A saved agent draft keeps its words as a message; its mention returns with access, from the mode.
@@ -187,7 +205,7 @@ export function Composer(
 		const text = [...mine.map((message) => message.text), doc ? serialize(doc) : ""]
 			.map(withoutLeadingAgentMention).filter(Boolean).join("\n\n");
 		composer.current?.set(
-			blocked ? withoutAgentMentions(text) : withAgentMention(normalizeAgentDraft(text)),
+			blocked ? withoutAgentMentions(text) : agentDraft(text),
 		);
 		const images = mine.flatMap((message) => message.images || []);
 		const files = mine.flatMap((message) => message.files || []);
@@ -218,7 +236,7 @@ export function Composer(
 	useEffect(() => {
 		// A chat that can't load can't answer either; asking again once it loads is how a refused
 		// channel's models recover, such as after a cloud workspace starts or Try again.
-		if (status !== "open" || mode !== "ace" || offline || !ready) return;
+		if (status !== "open" || !agentic || offline || !ready) return;
 		let active = true;
 		// Ask the channel itself: a hosted channel uses the service's credentials, not its workspace's.
 		host.channel<ModelOption[]>(channel.id, { op: "models" }).then(
@@ -236,7 +254,7 @@ export function Composer(
 		return () => {
 			active = false;
 		};
-	}, [channel.id, mode, status, settingsVersion, offline, ready]);
+	}, [channel.id, agentic, status, settingsVersion, offline, ready]);
 	// The chat holds the pick, so details, the CLI and other clients name what its next run uses.
 	// A pick shows until the chat's info reports a change, which follows the pick's own answer.
 	const chosen = `${current ? key(current) : "auto"} ${currentEffort || "off"}`;
@@ -321,11 +339,13 @@ export function Composer(
 			});
 			return;
 		}
-		const invoke = !blocked && (mode === "ace" || hasAgentMention(text));
+		// A Chat message that mentions the agent carries no mode, so it runs in the chat's own.
+		const carried = blocked ? undefined : asked(mode);
+		const invoke = !blocked && (!!carried || hasAgentMention(text));
 		const body = text.trim();
 		if (!body && !attached.length) return;
 		// The channel would refuse it for want of a key; setup keeps the draft for sending after.
-		if (mode === "ace" && models?.length === 0 && !modelError && onProviders) {
+		if (carried && models?.length === 0 && !modelError && onProviders) {
 			return onProviders();
 		}
 		const doc = composer.current?.get();
@@ -342,6 +362,7 @@ export function Composer(
 					author: user,
 					text: body,
 					...encoded,
+					...(carried ? { mode: carried } : {}),
 				});
 			} else {
 				await host.channel(channel.id, {
@@ -449,7 +470,7 @@ export function Composer(
 						: "The last run failed."}
 				</Notice>
 			)}
-			{mode === "ace" && !offline && models?.length === 0 && (
+			{agentic && !offline && models?.length === 0 && (
 				<Notice
 					action={onProviders && (
 						<Button size="sm" variant="outline" onClick={onProviders}>

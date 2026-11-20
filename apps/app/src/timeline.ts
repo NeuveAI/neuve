@@ -171,9 +171,16 @@ export function toEvents(
 	reactions: Reactions,
 	by: (asker: string) => string | undefined,
 	reviews: ReviewCards,
+	/** The chat's stored mode is Plan. */
+	plan = false,
 ): Event[] {
 	// A run answers the newest message that invoked it, as the channel's run end reports.
 	let asker: string | undefined;
+	// Only a person's message changes the chat's mode, so the newest input that invoked the agent
+	// ran in the stored mode; older ones may not have, and a chat stores no mode per message.
+	const planned = plan
+		? items.findLast((item) => item.kind === "message" && item.invoked)
+		: undefined;
 	const sender = (model: string | undefined): Event.Sender.Agent => {
 		const value = [model, asker && by(asker)].filter(Boolean).join(" · ");
 		return {
@@ -221,6 +228,7 @@ export function toEvents(
 					value: item.author,
 					display: authorName(item.author, people, channels),
 				},
+				...(item === planned ? { agent: { mode: "plan" } } : {}),
 				...(item.edited && !item.deleted ? { last_updated: Math.floor(item.edited / 1000) } : {}),
 				content: item.deleted ? [text("Message deleted")] : [
 					text(item.invoked ? withAgentMention(item.text) : item.text),

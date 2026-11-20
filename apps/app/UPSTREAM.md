@@ -2,7 +2,12 @@
 
 This app, `packages/ui` and `packages/split-tabs` come from [Ace revision fe662779](https://github.com/githubnext/ace/tree/fe66277931d2c46f12dcc250b63e1b4428a4e9ee). That revision is the source for the application composition, project navigation, dashboard, channels, GitHub work, panels, browser client contract and styling. [UPSTREAM-LICENSE](UPSTREAM-LICENSE) retains its MIT license.
 
-Of the 161 original files under `packages/ui/src`, 160 are unchanged from that revision apart from the naming changes below. ChatComposer adds the optional `Mode.mentionAliases` contract and a token helper so saved drafts and history recognize legacy agent mentions. Its CSS, styles and layout are unchanged. The original HTML, CSS, assets, main entry, navigation and layout components remain. Neuve's review app keeps its own components and styles on a separate origin.
+Of the 161 original files under `packages/ui/src`, 160 are unchanged from that revision apart from the naming changes below. ChatComposer adds the optional `Mode.mentionAliases` contract and a token helper so saved drafts and history recognize legacy agent mentions. Its CSS, styles and layout are unchanged. The original HTML, CSS, assets, main entry, navigation and layout components remain.
+
+Plan mode (NEU-424) changes these upstream files further, for the later rewrite tasks to find:
+
+- `packages/ui/src/components/composer/chat-composer.tsx` uses the new `mode-marker.ts` beside it, so a draft, Escape, `!` or history recall never moves the composer out of the `plan` mode. Only the mode menu does. It shows the model and effort pickers in Plan as in the agent's mode, and adds an optional `Mode.color` for the mode's icon, as `Agent.color` is used. `packages/ui` gains a `test` script and the test launcher's `bunfig.toml` for the rule's test.
+- `apps/app/src/composer.tsx` offers Plan between Chat and the agent, and sends the chat's mode with an ask. It remembers the mode per chat through `composer-mode.ts`, starting from the chat's stored mode and removing the old per-channel value. `conversation.tsx` passes the chat's stored mode. `timeline.ts` sets the "Plan" label on the newest message that invoked the agent while that mode is Plan. Neuve's review app keeps its own components and styles on a separate origin.
 
 The app is called Neuve, with Ace credited (decision 12.18 of the [design decisions](../../process/decisions.md)). Settings › General credits Ace, and [UPSTREAM-LICENSE](UPSTREAM-LICENSE) is kept as it is. The naming changes these places:
 
