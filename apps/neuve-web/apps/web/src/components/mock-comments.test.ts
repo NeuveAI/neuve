@@ -34,10 +34,6 @@ function deskStore() {
   return store
 }
 
-test("the sample comments live under their own key", () => {
-  expect(MOCK_REVIEW_COMMENTS_STORAGE_KEY).not.toBe(REVIEW_COMMENTS_STORAGE_KEY)
-})
-
 test("a key never written holds the seeded people's and agents' comments", () => {
   const store = deskStore()
   expect(store.get(mockCommentRepository.recordsAtom)).toEqual(

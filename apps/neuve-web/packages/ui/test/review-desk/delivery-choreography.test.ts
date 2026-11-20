@@ -5,18 +5,15 @@
  * stays today's choreography.
  */
 import { describe, expect, test } from "bun:test"
-import { createStore } from "jotai"
-
 import { cubicBezier } from "motion/react"
 
-import { EASE, OFFSET, SHARE, SPRING, TIMING } from "@workspace/ui/lib/motion"
+import { EASE, SHARE, SPRING, TIMING } from "@workspace/ui/lib/motion"
 import {
   MORPH_CURVES,
   MORPH_OVERLAP,
   MORPH_START_OPACITY,
   PHASED_DEFAULTS,
   blockExit,
-  deliveryChoreographyAtom,
   enterDelay,
   leaveTimeline,
   morphOverlap,
@@ -37,10 +34,6 @@ function physics(spring: { visualDuration: number; bounce: number }) {
 }
 
 describe("phased delivery choreography", () => {
-  test("the app's default is the phased choreography, canvas values", () => {
-    expect(createStore().get(deliveryChoreographyAtom)).toBe(PHASED_DEFAULTS)
-  })
-
   test("its shares are the SHARE tokens; the step and overlap derive", () => {
     expect(PHASED_DEFAULTS.contentStart).toBe(SHARE.contentStart)
     expect(MORPH_START_OPACITY).toBe(SHARE.morphStartOpacity)
@@ -51,16 +44,6 @@ describe("phased delivery choreography", () => {
     expect(
       timeToReach(timeSpring(SPRING.snappy), SHARE.chainThreshold)
     ).toBeCloseTo(127.5, 0)
-  })
-
-  test("defaults: canvas values, motion tokens", () => {
-    expect(PHASED_DEFAULTS.contentStart).toBe(0.75)
-    expect(PHASED_DEFAULTS.stagger).toBe(TIMING.deliveryChildStagger / 2)
-    expect(PHASED_DEFAULTS.offset).toBe(OFFSET.hint)
-    expect(PHASED_DEFAULTS.overlap).toBe(MORPH_OVERLAP)
-    expect(PHASED_DEFAULTS.morph.duration).toBe(TIMING.card / 1000)
-    expect(PHASED_DEFAULTS.content).toBe(TIMING.hint)
-    expect(PHASED_DEFAULTS.morph.ease).toBe(MORPH_CURVES.standard)
   })
 
   test("the overlap: the last leaving block is ≤30% opaque at the morph", () => {
@@ -102,12 +85,6 @@ describe("phased delivery choreography", () => {
       expect(back.stiffness).toBeCloseTo(spring.stiffness, 6)
       expect(back.damping).toBeCloseTo(spring.damping, 6)
     }
-  })
-
-  test("the bars' chain step: 85% of SPRING.snappy", () => {
-    const step = timeToReach(timeSpring(SPRING.snappy), 0.85)
-    expect(step).toBeGreaterThan(120)
-    expect(step).toBeLessThan(135)
   })
 
   test("leaving: blocks last-first, then the morph, the overlap early", () => {

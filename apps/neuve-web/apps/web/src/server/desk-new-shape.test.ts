@@ -1220,9 +1220,9 @@ test("an older review points to the newer one that holds its work, and a replace
   })
   // The newest review names no newer one.
   const newest = deskReady(reads.newest, "acme/docs-app", NO_SOURCES)
-  expect(newest.load.status === "ready" && newest.load.data).not.toHaveProperty(
-    "newer"
-  )
+  // Narrowed first: `false` has no property either, so a desk that failed to load would pass.
+  if (newest.load.status !== "ready") throw new Error("expected a desk")
+  expect(newest.load.data).not.toHaveProperty("newer")
   expect(overviewOf(reads.newestBatch, "acme/docs-app")).not.toHaveProperty(
     "newer"
   )
