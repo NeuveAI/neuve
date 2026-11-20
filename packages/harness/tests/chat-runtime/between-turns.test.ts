@@ -1,9 +1,9 @@
 // Why: a runtime that runs its own loop but resumes only between turns, ends no turn from a tool
-// and reports usage only per turn still serves coding chats. Each row below is a row of the
-// invariant's table (neu-425-capabilities-invariant.md, kept with the lane's notes) and asserts what
-// the runtime received: where the session opened, what was handed over as context (the interrupted
-// turn's request kept whatever the budget, the "may already have run" sentence, nothing else past
-// the budget), and the live instruction exactly. Claude Code's path is the other suites' subject.
+// and reports usage only per turn still serves coding chats. Each row below is one way a turn can
+// end or continuity can break, under the rule record 0017 states for such a runtime, and asserts
+// what the runtime received: where the session opened, what was handed over as context (the
+// "may already have run" sentence where a turn was interrupted, and nothing past the budget), and
+// the live instruction exactly. Claude Code's path is the other suites' subject.
 import { expect, test } from "bun:test";
 import type { ContentBlock, SessionStart } from "@neuve/runtime";
 import { STOP_ENTRY_KIND } from "../../src/chat-runtime/extension.ts";
@@ -244,21 +244,62 @@ const rows: Row[] = [
     steps: loss(),
   },
   {
-    row: "5 (budget)",
-    name: "a 40 KB request lost with results past the budget",
-    execute: (n) => `result-${n}-${"r".repeat(HANDOFF_TOKENS)}`,
+    row: "5 (image)",
+    name: "an image in the interrupted request, then continue",
+    steps: async (run) => {
+      await completedThen(run);
+      const image = "A".repeat(300_000);
+      run.fake.frames.push(call("lost", 7), failed(run));
+      await (
+        await run.conversation.submit(
+          {
+            type: "input",
+            content: [
+              { type: "text", text: "LOOK-AT-THIS" },
+              { type: "image", data: image, mimeType: "image/png" },
+            ],
+          } as never,
+          context,
+        )
+      )
+        .wait(context)
+        .catch(() => undefined);
+      await closed(run, 0);
+      run.fake.frames.push({ text: "recovered" });
+      await run.submit("continue");
+      // The image is never sent as text: past the budget, the request is left out.
+      expect(JSON.stringify(run.fake.requests.at(-1)!.input)).not.toContain(
+        image.slice(0, 1_000),
+      );
+      return {
+        start: fork("point-1"),
+        context: [id("lost"), "result-7"],
+        sentence: true,
+        instruction: ["continue"],
+      };
+    },
+  },
+  {
+    row: "5 (two interrupted turns)",
+    name: "two interrupted turns, the second with a 40 KB request, then a retry",
     steps: async (run) => {
       await completedThen(run);
       run.fake.frames.push(call("a", 1), call("b", 2), failed(run));
-      await run.submit(bigRequest);
+      await run.submit("REQUEST");
       await closed(run, 0);
+      run.fake.frames.push(call("c", 3), failed(run));
+      await run.submit(bigRequest);
+      await closed(run, 1);
       run.fake.frames.push({ text: "recovered" });
-      await run.submit("third");
+      await run.submit("try again 2");
+      expect(JSON.stringify(run.fake.requests.at(-1)!.input)).not.toContain(
+        bigRequest,
+      );
       return {
         start: fork("point-1"),
-        context: [bigRequest],
+        context: [id("c"), "result-3"],
         sentence: true,
-        instruction: ["third"],
+        instruction: ["try again 2"],
       };
     },
   },
@@ -595,36 +636,6 @@ const rows: Row[] = [
     },
   },
   {
-    row: "18 (kept request)",
-    name: "a 40 KB request kept whole beside history and results that still arrive",
-    steps: async (run) => {
-      await to(run, "faux", "coder");
-      directAnswer(run, "pi answer");
-      await run.submit("DELETE-THE-BRANCH");
-      await to(run, "subscription");
-      run.fake.frames.push(call("a", 1), call("b", 2), failed(run));
-      await run.submit(bigRequest);
-      await closed(run, 0);
-      run.fake.frames.push({ text: "recovered" });
-      await run.submit("third");
-      // The kept request counts against nothing: the history and every result keep their budget.
-      return {
-        start: { kind: "new" },
-        context: [
-          bigRequest,
-          "DELETE-THE-BRANCH",
-          "pi answer",
-          id("a"),
-          "result-1",
-          id("b"),
-          "result-2",
-        ],
-        sentence: true,
-        instruction: ["third"],
-      };
-    },
-  },
-  {
     row: "23b",
     name: "an edit, a new session that then fails, and another message",
     steps: async (run) => {
@@ -850,13 +861,9 @@ for (const row of rows)
         expect(handedOver).not.toContain(`"content":"${item}"`);
       if (expected.sentence !== undefined)
         expect(handedOver.includes(MAY_HAVE_RUN)).toBe(expected.sentence);
-      // Nothing past the budget but the interrupted request it must keep.
-      const kept = (expected.context ?? [])
-        .filter((item) => item === bigRequest)
-        .reduce((total, item) => total + item.length + 200, 0);
-      expect(Buffer.byteLength(handedOver)).toBeLessThanOrEqual(
-        HANDOFF_TOKENS + kept + 400,
-      );
+      // Nothing is exempt from the budget: no block is larger than it.
+      for (const text of sent.filter((text) => text.startsWith(HISTORY)))
+        expect(Buffer.byteLength(text)).toBeLessThanOrEqual(HANDOFF_TOKENS);
       if (expected.start === "live")
         expect(run.fake.requests[index]!.session).toBe(
           run.fake.opened[0]!.session.id,

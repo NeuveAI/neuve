@@ -8,14 +8,12 @@ export const MAY_HAVE_RUN =
   "Steps of the interrupted turn may already have run: check before repeating one.";
 /**
  * One UTF-8 byte per token is conservative; history stays intact and the newest items win.
- * `keep` items are always kept, whatever the budget; `note` is added to the heading; `skipEmpty`
- * sends no block when nothing is handed over.
+ * `note` is added to the heading; `skipEmpty` sends no block when nothing is handed over.
  */
 export function handoff(
   messages: readonly Message[],
   budget = HANDOFF_TOKENS,
   options: {
-    readonly keep?: ReadonlySet<Message>;
     readonly note?: string;
     readonly skipEmpty?: boolean;
   } = {},
@@ -42,11 +40,6 @@ export function handoff(
     const item = JSON.stringify(
       message.role === "toolResult" ? alreadyRan([message])[0] : message,
     );
-    // A kept item is sent whole and counts against nothing, so it never starves the rest.
-    if (options.keep?.has(message)) {
-      selected.push(item);
-      continue;
-    }
     const bytes = Buffer.byteLength(item) + 2;
     if (bytes > remaining) {
       if (message.role === "toolResult") omittedResults.add(message.toolCallId);

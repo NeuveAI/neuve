@@ -1347,34 +1347,26 @@ export class ChatRuntimeBridge {
 
 /**
  * What a session on a runtime that resumes only between turns is sent after anything but a clean
- * continuation: today's size-limited hand-over of what it does not hold, everything after `fork`
- * (-1 for a new session). The live instruction is, as always, the user messages after the last
- * assistant message. When those messages end in an interrupted turn (an assistant message after the
- * last finished reply), the turn's own request is always kept, and the model is told that its steps
- * may already have run. Nothing a finished reply answered is an instruction, and the interrupted
- * turn's work is recovered only as far as the budget allows: the person decides what to ask next.
+ * continuation: exactly today's size-limited hand-over of what it does not hold, everything after
+ * `fork` (-1 for a new session), with nothing exempt from the budget. The live instruction is, as
+ * always, the user messages after the last assistant message. When the handed-over part ends in an
+ * interrupted turn (an assistant message after the last finished reply), the model is told that
+ * its steps may already have run; it may no longer hold the request it was working on, and the
+ * person says again what they want.
  */
 function handOver(messages: Context["messages"], fork: number): ContentBlock[] {
   const unheld = messages.slice(fork + 1);
-  const finished = (message: Context["messages"][number]) =>
-    message.role === "assistant" &&
-    (message.stopReason === "stop" || message.stopReason === "length");
-  const lastReply = unheld.findLastIndex(finished);
-  const work = unheld.findIndex(
+  const lastReply = unheld.findLastIndex(
+    (message) =>
+      message.role === "assistant" &&
+      (message.stopReason === "stop" || message.stopReason === "length"),
+  );
+  const interrupted = unheld.some(
     (message, index) => index > lastReply && message.role === "assistant",
   );
   return handoff(unheld, HANDOFF_TOKENS, {
     skipEmpty: true,
-    ...(work < 0
-      ? {}
-      : {
-          keep: new Set(
-            unheld
-              .slice(lastReply + 1, work)
-              .filter((message) => message.role === "user"),
-          ),
-          note: MAY_HAVE_RUN,
-        }),
+    ...(interrupted ? { note: MAY_HAVE_RUN } : {}),
   });
 }
 /** Inputs as a turn's message: user content, and each tool result as already run. */
