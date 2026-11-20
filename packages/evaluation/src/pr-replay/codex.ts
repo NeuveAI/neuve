@@ -27,6 +27,7 @@ import {
 import { z } from "zod";
 import {
   CODEX_MODEL,
+  codexBinary,
   codexUsage,
   modelEnv,
   runBounded,
@@ -92,15 +93,6 @@ export const DISABLED_FEATURES = [
   "workspace_dependencies",
   "sleep_tool",
 ] as const;
-
-/**
- * The Codex binary, read on every call (`NEUVE_CODEX_BINARY`, else the ChatGPT app's bundled one):
- * a path captured once at import would let a test that imports this module early reach the real
- * binary under a later test's fake.
- */
-export const codexBinary = () =>
-  process.env["NEUVE_CODEX_BINARY"] ??
-  "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 
 /** The Linux and legacy local version. The dataset Mac install has its own pin below. */
 export const PINNED_CODEX_VERSION = "codex-cli 0.164.0-alpha.11.1";
@@ -561,11 +553,11 @@ export const pinCatalog = (codexHome: string) => {
   return pinnedEntry();
 };
 
-/** The SHA-256 of the Codex binary, read on every run: ChatGPT.app replaces it in place. */
 /**
  * The Codex install the gate covers: the bundle folder named `codex-cli` above the binary (the
  * binary, the code-mode host, the wrapper scripts, codex-package.json and their resources), else
- * the binary's own folder. ChatGPT.app replaces any of them in place.
+ * the binary's own folder. An app that bundles Codex can replace any of them in place, so its hash
+ * is read on every run.
  */
 export const codexInstallRoot = () => {
   const override = process.env["NEUVE_CODEX_INSTALL_ROOT"];

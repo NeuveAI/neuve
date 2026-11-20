@@ -9,5 +9,6 @@ export * from "./status.ts";
 export * from "./contract.ts";
 export * from "./errors.ts";
 export * from "./registry.ts";
+export { findProgram } from "./find-program.ts";
 export { signInCommand } from "./sign-in-command.ts";
 export * as AccountStore from "./store/index.ts";

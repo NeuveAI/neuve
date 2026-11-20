@@ -1,6 +1,6 @@
 // Why: labelling runs Codex with no tools, and that rests on the gate: this exact Codex install,
 // every tool feature listed once and off, nothing unknown on, the downloaded model catalog keeping
-// every tool behind the code-mode host, and no configuration the gate cannot see. ChatGPT.app replaces the install in place, a truncated or doubled `features list` could hide
+// every tool behind the code-mode host, and no configuration the gate cannot see. An app that bundles Codex can replace the install in place, a truncated or doubled `features list` could hide
 // a tool, and a config file beside the run could switch one on. So each way the gate must refuse is
 // checked against a fake Codex, including an install that changes while it is being checked.
 import { afterAll, expect, test } from "bun:test";

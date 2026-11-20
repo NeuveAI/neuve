@@ -13,6 +13,7 @@ import { parseArgs } from "node:util";
 import { Effect, Option } from "effect";
 import { Route, RouteProvider, Settings } from "@neuve/harness";
 import { settingsRoute } from "@neuve/harness/request";
+import { findProgram } from "@neuve/runtime";
 import { resolveStoreLocation, Worker } from "@neuve/records-core";
 import { isCompiled } from "../../../packages/harness/src/compiled.ts";
 import { discoverGraphBinary } from "./graph-query.ts";
@@ -107,7 +108,7 @@ const copyKind = async (path: string, home: string) => {
 
 /** Where `claude` is on PATH, as the Claude Code runtime finds it, or undefined. */
 export const findClaude = (path = process.env["PATH"] ?? "") =>
-  Bun.which("claude", { PATH: path }) ?? undefined;
+  findProgram("claude", undefined, path);
 
 /**
  * The review route the settings name, and whether this shell can use it. For the Claude route

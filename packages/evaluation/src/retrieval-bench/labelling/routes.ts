@@ -22,8 +22,8 @@ import type { RunReceipt } from "./schema.ts";
 /**
  * Model routes for labelling and grading (decision 9.37):
  *
- * - Codex (second family, 9.15): the ChatGPT app's bundled Codex CLI (`codex exec`) with GPT-6.1-Sol
- *   at high effort, its read-only sandbox (commands get no writes and no network), a
+ * - Codex (second family, 9.15): the Codex CLI named by `NEUVE_CODEX_BINARY` (`codex exec`) with
+ *   GPT-6.1-Sol at high effort, its read-only sandbox (commands get no writes and no network), a
  *   structured-output schema and a clean Codex home holding only the owner's sign-in, so personal
  *   skills and hooks are not loaded. The `codex` on PATH through nvm is an unrelated npm package.
  * - Opus 5.5: headless Claude Code (`claude -p`) on the owner's plan, in restricted mode (no command
@@ -35,9 +35,19 @@ import type { RunReceipt } from "./schema.ts";
  * and its logged tool calls are audited for paths outside that directory and the snapshot.
  */
 
-export const CODEX_BINARY =
-  process.env["NEUVE_CODEX_BINARY"] ??
-  "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
+/**
+ * The Codex program, only from `NEUVE_CODEX_BINARY` and read on every call: a path captured at import
+ * would let a test that imports this module early reach a real program under a later test's fake.
+ * These pinned runs never look a Codex up by themselves.
+ */
+export const codexBinary = () => {
+  const binary = process.env["NEUVE_CODEX_BINARY"];
+  if (binary === undefined || binary === "")
+    throw new Error(
+      "Set NEUVE_CODEX_BINARY to the absolute path of the Codex program to run: Neuve does not look one up",
+    );
+  return binary;
+};
 export const CODEX_MODEL = "gpt-6.1-sol";
 export const CODEX_EFFORT = "high";
 export const OPUS_MODEL = "claude-opus-5-5";
@@ -120,7 +130,7 @@ export const codexCommand = (run: CodexRun) => {
       resume !== null
         ? // `exec resume` takes no --sandbox or --cd: the sandbox is set by config, the folder by cwd.
           [
-            run.binary ?? CODEX_BINARY,
+            run.binary ?? codexBinary(),
             "exec",
             "resume",
             resume,
@@ -130,7 +140,7 @@ export const codexCommand = (run: CodexRun) => {
             "-",
           ]
         : [
-            run.binary ?? CODEX_BINARY,
+            run.binary ?? codexBinary(),
             "exec",
             ...(run.session === undefined ? ["--ephemeral"] : []),
             "--sandbox",

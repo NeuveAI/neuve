@@ -6,6 +6,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { QuerySession } from "./services.ts";
+import { findProgram } from "@neuve/runtime";
 import { Effect, Layer, Queue, Stream } from "effect";
 import {
   ClaudeExecutable,
@@ -42,8 +43,7 @@ const sdkError = (method: string, rejection?: unknown) => {
   });
 };
 export const executableLayer = Layer.succeed(ClaudeExecutable, {
-  resolve: (explicit) =>
-    Effect.sync(() => Bun.which(explicit ?? "claude") ?? undefined),
+  resolve: (explicit) => Effect.sync(() => findProgram("claude", explicit)),
 });
 export const processLayer = Layer.succeed(ClaudeProcess, {
   run: (command, env) =>
