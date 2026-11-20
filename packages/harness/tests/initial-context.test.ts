@@ -1211,18 +1211,18 @@ test("titles are bounded, lines are sanitised and missing commit file lists are 
 
 // Why: one hostile range must not monopolize the finder event loop. Elapsed and CPU time depend on
 // the machine and its load, so the check is on work, counted from outside the render at two sizes:
-// four times the files must cost about four times the work. The counting replaces array built-ins,
-// which slows array work for the rest of a process, so it runs in a process of its own;
-// `fixtures/opening-work.ts` says what it counts and what it cannot see (indexed loops, and work on
-// a Map, a Set or a string).
-test("twenty thousand files render with work in proportion to the range", () => {
+// four times the files must cost about four times the work. `fixtures/opening-work.ts` does the
+// counting in a process of its own and says what it counts and what it cannot see. The sizes are
+// small enough that a render doing sixteen times the work still finishes and fails on its count;
+// the 60 s limit below only stops a hang, and a slow render the counts do not show is not caught.
+test("ten thousand files render with work in proportion to the range", () => {
   const child = Bun.spawnSync(
     [
       process.execPath,
       "--no-env-file",
       fileURLToPath(new URL("./fixtures/opening-work.ts", import.meta.url)),
-      "5000",
-      "20000",
+      "2500",
+      "10000",
     ],
     { stdout: "pipe", stderr: "pipe" },
   );
@@ -1234,14 +1234,14 @@ test("twenty thousand files render with work in proportion to the range", () => 
     indexed: number;
     characters: number;
   }>;
-  expect([small!.files, large!.files]).toEqual([5000, 20000]);
-  expect(small!.reads).toBeGreaterThan(5000);
-  expect(small!.visits).toBeGreaterThan(5000);
+  expect([small!.files, large!.files]).toEqual([2500, 10000]);
+  expect(small!.reads).toBeGreaterThan(2500);
+  expect(small!.visits).toBeGreaterThan(2500);
   // Hunk reads are exactly linear: 4 times, with a margin for the few that do not scale.
   expect(large!.reads / small!.reads).toBeLessThan(4.1);
-  // Element visits come to 4.19 times: linear, plus the index's fit loop taking a round more. A
-  // rollup that copies or scans a folder's list for each file it adds comes to 21.8 times.
+  // Array work comes to 4.07 times. A rollup that copies or scans a folder's list for each file
+  // it adds comes to 16 times or more.
   expect(large!.visits / small!.visits).toBeLessThan(6);
-  expect(large!.indexed).toBe(20000);
+  expect(large!.indexed).toBe(10000);
   expect(large!.characters).toBeLessThanOrEqual(50000);
 }, 60_000);
