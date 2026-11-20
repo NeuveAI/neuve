@@ -17,7 +17,7 @@ Neuve has six base layers. Each owns its own internal abstractions and talks to 
 | **MCP** | Exposing Neuve's tools to coding agents over stdio, for the lifetime of the agent's session | Long-lived ports or shared daemons |
 | **Web app** | An event-driven interface for humans: the batch overview and review desk, projected from Records, with commands relayed back to it | Business logic. The BFF only projects and relays. |
 
-ACP connects Neuve to external coding harnesses such as Codex and Claude Code when they are available. It is a connection, not a layer, and final review never depends on it.
+External coding harnesses such as Claude Code and Codex are reached through the [runtime contract](decisions/0017-runtime-contract-and-accounts.md), each by its vendor's own interface: Claude Code through its Agent SDK, and Codex, once the [Codex runtime proposal](../process/proposals/codex-runtime.md) is built, through its app server ([decision 14.63](../process/decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026), which replaces the earlier ACP route). They are connections, not a layer, and final review never depends on one.
 
 ## How work flows
 
