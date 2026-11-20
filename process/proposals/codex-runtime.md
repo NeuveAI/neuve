@@ -342,7 +342,7 @@ Each is a change to the shared contract, used by every runtime, and none is a Co
 | Today | After |
 | --- | --- |
 | A build lane starts the Codex program from the ChatGPT app by hand | Removed. A lane's Codex implementer is a chat on the `codex` account |
-| pi's "OpenAI Codex (legacy)" provider in Ace's catalogue, and its model names in the channel's built-in lists | Removed from the catalogue. The planning mode work already removes those lists; Codex's models come from the account's probe |
+| pi's "OpenAI Codex (legacy)" provider in Ace's catalogue, and its model names in the channel's built-in lists | Removed from the catalogue. The planning mode work already removes those lists; Codex's models come from the account's status check |
 | The Claude runtime's private lookup | One shared function, used by both runtimes |
 | The app-bundle path written into the two evaluation files and their tests | Removed. They take the program only from the explicit setting they already have |
 | pi's copy of Codex's sign-in, a third way to sign in to one vendor that nothing in Neuve manages | Gone. Two remain, each the vendor's own: Codex's login, and OpenAI's Sign in with ChatGPT through Neuve |
