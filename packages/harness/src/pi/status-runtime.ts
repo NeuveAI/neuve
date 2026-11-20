@@ -32,6 +32,9 @@ export interface PiStatusRuntimeOptions {
 
 const capabilities: RuntimeCapabilities = {
   ownsLoop: false,
+  toolEndsTurn: false,
+  resumeInTurn: false,
+  perMessageUsage: false,
   resume: false,
   fork: false,
   interrupt: false,

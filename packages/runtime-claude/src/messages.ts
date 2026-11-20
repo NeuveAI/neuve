@@ -3,7 +3,10 @@ import type { CallUsage, RuntimeEvent, ToolDefinition } from "@neuve/runtime";
 import { z } from "zod";
 import { zeroUsage } from "./mapping.ts";
 
-type Finished = Extract<RuntimeEvent, { type: "message.finished" }>;
+/** Claude Code resumes inside a turn, so every message it reports names its resume point. */
+type Finished = Extract<RuntimeEvent, { type: "message.finished" }> & {
+  readonly resumePoint: string;
+};
 type Call = Finished["toolCalls"][number];
 export const requestUsage = z.object({
   input_tokens: z.number().int().nonnegative().nullish(),

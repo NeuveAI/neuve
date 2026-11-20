@@ -81,6 +81,9 @@ export const account = (name = "subscription", folder = "shared") =>
   });
 export const caps: RuntimeCapabilities = {
   ownsLoop: true,
+  toolEndsTurn: true,
+  resumeInTurn: true,
+  perMessageUsage: true,
   resume: true,
   fork: true,
   steering: true,
@@ -105,6 +108,8 @@ export type Frame = {
   delayHandler?: () => Promise<void>;
   resumePoint?: string;
   finishAfterResults?: string;
+  /** On a runtime without resumeInTurn, end the turn without the resume point the contract requires. */
+  omitTurnPoint?: true;
   modelUsage?: Pick<
     Extract<RuntimeEvent, { type: "usage" }>,
     "model" | "contextWindow" | "maxOutputTokens"
@@ -254,10 +259,13 @@ export class FakeSession {
         return;
       }
       if (frame.text) this.emit({ type: "text", text: frame.text });
+      // A runtime without resumeInTurn names a point only at a completed turn's end.
+      const point = frame.resumePoint ?? `point-${this.fake.requests.length}`;
+      const inTurn = this.fake.capabilities.resumeInTurn;
       this.emit({
         type: "message.finished",
         messageId: `message-${this.fake.requests.length}`,
-        resumePoint: frame.resumePoint ?? `point-${this.fake.requests.length}`,
+        ...(inTurn ? { resumePoint: point } : {}),
         stopReason: frame.calls?.length ? "tool-use" : "end-turn",
         toolCalls: frame.calls ?? [],
         usage: {
@@ -284,7 +292,11 @@ export class FakeSession {
         });
       }
       if (!frame.calls?.length) {
-        this.emit({ type: "turn.finished", outcome: { status: "completed" } });
+        this.emit({
+          type: "turn.finished",
+          outcome: { status: "completed" },
+          ...(inTurn || frame.omitTurnPoint ? {} : { resumePoint: point }),
+        });
         return;
       }
       await frame.delayHandler?.();

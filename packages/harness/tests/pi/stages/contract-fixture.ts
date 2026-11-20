@@ -44,6 +44,9 @@ export const route = ClaudeRouteConfig.parse({
 });
 const capabilities = {
   ownsLoop: true,
+  toolEndsTurn: true,
+  resumeInTurn: true,
+  perMessageUsage: true,
   resume: true,
   fork: true,
   interrupt: true,
@@ -67,6 +70,8 @@ interface Turn {
     calls?: readonly Call[],
     options?: {
       usage?: Message["usage"];
+      /** Present as undefined to send a message without its resume point. */
+      resumePoint?: string | undefined;
       id?: string;
       stopReason?: Message["stopReason"];
     },
@@ -220,7 +225,11 @@ export function fakeRuntime(script: Script[], stageFixture = true) {
                       turnId: input.turnId,
                       at: new Date().toISOString(),
                       messageId: options.id ?? `m${turns.length}-${++messages}`,
-                      resumePoint: `point-${turns.length}`,
+                      ...(Object.hasOwn(options, "resumePoint")
+                        ? options.resumePoint === undefined
+                          ? {}
+                          : { resumePoint: options.resumePoint }
+                        : { resumePoint: `point-${turns.length}` }),
                       stopReason:
                         options.stopReason ??
                         (calls.length > 0 ? "tool-use" : "end-turn"),

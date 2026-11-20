@@ -15,6 +15,7 @@ import {
   RuntimeFailure,
   runtimeErrorToFailure,
   type AccountName,
+  type ContentBlock,
   type ContinuationIdentity,
   type RuntimeCapabilities,
   type RuntimeEvent,
@@ -597,19 +598,29 @@ export class ChatRuntimeBridge {
         return;
       }
       if (!this.bind(live, gen)) return;
-      const message = point
-        ? inputMessages.flatMap((message) =>
-            message.role === "toolResult"
-              ? alreadyRan([message])
-              : userContent([message]),
-          )
-        : prior
+      // A runtime that resumes only between turns lost a failed turn's output. Only this
+      // conversation's own head on this continuation says where that turn began: the messages its
+      // first input went through. The turn's request goes again as the instruction, and what it
+      // already did follows as text, every result in full. Earlier messages are history: in a new
+      // session they go through the budgeted hand-over, never as an instruction. A head that cannot
+      // say where the turn began gets the budgeted hand-over of the whole conversation.
+      const lost =
+        !route.capabilities.resumeInTurn && firstInput
+          ? lostTurn(
+              gen.messages,
+              firstInput.through,
+              target ? checkpointIndex + 1 : 0,
+            )
+          : undefined;
+      const message = lost
+        ? lost
+        : !route.capabilities.resumeInTurn && firstInput
           ? handoff(gen.messages)
-          : gen.messages.flatMap((message) =>
-              message.role === "toolResult"
-                ? alreadyRan([message])
-                : userContent([message]),
-            );
+          : point
+            ? given(inputMessages)
+            : prior
+              ? handoff(gen.messages)
+              : given(gen.messages);
       await this.start(live, message);
       return;
     }
@@ -959,7 +970,11 @@ export class ChatRuntimeBridge {
         });
     }
     if (event.type === "message.finished" && gen) {
-      live.lastResumePoint = event.resumePoint;
+      // Only a runtime that resumes inside a turn can resume at a message.
+      const resumePoint = live.route.capabilities.resumeInTurn
+        ? event.resumePoint
+        : undefined;
+      live.lastResumePoint = resumePoint;
       for (const [id, call] of live.calls)
         if (call.delivered) live.calls.delete(id);
       const calls = mirrorCalls(
@@ -981,20 +996,22 @@ export class ChatRuntimeBridge {
       gen.message.responseId = responseId(
         nativeId(session),
         event.stopReason === "end-turn" || event.stopReason === "tool-use"
-          ? event.resumePoint
+          ? resumePoint
           : "",
       );
       if (event.stopReason === "tool-use") {
-        await this.recordHead(live, gen, event.resumePoint, "toolUse");
+        if (resumePoint !== undefined)
+          await this.recordHead(live, gen, resumePoint, "toolUse");
         this.finish(live, gen, "toolUse");
       } else if (event.stopReason === "end-turn") {
         gen.message.stopReason = "stop";
-        live.checkpoint = {
-          session: nativeId(session),
-          resumePoint: event.resumePoint,
-          checkpointThrough: headDigest(gen.messages),
-          digest: headDigest([...gen.messages, gen.message]),
-        };
+        if (resumePoint !== undefined)
+          live.checkpoint = {
+            session: nativeId(session),
+            resumePoint,
+            checkpointThrough: headDigest(gen.messages),
+            digest: headDigest([...gen.messages, gen.message]),
+          };
         // Keep the generation open through turn.finished, so failures and carrier checkpoints are recorded.
       } else {
         this.finish(
@@ -1029,6 +1046,30 @@ export class ChatRuntimeBridge {
       if (gen) {
         if (event.outcome.status === "completed") {
           const point = turnResumePoint(event) ?? live.lastResumePoint;
+          if (!point && !live.route.capabilities.resumeInTurn) {
+            // The contract requires this turn's end as its resume point. Without it nothing proves
+            // what the native session holds, so no head may survive to fork a stale turn from.
+            this.log("chat-runtime.protocol.fault", {
+              reason: "turn-ended-without-resume-point",
+            });
+            const head = this.options.heads.get(gen.owner);
+            if (head)
+              await this.options.heads
+                .restore(gen.owner, head, undefined)
+                .catch(() => {
+                  this.log("chat-runtime.head.restore.failed", {
+                    owner: gen.owner,
+                  });
+                });
+            this.finish(
+              live,
+              gen,
+              "error",
+              "This turn did not produce an answer. Try another message.",
+            );
+            await this.closeLive(live);
+            return;
+          }
           if (point) {
             gen.message.responseId = responseId(nativeId(session), point, true);
             await this.recordHead(live, gen, point, "stop");
@@ -1283,6 +1324,54 @@ export class ChatRuntimeBridge {
   }
 }
 
+/**
+ * A failed turn on a runtime that resumes only between turns, as the next turn's message: history
+ * from `base` before the turn's request through the budgeted hand-over, the request itself, then
+ * what the turn already did, in full. Undefined when no message is the one the first input went
+ * `through`.
+ */
+function lostTurn(
+  all: Context["messages"],
+  through: string,
+  base: number,
+): ContentBlock[] | undefined {
+  // Failed partials are in no request and in no digest, so they are neither history nor lost work.
+  const messages = all.filter(
+    (message, index) =>
+      index >= base &&
+      !(
+        message.role === "assistant" &&
+        (message.stopReason === "error" || message.stopReason === "aborted")
+      ),
+  );
+  const before = all.slice(0, base);
+  const end = messages.findLastIndex(
+    (_message, index) =>
+      headDigest([...before, ...messages.slice(0, index + 1)]) === through,
+  );
+  if (end < 0) return;
+  const start =
+    messages.findLastIndex(
+      (message, index) => index <= end && message.role === "assistant",
+    ) + 1;
+  const history = messages.slice(0, start);
+  const after = messages.slice(end + 1);
+  return [
+    ...(history.length > 0 ? handoff(history) : []),
+    ...given(messages.slice(start, end + 1)),
+    ...(after.some((message) => message.role === "assistant")
+      ? handoff(after, Number.POSITIVE_INFINITY)
+      : given(after)),
+  ];
+}
+/** Inputs as a turn's message: user content, and each tool result as already run. */
+function given(messages: Context["messages"]) {
+  return messages.flatMap((message) =>
+    message.role === "toolResult"
+      ? alreadyRan([message])
+      : userContent([message]),
+  );
+}
 // The registry forwards nativeSessionId as a getter (ruling 11a); read it live, never copy it.
 function nativeId(session: RuntimeSession): string {
   return session.nativeSessionId;

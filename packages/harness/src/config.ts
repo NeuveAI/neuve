@@ -19,6 +19,7 @@ import {
   computationRoute,
   routeAccount,
   routeRuntimeError,
+  stageCapabilitiesMissing,
   type AnyRouteConfig,
 } from "./route.ts";
 import type { RetrieverConfig } from "./retriever.ts";
@@ -186,8 +187,13 @@ export const routeOwnsLoop = (
   Effect.gen(function* () {
     const account = routeAccount(route);
     if (account === undefined) return false;
-    const { ownsLoop } = yield* runtimes.capabilities(account.name);
-    const error = routeRuntimeError(route, ownsLoop);
+    const capabilities = yield* runtimes.capabilities(account.name);
+    const { ownsLoop } = capabilities;
+    const error = routeRuntimeError(
+      route,
+      ownsLoop,
+      stageCapabilitiesMissing(capabilities),
+    );
     if (error !== undefined) return yield* error;
     return ownsLoop;
   });

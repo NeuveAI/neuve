@@ -286,6 +286,9 @@ test("R9 capabilities advertise the five newly supported operations", () =>
         const f = yield* fixture;
         expect(yield* f.runtime.capabilities(account)).toEqual({
           ownsLoop: true,
+          toolEndsTurn: true,
+          resumeInTurn: true,
+          perMessageUsage: true,
           resume: true,
           fork: true,
           interrupt: true,

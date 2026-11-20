@@ -1,6 +1,11 @@
 import { Data } from "effect";
 import { z } from "zod";
-import { AccountKind, AccountName } from "@neuve/runtime";
+import {
+  AccountKind,
+  AccountName,
+  RuntimeCapability,
+  type RuntimeCapabilities,
+} from "@neuve/runtime";
 
 /**
  * The route's configuration and accounting: what a run freezes, how its usage is read and priced.
@@ -138,23 +143,59 @@ export class RouteRuntimeMismatch extends Data.TaggedError(
   readonly account: RouteAccount["name"];
   readonly provider: AnyRouteConfig["provider"];
   readonly retryable: false;
+  /** What a review stage needs that the account's runtime, which runs its own loop, lacks. */
+  readonly missing?: ReadonlyArray<RuntimeCapability>;
 }> {
   constructor(
     account: RouteAccount["name"],
     provider: AnyRouteConfig["provider"],
+    missing: ReadonlyArray<RuntimeCapability> = [],
   ) {
-    super({ account, provider, retryable: false });
+    super({
+      account,
+      provider,
+      retryable: false,
+      ...(missing.length > 0 ? { missing } : {}),
+    });
   }
   override get message() {
-    return `Account ${this.account}'s runtime disagrees with route provider ${this.provider}.`;
+    return this.missing === undefined
+      ? `Account ${this.account}'s runtime disagrees with route provider ${this.provider}.`
+      : `Account ${this.account}'s runtime runs its own loop but can't run review stages: it lacks ${this.missing.map((capability) => STAGE_NEEDS[capability] ?? capability).join(", ")}.`;
   }
 }
 
+/**
+ * What a review stage needs of a runtime that runs its own loop: a submit tool ends the round, a
+ * held stage resumes inside its turn, and each request's usage feeds the context ceiling.
+ */
+const STAGE_NEEDS: Partial<Record<RuntimeCapability, string>> = {
+  toolEndsTurn: "ending a turn from a tool",
+  resumeInTurn: "resuming inside a turn",
+  perMessageUsage: "usage for each message",
+};
+export const stageCapabilitiesMissing = (capabilities: RuntimeCapabilities) =>
+  capabilities.ownsLoop
+    ? RuntimeCapability.options.filter(
+        (capability) =>
+          STAGE_NEEDS[capability] !== undefined && !capabilities[capability],
+      )
+    : [];
+
 /** The same agreement applies when a request freezes and when its stage opens. */
-export const routeRuntimeError = (route: AnyRouteConfig, ownsLoop: boolean) => {
+export const routeRuntimeError = (
+  route: AnyRouteConfig,
+  ownsLoop: boolean,
+  missing: ReadonlyArray<RuntimeCapability> = [],
+) => {
   const account = routeAccount(route);
-  return account !== undefined && ownsLoop !== (route.provider === "claude")
-    ? new RouteRuntimeMismatch(account.name, route.provider)
+  return account !== undefined &&
+    (ownsLoop !== (route.provider === "claude") || missing.length > 0)
+    ? new RouteRuntimeMismatch(
+        account.name,
+        route.provider,
+        ownsLoop === (route.provider === "claude") ? missing : [],
+      )
     : undefined;
 };
 
