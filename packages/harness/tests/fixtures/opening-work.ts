@@ -1,6 +1,7 @@
 // What this must do, for initial-context.test.ts, which runs it as a process of its own: render the
-// opening for each file count given as an argument and print one JSON line with the work each
-// render did, counted from outside the render and independent of the machine.
+// opening once for each file count given as an argument, then print one JSON line holding, for each
+// count, `files`, `reads` and `visits` as defined below. The same code and arguments must give the
+// same numbers on any machine.
 //
 // Why its own process: the counting replaces built-ins, and the engine does not take its fast paths
 // for arrays again afterwards (the same loop ran 2.3 times slower in a process that had replaced
@@ -13,9 +14,9 @@
 // count and the length of every array among its arguments. The functions are taken from those two
 // objects themselves, so one the language adds later is counted without a change here.
 //
-// Not counted, so work written this way goes unseen: an indexed loop (`for (let i = 0; ...)`); a
-// built-in outside those two objects handed an array (`structuredClone`, `JSON.stringify`, a typed
-// array's constructor); work on a Map, a Set or a string; and the comparisons inside a sort.
+// Not counted, so work written this way goes unseen: an indexed loop (`for (let i = 0; ...)`) or a
+// `for...in` loop; a built-in outside those two objects handed an array (`structuredClone`,
+// `JSON.stringify`); work on a Map, a Set or a string; and the comparisons inside a sort.
 import { renderOpening } from "../../src/initial-context.ts";
 import { frame, hunk } from "../find-fixture.ts";
 
@@ -84,8 +85,7 @@ const measured = process.argv.slice(2).map((argument) => {
   }));
   reads = 0;
   visits = 0;
-  const { counts, text } = renderOpening({ frame, hunks, commits });
-  const indexed = counts.filesNamed + counts.filesFolded;
-  return { files, reads, visits, indexed, characters: text.length };
+  renderOpening({ frame, hunks, commits });
+  return { files, reads, visits };
 });
 process.stdout.write(`${JSON.stringify(measured)}\n`);
