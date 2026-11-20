@@ -384,6 +384,7 @@ for (const failure of [
   "outcome",
   "startup-result",
   "usage",
+  "resume-point",
   "mixed-usage",
 ] as const) {
   test(`${failure} follows the native failure policy and closes any acquired session`, async () => {
@@ -406,6 +407,9 @@ for (const failure of [
           await turn.charge(usage, "request");
         } else if (failure === "usage")
           await turn.message([], { usage: undefined });
+        // A stage's runtime resumes inside a turn, so a message without its point is a protocol error.
+        else if (failure === "resume-point")
+          await turn.message([], { resumePoint: undefined });
         return {
           status: "failed",
           disposition: "broken",

@@ -3,6 +3,7 @@ import {
   type RuntimeError,
   type RuntimeRegistryShape,
   type RuntimeCapabilities,
+  type RuntimeCapability,
 } from "@neuve/runtime";
 // Why (0014, the pi port's restart and policy boundaries): an agent step runs on pi's own generation
 // and tool tasks, so the stage's bounded policy has to hold through pi's native boundaries. These
@@ -102,11 +103,18 @@ import { toolState } from "../../../src/pi/stages/tool-state.ts";
 export const testRuntimes = () => {
   const calls: AccountName[] = [];
   let sessionOpens = 0;
-  const policy: { ownsLoop: boolean; error?: RuntimeError } = {
+  const policy: {
+    ownsLoop: boolean;
+    error?: RuntimeError;
+    lacking?: ReadonlyArray<RuntimeCapability>;
+  } = {
     ownsLoop: false,
   };
   const capabilities: RuntimeCapabilities = {
     ownsLoop: false,
+    toolEndsTurn: true,
+    resumeInTurn: true,
+    perMessageUsage: true,
     resume: false,
     fork: false,
     interrupt: false,
@@ -127,7 +135,13 @@ export const testRuntimes = () => {
       Effect.suspend(() => {
         calls.push(name);
         return policy.error === undefined
-          ? Effect.succeed({ ...capabilities, ownsLoop: policy.ownsLoop })
+          ? Effect.succeed({
+              ...capabilities,
+              ownsLoop: policy.ownsLoop,
+              ...Object.fromEntries(
+                (policy.lacking ?? []).map((name) => [name, false]),
+              ),
+            })
           : Effect.fail(policy.error);
       }),
     continuation: unused,

@@ -165,6 +165,9 @@ test("pi cannot open sessions and capabilities need no credentials, so generatio
   );
   expect(result.capabilities).toEqual({
     ownsLoop: false,
+    toolEndsTurn: false,
+    resumeInTurn: false,
+    perMessageUsage: false,
     resume: false,
     fork: false,
     interrupt: false,

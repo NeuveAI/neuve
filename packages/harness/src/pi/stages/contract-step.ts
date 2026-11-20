@@ -444,7 +444,9 @@ export async function contractStep(input: {
             )
               throw protocol();
             if (event.type === "message.finished") {
-              if (event.usage === undefined) throw protocol();
+              // Stages run only where every message carries its usage and its resume point.
+              if (event.usage === undefined || event.resumePoint === undefined)
+                throw protocol();
               const previous = doc.events.find(
                 (item) =>
                   item.type === "message.finished" &&
@@ -538,7 +540,9 @@ export async function contractStep(input: {
                 sessionId: live.nativeSessionId,
                 resumePoint:
                   event.resumePoint ??
-                  (last?.type === "message.finished" ? last.resumePoint : null),
+                  (last?.type === "message.finished"
+                    ? (last.resumePoint ?? null)
+                    : null),
               };
             }
           });

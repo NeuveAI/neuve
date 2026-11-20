@@ -55,6 +55,9 @@ for (const appears of ["before-open", "after-open"] as const) {
                     capabilities: () =>
                       Effect.succeed({
                         ownsLoop: false,
+                        toolEndsTurn: false,
+                        resumeInTurn: false,
+                        perMessageUsage: false,
                         resume: true,
                         fork: true,
                         interrupt: false,

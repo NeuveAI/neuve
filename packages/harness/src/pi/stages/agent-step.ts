@@ -1,4 +1,4 @@
-import { accountReadRefused } from "@neuve/runtime";
+import { type RuntimeCapability, accountReadRefused } from "@neuve/runtime";
 import { safeRead } from "@neuve/records-schema";
 import { readData } from "@neuve/records-core";
 import { randomUUID } from "node:crypto";
@@ -65,6 +65,7 @@ import {
   storedUsage,
   zeroUsage,
   routeRuntimeError,
+  stageCapabilitiesMissing,
   type AnyRouteConfig,
   type RouteAccount,
 } from "../../route.ts";
@@ -145,8 +146,11 @@ import {
 export { RouteRuntimeMismatch } from "../../route.ts";
 
 /** Check provider agreement before selecting the stage's generation path. */
-export const stageRouteError = (route: AnyRouteConfig, ownsLoop: boolean) =>
-  routeRuntimeError(route, ownsLoop);
+export const stageRouteError = (
+  route: AnyRouteConfig,
+  ownsLoop: boolean,
+  missing: ReadonlyArray<RuntimeCapability> = [],
+) => routeRuntimeError(route, ownsLoop, missing);
 
 /**
  * One agent context of a review stage as a native pi task (0014). It keys the step and reuses a
@@ -2323,7 +2327,11 @@ export const agentStepTask = (
         );
       }
       const { ownsLoop } = resolved.success;
-      const error = stageRouteError(route, ownsLoop);
+      const error = stageRouteError(
+        route,
+        ownsLoop,
+        stageCapabilitiesMissing(resolved.success),
+      );
       if (error !== undefined)
         return fail(
           runtime,

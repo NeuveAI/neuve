@@ -32,6 +32,9 @@ const fakeRuntime = (calls: string[], signedIn = false): RuntimeShape => ({
   capabilities: () =>
     Effect.succeed({
       ownsLoop: true,
+      toolEndsTurn: true,
+      resumeInTurn: true,
+      perMessageUsage: true,
       resume: true,
       fork: true,
       interrupt: false,

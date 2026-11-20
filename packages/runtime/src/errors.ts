@@ -10,6 +10,9 @@ import {
 
 export const RuntimeCapability = z.enum([
   "ownsLoop", // The runtime runs its model loop and calls Neuve's tool handlers.
+  "toolEndsTurn", // A tool's endTurn ends the turn with no further model request.
+  "resumeInTurn", // message.finished names a resume point inside a turn.
+  "perMessageUsage", // message.finished carries its model request's usage.
   "resume",
   "fork",
   "interrupt",

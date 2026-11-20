@@ -76,8 +76,8 @@ export interface ToolOutcome {
   /**
    * Ends a stage round from a tool: submission accepted, chances used up, turn limit
    * or context ceiling. The runtime records the result, sends no further model request
-   * in this turn and finishes it completed. A runtime that cannot honour this must
-   * not declare ownsLoop.
+   * in this turn and finishes it completed. Only a runtime that declares toolEndsTurn
+   * honours this; review stages require it.
    */
   readonly endTurn?: true | undefined;
 }
@@ -174,13 +174,12 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   /** Text is an append-only delta. */
   z.strictObject({ ...eventFields, type: z.literal("text"), text: z.string() }),
   /**
-   * One event per model response that completes. It lists every tool call of that
-   * response and names its last block. The runtime emits it as soon as the response
-   * is known complete: at message stop, or at the first tool handler call of that
-   * message when the runtime calls handlers only after a response ends. It never
-   * waits on later frames. A frame of that response arriving after the event ends
-   * the turn with TurnFailed protocol-error, never a second or partial event.
-   * Turn usage totals also include
+   * One event per unit of model output the runtime can prove complete, a whole model
+   * response on Claude Code. It lists every tool call of that unit. The runtime emits it as soon as the unit is known
+   * complete: at message stop, or at the first tool handler call of that message when
+   * the runtime calls handlers only after a response ends. It never waits on later
+   * frames. A frame of that unit arriving after the event ends the turn with TurnFailed
+   * protocol-error, never a second or partial event. Turn usage totals also include
    * requests without message.finished: runtime retries, structured-output retries
    * and compaction.
    */
@@ -189,8 +188,13 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     type: z.literal("message.finished"),
     /** The runtime's native message id. */
     messageId: z.string().min(1),
-    /** The message's last assistant block, as an opaque resume.at for the same runtime; Claude Code uses its chain UUID. */
-    resumePoint: z.string().min(1),
+    /**
+     * The message's last assistant block, as an opaque resume.at for the same runtime; Claude Code
+     * uses its chain UUID. A runtime that declares resumeInTurn sets it on every message: Claude
+     * Code's own type requires it, and review stages refuse a message without it. A runtime that
+     * resumes only between turns leaves it out.
+     */
+    resumePoint: z.string().min(1).optional(),
     stopReason: z.enum([
       "end-turn",
       "tool-use",
@@ -209,8 +213,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     model: z.string().optional(),
     /**
      * Usage of this message's model request. Never sum with usage events; totals
-     * come only from those events. An ownsLoop runtime always fills this so a stage
-     * can read each request's input tokens for its context ceiling.
+     * come only from those events. A runtime that declares perMessageUsage always
+     * fills this, so a stage can read each request's input tokens for its context ceiling.
      */
     usage: CallUsage.optional(),
   }),
@@ -282,6 +286,9 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
      * Set when a turn ends on a tool-result carrier with no trailing assistant message; names the point to
      * resume or fork from. When set, it takes precedence over the turn's last message.finished resumePoint,
      * so a resume keeps the round's tool results.
+     *
+     * On a runtime without resumeInTurn, whose messages carry no resume point, a completed turn sets this
+     * to the turn's end: the only point it can resume or fork from.
      *
      * The receipt a resume point gives: a resume point (message.finished's, or this one when set) names a
      * point whose whole chain is in the native session. A completed turn.finished means every input given

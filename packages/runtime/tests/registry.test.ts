@@ -47,6 +47,9 @@ const policy: SessionPolicy = {
 };
 const capabilities: RuntimeCapabilities = {
   ownsLoop: true,
+  toolEndsTurn: true,
+  resumeInTurn: true,
+  perMessageUsage: true,
   resume: false,
   fork: false,
   interrupt: false,

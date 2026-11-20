@@ -47,6 +47,9 @@ const supportedAccount = (account: Account) =>
       );
 export const capabilities: RuntimeCapabilities = {
   ownsLoop: true,
+  toolEndsTurn: true,
+  resumeInTurn: true,
+  perMessageUsage: true,
   resume: true,
   fork: true,
   interrupt: true,

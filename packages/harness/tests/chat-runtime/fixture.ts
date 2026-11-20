@@ -81,6 +81,9 @@ export const account = (name = "subscription", folder = "shared") =>
   });
 export const caps: RuntimeCapabilities = {
   ownsLoop: true,
+  toolEndsTurn: true,
+  resumeInTurn: true,
+  perMessageUsage: true,
   resume: true,
   fork: true,
   steering: true,
@@ -102,9 +105,12 @@ export type Frame = {
   text?: string;
   calls?: Extract<RuntimeEvent, { type: "message.finished" }>["toolCalls"];
   failure?: import("@neuve/runtime").RuntimeFailure;
+  disposition?: "reusable" | "broken";
   delayHandler?: () => Promise<void>;
   resumePoint?: string;
   finishAfterResults?: string;
+  /** On a runtime without resumeInTurn, end the turn without the resume point the contract requires. */
+  omitTurnPoint?: true;
   modelUsage?: Pick<
     Extract<RuntimeEvent, { type: "usage" }>,
     "model" | "contextWindow" | "maxOutputTokens"
@@ -248,26 +254,47 @@ export class FakeSession {
           outcome: {
             status: "failed",
             failure: frame.failure,
-            disposition: "broken",
+            disposition: frame.disposition ?? "broken",
           },
         });
         return;
       }
       if (frame.text) this.emit({ type: "text", text: frame.text });
+      // A runtime without resumeInTurn names a point only at a completed turn's end.
+      const point = frame.resumePoint ?? `point-${this.fake.requests.length}`;
+      const inTurn = this.fake.capabilities.resumeInTurn;
       this.emit({
         type: "message.finished",
         messageId: `message-${this.fake.requests.length}`,
-        resumePoint: frame.resumePoint ?? `point-${this.fake.requests.length}`,
+        ...(inTurn ? { resumePoint: point } : {}),
         stopReason: frame.calls?.length ? "tool-use" : "end-turn",
         toolCalls: frame.calls ?? [],
-        usage: {
-          input: 10,
-          output: 4,
-          cacheRead: 2,
-          cacheWrite5m: 1,
-          cacheWrite1h: 0,
-        },
+        // A runtime without perMessageUsage reports usage only for the turn.
+        ...(this.fake.capabilities.perMessageUsage
+          ? {
+              usage: {
+                input: 10,
+                output: 4,
+                cacheRead: 2,
+                cacheWrite5m: 1,
+                cacheWrite1h: 0,
+              },
+            }
+          : {}),
       });
+      if (!this.fake.capabilities.perMessageUsage)
+        this.emit({
+          type: "usage",
+          scope: "turn",
+          usage: {
+            input: 10,
+            output: 4,
+            cacheRead: 2,
+            cacheWrite5m: 1,
+            cacheWrite1h: 0,
+          },
+          costUsd: null,
+        });
       if (frame.modelUsage) {
         this.emit({
           type: "usage",
@@ -284,7 +311,11 @@ export class FakeSession {
         });
       }
       if (!frame.calls?.length) {
-        this.emit({ type: "turn.finished", outcome: { status: "completed" } });
+        this.emit({
+          type: "turn.finished",
+          outcome: { status: "completed" },
+          ...(inTurn || frame.omitTurnPoint ? {} : { resumePoint: point }),
+        });
         return;
       }
       await frame.delayHandler?.();
