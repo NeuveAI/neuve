@@ -3,7 +3,8 @@
 // reads as plain prose in a list: a phrase link reads as its phrase and a bare local ID is dropped,
 // so no `[phrase](u.…)` markup or ID reaches the reader. A batch's waiting count and the unit its
 // desk opens on follow the Reviews load's rule: a unit waits until Records' closure decides it, a
-// batch of an older review asks for nothing, and the desk opens on the first unit that waits. The
+// batch of an older review asks for nothing, and the desk opens on the first human-required unit
+// that waits, else the first unit that waits (NEU-434). The
 // Records reads behind the standing run on real stores in `reviews-standing.test.ts`.
 import { expect, test } from "bun:test"
 import type { ReviewList } from "@neuve/records-core"
@@ -59,7 +60,7 @@ const standing: UnitStanding = {
   decided: new Map([["u2", "approve"]]),
 }
 
-test("a batch counts its lanes and what waits, and its desk opens on the first unit that waits", () => {
+test("a batch counts its lanes and what waits, and its desk opens on the first human-required unit that waits", () => {
   const summary = summaryOf(review, standing, new Set(), undefined)
   const batch = homeBatchOf(
     listed,
@@ -75,7 +76,8 @@ test("a batch counts its lanes and what waits, and its desk opens on the first u
   ])
   expect(batch.needYou).toBe(2)
   expect(batch.asked).toBe(3)
-  expect(batch.deskUnitId).toBe("u3")
+  // u4 before u3: human-required work first.
+  expect(batch.deskUnitId).toBe("u4")
   // No packet read: no digest, and the page still has the batch.
   expect(batch.digest).toBeUndefined()
 })

@@ -12,7 +12,14 @@ import { LANE_FACTS } from "./lane-facts"
 import type { DeskBatch, LaneFacts } from "./lane-facts"
 import { withoutLocalIds } from "./projection"
 import { readRecords } from "./records.server"
-import { LANE_ORDER, asks, laneOf, markOf, reviewsRead } from "./reviews.server"
+import {
+  LANE_ORDER,
+  asks,
+  entryUnitOf,
+  laneOf,
+  markOf,
+  reviewsRead,
+} from "./reviews.server"
 import type { UnitStanding } from "./reviews.server"
 
 /**
@@ -61,9 +68,6 @@ export const homeBatchOf = (
     counts.set(lane, (counts.get(lane) ?? 0) + 1)
   }
   const asked = newer ? [] : listed.units.filter(asks(standing))
-  const waiting = asked.find(
-    (unit) => markOf(standing, unit.unitId) === "waiting"
-  )
   const digest = plainDigest(packet?.digest?.digest)
   const toCheck = plainDigest(packet?.digest?.verification)
   const removes = packet
@@ -72,7 +76,9 @@ export const homeBatchOf = (
         .map((entry) => withoutLocalIds(entry.text).trim())
         .filter((text) => text !== "")
     : []
-  const deskUnitId = (waiting ?? listed.units.at(0))?.unitId
+  const deskUnitId =
+    (newer ? undefined : entryUnitOf(listed.units, standing)) ??
+    listed.units.at(0)?.unitId
   return {
     ...summary,
     // An older review asks for nothing: a newer one holds its units.
@@ -111,6 +117,8 @@ const packetsOf = (reviews: ReadonlyArray<Listed>) =>
 export async function homeLoad(options: {
   readonly page: number
   readonly filter: "all" | "waiting"
+  /** A cycle's own address: the list scoped to that one review. */
+  readonly cycle?: string | undefined
 }): Promise<HomeLoad> {
   const read = await reviewsRead(options)
   if (read.status === "empty") return read
@@ -121,11 +129,10 @@ export async function homeLoad(options: {
     const byId = new Map(
       (packet?.batches ?? []).map((batch) => [batch.batchId, batch])
     )
-    return {
-      ...summary,
-      batches: summary.batches.map((batch, at) => {
-        const own = listed?.batches.at(at)
-        return own
+    const batches = summary.batches.map((batch, at) => {
+      const own = listed?.batches.at(at)
+      return {
+        shown: own
           ? homeBatchOf(
               own,
               batch,
@@ -133,9 +140,21 @@ export async function homeLoad(options: {
               read.standing,
               summary.newer === true
             )
-          : { ...batch, lanes: [], asked: 0 }
-      }),
-    }
+          : { ...batch, lanes: [], asked: 0 },
+        required:
+          summary.newer !== true &&
+          (own?.units ?? []).some(
+            (unit) =>
+              laneOf(unit.lane) === "human-required" &&
+              asks(read.standing)(unit) &&
+              markOf(read.standing, unit.unitId) === "waiting"
+          ),
+      }
+    })
+    // A cycle's own address puts the batches a person must decide first.
+    if (options.cycle)
+      batches.sort((a, b) => Number(b.required) - Number(a.required))
+    return { ...summary, batches: batches.map(({ shown }) => shown) }
   })
   return { status: "ready", data: { ...read.data, reviews } }
 }

@@ -214,7 +214,7 @@ for (const mode of ["hosted", "floor"]) {
       const id = /id: "([a-f0-9]+)",\s*name: "sendDecision"/.exec(
         manifest,
       )?.[1];
-      const readId = /id: "([a-f0-9]+)",\s*name: "loadReviewCycle"/.exec(
+      const readId = /id: "([a-f0-9]+)",\s*name: "loadCycleEntry"/.exec(
         manifest,
       )?.[1];
       if (!id || !readId)

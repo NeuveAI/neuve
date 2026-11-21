@@ -1,10 +1,12 @@
 /**
  * The cycle addresses Ace's review cards open (contract section 5):
- * `/cycles/<cycle>` and `/cycles/<cycle>/desk` redirect to the cycle's first
- * batch and the unit it starts at, and keep the coding workspace's
- * `returnTo` on the way, so "Return to channel" survives a review opened in
- * its own tab. The loaders run as the router runs them, with Records' reads
- * replaced: a published cycle, one with no batch yet, and an unknown one.
+ * `/cycles/<cycle>` is the home list scoped to that review, so a person sees
+ * every batch and the whole cycle's lanes, never only its first batch
+ * (NEU-434); `/cycles/<cycle>/desk` opens the unit the cycle's desk entry
+ * chooses across all its batches. Both keep the coding workspace's
+ * `returnTo`, so "Return to channel" survives a review opened in its own
+ * tab. The loaders run as the router runs them, with the BFF's reads
+ * replaced: a cycle with a unit to open, one with none, and a malformed one.
  * The replacement is a module mock, which Bun never undoes in a process, so
  * the loaders run in a child process (`fixtures/cycle-route-loaders.ts`) and
  * this file reads what each one did.
@@ -38,11 +40,26 @@ beforeAll(async () => {
 }, 120_000)
 
 describe("/cycles/<cycle>", () => {
-  test("opens the cycle's first batch, keeping returnTo", () => {
-    expect(results.cycleWithReturn).toMatchObject({
+  test("is the home list scoped to the cycle, not a redirect to its first batch", () => {
+    expect(results.cycle).toEqual({
+      returned: { status: "ready", data: { reviews: [] } },
+    })
+    expect(results.cycleAsked).toEqual({
+      data: { page: 1, filter: "all", cycle: CYCLE },
+    })
+  })
+
+  test("a malformed cycle is not found", () => {
+    expect(results.cycleMalformed).toEqual({ notFound: true })
+  })
+})
+
+describe("/cycles/<cycle>/desk", () => {
+  test("opens the unit the cycle's desk entry chooses, keeping returnTo", () => {
+    expect(results.deskWithReturn).toMatchObject({
       redirect: {
-        to: "/batch/$batchId",
-        params: { batchId: "batch-1" },
+        to: "/review/$unitId",
+        params: { unitId: "unit-3" },
         search: { returnTo: RETURN },
         replace: true,
       },
@@ -50,36 +67,15 @@ describe("/cycles/<cycle>", () => {
   })
 
   test("without returnTo, the redirect carries none", () => {
-    expect(results.cycleWithoutReturn).toMatchObject({
-      redirect: { to: "/batch/$batchId" },
-    })
     const redirect =
-      "redirect" in results.cycleWithoutReturn
-        ? results.cycleWithoutReturn.redirect
+      "redirect" in results.deskWithoutReturn
+        ? results.deskWithoutReturn.redirect
         : undefined
     expect(redirect?.search).toEqual({ returnTo: undefined })
   })
 
-  test("a cycle with no batch yet stays on its own page", () => {
-    expect(results.cycleWithoutBatch).toEqual({
-      returned: { cycle: { batches: [] } },
-    })
-  })
-})
-
-describe("/cycles/<cycle>/desk", () => {
-  test("opens the unit the first batch starts at, keeping returnTo", () => {
-    expect(results.deskWithReturn).toMatchObject({
-      redirect: {
-        to: "/review/$unitId",
-        params: { unitId: "unit-1" },
-        search: { returnTo: RETURN },
-      },
-    })
-  })
-
-  test("with no batch to open, goes to the cycle's page, keeping returnTo", () => {
-    expect(results.deskWithoutCycle).toMatchObject({
+  test("with no unit to open, goes to the cycle's address, keeping returnTo", () => {
+    expect(results.deskWithoutUnit).toMatchObject({
       redirect: {
         to: "/cycles/$cycle",
         params: { cycle: CYCLE },

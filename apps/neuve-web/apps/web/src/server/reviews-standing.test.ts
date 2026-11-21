@@ -29,6 +29,7 @@ import {
 } from "../../../../../../packages/records-core/tests/support"
 
 import { deskRead, successorOf } from "./desk.server"
+import { LANE_FACTS } from "./lane-facts"
 import { standingOf, summaryOf, waitingOf } from "./reviews.server"
 import type { UnitStanding } from "./reviews.server"
 
@@ -337,8 +338,8 @@ test("Records' closure decides what waits: an agent's disposition closes human-s
   const across = waitingOf(listed, standing)
   expect(across.units).toBe(2)
   expect(across.waiting.map((entry) => entry.cycleId)).toEqual([review.cycleId])
-  // Open next opens the first waiting unit in packet order: the undecided human-suggested one.
-  expect(across.nextUnitId).toBe(review.unitIds[1])
+  // Open next opens the first human-required unit that waits, past the human-suggested one before it.
+  expect(across.nextUnitId).toBe(review.unitIds[2])
 })
 
 /** A new-shape review from the records lane's fixture, stored with its content. */
@@ -457,6 +458,37 @@ test("an older review of a branch counts nothing; the newer counts its own, and 
     [moved.cycleId, other.cycleId].sort()
   )
   expect(across.nextUnitId).toBe(moved.unitIds[0])
+})
+
+test("a review a later review's range holds counts nothing, with no lineage between them", async () => {
+  // Why (NEU-433): a pull request reviewed two or three times must not multiply the wait.
+  const first = oldReview("aaaaaaa", [
+    { lane: "human-required" },
+    { lane: "human-suggested" },
+  ])
+  const later = oldReview("bbbbbbb", [{ lane: "human-required" }])
+  const { listed, standing } = await read(
+    await seed([first, later]),
+    Effect.gen(function* () {
+      const listed = (yield* ReviewList.reviews({ limit: 200 })).reviews
+      return {
+        listed,
+        standing: yield* standingOf(
+          listed,
+          LANE_FACTS,
+          new Set([first.cycleId])
+        ),
+      }
+    })
+  )
+  expect(row(listed, standing, first.cycleId)).toMatchObject({
+    newer: true,
+    gate: [],
+  })
+  expect(waitingOf(listed, standing)).toMatchObject({
+    units: 1,
+    nextUnitId: later.unitIds[0],
+  })
 })
 
 test("a review a newer one took over in part counts the units it still holds", async () => {

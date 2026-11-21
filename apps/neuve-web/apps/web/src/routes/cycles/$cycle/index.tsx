@@ -1,42 +1,49 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute, notFound, useNavigate } from "@tanstack/react-router"
 import { Ulid } from "@neuve/records-schema"
+import { HomePage } from "@workspace/ui/neuve/home/home-screen"
+import { ReviewsSkeleton } from "@workspace/ui/neuve/states/skeletons"
 
 import { ReturnSearch } from "@/components/return-search"
-import { ReviewCycle } from "@/components/review-cycle"
 import { PENDING, RouteError } from "@/components/route-states"
-import { loadReviewCycle } from "@/server/review-cycle"
+import { loadHome } from "@/server/home-load"
 
 /**
- * A review cycle's batch overview (decision 12.23: a finished review card
- * opens it first), at the address Ace's review cards link to:
+ * A review cycle's own address (decision 12.23: a finished review card
+ * opens it first), the one Ace's review cards link to:
  * `/review/<project>/cycles/<cycle>` under Ace, `/cycles/<cycle>` on the
- * app's own address. Once Records has published the cycle's batches it is
- * the first batch's overview; until then the cycle itself, which the live
- * stream reloads as Records moves.
+ * app's own address. It is the home list scoped to that one review: every
+ * batch with its lanes and what waits, the review's lane counts across all
+ * of them, and "Open next" on its first human-required unit that waits. The
+ * live stream reloads it as Records moves.
  */
 export const Route = createFileRoute("/cycles/$cycle/")({
-  // The coding workspace's return address goes on with the redirect.
   validateSearch: ReturnSearch,
-  loaderDeps: ({ search }) => ({ returnTo: search.returnTo }),
-  loader: async ({ params, deps }) => {
-    if (!Ulid.safeParse(params.cycle).success) return { cycle: undefined }
-    const cycle = await loadReviewCycle({ data: { cycle: params.cycle } })
-    const first = cycle?.batches[0]
-    if (first)
-      throw redirect({
-        to: "/batch/$batchId",
-        params: { batchId: first.id },
-        search: { returnTo: deps.returnTo },
-        replace: true,
-      })
-    return { cycle }
+  loader: async ({ params }) => {
+    if (!Ulid.safeParse(params.cycle).success) throw notFound()
+    return loadHome({ data: { page: 1, filter: "all", cycle: params.cycle } })
   },
   head: () => ({ meta: [{ title: "Review · Neuve" }] }),
   ...PENDING,
+  pendingMs: 1000,
+  pendingComponent: ReviewsSkeleton,
   errorComponent: RouteError,
   component: CycleRoute,
 })
 
 function CycleRoute() {
-  return <ReviewCycle cycle={Route.useLoaderData().cycle} />
+  const { returnTo } = Route.useSearch()
+  const navigate = useNavigate()
+  return (
+    <HomePage
+      load={Route.useLoaderData()}
+      // Either filter leaves the one review for the whole list.
+      onFilterChange={(filter) =>
+        void navigate({
+          to: "/",
+          search: { filter: filter === "all" ? "all" : undefined, returnTo },
+          hash: "reviews",
+        })
+      }
+    />
+  )
 }

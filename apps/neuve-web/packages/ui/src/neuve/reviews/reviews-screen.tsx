@@ -186,7 +186,7 @@ function pageOf(data: Paged, page: number): NeuveDestination {
   return {
     to: "reviews",
     page,
-    filter: data.filter === "waiting" ? "waiting" : undefined,
+    filter: data.filter === "all" ? "all" : undefined,
     section: "reviews",
   }
 }

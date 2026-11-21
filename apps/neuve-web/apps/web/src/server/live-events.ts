@@ -92,9 +92,11 @@ const shownReview = (loaderData: unknown) => {
  *
  * - `"all"` concerns every page.
  * - The Reviews list and the start page (`/`) show every review and the
- *   running state of "Start a review": every change concerns them.
- * - A review's own page (`/cycles/$cycle`) shows it running: a change of
- *   its cycle or of the jobs.
+ *   running state of "Start a review": every change concerns them. So does
+ *   a review's own address (`/cycles/$cycle`), the list scoped to it: a
+ *   later review can take its work over.
+ * - A review's desk address (`/cycles/$cycle/desk`) waits for it to open:
+ *   a change of its cycle or of the jobs.
  * - A batch or unit page: a change of the review its loader data names; a
  *   packet published in a later review whose lineage names it (`takenOver`),
  *   which can give the page its "Newer review" link; or the jobs while
@@ -113,8 +115,8 @@ export function pageConcerned(
   if (change === "all" || page === undefined) return true
   switch (page.routeId) {
     case "/":
-      return true
     case "/cycles/$cycle/":
+      return true
     case "/cycles/$cycle/desk": {
       const cycle = page.params.cycle
       return change.jobs || cycle === undefined || change.cycles.includes(cycle)

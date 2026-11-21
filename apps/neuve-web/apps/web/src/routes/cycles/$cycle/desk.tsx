@@ -2,31 +2,27 @@ import { createFileRoute, redirect } from "@tanstack/react-router"
 import { Ulid } from "@neuve/records-schema"
 
 import { ReturnSearch } from "@/components/return-search"
-import { loadReviewCycle } from "@/server/review-cycle"
-import { loadOverview } from "@/server/review-loads"
+import { loadCycleEntry } from "@/server/review-cycle"
 
 /**
  * A review cycle's review desk (decision 12.23: the card's second link), at
- * `/cycles/<cycle>/desk` under the app's base: the unit its first batch's
- * overview starts the review at. A cycle with no batch to open yet shows
- * the cycle's own page.
+ * `/cycles/<cycle>/desk` under the app's base: across all the cycle's
+ * batches, its first human-required unit that waits, else its first unit
+ * that waits, else its first unit (`cycleEntry`). A cycle with no unit to
+ * open yet shows the cycle's own address.
  */
 export const Route = createFileRoute("/cycles/$cycle/desk")({
   // The coding workspace's return address goes on with the redirect.
   validateSearch: ReturnSearch,
   loaderDeps: ({ search }) => ({ returnTo: search.returnTo }),
   loader: async ({ params, deps }) => {
-    const cycle = Ulid.safeParse(params.cycle).success
-      ? await loadReviewCycle({ data: { cycle: params.cycle } })
+    const unitId = Ulid.safeParse(params.cycle).success
+      ? await loadCycleEntry({ data: { cycle: params.cycle } })
       : undefined
-    const first = cycle?.batches[0]
-    const overview = first
-      ? await loadOverview({ data: { batchId: first.id } })
-      : undefined
-    if (overview?.status === "ready")
+    if (unitId)
       throw redirect({
         to: "/review/$unitId",
-        params: { unitId: overview.data.firstUnitId },
+        params: { unitId },
         search: { returnTo: deps.returnTo },
         replace: true,
       })

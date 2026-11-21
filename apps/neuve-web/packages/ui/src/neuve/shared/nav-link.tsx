@@ -12,11 +12,11 @@ import * as React from "react"
  * a mock page only ever links to mock pages.
  */
 export type NeuveDestination =
-  /** Every review of the repository, `/` (a page and a filter of it). */
+  /** The repository's reviews, `/`: a page of "Waiting on you", or of every review (`all`). */
   | {
       to: "reviews"
       page?: number
-      filter?: "waiting"
+      filter?: "all"
       /** A section of the page, e.g. the list. */
       section?: "reviews"
     }
