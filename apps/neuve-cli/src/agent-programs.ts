@@ -130,7 +130,7 @@ export const programNamed = (id: AgentHarness) =>
 export const agentsFlag = (
   value: string | undefined,
   none = true,
-): ReadonlyArray<AgentHarness> | undefined => {
+): AgentHarness[] | undefined => {
   if (value === undefined) return undefined;
   if (none && value === "none") return [];
   const names = [
@@ -148,8 +148,15 @@ export const agentsFlag = (
       throw new Error(
         `--agents takes ${expected}, not ${JSON.stringify(name)}.`,
       );
-  return names as ReadonlyArray<AgentHarness>;
+  return names as AgentHarness[];
 };
+
+/** A look at the agent programs, as setup takes it: where to look is always given. */
+export type LookForPrograms = (
+  look: Look,
+  surroundings: Surroundings,
+  ids?: ReadonlyArray<AgentHarness>,
+) => Promise<ReadonlyArray<Finding>>;
 
 /** Looks for each program in `ids` (every one by default), in the list's order. */
 export const findAgentPrograms = async (

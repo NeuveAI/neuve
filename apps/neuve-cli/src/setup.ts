@@ -11,6 +11,7 @@ import {
   foundIds,
   machineOffers,
   offerInstall,
+  type LookForPrograms,
   type OfferContext,
 } from "./agent-programs.ts";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
@@ -258,7 +259,7 @@ const offerContext = (): OfferContext => ({
 export const setUpAgentPrograms = async (
   ids: ReadonlyArray<AgentHarness>,
   context: OfferContext = offerContext(),
-  look: typeof findAgentPrograms = findAgentPrograms,
+  look: LookForPrograms = findAgentPrograms,
 ) => {
   if (ids.length === 0) return [];
   const findings = [...(await look("find", { path: context.path }, ids))];
