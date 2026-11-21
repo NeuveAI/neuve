@@ -144,6 +144,7 @@ export namespace Event {
 			content: Array<Content | Content.Tool>;
 			/** Execution identity keeps adjacent turns by the same agent separate. */
 			run?: string;
+			agent?: AgentSelection;
 		};
 
 		/** Special spans within text content; gaps between parts are plain text. */
