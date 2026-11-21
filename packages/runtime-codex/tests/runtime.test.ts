@@ -159,6 +159,41 @@ describe("the account's states", () => {
     expect(later).toBeString();
   });
 
+  // Why: setup runs discovery on every setup, so a path already stored (by an earlier setup or the
+  // person) must be asked first and stop the search, and doctor must start only what run time would.
+  test("discovery asks a stored path first and stops there; scan: false asks only that", async () => {
+    const root = scratchFolder();
+    const stranger = file(join(root, "npm"));
+    const app = file(join(root, "app"));
+    const fake = fakeWith([stranger]);
+    const found = await Effect.runPromise(
+      discoverCodex({
+        environment: { PATH: join(root, "npm") },
+        apps: () => [app],
+        setting: app,
+      }).pipe(Effect.provide(fake.layer)),
+    );
+    expect(found.tried.map((t) => [t.candidate.found, t.kind])).toEqual([
+      ["set", "codex"],
+    ]);
+    expect(fake.processes.map((p) => p.program)).toEqual([app]);
+    const gone = join(root, "gone", "codex");
+    const checked = await Effect.runPromise(
+      discoverCodex({
+        environment: { PATH: join(root, "npm") },
+        apps: () => {
+          throw new Error("doctor must not look in the apps");
+        },
+        setting: gone,
+        scan: false,
+      }).pipe(Effect.provide(fakeWith([stranger]).layer)),
+    );
+    expect(checked.tried.map((t) => [t.candidate.path, t.kind])).toEqual([
+      [gone, "missing"],
+    ]);
+    expect(checked.appsLookedFor).toBe(false);
+  });
+
   test("discovery asks every PATH codex, then the apps, and returns the first that answers as Codex", async () => {
     const root = scratchFolder();
     const stranger = file(join(root, "npm"));
@@ -406,11 +441,12 @@ describe("OpenAI's apps", () => {
   };
 
   // On every system: the rule for the manifest, with the property list read by a stand-in.
-  test("the program the manifest declares, by identifier; an unknown layout and an entry outside bin are skipped", () => {
+  test("the program the manifest declares, by identifier; no manifest, an unknown layout and an entry outside bin are reported and skipped", () => {
     const { folder, good } = apps();
     expect(read(folder, fromXml)).toEqual({
       found: [good],
       skipped: [
+        `${join(folder, "Bare.app")}: it has no manifest naming its Codex`,
         `${join(folder, "Later.app")}: a layout this Neuve does not know`,
         `${join(folder, "Outside.app")}: a layout this Neuve does not know`,
       ],

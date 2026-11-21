@@ -141,6 +141,10 @@ export const inApps = (
       }
     })
     .flatMap((app) => {
+      // The identifier first, so an app of OpenAI's without a manifest is reported, not passed over.
+      const identifier = identifierOf(app);
+      if (identifier === undefined || !program.identifiers.includes(identifier))
+        return [];
       const resources = join(app, "Contents", "Resources");
       let manifest: string | undefined;
       try {
@@ -148,12 +152,12 @@ export const inApps = (
           .map((entry) => join(resources, entry, program.manifest))
           .find(existsSync);
       } catch {
+        manifest = undefined;
+      }
+      if (manifest === undefined) {
+        report(app, "it has no manifest naming its Codex");
         return [];
       }
-      if (manifest === undefined) return [];
-      const identifier = identifierOf(app);
-      if (identifier === undefined || !program.identifiers.includes(identifier))
-        return [];
       const folder = join(manifest, "..");
       let parsed: z.infer<typeof Manifest>;
       try {
@@ -187,13 +191,14 @@ export const runtimeCandidates = (
 };
 
 /**
- * Discovery's candidates, for the one explicit step that looks for Codex and stores it
- * (`neuve auth program codex --find`): every `codex` on the PATH, in order, then OpenAI's apps,
- * each file once.
+ * Discovery's candidates, for the one step that looks for Codex and stores it (`neuve auth
+ * program codex --find`, which setup also runs): the path the person already set, then every
+ * `codex` on the PATH, in order, then OpenAI's apps, each file once.
  */
 export const discoveryCandidates = (
   path: string | undefined,
   apps: () => ReadonlyArray<string>,
+  setting?: string,
 ): ReadonlyArray<Candidate> => {
   const seen = new Set<string>();
   const list: Candidate[] = [];
@@ -203,6 +208,7 @@ export const discoveryCandidates = (
     seen.add(key);
     list.push({ path: file, found });
   };
+  if (setting !== undefined) add(setting, "set");
   for (const file of onPath(path)) add(file, "path");
   for (const file of apps()) add(file, "app");
   return list;

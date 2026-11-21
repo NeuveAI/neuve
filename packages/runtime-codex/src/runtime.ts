@@ -176,11 +176,12 @@ const modelsOf = (connection: CodexConnection) =>
   });
 
 /**
- * Discovery, the one explicit step that looks for Codex (`neuve auth program codex --find`, and
- * setup later): every `codex` on the PATH, then OpenAI's apps by identifier and manifest, each
- * asked the version question as the app server in order. Every answer is returned, with the
- * first that answered as Codex, for the caller to store as the account's program. Status checks
- * and sessions never run it.
+ * Discovery, the one step that looks for Codex (`neuve auth program codex --find`, which setup
+ * runs too): the path already set, then every `codex` on the PATH, then OpenAI's apps by
+ * identifier and manifest, each asked the version question as the app server in order. Every
+ * answer is returned, with the first that answered as Codex, for the caller to store as the
+ * account's program. With `scan: false` (doctor) only what run time would ask is asked: the set
+ * path, else the PATH's one `codex`. Status checks and sessions never run it.
  */
 export const discoverCodex = (
   config: Pick<
@@ -188,18 +189,26 @@ export const discoverCodex = (
     "environment" | "home" | "apps" | "broken"
   > & {
     readonly codexHome?: string | undefined;
+    readonly setting?: string | undefined;
+    readonly scan?: boolean | undefined;
   } = {},
 ) =>
   Effect.gen(function* () {
     const environment = config.environment ?? process.env;
     const skipped: Array<{ readonly app: string; readonly why: string }> = [];
-    const list = discoveryCandidates(environment.PATH, () =>
-      config.apps !== undefined
-        ? config.apps()
-        : inApps(applicationFolders(config.home), (app, why) =>
-            skipped.push({ app, why }),
-          ),
-    );
+    const scan = config.scan !== false;
+    const list = scan
+      ? discoveryCandidates(
+          environment.PATH,
+          () =>
+            config.apps !== undefined
+              ? config.apps()
+              : inApps(applicationFolders(config.home), (app, why) =>
+                  skipped.push({ app, why }),
+                ),
+          config.setting,
+        )
+      : runtimeCandidates(config.setting, environment.PATH);
     const { tried, found } = yield* findCodex(
       {
         candidates: list,
@@ -213,7 +222,7 @@ export const discoverCodex = (
       tried,
       found: found?.asked,
       skippedApps: skipped,
-      appsLookedFor: config.apps !== undefined || appsLookedFor(),
+      appsLookedFor: scan && (config.apps !== undefined || appsLookedFor()),
     };
   });
 

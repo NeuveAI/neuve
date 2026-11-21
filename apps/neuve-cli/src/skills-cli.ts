@@ -22,6 +22,17 @@ import {
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { PacketView } from "@neuve/harness";
+import {
+  AGENT_IDS,
+  agentsFlag,
+  describeFinding,
+  findAgentPrograms,
+  AGENT_PROGRAMS,
+  installAdvice,
+  programNamed,
+  type Finding,
+} from "./agent-programs.ts";
+import type { AgentHarness } from "./capture/agent-hooks.ts";
 import { CLI_VERSION } from "./cli-version.ts";
 import {
   SKILL_NAME,
@@ -37,7 +48,8 @@ import {
 } from "./skill-bundle.ts";
 
 /**
- * `neuve skills`: installs the `neuve` agent skill into Claude Code's and Codex's skill folders.
+ * `neuve skills`: installs the `neuve` agent skill into the skill folders of the agent programs
+ * found ([the one list](agent-programs.ts)), or of those `--agents` names.
  *
  *   user scope (default)  Claude Code  ~/.claude/skills/neuve/ ($CLAUDE_CONFIG_DIR/skills/neuve/)
  *                         Codex        ~/.agents/skills/neuve/
@@ -59,13 +71,9 @@ import {
  */
 export const RECEIPT = ".neuve-skill.json";
 
-const AGENTS = ["claude-code", "codex"] as const;
-export type Agent = (typeof AGENTS)[number];
+export type Agent = AgentHarness;
 export type Scope = "user" | "repo";
-const AGENT_NAMES: Record<Agent, string> = {
-  "claude-code": "Claude Code",
-  codex: "Codex",
-};
+const agentName = (agent: Agent) => programNamed(agent).name;
 
 const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 export const receiptSchema = z.strictObject({
@@ -105,6 +113,8 @@ export type SkillsContext = Readonly<{
   version: string;
   /** The skill this CLI carries, or the places it looked. */
   source: () => Promise<SkillSource>;
+  /** The agent programs on this machine, for an install that names none (`--agents`). */
+  programs: () => Promise<ReadonlyArray<Finding>>;
   /** Whether a person can answer a question: standard input and output are a terminal. */
   isTerminal: boolean;
   /** Prints the question and reads one line; null at the end of input. */
@@ -210,6 +220,7 @@ export const defaultSkillsContext = (): SkillsContext => {
     cwd: process.cwd(),
     version: CLI_VERSION,
     source: () => findSkillSource(),
+    programs: () => findAgentPrograms("check"),
     isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
     ask: readLine,
     out: async (text) => {
@@ -254,7 +265,7 @@ export const skillFolder = (
 };
 
 const label = (target: Target) =>
-  `${AGENT_NAMES[target.agent]} (${target.scope === "user" ? "user" : "repository"})`;
+  `${agentName(target.agent)} (${target.scope === "user" ? "user" : "repository"})`;
 
 /**
  * In the repo scope, refuses unless every folder from the repository down to `neuve/` that exists
@@ -780,25 +791,8 @@ const describe = (plan: TargetPlan, verb: "install" | "uninstall") => {
   return lines;
 };
 
-const parseAgents = (value: string | undefined): ReadonlyArray<Agent> => {
-  if (value === undefined) return AGENTS;
-  const names = [
-    ...new Set(
-      value
-        .split(",")
-        .map((name) => name.trim())
-        .filter((name) => name !== ""),
-    ),
-  ];
-  if (names.length === 0)
-    throw new Error("--agents takes claude-code, codex or both.");
-  for (const name of names)
-    if (!(AGENTS as ReadonlyArray<string>).includes(name))
-      throw new Error(
-        `--agents takes claude-code, codex or both, not ${JSON.stringify(name)}.`,
-      );
-  return names as ReadonlyArray<Agent>;
-};
+/** `--agents` for the skill: named programs, never none. Undefined when not given. */
+const parseAgents = (value: string | undefined) => agentsFlag(value, false);
 
 const gitTopLevel = async (path: string) => {
   const child = Bun.spawn(["git", "-C", path, "rev-parse", "--show-toplevel"], {
@@ -826,8 +820,9 @@ const repositoryFor = async (cwd: string, flag: string | undefined) => {
 const targetsOf = async (
   context: SkillsContext,
   values: Readonly<{ agents?: string; scope?: string; repo?: string }>,
+  /** For an install that names none: the programs found, and those whose skill is already here. */
+  look = false,
 ): Promise<ReadonlyArray<Target>> => {
-  const agents = parseAgents(values.agents);
   const scope = values.scope ?? "user";
   if (scope !== "user" && scope !== "repo")
     throw new Error(
@@ -839,12 +834,50 @@ const targetsOf = async (
     scope === "repo"
       ? await repositoryFor(context.cwd, values.repo)
       : undefined;
+  const agents =
+    parseAgents(values.agents) ??
+    (look
+      ? await keptAgents(context, await context.programs(), scope, repository)
+      : AGENT_IDS);
   return agents.map((agent) => ({
     agent,
     scope,
     folder: skillFolder(context, agent, scope, repository),
     ...(repository === undefined ? {} : { within: repository }),
   }));
+};
+
+/**
+ * The agents a skill install covers when none is named: those found here, and every one whose
+ * skill Neuve already installed in this scope, so a program not found never leaves its copy stale.
+ * Each one not found is said so.
+ */
+const keptAgents = async (
+  context: SkillsContext,
+  findings: ReadonlyArray<Finding>,
+  scope: Scope,
+  repository?: string,
+) => {
+  const kept: Agent[] = [];
+  for (const finding of findings) {
+    const agent = finding.program.id;
+    if (finding.found !== undefined) {
+      kept.push(agent);
+      continue;
+    }
+    const installed =
+      (await inspectFolder(skillFolder(context, agent, scope, repository)))
+        .kind === "ours";
+    if (installed) kept.push(agent);
+    await context.out(
+      `${describeFinding(finding)}\n${
+        installed
+          ? `Its skill is already installed, so it is kept up to date.`
+          : `Its skill is not installed: ${installAdvice(finding)}, or name it with --agents.`
+      }\n`,
+    );
+  }
+  return kept;
 };
 
 const requireSource = async (context: SkillsContext) => {
@@ -857,9 +890,7 @@ const requireSource = async (context: SkillsContext) => {
 };
 
 const names = (plans: ReadonlyArray<TargetPlan>) =>
-  [...new Set(plans.map((plan) => AGENT_NAMES[plan.target.agent]))].join(
-    " and ",
-  );
+  [...new Set(plans.map((plan) => agentName(plan.target.agent)))].join(" and ");
 
 const LATER = "To install the skill later, run neuve skills install.";
 
@@ -870,6 +901,12 @@ const install = async (
   mode: "install" | "dry-run" | "offer",
 ) => {
   const { bundle } = await requireSource(context);
+  if (targets.length === 0) {
+    await context.out(
+      "No agent program was found, so the skill wasn't installed. Name one with --agents to install it anyway.\n",
+    );
+    return 0;
+  }
   const plans = await Promise.all(
     targets.map((target) => planInstall(target, bundle)),
   );
@@ -962,7 +999,7 @@ export const inspectInstalled = async (
   for (const scope of repository === undefined
     ? (["user"] as const)
     : (["user", "repo"] as const))
-    for (const agent of AGENTS)
+    for (const agent of AGENT_IDS)
       targets.push({
         agent,
         scope,
@@ -1160,8 +1197,7 @@ const skillCheck = async (
     return {
       check: "agent skill",
       status: "ok",
-      detail:
-        "not installed. To teach Claude Code and Codex to use Neuve, run neuve skills install",
+      detail: `not installed. To teach ${AGENT_PROGRAMS.map((program) => program.name).join(" and ")} to use Neuve, run neuve skills install`,
     };
   return {
     check: "agent skill",
@@ -1181,6 +1217,8 @@ export const offerSkillsAfterSetup = async (
   input: Readonly<{
     /** Setup's folder for this repository's state, where the marker goes. */
     stateDirectory: string;
+    /** The agent programs setup found; the skill is offered for those, and kept current wherever it is installed. */
+    agents: ReadonlyArray<Agent>;
     context?: SkillsContext;
   }>,
 ) => {
@@ -1191,10 +1229,20 @@ export const offerSkillsAfterSetup = async (
     if ((await lstatIfPresent(marker)) !== null) return;
     const source = await context.source();
     if (!source.found) return;
+    // A skill already installed is kept up to date even when setup didn't find its program.
+    const installed = await keptAgents(
+      { ...context, out: async () => {} },
+      AGENT_PROGRAMS.filter(
+        (program) => !input.agents.includes(program.id),
+      ).map((program) => ({ program, lines: [], strangers: [] })),
+      "user",
+    );
+    const agents = [...input.agents, ...installed];
+    if (agents.length === 0) return;
     await context.out("\n");
     await install(
       context,
-      AGENTS.map((agent) => ({
+      agents.map((agent) => ({
         agent,
         scope: "user" as const,
         folder: skillFolder(context, agent, "user"),
@@ -1225,7 +1273,9 @@ export const SKILLS_HELP = `Usage:
               is set) and ~/.agents/skills/neuve/ for Codex. The repo scope writes
               <repo>/.claude/skills/neuve/ and <repo>/.agents/skills/neuve/, for a team that keeps
               the skill with its code (--repo defaults to the current repository). Running it
-              again updates the skill to this neuve's version.
+              again updates the skill to this neuve's version. Without --agents it installs for
+              the agent programs found here: claude on the PATH, and the Codex the codex
+              account runs (asked its version, once), and says which were not found.
               It writes only inside those neuve/ folders, with a receipt (.neuve-skill.json) that
               names each file, and never changes agent settings, hooks, CLAUDE.md or AGENTS.md.
               A neuve/ folder Neuve didn't write is refused and left as it is.
@@ -1286,7 +1336,7 @@ const runCommand = async (
     });
     if (command === "uninstall" && values.offer === true)
       throw new Error("--offer goes with neuve skills install.");
-    const targets = await targetsOf(context, values);
+    const targets = await targetsOf(context, values, command === "install");
     if (command === "uninstall")
       return uninstall(context, targets, values["dry-run"] === true);
     if (values["dry-run"] === true && values.offer === true)

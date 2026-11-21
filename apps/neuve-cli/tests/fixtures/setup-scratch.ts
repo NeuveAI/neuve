@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { graphTestPrerequisite } from "../../../../scripts/graph-test-prerequisite.ts";
 
 export const CHECKOUT = resolve(import.meta.dir, "../../../..");
@@ -66,6 +66,12 @@ export const scratch = async (parent = tmpdir()) => {
   };
   git("init", "-q");
   await commit("a.ts", "export const a = 1;\n");
+  const stubs = join(root, "agent-stubs");
+  await mkdir(stubs);
+  for (const name of ["claude", "codex"]) {
+    await writeFile(join(stubs, name), "#!/bin/sh\nexit 1\n");
+    await chmod(join(stubs, name), 0o755);
+  }
   // From source, setup records the neuve it is told; this one only has to answer.
   const copy = join(root, "neuve");
   await writeFile(copy, "#!/bin/sh\necho 'neuve 0.1.0'\n");
@@ -73,7 +79,8 @@ export const scratch = async (parent = tmpdir()) => {
   const env = (extra: Record<string, string> = {}) => ({
     HOME: home,
     XDG_CONFIG_HOME: join(home, ".config"),
-    PATH: process.env["PATH"] ?? "",
+    // Stand-ins first, so doctor run here never starts this machine's Claude Code or Codex.
+    PATH: `${stubs}${delimiter}${process.env["PATH"] ?? ""}`,
     TMPDIR: root,
     NEUVE_TEST_PROCESS: "1",
     NEUVE_BUDGET_DIRECTORY: join(root, "budget"),
@@ -108,6 +115,9 @@ export const scratch = async (parent = tmpdir()) => {
         copy,
         "--graph-binary",
         engine,
+        // These tests are about setup itself; the agent programs have their own.
+        "--agents",
+        "none",
       ],
       extra,
     );

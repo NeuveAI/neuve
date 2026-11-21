@@ -181,14 +181,28 @@ test.skipIf(prerequisite.skip)(
     expect(built.code, built.stderr).toBe(0);
     await mkdir(join(prefix, "lib/neuve"), { recursive: true });
     await symlink(ENGINE, join(prefix, "lib/neuve/entire-graph"));
-    const first = await run([cli, "setup", "--repo", repository]);
+    const first = await run([
+      cli,
+      "setup",
+      "--repo",
+      repository,
+      "--agents",
+      "none",
+    ]);
     expect(first.code, first.stderr).toBe(0);
     // The engine an earlier setup recorded is gone, as after a reinstall elsewhere.
     await writeInstallation(repository, {
       cliBinary: cli,
       graphBinary: join(root, "gone/entire-graph"),
     });
-    const again = await run([cli, "setup", "--repo", repository]);
+    const again = await run([
+      cli,
+      "setup",
+      "--repo",
+      repository,
+      "--agents",
+      "none",
+    ]);
     expect(again.code, again.stderr).toBe(0);
     expect(await readInstallation(repository)).toMatchObject({
       cliBinary: await realpath(cli),
@@ -281,6 +295,8 @@ test.skipIf(prerequisite.skip)(
         copy,
         "--graph-binary",
         ENGINE,
+        "--agents",
+        "none",
       ]);
     const refused = await setup("chatgpt");
     expect(refused.code).toBe(1);

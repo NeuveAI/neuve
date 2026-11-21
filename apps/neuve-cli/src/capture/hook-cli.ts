@@ -17,7 +17,7 @@ import {
   type AgentHarness,
   type AgentHookEvent,
 } from "./agent-hooks.ts";
-import { hookLogPath, readCaptureConfig } from "./config.ts";
+import { captureConfigPath, hookLogPath, readCaptureConfig } from "./config.ts";
 import { holdWorkerStart } from "../version-skew.ts";
 import {
   TRAILER_HOOK,
@@ -96,7 +96,16 @@ export const runHook = async (
     if (Exit.isFailure(located)) return 0;
     location = located.value;
     const config = await readCaptureConfig(location);
-    if (config === undefined) return 0;
+    if (config === undefined) {
+      // No file is no capture; one that can't be read is a failure, said in the hooks' log.
+      if (await Bun.file(captureConfigPath(location)).exists())
+        await logFailure(
+          location,
+          hook,
+          `${captureConfigPath(location)} can't be read; neuve setup hooks writes it again`,
+        );
+      return 0;
+    }
     const at = location;
 
     if (harness === "git") {

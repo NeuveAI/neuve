@@ -372,6 +372,8 @@ test.skipIf(prerequisite.skip)(
       copy,
       "--graph-binary",
       ENGINE,
+      "--agents",
+      "none",
     ]);
     expect(done.code, done.stderr).toBe(0);
     expect(JSON.parse(done.stdout).initialIndexStatus).toBe("ok");

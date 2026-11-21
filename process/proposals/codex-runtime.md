@@ -172,7 +172,7 @@ At run time, what T3 Code does for a Codex the person installed, and nothing mor
 
 ### Setup, install and upgrade
 
-Today `neuve setup` never looks for an agent program: it writes capture hooks and the skill for both Claude Code and Codex whether or not either is there ([`setup-hooks.ts`](../../apps/neuve-cli/src/capture/setup-hooks.ts), lines 346–357; [`skills-cli.ts`](../../apps/neuve-cli/src/skills-cli.ts), line 62). Upgrading replaces the installed copy and stops: the install script's last words are that repositories "keep their setup", and nothing records which setup steps a repository or machine has had. Neuve installs no program for anyone; it prints the command.
+Before the slice "Setup finds the agent programs", `neuve setup` never looked for an agent program: it wrote capture hooks and the skill for both Claude Code and Codex whether or not either was there. Since that slice, setup and doctor say which programs the machine has, from one list ([`agent-programs.ts`](../../apps/neuve-cli/src/agent-programs.ts)); setup stores the Codex program it finds, through the same step `neuve auth program codex --find` runs, and writes hooks and the skill only for what it found. Upgrading replaces the installed copy and stops: the install script's last words are that repositories "keep their setup", and nothing records which setup steps a repository or machine has had. Neuve installs no program for anyone; it prints the command.
 
 The design extends what is there and adds no second mechanism:
 

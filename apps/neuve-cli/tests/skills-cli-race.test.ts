@@ -3,6 +3,7 @@
 // last moment (inside the very filesystem call that follows the checks, or while the plan is being
 // printed) and require that nothing outside the folder Neuve owns is written or removed, and that a
 // file changed since the plan is kept. Turned from the second review's reproduction harness.
+import { found } from "./fixtures/agent-programs.ts";
 import { afterEach, expect, mock, test } from "bun:test";
 import * as real from "node:fs/promises";
 import {
@@ -84,6 +85,7 @@ const context = (
       "0.1.0",
     ),
   }),
+  programs: () => found(),
   isTerminal: false,
   ask: async () => null,
   out,

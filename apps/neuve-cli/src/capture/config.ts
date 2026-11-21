@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { z } from "zod";
-import type { StoreLocation } from "@neuve/records-core/capture";
+import { Identity, type StoreLocation } from "@neuve/records-core/capture";
 
 /**
  * `<store>/capture.json`, written by `neuve setup hooks`. Its presence is what enables capture in a
@@ -14,7 +14,7 @@ export const CaptureConfig = z.strictObject({
   /** What hooks run, as argv, ahead of `<harness> <event>`. */
   hookCommand: z.array(z.string().min(1)).min(1),
   gitHooks: z.array(z.string().min(1)),
-  agents: z.array(z.enum(["claude-code", "codex"])),
+  agents: z.array(z.enum(Identity.AGENT_HARNESSES)),
   /** Opt-in `Neuve-Session` commit trailer; off by default and refused in this repository (8.1). */
   sessionTrailer: z.boolean(),
 });
@@ -28,7 +28,10 @@ export const readCaptureConfig = async (
 ): Promise<CaptureConfig | undefined> => {
   const file = Bun.file(captureConfigPath(location));
   if (!(await file.exists())) return undefined;
-  const parsed = CaptureConfig.safeParse(await file.json());
+  // A file that isn't JSON is read as one that doesn't match: no config, never a throw.
+  const parsed = CaptureConfig.safeParse(
+    await file.json().catch(() => undefined),
+  );
   return parsed.success ? parsed.data : undefined;
 };
 

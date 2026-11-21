@@ -6,7 +6,9 @@ import {
   AccountDirectory,
   type AccountDirectoryShape,
   type AccountStore,
+  type AccountName,
   type AccountStatus,
+  type RuntimeRegistryShape,
   type RuntimeShape,
   type SignInHint,
 } from "@neuve/runtime";
@@ -131,28 +133,30 @@ export interface AuthCliOptions {
 }
 type FindCodex = typeof import("@neuve/harness/runtimes").findCodexProgram;
 
-/**
- * The built-in Claude account's sign-in, checked as `neuve auth status claude --check` checks it:
- * the account status service opens Claude Code with no prompt, so no usage is spent, and a check
- * already running for the account is joined rather than repeated. Setup's closing check uses it.
- */
-export const checkClaudeSignIn = async (
-  options: AuthCliOptions = {},
-): Promise<AccountStatus> => {
-  const { AccountName, AccountStore, RuntimeRegistry, runtimeRegistryLayer } =
+/** What every account command works with: the store, its runtimes and the status service. */
+interface Accounts {
+  readonly home: string;
+  readonly store: AccountStore.AccountStoreShape;
+  readonly registry: RuntimeRegistryShape;
+  readonly statuses: AccountStore.AccountStatusesShape;
+}
+
+/** Runs `body` with the accounts of `options.home`, a runtime's log lines going to standard error. */
+const withAccounts = async <A>(
+  options: AuthCliOptions,
+  body: (accounts: Accounts) => Effect.Effect<A, unknown>,
+): Promise<A> => {
+  const { AccountStore, RuntimeRegistry, runtimeRegistryLayer } =
     await import("@neuve/runtime");
-  const name = AccountName.parse("claude");
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const home = options.home ?? homedir();
         const store = yield* AccountStore.make(home);
         return yield* Effect.gen(function* () {
-          const statuses = yield* AccountStore.makeStatuses(
-            home,
-            yield* RuntimeRegistry,
-          );
-          return yield* statuses.check(name);
+          const registry = yield* RuntimeRegistry;
+          const statuses = yield* AccountStore.makeStatuses(home, registry);
+          return yield* body({ home, store, registry, statuses });
         }).pipe(
           Effect.provide(
             options.runtimes === undefined
@@ -165,9 +169,184 @@ export const checkClaudeSignIn = async (
           ),
         );
       }),
-    ),
+    ).pipe(Effect.provide(stderrLogs)),
   );
 };
+
+/**
+ * The built-in Claude account's sign-in, checked as `neuve auth status claude --check` checks it:
+ * the account status service opens Claude Code with no prompt, so no usage is spent, and a check
+ * already running for the account is joined rather than repeated. Setup's closing check uses it.
+ */
+export const checkClaudeSignIn = async (
+  options: AuthCliOptions = {},
+): Promise<AccountStatus> => {
+  const { AccountName } = await import("@neuve/runtime");
+  return withAccounts(options, ({ statuses }) =>
+    statuses.check(AccountName.parse("claude")),
+  );
+};
+
+/** What looking for Codex found, in the words `auth program --find`, setup and doctor share. */
+export interface CodexLook {
+  readonly found?: {
+    readonly path: string;
+    readonly version: string;
+    readonly how: string;
+  };
+  /** Each candidate asked and what it answered, then what was stored and the account's state. */
+  readonly lines: ReadonlyArray<string>;
+  /** Programs named `codex` on the PATH that did not answer as Codex. */
+  readonly strangers: ReadonlyArray<string>;
+  /** The path stored for the account, when it no longer answers as Codex. */
+  readonly stale?: string;
+}
+
+const WHERE = {
+  set: "set",
+  path: "on the PATH",
+  app: "in an installed app",
+} as const;
+const ANSWERED = {
+  missing: "nothing runs there",
+  unrecognized: "did not answer as Codex, skipped",
+  broken: "a version marked broken, skipped",
+  codex: "Codex",
+} as const;
+
+/** The stored path, when it was asked and did not answer as Codex. */
+const staleOf = (
+  tried: Effect.Success<ReturnType<FindCodex>>["tried"],
+): { stale?: string } => {
+  const set = tried.find((asked) => asked.candidate.found === "set");
+  return set === undefined || set.kind === "codex"
+    ? {}
+    : { stale: set.candidate.path };
+};
+
+const lookOf = (
+  found: Effect.Success<ReturnType<FindCodex>>,
+  scanned: boolean,
+): CodexLook => ({
+  ...(found.found === undefined
+    ? {}
+    : {
+        found: {
+          path: found.found.candidate.path,
+          version: found.found.version,
+          how: PROGRAM_FOUND[found.found.candidate.found],
+        },
+      }),
+  lines: [
+    ...found.tried.map(
+      (asked) =>
+        `  ${asked.candidate.path} (${WHERE[asked.candidate.found]}): ${ANSWERED[asked.kind]}${"version" in asked ? ` ${asked.version}` : ""}`,
+    ),
+    ...found.skippedApps.map(({ app, why }) => `  ${app}: ${why}, skipped`),
+    ...(!scanned || found.appsLookedFor
+      ? []
+      : [
+          "  No installed app was looked for: OpenAI's desktop apps are looked for only on macOS.",
+        ]),
+  ],
+  ...staleOf(found.tried),
+  strangers: found.tried
+    .filter(
+      (asked) =>
+        asked.candidate.found === "path" && asked.kind === "unrecognized",
+    )
+    .map((asked) => asked.candidate.path),
+});
+
+/**
+ * Looking for the codex account's program. `find` is `neuve auth program codex --find`, which
+ * setup also runs: the path already set, every `codex` on the PATH, then (on macOS) OpenAI's
+ * apps, each started once as its app server to ask its version; the first that answers as Codex
+ * is stored as the account's program and the account is checked. `check` is doctor's: only what
+ * run time would start, the stored path or else the PATH's one `codex`, asked its version, and
+ * nothing stored.
+ */
+export const lookForCodex = async (
+  mode: "find" | "check",
+  options: AuthCliOptions & {
+    /** The account whose program is looked for; the built-in `codex` by default. */
+    readonly account?: string;
+    readonly environment?: Readonly<Record<string, string | undefined>>;
+  } = {},
+): Promise<CodexLook> => {
+  const { AccountName, AccountStore } = await import("@neuve/runtime");
+  const name = AccountName.parse(options.account ?? "codex");
+  const home = options.home ?? homedir();
+  const find =
+    options.findCodex ??
+    (await import("@neuve/harness/runtimes")).findCodexProgram;
+  const environment = options.environment ?? process.env;
+  if (mode === "check")
+    // Only reads: no account store is opened, and the built-in account's own Codex home is used.
+    return lookOf(
+      await Effect.runPromise(
+        find({
+          home,
+          environment,
+          setting: AccountStore.programPath(home, name),
+          scan: false,
+        }).pipe(Effect.provide(stderrLogs)),
+      ),
+      false,
+    );
+  return withAccounts(options, (accounts) =>
+    findAndStore(accounts, name, find, environment),
+  );
+};
+
+/** `lookForCodex`'s `find`, inside an account command's accounts. */
+const findAndStore = (
+  { home, store, statuses }: Accounts,
+  name: AccountName,
+  find: FindCodex,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+) =>
+  Effect.gen(function* () {
+    const { AccountStore } = yield* Effect.promise(
+      () => import("@neuve/runtime"),
+    );
+    const account = yield* store.directory.lookup(name, "use");
+    if (account?.runtime !== "codex")
+      return yield* new AccountStore.StoreError({
+        message: `The ${name} account doesn't run Codex.`,
+      });
+    const found = yield* find({
+      home,
+      environment,
+      codexHome: account.credential.folder,
+      setting: AccountStore.programPath(home, name),
+    });
+    const look = lookOf(found, true);
+    if (found.found === undefined)
+      return {
+        ...look,
+        lines: [...look.lines, "Found no Codex; nothing was stored."],
+      } satisfies CodexLook;
+    const path = found.found.candidate.path;
+    yield* Effect.try({
+      try: () => AccountStore.setProgramPath(home, name, path),
+      catch: (error) =>
+        error instanceof AccountStore.StoreError
+          ? error
+          : new AccountStore.StoreError({
+              message: "The program path could not be saved.",
+            }),
+    });
+    // Said once it is saved, not before.
+    return {
+      ...look,
+      lines: [
+        ...look.lines,
+        `Stored ${path} as ${name}'s program.`,
+        accountDescription(yield* statuses.check(name)),
+      ],
+    } satisfies CodexLook;
+  });
 
 /** Fixed argv and inherited streams keep Claude Code's sign-in bytes out of Neuve. */
 export const claudeLoginOptions = (
@@ -242,323 +421,232 @@ const runAccountCommand = async (
   },
   options: AuthCliOptions,
 ) => {
-  const {
-    AccountName,
-    AccountStore,
-    RuntimeRegistry,
-    runtimeRegistryLayer,
-    signInCommand,
-    unavailableText,
-  } = await import("@neuve/runtime");
-  return Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const home = options.home ?? homedir();
-        const store = yield* AccountStore.make(home);
-        return yield* Effect.gen(function* () {
-          const registry = yield* RuntimeRegistry;
-          const statuses = yield* AccountStore.makeStatuses(home, registry);
-          const output = (value: string) => Effect.promise(() => write(value));
-          if (command === "add") {
-            const kind = positionals[0];
-            const name = positionals[1];
-            if (
-              (kind !== "claude" && kind !== "chatgpt") ||
-              name === undefined ||
-              positionals.length !== 2
-            )
-              return yield* new AccountStore.StoreError({
-                message:
-                  "Use neuve auth add claude <name> or neuve auth add chatgpt <name>.",
-              });
-            const account = yield* store.add(kind, name);
-            yield* output(
-              signInCommand(
-                account.credential.kind === "claude-config-folder" &&
-                  account.credential.folder !== undefined
-                  ? {
-                      kind: "command",
-                      command: "claude auth login",
-                      environment: {
-                        CLAUDE_CONFIG_DIR: account.credential.folder,
-                      },
-                    }
-                  : {
-                      kind: "command",
-                      command: "neuve auth login",
-                      account: account.name,
-                    },
-              ) ?? "Set the key in Settings.",
-            );
-            return 0;
-          }
-          if (command === "list") {
-            const all = yield* values.check === true
-              ? statuses.checkAll
-              : statuses.read;
-            yield* output(
-              values.json === true
-                ? JSON.stringify(all)
-                : all.map(accountDescription).join("\n"),
-            );
-            return 0;
-          }
-          const name = AccountName.safeParse(positionals[0]);
-          if (!name.success)
-            return yield* new AccountStore.StoreError({
-              message: "Use a valid account name.",
-            });
-          if (command === "program") {
-            const account = yield* store.directory.lookup(name.data, "use");
-            if (account?.runtime !== "codex")
-              return yield* new AccountStore.StoreError({
-                message:
-                  "Only an account whose runtime finds its own program takes a program path: codex.",
-              });
-            const given = positionals[1];
-            if (
-              [
-                given !== undefined,
-                values.unset === true,
-                values.find === true,
-              ].filter(Boolean).length !== 1
-            )
-              return yield* new AccountStore.StoreError({
-                message: `Use neuve auth program ${name.data} <path>, --find, or --unset.`,
-              });
-            // An empty path would resolve to the current folder: refused, never stored.
-            if (given !== undefined && given.trim() === "")
-              return yield* new AccountStore.StoreError({
-                message: "Give the program's path, or use --find or --unset.",
-              });
-            if (values.find === true) {
-              // Discovery, once, when asked: what it finds is stored, and checks then ask only that.
-              const findCodexProgram =
-                options.findCodex ??
-                (yield* Effect.promise(() => import("@neuve/harness/runtimes")))
-                  .findCodexProgram;
-              const found = yield* findCodexProgram({
-                home,
-                codexHome: account.credential.folder,
-              });
-              const where = {
-                set: "set",
-                path: "on the PATH",
-                app: "in an installed app",
-              } as const;
-              const answered = {
-                missing: "nothing runs there",
-                unrecognized: "did not answer as Codex, skipped",
-                broken: "a version marked broken, skipped",
-                codex: "Codex",
-              } as const;
-              yield* output(
-                [
-                  "Looked for Codex:",
-                  ...found.tried.map(
-                    (asked) =>
-                      `  ${asked.candidate.path} (${where[asked.candidate.found]}): ${answered[asked.kind]}${"version" in asked ? ` ${asked.version}` : ""}`,
-                  ),
-                  ...found.skippedApps.map(
-                    ({ app, why }) => `  ${app}: ${why}, skipped`,
-                  ),
-                  ...(found.appsLookedFor
-                    ? []
-                    : [
-                        "  No installed app was looked for: OpenAI's desktop apps are looked for only on macOS.",
-                      ]),
-                  ...(found.found === undefined
-                    ? ["Found no Codex; nothing was stored."]
-                    : []),
-                ].join("\n"),
-              );
-              if (found.found === undefined) return 1;
-              yield* Effect.try({
-                try: () =>
-                  AccountStore.setProgramPath(
-                    home,
-                    name.data,
-                    found.found!.candidate.path,
-                  ),
-                catch: (error) =>
-                  error instanceof AccountStore.StoreError
-                    ? error
-                    : new AccountStore.StoreError({
-                        message: "The program path could not be saved.",
-                      }),
-              });
-              // Said once it is saved, not before.
-              yield* output(
-                `Stored ${found.found.candidate.path} as ${name.data}'s program.`,
-              );
-              yield* output(
-                accountDescription(yield* statuses.check(name.data)),
-              );
-              return 0;
-            }
-            yield* Effect.try({
-              try: () =>
-                AccountStore.setProgramPath(
-                  home,
-                  name.data,
-                  given === undefined ? undefined : resolvePath(given),
-                ),
-              catch: (error) =>
-                error instanceof AccountStore.StoreError
-                  ? error
-                  : new AccountStore.StoreError({
-                      message: "The program path could not be saved.",
-                    }),
-            });
-            yield* output(accountDescription(yield* statuses.check(name.data)));
-            return 0;
-          }
-          if (command === "remove") {
-            yield* store.remove(name.data, registry, {
-              force: values.force === true,
-              onStep: (step) => output(removalMessages[step]),
-            });
-            return 0;
-          }
-          const account = yield* store.directory.lookup(name.data, "use");
-          if (account === undefined)
-            return yield* new AccountStore.StoreError({
-              message: "Account not found.",
-            });
-          const status =
-            values.check === true || command === "login"
-              ? yield* statuses.check(name.data)
-              : (yield* statuses.read).find(
-                  (status) => status.name === name.data,
-                );
-          if (status === undefined)
-            return yield* new AccountStore.StoreError({
-              message: "Account not found.",
-            });
-          if (command === "status") {
-            yield* output(
-              values.json === true
-                ? JSON.stringify(status)
-                : accountDescription(status),
-            );
-            return 0;
-          }
-          if (status.signIn.state === "signed-in") {
-            yield* output(accountDescription(status));
-            return 0;
-          }
-          if (status.signIn.state === "runtime-unavailable") {
-            // Key accounts still have no sign-in flow, as the original openai-only command reports.
-            if (
-              account.kind === "anthropic-api-key" ||
-              account.kind === "openai-api-key"
-            )
-              expectOpenAi(account.name, true);
-            yield* output(
-              status.signIn.reason === "not-installed"
-                ? (status.signIn.fix ?? `${unavailableText(status.signIn)}.`)
-                : accountDescription(status),
-            );
-            return 1;
-          }
-          const hint = "hint" in status.signIn ? status.signIn.hint : undefined;
-          if (hint === undefined) {
-            yield* output(accountDescription(status));
-            return 1;
-          }
-          // Codex's own sign-in is the person's to run, in their terminal.
-          if (
-            hint.kind === "settings" ||
-            hint.command === "codex login" ||
-            values.print === true ||
-            process.stdin.isTTY !== true
-          ) {
-            yield* output(signInCommand(hint) ?? "Set the key in Settings.");
-            return 0;
-          }
-          if (hint.command === "claude auth login") {
-            const code = yield* Effect.acquireUseRelease(
-              Effect.try({
-                try: () =>
-                  Bun.spawn(
-                    ["claude", "auth", "login"],
-                    claudeLoginOptions(hint),
-                  ),
-                catch: () =>
-                  new AccountStore.StoreError({
-                    message: "Claude Code isn't installed or could not start.",
-                  }),
-              }),
-              (child) => Effect.promise(() => child.exited),
-              (child) =>
-                Effect.promise(async () => {
-                  if (child.exitCode !== null) return;
-                  child.kill("SIGTERM");
-                  const deadline = setTimeout(
-                    () => child.kill("SIGKILL"),
-                    2000,
-                  );
-                  try {
-                    await child.exited;
-                  } finally {
-                    clearTimeout(deadline);
-                  }
-                }),
-            );
-            const after = yield* statuses.check(name.data);
-            yield* output(accountDescription(after));
-            return code !== 0
-              ? code
-              : after.signIn.state === "signed-in"
-                ? 0
-                : 1;
-          }
-          if (
-            account.credential.kind !== "neuve-sign-in" ||
-            hint.account !== account.name
-          )
-            return yield* new AccountStore.StoreError({
-              message: "The sign-in command does not match the account.",
-            });
-          const authOptions = RouteProvider.OpenAiAuth.authOptionsFor(
-            account.credential,
-          );
-          const signedIn = yield* Effect.tryPromise({
-            try: () =>
-              RouteProvider.OpenAiAuth.signIn({
-                ...authOptions,
-                openBrowser: async (url) => {
-                  const opened =
-                    values["no-browser"] === true
-                      ? false
-                      : await openBrowser(url);
-                  await write(
-                    opened
-                      ? `Opened the browser to sign in with ChatGPT. If it did not open, visit:\n${url}\nWaiting for the browser (5 minutes)...`
-                      : `Visit this link to sign in with ChatGPT:\n${url}\nWaiting for the browser (5 minutes)...`,
-                  );
+  const { AccountName, AccountStore, signInCommand, unavailableText } =
+    await import("@neuve/runtime");
+  return withAccounts(options, ({ home, store, registry, statuses }) =>
+    Effect.gen(function* () {
+      const output = (value: string) => Effect.promise(() => write(value));
+      if (command === "add") {
+        const kind = positionals[0];
+        const name = positionals[1];
+        if (
+          (kind !== "claude" && kind !== "chatgpt") ||
+          name === undefined ||
+          positionals.length !== 2
+        )
+          return yield* new AccountStore.StoreError({
+            message:
+              "Use neuve auth add claude <name> or neuve auth add chatgpt <name>.",
+          });
+        const account = yield* store.add(kind, name);
+        yield* output(
+          signInCommand(
+            account.credential.kind === "claude-config-folder" &&
+              account.credential.folder !== undefined
+              ? {
+                  kind: "command",
+                  command: "claude auth login",
+                  environment: {
+                    CLAUDE_CONFIG_DIR: account.credential.folder,
+                  },
+                }
+              : {
+                  kind: "command",
+                  command: "neuve auth login",
+                  account: account.name,
                 },
-              }),
+          ) ?? "Set the key in Settings.",
+        );
+        return 0;
+      }
+      if (command === "list") {
+        const all = yield* values.check === true
+          ? statuses.checkAll
+          : statuses.read;
+        yield* output(
+          values.json === true
+            ? JSON.stringify(all)
+            : all.map(accountDescription).join("\n"),
+        );
+        return 0;
+      }
+      const name = AccountName.safeParse(positionals[0]);
+      if (!name.success)
+        return yield* new AccountStore.StoreError({
+          message: "Use a valid account name.",
+        });
+      if (command === "program") {
+        const account = yield* store.directory.lookup(name.data, "use");
+        if (account?.runtime !== "codex")
+          return yield* new AccountStore.StoreError({
+            message:
+              "Only an account whose runtime finds its own program takes a program path: codex.",
+          });
+        const given = positionals[1];
+        if (
+          [
+            given !== undefined,
+            values.unset === true,
+            values.find === true,
+          ].filter(Boolean).length !== 1
+        )
+          return yield* new AccountStore.StoreError({
+            message: `Use neuve auth program ${name.data} <path>, --find, or --unset.`,
+          });
+        // An empty path would resolve to the current folder: refused, never stored.
+        if (given !== undefined && given.trim() === "")
+          return yield* new AccountStore.StoreError({
+            message: "Give the program's path, or use --find or --unset.",
+          });
+        if (values.find === true) {
+          // Discovery, once, when asked: what it finds is stored, and checks then ask only that.
+          const look = yield* findAndStore(
+            { home, store, registry, statuses },
+            name.data,
+            options.findCodex ??
+              (yield* Effect.promise(() => import("@neuve/harness/runtimes")))
+                .findCodexProgram,
+          );
+          yield* output(["Looked for Codex:", ...look.lines].join("\n"));
+          return look.found === undefined ? 1 : 0;
+        }
+        yield* Effect.try({
+          try: () =>
+            AccountStore.setProgramPath(
+              home,
+              name.data,
+              given === undefined ? undefined : resolvePath(given),
+            ),
+          catch: (error) =>
+            error instanceof AccountStore.StoreError
+              ? error
+              : new AccountStore.StoreError({
+                  message: "The program path could not be saved.",
+                }),
+        });
+        yield* output(accountDescription(yield* statuses.check(name.data)));
+        return 0;
+      }
+      if (command === "remove") {
+        yield* store.remove(name.data, registry, {
+          force: values.force === true,
+          onStep: (step) => output(removalMessages[step]),
+        });
+        return 0;
+      }
+      const account = yield* store.directory.lookup(name.data, "use");
+      if (account === undefined)
+        return yield* new AccountStore.StoreError({
+          message: "Account not found.",
+        });
+      const status =
+        values.check === true || command === "login"
+          ? yield* statuses.check(name.data)
+          : (yield* statuses.read).find((status) => status.name === name.data);
+      if (status === undefined)
+        return yield* new AccountStore.StoreError({
+          message: "Account not found.",
+        });
+      if (command === "status") {
+        yield* output(
+          values.json === true
+            ? JSON.stringify(status)
+            : accountDescription(status),
+        );
+        return 0;
+      }
+      if (status.signIn.state === "signed-in") {
+        yield* output(accountDescription(status));
+        return 0;
+      }
+      if (status.signIn.state === "runtime-unavailable") {
+        // Key accounts still have no sign-in flow, as the original openai-only command reports.
+        if (
+          account.kind === "anthropic-api-key" ||
+          account.kind === "openai-api-key"
+        )
+          expectOpenAi(account.name, true);
+        yield* output(
+          status.signIn.reason === "not-installed"
+            ? (status.signIn.fix ?? `${unavailableText(status.signIn)}.`)
+            : accountDescription(status),
+        );
+        return 1;
+      }
+      const hint = "hint" in status.signIn ? status.signIn.hint : undefined;
+      if (hint === undefined) {
+        yield* output(accountDescription(status));
+        return 1;
+      }
+      // Codex's own sign-in is the person's to run, in their terminal.
+      if (
+        hint.kind === "settings" ||
+        hint.command === "codex login" ||
+        values.print === true ||
+        process.stdin.isTTY !== true
+      ) {
+        yield* output(signInCommand(hint) ?? "Set the key in Settings.");
+        return 0;
+      }
+      if (hint.command === "claude auth login") {
+        const code = yield* Effect.acquireUseRelease(
+          Effect.try({
+            try: () =>
+              Bun.spawn(["claude", "auth", "login"], claudeLoginOptions(hint)),
             catch: () =>
               new AccountStore.StoreError({
-                message: "Could not finish signing in with ChatGPT.",
+                message: "Claude Code isn't installed or could not start.",
               }),
-          });
-          yield* output(accountDescription(yield* statuses.check(name.data)));
-          return signedIn.planUsage ? 0 : 1;
-        }).pipe(
-          Effect.provide(
-            options.runtimes === undefined
-              ? authRuntimes({ directory: store.directory, home })
-              : runtimeRegistryLayer(options.runtimes).pipe(
-                  Layer.provide(
-                    Layer.succeed(AccountDirectory, store.directory),
-                  ),
-                ),
-          ),
+          }),
+          (child) => Effect.promise(() => child.exited),
+          (child) =>
+            Effect.promise(async () => {
+              if (child.exitCode !== null) return;
+              child.kill("SIGTERM");
+              const deadline = setTimeout(() => child.kill("SIGKILL"), 2000);
+              try {
+                await child.exited;
+              } finally {
+                clearTimeout(deadline);
+              }
+            }),
         );
-      }),
-    ).pipe(Effect.provide(stderrLogs)),
+        const after = yield* statuses.check(name.data);
+        yield* output(accountDescription(after));
+        return code !== 0 ? code : after.signIn.state === "signed-in" ? 0 : 1;
+      }
+      if (
+        account.credential.kind !== "neuve-sign-in" ||
+        hint.account !== account.name
+      )
+        return yield* new AccountStore.StoreError({
+          message: "The sign-in command does not match the account.",
+        });
+      const authOptions = RouteProvider.OpenAiAuth.authOptionsFor(
+        account.credential,
+      );
+      const signedIn = yield* Effect.tryPromise({
+        try: () =>
+          RouteProvider.OpenAiAuth.signIn({
+            ...authOptions,
+            openBrowser: async (url) => {
+              const opened =
+                values["no-browser"] === true ? false : await openBrowser(url);
+              await write(
+                opened
+                  ? `Opened the browser to sign in with ChatGPT. If it did not open, visit:\n${url}\nWaiting for the browser (5 minutes)...`
+                  : `Visit this link to sign in with ChatGPT:\n${url}\nWaiting for the browser (5 minutes)...`,
+              );
+            },
+          }),
+        catch: () =>
+          new AccountStore.StoreError({
+            message: "Could not finish signing in with ChatGPT.",
+          }),
+      });
+      yield* output(accountDescription(yield* statuses.check(name.data)));
+      return signedIn.planUsage ? 0 : 1;
+    }),
   );
 };
 

@@ -34,6 +34,7 @@ import {
   capturePostCommit,
   SESSION_OVERRIDE_ENV,
 } from "../src/capture/git-hooks.ts";
+import { found } from "./fixtures/agent-programs.ts";
 import { runSetupHooks } from "../src/capture/setup-hooks.ts";
 
 const directories: Array<string> = [];
@@ -90,16 +91,19 @@ test("setup hooks keeps foreign hooks and settings, backs files up, and is idemp
   await writeFile(previousHook, "#!/bin/sh\necho previous\n");
   await chmod(previousHook, 0o755);
   const setup = () =>
-    runSetupHooks([
-      "--repo",
-      repo,
-      "--claude-settings",
-      claude,
-      "--codex-hooks",
-      codex,
-      "--command",
-      "/opt/neuve/bin/neuve",
-    ]);
+    runSetupHooks(
+      [
+        "--repo",
+        repo,
+        "--claude-settings",
+        claude,
+        "--codex-hooks",
+        codex,
+        "--command",
+        "/opt/neuve/bin/neuve",
+      ],
+      { programs: () => found() },
+    );
 
   await setup();
   const first = await readFile(claude, "utf8");
