@@ -201,7 +201,8 @@ const DOCK_CHIP: Partial<
  * A rail card's tag: the disposition standing on its unit, in the words the
  * dock shows for it, so a card says the same open or not. The open card
  * reads the dock first, which also holds what only it knows (a decision
- * just sent or undone, a comment), then its decision signal.
+ * just sent or undone, a comment), then its decision signal, before the
+ * standing disposition, as it did before every card showed one.
  */
 export function railCardChip(
   unit: Pick<RailUnit, "disposition">,
@@ -216,10 +217,11 @@ export function railCardChip(
   if (!open) return standing ?? null
   return (
     DOCK_CHIP[open.dock] ??
-    standing ??
     (open.signal === "conflict"
       ? { text: "conflict", className: "bg-req-tint text-req-ink" }
-      : null)
+      : undefined) ??
+    standing ??
+    null
   )
 }
 

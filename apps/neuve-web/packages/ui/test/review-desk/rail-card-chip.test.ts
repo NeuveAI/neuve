@@ -49,4 +49,19 @@ describe("railCardChip", () => {
     )
     expect(railCardChip({})).toBeNull()
   })
+
+  test("the open card's conflict comes before another person's standing decision", () => {
+    // Why: the dock is at rest (another person decided), and the conflict
+    // the open card showed before every card had a tag must still win.
+    expect(
+      word(
+        railCardChip(
+          { disposition: "approve" },
+          { dock: "rest", signal: "conflict" }
+        )
+      )
+    ).toBe("conflict")
+    // The same card, not open, shows the standing disposition.
+    expect(word(railCardChip({ disposition: "approve" }))).toBe("approved")
+  })
 })
