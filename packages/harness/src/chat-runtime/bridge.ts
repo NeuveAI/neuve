@@ -8,6 +8,7 @@ import type {
   Model,
   Api,
   SimpleStreamOptions,
+  SystemMessage,
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { Effect, Exit, Scope, Stream } from "effect";
@@ -69,6 +70,8 @@ type Generation = {
   messages: Context["messages"];
   /** The chat's own folder, from its agent: where a runtime with its own tools works. */
   folder?: string | undefined;
+  /** Channel policy for this request. Keep its temporary tool offer out of continuation digests. */
+  planRequest?: SystemMessage;
   cleanup: (() => void)[];
   head?: {
     owner: string;
@@ -76,6 +79,15 @@ type Generation = {
     value: Parameters<NativeHeads["set"]>[1];
   };
 };
+const planningRequest = Symbol.for("neuve.chat.plan-request");
+
+function offeredMessages(
+  generation: Generation,
+): readonly Context["messages"][number][] {
+  const { messages, planRequest } = generation;
+  return planRequest ? [...messages, planRequest] : messages;
+}
+
 type HeldCall = {
   result?: ToolOutcome | undefined;
   waiter?: ((value: ToolOutcome) => void) | undefined;
@@ -213,7 +225,15 @@ export class ChatRuntimeBridge {
     selection?: SessionPolicy["model"],
   ): AssistantMessageEventStream {
     const stream = createAssistantMessageEventStream();
-    const messages = normalizeContext(context).messages;
+    const requested = normalizeContext(context).messages;
+    const planRequest = requested.find(
+      (message): message is SystemMessage =>
+        message.role === "system" &&
+        Reflect.get(message, planningRequest) === true,
+    );
+    const messages = planRequest
+      ? requested.filter((message) => message !== planRequest)
+      : requested;
     const identity = messages
       .map((message) => this.identities.get(message))
       .findLast((value) => value !== undefined);
@@ -235,6 +255,7 @@ export class ChatRuntimeBridge {
       streams: [],
       messages,
       ...(identity?.folder === undefined ? {} : { folder: identity.folder }),
+      ...(planRequest === undefined ? {} : { planRequest }),
       cleanup: [],
       message: {
         role: "assistant",
@@ -494,7 +515,7 @@ export class ChatRuntimeBridge {
       return;
     }
     const desired = policy(
-      gen.messages,
+      offeredMessages(gen),
       () => Effect.succeed({ text: "Call stopped.", error: "Call stopped." }),
       selection,
       // Only a runtime with its own tools works in the chat's folder; for any other a change of
@@ -746,7 +767,7 @@ export class ChatRuntimeBridge {
     }
     const scope = Scope.makeUnsafe();
     const configured = policy(
-      gen.messages,
+      offeredMessages(gen),
       (_name, call) => this.wait(() => live, call),
       selection,
       // Only a runtime with its own tools works in the chat's folder; for any other a change of
@@ -925,16 +946,14 @@ export class ChatRuntimeBridge {
     if (!(await this.markPending(live, "message"))) return;
     live.turn = crypto.randomUUID();
     live.lastResumePoint = undefined;
-    // Every chat writes in its own folder today: Ace has no plan mode yet to make a turn read only.
     const folder = live.policy.folder;
+    const access = live.generation?.planRequest ? "read-only" : "write";
     await this.command(
       live,
       live.state.session.startTurn({
         turnId: live.turn,
         message,
-        ...(folder === undefined
-          ? {}
-          : { workspace: { folder, access: "write" } }),
+        ...(folder === undefined ? {} : { workspace: { folder, access } }),
       }),
     );
     await this.followSession(live);

@@ -81,6 +81,16 @@ The native extension binding installs before harness open/recovery and attaches 
 
 ## Verification and limits
 
+Plan mode extends the upstream `packages/channel/src/channel.ts` admission and watch paths. An ask binds the mode to its retry digest, and admission updates a separate mode document. The harness passes the chat ID when it obtains file access. The channel publishes mode changes on the agent event and carries the recorded mode on replies.
+
+| Integration file | Plan mode behavior |
+| --- | --- |
+| `packages/channel/src/extensions.ts` | The existing tool wrapper checks the chat's effective mode inside execute, including safe replays. |
+| `packages/channel/src/frame.ts` | Agent and reply frames retain the mode through relay. |
+| `packages/channel/src/parse.ts` | The ask schema accepts the mode at both channel and gateway ingress. |
+| `packages/channel/src/plan-mode.ts` | Stores the chat mode, resolves inheritance from the chat's creator, and applies the allowlist to model requests. |
+| `packages/channel/tests/plan-mode.test.ts` | Exercises admission, busy chats, inheritance, and interrupted tool replay. |
+
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 
 The coordinator runs the full composed check and isolated browser/CLI journeys at the frozen product hashes. Team membership, cloud deploy/compute, real keychain/provider authentication and remote transfers are not established by these tests. External independent review remains owner-operated; implementation completion and passing tests do not grant approval.

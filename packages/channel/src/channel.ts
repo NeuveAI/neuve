@@ -1,4 +1,5 @@
 import { ReviewCardsDoc } from "./review-cards";
+import type { Context } from "@earendil-works/chord";
 import { type ChannelExtension, install, observe, price } from "./extensions";
 import { admitted, claim, digest } from "./requests";
 import {
@@ -73,12 +74,14 @@ import {
 } from "./messages";
 import { metadata, MetadataDoc, validateName } from "./metadata";
 import { available, choose, usable } from "./models";
+import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode } from "./plan-mode";
 import { progress } from "./progress";
 import { answer, Questions } from "./questions";
 import type {
 	ChannelInfo,
 	Chat,
 	ChatId,
+	ChatMode,
 	Effort,
 	Event,
 	Metadata,
@@ -144,7 +147,9 @@ export type Options = {
 	resume?: boolean;
 	storage: Storage;
 	models: Models;
-	env(cwd: string): ExecutionEnv;
+	env(cwd: string, chat?: ConversationId): ExecutionEnv;
+	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
+	planFileAccess?(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv;
 	desktop?: Desktop;
 	browser?: Browser;
 	images?: Images;
@@ -226,6 +231,7 @@ export class Channel {
 		try {
 		const log = scoped(options.log, { channel: options.id });
 		let channel: Channel;
+		const planning: IsPlanning = (chat, context) => isPlanning(channel.#harness, chat, context);
 		const registry = createRegistry();
 		registry.install(logging(log));
 		registry.install(CodingTools);
@@ -258,11 +264,16 @@ export class Channel {
 		registry.install(
 			defineExtension({ name: "ace-channel", sections: [room.section(options), instructions] }),
 		);
-		install(registry, options.extension);
+		registry.install(planModeExtension(planning));
+		install(registry, options.extension, planning, !!options.planFileAccess, log);
 		const harness = await Harness.open(options.storage, {
-			models: options.models,
+			models: planModeModels(options.models),
 			registry,
-			env: ({ cwd }) => options.extension?.environment?.(cwd || options.project) === false ? undefined : options.env(cwd || options.project),
+			env: ({ cwd = options.project, conversationId }) => {
+				if (options.extension?.environment?.(cwd) === false) return;
+				const env = options.env(cwd, conversationId);
+				return options.planFileAccess?.(env, context => planning(conversationId, context)) ?? env;
+			},
 			onReport: (error) => log("error", "harness.report", failure(error)),
 		}, context);
 		ownedHarness = harness;
@@ -283,6 +294,7 @@ export class Channel {
 				: {}),
 		});
 		const value = await harness.commit(async (tx) => {
+			await tx.doc(ChatModesDoc);
 			const doc = await tx.doc(MetadataDoc);
 			// A missing document is the version 0 upgrade; existing pi metadata always wins.
 			if (!doc.name) {
@@ -566,6 +578,7 @@ export class Channel {
 			cursor = page.next;
 		} while (cursor);
 		const lanes = (await this.#harness.snapshot(LanesDoc, context))?.lanes || {};
+		const modes = (await this.#harness.snapshot(ChatModesDoc, context))?.chats || {};
 		const byPath = new Map(Object.entries(lanes).map(([lane, { path }]) => [path, lane]));
 		const chats: Chat[] = await Promise.all(records.map(async (record) => {
 			const [agent, live, spent] = await Promise.all([
@@ -576,6 +589,7 @@ export class Channel {
 			const cwd = agent?.cwd;
 			const lane = cwd && byPath.get(cwd);
 			const chat: Chat = { id: record.id, busy: !!live?.run, usage: price(usage(spent), [...Object.keys(spent?.models || {}), ...Object.keys(spent?.tools || {})], this.#options.extension?.priced) };
+			chat.mode = modes[record.id] ?? "ace";
 			const window = agent?.model
 				&& this.#options.models.getModel(agent.model.provider, agent.model.modelId)?.contextWindow;
 			const used = window && await this.#used(record.id);
@@ -872,10 +886,11 @@ export class Channel {
 		room.checkAttachments(request);
 		await this.#mayInvoke(request.author);
 		const conversation = await this.#conversation(request.chat);
-		const { requestId, author, text, images, files, model, automatic, effort } = request;
+		const { requestId, author, text, images, files, model, automatic, effort, mode } = request;
+		if (mode !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's mode.");
 		let bound: ((tx: Tx) => Promise<void>) | undefined;
 		if (requestId) {
-			const value = await digest({ op: "ask", author, text, images, files, model, automatic, effort });
+			const value = await digest({ op: "ask", author, text, images, files, model, automatic, effort, mode });
 			// A retry gets its submission back without selecting again, so it never undoes a later choice.
 			const existing = await this.#harness.commit(
 				(tx) => admitted(tx, conversation.id, requestId, value),
@@ -888,7 +903,7 @@ export class Channel {
 				}
 			};
 		}
-		await this.#select(conversation, request, model, effort, automatic, bound);
+		await this.#select(conversation, request, model, effort, automatic, { bound, mode });
 		const submission = await conversation.submit({
 			type: "input",
 			content: room.content(request.author, request.text, request),
@@ -924,7 +939,7 @@ export class Channel {
 		requested: ModelRef | undefined,
 		effort?: Effort,
 		automatic?: boolean,
-		bound?: (tx: Tx) => Promise<void>,
+		{ bound, mode }: { bound?: ((tx: Tx) => Promise<void>) | undefined; mode?: ChatMode | undefined } = {},
 	): Promise<{ model: ModelRef; effort: Effort }> {
 		const agent = await conversation.agent(context);
 		const current = agent.model;
@@ -951,12 +966,6 @@ export class Channel {
 			|| (levels.includes(agent.thinkingLevel) ? agent.thinkingLevel : this.#options.extension?.thinkingLevel || "off");
 		const sameModel = current?.provider === model.provider && current.modelId === model.modelId;
 		const same = sameModel && thinkingLevel === agent.thinkingLevel;
-		const live = await this.#harness.snapshot(LiveDoc, conversation.id, context);
-		if (!same && live?.run) {
-			throw new Error(
-				"The chat is busy; stop it or wait before changing its model or reasoning effort",
-			);
-		}
 		if (model !== kept && !await usable(this.#options.models, model)) {
 			// getModel above found this model, so its provider is registered.
 			const name = this.#options.models.getProvider(model.provider)!.name;
@@ -964,24 +973,42 @@ export class Channel {
 				`The ${name} API key is missing. Add it in Provider settings to invoke an agent. Chat is still available.`,
 			);
 		}
-		if (same) {
-			if (bound) await this.#harness.commit(bound, context);
-			return { model, effort: thinkingLevel };
+		const modeChanged = mode !== undefined && await this.#harness.commit(
+			tx => setChatMode(tx, conversation.id, mode), context,
+		);
+		try {
+			if (!same || bound) await this.#harness.commit(async (tx) => {
+				if (!same && (await tx.doc(LiveDoc, conversation.id)).run) {
+					throw new Error(
+						"The chat is busy; stop it or wait before changing its model or reasoning effort",
+					);
+				}
+				await bound?.(tx);
+				if (!same) await configure(tx, conversation.id, { model, thinkingLevel });
+			}, context);
+		} catch (error) {
+			// A system wake can start a run after the mode commit and before model selection.
+			if (modeChanged) this.#agentChanged(conversation.id, current ?? model, agent.thinkingLevel, mode);
+			throw error;
 		}
-		await this.#harness.commit(async (tx) => {
-			await bound?.(tx);
-			await configure(tx, conversation.id, { model, thinkingLevel });
-		}, context);
-		const event: Event = { kind: "agent", chat: conversation.id, model, effort: thinkingLevel };
+		if (!same || modeChanged) this.#agentChanged(conversation.id, model, thinkingLevel, modeChanged ? mode : undefined);
+		return { model, effort: thinkingLevel };
+	}
+
+	#agentChanged(chat: ChatId, model: ModelRef, effort: Effort, mode?: ChatMode) {
+		const event: Event = {
+			kind: "agent", chat, model, effort,
+			...(mode === undefined ? {} : { mode }),
+		};
+		if (mode !== undefined) this.#log("info", "plan.mode.changed", { chat, mode });
 		for (const listener of this.#listeners) {
-			if (listener.chat !== conversation.id || !listener.agent) continue;
+			if (listener.chat !== chat || !listener.agent) continue;
 			try {
 				listener.send(event);
 			} catch {
 				this.#listeners.delete(listener);
 			}
 		}
-		return { model, effort: thinkingLevel };
 	}
 
 	#automatic(): Promise<ModelRef> {
@@ -1497,6 +1524,9 @@ function events(entry: EntryRecord): Event[] {
 		const model = message.model;
 		const error = message.stopReason === "error";
 		const stopped = message.stopReason === "aborted";
+		const mode = "neuveChatMode" in message && (message.neuveChatMode === "plan" || message.neuveChatMode === "ace")
+			? message.neuveChatMode
+			: undefined;
 		if (text || error || stopped) {
 			out.push({
 				kind: "reply",
@@ -1505,6 +1535,7 @@ function events(entry: EntryRecord): Event[] {
 				at,
 				model,
 				text,
+				...(mode === undefined ? {} : { mode }),
 				...(error ? { error: failed(message) } : {}),
 				...(stopped ? { stopped } : {}),
 			});

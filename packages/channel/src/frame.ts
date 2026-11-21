@@ -4,7 +4,7 @@ import { RefusalReasonSchema, ReviewRangeSchema, ReviewStatusSchema } from "./re
 import type { ReviewCard } from "./review-cards";
 
 import { EffortSchema } from "./effort";
-import { ModelRefSchema } from "./parse";
+import { ChatModeSchema, ModelRefSchema } from "./parse";
 import type { Event, Frame } from "./protocol";
 
 const id = z.int().nonnegative();
@@ -68,6 +68,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
 		kind: z.literal("reply"),
 		...message,
 		model: text,
+		mode: ChatModeSchema.optional(),
 		error: text.optional(),
 		stopped: z.boolean().optional(),
 	}),
@@ -109,6 +110,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
 		...base,
 		model: ModelRefSchema,
 		effort: EffortSchema,
+		mode: ChatModeSchema.optional(),
 	}),
 	z.object({
 		kind: z.literal("metadata"),

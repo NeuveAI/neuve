@@ -2,6 +2,8 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import type { ConversationId, Cursor, Extension, Harness, Registry, ToolRegistration } from "@earendil-works/pi-durable";
 import type { Effort, ModelRef, Usage } from "./protocol";
+import type { Log } from "./log";
+import { type IsPlanning, planTools } from "./plan-mode";
 
 export type Admission = {
 	invoke(author: string): Promise<void>;
@@ -20,11 +22,35 @@ export type ChannelExtension = {
 	nonTurnModels?(kind: "caption" | "recap", chat: ConversationId): Models;
 };
 
-export function install(registry: Registry, extension?: ChannelExtension): void {
+export function install(
+	registry: Registry,
+	extension: ChannelExtension | undefined,
+	planning: IsPlanning,
+	confinedReads: boolean,
+	log: Log,
+): void {
 	for (const item of extension?.extensions || []) registry.install(item);
-	if (!extension?.tool) return;
+	const guard = (registration: ToolRegistration): ToolRegistration => {
+		const tool = extension?.tool?.(registration) ?? registration;
+		return {
+			...tool,
+			async execute(args, api, context) {
+				// Pi re-enters execute directly when recovering an interrupted replay-safe tool.
+				const allowed = planTools.has(registration.name)
+					&& (registration.name !== "read" || confinedReads);
+				if (!allowed && await planning(api.conversationId, context)) {
+					const reason = registration.name === "read"
+						? "Plan mode requires confined file access, which is unavailable here."
+						: `Plan mode is read-only. The ${registration.name} tool is unavailable in plan mode.`;
+					log("info", "plan.tool.refused", { chat: api.conversationId, tool: registration.name });
+					return { content: [{ type: "text", text: reason }], isError: true };
+				}
+				return tool.execute(args, api, context);
+			},
+		};
+	};
 	for (const installed of registry.snapshot().installed()) {
-		if (installed.tools) registry.install({ ...installed, tools: installed.tools.map(extension.tool) });
+		if (installed.tools) registry.install({ ...installed, tools: installed.tools.map(guard) });
 	}
 }
 

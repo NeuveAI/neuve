@@ -4,15 +4,103 @@
 // in order, release nothing back to the runtime, and send the turn the chat's own folder. pi's
 // shell and file tools and the pass-through itself are never served to such a runtime.
 import { expect, test } from "bun:test";
+import type { SystemMessage } from "@earendil-works/pi-ai";
+import {
+  defineExtension,
+  GenerationTask,
+  hook,
+} from "@earendil-works/pi-durable";
 import {
   RuntimeEvent,
   TurnFailed,
+  type RuntimeShape,
   type RuntimeSession,
   type SessionPolicy,
 } from "@neuve/runtime";
 import { Cause, Effect, Queue, Stream } from "effect";
 import { RUNTIME_WORK_TOOL } from "../../src/chat-runtime/transcript.ts";
 import { FakeRuntime, caps, context, fixture, until } from "./fixture.ts";
+
+// Give the bridge the same request marker it receives when a chat is planning.
+test.each([
+  { runtimeName: "Codex-like", ownTools: true },
+  { runtimeName: "Claude subscription-like", ownTools: false },
+])(
+  "plan mode limits tools and workspace access on a $runtimeName runtime",
+  async ({ ownTools }) => {
+    const fake = new FakeRuntime();
+    fake.capabilities = {
+      ...caps,
+      ownTools,
+      toolEndsTurn: !ownTools,
+      resumeInTurn: !ownTools,
+      perMessageUsage: !ownTools,
+    };
+    const workspaces: unknown[] = [];
+    const openSession = fake.shape.openSession;
+    const captureWorkspace: RuntimeShape["openSession"] = (...args) =>
+      Effect.map(openSession(...args), (session) => ({
+        ...session,
+        get nativeSessionId() {
+          return session.nativeSessionId;
+        },
+        startTurn(input) {
+          workspaces.push(input.workspace);
+          return session.startTurn(input);
+        },
+      }));
+    Object.assign(fake.shape, { openSession: captureWorkspace });
+    const runtime = await fixture({ fake });
+    try {
+      await runtime.conversation.configure({ cwd: "/work/lane" }, context);
+      let planning = false;
+      runtime.pi.install(
+        defineExtension({
+          name: "plan-mode-test",
+          hooks: [
+            hook(GenerationTask, {
+              beforeRequest({ messages }) {
+                if (!planning) return;
+                const offer: SystemMessage = {
+                  role: "system",
+                  content: "",
+                  timestamp: messages.at(-1)?.timestamp ?? 0,
+                  toolsRemoved: [{ name: "probe" }],
+                };
+                Object.defineProperty(
+                  offer,
+                  Symbol.for("neuve.chat.plan-request"),
+                  {
+                    value: true,
+                  },
+                );
+                return { messages: [...messages, offer] };
+              },
+            }),
+          ],
+        }),
+      );
+      for (const readOnly of [false, true, false]) {
+        planning = readOnly;
+        fake.frames.push({ text: "Turn complete." });
+        expect((await runtime.submit("Inspect the repo")).status).toBe("done");
+      }
+      expect(workspaces).toEqual(
+        ownTools
+          ? ["write", "read-only", "write"].map((access) => ({
+              folder: "/work/lane",
+              access,
+            }))
+          : [undefined, undefined, undefined],
+      );
+      expect(
+        fake.opened.map(({ policy }) => policy.tools.map(({ name }) => name)),
+      ).toEqual([["probe"], [], ["probe"]]);
+    } finally {
+      await runtime.close();
+    }
+  },
+);
 
 test("Codex's own work shows as calls that already ran, in order, and nothing goes back to it", async () => {
   const fake = new FakeRuntime();
