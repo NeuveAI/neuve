@@ -234,7 +234,7 @@ export class Channel {
 		try {
 		const log = scoped(options.log, { channel: options.id });
 		let channel: Channel;
-		const planning: IsPlanning = (chat, context) =>
+		const planning: IsPlanning = async (chat, context) =>
 			isPlanning(channel.#harness, chat, context, id => channel.#changingModes.get(id));
 		const registry = createRegistry();
 		registry.install(logging(log));
@@ -273,11 +273,17 @@ export class Channel {
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models),
 			registry,
-			env: ({ cwd, conversationId }) => {
+			env: async ({ cwd, conversationId }, context) => {
 				const folder = cwd || options.project;
-				if (options.extension?.environment?.(folder) === false) return;
+				const { planFileAccess } = options;
+				const chatPlanning = (context: Context) => planning(conversationId, context);
+				if (options.extension?.environment?.(folder) === false) {
+					if (!planFileAccess || !await chatPlanning(context).catch(() => false)) return;
+					// An environment granted by plan mode stays confined for its lifetime.
+					return planFileAccess(options.env(folder), async () => true);
+				}
 				const env = options.env(folder);
-				return options.planFileAccess?.(env, context => planning(conversationId, context)) ?? env;
+				return planFileAccess?.(env, chatPlanning) ?? env;
 			},
 			onReport: (error) => log("error", "harness.report", failure(error)),
 		}, context);

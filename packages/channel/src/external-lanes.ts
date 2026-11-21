@@ -26,7 +26,7 @@ const NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 /**
  * The initial channel name remains the lane prefix after a rename. `lanes` is the directory the
  * host gives this channel's lane worktrees, outside the project checkout. `env` reaches the
- * project's Git, which a chat outside a lane has no environment for.
+ * project's Git for lane operations.
  */
 export type Place = {
 	name: string;
@@ -35,7 +35,7 @@ export type Place = {
 	env(cwd: string): ExecutionEnv;
 };
 
-/** Whether `cwd` is a lane rather than the project checkout, the only places a chat's tools run. */
+/** Whether `cwd` is outside the project checkout, where ordinary tool environments are allowed. */
 export function isPlaced(cwd: string, project: string): boolean {
 	return cwd !== project && !cwd.startsWith(`${project}/`);
 }

@@ -6,8 +6,10 @@ import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurr
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { Channel, Event, Request } from "@ace/channel";
+import { config } from "../src/host-config";
 import { openChannel } from "../src/worker-runtime";
 import { parseHostEnvelope } from "../src/parse";
+import { configureRuntime, runtimeHooks } from "../src/runtime-hooks";
 
 function git(cwd: string, ...args: string[]) {
 	const child = Bun.spawnSync(["git", "-c", "user.name=Test", "-c", "user.email=test@neuve.invalid", ...args], { cwd });
@@ -61,6 +63,63 @@ test("the gateway preserves an ask's mode and stamps the verified author", () =>
 	}), "teammate")).toEqual({
 		id: 1, op: "channel", channel: "plan-test", request: { op: "ask", author: "teammate", text: "Plan it", mode: "plan" },
 	});
+});
+
+// Exercise the configured worker's lane rule and confined file access on the same checkout.
+test("the configured worker gives planning chats confined access without a lane", async () => {
+	const root = await mkdtemp(join(tmpdir(), "neuve plan checkout "));
+	const previous = runtimeHooks();
+	const previousLanes = config.lanes;
+	try {
+		const dir = await realpath(root);
+		const repo = join(dir, "checkout");
+		await mkdir(repo);
+		git(repo, "init", "-q");
+		await writeFile(join(repo, "tracked.txt"), "tracked fixture");
+		await writeFile(join(repo, ".gitignore"), "ignored.txt\n");
+		await writeFile(join(repo, "ignored.txt"), "ignored fixture");
+		await writeFile(join(dir, "outside.txt"), "outside fixture");
+		git(repo, "add", "--", "tracked.txt");
+
+		config.lanes = join(dir, "lanes");
+		await mkdir(config.lanes);
+		configureRuntime({ worker: { models: (_, defaults) => defaults } });
+		const { fake, models } = faux();
+		const channel = await open(repo, models);
+		try {
+			fake.appendResponses([
+				fauxAssistantMessage([
+					fauxToolCall("read", { path: "tracked.txt" }, { id: "tracked" }),
+					fauxToolCall("explore", { action: "list" }, { id: "list" }),
+					fauxToolCall("read", { path: "ignored.txt" }, { id: "ignored" }),
+					fauxToolCall("read", { path: "../outside.txt" }, { id: "outside" }),
+					fauxToolCall("read", { path: ".git/config" }, { id: "metadata" }),
+				], { stopReason: "toolUse" }),
+				fauxAssistantMessage("Exploration complete"),
+				fauxAssistantMessage(fauxToolCall("read", { path: "tracked.txt" }, { id: "ordinary" }), { stopReason: "toolUse" }),
+				fauxAssistantMessage("Read complete"),
+			]);
+			await ask(channel, { mode: "plan" });
+			const planning = await results(channel);
+			expect(planning.get("tracked")).toMatchObject({ error: false, text: "tracked fixture" });
+			expect(planning.get("list")).toMatchObject({ error: false, text: expect.stringContaining("tracked.txt") });
+			expect(planning.get("ignored")).toMatchObject({ error: true, text: expect.stringContaining("Git ignores") });
+			expect(planning.get("outside")).toMatchObject({ error: true, text: expect.stringContaining("outside the working tree") });
+			expect(planning.get("metadata")).toMatchObject({ error: true, text: expect.stringContaining("Git metadata") });
+
+			await ask(channel, { mode: "ace" });
+			expect((await results(channel)).get("ordinary")).toMatchObject({
+				error: true, text: expect.stringContaining("No execution environment is configured"),
+			});
+		} finally {
+			await channel.close();
+		}
+	} finally {
+		configureRuntime({ worker: previous.worker });
+		if (previousLanes === undefined) Reflect.deleteProperty(config, "lanes");
+		else config.lanes = previousLanes;
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 // Use pi's real read tool to cover path rewrites and two chats sharing the host's file access.

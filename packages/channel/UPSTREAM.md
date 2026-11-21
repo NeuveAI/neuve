@@ -81,7 +81,7 @@ The native extension binding installs before harness open/recovery and attaches 
 
 ## Verification and limits
 
-Plan mode extends the upstream `packages/channel/src/channel.ts` admission and watch paths. An ask binds the mode to its retry digest, and admission updates a separate mode document. The harness passes the chat ID when it obtains file access. The channel publishes mode changes on the agent event and carries the recorded mode on replies.
+Plan mode extends the upstream `packages/channel/src/channel.ts` admission and watch paths. An ask binds the mode to its retry digest, and admission updates a separate mode document. The harness passes the chat ID when it obtains file access. The environment gate uses the same inherited mode check as the tool guard to permit confined access before lane placement. The channel publishes mode changes on the agent event and carries the recorded mode on replies.
 
 | Integration file | Plan mode behavior |
 | --- | --- |
