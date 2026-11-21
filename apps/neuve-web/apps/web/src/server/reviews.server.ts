@@ -22,6 +22,8 @@ import type { OpensCache } from "./desk.server"
 import { repositoryName } from "./git-source.server"
 import { LANE_FACTS } from "./lane-facts"
 import type { LaneFacts } from "./lane-facts"
+import { ancestryOf, rangeEnds, rangePatchesOf } from "./range-done.server"
+import type { RangeEnd } from "./range-done.server"
 import { NoStore, readRecords, repository } from "./records.server"
 
 /**
@@ -39,10 +41,19 @@ import { NoStore, readRecords, repository } from "./records.server"
  * file, as the overview reads it) never waits. Nor does a unit a later
  * review took over: the desk's `successorOf`, with the "Newer review"
  * link's `laterThan`, leads from it to a unit that opens, which counts in
- * its own review instead. A review whose every human unit is taken over is
- * older: its row asks for nothing and says a newer review replaced it. The
- * BFF decides nothing: Records says each review's state, lanes, lineage and
- * dispositions.
+ * its own review instead. Nor does any unit of a review a later published
+ * review's range holds (`replacedOf`): that review reviewed the same
+ * changes, so only the newest review per branch counts (14.33). A review
+ * whose every human unit is taken over is older: its row asks for nothing
+ * and says a newer review replaced it. The BFF decides nothing: Records says
+ * each review's state, lanes, lineage and dispositions, and git says how
+ * the ranges relate and whether one landed.
+ *
+ * "Waiting on you", the default list, holds the reviews with a unit that
+ * waits, landed ones only while a human-required unit waits
+ * (`listedByDefault`), human-required work first (`defaultListOf`). The
+ * header's counts and "Open next" count over it. A cycle's own address
+ * (`cycle`) lists that one review, wherever it stands.
  */
 
 export const PAGE_SIZE = 10
@@ -87,7 +98,10 @@ const subjectOf = async (at: string, oid: string) => {
 
 /** What Records says of the listed reviews' units, read once per load. */
 export interface UnitStanding {
-  /** Units whose work a later review holds: lineage leads to a unit that opens. */
+  /**
+   * Units whose work a later review holds: lineage leads to a unit that
+   * opens, or a later review's range holds their review's (`replacedOf`).
+   */
   readonly takenOver: ReadonlySet<string>
   /** Human units Records' judgement closes, with the verdict that stands. */
   readonly decided: ReadonlyMap<string, Verdict>
@@ -136,6 +150,129 @@ const waitingUnits = (review: Listed, standing: UnitStanding) =>
   askedUnits(review, standing).filter(
     (unit) => markOf(standing, unit.unitId) === "waiting"
   )
+
+const requiredWaiting = (review: Listed, standing: UnitStanding) =>
+  waitingUnits(review, standing).filter(
+    (unit) => laneOf(unit.lane) === "human-required"
+  )
+
+/**
+ * The unit a desk opens on among `candidates` (a review's units, or a
+ * batch's): the first human-required unit that waits, else the first unit
+ * that waits. A caller with nothing waiting opens the first unit.
+ */
+export const entryUnitOf = (
+  candidates: ReadonlyArray<ReviewList.ListedUnit>,
+  standing: UnitStanding
+) => {
+  const waiting = candidates.filter(
+    (unit) =>
+      asks(standing)(unit) && markOf(standing, unit.unitId) === "waiting"
+  )
+  return (
+    waiting.find((unit) => laneOf(unit.lane) === "human-required") ?? waiting[0]
+  )?.unitId
+}
+
+/** A review that published every batch: it holds what it reviewed. */
+const wholeOf = (review: Listed, facts: LaneFacts = LANE_FACTS) =>
+  review.batches.length > 0 && facts.listedPendingBatches(review) === 0
+
+/**
+ * The gone reviews (`ends`) a later whole review carries: every commit of
+ * the gone range has a commit of the later range with the same patch-id,
+ * git's rebase equivalence (`git cherry`). A rebased pull request reviewed
+ * again counts once. A gone review with a commit no later review carries
+ * stays.
+ */
+export const rebasedOf = (
+  reviews: ReadonlyArray<Listed>,
+  ends: ReadonlyMap<string, RangeEnd>,
+  patchesOf: (review: Listed) => ReadonlyArray<string> | undefined,
+  facts: LaneFacts = LANE_FACTS
+): ReadonlySet<string> =>
+  new Set(
+    reviews
+      .filter((earlier) => {
+        if (ends.get(earlier.cycleId) !== "gone") return false
+        const own = patchesOf(earlier) ?? []
+        if (own.length === 0) return false
+        return reviews.some((later) => {
+          if (later.cycleId <= earlier.cycleId || !wholeOf(later, facts))
+            return false
+          const carried = new Set(patchesOf(later) ?? [])
+          return own.every((patch) => carried.has(patch))
+        })
+      })
+      .map((review) => review.cycleId)
+  )
+
+/**
+ * The reviews a later review replaces: one opened later, with every batch
+ * published, whose base is at or before the earlier base and whose head is
+ * at or past the earlier head. It reviewed the same changes, and decisions
+ * carry to the units that didn't change (14.12). A later review that
+ * published nothing, or stopped short of its batches, may not hold what the
+ * earlier one asks.
+ */
+export const replacedOf = (
+  reviews: ReadonlyArray<Listed>,
+  descends: (ancestor: string, descendant: string) => boolean,
+  facts: LaneFacts = LANE_FACTS
+): ReadonlySet<string> =>
+  new Set(
+    reviews
+      .filter((earlier) =>
+        reviews.some(
+          (later) =>
+            later.cycleId > earlier.cycleId &&
+            wholeOf(later, facts) &&
+            descends(later.range.baseOid, earlier.range.baseOid) &&
+            descends(earlier.range.headOid, later.range.headOid)
+        )
+      )
+      .map((review) => review.cycleId)
+  )
+
+/**
+ * Whether "Waiting on you" lists a review, given its units that wait
+ * (14.33) and how its range ended. A review still open is listed while
+ * anything of it waits; a landed or gone one (its commits rewritten, maybe
+ * landed under new hashes) only while a human-required unit waits, since a
+ * person still decides it.
+ */
+export const listedByDefault = (
+  waiting: number,
+  required: number,
+  end: RangeEnd | undefined
+) => (end === undefined ? waiting > 0 : required > 0)
+
+/**
+ * "Waiting on you": the reviews `listedByDefault` holds, newest run first
+ * within each group: open reviews with a human-required unit that waits,
+ * then landed or gone ones with one, then the rest.
+ */
+export const defaultListOf = (
+  reviews: ReadonlyArray<Listed>,
+  standing: UnitStanding,
+  ends: ReadonlyMap<string, RangeEnd>
+): ReadonlyArray<Listed> => {
+  const rank = (review: Listed) => {
+    if (requiredWaiting(review, standing).length === 0) return 2
+    return ends.has(review.cycleId) ? 1 : 0
+  }
+  return reviews
+    .filter((review) =>
+      listedByDefault(
+        waitingUnits(review, standing).length,
+        requiredWaiting(review, standing).length,
+        ends.get(review.cycleId)
+      )
+    )
+    .map((review, index) => ({ review, index, rank: rank(review) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(({ review }) => review)
+}
 
 /** Every human unit of the review is held by a later review: it asks for nothing. */
 const isOlder = (review: Listed, standing: UnitStanding) => {
@@ -239,7 +376,9 @@ const isPerson = (actorId: string, known: PersonKinds) =>
  */
 export const standingOf = (
   reviews: ReadonlyArray<Listed>,
-  facts: LaneFacts = LANE_FACTS
+  facts: LaneFacts = LANE_FACTS,
+  /** Reviews a later review's range holds (`replacedOf`): every unit of theirs is taken over. */
+  replaced: ReadonlySet<string> = new Set()
 ) =>
   Effect.gen(function* () {
     // One shared cache: each later review's manifest and range read once.
@@ -257,6 +396,10 @@ export const standingOf = (
     )
     let walks = 0
     for (const { review, unit } of human) {
+      if (replaced.has(review.cycleId)) {
+        taken.add(unit.unitId)
+        continue
+      }
       if ((named.get(unit.unitId) ?? []).length === 0) continue
       walks += 1
       // The batched read already holds each listed unit's lineage: the
@@ -343,13 +486,15 @@ export const standingOf = (
       "neuve.reviews.asked-units": asked.length,
       "neuve.reviews.packet-reads": packetReads.size,
       "neuve.reviews.taken-over": taken.size,
+      "neuve.reviews.replaced": replaced.size,
     })
     return { takenOver: taken, decided, notRead } satisfies UnitStanding
   }).pipe(Effect.withSpan("web.reviews.standing"))
 
 /**
- * What waits on a person across `reviews` (newest run first): the reviews
- * with a unit waiting, how many units, and the unit "Open next" opens.
+ * What waits on a person across `reviews`, in their order: the reviews with
+ * a unit waiting, how many units, and the unit "Open next" opens, the first
+ * human-required unit that waits before any other.
  */
 export const waitingOf = (
   reviews: ReadonlyArray<Listed>,
@@ -358,22 +503,28 @@ export const waitingOf = (
   const waiting = reviews.filter(
     (review) => waitingUnits(review, standing).length > 0
   )
-  const next = waiting.at(0)
+  const required = waiting.find(
+    (review) => requiredWaiting(review, standing).length > 0
+  )
+  const next = required ?? waiting.at(0)
   return {
     waiting,
     units: waiting.reduce(
       (sum, review) => sum + waitingUnits(review, standing).length,
       0
     ),
-    nextUnitId: next ? waitingUnits(next, standing)[0]?.unitId : undefined,
+    nextUnitId: next ? entryUnitOf(units(next), standing) : undefined,
   }
 }
 
 /** Records' word on `reviews`' units, and where anyone gave feedback. */
-const answers = (reviews: ReadonlyArray<Listed>) =>
+const answers = (
+  reviews: ReadonlyArray<Listed>,
+  replaced?: ReadonlySet<string>
+) =>
   Effect.gen(function* () {
     return {
-      standing: yield* standingOf(reviews),
+      standing: yield* standingOf(reviews, LANE_FACTS, replaced),
       feedback: yield* ReviewList.feedbackGiven(
         reviews.map((review) => review.cycleId)
       ),
@@ -402,9 +553,18 @@ export async function reviewsLoad(options: {
   return read.status === "empty" ? read : { status: "ready", data: read.data }
 }
 
+/** Git's word, or none when git can't say: nothing replaced, nothing ended. */
+export const orNone = <A>(read: Promise<A>, none: A, what: string) =>
+  read.catch((error: unknown) => {
+    console.warn(`the Reviews load could not read ${what} from git`, error)
+    return none
+  })
+
 export async function reviewsRead(options: {
   readonly page: number
   readonly filter: ReviewsFilter
+  /** A cycle's own address: that one review, wherever it stands. */
+  readonly cycle?: string | undefined
 }): Promise<ReviewsRead> {
   const at = repository()
   const read = await readRecords("web.load.reviews", () =>
@@ -420,31 +580,119 @@ export async function reviewsRead(options: {
           attributes: { "neuve.reviews.cap": WAITING_CAP },
         })
       )
+      const cycle = options.cycle
+      // A cycle past the newest WAITING_CAP is read on its own.
+      const scoped =
+        cycle === undefined ||
+        recent.reviews.some((review) => review.cycleId === cycle)
+          ? []
+          : (yield* ReviewList.reviews({ limit: 1, cycleId: cycle })).reviews
+      const reviews = [...recent.reviews, ...scoped]
+      const descends = yield* Effect.promise(() =>
+        orNone(
+          ancestryOf(
+            at,
+            reviews.flatMap((review) => [
+              review.range.baseOid,
+              review.range.headOid,
+            ])
+          ),
+          () => false,
+          "the reviewed history"
+        )
+      )
+      const replaced = replacedOf(reviews, descends)
       return {
         recent,
-        ...(yield* answers(recent.reviews)),
+        reviews,
+        ...(yield* answers(reviews, replaced)),
       }
     })
   ).catch((error: unknown) => {
     if (error instanceof NoStore) return undefined
     throw error
   })
-  if (!read || read.recent.total === 0) return { status: "empty" }
-  const standing = read.standing
+  if (!options.cycle && (!read || read.recent.total === 0))
+    return { status: "empty" }
+  const reviews = read?.reviews ?? []
+  let standing = read?.standing ?? NO_STANDING
+  const feedback = new Set(read?.feedback)
+  // How a range ended matters only to a review with a unit that waits.
+  const ends = await orNone(
+    rangeEnds(
+      at,
+      reviews
+        .filter((review) => waitingUnits(review, standing).length > 0)
+        .map((review) => ({
+          cycleId: review.cycleId,
+          baseRef: review.range.baseRef,
+          headOid: review.range.headOid,
+        }))
+    ),
+    new Map<string, RangeEnd>(),
+    "how the ranges ended"
+  )
+  // A gone review a later review carries, commit for commit, is replaced
+  // like one whose range a later review holds.
+  const gone = reviews.filter((review) => ends.get(review.cycleId) === "gone")
+  if (gone.length > 0) {
+    const first = gone.reduce(
+      (earliest, review) =>
+        review.cycleId < earliest ? review.cycleId : earliest,
+      gone[0]?.cycleId ?? ""
+    )
+    const asked = reviews.filter(
+      (review) =>
+        ends.get(review.cycleId) === "gone" ||
+        (review.cycleId > first && wholeOf(review))
+    )
+    const patches = await orNone(
+      rangePatchesOf(
+        at,
+        asked.map((review) => review.range)
+      ),
+      new Map<string, ReadonlyArray<string>>(),
+      "the reviewed commits"
+    )
+    const rebased = rebasedOf(reviews, ends, (review) =>
+      patches.get(`${review.range.baseOid}..${review.range.headOid}`)
+    )
+    if (rebased.size > 0)
+      standing = {
+        ...standing,
+        takenOver: new Set([
+          ...standing.takenOver,
+          ...reviews
+            .filter((review) => rebased.has(review.cycleId))
+            .flatMap((review) => units(review).map((unit) => unit.unitId)),
+        ]),
+      }
+  }
   let pageStanding = standing
-  const feedback = new Set(read.feedback)
-  const across = waitingOf(read.recent.reviews, standing)
-  const waiting = across.waiting
-  const listed = options.filter === "waiting" ? waiting : read.recent.reviews
-  const total =
-    options.filter === "waiting" ? waiting.length : read.recent.total
+  const waiting = defaultListOf(
+    reviews.slice(0, read?.recent.reviews.length),
+    standing,
+    ends
+  )
+  const own = reviews.filter((review) => review.cycleId === options.cycle)
+  const listed = options.cycle
+    ? own
+    : options.filter === "waiting"
+      ? waiting
+      : reviews
+  const across = waitingOf(options.cycle ? own : waiting, standing)
+  const total = options.cycle
+    ? own.length
+    : options.filter === "waiting"
+      ? waiting.length
+      : (read?.recent.total ?? 0)
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const page = Math.min(Math.max(1, Math.trunc(options.page) || 1), pageCount)
   const offset = (page - 1) * PAGE_SIZE
-  // The newest WAITING_CAP reviews hold every page but those past them; a
-  // page past them reads its reviews, and Records' word on them, apart.
+  // The newest WAITING_CAP reviews hold every page of All but those past
+  // them; a page past them reads its reviews, and Records' word on them, apart.
   let onPage: ReadonlyArray<Listed> = listed.slice(offset, offset + PAGE_SIZE)
-  if (offset >= listed.length) {
+  if (!options.cycle && options.filter === "all" && offset >= listed.length) {
     const older = await readRecords("web.load.reviews.page", () =>
       Effect.gen(function* () {
         const reviews = (yield* ReviewList.reviews({
@@ -465,26 +713,49 @@ export async function reviewsRead(options: {
         : subjectOf(at, review.range.headOid)
     )
   )
+  const inWaiting = new Set(waiting.map((review) => review.cycleId))
   const data: ReviewsData = {
+    ...(options.cycle ? { cycle: options.cycle } : {}),
     repo: await repositoryName(at),
     reviews: onPage.map((review, index) =>
       summaryOf(review, pageStanding, feedback, subjects[index])
     ),
-    filter: options.filter,
+    filter: options.cycle ? "all" : options.filter,
     page,
     pageSize: PAGE_SIZE,
     total,
-    counts: { all: read.recent.total, waiting: waiting.length },
+    // A cycle's address counts its one review.
+    counts: options.cycle
+      ? {
+          all: own.length,
+          waiting: own.filter((review) => inWaiting.has(review.cycleId)).length,
+        }
+      : { all: read?.recent.total ?? 0, waiting: waiting.length },
     waiting: {
       units: across.units,
-      reviews: waiting.length,
+      reviews: across.waiting.length,
       nextUnitId: across.nextUnitId,
     },
     // A failed or running review reviewed nothing yet: new work counts from
-    // the newest review that finished.
-    newestHead: read.recent.reviews.find(
-      (review) => review.state === "completed" || review.state === "timed-out"
-    )?.range.headOid,
+    // the newest review that finished. A cycle's address offers none.
+    newestHead: options.cycle
+      ? undefined
+      : read?.recent.reviews.find(
+          (review) =>
+            review.state === "completed" || review.state === "timed-out"
+        )?.range.headOid,
   }
   return { status: "ready", data, onPage, standing: pageStanding }
+}
+
+/**
+ * The unit a cycle's desk address opens on, across all its batches: the
+ * first human-required unit that waits, else the first unit that waits,
+ * else its first unit. None while it has no unit.
+ */
+export async function cycleEntry(cycle: string): Promise<string | undefined> {
+  const read = await reviewsRead({ page: 1, filter: "all", cycle })
+  const review = read.status === "ready" ? read.onPage[0] : undefined
+  if (!review || read.status !== "ready") return undefined
+  return entryUnitOf(units(review), read.standing) ?? units(review)[0]?.unitId
 }

@@ -102,12 +102,14 @@ export interface ReviewPage {
  * was read moves to the top, so a later page never repeats it. `offset` skips that many reviews
  * first, for numbered pages; it pages by position, so a review re-run between two reads shifts the
  * others by one. A `limit` that is not a finite number reads one page of `LIMIT_MAX`; a `before` or
- * `offset` that is not one reads from the newest.
+ * `offset` that is not one reads from the newest. `cycleId` reads that one review, wherever it
+ * stands.
  */
 export const reviews = (options: {
   readonly limit: number;
   readonly before?: number | undefined;
   readonly offset?: number | undefined;
+  readonly cycleId?: string | undefined;
 }) =>
   Effect.gen(function* () {
     yield* assertCompatible;
@@ -123,6 +125,7 @@ export const reviews = (options: {
       options.offset !== undefined && Number.isFinite(options.offset)
         ? Math.max(0, Math.trunc(options.offset))
         : 0;
+    const cycle = options.cycleId ?? null;
     // One row more than the page tells whether an older page exists; the window counts every
     // review the read pages through, in the same grouping pass.
     const runs = yield* sql<{
@@ -135,6 +138,7 @@ export const reviews = (options: {
       WHERE e.kind = 'review.requested@1'
         AND (EXISTS (SELECT 1 FROM jobs j WHERE j.event_id = e.id AND j.kind IN ('review.run', 'review.run@2'))
           OR EXISTS (SELECT 1 FROM projection_runs r WHERE r.run_id = e.id))
+        AND (${cycle} IS NULL OR json_extract(e.envelope, '$.attribution.cycleId') = ${cycle})
       GROUP BY cycle_id HAVING ${before} IS NULL OR max(e.seq) < ${before}
       ORDER BY seq DESC LIMIT ${limit + 1} OFFSET ${offset}`;
     const page = runs.slice(0, limit);
@@ -149,6 +153,7 @@ export const reviews = (options: {
               WHERE e.kind = 'review.requested@1'
                 AND (EXISTS (SELECT 1 FROM jobs j WHERE j.event_id = e.id AND j.kind IN ('review.run', 'review.run@2'))
                   OR EXISTS (SELECT 1 FROM projection_runs r WHERE r.run_id = e.id))
+                AND (${cycle} IS NULL OR json_extract(e.envelope, '$.attribution.cycleId') = ${cycle})
               GROUP BY json_extract(e.envelope, '$.attribution.cycleId')
               HAVING ${before} IS NULL OR max(e.seq) < ${before})`)[0]?.total ??
           0));

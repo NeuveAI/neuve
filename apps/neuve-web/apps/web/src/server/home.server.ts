@@ -12,7 +12,14 @@ import { LANE_FACTS } from "./lane-facts"
 import type { DeskBatch, LaneFacts } from "./lane-facts"
 import { withoutLocalIds } from "./projection"
 import { readRecords } from "./records.server"
-import { LANE_ORDER, asks, laneOf, markOf, reviewsRead } from "./reviews.server"
+import {
+  LANE_ORDER,
+  asks,
+  entryUnitOf,
+  laneOf,
+  markOf,
+  reviewsRead,
+} from "./reviews.server"
 import type { UnitStanding } from "./reviews.server"
 
 /**
@@ -61,9 +68,6 @@ export const homeBatchOf = (
     counts.set(lane, (counts.get(lane) ?? 0) + 1)
   }
   const asked = newer ? [] : listed.units.filter(asks(standing))
-  const waiting = asked.find(
-    (unit) => markOf(standing, unit.unitId) === "waiting"
-  )
   const digest = plainDigest(packet?.digest?.digest)
   const toCheck = plainDigest(packet?.digest?.verification)
   const removes = packet
@@ -72,7 +76,9 @@ export const homeBatchOf = (
         .map((entry) => withoutLocalIds(entry.text).trim())
         .filter((text) => text !== "")
     : []
-  const deskUnitId = (waiting ?? listed.units.at(0))?.unitId
+  const deskUnitId =
+    (newer ? undefined : entryUnitOf(listed.units, standing)) ??
+    listed.units.at(0)?.unitId
   return {
     ...summary,
     // An older review asks for nothing: a newer one holds its units.
@@ -108,34 +114,63 @@ const packetsOf = (reviews: ReadonlyArray<Listed>) =>
     return reviews.map(() => undefined)
   })
 
+/**
+ * A review's batches as the home page shows them, in packet order; at a
+ * cycle's own address (`requiredFirst`), the batches with a human-required
+ * unit that waits come first, each group keeping that order.
+ */
+export const homeBatchesOf = (
+  summary: ReviewSummary,
+  listed: Listed | undefined,
+  packet: { readonly batches: ReadonlyArray<DeskBatch> } | undefined,
+  standing: UnitStanding,
+  requiredFirst: boolean
+): Array<HomeBatch> => {
+  const byId = new Map(
+    (packet?.batches ?? []).map((batch) => [batch.batchId, batch])
+  )
+  const newer = summary.newer === true
+  const batches = summary.batches.map((batch, at) => {
+    const own = listed?.batches.at(at)
+    return {
+      shown: own
+        ? homeBatchOf(own, batch, byId.get(batch.id), standing, newer)
+        : { ...batch, lanes: [], asked: 0 },
+      required:
+        !newer &&
+        (own?.units ?? []).some(
+          (unit) =>
+            laneOf(unit.lane) === "human-required" &&
+            asks(standing)(unit) &&
+            markOf(standing, unit.unitId) === "waiting"
+        ),
+    }
+  })
+  if (requiredFirst)
+    batches.sort((a, b) => Number(b.required) - Number(a.required))
+  return batches.map(({ shown }) => shown)
+}
+
 export async function homeLoad(options: {
   readonly page: number
   readonly filter: "all" | "waiting"
+  /** A cycle's own address: the list scoped to that one review. */
+  readonly cycle?: string | undefined
 }): Promise<HomeLoad> {
   const read = await reviewsRead(options)
   if (read.status === "empty") return read
   const packets = await packetsOf(read.onPage)
-  const reviews: Array<HomeReview> = read.data.reviews.map((summary, index) => {
-    const listed = read.onPage.at(index)
-    const packet = packets.at(index)
-    const byId = new Map(
-      (packet?.batches ?? []).map((batch) => [batch.batchId, batch])
-    )
-    return {
+  const reviews: Array<HomeReview> = read.data.reviews.map(
+    (summary, index) => ({
       ...summary,
-      batches: summary.batches.map((batch, at) => {
-        const own = listed?.batches.at(at)
-        return own
-          ? homeBatchOf(
-              own,
-              batch,
-              byId.get(batch.id),
-              read.standing,
-              summary.newer === true
-            )
-          : { ...batch, lanes: [], asked: 0 }
-      }),
-    }
-  })
+      batches: homeBatchesOf(
+        summary,
+        read.onPage.at(index),
+        packets.at(index),
+        read.standing,
+        options.cycle !== undefined
+      ),
+    })
+  )
   return { status: "ready", data: { ...read.data, reviews } }
 }

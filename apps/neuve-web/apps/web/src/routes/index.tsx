@@ -1,5 +1,3 @@
-import { loadReviewCycle } from "@/server/review-cycle"
-import { ReviewCycle } from "@/components/review-cycle"
 import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router"
 import { atom, useAtomValue, useSetAtom } from "jotai"
 import { z } from "zod"
@@ -17,7 +15,8 @@ import { loadStart, requestStart } from "@/server/start-review"
 /**
  * The page and filter in the address, so a page of the list can be shared
  * and the back button returns to it. Anything else reads as the first page
- * of every review.
+ * of "Waiting on you"; `filter=all` lists every review, and `cycle` that
+ * one review.
  */
 const ReviewsSearch = z.object({
   returnTo: z.string().max(8192).optional().catch(undefined),
@@ -26,13 +25,14 @@ const ReviewsSearch = z.object({
     .regex(/^[0-9A-HJKMNP-TV-Z]{26}$/)
     .optional(),
   page: z.coerce.number().int().min(1).max(10_000).optional().catch(undefined),
-  filter: z.enum(["waiting"]).optional().catch(undefined),
+  filter: z.enum(["all"]).optional().catch(undefined),
 })
 
 /**
- * The home page: every review of the repository, newest run first, each with
- * its batches and their batch digests, lanes and what waits on the reader;
- * nothing is opened for them. With
+ * The home page: "Waiting on you" (the reviews that still need a person,
+ * human-required work first), or every review of the repository, newest run
+ * first; each with its batches and their batch digests, lanes and what waits
+ * on the reader; nothing is opened for them. With
  * none, "Start a review" (ST1–ST4): the branch it would review, or the review
  * it started while it runs; the review arrives through the web events. With
  * reviews, the same start, offered once the branch has moved past the newest
@@ -46,13 +46,15 @@ export const Route = createFileRoute("/")({
   }): { page: number; filter: ReviewsFilter; cycle?: string } => ({
     cycle: search.cycle,
     page: search.page ?? 1,
-    filter: search.filter ?? "all",
+    filter: search.filter ?? "waiting",
   }),
   loader: async ({ deps }) => {
     if (deps.cycle)
       return {
-        kind: "cycle" as const,
-        cycle: await loadReviewCycle({ data: { cycle: deps.cycle } }),
+        load: await loadHome({
+          data: { page: 1, filter: "all", cycle: deps.cycle },
+        }),
+        start: undefined,
       }
     // The list and the branch's state are read side by side.
     const [load, start] = await Promise.all([
@@ -61,12 +63,10 @@ export const Route = createFileRoute("/")({
     ])
     if (load.status === "empty")
       return {
-        kind: "list" as const,
         load,
         start: start ?? (await loadStart()),
       }
     return {
-      kind: "list" as const,
       load,
       start: await nextStart(load.data.newestHead, start, (reviewed, head) =>
         loadMovedPast({ data: { reviewed, head } })
@@ -122,12 +122,10 @@ function useStartHandler(
 function ReviewsRoute() {
   const result = Route.useLoaderData()
   const { returnTo } = Route.useSearch()
-  const start = result.kind === "list" ? result.start : undefined
+  const { load, start } = result
   const navigate = useNavigate({ from: "/" })
   const onStartReview = useStartHandler(start)
   const started = useAtomValue(startedAtom)
-  if (result.kind === "cycle") return <ReviewCycle cycle={result.cycle} />
-  const { load } = result
   return (
     <HomePage
       load={load}
@@ -138,7 +136,7 @@ function ReviewsRoute() {
       onFilterChange={(filter) =>
         void navigate({
           search: {
-            filter: filter === "waiting" ? "waiting" : undefined,
+            filter: filter === "all" ? "all" : undefined,
             returnTo,
           },
           hash: "reviews",

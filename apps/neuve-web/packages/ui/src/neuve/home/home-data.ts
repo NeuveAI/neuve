@@ -27,7 +27,7 @@ export interface HomeBatch extends ReviewBatch {
   removes?: Array<string>
   /** Human units it asks a person about, decided or not (`needYou` waits). */
   asked: number
-  /** The unit its desk opens on: the first waiting on the reader, else its first. */
+  /** The unit its desk opens on: the first human-required unit waiting on the reader, else the first waiting, else its first. */
   deskUnitId?: string
 }
 

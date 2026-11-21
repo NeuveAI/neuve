@@ -3,12 +3,24 @@
 // reviewed one, so an unrelated branch or a reset behind the review read as new work. This runs the
 // rule on a real repository in a temporary directory: only a head that descends from the reviewed
 // one, and is not it, counts.
+//
+// Why (21 November 2026, NEU-433): "Waiting on you" drops a review whose range is done or that a
+// later review's range holds, so a wrong answer from git hides work a person still has to decide,
+// or keeps finished work in the way. These run the git reads on real repositories: a merge, a
+// squash merge of a branch tip that holds the reviewed head, a stacked pair squashed as one, a head
+// on no branch (a ref of Neuve's own doesn't count), a head the repository doesn't hold, and a
+// range still open; and which reviewed commits descend from which. A git failure must never read as
+// "gone" (that would empty the list), and a change already on the default branch before a branch
+// forked is not that branch landing. A rebase keeps each commit's patch-id, which is how a rebased
+// review a later one carries counts once.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, expect, test } from "bun:test"
 
 import { movedPast } from "./branch-moved.server"
+import { ancestryOf, rangeEnds, rangePatchesOf } from "./range-done.server"
+import { orNone } from "./reviews.server"
 
 const directories: Array<string> = []
 afterAll(() => {
@@ -62,4 +74,186 @@ test("only a head that descends from the reviewed one is new work", async () => 
   expect(await movedPast(at, reviewed, unrelated)).toBe(false)
   // A revision the repository doesn't hold.
   expect(await movedPast(at, "f".repeat(40), later)).toBe(false)
+})
+
+test("a range is done when it landed on the default branch, by merge or by squash, or its head is gone", async () => {
+  const at = mkdtempSync(join(tmpdir(), "range-done-"))
+  directories.push(at)
+  git(at, "init", "--quiet", "-b", "main")
+  commit(at, "base")
+  // Merged: its head is in the default branch.
+  git(at, "checkout", "--quiet", "-b", "merged")
+  const merged = commit(at, "merged")
+  git(at, "checkout", "--quiet", "main")
+  git(at, "merge", "--quiet", "--no-ff", "-m", "merge", "merged")
+  // Squashed from a later tip: the reviewed head is behind the branch's tip.
+  git(at, "checkout", "--quiet", "-b", "squashed")
+  const squashedHead = commit(at, "squashed-1")
+  commit(at, "squashed-2")
+  // Stacked: the upper branch, holding the lower, landed as one squash.
+  git(at, "checkout", "--quiet", "-b", "lower", "main")
+  const lower = commit(at, "lower")
+  git(at, "checkout", "--quiet", "-b", "upper")
+  const upper = commit(at, "upper")
+  git(at, "checkout", "--quiet", "main")
+  for (const branch of ["squashed", "upper"]) {
+    git(at, "merge", "--quiet", "--squash", branch)
+    git(at, "commit", "--quiet", "-m", `squash ${branch}`)
+  }
+  // Gone: rebased away, kept only by a ref of Neuve's own.
+  git(at, "checkout", "--quiet", "-b", "gone")
+  const gone = commit(at, "gone")
+  git(at, "update-ref", `refs/neuve/reviews/${gone}`, gone)
+  git(at, "checkout", "--quiet", "main")
+  git(at, "branch", "--quiet", "-D", "gone")
+  // Open: on a branch, not landed.
+  git(at, "checkout", "--quiet", "-b", "open")
+  const open = commit(at, "open")
+  git(at, "checkout", "--quiet", "main")
+  git(at, "update-ref", "refs/remotes/origin/main", "main")
+  git(
+    at,
+    "symbolic-ref",
+    "refs/remotes/origin/HEAD",
+    "refs/remotes/origin/main"
+  )
+
+  const range = (cycleId: string, headOid: string, baseRef = "abc1234") => ({
+    cycleId,
+    baseRef,
+    headOid,
+  })
+  const ranges = [
+    range("merged", merged),
+    range("squashed", squashedHead),
+    range("lower", lower),
+    range("upper", upper),
+    range("gone", gone),
+    range("missing", "f".repeat(40)),
+    range("open", open),
+  ]
+  const ended = async (of: typeof ranges) =>
+    Object.fromEntries(await rangeEnds(at, of)) as Record<string, string>
+  const expected: Record<string, string> = {
+    merged: "landed",
+    squashed: "landed",
+    lower: "landed",
+    upper: "landed",
+    gone: "gone",
+    missing: "gone",
+  }
+  expect(await ended(ranges)).toEqual(expected)
+  // The second read answers from what the first kept, the same.
+  expect(await ended(ranges)).toEqual(expected)
+
+  // Without origin/HEAD, a base ref that names a branch is the default branch; one that doesn't
+  // leaves the range unplaced.
+  git(at, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+  expect(
+    await ended([
+      range("named", merged, "main"),
+      range("unnamed", merged, "abc1234"),
+    ])
+  ).toEqual({ named: "landed" })
+})
+
+test("which reviewed commits descend from which", async () => {
+  const at = mkdtempSync(join(tmpdir(), "range-ancestry-"))
+  directories.push(at)
+  git(at, "init", "--quiet", "-b", "main")
+  const base = commit(at, "base")
+  const middle = commit(at, "middle")
+  const head = commit(at, "head")
+  git(at, "checkout", "--quiet", "-b", "side", base)
+  const side = commit(at, "side")
+  const missing = "e".repeat(40)
+  const descends = await ancestryOf(at, [base, middle, head, side, missing])
+  expect(descends(base, head)).toBe(true)
+  expect(descends(middle, head)).toBe(true)
+  expect(descends(head, head)).toBe(true)
+  expect(descends(head, middle)).toBe(false)
+  expect(descends(side, head)).toBe(false)
+  expect(descends(base, side)).toBe(true)
+  expect(descends(missing, head)).toBe(false)
+})
+
+test("a directory git can't read says nothing: no range is gone, and the load falls back to none", async () => {
+  const at = mkdtempSync(join(tmpdir(), "range-silent-"))
+  directories.push(at)
+  const ranges = [{ cycleId: "c", baseRef: "main", headOid: "a".repeat(40) }]
+  await expect(rangeEnds(at, ranges)).rejects.toThrow()
+  await expect(
+    ancestryOf(at, ["a".repeat(40), "b".repeat(40)])
+  ).rejects.toThrow()
+  await expect(
+    rangePatchesOf(at, [{ baseOid: "a".repeat(40), headOid: "b".repeat(40) }])
+  ).rejects.toThrow()
+  expect(
+    await orNone(rangeEnds(at, ranges), new Map(), "how the ranges ended")
+  ).toEqual(new Map())
+})
+
+test("a change the default branch had before the branch forked is not the branch landing", async () => {
+  const at = mkdtempSync(join(tmpdir(), "range-fork-"))
+  directories.push(at)
+  git(at, "init", "--quiet", "-b", "main")
+  commit(at, "base")
+  // The default branch adds a file, then removes it.
+  commit(at, "readded")
+  git(at, "rm", "--quiet", "readded")
+  git(at, "commit", "--quiet", "-m", "remove readded")
+  // A branch forked after that adds the same file back: the same patch-id as the first commit.
+  git(at, "checkout", "--quiet", "-b", "again")
+  const again = commit(at, "readded")
+  git(at, "checkout", "--quiet", "main")
+  commit(at, "later")
+  git(at, "update-ref", "refs/remotes/origin/main", "main")
+  git(
+    at,
+    "symbolic-ref",
+    "refs/remotes/origin/HEAD",
+    "refs/remotes/origin/main"
+  )
+  expect(
+    Object.fromEntries(
+      await rangeEnds(at, [
+        { cycleId: "again", baseRef: "main", headOid: again },
+      ])
+    )
+  ).toEqual({})
+})
+
+test("a rebase keeps each commit's patch-id; a changed commit doesn't", async () => {
+  const at = mkdtempSync(join(tmpdir(), "range-rebase-"))
+  directories.push(at)
+  git(at, "init", "--quiet", "-b", "main")
+  const base = commit(at, "base")
+  git(at, "checkout", "--quiet", "-b", "before")
+  commit(at, "one")
+  const before = commit(at, "two")
+  // The default branch moves on; the branch is replayed onto it, with one more commit.
+  git(at, "checkout", "--quiet", "main")
+  const moved = commit(at, "elsewhere")
+  git(at, "checkout", "--quiet", "-b", "after")
+  git(at, "cherry-pick", "--quiet", `${base}..${before}`)
+  const after = commit(at, "three")
+  // Another branch changes "two" before replaying.
+  git(at, "checkout", "--quiet", "-b", "changed", moved)
+  commit(at, "one")
+  writeFileSync(join(at, "two"), "different")
+  git(at, "add", "two")
+  git(at, "commit", "--quiet", "-m", "two, changed")
+  const changed = git(at, "rev-parse", "HEAD")
+  const patches = await rangePatchesOf(at, [
+    { baseOid: base, headOid: before },
+    { baseOid: moved, headOid: after },
+    { baseOid: moved, headOid: changed },
+  ])
+  const of = (range: string) => new Set(patches.get(range))
+  const gone = [...of(`${base}..${before}`)]
+  expect(gone).toHaveLength(2)
+  expect(gone.every((patch) => of(`${moved}..${after}`).has(patch))).toBe(true)
+  expect(gone.every((patch) => of(`${moved}..${changed}`).has(patch))).toBe(
+    false
+  )
 })

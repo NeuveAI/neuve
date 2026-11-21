@@ -3,27 +3,31 @@
  * for the whole process and is never undone, so Records' faked reads live and
  * die here. It runs the two cycle routes' loaders as the router runs them, a
  * case at a time, and prints what each one threw or returned as one JSON line.
+ * The home load and the cycle's desk entry are the faked reads; which unit
+ * the entry chooses runs on Records' shape in `reviews.test.ts`.
  */
 import { mock } from "bun:test"
-import { isRedirect } from "@tanstack/react-router"
+import { isNotFound, isRedirect } from "@tanstack/react-router"
 
 export const CYCLE = "01JZ0000000000000000000000"
 export const RETURN = "http://127.0.0.1:4141/?channel=c1&chat=2#channels"
-
-type Cycle = { batches: Array<{ id: string }> } | undefined
 
 /** What a loader did: the redirect it threw, as the router reads it, or what it returned. */
 export type Outcome =
   | { redirect: Record<string, unknown> }
   | { returned: unknown }
+  | { notFound: true }
   | { threw: string }
 
 export type Results = {
-  cycleWithReturn: Outcome
-  cycleWithoutReturn: Outcome
-  cycleWithoutBatch: Outcome
+  cycle: Outcome
+  /** What the cycle's address asked the home load for. */
+  cycleAsked: unknown
+  cycleMalformed: Outcome
+  cycleUnknown: Outcome
   deskWithReturn: Outcome
-  deskWithoutCycle: Outcome
+  deskWithoutReturn: Outcome
+  deskWithoutUnit: Outcome
   search: Array<unknown>
 }
 
@@ -33,14 +37,17 @@ type Loader = (context: {
 }) => Promise<unknown>
 
 if (import.meta.main) {
-  const published: Cycle = { batches: [{ id: "batch-1" }, { id: "batch-2" }] }
-  let cycle: Cycle = published
+  let entry: string | undefined = "unit-3"
+  let asked: unknown
+  let listed: Array<unknown> = [{ id: CYCLE }]
   mock.module("@/server/review-cycle", () => ({
-    loadReviewCycle: () => Promise.resolve(cycle),
+    loadCycleEntry: () => Promise.resolve(entry),
   }))
-  mock.module("@/server/review-loads", () => ({
-    loadOverview: () =>
-      Promise.resolve({ status: "ready", data: { firstUnitId: "unit-1" } }),
+  mock.module("@/server/home-load", () => ({
+    loadHome: (input: unknown) => {
+      asked = input
+      return Promise.resolve({ status: "ready", data: { reviews: listed } })
+    },
   }))
   const { Route: CycleRoute } = await import("../../routes/cycles/$cycle/index")
   const { Route: DeskRoute } = await import("../../routes/cycles/$cycle/desk")
@@ -49,20 +56,22 @@ if (import.meta.main) {
 
   const run = async (
     route: { options: unknown },
-    given: Cycle,
-    returnTo?: string
+    unit: string | undefined,
+    returnTo?: string,
+    cycle = CYCLE
   ): Promise<Outcome> => {
-    cycle = given
+    entry = unit
     try {
       return {
         returned: await loaderOf(route)({
-          params: { cycle: CYCLE },
+          params: { cycle },
           deps: { returnTo },
         }),
       }
     } catch (thrown) {
       if (isRedirect(thrown))
         return { redirect: thrown.options as Record<string, unknown> }
+      if (isNotFound(thrown)) return { notFound: true }
       return { threw: String(thrown) }
     }
   }
@@ -73,12 +82,19 @@ if (import.meta.main) {
       }
     ).validateSearch.parse(search)
 
+  const cycle = await run(CycleRoute, "unit-3", RETURN)
+  const cycleAsked = asked
+  listed = []
+  const cycleUnknown = await run(CycleRoute, undefined, RETURN)
+  listed = [{ id: CYCLE }]
   const results: Results = {
-    cycleWithReturn: await run(CycleRoute, published, RETURN),
-    cycleWithoutReturn: await run(CycleRoute, published),
-    cycleWithoutBatch: await run(CycleRoute, { batches: [] }, RETURN),
-    deskWithReturn: await run(DeskRoute, published, RETURN),
-    deskWithoutCycle: await run(DeskRoute, undefined, RETURN),
+    cycle,
+    cycleAsked,
+    cycleUnknown,
+    cycleMalformed: await run(CycleRoute, undefined, RETURN, "not-a-cycle"),
+    deskWithReturn: await run(DeskRoute, "unit-3", RETURN),
+    deskWithoutReturn: await run(DeskRoute, "unit-3"),
+    deskWithoutUnit: await run(DeskRoute, undefined, RETURN),
     search: [
       validate({ returnTo: RETURN }),
       validate({ returnTo: 42 }),

@@ -25,7 +25,10 @@ import type {
   HomeLoad,
   HomeReview,
 } from "@workspace/ui/neuve/home/home-data"
-import { RunState } from "@workspace/ui/neuve/reviews/review-row"
+import {
+  LaneCountsInline,
+  RunState,
+} from "@workspace/ui/neuve/reviews/review-row"
 import {
   FailedStartNotice,
   ReviewsPagination,
@@ -101,8 +104,9 @@ function NoBatchYet({ review }: { review: HomeReview }) {
 }
 
 /**
- * One review: when it ran, its range, where its run stands and how many
- * batches it has, then each batch as a card. An older review says a newer
+ * One review: when it ran, its range, where its run stands, how many
+ * batches it has and its units by lane across all of them, then each batch
+ * as a card. An older review says a newer
  * one replaced it, and its batches ask for nothing (14.33).
  */
 function ReviewGroup({ review, time }: { review: HomeReview; time: string }) {
@@ -112,7 +116,7 @@ function ReviewGroup({ review, time }: { review: HomeReview; time: string }) {
       aria-label={`Review ${review.range}`}
       className="flex flex-col gap-3"
     >
-      <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-ink-muted">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-ink-muted">
         <span className="font-mono tabular-nums">{time}</span>
         <Dot />
         <span translate="no" className="font-mono">
@@ -126,13 +130,19 @@ function ReviewGroup({ review, time }: { review: HomeReview; time: string }) {
             <span>{batchCount(review)}</span>
           </>
         )}
+        {review.lanes.length > 0 && (
+          <>
+            <Dot />
+            <LaneCountsInline lanes={review.lanes} />
+          </>
+        )}
         {older && (
           <>
             <Dot />
             <span className="text-ink-2">Replaced by a newer review</span>
           </>
         )}
-      </p>
+      </div>
       {review.batches.length === 0 && (review.pendingBatches ?? 0) === 0 ? (
         <NoBatchYet review={review} />
       ) : (
@@ -184,15 +194,9 @@ function Home({
           {...regionTransition("reviews-hero", 1)}
           className="flex flex-col gap-5"
         >
-          <div className="flex flex-col gap-2">
-            <h1 className="m-0 text-[40px] leading-[46px] font-semibold tracking-[-0.03em] max-[600px]:text-[30px] max-[600px]:leading-9">
-              Reviews
-            </h1>
-            <p className="m-0 max-w-[620px] text-[15px] leading-6 text-pretty text-ink-2">
-              Every review&rsquo;s batches, newest first: what each batch
-              changes, what waits on you, and where its review stands.
-            </p>
-          </div>
+          <h1 className="m-0 text-[40px] leading-[46px] font-semibold tracking-[-0.03em] max-[600px]:text-[30px] max-[600px]:leading-9">
+            Reviews
+          </h1>
           {start?.status === "ready" &&
           start.failure !== undefined &&
           onStartReview ? (
@@ -221,7 +225,11 @@ function Home({
               id="reviews-heading"
               className="m-0 text-[22px] font-semibold tracking-[-0.02em]"
             >
-              All reviews
+              {data.cycle
+                ? "Review"
+                : data.filter === "waiting"
+                  ? "Waiting on you"
+                  : "All reviews"}
             </h2>
             <Segmented
               label="Show"
@@ -249,9 +257,10 @@ function Home({
                   : "No reviews on this page."}
               </p>
             )}
-            {groups.map((group) => (
+            {/* "Waiting on you" ranks by what needs a person, so a day can recur. */}
+            {groups.map((group, index) => (
               <section
-                key={group.label}
+                key={`${index}:${group.label}`}
                 aria-label={group.label}
                 className="flex flex-col gap-4"
               >

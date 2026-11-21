@@ -1272,6 +1272,8 @@ export interface ReviewsData {
   waiting: { units: number; reviews: number; nextUnitId?: string }
   /** The head the newest review reviewed, for the new-work notice. */
   newestHead?: string
+  /** A cycle's own address: the list holds that one review. */
+  cycle?: string
 }
 
 export type ReviewsLoad =

@@ -424,8 +424,8 @@ test("the page reloads only for a change that can concern what it shows", () => 
   // The Reviews list and the start page concern every review and the jobs.
   expect(pageConcerned(of([other]), reviews)).toBe(true)
   expect(pageConcerned(of([], true), reviews)).toBe(true)
-  // A review's own page shows it running: its cycle or the jobs.
-  expect(pageConcerned(of([other]), cyclePage)).toBe(false)
+  // A review's own address is the list scoped to it: a later review can take its work over.
+  expect(pageConcerned(of([other]), cyclePage)).toBe(true)
   expect(pageConcerned(of([], true), cyclePage)).toBe(true)
   // A batch or unit page: another review never; the jobs only while batches are to come.
   for (const page of [batch(), unit()]) {

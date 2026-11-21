@@ -3,6 +3,9 @@
 // the review that holds the work now. These run the loader's Records reads (`standingOf`) on real
 // temporary stores, so the closure, the carried decision, the lockfile mark and the lineage are
 // Records' own, not a hand-written answer.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { afterAll, expect, test } from "bun:test"
 import { Effect } from "effect"
 import {
@@ -13,6 +16,7 @@ import {
   canonicalJson,
   mintUlid,
   sha256Hex,
+  storeLocationIn,
 } from "@neuve/records-core"
 import {
   contentLayer,
@@ -29,7 +33,15 @@ import {
 } from "../../../../../../packages/records-core/tests/support"
 
 import { deskRead, successorOf } from "./desk.server"
-import { standingOf, summaryOf, waitingOf } from "./reviews.server"
+import { LANE_FACTS } from "./lane-facts"
+import { REPOSITORY_VARIABLE } from "./records.server"
+import {
+  cycleEntry,
+  reviewsRead,
+  standingOf,
+  summaryOf,
+  waitingOf,
+} from "./reviews.server"
 import type { UnitStanding } from "./reviews.server"
 
 afterAll(removeTemporaryDirectories)
@@ -116,13 +128,17 @@ const agentDecision = (
  * a packet of record whose manifest names them, and the request whose run
  * lists it on the Reviews page.
  */
-const oldReview = (head: string, units: ReadonlyArray<UnitSpec>) => {
+const oldReview = (
+  head: string,
+  units: ReadonlyArray<UnitSpec>,
+  base = "b".repeat(40)
+) => {
   const cycleId = mintUlid()
   const batchId = mintUlid()
   const runId = mintUlid()
   const range = {
     baseRef: "refs/heads/main",
-    baseOid: "b".repeat(40),
+    baseOid: base,
     headOid: head.padEnd(40, "0"),
   }
   const unitIds = units.map(() => mintUlid())
@@ -271,8 +287,10 @@ const oldReview = (head: string, units: ReadonlyArray<UnitSpec>) => {
 type Review = ReturnType<typeof oldReview>
 
 /** Appends the reviews in order, each published and requested; ULIDs keep the order. */
-const seed = async (reviews: ReadonlyArray<Review>) => {
-  const location = freshLocation()
+const seed = async (
+  reviews: ReadonlyArray<Review>,
+  location: Location = freshLocation()
+) => {
   await read(
     location,
     Effect.gen(function* () {
@@ -337,8 +355,8 @@ test("Records' closure decides what waits: an agent's disposition closes human-s
   const across = waitingOf(listed, standing)
   expect(across.units).toBe(2)
   expect(across.waiting.map((entry) => entry.cycleId)).toEqual([review.cycleId])
-  // Open next opens the first waiting unit in packet order: the undecided human-suggested one.
-  expect(across.nextUnitId).toBe(review.unitIds[1])
+  // Open next opens the first human-required unit that waits, past the human-suggested one before it.
+  expect(across.nextUnitId).toBe(review.unitIds[2])
 })
 
 /** A new-shape review from the records lane's fixture, stored with its content. */
@@ -457,6 +475,37 @@ test("an older review of a branch counts nothing; the newer counts its own, and 
     [moved.cycleId, other.cycleId].sort()
   )
   expect(across.nextUnitId).toBe(moved.unitIds[0])
+})
+
+test("a review a later review's range holds counts nothing, with no lineage between them", async () => {
+  // Why (NEU-433): a pull request reviewed two or three times must not multiply the wait.
+  const first = oldReview("aaaaaaa", [
+    { lane: "human-required" },
+    { lane: "human-suggested" },
+  ])
+  const later = oldReview("bbbbbbb", [{ lane: "human-required" }])
+  const { listed, standing } = await read(
+    await seed([first, later]),
+    Effect.gen(function* () {
+      const listed = (yield* ReviewList.reviews({ limit: 200 })).reviews
+      return {
+        listed,
+        standing: yield* standingOf(
+          listed,
+          LANE_FACTS,
+          new Set([first.cycleId])
+        ),
+      }
+    })
+  )
+  expect(row(listed, standing, first.cycleId)).toMatchObject({
+    newer: true,
+    gate: [],
+  })
+  expect(waitingOf(listed, standing)).toMatchObject({
+    units: 1,
+    nextUnitId: later.unitIds[0],
+  })
 })
 
 test("a review a newer one took over in part counts the units it still holds", async () => {
@@ -600,4 +649,111 @@ test("the batched lineage gives the desk's successor walk the same answers as it
   )
   expect(of(first.unitIds[2], first.cycleId)).toBeUndefined()
   expect(of(other.unitIds[0], other.cycleId)).toBeUndefined()
+})
+
+test("a cycle's address reads that one review from Records, and its desk opens on its first human-required unit that waits", async () => {
+  // Why (NEU-434): the route tests fake this load; this runs it on a real store in a real repository.
+  const repo = mkdtempSync(join(tmpdir(), "reviews-cycle-"))
+  const before = process.env[REPOSITORY_VARIABLE]
+  try {
+    Bun.spawnSync(["git", "init", "--quiet", repo])
+    const other = oldReview("aaaaaaa", [{ lane: "human-required" }])
+    const cycle = oldReview("ccccccc", [
+      { lane: "human-suggested" },
+      { lane: "agentic", agent: "approve" },
+      { lane: "human-required" },
+    ])
+    await seed([other, cycle], storeLocationIn(join(repo, ".git")))
+    process.env[REPOSITORY_VARIABLE] = repo
+    const read = await reviewsRead({
+      page: 1,
+      filter: "all",
+      cycle: cycle.cycleId,
+    })
+    if (read.status !== "ready") throw new Error("no reviews read")
+    expect(read.data.reviews.map((review) => review.id)).toEqual([
+      cycle.cycleId,
+    ])
+    expect(read.data).toMatchObject({
+      cycle: cycle.cycleId,
+      counts: { all: 1 },
+      waiting: { units: 2, nextUnitId: cycle.unitIds[2] },
+    })
+    // Past the human-suggested unit before it.
+    expect(await cycleEntry(cycle.cycleId)).toBe(cycle.unitIds[2])
+    const unknown = mintUlid()
+    const none = await reviewsRead({ page: 1, filter: "all", cycle: unknown })
+    expect(none.status === "ready" && none.data.reviews).toEqual([])
+    expect(await cycleEntry(unknown)).toBeUndefined()
+  } finally {
+    if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
+    else process.env[REPOSITORY_VARIABLE] = before
+    rmSync(repo, { recursive: true, force: true })
+  }
+})
+
+test("the list counts a rebased review once, even beside a review whose commits the repository no longer holds", async () => {
+  // Why (NEU-433, final review): one unreadable range must not cost the rebase rule its answers,
+  // or a pull request reviewed before and after a rebase waits twice.
+  const repo = mkdtempSync(join(tmpdir(), "reviews-rebased-"))
+  const before = process.env[REPOSITORY_VARIABLE]
+  const git = (...args: Array<string>) => {
+    const run = Bun.spawnSync(["git", "-C", repo, ...args], {
+      env: {
+        PATH: process.env["PATH"] ?? "",
+        HOME: repo,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    })
+    if (run.exitCode !== 0) throw new Error(run.stderr.toString())
+    return run.stdout.toString().trim()
+  }
+  const commit = (file: string) => {
+    writeFileSync(join(repo, file), file)
+    git("add", file)
+    git("commit", "--quiet", "-m", file)
+    return git("rev-parse", "HEAD")
+  }
+  try {
+    git("init", "--quiet", "-b", "main")
+    const base = commit("base")
+    // Reviewed once, then rebased onto a moved main and reviewed again; the first branch is gone.
+    git("checkout", "--quiet", "-b", "first")
+    commit("one")
+    const firstHead = commit("two")
+    git("checkout", "--quiet", "main")
+    const moved = commit("elsewhere")
+    git("checkout", "--quiet", "-b", "second")
+    git("cherry-pick", "--quiet", `${base}..${firstHead}`)
+    const secondHead = git("rev-parse", "HEAD")
+    git("checkout", "--quiet", "main")
+    git("branch", "--quiet", "-D", "first")
+
+    const rebased = oldReview(firstHead, [{ lane: "human-required" }], base)
+    // A review of commits this repository never held.
+    const missing = oldReview("ddddddd", [{ lane: "human-required" }])
+    const replay = oldReview(secondHead, [{ lane: "human-required" }], moved)
+    await seed([rebased, missing, replay], storeLocationIn(join(repo, ".git")))
+    process.env[REPOSITORY_VARIABLE] = repo
+
+    const read = await reviewsRead({ page: 1, filter: "waiting" })
+    if (read.status !== "ready") throw new Error("no reviews read")
+    expect(read.data.reviews.map((review) => review.id).sort()).toEqual(
+      [missing.cycleId, replay.cycleId].sort()
+    )
+    expect(read.data.waiting.units).toBe(2)
+    // Under All, the rebased review says a newer one holds it.
+    const all = await reviewsRead({ page: 1, filter: "all" })
+    if (all.status !== "ready") throw new Error("no reviews read")
+    expect(
+      all.data.reviews.find((review) => review.id === rebased.cycleId)
+    ).toMatchObject({ newer: true, gate: [] })
+  } finally {
+    if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
+    else process.env[REPOSITORY_VARIABLE] = before
+    rmSync(repo, { recursive: true, force: true })
+  }
 })

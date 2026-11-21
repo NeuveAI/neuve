@@ -3,12 +3,13 @@
 // reads as plain prose in a list: a phrase link reads as its phrase and a bare local ID is dropped,
 // so no `[phrase](u.…)` markup or ID reaches the reader. A batch's waiting count and the unit its
 // desk opens on follow the Reviews load's rule: a unit waits until Records' closure decides it, a
-// batch of an older review asks for nothing, and the desk opens on the first unit that waits. The
+// batch of an older review asks for nothing, and the desk opens on the first human-required unit
+// that waits, else the first unit that waits (NEU-434). The
 // Records reads behind the standing run on real stores in `reviews-standing.test.ts`.
 import { expect, test } from "bun:test"
 import type { ReviewList } from "@neuve/records-core"
 
-import { homeBatchOf, plainDigest } from "./home.server"
+import { homeBatchOf, homeBatchesOf, plainDigest } from "./home.server"
 import { NO_STANDING, summaryOf } from "./reviews.server"
 import type { UnitStanding } from "./reviews.server"
 
@@ -59,7 +60,7 @@ const standing: UnitStanding = {
   decided: new Map([["u2", "approve"]]),
 }
 
-test("a batch counts its lanes and what waits, and its desk opens on the first unit that waits", () => {
+test("a batch counts its lanes and what waits, and its desk opens on the first human-required unit that waits", () => {
   const summary = summaryOf(review, standing, new Set(), undefined)
   const batch = homeBatchOf(
     listed,
@@ -75,7 +76,8 @@ test("a batch counts its lanes and what waits, and its desk opens on the first u
   ])
   expect(batch.needYou).toBe(2)
   expect(batch.asked).toBe(3)
-  expect(batch.deskUnitId).toBe("u3")
+  // u4 before u3: human-required work first.
+  expect(batch.deskUnitId).toBe("u4")
   // No packet read: no digest, and the page still has the batch.
   expect(batch.digest).toBeUndefined()
 })
@@ -92,4 +94,39 @@ test("an older review's batch asks for nothing, and its desk opens on its first 
   expect(batch.needYou).toBe(0)
   expect(batch.asked).toBe(0)
   expect(batch.deskUnitId).toBe("u1")
+})
+
+test("a cycle's own address puts the batches with human-required work first; the list keeps packet order", () => {
+  // Why (NEU-434): the page a person lands on from a cycle's address must lead with what they decide.
+  const batches: Array<ReviewList.ListedBatch> = [
+    {
+      batchId: "b1",
+      title: "One",
+      units: [{ unitId: "v1", lane: "human-suggested" }],
+    },
+    { batchId: "b2", title: "Two", units: [{ unitId: "v2", lane: "agentic" }] },
+    {
+      batchId: "b3",
+      title: "Three",
+      units: [{ unitId: "v3", lane: "human-required" }],
+    },
+    {
+      batchId: "b4",
+      title: "Four",
+      units: [{ unitId: "v4", lane: "human-required" }],
+    },
+  ]
+  const cycle = { ...review, batches }
+  // b4's human-required unit is decided: it no longer leads.
+  const decidedFour: UnitStanding = {
+    ...NO_STANDING,
+    decided: new Map([["v4", "approve"]]),
+  }
+  const summary = summaryOf(cycle, decidedFour, new Set(), undefined)
+  const order = (requiredFirst: boolean) =>
+    homeBatchesOf(summary, cycle, undefined, decidedFour, requiredFirst).map(
+      (batch) => batch.id
+    )
+  expect(order(true)).toEqual(["b3", "b1", "b2", "b4"])
+  expect(order(false)).toEqual(["b1", "b2", "b3", "b4"])
 })
