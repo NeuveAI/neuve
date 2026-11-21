@@ -20,8 +20,20 @@ import {
   resolveStoreLocation,
   Starter,
 } from "@neuve/records-core";
-import { AGENT_HARNESSES, type AgentHarness } from "./agent-hooks.ts";
-import { captureConfigPath, type CaptureConfig } from "./config.ts";
+import {
+  agentsFlag,
+  describeFinding,
+  findAgentPrograms,
+  foundIds,
+  installAdvice,
+  type Finding,
+} from "../agent-programs.ts";
+import type { AgentHarness } from "./agent-hooks.ts";
+import {
+  captureConfigPath,
+  readCaptureConfig,
+  type CaptureConfig,
+} from "./config.ts";
 import { GIT_HOOKS, TRAILER_HOOK } from "./git-hooks.ts";
 import { setupStack } from "../stack-cli.ts";
 
@@ -30,8 +42,10 @@ export const SETUP_HOOKS_HELP = `Usage:
     [--session-trailer] [--claude-settings <path>] [--codex-hooks <path>] [--no-stack] [--dry-run]
 
 Enables capture in one repository: git post-commit and post-rewrite hooks in its hooks directory,
-<git common directory>/neuve/capture.json, and agent hooks for Claude Code and Codex in the user's
-configuration (default ~/.claude/settings.json and ~/.codex/hooks.json). Agent hooks are per user and
+<git common directory>/neuve/capture.json, and agent hooks in the user's configuration (default
+~/.claude/settings.json for Claude Code and ~/.codex/hooks.json for Codex). Without --agents, agent
+hooks are written for the agent programs found here: claude on the PATH, and the Codex the codex
+account runs (asked its version, once); each one not found is said so. Agent hooks are per user and
 do nothing in repositories without capture.json. Every changed user file is backed up first.
 Hooks only write the spool; the worker ingests it.
 
@@ -318,6 +332,12 @@ const installAgentHooks = async (
 
 export const runSetupHooks = async (
   args: readonly string[],
+  options: {
+    /** For tests: the agent programs found, in place of looking on this machine. */
+    readonly programs?: () => Promise<ReadonlyArray<Finding>>;
+    /** For tests: the stack store, in place of the user's cache. */
+    readonly stackStore?: string;
+  } = {},
 ): Promise<number> => {
   const { values } = parseArgs({
     args: [...args],
@@ -343,18 +363,6 @@ export const runSetupHooks = async (
     "rev-parse",
     "--show-toplevel",
   ]);
-  const agents =
-    values.agents === undefined
-      ? [...AGENT_HARNESSES]
-      : values.agents === "none"
-        ? []
-        : values.agents.split(",").map((name) => {
-            if (!(AGENT_HARNESSES as ReadonlyArray<string>).includes(name))
-              throw new Error(
-                `Unknown agent harness ${name}; expected claude-code or codex`,
-              );
-            return name as AgentHarness;
-          });
   const sessionTrailer = values["session-trailer"] === true;
   if (sessionTrailer) {
     const superproject = await git(root, [
@@ -405,6 +413,48 @@ export const runSetupHooks = async (
     await buildHookBundle();
   const command = hookArgv.map(quote).join(" ");
 
+  const claudeHome =
+    process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude");
+  const codexHome = process.env["CODEX_HOME"] ?? join(homedir(), ".codex");
+  const hookFile = (harness: AgentHarness) =>
+    resolve(
+      harness === "claude-code"
+        ? (values["claude-settings"] ?? join(claudeHome, "settings.json"))
+        : (values["codex-hooks"] ?? join(codexHome, "hooks.json")),
+    );
+  // Named, the person's choice. Otherwise the agent programs found here, and every one this
+  // repository's capture.json already lists: a program not found adds nothing new and never takes
+  // away what is there; only --agents removes one.
+  const notFound: string[] = [];
+  const agents =
+    agentsFlag(values.agents) ??
+    (await (async () => {
+      const earlier = await readCaptureConfig(location);
+      if (earlier === undefined && (await exists(captureConfigPath(location))))
+        notFound.push(
+          `${captureConfigPath(location)} couldn't be read, so no earlier list of agents was kept; it is written again.`,
+        );
+      const previous = earlier?.agents ?? [];
+      const findings = await (
+        options.programs ?? (() => findAgentPrograms("check"))
+      )();
+      const kept: AgentHarness[] = [];
+      for (const finding of findings) {
+        const id = finding.program.id;
+        if (finding.found !== undefined) kept.push(id);
+        else if (previous.includes(id)) {
+          kept.push(id);
+          notFound.push(
+            `${describeFinding(finding)}\n${finding.program.name}'s capture is already set up, so it is kept; neuve setup hooks --agents names the agents to keep.`,
+          );
+        } else
+          notFound.push(
+            `${describeFinding(finding)}\nNo ${finding.program.name} hooks were written: ${installAdvice(finding)}, or name it with --agents.`,
+          );
+      }
+      return kept;
+    })());
+
   const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
   const changes: Array<Change> = [];
   for (const name of gitHooks)
@@ -431,23 +481,16 @@ export const runSetupHooks = async (
     action: dryRun ? "would write" : "written",
   });
 
-  const claudeHome =
-    process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude");
-  const codexHome = process.env["CODEX_HOME"] ?? join(homedir(), ".codex");
-  for (const harness of agents) {
-    const path =
-      harness === "claude-code"
-        ? (values["claude-settings"] ?? join(claudeHome, "settings.json"))
-        : (values["codex-hooks"] ?? join(codexHome, "hooks.json"));
+  for (const harness of agents)
     changes.push(
-      await installAgentHooks(resolve(path), harness, command, dryRun),
+      await installAgentHooks(hookFile(harness), harness, command, dryRun),
     );
-  }
 
   const lines = [
     `${dryRun ? "Would enable" : "Enabled"} capture in ${root}`,
     `Hooks run: ${command}`,
     ...changes.map((change) => `  ${change.path}: ${change.action}`),
+    ...notFound,
   ];
   if (agents.includes("codex"))
     lines.push(
@@ -459,6 +502,9 @@ export const runSetupHooks = async (
       root,
       dryRun,
       ...(values["no-stack"] === true ? { off: "--no-stack" as const } : {}),
+      ...(options.stackStore === undefined
+        ? {}
+        : { storeRoot: options.stackStore }),
     })),
   );
   await Bun.write(Bun.stdout, `${lines.join("\n")}\n`);

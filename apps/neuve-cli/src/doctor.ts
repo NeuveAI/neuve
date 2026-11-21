@@ -27,12 +27,22 @@ import {
 import { repositorySetup } from "./setup-status.ts";
 import { quote } from "./shell-quote.ts";
 import { inspectSkillForDoctor } from "./skills-cli.ts";
+import {
+  findAgentPrograms,
+  headline,
+  installAdvice,
+  type Finding,
+  type Surroundings,
+} from "./agent-programs.ts";
 import { gitAvailability, xcodeToolsPath } from "./git-available.ts";
 
 /**
  * `neuve doctor`: what a review needs on this machine and in this repository, each with the exact
  * fix. It only reads: no store is created, no worker is started, nothing is written, no network
- * request is made, and a credential is named but its value never printed.
+ * request is made of its own, and a credential is named but its value never printed. The programs it starts
+ * are named: Git and the Graph engine for their versions, `claude --version`, and the Codex the
+ * codex account runs (the stored path, else the PATH's `codex`), once as its app server for its
+ * version, which sends no model request.
  */
 export type DoctorCheck = Readonly<{
   check: string;
@@ -298,6 +308,8 @@ export const inspectDoctor = async (input: {
   executable?: string;
   home?: string;
   path?: string;
+  /** For tests: Codex's discovery, in place of the real one. */
+  findCodex?: Surroundings["findCodex"];
 }) => {
   const home = input.home ?? homedir();
   const fromSource = !isCompiled();
@@ -519,12 +531,25 @@ export const inspectDoctor = async (input: {
       );
     }
   }
+  // The agent programs, in setup's words; only what run time would start is asked. The sign-in
+  // check reads the same look's claude.
+  const agents = await findAgentPrograms("check", {
+    path: input.path ?? process.env["PATH"] ?? "",
+    home,
+    ...(input.findCodex === undefined ? {} : { findCodex: input.findCodex }),
+  });
   checks.push(
-    checkSignIn(repository, home, RouteProvider.credentialPresent, () =>
-      findClaude(input.path ?? process.env["PATH"]),
+    checkSignIn(
+      repository,
+      home,
+      RouteProvider.credentialPresent,
+      () =>
+        agents.find((finding) => finding.program.id === "claude-code")?.found
+          ?.path,
     ),
   );
   if (repository !== undefined) checks.push(await checkWorker(repository));
+  for (const finding of agents) checks.push(agentCheck(finding));
   // The agent skill is optional: a warning only when an installed copy is older than this CLI,
   // didn't finish installing, or isn't safe to update; never "missing".
   checks.push(
@@ -544,11 +569,42 @@ export const inspectDoctor = async (input: {
 export const DOCTOR_HELP = `Usage: neuve doctor [--repo <path>] [--json]
   Check what a review needs: this copy of neuve and which copy is first on PATH, Git, the
   Graph engine and the review desk beside the CLI, setup in the repository, the model
-  sign-in, the background worker and whether the installed Neuve skill is older than this
-  neuve. Each problem comes with its fix. It only reads, makes
-  no network request, and names credentials without printing them. Exits 1 when something
-  is missing.
+  sign-in, the background worker, the agent programs setup looks for, and whether the
+  installed Neuve skill is older than this neuve. Each problem comes with its fix. It only
+  reads, makes no network request of its own, and names credentials without printing them.
+  The programs it starts, only to ask their versions: Git, the Graph engine, claude --version,
+  and the Codex the codex account runs (the stored path, else the codex on PATH), once as its
+  app server, with no model request. Exits 1 when something is missing.
 `;
+
+/**
+ * One agent program, in setup's words. A stored path that no longer answers is a warning that
+ * offers setup's look again; a program not found is fine, since each is optional, with its install.
+ */
+const agentCheck = (finding: Finding): DoctorCheck => {
+  const name = finding.program.name;
+  if (finding.found !== undefined) return ok(name, headline(finding));
+  const asked = finding.lines.map((line) => line.trim()).join("; ");
+  const detail = `${headline(finding)}${asked === "" ? "" : `: ${asked}`}`;
+  if (finding.problem !== undefined)
+    return {
+      check: name,
+      status: "warning",
+      detail,
+      fix: "Fix what the message names, then run neuve doctor again",
+    };
+  return finding.stale !== undefined
+    ? {
+        check: name,
+        status: "warning",
+        detail: `${detail}. The path stored for it, ${finding.stale}, no longer answers`,
+        fix: "neuve setup, which looks for it again",
+      }
+    : ok(
+        name,
+        `${detail}. It is optional: ${installAdvice(finding)}, or run neuve setup to look for it`,
+      );
+};
 
 export const runDoctor = async (args: readonly string[], version: string) => {
   const { values } = parseArgs({

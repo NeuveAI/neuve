@@ -84,13 +84,14 @@ export const lstatIfPresent = async (path: string): Promise<Stats | null> => {
 export const writeFileAtomically = async (
   path: string,
   bytes: Uint8Array | string,
+  mode = 0o644,
 ) => {
   const temporary = join(
     dirname(path),
     `.${SKILL_NAME}-${process.pid}-${randomUUID()}.tmp`,
   );
   try {
-    await writeFile(temporary, bytes, { mode: 0o644 });
+    await writeFile(temporary, bytes, { mode });
     await rename(temporary, path);
   } finally {
     await rm(temporary, { force: true });

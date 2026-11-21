@@ -45,13 +45,14 @@ const HELP = `Usage:
 Commands:
   upgrade [--version vX.Y.Z]
               Upgrade to the latest release, or the --version tag, through its checksum-checked install script.
-  setup [--repo <path>] [--route openai|anthropic|claude] [--graph-binary <path>] [--cli-binary <path>]
-    [--no-skills]
+  setup [--repo <path>] [--route openai|anthropic|claude] [--agents claude-code,codex|none]
+    [--ask-install-again] [--graph-binary <path>] [--cli-binary <path>] [--no-skills]
               Set Neuve up in a repository: record this neuve and its Graph engine, check that
               the engine can work there, and choose how reviews sign in (ChatGPT, an Anthropic
               API key, or a Claude subscription through Claude Code). Run it once before neuve
-              review. At a terminal it then offers the Neuve skill once per repository;
-              --no-skills skips the offer.
+              review. It then looks for the agent programs here, says what it found, and offers
+              the npm package of one it doesn't find (default no). At a terminal it then offers
+              the Neuve skill once per repository; --no-skills skips the offer.
   setup hooks [--repo <path>] [--agents claude-code,codex|none] [--dry-run]
               Capture commits and agent sessions in this repository. Run
               neuve setup hooks --help for the files it changes.

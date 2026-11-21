@@ -21,6 +21,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { symlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { found } from "./fixtures/agent-programs.ts";
 import {
   findSkillSource,
   inspectSkillForDoctor,
@@ -115,6 +116,7 @@ const harness = async (
       location: "test template",
       bundle: await bundle(),
     }),
+    programs: () => found(),
     isTerminal: false,
     ask: async () => {
       throw new Error("asked without a terminal");
@@ -522,16 +524,19 @@ test("setup offers the skill once per repository, and only at a terminal", async
   };
   await offerSkillsAfterSetup({
     stateDirectory: join(repository, "neuve"),
+    agents: ["claude-code", "codex"],
     context: h.context(),
   });
   expect(asked).toBe(0);
   expect(await tree(repository)).toEqual({});
   await offerSkillsAfterSetup({
     stateDirectory: join(repository, "neuve"),
+    agents: ["claude-code", "codex"],
     context: h.context({ isTerminal: true, ask }),
   });
   await offerSkillsAfterSetup({
     stateDirectory: join(repository, "neuve"),
+    agents: ["claude-code", "codex"],
     context: h.context({ isTerminal: true, ask }),
   });
   expect(asked).toBe(1);
@@ -925,7 +930,9 @@ test("a skill folder doctor can't read is one warning, and doctor still reports 
       version: "0.1.0",
       quote,
     });
+  // No PATH, so doctor starts no agent program of this machine's.
   const baseline = await inspectDoctor({
+    path: "",
     repository,
     version: "0.1.0",
     home: fileHome.home,
@@ -948,6 +955,7 @@ test("a skill folder doctor can't read is one warning, and doctor still reports 
       expect(check.detail).not.toMatch(UNSAFE_TEXT);
     }
     const report = await inspectDoctor({
+      path: "",
       repository,
       version: "0.1.0",
       home: asRoot ? fileHome.home : unreadable.home,
@@ -981,14 +989,22 @@ test("an offer that stopped on an error is not remembered, so setup asks next ti
       },
     });
   const stateDirectory = join(repository, "state");
-  await offerSkillsAfterSetup({ stateDirectory, context: context(true) });
+  await offerSkillsAfterSetup({
+    stateDirectory,
+    agents: ["claude-code", "codex"],
+    context: context(true),
+  });
   expect(h.output()).toContain(
     "The skill offer stopped: the skill files can't be read",
   );
   expect(
     await lstat(join(stateDirectory, "skills-offered.json")).catch(() => null),
   ).toBe(null);
-  await offerSkillsAfterSetup({ stateDirectory, context: context(false) });
+  await offerSkillsAfterSetup({
+    stateDirectory,
+    agents: ["claude-code", "codex"],
+    context: context(false),
+  });
   expect(asked).toBe(1);
   expect(
     (await lstat(join(stateDirectory, "skills-offered.json"))).isFile(),
@@ -1032,7 +1048,8 @@ test.skipIf(!existsSync("/usr/bin/expect"))(
           answer,
           "/bin/sh",
           "-c",
-          `"$0" "$1" skills install --offer </dev/tty`,
+          // Named, so the offer does not depend on which agent programs this machine has.
+          `"$0" "$1" skills install --offer --agents codex </dev/tty`,
           process.execPath,
           cli,
         ],

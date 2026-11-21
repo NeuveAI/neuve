@@ -2,7 +2,18 @@ import { checkSignIn } from "./doctor.ts";
 import { writePrivateEnvironment } from "./private-environment.ts";
 import { REVIEW_DESK_COMMAND } from "./review-desk-config.ts";
 import { quote } from "./shell-quote.ts";
-import { offerSkillsAfterSetup } from "./skills-cli.ts";
+import { defaultSkillsContext, offerSkillsAfterSetup } from "./skills-cli.ts";
+import {
+  AGENT_IDS,
+  agentsFlag,
+  describeFinding,
+  findAgentPrograms,
+  foundIds,
+  machineOffers,
+  offerInstall,
+  type OfferContext,
+} from "./agent-programs.ts";
+import type { AgentHarness } from "./capture/agent-hooks.ts";
 import {
   RouteRefused,
   settingsRoute,
@@ -62,10 +73,12 @@ const flagsSchema = z
     "--initial-query": z.string().trim().min(1).optional(),
     // How reviews sign in; the harness's settings schema decides what it may be.
     "--route": z.string().optional(),
+    // Which agent programs setup looks for: every one in the list unless named, or none.
+    "--agents": z.string().optional(),
   })
   .strict();
 
-export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|anthropic|claude] [--graph-binary <path>] [--cli-binary <path>] [--no-skills]
+export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|anthropic|claude] [--agents claude-code,codex|none] [--ask-install-again] [--graph-binary <path>] [--cli-binary <path>] [--no-skills]
   Set Neuve up in a Git repository (the current one by default): record this neuve and the Graph
   engine beside it, and check that the engine can work on the repository. It keeps its state with
   the repository's Records, in <git common directory>/neuve/setup/, and writes nothing in the
@@ -76,8 +89,16 @@ export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|an
   (your Claude subscription through Claude Code, after claude auth login). Without it, setup
   asks on a terminal when no route is set yet, and changes nothing otherwise.
   --graph-binary and --cli-binary name other built executables.
-  At a terminal, setup then offers the Neuve skill, which teaches Claude Code and Codex to use
-  Neuve, once per repository (default no); --no-skills skips the offer.
+  Setup then looks for the agent programs on this machine and says what it found: Claude Code
+  as the claude on PATH, asked claude --version; Codex as neuve auth program codex --find looks
+  for it (the path already set, every codex on PATH, then on macOS OpenAI's installed apps), each
+  started once as its app server to ask its version. The first that answers as Codex is stored
+  as the codex account's program. --agents names which to look for, or none.
+  For a program not found, setup offers its npm package at a terminal (default no) and otherwise
+  prints the command; it installs nothing without your yes. Each program is asked about once per
+  machine; --ask-install-again asks again.
+  At a terminal, setup then offers the Neuve skill, which teaches the agent programs it found to
+  use Neuve, once per repository (default no); --no-skills skips the offer.
   Run neuve setup hooks --help and neuve setup stack --help for those.
 `;
 
@@ -91,14 +112,25 @@ const executableFile = async (path: string) => {
   }
 };
 
+/** Asks the install offer again for a program not found, whatever was answered before. */
+export const ASK_INSTALL_AGAIN = "--ask-install-again";
+
+/** Setup's flags that take no value; `--agents` only ever says which programs. */
+export const switches = (given: readonly string[]) => ({
+  askAgain: given.includes(ASK_INSTALL_AGAIN),
+});
+
 export const runSetup = async (given: readonly string[]): Promise<number> => {
   if (given.includes("--help") || given.includes("-h")) {
     await Bun.write(Bun.stdout, SETUP_HELP);
     return 0;
   }
-  // --no-skills takes no value: setup offers the Neuve skill at its end unless told not to.
+  // --no-skills and --ask-install-again take no value.
   const noSkills = given.includes("--no-skills");
-  const args = given.filter((arg) => arg !== "--no-skills");
+  const { askAgain } = switches(given);
+  const args = given.filter(
+    (arg) => arg !== "--no-skills" && arg !== ASK_INSTALL_AGAIN,
+  );
   const raw: Record<string, string> = {};
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index],
@@ -109,6 +141,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     raw[flag] = value;
   }
   const options = flagsSchema.parse(raw);
+  const wanted = agentsFlag(options["--agents"]) ?? AGENT_IDS;
   // On a Mac without the command-line tools, git only opens Apple's installer.
   const available = gitAvailability();
   if (!available.usable) {
@@ -196,10 +229,59 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     `${moved}${route.line === undefined ? "" : `${route.line}\n`}${await nextSteps(repository, check, route.route)}`,
   );
   if (check.status === "error") return 1;
+  const agents = await setUpAgentPrograms(wanted, {
+    ...offerContext(),
+    askAgain,
+  });
   // After the next steps: once per repository, only at a terminal; it never fails setup.
   if (!noSkills)
-    await offerSkillsAfterSetup({ stateDirectory: layout.directory });
+    await offerSkillsAfterSetup({ stateDirectory: layout.directory, agents });
   return 0;
+};
+
+/**
+ * Setup's look at the agent programs: each found is shown with how it was found (Codex's path
+ * stored as `auth program codex --find` stores it), and each missing one is offered from npm.
+ * The ids of those found, for the skill offer.
+ */
+/** Setup's install offer at the person's terminal, with the machine's memory of earlier answers. */
+const offerContext = (): OfferContext => ({
+  isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
+  ask: defaultSkillsContext().ask,
+  out: async (text) => {
+    await Bun.write(Bun.stderr, text);
+  },
+  path: process.env["PATH"] ?? "",
+  offers: machineOffers(),
+});
+
+export const setUpAgentPrograms = async (
+  ids: ReadonlyArray<AgentHarness>,
+  context: OfferContext = offerContext(),
+  look: typeof findAgentPrograms = findAgentPrograms,
+) => {
+  if (ids.length === 0) return [];
+  const findings = [...(await look("find", { path: context.path }, ids))];
+  await context.out(
+    `\nAgent programs on this machine:\n${findings.map(describeFinding).join("\n")}\n`,
+  );
+  for (const [index, finding] of findings.entries())
+    // Only a program that is missing is offered; one whose look failed is not known to be.
+    if (
+      finding.found === undefined &&
+      finding.problem === undefined &&
+      (await offerInstall(finding, context))
+    ) {
+      const [again] = await look("find", { path: context.path }, [
+        finding.program.id,
+      ]);
+      if (again === undefined) continue;
+      findings[index] = again;
+      await context.out(
+        `npm finished. Looked for ${again.program.name} again:\n${describeFinding(again)}\n`,
+      );
+    }
+  return foundIds(findings);
 };
 
 /** The links the store's folder held while setup still linked its binaries there. */

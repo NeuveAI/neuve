@@ -20,7 +20,10 @@ import {
   type CodexRuntimeConfig,
   type LogEntry,
 } from "@neuve/runtime-codex";
-export { findCodexProgram } from "@neuve/runtime-codex";
+export {
+  findCodexProgram,
+  PROGRAM as CODEX_PROGRAM,
+} from "@neuve/runtime-codex";
 import { Context, Effect, Layer, ManagedRuntime, Scope } from "effect";
 import type { ReadinessStatuses } from "./route-provider.ts";
 import {
