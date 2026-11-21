@@ -311,6 +311,9 @@ const installAgentHooks = async (
   command: string,
   dryRun: boolean,
 ): Promise<Change> => {
+  // A file of a shape this can't change safely stops here, in the words doctor uses.
+  if ((await hookCommands(path)) === "unreadable")
+    throw new Error(unreadableHookFile(path, harness));
   path = await linkTarget(path);
   const present = await exists(path);
   const config = present
@@ -583,6 +586,10 @@ const neededBy = (argv: ReadonlyArray<string>) => {
     : [program];
 };
 
+/** What setup hooks says, and doctor's fix, for an agent hook file it can't read. */
+export const unreadableHookFile = (path: string, harness: AgentHarness) =>
+  `${path} can't be read as ${harness}'s hook file, so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`;
+
 /**
  * Every hook command in an agent's hook file, read from any shape without throwing: none when the
  * file is absent, `unreadable` when it isn't JSON or its hooks aren't events listing groups of
@@ -742,7 +749,7 @@ export const inspectCapture = async (
       parts.push({
         path,
         state: "unreadable",
-        why: `Neuve can't read it as ${harness}'s hook file, so it can't say whether capture's hooks there work. Fix the file by hand, then run neuve doctor again`,
+        why: `Neuve can't read it as ${harness}'s hook file, so it can't say whether capture's hooks there work`,
       });
       continue;
     }

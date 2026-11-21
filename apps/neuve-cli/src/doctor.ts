@@ -623,15 +623,21 @@ const captureCheck = async (
     )
     .concat(unclear)
     .join("; ");
+  // A hook file Neuve can't read has to be fixed or moved first; setup hooks then does the rest.
+  const unreadable = off.filter((part) => part.state === "unreadable");
+  const repair =
+    unreadable.length === 0
+      ? fix
+      : `Fix or move ${unreadable.map((part) => part.path).join(" and ")}, then run ${fix}`;
   if (found === undefined || !found.configured)
     return {
       check: "capture",
       status: "warning",
       detail: `Capture isn't set up in ${repository}: it has no capture.json or Git hooks${said === "" ? "" : `. ${said}`}`,
-      fix,
+      fix: repair,
     };
   if (off.length > 0)
-    return { check: "capture", status: "warning", detail: said, fix };
+    return { check: "capture", status: "warning", detail: said, fix: repair };
   return ok(
     "capture",
     unclear.length === 0

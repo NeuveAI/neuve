@@ -243,6 +243,52 @@ test("doctor names capture that isn't set up, a hook calling a program that is g
   });
 });
 
+// Why: the person's hook file can be in any shape; doctor must report one it can't read, with a fix
+// that works, and setup hooks must stop on it in the same words rather than throw.
+test("doctor reports an agent hook file it can't read in a repository with capture, and setup hooks stops on it", async () => {
+  const { root, repository, home, doctor } = await scratch();
+  await markSetUp(repository);
+  const settings = join(home, ".claude/settings.json");
+  const isolated = {
+    CLAUDE_CONFIG_DIR: join(home, ".claude"),
+    CODEX_HOME: join(home, ".codex"),
+  };
+  const program = join(root, "bin/neuve");
+  await mkdir(dirname(program), { recursive: true });
+  await writeFile(program, "#!/bin/sh\nexit 0\n");
+  await chmod(program, 0o755);
+  const { runSetupHooks } = await import("../src/capture/setup-hooks.ts");
+  const setUp = () =>
+    runSetupHooks(
+      [
+        "--repo",
+        repository,
+        "--agents",
+        "claude-code",
+        "--claude-settings",
+        settings,
+        "--codex-hooks",
+        join(home, ".codex/hooks.json"),
+        "--command",
+        program,
+        "--no-stack",
+      ],
+      { stackStore: join(root, "stack") },
+    );
+  expect(await setUp()).toBe(0);
+  await writeFile(settings, '{"hooks":{"Stop":{}}}');
+  const { check } = await doctor(isolated);
+  expect(check("capture")).toMatchObject({
+    status: "warning",
+    detail: expect.stringContaining(`${settings} can't be read`),
+    fix: `Fix or move ${settings}, then run neuve setup hooks --repo '${repository}'`,
+  });
+  await expect(setUp()).rejects.toThrow(
+    `${settings} can't be read as claude-code's hook file, so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`,
+  );
+  expect(await Bun.file(settings).text()).toBe('{"hooks":{"Stop":{}}}');
+});
+
 test("the OpenAI route in the settings needs its sign-in, and unreadable settings are named", async () => {
   const { home, doctor } = await scratch();
   const folder = dirname(settingsPath(home));
