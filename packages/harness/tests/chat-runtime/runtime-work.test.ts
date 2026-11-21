@@ -50,7 +50,7 @@ test.each([
         },
       }));
     Object.assign(fake.shape, { openSession: captureWorkspace });
-    const runtime = await fixture({ fake });
+    const runtime = await fixture({ fake, toolName: "question" });
     try {
       await runtime.conversation.configure({ cwd: "/work/lane" }, context);
       let planning = false;
@@ -65,7 +65,7 @@ test.each([
                   role: "system",
                   content: "",
                   timestamp: messages.at(-1)?.timestamp ?? 0,
-                  toolsRemoved: [{ name: "probe" }],
+                  toolsRemoved: [{ name: "question" }],
                 };
                 Object.defineProperty(
                   offer,
@@ -95,7 +95,7 @@ test.each([
       );
       expect(
         fake.opened.map(({ policy }) => policy.tools.map(({ name }) => name)),
-      ).toEqual([["probe"], [], ["probe"]]);
+      ).toEqual([["question"], [], ["question"]]);
     } finally {
       await runtime.close();
     }

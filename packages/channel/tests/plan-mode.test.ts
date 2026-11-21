@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import type { Context } from "@earendil-works/chord";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -105,47 +105,43 @@ test("a rejected submission keeps the chat mode and lets the same request retry"
 	}
 });
 
-test("a native wake waits for a refused mode change to roll back", async () => {
-	class RefusingStorage extends MemoryStorage {
-		override commit(writes: readonly StorageWrite[], context: Context) {
-			if (writes.some(write => write.type === "submission" && write.value.requestId === "refused")) {
-				throw new StorageRejected("Fixture refused the ask");
-			}
-			return super.commit(writes, context);
-		}
-	}
+test("file policy waits for a refused mode change to roll back", async () => {
 	let harness: Harness | undefined;
+	const access = Promise.withResolvers<(context: Context) => Promise<boolean>>();
+	const paused = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
 	const run = await memoryChannel({
-		storage: new RefusingStorage(),
 		feed: async value => { harness = value; return { close: async () => {}, pending: () => false }; },
+		planFileAccess: (env, planning) => { access.resolve(planning); return env; },
 	});
 	try {
 		run.fake.appendResponses([fauxAssistantMessage("Planning")]);
 		expect(await run.wait(await run.ask({ mode: "plan" }))).toBe("done");
 		const conversation = await harness?.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT);
 		if (!harness || !conversation) throw new Error("Missing fixture conversation");
-		let wake: ReturnType<typeof conversation.submit> | undefined;
-		const stop = harness.subscribeCommits(({ changes }) => {
-			if (wake || !changes.some(change => change.type === "document"
-				&& change.record.kind === ChatModesDoc.definition.kind)) return;
-			wake = Promise.resolve().then(() => conversation.submit({
-				type: "input", content: "System wake", whenBusy: "followUp",
-			}, BACKGROUND_CONTEXT));
+		const readMode = await access.promise;
+		const selectConversation = spyOn(harness, "conversation").mockResolvedValue(conversation);
+		const submit = spyOn(conversation, "submit").mockImplementation(async () => {
+			paused.resolve();
+			await release.promise;
+			throw new StorageRejected("Fixture refused the ask");
 		});
 		try {
-			let offered: string[] | undefined;
-			run.fake.appendResponses([request => {
-				offered = getCurrentTools(request.messages).map(tool => tool.name);
-				return fauxAssistantMessage("Wake answered");
-			}]);
-			await expect(run.ask({ mode: "ace", requestId: "refused" })).rejects.toThrow("Fixture refused the ask");
-			if (!wake) throw new Error("No wake was queued");
-			expect((await (await wake).wait(BACKGROUND_CONTEXT)).status).toBe("done");
-			expect(offered).toContain("read");
-			expect(offered).not.toContain("bash");
-			expect((await run.channel.info()).chats[0]?.mode).toBe("plan");
+			const refused = run.ask({ mode: "ace" }).catch((error: unknown) => error);
+			await paused.promise;
+			const policy = readMode(BACKGROUND_CONTEXT);
+			// This transaction runs after the policy read's first lookup and before admission settles.
+			const staged = await harness.commit(async tx =>
+				(await tx.doc(ChatModesDoc)).chats[ROOT_CONVERSATION_ID], BACKGROUND_CONTEXT);
+			expect(staged).toBe("ace");
+			expect(await Promise.race([policy, Promise.resolve("waiting")])).toBe("waiting");
+			release.resolve();
+			expect(await refused).toMatchObject({ message: "Fixture refused the ask" });
+			expect(await policy).toBe(true);
 		} finally {
-			stop();
+			release.resolve();
+			submit.mockRestore();
+			selectConversation.mockRestore();
 		}
 	} finally {
 		await run.channel.close();
