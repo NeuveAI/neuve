@@ -283,16 +283,16 @@ export function EmbeddedRow({
 }
 
 /**
- * The one header for every screen (option A bar): logo + logotype (back to
- * the batch), repo (to the Reviews page) / branch, the commit chip, the batch menu when the review
+ * The one header for every screen (option A bar): logo + logotype (to the
+ * Reviews page), the branch, the commit chip, the batch menu when the review
  * has several batches (published or still being reviewed), the Agents control, Find ⌘K,
  * Settings and the theme toggle. The live status follows the commit chip (round 3:
  * the full-width status strip is gone). The human gate and Units/Files live in the unit
  * column, not here.
  *
  * On a phone (600px and narrower) the bar takes two rows: the logomark and
- * the controls, then the breadcrumb on one line, where the repository and
- * branch shorten before anything wraps. The agents' avatars and Find's
+ * the controls, then the breadcrumb on one line, where the
+ * branch shortens before anything wraps. The agents' avatars and Find's
  * label and ⌘K give way, and the logotype below 360px; each control keeps
  * its name, and the agents' count and the batch menu stay. Several batches
  * put the menu on a line of its own below.
@@ -330,8 +330,8 @@ function FullHeader({
       className="relative box-border flex min-h-14 flex-wrap items-center gap-4 border-b border-line px-5 py-2 max-[600px]:gap-x-2 max-[600px]:gap-y-1 max-[600px]:px-4 embedded:hidden"
     >
       <NeuveLink
-        destination={batchOverview(batches)}
-        aria-label="Neuve — back to the review batch"
+        destination={{ to: "reviews" }}
+        aria-label="Neuve — Reviews"
         className="no-underline max-[600px]:mr-auto"
       >
         <BrandMark logotypeClassName="max-[360px]:hidden" />
@@ -354,18 +354,11 @@ function FullHeader({
         // On a phone at least the loading header's second row
         // (skeletons.tsx), so the page below holds still as it loads.
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-muted max-[600px]:order-last max-[600px]:min-h-[21px] max-[600px]:basis-full">
-          {/* On a phone one line: it fits by shortening the repository and
-              branch (basis 0, growing to their full width where there is
-              room), so the live status stays beside the commit. */}
+          {/* On a phone one line: it fits by shortening the branch (basis 0,
+              growing to its full width where there is room), so the live
+              status stays beside the commit. The logo leads to the Reviews
+              page, so the breadcrumb starts at the range. */}
           <span className="contents max-[600px]:flex max-[600px]:max-w-max max-[600px]:min-w-0 max-[600px]:grow max-[600px]:basis-0 max-[600px]:items-center max-[600px]:gap-2">
-            {/* The repository leads to its reviews (the Reviews page, `/`). */}
-            <NeuveLink
-              destination={{ to: "reviews" }}
-              className="rounded-sm text-ink-muted no-underline transition-colors duration-surface-tone ease-standard hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus focus-visible:outline-solid motion-reduce:transition-none max-[600px]:min-w-0 max-[600px]:truncate"
-            >
-              {repo}
-            </NeuveLink>
-            <span aria-hidden="true">/</span>
             <span className="truncate font-medium text-ink">{branch}</span>
             {commit && (
               <span className="shrink-0 rounded-md bg-raised px-2 py-0.5 font-mono text-[11.5px] whitespace-nowrap text-ink-2">

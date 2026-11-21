@@ -1899,7 +1899,7 @@ export const PhoneNeighborFits: Story = {
  * breadcrumb on one line. Before the fix it wrapped onto four rows, 180px
  * tall at 375 (202px at 320) with the controls on rows of their own. Every
  * control stays on screen with its name, the agents' count and the commit
- * whole; the repository and branch shorten instead of wrapping.
+ * whole; the branch shortens instead of wrapping.
  */
 async function expectHeaderFits(canvasElement: HTMLElement, width: number) {
   const doc = canvasElement.ownerDocument
@@ -1921,7 +1921,7 @@ async function expectHeaderFits(canvasElement: HTMLElement, width: number) {
   ).toBeLessThanOrEqual(80)
 
   const controls = [
-    canvas.getByRole("link", { name: /back to the review batch/ }),
+    canvas.getByRole("link", { name: "Neuve — Reviews" }),
     canvas.getByRole("button", { name: /agents on this branch/ }),
     canvas.getByRole("button", { name: "Find" }),
     canvas.getByRole("link", { name: "Settings" }),
@@ -1943,10 +1943,9 @@ async function expectHeaderFits(canvasElement: HTMLElement, width: number) {
     /^\d+ agents · \d+ live$/
   )
 
-  const repo = canvas.getByRole("link", { name: "acme/docs-app" })
   const branch = canvas.getByText("shr-212-revoke-links")
   const commit = canvas.getByText("a3f9c2e")
-  for (const part of [repo, branch, commit]) {
+  for (const part of [branch, commit]) {
     await expect(part).toBeVisible()
     await expect(
       part.getBoundingClientRect().top,
