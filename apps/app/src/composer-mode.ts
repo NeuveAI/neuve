@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { useLocalStorage } from "@ace/ui";
 import type { ChatMode } from "@ace/channel/protocol";
 
@@ -19,8 +21,10 @@ const forgotten = new Set<string>();
 
 /**
  * The composer's mode, remembered per chat so a composer left on Plan in one chat leaves its
- * channel's other chats be. A mode chosen in this browser wins; until one is, the chat's stored
- * mode. The per-channel value it replaces is removed, not carried to a chat.
+ * channel's other chats be. Only a person's choice in the mode menu is remembered; a mode the
+ * draft or a key moved to lasts while the chat is open. Until the chat's stored mode is known
+ * (`stored` undefined), nothing but a choice moves the mode, so a planning chat opens in Plan.
+ * The per-channel value it replaces is removed, not carried to a chat.
  */
 export function useChatMode(channel: string, chat: number, stored: ChatMode | undefined) {
 	if (!forgotten.has(channel)) {
@@ -29,9 +33,13 @@ export function useChatMode(channel: string, chat: number, stored: ChatMode | un
 			localStorage.removeItem(`ace:mode:/channels/${channel}`);
 		} catch {}
 	}
-	const [remembered, change] = useLocalStorage<string | null>(
-		`ace:mode:/channels/${channel}/${chat}`,
-		null,
-	);
-	return [remembered ?? stored ?? "ace", change] as const;
+	const scope = `/channels/${channel}/${chat}`;
+	const [remembered, remember] = useLocalStorage<string | null>(`ace:mode:${scope}`, null);
+	const [moved, move] = useState<{ scope: string; mode: string }>();
+	const change = (mode: string, chosen = false) => {
+		if (chosen) remember(mode);
+		if (chosen || stored !== undefined) move({ scope, mode });
+	};
+	const mode = (moved?.scope === scope ? moved.mode : undefined) ?? remembered ?? stored ?? "ace";
+	return [mode, change] as const;
 }

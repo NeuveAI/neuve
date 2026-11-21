@@ -190,7 +190,8 @@ type Props = {
 	/** Enables dictation where the runtime can transcribe speech. Defaults to false. */
 	mic?: boolean;
 	mode?: string;
-	onModeChange?: (mode: string) => void;
+	/** `chosen` when the person picked the mode in the mode menu, not a draft or a key. */
+	onModeChange?: (mode: string, chosen?: boolean) => void;
 	model?: string;
 	onModelChange?: (model: string) => void;
 	agent?: string;
@@ -775,12 +776,12 @@ function useComposer({
 		};
 	}, []);
 
-	function updateMode(next: string | ((prev: string) => string)) {
+	function updateMode(next: string | ((prev: string) => string), chosen = false) {
 		let v = typeof next === "function" ? next(modeRef.current) : next;
 		if (v === modeRef.current) return;
 		modeRef.current = v;
 		if (latest.current.mode === undefined) setModeState(v);
-		latest.current.onModeChange?.(v);
+		latest.current.onModeChange?.(v, chosen);
 	}
 
 	function updateModel(next: string) {
@@ -1400,7 +1401,7 @@ function ComposerMode({ state }: { state: ComposerState }) {
 						<DropdownMenuItem
 							key={m.id}
 							onClick={() => {
-								updateMode(m.id);
+								updateMode(m.id, true);
 								view.current?.focus();
 							}}
 						>

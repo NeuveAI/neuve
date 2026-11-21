@@ -85,7 +85,7 @@ const RETRY = "Try again.";
 type Props = {
 	channel: Listing;
 	chat: number;
-	/** The chat's stored mode, which a chat this browser hasn't remembered opens in. */
+	/** The chat's stored mode, which a chat this browser hasn't remembered opens in; absent while unknown. */
 	chatMode?: ChatMode;
 	user: string;
 	current?: ModelRef;
