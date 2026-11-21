@@ -281,6 +281,8 @@ export function toEvents(
 			...base,
 			sender: sender(item.model),
 			content,
+			// Each reply carries the mode its own run ran in, so earlier replies keep their label.
+			...(item.mode === "plan" ? { agent: { mode: "plan" } } : {}),
 		} as Event;
 	});
 	if (!draft.text) return events;

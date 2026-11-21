@@ -110,7 +110,7 @@ type Row = {
 	display?: Event.Sender["display"];
 	credit?: string;
 	run?: string;
-	/** Agent selection used for this user message. */
+	/** Agent selection a person's message was sent to, or an agent's reply was written in. */
 	agent?: Event.Message.User["agent"];
 	/** Unix seconds when the underlying event was edited. */
 	edited?: number;
@@ -335,9 +335,7 @@ function eventToRow(event: Event, project?: REPO, aborted = false): Row | null {
 		// Chat messages from users or agents.
 		case "message": {
 			let role = event.sender.kind === "user" ? "user" as const : "assistant" as const;
-			let agent = event.sender.kind === "user"
-				? (event as Event.Message & Event.Message.User).agent
-				: undefined;
+			let agent = (event as Event.Message & Pick<Event.Message.User, "agent">).agent;
 			let streaming = role === "assistant" && (event as { streaming?: boolean }).streaming === true;
 			let chunks = structure(event.content);
 			return {

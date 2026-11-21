@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type {
+	ChatMode,
 	Image,
 	ReviewNotice,
 	QueuedMessage,
@@ -59,6 +60,8 @@ export type Item =
 		tools: Tool[];
 		error?: string;
 		stopped?: boolean;
+		/** The mode the run that wrote it ran in. */
+		mode?: ChatMode;
 		/** Who stopped the run, once the channel records it. */
 		stopper?: string;
 		/** Queued messages withdrawn when the run was stopped. */
@@ -178,6 +181,7 @@ export function apply(state: Transcript, event: Event): Transcript {
 				tools: [],
 				...(event.error ? { error: event.error } : {}),
 				...(event.stopped ? { stopped: true } : {}),
+				...(event.mode ? { mode: event.mode } : {}),
 			};
 			return { ...state, draft: "", items: [...state.items, item] };
 		}

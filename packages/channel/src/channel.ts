@@ -1,4 +1,5 @@
 import { ReviewCardsDoc } from "./review-cards";
+import type { Context } from "@earendil-works/chord";
 import { type ChannelExtension, install, observe, price } from "./extensions";
 import { admitted, claim, digest } from "./requests";
 import {
@@ -11,6 +12,7 @@ import {
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
 	AgentDoc,
+	type AgentChange,
 	type AgentEvent,
 	type CommitChange,
 	configure,
@@ -27,6 +29,7 @@ import {
 	Harness,
 	InboxDoc,
 	type InboxState,
+	type InputSubmissionDraft,
 	LiveDoc,
 	type LiveState,
 	ROOT_CONVERSATION_ID,
@@ -73,12 +76,14 @@ import {
 } from "./messages";
 import { metadata, MetadataDoc, validateName } from "./metadata";
 import { available, choose, usable } from "./models";
+import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode } from "./plan-mode";
 import { progress } from "./progress";
 import { answer, Questions } from "./questions";
 import type {
 	ChannelInfo,
 	Chat,
 	ChatId,
+	ChatMode,
 	Effort,
 	Event,
 	Metadata,
@@ -145,6 +150,8 @@ export type Options = {
 	storage: Storage;
 	models: Models;
 	env(cwd: string): ExecutionEnv;
+	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
+	planFileAccess?(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv;
 	desktop?: Desktop;
 	browser?: Browser;
 	images?: Images;
@@ -200,6 +207,7 @@ export class Channel {
 	#feed?: { close(): Promise<void>; pending(): boolean };
 	#captionTasks = new Set<Promise<void>>();
 	#admissions = new Map<ChatId, Promise<unknown>>();
+	#changingModes = new Map<ChatId, Promise<unknown>>();
 	#listeners = new Set<Listener>();
 	/** Chats with a captioning pass in progress; `true` when another pass must follow it. */
 	#captioning = new Map<ConversationId, boolean>();
@@ -226,6 +234,8 @@ export class Channel {
 		try {
 		const log = scoped(options.log, { channel: options.id });
 		let channel: Channel;
+		const planning: IsPlanning = async (chat, context) =>
+			isPlanning(channel.#harness, chat, context, id => channel.#changingModes.get(id));
 		const registry = createRegistry();
 		registry.install(logging(log));
 		registry.install(CodingTools);
@@ -258,11 +268,23 @@ export class Channel {
 		registry.install(
 			defineExtension({ name: "ace-channel", sections: [room.section(options), instructions] }),
 		);
-		install(registry, options.extension);
+		registry.install(planModeExtension(planning));
+		install(registry, options.extension, planning, !!options.planFileAccess, log);
 		const harness = await Harness.open(options.storage, {
-			models: options.models,
+			models: planModeModels(options.models),
 			registry,
-			env: ({ cwd }) => options.extension?.environment?.(cwd || options.project) === false ? undefined : options.env(cwd || options.project),
+			env: async ({ cwd, conversationId }, context) => {
+				const folder = cwd || options.project;
+				const { planFileAccess } = options;
+				const chatPlanning = (context: Context) => planning(conversationId, context);
+				if (options.extension?.environment?.(folder) === false) {
+					if (!planFileAccess || !await chatPlanning(context).catch(() => false)) return;
+					// An environment granted by plan mode stays confined for its lifetime.
+					return planFileAccess(options.env(folder), async () => true);
+				}
+				const env = options.env(folder);
+				return planFileAccess?.(env, chatPlanning) ?? env;
+			},
 			onReport: (error) => log("error", "harness.report", failure(error)),
 		}, context);
 		ownedHarness = harness;
@@ -283,6 +305,7 @@ export class Channel {
 				: {}),
 		});
 		const value = await harness.commit(async (tx) => {
+			await tx.doc(ChatModesDoc);
 			const doc = await tx.doc(MetadataDoc);
 			// A missing document is the version 0 upgrade; existing pi metadata always wins.
 			if (!doc.name) {
@@ -566,6 +589,7 @@ export class Channel {
 			cursor = page.next;
 		} while (cursor);
 		const lanes = (await this.#harness.snapshot(LanesDoc, context))?.lanes || {};
+		const modes = (await this.#harness.snapshot(ChatModesDoc, context))?.chats || {};
 		const byPath = new Map(Object.entries(lanes).map(([lane, { path }]) => [path, lane]));
 		const chats: Chat[] = await Promise.all(records.map(async (record) => {
 			const [agent, live, spent] = await Promise.all([
@@ -576,6 +600,7 @@ export class Channel {
 			const cwd = agent?.cwd;
 			const lane = cwd && byPath.get(cwd);
 			const chat: Chat = { id: record.id, busy: !!live?.run, usage: price(usage(spent), [...Object.keys(spent?.models || {}), ...Object.keys(spent?.tools || {})], this.#options.extension?.priced) };
+			chat.mode = modes[record.id] ?? "ace";
 			const window = agent?.model
 				&& this.#options.models.getModel(agent.model.provider, agent.model.modelId)?.contextWindow;
 			const used = window && await this.#used(record.id);
@@ -847,18 +872,18 @@ export class Channel {
 
 	#ask(request: Extract<Request, { op: "ask" }>) {
 		this.#clientRequestId(request.requestId);
-		return this.#admitted(request.chat, () => this.#admit(request));
+		return this.#admitted(request.chat, settled => this.#admit(request, settled));
 	}
 
 	#clientRequestId(requestId: string | undefined) {
 		if (reservedReviewRequestId(requestId)) throw new Error("The neuve.review: request-ID namespace is reserved for the host");
 	}
 
-	async #admitted<T>(id: ChatId | undefined, admit: () => Promise<T>): Promise<T> {
+	async #admitted<T>(id: ChatId | undefined, admit: (settled: Promise<T>) => Promise<T>): Promise<T> {
 		const chat = id || ROOT_CONVERSATION_ID;
 		const previous = this.#admissions.get(chat) || Promise.resolve();
 		// Selection and submission must stay together across concurrent clients.
-		const pending = previous.catch(() => {}).then(admit);
+		const pending: Promise<T> = previous.catch(() => {}).then(() => admit(pending));
 		this.#admissions.set(chat, pending);
 		try {
 			return await pending;
@@ -867,15 +892,16 @@ export class Channel {
 		}
 	}
 
-	async #admit(request: Extract<Request, { op: "ask" }>) {
+	async #admit(request: Extract<Request, { op: "ask" }>, settled: Promise<unknown>) {
 		this.#author(request.author);
 		room.checkAttachments(request);
 		await this.#mayInvoke(request.author);
 		const conversation = await this.#conversation(request.chat);
-		const { requestId, author, text, images, files, model, automatic, effort } = request;
+		const { requestId, author, text, images, files, model, automatic, effort, mode } = request;
+		if (mode !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's mode.");
 		let bound: ((tx: Tx) => Promise<void>) | undefined;
 		if (requestId) {
-			const value = await digest({ op: "ask", author, text, images, files, model, automatic, effort });
+			const value = await digest({ op: "ask", author, text, images, files, model, automatic, effort, mode });
 			// A retry gets its submission back without selecting again, so it never undoes a later choice.
 			const existing = await this.#harness.commit(
 				(tx) => admitted(tx, conversation.id, requestId, value),
@@ -888,14 +914,14 @@ export class Channel {
 				}
 			};
 		}
-		await this.#select(conversation, request, model, effort, automatic, bound);
-		const submission = await conversation.submit({
+		const input: InputSubmissionDraft = {
 			type: "input",
 			content: room.content(request.author, request.text, request),
 			whenBusy: "steer",
 			...(request.requestId ? { requestId: request.requestId } : {}),
-		}, context);
-		return { submission: submission.id };
+		};
+		const { submission } = await this.#select(conversation, request, model, effort, automatic, { bound, mode, input, settled });
+		return { submission };
 	}
 
 	async #pick(request: Extract<Request, { op: "select" }>) {
@@ -924,8 +950,8 @@ export class Channel {
 		requested: ModelRef | undefined,
 		effort?: Effort,
 		automatic?: boolean,
-		bound?: (tx: Tx) => Promise<void>,
-	): Promise<{ model: ModelRef; effort: Effort }> {
+		invocation?: { bound: ((tx: Tx) => Promise<void>) | undefined; mode: ChatMode | undefined; input: InputSubmissionDraft; settled: Promise<unknown> },
+	): Promise<{ model: ModelRef; effort: Effort; submission?: SubmissionId }> {
 		const agent = await conversation.agent(context);
 		const current = agent.model;
 		// A chat's inherited model can lose its provider key; only an explicit request must keep it.
@@ -951,12 +977,6 @@ export class Channel {
 			|| (levels.includes(agent.thinkingLevel) ? agent.thinkingLevel : this.#options.extension?.thinkingLevel || "off");
 		const sameModel = current?.provider === model.provider && current.modelId === model.modelId;
 		const same = sameModel && thinkingLevel === agent.thinkingLevel;
-		const live = await this.#harness.snapshot(LiveDoc, conversation.id, context);
-		if (!same && live?.run) {
-			throw new Error(
-				"The chat is busy; stop it or wait before changing its model or reasoning effort",
-			);
-		}
 		if (model !== kept && !await usable(this.#options.models, model)) {
 			// getModel above found this model, so its provider is registered.
 			const name = this.#options.models.getProvider(model.provider)!.name;
@@ -964,24 +984,78 @@ export class Channel {
 				`The ${name} API key is missing. Add it in Provider settings to invoke an agent. Chat is still available.`,
 			);
 		}
-		if (same) {
-			if (bound) await this.#harness.commit(bound, context);
-			return { model, effort: thinkingLevel };
+		const mode = invocation?.mode;
+		const checkModelIdle = async (tx: Tx) => {
+			if (!same && (await tx.doc(LiveDoc, conversation.id)).run) {
+				throw new Error(
+					"The chat is busy; stop it or wait before changing its model or reasoning effort",
+				);
+			}
+		};
+		let modeChange: Awaited<ReturnType<typeof setChatMode>>;
+		let previousSelection: Pick<AgentChange, "model" | "thinkingLevel"> | undefined;
+		let submission: SubmissionId | undefined;
+		try {
+			if (invocation && mode !== undefined) {
+				// The chat and affected children must be idle, and new policy reads wait for admission to settle.
+				this.#changingModes.set(conversation.id, invocation.settled);
+				modeChange = await this.#harness.commit(async tx => {
+					await checkModelIdle(tx);
+					await invocation.bound?.(tx);
+					return setChatMode(tx, conversation.id, mode);
+				}, context);
+			}
+			if (!same || (mode === undefined && invocation?.bound)) {
+				previousSelection = await this.#harness.commit(async tx => {
+					await checkModelIdle(tx);
+					if (mode === undefined) await invocation?.bound?.(tx);
+					if (same) return;
+					const state = await tx.doc(AgentDoc, conversation.id);
+					const previous = { model: state.model ? { ...state.model } : null, thinkingLevel: state.thinkingLevel ?? null };
+					await configure(tx, conversation.id, { model, thinkingLevel });
+					return previous;
+				}, context);
+			}
+			if (!same && !modeChange) this.#agentChanged(conversation.id, model, thinkingLevel);
+			if (invocation) {
+				submission = (await conversation.submit(invocation.input, context)).id;
+			}
+		} catch (error) {
+			if (modeChange) {
+				const { previous } = modeChange;
+				try {
+					await this.#harness.commit(async tx => {
+						const { chats } = await tx.doc(ChatModesDoc);
+						if (previous === undefined) delete chats[conversation.id];
+						else chats[conversation.id] = previous;
+						if (previousSelection) await configure(tx, conversation.id, previousSelection);
+					}, context);
+				} catch (rollback) {
+					throw new AggregateError([error, rollback], "The chat could not restore its mode after admission failed.");
+				}
+			}
+			throw error;
+		} finally {
+			if (mode !== undefined) this.#changingModes.delete(conversation.id);
 		}
-		await this.#harness.commit(async (tx) => {
-			await bound?.(tx);
-			await configure(tx, conversation.id, { model, thinkingLevel });
-		}, context);
-		const event: Event = { kind: "agent", chat: conversation.id, model, effort: thinkingLevel };
+		if (modeChange) this.#agentChanged(conversation.id, model, thinkingLevel, mode);
+		return { model, effort: thinkingLevel, ...(submission === undefined ? {} : { submission }) };
+	}
+
+	#agentChanged(chat: ChatId, model: ModelRef, effort: Effort, mode?: ChatMode) {
+		const event: Event = {
+			kind: "agent", chat, model, effort,
+			...(mode === undefined ? {} : { mode }),
+		};
+		if (mode !== undefined) this.#log("info", "plan.mode.changed", { chat, mode });
 		for (const listener of this.#listeners) {
-			if (listener.chat !== conversation.id || !listener.agent) continue;
+			if (listener.chat !== chat || !listener.agent) continue;
 			try {
 				listener.send(event);
 			} catch {
 				this.#listeners.delete(listener);
 			}
 		}
-		return { model, effort: thinkingLevel };
 	}
 
 	#automatic(): Promise<ModelRef> {
@@ -1497,6 +1571,9 @@ function events(entry: EntryRecord): Event[] {
 		const model = message.model;
 		const error = message.stopReason === "error";
 		const stopped = message.stopReason === "aborted";
+		const mode = "neuveChatMode" in message && (message.neuveChatMode === "plan" || message.neuveChatMode === "ace")
+			? message.neuveChatMode
+			: undefined;
 		if (text || error || stopped) {
 			out.push({
 				kind: "reply",
@@ -1505,6 +1582,7 @@ function events(entry: EntryRecord): Event[] {
 				at,
 				model,
 				text,
+				...(mode === undefined ? {} : { mode }),
 				...(error ? { error: failed(message) } : {}),
 				...(stopped ? { stopped } : {}),
 			});

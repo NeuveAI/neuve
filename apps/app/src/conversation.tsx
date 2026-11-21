@@ -398,6 +398,7 @@ export function Conversation(
 					<Composer
 						channel={channel}
 						chat={id}
+						chatMode={chat && (chat.mode ?? "ace")}
 						user={user}
 						current={model}
 						currentEffort={chat?.effort}

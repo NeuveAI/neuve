@@ -11,7 +11,8 @@
     "./review-link": "./src/lib/review-link.ts"
   },
   "scripts": {
-    "typecheck": "tsgo --noEmit --skipLibCheck"
+    "typecheck": "tsgo --noEmit --skipLibCheck",
+    "test": "bun ../../scripts/test-budget.ts ./tests"
   },
   "dependencies": {
     "@base-ui/react": "1.4.1",

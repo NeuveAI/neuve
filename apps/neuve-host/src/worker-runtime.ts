@@ -18,6 +18,7 @@ import type { Planning } from "@ace/channel/planning";
 import type { Review } from "@ace/channel/review";
 import { config, configure, CONFIG_VARIABLE, GIT_LOCAL, type HostConfig } from "./host-config";
 import { configureRuntime, runtimeHooks } from "./runtime-hooks";
+import { planExplore, planFileAccess } from "./plan-git";
 /**
  * The channel a worker serves, given to root's factories before anything is created, so they can
  * bind provider capture and telemetry to it. The host keeps no capture store of its own.
@@ -130,7 +131,11 @@ export async function runWorker(setup: WorkerSetup): Promise<void> {
 
 export async function openChannel(options: Options, stateDirectory: string): Promise<Channel> {
 	const setup = runtimeHooks().worker;
-	if (!setup) return Channel.open(options);
+	const planOptions = { ...options, planFileAccess };
+	if (!setup) return Channel.open({
+		...planOptions,
+		extension: { ...options.extension, extensions: [...(options.extension?.extensions ?? []), planExplore] },
+	});
 	const worker: WorkerContext = {sessionId: options.id, config, stateDirectory};
 	const storage = options.storage;
 	try {
@@ -143,7 +148,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		const extension = {
 			environment: (cwd: string) => isPlaced(cwd, options.project),
 			...operations.extension,
-			extensions: [...operations.extension.extensions, externalLanes({name: options.prefix || options.name, project: options.project, lanes: catalogLanes(options.id), env: options.env}), ...(additional?.extensions ?? [])],
+			extensions: [...operations.extension.extensions, externalLanes({name: options.prefix || options.name, project: options.project, lanes: catalogLanes(options.id), env: options.env}), ...(additional?.extensions ?? []), planExplore],
 			attach: async (harness: Harness, admission: import("@ace/channel/extensions").Admission) => {
 				await operations.extension.attach?.(harness, admission);
 				await additional?.attach?.(harness);
@@ -154,7 +159,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			...(config.thinkingLevel ? {thinkingLevel: config.thinkingLevel} : {}),
 			...(setup.nonTurnModels ? {nonTurnModels: (kind: "caption" | "recap", chat: ConversationId) => setup.nonTurnModels!(worker, kind, chat, options.models)} : {}),
 		};
-		const channel = await Channel.open({...options, log: privateLog.log, storage, models, extension,
+		const channel = await Channel.open({...planOptions, log: privateLog.log, storage, models, extension,
 			...(setup.review ? {
 				feed: async (harness: import("@earendil-works/pi-durable").Harness) => {
 					const adapter = nativeReview(options.id);

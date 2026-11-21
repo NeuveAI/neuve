@@ -2,6 +2,7 @@ import { pick } from "../../lib/emoji";
 import {
 	type ComponentPropsWithRef,
 	type ComponentType,
+	type CSSProperties,
 	Fragment,
 	type ReactNode,
 	type Ref,
@@ -53,6 +54,7 @@ import { Waveform } from "../../ui/waveform";
 import { type Attachment, AttachmentList } from "./attachment-list";
 import { Composer } from "./composer";
 import { ComposerToolbar, type ComposerToolbarEvent } from "./composer-toolbar";
+import { type Cause, held, modeChange } from "./mode-marker";
 import { canSendMessage } from "./send";
 import { mentionTokens } from "./mention-tokens";
 import { useAttachments } from "./use-attachments";
@@ -99,6 +101,8 @@ type Mode = {
 	placeholder: string;
 	/** Optional icon shown in the mode picker. */
 	icon?: ComponentType<{ className?: string }>;
+	/** The icon's tone, as an agent's in the agent picker. */
+	color?: string;
 	/** If set, auto-inserts the named mention when this mode is active. */
 	mention?: string;
 	/** Earlier mention names recognized as the same mode, without advertising them. */
@@ -133,7 +137,7 @@ function text(model: Model) {
 	return [model.name, model.id, model.vendor].filter(Boolean).join(" ");
 }
 
-function glyph(mode?: Mode): ComponentType<{ className?: string }> {
+function glyph(mode?: Mode): ComponentType<{ className?: string; style?: CSSProperties }> {
 	if (mode?.icon) return mode.icon;
 	if (mode?.kind === "terminal") return IconConsoleMicro;
 	switch (mode?.id) {
@@ -186,7 +190,8 @@ type Props = {
 	/** Enables dictation where the runtime can transcribe speech. Defaults to false. */
 	mic?: boolean;
 	mode?: string;
-	onModeChange?: (mode: string) => void;
+	/** `chosen` when the person picked the mode in the mode menu, not a draft or a key. */
+	onModeChange?: (mode: string, chosen?: boolean) => void;
 	model?: string;
 	onModelChange?: (model: string) => void;
 	agent?: string;
@@ -565,7 +570,7 @@ function presentation({
 	let sendable = canSendMessage({ text: value, attachments: attach, enabled: canSend });
 	let stop = (canStop ?? busy) && !!onStop;
 	let showMode = modes.length > 1;
-	let showModel = !edit && ace && !!models?.length;
+	let showModel = !edit && (ace || planning) && !!models?.length;
 	let showAgent = !edit && ace && !!agents?.length;
 	let selectedAgent = agents?.find(item => item.id === curAgent) ?? agents?.[0];
 	let AgentIcon = selectedAgent?.icon
@@ -692,7 +697,8 @@ function useComposer({
 	let [emoji, setEmoji] = useState<EmojiState>(EMPTY_EMOJI);
 
 	let draft = useDraft(scope);
-	let restoredMode = useRef(draft.defaultValue ? curMode : undefined);
+	// The saved draft is the scope's and the mode the chat's, so a restored draft moves no mode.
+	let restoring = useRef(!!draft.defaultValue);
 	let history = useHistory(scope);
 	let mic = dictation && canDictate;
 	let analyser = useMic(mic && recording);
@@ -770,12 +776,14 @@ function useComposer({
 		};
 	}, []);
 
-	function updateMode(next: string | ((prev: string) => string)) {
-		let v = typeof next === "function" ? next(modeRef.current) : next;
-		if (v === modeRef.current) return;
-		modeRef.current = v;
-		if (latest.current.mode === undefined) setModeState(v);
-		latest.current.onModeChange?.(v);
+	/** Applies what a cause reports, through the one rule; says whether anything was reported. */
+	function updateMode(cause: Cause<Mode>, from?: string) {
+		let change = modeChange(latest.current.modes, modeRef.current, cause, from);
+		if (!change) return false;
+		modeRef.current = change.mode;
+		if (latest.current.mode === undefined) setModeState(change.mode);
+		latest.current.onModeChange?.(change.mode, change.chosen);
+		return true;
 	}
 
 	function updateModel(next: string) {
@@ -853,7 +861,8 @@ function useComposer({
 	}
 
 	function exit() {
-		updateMode(modes[0]!.id);
+		// Leaving the terminal returns to the first mode, as Escape does.
+		updateMode({ kind: "escape", double: false });
 		view.current?.focus();
 	}
 
@@ -882,28 +891,38 @@ function useComposer({
 		},
 	}));
 
+	/** Drops other modes' markers: a leading one goes, a later one becomes plain text. */
+	function unmark(v: EditorView, mode: string) {
+		for (let m of latest.current.modes) {
+			if (m.id === mode || !m.mention) continue;
+			demoteMentions(v, m.mention, m.mentionAliases);
+		}
+	}
+
 	// Sync mention-modes: keep the doc in sync with the active mode.
+	let synced = useRef<string | undefined>(undefined);
 	useEffect(() => {
 		let v = view.current;
 		if (!v || !mentions?.length) return;
 		if (latest.current.editing) return;
-		// Preserve restored mentions until their inferred mode reaches the controlled prop.
-		if (restoredMode.current === curMode) return;
-		restoredMode.current = undefined;
 
-		for (let m of modes) {
-			if (m.id === curMode || !m.mention) continue;
-			demoteMentions(v, m.mention, m.mentionAliases);
-		}
+		// A held mode sheds markers when it is entered, so a mention typed in it later stays put.
+		let entered = synced.current !== curMode;
+		synced.current = curMode;
+		if (entered || !held(curMode)) unmark(v, curMode);
+		mark(v, curMode);
+	}, [curMode, mentions, modes]);
 
-		let target = modes.find(m => m.id === curMode);
+	/** Gives the draft the mode's own marker when it lacks one. */
+	function mark(v: EditorView, mode: string) {
+		let target = latest.current.modes.find(m => m.id === mode);
 		if (!target?.mention) return;
-		let entry = mentions.find(x => x.name === target.mention);
+		let entry = latest.current.mentions?.find(x => x.name === target.mention);
 		if (!entry || hasMention(v, entry.name, target.mentionAliases)) return;
 		if (promoteMention(v, entry, target.mentionAliases)) return;
 
 		insertModeMention(v, entry);
-	}, [curMode, mentions, modes]);
+	}
 
 	function run(cmd: Command) {
 		let v = view.current;
@@ -1064,22 +1083,15 @@ function useComposer({
 			if (e.repeat) return true;
 			let now = e.timeStamp;
 			let last = esc.current;
-			if (modeRef.current !== ms[0]!.id) {
+			let double = last > 0 && now - last <= ESCAPE_WINDOW;
+			let cur = ms.find(m => m.id === modeRef.current);
+			if (updateMode({ kind: "escape", double })) {
 				esc.current = 0;
 				e.preventDefault();
-				let cur = ms.find(m => m.id === modeRef.current);
-				updateMode(ms[0]!.id);
 				if (cur?.mention) {
 					demoteMentions(v, cur.mention, cur.mentionAliases)
 						|| demoteLeadingMention(v, cur.mention, cur.mentionAliases);
 				}
-				return true;
-			}
-			let ace = ms.find(m => m.id === "ace");
-			if (ace && last > 0 && now - last <= ESCAPE_WINDOW) {
-				esc.current = 0;
-				e.preventDefault();
-				updateMode(ace.id);
 				return true;
 			}
 			esc.current = now;
@@ -1090,14 +1102,21 @@ function useComposer({
 			}
 		}
 		if (e.key === "!" && !e.metaKey && !e.ctrlKey && !v.state.doc.textContent) {
-			let term = ms.find(m => m.kind === "terminal");
-			if (term && modeRef.current !== term.id) {
+			if (updateMode({ kind: "bang" })) {
 				e.preventDefault();
-				updateMode(term.id);
 				return true;
 			}
 		}
-		return history.handleKey(v, e, m => updateMode(m || ms[0]!.id), modeRef.current);
+		// The recalled text lands first and may already move the mode; judge from the mode before.
+		let before = modeRef.current;
+		return history.handleKey(v, e, mode => {
+			updateMode({ kind: "recall", mode }, before);
+			let next = modeRef.current;
+			// Held, the recalled text sheds another mode's marker, as the mode itself shows none; a
+			// Plan message recalled into a mode with a marker takes that mode's marker.
+			if (held(next)) unmark(v, next);
+			else if (held(mode)) mark(v, next);
+		}, before);
 	}
 
 	function update(v: EditorView) {
@@ -1108,18 +1127,14 @@ function useComposer({
 		setEmpty(!value);
 		latest.current.onTextChange?.(text);
 
-		let ms = latest.current.modes;
-		let list = latest.current.mentions;
-		if (!list?.length) return;
-
-		for (let m of ms) {
-			if (!m.mention) continue;
-			if (hasMention(v, m.mention, m.mentionAliases) && modeRef.current !== m.id) {
-				return updateMode(m.id);
-			}
-		}
-		let cur = ms.find(m => m.id === modeRef.current);
-		if (cur?.mention && !hasMention(v, cur.mention, cur.mentionAliases)) updateMode(ms[0]!.id);
+		let restored = restoring.current;
+		restoring.current = false;
+		if (!latest.current.mentions?.length) return;
+		updateMode(
+			restored
+				? { kind: "restore" }
+				: { kind: "draft", has: m => !!m.mention && hasMention(v, m.mention, m.mentionAliases) },
+		);
 	}
 
 	let {
@@ -1372,7 +1387,7 @@ function ComposerMode({ state }: { state: ComposerState }) {
 					/>
 				}
 			>
-				<CurrentIcon className="size-3" />
+				<CurrentIcon className="size-3" style={{ color: current?.color }} />
 				{current?.name}
 				<IconChevronDownMicro className="size-3 transition-transform duration-150 group-data-[popup-open]/button:scale-y-[-1]" />
 			</DropdownMenuTrigger>
@@ -1383,11 +1398,14 @@ function ComposerMode({ state }: { state: ComposerState }) {
 						<DropdownMenuItem
 							key={m.id}
 							onClick={() => {
-								updateMode(m.id);
+								updateMode({ kind: "menu", mode: m.id });
 								view.current?.focus();
 							}}
 						>
-							<Icon className="size-3 shrink-0 text-muted-foreground group-focus/dropdown-menu-item:text-popover-foreground" />
+							<Icon
+								className="size-3 shrink-0 text-muted-foreground group-focus/dropdown-menu-item:text-popover-foreground"
+								style={{ color: m.color }}
+							/>
 							<span className="min-w-0 flex-1 truncate">{m.name}</span>
 						</DropdownMenuItem>
 					);

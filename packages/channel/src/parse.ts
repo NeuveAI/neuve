@@ -9,6 +9,7 @@ export { EffortSchema };
 const id = z.int().nonnegative();
 const chat = id.optional();
 export const ModelRefSchema = z.strictObject({ provider: z.string().min(1), modelId: z.string().min(1) });
+export const ChatModeSchema = z.enum(["ace", "plan"]);
 const images = z.array(z.strictObject({ mimeType: z.string(), data: z.string() })).optional();
 const files = z.array(z.strictObject({ name: z.string(), text: z.string() })).optional();
 const requestId = z.string().min(1).max(200).refine(value => !reservedReviewRequestId(value), {
@@ -60,6 +61,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 		model: ModelRefSchema.optional(),
 		automatic: z.boolean().optional(),
 		effort: EffortSchema.optional(),
+		mode: ChatModeSchema.optional(),
 		requestId,
 	}),
 	z.strictObject({
