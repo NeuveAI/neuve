@@ -2485,6 +2485,7 @@ const railUnits = (
         hunkCount: hunkCount(unit, hunks),
         ...(untitled ? { untitled } : {}),
         ...unitLaneFacts(unit, "human-required", facts),
+        ...(decision ? { disposition: decision.verdict } : {}),
         // A unit in the rail's "Decided" group (`arrivedDecided`): its row
         // shows the person's review standing on it, the carried one marked.
         ...(arrivedDecided(unit, facts) && decision

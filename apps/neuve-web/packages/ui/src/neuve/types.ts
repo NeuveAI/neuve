@@ -563,6 +563,11 @@ export interface RailUnit extends UnitLaneFacts {
   /** As on `LaneUnit`: set only when the unit has no written title. */
   untitled?: { files: Array<UntitledFile> }
   /**
+   * The person's disposition standing on the unit (the meter's rule): its
+   * rail card shows it as a tag, open or not.
+   */
+  disposition?: "approve" | "request-changes"
+  /**
    * On a unit that arrived closed by a person's decision carried from an
    * earlier review (a `carriedUnits` row): the person's review that stands
    * on it, with the carried label (the earlier review's short head) while

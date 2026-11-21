@@ -774,6 +774,69 @@ describe('range highlight', () => {
       ctx.cleanup();
     }
   });
+
+  // NEUVE FORK, NEU-444: a highlighted range fades as one box — one animation
+  // on the code root, not one per row — and lines it leaves stay tagged, under
+  // the current tint, only until that fade ends. The animation is stubbed: the
+  // DOM harness has none, and what matters here is which fades start and what
+  // the rows carry meanwhile.
+  test('fades a range as one, keeping the lines it leaves only while they fade', async () => {
+    const ctx = setup(ANNOTATIONS);
+    const runs: Array<{ amounts: string[]; finish(): void }> = [];
+    const animate = HTMLElement.prototype.animate;
+    HTMLElement.prototype.animate = function (keyframes) {
+      const animation = {
+        onfinish: null as null | (() => void),
+        cancel() {},
+      };
+      runs.push({
+        amounts: Object.keys(keyframes as Record<string, unknown>),
+        finish: () => animation.onfinish?.(),
+      });
+      return animation as unknown as Animation;
+    };
+    try {
+      await waitForCode(ctx.container);
+      const range = { start: 20, side: 'additions' as const, end: 21 };
+      ctx.instance.setAnnotationOverlayState({
+        highlight: { range, tone: 'hint' },
+      });
+      expect(runs.map((run) => run.amounts)).toEqual([
+        ['--diffs-overlay-range-in'],
+      ]);
+      // The same lines written as the open card's range, with its outline on
+      // line 21: the tint is the same box, so only the outline fades in.
+      ctx.instance.setAnnotationOverlayState({
+        highlight: { range: { ...range, endSide: 'additions' }, tone: 'strong' },
+        engaged: { start: 21, side: 'additions', end: 21 },
+      });
+      expect(runs.map((run) => run.amounts)).toEqual([
+        ['--diffs-overlay-range-in'],
+        ['--diffs-overlay-engaged-in'],
+      ]);
+      // The highlight goes; the outline stays. The tint's lines leave at once
+      // (hosts read that), and fade out as one, but line 21 never showed the
+      // tint under its outline, so only line 20 is left fading.
+      ctx.instance.setAnnotationOverlayState({ highlight: undefined });
+      expect(ctx.shadow().querySelectorAll('[data-overlay-range]').length).toBe(
+        0
+      );
+      expect(runs.at(-1)?.amounts).toEqual(['--diffs-overlay-range-out']);
+      const leaving = () =>
+        Array.from(
+          ctx.shadow().querySelectorAll('[data-overlay-range-leaving]'),
+          (el) =>
+            `${el.getAttribute('data-line') ?? `#${el.getAttribute('data-column-number')}`}:${el.getAttribute('data-overlay-range-leaving')}`
+        );
+      expect(leaving()).toEqual(['#20:strong', '20:strong']);
+      runs.at(-1)?.finish();
+      expect(leaving()).toEqual([]);
+      expect(runs.filter((run) => run.amounts[0]?.endsWith('-in')).length).toBe(2);
+    } finally {
+      HTMLElement.prototype.animate = animate;
+      ctx.cleanup();
+    }
+  });
 });
 
 describe('keyboard line selection (NEUVE FORK)', () => {

@@ -851,3 +851,36 @@ test("a unit's hunk count is one rule on the overview, the rail and the unit pag
   expect(onExpiry.unit.hunkCount).toBe(2)
   expect(onExpiry.unit.stats).toContain("2 hunks")
 })
+
+test("every rail card carries the disposition the meter counts, whichever unit is open", () => {
+  // Why (NEU-445): a rail card showed its tag only while open, from the open
+  // unit's dock. The tag now comes from the disposition standing on each
+  // unit, the one the meter counts, so a person's decision, theirs or
+  // another's, is on its card whether it is open or not.
+  const admins = unit(
+    "u-admins",
+    "Admins can extend an expired link",
+    "human-required",
+    { decisions: [judged("e-mine", OWNER, "approve")] }
+  )
+  const shared = unit(
+    "u-schedule",
+    "Changes to src/sharing/schedule.ts",
+    "human-required",
+    { decisions: [judged("e-theirs", OTHER, "request-changes")] }
+  )
+  const context = contextOf([expiry(), admins, shared])
+  for (const open of [expiry(), admins]) {
+    const { desk } = asked(context, factsOf({}), open)
+    expect(
+      desk.railUnits.map((row) => [row.id, row.disposition ?? null])
+    ).toEqual([
+      ["u-expiry", null],
+      ["u-admins", "approve"],
+      ["u-schedule", "request-changes"],
+    ])
+    expect(
+      desk.railUnits.filter((row) => row.disposition).map((row) => row.id)
+    ).toEqual(desk.humanDecidedUnitIds ?? [])
+  }
+})

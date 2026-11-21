@@ -785,7 +785,7 @@ export const EngagedUnderHoveredPhrase: Story = {
 
 /**
  * Reduced motion: the engaged look takes over at once, with no transition
- * (with full motion only the line-tint transition eases it in).
+ * (with full motion one fade on the diff's code root eases it in).
  */
 export const EngagedReducedMotion: Story = {
   globals: { reducedMotion: "reduce" },
@@ -820,17 +820,14 @@ export const EngagedLandingKeepsOutline: Story = {
       await pause(60)
     }
     await expect(samples.length).toBeGreaterThan(5)
-    const ring = /rgb\([^)]*\) 0px 0px 0px 2px inset/
+    // The ring's colour is mixed by the outline's fade, so it computes as
+    // rgb() or color(srgb …).
+    const ring = /(?:rgb|color)\([^)]*\) 0px 0px 0px 2px inset/
     for (const shadow of samples) await expect(shadow).toMatch(ring)
-    // It ends on the engaged look itself: the outline over the hover tint.
+    // It ends on the engaged look itself: the outline over the hover tint,
+    // with the landing's layer (painted under it) gone.
     await expectOutlined(root, 34)
-    const hoverTint = getComputedStyle(row(root, 34)!)
-      .getPropertyValue("--nv-lit")
-      .trim()
-      .replace(/\s+/g, " ")
-    await expect(
-      getComputedStyle(row(root, 34)!).boxShadow.replace(/\s+/g, " ")
-    ).toContain(hoverTint.replace(/,(\S)/g, ", $1"))
+    await expect(getComputedStyle(row(root, 34)!).backgroundImage).toBe("none")
   },
 }
 

@@ -27,7 +27,7 @@ import {
  * loaded header's sizes, so it wraps where that header wraps and the page
  * holds still when it arrives. Each page's header differs: the Reviews
  * page's breadcrumb is the repository and "Reviews", with no Agents
- * control; a batch's (overview, desk, lineage) is repository / branch and
+ * control; a batch's (overview, desk, lineage) is the branch and
  * the commit, then the Agents control. On a phone (narrower than 600px)
  * both take the header's two rows (app-header.tsx), the breadcrumb below
  * the controls.

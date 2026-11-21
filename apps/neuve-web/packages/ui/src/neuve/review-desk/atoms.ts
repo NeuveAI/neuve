@@ -73,6 +73,19 @@ export type DockState =
   | "agreed"
   | "commented"
 
+/**
+ * The dock a recorded disposition opens: request changes as itself, an
+ * approval as approved on human-required work and as agreed elsewhere
+ * (approve shows as agree when the agent approved).
+ */
+export function decidedDock(
+  disposition: "approve" | "request-changes",
+  lane: ReviewLane | undefined
+): DockState {
+  if (disposition === "request-changes") return "changes-requested"
+  return lane === "human-required" ? "approved" : "agreed"
+}
+
 export type DiffLayout = "stacked" | "split"
 export type BrowseMode = "units" | "files"
 /** New-commit notice: shown, parked as a corner pill, or none. */

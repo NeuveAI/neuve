@@ -1,3 +1,4 @@
+import { decidedDock } from "@workspace/ui/neuve/review-desk/atoms"
 import type { ReviewDeskLoad } from "@workspace/ui/neuve/types"
 
 /**
@@ -17,12 +18,7 @@ export function recordedDecision(load: ReviewDeskLoad) {
       kind: "disposition" as const,
     },
     initialState: {
-      dock:
-        decision.decision === "request-changes"
-          ? ("changes-requested" as const)
-          : load.data.unit.lane === "human-required"
-            ? ("approved" as const)
-            : ("agreed" as const),
+      dock: decidedDock(decision.decision, load.data.unit.lane),
     },
   }
 }
