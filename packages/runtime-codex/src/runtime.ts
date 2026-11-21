@@ -24,6 +24,7 @@ import { RELEASE } from "./generated/methods.ts";
 import type { LogEntry } from "./log.ts";
 import {
   applicationFolders,
+  appsLookedFor,
   discoveryCandidates,
   findCodex,
   inApps,
@@ -80,7 +81,11 @@ export const unavailable = (
   tried: ReadonlyArray<Asked>,
 ): Extract<SignInState, { state: "runtime-unavailable" }> => {
   const set = `neuve auth program ${account} <path>`;
-  const install = `Run neuve auth program ${account} --find to look for Codex on the PATH and in the installed apps, install it with ${PROGRAM.install} (${PROGRAM.page}), or set its path with ${set}.`;
+  // Installed apps are looked for only where they exist: on macOS.
+  const where = appsLookedFor()
+    ? "on the PATH and in the installed apps"
+    : "everywhere on the PATH";
+  const install = `Run neuve auth program ${account} --find to look for Codex ${where}, install it with ${PROGRAM.install} (${PROGRAM.page}), or set its path with ${set}.`;
   const broken = tried.find((asked) => asked.kind === "broken");
   if (broken !== undefined)
     return {
@@ -204,7 +209,12 @@ export const discoverCodex = (
       },
       () => Effect.void,
     );
-    return { tried, found: found?.asked, skippedApps: skipped };
+    return {
+      tried,
+      found: found?.asked,
+      skippedApps: skipped,
+      appsLookedFor: config.apps !== undefined || appsLookedFor(),
+    };
   });
 
 export const makeRuntime = (config: CodexRuntimeConfig = {}) =>

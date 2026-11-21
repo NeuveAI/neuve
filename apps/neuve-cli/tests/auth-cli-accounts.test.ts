@@ -461,6 +461,7 @@ test("auth program --find reports what it asked, stores what answered, and store
                 why: "a layout this Neuve does not know",
               },
             ],
+            appsLookedFor: true,
           }),
       }),
     );
@@ -486,11 +487,14 @@ test("auth program --find reports what it asked, stores what answered, and store
             tried: [{ candidate: stranger, kind: "unrecognized" as const }],
             found: undefined,
             skippedApps: [],
+            appsLookedFor: false,
           }),
       }),
     );
     expect(none.value).toBe(1);
     expect(none.out).toContain("Found no Codex; nothing was stored.");
+    // Off macOS no app is looked for, and the report says so.
+    expect(none.out).toContain("No installed app was looked for");
     expect(
       AccountStore.programPath(home, AccountName.parse("codex")),
     ).toBeUndefined();

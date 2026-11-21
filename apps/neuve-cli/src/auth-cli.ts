@@ -60,8 +60,8 @@ export const AUTH_HELP = `Usage:
   neuve auth program <account> [<path> | --find | --unset]
               Set the program an account runs on, such as the Codex the codex account uses,
               then check it. Once set, only that program is used. --find looks once for Codex,
-              on the PATH and in the installed apps, says what it asked and why each was
-              skipped, and stores the first that answers as Codex. --unset forgets the path,
+              on the PATH and, on macOS, in the installed apps, says what it asked and why each
+              was skipped, and stores the first that answers as Codex. --unset forgets the path,
               and the account uses the codex the PATH resolves to.
   neuve auth remove <account> [--force]
               Stop use, sign out, then remove the sign-in. --force allows removal when
@@ -362,6 +362,11 @@ const runAccountCommand = async (
                   ...found.skippedApps.map(
                     ({ app, why }) => `  ${app}: ${why}, skipped`,
                   ),
+                  ...(found.appsLookedFor
+                    ? []
+                    : [
+                        "  No installed app was looked for: OpenAI's desktop apps are looked for only on macOS.",
+                      ]),
                   ...(found.found === undefined
                     ? ["Found no Codex; nothing was stored."]
                     : []),

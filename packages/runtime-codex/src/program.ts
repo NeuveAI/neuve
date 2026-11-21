@@ -73,7 +73,19 @@ export const onPath = (path: string | undefined): ReadonlyArray<string> =>
     .map((folder) => join(folder, program.name))
     .filter(executable);
 
-const identifierOf = (app: string) => {
+/**
+ * Whether installed apps are looked for at all: OpenAI's desktop apps, their identifiers and
+ * their property lists are macOS's, so on any other system discovery asks the PATH alone and
+ * starts no macOS tool. Read when asked, so a test can run the same code as another system.
+ */
+export const appsLookedFor = (platform: string = process.platform) =>
+  platform === "darwin";
+
+/** An app's bundle identifier, read from its property list. */
+export type IdentifierReader = (app: string) => string | undefined;
+/** macOS's own reader of an app's property list, `plutil`; nothing on another system. */
+export const plistIdentifier: IdentifierReader = (app) => {
+  if (!appsLookedFor()) return undefined;
   const plist = join(app, "Contents", "Info.plist");
   if (!existsSync(plist)) return undefined;
   const read = Bun.spawnSync(
@@ -107,12 +119,15 @@ const Manifest = z.looseObject({
  */
 /** The two Applications folders, the machine's and the person's. */
 export const applicationFolders = (home = homedir()) =>
-  program.applicationFolders.map((folder) =>
-    folder.startsWith("~/") ? join(home, folder.slice(2)) : folder,
-  );
+  appsLookedFor()
+    ? program.applicationFolders.map((folder) =>
+        folder.startsWith("~/") ? join(home, folder.slice(2)) : folder,
+      )
+    : [];
 export const inApps = (
   folders: ReadonlyArray<string> = applicationFolders(),
   report: (app: string, why: string) => void = () => {},
+  identifierOf: IdentifierReader = plistIdentifier,
 ): ReadonlyArray<string> =>
   folders
     .flatMap((folder) => {

@@ -3,6 +3,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -18,7 +19,7 @@ import {
   type SignInHint,
 } from "@neuve/runtime";
 import { Effect, Exit } from "effect";
-import { inApps } from "../src/program.ts";
+import { applicationFolders, inApps } from "../src/program.ts";
 import {
   discoverCodex,
   makeRuntime,
@@ -361,7 +362,8 @@ describe("OpenAI's apps", () => {
       entry.split("/").at(-1),
     );
   };
-  test("the program the manifest declares, by identifier; an unknown layout and an entry outside bin are skipped", () => {
+  /** The apps of every test below, in one folder. */
+  const apps = () => {
     const folder = scratchFolder();
     const good = app(folder, "Desktop", "com.openai.codex", {
       layoutVersion: 1,
@@ -383,16 +385,76 @@ describe("OpenAI's apps", () => {
       "codex",
     );
     app(folder, "Bare", "com.openai.codex", undefined);
+    return { folder, good };
+  };
+  /** Reads the identifier from the fixtures' XML property lists, on any system. */
+  const fromXml = (app: string) =>
+    /<key>CFBundleIdentifier<\/key><string>([^<]+)<\/string>/.exec(
+      readFileSync(join(app, "Contents", "Info.plist"), "utf8"),
+    )?.[1];
+  const read = (
+    folder: string,
+    reader?: (app: string) => string | undefined,
+  ) => {
     const skipped: string[] = [];
-    expect(
-      inApps([folder, join(folder, "missing")], (path, why) =>
-        skipped.push(`${path}: ${why}`),
-      ),
-    ).toEqual([good]);
-    expect(skipped).toEqual([
-      `${join(folder, "Later.app")}: a layout this Neuve does not know`,
-      `${join(folder, "Outside.app")}: a layout this Neuve does not know`,
-    ]);
+    const found = inApps(
+      [folder, join(folder, "missing")],
+      (path, why) => skipped.push(`${path}: ${why}`),
+      reader,
+    );
+    return { found, skipped };
+  };
+
+  // On every system: the rule for the manifest, with the property list read by a stand-in.
+  test("the program the manifest declares, by identifier; an unknown layout and an entry outside bin are skipped", () => {
+    const { folder, good } = apps();
+    expect(read(folder, fromXml)).toEqual({
+      found: [good],
+      skipped: [
+        `${join(folder, "Later.app")}: a layout this Neuve does not know`,
+        `${join(folder, "Outside.app")}: a layout this Neuve does not know`,
+      ],
+    });
+  });
+
+  // On macOS only: the same apps, read through the system's own `plutil`.
+  test.if(process.platform === "darwin")(
+    "on macOS the property list is read by plutil, with the same result",
+    () => {
+      const { folder, good } = apps();
+      expect(read(folder).found).toEqual([good]);
+    },
+  );
+
+  // Off macOS: no app is looked for and no macOS tool is started, and the person is told why.
+  test("off macOS no app is looked for, no macOS tool runs, and the fix does not point at one", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    try {
+      const { folder } = apps();
+      expect(applicationFolders("/home/someone")).toEqual([]);
+      // The default reader starts nothing: a found manifest is still not an app here.
+      expect(read(folder).found).toEqual([]);
+      const root = scratchFolder();
+      const stranger = file(join(root, "npm"));
+      const fake = fakeWith([stranger]);
+      const found = await Effect.runPromise(
+        discoverCodex({ environment: { PATH: join(root, "npm") } }).pipe(
+          Effect.provide(fake.layer),
+        ),
+      );
+      expect(found.appsLookedFor).toBe(false);
+      expect(found.tried.map((t) => t.candidate.found)).toEqual(["path"]);
+      expect(found.found).toBeUndefined();
+      const status = await probe(fakeWith([stranger]), {
+        environment: { PATH: join(root, "npm") },
+      });
+      const fix = (status.signIn as { fix: string }).fix;
+      expect(fix).toContain("--find to look for Codex everywhere on the PATH");
+      expect(fix).not.toContain("installed apps");
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 });
 

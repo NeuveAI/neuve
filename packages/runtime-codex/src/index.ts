@@ -24,6 +24,7 @@ export {
   type CodexRuntimeConfig,
 } from "./runtime.ts";
 export {
+  appsLookedFor,
   discoveryCandidates,
   findCodex,
   inApps,
