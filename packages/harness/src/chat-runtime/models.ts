@@ -10,11 +10,12 @@ import {
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { Effect } from "effect";
-import type {
-  AccountStatus,
-  RuntimeRegistryShape,
-  RuntimeModel,
-  SessionPolicy,
+import {
+  unavailableText,
+  type AccountStatus,
+  type RuntimeRegistryShape,
+  type RuntimeModel,
+  type SessionPolicy,
 } from "@neuve/runtime";
 import { ChatRuntimeBridge, type AccountRoute } from "./bridge.ts";
 import { failureStream, terminalText } from "./failure.ts";
@@ -58,7 +59,7 @@ export async function accountModels(
   const added = createModels();
   const limits = new Map<
     string,
-    Map<string, { contextWindow: number; maxTokens: number }>
+    Map<string, { contextWindow: number; maxTokens?: number }>
   >();
   const stopLimits = options.bridge.subscribeModelLimits(
     (account, model, value) => {
@@ -69,7 +70,7 @@ export async function accountModels(
       const key = row?.resolvedModel ?? row?.id ?? model;
       let known = limits.get(account);
       if (!known) limits.set(account, (known = new Map()));
-      known.set(key, value);
+      known.set(key, { ...known.get(key), ...value });
       for (const candidate of added.getModels(account)) {
         const row = status && resolveRow(status, candidate.id);
         if ((row?.resolvedModel ?? row?.id) === key)
@@ -82,9 +83,13 @@ export async function accountModels(
     row: RuntimeModel,
     id = row.id,
   ): Model<Api> => {
+    // pi's catalogue entry for the model the row names, under whichever provider lists it: no
+    // vendor is assumed, and a row stored before rows carried limits keeps its real ones.
+    const listed = native.getModels();
     const catalog =
-      (row.resolvedModel && native.getModel("anthropic", row.resolvedModel)) ||
-      native.getModel("anthropic", row.id);
+      (row.resolvedModel !== undefined &&
+        listed.find((model) => model.id === row.resolvedModel)) ||
+      listed.find((model) => model.id === row.id);
     const known = limits.get(status.name)?.get(row.resolvedModel ?? row.id);
     const levels = row.supportsEffort ? (row.supportedEffortLevels ?? []) : [];
     return {
@@ -105,8 +110,14 @@ export async function accountModels(
         ...Object.fromEntries(levels.map((level) => [level, level])),
       },
       input: ["text", "image"],
-      contextWindow: known?.contextWindow ?? catalog?.contextWindow ?? 200_000,
-      maxTokens: known?.maxTokens ?? catalog?.maxTokens ?? 32_000,
+      // A turn's report first, then the runtime's row, then the catalogue, then pi's defaults.
+      contextWindow:
+        known?.contextWindow ??
+        row.contextWindow ??
+        catalog?.contextWindow ??
+        200_000,
+      maxTokens:
+        known?.maxTokens ?? row.maxOutputTokens ?? catalog?.maxTokens ?? 32_000,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     };
   };
@@ -191,13 +202,19 @@ export async function accountModels(
     if (!status || status.signIn.state !== "signed-in") {
       const state = status?.signIn;
       const text =
-        state && "hint" in state && state.hint
-          ? terminalText({
-              _tag: "SignInRequired",
-              account: route.name,
-              hint: state.hint,
-            })
-          : `Sign in for ${route.name} before continuing.`;
+        state?.state === "runtime-unavailable" && state.fix !== undefined
+          ? unavailableText(state)
+          : state?.state === "unknown" &&
+              state.reason === "check-failed" &&
+              state.hint === undefined
+            ? `Neuve couldn't check ${route.name}. Run neuve auth status ${route.name} --check.`
+            : state && "hint" in state && state.hint
+              ? terminalText({
+                  _tag: "SignInRequired",
+                  account: route.name,
+                  hint: state.hint,
+                })
+              : `Sign in for ${route.name} before continuing.`;
       const previous = newest(context.messages);
       return failureStream(
         model,

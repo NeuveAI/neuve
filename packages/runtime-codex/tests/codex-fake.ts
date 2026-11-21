@@ -9,6 +9,8 @@ import { fake, type Fake } from "./replay.ts";
 
 export interface Process {
   readonly io: Fake;
+  /** The program the process was started as. */
+  readonly program: string;
   readonly args: ReadonlyArray<string>;
   readonly env: Readonly<Record<string, string | undefined>>;
   /** Whether the process was started with the person's own settings off. */
@@ -171,6 +173,7 @@ export const codex = (reply: Reply = () => undefined) => {
         });
         process = {
           io: one.io,
+          program: command[0],
           args,
           env: options.env,
           clean: args.includes("features.hooks=false"),

@@ -45,6 +45,7 @@ test("defaults exist without files and anthropic reads the environment", async (
             "anthropic",
             "chatgpt",
             "claude",
+            "codex",
           ]);
           expect(accounts[0]?.credential).toEqual({
             kind: "environment",

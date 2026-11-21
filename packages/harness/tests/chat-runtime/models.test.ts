@@ -195,7 +195,8 @@ for (const { label, supportsEffort, supportedEffortLevels } of [
   });
 }
 
-// Catalog precedence and account isolation prevent stale or cross-account context limits.
+// Catalog precedence and account isolation prevent stale or cross-account context limits. The
+// catalogue is any provider's entry for the model the row names, so no vendor is assumed.
 test("catalog limits seed each model, turn usage updates alias and pin only on that account", async () => {
   const native = createModels();
   native.setProvider(
@@ -283,25 +284,29 @@ test("catalog limits seed each model, turn usage updates alias and pin only on t
   }
 });
 
-// Older runtimes omit limits; request usage and incomplete observations cannot replace a pair.
-test("missing, partial and request usage limits keep the catalog or fallback", async () => {
+// Older runtimes omit limits; request usage and an output limit alone change nothing, while a
+// window alone, all Codex reports, updates the window and keeps the output limit.
+test("missing, partial and request usage limits keep the row or fallback, and a window alone counts", async () => {
   const run = await fixture();
   try {
-    for (const modelUsage of [
-      { model: "sonnet" },
-      { model: "sonnet", contextWindow: 500_000 },
-      { model: "sonnet", maxOutputTokens: 50_000 },
-      {
-        model: "sonnet",
-        scope: "request" as const,
-        contextWindow: 500_000,
-        maxOutputTokens: 50_000,
-      },
-    ]) {
+    for (const [modelUsage, expected] of [
+      [{ model: "sonnet" }, [200_000, 32_000]],
+      [{ model: "sonnet", maxOutputTokens: 50_000 }, [200_000, 32_000]],
+      [
+        {
+          model: "sonnet",
+          scope: "request" as const,
+          contextWindow: 500_000,
+          maxOutputTokens: 50_000,
+        },
+        [200_000, 32_000],
+      ],
+      [{ model: "sonnet", contextWindow: 500_000 }, [500_000, 32_000]],
+    ] as const) {
       run.fake.frames.push({ text: "answer", modelUsage });
       expect((await run.submit("next")).status).toBe("done");
       const model = run.models.getModel("subscription", "sonnet")!;
-      expect([model.contextWindow, model.maxTokens]).toEqual([200_000, 32_000]);
+      expect([model.contextWindow, model.maxTokens]).toEqual([...expected]);
     }
   } finally {
     await run.close();

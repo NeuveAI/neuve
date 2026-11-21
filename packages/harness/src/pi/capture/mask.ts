@@ -711,7 +711,15 @@ const maskContractState = (
                 ...event,
                 input: z.json().parse(maskJson(event.input, declared)),
               }
-            : event,
+            : event.type === "work.finished"
+              ? {
+                  ...event,
+                  input: z.json().parse(maskJson(event.input, declared)),
+                  ...(event.output === undefined
+                    ? {}
+                    : { output: maskString(event.output, declared) }),
+                }
+              : event,
   ),
   settlements: Object.fromEntries(
     Object.entries(state.settlements).map(([id, outcome]) => [

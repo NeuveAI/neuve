@@ -444,7 +444,7 @@ test("a refused account stays isolated when stderr fails", async () => {
           try {
             expect(
               (yield* store.list).map((item) => String(item.name)),
-            ).toEqual(["anthropic", "chatgpt", "claude"]);
+            ).toEqual(["anthropic", "chatgpt", "claude", "codex"]);
           } finally {
             stderr.mockRestore();
           }

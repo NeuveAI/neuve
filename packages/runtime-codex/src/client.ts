@@ -119,6 +119,8 @@ export interface CodexConnection {
    * wait. Closing the scope does the same, whether the connection was open or had ended.
    */
   readonly close: Effect.Effect<void>;
+  /** Whether the connection is still open: false once the program ended or was closed. */
+  readonly open: () => boolean;
 }
 
 /** Bounded for a log line: Codex chooses these names. */
@@ -481,5 +483,6 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
     request,
     notifications: Stream.fromQueue(notifications),
     close,
+    open: () => state.kind === "open",
   } satisfies CodexConnection as CodexConnection;
 });

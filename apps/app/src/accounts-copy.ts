@@ -3,6 +3,7 @@ import type {
   LimitWindow,
   SignInState,
 } from "@neuve/runtime/status";
+import { unavailableText } from "@neuve/runtime/sign-in-command";
 
 export const accountsCopy = {
   title: "Accounts",
@@ -21,12 +22,6 @@ export const accountsCopy = {
     "chatgpt-subscription": "ChatGPT",
     "anthropic-api-key": "Anthropic",
     "openai-api-key": "OpenAI",
-  },
-  runtime: {
-    "not-installed": "Claude Code isn't installed",
-    "not-registered": "Claude Code isn't set up for Neuve",
-    "unsupported-version": "Claude Code needs a newer version",
-    "start-failed": "Claude Code couldn't start",
   },
   windows: {
     "five-hour": "5-hour limit",
@@ -60,7 +55,7 @@ export function accountDescription(
     case "credential-rejected":
       return `${accountsCopy.providers[kind]} rejected this sign-in`;
     case "runtime-unavailable":
-      return accountsCopy.runtime[signIn.reason];
+      return unavailableText(signIn);
     case "unknown":
       return signIn.reason === "not-checked"
         ? "Not checked yet"

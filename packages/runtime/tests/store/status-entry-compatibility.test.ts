@@ -112,7 +112,7 @@ test("a refused status stays isolated in reads, checks, watches and sibling writ
             expect(JSON.stringify(stored(home).accounts[0])).toBe(
               JSON.stringify(refused),
             );
-            expect(stored(home).accounts).toHaveLength(5); // Default accounts retain the existing write-back behavior.
+            expect(stored(home).accounts).toHaveLength(6); // Default accounts retain the existing write-back behavior.
             yield* forgetStatus(home, {
               account: sibling,
               folderId: good.identity,

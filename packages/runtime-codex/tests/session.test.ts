@@ -1739,3 +1739,126 @@ describe("what the planted faults showed", () => {
     );
   });
 });
+
+// Why: round four of the hand-over, from the runtime slice's review. Each test fails on the code
+// before it: a process that died after its last answer was made current; a refused resume of a
+// thread whose first turn was cut short silently started a new thread.
+describe("the hand-over, round four", () => {
+  test("a process that dies after its last answer is never made current, and the session goes on", async () => {
+    // Processes: 0 reads the settings, 1 is clean, 2 the person's own, which answers the resume
+    // and then dies before it is made current.
+    const fake = codex((message, process) => {
+      if (
+        message.method !== "thread/resume" ||
+        fake.processes.indexOf(process) !== 2
+      )
+        return undefined;
+      queueMicrotask(() => {
+        process.io.send({
+          id: message.id,
+          result: { thread: { id: "thread-1", turns: [] } },
+        });
+        process.io.exit({ exitCode: 1 });
+      });
+      return SILENT;
+    });
+    await run(fake, (session, read) =>
+      Effect.gen(function* () {
+        yield* startOn(fake, session, readOnly);
+        fake.send("turn/completed", completed("completed"));
+        yield* read.next("turn.finished");
+        yield* session.startTurn({
+          turnId: "w1",
+          message: "go",
+          workspace: write,
+        });
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          outcome: { status: "failed", disposition: "reusable" },
+        });
+        expect(written(fake.processes[2]!, "turn/start")).toHaveLength(0);
+        expect(read.ended()).toBe(false);
+        // The death of a process that was not current did not stop the session.
+        yield* session.startTurn({
+          turnId: "w2",
+          message: "go",
+          workspace: write,
+        });
+        yield* until(() => written(fake.current(), "turn/start").length > 0);
+        expect(fake.processes.indexOf(fake.current())).toBe(3);
+        expect(written(fake.current(), "thread/resume")).toHaveLength(1);
+      }),
+    );
+  });
+
+  test("a refused resume of a thread whose first turn was cut short fails, and starts no new thread", async () => {
+    // Processes: 0 reads the settings, 1 is clean, 2 the person's own, which refuses the thread.
+    const fake = codex((message, process) =>
+      message.method === "thread/resume" &&
+      fake.processes.indexOf(process) === 2
+        ? new Error("thread not found")
+        : undefined,
+    );
+    await run(fake, (session, read) =>
+      Effect.gen(function* () {
+        yield* startOn(fake, session, readOnly);
+        yield* session.interruptTurn({ turnId: "turn" });
+        fake.send("turn/completed", completed("interrupted"));
+        yield* read.next("turn.finished");
+        yield* session.startTurn({
+          turnId: "w1",
+          message: "go",
+          workspace: write,
+        });
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          outcome: { status: "failed" },
+        });
+        expect(written(fake.processes[2]!, "thread/start")).toHaveLength(0);
+        expect(written(fake.processes[2]!, "turn/start")).toHaveLength(0);
+      }),
+    );
+  });
+
+  test("an interrupt while the old process is stopped for a change of mode ends the turn, and nothing is sent", async () => {
+    const fake = codex();
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session, readOnly);
+          fake.send("turn/completed", completed("completed"));
+          yield* read.next("turn.finished");
+          fake.current().io.ignoreTerm();
+          const before = fake.processes.length;
+          yield* session
+            .startTurn({ turnId: "w1", message: "go", workspace: write })
+            .pipe(Effect.forkDetach);
+          yield* Effect.sleep("20 millis");
+          yield* session.interruptTurn({ turnId: "w1" });
+          expect(yield* read.next("turn.finished")).toMatchObject({
+            outcome: { status: "interrupted" },
+          });
+          yield* Effect.sleep("300 millis");
+          for (const p of fake.processes.slice(before))
+            expect(written(p, "turn/start")).toHaveLength(0);
+        }),
+      { stopWait: "200 millis" },
+    );
+  });
+
+  test("closing the session waits until every process it started has ended", async () => {
+    const fake = codex();
+    await run(
+      fake,
+      (session, read, scope) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session);
+          for (const p of fake.processes) p.io.ignoreTerm();
+          yield* Scope.close(scope, Exit.void);
+          // No wait after the close: the finalizer itself waited for the kills.
+          expect(fake.processes.every((p) => p.io.exited())).toBe(true);
+          yield* read.done;
+        }),
+      { stopWait: "100 millis" },
+    );
+  });
+});
