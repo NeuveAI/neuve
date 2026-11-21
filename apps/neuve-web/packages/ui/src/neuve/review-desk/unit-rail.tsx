@@ -64,6 +64,7 @@ import { Segmented } from "@workspace/ui/neuve/shared/segmented"
 import { railTransition } from "@workspace/ui/neuve/shared/view-transitions"
 import {
   browseModeAtom,
+  decidedDock,
   dockAtom,
   hoverHintAtom,
   isDecidedAtom,
@@ -75,6 +76,7 @@ import {
   toggleRailAtom,
   useRailCollapsed,
 } from "@workspace/ui/neuve/review-desk/atoms"
+import type { DockState } from "@workspace/ui/neuve/review-desk/atoms"
 import {
   currentFileAtom,
   landOnAtom,
@@ -182,19 +184,49 @@ function useUnitSwitch(current: string) {
   }
 }
 
-/** Rail chip for the current unit: its decision signal, then its disposition. */
+/** A rail card's tag for each decided state of the dock. */
+const DOCK_CHIP: Partial<
+  Record<DockState, { text: string; className: string }>
+> = {
+  approved: { text: "approved", className: "bg-raised-2 text-agt-fg" },
+  agreed: { text: "agreed", className: "bg-raised-2 text-agt-fg" },
+  "changes-requested": {
+    text: "changes requested",
+    className: "bg-raised-2 text-ink-2",
+  },
+  commented: { text: "commented", className: "bg-raised-2 text-ink-2" },
+}
+
+/**
+ * A rail card's tag: the disposition standing on its unit, in the words the
+ * dock shows for it, so a card says the same open or not. The open card
+ * reads the dock first, which also holds what only it knows (a decision
+ * just sent or undone, a comment), then its decision signal.
+ */
+export function railCardChip(
+  unit: Pick<RailUnit, "disposition">,
+  open?: {
+    dock: DockState
+    signal: ReviewDeskData["unit"]["decisionSignal"]
+  }
+) {
+  const standing = unit.disposition
+    ? DOCK_CHIP[decidedDock(unit.disposition, "human-required")]
+    : undefined
+  if (!open) return standing ?? null
+  return (
+    DOCK_CHIP[open.dock] ??
+    standing ??
+    (open.signal === "conflict"
+      ? { text: "conflict", className: "bg-req-tint text-req-ink" }
+      : null)
+  )
+}
+
+/** Rail chip for the current unit from the dock: its disposition, then its decision signal. */
 function useRailChip(signal: ReviewDeskData["unit"]["decisionSignal"]) {
   const dock = useAtomValue(dockAtom)
-  if (dock === "approved")
-    return { text: "approved", className: "bg-raised-2 text-agt-fg" }
-  if (dock === "agreed")
-    return { text: "agreed", className: "bg-raised-2 text-agt-fg" }
-  if (dock === "changes-requested")
-    return { text: "changes requested", className: "bg-raised-2 text-ink-2" }
-  if (dock === "commented")
-    return { text: "commented", className: "bg-raised-2 text-ink-2" }
-  if (signal !== "conflict") return null
-  return { text: "conflict", className: "bg-req-tint text-req-ink" }
+  return railCardChip({}, { dock, signal })
 }
 
 /**
@@ -294,9 +326,9 @@ function GateMeter({ data }: { data: ReviewDeskData }) {
 type CarriedReview = NonNullable<RailUnit["carriedReview"]> | PersonReview
 
 /** The current row's chip that says the same as a carried review. */
-const CARRIED_CHIP: Record<CarriedReview["verdict"], string> = {
-  approved: "approved",
-  changes_requested: "changes requested",
+const CARRIED_CHIP: Record<CarriedReview["verdict"], string | undefined> = {
+  approved: DOCK_CHIP.approved?.text,
+  changes_requested: DOCK_CHIP["changes-requested"]?.text,
 }
 
 /** "Carried · You approved", or "You approved" once decided fresh: a row's tooltip. */
@@ -450,6 +482,7 @@ function ExpandedRail({
   markers: Record<string, ContextualMarker>
 }) {
   const chip = useRailChip(data.unit.decisionSignal)
+  const dock = useAtomValue(dockAtom)
   const linked = useLinkedUnits(markers)
   const agents = useAtomValue(agentByIdAtom)
   const toggle = useSetAtom(toggleRailAtom)
@@ -541,6 +574,12 @@ function ExpandedRail({
                       ? agents[unit.agentId]
                       : undefined
                     const name = untitledName(unit.untitled)
+                    const tag = railCardChip(
+                      unit,
+                      here && !unitSwitch.pending
+                        ? { dock, signal: data.unit.decisionSignal }
+                        : undefined
+                    )
                     return (
                       <RowTip
                         key={unit.id}
@@ -593,14 +632,14 @@ function ExpandedRail({
                             {isLinked && (
                               <LinkMark label="Shares the open context" />
                             )}
-                            {here && !unitSwitch.pending && chip && (
+                            {tag && (
                               <span
                                 className={cn(
                                   "rounded-sm px-1.5 py-px font-mono text-[10.5px]",
-                                  chip.className
+                                  tag.className
                                 )}
                               >
-                                {chip.text}
+                                {tag.text}
                               </span>
                             )}
                             {agent && (
