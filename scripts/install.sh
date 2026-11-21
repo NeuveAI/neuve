@@ -1377,6 +1377,7 @@ if [ "$dry_run" = 1 ]; then
     else say "Agent skills: would offer them with neuve skills install --offer, if this release includes them. Nothing is written without your yes."; fi
     winner=$(command -v neuve || :)
     if [ -n "$winner" ] && [ "$winner" != "$prefix/bin/neuve" ]; then say "In this terminal, the neuve command runs $winner."; fi
+    if [ "$owned" = 1 ]; then say 'Setup: would run neuve setup upgrade, for the setup steps this version adds or drops on this machine and in each repository set up here, if this release has it. A step that needs an answer waits for a terminal.'; fi
     if [ "$owned" = 1 ]; then say 'Then: repositories already set up keep their setup and records; in one of them, run neuve doctor.'
     else say 'Then: in a repository, run neuve setup, then neuve doctor.'; fi
     exit 0
@@ -1645,6 +1646,20 @@ if [ "$no_skills" = 0 ]; then
         fi
     else
         say "Agent skills can be added later, once a release includes them."
+    fi
+fi
+# After an upgrade, the new CLI's setup runs the steps this version adds, on this machine and in
+# each repository set up here, and undoes those it drops; one that needs an answer waits for a
+# terminal. A release whose setup has no such command is left to neuve setup in each repository.
+if [ "$owned" = 1 ]; then
+    skip_skills=
+    if [ "$no_skills" = 1 ]; then skip_skills=1; fi
+    if "$prefix/bin/neuve" setup --help 2>/dev/null | grep -q 'neuve setup upgrade'; then
+        if (exec </dev/tty) 2>/dev/null; then
+            "$prefix/bin/neuve" setup upgrade ${skip_skills:+--no-skills} </dev/tty || say "Setup's steps for this version didn't all run. To finish them, run neuve setup upgrade."
+        else
+            "$prefix/bin/neuve" setup upgrade ${skip_skills:+--no-skills} </dev/null || say "Setup's steps for this version didn't all run. To finish them, run neuve setup upgrade."
+        fi
     fi
 fi
 # An upgrade leaves each repository's setup and records where they are; the new CLI opens them.

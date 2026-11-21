@@ -1211,7 +1211,7 @@ const skillCheck = async (
 /**
  * The offer at the end of `neuve setup`: once per repository (a marker in the folder setup keeps
  * the repository's state in), only when a person is at a terminal, for the user scope. It never
- * fails setup.
+ * fails setup. When it can't be made for a reason another try wouldn't change, it says why.
  */
 export const offerSkillsAfterSetup = async (
   input: Readonly<{
@@ -1221,14 +1221,15 @@ export const offerSkillsAfterSetup = async (
     agents: ReadonlyArray<Agent>;
     context?: SkillsContext;
   }>,
-) => {
+): Promise<{ readonly reason?: string }> => {
   const context = guarded(input.context ?? defaultSkillsContext());
-  if (!context.isTerminal) return;
+  if (!context.isTerminal) return {};
   const marker = join(input.stateDirectory, "skills-offered.json");
   try {
-    if ((await lstatIfPresent(marker)) !== null) return;
+    if ((await lstatIfPresent(marker)) !== null) return {};
     const source = await context.source();
-    if (!source.found) return;
+    if (!source.found)
+      return { reason: "this neuve carries no Neuve skill to offer" };
     // A skill already installed is kept up to date even when setup didn't find its program.
     const installed = await keptAgents(
       { ...context, out: async () => {} },
@@ -1238,7 +1239,8 @@ export const offerSkillsAfterSetup = async (
       "user",
     );
     const agents = [...input.agents, ...installed];
-    if (agents.length === 0) return;
+    if (agents.length === 0)
+      return { reason: "no agent program was found to offer it to" };
     await context.out("\n");
     await install(
       context,
@@ -1255,9 +1257,11 @@ export const offerSkillsAfterSetup = async (
       marker,
       `${JSON.stringify({ offeredAt: context.now().toISOString() })}\n`,
     );
+    return {};
   } catch (error) {
-    // It never fails setup.
+    // It never fails setup, and is tried again next time.
     await context.out(`The skill offer stopped: ${message(error)}\n`);
+    return {};
   }
 };
 

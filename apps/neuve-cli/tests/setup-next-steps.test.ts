@@ -70,10 +70,22 @@ test.skipIf(prerequisite.skip)(
     expect(await readFile(join(repository, ".git/info/exclude"), "utf8")).toBe(
       exclude,
     );
+    // With --agents none there is no program to offer the skill to, so the skill step is decided
+    // without asking: recorded as considered, with that reason, and nothing is said about waiting.
+    // The same on every machine, whatever agent programs it has.
     expect((await readdir(store)).sort()).toEqual([
       "config.json",
       "initial-index.json",
+      "setup-steps.json",
     ]);
+    expect(
+      JSON.parse(await readFile(join(store, "setup-steps.json"), "utf8")).steps,
+    ).toMatchObject({
+      "skill-offer": {
+        outcome: "considered",
+        reason: "--agents none named no agent program to offer it to",
+      },
+    });
     // Setup checks the engine and indexes nothing: no Graph snapshot in the store or the shared
     // cache, because no review would read it (commit preparation builds what reviews read).
     expect(
