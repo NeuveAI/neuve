@@ -82,3 +82,26 @@ for (const missing of lacking)
       await Effect.runPromise(Scope.close(run.scope, Exit.succeed(undefined)));
     }
   });
+
+// Reason: the worker now registers the Codex runtime, so a review naming an account on it reaches
+// this check with Codex's own declared capabilities: refused by name, before any session.
+test("freezing a route on the Codex runtime's capabilities refuses it, naming what it lacks", async () => {
+  const { capabilities: codex } = await import("@neuve/runtime-codex");
+  const fake = fakeRuntime([]);
+  const exit = await Effect.runPromiseExit(
+    prepareReviewConfig({
+      location: storeLocationIn("/unused"),
+      search: {},
+      stack: undefined,
+      route,
+      runtimes: { ...fake.registry, capabilities: () => Effect.succeed(codex) },
+    }),
+  );
+  expect(
+    Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined,
+  ).toMatchObject({
+    _tag: "RouteRuntimeMismatch",
+    missing: [...lacking],
+  });
+  expect(fake.opens()).toBe(0);
+});

@@ -120,6 +120,12 @@ export interface SessionPolicy {
   readonly outputSchema?: JsonSchema | undefined;
   readonly approvalPolicy: "allow" | "ask";
   /**
+   * The folder the session's work is in: a chat's own worktree. A runtime that declares ownTools
+   * starts there and refuses a session without it; pi and Claude Code ignore it, as they do a
+   * turn's workspace.
+   */
+  readonly folder?: string | undefined;
+  /**
    * Absent selects the runtime's default for the account. An absent effort sends none. A runtime
    * refuses an effort its model doesn't support with TurnFailed, reason protocol-error: effort support is per model,
    * so a caller offers only the levels in that model's supportedEffortLevels.
@@ -414,19 +420,3 @@ export interface RuntimeShape {
   /** Runs the runtime's own sign-out for this account's credential and never reads it; a no-op for key references. */
   readonly signOut: (account: Account) => Effect.Effect<void, RuntimeError>;
 }
-
-/**
- * A tool definition as an MCP tool, the form both runtimes that serve Neuve's tools to an agent
- * program list them in; each adds what its program needs on top.
- */
-export const mcpTool = (definition: ToolDefinition) => ({
-  name: definition.name,
-  description: definition.description,
-  inputSchema: definition.inputSchema,
-  annotations: {
-    readOnlyHint: definition.hints.readOnly,
-    destructiveHint: definition.hints.destructive,
-    idempotentHint: definition.hints.idempotent,
-    openWorldHint: definition.hints.openWorld,
-  },
-});

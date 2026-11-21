@@ -292,6 +292,9 @@ export const runtimeRegistryLayer = (
               limits: probe.limits,
               checkedAt: probe.checkedAt,
               ...(probe.models === undefined ? {} : { models: probe.models }),
+              ...(probe.program === undefined
+                ? {}
+                : { program: probe.program }),
             };
           }),
         signOut: (name) =>

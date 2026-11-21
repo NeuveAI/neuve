@@ -13,6 +13,7 @@ import {
 } from "@neuve/harness/chat-runtime";
 import type { RuntimeRegistryShape } from "@neuve/harness/chat-runtime";
 import {
+  codexRuntimeOptions,
   defaultClaudeWorkingFolder,
   harnessRuntimes,
 } from "@neuve/harness/runtimes";
@@ -53,6 +54,7 @@ export function productionChatSources(options: {
           claude: options.claude ?? {
             cwd: defaultClaudeWorkingFolder(options.home),
           },
+          codex: codexRuntimeOptions(options.home),
         }).pipe(
           // Subscribe before exposing the registry: account events have no replay.
           Layer.tap((services) =>

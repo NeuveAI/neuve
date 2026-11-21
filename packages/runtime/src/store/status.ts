@@ -14,7 +14,7 @@ import {
   Stream,
 } from "effect";
 import { z } from "zod";
-import { AccountName, type Account } from "../account.ts";
+import { AccountName, RUNTIME_PROGRAM, type Account } from "../account.ts";
 import type { AccountEvent, RuntimeRegistryShape } from "../registry.ts";
 import { AccountStatus, LimitWindow } from "../status.ts";
 import {
@@ -256,8 +256,8 @@ function mergeStatus(
 ): AccountStatus {
   const newer =
     Date.parse(observation.checkedAt) > Date.parse(previous.checkedAt);
-  // A newer observation's model list replaces the stored one; one without a list leaves none.
-  const { models: _stored, ...kept } = previous;
+  // A newer observation's model list and program replace the stored ones; one without leaves none.
+  const { models: _stored, program: _program, ...kept } = previous;
   return {
     ...(newer ? kept : previous),
     ...(newer
@@ -267,6 +267,9 @@ function mergeStatus(
           ...(observation.models === undefined
             ? {}
             : { models: observation.models }),
+          ...(observation.program === undefined
+            ? {}
+            : { program: observation.program }),
         }
       : {}),
     limits: mergeLimits(
@@ -566,6 +569,11 @@ export const makeStatuses = (
                           ? {
                               state: "runtime-unavailable",
                               reason: probed.failure.reason,
+                              ...(RUNTIME_PROGRAM[account.runtime] === undefined
+                                ? {}
+                                : {
+                                    program: RUNTIME_PROGRAM[account.runtime]!,
+                                  }),
                             }
                           : { state: "unknown", reason: "check-failed" },
                     };

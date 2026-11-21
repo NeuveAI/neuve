@@ -37,6 +37,7 @@
     "@neuve/review-rules": "workspace:*",
     "@neuve/runtime": "workspace:*",
     "@neuve/runtime-claude": "workspace:*",
+    "@neuve/runtime-codex": "workspace:*",
     "@neuve/semantic-client": "workspace:*",
     "@sigstore/bundle": "5.0.0",
     "@sigstore/core": "4.0.1",

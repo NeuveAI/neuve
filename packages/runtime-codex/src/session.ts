@@ -141,6 +141,8 @@ interface Current {
   readonly scope: Scope.Closeable;
   readonly configuration: Configuration;
   readonly generation: number;
+  /** Set once its output has ended: a process that died is never made current. */
+  ended: boolean;
 }
 
 const EMPTY: OwnSettings = {
@@ -252,12 +254,14 @@ export const openCodexSession = Effect.fnUntraced(function* (
   log?.know(options.cwd, "<cwd>");
   log?.know(codexHome, "<codex-home>");
   log?.know(options.program, "<program>");
+  // Signed in by the program the session runs: a bare `codex` on the PATH may be another one.
   const hint: SignInHint = {
     kind: "command",
     command: "codex login",
     ...(options.codexHome === undefined
       ? {}
       : { environment: { CODEX_HOME: options.codexHome } }),
+    program: options.program,
   };
   const turnFailed = (reason: TurnFailureReason) =>
     new TurnFailed({ account, reason });
@@ -274,7 +278,8 @@ export const openCodexSession = Effect.fnUntraced(function* (
   let generation = 0;
   let dead = false;
   let turn: Turn | undefined;
-  let completedTurns = 0;
+  /** Whether any turn was ever sent to Codex on this thread. */
+  let turnSent = false;
   let rateLimits: Decode.RateLimits | undefined;
   /** Every process's scope until it is closed, so none outlives the session, whatever was cut short. */
   const scopes = new Set<Scope.Closeable>();
@@ -351,7 +356,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
           errored: true,
         });
       active.work.clear();
-      if (outcome.status === "completed") completedTurns++;
       emit({
         type: "turn.finished",
         turnId: active.id,
@@ -906,22 +910,28 @@ export const openCodexSession = Effect.fnUntraced(function* (
       }
       if (verdict.kind === "unsupported")
         yield* Effect.logWarning("codex version", { advice: verdict.advice });
-      yield* Stream.runForEach(connection.notifications, onNotification).pipe(
-        // Only the current process's end is the session's: one still being prepared fails its
-        // own pending request, and is closed by the code preparing it.
-        Effect.catch((termination) =>
-          current?.generation === gen
-            ? stop(turnFailure(terminationOf(termination), "broken"))
-            : Effect.void,
-        ),
-        Effect.forkIn(scope),
-      );
-      return {
+      const started: Current = {
         connection,
         scope,
         configuration,
         generation: gen,
-      } satisfies Current;
+        ended: false,
+      };
+      yield* Stream.runForEach(connection.notifications, onNotification).pipe(
+        // Only the current process's end is the session's. One still being prepared is marked
+        // ended, and the code preparing it closes it rather than making it current.
+        Effect.catch((termination) =>
+          Effect.suspend(() => {
+            started.ended = true;
+            return current === started
+              ? stop(turnFailure(terminationOf(termination), "broken"))
+              : Effect.void;
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => (started.ended = true))),
+        Effect.forkIn(scope),
+      );
+      return started;
     });
 
   const ask = <A>(
@@ -1145,6 +1155,16 @@ export const openCodexSession = Effect.fnUntraced(function* (
         options.cwd,
       );
       yield* prepare(next, configuration, active).pipe(
+        // A process that died after its last answer failed its preparation too.
+        // One scheduler turn first, so a death the client has already read is seen here.
+        Effect.andThen(Effect.yieldNow),
+        Effect.andThen(
+          Effect.suspend(() =>
+            next.ended || !next.connection.open()
+              ? Effect.fail(unavailable("start-failed"))
+              : Effect.void,
+          ),
+        ),
         Effect.onExit((exit) =>
           Exit.isSuccess(exit) ? Effect.void : closeScope(next.scope),
         ),
@@ -1171,8 +1191,9 @@ export const openCodexSession = Effect.fnUntraced(function* (
       ).pipe(Effect.exit);
       yield* still(active);
       if (Exit.isSuccess(resumed)) return;
-      // A thread with no finished turn may not be resumable yet; a new one stands in for it.
-      if (completedTurns > 0 || options.start.kind === "resume")
+      // A thread no turn was ever sent to may not be resumable yet, and holds nothing: a new one
+      // stands in for it. One that had a turn, finished or not, is never silently replaced.
+      if (turnSent || options.start.kind === "resume")
         return yield* turnFailed("protocol-error");
       yield* newThread(next.connection);
       yield* still(active);
@@ -1330,10 +1351,25 @@ export const openCodexSession = Effect.fnUntraced(function* (
             ? {}
             : { reason: active.interrupt.reason }),
         });
-      if (!live(active) || current === undefined)
+      if (!live(active))
         return yield* finish(active, turnFailure("session-stopped"));
+      // The process died after it was made current and before the turn reached it.
+      if (current === undefined || !current.connection.open()) {
+        const ended = current;
+        current = undefined;
+        if (ended !== undefined) yield* closeScope(ended.scope);
+        return yield* finish(
+          active,
+          failure({
+            _tag: "RuntimeUnavailable",
+            account,
+            reason: "start-failed",
+          }),
+        );
+      }
       const connection = current.connection;
       active.sent = true;
+      turnSent = true;
       const answered = yield* connection
         .request("turn/start", {
           threadId,

@@ -71,6 +71,7 @@ for (const choice of [
     const options = spyOn(runtimes, "workerRuntimeOptions").mockReturnValue({
       accountDirectory: directory,
       claude: { cwd: runtimes.defaultClaudeWorkingFolder(root) },
+      codex: false,
     });
     cleanups.push(() => options.mockRestore());
     const fake = fakeRuntime([]);

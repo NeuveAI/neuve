@@ -753,6 +753,7 @@ test("statusSource reads defaults without files and pushes the full set after ad
             "anthropic",
             "chatgpt",
             "claude",
+            "codex",
           ]);
           expect(
             defaults.every(

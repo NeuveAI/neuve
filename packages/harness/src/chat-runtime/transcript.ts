@@ -20,6 +20,12 @@ import {
   type CallUsage,
 } from "@neuve/runtime";
 import type { Effect } from "effect";
+import { CodingTools } from "@earendil-works/pi-durable/tools";
+
+/** The pass-through that records a runtime's own work in pi's transcript (extension.ts). */
+export const RUNTIME_WORK_TOOL = "runtime_work";
+/** pi's shell and file tools, which a runtime with its own tools has already: never served to it. */
+const CODING_TOOLS = new Set(CodingTools.tools?.map((tool) => tool.name) ?? []);
 
 export type Log = (
   event: string,
@@ -163,18 +169,30 @@ export function policy(
   messages: readonly Message[],
   handle: Parameters<typeof definitions>[1],
   model?: SessionPolicy["model"],
+  where: { folder?: string | undefined; ownTools?: boolean } = {},
 ): SessionPolicy {
   return {
     systemPrompt: getCurrentSystemPrompt(messages),
-    tools: definitions(getCurrentTools(messages), handle),
+    // The pass-through is served to no runtime; a runtime with its own shell and file editor
+    // uses those, not a second set that would run outside its sandbox.
+    tools: definitions(
+      getCurrentTools(messages).filter(
+        (tool) =>
+          tool.name !== RUNTIME_WORK_TOOL &&
+          !(where.ownTools === true && CODING_TOOLS.has(tool.name)),
+      ),
+      handle,
+    ),
     approvalPolicy: "allow",
     turnLimit: TurnLimit.parse(Number.MAX_SAFE_INTEGER),
     ...(model ? { model } : {}),
+    ...(where.folder === undefined ? {} : { folder: where.folder }),
   };
 }
 export function policyKey(value: SessionPolicy): string {
   return JSON.stringify({
     systemPrompt: value.systemPrompt,
+    folder: value.folder,
     tools: value.tools.map(({ name, description, inputSchema }) => ({
       name,
       description,

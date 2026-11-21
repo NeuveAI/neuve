@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import { homedir } from "node:os";
-import { Effect, Layer } from "effect";
+import { resolve as resolvePath } from "node:path";
+import { Effect, Layer, Logger } from "effect";
 import {
   AccountDirectory,
   type AccountDirectoryShape,
@@ -11,6 +12,7 @@ import {
 } from "@neuve/runtime";
 import { Route, RouteProvider } from "@neuve/harness";
 import {
+  codexRuntimeOptions,
   defaultClaudeWorkingFolder,
   harnessRuntimes,
 } from "@neuve/harness/runtimes";
@@ -55,6 +57,12 @@ export const AUTH_HELP = `Usage:
               Add a separate sign-in and print the command to sign in.
   neuve auth login <account> [--print]
               Sign in using the account's own command. --print only shows the command.
+  neuve auth program <account> [<path> | --find | --unset]
+              Set the program an account runs on, such as the Codex the codex account uses,
+              then check it. Once set, only that program is used. --find looks once for Codex,
+              on the PATH and, on macOS, in the installed apps, says what it asked and why each
+              was skipped, and stores the first that answers as Codex. --unset forgets the path,
+              and the account uses the codex the PATH resolves to.
   neuve auth remove <account> [--force]
               Stop use, sign out, then remove the sign-in. --force allows removal when
               Claude Code is missing; its sign-in may remain in the Keychain.
@@ -112,12 +120,16 @@ export const authRuntimes = ({
   harnessRuntimes({
     accountDirectory: Layer.succeed(AccountDirectory, directory),
     claude: { cwd: defaultClaudeWorkingFolder(home) },
+    codex: codexRuntimeOptions(home),
   });
 
 export interface AuthCliOptions {
   readonly runtimes?: ReadonlyArray<RuntimeShape>;
   readonly home?: string;
+  /** For tests: what `program --find` runs in place of discovery's real programs. */
+  readonly findCodex?: FindCodex;
 }
+type FindCodex = typeof import("@neuve/harness/runtimes").findCodexProgram;
 
 /**
  * The built-in Claude account's sign-in, checked as `neuve auth status claude --check` checks it:
@@ -173,15 +185,38 @@ const accountDescription = (status: AccountStatus) => {
   const state =
     signIn.state === "signed-in" && signIn.sourceMatchesAccount === false
       ? "signed in through another source, not this account's folder"
-      : signIn.state === "runtime-unavailable" || signIn.state === "unknown"
-        ? `${signIn.state}: ${signIn.reason}`
-        : signIn.state;
+      : signIn.state === "runtime-unavailable"
+        ? `${signIn.state}: ${signIn.reason}${signIn.fix === undefined ? "" : `\n  ${signIn.fix}`}`
+        : signIn.state === "unknown"
+          ? `${signIn.state}: ${signIn.reason}`
+          : signIn.state;
+  const program =
+    status.program === undefined
+      ? ""
+      : `\n  program ${status.program.path}${status.program.version === undefined ? "" : ` (${status.program.version})`}, ${PROGRAM_FOUND[status.program.found]}`;
+  const models =
+    status.program === undefined || status.models === undefined
+      ? ""
+      : `\n  models ${status.models
+          .map(
+            (model) =>
+              `${model.id}${model.supportedEffortLevels?.length ? ` (${model.supportedEffortLevels.join(", ")})` : ""}`,
+          )
+          .join(", ")}`;
   return `${status.name}  ${status.kind}  ${state}${status.limits
     .map(
       (limit) =>
         `  ${limit.window}${limit.model === undefined ? "" : ` (${limit.model})`}: ${limit.status}${limit.utilization === undefined ? "" : ` ${Math.round(limit.utilization * 100)}%`}${limit.resetsAt === undefined ? "" : `, resets ${limit.resetsAt}`}`,
     )
-    .join("")}`;
+    .join("")}${program}${models}`;
+};
+const PROGRAM_FOUND: Record<
+  NonNullable<AccountStatus["program"]>["found"],
+  string
+> = {
+  set: "the path set for this account",
+  path: "found on the PATH",
+  app: "found in an installed app",
 };
 const removalMessages: Record<AccountStore.RemovalStep, string> = {
   "admission-closed": "Stopped new use of the account.",
@@ -201,6 +236,8 @@ const runAccountCommand = async (
     json?: boolean;
     print?: boolean;
     force?: boolean;
+    unset?: boolean;
+    find?: boolean;
     "no-browser"?: boolean;
   },
   options: AuthCliOptions,
@@ -211,6 +248,7 @@ const runAccountCommand = async (
     RuntimeRegistry,
     runtimeRegistryLayer,
     signInCommand,
+    unavailableText,
   } = await import("@neuve/runtime");
   return Effect.runPromise(
     Effect.scoped(
@@ -270,6 +308,111 @@ const runAccountCommand = async (
             return yield* new AccountStore.StoreError({
               message: "Use a valid account name.",
             });
+          if (command === "program") {
+            const account = yield* store.directory.lookup(name.data, "use");
+            if (account?.runtime !== "codex")
+              return yield* new AccountStore.StoreError({
+                message:
+                  "Only an account whose runtime finds its own program takes a program path: codex.",
+              });
+            const given = positionals[1];
+            if (
+              [
+                given !== undefined,
+                values.unset === true,
+                values.find === true,
+              ].filter(Boolean).length !== 1
+            )
+              return yield* new AccountStore.StoreError({
+                message: `Use neuve auth program ${name.data} <path>, --find, or --unset.`,
+              });
+            // An empty path would resolve to the current folder: refused, never stored.
+            if (given !== undefined && given.trim() === "")
+              return yield* new AccountStore.StoreError({
+                message: "Give the program's path, or use --find or --unset.",
+              });
+            if (values.find === true) {
+              // Discovery, once, when asked: what it finds is stored, and checks then ask only that.
+              const findCodexProgram =
+                options.findCodex ??
+                (yield* Effect.promise(() => import("@neuve/harness/runtimes")))
+                  .findCodexProgram;
+              const found = yield* findCodexProgram({
+                home,
+                codexHome: account.credential.folder,
+              });
+              const where = {
+                set: "set",
+                path: "on the PATH",
+                app: "in an installed app",
+              } as const;
+              const answered = {
+                missing: "nothing runs there",
+                unrecognized: "did not answer as Codex, skipped",
+                broken: "a version marked broken, skipped",
+                codex: "Codex",
+              } as const;
+              yield* output(
+                [
+                  "Looked for Codex:",
+                  ...found.tried.map(
+                    (asked) =>
+                      `  ${asked.candidate.path} (${where[asked.candidate.found]}): ${answered[asked.kind]}${"version" in asked ? ` ${asked.version}` : ""}`,
+                  ),
+                  ...found.skippedApps.map(
+                    ({ app, why }) => `  ${app}: ${why}, skipped`,
+                  ),
+                  ...(found.appsLookedFor
+                    ? []
+                    : [
+                        "  No installed app was looked for: OpenAI's desktop apps are looked for only on macOS.",
+                      ]),
+                  ...(found.found === undefined
+                    ? ["Found no Codex; nothing was stored."]
+                    : []),
+                ].join("\n"),
+              );
+              if (found.found === undefined) return 1;
+              yield* Effect.try({
+                try: () =>
+                  AccountStore.setProgramPath(
+                    home,
+                    name.data,
+                    found.found!.candidate.path,
+                  ),
+                catch: (error) =>
+                  error instanceof AccountStore.StoreError
+                    ? error
+                    : new AccountStore.StoreError({
+                        message: "The program path could not be saved.",
+                      }),
+              });
+              // Said once it is saved, not before.
+              yield* output(
+                `Stored ${found.found.candidate.path} as ${name.data}'s program.`,
+              );
+              yield* output(
+                accountDescription(yield* statuses.check(name.data)),
+              );
+              return 0;
+            }
+            yield* Effect.try({
+              try: () =>
+                AccountStore.setProgramPath(
+                  home,
+                  name.data,
+                  given === undefined ? undefined : resolvePath(given),
+                ),
+              catch: (error) =>
+                error instanceof AccountStore.StoreError
+                  ? error
+                  : new AccountStore.StoreError({
+                      message: "The program path could not be saved.",
+                    }),
+            });
+            yield* output(accountDescription(yield* statuses.check(name.data)));
+            return 0;
+          }
           if (command === "remove") {
             yield* store.remove(name.data, registry, {
               force: values.force === true,
@@ -313,7 +456,7 @@ const runAccountCommand = async (
               expectOpenAi(account.name, true);
             yield* output(
               status.signIn.reason === "not-installed"
-                ? "Claude Code isn't installed."
+                ? (status.signIn.fix ?? `${unavailableText(status.signIn)}.`)
                 : accountDescription(status),
             );
             return 1;
@@ -415,9 +558,23 @@ const runAccountCommand = async (
           ),
         );
       }),
-    ),
+    ).pipe(Effect.provide(stderrLogs)),
   );
 };
+
+/**
+ * A runtime's log lines (a candidate program skipped, an effort level left out) go to standard
+ * error, so what these commands print, `--json` included, stays the account's alone.
+ */
+const stderrLogs = Logger.layer([
+  Logger.make(({ logLevel, message }) => {
+    try {
+      process.stderr.write(
+        `neuve: ${String(logLevel).toLowerCase()}: ${JSON.stringify(message)}\n`,
+      );
+    } catch {}
+  }),
+]);
 
 export const runAuthCli = async (
   args: readonly string[],
@@ -437,6 +594,8 @@ export const runAuthCli = async (
       json: { type: "boolean" },
       print: { type: "boolean" },
       force: { type: "boolean" },
+      unset: { type: "boolean" },
+      find: { type: "boolean" },
     },
   });
   const provider = positionals[0];
@@ -449,6 +608,7 @@ export const runAuthCli = async (
   if (
     command === "list" ||
     command === "add" ||
+    command === "program" ||
     command === "remove" ||
     ((command === "status" || command === "login") &&
       provider !== undefined &&

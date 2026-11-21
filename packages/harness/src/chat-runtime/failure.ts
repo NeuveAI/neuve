@@ -31,7 +31,11 @@ export function terminalText(
     case "TurnFailed":
       return "This turn did not produce an answer. Try another message.";
     case "RuntimeUnavailable":
-      return `The selected account ${failure.account} cannot run here.`;
+      // A program that vanished since the last check says so, with its fix, when the runtime knows.
+      return (
+        failure.fix ??
+        `The selected account ${failure.account} cannot run here.`
+      );
     case "AccountStoreRefused":
       return accountStoreRefusalMessage(failure);
     case "AccountNeedsNewerBuild":

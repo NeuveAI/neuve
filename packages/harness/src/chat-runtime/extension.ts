@@ -7,11 +7,14 @@ import {
   LiveDoc,
   ToolTask,
   defineExtension,
+  defineTool,
   hook,
   type Harness,
   type ConversationId,
 } from "@earendil-works/pi-durable";
+import { Type } from "@earendil-works/pi-ai";
 import type { ChatRuntimeBridge } from "./bridge.ts";
+import { RUNTIME_WORK_TOOL } from "./transcript.ts";
 import { newest, pointer } from "./transcript.ts";
 
 export const RECOVERY_ALLOW_TOOLS: readonly string[] = [
@@ -38,6 +41,43 @@ export function chatRuntimeExtension(
   });
   const extension = defineExtension({
     name: "neuve-chat-runtime",
+    tools: [
+      /**
+       * Work a runtime with tools of its own already did, recorded in the transcript as a call
+       * that already ran so Ace shows it as any other: it runs nothing, and returns the outcome
+       * the runtime reported. A call the bridge did not record (a model calling it) is refused.
+       */
+      defineTool({
+        name: RUNTIME_WORK_TOOL,
+        description:
+          "Records work the account's own program already did. Never call it: it runs nothing.",
+        parameters: Type.Object({
+          kind: Type.String(),
+          input: Type.Unknown(),
+          errored: Type.Boolean(),
+        }),
+        replay: "safe",
+        execute: async (_args, api) => {
+          const ran = bridge.ran(api.callId);
+          return ran === undefined
+            ? {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "This records work the account's own program did; it runs nothing.",
+                  },
+                ],
+                isError: true,
+              }
+            : {
+                content: [
+                  { type: "text" as const, text: ran.output ?? "(no output)" },
+                ],
+                isError: ran.errored,
+              };
+        },
+      }),
+    ],
     hooks: [
       hook(GenerationTask, {
         async beforeRequest(request, api, context) {
@@ -55,6 +95,7 @@ export function chatRuntimeExtension(
             api.conversationId,
             api.taskId,
             recovered,
+            agent.cwd,
           );
           const conversation = await attached.conversation(
             api.conversationId,
@@ -101,7 +142,13 @@ export function chatRuntimeExtension(
           );
           const messages = [...request.messages];
           messages.splice(at < 0 ? messages.length : at, 0, message);
-          bridge.identify(messages, api.conversationId, api.taskId, recovered);
+          bridge.identify(
+            messages,
+            api.conversationId,
+            api.taskId,
+            recovered,
+            agent.cwd,
+          );
           return { messages };
         },
       }),

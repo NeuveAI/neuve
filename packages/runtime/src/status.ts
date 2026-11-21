@@ -15,11 +15,16 @@ export const SignInHint = z.union([
     command: z.literal("neuve auth login"),
     account: AccountName,
   }),
-  /** Codex's own sign-in; the environment names a Codex home other than the person's default. */
+  /**
+   * Codex's own sign-in; the environment names a Codex home other than the person's default, and
+   * `program` the Codex the account runs on, which runs the login when known: a bare `codex` on
+   * the PATH may be another program.
+   */
   z.strictObject({
     kind: z.literal("command"),
     command: z.literal("codex login"),
     environment: z.strictObject({ CODEX_HOME: AbsoluteFolder }).optional(),
+    program: AbsoluteFolder.optional(),
   }),
   z.strictObject({ kind: z.literal("settings"), entry: z.literal("accounts") }),
 ]);
@@ -29,6 +34,8 @@ export const RuntimeUnavailableReason = z.enum([
   "not-registered",
   "unsupported-version",
   "start-failed",
+  /** A file was found under the program's name and did not answer as that program. */
+  "unrecognized-program",
 ]);
 export type RuntimeUnavailableReason = z.infer<typeof RuntimeUnavailableReason>;
 export const CredentialSource = z.enum([
@@ -67,6 +74,10 @@ export const SignInState = z.discriminatedUnion("state", [
   z.strictObject({
     state: z.literal("runtime-unavailable"),
     reason: RuntimeUnavailableReason,
+    /** The program the runtime drives, by its own name: "Codex". */
+    program: z.string().min(1).optional(),
+    /** Neuve's own words for what fixes it, written by the runtime; never the program's text. */
+    fix: z.string().min(1).optional(),
   }),
   z.strictObject({
     state: z.literal("unknown"),
@@ -109,6 +120,9 @@ export const RuntimeModel = z.strictObject({
   description: z.string(),
   supportsEffort: z.boolean().optional(),
   supportedEffortLevels: z.array(EffortLevel).optional(),
+  /** The model's limits as the runtime reports them before any turn has run, when it does. */
+  contextWindow: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
 });
 export type RuntimeModel = z.infer<typeof RuntimeModel>;
 
@@ -119,6 +133,15 @@ export const AccountProbe = z.strictObject({
   checkedAt: z.iso.datetime({ offset: true }),
   /** The models the runtime offers for this account, its default first. Omitted by pi. */
   models: z.array(RuntimeModel).optional(),
+  /** The program the account runs on, as the probe found it, for a runtime that finds one. */
+  program: z
+    .strictObject({
+      path: AbsoluteFolder,
+      version: z.string().min(1).optional(),
+      /** Where it was found: the path the person set, the PATH, or an installed app. */
+      found: z.enum(["set", "path", "app"]),
+    })
+    .optional(),
 });
 export type AccountProbe = z.infer<typeof AccountProbe>;
 

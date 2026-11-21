@@ -105,6 +105,9 @@ export const RuntimeFailure = z.discriminatedUnion("_tag", [
     _tag: z.literal("RuntimeUnavailable"),
     account: AccountName,
     reason: RuntimeUnavailableReason,
+    /** As on the account's state: the program, and the runtime's words for what fixes it. */
+    program: z.string().min(1).optional(),
+    fix: z.string().min(1).optional(),
   }),
   z.strictObject({ _tag: z.literal("AccountNotFound"), account: AccountName }),
   z.strictObject({
@@ -238,6 +241,7 @@ function projectSignInHint(hint: SignInHint): SignInHint {
         ...(hint.environment === undefined
           ? {}
           : { environment: { CODEX_HOME: hint.environment.CODEX_HOME } }),
+        ...(hint.program === undefined ? {} : { program: hint.program }),
       };
   }
 }
@@ -287,7 +291,13 @@ export function runtimeErrorToFailure(error: RuntimeError): RuntimeFailure {
             : { kind: error.problem.kind },
       };
     case "RuntimeUnavailable":
-      return { _tag: error._tag, account, reason: error.reason };
+      return {
+        _tag: error._tag,
+        account,
+        reason: error.reason,
+        ...(error.program === undefined ? {} : { program: error.program }),
+        ...(error.fix === undefined ? {} : { fix: error.fix }),
+      };
     case "AccountNeedsNewerBuild":
     case "AccountNotFound":
       return { _tag: error._tag, account };

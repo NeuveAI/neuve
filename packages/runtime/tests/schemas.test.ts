@@ -52,6 +52,7 @@ const references: CredentialReference[] = [
   { kind: "vault", entry: "ANTHROPIC_API_KEY" },
   { kind: "environment", variable: "API_KEY" },
   { kind: "neuve-sign-in" },
+  { kind: "codex-home" },
 ];
 const permitted = new Set([
   "claude-subscription/claude-code/claude-config-folder",
@@ -60,6 +61,7 @@ const permitted = new Set([
   "anthropic-api-key/claude-code/vault",
   "anthropic-api-key/claude-code/environment",
   "chatgpt-subscription/pi/neuve-sign-in",
+  "chatgpt-subscription/codex/codex-home",
   "openai-api-key/pi/vault",
   "openai-api-key/pi/environment",
 ]);

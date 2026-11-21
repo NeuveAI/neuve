@@ -13,6 +13,8 @@ import {
   type RuntimeShape,
 } from "@neuve/runtime";
 import { claudeRuntime, type ClaudeRuntimeConfig } from "@neuve/runtime-claude";
+import { codexRuntime, type CodexRuntimeConfig } from "@neuve/runtime-codex";
+export { findCodexProgram } from "@neuve/runtime-codex";
 import { Context, Effect, Layer, ManagedRuntime, Scope } from "effect";
 import type { ReadinessStatuses } from "./route-provider.ts";
 import {
@@ -31,7 +33,18 @@ export interface HarnessRuntimesOptions<E, R> extends PiStatusRuntimeOptions {
   readonly accountDirectory?: Layer.Layer<AccountDirectory, E, R>;
   /** The Claude Code runtime's configuration; `false` leaves it unregistered. */
   readonly claude?: ClaudeRuntimeConfig | false;
+  /**
+   * The Codex runtime's configuration; absent or `false` leaves it unregistered, so a process or
+   * test that does not ask for it never starts a program named `codex`.
+   */
+  readonly codex?: CodexRuntimeConfig | false;
 }
+
+/** The Codex runtime as the worker, the workspace and `neuve auth` register it for a home. */
+export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
+  home,
+  programPath: (name) => AccountStore.programPath(home, name),
+});
 
 /** Creates the folder, or tightens an existing one, to owner-only access; false when it can't. */
 const privateFolder = (folder: string) => {
@@ -77,7 +90,11 @@ export function harnessRuntimes<E = never, R = never>(
   return runtimeRegistryLayerEffect(
     Effect.gen(function* () {
       const pi = piStatusRuntime(options);
-      if (claude === undefined) return [pi];
+      const codex =
+        options.codex === undefined || options.codex === false
+          ? []
+          : [yield* codexRuntime(options.codex)];
+      if (claude === undefined) return [pi, ...codex];
       const runtime = yield* claudeRuntime(claude);
       const ready = yield* Effect.cachedWithTTL(
         Effect.yieldNow.pipe(
@@ -90,6 +107,7 @@ export function harnessRuntimes<E = never, R = never>(
       );
       return [
         pi,
+        ...codex,
         {
           ...runtime,
           openSession: (account, policy, start) =>
@@ -123,6 +141,7 @@ export type ProcessRuntimeOptions = HarnessRuntimesOptions<never, never> & {
 export function workerRuntimeOptions(home = homedir()) {
   return {
     claude: { cwd: defaultClaudeWorkingFolder(home) },
+    codex: codexRuntimeOptions(home) as CodexRuntimeConfig | false,
     accountDirectory: Layer.effect(
       AccountDirectory,
       AccountStore.retryingDirectory(home),
@@ -146,6 +165,7 @@ export function processRuntimes(): Promise<RuntimeRegistryShape> {
       harnessRuntimes({
         ...processOptions,
         claude: processOptions.claude ?? false,
+        codex: processOptions.codex ?? false,
       }),
     );
     processRegistry = runtime

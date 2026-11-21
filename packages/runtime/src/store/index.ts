@@ -62,6 +62,7 @@ export {
   statusesPath,
 } from "./files.ts";
 export * from "./status.ts";
+export { programPath, programsPath, setProgramPath } from "./programs.ts";
 
 const Record = z.strictObject({
   version: z.literal(1),
@@ -142,6 +143,11 @@ function readAccountEntries(home: string): ReadonlyArray<AccountEntry> {
         // A concurrent state rename moves the file atomically. Read its new name
         // before deciding that no record protects the provider folder.
         if (entry === undefined) continue;
+        // A name a later build made built-in (`codex`) leaves its record as stored, unused.
+        if (isDefault(entry.account.name) && name === entry.account.name) {
+          storeNotice(path, "names a built-in account; leaving it as stored.");
+          break;
+        }
         if (
           !state.success ||
           match?.[1] !== (entry.folderId ?? "default") ||
@@ -365,16 +371,50 @@ function deleteOwnedFolder(home: string, parent: string, folderId: string) {
   }
 }
 
+/**
+ * Why a built-in account is not removed, by what its credential is, so a built-in added later
+ * cannot fall through to another's words: the switch has a case for every credential.
+ */
+function builtInRefusal(account: Account): string {
+  const credential = account.credential;
+  switch (credential.kind) {
+    case "claude-config-folder":
+      return "Claude Code owns this sign-in. Sign out yourself with claude auth logout.";
+    case "neuve-sign-in":
+      return "Sign out with neuve auth logout openai.";
+    case "codex-home":
+      return "This is your own Codex login, and Neuve never signs you out of it. Sign out in Codex itself if you want to.";
+    case "environment":
+      return `This key is set where ${credential.variable} is set today.`;
+    case "vault":
+      return "This key is kept in Neuve's vault; change it in Settings.";
+  }
+}
+
+/** Why an account's folder is not Neuve's to delete, or nothing when it is. */
+function undeletable(account: Account): string | undefined {
+  switch (account.credential.kind) {
+    case "claude-config-folder":
+    case "neuve-sign-in":
+      return undefined;
+    case "codex-home":
+      return "A Codex home is Codex's own; Neuve never deletes it.";
+    case "environment":
+    case "vault":
+      return "Removing key accounts is not supported.";
+  }
+}
+
 function deleteFolder(home: string, entry: AccountRecord) {
   refuseUnreadableMutation(home, entry);
   const account = entry.account;
+  const refused = undeletable(account);
+  if (refused !== undefined) throw new StoreError({ message: refused });
   if (
     account.credential.kind !== "claude-config-folder" &&
     account.credential.kind !== "neuve-sign-in"
   )
-    throw new StoreError({
-      message: "Removing key accounts is not supported.",
-    });
+    return;
   const folder = account.credential.folder;
   const parent = join(
     neuveFolder(home),
@@ -685,15 +725,11 @@ export const make = (
         }),
       remove: (name, registry, options = {}) =>
         Effect.gen(function* () {
-          if (isDefault(name))
-            return yield* new StoreError({
-              message:
-                name === "claude"
-                  ? "Claude Code owns this sign-in. Sign out yourself with claude auth logout."
-                  : name === "chatgpt"
-                    ? "Sign out with neuve auth logout openai."
-                    : "This key is set where ANTHROPIC_API_KEY is set today.",
-            });
+          const builtIn = DEFAULT_ACCOUNTS.find(
+            (account) => account.name === name,
+          );
+          if (builtIn !== undefined)
+            return yield* new StoreError({ message: builtInRefusal(builtIn) });
           const step = (value: RemovalStep) =>
             options.onStep?.(value) ?? Effect.void;
           const entry = yield* storeIO(() => {

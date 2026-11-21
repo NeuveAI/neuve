@@ -47,6 +47,7 @@ import {
   policyKey,
   responseId,
   resultText,
+  RUNTIME_WORK_TOOL,
   usage,
   userContent,
   type Log,
@@ -66,6 +67,8 @@ type Generation = {
   streams: AssistantMessageEventStream[];
   message: AssistantMessage;
   messages: Context["messages"];
+  /** The chat's own folder, from its agent: where a runtime with its own tools works. */
+  folder?: string | undefined;
   cleanup: (() => void)[];
   head?: {
     owner: string;
@@ -88,6 +91,20 @@ type Live = {
   route: AccountRoute;
   policy: SessionPolicy;
   calls: Map<string, HeldCall>;
+  /**
+   * Set while a round recorded as a tool call waits for pi's next generation, on a runtime with
+   * its own tools, whose turn goes on meanwhile. Its events are taken as they arrive and kept in
+   * `backlog`, in order, so the bridge knows whether the turn has already ended; the next
+   * generation records them.
+   */
+  holding?: boolean;
+  /** Whether `pump` is recording events now; it alone handles them, in order. */
+  pumping?: boolean;
+  backlog: RuntimeEvent[];
+  /** Set when the runtime's event stream has ended: cleanly, or with a failure. */
+  streamEnded?: "ended" | "failed" | undefined;
+  /** The person's message that arrived after the runtime's turn had ended: the next turn's input. */
+  followUp?: ContentBlock[] | undefined;
   generation?: Generation | undefined;
   reserved?: Generation | undefined;
   replay?: { key: string; message: AssistantMessage };
@@ -119,20 +136,36 @@ export class ChatRuntimeBridge {
   private readonly accountCloses = new Map<AccountName, number>();
   private readonly identities = new WeakMap<
     object,
-    { conversation: string; generation: string; redispatched: boolean }
+    {
+      conversation: string;
+      generation: string;
+      redispatched: boolean;
+      folder?: string | undefined;
+    }
   >();
+  /** What each piece of a runtime's own work returned, by the call id the transcript gives it. */
+  private readonly work = new Map<
+    string,
+    { output?: string | undefined; errored: boolean }
+  >();
+  /** The outcome of a recorded call to the pass-through, or nothing for one the bridge did not record. */
+  ran(callId: string) {
+    const outcome = this.work.get(callId);
+    this.work.delete(callId);
+    return outcome;
+  }
   private readonly limitListeners = new Set<
     (
       account: AccountName,
       model: string,
-      limits: { contextWindow: number; maxTokens: number },
+      limits: { contextWindow: number; maxTokens?: number },
     ) => void
   >();
   subscribeModelLimits(
     listener: (
       account: AccountName,
       model: string,
-      limits: { contextWindow: number; maxTokens: number },
+      limits: { contextWindow: number; maxTokens?: number },
     ) => void,
   ) {
     this.limitListeners.add(listener);
@@ -153,12 +186,14 @@ export class ChatRuntimeBridge {
     conversation: import("@earendil-works/pi-durable").ConversationId,
     generation: import("@earendil-works/pi-durable").TaskId | string,
     redispatched = false,
+    folder?: string,
   ): void {
     for (const message of messages)
       this.identities.set(message, {
         conversation: String(conversation),
         generation: String(generation),
         redispatched,
+        ...(folder?.startsWith("/") ? { folder } : {}),
       });
   }
   isRedispatched(
@@ -199,6 +234,7 @@ export class ChatRuntimeBridge {
       cancellation: new AbortController(),
       streams: [],
       messages,
+      ...(identity?.folder === undefined ? {} : { folder: identity.folder }),
       cleanup: [],
       message: {
         role: "assistant",
@@ -461,6 +497,12 @@ export class ChatRuntimeBridge {
       gen.messages,
       () => Effect.succeed({ text: "Call stopped.", error: "Call stopped." }),
       selection,
+      // Only a runtime with its own tools works in the chat's folder; for any other a change of
+      // folder must not reopen its session.
+      {
+        folder: route.capabilities.ownTools ? gen.folder : undefined,
+        ownTools: route.capabilities.ownTools,
+      },
     );
     const tail = gen.messages.slice(previous.index + 1);
     const results = tail.filter(
@@ -645,10 +687,20 @@ export class ChatRuntimeBridge {
       await this.start(live, message);
       return;
     }
+    // A runtime that went on and ended its turn while pi recorded its work cannot be steered: the
+    // person's message waits for that turn's end, which the kept events hold, and then starts the
+    // next turn. Decided before binding, which starts recording those events.
+    const ended =
+      heldRound === true &&
+      live.backlog.some((event) => event.type === "turn.finished");
+    if (ended && users.length)
+      live.followUp = [...(live.followUp ?? []), ...users];
     if (!this.bind(live, gen) || live.state.kind !== "open") return;
     if (heldRound) {
       if (!(await this.markPending(live))) return;
-      if (users.length) {
+      if (users.length && ended) {
+        // Recorded with the round's result below; the turn's end then starts it.
+      } else if (users.length) {
         if (!(await this.markPending(live, "steer"))) return;
         await this.command(
           live,
@@ -697,6 +749,12 @@ export class ChatRuntimeBridge {
       gen.messages,
       (_name, call) => this.wait(() => live, call),
       selection,
+      // Only a runtime with its own tools works in the chat's folder; for any other a change of
+      // folder must not reopen its session.
+      {
+        folder: route.capabilities.ownTools ? gen.folder : undefined,
+        ownTools: route.capabilities.ownTools,
+      },
     );
     const live: Live = {
       owner: gen.owner,
@@ -706,6 +764,7 @@ export class ChatRuntimeBridge {
       route,
       policy: configured,
       calls: new Map(),
+      backlog: [],
       generation: gen,
       last: this.now(),
     };
@@ -755,29 +814,26 @@ export class ChatRuntimeBridge {
       await this.closeLive(live, false);
       throw error;
     }
-    // Register the consumer before startTurn can emit its first event.
+    // Register the consumer before startTurn can emit its first event. The reader only keeps each
+    // event; `pump` records them, and ends the session once the stream has ended and everything
+    // it held is recorded, so a round pi is still recording loses nothing to the stream's end.
     live.reader = Effect.runPromise(
       Stream.runForEach(live.state.session.events, (event) =>
-        Effect.promise(() => this.event(live, event)),
+        Effect.sync(() => {
+          live.backlog.push(event);
+          void this.pump(live);
+        }),
       ),
       { signal: live.cancellation.signal },
-    ).catch(async () => {
-      await live.command;
-      if (!live.closing && live.generation)
-        this.finish(
-          live,
-          live.generation,
-          "error",
-          this.options.heads.isRefused(live.owner)
-            ? resumeFailed
-            : "This turn did not produce an answer. Try another message.",
-        );
-    });
-    void live.reader.then(async () => {
-      // Account checks can end events before returning their typed command failure.
-      await live.command;
-      if (!live.closing) await this.closeLive(live);
-    });
+    ).then(
+      () => {
+        live.streamEnded = "ended";
+      },
+      () => {
+        live.streamEnded = "failed";
+      },
+    );
+    void live.reader.then(() => this.pump(live));
     return live;
   }
   private reserve(live: Live, gen: Generation) {
@@ -797,6 +853,10 @@ export class ChatRuntimeBridge {
     live.reserved = undefined;
     live.generation = gen;
     gen.message.responseId = responseId(nativeId(live.state.session));
+    if (live.holding) {
+      live.holding = false;
+      void this.pump(live);
+    }
     return !gen.settled;
   }
   private async command(
@@ -865,10 +925,38 @@ export class ChatRuntimeBridge {
     if (!(await this.markPending(live, "message"))) return;
     live.turn = crypto.randomUUID();
     live.lastResumePoint = undefined;
+    // Every chat writes in its own folder today: Ace has no plan mode yet to make a turn read only.
+    const folder = live.policy.folder;
     await this.command(
       live,
-      live.state.session.startTurn({ turnId: live.turn, message }),
+      live.state.session.startTurn({
+        turnId: live.turn,
+        message,
+        ...(folder === undefined
+          ? {}
+          : { workspace: { folder, access: "write" } }),
+      }),
     );
+    await this.followSession(live);
+  }
+  /**
+   * A runtime may replace a session that holds no turn yet when the turn starts (Codex starts a new
+   * thread when it restarts for the turn's mode). The head follows before any round is recorded,
+   * so the turn's later rounds find this session and the next message resumes it.
+   */
+  private async followSession(live: Live) {
+    const head = this.options.heads.get(live.owner);
+    if (
+      head === undefined ||
+      live.closing ||
+      live.state.kind !== "open" ||
+      head.session === nativeId(live.state.session)
+    )
+      return;
+    await this.options.heads.set(live.owner, {
+      ...head,
+      session: nativeId(live.state.session),
+    });
   }
   private async resolveDelivery(live: Live) {
     const head = this.options.heads.get(live.owner);
@@ -950,7 +1038,51 @@ export class ChatRuntimeBridge {
     entry.result = outcome;
     entry.waiter?.(outcome);
   }
-  private async event(live: Live, event: RuntimeEvent) {
+  /**
+   * The one place events are recorded, in order: what the reader kept, until a round recorded as
+   * a tool call holds for pi's next generation (a runtime with its own tools goes on meanwhile), a
+   * person's stop closes the session, or nothing is left. Once the stream has ended and nothing is
+   * left, it ends the session, as a failure in recording does, with the same message.
+   */
+  private async pump(live: Live): Promise<void> {
+    if (live.pumping) return;
+    live.pumping = true;
+    let failed = false;
+    try {
+      while (live.backlog.length > 0 && !live.holding && !live.closing)
+        await this.handle(live, live.backlog.shift()!);
+    } catch {
+      failed = true;
+    } finally {
+      live.pumping = false;
+    }
+    if (live.closing) return;
+    if (!failed && live.backlog.length > 0 && !live.holding)
+      return this.pump(live);
+    if (
+      failed ||
+      (live.streamEnded !== undefined &&
+        live.backlog.length === 0 &&
+        !live.holding)
+    )
+      await this.endLive(live, failed || live.streamEnded === "failed");
+  }
+  /** The session's end: the open generation is answered when the end was a failure, then closed. */
+  private async endLive(live: Live, failed: boolean) {
+    // Account checks can end events before returning their typed command failure.
+    await live.command;
+    if (failed && !live.closing && live.generation)
+      this.finish(
+        live,
+        live.generation,
+        "error",
+        this.options.heads.isRefused(live.owner)
+          ? resumeFailed
+          : "This turn did not produce an answer. Try another message.",
+      );
+    if (!live.closing) await this.closeLive(live);
+  }
+  private async handle(live: Live, event: RuntimeEvent) {
     // Scope closure may publish an interrupted turn before checkTurn returns its typed failure.
     if (event.type === "turn.finished") await live.command;
     if (live.closing || live.state.kind !== "open") return;
@@ -959,7 +1091,8 @@ export class ChatRuntimeBridge {
     if (
       (event.type === "text" ||
         event.type === "message.finished" ||
-        event.type === "tool.started") &&
+        event.type === "tool.started" ||
+        event.type === "work.finished") &&
       !gen
     ) {
       this.log("chat-runtime.protocol.fault", {
@@ -1021,6 +1154,7 @@ export class ChatRuntimeBridge {
           : "",
       );
       if (event.stopReason === "tool-use") {
+        await this.followSession(live);
         if (resumePoint !== undefined)
           await this.recordHead(live, gen, resumePoint, "toolUse");
         this.finish(live, gen, "toolUse");
@@ -1044,15 +1178,40 @@ export class ChatRuntimeBridge {
         await this.closeLive(live);
       }
     }
+    if (event.type === "work.finished" && gen) {
+      // Codex's own command, file change or search: recorded as a call that already ran, through
+      // the pass-through, whose result is never released to the runtime, which waits for none.
+      const id = `work-${event.workId}`;
+      this.work.set(id, {
+        ...(event.output === undefined ? {} : { output: event.output }),
+        errored: event.errored,
+      });
+      live.calls.set(id, { delivered: true });
+      gen.message.content.push({
+        type: "toolCall",
+        id,
+        name: RUNTIME_WORK_TOOL,
+        // What came back is the call's result, held once, not repeated here.
+        arguments: {
+          kind: event.kind,
+          input: event.input,
+          errored: event.errored,
+        },
+      });
+      gen.message.responseId = responseId(nativeId(session), "");
+      await this.followSession(live);
+      this.finish(live, gen, "toolUse");
+      return;
+    }
     if (event.type === "usage" && event.scope === "turn" && event.model) {
-      if (
-        event.contextWindow !== undefined &&
-        event.maxOutputTokens !== undefined
-      )
+      // Codex reports the window and not the output limit: the window alone is still news.
+      if (event.contextWindow !== undefined)
         for (const listener of this.limitListeners)
           listener(live.route.name, event.model, {
             contextWindow: event.contextWindow,
-            maxTokens: event.maxOutputTokens,
+            ...(event.maxOutputTokens === undefined
+              ? {}
+              : { maxTokens: event.maxOutputTokens }),
           });
     }
     if (event.type === "turn.finished") {
@@ -1094,6 +1253,14 @@ export class ChatRuntimeBridge {
           if (point) {
             gen.message.responseId = responseId(nativeId(session), point, true);
             await this.recordHead(live, gen, point, "stop");
+          }
+          // The person wrote while the ended turn was still being recorded: their message starts
+          // the next turn, and its answer continues this generation.
+          if (point && live.followUp !== undefined && !live.closing) {
+            const message = live.followUp;
+            live.followUp = undefined;
+            await this.start(live, message);
+            return;
           }
           if (!point) await this.resolveDelivery(live);
           this.finish(live, gen, "stop");
@@ -1200,6 +1367,12 @@ export class ChatRuntimeBridge {
     if (live) {
       live.replay = { key: gen.key, message: structuredClone(gen.message) };
       if (live.generation === gen) live.generation = undefined;
+      if (
+        reason === "toolUse" &&
+        live.turn !== undefined &&
+        live.route.capabilities.ownTools
+      )
+        live.holding = true;
       this.idle(live);
     }
   }
@@ -1301,6 +1474,9 @@ export class ChatRuntimeBridge {
     }
     const closed = Promise.withResolvers<void>();
     live.closing = closed.promise;
+    live.holding = false;
+    live.backlog.length = 0;
+    live.followUp = undefined;
     clearTimeout(live.timer);
     const command = live.command;
     const closingScope = Effect.runPromise(
@@ -1319,8 +1495,11 @@ export class ChatRuntimeBridge {
       async () => {
         if (command && live.generation)
           this.finish(live, live.generation, "aborted");
-        for (const call of live.calls.values())
+        for (const [id, call] of live.calls) {
           call.waiter?.({ text: "Call stopped.", error: "Call stopped." });
+          // An outcome recorded for a round that will never run is let go with the session.
+          this.work.delete(id);
+        }
         live.calls.clear();
         try {
           await this.resolveDelivery(live);

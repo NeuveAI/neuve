@@ -1,0 +1,11 @@
+{
+  "note": "How the Codex program is found, kept as data in the probe's order (the Codex runtime design, \"The probe\"): at run time the path the person set and only that, or else the one codex the PATH resolves to; once, with neuve auth program codex --find, every codex on the PATH, then OpenAI's desktop apps in the two Applications folders, found by their identifier and read through the manifest inside them for the program it declares. No install location is written here: the folders are the system's own, and the app is matched by identifier.",
+  "name": "codex",
+  "displayName": "Codex",
+  "applicationFolders": ["/Applications", "~/Applications"],
+  "identifiers": ["com.openai.codex"],
+  "manifest": "codex-package.json",
+  "layoutVersion": 1,
+  "install": "npm install -g @openai/codex",
+  "page": "https://developers.openai.com/codex"
+}

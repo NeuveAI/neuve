@@ -20,6 +20,13 @@ export const DEFAULT_ACCOUNTS: ReadonlyArray<Account> = [
     runtime: "claude-code",
     credential: { kind: "claude-config-folder" },
   }),
+  // The person's own Codex login, as `claude` is Claude Code's own configuration.
+  Account.parse({
+    name: "codex",
+    kind: "chatgpt-subscription",
+    runtime: "codex",
+    credential: { kind: "codex-home" },
+  }),
 ];
 
 /**

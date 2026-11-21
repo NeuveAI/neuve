@@ -359,3 +359,146 @@ test("login --print prints its hint and signed-in accounts exit successfully", a
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// Reason: the done-when's one command. The path a person sets for the codex account is stored,
+// is what the next check uses, and is shown; input that is not a program path, or an account that
+// does not find its own program, is refused without writing anything.
+test("auth program sets the codex account's program, then shows the check that used it", async () => {
+  const home = scratch();
+  try {
+    const seen: Array<string | undefined> = [];
+    const codex: RuntimeShape = {
+      ...fakeRuntime([], true),
+      kind: "codex",
+      probe: (account) =>
+        Effect.sync(() => {
+          const path = AccountStore.programPath(home, account.name);
+          seen.push(path);
+          return {
+            signIn: { state: "signed-in" as const },
+            limits: [],
+            checkedAt: new Date().toISOString(),
+            ...(path === undefined
+              ? {}
+              : {
+                  program: { path, version: "0.171.0", found: "set" as const },
+                }),
+            models: [
+              {
+                id: "main",
+                displayName: "Main",
+                description: "",
+                supportsEffort: true,
+                supportedEffortLevels: ["low" as const, "high" as const],
+              },
+            ],
+          };
+        }),
+    };
+    const runtimes = [codex, fakeRuntime([], true)];
+    const set = await capture(() =>
+      runAuthCli(["program", "codex", "/opt/codex/bin/codex"], {
+        home,
+        runtimes,
+      }),
+    );
+    expect(set.value).toBe(0);
+    expect(seen).toEqual(["/opt/codex/bin/codex"]);
+    expect(set.out).toBe(
+      "codex  chatgpt-subscription  signed-in\n  program /opt/codex/bin/codex (0.171.0), the path set for this account\n  models main (low, high)\n",
+    );
+    const unset = await capture(() =>
+      runAuthCli(["program", "codex", "--unset"], { home, runtimes }),
+    );
+    expect(unset.value).toBe(0);
+    expect(
+      AccountStore.programPath(home, AccountName.parse("codex")),
+    ).toBeUndefined();
+    for (const args of [
+      ["program", "claude", "/opt/x"],
+      ["program", "codex"],
+      ["program", "codex", "/opt/x", "--unset"],
+      // An empty path would resolve to the current folder.
+      ["program", "codex", ""],
+    ])
+      await expect(
+        capture(() => runAuthCli(args, { home, runtimes })),
+      ).rejects.toThrow();
+    expect(existsSync(AccountStore.programsPath(home))).toBe(false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// Reason: `--find` is the one step that looks for Codex. It must report each program it asked and
+// why each was skipped, store the first that answered as Codex and say so only once it is saved,
+// and store nothing when none answered. Discovery itself is faked: no program is run.
+test("auth program --find reports what it asked, stores what answered, and stores nothing otherwise", async () => {
+  const home = scratch();
+  try {
+    const codex: RuntimeShape = { ...fakeRuntime([], true), kind: "codex" };
+    const runtimes = [codex, fakeRuntime([], true)];
+    const stranger = { path: "/usr/local/bin/codex", found: "path" as const };
+    const app = { path: "/opt/apps/Codex/bin/codex", found: "app" as const };
+    const found = await capture(() =>
+      runAuthCli(["program", "codex", "--find"], {
+        home,
+        runtimes,
+        findCodex: () =>
+          Effect.succeed({
+            tried: [
+              { candidate: stranger, kind: "unrecognized" as const },
+              { candidate: app, kind: "codex" as const, version: "0.171.0" },
+            ],
+            found: {
+              candidate: app,
+              kind: "codex" as const,
+              version: "0.171.0",
+            },
+            skippedApps: [
+              {
+                app: "/opt/apps/Other.app",
+                why: "a layout this Neuve does not know",
+              },
+            ],
+            appsLookedFor: true,
+          }),
+      }),
+    );
+    expect(found.value).toBe(0);
+    expect(found.out.split("\n").slice(0, 6)).toEqual([
+      "Looked for Codex:",
+      "  /usr/local/bin/codex (on the PATH): did not answer as Codex, skipped",
+      "  /opt/apps/Codex/bin/codex (in an installed app): Codex 0.171.0",
+      "  /opt/apps/Other.app: a layout this Neuve does not know, skipped",
+      "Stored /opt/apps/Codex/bin/codex as codex's program.",
+      "codex  chatgpt-subscription  signed-in",
+    ]);
+    expect(AccountStore.programPath(home, AccountName.parse("codex"))).toBe(
+      app.path,
+    );
+    AccountStore.setProgramPath(home, AccountName.parse("codex"), undefined);
+    const none = await capture(() =>
+      runAuthCli(["program", "codex", "--find"], {
+        home,
+        runtimes,
+        findCodex: () =>
+          Effect.succeed({
+            tried: [{ candidate: stranger, kind: "unrecognized" as const }],
+            found: undefined,
+            skippedApps: [],
+            appsLookedFor: false,
+          }),
+      }),
+    );
+    expect(none.value).toBe(1);
+    expect(none.out).toContain("Found no Codex; nothing was stored.");
+    // Off macOS no app is looked for, and the report says so.
+    expect(none.out).toContain("No installed app was looked for");
+    expect(
+      AccountStore.programPath(home, AccountName.parse("codex")),
+    ).toBeUndefined();
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
