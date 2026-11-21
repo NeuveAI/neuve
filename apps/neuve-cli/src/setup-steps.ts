@@ -48,6 +48,7 @@ import { Settings } from "@neuve/harness";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
 import { writePrivateEnvironment } from "./private-environment.ts";
 import { offerSkillsAfterSetup, type SkillsContext } from "./skills-cli.ts";
+import { shown, type Screen } from "./terminal.ts";
 
 export type StepScope = "machine" | "repository";
 
@@ -65,6 +66,10 @@ interface StepBase {
   readonly scope: StepScope;
   /** What it does, as a phrase after "setup". */
   readonly does: string;
+  /** Its name on a step line ("Neuve skill"); a generic one when absent. */
+  readonly label?: string;
+  /** The command that does its work without asking, for a person or an agent to run. */
+  readonly command?: string;
   /** It needs the person's answer: it writes an agent's configuration or a repository. */
   readonly asks: boolean;
   /** Left out of this run by the person's own flag, named here: recorded as considered for it. */
@@ -172,9 +177,9 @@ export interface StepsRun {
   readonly mode: "setup" | "upgrade";
   /** Where, for what is said: "this machine" or the repository. */
   readonly where: string;
-  readonly isTerminal: boolean;
   readonly version: string;
-  readonly out: (text: string) => Promise<void>;
+  /** Where it speaks; it asks only when the screen can. */
+  readonly screen: Screen;
   readonly now?: () => Date;
 }
 
@@ -200,10 +205,15 @@ const stillToDo = (steps: ReadonlyArray<SetupStep>, entries: Entries) =>
 
 /** Runs one scope's steps against its record, writing the record after each change. */
 export const runSteps = async (run: StepsRun): Promise<StepsOutcome> => {
+  const { screen } = run;
+  // An upgrade goes through many places, so its lines say which; setup's are all its own.
+  const at = run.mode === "upgrade" ? ` (${shown(run.where)})` : "";
   const read = await readStepsRecord(run.record, run.steps);
   if (read.kind !== "read") {
-    await run.out(
-      `Setup's steps for ${run.where} were left as they are: ${read.why}.\n`,
+    await screen.step(
+      "needs",
+      "Setup steps",
+      `left as they are${at}: ${read.why}`,
     );
     return { changed: [], waiting: [], toDo: [], left: read.why };
   }
@@ -244,12 +254,14 @@ export const runSteps = async (run: StepsRun): Promise<StepsOutcome> => {
     const earlier = entries[step.id];
     if (step.dropped === true) {
       if (earlier === undefined) continue;
-      await run.out(
+      await screen.step(
+        "done",
+        labelOf(step),
         `${
           step.undo === undefined
-            ? `Setup no longer ${step.does} in ${run.where}. This step has no undo, so what it did there is left as it is.`
+            ? `setup no longer ${step.does}; this step has no undo, so what it did is left as it is`
             : await step.undo()
-        }\n`,
+        }${at}`,
       );
       delete entries[step.id];
       await save(step.id);
@@ -273,7 +285,7 @@ export const runSteps = async (run: StepsRun): Promise<StepsOutcome> => {
       await keep(step.id, { considered: step.leftOut });
       continue;
     }
-    if (step.asks && !run.isTerminal) {
+    if (step.asks && !screen.canAsk) {
       waiting.push(step);
       continue;
     }
@@ -281,18 +293,26 @@ export const runSteps = async (run: StepsRun): Promise<StepsOutcome> => {
     if (result === "waiting") waiting.push(step);
     else if (result !== "skipped") await keep(step.id, result);
   }
-  if (waiting.length > 0)
-    await run.out(
-      `Waiting in ${run.where} for an answer at a terminal: setup ${waiting.map((step) => step.does).join("; ")}. Run neuve setup there at a terminal to be asked.\n`,
+  // Each step left for the person, once, with the command that does it.
+  for (const step of waiting)
+    await screen.step(
+      "needs",
+      labelOf(step),
+      `waiting for a yes at a terminal${at}`,
+      step.command ?? "neuve setup",
     );
   const toDo = stillToDo(run.steps, entries);
-  const other = toDo.filter((step) => !waiting.includes(step));
-  if (other.length > 0)
-    await run.out(
-      `Still to do in ${run.where}: setup ${other.map((step) => step.does).join("; ")}. neuve setup there does it.\n`,
+  for (const step of toDo.filter((step) => !waiting.includes(step)))
+    await screen.step(
+      "needs",
+      labelOf(step),
+      `still to do${at}`,
+      "neuve setup",
     );
   return { changed, waiting, toDo };
 };
+
+const labelOf = (step: SetupStep) => step.label ?? "Setup step";
 
 /**
  * What doctor says, read only: the steps not applied yet, those considered with their reasons, or
@@ -338,6 +358,7 @@ export const machineSteps = (
   {
     id: "agent-programs",
     scope: "machine",
+    label: "Agents",
     does: "looks for the agent programs, stores the Codex it finds and offers to install one that is missing",
     asks: false,
     run: look,
@@ -375,6 +396,8 @@ export const repositorySteps = (
     {
       id: "skill-offer",
       scope: "repository",
+      label: "Neuve skill",
+      command: "neuve skills install",
       does: "offers the Neuve skill to the agent programs found",
       asks: true,
       ...(leftOut === undefined ? {} : { leftOut }),

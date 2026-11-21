@@ -65,9 +65,10 @@ describe.each(shells)("installer under %s", (shell) => {
     expect(first.output).toContain(
       `Installed neuve 0.1.0-preview.1 at ${await realpath(context.home)}/.neuve/bin/neuve.`,
     );
-    expect(first.output).toContain(
-      "Next, in a repository, run neuve setup, then neuve doctor.",
-    );
+    // A header, one line per step, and one summary with the next command.
+    expect(first.stdout).toStartWith("Neuve installer\n  ");
+    expect(first.stdout).toContain("\n\nNeuve is installed.\n");
+    expect(first.stdout).toEndWith("  Next, in your repository: neuve setup\n");
     expect(first.output).toContain(
       "Agent skills can be added later, once a release includes them.",
     );
@@ -472,12 +473,12 @@ describe.each(shells)("installer under %s", (shell) => {
     const planned = await install(context, release, ["--dry-run"], shell);
     ok(planned);
     for (const line of [
-      "Dry run: nothing is downloaded, installed or changed.",
-      `Release: neuve 0.1.0 from ${release.archive}, which matches ${release.sums}.`,
-      "(a new install): bin/neuve, lib/neuve and share/neuve.",
-      "PATH: would add this line to",
-      "Agent skills: would offer them with neuve skills install --offer",
-      "Then: in a repository, run neuve setup, then neuve doctor.",
+      "Neuve installer (dry run: nothing is downloaded, installed or changed)\n",
+      `  Release: neuve 0.1.0 from ${release.archive}, checked against ${release.sums}.`,
+      "(a new install).",
+      "  PATH: would add this line to",
+      "  Agent skills: would be offered; nothing is written without your yes.",
+      "\nThen, in your repository: neuve setup\n",
     ])
       expect(planned.output).toContain(line);
     expect(await snapshot(context.directory)).toEqual(before);
@@ -738,7 +739,7 @@ test.skipIf(process.platform !== "darwin")(
     ok(upgraded);
     expect(upgraded.output).toContain("Installed neuve 0.1.0-preview.2");
     expect(upgraded.output).toContain(
-      "Repositories already set up keep their setup and records. Next, in one of them, run neuve doctor.",
+      "\nNeuve is installed.\n  Next, in a repository already set up: neuve doctor\n",
     );
     expect(upgraded.output).not.toContain("run neuve setup");
     const prefix = await realpath(context.prefix);

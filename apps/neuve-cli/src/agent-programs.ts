@@ -16,9 +16,10 @@ import { writeFileAtomically } from "./skill-bundle.ts";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Settings } from "@neuve/harness";
-import { findProgram } from "@neuve/runtime";
+import { findProgram, type AccountStatus } from "@neuve/runtime";
 import { CODEX_PROGRAM } from "@neuve/harness/runtimes";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
+import { shown, type Screen } from "./terminal.ts";
 
 export type Look = "find" | "check";
 
@@ -46,6 +47,8 @@ export interface Finding {
   readonly stale?: string;
   /** Why looking failed, when it could not finish (a settings file that can't be read, say). */
   readonly problem?: string;
+  /** Setup's full look: the path stored as the program, and its account's checked status. */
+  readonly stored?: { readonly path: string; readonly account: AccountStatus };
 }
 
 export interface AgentProgram {
@@ -195,17 +198,44 @@ export const headline = ({ program, found, problem }: Finding) =>
 export const describeFinding = (finding: Finding) =>
   [`${headline(finding)}.`, ...finding.lines].join("\n");
 
+/**
+ * The finding as setup shows it, once: the version (without a trailing repeat of the program's
+ * name) and where it is, then, for a stored Codex, how many models its account offers and the
+ * first of them. `--verbose` adds what was asked on the way and the full model list.
+ */
+export const summary = (finding: Finding) => {
+  const { program, found, stored } = finding;
+  if (found === undefined) return undefined;
+  const version = found.version?.replace(` (${program.name})`, "");
+  const models = stored?.account.models ?? [];
+  return {
+    text: [
+      ...(version === undefined ? [] : [version]),
+      shown(found.path),
+      ...(models.length === 0
+        ? []
+        : [`${models.length} ${models.length === 1 ? "model" : "models"}`]),
+    ].join(" · "),
+    verbose: [
+      ...finding.lines.map((line) => line.trim()),
+      ...(models.length === 0
+        ? []
+        : [
+            `models: ${models.map((model) => `${model.id}${model.supportedEffortLevels?.length ? ` (${model.supportedEffortLevels.join(", ")})` : ""}`).join(", ")}`,
+          ]),
+    ],
+  };
+};
+
 /** How a missing program is installed, and the vendor's page; for a look that failed, its fix. */
 export const installAdvice = ({ program, problem }: Finding) =>
   problem === undefined
     ? `install it with ${program.install.join(" ")} (${program.page})`
     : "fix what stopped the look, then run this again";
 
-/** What the install offer reads from its surroundings; setup passes the skill offer's. */
+/** What the install offer reads from its surroundings: where it speaks and asks, and the PATH. */
 export interface OfferContext {
-  readonly isTerminal: boolean;
-  readonly ask: (question: string) => Promise<string | null>;
-  readonly out: (text: string) => Promise<void>;
+  readonly screen: Screen;
   readonly path: string;
   /** Runs npm with the person's terminal; the exit code. */
   readonly run?: (argv: ReadonlyArray<string>) => Promise<number>;
@@ -264,9 +294,6 @@ export const machineOffers = (home = homedir()): OfferMemory => {
   };
 };
 
-/** The skill offer's answer: yes only when typed. */
-export const YES = /^\s*y(es)?\s*$/i;
-
 const inherit = async (argv: ReadonlyArray<string>) => {
   try {
     return await Bun.spawn([...argv], {
@@ -278,53 +305,66 @@ const inherit = async (argv: ReadonlyArray<string>) => {
 };
 
 /**
- * The offer for one missing program, default no, as the skill offer asks. Without a terminal it
- * prints the command and installs nothing. On yes it runs the npm package's own install and nothing
- * else; without npm, or when npm refuses, it says so and nothing else is changed. True only when
- * npm installed it.
+ * The offer for one missing program, default no. It says the program is missing and the command
+ * that installs it; at a terminal, once per machine, it asks. On yes it runs the npm package's own
+ * install and nothing else; without npm, or when npm refuses, it says so and nothing else is
+ * changed. True only when npm installed it.
  */
 export const offerInstall = async (
   finding: Finding,
   context: OfferContext,
+  /** Another program was found, so this one is not left for the person to do. */
+  optional = false,
 ): Promise<boolean> => {
   const { program } = finding;
+  const { screen } = context;
   const command = program.install.join(" ");
   const another =
     finding.strangers.length === 0
       ? []
       : [
-          `Another program with its name is on the PATH (${finding.strangers.join(", ")}), and it did not answer as ${program.name}. What npm does about it is npm's: it may refuse, or replace it.`,
+          `Another program named like it is on the PATH (${finding.strangers.map((path) => shown(path)).join(", ")}) and did not answer as ${program.name}; npm may refuse or replace it.`,
         ];
-  if (!context.isTerminal) {
-    await context.out(
-      `${[`To install ${program.name}: ${command} (${program.page}). Nothing was installed: there is no terminal to ask.`, ...another].join("\n")}\n`,
-    );
-    return false;
-  }
-  if (context.askAgain !== true && (await context.offers?.asked(program.id))) {
-    await context.out(
-      `${[`To install ${program.name}: ${command} (${program.page}). Setup asked about it on this machine before, so it doesn't ask again; neuve setup --ask-install-again asks again.`, ...another].join("\n")}\n`,
+  const missing = async (
+    mark: "needs" | "skipped",
+    extra: ReadonlyArray<string> = [],
+  ) => {
+    await screen.step(mark, program.name, "not found", command);
+    await screen.detail([...extra, ...another]);
+  };
+  const askedBefore =
+    context.askAgain !== true && (await context.offers?.asked(program.id));
+  if (!screen.canAsk || askedBefore) {
+    await missing(
+      optional ? "skipped" : "needs",
+      askedBefore === true
+        ? [
+            "Asked on this machine before; neuve setup --ask-install-again asks again.",
+          ]
+        : [],
     );
     return false;
   }
   const remember = async () => {
     const problem = await context.offers?.record(program.id);
-    if (problem !== undefined) await context.out(`${problem}\n`);
+    if (problem !== undefined) await screen.detail([problem]);
   };
-  if (another.length > 0) await context.out(`${another.join("\n")}\n`);
-  const answer = await context.ask(
-    `Install ${program.name} with ${command}? Its own page is ${program.page}. [y/N] `,
-  );
-  // A no is remembered; the end of input is no answer, and a yes waits for npm's result.
-  if (!YES.test(answer ?? "")) {
-    if (answer !== null) await remember();
-    await context.out(`Not installed. To install it later: ${command}\n`);
+  await screen.step("needs", program.name, `not found (${program.page})`);
+  await screen.detail(another);
+  const yes = await screen.confirm(`Install ${program.name} with ${command}?`);
+  if (yes !== true) {
+    // A no is remembered; the end of input is no answer.
+    if (yes === false) await remember();
+    await missing("skipped");
     return false;
   }
   const npm = findProgram("npm", undefined, context.path);
   if (npm === undefined) {
-    await context.out(
-      `npm isn't on the PATH, so ${program.name} wasn't installed and nothing was changed. Install npm, then run ${command}, or see ${program.page}.\n`,
+    await screen.step(
+      "failed",
+      program.name,
+      "not installed: npm isn't on the PATH. Install npm, then run",
+      command,
     );
     return false;
   }
@@ -333,8 +373,10 @@ export const offerInstall = async (
     ...program.install.slice(1),
   ]);
   if (code !== 0) {
-    await context.out(
-      `npm did not install ${program.name} (it exited ${code}); setup changed nothing else.\n`,
+    await screen.step(
+      "failed",
+      program.name,
+      `not installed: npm exited ${code}; nothing else was changed`,
     );
     return false;
   }

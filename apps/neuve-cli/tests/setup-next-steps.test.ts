@@ -1,6 +1,7 @@
 // Why: `neuve setup` is the first thing a newcomer runs, and every review needs it. Each test runs
 // the real setup (its first index needs the built Graph engine) and checks one promise:
-// - it tells the person the sign-in and the next commands, with its JSON record still on stdout;
+// - with --json, its record alone is on stdout; without it, the same plain lines go to stdout with
+//   no record, which is what an agent or a script reads (a contract: the shipped skill quotes it);
 // - it keeps its record in the store, writes nothing in the working tree, and covers worktrees;
 // - it checks the Graph engine and indexes nothing, since no review reads such an index;
 // - Neuve's own old working-tree folder stays set up and moves into the store;
@@ -22,6 +23,7 @@ import { existsSync } from "node:fs";
 import { settingsPath } from "../../../packages/harness/src/settings.ts";
 import { readInstallation, writeInstallation } from "../src/installation.ts";
 import { requireRepositorySetup } from "../src/setup-status.ts";
+import { CLI_VERSION } from "../src/cli-version.ts";
 import {
   CHECKOUT,
   CLI,
@@ -39,7 +41,7 @@ test.skipIf(prerequisite.skip)(
   "setup keeps its record in the store, leaves git status clean, covers worktrees and ends with the next steps",
   async () => {
     prerequisite.require();
-    const { root, repository, home, git, copy, setup } = await scratch();
+    const { root, repository, home, git, copy, run, setup } = await scratch();
     const exclude = await readFile(
       join(repository, ".git/info/exclude"),
       "utf8",
@@ -110,27 +112,41 @@ test.skipIf(prerequisite.skip)(
     const settings = settingsPath(home);
     const repo = ` --repo '${repository}'`;
     expect(existsSync(settings)).toBe(false);
+    // No terminal: nothing asked and nothing written about the route; one line per step, each
+    // fact once, then what is left as exact commands and the next one.
+    const lines = [
+      `ok      Repository   ${repository}, recorded in .git/neuve/setup`,
+      `ok      Graph engine checked at ${git("rev-parse", "HEAD").slice(0, 12)}`,
+      "to do   Reviews      choose openai (ChatGPT), anthropic (an API key) or claude (a Claude subscription): neuve setup --route <openai|anthropic|claude>",
+      "",
+      "One thing is left for you:",
+      "  neuve setup --route <openai|anthropic|claude>",
+      `Then: neuve review HEAD~1..HEAD${repo}`,
+      "",
+    ];
     expect(stderr).toBe(
-      [
-        // No terminal: nothing asked and nothing written about the route, one line on how to choose.
-        "Reviews sign in with ChatGPT, an Anthropic API key or your Claude subscription through Claude Code. Choose with neuve setup --route openai, neuve setup --route anthropic or neuve setup --route claude.",
-        `Neuve is set up in ${repository}.`,
-        "",
-        "Next steps:",
-        "  1. Choose how reviews sign in, then sign in:",
-        "       neuve setup --route openai, then neuve auth login openai (ChatGPT)",
-        "       neuve setup --route anthropic, then set ANTHROPIC_API_KEY to an Anthropic API key",
-        "       (an API key: a Claude subscription token doesn't work here)",
-        "       neuve setup --route claude, then claude auth login (your Claude subscription,",
-        "       through Claude Code)",
-        `     Not yet: Reviews use the Anthropic route (the default; ${settings} names none), and ANTHROPIC_API_KEY isn't set in this shell. A review waits until a worker has it.`,
-        "  2. Request a review of a commit range, for example the last commit:",
-        `       neuve review HEAD~1..HEAD${repo}`,
-        "  3. Open the batch overview and the review desk:",
-        `       neuve review desk${repo}`,
-        "neuve doctor checks all of this and says how to fix what is missing.",
-        "",
-      ].join("\n"),
+      [`neuve setup ${CLI_VERSION}`, "", ...lines].join("\n"),
+    );
+    expect(existsSync(settings)).toBe(false);
+    // Without --json the same lines go to standard output, with no record and no colour.
+    const plain = await run([
+      process.execPath,
+      "--no-env-file",
+      CLI,
+      "setup",
+      "--repo",
+      repository,
+      "--cli-binary",
+      copy,
+      "--graph-binary",
+      ENGINE,
+      "--agents",
+      "none",
+    ]);
+    expect(plain.code, plain.stderr).toBe(0);
+    expect(plain.stderr).toBe("");
+    expect(plain.stdout).toBe(
+      [`neuve setup ${CLI_VERSION}`, "", ...lines].join("\n"),
     );
   },
   60_000,
@@ -165,7 +181,7 @@ test.skipIf(prerequisite.skip)(
     const { stderr, code } = await setup();
     expect(code, stderr).toBe(0);
     const store = join(repository, ".git/neuve/setup");
-    expect(stderr).toStartWith(
+    expect(stderr).toContain(
       `Moved Neuve's setup out of the working tree, into ${store}, and removed ${legacy}.\n`,
     );
     expect(await lstat(legacy).catch(() => undefined)).toBeUndefined();
@@ -276,7 +292,7 @@ test.skipIf(prerequisite.skip)(
     await commit("b.ts", "export const b = 2;\n");
     const done = await setup();
     expect(done.code, done.stderr).toBe(0);
-    expect(done.stderr).toStartWith(
+    expect(done.stderr).toContain(
       `An old neuve/ folder was left in place at ${folder}: its name differs from neuve in case only.\n`,
     );
     expect(git("status", "--porcelain")).toBe("");
@@ -323,8 +339,8 @@ test.skipIf(prerequisite.skip)(
       version: 1,
       review: { route: "openai" },
     });
-    expect(done.stderr).toContain(
-      "  1. Sign in with ChatGPT:\n       neuve auth login openai\n",
+    expect(done.stdout).toContain(
+      "to do   Reviews      sign in with ChatGPT: neuve auth login openai\n",
     );
     const doctor = await run([
       process.execPath,
