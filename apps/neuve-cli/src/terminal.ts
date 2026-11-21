@@ -113,8 +113,6 @@ export interface Screen {
   readonly styled: boolean;
   /** A person can answer: standard input and output are a terminal, and no record was asked for. */
   readonly canAsk: boolean;
-  /** `--verbose`: every detail, not only the summary. */
-  readonly verbose: boolean;
   print: (text: string) => Promise<void>;
   /** The command and version, once, at the top. */
   header: (title: string) => Promise<void>;
@@ -159,7 +157,6 @@ export const makeScreen = (input: {
   readonly out: (text: string) => Promise<void>;
   readonly styled: boolean;
   readonly canAsk: boolean;
-  readonly verbose?: boolean;
   /** Prints the question and reads one line; null at the end of input. */
   readonly ask?: (question: string) => Promise<string | null>;
 }): Screen => {
@@ -194,7 +191,6 @@ export const makeScreen = (input: {
   return {
     styled,
     canAsk: input.canAsk,
-    verbose: input.verbose === true,
     print: write,
     header: (title) => write(`${paint("bold", title)}\n\n`),
     step: async (mark, label, text, command) => {
@@ -276,10 +272,7 @@ export const makeScreen = (input: {
  * The screen for a command run by a person or an agent: human lines on standard output, or, with
  * `--json`, on standard error so standard output holds only the record. Asks only at a terminal.
  */
-export const commandScreen = (options: {
-  readonly json?: boolean;
-  readonly verbose?: boolean;
-}) => {
+export const commandScreen = (options: { readonly json?: boolean }) => {
   const stream = options.json === true ? process.stderr : process.stdout;
   const target = options.json === true ? Bun.stderr : Bun.stdout;
   return makeScreen({
@@ -291,7 +284,6 @@ export const commandScreen = (options: {
       options.json !== true &&
       process.stdin.isTTY === true &&
       process.stdout.isTTY === true,
-    ...(options.verbose === undefined ? {} : { verbose: options.verbose }),
   });
 };
 

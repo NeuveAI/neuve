@@ -598,12 +598,10 @@ test("setup's command line: --ask-install-again asks again, and --agents only sa
   expect(switches(["--ask-install-again", "--repo", "/r"])).toEqual({
     askAgain: true,
     json: false,
-    verbose: false,
   });
-  expect(switches(["--agents", "codex", "--json", "--verbose"])).toEqual({
+  expect(switches(["--agents", "codex", "--json"])).toEqual({
     askAgain: false,
     json: true,
-    verbose: true,
   });
 });
 

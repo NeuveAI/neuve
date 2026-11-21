@@ -799,7 +799,7 @@ export const runSetupHooks = async (
     `${dryRun ? "dry run: would enable" : "enabled"} in ${shown(root)}; hooks run ${command}`,
   );
   await screen.detail(
-    changes.map((change) => `${change.action}  ${shown(change.path)}`),
+    changes.map((change) => `${change.path}: ${change.action}`),
   );
   for (const line of notFound)
     await screen.step(line.mark, line.label, line.text);

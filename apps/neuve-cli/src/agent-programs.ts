@@ -200,31 +200,17 @@ export const describeFinding = (finding: Finding) =>
 
 /**
  * The finding as setup shows it, once: the version (without a trailing repeat of the program's
- * name) and where it is, then, for a stored Codex, how many models its account offers and the
- * first of them. `--verbose` adds what was asked on the way and the full model list.
+ * name) and where it is, then, for a stored Codex, how many models its account offers.
  */
-export const summary = (finding: Finding) => {
-  const { program, found, stored } = finding;
+export const summary = ({ program, found, stored }: Finding) => {
   if (found === undefined) return undefined;
   const version = found.version?.replace(` (${program.name})`, "");
-  const models = stored?.account.models ?? [];
-  return {
-    text: [
-      ...(version === undefined ? [] : [version]),
-      shown(found.path),
-      ...(models.length === 0
-        ? []
-        : [`${models.length} ${models.length === 1 ? "model" : "models"}`]),
-    ].join(" · "),
-    verbose: [
-      ...finding.lines.map((line) => line.trim()),
-      ...(models.length === 0
-        ? []
-        : [
-            `models: ${models.map((model) => `${model.id}${model.supportedEffortLevels?.length ? ` (${model.supportedEffortLevels.join(", ")})` : ""}`).join(", ")}`,
-          ]),
-    ],
-  };
+  const models = stored?.account.models?.length ?? 0;
+  return [
+    ...(version === undefined ? [] : [version]),
+    shown(found.path),
+    ...(models === 0 ? [] : [`${models} ${models === 1 ? "model" : "models"}`]),
+  ].join(" · ");
 };
 
 /** How a missing program is installed, and the vendor's page; for a look that failed, its fix. */

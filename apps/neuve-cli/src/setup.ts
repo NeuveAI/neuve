@@ -98,7 +98,7 @@ const flagsSchema = z
   })
   .strict();
 
-export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|anthropic|claude] [--agents claude-code,codex|none] [--ask-install-again] [--graph-binary <path>] [--cli-binary <path>] [--no-skills] [--json] [--verbose]
+export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|anthropic|claude] [--agents claude-code,codex|none] [--ask-install-again] [--graph-binary <path>] [--cli-binary <path>] [--no-skills] [--json]
   Set Neuve up in a Git repository (the current one by default): record this neuve and the Graph
   engine beside it, and check that the engine can work on the repository. It keeps its state with
   the repository's Records, in <git common directory>/neuve/setup/, and writes nothing in the
@@ -124,8 +124,8 @@ export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|an
   setup-steps.json. neuve setup upgrade, which the install script runs after an upgrade, runs the
   steps a new version adds and undoes those it drops.
   It prints one line per step and ends with what is left for you as exact commands; without a
-  terminal the same lines are plain and nothing is asked. --verbose adds every detail; --json
-  prints only setup's record on standard output, the lines going to standard error.
+  terminal the same lines are plain and nothing is asked. --json prints only setup's record on
+  standard output, the lines going to standard error.
   Run neuve setup hooks --help and neuve setup stack --help for those.
 `;
 
@@ -143,15 +143,13 @@ const executableFile = async (path: string) => {
 export const ASK_INSTALL_AGAIN = "--ask-install-again";
 
 /** Setup's flags that take no value. */
-const SWITCHES = ["--no-skills", ASK_INSTALL_AGAIN, "--json", "--verbose"];
+const SWITCHES = ["--no-skills", ASK_INSTALL_AGAIN, "--json"];
 
 /** Setup's flags that take no value; `--agents` only ever says which programs. */
 export const switches = (given: readonly string[]) => ({
   askAgain: given.includes(ASK_INSTALL_AGAIN),
   /** Only the setup record on standard output; what a person reads goes to standard error. */
   json: given.includes("--json"),
-  /** Every detail: what was asked on the way, each model, each skill file. */
-  verbose: given.includes("--verbose"),
 });
 
 export const runSetup = async (given: readonly string[]): Promise<number> => {
@@ -161,7 +159,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   }
   // The switches take no value.
   const noSkills = given.includes("--no-skills");
-  const { askAgain, json, verbose } = switches(given);
+  const { askAgain, json } = switches(given);
   const args = given.filter((arg) => !SWITCHES.includes(arg));
   const raw: Record<string, string> = {};
   for (let index = 0; index < args.length; index += 2) {
@@ -183,7 +181,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   const repository = await realpath(
     await git(resolve(options["--repo"]), ["rev-parse", "--show-toplevel"]),
   );
-  const screen = commandScreen({ json, verbose });
+  const screen = commandScreen({ json });
   await screen.header(`neuve setup ${CLI_VERSION}`);
   // The route before anything else is written: a settings file setup can't read stops it here.
   const route = await chooseRoute(options["--route"], screen);
@@ -387,11 +385,8 @@ export const agentLooks = (
 /** One program's line: found with its summary, or why looking failed; a missing one is the offer's. */
 const showFinding = async (screen: Screen, finding: Finding) => {
   const line = summary(finding);
-  if (line !== undefined) {
-    await screen.step("done", finding.program.name, line.text);
-    if (screen.verbose) await screen.detail(line.verbose);
-    return;
-  }
+  if (line !== undefined)
+    return screen.step("done", finding.program.name, line);
   await screen.step(
     finding.problem === undefined ? "needs" : "failed",
     finding.program.name,

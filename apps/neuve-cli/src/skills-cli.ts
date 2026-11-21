@@ -916,7 +916,7 @@ const install = async (
 
 /**
  * The offer, at the end of setup or the install script: one line naming the version, the agents
- * and where the files go (the count, each file only with `--verbose`), then the question, default
+ * and where the files go (their count), then the question, default
  * no. Without a terminal it asks nothing and gives the command. It never fails the command it
  * ends.
  */
@@ -982,12 +982,6 @@ const offer = async (
       : `${version} for ${names(changing)} (${where}), not installed without a yes`,
     screen.canAsk ? undefined : "neuve skills install",
   );
-  if (screen.verbose)
-    await screen.detail(
-      changing.flatMap((plan) =>
-        plan.steps.map((step) => safe(`${step.action}  ${shown(step.path)}`)),
-      ),
-    );
   if (!screen.canAsk) return 0;
   if (
     (await screen.confirm(

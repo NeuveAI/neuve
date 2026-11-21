@@ -46,7 +46,7 @@ Commands:
   upgrade [--version vX.Y.Z]
               Upgrade to the latest release, or the --version tag, through its checksum-checked install script.
   setup [--repo <path>] [--route openai|anthropic|claude] [--agents claude-code,codex|none]
-    [--ask-install-again] [--graph-binary <path>] [--cli-binary <path>] [--no-skills] [--json] [--verbose]
+    [--ask-install-again] [--graph-binary <path>] [--cli-binary <path>] [--no-skills] [--json]
               Set Neuve up in a repository: record this neuve and its Graph engine, check that
               the engine can work there, and choose how reviews sign in (ChatGPT, an Anthropic
               API key, or a Claude subscription through Claude Code). Run it once before neuve
