@@ -272,6 +272,17 @@
 	box-shadow: 0 0 12px 0 color-mix(in oklab, var(--accent) 45%, transparent);
 }
 
+/* Plan mode shows the plan agent's tone the same way: a border, and a still ink button that glows. */
+:root .composer\:body[data-beam="plan"]::before {
+	border-color: color-mix(in oklab, var(--agent-plan) 55%, transparent);
+}
+
+:root button[data-beam="plan"]:not(:disabled) {
+	background: var(--primary);
+	color: var(--primary-foreground);
+	box-shadow: 0 0 12px 0 color-mix(in oklab, var(--agent-plan) 45%, transparent);
+}
+
 /* Code blocks, the editor and diffs read Neuve's syntax and diff palette (styles/syntax.css). The
    diff slots are light-dark() pairs, so they take both themes' values at once. */
 :root {

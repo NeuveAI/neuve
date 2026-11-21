@@ -1279,6 +1279,7 @@ function ChatComposer(props: Props) {
 		analyser,
 		recording,
 		ace,
+		planning,
 		attachable,
 		addFiles,
 		file,
@@ -1312,7 +1313,7 @@ function ChatComposer(props: Props) {
 					"transition-shadow duration-300",
 					!terminal && recording && "shadow-[0_0_0_1px_rgb(239_68_68)]",
 				)}
-				data-beam={ace ? "ace" : undefined}
+				data-beam={ace ? "ace" : planning ? "plan" : undefined}
 				onFiles={attachable ? addFiles : undefined}
 			>
 				<input
@@ -1404,7 +1405,7 @@ function ComposerMode({ state }: { state: ComposerState }) {
 						>
 							<Icon
 								className="size-3 shrink-0 text-muted-foreground group-focus/dropdown-menu-item:text-popover-foreground"
-								style={{ color: m.color }}
+								style={{ color: m.id === current?.id ? m.color : undefined }}
 							/>
 							<span className="min-w-0 flex-1 truncate">{m.name}</span>
 						</DropdownMenuItem>
@@ -1753,7 +1754,7 @@ function ComposerSend({ state }: { state: ComposerState }) {
 			onStop={mic ? () => setRecording(false) : undefined}
 			onSend={send}
 			disabled={!sendable && (!mic || busy || !canSend)}
-			data-beam={ace ? "ace" : undefined}
+			data-beam={ace ? "ace" : planning ? "plan" : undefined}
 		/>
 	);
 }
