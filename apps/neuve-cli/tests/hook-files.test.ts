@@ -48,7 +48,7 @@ const scene = async () => {
   const hookFiles = (harness: string) =>
     harness === "claude-code" ? settings : codex;
   let said = "";
-  const setUp = async () => {
+  const setUp = async (command = program) => {
     said = "";
     const write = Bun.write;
     (Bun as { write: typeof Bun.write }).write = (async (
@@ -71,7 +71,7 @@ const scene = async () => {
           "--codex-hooks",
           codex,
           "--command",
-          program,
+          command,
           "--no-stack",
         ],
         { stackStore: join(root, "stack") },
@@ -367,3 +367,48 @@ test("a hooks folder that is a link is refused in the same words in both places"
   expect(found).toMatchObject({ state: "unreadable" });
   await expect(setUp()).rejects.toThrow(found!.why!);
 });
+
+test("a Neuve hook under an event Neuve doesn't write needs an update, and setup hooks removes it", async () => {
+  const { settings, setUp, said, part } = await scene();
+  expect(await setUp()).toBe(0);
+  const file = JSON.parse(await readFile(settings, "utf8"));
+  file.hooks.PreToolUse = structuredClone(file.hooks.Stop);
+  await writeFile(settings, JSON.stringify(file, null, 2) + "\n");
+  expect(await part(settings)).toMatchObject({
+    state: "update",
+    why: expect.stringContaining("a Neuve hook sits under PreToolUse"),
+  });
+  expect(await setUp()).toBe(0);
+  expect(said()).not.toContain(`${settings}: unchanged`);
+  expect(JSON.parse(await readFile(settings, "utf8")).hooks).not.toHaveProperty(
+    "PreToolUse",
+  );
+  expect(await part(settings)).toMatchObject({ state: "ok" });
+});
+
+test("a command that is a .js file needs its execute bit, as any command does", async () => {
+  const { root, repo, setUp, part } = await scene();
+  const command = join(root, "install/bin/neuve.js");
+  await writeFile(command, "#!/bin/sh\nexit 0\n");
+  await chmod(command, 0o755);
+  expect(await setUp(command)).toBe(0);
+  const config = join(repo, ".git/neuve/capture.json");
+  expect(await part(config)).toMatchObject({ state: "ok" });
+  await chmod(command, 0o644);
+  expect(await part(config)).toMatchObject({
+    state: "update",
+    why: expect.stringContaining(command),
+  });
+});
+
+test("a FIFO in place of a hook file is unreadable, read without waiting on it", async () => {
+  const { settings, setUp, part } = await scene();
+  await mkdir(join(settings, ".."), { recursive: true });
+  expect(Bun.spawnSync(["mkfifo", settings]).exitCode).toBe(0);
+  const found = await part(settings);
+  // Kept before matching: a matcher can stand in for the value it matched.
+  const why = String(found?.why);
+  expect(found?.state).toBe("unreadable");
+  expect(why).toContain("it isn't a plain file");
+  await expect(setUp()).rejects.toThrow(why);
+}, 10_000);

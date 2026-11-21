@@ -312,7 +312,13 @@ const judgeGitHook = async (
   const entry = await lstat(path).catch(() => undefined);
   if (entry === undefined)
     return { state: "missing", why: "there is no hook", foreign: false };
-  if (!entry.isFile() && !entry.isSymbolicLink())
+  if (
+    !entry.isFile() &&
+    !(
+      entry.isSymbolicLink() &&
+      (await stat(path).catch(() => undefined))?.isFile()
+    )
+  )
     return { state: "unreadable", why: refusal.notAPlainFile(path) };
   const current = await readFile(path, "utf8").catch(() => "");
   const chained = await exists(previous);
@@ -397,7 +403,12 @@ type HookFileRead =
 const readHookFile = async (path: string): Promise<HookFileRead> => {
   let text: string;
   try {
-    text = await readFile(await linkTarget(path), "utf8");
+    // Only a plain file is read: a FIFO or a device would block the read for ever.
+    const target = await linkTarget(path);
+    const entry = await stat(target);
+    if (!entry.isFile())
+      return { kind: "unreadable", reason: "it isn't a plain file" };
+    text = await readFile(target, "utf8");
   } catch (error) {
     return error instanceof Error && "code" in error && error.code === "ENOENT"
       ? { kind: "absent" }
@@ -525,7 +536,7 @@ const judgeAgentHooks = async (
     if (files === undefined) unread += 1;
     else
       for (const needed of files)
-        if (!(await present(needed))) gone.add(needed);
+        if (!(await present(needed))) gone.add(needed.path);
   }
   if (gone.size > 0)
     differs.unshift(
@@ -563,6 +574,14 @@ const installAgentHooks = async (
   const hooks = {
     ...((config["hooks"] ?? {}) as Record<string, HookGroup[]>),
   };
+  // Neuve's entries under an event it doesn't write are taken out too; an event left with nothing
+  // that was only Neuve's goes with them.
+  for (const [event, groups] of Object.entries(hooks))
+    if (!AGENT_EVENTS.some(([name]) => name === event)) {
+      const kept = withoutOwn(groups);
+      if (kept.length === 0 && groups.length > 0) delete hooks[event];
+      else hooks[event] = kept;
+    }
   for (const [event, verb] of AGENT_EVENTS) {
     const entry = {
       type: "command",
@@ -812,7 +831,7 @@ export interface CapturePart {
  * quoted one with an apostrophe in it. Such an entry is reported as one Neuve can't judge, never as
  * gone.
  */
-const filesCalledBy = (command: string): ReadonlyArray<string> | undefined => {
+const filesCalledBy = (command: string): ReadonlyArray<Needed> | undefined => {
   const inner =
     /^sh -c '(.*)'$/s.exec(command)?.[1]?.replaceAll(`'\\''`, "'") ?? command;
   const words: string[] = [];
@@ -830,13 +849,19 @@ const filesCalledBy = (command: string): ReadonlyArray<string> | undefined => {
   return neededBy(words);
 };
 
+/** A file a hook needs, and what for: the program it runs, or the script `bun` reads. */
+interface Needed {
+  readonly path: string;
+  readonly use: "run" | "read";
+}
+
 /** From a hook's argv: the program, and when it is `bun`, the absolute script it runs. */
-const neededBy = (argv: ReadonlyArray<string>) => {
-  const program = argv[0]!;
-  if (!/(^|\/)bun$/.test(program)) return [program];
-  const script = argv.find((word) => word.endsWith(".js"));
+const neededBy = (argv: ReadonlyArray<string>): ReadonlyArray<Needed> => {
+  const program: Needed = { path: argv[0]!, use: "run" };
+  if (!/(^|\/)bun$/.test(program.path)) return [program];
+  const script = argv.slice(1).find((word) => word.endsWith(".js"));
   return script !== undefined && isAbsolute(script)
-    ? [program, script]
+    ? [program, { path: script, use: "read" }]
     : [program];
 };
 
@@ -849,10 +874,10 @@ export const unreadableHookFile = (
   `${path} can't be read as ${harness}'s hook file (${reason}), so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`;
 
 /** A file an entry needs is there: the program runnable, a script readable. */
-const present = async (path: string) => {
+const present = async ({ path, use }: Needed) => {
   try {
     if (!(await stat(path)).isFile()) return false;
-    await access(path, path.endsWith(".js") ? constants.R_OK : constants.X_OK);
+    await access(path, use === "read" ? constants.R_OK : constants.X_OK);
     return true;
   } catch {
     return false;
@@ -895,7 +920,8 @@ export const inspectCapture = async (
     // The program, and for a hook from a source checkout the bundled script `bun` runs.
     const needed = neededBy(config.hookCommand);
     const missing: string[] = [];
-    for (const file of needed) if (!(await present(file))) missing.push(file);
+    for (const file of needed)
+      if (!(await present(file))) missing.push(file.path);
     const program = missing.join(", ");
     dead = missing.length > 0;
     parts.push(
