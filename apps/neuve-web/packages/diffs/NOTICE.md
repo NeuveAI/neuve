@@ -235,7 +235,11 @@ comments also describe some of the changes inside the implementation.
    - Overlay: `DiffLineAnnotation.anchorSlot` places an item at the row
      holding a slot (a fold row or a custom hunk separator); the
      `landing` state tags a range `data-overlay-land` (`a`/`b` restart the
-     tint, `static` holds it).
+     tint, `static` holds it). The range highlight, the engaged outline and
+     the landing each fade as one box: the code root carries their amounts
+     (registered `--diffs-overlay-*` numbers, animated once per change) and
+     the rows mix their tint by them; lines a layer just left are tagged
+     `-leaving` and fade out under the current tint.
    - Skeleton rows: virtualizer buffers show numbered skeleton rows next to
      the rendered window (`FileDiff.fillSkeleton`) and a masked bar pattern
      beyond (`--diffs-skeleton-color`), breathing on opacity; the
@@ -243,8 +247,9 @@ comments also describe some of the changes inside the implementation.
      renderer's first output (`src/components/web-components.ts`).
    - CSS hooks: `--diffs-content-buffer-image` / `-color` and
      `--diffs-gutter-buffer-color` replace the split view's hatched missing
-     side; a 140ms box-shadow transition on rows (overlay highlight); the
-     landing keyframes (`--diffs-overlay-land`).
+     side; a 140ms box-shadow transition on rows no overlay layer paints
+     (selection, anchor rings); the landing keyframes on the code root
+     (`--diffs-overlay-land`).
    - `HunkFold.row: false`: the read-only decoration without a fold row, for
      virtualized renders (the virtual layout cannot estimate a host row).
    - Separator label (review round 2): "N unchanged lines" instead of

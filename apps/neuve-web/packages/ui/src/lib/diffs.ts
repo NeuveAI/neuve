@@ -86,22 +86,34 @@ pre { border-radius: 0 0 10px 10px; overflow: hidden; }
 /* Round 5c: an engaged marker (its card or its line's list open) shows its
    lines as hover does (the --nv-lit tint) with an outline around the range,
    so the state is not colour alone; the number cells keep the stronger open
-   tint. It takes over at once under reduced motion too (only the line-tint
-   transition, which reduced motion removes, eases it in). */
-[data-line][data-overlay-engaged] {
-  --ring: var(--diffs-overlay-engaged-ring);
+   tint. The whole range fades in and out as one box: the outline by the code
+   root's engaged amount, the tint by that or, on lines already tinted, the
+   highlight's (the diffs fork's "one fade per overlay layer"); at once under
+   reduced motion. */
+:is([data-line], [data-column-number])[data-overlay-engaged] {
+  --lit: var(--diffs-overlay-engaged-in, 1);
+}
+:is([data-line], [data-column-number])[data-overlay-engaged][data-overlay-range] {
+  --lit: max(var(--diffs-overlay-engaged-in, 1), var(--diffs-overlay-range-in, 1));
+}
+[data-line]:is([data-overlay-engaged], [data-overlay-engaged-leaving]) {
   --w: 2px;
+  --shade: var(--diffs-overlay-range-hint);
+}
+[data-line][data-overlay-engaged] {
+  --ring: color-mix(in srgb, var(--diffs-overlay-engaged-ring) calc(var(--diffs-overlay-engaged-in, 1) * 100%), transparent);
   --edges: inset var(--w) 0 0 var(--ring), inset calc(-1 * var(--w)) 0 0 var(--ring);
-  --tint: inset 0 0 0 100vmax var(--diffs-overlay-range-hint);
+  --tint: inset 0 0 0 100vmax color-mix(in srgb, var(--shade) calc(var(--lit) * 100%), transparent);
   box-shadow: var(--edges), var(--tint);
 }
 /* The composer's selected range: the same outline at 1px, quieter than an
    engaged marker's, over the selection tint (round 5c). Keyed on the host,
    so mid-drag a row the selection has just left never turns 2px. */
 :host([data-engaged-tone='composer']) [data-line][data-overlay-engaged],
-[data-line][data-selected-line][data-overlay-engaged] {
+[data-line][data-selected-line][data-overlay-engaged],
+[data-line][data-overlay-engaged-leaving~='composer'] {
   --w: 1px;
-  --tint: inset 0 0 0 100vmax var(--diffs-overlay-range-strong);
+  --shade: var(--diffs-overlay-range-strong);
 }
 [data-line][data-overlay-engaged='first'] {
   --edges: inset var(--w) 0 0 var(--ring), inset calc(-1 * var(--w)) 0 0 var(--ring),
@@ -114,45 +126,33 @@ pre { border-radius: 0 0 10px 10px; overflow: hidden; }
 [data-line][data-overlay-engaged='only'] {
   --edges: inset 0 0 0 var(--w) var(--ring);
 }
+/* Number cells take the open tint as the outline comes in (from the hint a
+   pointed-at pin already gave them). */
 [data-column-number][data-overlay-engaged] {
-  --edges: inset 0 0 0 0 transparent;
-  --tint: inset 0 0 0 100vmax var(--diffs-overlay-range-strong);
-  box-shadow: var(--tint);
+  --open: color-mix(in srgb, var(--diffs-overlay-range-strong) calc(var(--diffs-overlay-engaged-in, 1) * 100%), var(--diffs-overlay-range-hint));
+  box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--open) calc(var(--lit) * 100%), transparent);
 }
-/* A landing on engaged lines keeps the outline and fades back to the
-   engaged tint, not to nothing (the canvas does the same): hold
-   TIMING.landHold, then fade over TIMING.landFade. Static under reduced
-   motion until the next action, like any landing. */
-:is([data-line], [data-column-number])[data-overlay-engaged]:is(
-    [data-overlay-land='a'],
-    [data-overlay-land='b']
-  ) {
-  animation: nv-land-engaged
-    calc(var(--nv-dur-land-hold) + var(--nv-dur-land-fade))
-    var(--nv-ease-emphasized-accelerate) backwards;
+/* Lines the outline has just left fade out with it, under the current tint
+   (a background layer, as the fork paints every leaving layer). A landing
+   on engaged lines paints under them the same way, so it fades back to the
+   engaged tint, not to nothing. */
+[data-line][data-overlay-engaged-leaving] {
+  --gone: color-mix(in srgb, var(--diffs-overlay-engaged-ring) calc(var(--diffs-overlay-engaged-out, 0) * 100%), transparent);
+  --gone-tint: color-mix(in srgb, var(--shade) calc(var(--diffs-overlay-engaged-out, 0) * 100%), transparent);
+  --gone-sides: linear-gradient(to right, var(--gone) var(--w), transparent var(--w) calc(100% - var(--w)), var(--gone) calc(100% - var(--w)));
+  --gone-top: linear-gradient(transparent, transparent);
+  --gone-bottom: linear-gradient(transparent, transparent);
+  --diffs-overlay-engaged-left-layer: var(--gone-top), var(--gone-bottom), var(--gone-sides), linear-gradient(var(--gone-tint), var(--gone-tint));
 }
-:is([data-line], [data-column-number])[data-overlay-engaged][data-overlay-land='b'] {
-  animation-name: nv-land-engaged-b;
+[data-line]:is([data-overlay-engaged-leaving~='first'], [data-overlay-engaged-leaving~='only']) {
+  --gone-top: linear-gradient(to bottom, var(--gone) var(--w), transparent var(--w));
 }
-:is([data-line], [data-column-number])[data-overlay-engaged][data-overlay-land='static'] {
-  box-shadow: var(--edges), inset 0 0 0 100vmax var(--diffs-overlay-land);
+[data-line]:is([data-overlay-engaged-leaving~='last'], [data-overlay-engaged-leaving~='only']) {
+  --gone-bottom: linear-gradient(to top, var(--gone) var(--w), transparent var(--w));
 }
-@keyframes nv-land-engaged {
-  0%, 25% { box-shadow: var(--edges), inset 0 0 0 100vmax var(--diffs-overlay-land); }
-  100% { box-shadow: var(--edges), var(--tint); }
-}
-@keyframes nv-land-engaged-b {
-  0%, 25% { box-shadow: var(--edges), inset 0 0 0 100vmax var(--diffs-overlay-land); }
-  100% { box-shadow: var(--edges), var(--tint); }
-}
-@media (prefers-reduced-motion: reduce) {
-  :is([data-line], [data-column-number])[data-overlay-engaged]:is(
-      [data-overlay-land='a'],
-      [data-overlay-land='b']
-    ) {
-    animation: none;
-    box-shadow: var(--edges), inset 0 0 0 100vmax var(--diffs-overlay-land);
-  }
+[data-column-number][data-overlay-engaged-leaving] {
+  --gone-tint: color-mix(in srgb, var(--diffs-overlay-range-strong) calc(var(--diffs-overlay-engaged-out, 0) * 100%), transparent);
+  --diffs-overlay-engaged-left-layer: linear-gradient(var(--gone-tint), var(--gone-tint));
 }
 [data-utility-button] {
   width: 18px; height: 18px; margin-right: -6px; margin-top: 3px;

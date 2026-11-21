@@ -208,6 +208,92 @@ const SIDE_ORDER: Record<AnnotationSide, number> = {
   additions: 1,
 };
 
+// NEUVE FORK: one fade per overlay layer. The range highlight and the engaged
+// outline each fade as one box: the code root carries the layer's amount
+// (`--diffs-overlay-<layer>-in`, and `-out` for lines it has just left) and
+// every tagged row mixes its tint by it, so a range of any length — rows that
+// render later, across hunks, scrolled away — runs one animation, not one per
+// row. The amounts are registered so they interpolate and inherit into rows.
+type FadeLayer = 'range' | 'engaged';
+
+interface OverlayFade<Leaving> {
+  /** What the layer shows now (its lines), or undefined. */
+  key: string | undefined;
+  /** Lines the layer has just left, fading out under the current tint. */
+  leaving: (Leaving & { key: string }) | undefined;
+  enter: Animation | undefined;
+  exit: Animation | undefined;
+}
+
+interface RangeLeaving {
+  ranges: SelectedLineRange[];
+  tone: AnnotationOverlayHighlight['tone'];
+  /** Lines the engaged outline covered then: the range's tint never showed there. */
+  mask: SelectedLineRange | undefined;
+}
+
+let overlayAmountsRegistered = false;
+
+function registerOverlayAmounts(): void {
+  if (overlayAmountsRegistered) return;
+  overlayAmountsRegistered = true;
+  if (typeof CSS === 'undefined' || !('registerProperty' in CSS)) return;
+  for (const name of [
+    '--diffs-overlay-range-in',
+    '--diffs-overlay-range-out',
+    '--diffs-overlay-engaged-in',
+    '--diffs-overlay-engaged-out',
+    '--diffs-overlay-land-amount',
+  ]) {
+    try {
+      CSS.registerProperty({
+        name,
+        syntax: '<number>',
+        inherits: true,
+        initialValue: '0',
+      });
+    } catch {
+      // Already registered in this document (another copy of the renderer).
+    }
+  }
+}
+
+function rangesKey(ranges: SelectedLineRange[] | undefined): string | undefined {
+  return ranges == null ? undefined : JSON.stringify(ranges);
+}
+
+function msOf(duration: string): number {
+  const value = parseFloat(duration);
+  if (!Number.isFinite(value)) return 0;
+  return duration.trim().endsWith('ms') ? value : value * 1000;
+}
+
+/** Tag each column's elements (code rows, number cells, per side) by place. */
+function tagColumns(
+  elements: HTMLElement[],
+  attribute: string,
+  suffix = ''
+): void {
+  const columns = new Map<Element | null, HTMLElement[]>();
+  for (const element of [...elements].sort((a, b) =>
+    a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
+  )) {
+    const column = columns.get(element.parentElement) ?? [];
+    column.push(element);
+    columns.set(element.parentElement, column);
+  }
+  for (const column of columns.values()) {
+    column.forEach((element, index) => {
+      const first = index === 0;
+      const last = index === column.length - 1;
+      element.setAttribute(
+        attribute,
+        `${first && last ? 'only' : first ? 'first' : last ? 'last' : 'mid'}${suffix}`
+      );
+    });
+  }
+}
+
 export class AnnotationOverlayManager {
   private layer: HTMLDivElement | undefined;
   private hint: HTMLDivElement | undefined;
@@ -225,11 +311,30 @@ export class AnnotationOverlayManager {
   private frame: number | undefined;
   private lastLayout: AnnotationOverlayItemLayout[] = [];
   private visible = true;
+  private rangeFade: OverlayFade<RangeLeaving> = {
+    key: undefined,
+    leaving: undefined,
+    enter: undefined,
+    exit: undefined,
+  };
+  /** The host's outline tone (`data-engaged-tone`) while the outline showed. */
+  private engagedTone: string | null = null;
+  private engagedFade: OverlayFade<{
+    range: SelectedLineRange;
+    tone: string | null;
+  }> = {
+    key: undefined,
+    leaving: undefined,
+    enter: undefined,
+    exit: undefined,
+  };
 
   constructor(
     private readonly host: AnnotationOverlayHost,
     private options: AnnotationOverlayOptions = {}
-  ) {}
+  ) {
+    registerOverlayAmounts();
+  }
 
   setOptions(options: AnnotationOverlayOptions): void {
     this.options = options;
@@ -331,9 +436,55 @@ export class AnnotationOverlayManager {
     if (state.dismissedIds != null) this.dismissed = new Set(state.dismissedIds);
     if ('hintId' in state) this.hintId = state.hintId;
     if (state.isolated != null) this.isolated = state.isolated;
+    const { highlight, engaged } = this;
     if ('highlight' in state) this.highlight = state.highlight;
     if ('landing' in state) this.landing = state.landing;
     if ('engaged' in state) this.engaged = state.engaged;
+    this.moveFade(
+      this.rangeFade,
+      'range',
+      rangesKey(
+        this.highlight && [this.highlight.range, ...(this.highlight.ranges ?? [])]
+      ),
+      highlight && {
+        ranges: [highlight.range, ...(highlight.ranges ?? [])],
+        tone: highlight.tone,
+        mask: engaged,
+      },
+      // The same lines written another way (a pointed-at pin, then its open
+      // card) are the same box: only the tone changes.
+      () => {
+        if (highlight == null || this.highlight == null) return false;
+        const rows = (h: AnnotationOverlayHighlight) =>
+          new Set(
+            [h.range, ...(h.ranges ?? [])].flatMap((range) =>
+              this.host.findRangeRowElements(range)
+            )
+          );
+        const before = rows(highlight);
+        const after = rows(this.highlight);
+        return (
+          before.size > 0 &&
+          before.size === after.size &&
+          [...after].every((row) => before.has(row))
+        );
+      }
+    );
+    // An outline that keeps some of its lines (the composer's selection as it
+    // is dragged) is the same box changing shape, so it does not fade again.
+    this.moveFade(
+      this.engagedFade,
+      'engaged',
+      rangesKey(this.engaged && [this.engaged]),
+      engaged && { range: engaged, tone: this.engagedTone },
+      () => {
+        if (engaged == null || this.engaged == null) return false;
+        const kept = new Set(this.host.findRangeRowElements(engaged));
+        return this.host
+          .findRangeRowElements(this.engaged)
+          .some((row) => kept.has(row));
+      }
+    );
     this.commitState();
   }
 
@@ -410,6 +561,11 @@ export class AnnotationOverlayManager {
   }
 
   cleanUp(): void {
+    for (const fade of [this.rangeFade, this.engagedFade]) {
+      fade.enter?.cancel();
+      fade.exit?.cancel();
+      fade.enter = fade.exit = fade.leaving = undefined;
+    }
     if (this.frame != null) {
       cancelAnimationFrame(this.frame);
       this.frame = undefined;
@@ -431,6 +587,81 @@ export class AnnotationOverlayManager {
     this.tagRows();
     this.scheduleLayout();
     this.options.onStateChange?.(this.getState());
+  }
+
+  /**
+   * NEUVE FORK: a layer moved to other lines (or none). The old lines fade
+   * out from where they are and the new ones fade in, each one animation on
+   * the code root (TIMING.lineTint, the overlay highlight). Re-entering lines
+   * still fading out picks them up where they are. Instant under reduced
+   * motion, and when `sameBox` says the layer only changed shape.
+   */
+  private moveFade<Leaving>(
+    fade: OverlayFade<Leaving>,
+    layer: FadeLayer,
+    key: string | undefined,
+    leaving: Leaving | undefined,
+    sameBox?: () => boolean
+  ): void {
+    const before = fade.key;
+    if (before === key) return;
+    fade.key = key;
+    if (sameBox?.() === true) return;
+    const root = this.host.getCodeRoot();
+    if (
+      root == null ||
+      typeof root.animate !== 'function' ||
+      (typeof matchMedia === 'function' &&
+        matchMedia('(prefers-reduced-motion: reduce)').matches)
+    ) {
+      fade.enter?.cancel();
+      fade.exit?.cancel();
+      fade.enter = fade.exit = fade.leaving = undefined;
+      return;
+    }
+    // Read before this change is tagged: the amounts as they are on screen.
+    const style = getComputedStyle(root);
+    const amount = (name: string, fallback: number) => {
+      const value = parseFloat(style.getPropertyValue(name));
+      return Number.isFinite(value) ? value : fallback;
+    };
+    const shown = amount(`--diffs-overlay-${layer}-in`, 1);
+    const fading = amount(`--diffs-overlay-${layer}-out`, 0);
+    const timing = {
+      duration: msOf(style.getPropertyValue('--nv-dur-line-tint')),
+      easing: style.getPropertyValue('--nv-ease-standard').trim() || 'ease',
+    };
+    const resumes = key != null && key === fade.leaving?.key;
+    if (before != null && leaving != null) {
+      fade.exit?.cancel();
+      const exit = root.animate(
+        { [`--diffs-overlay-${layer}-out`]: [`${shown}`, '0'] },
+        timing
+      );
+      fade.exit = exit;
+      fade.leaving = { ...leaving, key: before };
+      exit.onfinish = () => {
+        if (fade.exit !== exit) return;
+        fade.exit = fade.leaving = undefined;
+        this.tagRows();
+      };
+    } else if (resumes) {
+      fade.exit?.cancel();
+      fade.exit = fade.leaving = undefined;
+    }
+    fade.enter?.cancel();
+    fade.enter =
+      key == null
+        ? undefined
+        : root.animate(
+            {
+              [`--diffs-overlay-${layer}-in`]: [
+                `${resumes ? fading : 0}`,
+                '1',
+              ],
+            },
+            timing
+          );
   }
 
   private createItem(anchor: AnnotationOverlayAnchor): OverlayItem {
@@ -589,55 +820,63 @@ export class AnnotationOverlayManager {
     // cells, per side in split view) marks its first and last element, so
     // the range is outlined as a closed shape on each side.
     for (const element of root.querySelectorAll<HTMLElement>(
-      '[data-overlay-engaged]'
+      '[data-overlay-engaged], [data-overlay-engaged-leaving], [data-overlay-range-leaving]'
     )) {
       element.removeAttribute('data-overlay-engaged');
+      element.removeAttribute('data-overlay-engaged-leaving');
+      element.removeAttribute('data-overlay-range-leaving');
     }
     if (this.engaged != null) {
-      const engaged = this.host
-        .findRangeRowElements(this.engaged)
-        .sort((a, b) =>
-          a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING
-            ? -1
-            : 1
-        );
-      const columns = new Map<Element | null, HTMLElement[]>();
-      for (const element of engaged) {
-        const column = columns.get(element.parentElement) ?? [];
-        column.push(element);
-        columns.set(element.parentElement, column);
-      }
-      for (const column of columns.values()) {
-        column.forEach((element, index) => {
-          const first = index === 0;
-          const last = index === column.length - 1;
-          element.setAttribute(
-            'data-overlay-engaged',
-            first && last ? 'only' : first ? 'first' : last ? 'last' : 'mid'
-          );
-        });
+      tagColumns(
+        this.host.findRangeRowElements(this.engaged),
+        'data-overlay-engaged'
+      );
+      // Kept for the lines it leaves: the host drops its tone with the outline.
+      const shadow = root.getRootNode() as Partial<ShadowRoot>;
+      this.engagedTone =
+        shadow.host?.getAttribute('data-engaged-tone') ?? null;
+    }
+    // NEUVE FORK: the lines each layer has just left, while they fade out.
+    const rangeLeaving = this.rangeFade.leaving;
+    if (rangeLeaving != null) {
+      const masked = new Set(
+        rangeLeaving.mask ? this.host.findRangeRowElements(rangeLeaving.mask) : []
+      );
+      for (const range of rangeLeaving.ranges) {
+        for (const element of this.host.findRangeRowElements(range)) {
+          if (!masked.has(element)) {
+            element.setAttribute('data-overlay-range-leaving', rangeLeaving.tone);
+          }
+        }
       }
     }
-    // NEUVE FORK: landing tint. Rows keep their value across re-tags, so an
-    // animation in progress is not restarted by a later layout pass.
-    const landed = new Set<HTMLElement>(
-      this.landing != null
-        ? [this.landing.range, ...(this.landing.ranges ?? [])].flatMap(
-            (range) => this.host.findRangeRowElements(range)
-          )
-        : []
-    );
+    const engagedLeaving = this.engagedFade.leaving;
+    if (engagedLeaving != null) {
+      tagColumns(
+        this.host.findRangeRowElements(engagedLeaving.range),
+        'data-overlay-engaged-leaving',
+        engagedLeaving.tone != null ? ` ${engagedLeaving.tone}` : ''
+      );
+    }
+    // NEUVE FORK: the code root holds each layer's amount (style.css).
+    root.toggleAttribute('data-overlay-range-shown', this.highlight != null);
+    root.toggleAttribute('data-overlay-engaged-shown', this.engaged != null);
+    // NEUVE FORK: landing tint. The root runs the one fade (`key`); rows
+    // carry the key too, so hosts can read which landing they show.
     for (const element of root.querySelectorAll<HTMLElement>(
       '[data-overlay-land]'
     )) {
-      if (!landed.has(element)) element.removeAttribute('data-overlay-land');
+      element.removeAttribute('data-overlay-land');
     }
     if (this.landing != null) {
-      for (const element of landed) {
-        if (element.getAttribute('data-overlay-land') !== this.landing.key) {
+      root.setAttribute('data-overlay-landing', this.landing.key);
+      for (const range of [this.landing.range, ...(this.landing.ranges ?? [])]) {
+        for (const element of this.host.findRangeRowElements(range)) {
           element.setAttribute('data-overlay-land', this.landing.key);
         }
       }
+    } else {
+      root.removeAttribute('data-overlay-landing');
     }
     const expandedEntry =
       this.expandedId != null

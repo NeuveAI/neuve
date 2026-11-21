@@ -2027,15 +2027,89 @@
       var(--diffs-overlay-active-ring, var(--diffs-fg-number));
   }
 
-  /* A comment's lines: tinted while it is open, lightly while pointed at. */
+  /* A comment's lines: tinted while it is open, lightly while pointed at.
+   * NEUVE FORK: mixed by the code root's amount, so the range fades as one
+   * box (AnnotationOverlayManager, "one fade per overlay layer"). */
   :is([data-line], [data-column-number])[data-overlay-range='strong'] {
     box-shadow: inset 0 0 0 100vmax
-      var(--diffs-overlay-range-strong, rgb(0 0 0 / 0.08));
+      color-mix(
+        in srgb,
+        var(--diffs-overlay-range-strong, rgb(0 0 0 / 0.08))
+          calc(var(--diffs-overlay-range-in, 1) * 100%),
+        transparent
+      );
   }
 
   :is([data-line], [data-column-number])[data-overlay-range='hint'] {
     box-shadow: inset 0 0 0 100vmax
-      var(--diffs-overlay-range-hint, rgb(0 0 0 / 0.04));
+      color-mix(
+        in srgb,
+        var(--diffs-overlay-range-hint, rgb(0 0 0 / 0.04))
+          calc(var(--diffs-overlay-range-in, 1) * 100%),
+        transparent
+      );
+  }
+
+  /* NEUVE FORK: the layer amounts, held on the code root while each layer
+   * shows; the manager animates them (TIMING.lineTint). */
+  [data-overlay-range-shown] {
+    --diffs-overlay-range-in: 1;
+  }
+
+  [data-overlay-engaged-shown] {
+    --diffs-overlay-engaged-in: 1;
+  }
+
+  /* NEUVE FORK: lines a layer has just left, and lines a jump landed on,
+   * paint as background layers: under the current tint, so a range moving
+   * to other lines crossfades, and off the rows' box-shadow, so its
+   * transition (below) never starts on them. */
+  :is([data-line], [data-column-number])[data-overlay-range-leaving='strong'] {
+    --diffs-overlay-range-left: var(
+      --diffs-overlay-range-strong,
+      rgb(0 0 0 / 0.08)
+    );
+  }
+
+  :is([data-line], [data-column-number])[data-overlay-range-leaving='hint'] {
+    --diffs-overlay-range-left: var(--diffs-overlay-range-hint, rgb(0 0 0 / 0.04));
+  }
+
+  :is([data-line], [data-column-number])[data-overlay-range-leaving] {
+    --diffs-overlay-range-left-now: color-mix(
+      in srgb,
+      var(--diffs-overlay-range-left)
+        calc(var(--diffs-overlay-range-out, 0) * 100%),
+      transparent
+    );
+    --diffs-overlay-range-left-layer: linear-gradient(
+      var(--diffs-overlay-range-left-now),
+      var(--diffs-overlay-range-left-now)
+    );
+  }
+
+  :is([data-line], [data-column-number])[data-overlay-land] {
+    --diffs-overlay-land-now: color-mix(
+      in srgb,
+      var(--diffs-overlay-land, transparent)
+        calc(var(--diffs-overlay-land-amount, 1) * 100%),
+      transparent
+    );
+    --diffs-overlay-land-layer: linear-gradient(
+      var(--diffs-overlay-land-now),
+      var(--diffs-overlay-land-now)
+    );
+  }
+
+  :is([data-line], [data-column-number]):is(
+      [data-overlay-land],
+      [data-overlay-range-leaving],
+      [data-overlay-engaged-leaving]
+    ) {
+    background-image:
+      var(--diffs-overlay-land-layer, none),
+      var(--diffs-overlay-engaged-left-layer, none),
+      var(--diffs-overlay-range-left-layer, none);
   }
 
   /* Keyboard-operable line numbers (enableKeyboardLineSelection). */
@@ -2062,62 +2136,64 @@
     }
   }
 
-  /* NEUVE FORK: a hovered/focused marker's lines tint in (TIMING.lineTint,
-   * the overlay highlight); instant under reduced motion. */
+  /* NEUVE FORK: the selected lines and anchor rings tint in and out
+   * (TIMING.lineTint); instant under reduced motion. Rows an overlay layer
+   * paints are left out: the root's one fade drives them. */
   @media (prefers-reduced-motion: no-preference) {
-    [data-line],
-    [data-column-number] {
+    :is([data-line], [data-column-number]):not(
+        [data-overlay-range],
+        [data-overlay-engaged],
+        [data-overlay-range-leaving],
+        [data-overlay-engaged-leaving]
+      ) {
       transition: box-shadow var(--nv-dur-line-tint) var(--nv-ease-standard);
     }
   }
 
-  /* NEUVE FORK: landing tint (overlay `landing`). Holds TIMING.landHold
-   * (the 25% keyframe), then fades over TIMING.landFade. Two identical
-   * keyframes so a repeat landing restarts; the end state is not kept (fill
-   * backwards) so other tints show again. */
-  :is([data-line], [data-column-number])[data-overlay-land='a'] {
+  /* NEUVE FORK: landing tint (overlay `landing`), one fade on the code root.
+   * Holds TIMING.landHold (the 25% keyframe), then fades over
+   * TIMING.landFade. Two identical keyframes so a repeat landing restarts;
+   * the end state is not kept (fill backwards) so the amount returns to 0. */
+  [data-overlay-landing='static'] {
+    --diffs-overlay-land-amount: 1;
+  }
+
+  [data-overlay-landing='a'] {
     animation: diffs-land-a
       calc(var(--nv-dur-land-hold) + var(--nv-dur-land-fade))
       var(--nv-ease-emphasized-accelerate) backwards;
   }
 
-  :is([data-line], [data-column-number])[data-overlay-land='b'] {
+  [data-overlay-landing='b'] {
     animation: diffs-land-b
       calc(var(--nv-dur-land-hold) + var(--nv-dur-land-fade))
       var(--nv-ease-emphasized-accelerate) backwards;
   }
 
-  :is([data-line], [data-column-number])[data-overlay-land='static'] {
-    box-shadow: inset 0 0 0 100vmax var(--diffs-overlay-land, transparent);
-  }
-
   @keyframes diffs-land-a {
     0%,
     25% {
-      box-shadow: inset 0 0 0 100vmax var(--diffs-overlay-land, transparent);
+      --diffs-overlay-land-amount: 1;
     }
     100% {
-      box-shadow: inset 0 0 0 100vmax transparent;
+      --diffs-overlay-land-amount: 0;
     }
   }
 
   @keyframes diffs-land-b {
     0%,
     25% {
-      box-shadow: inset 0 0 0 100vmax var(--diffs-overlay-land, transparent);
+      --diffs-overlay-land-amount: 1;
     }
     100% {
-      box-shadow: inset 0 0 0 100vmax transparent;
+      --diffs-overlay-land-amount: 0;
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    :is([data-line], [data-column-number]):is(
-        [data-overlay-land='a'],
-        [data-overlay-land='b']
-      ) {
+    [data-overlay-landing] {
       animation: none;
-      box-shadow: inset 0 0 0 100vmax var(--diffs-overlay-land, transparent);
+      --diffs-overlay-land-amount: 1;
     }
   }
 
