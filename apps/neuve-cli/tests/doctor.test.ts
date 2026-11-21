@@ -278,14 +278,16 @@ test("doctor reports an agent hook file it can't read in a repository with captu
   expect(await setUp()).toBe(0);
   await writeFile(settings, '{"hooks":{"Stop":{}}}');
   const { check } = await doctor(isolated);
+  // The same sentence in both places. Read before matching: a matcher can stand in for the value.
+  const sentence = `${settings} can't be read as claude-code's hook file (hooks.Stop: Invalid input: expected array, received object), so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`;
+  const detail = String(check("capture")?.detail);
+  expect(detail.includes(sentence)).toBe(true);
   expect(check("capture")).toMatchObject({
     status: "warning",
     detail: expect.stringContaining(`${settings} can't be read`),
     fix: `Fix or move ${settings}, then run neuve setup hooks --repo '${repository}'`,
   });
-  await expect(setUp()).rejects.toThrow(
-    `${settings} can't be read as claude-code's hook file, so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`,
-  );
+  await expect(setUp()).rejects.toThrow(sentence);
   expect(await Bun.file(settings).text()).toBe('{"hooks":{"Stop":{}}}');
 });
 

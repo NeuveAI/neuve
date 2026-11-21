@@ -21,6 +21,15 @@ import {
   runSetupHooks,
 } from "../src/capture/setup-hooks.ts";
 
+const EVENTS = [
+  ["SessionStart", "session-start"],
+  ["UserPromptSubmit", "user-prompt-submit"],
+  ["Stop", "stop"],
+  ["SubagentStart", "subagent-start"],
+  ["SubagentStop", "subagent-stop"],
+  ["SessionEnd", "session-end"],
+] as const;
+
 const scratches: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -185,7 +194,7 @@ test("a hook calling a program that is gone is a finding, and setup hooks repair
 
 // Why: the check reads a command back from text; a word it can't read surely must never be
 // reported as a program that is gone, and a source-run hook must be judged by the script it runs.
-test("an entry Neuve can't read surely is unclear, never gone; a bun hook is judged by its script", async () => {
+test("an entry Neuve can't read surely is ok with a note, never gone; a bun hook is judged by its script", async () => {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "neuve-capture-unclear-")),
   );
@@ -198,37 +207,46 @@ test("an entry Neuve can't read surely is unclear, never gone; a bun hook is jud
     harness === "claude-code" ? settings : join(root, "none.json");
   const entry = (line: string) =>
     `sh -c '${line.replaceAll("'", `'\\''`)} >/dev/null 2>&1; exit 0 # neuve-capture-hook'`;
-  const write = (commands: string[]) =>
+  // Every event, each as setup hooks writes it, running `prefix`.
+  const write = (prefix: string) =>
     writeFile(
       settings,
       JSON.stringify({
-        hooks: {
-          Stop: [
-            {
-              matcher: "",
-              hooks: commands.map((command) => ({ type: "command", command })),
-            },
-          ],
-        },
+        hooks: Object.fromEntries(
+          EVENTS.map(([event, verb]) => [
+            event,
+            [
+              {
+                matcher: "",
+                hooks: [
+                  {
+                    type: "command",
+                    command: entry(`${prefix} claude-code ${verb}`),
+                    timeout: 10,
+                  },
+                ],
+              },
+            ],
+          ]),
+        ),
       }),
     );
   const part = async () =>
     (await inspectCapture(repo, hookFiles))?.parts.find(
       (found) => found.path === settings,
     );
-  for (const line of [
-    "neuve hook claude-code stop",
-    "./bin/neuve hook claude-code stop",
-    `'/gone/it'\''s/neuve' hook claude-code stop`,
+  for (const prefix of [
+    "neuve hook",
+    "./bin/neuve hook",
+    `'/gone/it'\\''s/neuve' hook`,
   ]) {
-    await write([entry(line)]);
-    expect(await part(), line).toMatchObject({ state: "unclear" });
+    await write(prefix);
+    expect(await part(), prefix).toMatchObject({
+      state: "ok",
+      why: expect.stringContaining("can't tell what"),
+    });
   }
-  await write([
-    entry(
-      `${process.execPath} --no-env-file /gone/neuve-hook.js claude-code stop`,
-    ),
-  ]);
+  await write(`${process.execPath} --no-env-file /gone/neuve-hook.js`);
   expect(await part()).toMatchObject({
     state: "update",
     why: expect.stringContaining("/gone/neuve-hook.js"),

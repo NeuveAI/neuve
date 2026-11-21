@@ -607,23 +607,21 @@ const captureCheck = async (
   const found = await inspectCapture(repository, hookFiles);
   const fix = `neuve setup hooks --repo ${quote(repository)}`;
   const parts = found?.parts ?? [];
-  const off = parts.filter(
-    (part) =>
-      part.state === "update" ||
-      part.state === "missing" ||
-      part.state === "unreadable",
-  );
-  const unclear = parts
-    .filter((part) => part.state === "unclear")
+  const off = parts.filter((part) => part.state !== "ok");
+  // Notes beside an ok: what Neuve couldn't judge.
+  const notes = parts
+    .filter((part) => part.state === "ok" && part.why !== undefined)
     .map((part) => `${part.path}: ${part.why}`);
+  // An unreadable part's why is the sentence setup hooks stops with, word for word.
   const said = off
-    .map(
-      (part) =>
-        `${part.path} ${part.state === "missing" ? "is missing" : part.state === "unreadable" ? "can't be read" : "needs an update"}: ${part.why}`,
+    .map((part) =>
+      part.state === "unreadable"
+        ? `${part.why}`
+        : `${part.path} ${part.state === "missing" ? "is missing" : "needs an update"}: ${part.why}`,
     )
-    .concat(unclear)
+    .concat(notes)
     .join("; ");
-  // A hook file Neuve can't read has to be fixed or moved first; setup hooks then does the rest.
+  // What Neuve won't touch has to be fixed or moved first; setup hooks then does the rest.
   const unreadable = off.filter((part) => part.state === "unreadable");
   const repair =
     unreadable.length === 0
@@ -640,9 +638,9 @@ const captureCheck = async (
     return { check: "capture", status: "warning", detail: said, fix: repair };
   return ok(
     "capture",
-    unclear.length === 0
-      ? "Every capture hook is as neuve setup hooks writes it"
-      : `Every capture hook Neuve can judge is as neuve setup hooks writes it. ${said}`,
+    notes.length === 0
+      ? "Every capture hook is Neuve's own and working, as far as Neuve can tell"
+      : `Every capture hook Neuve can judge is its own and working. ${said}`,
   );
 };
 

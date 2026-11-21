@@ -1,4 +1,5 @@
 import {
+  access,
   stat,
   chmod,
   copyFile,
@@ -14,6 +15,8 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Effect, Exit } from "effect";
+import { constants } from "node:fs";
+import { z } from "zod";
 import {
   Registry,
   STORE_DIRECTORY_MODE,
@@ -55,6 +58,31 @@ Hooks only write the spool; the worker ingests it.
                      refused in the Neuve repository, which forbids attribution trailers.
   --no-stack         Do not set up stack sources (neuve setup stack), which this runs at its end;
                      the choice is kept in <git common directory>/neuve/stack.json.`;
+
+/*
+ * What reading a hook file guarantees (an agent's hook file, or a Git hook), for `setup hooks` and
+ * for the inspection doctor shows alike. Both go through one reader (`readHookFile`) and one
+ * judgement per kind (`judgeAgentHooks`, `judgeGitHook`); `setup hooks` writes from the same read.
+ *
+ * 1. Any content is read without throwing: absent, empty (read as `{}`), not JSON, the wrong shape
+ *    at any depth (a command that isn't text included), a link, a folder, a file that can't be
+ *    opened.
+ * 2. Neuve judges and rewrites only entries that carry its marker (or the two older forms
+ *    `isOwnCommand` names). Every other entry, group and field is kept as it is; a group is dropped
+ *    only when it held a Neuve entry and nothing is left in it.
+ * 3. A file Neuve shares with the person (an agent's hook file, a Git hook that isn't Neuve's) that
+ *    it can't parse or mustn't touch is never rewritten: `setup hooks` stops on it and doctor
+ *    reports it in the same words, with "fix or move the file". Neuve's own capture.json may be
+ *    written again.
+ * 4. Each part's state means one thing everywhere (`CapturePart`): ok, needs an update, missing, or
+ *    unreadable. An entry Neuve can't read surely is ok with a note.
+ * 5. Reading changes nothing; only `setup hooks` writes, after a backup of the file it changes.
+ *
+ * A known limit: an agent that changes its hook file between `setup hooks`'s read and its rename
+ * loses that change (the backup keeps the file as it was read). Which install an entry runs, a link
+ * in place of a Git hook (it becomes a plain file), a version marker on entries and a trailer hook
+ * to remove are left for later.
+ */
 
 /** Marks files and entries this command owns, so a rerun replaces them and leaves the rest alone. */
 const MARKER = "neuve-capture-hook";
@@ -247,6 +275,62 @@ interface Change {
 const executableByOwner = async (path: string) =>
   ((await stat(path).catch(() => undefined))?.mode ?? 0) & 0o100 ? true : false;
 
+/**
+ * The refusals `setup hooks` stops on, in the words doctor reports them with: each names what is
+ * in the way, and Neuve changes nothing there until the person moves or fixes it.
+ */
+const refusal = {
+  hooksFolderLink: (directory: string) =>
+    `${directory} is a symbolic link; point core.hooksPath at a real directory`,
+  notAPlainFile: (path: string) =>
+    `${path} isn't a plain file or a link, so Neuve leaves it as it is; move it away first`,
+  foreignBeside: (path: string, previous: string) =>
+    `${path} is not Neuve's and ${previous} already exists; move one aside first`,
+};
+
+type GitHookState =
+  | { readonly state: "ok" }
+  | { readonly state: "update"; readonly why: string }
+  | {
+      readonly state: "missing";
+      readonly why: string;
+      readonly foreign: boolean;
+    }
+  | { readonly state: "unreadable"; readonly why: string };
+
+/**
+ * One Git hook against the one `command` would have: the judgement `setup hooks` acts on and doctor
+ * reports. A folder in its place, or another tool's hook beside an earlier `.pre-neuve`, is refused.
+ */
+const judgeGitHook = async (
+  hooksDirectory: string,
+  name: string,
+  command: string,
+): Promise<GitHookState> => {
+  const path = join(hooksDirectory, name);
+  const previous = join(hooksDirectory, `${name}.pre-neuve`);
+  const entry = await lstat(path).catch(() => undefined);
+  if (entry === undefined)
+    return { state: "missing", why: "there is no hook", foreign: false };
+  if (!entry.isFile() && !entry.isSymbolicLink())
+    return { state: "unreadable", why: refusal.notAPlainFile(path) };
+  const current = await readFile(path, "utf8").catch(() => "");
+  const chained = await exists(previous);
+  if (!current.includes(MARKER))
+    return chained
+      ? { state: "unreadable", why: refusal.foreignBeside(path, previous) }
+      : {
+          state: "missing",
+          why: "the hook there isn't Neuve's",
+          foreign: true,
+        };
+  if (current !== gitHookScript(name, command, chained))
+    return { state: "update", why: "it isn't the hook this setup writes" };
+  if (!(await executableByOwner(path)))
+    return { state: "update", why: "it can't be executed, so Git skips it" };
+  return { state: "ok" };
+};
+
 const installGitHook = async (
   hooksDirectory: string,
   name: string,
@@ -255,55 +339,194 @@ const installGitHook = async (
 ): Promise<Change> => {
   const path = join(hooksDirectory, name);
   const previous = join(hooksDirectory, `${name}.pre-neuve`);
-  let chained = await exists(previous);
-  let action = "installed";
-  if (await exists(path)) {
-    const current = await readFile(path, "utf8").catch(() => "");
-    if (current.includes(MARKER)) action = "updated";
-    else {
-      if (chained)
-        throw new Error(
-          `${path} is not Neuve's and ${previous} already exists; move one aside first`,
-        );
-      if (!dryRun) await rename(path, previous);
-      chained = true;
-      action = `installed; the existing hook moved to ${previous} and still runs first whenever it is executable`;
-    }
+  const judged = await judgeGitHook(hooksDirectory, name, command);
+  if (judged.state === "unreadable") throw new Error(judged.why);
+  if (judged.state === "ok") return { path, action: "unchanged" };
+  let action = judged.state === "update" ? "updated" : "installed";
+  if (judged.state === "missing" && judged.foreign) {
+    if (!dryRun) await rename(path, previous);
+    action = `installed; the existing hook moved to ${previous} and still runs first whenever it is executable`;
   }
-  const script = gitHookScript(name, command, chained);
-  // As for the agent hook files: a hook already as it should be is left as it is. Git skips a hook
-  // without its execute bit, so one with the right text but not executable is written again.
-  if (
-    action === "updated" &&
-    (await readFile(path, "utf8").catch(() => "")) === script &&
-    (await executableByOwner(path))
-  )
-    return { path, action: "unchanged" };
+  const chained =
+    (judged.state === "missing" && judged.foreign) || (await exists(previous));
   if (!dryRun) {
     await mkdir(hooksDirectory, { recursive: true });
     const temporary = `${path}.${process.pid}.tmp`;
-    await writeFile(temporary, script);
+    await writeFile(temporary, gitHookScript(name, command, chained));
     await chmod(temporary, 0o755);
     await rename(temporary, path);
   }
   return { path, action: dryRun ? `would be ${action}` : action };
 };
 
-type HookGroup = {
-  matcher?: string | null;
-  hooks?: Array<{ type?: string; command?: string }>;
+/**
+ * The shape of an agent's hook file that Neuve relies on, the one parse both `setup hooks` and the
+ * inspection read it with: events mapping to lists of groups, each group's `hooks` a list of entries
+ * whose `command`, when there is one, is text. Everything else, at any depth, is kept as it is.
+ */
+const HookFile = z.looseObject({
+  hooks: z
+    .record(
+      z.string(),
+      z.array(
+        z.looseObject({
+          hooks: z
+            .array(z.looseObject({ command: z.string().optional() }))
+            .optional(),
+        }),
+      ),
+    )
+    .optional(),
+});
+type HookFile = z.infer<typeof HookFile>;
+type HookGroup = NonNullable<HookFile["hooks"]>[string][number];
+
+type HookFileRead =
+  | { readonly kind: "absent" }
+  | { readonly kind: "read"; readonly text: string; readonly file: HookFile }
+  | { readonly kind: "unreadable"; readonly reason: string };
+
+/** An agent's hook file through `HookFile`: absent, read, or unreadable with the reason. */
+const readHookFile = async (path: string): Promise<HookFileRead> => {
+  let text: string;
+  try {
+    text = await readFile(await linkTarget(path), "utf8");
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT"
+      ? { kind: "absent" }
+      : {
+          kind: "unreadable",
+          reason: error instanceof Error ? error.message : String(error),
+        };
+  }
+  // An empty file is a file with nothing in it yet.
+  if (text.trim() === "") return { kind: "read", text, file: {} };
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { kind: "unreadable", reason: "it isn't JSON" };
+  }
+  const parsed = HookFile.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      kind: "unreadable",
+      reason: `${issue?.path.length ? issue.path.join(".") : "the file"}: ${issue?.message ?? "not a hook file"}`,
+    };
+  }
+  return { kind: "read", text, file: parsed.data };
 };
 
-/** Removes this command's earlier entries from one event's groups, keeping every other hook. */
+/**
+ * Removes Neuve's entries from one event's groups. A group that held one and is left empty goes with
+ * it; every other group, a person's group with no `hooks` or an empty list included, stays as it is.
+ */
 const withoutOwn = (groups: ReadonlyArray<HookGroup>) =>
-  groups
-    .map((group) => ({
-      ...group,
-      hooks: (group.hooks ?? []).filter(
-        (hook) => !isOwnCommand(hook.command ?? ""),
-      ),
-    }))
-    .filter((group) => group.hooks.length > 0);
+  groups.flatMap((group) => {
+    const hooks = group.hooks ?? [];
+    if (!hooks.some((hook) => isOwnCommand(hook.command ?? ""))) return [group];
+    const kept = hooks.filter((hook) => !isOwnCommand(hook.command ?? ""));
+    return kept.length > 0 ? [{ ...group, hooks: kept }] : [];
+  });
+
+/** The line inside an entry Neuve wrote: what it runs, for which agent, on which event. */
+const OWN_LINE =
+  /^(.*) (claude-code|codex) ([a-z-]+) >\/dev\/null 2>&1; exit 0 # neuve-capture-hook$/s;
+
+const unwrapped = (command: string) =>
+  /^sh -c '(.*)'$/s.exec(command)?.[1]?.replaceAll(`'\\''`, "'");
+
+type AgentHooksState =
+  | { readonly state: "missing" }
+  | { readonly state: "update"; readonly why: string }
+  | {
+      readonly state: "ok";
+      /** Something Neuve couldn't judge, said beside the ok. */
+      readonly note?: string;
+      /** Each entry runs `prefix`, when one was given. */
+      readonly sameInstall: boolean;
+    };
+
+/**
+ * Neuve's entries for one agent in a parsed hook file, against what `setup hooks` writes: one entry
+ * per event, under the event's own verb, with Neuve's command form, timeout and matcher, running
+ * files that are there. The one judgement `setup hooks` reports from and doctor shows. Which install
+ * an entry runs is not judged; `sameInstall` only says whether it is `prefix`.
+ */
+const judgeAgentHooks = async (
+  file: HookFile,
+  harness: AgentHarness,
+  prefix?: string,
+): Promise<AgentHooksState> => {
+  const own = Object.entries(file.hooks ?? {}).flatMap(([event, groups]) =>
+    groups.flatMap((group) =>
+      (group.hooks ?? [])
+        .filter((hook) => isOwnCommand(hook.command ?? ""))
+        .map((hook) => ({ event, group, hook })),
+    ),
+  );
+  if (own.length === 0) return { state: "missing" };
+  const differs: string[] = [];
+  const gone = new Set<string>();
+  let unread = 0;
+  let sameInstall = true;
+  for (const [event] of AGENT_EVENTS) {
+    const count = own.filter((entry) => entry.event === event).length;
+    if (count === 0) differs.push(`its ${event} hook is missing`);
+    if (count > 1) differs.push(`${event} has ${count} Neuve hooks`);
+  }
+  const matcher = harness === "codex" ? null : "";
+  for (const { event, group, hook } of own) {
+    const verb = AGENT_EVENTS.find(([name]) => name === event)?.[1];
+    if (verb === undefined) differs.push(`a Neuve hook sits under ${event}`);
+    const line = OWN_LINE.exec(unwrapped(hook.command!) ?? "");
+    if (line === null) {
+      if (hook.command!.includes(COMMAND_MARKER)) unread += 1;
+      else differs.push(`its ${event} hook is in an older form`);
+      continue;
+    }
+    const [, runs, agent, said] = line as unknown as [
+      string,
+      string,
+      string,
+      string,
+    ];
+    if (agent !== harness || (verb !== undefined && said !== verb))
+      differs.push(`its ${event} hook runs ${agent} ${said}`);
+    else if (hook.command !== agentHookCommand(runs, agent, said))
+      differs.push(`its ${event} hook's command was changed`);
+    if (prefix !== undefined && runs !== prefix) sameInstall = false;
+    const fields = hook as Record<string, unknown>;
+    if (
+      fields["type"] !== "command" ||
+      fields["timeout"] !== HOOK_TIMEOUT_SECONDS
+    )
+      differs.push(`its ${event} hook's type or timeout was changed`);
+    if (group["matcher"] !== matcher || (group.hooks ?? []).length !== 1)
+      differs.push(`its ${event} hook's group was changed`);
+    const files = filesCalledBy(hook.command!);
+    if (files === undefined) unread += 1;
+    else
+      for (const needed of files)
+        if (!(await present(needed))) gone.add(needed);
+  }
+  if (gone.size > 0)
+    differs.unshift(
+      `Neuve's ${harness} hooks run ${[...gone].join(", ")}, which isn't there or can't run, so they capture nothing`,
+    );
+  if (differs.length > 0)
+    return { state: "update", why: [...new Set(differs)].join("; ") };
+  return {
+    state: "ok",
+    sameInstall,
+    ...(unread === 0
+      ? {}
+      : {
+          note: `Neuve can't tell what ${unread} of its ${harness} hook entries run, so it can't say whether they work`,
+        }),
+  };
+};
 
 const installAgentHooks = async (
   path: string,
@@ -311,18 +534,15 @@ const installAgentHooks = async (
   command: string,
   dryRun: boolean,
 ): Promise<Change> => {
-  // A file of a shape this can't change safely stops here, in the words doctor uses.
-  if ((await hookCommands(path)) === "unreadable")
-    throw new Error(unreadableHookFile(path, harness));
+  // A file of a shape this can't change safely stops here, in the words doctor uses. The file is
+  // read once; what is written is built from that read, so a file changed since can't make it throw.
+  const read = await readHookFile(path);
+  if (read.kind === "unreadable")
+    throw new Error(unreadableHookFile(path, harness, read.reason));
   path = await linkTarget(path);
-  const present = await exists(path);
-  const config = present
-    ? (JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>)
-    : {};
-  const hooks = {
-    ...((config["hooks"] as Record<string, Array<HookGroup>> | undefined) ??
-      {}),
-  };
+  const present = read.kind === "read";
+  const config: HookFile = present ? read.file : {};
+  const hooks: Record<string, HookGroup[]> = { ...(config.hooks ?? {}) };
   for (const [event, verb] of AGENT_EVENTS) {
     const entry = {
       type: "command",
@@ -337,17 +557,30 @@ const installAgentHooks = async (
     ];
   }
   const next = `${JSON.stringify({ ...config, hooks }, null, 2)}\n`;
-  if (present && next === (await readFile(path, "utf8")))
-    return { path, action: "unchanged" };
+  if (present && next === read.text) return { path, action: "unchanged" };
+  // Neuve's entries already right and only their place or layout differs: said as that.
+  const judged = present
+    ? await judgeAgentHooks(read.file, harness, command)
+    : ({ state: "missing" } as const);
+  const reordered = judged.state === "ok" && judged.sameInstall;
   if (dryRun)
-    return { path, action: present ? "would update" : "would create" };
+    return {
+      path,
+      action: reordered
+        ? "would reorder"
+        : present
+          ? "would update"
+          : "would create",
+    };
   const backup = await replaceFile(path, next);
   return {
     path,
     action:
       backup === undefined
         ? `created with ${AGENT_EVENTS.length} ${harness} hooks`
-        : `added ${AGENT_EVENTS.length} ${harness} hooks (other settings kept); backup ${backup}`,
+        : reordered
+          ? `reordered: Neuve's ${harness} hooks were already right, and now come after the others (other settings kept); backup ${backup}`
+          : `added ${AGENT_EVENTS.length} ${harness} hooks (other settings kept); backup ${backup}`,
   };
 };
 
@@ -416,9 +649,7 @@ export const runSetupHooks = async (
     (await exists(hooksDirectory)) &&
     (await lstat(hooksDirectory)).isSymbolicLink()
   )
-    throw new Error(
-      `${hooksDirectory} is a symbolic link; point core.hooksPath at a real directory`,
-    );
+    throw new Error(refusal.hooksFolderLink(hooksDirectory));
 
   const hookArgv =
     values.command !== undefined || compiled()
@@ -539,15 +770,15 @@ export const defaultHookFile = (harness: AgentHarness, home = homedir()) =>
     : join(process.env["CODEX_HOME"] ?? join(home, ".codex"), "hooks.json");
 
 /**
- * What one part of capture needs, read without writing: `ok` (as it should be), `update` (Neuve's
- * own, but not what this setup writes, or calling a program that isn't there) or `missing`. There is
- * no `remove` yet: this version drops nothing, and an agent's hook entries are the user's, shared by
- * every repository, so one repository can't say another doesn't want them.
+ * What one part of capture needs, read without writing, one meaning everywhere: `ok` (Neuve's own
+ * and working, as far as Neuve can tell; `why` is then a note), `update` (Neuve's own, and setup
+ * hooks would change it: it doesn't work, or is incomplete or malformed), `missing` (Neuve's part
+ * isn't there) or `unreadable` (a file Neuve shares with the person that it can't parse or won't
+ * touch; `why` is the sentence setup hooks stops with). There is no "needs removing" yet.
  */
 export interface CapturePart {
   readonly path: string;
-  /** `unclear`: Neuve can't read the hook command surely enough to judge it. */
-  readonly state: "ok" | "update" | "missing" | "unclear" | "unreadable";
+  readonly state: "ok" | "update" | "missing" | "unreadable";
   readonly why?: string;
 }
 
@@ -587,65 +818,23 @@ const neededBy = (argv: ReadonlyArray<string>) => {
 };
 
 /** What setup hooks says, and doctor's fix, for an agent hook file it can't read. */
-export const unreadableHookFile = (path: string, harness: AgentHarness) =>
-  `${path} can't be read as ${harness}'s hook file, so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`;
-
-/**
- * Every hook command in an agent's hook file, read from any shape without throwing: none when the
- * file is absent, `unreadable` when it isn't JSON or its hooks aren't events listing groups of
- * hooks.
- */
-const hookCommands = async (
+export const unreadableHookFile = (
   path: string,
-): Promise<ReadonlyArray<string> | "unreadable"> => {
-  let text: string;
-  try {
-    text = await readFile(await linkTarget(path), "utf8");
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "ENOENT"
-      ? []
-      : "unreadable";
-  }
-  const record = (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null && !Array.isArray(value);
-  let file: unknown;
-  try {
-    file = JSON.parse(text);
-  } catch {
-    return "unreadable";
-  }
-  if (!record(file)) return "unreadable";
-  if (file["hooks"] === undefined) return [];
-  if (!record(file["hooks"])) return "unreadable";
-  const commands: string[] = [];
-  for (const groups of Object.values(file["hooks"])) {
-    if (!Array.isArray(groups)) return "unreadable";
-    for (const group of groups) {
-      if (!record(group)) return "unreadable";
-      const hooks = group["hooks"] ?? [];
-      if (!Array.isArray(hooks)) return "unreadable";
-      for (const hook of hooks) {
-        if (!record(hook)) return "unreadable";
-        if (typeof hook["command"] === "string") commands.push(hook["command"]);
-      }
-    }
-  }
-  return commands;
-};
+  harness: AgentHarness,
+  reason: string,
+) =>
+  `${path} can't be read as ${harness}'s hook file (${reason}), so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`;
 
 /** A file an entry needs is there: the program runnable, a script readable. */
 const present = async (path: string) => {
   try {
-    const entry = await stat(path);
-    return (
-      entry.isFile() && (path.endsWith(".js") || (entry.mode & 0o111) !== 0)
-    );
+    if (!(await stat(path)).isFile()) return false;
+    await access(path, path.endsWith(".js") ? constants.R_OK : constants.X_OK);
+    return true;
   } catch {
     return false;
   }
 };
-
-const runnable = present;
 
 /**
  * Capture in one repository as `neuve setup hooks` would leave it, compared with what is there,
@@ -706,83 +895,62 @@ export const inspectCapture = async (
         : isAbsolute(hooksPath)
           ? hooksPath
           : resolve(root, hooksPath);
-    for (const name of hooksDirectory === undefined ? [] : config.gitHooks) {
-      const path = join(hooksDirectory!, name);
-      const current = await readFile(path, "utf8").catch(() => undefined);
-      const chained = await exists(join(hooksDirectory!, `${name}.pre-neuve`));
-      parts.push(
-        current === undefined || !current.includes(MARKER)
-          ? {
-              path,
-              state: "missing",
-              why:
-                current === undefined
-                  ? "there is no hook"
-                  : "the hook there isn't Neuve's",
-            }
-          : current !== gitHookScript(name, command, chained)
+    if (
+      hooksDirectory !== undefined &&
+      (await lstat(hooksDirectory).catch(() => undefined))?.isSymbolicLink()
+    )
+      parts.push({
+        path: hooksDirectory,
+        state: "unreadable",
+        why: refusal.hooksFolderLink(hooksDirectory),
+      });
+    else
+      for (const name of hooksDirectory === undefined ? [] : config.gitHooks) {
+        const path = join(hooksDirectory!, name);
+        const judged = await judgeGitHook(hooksDirectory!, name, command);
+        parts.push(
+          judged.state === "ok" && dead
             ? {
                 path,
                 state: "update",
-                why: "it isn't the hook this setup writes",
+                why: `it runs ${program}, which isn't there or can't run`,
               }
-            : !(await executableByOwner(path))
-              ? {
-                  path,
-                  state: "update",
-                  why: "it can't be executed, so Git skips it",
-                }
-              : dead
-                ? {
-                    path,
-                    state: "update",
-                    why: `it runs ${program}, which isn't there or can't run`,
-                  }
-                : { path, state: "ok" },
-      );
-    }
+            : judged.state === "ok"
+              ? { path, state: "ok" }
+              : { path, state: judged.state, why: judged.why },
+        );
+      }
   }
   for (const harness of Identity.AGENT_HARNESSES) {
     const path = hookFiles(harness);
-    const read = await hookCommands(path);
-    if (read === "unreadable") {
+    const read = await readHookFile(path);
+    if (read.kind === "unreadable") {
       parts.push({
         path,
         state: "unreadable",
-        why: `Neuve can't read it as ${harness}'s hook file, so it can't say whether capture's hooks there work`,
+        why: unreadableHookFile(path, harness, read.reason),
       });
       continue;
     }
-    const own = read.filter(isOwnCommand);
-    const gone = new Set<string>();
-    let unread = 0;
-    for (const entry of own) {
-      const files = filesCalledBy(entry);
-      if (files === undefined) unread += 1;
-      else for (const file of files) if (!(await present(file))) gone.add(file);
-    }
-    if (gone.size > 0)
+    const judged =
+      read.kind === "read"
+        ? await judgeAgentHooks(read.file, harness)
+        : ({ state: "missing" } as const);
+    if (judged.state === "missing") {
+      if (config?.agents.includes(harness) === true)
+        parts.push({
+          path,
+          state: "missing",
+          why: `there are no Neuve ${harness} hooks`,
+        });
+    } else if (judged.state === "update")
+      parts.push({ path, state: "update", why: judged.why });
+    else
       parts.push({
         path,
-        state: "update",
-        why: `Neuve's ${harness} hooks run ${[...gone].join(", ")}, which isn't there or can't run, so they capture nothing`,
+        state: "ok",
+        ...(judged.note === undefined ? {} : { why: judged.note }),
       });
-    else if (unread > 0)
-      parts.push({
-        path,
-        state: "unclear",
-        why: `Neuve can't tell what ${unread} of its ${harness} hook entries run, so it can't say whether they work`,
-      });
-    else if (config?.agents.includes(harness) === true)
-      parts.push(
-        own.length === 0
-          ? {
-              path,
-              state: "missing",
-              why: `there are no Neuve ${harness} hooks`,
-            }
-          : { path, state: "ok" },
-      );
   }
   return { configured: config !== undefined, parts };
 };
