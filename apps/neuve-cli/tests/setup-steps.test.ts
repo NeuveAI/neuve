@@ -631,3 +631,26 @@ test("the skill offer records no 'no program found' from the upgrade's narrow lo
       });
   }
 });
+
+test("a list of repositories that exists but is a folder is said to be unreadable, and the upgrade fails", async () => {
+  const root = await scratch();
+  const registry = join(root, "repositories.json");
+  await mkdir(registry);
+  let said = "";
+  const code = await upgradeSetup({
+    home: join(root, "home"),
+    registry,
+    machine: [],
+    repository: () => [],
+    isTerminal: false,
+    version: "0.3.0",
+    out: async (text) => {
+      said += text;
+    },
+  });
+  expect(code).toBe(1);
+  expect(said).toContain(
+    `Neuve's list of repositories, ${registry}, can't be read`,
+  );
+  expect(said).not.toContain("are up to date");
+});

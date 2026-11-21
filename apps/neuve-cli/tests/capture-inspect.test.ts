@@ -14,8 +14,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { inspectCapture, runSetupHooks } from "../src/capture/setup-hooks.ts";
+import { dirname, join } from "node:path";
+import {
+  gitHookScript,
+  inspectCapture,
+  runSetupHooks,
+} from "../src/capture/setup-hooks.ts";
 
 const scratches: string[] = [];
 afterEach(async () => {
@@ -228,5 +232,79 @@ test("an entry Neuve can't read surely is unclear, never gone; a bun hook is jud
   expect(await part()).toMatchObject({
     state: "update",
     why: expect.stringContaining("/gone/neuve-hook.js"),
+  });
+});
+
+// Why: doctor reads the person's own hook files, whatever shape they are in; one it can't make
+// sense of must be a finding, never a crash that stops doctor.
+test("a hook file of a shape Neuve doesn't expect is reported unreadable, not thrown", async () => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "neuve-capture-shape-")),
+  );
+  scratches.push(root);
+  const repo = join(root, "repo");
+  await mkdir(repo);
+  Bun.spawnSync(["git", "init", "-q", repo]);
+  const settings = join(root, "settings.json");
+  const hookFiles = (harness: string) =>
+    harness === "claude-code" ? settings : join(root, "none.json");
+  for (const shape of [
+    '{"hooks":{"Stop":{}}}',
+    '{"hooks":[]}',
+    '{"hooks":{"Stop":[{"hooks":{}}]}}',
+    "not json",
+  ]) {
+    await writeFile(settings, shape);
+    expect(
+      (await inspectCapture(repo, hookFiles))?.parts.find(
+        (part) => part.path === settings,
+      ),
+      shape,
+    ).toMatchObject({ state: "unreadable" });
+  }
+});
+
+// Why: a Git hook written from a source checkout runs bun with a bundled script; losing the script
+// stops capture as surely as losing the program.
+test("a Git hook whose bundled script is gone needs an update", async () => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "neuve-capture-script-")),
+  );
+  scratches.push(root);
+  const repo = join(root, "repo");
+  await mkdir(repo);
+  Bun.spawnSync(["git", "init", "-q", repo]);
+  const script = join(root, "hook/neuve-hook.js");
+  await mkdir(dirname(script), { recursive: true });
+  await writeFile(script, "");
+  const argv = [process.execPath, "--no-env-file", script];
+  await mkdir(join(repo, ".git/neuve"), { recursive: true });
+  await writeFile(
+    join(repo, ".git/neuve/capture.json"),
+    JSON.stringify({
+      version: 1,
+      command: [process.execPath],
+      hookCommand: argv,
+      gitHooks: ["post-commit"],
+      agents: [],
+      sessionTrailer: false,
+    }),
+  );
+  const hook = join(repo, ".git/hooks/post-commit");
+  const command = argv
+    .map((word) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word}'`))
+    .join(" ");
+  await writeFile(hook, gitHookScript("post-commit", command, false));
+  await chmod(hook, 0o755);
+  const hookFiles = () => join(root, "none.json");
+  const part = async () =>
+    (await inspectCapture(repo, hookFiles))?.parts.find(
+      (found) => found.path === hook,
+    );
+  expect(await part()).toMatchObject({ state: "ok" });
+  await rm(script);
+  expect(await part()).toMatchObject({
+    state: "update",
+    why: expect.stringContaining(script),
   });
 });

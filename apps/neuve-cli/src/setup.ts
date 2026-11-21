@@ -399,11 +399,17 @@ export const upgradeSetup = async (input: {
     Registry.readRegistry(list).pipe(Effect.provide(BunFileSystem.layer)),
   ).catch(() => ({ repositories: [] }));
   // The list reads as empty when it can't be read; say so, since then no repository gets its steps.
-  const text = await readFile(list, "utf8").catch(() => undefined);
+  // Absent is an empty list; anything else that can't be read (a folder, no permission) is not.
+  const text = await readFile(list, "utf8").catch((error: unknown) =>
+    error instanceof Error && "code" in error && error.code === "ENOENT"
+      ? undefined
+      : null,
+  );
   if (text !== undefined && registry.repositories.length === 0) {
     let readable = false;
     try {
-      readable = Registry.Registry.safeParse(JSON.parse(text)).success;
+      readable =
+        text !== null && Registry.Registry.safeParse(JSON.parse(text)).success;
     } catch {
       readable = false;
     }

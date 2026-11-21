@@ -209,7 +209,11 @@ const isNeuveRepository = async (root: string) => {
  * The git hook script: runs a hook that was there before, only if it is executable (git itself skips a
  * hook that is not, so neither may the chain), then the capture hook, silently and without failing.
  */
-const gitHookScript = (name: string, command: string, chained: boolean) => {
+export const gitHookScript = (
+  name: string,
+  command: string,
+  chained: boolean,
+) => {
   const run = `${command} git ${name} "$@"`;
   const lines = [
     "#!/bin/sh",
@@ -540,7 +544,7 @@ export const defaultHookFile = (harness: AgentHarness, home = homedir()) =>
 export interface CapturePart {
   readonly path: string;
   /** `unclear`: Neuve can't read the hook command surely enough to judge it. */
-  readonly state: "ok" | "update" | "missing" | "unclear";
+  readonly state: "ok" | "update" | "missing" | "unclear" | "unreadable";
   readonly why?: string;
 }
 
@@ -566,11 +570,60 @@ const filesCalledBy = (command: string): ReadonlyArray<string> | undefined => {
   }
   const program = words[0];
   if (program === undefined || !isAbsolute(program)) return undefined;
+  return neededBy(words);
+};
+
+/** From a hook's argv: the program, and when it is `bun`, the absolute script it runs. */
+const neededBy = (argv: ReadonlyArray<string>) => {
+  const program = argv[0]!;
   if (!/(^|\/)bun$/.test(program)) return [program];
-  const script = words.find((word) => word.endsWith(".js"));
+  const script = argv.find((word) => word.endsWith(".js"));
   return script !== undefined && isAbsolute(script)
     ? [program, script]
     : [program];
+};
+
+/**
+ * Every hook command in an agent's hook file, read from any shape without throwing: none when the
+ * file is absent, `unreadable` when it isn't JSON or its hooks aren't events listing groups of
+ * hooks.
+ */
+const hookCommands = async (
+  path: string,
+): Promise<ReadonlyArray<string> | "unreadable"> => {
+  let text: string;
+  try {
+    text = await readFile(await linkTarget(path), "utf8");
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT"
+      ? []
+      : "unreadable";
+  }
+  const record = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  let file: unknown;
+  try {
+    file = JSON.parse(text);
+  } catch {
+    return "unreadable";
+  }
+  if (!record(file)) return "unreadable";
+  if (file["hooks"] === undefined) return [];
+  if (!record(file["hooks"])) return "unreadable";
+  const commands: string[] = [];
+  for (const groups of Object.values(file["hooks"])) {
+    if (!Array.isArray(groups)) return "unreadable";
+    for (const group of groups) {
+      if (!record(group)) return "unreadable";
+      const hooks = group["hooks"] ?? [];
+      if (!Array.isArray(hooks)) return "unreadable";
+      for (const hook of hooks) {
+        if (!record(hook)) return "unreadable";
+        if (typeof hook["command"] === "string") commands.push(hook["command"]);
+      }
+    }
+  }
+  return commands;
 };
 
 /** A file an entry needs is there: the program runnable, a script readable. */
@@ -619,9 +672,13 @@ export const inspectCapture = async (
         why: "it isn't a capture.json this neuve can read",
       });
   } else {
-    const program = config.hookCommand[0]!;
     command = config.hookCommand.map(quote).join(" ");
-    dead = !(await runnable(program));
+    // The program, and for a hook from a source checkout the bundled script `bun` runs.
+    const needed = neededBy(config.hookCommand);
+    const missing: string[] = [];
+    for (const file of needed) if (!(await present(file))) missing.push(file);
+    const program = missing.join(", ");
+    dead = missing.length > 0;
     parts.push(
       dead
         ? {
@@ -680,16 +737,16 @@ export const inspectCapture = async (
   }
   for (const harness of Identity.AGENT_HARNESSES) {
     const path = hookFiles(harness);
-    let file: { hooks?: Record<string, ReadonlyArray<HookGroup>> } | undefined;
-    try {
-      file = JSON.parse(await readFile(await linkTarget(path), "utf8"));
-    } catch {
-      file = undefined;
+    const read = await hookCommands(path);
+    if (read === "unreadable") {
+      parts.push({
+        path,
+        state: "unreadable",
+        why: `Neuve can't read it as ${harness}'s hook file, so it can't say whether capture's hooks there work. Fix the file by hand, then run neuve doctor again`,
+      });
+      continue;
     }
-    const own = Object.values(file?.hooks ?? {})
-      .flatMap((groups) => groups.flatMap((group) => group.hooks ?? []))
-      .map((hook) => hook.command ?? "")
-      .filter(isOwnCommand);
+    const own = read.filter(isOwnCommand);
     const gone = new Set<string>();
     let unread = 0;
     for (const entry of own) {

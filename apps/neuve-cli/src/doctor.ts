@@ -608,7 +608,10 @@ const captureCheck = async (
   const fix = `neuve setup hooks --repo ${quote(repository)}`;
   const parts = found?.parts ?? [];
   const off = parts.filter(
-    (part) => part.state === "update" || part.state === "missing",
+    (part) =>
+      part.state === "update" ||
+      part.state === "missing" ||
+      part.state === "unreadable",
   );
   const unclear = parts
     .filter((part) => part.state === "unclear")
@@ -616,7 +619,7 @@ const captureCheck = async (
   const said = off
     .map(
       (part) =>
-        `${part.path} ${part.state === "missing" ? "is missing" : "needs an update"}: ${part.why}`,
+        `${part.path} ${part.state === "missing" ? "is missing" : part.state === "unreadable" ? "can't be read" : "needs an update"}: ${part.why}`,
     )
     .concat(unclear)
     .join("; ");
