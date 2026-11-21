@@ -54,7 +54,7 @@ import { Waveform } from "../../ui/waveform";
 import { type Attachment, AttachmentList } from "./attachment-list";
 import { Composer } from "./composer";
 import { ComposerToolbar, type ComposerToolbarEvent } from "./composer-toolbar";
-import { held, nextMode } from "./mode-marker";
+import { type Cause, held, modeChange } from "./mode-marker";
 import { canSendMessage } from "./send";
 import { mentionTokens } from "./mention-tokens";
 import { useAttachments } from "./use-attachments";
@@ -776,12 +776,14 @@ function useComposer({
 		};
 	}, []);
 
-	function updateMode(next: string | ((prev: string) => string), chosen = false) {
-		let v = typeof next === "function" ? next(modeRef.current) : next;
-		if (v === modeRef.current) return;
-		modeRef.current = v;
-		if (latest.current.mode === undefined) setModeState(v);
-		latest.current.onModeChange?.(v, chosen);
+	/** Applies what a cause reports, through the one rule; says whether anything was reported. */
+	function updateMode(cause: Cause<Mode>, from?: string) {
+		let change = modeChange(latest.current.modes, modeRef.current, cause, from);
+		if (!change) return false;
+		modeRef.current = change.mode;
+		if (latest.current.mode === undefined) setModeState(change.mode);
+		latest.current.onModeChange?.(change.mode, change.chosen);
+		return true;
 	}
 
 	function updateModel(next: string) {
@@ -859,7 +861,8 @@ function useComposer({
 	}
 
 	function exit() {
-		updateMode(modes[0]!.id);
+		// Leaving the terminal returns to the first mode, as Escape does.
+		updateMode({ kind: "escape", double: false });
 		view.current?.focus();
 	}
 
@@ -1081,12 +1084,10 @@ function useComposer({
 			let now = e.timeStamp;
 			let last = esc.current;
 			let double = last > 0 && now - last <= ESCAPE_WINDOW;
-			let next = nextMode(ms, modeRef.current, { kind: "escape", double });
-			if (next !== modeRef.current) {
+			let cur = ms.find(m => m.id === modeRef.current);
+			if (updateMode({ kind: "escape", double })) {
 				esc.current = 0;
 				e.preventDefault();
-				let cur = ms.find(m => m.id === modeRef.current);
-				updateMode(next);
 				if (cur?.mention) {
 					demoteMentions(v, cur.mention, cur.mentionAliases)
 						|| demoteLeadingMention(v, cur.mention, cur.mentionAliases);
@@ -1101,18 +1102,16 @@ function useComposer({
 			}
 		}
 		if (e.key === "!" && !e.metaKey && !e.ctrlKey && !v.state.doc.textContent) {
-			let next = nextMode(ms, modeRef.current, { kind: "bang" });
-			if (next !== modeRef.current) {
+			if (updateMode({ kind: "bang" })) {
 				e.preventDefault();
-				updateMode(next);
 				return true;
 			}
 		}
 		// The recalled text lands first and may already move the mode; judge from the mode before.
 		let before = modeRef.current;
 		return history.handleKey(v, e, mode => {
-			let next = nextMode(ms, before, { kind: "recall", mode });
-			if (next !== modeRef.current) updateMode(next);
+			updateMode({ kind: "recall", mode }, before);
+			let next = modeRef.current;
 			// Held, the recalled text sheds another mode's marker, as the mode itself shows none; a
 			// Plan message recalled into a mode with a marker takes that mode's marker.
 			if (held(next)) unmark(v, next);
@@ -1131,13 +1130,11 @@ function useComposer({
 		let restored = restoring.current;
 		restoring.current = false;
 		if (!latest.current.mentions?.length) return;
-		updateMode(nextMode(
-			latest.current.modes,
-			modeRef.current,
+		updateMode(
 			restored
 				? { kind: "restore" }
 				: { kind: "draft", has: m => !!m.mention && hasMention(v, m.mention, m.mentionAliases) },
-		));
+		);
 	}
 
 	let {
@@ -1401,7 +1398,7 @@ function ComposerMode({ state }: { state: ComposerState }) {
 						<DropdownMenuItem
 							key={m.id}
 							onClick={() => {
-								updateMode(m.id, true);
+								updateMode({ kind: "menu", mode: m.id });
 								view.current?.focus();
 							}}
 						>

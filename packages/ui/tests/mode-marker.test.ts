@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { type Cause, nextMode } from "../src/components/composer/mode-marker";
+import { type Cause, modeChange, nextMode } from "../src/components/composer/mode-marker";
 
 // Why: every change of mode other than the menu's goes through this rule. If a draft, a key or a
 // recalled message moved the composer out of Plan, the next message would take the chat out of
@@ -61,4 +61,24 @@ test("Chat and the agent's mode move as before", () => {
 	expect(nextMode(modes, "ace", causes["a recalled Chat message"]!)).toBe("chat");
 	expect(nextMode(modes, "ace", causes["a recalled message from before modes were stored"]!)).toBe("chat");
 	expect(nextMode(blocked, "chat", causes["a draft with the agent's mention"]!)).toBe("chat");
+});
+
+// Why: only a menu choice is remembered, and a draft or Escape can move the mode without being
+// remembered. A person who then picks that same mode in the menu must still be reported as having
+// chosen it, or the choice is lost on reload: remembered agent's mode, Escape to Chat, Chat picked
+// in the menu, and the chat reopens in the agent's mode.
+test("a menu choice is reported as chosen, even when the mode does not change", () => {
+	expect(modeChange(modes, "chat", { kind: "menu", mode: "chat" })).toEqual({ mode: "chat", chosen: true });
+	expect(modeChange(modes, "chat", { kind: "menu", mode: "plan" })).toEqual({ mode: "plan", chosen: true });
+	// Only the menu leaves Plan, and it is still a choice.
+	expect(modeChange(modes, "plan", { kind: "menu", mode: "ace" })).toEqual({ mode: "ace", chosen: true });
+});
+
+test("every other cause is reported only when the mode moves, and never as chosen", () => {
+	expect(modeChange(modes, "ace", causes.Escape!)).toEqual({ mode: "chat", chosen: false });
+	expect(modeChange(modes, "chat", causes.Escape!)).toBeUndefined();
+	expect(modeChange(modes, "chat", causes["a draft without it"]!)).toBeUndefined();
+	expect(modeChange(modes, "plan", causes["a draft with the agent's mention"]!)).toBeUndefined();
+	// A recall is judged from the mode before its text landed.
+	expect(modeChange(modes, "chat", { kind: "recall", mode: "plan" }, "ace")).toEqual({ mode: "ace", chosen: false });
 });
