@@ -1,8 +1,10 @@
-import { chmodSync, mkdirSync, statSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   DEFAULT_ACCOUNTS,
+  type AccountName,
   AccountDirectory,
   AccountStore,
   RuntimeRegistry,
@@ -13,7 +15,11 @@ import {
   type RuntimeShape,
 } from "@neuve/runtime";
 import { claudeRuntime, type ClaudeRuntimeConfig } from "@neuve/runtime-claude";
-import { codexRuntime, type CodexRuntimeConfig } from "@neuve/runtime-codex";
+import {
+  codexRuntime,
+  type CodexRuntimeConfig,
+  type LogEntry,
+} from "@neuve/runtime-codex";
 export { findCodexProgram } from "@neuve/runtime-codex";
 import { Context, Effect, Layer, ManagedRuntime, Scope } from "effect";
 import type { ReadinessStatuses } from "./route-provider.ts";
@@ -45,6 +51,31 @@ export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
   home,
   programPath: (name) => AccountStore.programPath(home, name),
 });
+
+/**
+ * Where a runtime's protocol log goes for one channel: `<folder>/<account>-protocol.jsonl`, owner
+ * only, beside the channel's other state, so it is removed with the channel. Each session's lines
+ * carry the session's own label, so chats running at once stay apart in the one file. The runtime
+ * redacts every line before it reaches here. A session reports its first failed write, not each.
+ */
+export const protocolLogs =
+  (folder: string, report: (path: string, error: unknown) => void) =>
+  (account: AccountName): ((entry: LogEntry) => void) => {
+    const path = join(folder, `${account}-protocol.jsonl`);
+    const session = randomUUID().slice(0, 8);
+    let reported = false;
+    return (entry) => {
+      try {
+        mkdirSync(folder, { recursive: true, mode: 0o700 });
+        appendFileSync(path, `${JSON.stringify({ session, ...entry })}\n`, {
+          mode: 0o600,
+        });
+      } catch (error) {
+        if (!reported) report(path, error);
+        reported = true;
+      }
+    };
+  };
 
 /** Creates the folder, or tightens an existing one, to owner-only access; false when it can't. */
 const privateFolder = (folder: string) => {

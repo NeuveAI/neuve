@@ -3,7 +3,8 @@ import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-import type { ChannelInfo, ChatId, Event, Request } from "@ace/channel/protocol";
+import { EffortSchema } from "@ace/channel/parse";
+import type { ChannelInfo, ChatId, Event, ModelRef, Request } from "@ace/channel/protocol";
 
 import { appUrl, token } from "./auth";
 import { backup, restore } from "./backup";
@@ -69,8 +70,9 @@ const USAGE = `ace — channels on this host
                                                 add a seed as a new local channel; --now moves its
                                                 newest message to now
   ace say <channel> [--chat <id>] <text…>        post without invoking the agent
-  ace ask <channel> [--chat <id>] [--model <provider/id>] [--detach] <text…>
-                                                exits 1 if the run fails or is stopped
+  ace ask <channel> [--chat <id>] [--model <provider/id>] [--effort <level>] [--detach] <text…>
+                                                exits 1 if the run fails or is stopped; --effort
+                                                 is one the model lists, kept for the chat's later runs
   ace watch <channel> [--chat <id>]
   ace answer <channel> [--chat <id>] <text…>     answer the chat's waiting question in writing
   ace chat <channel> [--model <provider/id>]     open another chat
@@ -117,6 +119,7 @@ const OPTIONS = {
 	project: { type: "string" },
 	name: { type: "string" },
 	model: { type: "string" },
+	effort: { type: "string" },
 	hosted: { type: "string" },
 	local: { type: "boolean" },
 	compute: { type: "boolean" },
@@ -158,6 +161,12 @@ const { values: flags, positionals } = parse();
 const [command, ref, ...rest] = positionals;
 
 const model = parseModel;
+
+function effort(value: string) {
+	const parsed = EffortSchema.safeParse(value);
+	if (parsed.success) return parsed.data;
+	throw new Error(`--effort is one of ${EffortSchema.options.join(", ")}`);
+}
 
 function chat(): ChatId | undefined {
 	return flags.chat === undefined ? undefined : Number(flags.chat);
@@ -263,6 +272,14 @@ function local<T>(request: HostRequest): Promise<T> {
  */
 async function isHostRunning(): Promise<boolean> {
 	return (await health(Number(flags.port || config.port)))?.home === config.home;
+}
+
+/**
+ * The running host's models, an account's among them, which only it lists; this process's own
+ * when no host runs.
+ */
+async function hostModels(): Promise<ModelRef[] | undefined> {
+	return await isHostRunning() ? await local<ModelRef[]>({ op: "models" }) : undefined;
 }
 
 /** The running host knows each owner's GitHub login, as the app shows it. */
@@ -467,7 +484,7 @@ async function main() {
 		case "new": {
 			const dir = await project(resolve(flags.project || "."));
 			const model = flags.model ? parseModel(flags.model) : undefined;
-			if (model) await checkModel(model);
+			if (model) await checkModel(model, await hostModels());
 			const record = catalog.create(dir, model, flags.name);
 			return console.log(`${record.name}\t${record.id}`);
 		}
@@ -517,7 +534,7 @@ async function main() {
 			return console.log(`${record.name}\t${record.id}`);
 		}
 		case "models": {
-			for (const m of await models()) console.log(`${m.provider}/${m.modelId}`);
+			for (const m of (await hostModels()) ?? (await models())) console.log(`${m.provider}/${m.modelId}`);
 			return;
 		}
 		case "project": {
@@ -584,7 +601,7 @@ async function main() {
 			return console.log(web.app() ?? "No web app");
 		}
 		case "model": {
-			if (ref) await setModel(ref === "auto" ? null : parseModel(ref));
+			if (ref) await setModel(ref === "auto" ? null : parseModel(ref), await hostModels());
 			const saved = preference();
 			if (saved) console.log(`${saved.provider}/${saved.modelId}`);
 			else {
@@ -671,6 +688,8 @@ async function main() {
 						author: catalog.user,
 						text,
 						model: flags.model ? model(flags.model) : undefined,
+						// The channel refuses a level the model does not list, naming those it does.
+						effort: flags.effort === undefined ? undefined : effort(flags.effort),
 					} as const;
 					// The channel refuses by the owner's Tailscale login; name them as the app does.
 					const refused = async (error: Error): Promise<never> => {

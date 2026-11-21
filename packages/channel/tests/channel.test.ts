@@ -268,6 +268,10 @@ describe("runs and committed history", () => {
 		await expect(
 			fixture.request({ op: "ask", author: OWNER, text: "hi", model: { provider: "faux", modelId: "none" } }),
 		).rejects.toThrow("Unknown model faux/none");
+		// The refusal names the levels the model lists, so a person can pick one from the command line.
+		await expect(
+			fixture.request({ op: "ask", author: OWNER, text: "hi", model: MODEL, effort: "max" }),
+		).rejects.toThrow(/^Unsupported reasoning effort max for faux\/coder: it lists minimal, low, medium, high, and off\.$/);
 		const { model, effort } = await fixture.request<{ model: unknown; effort: string }>({
 			op: "select",
 			author: OWNER,

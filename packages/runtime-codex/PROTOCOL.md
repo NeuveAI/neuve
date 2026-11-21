@@ -192,6 +192,8 @@ An approval still open when its turn ends is answered as declined. A call to one
 
 Every line each way, redacted as it is written ([`src/log.ts`](src/log.ts)): Codex's own commands, their output and file changes, and calls to Neuve's tools, whole, since they are the run's record of what was done. Not kept: streamed text (its length only), the person's configuration and skill list (their size only), their plan and balance, the operating system's release, and every MCP server's name but Neuve's. A call to one of the person's own servers keeps its tool's name and its status, and loses its arguments, result and error, which are theirs. The session's token, folders and program, and the names of the person's settings, are replaced by labels wherever they appear.
 
+A workspace chat on Codex writes it to `<account>-protocol.jsonl` in its channel's own folder, beside `channel.sqlite`, readable by its owner only, with each line labelled by its session ([`protocolLogs`](../harness/src/runtimes.ts)). It is removed with the channel and never copied by a backup or a move. The review worker and `neuve auth` keep none.
+
 ## What the runtime slice closed, and what stays open
 
 - **Responses are decoded where the runtime reads them**, by [`src/decode.ts`](src/decode.ts): only the fields read, the rest passed through. A turn's ending that does not decode ends the turn; an item that does not decode is logged and skipped.
