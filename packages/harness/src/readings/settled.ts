@@ -37,7 +37,11 @@ import {
   type ReadingOutcome,
   type SectionEntry,
 } from "./decide.ts";
-import { REMOVED_TEXT, removesDeclaration } from "./code-facts.ts";
+import {
+  REMOVED_TEXT,
+  removalSentence,
+  removesDeclaration,
+} from "./code-facts.ts";
 import type {
   EvidenceRow,
   GroupEvidence,
@@ -1660,19 +1664,18 @@ const factsLine = (title: string, ranges: ReadonlyArray<OwnedRange>) => {
 
 /**
  * A section's facts as a person reads them: the plain sentence today's code-filled units give
- * (`compose.ts` `codeFacts`: lines added and removed), and, for a declaration the change removes
- * with nothing in its place, that removal first. Code's words only, from the section's own owned
- * rows; never the plan's change facts, which are written for the readings.
+ * (`compose.ts` `codeFacts`: lines added and removed), or, for a declaration the change removes,
+ * the removal sentence (`removalSentence`), which says the same lines as a removal. Code's words
+ * only, from the section's own owned rows; never the plan's change facts, which are written for the
+ * readings.
  */
 export const readerFacts = (
   section: Pick<PlanSection, "title" | "kind" | "identity" | "owned">,
   ranges: ReadonlyArray<OwnedRange>,
-) => {
-  const line = factsLine(section.title, ranges);
-  return removesDeclaration(section)
-    ? `${oneLine(section.title)} is removed, and nothing is added in its place. ${line}`
-    : line;
-};
+) =>
+  removesDeclaration(section)
+    ? removalSentence(oneLine(section.title), lineCount(ranges, "old"))
+    : factsLine(section.title, ranges);
 
 // ---------------------------------------------------------------------------------------------
 // The Guided stop, by code
@@ -2841,8 +2844,8 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
             (range) => range.kind === "lines" && range.side === "old",
           );
           if (old?.kind === "lines") {
-            const removed = lineCount(ranges, "old");
-            const text = `This change removes ${oneLine(section.title)} (${plural(removed, "line")} on the old side), and adds nothing in its place.`;
+            // The removal sentence of its facts line: what code checked, and no more.
+            const text = readerFacts(section, ranges);
             const anchor = {
               path: old.path,
               side: old.side,

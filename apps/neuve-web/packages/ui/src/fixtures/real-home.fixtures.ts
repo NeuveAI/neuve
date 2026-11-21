@@ -402,9 +402,9 @@ export const realHome: HomeData = {
           digest:
             '2 units in 2 files for "Share release test setup". release-command.test.ts at line 17: 3 lines added and 1 removed. release-command.test.ts at line 46: 1 line removed. git in release-command.test.ts: 15 lines removed. Checkout in release-command.test.ts: 8 lines removed. release-command.test.ts at line 140: 1 line removed. makeCheckout in release-command.test.ts: 68 lines removed. release-command.test.ts at line 76: 1 line added and 1 removed. imports in release-fixture.ts: 3 lines added and 2 removed. git in release-fixture.ts: 17 lines added. Checkout in release-fixture.ts: 8 lines added. releaseCheckout in release-fixture.ts: 69 lines added.',
           removes: [
-            "This change removes git in release-command.test.ts (15 lines on the old side), and adds nothing in its place.",
-            "This change removes Checkout in release-command.test.ts (8 lines on the old side), and adds nothing in its place.",
-            "This change removes makeCheckout in release-command.test.ts (68 lines on the old side), and adds nothing in its place.",
+            "This change removes git in release-command.test.ts (15 lines).",
+            "This change removes Checkout in release-command.test.ts (8 lines).",
+            "This change removes makeCheckout in release-command.test.ts (68 lines).",
           ],
           asked: 1,
           deskUnitId: "01M7FPD2AP000DAZ5H8Z8JFKFV",
@@ -616,9 +616,9 @@ export const realHome: HomeData = {
           digest:
             '3 units in 3 files for "Precise readable briefings". undangled in briefing-settle.ts: 2 lines added and 2 removed. cutText in briefing-settle.ts: 3 lines added and 3 removed. HunkRange in briefing-settle.ts: 14 lines added. citeSide in briefing-settle.ts: 7 lines added. narrowedCite in briefing-settle.ts: 28 lines added. imports in briefing.ts: 1 line removed. briefing.ts at line 33: 7 lines added. briefing.ts at line 40: 2 lines added. hunkRangesOf in briefing.ts: 1 line removed. HunkRange in briefing.ts: 10 lines removed. HunkSides in briefing.ts: 1 line removed. citeSide in briefing.ts: 6 lines removed. PartSection in briefing.ts: 1 line added. resolveCite in briefing.ts: 1 line removed. narrowedCite in briefing.ts: 27 lines removed. briefing.ts at line 1400: 13 lines added and 7 removed. settled.ts at line 6: 1 line added. settled.ts at line 60: 3 lines added. heldRowsOf in settled.ts: 23 lines added. rowEvidence in settled.ts: 47 lines added and 5 removed. guidedOf in settled.ts: 6 lines added. settledBatches in settled.ts: 3 lines added.',
           removes: [
-            "This change removes HunkRange in briefing.ts (10 lines on the old side), and adds nothing in its place.",
-            "This change removes citeSide in briefing.ts (6 lines on the old side), and adds nothing in its place.",
-            "This change removes narrowedCite in briefing.ts (27 lines on the old side), and adds nothing in its place.",
+            "This change removes HunkRange in briefing.ts (10 lines).",
+            "This change removes citeSide in briefing.ts (6 lines).",
+            "This change removes narrowedCite in briefing.ts (27 lines).",
             "Evidence links clip to owned rows or omit shared-hunk fallbacks instead of always linking…",
             "Guided evidence generation receives unit ownership and review-wide row constraints",
             "Settled batch output applies review-wide ownership constraints to Guided evidence",
@@ -1474,9 +1474,9 @@ export const realHomeWaiting: HomeData = {
           digest:
             '3 units in 3 files for "Precise readable briefings". undangled in briefing-settle.ts: 2 lines added and 2 removed. cutText in briefing-settle.ts: 3 lines added and 3 removed. HunkRange in briefing-settle.ts: 14 lines added. citeSide in briefing-settle.ts: 7 lines added. narrowedCite in briefing-settle.ts: 28 lines added. imports in briefing.ts: 1 line removed. briefing.ts at line 33: 7 lines added. briefing.ts at line 40: 2 lines added. hunkRangesOf in briefing.ts: 1 line removed. HunkRange in briefing.ts: 10 lines removed. HunkSides in briefing.ts: 1 line removed. citeSide in briefing.ts: 6 lines removed. PartSection in briefing.ts: 1 line added. resolveCite in briefing.ts: 1 line removed. narrowedCite in briefing.ts: 27 lines removed. briefing.ts at line 1400: 13 lines added and 7 removed. settled.ts at line 6: 1 line added. settled.ts at line 60: 3 lines added. heldRowsOf in settled.ts: 23 lines added. rowEvidence in settled.ts: 47 lines added and 5 removed. guidedOf in settled.ts: 6 lines added. settledBatches in settled.ts: 3 lines added.',
           removes: [
-            "This change removes HunkRange in briefing.ts (10 lines on the old side), and adds nothing in its place.",
-            "This change removes citeSide in briefing.ts (6 lines on the old side), and adds nothing in its place.",
-            "This change removes narrowedCite in briefing.ts (27 lines on the old side), and adds nothing in its place.",
+            "This change removes HunkRange in briefing.ts (10 lines).",
+            "This change removes citeSide in briefing.ts (6 lines).",
+            "This change removes narrowedCite in briefing.ts (27 lines).",
             "Evidence links clip to owned rows or omit shared-hunk fallbacks instead of always linking…",
             "Guided evidence generation receives unit ownership and review-wide row constraints",
             "Settled batch output applies review-wide ownership constraints to Guided evidence",
@@ -2068,7 +2068,7 @@ export const realHomeWaiting: HomeData = {
           digest:
             '4 units in 2 files for "Behaviour and evidence". imports in briefing.ts: 1 line added and 1 removed. briefing.ts at line 18: 2 lines removed. imports in briefing.ts: 1 line added and 1 removed. BRIEFING_PART_BOUND in briefing.ts: 9 lines added and 6 removed. BRIEFING_PROMPT_VERSION in briefing.ts: 5 lines added and 2 removed. DIGEST_PROMPT_VERSION in briefing.ts: 2 lines added and 2 removed. BRIEFING_ANSWER_VERSION in briefing.ts: 3 lines added and 2 removed. BRIEFING_STORED_VERSION in briefing.ts: 2 lines added and 2 removed. BRIEFING_RECIPE in briefing.ts: 1 line added and 1 removed. LEAD_CHARS in briefing.ts: 2 lines added. TESTED_LINE_CHARS in briefing.ts: 2 lines added. RequirementText in briefing.ts: 8 lines added. AssessText in briefing.ts: 3 lines added and 2 removed. briefing.ts at line 305: 2 lines added. headLineText in briefing.ts: 23 lines added. anchorHunks in briefing.ts: 23 lines added and 6 removed. assessTextOf in briefing.ts: 52 lines added and 13 removed. askedOf in briefing.ts: 20 lines removed. PartSection in briefing.ts: 6 lines added and 1 removed. LeadFile in briefing.ts: 8 lines added. PartMaterial in briefing.ts: 3 lines added. linkedOf in briefing.ts: 49 lines added. partMaterial in briefing.ts: 46 lines added and 22 removed. assessLines in briefing.ts: 4 lines added and 3 removed. renderBriefingTask in briefing.ts: 19 lines added and 9 removed. briefing.ts at line 861: 5 lines added and 3 removed. briefing.ts at line 882: 3 lines added and 2 removed. briefing.ts at line 888: 8 lines added. DigestAnswer in briefing.ts: 1 line added. BriefingAnswer in briefing.ts: 7 lines added and 2 removed. BRIEFING_PROBLEM_CLASSES in briefing.ts: 6 lines added and 1 removed. claimsOf in briefing.ts: 9 lines added. uncitedClaimsOf in briefing.ts: 6 lines added. BriefingIndex in briefing.ts: 4 lines added and 2 removed. partIndexOf in briefing.ts: 2 lines added and 1 removed. digestIndexOf in briefing.ts: 2 lines added and 1 removed. cleanText in briefing',
           removes: [
-            "This change removes askedOf in briefing.ts (20 lines on the old side), and adds nothing in its place.",
+            "This change removes askedOf in briefing.ts (20 lines).",
             "Section answers no longer accept null Briefed values.",
             "Submissions must now include a leads array, empty when none are requested.",
             "The replacement fixture drops unknown-cite and judging-word examples.",
@@ -2127,7 +2127,7 @@ export const realHomeWaiting: HomeData = {
           digest:
             '5 units in 3 files for "Settle and publish orientation". SectionBriefing in briefing-settle.ts: 2 lines removed. FileLead in briefing-settle.ts: 6 lines added. DigestBriefing in briefing-settle.ts: 1 line added. SettledBriefings in briefing-settle.ts: 2 lines added. briefedFrom in briefing-settle.ts: 7 lines added and 6 removed. LEAD_POINTS in briefing-settle.ts: 2 lines added. pointsOf in briefing-settle.ts: 2 lines added. boundedText in briefing-settle.ts: 35 lines added. DIGEST_FAILED in briefing-settle.ts: 1 line added. unitLeadOf in briefing-settle.ts: 27 lines added. collect.ts at line 57: 1 line added. settledBriefingsOf in collect.ts: 8 lines added and 4 removed. imports in collect.ts: 6 lines added. imports in readings-briefing-boundary.test.ts: 2 lines added. readings-briefing-boundary.test.ts at line 14: 3 lines added and 1 removed. publishedRead in readings-briefing-boundary.test.ts: 1 line removed. readings-briefing-boundary.test.ts at line 21: 1 line removed. "written: no unit outside the generated batch publishes Facts only, and the diges" in readings-briefing-boundary.test.ts: 3 lines added and 2 removed. "failed: every affected unit carries the briefing-failed gap, and the digest says" in readings-briefing-boundary.test.ts: 1 line added and 1 removed. "a same-batch reference by code, each range\'s hunk, the unit lead and the Briefed" in readings-briefing-boundary.test.ts: 108 lines added.',
           removes: [
-            "This change removes readings-briefing-boundary.test.ts at line 21 (1 line on the old side), and adds nothing in its place.",
+            "This change removes readings-briefing-boundary.test.ts at line 21 (1 line).",
           ],
           asked: 4,
           deskUnitId: "01M7DT4CDH000A6PEJWJAXX5BA",
@@ -2150,7 +2150,7 @@ export const realHomeWaiting: HomeData = {
           digest:
             '2 units in 2 files for "Connect related changes". imports in settled.ts: 1 line removed. settled.ts at line 2: 6 lines added. imports in settled.ts: 1 line added and 1 removed. settled.ts at line 39: 5 lines added. settled.ts at line 59: 1 line added. SettledBatch in settled.ts: 2 lines added and 2 removed. Reference in settled.ts: 2 lines removed. SettledSection in settled.ts: 6 lines added. SettledUnit in settled.ts: 5 lines added. SettledBatchSchema in settled.ts: 3 lines added. rangeHunksOf in settled.ts: 11 lines added. settled.ts at line 614: 3 lines added. rangeHunksFor in settled.ts: 21 lines added. SettledReference in settled.ts: 7 lines added. ReferenceSection in settled.ts: 10 lines added. settled.ts at line 655: 2 lines added. sameBatchReferences in settled.ts: 197 lines added. clipTo in settled.ts: 1 line added. SettledInput in settled.ts: 4 lines added. settledBatches in settled.ts: 65 lines added. readings-settled.test.ts at line 27: 4 lines added. imports in readings-settled.test.ts: 3 lines added. "a settled batch of a mixed range passes every check the publisher makes and ever" in readings-settled.test.ts: 2 lines added. callerOnHelper in readings-settled.test.ts: 30 lines added. "same-batch references: a confirmed caller row into another unit\'s owned lines wr" in readings-settled.test.ts: 102 lines added. "range hunks: one per owned range when each is a hunk ID in one file, else none" in readings-settled.test.ts: 28 lines added. "same-batch references: an unconfirmed row writes none, and no head writes none" in readings-settled.test.ts: 22 lines added. "same-batch references: a row whose call site is in the same unit writes none" in readings-settled.test.ts: 52 lines added.',
           removes: [
-            "This change removes Reference in settled.ts (2 lines on the old side), and adds nothing in its place.",
+            "This change removes Reference in settled.ts (2 lines).",
             "Reference values must satisfy the assembled-reference contract instead of arbitrary…",
           ],
           asked: 1,
@@ -2374,9 +2374,9 @@ export const realHomeWaiting: HomeData = {
           digest:
             '3 units in 2 files for "Briefing boundaries and prompts". BRIEFING_ANSWER_VERSION in briefing.ts: 4 lines added and 1 removed. DIGEST_SUBMIT in briefing.ts: 1 line removed. digestSystem in briefing.ts: 1 line added and 1 removed. BriefingAnswer in briefing.ts: 9 lines added. BRIEFING_PROBLEM_CLASSES in briefing.ts: 1 line removed. AnyBriefingAnswer in briefing.ts: 2 lines removed. BriefingDigestAnswer in briefing.ts: 6 lines removed. briefingRepair in briefing.ts: 2 lines added and 2 removed. briefingStep in briefing.ts: 12 lines added and 34 removed. "failed: every affected unit carries the briefing-failed gap, and the digest says" in readings-briefing-boundary.test.ts: 2 lines added and 1 removed.',
           removes: [
-            "This change removes DIGEST_SUBMIT in briefing.ts (1 line on the old side), and adds nothing in its place.",
-            "This change removes BriefingDigestAnswer in briefing.ts (6 lines on the old side), and adds nothing in its place.",
-            "This change removes AnyBriefingAnswer in briefing.ts (2 lines on the old side), and adds nothing in its place.",
+            "This change removes DIGEST_SUBMIT in briefing.ts (1 line).",
+            "This change removes BriefingDigestAnswer in briefing.ts (6 lines).",
+            "This change removes AnyBriefingAnswer in briefing.ts (2 lines).",
           ],
           asked: 2,
           deskUnitId: "01M7DKKEM6000DNNW5D5XS5FJ0",

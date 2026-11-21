@@ -414,15 +414,15 @@ test("a settled batch of a mixed range passes every check the publisher makes an
         startLine: 4,
         endLine: 6,
         kind: "impact",
-        text: "This change removes drop in old.ts (3 lines on the old side), and adds nothing in its place.",
+        text: "This change removes drop in old.ts (3 lines).",
       }),
       section: drop.key,
       kind: "impact",
       effect: "removed",
       summary:
-        "This change removes drop in old.ts (3 lines on the old side), and adds nothing in its place.",
+        "This change removes drop in old.ts (3 lines).",
       about: "tests",
-      body: "This change removes drop in old.ts (3 lines on the old side), and adds nothing in its place.",
+      body: "This change removes drop in old.ts (3 lines).",
       anchor: { path: "src/old.ts", side: "old", startLine: 4, endLine: 6 },
       evidence: [
         { ref: `computation:${MANIFEST_KEY}`, entry: drop.hunkIds[0]! },
@@ -1122,7 +1122,7 @@ test("a withheld impact comment does not stand for a removal; code's own removal
     row: null,
   });
   const code =
-    "This change removes drop in old.ts (3 lines on the old side), and adds nothing in its place.";
+    "This change removes drop in old.ts (3 lines).";
   const bodiesWith = (comment: ReturnType<typeof removal>) => {
     const { out } = build({
       groups: [all],
@@ -1179,7 +1179,7 @@ test("code's removed impact entry does not double code's removal comment", () =>
     .filter((c) => c.section === drop.key)
     .map((c) => c.body);
   expect(bodies).toEqual([
-    "This change removes drop in old.ts (3 lines on the old side), and adds nothing in its place.",
+    "This change removes drop in old.ts (3 lines).",
   ]);
   expect(batch.withheld ?? []).toEqual([]);
 });
@@ -1257,7 +1257,7 @@ test("from a new Assess answer, a section that only adds code gets no Assess imp
     drop: [
       [
         "removed",
-        "This change removes drop in old.ts (3 lines on the old side), and adds nothing in its place.",
+        "This change removes drop in old.ts (3 lines).",
       ],
     ],
   });
