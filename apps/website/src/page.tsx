@@ -61,17 +61,30 @@ const QuestionGlyph = () => (
 const FindingGlyph = ({ kind }: { kind: FindingKind }) =>
   kind === "defect" ? <LaneGlyph lane="human-required" /> : <QuestionGlyph />;
 
-function Install() {
+/** `name` keeps each block's switch apart: the page shows the block twice. */
+function Install({ name }: { name: string }) {
   return (
     <div className="install">
       <div className="install-h">
         <span>{INSTALL.label}</span>
-        <button
-          className="copybtn"
-          type="button"
-          data-copy={INSTALL.lines.join("\n")}
-          aria-label={UI.copyLabel}
+        <div
+          className="seg"
+          role="radiogroup"
+          aria-label={INSTALL.versions.label}
         >
+          {(["human", "agent"] as const).map((v) => (
+            <label key={v}>
+              <input
+                type="radio"
+                name={`install-${name}`}
+                value={v}
+                defaultChecked={v === "human"}
+              />
+              {INSTALL.versions[v]}
+            </label>
+          ))}
+        </div>
+        <button className="copybtn" type="button" aria-label={UI.copyLabel}>
           <svg
             className="ic-copy"
             viewBox="0 0 24 24"
@@ -100,7 +113,7 @@ function Install() {
           <span className="lbl">{UI.copy}</span>
         </button>
       </div>
-      <pre>
+      <pre data-version="human" data-copy={INSTALL.lines.join("\n")}>
         {INSTALL.lines.map((line, i) => (
           <span className="ln" key={line}>
             <span className="pr">$ </span>
@@ -108,6 +121,9 @@ function Install() {
             {i < INSTALL.lines.length - 1 ? "\n" : ""}
           </span>
         ))}
+      </pre>
+      <pre data-version="agent" data-copy={INSTALL.prompt}>
+        {INSTALL.prompt}
       </pre>
     </div>
   );
@@ -198,7 +214,7 @@ function Hero() {
             <p>{HERO.subline}</p>
           </div>
           <div className="cta">
-            <Install />
+            <Install name="hero" />
             <div className="row">
               <a className="btn" href={HERO.primary.href}>
                 {HERO.primary.label} <Arrow />
@@ -736,7 +752,7 @@ function Close() {
     <section className="wrap close" aria-labelledby="cl-h">
       <h2 id="cl-h">{CLOSE.title}</h2>
       <div className="cta">
-        <Install />
+        <Install name="close" />
         <div className="row">
           <a className="btn" href={HERO.primary.href}>
             {HERO.primary.label} <Arrow />
