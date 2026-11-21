@@ -225,18 +225,24 @@ let rangePatchMemo = new Map<string, ReadonlyArray<string>>()
 
 /**
  * Each range's commits by patch-id, merges left out, by `base..head`: the
- * changes a rebase carries under new hashes. A range the repository can't
- * read throws.
+ * changes a rebase carries under new hashes. Only ranges whose commits the
+ * repository holds are read, and each on its own: a range git can't read is
+ * absent (unknown, never "no commits"). Throws when git can't read the
+ * repository at all.
  */
 export async function rangePatchesOf(
   at: string,
   ranges: ReadonlyArray<{ readonly baseOid: string; readonly headOid: string }>
 ): Promise<ReadonlyMap<string, ReadonlyArray<string>>> {
+  const held = await present(
+    at,
+    ranges.flatMap(({ baseOid, headOid }) => [baseOid, headOid])
+  )
   const asked = [
     ...new Set(
       ranges
         .filter(
-          ({ baseOid, headOid }) => OID.test(baseOid) && OID.test(headOid)
+          ({ baseOid, headOid }) => held.has(baseOid) && held.has(headOid)
         )
         .map(({ baseOid, headOid }) => `${baseOid}..${headOid}`)
     ),
@@ -244,11 +250,11 @@ export async function rangePatchesOf(
   // Only the ranges this load asks for keep their answers.
   const kept = new Map<string, ReadonlyArray<string>>()
   for (const range of asked) {
-    const held = rangePatchMemo.get(`${at}\0${range}`)
-    if (held) kept.set(`${at}\0${range}`, held)
+    const answer = rangePatchMemo.get(`${at}\0${range}`)
+    if (answer) kept.set(`${at}\0${range}`, answer)
   }
   rangePatchMemo = kept
-  const patches = await Promise.all(
+  const read = await Promise.allSettled(
     asked.map((range) =>
       once(
         rangePatchWork,
@@ -272,7 +278,14 @@ export async function rangePatchesOf(
       )
     )
   )
-  return new Map(asked.map((range, index) => [range, patches[index] ?? []]))
+  const patches = new Map<string, ReadonlyArray<string>>()
+  read.forEach((each, index) => {
+    const range = asked[index]
+    if (range === undefined) return
+    if (each.status === "fulfilled") patches.set(range, each.value)
+    else console.warn(`git could not read the commits of ${range}`, each.reason)
+  })
+  return patches
 }
 
 /** What each default branch tip answers, dropped once a load no longer reads that tip. */

@@ -3,7 +3,7 @@
 // the review that holds the work now. These run the loader's Records reads (`standingOf`) on real
 // temporary stores, so the closure, the carried decision, the lockfile mark and the lineage are
 // Records' own, not a hand-written answer.
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, expect, test } from "bun:test"
@@ -128,13 +128,17 @@ const agentDecision = (
  * a packet of record whose manifest names them, and the request whose run
  * lists it on the Reviews page.
  */
-const oldReview = (head: string, units: ReadonlyArray<UnitSpec>) => {
+const oldReview = (
+  head: string,
+  units: ReadonlyArray<UnitSpec>,
+  base = "b".repeat(40)
+) => {
   const cycleId = mintUlid()
   const batchId = mintUlid()
   const runId = mintUlid()
   const range = {
     baseRef: "refs/heads/main",
-    baseOid: "b".repeat(40),
+    baseOid: base,
     headOid: head.padEnd(40, "0"),
   }
   const unitIds = units.map(() => mintUlid())
@@ -681,6 +685,72 @@ test("a cycle's address reads that one review from Records, and its desk opens o
     const none = await reviewsRead({ page: 1, filter: "all", cycle: unknown })
     expect(none.status === "ready" && none.data.reviews).toEqual([])
     expect(await cycleEntry(unknown)).toBeUndefined()
+  } finally {
+    if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
+    else process.env[REPOSITORY_VARIABLE] = before
+    rmSync(repo, { recursive: true, force: true })
+  }
+})
+
+test("the list counts a rebased review once, even beside a review whose commits the repository no longer holds", async () => {
+  // Why (NEU-433, final review): one unreadable range must not cost the rebase rule its answers,
+  // or a pull request reviewed before and after a rebase waits twice.
+  const repo = mkdtempSync(join(tmpdir(), "reviews-rebased-"))
+  const before = process.env[REPOSITORY_VARIABLE]
+  const git = (...args: Array<string>) => {
+    const run = Bun.spawnSync(["git", "-C", repo, ...args], {
+      env: {
+        PATH: process.env["PATH"] ?? "",
+        HOME: repo,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    })
+    if (run.exitCode !== 0) throw new Error(run.stderr.toString())
+    return run.stdout.toString().trim()
+  }
+  const commit = (file: string) => {
+    writeFileSync(join(repo, file), file)
+    git("add", file)
+    git("commit", "--quiet", "-m", file)
+    return git("rev-parse", "HEAD")
+  }
+  try {
+    git("init", "--quiet", "-b", "main")
+    const base = commit("base")
+    // Reviewed once, then rebased onto a moved main and reviewed again; the first branch is gone.
+    git("checkout", "--quiet", "-b", "first")
+    commit("one")
+    const firstHead = commit("two")
+    git("checkout", "--quiet", "main")
+    const moved = commit("elsewhere")
+    git("checkout", "--quiet", "-b", "second")
+    git("cherry-pick", "--quiet", `${base}..${firstHead}`)
+    const secondHead = git("rev-parse", "HEAD")
+    git("checkout", "--quiet", "main")
+    git("branch", "--quiet", "-D", "first")
+
+    const rebased = oldReview(firstHead, [{ lane: "human-required" }], base)
+    // A review of commits this repository never held.
+    const missing = oldReview("ddddddd", [{ lane: "human-required" }])
+    const replay = oldReview(secondHead, [{ lane: "human-required" }], moved)
+    await seed([rebased, missing, replay], storeLocationIn(join(repo, ".git")))
+    process.env[REPOSITORY_VARIABLE] = repo
+
+    const read = await reviewsRead({ page: 1, filter: "waiting" })
+    if (read.status !== "ready") throw new Error("no reviews read")
+    expect(read.data.reviews.map((review) => review.id).sort()).toEqual(
+      [missing.cycleId, replay.cycleId].sort()
+    )
+    expect(read.data.waiting.units).toBe(2)
+    // Under All, the rebased review says a newer one holds it.
+    const all = await reviewsRead({ page: 1, filter: "all" })
+    if (all.status !== "ready") throw new Error("no reviews read")
+    expect(
+      all.data.reviews.find((review) => review.id === rebased.cycleId)
+    ).toMatchObject({ newer: true, gate: [] })
   } finally {
     if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
     else process.env[REPOSITORY_VARIABLE] = before
