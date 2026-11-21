@@ -383,7 +383,14 @@ type HookGroup = NonNullable<HookFile["hooks"]>[string][number];
 
 type HookFileRead =
   | { readonly kind: "absent" }
-  | { readonly kind: "read"; readonly text: string; readonly file: HookFile }
+  | {
+      readonly kind: "read";
+      readonly text: string;
+      /** Checked against `HookFile`, which puts the keys it knows first: for judging only. */
+      readonly file: HookFile;
+      /** The file as written, keys in the person's order: what a rewrite is built from. */
+      readonly raw: Record<string, unknown>;
+    }
   | { readonly kind: "unreadable"; readonly reason: string };
 
 /** An agent's hook file through `HookFile`: absent, read, or unreadable with the reason. */
@@ -400,7 +407,7 @@ const readHookFile = async (path: string): Promise<HookFileRead> => {
         };
   }
   // An empty file is a file with nothing in it yet.
-  if (text.trim() === "") return { kind: "read", text, file: {} };
+  if (text.trim() === "") return { kind: "read", text, file: {}, raw: {} };
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -415,7 +422,12 @@ const readHookFile = async (path: string): Promise<HookFileRead> => {
       reason: `${issue?.path.length ? issue.path.join(".") : "the file"}: ${issue?.message ?? "not a hook file"}`,
     };
   }
-  return { kind: "read", text, file: parsed.data };
+  return {
+    kind: "read",
+    text,
+    file: parsed.data,
+    raw: value as Record<string, unknown>,
+  };
 };
 
 /**
@@ -481,9 +493,13 @@ const judgeAgentHooks = async (
     const verb = AGENT_EVENTS.find(([name]) => name === event)?.[1];
     if (verb === undefined) differs.push(`a Neuve hook sits under ${event}`);
     const line = OWN_LINE.exec(unwrapped(hook.command!) ?? "");
+    // Marked but not in Neuve's form is a command someone changed; unmarked, an older Neuve's form.
     if (line === null) {
-      if (hook.command!.includes(COMMAND_MARKER)) unread += 1;
-      else differs.push(`its ${event} hook is in an older form`);
+      differs.push(
+        hook.command!.includes(COMMAND_MARKER)
+          ? `its ${event} hook's command was changed`
+          : `its ${event} hook is in an older form`,
+      );
       continue;
     }
     const [, runs, agent, said] = line as unknown as [
@@ -541,8 +557,12 @@ const installAgentHooks = async (
     throw new Error(unreadableHookFile(path, harness, read.reason));
   path = await linkTarget(path);
   const present = read.kind === "read";
-  const config: HookFile = present ? read.file : {};
-  const hooks: Record<string, HookGroup[]> = { ...(config.hooks ?? {}) };
+  // Built from the file as written, so the person's keys, groups and entries keep their order;
+  // the schema has already said every value here is of the shape it relies on.
+  const config = present ? read.raw : {};
+  const hooks = {
+    ...((config["hooks"] ?? {}) as Record<string, HookGroup[]>),
+  };
   for (const [event, verb] of AGENT_EVENTS) {
     const entry = {
       type: "command",
@@ -556,8 +576,11 @@ const installAgentHooks = async (
         : { matcher: "", hooks: [entry] },
     ];
   }
-  const next = `${JSON.stringify({ ...config, hooks }, null, 2)}\n`;
-  if (present && next === read.text) return { path, action: "unchanged" };
+  const built = { ...config, hooks };
+  const next = `${JSON.stringify(built, null, 2)}\n`;
+  // As it should be, whatever its layout: the same keys in the same order. Nothing is written.
+  if (present && JSON.stringify(built) === JSON.stringify(read.raw))
+    return { path, action: "unchanged" };
   // Neuve's entries already right and only their place or layout differs: said as that.
   const judged = present
     ? await judgeAgentHooks(read.file, harness, command)

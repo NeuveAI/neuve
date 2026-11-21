@@ -160,20 +160,130 @@ test("a person's own entries, a group without hooks and extra fields survive, an
     "reordered: Neuve's claude-code hooks were already right",
   );
   expect(said()).not.toContain("added 6");
+  // Order counts, by serialised text: the person's groups in their order, then Neuve's.
   const after = JSON.parse(await readFile(settings, "utf8"));
-  expect(after.hooks.Stop).toContainEqual({
-    matcher: "Bash",
-    hooks: [
-      { type: "command", command: "echo mine", timeout: 3, label: "kept" },
-    ],
-    note: "a field Neuve doesn't use",
-  });
-  expect(after.hooks.Stop).toContainEqual({ matcher: "empty" });
-  expect(after.hooks.PreToolUse).toEqual([{ matcher: "x", hooks: [] }]);
-  // Neuve's entry now comes last.
+  expect(JSON.stringify(after.hooks.Stop.slice(0, 2))).toBe(
+    JSON.stringify([
+      {
+        matcher: "Bash",
+        hooks: [
+          { type: "command", command: "echo mine", timeout: 3, label: "kept" },
+        ],
+        note: "a field Neuve doesn't use",
+      },
+      { matcher: "empty" },
+    ]),
+  );
+  expect(JSON.stringify(after.hooks.PreToolUse)).toBe(
+    JSON.stringify([{ matcher: "x", hooks: [] }]),
+  );
   expect(JSON.stringify(after.hooks.Stop.at(-1))).toContain(
     "neuve-capture-hook",
   );
+});
+
+// Why: the schema reads keys it knows first; a rewrite built from it would reorder the person's
+// file and rewrite one already right. The output is built from the file as written.
+test("a file whose Neuve entries are as written is left byte for byte, with no backup", async () => {
+  const { root, settings, setUp, said } = await scene();
+  expect(await setUp()).toBe(0);
+  const written = JSON.parse(await readFile(settings, "utf8"));
+  // The person's keys first, their own layout, Neuve's entries untouched.
+  const text = JSON.stringify(
+    {
+      permissions: { allow: ["Bash(ls)"] },
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "Bash",
+            hooks: [{ type: "command", command: "echo mine" }],
+          },
+        ],
+        ...written.hooks,
+      },
+    },
+    null,
+    4,
+  );
+  await writeFile(settings, text);
+  expect(await setUp()).toBe(0);
+  expect(said()).toContain(`${settings}: unchanged`);
+  expect(await readFile(settings, "utf8")).toBe(text);
+  const { readdir } = await import("node:fs/promises");
+  expect(
+    (await readdir(join(root, "home/.claude"))).filter((name) =>
+      name.includes("neuve-backup"),
+    ),
+  ).toEqual([]);
+});
+
+test("a person's keys, groups and entries keep their order when Neuve's are added", async () => {
+  const { settings, setUp } = await scene();
+  await mkdir(join(settings, ".."), { recursive: true });
+  const mine = {
+    permissions: { allow: [] },
+    hooks: {
+      Stop: [
+        {
+          hooks: [{ command: "echo first", type: "command", timeout: 1 }],
+          matcher: "z",
+        },
+      ],
+      Notification: [{ matcher: "a", hooks: [] }],
+    },
+    theme: "dark",
+  };
+  await writeFile(settings, JSON.stringify(mine, null, 2));
+  expect(await setUp()).toBe(0);
+  const after = JSON.parse(await readFile(settings, "utf8"));
+  expect(Object.keys(after)).toEqual(["permissions", "hooks", "theme"]);
+  expect(Object.keys(after.hooks).slice(0, 2)).toEqual([
+    "Stop",
+    "Notification",
+  ]);
+  expect(JSON.stringify(after.hooks.Stop[0])).toBe(
+    JSON.stringify(mine.hooks.Stop[0]),
+  );
+});
+
+test("a changed matcher, a changed command and a hook under the wrong event each need an update", async () => {
+  const { settings, setUp, part } = await scene();
+  expect(await setUp()).toBe(0);
+  const written = await readFile(settings, "utf8");
+  const edit = async (change: (file: any) => void) => {
+    const file = JSON.parse(written);
+    change(file);
+    await writeFile(settings, JSON.stringify(file));
+    return (await part(settings))!;
+  };
+  expect(
+    await edit((file) => (file.hooks.Stop[0].matcher = "Bash")),
+  ).toMatchObject({
+    state: "update",
+    why: expect.stringContaining("its Stop hook's group was changed"),
+  });
+  expect(
+    await edit(
+      (file) =>
+        (file.hooks.Stop[0].hooks[0].command =
+          file.hooks.Stop[0].hooks[0].command.replace(
+            ">/dev/null 2>&1",
+            ">/tmp/log 2>&1",
+          )),
+    ),
+  ).toMatchObject({
+    state: "update",
+    why: expect.stringContaining("its Stop hook's command was changed"),
+  });
+  expect(
+    await edit((file) => {
+      file.hooks.SessionEnd = file.hooks.Stop;
+      file.hooks.Stop = file.hooks.SessionStart;
+    }),
+  ).toMatchObject({
+    state: "update",
+    why: expect.stringContaining("runs claude-code"),
+  });
 });
 
 test("an unreadable bundled script needs an update", async () => {

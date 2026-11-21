@@ -291,6 +291,48 @@ test("doctor reports an agent hook file it can't read in a repository with captu
   expect(await Bun.file(settings).text()).toBe('{"hooks":{"Stop":{}}}');
 });
 
+test("doctor shows a note beside an ok capture when it can't tell what a hook runs", async () => {
+  const { root, repository, home, doctor } = await scratch();
+  await markSetUp(repository);
+  const settings = join(home, ".claude/settings.json");
+  const isolated = {
+    CLAUDE_CONFIG_DIR: join(home, ".claude"),
+    CODEX_HOME: join(home, ".codex"),
+  };
+  const program = join(root, "bin/neuve");
+  await mkdir(dirname(program), { recursive: true });
+  await writeFile(program, "#!/bin/sh\nexit 0\n");
+  await chmod(program, 0o755);
+  const { runSetupHooks } = await import("../src/capture/setup-hooks.ts");
+  expect(
+    await runSetupHooks(
+      [
+        "--repo",
+        repository,
+        "--agents",
+        "claude-code",
+        "--claude-settings",
+        settings,
+        "--codex-hooks",
+        join(home, ".codex/hooks.json"),
+        "--command",
+        program,
+        "--no-stack",
+      ],
+      { stackStore: join(root, "stack") },
+    ),
+  ).toBe(0);
+  // The same entries, each running a bare word Neuve can't look up surely.
+  const text = await Bun.file(settings).text();
+  await writeFile(settings, text.replaceAll(`${program} hook`, "neuve hook"));
+  const capture = (await doctor(isolated)).check("capture");
+  const detail = String(capture?.detail);
+  expect(capture?.status).toBe("ok");
+  expect(
+    detail.includes("can't tell what 6 of its claude-code hook entries run"),
+  ).toBe(true);
+});
+
 test("the OpenAI route in the settings needs its sign-in, and unreadable settings are named", async () => {
   const { home, doctor } = await scratch();
   const folder = dirname(settingsPath(home));
