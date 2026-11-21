@@ -13,6 +13,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeInstallation } from "../src/installation.ts";
@@ -21,6 +22,7 @@ import { agentLooks, SETUP_HELP, upgradeSetup } from "../src/setup.ts";
 import {
   machineSteps,
   machineStepsRecord,
+  repositorySteps,
   pendingSteps,
   repositoryStepsRecord,
   runSteps,
@@ -153,7 +155,11 @@ test("setup runs again a step that doesn't ask, and never asks twice", async () 
   const steps = [step("look", ran), step("offer", ran, { asks: true })];
   await runner(record, steps, { mode: "setup" });
   const bytes = await readFile(record, "utf8");
-  await runner(record, steps, { mode: "setup" });
+  // A later clock: a record written again would carry a new time.
+  await runner(record, steps, {
+    mode: "setup",
+    now: () => new Date("2026-12-24T00:00:00.000Z"),
+  });
   expect(ran).toEqual(["look", "offer", "look"]);
   expect(await readFile(record, "utf8")).toBe(bytes);
 });
@@ -481,4 +487,147 @@ test("a list of repositories that can't be read is said, and the upgrade fails",
     `Neuve's list of repositories, ${registry}, can't be read`,
   );
   expect(said).not.toContain("are up to date");
+});
+
+// Why: the summary is what a person reads at the end of an install; it must call a place up to
+// date only by the rule doctor uses, so a step left to do is never hidden behind "up to date".
+test("the summary names a machine or repository with a step still to do, as doctor does", async () => {
+  const root = await scratch();
+  const repo = join(root, "repo");
+  await mkdir(repo);
+  Bun.spawnSync(["git", "init", "-q", repo]);
+  await writeInstallation(repo, {
+    cliBinary: "/opt/neuve/bin/neuve",
+    graphBinary: "/opt/neuve/lib/neuve/entire-graph",
+  });
+  const registry = join(root, "repositories.json");
+  await writeFile(
+    registry,
+    JSON.stringify({
+      version: 1,
+      repositories: [{ store: join(repo, ".git/neuve"), repository: repo }],
+    }),
+  );
+  const skipping = (
+    id: string,
+    scope: "machine" | "repository",
+  ): SetupStep => ({
+    id,
+    scope,
+    does: `does ${id}`,
+    asks: false,
+    run: async () => "skipped",
+  });
+  const fine = (id: string, scope: "machine" | "repository"): SetupStep => ({
+    id,
+    scope,
+    does: `does ${id}`,
+    asks: false,
+    run: async () => "applied",
+  });
+  for (const [machine, repository, where] of [
+    [
+      skipping("m", "machine"),
+      fine("r", "repository"),
+      "this machine, where setup does m",
+    ],
+    [
+      fine("m", "machine"),
+      skipping("r", "repository"),
+      `${repo}, where setup does r`,
+    ],
+  ] as const) {
+    const home = join(root, `home-${where.length}`);
+    let said = "";
+    await upgradeSetup({
+      home,
+      registry,
+      machine: [machine],
+      repository: () => [repository],
+      isTerminal: false,
+      version: "0.3.0",
+      out: async (text) => {
+        said += text;
+      },
+    });
+    expect(said, where).not.toContain("are up to date");
+    expect(said, where).toContain(`Still to do: ${where}.`);
+    // Doctor says the same of each place.
+    const machinePending = await pendingSteps(
+      [machine],
+      machineStepsRecord(home),
+    );
+    const repositoryPending = await pendingSteps(
+      [repository],
+      repositoryStepsRecord(join(repo, ".git/neuve/setup")),
+    );
+    expect(machinePending.waiting.length, where).toBe(
+      where.startsWith("this machine") ? 1 : 0,
+    );
+    expect(repositoryPending.waiting.length, where).toBe(
+      where.startsWith("this machine") ? 0 : 1,
+    );
+    await rm(repositoryStepsRecord(join(repo, ".git/neuve/setup")), {
+      force: true,
+    });
+  }
+});
+
+test("work already there counts before a flag that leaves the step out, and doctor doesn't list it", async () => {
+  const record = join(await scratch(), "setup-steps.json");
+  const ran: string[] = [];
+  const there = {
+    ...step("offer", ran, { asks: true, done: true }),
+    leftOut: "--no-skills left it out",
+  };
+  expect((await pendingSteps([there], record)).waiting).toHaveLength(0);
+  await runner(record, [there], { isTerminal: false });
+  expect((await written(record))["offer"]).not.toHaveProperty("outcome");
+});
+
+test("a record that isn't a plain file is left alone", async () => {
+  const directory = await scratch();
+  const ran: string[] = [];
+  const folder = join(directory, "folder.json");
+  await mkdir(folder);
+  const target = join(directory, "target.json");
+  await olderRecord(target, []);
+  const link = join(directory, "link.json");
+  await symlink(target, link);
+  for (const record of [folder, link]) {
+    const outcome = await runner(record, [step("added", ran)]);
+    expect(outcome.said, record).toContain("is damaged");
+  }
+  expect(ran).toEqual([]);
+  expect(await readFile(target, "utf8")).toContain('"steps":{}');
+});
+
+test("the skill offer records no 'no program found' from the upgrade's narrow look, but does from setup's", async () => {
+  const root = await scratch();
+  const context = {
+    home: join(root, "home"),
+    claudeConfigDir: undefined,
+    cwd: root,
+    version: "0.1.0",
+    source: (await import("../src/skills-cli.ts")).findSkillSource,
+    programs: async () => [],
+    isTerminal: true,
+    ask: async () => "n",
+    out: async () => {},
+    now: () => new Date(),
+  };
+  for (const narrow of [true, false]) {
+    const state = join(root, `state-${narrow}`);
+    const record = repositoryStepsRecord(state);
+    await runner(
+      record,
+      repositorySteps(state, async () => [], true, narrow, context),
+    );
+    const kept = await readFile(record, "utf8").catch(() => null);
+    if (narrow) expect(kept).toBe(null);
+    else
+      expect(JSON.parse(kept!).steps["skill-offer"]).toMatchObject({
+        outcome: "considered",
+      });
+  }
 });

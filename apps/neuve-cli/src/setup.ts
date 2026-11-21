@@ -47,6 +47,7 @@ import {
   repositoryStepsRecord,
   runSteps,
   type SetupStep,
+  type StepsOutcome,
 } from "./setup-steps.ts";
 import { gitAvailability, gitRefusal } from "./git-available.ts";
 import { z } from "zod";
@@ -366,7 +367,6 @@ export const upgradeSetup = async (input: {
     version: input.version,
     out: input.out,
   } as const;
-  let held = 0;
   let failed = 0;
   const stopped = (where: string) => async (error: unknown) => {
     failed += 1;
@@ -381,10 +381,19 @@ export const upgradeSetup = async (input: {
     record: machineStepsRecord(input.home),
     where: "this machine",
   }).catch(stopped("this machine"));
-  const machineHeld =
-    machine === undefined ||
-    machine.waiting.length > 0 ||
-    machine.left !== undefined;
+  // What is not up to date, per place, by the rule doctor uses: a record left alone, or steps it
+  // still lacks, waiting for a terminal or not.
+  const behind: string[] = [];
+  const note = (where: string, outcome: StepsOutcome | undefined) => {
+    if (outcome === undefined) return;
+    if (outcome.left !== undefined)
+      behind.push(`${where}, whose record is left as it is`);
+    else if (outcome.toDo.length > 0)
+      behind.push(
+        `${where}, where setup ${outcome.toDo.map((step) => step.does).join("; ")}`,
+      );
+  };
+  note("this machine", machine);
   const list = input.registry ?? Registry.registryPath(input.home);
   const registry = await Effect.runPromise(
     Registry.readRegistry(list).pipe(Effect.provide(BunFileSystem.layer)),
@@ -426,25 +435,17 @@ export const upgradeSetup = async (input: {
       record: repositoryStepsRecord(layout.directory),
       where: set.repository,
     }).catch(stopped(set.repository));
-    if (
-      outcome !== undefined &&
-      (outcome.waiting.length > 0 || outcome.left !== undefined)
-    )
-      held += 1;
+    note(set.repository, outcome);
   }
   const repositories = `${visited} ${visited === 1 ? "repository" : "repositories"} set up here`;
   await input.out(
-    held === 0 && !machineHeld && failed === 0
+    behind.length === 0 && failed === 0
       ? `Setup's steps are up to date on this machine and in ${repositories}.\n`
-      : `Setup's steps ran on this machine and in ${repositories}; ${[
-          ...(machineHeld ? ["this machine's are not up to date"] : []),
-          ...(held === 0
-            ? []
-            : [
-                `${held} ${held === 1 ? "repository's are" : "repositories' are"} not up to date`,
-              ]),
-          ...(failed === 0 ? [] : ["some stopped"]),
-        ].join(", ")}, as said above.\n`,
+      : `Setup's steps ran on this machine and in ${repositories}, and are not all up to date.${
+          behind.length === 0
+            ? ""
+            : ` Still to do: ${behind.join("; ")}. neuve setup there does it, asking at a terminal where a step asks.`
+        }${failed === 0 ? "" : " Some stopped, as said above; neuve setup upgrade finishes them."}\n`,
   );
   // Nonzero when a repository's steps stopped, so the install script says how to finish them.
   return failed === 0 ? 0 : 1;

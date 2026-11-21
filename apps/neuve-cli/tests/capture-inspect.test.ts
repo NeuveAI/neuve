@@ -77,6 +77,16 @@ test("a hook calling a program that is gone is a finding, and setup hooks repair
     ),
   ).toBe(true);
 
+  // A listed agent whose Neuve entries were taken out of the hook file is missing.
+  const kept = await readFile(files["claude-code"], "utf8");
+  await writeFile(files["claude-code"], JSON.stringify({ hooks: {} }));
+  expect(
+    (await inspectCapture(repo, hookFiles))?.parts.find(
+      (part) => part.path === files["claude-code"],
+    ),
+  ).toMatchObject({ state: "missing" });
+  await writeFile(files["claude-code"], kept);
+
   // The install moves: every hook still calls the old path, and nothing says so.
   await rm(join(root, "old copy"), { recursive: true });
   const stale = (await inspectCapture(repo, hookFiles))?.parts ?? [];

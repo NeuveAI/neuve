@@ -47,7 +47,7 @@ import { z } from "zod";
 import { Settings } from "@neuve/harness";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
 import { writePrivateEnvironment } from "./private-environment.ts";
-import { offerSkillsAfterSetup } from "./skills-cli.ts";
+import { offerSkillsAfterSetup, type SkillsContext } from "./skills-cli.ts";
 
 export type StepScope = "machine" | "repository";
 
@@ -183,9 +183,20 @@ export interface StepsOutcome {
   readonly changed: ReadonlyArray<string>;
   /** The steps left for a terminal. */
   readonly waiting: ReadonlyArray<SetupStep>;
+  /**
+   * Every step still to do once the run ends, waiting or not: those the record still lacks. The
+   * same as doctor's `pendingSteps`, from the same rule (`stillToDo`).
+   */
+  readonly toDo: ReadonlyArray<SetupStep>;
   /** Why the record was left alone, when it was. */
   readonly left?: string;
 }
+
+/** The steps a record still lacks: what is left to do, for setup's summary and for doctor alike. */
+const stillToDo = (steps: ReadonlyArray<SetupStep>, entries: Entries) =>
+  steps.filter(
+    (step) => step.dropped === undefined && entries[step.id] === undefined,
+  );
 
 /** Runs one scope's steps against its record, writing the record after each change. */
 export const runSteps = async (run: StepsRun): Promise<StepsOutcome> => {
@@ -194,7 +205,7 @@ export const runSteps = async (run: StepsRun): Promise<StepsOutcome> => {
     await run.out(
       `Setup's steps for ${run.where} were left as they are: ${read.why}.\n`,
     );
-    return { changed: [], waiting: [], left: read.why };
+    return { changed: [], waiting: [], toDo: [], left: read.why };
   }
   const entries: Entries = { ...read.steps };
   const changed: string[] = [];
@@ -252,12 +263,14 @@ export const runSteps = async (run: StepsRun): Promise<StepsOutcome> => {
         (step.asks && outcomeOf(earlier) === "applied"))
     )
       continue;
-    if (step.leftOut !== undefined) {
-      await keep(step.id, { considered: step.leftOut });
-      continue;
-    }
+    // Work already there counts before the person's flag: a repository offered the skill before
+    // steps were recorded has it applied, whatever this run leaves out.
     if (earlier === undefined && (await step.done?.()) === true) {
       await keep(step.id, "applied");
+      continue;
+    }
+    if (step.leftOut !== undefined) {
+      await keep(step.id, { considered: step.leftOut });
       continue;
     }
     if (step.asks && !run.isTerminal) {
@@ -272,7 +285,13 @@ export const runSteps = async (run: StepsRun): Promise<StepsOutcome> => {
     await run.out(
       `Waiting in ${run.where} for an answer at a terminal: setup ${waiting.map((step) => step.does).join("; ")}. Run neuve setup there at a terminal to be asked.\n`,
     );
-  return { changed, waiting };
+  const toDo = stillToDo(run.steps, entries);
+  const other = toDo.filter((step) => !waiting.includes(step));
+  if (other.length > 0)
+    await run.out(
+      `Still to do in ${run.where}: setup ${other.map((step) => step.does).join("; ")}. neuve setup there does it.\n`,
+    );
+  return { changed, waiting, toDo };
 };
 
 /**
@@ -291,13 +310,17 @@ export const pendingSteps = async (
   if (read.kind !== "read")
     return { waiting: [], considered: [], left: read.why };
   const waiting: SetupStep[] = [];
+  // Work already there, which a run would record before anything else, isn't left to do.
+  for (const step of stillToDo(steps, read.steps))
+    if ((await step.done?.()) !== true) waiting.push(step);
   const considered: Array<{ step: SetupStep; reason: string }> = [];
   for (const step of steps) {
-    if (step.dropped === true) continue;
     const entry = read.steps[step.id];
-    if (entry === undefined) {
-      if ((await step.done?.()) !== true) waiting.push(step);
-    } else if (outcomeOf(entry) === "considered")
+    if (
+      step.dropped === undefined &&
+      entry !== undefined &&
+      outcomeOf(entry) === "considered"
+    )
       considered.push({ step, reason: entry.reason ?? "no reason was kept" });
   }
   return { waiting, considered };
@@ -334,6 +357,8 @@ export const repositorySteps = (
   offer = true,
   /** `agents` comes from the upgrade's narrow look, so finding none is no reason to record. */
   narrow = false,
+  /** For tests: the skill offer's surroundings, in place of the person's terminal and home. */
+  context?: SkillsContext,
 ): ReadonlyArray<SetupStep> => {
   const offered = async () =>
     (await lstat(join(stateDirectory, "skills-offered.json")).catch(
@@ -352,6 +377,7 @@ export const repositorySteps = (
         const result = await offerSkillsAfterSetup({
           stateDirectory,
           agents: found,
+          ...(context === undefined ? {} : { context }),
         });
         if (await offered()) return "applied";
         return result.reason === undefined || (narrow && found.length === 0)
