@@ -11,7 +11,8 @@ import type { PlanSection } from "./plan.ts";
  * facts could not be computed). Code's factors are stored beside the model's (`codeFactors`), never
  * among the factors the lane rule reads: a fact written for every section is not evidence that a
  * level is high, so it must not make the "cited evidence" rule a constant. The `removed` impact entry follows
- * the one rule `removesDeclaration`, which also decides code's own removal comment (`settled.ts`),
+ * the one rule `removesDeclaration`, which also decides code's own removal comment and facts line
+ * (`settled.ts`, in `removalSentence`'s words),
  * so the entry and the comment are the same removal and the comment is not doubled.
  *
  * Takes only types from `plan.ts`, and nothing imports it at module load but `reading.ts` and
@@ -54,9 +55,19 @@ export const removesDeclaration = (
   section.owned.length > 0 &&
   section.owned.every((range) => range.side === "old");
 
-/** The words of code's `removed` impact entry: one sentence, the same for every removed declaration. */
-export const REMOVED_TEXT =
-  "The change removes this declaration, and adds nothing in its place.";
+/**
+ * The words of code's `removed` impact entry: one sentence, the same for every removed declaration.
+ * Like `removalSentence`, it says only what `removesDeclaration` checked; whether the change adds
+ * something in its place elsewhere is never checked, so it is never said (NEU-446).
+ */
+export const REMOVED_TEXT = "The change removes this declaration.";
+
+/**
+ * What a person reads of a removed declaration, on its facts line and in code's removal comment:
+ * its title and the lines it had. One sentence, built here only.
+ */
+export const removalSentence = (title: string, lines: number) =>
+  `This change removes ${title} (${plural(lines, "line")}).`;
 
 const lines = (section: CodeFactsSection, side: "old" | "new") =>
   section.owned

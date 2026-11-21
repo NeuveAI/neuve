@@ -135,12 +135,37 @@ const PAIR_HEAD =
 const GONE_BASE =
   "export function keep() {\n  return 1;\n}\n\nexport function drop(x: number) {\n  const y = x * 2;\n  return y + 1;\n}\n";
 const GONE_HEAD = "export function keep() {\n  return 1;\n}\n";
+/**
+ * The two shapes NEU-446 plants, each removing a declaration whose replacement is elsewhere in the
+ * range: `shout` moves from text.ts to its own file under the same name, and `Panel`'s file is
+ * deleted while its caller, page.ts, now renders `List` from a new file.
+ */
+const PLANTED_BASE: Record<string, string> = {
+  "text.ts":
+    "export function whisper(s: string) {\n  return s.toLowerCase();\n}\n\nexport function shout(s: string) {\n  const loud = s.toUpperCase();\n  return `${loud}!`;\n}\n",
+  "panel.ts":
+    "export function Panel(title: string) {\n  const heading = `<h1>${title}</h1>`;\n  return `<section>${heading}</section>`;\n}\n",
+  "page.ts":
+    'import { Panel } from "./panel";\n\nexport const page = () => Panel("Home");\n',
+};
+const PLANTED_HEAD: Record<string, string | null> = {
+  "text.ts":
+    "export function whisper(s: string) {\n  return s.toLowerCase();\n}\n",
+  "shout.ts":
+    "export function shout(s: string) {\n  const loud = s.toUpperCase();\n  return `${loud}!`;\n}\n",
+  "panel.ts": null,
+  "list.ts":
+    'export function List(items: string[]) {\n  const rows = items.map((item) => `<li>${item}</li>`);\n  return `<ul>${rows.join("")}</ul>`;\n}\n',
+  "page.ts":
+    'import { List } from "./list";\n\nexport const page = () => List(["Home"]);\n',
+};
 
 const repositoryOf = (
   name: string,
   withTest: boolean,
   pair = false,
   removal = false,
+  planted = false,
 ) => {
   const repository = join(directory, name, "repo");
   mkdirSync(join(repository, "src"), { recursive: true });
@@ -171,6 +196,9 @@ const repositoryOf = (
   writeFileSync(join(repository, "src", "label.ts"), LABEL_BASE);
   if (pair) writeFileSync(join(repository, "src", "pair.ts"), PAIR_BASE);
   if (removal) writeFileSync(join(repository, "src", "gone.ts"), GONE_BASE);
+  if (planted)
+    for (const [file, text] of Object.entries(PLANTED_BASE))
+      writeFileSync(join(repository, "src", file), text);
   // Bun's test runner, so a `.test.ts` file is declared a test by the repository's own rule.
   writeFileSync(
     join(repository, "package.json"),
@@ -193,6 +221,10 @@ const repositoryOf = (
     writeFileSync(join(repository, "tests", "count.test.ts"), TEST_HEAD);
   if (pair) writeFileSync(join(repository, "src", "pair.ts"), PAIR_HEAD);
   if (removal) writeFileSync(join(repository, "src", "gone.ts"), GONE_HEAD);
+  if (planted)
+    for (const [file, text] of Object.entries(PLANTED_HEAD))
+      if (text === null) rmSync(join(repository, "src", file));
+      else writeFileSync(join(repository, "src", file), text);
   const head = commit("count only filled items");
   return { repository, range: { baseOid: base, headOid: head } };
 };
@@ -235,6 +267,8 @@ interface Options {
   readonly pair?: boolean;
   /** `src/gone.ts`, whose second function the change removes whole. */
   readonly removal?: boolean;
+  /** NEU-446's planted shapes (`PLANTED_BASE`): a function moved, and a component replaced. */
+  readonly planted?: boolean;
   /** A second kept finding, on lines no section owns, naming a Map group that is no batch. */
   readonly strayFinding?: boolean;
 }
@@ -252,6 +286,7 @@ const review = async (name: string, options: Options = {}) => {
     options.withTest === true,
     options.pair === true,
     options.removal === true,
+    options.planted === true,
   );
   const location = storeLocationIn(join(directory, name, "store"));
   const scope = await Effect.runPromise(Scope.make());
@@ -1276,7 +1311,7 @@ test.skipIf(graph.skip)(
         if (section.identity.parts.side === "old" && added === 0) {
           removals++;
           expect(text).toBe(
-            `${section.title} is removed, and nothing is added in its place. ${line}`,
+            `This change removes ${section.title} (${plural(removed)}).`,
           );
         } else expect(text).toBe(line);
         expect(section.content!.facts.cites).toEqual(
@@ -1308,6 +1343,61 @@ test.skipIf(graph.skip)(
         texts.push(JSON.stringify(event.payload));
     for (const text of texts)
       for (const word of HARNESS_WORDS) expect(text).not.toMatch(word);
+    await world.harness.close(context);
+  },
+  120_000,
+);
+
+// Reason (NEU-446): code once said a removed declaration "adds nothing in its place" from the
+// section's own lines, so a function moved to another file, or a component whose callers now render
+// something else, read as a loss. On a real range planting both shapes beside a dead-code deletion,
+// nothing published may claim an absence, and every removal must still be said, on its facts line
+// and in code's removal comment, which is what the batch card and digest lead with (decision 13.20).
+test.skipIf(graph.skip)(
+  "a moved function and a replaced component claim no absence, and every removed declaration, a dead one too, still shows its removal",
+  async () => {
+    graph.require();
+    const world = await review("planted", { removal: true, planted: true });
+    const { batches } = await allSettled(world);
+    expect(JSON.stringify(batches)).not.toContain("in its place");
+    const removals = batches.flatMap((batch) =>
+      batch.sections.filter(
+        (section) =>
+          section.identity.parts.side === "old" &&
+          section.ownedRanges.every(
+            (range) => range.kind === "lines" && range.side === "old",
+          ),
+      ),
+    );
+    expect(removals.map((section) => section.title).sort()).toEqual([
+      "Panel in panel.ts",
+      "drop in gone.ts",
+      "shout in text.ts",
+    ]);
+    const lines = {
+      "Panel in panel.ts": 4,
+      "drop in gone.ts": 5,
+      "shout in text.ts": 5,
+    };
+    for (const section of removals) {
+      const sentence = `This change removes ${section.title} (${lines[section.title as keyof typeof lines]} lines).`;
+      expect(section.content!.facts.text).toBe(sentence);
+      const comments = batches.flatMap((batch) =>
+        batch.units.flatMap((unit) =>
+          unit.comments.filter(
+            (comment) => comment.section === section.identity.key,
+          ),
+        ),
+      );
+      expect(
+        comments
+          .filter(
+            (comment) =>
+              comment.kind === "impact" && comment.effect === "removed",
+          )
+          .map((comment) => comment.body),
+      ).toEqual([sentence]);
+    }
     await world.harness.close(context);
   },
   120_000,
