@@ -9,7 +9,7 @@
 import { expect, test } from "bun:test"
 import type { ReviewList } from "@neuve/records-core"
 
-import { homeBatchOf, plainDigest } from "./home.server"
+import { homeBatchOf, homeBatchesOf, plainDigest } from "./home.server"
 import { NO_STANDING, summaryOf } from "./reviews.server"
 import type { UnitStanding } from "./reviews.server"
 
@@ -94,4 +94,39 @@ test("an older review's batch asks for nothing, and its desk opens on its first 
   expect(batch.needYou).toBe(0)
   expect(batch.asked).toBe(0)
   expect(batch.deskUnitId).toBe("u1")
+})
+
+test("a cycle's own address puts the batches with human-required work first; the list keeps packet order", () => {
+  // Why (NEU-434): the page a person lands on from a cycle's address must lead with what they decide.
+  const batches: Array<ReviewList.ListedBatch> = [
+    {
+      batchId: "b1",
+      title: "One",
+      units: [{ unitId: "v1", lane: "human-suggested" }],
+    },
+    { batchId: "b2", title: "Two", units: [{ unitId: "v2", lane: "agentic" }] },
+    {
+      batchId: "b3",
+      title: "Three",
+      units: [{ unitId: "v3", lane: "human-required" }],
+    },
+    {
+      batchId: "b4",
+      title: "Four",
+      units: [{ unitId: "v4", lane: "human-required" }],
+    },
+  ]
+  const cycle = { ...review, batches }
+  // b4's human-required unit is decided: it no longer leads.
+  const decidedFour: UnitStanding = {
+    ...NO_STANDING,
+    decided: new Map([["v4", "approve"]]),
+  }
+  const summary = summaryOf(cycle, decidedFour, new Set(), undefined)
+  const order = (requiredFirst: boolean) =>
+    homeBatchesOf(summary, cycle, undefined, decidedFour, requiredFirst).map(
+      (batch) => batch.id
+    )
+  expect(order(true)).toEqual(["b3", "b1", "b2", "b4"])
+  expect(order(false)).toEqual(["b1", "b2", "b3", "b4"])
 })

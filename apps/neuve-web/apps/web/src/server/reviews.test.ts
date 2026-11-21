@@ -21,6 +21,7 @@ import {
   NO_STANDING,
   defaultListOf,
   entryUnitOf,
+  rebasedOf,
   replacedOf,
   summaryOf,
   waitingOf,
@@ -297,4 +298,33 @@ test("Waiting on you lists open human-required work first, then landed, then the
   const across = waitingOf(listed, standing)
   expect(across).toMatchObject({ units: 6, nextUnitId: "01F-1" })
   expect(across.waiting).toHaveLength(5)
+})
+
+test("a gone review a later whole review carries commit for commit counts once; one it doesn't carry stays", () => {
+  const reviews = [
+    ranged("01A", "o", "a"),
+    ranged("01B", "o", "b"),
+    ranged("01C", "p", "c"),
+    // Stopped with batches unpublished: it carries nothing yet.
+    { ...ranged("01D", "p", "d"), pendingBatches: 1 },
+  ]
+  const ends = new Map([
+    ["01A", "gone" as const],
+    ["01B", "gone" as const],
+  ])
+  const patches: Record<string, Array<string>> = {
+    "01A": ["p1", "p2"],
+    "01B": ["p3"],
+    "01C": ["p1", "p2", "p4"],
+    "01D": ["p3"],
+  }
+  // 01A's every commit is in 01C; 01B's only commit is in 01D, which isn't whole.
+  expect([
+    ...rebasedOf(reviews, ends, (review) => patches[review.cycleId]),
+  ]).toEqual(["01A"])
+  // One commit 01C lacks keeps 01A listed.
+  patches["01A"] = ["p1", "p5"]
+  expect(
+    rebasedOf(reviews, ends, (review) => patches[review.cycleId]).size
+  ).toBe(0)
 })

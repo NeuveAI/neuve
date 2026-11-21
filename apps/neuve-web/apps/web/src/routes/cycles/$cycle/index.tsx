@@ -20,7 +20,13 @@ export const Route = createFileRoute("/cycles/$cycle/")({
   validateSearch: ReturnSearch,
   loader: async ({ params }) => {
     if (!Ulid.safeParse(params.cycle).success) throw notFound()
-    return loadHome({ data: { page: 1, filter: "all", cycle: params.cycle } })
+    const load = await loadHome({
+      data: { page: 1, filter: "all", cycle: params.cycle },
+    })
+    // A cycle Records doesn't hold here is not found, as any unknown address.
+    if (load.status !== "ready" || load.data.reviews.length === 0)
+      throw notFound()
+    return load
   },
   head: () => ({ meta: [{ title: "Review · Neuve" }] }),
   ...PENDING,

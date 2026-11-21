@@ -22,7 +22,7 @@ import type { OpensCache } from "./desk.server"
 import { repositoryName } from "./git-source.server"
 import { LANE_FACTS } from "./lane-facts"
 import type { LaneFacts } from "./lane-facts"
-import { ancestryOf, rangeEnds } from "./range-done.server"
+import { ancestryOf, rangeEnds, rangePatchesOf } from "./range-done.server"
 import type { RangeEnd } from "./range-done.server"
 import { NoStore, readRecords, repository } from "./records.server"
 
@@ -174,6 +174,39 @@ export const entryUnitOf = (
   )?.unitId
 }
 
+/** A review that published every batch: it holds what it reviewed. */
+const wholeOf = (review: Listed, facts: LaneFacts = LANE_FACTS) =>
+  review.batches.length > 0 && facts.listedPendingBatches(review) === 0
+
+/**
+ * The gone reviews (`ends`) a later whole review carries: every commit of
+ * the gone range has a commit of the later range with the same patch-id,
+ * git's rebase equivalence (`git cherry`). A rebased pull request reviewed
+ * again counts once. A gone review with a commit no later review carries
+ * stays.
+ */
+export const rebasedOf = (
+  reviews: ReadonlyArray<Listed>,
+  ends: ReadonlyMap<string, RangeEnd>,
+  patchesOf: (review: Listed) => ReadonlyArray<string> | undefined,
+  facts: LaneFacts = LANE_FACTS
+): ReadonlySet<string> =>
+  new Set(
+    reviews
+      .filter((earlier) => {
+        if (ends.get(earlier.cycleId) !== "gone") return false
+        const own = patchesOf(earlier) ?? []
+        if (own.length === 0) return false
+        return reviews.some((later) => {
+          if (later.cycleId <= earlier.cycleId || !wholeOf(later, facts))
+            return false
+          const carried = new Set(patchesOf(later) ?? [])
+          return own.every((patch) => carried.has(patch))
+        })
+      })
+      .map((review) => review.cycleId)
+  )
+
 /**
  * The reviews a later review replaces: one opened later, with every batch
  * published, whose base is at or before the earlier base and whose head is
@@ -193,8 +226,7 @@ export const replacedOf = (
         reviews.some(
           (later) =>
             later.cycleId > earlier.cycleId &&
-            later.batches.length > 0 &&
-            facts.listedPendingBatches(later) === 0 &&
+            wholeOf(later, facts) &&
             descends(later.range.baseOid, earlier.range.baseOid) &&
             descends(earlier.range.headOid, later.range.headOid)
         )
@@ -522,7 +554,7 @@ export async function reviewsLoad(options: {
 }
 
 /** Git's word, or none when git can't say: nothing replaced, nothing ended. */
-const orNone = <A>(read: Promise<A>, none: A, what: string) =>
+export const orNone = <A>(read: Promise<A>, none: A, what: string) =>
   read.catch((error: unknown) => {
     console.warn(`the Reviews load could not read ${what} from git`, error)
     return none
@@ -583,8 +615,7 @@ export async function reviewsRead(options: {
   if (!options.cycle && (!read || read.recent.total === 0))
     return { status: "empty" }
   const reviews = read?.reviews ?? []
-  const standing = read?.standing ?? NO_STANDING
-  let pageStanding = standing
+  let standing = read?.standing ?? NO_STANDING
   const feedback = new Set(read?.feedback)
   // How a range ended matters only to a review with a unit that waits.
   const ends = await orNone(
@@ -601,6 +632,43 @@ export async function reviewsRead(options: {
     new Map<string, RangeEnd>(),
     "how the ranges ended"
   )
+  // A gone review a later review carries, commit for commit, is replaced
+  // like one whose range a later review holds.
+  const gone = reviews.filter((review) => ends.get(review.cycleId) === "gone")
+  if (gone.length > 0) {
+    const first = gone.reduce(
+      (earliest, review) =>
+        review.cycleId < earliest ? review.cycleId : earliest,
+      gone[0]?.cycleId ?? ""
+    )
+    const asked = reviews.filter(
+      (review) =>
+        ends.get(review.cycleId) === "gone" ||
+        (review.cycleId > first && wholeOf(review))
+    )
+    const patches = await orNone(
+      rangePatchesOf(
+        at,
+        asked.map((review) => review.range)
+      ),
+      new Map<string, ReadonlyArray<string>>(),
+      "the reviewed commits"
+    )
+    const rebased = rebasedOf(reviews, ends, (review) =>
+      patches.get(`${review.range.baseOid}..${review.range.headOid}`)
+    )
+    if (rebased.size > 0)
+      standing = {
+        ...standing,
+        takenOver: new Set([
+          ...standing.takenOver,
+          ...reviews
+            .filter((review) => rebased.has(review.cycleId))
+            .flatMap((review) => units(review).map((unit) => unit.unitId)),
+        ]),
+      }
+  }
+  let pageStanding = standing
   const waiting = defaultListOf(
     reviews.slice(0, read?.recent.reviews.length),
     standing,

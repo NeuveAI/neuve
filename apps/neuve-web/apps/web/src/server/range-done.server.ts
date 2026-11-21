@@ -6,6 +6,9 @@ import type { SharedOutcome } from "@neuve/records-core/shared-work"
  * user's last fetch left the repository:
  * - which reviewed commits descend from which, for a later review whose
  *   range holds an earlier one;
+ * - each range's commits by patch-id (`git patch-id --stable`, the rebase
+ *   equivalence `git cherry` uses), for a rebased review a later review
+ *   carries;
  * - whether a range is done against the repository's default branch
  *   (`origin/HEAD`, else the review's recorded base ref when it names a
  *   branch): landed, when its head is in the default branch or the diff of
@@ -18,22 +21,33 @@ import type { SharedOutcome } from "@neuve/records-core/shared-work"
  * (`refs/neuve/reviews/<head>`, record 0015) and other tools' refs keep
  * commits from pruning, not a range open.
  *
+ * A git failure (a repository git refuses, a broken object database) is
+ * never an answer: every read throws, and the caller treats git as silent.
+ *
  * Each read runs once per key through records-core's shared work (record
  * 0016): concurrent loads join the run in flight, and an answer that commit
  * IDs alone decide is kept for the next load. Answers that hang on refs are
- * keyed by the refs they read, which each load reads afresh.
+ * keyed by the refs they read: one listing of them per load.
  */
 
 export type RangeEnd = "landed" | "gone"
 
 const COUNTED_REFS = ["refs/heads", "refs/remotes", "refs/tags"]
 
-/** Runs `git -C at …`, with `input` on its stdin; its stdout, or undefined when it fails. */
-const git = async (
+/** A full commit ID; anything else from the store is never handed to git. */
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+
+/** Git exited with an error: it said nothing about the ranges. */
+export class GitSilent extends Error {
+  override readonly name = "GitSilent"
+}
+
+/** Runs `git -C at …`, with `input` on its stdin: its exit code and stdout. */
+const run = async (
   at: string,
   args: ReadonlyArray<string>,
   input?: string | ReadableStream<Uint8Array>
-): Promise<string | undefined> => {
+) => {
   const child = Bun.spawn(["git", "-C", at, ...args], {
     stdin:
       input === undefined
@@ -48,22 +62,41 @@ const git = async (
     new Response(child.stdout).text(),
     child.exited,
   ])
-  return code === 0 ? out : undefined
+  return { code, out }
+}
+
+/** Stdout of a git command that must succeed. */
+const must = async (
+  at: string,
+  args: ReadonlyArray<string>,
+  input?: string | ReadableStream<Uint8Array>
+) => {
+  const { code, out } = await run(at, args, input)
+  if (code !== 0) throw new GitSilent(`git ${args[0]} exited ${code}`)
+  return out
+}
+
+/** Stdout of a git command whose exit 1 means "none" (a missing ref, no common ancestor); undefined then. */
+const maybe = async (at: string, args: ReadonlyArray<string>) => {
+  const { code, out } = await run(at, args)
+  if (code === 1) return undefined
+  if (code !== 0) throw new GitSilent(`git ${args[0]} exited ${code}`)
+  return out
 }
 
 const lines = (text: string | undefined) =>
   (text ?? "").split("\n").filter((line) => line !== "")
 
-/** The patch-id of `git <args>`'s diff output, or undefined for an empty diff. */
+/** Each change's patch-id in `git <args>`'s output, with the commit it names (none for a plain diff). */
 const patchIds = async (at: string, args: ReadonlyArray<string>) => {
   const diff = Bun.spawn(["git", "-C", at, ...args], {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "ignore",
   })
-  const ids = await git(at, ["patch-id", "--stable"], diff.stdout)
-  await diff.exited
-  // Each line is `<patch-id> <commit>`; a plain diff names no commit.
+  const ids = await must(at, ["patch-id", "--stable"], diff.stdout)
+  const code = await diff.exited
+  if (code !== 0) throw new GitSilent(`git ${args[0]} exited ${code}`)
   return lines(ids).map((line) => {
     const [patch = "", commit = ""] = line.split(" ")
     return { patch, commit }
@@ -77,7 +110,7 @@ const ok = <A>(value: A): SharedOutcome<A, never> => ({
 
 /**
  * One run per key in flight, and its answer kept in `memo`, which the
- * caller bounds: commit IDs alone decide what each memo here holds.
+ * caller bounds. A failure is never kept.
  */
 const once = async <A>(
   work: SharedWork<A>,
@@ -99,11 +132,12 @@ const once = async <A>(
 
 /** The commits among `oids` the repository holds (`cat-file --batch-check`). */
 const present = async (at: string, oids: ReadonlyArray<string>) => {
-  if (oids.length === 0) return new Set<string>()
-  const out = await git(
+  const asked = [...new Set(oids)].filter((oid) => OID.test(oid))
+  if (asked.length === 0) return new Set<string>()
+  const out = await must(
     at,
     ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
-    `${oids.join("\n")}\n`
+    `${asked.join("\n")}\n`
   )
   return new Set(
     lines(out)
@@ -128,7 +162,7 @@ export async function ancestryOf(
   at: string,
   oids: ReadonlyArray<string>
 ): Promise<Descends> {
-  const held = [...(await present(at, [...new Set(oids)]))].sort()
+  const held = [...(await present(at, oids))].sort()
   const key = `${at}\0${held.join(",")}`
   // Only the newest set is kept: the next load reads the same reviews.
   if (!ancestryMemo.has(key)) ancestryMemo = new Map()
@@ -142,16 +176,22 @@ export async function ancestryOf(
       if (held.length === 0) return () => false
       const bound =
         held.length > 1
-          ? lines(await git(at, ["merge-base", "--octopus", ...held]))[0]
+          ? lines(
+              await maybe(at, [
+                "merge-base",
+                "--octopus",
+                "--end-of-options",
+                ...held,
+              ])
+            )[0]
           : undefined
-      const out = await git(at, [
+      const out = await must(at, [
         "rev-list",
         "--parents",
+        "--end-of-options",
         ...held,
         ...(bound ? [`^${bound}`] : []),
       ])
-      if (out === undefined)
-        throw new Error("git could not list the reviewed history")
       const parents = new Map<string, ReadonlyArray<string>>()
       for (const line of lines(out)) {
         const [commit = "", ...rest] = line.split(" ")
@@ -180,10 +220,65 @@ export async function ancestryOf(
   )
 }
 
+const rangePatchWork = new SharedWork<ReadonlyArray<string>>()
+let rangePatchMemo = new Map<string, ReadonlyArray<string>>()
+
+/**
+ * Each range's commits by patch-id, merges left out, by `base..head`: the
+ * changes a rebase carries under new hashes. A range the repository can't
+ * read throws.
+ */
+export async function rangePatchesOf(
+  at: string,
+  ranges: ReadonlyArray<{ readonly baseOid: string; readonly headOid: string }>
+): Promise<ReadonlyMap<string, ReadonlyArray<string>>> {
+  const asked = [
+    ...new Set(
+      ranges
+        .filter(
+          ({ baseOid, headOid }) => OID.test(baseOid) && OID.test(headOid)
+        )
+        .map(({ baseOid, headOid }) => `${baseOid}..${headOid}`)
+    ),
+  ]
+  // Only the ranges this load asks for keep their answers.
+  const kept = new Map<string, ReadonlyArray<string>>()
+  for (const range of asked) {
+    const held = rangePatchMemo.get(`${at}\0${range}`)
+    if (held) kept.set(`${at}\0${range}`, held)
+  }
+  rangePatchMemo = kept
+  const patches = await Promise.all(
+    asked.map((range) =>
+      once(
+        rangePatchWork,
+        "web.range.patches",
+        `${at}\0${range}`,
+        rangePatchMemo,
+        async () =>
+          (
+            await patchIds(at, [
+              "log",
+              "-p",
+              "--no-merges",
+              "--no-color",
+              "--no-ext-diff",
+              "--no-textconv",
+              "--format=commit %H",
+              "--end-of-options",
+              range,
+            ])
+          ).map(({ patch }) => patch)
+      )
+    )
+  )
+  return new Map(asked.map((range, index) => [range, patches[index] ?? []]))
+}
+
 /** What each default branch tip answers, dropped once a load no longer reads that tip. */
 interface TipMemo {
-  /** The patch-id of each first-parent commit's change, read once per tip. */
-  readonly firstParent: Map<string, ReadonlyMap<string, string>>
+  /** The patch-ids of the tip's first-parent commits after a fork point, by fork point. */
+  readonly firstParent: Map<string, ReadonlySet<string>>
   /** Whether a tip's change from its fork off this tip squash-landed on it. */
   readonly squashed: Map<string, boolean>
   /** How a head ended, by the head and the refs that hold it. */
@@ -191,7 +286,7 @@ interface TipMemo {
 }
 
 const tips = new Map<string, TipMemo>()
-const patchWork = new SharedWork<ReadonlyMap<string, string>>()
+const patchWork = new SharedWork<ReadonlySet<string>>()
 const squashWork = new SharedWork<boolean>()
 const endWork = new SharedWork<RangeEnd | undefined>()
 
@@ -205,27 +300,33 @@ const tipMemo = (tip: string) => {
   return memo
 }
 
-/** Each first-parent commit of `tip` by the patch-id of its change. */
-const firstParentPatches = (at: string, tip: string) =>
+/**
+ * The patch-ids of `tip`'s first-parent commits after `fork`: only a commit
+ * that landed after a branch forked can be that branch landing.
+ */
+const firstParentPatches = (at: string, tip: string, fork: string) =>
   once(
     patchWork,
     "web.range.first-parent",
-    `${at}\0${tip}`,
+    `${at}\0${tip}\0${fork}`,
     tipMemo(tip).firstParent,
-    async () => {
-      const ids = await patchIds(at, [
-        "log",
-        "--first-parent",
-        "-m",
-        "-p",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--format=commit %H",
-        tip,
-      ])
-      return new Map(ids.map(({ patch, commit }) => [patch, commit]))
-    }
+    async () =>
+      new Set(
+        (
+          await patchIds(at, [
+            "log",
+            "--first-parent",
+            "-m",
+            "-p",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--format=commit %H",
+            "--end-of-options",
+            `${fork}..${tip}`,
+          ])
+        ).map(({ patch }) => patch)
+      )
   )
 
 /** Whether `from`'s change since it forks off `tip` landed on `tip` as one first-parent commit. */
@@ -236,26 +337,35 @@ const squashLanded = (at: string, from: string, tip: string) =>
     `${at}\0${from}\0${tip}`,
     tipMemo(tip).squashed,
     async () => {
-      const fork = lines(await git(at, ["merge-base", from, tip]))[0]
+      const fork = lines(
+        await maybe(at, ["merge-base", "--end-of-options", from, tip])
+      )[0]
       if (!fork) return false
       const [change] = await patchIds(at, [
         "diff",
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
+        "--end-of-options",
         fork,
         from,
       ])
       if (!change) return false
-      const landed = (await firstParentPatches(at, tip)).get(change.patch)
-      // A first-parent commit before the fork was already in it.
-      return (
-        landed !== undefined &&
-        (await git(at, ["merge-base", "--is-ancestor", landed, fork])) ===
-          undefined
-      )
+      return (await firstParentPatches(at, tip, fork)).has(change.patch)
     }
   )
+
+/** A ref's commit, or undefined when there is no such ref. */
+const commitOf = async (at: string, ref: string) =>
+  lines(
+    await maybe(at, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "--end-of-options",
+      `${ref}^{commit}`,
+    ])
+  )[0]
 
 /** The default branch's tip: `origin/HEAD`, else `baseRef` when it names a branch. */
 const defaultTipOf = async (
@@ -265,36 +375,77 @@ const defaultTipOf = async (
 ) => {
   if (origin) return origin
   const name = lines(
-    await git(at, [
+    await maybe(at, [
       "rev-parse",
       "--verify",
       "--quiet",
       "--symbolic-full-name",
+      "--end-of-options",
       baseRef,
     ])
   )[0]
   if (!name?.startsWith("refs/heads/") && !name?.startsWith("refs/remotes/"))
     return undefined
-  return lines(
-    await git(at, ["rev-parse", "--verify", "--quiet", `${name}^{commit}`])
-  )[0]
+  return commitOf(at, name)
 }
 
-/** The tips of counted refs that hold `head`, peeled to commits; undefined when git can't say. */
-const tipsHolding = async (at: string, head: string) => {
-  const out = await git(at, [
-    "for-each-ref",
-    "--contains",
-    head,
-    "--format=%(if)%(*objectname)%(then)%(*objectname)%(else)%(objectname)%(end)",
-    ...COUNTED_REFS,
-  ])
-  return out === undefined ? undefined : [...new Set(lines(out))].sort()
+const refsWork = new SharedWork<string>()
+const holdWork = new SharedWork<ReadonlyArray<string>>()
+let holding: { refs: string; memo: Map<string, ReadonlyArray<string>> } = {
+  refs: "",
+  memo: new Map(),
+}
+
+/** Every counted ref and its commit, once per load (concurrent loads share it). */
+const countedRefs = async (at: string) => {
+  const result = await refsWork.run({
+    scope: "web.range.refs",
+    key: at,
+    run: async () =>
+      ok(
+        await must(at, [
+          "for-each-ref",
+          "--format=%(objectname) %(refname)",
+          ...COUNTED_REFS,
+        ])
+      ),
+  })
+  if (result.outcome.kind !== "succeeded") throw result.outcome.error
+  return result.outcome.value
 }
 
 /**
- * How each range ended, by cycle; a range git can't place, or one still
- * open, is absent. Commits the repository no longer holds are gone.
+ * The tips of counted refs that hold `head`, peeled to commits: one read
+ * per head while the refs don't change.
+ */
+const tipsHolding = (at: string, head: string, refs: string) => {
+  if (holding.refs !== refs) holding = { refs, memo: new Map() }
+  return once(
+    holdWork,
+    "web.range.holding",
+    `${at}\0${head}\0${Bun.hash(refs)}`,
+    holding.memo,
+    async () =>
+      [
+        ...new Set(
+          lines(
+            await must(at, [
+              "for-each-ref",
+              "--contains",
+              head,
+              "--format=%(if)%(*objectname)%(then)%(*objectname)%(else)%(objectname)%(end)",
+              ...COUNTED_REFS,
+            ])
+          )
+        ),
+      ].sort()
+  )
+}
+
+/**
+ * How each range ended, by cycle; a range still open, or one with no
+ * default branch to judge it by, is absent. Commits the repository no longer
+ * holds are gone. Throws when git can't read the repository.
  */
 export async function rangeEnds(
   at: string,
@@ -304,26 +455,21 @@ export async function rangeEnds(
     readonly headOid: string
   }>
 ): Promise<ReadonlyMap<string, RangeEnd>> {
-  const origin = lines(
-    await git(at, [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      "refs/remotes/origin/HEAD^{commit}",
-    ])
-  )[0]
-  const held = await present(
-    at,
-    ranges.map((range) => range.headOid)
-  )
+  const [origin, held, refs] = await Promise.all([
+    commitOf(at, "refs/remotes/origin/HEAD"),
+    present(
+      at,
+      ranges.map((range) => range.headOid)
+    ),
+    countedRefs(at),
+  ])
   const placed = await Promise.all(
     ranges.map(async (range) => {
       if (!held.has(range.headOid)) return "gone" as const
       const [tip, holding] = await Promise.all([
         defaultTipOf(at, range.baseRef, origin),
-        tipsHolding(at, range.headOid),
+        tipsHolding(at, range.headOid, refs),
       ])
-      if (holding === undefined) return undefined
       if (holding.length === 0) return "gone" as const
       if (tip === undefined) return undefined
       return { tip, holding }

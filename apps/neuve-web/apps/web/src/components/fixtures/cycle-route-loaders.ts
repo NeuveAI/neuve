@@ -24,6 +24,7 @@ export type Results = {
   /** What the cycle's address asked the home load for. */
   cycleAsked: unknown
   cycleMalformed: Outcome
+  cycleUnknown: Outcome
   deskWithReturn: Outcome
   deskWithoutReturn: Outcome
   deskWithoutUnit: Outcome
@@ -38,13 +39,14 @@ type Loader = (context: {
 if (import.meta.main) {
   let entry: string | undefined = "unit-3"
   let asked: unknown
+  let listed: Array<unknown> = [{ id: CYCLE }]
   mock.module("@/server/review-cycle", () => ({
     loadCycleEntry: () => Promise.resolve(entry),
   }))
   mock.module("@/server/home-load", () => ({
     loadHome: (input: unknown) => {
       asked = input
-      return Promise.resolve({ status: "ready", data: { reviews: [] } })
+      return Promise.resolve({ status: "ready", data: { reviews: listed } })
     },
   }))
   const { Route: CycleRoute } = await import("../../routes/cycles/$cycle/index")
@@ -81,9 +83,14 @@ if (import.meta.main) {
     ).validateSearch.parse(search)
 
   const cycle = await run(CycleRoute, "unit-3", RETURN)
+  const cycleAsked = asked
+  listed = []
+  const cycleUnknown = await run(CycleRoute, undefined, RETURN)
+  listed = [{ id: CYCLE }]
   const results: Results = {
     cycle,
-    cycleAsked: asked,
+    cycleAsked,
+    cycleUnknown,
     cycleMalformed: await run(CycleRoute, undefined, RETURN, "not-a-cycle"),
     deskWithReturn: await run(DeskRoute, "unit-3", RETURN),
     deskWithoutReturn: await run(DeskRoute, "unit-3"),

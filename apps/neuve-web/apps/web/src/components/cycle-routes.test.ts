@@ -42,15 +42,16 @@ beforeAll(async () => {
 describe("/cycles/<cycle>", () => {
   test("is the home list scoped to the cycle, not a redirect to its first batch", () => {
     expect(results.cycle).toEqual({
-      returned: { status: "ready", data: { reviews: [] } },
+      returned: { status: "ready", data: { reviews: [{ id: CYCLE }] } },
     })
     expect(results.cycleAsked).toEqual({
       data: { page: 1, filter: "all", cycle: CYCLE },
     })
   })
 
-  test("a malformed cycle is not found", () => {
+  test("a malformed cycle, or one Records doesn't hold, is not found", () => {
     expect(results.cycleMalformed).toEqual({ notFound: true })
+    expect(results.cycleUnknown).toEqual({ notFound: true })
   })
 })
 

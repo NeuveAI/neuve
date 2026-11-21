@@ -3,6 +3,9 @@
 // the review that holds the work now. These run the loader's Records reads (`standingOf`) on real
 // temporary stores, so the closure, the carried decision, the lockfile mark and the lineage are
 // Records' own, not a hand-written answer.
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { afterAll, expect, test } from "bun:test"
 import { Effect } from "effect"
 import {
@@ -13,6 +16,7 @@ import {
   canonicalJson,
   mintUlid,
   sha256Hex,
+  storeLocationIn,
 } from "@neuve/records-core"
 import {
   contentLayer,
@@ -30,7 +34,14 @@ import {
 
 import { deskRead, successorOf } from "./desk.server"
 import { LANE_FACTS } from "./lane-facts"
-import { standingOf, summaryOf, waitingOf } from "./reviews.server"
+import { REPOSITORY_VARIABLE } from "./records.server"
+import {
+  cycleEntry,
+  reviewsRead,
+  standingOf,
+  summaryOf,
+  waitingOf,
+} from "./reviews.server"
 import type { UnitStanding } from "./reviews.server"
 
 afterAll(removeTemporaryDirectories)
@@ -272,8 +283,10 @@ const oldReview = (head: string, units: ReadonlyArray<UnitSpec>) => {
 type Review = ReturnType<typeof oldReview>
 
 /** Appends the reviews in order, each published and requested; ULIDs keep the order. */
-const seed = async (reviews: ReadonlyArray<Review>) => {
-  const location = freshLocation()
+const seed = async (
+  reviews: ReadonlyArray<Review>,
+  location: Location = freshLocation()
+) => {
   await read(
     location,
     Effect.gen(function* () {
@@ -632,4 +645,45 @@ test("the batched lineage gives the desk's successor walk the same answers as it
   )
   expect(of(first.unitIds[2], first.cycleId)).toBeUndefined()
   expect(of(other.unitIds[0], other.cycleId)).toBeUndefined()
+})
+
+test("a cycle's address reads that one review from Records, and its desk opens on its first human-required unit that waits", async () => {
+  // Why (NEU-434): the route tests fake this load; this runs it on a real store in a real repository.
+  const repo = mkdtempSync(join(tmpdir(), "reviews-cycle-"))
+  const before = process.env[REPOSITORY_VARIABLE]
+  try {
+    Bun.spawnSync(["git", "init", "--quiet", repo])
+    const other = oldReview("aaaaaaa", [{ lane: "human-required" }])
+    const cycle = oldReview("ccccccc", [
+      { lane: "human-suggested" },
+      { lane: "agentic", agent: "approve" },
+      { lane: "human-required" },
+    ])
+    await seed([other, cycle], storeLocationIn(join(repo, ".git")))
+    process.env[REPOSITORY_VARIABLE] = repo
+    const read = await reviewsRead({
+      page: 1,
+      filter: "all",
+      cycle: cycle.cycleId,
+    })
+    if (read.status !== "ready") throw new Error("no reviews read")
+    expect(read.data.reviews.map((review) => review.id)).toEqual([
+      cycle.cycleId,
+    ])
+    expect(read.data).toMatchObject({
+      cycle: cycle.cycleId,
+      counts: { all: 1 },
+      waiting: { units: 2, nextUnitId: cycle.unitIds[2] },
+    })
+    // Past the human-suggested unit before it.
+    expect(await cycleEntry(cycle.cycleId)).toBe(cycle.unitIds[2])
+    const unknown = mintUlid()
+    const none = await reviewsRead({ page: 1, filter: "all", cycle: unknown })
+    expect(none.status === "ready" && none.data.reviews).toEqual([])
+    expect(await cycleEntry(unknown)).toBeUndefined()
+  } finally {
+    if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
+    else process.env[REPOSITORY_VARIABLE] = before
+    rmSync(repo, { recursive: true, force: true })
+  }
 })
