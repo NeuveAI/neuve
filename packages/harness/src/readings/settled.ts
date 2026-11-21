@@ -2558,8 +2558,8 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
         entry: decision.entry,
         content: {
           // What a person reads first about the section: code's plain sentence of what changed,
-          // a removal first. The plan's change facts are the readings' (their wording is the
-          // models'), so none is shown here.
+          // or of what it removes. The plan's change facts are the readings' (their wording is
+          // the models'), so none is shown here.
           facts: {
             text: readerFacts(section, ranges).slice(0, 2_000),
             cites: section.hunkIds.slice(0, 6),
