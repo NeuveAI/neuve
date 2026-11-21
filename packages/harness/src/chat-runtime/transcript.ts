@@ -26,6 +26,14 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 export const RUNTIME_WORK_TOOL = "runtime_work";
 /** pi's shell and file tools, which a runtime with its own tools has already: never served to it. */
 const CODING_TOOLS = new Set(CodingTools.tools?.map((tool) => tool.name) ?? []);
+/**
+ * The only chat tools Neuve runs for a runtime with its own sandbox that works unattended. Neuve
+ * runs every chat tool outside that sandbox, so a tool is listed only when it cannot widen what the
+ * runtime may write or reach: asking the person a question. Any other (a lane, a subagent on any
+ * model, a review, the plan, Linear, the browser, the desktop, other channels, a new tool) is
+ * withheld until someone classifies it.
+ */
+const UNATTENDED_TOOLS: ReadonlySet<string> = new Set(["question"]);
 
 export type Log = (
   event: string,
@@ -171,19 +179,33 @@ export function policy(
   model?: SessionPolicy["model"],
   where: { folder?: string | undefined; ownTools?: boolean } = {},
 ): SessionPolicy {
+  // Every chat session runs unattended until approvals can be answered in the chat.
+  const approvalPolicy: SessionPolicy["approvalPolicy"] = "allow";
+  const sandboxed = where.ownTools === true;
+  // The pass-through is served to no runtime; a runtime with its own shell and file editor
+  // uses those, not a second set that would run outside its sandbox.
+  const offered = getCurrentTools(messages).filter(
+    (tool) =>
+      tool.name !== RUNTIME_WORK_TOOL &&
+      !(sandboxed && CODING_TOOLS.has(tool.name)),
+  );
+  // Serving a tool is running it: the bridge hands pi every call to a served tool, outside the
+  // runtime's sandbox. So an unattended one is served only what cannot widen that sandbox.
+  const withheld =
+    sandboxed && approvalPolicy === "allow"
+      ? offered.filter((tool) => !UNATTENDED_TOOLS.has(tool.name))
+      : [];
+  const prompt = getCurrentSystemPrompt(messages);
   return {
-    systemPrompt: getCurrentSystemPrompt(messages),
-    // The pass-through is served to no runtime; a runtime with its own shell and file editor
-    // uses those, not a second set that would run outside its sandbox.
+    // The prompt still describes what was withheld, so it says those tools are not run here.
+    systemPrompt: withheld.length
+      ? `${prompt}\n\nIn this session Neuve does not run these tools, because they would run outside your sandbox while no one is attending: ${withheld.map((tool) => tool.name).join(", ")}. Where these instructions ask you to use one of them first, such as starting a lane before changing files, work in your working folder with your own tools instead: it is the only folder you can write, and this chat's work belongs there. If the work needs one of them, say so in your reply.`
+      : prompt,
     tools: definitions(
-      getCurrentTools(messages).filter(
-        (tool) =>
-          tool.name !== RUNTIME_WORK_TOOL &&
-          !(where.ownTools === true && CODING_TOOLS.has(tool.name)),
-      ),
+      offered.filter((tool) => !withheld.includes(tool)),
       handle,
     ),
-    approvalPolicy: "allow",
+    approvalPolicy,
     turnLimit: TurnLimit.parse(Number.MAX_SAFE_INTEGER),
     ...(model ? { model } : {}),
     ...(where.folder === undefined ? {} : { folder: where.folder }),

@@ -101,7 +101,7 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
         } satisfies RuntimeSession as RuntimeSession;
       }),
   };
-  const run = await fixture({ fake });
+  const run = await fixture({ fake, toolName: "question" });
   try {
     await run.conversation.configure({ cwd: "/work/lane" }, context);
     await run.submit("change the notes");
@@ -164,7 +164,7 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
       "thread-1",
     );
     expect(opened[0]?.folder).toBe("/work/lane");
-    expect(opened[0]?.tools.map((tool) => tool.name)).toEqual(["probe"]);
+    expect(opened[0]?.tools.map((tool) => tool.name)).toEqual(["question"]);
     // A call the bridge did not record, as a model calling the tool would make, gets nothing.
     expect(run.bridge.ran("work-forged")).toBeUndefined();
   } finally {
@@ -208,6 +208,7 @@ test("a chat on an account whose program cannot run fails with that state's fix"
 // Why: in a real chat Neuve's own tools are served beside Codex's, and a call to one is held open
 // while pi runs it, with Codex's own work before and after it in the same turn. Both kinds of
 // round must take turns in order, the held call must get pi's result, and nothing else goes back.
+// The tool is named `question`, the one an unattended Codex session is still served.
 test("a call to one of Neuve's tools between two pieces of Codex's own work is run by pi and answered", async () => {
   const fake = new FakeRuntime();
   fake.capabilities = {
@@ -262,16 +263,16 @@ test("a call to one of Neuve's tools between two pieces of Codex's own work is r
                   messageId: "t1",
                   stopReason: "tool-use",
                   toolCalls: [
-                    { callId: "t1", toolName: "probe", input: { n: 7 } },
+                    { callId: "t1", toolName: "question", input: { n: 7 } },
                   ],
                 });
                 emit({
                   type: "tool.started",
                   callId: "t1",
-                  toolName: "probe",
+                  toolName: "question",
                   input: { n: 7 },
                 });
-                const tool = policy.tools.find((t) => t.name === "probe")!;
+                const tool = policy.tools.find((t) => t.name === "question")!;
                 const outcome = await Effect.runPromise(
                   tool.handle({ n: 7 }, { callId: "t1", signal: abort.signal }),
                 );
@@ -279,7 +280,7 @@ test("a call to one of Neuve's tools between two pieces of Codex's own work is r
                 emit({
                   type: "tool.finished",
                   callId: "t1",
-                  toolName: "probe",
+                  toolName: "question",
                   errored: false,
                 });
                 work("after", "two");
@@ -305,7 +306,7 @@ test("a call to one of Neuve's tools between two pieces of Codex's own work is r
         } satisfies RuntimeSession as RuntimeSession;
       }),
   };
-  const run = await fixture({ fake });
+  const run = await fixture({ fake, toolName: "question" });
   try {
     await run.conversation.configure({ cwd: "/work/lane" }, context);
     await run.submit("go");
@@ -325,7 +326,7 @@ test("a call to one of Neuve's tools between two pieces of Codex's own work is r
       ),
     ).toEqual([
       `${RUNTIME_WORK_TOOL}:work-before`,
-      "probe:t1",
+      "question:t1",
       `${RUNTIME_WORK_TOOL}:work-after`,
     ]);
     expect(run.executed).toEqual([7]);
@@ -634,6 +635,97 @@ test("a failure while recording kept events ends the generation with the failure
             "This turn did not produce an answer. Try another message.",
       ),
     ).toBe(true);
+  } finally {
+    await run.close();
+  }
+});
+
+// Why: serving a tool is running it, because the bridge hands pi every call to a served tool, and
+// pi runs Ace's tools outside the runtime's sandbox. An unattended runtime with its own sandbox must
+// never get Ace's `lane` (it moves the chat's folder, and so the runtime's writable root): it is not
+// served, and a call to it that reaches the bridge anyway is dropped, never run by pi.
+test("a call to a withheld tool is never run by pi, and the turn still completes", async () => {
+  const fake = new FakeRuntime();
+  fake.capabilities = {
+    ...caps,
+    ownTools: true,
+    toolEndsTurn: false,
+    resumeInTurn: false,
+    perMessageUsage: false,
+  };
+  const opened: SessionPolicy[] = [];
+  (fake as { shape: FakeRuntime["shape"] }).shape = {
+    ...fake.shape,
+    openSession: (_account, policy) =>
+      Effect.gen(function* () {
+        opened.push(policy);
+        const queue = yield* Queue.unbounded<RuntimeEvent, Cause.Done>();
+        let turnId = "";
+        const emit = (event: Record<string, unknown>) =>
+          Queue.offerUnsafe(
+            queue,
+            RuntimeEvent.parse({
+              ...event,
+              turnId,
+              at: "2026-11-21T12:00:00Z",
+            }),
+          );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => Queue.endUnsafe(queue)),
+        );
+        return {
+          nativeSessionId: "thread-1",
+          startTurn: (input) =>
+            Effect.sync(() => {
+              turnId = input.turnId;
+              emit({ type: "turn.started" });
+              emit({
+                type: "message.finished",
+                messageId: "t1",
+                stopReason: "tool-use",
+                toolCalls: [
+                  { callId: "t1", toolName: "lane", input: { n: 7 } },
+                ],
+              });
+              emit({ type: "text", text: "Done." });
+              emit({
+                type: "message.finished",
+                messageId: "m",
+                stopReason: "end-turn",
+                toolCalls: [],
+              });
+              emit({
+                type: "turn.finished",
+                outcome: { status: "completed" },
+                resumePoint: "turn-1",
+              });
+            }),
+          steerTurn: () => Effect.void,
+          interruptTurn: () => Effect.void,
+          setModel: () => Effect.void,
+          respondToApproval: () => Effect.void,
+          events: Stream.fromQueue(queue),
+        } satisfies RuntimeSession as RuntimeSession;
+      }),
+  };
+  const run = await fixture({ fake, toolName: "lane" });
+  try {
+    await run.conversation.configure({ cwd: "/work/lane" }, context);
+    await run.submit("go");
+    await until(async () =>
+      (await run.messages()).some(
+        (m) => m.role === "assistant" && m.stopReason === "stop",
+      ),
+    );
+    expect(opened[0]?.tools.map((tool) => tool.name)).toEqual([]);
+    expect(opened[0]?.systemPrompt).toContain("lane");
+    expect(run.executed).toEqual([]);
+    const calls = (await run.messages()).flatMap((m) =>
+      m.role === "assistant"
+        ? m.content.filter((block) => block.type === "toolCall")
+        : [],
+    );
+    expect(calls).toEqual([]);
   } finally {
     await run.close();
   }

@@ -16,6 +16,7 @@ import {
   codexRuntimeOptions,
   defaultClaudeWorkingFolder,
   harnessRuntimes,
+  protocolLogs,
 } from "@neuve/harness/runtimes";
 import {
   AccountDirectory,
@@ -31,6 +32,8 @@ export type ChatRuntimeSources = {
   registry: RuntimeRegistryShape;
   statuses: AccountStatusSource;
   unavailable?(): boolean;
+  /** Where this process's runtime sessions write their protocol logs: its channel's own folder. */
+  logIn?(folder: string, report: (path: string, error: unknown) => void): void;
   close?(): Promise<void>;
 };
 
@@ -45,6 +48,8 @@ export function productionChatSources(options: {
   claude?: ClaudeRuntimeConfig;
 }): ChatRuntimeSources & { close(): Promise<void> } {
   let ensureStatuses: Effect.Effect<void> = Effect.void;
+  // A worker learns its channel's folder after its sources exist; sessions open only after that.
+  let logs: ReturnType<typeof protocolLogs> | undefined;
   const runtime = ManagedRuntime.make(
     Layer.unwrap(
       Effect.gen(function* () {
@@ -54,7 +59,10 @@ export function productionChatSources(options: {
           claude: options.claude ?? {
             cwd: defaultClaudeWorkingFolder(options.home),
           },
-          codex: codexRuntimeOptions(options.home),
+          codex: {
+            ...codexRuntimeOptions(options.home),
+            log: (account) => logs?.(account),
+          },
         }).pipe(
           // Subscribe before exposing the registry: account events have no replay.
           Layer.tap((services) =>
@@ -152,6 +160,9 @@ export function productionChatSources(options: {
       },
     },
     unavailable: () => unavailable,
+    logIn: (folder, report) => {
+      logs = protocolLogs(folder, report);
+    },
     close: () =>
       (closing ??= Promise.resolve().then(async () => {
         for (const stop of subscriptions) stop();
@@ -198,6 +209,12 @@ export async function workspaceChatRuntime(
     };
   const log = (event: string, fields: Readonly<Record<string, unknown>>) =>
     process.stderr.write(`${JSON.stringify({ event, ...fields })}\n`);
+  sources.logIn?.(stateDirectory, (path, error) =>
+    log("chat-runtime.protocol-log.failed", {
+      path,
+      cause: error instanceof Error ? error.message : String(error),
+    }),
+  );
   const bridge = new ChatRuntimeBridge({
     registry: sources.registry,
     heads: await NativeHeads.open(stateDirectory),
