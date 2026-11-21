@@ -55,6 +55,7 @@ const capabilities = {
   steering: false,
   approvals: false,
   perRequestTelemetry: true,
+  ownTools: false,
   byteExactCapture: false,
   nativeToolServer: true,
   statusProbe: false,

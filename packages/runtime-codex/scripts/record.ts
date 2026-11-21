@@ -16,12 +16,8 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Effect, Exit } from "effect";
 import { connect } from "../src/client.ts";
-import { processService } from "../src/production.ts";
-import {
-  recordingLayer,
-  saveRecording,
-  type Recorded,
-} from "../src/recorder.ts";
+import { processLayer } from "../src/production.ts";
+import { saveRecording, type Recorded } from "../src/recorder.ts";
 import { steps, type Step } from "./steps.ts";
 
 /**
@@ -117,13 +113,14 @@ const record = async () => {
           cwd: workdir,
           clientInfo: { name: "neuve", title: "Neuve", version: "0.1.0" },
           answer: (request) => Effect.sync(() => step.answer(request)),
+          onLine: (line) => entries.push(line),
           handshakeTimeout: "20 seconds",
         });
         const note = yield* step.run(connection, workdir);
         yield* connection.close;
         return { note, userAgent: connection.initialize.userAgent };
       }),
-    ).pipe(Effect.provide(recordingLayer(processService, entries))),
+    ).pipe(Effect.provide(processLayer)),
   );
   const value = Exit.isSuccess(exit) ? exit.value : undefined;
   if (value !== undefined && !step.recorded)

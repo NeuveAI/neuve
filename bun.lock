@@ -351,7 +351,10 @@
       "name": "@neuve/runtime-codex",
       "version": "0.1.0",
       "dependencies": {
+        "@modelcontextprotocol/sdk": "1.32.2",
+        "@neuve/runtime": "workspace:*",
         "effect": "4.0.0",
+        "zod": "4",
       },
     },
     "packages/semantic-client": {

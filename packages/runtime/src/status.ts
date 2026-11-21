@@ -15,6 +15,12 @@ export const SignInHint = z.union([
     command: z.literal("neuve auth login"),
     account: AccountName,
   }),
+  /** Codex's own sign-in; the environment names a Codex home other than the person's default. */
+  z.strictObject({
+    kind: z.literal("command"),
+    command: z.literal("codex login"),
+    environment: z.strictObject({ CODEX_HOME: AbsoluteFolder }).optional(),
+  }),
   z.strictObject({ kind: z.literal("settings"), entry: z.literal("accounts") }),
 ]);
 export type SignInHint = z.infer<typeof SignInHint>;

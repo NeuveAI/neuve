@@ -66,6 +66,7 @@ for (const appears of ["before-open", "after-open"] as const) {
                         steering: false,
                         approvals: false,
                         perRequestTelemetry: false,
+                        ownTools: false,
                         byteExactCapture: false,
                         nativeToolServer: false,
                         statusProbe: false,

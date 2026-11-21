@@ -39,6 +39,7 @@ const CLIENT_METHODS = [
   "mcpServerStatus/list",
   "thread/start",
   "thread/resume",
+  "thread/fork",
   "thread/read",
   "thread/archive",
   "thread/delete",
@@ -183,10 +184,22 @@ const generate = async () => {
     notification: await fetchText(`${schema}ServerNotification.ts`),
     request: await fetchText(`${schema}ServerRequest.ts`),
   };
+  /** A response type a server request may lack: it is kept when the schema has it. */
+  const followIfThere = async (path: string) => {
+    try {
+      await follow(path);
+      return path;
+    } catch (error) {
+      if (error instanceof Error && error.message.endsWith("HTTP 404"))
+        return undefined;
+      throw error;
+    }
+  };
   const pick = async (
     union: string,
     methods: ReadonlyArray<string>,
     response?: (method: string, params: string) => string,
+    optional = false,
   ) => {
     const all = members(union);
     const kept: Array<{ method: string; params?: string; response?: string }> =
@@ -200,8 +213,13 @@ const generate = async () => {
           ? undefined
           : pathOf(union, member.params);
       if (params !== undefined) await follow(params);
-      const answer = response?.(method, params ?? "");
-      if (answer !== undefined) await follow(answer);
+      const named = response?.(method, params ?? "");
+      const answer =
+        named === undefined
+          ? undefined
+          : optional
+            ? await followIfThere(named)
+            : (await follow(named), named);
       kept.push({
         method,
         ...(params === undefined ? {} : { params }),
@@ -220,6 +238,8 @@ const generate = async () => {
   const requests = await pick(
     unions.request,
     members(unions.request).map((entry) => entry.method),
+    (_method, params) => params.replace(/Params\.ts$/, "Response.ts"),
+    true,
   );
   const header = (from: string) =>
     [
@@ -281,6 +301,16 @@ const generate = async () => {
       (entry) =>
         `  ${JSON.stringify(entry.method)}: ${paramsType(entry.params)};`,
     ),
+    "};",
+    "",
+    "/** The answer each server request takes, where the schema names one. */",
+    "export type ServerResponses = {",
+    ...requests
+      .filter((entry) => entry.response !== undefined)
+      .map(
+        (entry) =>
+          `  ${JSON.stringify(entry.method)}: ${typeOf(entry.response!)};`,
+      ),
     "};",
     "",
     "/** Every notification name this release's server has. */",

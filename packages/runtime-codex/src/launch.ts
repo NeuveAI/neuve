@@ -1,0 +1,179 @@
+/**
+ * How a Codex process is started for a session and what each turn is set to: the design's mode
+ * table ([tools](../../../process/proposals/codex-runtime.md#tools-codex-keeps-its-own-and-neuves-are-served-beside-them)).
+ * Codex's configuration is fixed when its process starts, so the two configurations below are two
+ * processes: the person's own Codex, and a clean one for a read-only turn.
+ */
+import type { SessionPolicy, TurnWorkspace } from "@neuve/runtime";
+import type { AskForApproval } from "./generated/v2/AskForApproval";
+import type { SandboxPolicy } from "./generated/v2/SandboxPolicy";
+
+/** The variable Neuve's tool server token is in; Codex's shell never passes it on. */
+export const TOKEN_VARIABLE = "NEUVE_CODEX_TOOL_TOKEN";
+/** Neuve's tool server, by the name Codex knows it under. */
+export const NEUVE_SERVER = "neuve";
+/** OpenAI's key and address variables, removed so Codex uses its own login, as T3 Code does. */
+export const REMOVED_ENVIRONMENT = [
+  "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
+  "OPENAI_API_BASE",
+  "OPENAI_ORG_ID",
+  "OPENAI_ORGANIZATION",
+  "OPENAI_PROJECT",
+  "OPENAI_PROJECT_ID",
+  "CODEX_API_KEY",
+  "CODEX_HOME",
+] as const;
+
+/** The names of the person's own settings, read through the protocol before a clean start. */
+export interface OwnSettings {
+  readonly mcpServers: ReadonlyArray<string>;
+  readonly plugins: ReadonlyArray<string>;
+  readonly apps: ReadonlyArray<string>;
+  readonly skills: ReadonlyArray<string>;
+  /**
+   * The person's own `shell_environment_policy.exclude`. A `-c` value replaces the setting, so
+   * the token's variable is added to this list, never put in its place.
+   */
+  readonly exclude: ReadonlyArray<string>;
+}
+export type Configuration = "own" | "clean";
+
+/** Features that run the person's additions, or reach outside the sandbox, off in a clean session. */
+const PERSONAL_FEATURES = [
+  "hooks",
+  "apps",
+  "plugins",
+  "remote_plugin",
+  "plugin_sharing",
+  "memories",
+  "browser_use",
+  "browser_use_external",
+  "browser_use_full_cdp_access",
+  "computer_use",
+  "in_app_browser",
+  "in_app_local_automation",
+  "skill_mcp_dependency_install",
+  "tool_suggest",
+];
+
+/**
+ * `-c` splits a key on every dot and takes quotes literally, so a name with a dot or a quote cannot
+ * be switched off from the command line (the protocol facts). Such a name is returned, and the
+ * clean session is refused rather than started with that setting on.
+ */
+export const unaddressable = (own: OwnSettings): string | undefined =>
+  [...own.mcpServers, ...own.plugins, ...own.apps].find((name) =>
+    /[."=\s]/.test(name),
+  );
+
+const flags = (settings: ReadonlyArray<string>) =>
+  settings.flatMap((setting) => ["-c", setting]);
+
+/**
+ * The arguments after `app-server`. Both configurations serve Neuve's tools (when the session has
+ * any), approved without asking, with no limit on how long a call takes, and keep the token's
+ * variable out of every command Codex runs. Codex's own question tool is off in both: a question
+ * for the person goes through Neuve's own tool, and nothing in a Neuve session answers Codex's.
+ */
+export const launchArguments = (
+  configuration: Configuration,
+  own: OwnSettings,
+  toolServer: string | undefined,
+): ReadonlyArray<string> =>
+  flags([
+    ...(toolServer === undefined
+      ? []
+      : [
+          `mcp_servers.${NEUVE_SERVER}.url=${JSON.stringify(toolServer)}`,
+          `mcp_servers.${NEUVE_SERVER}.bearer_token_env_var=${JSON.stringify(TOKEN_VARIABLE)}`,
+          `mcp_servers.${NEUVE_SERVER}.default_tools_approval_mode="approve"`,
+          // A year: a call ends when its handler does, or the turn or the session ends.
+          `mcp_servers.${NEUVE_SERVER}.tool_timeout_sec=31536000`,
+          // Only a process that holds the token sets the list, so the probe that reads the
+          // person's own list reads it unchanged.
+          `shell_environment_policy.exclude=[${[...own.exclude, TOKEN_VARIABLE]
+            .map((pattern) => JSON.stringify(pattern))
+            .join(",")}]`,
+        ]),
+    "tools.experimental_request_user_input.enabled=false",
+    ...(configuration === "own"
+      ? []
+      : [
+          ...PERSONAL_FEATURES.map((feature) => `features.${feature}=false`),
+          'web_search="disabled"',
+          ...own.mcpServers.map((name) => `mcp_servers.${name}.enabled=false`),
+          ...own.plugins.map((name) => `plugins.${name}.enabled=false`),
+          ...own.apps.map((name) => `apps.${name}.enabled=false`),
+          "apps._default.enabled=false",
+          "skills.bundled.enabled=false",
+          ...(own.skills.length === 0
+            ? []
+            : [
+                `skills.config=[${own.skills
+                  .map((name) => `{name=${JSON.stringify(name)},enabled=false}`)
+                  .join(",")}]`,
+              ]),
+          "memories.use_memories=false",
+          "memories.generate_memories=false",
+          "notify=[]",
+        ]),
+  ]);
+
+/**
+ * Codex asks nothing. T3 Code sends a granular policy here that lets only an MCP server's prompt
+ * through (`CodexAdapterV2.ts`, lines 778–787), but Codex accepts it only from a client on its
+ * experimental surface ("askForApproval.granular requires experimentalApi capability", seen live),
+ * and Neuve stays on the stable one. Under `never` Codex itself declines another server's prompt,
+ * and the declined call reaches Neuve as a failed piece of work; Neuve's own tools need no prompt,
+ * since their server is configured to approve them.
+ */
+const UNATTENDED: AskForApproval = "never";
+
+export interface TurnSettings {
+  readonly configuration: Configuration;
+  readonly approvalPolicy: AskForApproval;
+  readonly sandboxPolicy: SandboxPolicy;
+}
+
+/**
+ * The mode table. Read only: Codex's read-only sandbox, nothing asked, a clean session. Write,
+ * attended ("ask"): writes in the working folder only, Codex asks on request. Write, unattended
+ * ("allow"): the same sandbox, nothing asked. Network is off, Codex's own default; the temporary
+ * folders are not writable, so a write outside the working folder fails.
+ */
+export const turnSettings = (
+  workspace: TurnWorkspace,
+  approvals: SessionPolicy["approvalPolicy"],
+): TurnSettings =>
+  workspace.access === "read-only"
+    ? {
+        configuration: "clean",
+        approvalPolicy: UNATTENDED,
+        sandboxPolicy: { type: "readOnly", networkAccess: false },
+      }
+    : {
+        configuration: "own",
+        approvalPolicy: approvals === "ask" ? "on-request" : UNATTENDED,
+        sandboxPolicy: {
+          type: "workspaceWrite",
+          writableRoots: [workspace.folder],
+          networkAccess: false,
+          excludeTmpdirEnvVar: true,
+          excludeSlashTmp: true,
+        },
+      };
+
+/** The person's environment for Codex, as T3 Code gives it, with the account's Codex home. */
+export const codexEnvironment = (
+  base: Readonly<Record<string, string | undefined>>,
+  codexHome: string | undefined,
+  /** Only a process that serves Neuve's tools is given the token. */
+  token: string | undefined,
+): Record<string, string | undefined> => {
+  const env: Record<string, string | undefined> = { ...base };
+  for (const name of REMOVED_ENVIRONMENT) delete env[name];
+  if (codexHome !== undefined) env.CODEX_HOME = codexHome;
+  if (token !== undefined) env[TOKEN_VARIABLE] = token;
+  return env;
+};

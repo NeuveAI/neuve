@@ -10,6 +10,7 @@ import {
 
 export const RuntimeCapability = z.enum([
   "ownsLoop", // The runtime runs its model loop and calls Neuve's tool handlers.
+  "ownTools", // The runtime also runs tools of its own, reported as work.finished.
   "toolEndsTurn", // A tool's endTurn ends the turn with no further model request.
   "resumeInTurn", // message.finished names a resume point inside a turn.
   "perMessageUsage", // message.finished carries its model request's usage.
@@ -230,6 +231,14 @@ function projectSignInHint(hint: SignInHint): SignInHint {
       };
     case "neuve auth login":
       return { kind: hint.kind, command: hint.command, account: hint.account };
+    case "codex login":
+      return {
+        kind: hint.kind,
+        command: hint.command,
+        ...(hint.environment === undefined
+          ? {}
+          : { environment: { CODEX_HOME: hint.environment.CODEX_HOME } }),
+      };
   }
 }
 

@@ -300,6 +300,7 @@ test("R9 capabilities advertise the five newly supported operations", () =>
           statusProbe: true,
           internalRetries: true,
           perRequestTelemetry: false,
+          ownTools: false,
           byteExactCapture: false,
         });
       }),

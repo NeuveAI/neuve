@@ -1,0 +1,4 @@
+{
+  "note": "Codex releases this runtime knows, kept as data as T3 Code keeps its table. A release listed as broken is refused; one older than the release the protocol types were generated from runs with advice; any other runs.",
+  "broken": []
+}

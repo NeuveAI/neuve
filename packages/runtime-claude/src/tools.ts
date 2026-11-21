@@ -9,7 +9,12 @@ import {
   ToolSchema,
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { TurnFailed, type Account, type ToolDefinition } from "@neuve/runtime";
+import {
+  mcpTool,
+  TurnFailed,
+  type Account,
+  type ToolDefinition,
+} from "@neuve/runtime";
 import { z } from "zod";
 
 export const TOOL_TIMEOUT_MS = 2147483647;
@@ -89,19 +94,12 @@ export function toolServer(
     { capabilities: { tools: {} } },
   );
   const tools = definitions.map((definition) => ({
-    name: definition.name,
-    description: definition.description,
+    ...mcpTool(definition),
     inputSchema: ToolSchema.shape.inputSchema.parse(definition.inputSchema),
     // sdk.mjs:121 applies server alwaysLoad to each tool; sdk.mjs:147 bw drops it from SDK config.
     _meta: {
       "anthropic/maxResultSizeChars": 500000,
       "anthropic/alwaysLoad": true,
-    },
-    annotations: {
-      readOnlyHint: definition.hints.readOnly,
-      destructiveHint: definition.hints.destructive,
-      idempotentHint: definition.hints.idempotent,
-      openWorldHint: definition.hints.openWorld,
     },
   }));
   instance.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));

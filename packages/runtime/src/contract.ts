@@ -9,7 +9,7 @@
  */
 import type { Effect, Scope, Stream } from "effect";
 import { z } from "zod";
-import { RuntimeKind, type Account } from "./account.ts";
+import { AbsoluteFolder, RuntimeKind, type Account } from "./account.ts";
 import {
   RuntimeCapability,
   RuntimeFailure,
@@ -128,6 +128,25 @@ export interface SessionPolicy {
     | { readonly id: string; readonly effort?: EffortLevel | undefined }
     | undefined;
 }
+
+/**
+ * Where a turn's work is and what may be done there, set by the caller from the chat's mode. A
+ * runtime that declares ownTools turns it into its own sandbox and approvals, and refuses a turn
+ * without it. pi and Claude Code ignore it: their tools are Neuve's, which check the mode themselves.
+ */
+export const TurnWorkspace = z.strictObject({
+  folder: AbsoluteFolder,
+  access: z.enum(["read-only", "write"]),
+});
+export type TurnWorkspace = z.infer<typeof TurnWorkspace>;
+/** What a runtime with tools of its own did by itself. Neuve's own tools are never one of these. */
+export const WorkKind = z.enum([
+  "command",
+  "file-change",
+  "web-search",
+  "tool",
+]);
+export type WorkKind = z.infer<typeof WorkKind>;
 
 export const CallUsage = z.strictObject({
   input: z.number().int().nonnegative(),
@@ -270,13 +289,37 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     delayMs: z.number().nonnegative(),
     httpStatus: z.number().int().min(100).max(599).optional(),
   }),
+  /**
+   * Names exactly one of toolName, for one of Neuve's tools, or work, for work the runtime does
+   * itself (then callId is that work's workId and input says what it asks).
+   */
+  z
+    .strictObject({
+      ...eventFields,
+      type: z.literal("approval.requested"),
+      requestId: z.string().min(1),
+      callId: z.string().min(1),
+      toolName: z.string().min(1).optional(),
+      work: WorkKind.optional(),
+      input: z.json(),
+    })
+    .refine(
+      (event) => (event.toolName === undefined) !== (event.work === undefined),
+      "an approval request names either a tool or work",
+    ),
+  /**
+   * One piece of work a runtime that declares ownTools did itself, once, when it ended: what kind,
+   * what it was asked, what came back, and whether it failed. Neuve ran none of it.
+   */
   z.strictObject({
     ...eventFields,
-    type: z.literal("approval.requested"),
-    requestId: z.string().min(1),
-    callId: z.string().min(1),
-    toolName: z.string().min(1),
+    type: z.literal("work.finished"),
+    workId: z.string().min(1),
+    kind: WorkKind,
     input: z.json(),
+    output: z.string().optional(),
+    errored: z.boolean(),
+    durationMs: z.number().nonnegative().optional(),
   }),
   z.strictObject({
     ...eventFields,
@@ -316,6 +359,7 @@ export interface RuntimeSession {
     readonly turnId: string;
     readonly message: string | ReadonlyArray<ContentBlock>;
     readonly final?: true | undefined;
+    readonly workspace?: TurnWorkspace | undefined;
   }) => Effect.Effect<void, RuntimeError>;
   /** Fails with CapabilityUnsupported for steering when steering is false. */
   readonly steerTurn: (input: {
@@ -370,3 +414,19 @@ export interface RuntimeShape {
   /** Runs the runtime's own sign-out for this account's credential and never reads it; a no-op for key references. */
   readonly signOut: (account: Account) => Effect.Effect<void, RuntimeError>;
 }
+
+/**
+ * A tool definition as an MCP tool, the form both runtimes that serve Neuve's tools to an agent
+ * program list them in; each adds what its program needs on top.
+ */
+export const mcpTool = (definition: ToolDefinition) => ({
+  name: definition.name,
+  description: definition.description,
+  inputSchema: definition.inputSchema,
+  annotations: {
+    readOnlyHint: definition.hints.readOnly,
+    destructiveHint: definition.hints.destructive,
+    idempotentHint: definition.hints.idempotent,
+    openWorldHint: definition.hints.openWorld,
+  },
+});
