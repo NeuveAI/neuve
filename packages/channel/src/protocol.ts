@@ -390,6 +390,8 @@ export type Event =
 		text: string;
 		error?: string;
 		stopped?: boolean;
+		/** The mode the run that wrote this reply ran in; absent from older hosts. */
+		mode?: ChatMode;
 	}
 	/** Streamed text of the reply being generated; the next `reply` replaces it. */
 	| { kind: "delta"; chat: ChatId; text: string }
@@ -440,7 +442,14 @@ export type Event =
 	/** `author` stopped the run, whose aborted reply came before this. */
 	| { kind: "stopped"; chat: ChatId; at: number; author: string }
 	/** The chat's model, effort or mode changed, so the next run uses these; `info` has the mode. */
-	| { kind: "agent"; chat: ChatId; model: ModelRef; effort: Effort }
+	| {
+		kind: "agent";
+		chat: ChatId;
+		model: ModelRef;
+		effort: Effort;
+		/** The chat's stored mode, sent when it changes. */
+		mode?: ChatMode;
+	}
 	/**
 	 * Channel-wide metadata, sent initially and whenever its name, summary, or settings change.
 	 * `revision` covers only the name and summary. Older hosts omit `shared` and `desktop`;
