@@ -2,7 +2,7 @@ import { checkSignIn } from "./doctor.ts";
 import { writePrivateEnvironment } from "./private-environment.ts";
 import { REVIEW_DESK_COMMAND } from "./review-desk-config.ts";
 import { quote } from "./shell-quote.ts";
-import { defaultSkillsContext, offerSkillsAfterSetup } from "./skills-cli.ts";
+import { defaultSkillsContext } from "./skills-cli.ts";
 import {
   AGENT_IDS,
   agentsFlag,
@@ -28,12 +28,26 @@ import {
   access,
   lstat,
   readdir,
+  readFile,
   realpath,
   rm,
   rmdir,
   stat,
 } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
+import { Effect } from "effect";
+import { Registry } from "@neuve/records-core";
+import { CLI_VERSION } from "./cli-version.ts";
+import {
+  machineSteps,
+  machineStepsRecord,
+  repositorySteps,
+  repositoryStepsRecord,
+  runSteps,
+  type SetupStep,
+} from "./setup-steps.ts";
 import { gitAvailability, gitRefusal } from "./git-available.ts";
 import { z } from "zod";
 import {
@@ -47,6 +61,7 @@ import {
   readInstallation,
   readWorkingTreeRecord,
   RelocatedSetup,
+  storeSetupLayout,
   type SetupLayout,
   validateInstallationState,
   writeInstallation,
@@ -100,6 +115,10 @@ export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|an
   machine; --ask-install-again asks again.
   At a terminal, setup then offers the Neuve skill, which teaches the agent programs it found to
   use Neuve, once per repository (default no); --no-skills skips the offer.
+  The agent programs and the skill offer are setup's named steps: each one applied is recorded,
+  per machine beside your Neuve settings and per repository in its setup folder, in
+  setup-steps.json. neuve setup upgrade, which the install script runs after an upgrade, runs the
+  steps a new version adds and undoes those it drops.
   Run neuve setup hooks --help and neuve setup stack --help for those.
 `;
 
@@ -230,14 +249,234 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     `${moved}${route.line === undefined ? "" : `${route.line}\n`}${await nextSteps(repository, check, route.route)}`,
   );
   if (check.status === "error") return 1;
-  const agents = await setUpAgentPrograms(wanted, {
-    ...offerContext(),
-    askAgain,
+  // After the next steps, the named steps: this machine's, then this repository's.
+  const programs = agentLooks(wanted, "setup", askAgain);
+  const steps = { mode: "setup", ...stepsAtTerminal() } as const;
+  await runSteps({
+    ...steps,
+    steps: machineSteps(programs.look),
+    record: machineStepsRecord(homedir()),
+    where: "this machine",
   });
-  // After the next steps: once per repository, only at a terminal; it never fails setup.
-  if (!noSkills)
-    await offerSkillsAfterSetup({ stateDirectory: layout.directory, agents });
+  await runSteps({
+    ...steps,
+    steps: repositorySteps(layout.directory, programs.found, !noSkills),
+    record: repositoryStepsRecord(layout.directory),
+    where: repository,
+  });
   return 0;
+};
+
+/** Where steps say what they do, and whether there is a terminal to ask at. */
+const stepsAtTerminal = () => ({
+  isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
+  version: CLI_VERSION,
+  out: async (text: string) => {
+    await Bun.write(Bun.stderr, text);
+  },
+});
+
+/**
+ * The agent programs for setup's steps. In setup, `find` is setup's own look with the install
+ * offer. In an upgrade, which the install script runs, it asks only what run time would start (the
+ * stored path, else the PATH's `codex`), says what no longer answers, and offers nothing: no
+ * installed app is started and nothing is installed from inside an install. `found` is what the
+ * look found, or that same check, asked once.
+ */
+export const agentLooks = (
+  wanted: ReadonlyArray<AgentHarness>,
+  mode: "setup" | "upgrade",
+  askAgain = false,
+  /** For tests: the narrow look and where it says what it found. */
+  narrow: {
+    find?: typeof findAgentPrograms;
+    out?: (text: string) => Promise<void>;
+  } = {},
+) => {
+  const find = narrow.find ?? findAgentPrograms;
+  const out = narrow.out ?? offerContext().out;
+  let found: Promise<ReadonlyArray<AgentHarness>> | undefined;
+  const check = async () => {
+    const findings = await find("check", undefined, wanted);
+    const ids = foundIds(findings);
+    await out(
+      `\nAgent programs on this machine:\n${findings
+        .map((finding) =>
+          [
+            describeFinding(finding),
+            ...(finding.stale === undefined
+              ? []
+              : [
+                  `The path stored for it, ${finding.stale}, no longer answers; neuve setup looks for it again.`,
+                ]),
+          ].join("\n"),
+        )
+        .join("\n")}\n${
+        ids.length === 0
+          ? "The upgrade looks only where run time would start a program, so this step stays to do: neuve setup looks everywhere, the installed apps included.\n"
+          : ""
+      }`,
+    );
+    return ids;
+  };
+  return {
+    /**
+     * The machine step's run. In an upgrade, `checked`, since that look stores nothing; and when it
+     * finds nothing, `skipped`, so the step stays unrecorded and a later look isn't stopped by it.
+     */
+    look: async (): Promise<"applied" | "checked" | "skipped"> => {
+      found ??=
+        mode === "upgrade"
+          ? check()
+          : setUpAgentPrograms(wanted, { ...offerContext(), askAgain });
+      const ids = await found;
+      if (mode === "setup") return "applied";
+      return ids.length === 0 ? "skipped" : "checked";
+    },
+    found: () => (found ??= find("check", undefined, wanted).then(foundIds)),
+    /** Whether `found` comes from the narrow look, which can't say no program is here. */
+    narrow: mode === "upgrade",
+  };
+};
+
+export const SETUP_UPGRADE_HELP = `Usage: neuve setup upgrade [--no-skills]
+  What the install script runs once it has installed a new version: the setup steps this version
+  adds, on this machine and in each repository set up here, and the undoing of those it drops.
+  The repositories are those in Neuve's list of repositories with a Records store; one whose folder
+  is gone is skipped and said so, and one that was never set up is left alone. A step that needs
+  an answer is asked at a terminal and otherwise waits; neuve doctor shows it. --no-skills leaves
+  the skill offer out. Running it again changes nothing. It looks for the agent programs only as
+  run time would start them (the stored path, else the PATH's codex) and installs nothing; neuve
+  setup does the full look.
+`;
+
+/** `neuve setup upgrade`, with the steps and the list of repositories given, for tests. */
+export const upgradeSetup = async (input: {
+  readonly home: string;
+  readonly registry?: string;
+  readonly machine: ReadonlyArray<SetupStep>;
+  readonly repository: (stateDirectory: string) => ReadonlyArray<SetupStep>;
+  readonly isTerminal: boolean;
+  readonly version: string;
+  readonly out: (text: string) => Promise<void>;
+}) => {
+  const steps = {
+    mode: "upgrade",
+    isTerminal: input.isTerminal,
+    version: input.version,
+    out: input.out,
+  } as const;
+  let held = 0;
+  let failed = 0;
+  const stopped = (where: string) => async (error: unknown) => {
+    failed += 1;
+    await input.out(
+      `Setup's steps stopped on ${where}: ${error instanceof Error ? error.message : String(error)}. neuve setup upgrade finishes them.\n`,
+    );
+    return undefined;
+  };
+  const machine = await runSteps({
+    ...steps,
+    steps: input.machine,
+    record: machineStepsRecord(input.home),
+    where: "this machine",
+  }).catch(stopped("this machine"));
+  const machineHeld =
+    machine === undefined ||
+    machine.waiting.length > 0 ||
+    machine.left !== undefined;
+  const list = input.registry ?? Registry.registryPath(input.home);
+  const registry = await Effect.runPromise(
+    Registry.readRegistry(list).pipe(Effect.provide(BunFileSystem.layer)),
+  ).catch(() => ({ repositories: [] }));
+  // The list reads as empty when it can't be read; say so, since then no repository gets its steps.
+  const text = await readFile(list, "utf8").catch(() => undefined);
+  if (text !== undefined && registry.repositories.length === 0) {
+    let readable = false;
+    try {
+      readable = Registry.Registry.safeParse(JSON.parse(text)).success;
+    } catch {
+      readable = false;
+    }
+    if (!readable) {
+      failed += 1;
+      await input.out(
+        `Neuve's list of repositories, ${list}, can't be read, so no repository's steps ran. neuve setup in each repository runs them.\n`,
+      );
+    }
+  }
+  let visited = 0;
+  for (const { repository } of registry.repositories) {
+    if ((await stat(repository).catch(() => undefined)) === undefined) {
+      await input.out(
+        `Skipped ${repository}: its folder is gone. Neuve's list of repositories still names it.\n`,
+      );
+      continue;
+    }
+    // Only a repository set up here gets setup's steps; an upgrade never sets one up.
+    const set = await readInstallation(repository).catch(() => undefined);
+    const layout =
+      set === undefined ? undefined : await storeSetupLayout(repository);
+    if (set === undefined || layout === undefined) continue;
+    visited += 1;
+    // One repository that fails is said so, and the others still get their steps.
+    const outcome = await runSteps({
+      ...steps,
+      steps: input.repository(layout.directory),
+      record: repositoryStepsRecord(layout.directory),
+      where: set.repository,
+    }).catch(stopped(set.repository));
+    if (
+      outcome !== undefined &&
+      (outcome.waiting.length > 0 || outcome.left !== undefined)
+    )
+      held += 1;
+  }
+  const repositories = `${visited} ${visited === 1 ? "repository" : "repositories"} set up here`;
+  await input.out(
+    held === 0 && !machineHeld && failed === 0
+      ? `Setup's steps are up to date on this machine and in ${repositories}.\n`
+      : `Setup's steps ran on this machine and in ${repositories}; ${[
+          ...(machineHeld ? ["this machine's are not up to date"] : []),
+          ...(held === 0
+            ? []
+            : [
+                `${held} ${held === 1 ? "repository's are" : "repositories' are"} not up to date`,
+              ]),
+          ...(failed === 0 ? [] : ["some stopped"]),
+        ].join(", ")}, as said above.\n`,
+  );
+  // Nonzero when a repository's steps stopped, so the install script says how to finish them.
+  return failed === 0 ? 0 : 1;
+};
+
+export const runSetupUpgrade = async (
+  given: readonly string[],
+): Promise<number> => {
+  if (given.includes("--help") || given.includes("-h")) {
+    await Bun.write(Bun.stdout, SETUP_UPGRADE_HELP);
+    return 0;
+  }
+  // --no-skills, as the install script was given it, leaves the skill offer out.
+  const noSkills = given.includes("--no-skills");
+  const other = given.find((arg) => arg !== "--no-skills");
+  if (other !== undefined)
+    throw new Error(
+      `neuve setup upgrade takes only --no-skills, not ${other}.`,
+    );
+  const programs = agentLooks(AGENT_IDS, "upgrade");
+  return upgradeSetup({
+    home: homedir(),
+    machine: machineSteps(programs.look),
+    repository: (stateDirectory) =>
+      repositorySteps(
+        stateDirectory,
+        programs.found,
+        !noSkills,
+        programs.narrow,
+      ),
+    ...stepsAtTerminal(),
+  });
 };
 
 /**

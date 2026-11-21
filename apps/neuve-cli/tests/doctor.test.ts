@@ -155,6 +155,94 @@ test("a key in the environment is named, never printed", async () => {
   });
 });
 
+// Why: capture's hooks discard their output and exit 0, so a hook calling a program that is gone
+// stops capture without a word; and setup's steps are what an upgrade relies on. Doctor is where
+// each shows, read only, in the words setup upgrade uses.
+test("doctor names capture that isn't set up, a hook calling a program that is gone, and setup's steps", async () => {
+  const { root, repository, home, doctor } = await scratch();
+  await markSetUp(repository);
+  const isolated = {
+    CLAUDE_CONFIG_DIR: join(home, ".claude"),
+    CODEX_HOME: join(home, ".codex"),
+  };
+  const first = await doctor(isolated);
+  expect(first.check("capture")).toMatchObject({
+    status: "warning",
+    detail: expect.stringContaining("Capture isn't set up in"),
+  });
+  expect(first.check("setup steps")).toMatchObject({
+    status: "warning",
+    detail: expect.stringContaining(
+      "Not applied yet: setup looks for the agent programs",
+    ),
+  });
+
+  // Capture set up with an install that then moves away.
+  const old = join(root, "old/bin/neuve");
+  await mkdir(dirname(old), { recursive: true });
+  await writeFile(old, "#!/bin/sh\nexit 0\n");
+  await chmod(old, 0o755);
+  const { runSetupHooks } = await import("../src/capture/setup-hooks.ts");
+  expect(
+    await runSetupHooks(
+      [
+        "--repo",
+        repository,
+        "--agents",
+        "claude-code",
+        "--claude-settings",
+        join(home, ".claude/settings.json"),
+        "--codex-hooks",
+        join(home, ".codex/hooks.json"),
+        "--command",
+        old,
+        "--no-stack",
+      ],
+      { stackStore: join(root, "stack") },
+    ),
+  ).toBe(0);
+  expect((await doctor(isolated)).check("capture")?.status).toBe("ok");
+  await rm(join(root, "old"), { recursive: true });
+  expect((await doctor(isolated)).check("capture")).toMatchObject({
+    status: "warning",
+    detail: expect.stringContaining(
+      `run ${old}, which isn't there or can't run`,
+    ),
+    fix: `neuve setup hooks --repo '${repository}'`,
+  });
+
+  // A skill offer considered for a reason is named, not "not applied yet".
+  const stamp = { appliedAt: "2026-11-21T00:00:00.000Z", by: "0.2.1" };
+  const machine = join(dirname(settingsPath(home)), "setup-steps.json");
+  await mkdir(dirname(machine), { recursive: true });
+  await writeFile(
+    machine,
+    JSON.stringify({
+      schemaVersion: 1,
+      steps: { "agent-programs": { ...stamp, outcome: "checked" } },
+    }),
+  );
+  await writeFile(
+    join(repository, ".git/neuve/setup/setup-steps.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      steps: {
+        "skill-offer": {
+          ...stamp,
+          outcome: "considered",
+          reason: "no agent program was found to offer it to",
+        },
+      },
+    }),
+  );
+  expect((await doctor(isolated)).check("setup steps")).toMatchObject({
+    status: "ok",
+    detail: expect.stringContaining(
+      "not done, as no agent program was found to offer it to",
+    ),
+  });
+});
+
 test("the OpenAI route in the settings needs its sign-in, and unreadable settings are named", async () => {
   const { home, doctor } = await scratch();
   const folder = dirname(settingsPath(home));

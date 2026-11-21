@@ -20,7 +20,7 @@ import { runSetupHooks } from "./capture/setup-hooks.ts";
 import { runSetupStack, runStackCli } from "./stack-cli.ts";
 
 import { REVIEW_DESK_COMMAND } from "./review-desk-config.ts";
-import { runSetup } from "./setup.ts";
+import { runSetup, runSetupUpgrade } from "./setup.ts";
 import { runSkillsCli } from "./skills-cli.ts";
 import { CLI_VERSION, RELEASE_BUILD } from "./cli-version.ts";
 
@@ -53,6 +53,9 @@ Commands:
               review. It then looks for the agent programs here, says what it found, and offers
               the npm package of one it doesn't find (default no). At a terminal it then offers
               the Neuve skill once per repository; --no-skills skips the offer.
+  setup upgrade
+              Run the setup steps a newly installed version adds, and undo those it drops, on
+              this machine and in each repository set up here. The install script runs it.
   setup hooks [--repo <path>] [--agents claude-code,codex|none] [--dry-run]
               Capture commits and agent sessions in this repository. Run
               neuve setup hooks --help for the files it changes.
@@ -192,6 +195,8 @@ const main = async (args: readonly string[]): Promise<number> => {
     return runSetupHooks(args.slice(2));
   if (command === "setup" && args[1] === "stack")
     return runSetupStack(args.slice(2));
+  if (command === "setup" && args[1] === "upgrade")
+    return runSetupUpgrade(args.slice(2));
   if (command === "stack") return runStackCli(args.slice(1));
   if (command === "skills") return runSkillsCli(args.slice(1));
   if (command === "agents") return runAgentsCli(args.slice(1));

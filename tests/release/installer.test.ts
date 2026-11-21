@@ -146,6 +146,56 @@ describe.each(shells)("installer under %s", (shell) => {
     );
   }, 90_000);
 
+  // Why: the installer's last step hands the upgrade to the new copy's setup, and it must never run
+  // a copy's setup that doesn't name the command: an older setup takes the words as its own flags.
+  test("an upgrade runs the new copy's setup upgrade, and only when that copy has it", async () => {
+    const context = await scratch();
+    const first = await tinyRelease("0.1.0", { setupSteps: true });
+    ok(await install(context, first, [], shell));
+    const calls = () => read(context.log).catch(() => "");
+    expect(await calls()).not.toContain("setup");
+    const without = await install(
+      context,
+      await tinyRelease("0.1.1"),
+      [],
+      shell,
+    );
+    ok(without);
+    expect(await calls()).not.toContain("setup upgrade");
+    await rm(context.log, { force: true });
+    const upgraded = await install(
+      context,
+      await tinyRelease("0.1.2", { setupSteps: true }),
+      [],
+      shell,
+    );
+    ok(upgraded);
+    expect(await calls()).toContain("neuve 0.1.2: setup upgrade");
+    // --no-skills reaches the new copy's setup, which then leaves the skill offer out.
+    await rm(context.log, { force: true });
+    ok(
+      await install(
+        context,
+        await tinyRelease("0.1.3", { setupSteps: true }),
+        ["--no-skills"],
+        shell,
+      ),
+    );
+    expect(await calls()).toContain("neuve 0.1.3: setup upgrade --no-skills");
+    // A setup upgrade that fails leaves the install in place and says how to finish.
+    const failed = await install(
+      context,
+      await tinyRelease("0.1.4", { setupSteps: "fails" }),
+      [],
+      shell,
+    );
+    ok(failed);
+    expect(failed.output).toContain(
+      "Setup's steps for this version didn't all run. To finish them, run neuve setup upgrade.",
+    );
+    expect(failed.output).toContain("Installed neuve 0.1.4");
+  }, 60_000);
+
   test("refuses a tampered archive, unsafe members and links before creating the prefix", async () => {
     const context = await scratch();
     const release = await tinyRelease("0.1.0");
@@ -619,8 +669,14 @@ test.skipIf(process.platform !== "darwin")(
   async () => {
     const context = await scratch();
     const releases = {
-      first: await tinyRelease("0.1.0-preview.1", { skills: true }),
-      second: await tinyRelease("0.1.0-preview.2", { skills: true }),
+      first: await tinyRelease("0.1.0-preview.1", {
+        skills: true,
+        setupSteps: true,
+      }),
+      second: await tinyRelease("0.1.0-preview.2", {
+        skills: true,
+        setupSteps: true,
+      }),
     };
     const shipped = async (
       release: Awaited<ReturnType<typeof tinyRelease>>,
@@ -675,6 +731,8 @@ test.skipIf(process.platform !== "darwin")(
       support: await snapshot(support),
     });
     const before = await kept();
+    // A first install has no setup to bring up to date.
+    expect(await read(context.log)).not.toContain("setup upgrade");
     await rm(context.log);
     const upgraded = await from(releases.second);
     ok(upgraded);
@@ -693,6 +751,9 @@ test.skipIf(process.platform !== "darwin")(
     expect(zshrc.split(`export PATH="${prefix}/bin:$PATH"`).length - 1).toBe(1);
     const calls = await read(context.log);
     expect(calls).toContain("neuve 0.1.0-preview.2: skills install --offer");
+    // The new copy's setup runs the steps the new version adds, at the person's terminal.
+    expect(calls).toContain("neuve 0.1.0-preview.2: setup upgrade");
+    expect(upgraded.output).toContain("setup upgrade read a terminal");
     expect(calls).not.toContain("neuve 0.1.0-preview.1");
     expect(await kept()).toEqual(before);
     // The first release's installer, with its own archive, refuses to replace the newer release.

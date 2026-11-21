@@ -25,6 +25,15 @@ import {
   SOURCE_DESK_FIX,
 } from "./review-desk-config.ts";
 import { repositorySetup } from "./setup-status.ts";
+import { storeSetupLayout } from "./installation.ts";
+import {
+  machineSteps,
+  machineStepsRecord,
+  pendingSteps,
+  repositorySteps,
+  repositoryStepsRecord,
+} from "./setup-steps.ts";
+import { defaultHookFile, inspectCapture } from "./capture/setup-hooks.ts";
 import { quote } from "./shell-quote.ts";
 import { inspectSkillForDoctor } from "./skills-cli.ts";
 import {
@@ -310,6 +319,8 @@ export const inspectDoctor = async (input: {
   path?: string;
   /** For tests: Codex's discovery, in place of the real one. */
   findCodex?: Surroundings["findCodex"];
+  /** Each agent's hook file; the person's by default, under `home`. */
+  hookFiles?: Parameters<typeof inspectCapture>[1];
 }) => {
   const home = input.home ?? homedir();
   const fromSource = !isCompiled();
@@ -529,6 +540,13 @@ export const inspectDoctor = async (input: {
               }
             : ok("setup", `Neuve is set up in ${repository}`),
       );
+      checks.push(await stepsCheck(repository, home));
+      checks.push(
+        await captureCheck(
+          repository,
+          input.hookFiles ?? ((harness) => defaultHookFile(harness, home)),
+        ),
+      );
     }
   }
   // The agent programs, in setup's words; only what run time would start is asked. The sign-in
@@ -576,6 +594,105 @@ export const DOCTOR_HELP = `Usage: neuve doctor [--repo <path>] [--json]
   and the Codex the codex account runs (the stored path, else the codex on PATH), once as its
   app server, with no model request. Exits 1 when something is missing.
 `;
+
+/**
+ * Capture in the repository: absent is said plainly, and a part that `neuve setup hooks` would
+ * change, such as a hook running a program that is gone, is a finding rather than "set up". A hook
+ * entry Neuve can't read surely is named, never called gone.
+ */
+const captureCheck = async (
+  repository: string,
+  hookFiles: Parameters<typeof inspectCapture>[1],
+): Promise<DoctorCheck> => {
+  const found = await inspectCapture(repository, hookFiles);
+  const fix = `neuve setup hooks --repo ${quote(repository)}`;
+  const parts = found?.parts ?? [];
+  const off = parts.filter(
+    (part) => part.state === "update" || part.state === "missing",
+  );
+  const unclear = parts
+    .filter((part) => part.state === "unclear")
+    .map((part) => `${part.path}: ${part.why}`);
+  const said = off
+    .map(
+      (part) =>
+        `${part.path} ${part.state === "missing" ? "is missing" : "needs an update"}: ${part.why}`,
+    )
+    .concat(unclear)
+    .join("; ");
+  if (found === undefined || !found.configured)
+    return {
+      check: "capture",
+      status: "warning",
+      detail: `Capture isn't set up in ${repository}: it has no capture.json or Git hooks${said === "" ? "" : `. ${said}`}`,
+      fix,
+    };
+  if (off.length > 0)
+    return { check: "capture", status: "warning", detail: said, fix };
+  return ok(
+    "capture",
+    unclear.length === 0
+      ? "Every capture hook is as neuve setup hooks writes it"
+      : `Every capture hook Neuve can judge is as neuve setup hooks writes it. ${said}`,
+  );
+};
+
+/**
+ * Setup's named steps on this machine and in the repository: those waiting, those considered and
+ * why, or a record left alone, in the words neuve setup upgrade uses.
+ */
+const stepsCheck = async (
+  repository: string,
+  home: string,
+): Promise<DoctorCheck> => {
+  const layout = await storeSetupLayout(repository);
+  const nothing = async () => [];
+  const scopes = [
+    await pendingSteps(
+      machineSteps(async () => "checked"),
+      machineStepsRecord(home),
+    ),
+    ...(layout === undefined
+      ? []
+      : [
+          await pendingSteps(
+            repositorySteps(layout.directory, nothing),
+            repositoryStepsRecord(layout.directory),
+          ),
+        ]),
+  ];
+  const left = scopes.flatMap((scope) =>
+    scope.left === undefined ? [] : [scope.left],
+  );
+  const waiting = scopes.flatMap((scope) =>
+    scope.waiting.map((step) => step.does),
+  );
+  const considered = scopes.flatMap((scope) =>
+    scope.considered.map(
+      ({ step, reason }) => `setup ${step.does}: not done, as ${reason}`,
+    ),
+  );
+  if (left.length > 0)
+    return {
+      check: "setup steps",
+      status: "warning",
+      detail: `Setup's steps are left as they are: ${left.join("; ")}`,
+      fix: "Do what the message says, then run neuve doctor again",
+    };
+  if (waiting.length > 0)
+    return {
+      check: "setup steps",
+      status: "warning",
+      detail: `Not applied yet: setup ${waiting.join("; ")}`,
+      fix: `neuve setup --repo ${quote(repository)}, at a terminal`,
+    };
+  return ok(
+    "setup steps",
+    considered.length === 0
+      ? "Every setup step of this neuve is applied"
+      : `Every setup step of this neuve was considered. ${considered.join("; ")}; neuve setup tries again`,
+  );
+};
 
 /**
  * One agent program, in setup's words. A stored path that no longer answers is a warning that

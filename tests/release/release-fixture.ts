@@ -91,12 +91,14 @@ export interface TinyRelease {
 /**
  * A release archive whose `neuve` answers `--version`, `worker uninstall-agent` (as the real CLI
  * does with no timer registered) and, when `skills` is set, `skills --help` and
- * `skills install --offer`, logging each call to `$NEUVE_TEST_LOG` when that is set.
+ * `skills install --offer`, and when `setupSteps` is set, `setup --help` and `setup upgrade`, logging each call to `$NEUVE_TEST_LOG` when that is set.
  */
 export const tinyRelease = async (
   version: string,
   options: Readonly<{
     skills?: boolean;
+    /** Answers `setup --help` naming `neuve setup upgrade`, and `setup upgrade` (exiting 1 for `fails`). */
+    setupSteps?: boolean | "fails";
     /** Changes the staged tree before it is packed: a way to plant bad members. */
     plant?: (stage: string) => Promise<void>;
     tarArgs?: ReadonlyArray<string>;
@@ -117,6 +119,12 @@ export const tinyRelease = async (
       ? [
           'if [ "${1:-}" = skills ] && [ "${2:-}" = --help ]; then exit 0; fi',
           'if [ "${1:-}" = skills ] && [ "${2:-}" = install ]; then [ -t 0 ] && echo "skills offer read a terminal"; exit 0; fi',
+        ]
+      : []),
+    ...(options.setupSteps
+      ? [
+          'if [ "${1:-}" = setup ] && [ "${2:-}" = --help ]; then echo "  neuve setup upgrade, which the install script runs"; exit 0; fi',
+          `if [ "\${1:-}" = setup ] && [ "\${2:-}" = upgrade ]; then [ -t 0 ] && echo "setup upgrade read a terminal"; exit ${options.setupSteps === "fails" ? 1 : 0}; fi`,
         ]
       : []),
     'echo "neuve: Unknown command: ${1:-}" >&2',

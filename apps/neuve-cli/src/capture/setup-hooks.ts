@@ -35,6 +35,7 @@ import {
   type CaptureConfig,
 } from "./config.ts";
 import { GIT_HOOKS, TRAILER_HOOK } from "./git-hooks.ts";
+import { Identity } from "@neuve/records-core/capture";
 import { setupStack } from "../stack-cli.ts";
 
 export const SETUP_HOOKS_HELP = `Usage:
@@ -238,6 +239,10 @@ interface Change {
   readonly action: string;
 }
 
+/** Whether Git would run the file as a hook: its owner may execute it. */
+const executableByOwner = async (path: string) =>
+  ((await stat(path).catch(() => undefined))?.mode ?? 0) & 0o100 ? true : false;
+
 const installGitHook = async (
   hooksDirectory: string,
   name: string,
@@ -261,10 +266,19 @@ const installGitHook = async (
       action = `installed; the existing hook moved to ${previous} and still runs first whenever it is executable`;
     }
   }
+  const script = gitHookScript(name, command, chained);
+  // As for the agent hook files: a hook already as it should be is left as it is. Git skips a hook
+  // without its execute bit, so one with the right text but not executable is written again.
+  if (
+    action === "updated" &&
+    (await readFile(path, "utf8").catch(() => "")) === script &&
+    (await executableByOwner(path))
+  )
+    return { path, action: "unchanged" };
   if (!dryRun) {
     await mkdir(hooksDirectory, { recursive: true });
     const temporary = `${path}.${process.pid}.tmp`;
-    await writeFile(temporary, gitHookScript(name, command, chained));
+    await writeFile(temporary, script);
     await chmod(temporary, 0o755);
     await rename(temporary, path);
   }
@@ -413,14 +427,11 @@ export const runSetupHooks = async (
     await buildHookBundle();
   const command = hookArgv.map(quote).join(" ");
 
-  const claudeHome =
-    process.env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude");
-  const codexHome = process.env["CODEX_HOME"] ?? join(homedir(), ".codex");
   const hookFile = (harness: AgentHarness) =>
     resolve(
-      harness === "claude-code"
-        ? (values["claude-settings"] ?? join(claudeHome, "settings.json"))
-        : (values["codex-hooks"] ?? join(codexHome, "hooks.json")),
+      (harness === "claude-code"
+        ? values["claude-settings"]
+        : values["codex-hooks"]) ?? defaultHookFile(harness),
     );
   // Named, the person's choice. Otherwise the agent programs found here, and every one this
   // repository's capture.json already lists: a program not found adds nothing new and never takes
@@ -509,4 +520,205 @@ export const runSetupHooks = async (
   );
   await Bun.write(Bun.stdout, `${lines.join("\n")}\n`);
   return 0;
+};
+
+/** Each agent's hook file, where `setup hooks` writes it unless told otherwise. */
+export const defaultHookFile = (harness: AgentHarness, home = homedir()) =>
+  harness === "claude-code"
+    ? join(
+        process.env["CLAUDE_CONFIG_DIR"] ?? join(home, ".claude"),
+        "settings.json",
+      )
+    : join(process.env["CODEX_HOME"] ?? join(home, ".codex"), "hooks.json");
+
+/**
+ * What one part of capture needs, read without writing: `ok` (as it should be), `update` (Neuve's
+ * own, but not what this setup writes, or calling a program that isn't there) or `missing`. There is
+ * no `remove` yet: this version drops nothing, and an agent's hook entries are the user's, shared by
+ * every repository, so one repository can't say another doesn't want them.
+ */
+export interface CapturePart {
+  readonly path: string;
+  /** `unclear`: Neuve can't read the hook command surely enough to judge it. */
+  readonly state: "ok" | "update" | "missing" | "unclear";
+  readonly why?: string;
+}
+
+/**
+ * The files an agent hook entry needs, read back from the command `setup hooks` wrote: the program
+ * it starts and, when that program is `bun` (a hook written from a source checkout), the script it
+ * runs. Undefined when the command can't be read that surely: a bare or relative first word, or a
+ * quoted one with an apostrophe in it. Such an entry is reported as one Neuve can't judge, never as
+ * gone.
+ */
+const filesCalledBy = (command: string): ReadonlyArray<string> | undefined => {
+  const inner =
+    /^sh -c '(.*)'$/s.exec(command)?.[1]?.replaceAll(`'\\''`, "'") ?? command;
+  const words: string[] = [];
+  let rest = inner.trim();
+  while (rest !== "" && !rest.startsWith(">")) {
+    const quoted = /^'([^']*)'(?=\s|$)/.exec(rest);
+    const bare = /^([^\s']+)(?=\s|$)/.exec(rest);
+    const word = quoted ?? bare;
+    if (word === null) return undefined;
+    words.push(word[1]!);
+    rest = rest.slice(word[0].length).trimStart();
+  }
+  const program = words[0];
+  if (program === undefined || !isAbsolute(program)) return undefined;
+  if (!/(^|\/)bun$/.test(program)) return [program];
+  const script = words.find((word) => word.endsWith(".js"));
+  return script !== undefined && isAbsolute(script)
+    ? [program, script]
+    : [program];
+};
+
+/** A file an entry needs is there: the program runnable, a script readable. */
+const present = async (path: string) => {
+  try {
+    const entry = await stat(path);
+    return (
+      entry.isFile() && (path.endsWith(".js") || (entry.mode & 0o111) !== 0)
+    );
+  } catch {
+    return false;
+  }
+};
+
+const runnable = present;
+
+/**
+ * Capture in one repository as `neuve setup hooks` would leave it, compared with what is there,
+ * without writing: its capture.json and Git hooks, and Neuve's entries in the person's agent hook
+ * files. Those entries are per user, shared by every repository, so they are judged on what holds
+ * for all of them: an entry whose program is gone or can't run needs an update wherever it is seen,
+ * even from a repository with no capture; a listed agent with no Neuve entries is missing. Which
+ * live copy an entry calls is not judged, since another repository may have set it up with another.
+ * `configured` is false when this repository has no capture.json.
+ */
+export const inspectCapture = async (
+  root: string,
+  hookFiles: (harness: AgentHarness) => string = (harness) =>
+    defaultHookFile(harness),
+): Promise<
+  { configured: boolean; parts: ReadonlyArray<CapturePart> } | undefined
+> => {
+  const located = await Effect.runPromiseExit(resolveStoreLocation(root));
+  if (Exit.isFailure(located)) return undefined;
+  const location = located.value;
+  const configPath = captureConfigPath(location);
+  const config = await readCaptureConfig(location);
+  const parts: CapturePart[] = [];
+  let command: string | undefined;
+  let dead = false;
+  if (config === undefined) {
+    if (await exists(configPath))
+      parts.push({
+        path: configPath,
+        state: "update",
+        why: "it isn't a capture.json this neuve can read",
+      });
+  } else {
+    const program = config.hookCommand[0]!;
+    command = config.hookCommand.map(quote).join(" ");
+    dead = !(await runnable(program));
+    parts.push(
+      dead
+        ? {
+            path: configPath,
+            state: "update",
+            why: `its hooks run ${program}, which isn't there or can't run`,
+          }
+        : { path: configPath, state: "ok" },
+    );
+    const hooksPath = await git(root, [
+      "rev-parse",
+      "--git-path",
+      "hooks",
+    ]).catch(() => undefined);
+    const hooksDirectory =
+      hooksPath === undefined
+        ? undefined
+        : isAbsolute(hooksPath)
+          ? hooksPath
+          : resolve(root, hooksPath);
+    for (const name of hooksDirectory === undefined ? [] : config.gitHooks) {
+      const path = join(hooksDirectory!, name);
+      const current = await readFile(path, "utf8").catch(() => undefined);
+      const chained = await exists(join(hooksDirectory!, `${name}.pre-neuve`));
+      parts.push(
+        current === undefined || !current.includes(MARKER)
+          ? {
+              path,
+              state: "missing",
+              why:
+                current === undefined
+                  ? "there is no hook"
+                  : "the hook there isn't Neuve's",
+            }
+          : current !== gitHookScript(name, command, chained)
+            ? {
+                path,
+                state: "update",
+                why: "it isn't the hook this setup writes",
+              }
+            : !(await executableByOwner(path))
+              ? {
+                  path,
+                  state: "update",
+                  why: "it can't be executed, so Git skips it",
+                }
+              : dead
+                ? {
+                    path,
+                    state: "update",
+                    why: `it runs ${program}, which isn't there or can't run`,
+                  }
+                : { path, state: "ok" },
+      );
+    }
+  }
+  for (const harness of Identity.AGENT_HARNESSES) {
+    const path = hookFiles(harness);
+    let file: { hooks?: Record<string, ReadonlyArray<HookGroup>> } | undefined;
+    try {
+      file = JSON.parse(await readFile(await linkTarget(path), "utf8"));
+    } catch {
+      file = undefined;
+    }
+    const own = Object.values(file?.hooks ?? {})
+      .flatMap((groups) => groups.flatMap((group) => group.hooks ?? []))
+      .map((hook) => hook.command ?? "")
+      .filter(isOwnCommand);
+    const gone = new Set<string>();
+    let unread = 0;
+    for (const entry of own) {
+      const files = filesCalledBy(entry);
+      if (files === undefined) unread += 1;
+      else for (const file of files) if (!(await present(file))) gone.add(file);
+    }
+    if (gone.size > 0)
+      parts.push({
+        path,
+        state: "update",
+        why: `Neuve's ${harness} hooks run ${[...gone].join(", ")}, which isn't there or can't run, so they capture nothing`,
+      });
+    else if (unread > 0)
+      parts.push({
+        path,
+        state: "unclear",
+        why: `Neuve can't tell what ${unread} of its ${harness} hook entries run, so it can't say whether they work`,
+      });
+    else if (config?.agents.includes(harness) === true)
+      parts.push(
+        own.length === 0
+          ? {
+              path,
+              state: "missing",
+              why: `there are no Neuve ${harness} hooks`,
+            }
+          : { path, state: "ok" },
+      );
+  }
+  return { configured: config !== undefined, parts };
 };
