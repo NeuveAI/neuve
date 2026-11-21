@@ -22,7 +22,7 @@ test("an ask carries only a recognized chat mode through the parser", () => {
 });
 
 async function memoryChannel(options: Partial<Options> = {}) {
-	const fake = fauxProvider({ provider: MODEL.provider, models: [{ id: MODEL.modelId }], tokensPerSecond: 500 });
+	const fake = fauxProvider({ provider: MODEL.provider, models: [{ id: MODEL.modelId }, { id: "alternate" }], tokensPerSecond: 500 });
 	const models = createModels();
 	models.setProvider(fake.provider);
 	const channel = await Channel.open({
@@ -33,7 +33,7 @@ async function memoryChannel(options: Partial<Options> = {}) {
 		...options,
 	});
 	const request = (input: Request) => channel.handle(input, () => {});
-	const ask = (fields: Pick<Extract<Request, { op: "ask" }>, "chat" | "mode" | "requestId"> = {}) =>
+	const ask = (fields: Pick<Extract<Request, { op: "ask" }>, "chat" | "mode" | "model" | "requestId"> = {}) =>
 		request({ op: "ask", author: OWNER, text: "Inspect the repo", ...fields });
 	const wait = async (receipt: unknown) => {
 		if (!receipt || typeof receipt !== "object" || !("submission" in receipt) || typeof receipt.submission !== "number") {
@@ -46,12 +46,15 @@ async function memoryChannel(options: Partial<Options> = {}) {
 
 // The Codex bridge reads this exact symbol on the model request. Hooks may copy the messages.
 test("the channel sends the Codex planning marker after request hooks", async () => {
+	let dropDecision = false;
 	const run = await memoryChannel({
 		extension: {
 			extensions: [defineExtension({
 				name: "copy-request-messages",
 				hooks: [hook(GenerationTask, {
-					beforeRequest: ({ messages }) => ({ messages: structuredClone(messages) }),
+					beforeRequest: ({ messages }) => ({
+						messages: structuredClone(dropDecision ? messages.slice(0, -1) : messages),
+					}),
 				})],
 			})],
 		},
@@ -67,6 +70,10 @@ test("the channel sends the Codex planning marker after request hooks", async ()
 			expect(await run.wait(await run.ask({ mode }))).toBe("done");
 		}
 		expect(markers).toEqual([false, true, false]);
+		dropDecision = true;
+		run.fake.appendResponses([fauxAssistantMessage("The model should not be called")]);
+		expect(await run.wait(await run.ask({ mode: "plan" }))).toBe("unanswered");
+		expect(run.fake.state.callCount).toBe(3);
 	} finally {
 		await run.channel.close();
 	}
@@ -86,13 +93,60 @@ test("a rejected submission keeps the chat mode and lets the same request retry"
 	const storage = new RefusingStorage();
 	const run = await memoryChannel({ storage });
 	try {
-		const ask = { mode: "plan", requestId: "mode-change" } satisfies { mode: ChatMode; requestId: string };
+		const ask = { mode: "plan" as const, requestId: "mode-change", model: { ...MODEL, modelId: "alternate" } };
 		await expect(run.ask(ask)).rejects.toThrow("Fixture rejected submission");
-		expect((await run.channel.info()).chats[0]).toMatchObject({ mode: "ace", busy: false });
+		expect((await run.channel.info()).chats[0]).toMatchObject({ mode: "ace", busy: false, model: MODEL });
 		storage.refuse = false;
 		run.fake.appendResponses([fauxAssistantMessage("Ready")]);
 		expect(await run.wait(await run.ask(ask))).toBe("done");
-		expect((await run.channel.info()).chats[0]?.mode).toBe("plan");
+		expect((await run.channel.info()).chats[0]).toMatchObject({ mode: "plan", model: ask.model });
+	} finally {
+		await run.channel.close();
+	}
+});
+
+test("a native wake waits for a refused mode change to roll back", async () => {
+	class RefusingStorage extends MemoryStorage {
+		override commit(writes: readonly StorageWrite[], context: Context) {
+			if (writes.some(write => write.type === "submission" && write.value.requestId === "refused")) {
+				throw new StorageRejected("Fixture refused the ask");
+			}
+			return super.commit(writes, context);
+		}
+	}
+	let harness: Harness | undefined;
+	const run = await memoryChannel({
+		storage: new RefusingStorage(),
+		feed: async value => { harness = value; return { close: async () => {}, pending: () => false }; },
+	});
+	try {
+		run.fake.appendResponses([fauxAssistantMessage("Planning")]);
+		expect(await run.wait(await run.ask({ mode: "plan" }))).toBe("done");
+		const conversation = await harness?.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT);
+		if (!harness || !conversation) throw new Error("Missing fixture conversation");
+		let wake: ReturnType<typeof conversation.submit> | undefined;
+		const stop = harness.subscribeCommits(({ changes }) => {
+			if (wake || !changes.some(change => change.type === "document"
+				&& change.record.kind === ChatModesDoc.definition.kind)) return;
+			wake = Promise.resolve().then(() => conversation.submit({
+				type: "input", content: "System wake", whenBusy: "followUp",
+			}, BACKGROUND_CONTEXT));
+		});
+		try {
+			let offered: string[] | undefined;
+			run.fake.appendResponses([request => {
+				offered = getCurrentTools(request.messages).map(tool => tool.name);
+				return fauxAssistantMessage("Wake answered");
+			}]);
+			await expect(run.ask({ mode: "ace", requestId: "refused" })).rejects.toThrow("Fixture refused the ask");
+			if (!wake) throw new Error("No wake was queued");
+			expect((await (await wake).wait(BACKGROUND_CONTEXT)).status).toBe("done");
+			expect(offered).toContain("read");
+			expect(offered).not.toContain("bash");
+			expect((await run.channel.info()).chats[0]?.mode).toBe("plan");
+		} finally {
+			stop();
+		}
 	} finally {
 		await run.channel.close();
 	}
