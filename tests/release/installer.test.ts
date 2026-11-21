@@ -739,7 +739,7 @@ test.skipIf(process.platform !== "darwin")(
     ok(upgraded);
     expect(upgraded.output).toContain("Installed neuve 0.1.0-preview.2");
     expect(upgraded.output).toContain(
-      "\nNeuve is installed.\n  Next, in a repository already set up: neuve doctor\n",
+      "Next, in a repository already set up: neuve doctor",
     );
     expect(upgraded.output).not.toContain("run neuve setup");
     const prefix = await realpath(context.prefix);

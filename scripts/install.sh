@@ -12,14 +12,15 @@ say() {
     if (
         trap - EXIT
         if [ "$cleaning_up" = 0 ]; then trap 'exit 141' PIPE; fi
-        printf '%s%s\n' "$say_prefix" "$*" 2>/dev/null || :
+        printf "$say_prefix%s\n" "$*" 2>/dev/null || :
     ); then :
     else
         message_status=$?
         if [ "$message_status" = 141 ]; then handle_signal 141; else exit "$message_status"; fi
     fi
 }
-# Errors name the installer, since its output may be piped; progress sits under its header.
+# Errors name the installer, since its output may be piped; progress sits under its header. The
+# prefix is part of the format, so the message stays printf's one argument; it holds no %.
 say_prefix='neuve install: '
 fail() { say_prefix='neuve install: '; say "$*" >&2; exit 1; }
 show_error() {
