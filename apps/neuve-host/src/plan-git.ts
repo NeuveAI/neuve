@@ -15,7 +15,8 @@ function error(code: FileError["code"], message: string): never {
 }
 
 async function git(
-	cwd: string, args: string[], context: Context, accepted = [0], output?: ToolExecutionApi["output"],
+	cwd: string, args: string[], context: Context,
+	{ accepted = [0], output, input }: { accepted?: number[]; output?: ToolExecutionApi["output"]; input?: Buffer } = {},
 ) {
 	const child = Bun.spawn([
 		"git", "--no-pager",
@@ -30,29 +31,33 @@ async function git(
 			HOME: process.env.HOME,
 			XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
 			GIT_OPTIONAL_LOCKS: "0",
-			// check-ignore rejects Git's literal pathspec flag. Its paths are prefixed with "./".
-			...(args[0] === "check-ignore" ? {} : { GIT_LITERAL_PATHSPECS: "1" }),
+			// Diff supplies literal pathspec magic. check-ignore takes paths prefixed with "./".
+			...(args[0] === "diff" || args[0] === "check-ignore" ? {} : { GIT_LITERAL_PATHSPECS: "1" }),
 			GIT_NO_LAZY_FETCH: "1",
 			GIT_ALLOW_PROTOCOL: "",
 			GIT_TERMINAL_PROMPT: "0",
 		},
-		stdin: "ignore", stdout: "pipe", stderr: "ignore",
+		stdin: input ?? "ignore", stdout: "pipe", stderr: "ignore",
 		...(context.abortSignal ? { signal: context.abortSignal } : {}),
 	});
 	const read = async () => {
-		if (!output) return new Response(child.stdout).text();
+		if (!output) {
+			const bytes = await new Response(child.stdout).arrayBuffer();
+			// Preserve the exact filenames used for exclusions or fail before emitting a patch.
+			return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+		}
 		for await (const bytes of child.stdout) output(bytes);
 		return "";
 	};
 	const [text, status] = await Promise.all([read(), child.exited]);
 	context.abortSignal?.throwIfAborted();
 	if (!accepted.includes(status)) throw new Error(`Git ${args[0]} failed with exit status ${status}.`);
-	return { text, status };
+	return text;
 }
 
 async function tree(cwd: string, context: Context): Promise<Tree> {
 	const root = await realpath(cwd);
-	const { text } = await git(root, [
+	const text = await git(root, [
 		"rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir",
 	], context);
 	const [toplevel, gitDir, commonDir, ...extra] = text.replace(/\n$/, "").split("\n");
@@ -90,16 +95,33 @@ async function canonical(path: string, allowMissing: boolean): Promise<string> {
 	return realpath(path);
 }
 
-async function confined(tree: Tree, path: string, context: Context, allowMissing = false) {
+async function confinedPath(tree: Tree, path: string, allowMissing: boolean) {
 	const requested = resolve(tree.root, path);
 	checkedName(tree, requested);
 	const actual = await canonical(requested, allowMissing);
 	const name = checkedName(tree, actual);
-	if (name) {
-		const { status } = await git(tree.root, ["check-ignore", "--", `./${name}`], context, [0, 1]);
-		if (status === 0) error("permission_denied", "Plan mode cannot read a file Git ignores.");
-	}
 	return { actual, name };
+}
+
+async function ignoredPaths(tree: Tree, names: string[], context: Context): Promise<string[]> {
+	if (!names.length) return [];
+	const paths = new Map(names.map(name => [`./${name}`, name]));
+	const text = await git(tree.root, ["check-ignore", "-z", "--stdin"], context, {
+		accepted: [0, 1], input: Buffer.from(`${[...paths.keys()].join("\0")}\0`),
+	});
+	return text.split("\0").filter(Boolean).map(path => {
+		const name = paths.get(path);
+		if (name === undefined) throw new Error("Git returned an unexpected ignored path.");
+		return name;
+	});
+}
+
+async function confined(tree: Tree, path: string, context: Context, allowMissing = false) {
+	const file = await confinedPath(tree, path, allowMissing);
+	if (file.name && (await ignoredPaths(tree, [file.name], context)).length) {
+		error("permission_denied", "Plan mode cannot read a file Git ignores.");
+	}
+	return file;
 }
 
 export function planFileAccess(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv {
@@ -204,10 +226,10 @@ export const planExplore = defineExtension({
 			const worktree = await tree(cwd, context);
 			const file = args.path === undefined ? undefined : (await confined(worktree, args.path, context, true)).name;
 			const paths = ["--", ...(file ? [file] : [])];
-			const run = (command: string[], accepted?: number[]) =>
-				git(worktree.root, command, context, accepted, api.output);
+			const run = (command: string[], accepted = [0]) =>
+				git(worktree.root, command, context, { accepted, output: api.output });
 			const commit = async (rev: string) => {
-				const { text } = await git(worktree.root,
+				const text = await git(worktree.root,
 					["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`], context);
 				const oid = text.trim();
 				if (!objectId.test(oid)) throw new Error("Git did not return a commit ID.");
@@ -222,13 +244,13 @@ export const planExplore = defineExtension({
 					await run(["grep", "--cached", "--no-recurse-submodules", "--no-textconv", "-F", "-n", "-e", args.pattern, ...paths], [0, 1]);
 					break;
 				case "history":
-					await run(["log", ...noDrivers, "--no-show-signature", "--no-notes", "--no-decorate", "--no-use-mailmap",
+					await run(["log", ...noDrivers, "--no-patch", "--no-show-signature", "--no-notes", "--no-decorate", "--no-use-mailmap",
 						"--format=%h %s", `--max-count=${args.count ?? 20}`,
 						"--end-of-options", await commit(args.revision ?? "HEAD"), ...paths]);
 					break;
 				case "show": {
 					if (!file) throw new Error("Showing a file needs a path inside the working tree.");
-					const { text } = await git(worktree.root, [
+					const text = await git(worktree.root, [
 						"ls-tree", "-z", "--full-tree", "--end-of-options", await commit(args.revision), ...paths,
 					], context);
 					const [header] = text.split("\t", 1);
@@ -239,10 +261,26 @@ export const planExplore = defineExtension({
 					await run(["cat-file", "blob", "--end-of-options", oid]);
 					break;
 				}
-				case "compare":
-					await run(["diff", ...noDrivers, "--ignore-submodules=all", "--no-relative", "--no-color",
-						"--end-of-options", await commit(args.from), await commit(args.to), ...paths]);
+				case "compare": {
+					// Treat each side of a rename separately so an ignored source can't enter the patch.
+					const diff = ["diff", ...noDrivers, "--no-renames", "--ignore-submodules=all", "--no-relative", "--no-color"];
+					const selection = ["--end-of-options", await commit(args.from), await commit(args.to), "--",
+						...(file ? [`:(top,literal)${file}`] : [])];
+					const names = (await git(worktree.root, [...diff, "--name-only", "-z", ...selection], context))
+						.split("\0").filter(Boolean);
+					const confinedNames: string[] = [];
+					const excluded: string[] = [];
+					for (const name of names) {
+						const path = await confinedPath(worktree, name, true).catch(() => undefined);
+						(path?.name === name ? confinedNames : excluded).push(name);
+					}
+					for (const name of await ignoredPaths(worktree, confinedNames, context)) excluded.push(name);
+					if (excluded.length < names.length) {
+						await run([...diff, ...selection, ...excluded.map(name => `:(top,literal,exclude)${name}`)]);
+					}
+					if (excluded.length) api.output("\nSome changed paths are unavailable in plan mode.\n");
 					break;
+				}
 			}
 			return {};
 		},

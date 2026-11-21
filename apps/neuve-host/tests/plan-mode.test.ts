@@ -178,8 +178,12 @@ test("explore rejects options and leaves files, the index, and configured progra
 				{ action: "search", pattern: value },
 				{ action: "history", revision: value },
 				{ action: "history", count: value },
+				{ action: "history", path: value },
+				{ action: "show", revision: value, path: "notes.txt" },
+				{ action: "show", revision: "HEAD", path: value },
 				{ action: "compare", from: value, to: "HEAD" },
 				{ action: "compare", from: "HEAD", to: value },
+				{ action: "compare", from: "HEAD~1", to: "HEAD", path: value },
 			]);
 			const valid = [
 				{ action: "list" },
@@ -212,6 +216,59 @@ test("explore rejects options and leaves files, the index, and configured progra
 			expect((await readdir(root)).sort()).toEqual(outside);
 			expect(await readFile(join(repo, "notes.txt"), "utf8")).toBe("second version\n");
 			expect(await readFile(join(repo, ".git", "index"))).toEqual(index);
+		} finally {
+			await channel.close();
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+// A broad path selection must honor the same ignore boundary as an explicit historical read.
+test("explore compare omits paths Git now ignores in the whole tree and in a directory", async () => {
+	const root = await mkdtemp(join(tmpdir(), "neuve plan compare "));
+	try {
+		const repo = await realpath(root);
+		git(repo, "init", "-q");
+		git(repo, "config", "diff.renames", "true");
+		await mkdir(join(repo, "config"));
+		const shared = "This setting can be checked into Git.\n".repeat(4);
+		await writeFile(join(repo, "config", "secret.env"), `${shared}PRIVATE=fixture-only\n`);
+		await writeFile(join(repo, "config", "notes.txt"), "first version\n");
+		git(repo, "add", "--", "config");
+		git(repo, "commit", "-qm", "Initial fixture");
+		await writeFile(join(repo, ".gitignore"), "*.env\n");
+		await writeFile(join(repo, "config", "notes.txt"), "second version\n");
+		await writeFile(join(repo, "config", "example.txt"), shared);
+		git(repo, "rm", "--cached", "--", "config/secret.env");
+		git(repo, "add", "--", ".gitignore", "config/notes.txt", "config/example.txt");
+		git(repo, "commit", "-qm", "Update fixture");
+		const { fake, models } = faux();
+		const channel = await open(repo, models);
+		try {
+			const compare = { action: "compare", from: "HEAD~1", to: "HEAD" };
+			fake.appendResponses([
+				fauxAssistantMessage([
+					fauxToolCall("explore", compare, { id: "whole-tree" }),
+					fauxToolCall("explore", { ...compare, path: "config" }, { id: "directory" }),
+					fauxToolCall("explore", { action: "show", revision: "HEAD~1", path: "config/secret.env" }, { id: "show" }),
+					fauxToolCall("explore", { action: "history", path: "config" }, { id: "history" }),
+				], { stopReason: "toolUse" }),
+				fauxAssistantMessage("Exploration complete"),
+			]);
+			await ask(channel, { mode: "plan" });
+			const transcript = await results(channel);
+			for (const id of ["whole-tree", "directory"]) {
+				const reply = transcript.get(id);
+				expect(reply?.error).toBe(false);
+				expect(reply?.text).toContain("+second version");
+				expect(reply?.text?.includes("PRIVATE=fixture-only")).toBe(false);
+				expect(reply?.text?.includes("config/secret.env")).toBe(false);
+			}
+			expect(transcript.get("show")).toMatchObject({ error: true, text: expect.stringContaining("Git ignores") });
+			expect(transcript.get("history")).toMatchObject({ error: false, text: expect.stringMatching(
+				/^[\da-f]+ Update fixture\n[\da-f]+ Initial fixture\s*$/,
+			) });
 		} finally {
 			await channel.close();
 		}
