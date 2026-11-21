@@ -1,12 +1,15 @@
 import { expect, test } from "bun:test";
-import { getCurrentTools, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { Context } from "@earendil-works/chord";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type Harness, LiveDoc, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
+import { defineExtension, GenerationTask, type Harness, hook, InboxDoc, LiveDoc, MemoryStorage, ROOT_CONVERSATION_ID, StorageRejected, type StorageWrite } from "@earendil-works/pi-durable";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { Channel, type Options } from "../src/channel";
 import { EventSchema } from "../src/frame";
 import { parseRequest } from "../src/parse";
 import { ChatModesDoc } from "../src/plan-mode";
-import type { ChannelInfo, ChatMode, Request } from "../src/protocol";
-import { Fixture, OWNER } from "./helpers";
+import type { ChannelInfo, ChatMode, Event, Request } from "../src/protocol";
+import { Fixture, MODEL, OWNER, until } from "./helpers";
 
 // Both composers send through this parser before admission.
 test("an ask carries only a recognized chat mode through the parser", () => {
@@ -16,6 +19,173 @@ test("an ask carries only a recognized chat mode through the parser", () => {
 		});
 	}
 	expect(() => parseRequest({ op: "ask", text: "Draft a plan", mode: "write" }, "member")).toThrow("at mode");
+});
+
+async function memoryChannel(options: Partial<Options> = {}) {
+	const fake = fauxProvider({ provider: MODEL.provider, models: [{ id: MODEL.modelId }], tokensPerSecond: 500 });
+	const models = createModels();
+	models.setProvider(fake.provider);
+	const channel = await Channel.open({
+		id: "plan", name: "Plan", owner: OWNER, project: import.meta.dir, models,
+		storage: new MemoryStorage(), model: MODEL, env: cwd => new NodeExecutionEnv({ cwd }),
+		directory: { self: { id: "plan", name: "Plan" }, list: async () => [], deliver: async () => {} },
+		log: () => {},
+		...options,
+	});
+	const request = (input: Request) => channel.handle(input, () => {});
+	const ask = (fields: Pick<Extract<Request, { op: "ask" }>, "chat" | "mode" | "requestId"> = {}) =>
+		request({ op: "ask", author: OWNER, text: "Inspect the repo", ...fields });
+	const wait = async (receipt: unknown) => {
+		if (!receipt || typeof receipt !== "object" || !("submission" in receipt) || typeof receipt.submission !== "number") {
+			throw new Error("No submission was admitted");
+		}
+		return request({ op: "wait", submission: receipt.submission });
+	};
+	return { channel, fake, request, ask, wait };
+}
+
+// The Codex bridge reads this exact symbol on the model request. Hooks may copy the messages.
+test("the channel sends the Codex planning marker after request hooks", async () => {
+	const run = await memoryChannel({
+		extension: {
+			extensions: [defineExtension({
+				name: "copy-request-messages",
+				hooks: [hook(GenerationTask, {
+					beforeRequest: ({ messages }) => ({ messages: structuredClone(messages) }),
+				})],
+			})],
+		},
+	});
+	try {
+		const markers: boolean[] = [];
+		for (const mode of ["ace", "plan", "ace"] satisfies ChatMode[]) {
+			run.fake.appendResponses([request => {
+				markers.push(request.messages.some(message =>
+					message.role === "system" && Reflect.get(message, Symbol.for("neuve.chat.plan-request")) === true));
+				return fauxAssistantMessage("Ready");
+			}]);
+			expect(await run.wait(await run.ask({ mode }))).toBe("done");
+		}
+		expect(markers).toEqual([false, true, false]);
+	} finally {
+		await run.channel.close();
+	}
+});
+
+// Reject the batch containing the submission, where a separate mode commit used to leak through.
+test("a rejected submission keeps the chat mode and lets the same request retry", async () => {
+	class RefusingStorage extends MemoryStorage {
+		refuse = true;
+		override commit(writes: readonly StorageWrite[], context: Context) {
+			if (this.refuse && writes.some(write => write.type === "submission")) {
+				throw new StorageRejected("Fixture rejected submission");
+			}
+			return super.commit(writes, context);
+		}
+	}
+	const storage = new RefusingStorage();
+	const run = await memoryChannel({ storage });
+	try {
+		const ask = { mode: "plan", requestId: "mode-change" } satisfies { mode: ChatMode; requestId: string };
+		await expect(run.ask(ask)).rejects.toThrow("Fixture rejected submission");
+		expect((await run.channel.info()).chats[0]).toMatchObject({ mode: "ace", busy: false });
+		storage.refuse = false;
+		run.fake.appendResponses([fauxAssistantMessage("Ready")]);
+		expect(await run.wait(await run.ask(ask))).toBe("done");
+		expect((await run.channel.info()).chats[0]?.mode).toBe("plan");
+	} finally {
+		await run.channel.close();
+	}
+});
+
+// Pi may keep a queued passive write when an earlier run aborts. It still belongs before the ask.
+test("a mode-changing ask admits previously queued work in order", async () => {
+	let harness: Harness | undefined;
+	const run = await memoryChannel({
+		feed: async value => { harness = value; return { close: async () => {}, pending: () => false }; },
+	});
+	try {
+		if (!harness) throw new Error("Missing fixture harness");
+		const chat = ROOT_CONVERSATION_ID;
+		await harness.commit(async tx => {
+			const inbox = await tx.doc(InboxDoc, chat);
+			const olderInput = await tx.createSubmission({ conversationId: chat, type: "input", status: "queued" });
+			inbox.items.push({ id: olderInput.id, mode: "followUp", content: "Earlier input" });
+			const passive = await tx.createSubmission({ conversationId: chat, type: "write", status: "queued" });
+			inbox.items.push({
+				id: passive.id, mode: "write",
+				entry: { kind: "fixture.write", model: [{ role: "user", content: "Passive write", timestamp: 1 }] },
+			});
+		}, BACKGROUND_CONTEXT);
+		let inputs: unknown[] = [];
+		run.fake.appendResponses([request => {
+			inputs = request.messages.flatMap(message => message.role === "user" ? [message.content] : []);
+			return fauxAssistantMessage("Ready");
+		}]);
+		expect(await run.wait(await run.ask({ mode: "plan" }))).toBe("done");
+		expect(inputs).toEqual(["Passive write", "Earlier input", "owner: Inspect the repo"]);
+	} finally {
+		await run.channel.close();
+	}
+});
+
+// A child can receive its own message after the parent run that created it is over.
+test("a busy child blocks an idle parent's mode change", async () => {
+	const run = await memoryChannel();
+	const started = Promise.withResolvers<void>();
+	const finish = Promise.withResolvers<void>();
+	try {
+		run.fake.appendResponses([
+			fauxAssistantMessage(fauxToolCall("subagent", { task: "Read the repo" }), { stopReason: "toolUse" }),
+			fauxAssistantMessage("Child ready"), fauxAssistantMessage("Parent ready"),
+		]);
+		expect(await run.wait(await run.ask())).toBe("done");
+		const child = (await run.channel.info()).chats.find(chat => chat.parent === ROOT_CONVERSATION_ID);
+		if (!child) throw new Error("No child chat was created");
+		run.fake.appendResponses([async () => {
+			started.resolve();
+			await finish.promise;
+			return fauxAssistantMessage("Child finished");
+		}]);
+		const receipt = await run.ask({ chat: child.id });
+		await started.promise;
+		const parent = (await run.channel.info()).chats.find(chat => chat.id === ROOT_CONVERSATION_ID);
+		expect(parent).toMatchObject({ busy: false, mode: "ace" });
+		await expect(run.ask({ mode: "plan" })).rejects.toThrow("a chat it started is busy");
+		expect((await run.channel.info()).chats.find(chat => chat.id === ROOT_CONVERSATION_ID)?.mode).toBe("ace");
+		finish.resolve();
+		expect(await run.wait(receipt)).toBe("done");
+	} finally {
+		finish.resolve();
+		await run.channel.close();
+	}
+});
+
+// Wait for pi's persisted partial, then stop before it can write a final reply.
+test("a stopped partial reply keeps the mode it ran in", async () => {
+	let harness: Harness | undefined;
+	const run = await memoryChannel({
+		feed: async value => { harness = value; return { close: async () => {}, pending: () => false }; },
+	});
+	try {
+		const events: Event[] = [];
+		await run.channel.handle({ op: "watch" }, event => events.push(event));
+		run.fake.appendResponses([fauxAssistantMessage("Draft ".repeat(2_000))]);
+		const receipt = await run.ask({ mode: "plan" });
+		await until(async () => (await harness?.snapshot(LiveDoc, ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT))?.generation?.message);
+		await run.request({ op: "stop", author: OWNER });
+		expect(await run.wait(receipt)).toBe("unanswered");
+		const reply = await until(() => events.find(event => event.kind === "reply" && event.stopped));
+		expect(EventSchema.parse(reply)).toMatchObject({ mode: "plan", stopped: true });
+
+		run.fake.appendResponses([fauxAssistantMessage("Ready")]);
+		expect(await run.wait(await run.ask({ mode: "ace" }))).toBe("done");
+		const replay: Event[] = [];
+		await run.channel.handle({ op: "watch" }, event => replay.push(event));
+		expect(replay.find(event => event.kind === "reply" && event.stopped)).toMatchObject({ mode: "plan" });
+	} finally {
+		await run.channel.close();
+	}
 });
 
 const question = (id: string) => fauxAssistantMessage(fauxToolCall("question", {
@@ -38,7 +208,7 @@ test.each([OWNER, "teammate"])("%s can keep, but cannot switch, a busy chat's mo
 				fixture.script(question(`choose-${mode}`), fauxAssistantMessage(`Answered in ${mode}`));
 				const ask = { op: "ask", author, text: "Consider the approach", mode } satisfies
 					Extract<Request, { op: "ask" }>;
-				const switchMode = { ...ask, mode: other };
+				const switchMode = { ...ask, mode: other } satisfies Extract<Request, { op: "ask" }>;
 				const { submission } = await fixture.request<{ submission: number }>({ ...ask, requestId: mode });
 				await watch.until("tool", event => event.call === `choose-${mode}`);
 				expect((await fixture.request<ChannelInfo>({ op: "info" })).chats[0]).toMatchObject({ mode, busy: true });

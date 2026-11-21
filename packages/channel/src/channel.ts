@@ -28,6 +28,7 @@ import {
 	Harness,
 	InboxDoc,
 	type InboxState,
+	type InputSubmissionDraft,
 	LiveDoc,
 	type LiveState,
 	ROOT_CONVERSATION_ID,
@@ -74,7 +75,7 @@ import {
 } from "./messages";
 import { metadata, MetadataDoc, validateName } from "./metadata";
 import { available, choose, usable } from "./models";
-import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode } from "./plan-mode";
+import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, submitModeChange } from "./plan-mode";
 import { progress } from "./progress";
 import { answer, Questions } from "./questions";
 import type {
@@ -147,7 +148,7 @@ export type Options = {
 	resume?: boolean;
 	storage: Storage;
 	models: Models;
-	env(cwd: string, chat?: ConversationId): ExecutionEnv;
+	env(cwd: string): ExecutionEnv;
 	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
 	planFileAccess?(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv;
 	desktop?: Desktop;
@@ -269,9 +270,10 @@ export class Channel {
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models),
 			registry,
-			env: ({ cwd = options.project, conversationId }) => {
-				if (options.extension?.environment?.(cwd) === false) return;
-				const env = options.env(cwd, conversationId);
+			env: ({ cwd, conversationId }) => {
+				const folder = cwd || options.project;
+				if (options.extension?.environment?.(folder) === false) return;
+				const env = options.env(folder);
 				return options.planFileAccess?.(env, context => planning(conversationId, context)) ?? env;
 			},
 			onReport: (error) => log("error", "harness.report", failure(error)),
@@ -903,14 +905,14 @@ export class Channel {
 				}
 			};
 		}
-		await this.#select(conversation, request, model, effort, automatic, { bound, mode });
-		const submission = await conversation.submit({
+		const input: InputSubmissionDraft = {
 			type: "input",
 			content: room.content(request.author, request.text, request),
 			whenBusy: "steer",
 			...(request.requestId ? { requestId: request.requestId } : {}),
-		}, context);
-		return { submission: submission.id };
+		};
+		const { submission } = await this.#select(conversation, request, model, effort, automatic, { bound, mode, input });
+		return { submission: submission ?? (await conversation.submit(input, context)).id };
 	}
 
 	async #pick(request: Extract<Request, { op: "select" }>) {
@@ -939,8 +941,8 @@ export class Channel {
 		requested: ModelRef | undefined,
 		effort?: Effort,
 		automatic?: boolean,
-		{ bound, mode }: { bound?: ((tx: Tx) => Promise<void>) | undefined; mode?: ChatMode | undefined } = {},
-	): Promise<{ model: ModelRef; effort: Effort }> {
+		invocation?: { bound: ((tx: Tx) => Promise<void>) | undefined; mode: ChatMode | undefined; input: InputSubmissionDraft },
+	): Promise<{ model: ModelRef; effort: Effort; submission?: SubmissionId }> {
 		const agent = await conversation.agent(context);
 		const current = agent.model;
 		// A chat's inherited model can lose its provider key; only an explicit request must keep it.
@@ -973,26 +975,25 @@ export class Channel {
 				`The ${name} API key is missing. Add it in Provider settings to invoke an agent. Chat is still available.`,
 			);
 		}
-		const modeChanged = mode !== undefined && await this.#harness.commit(
-			tx => setChatMode(tx, conversation.id, mode), context,
-		);
-		try {
-			if (!same || bound) await this.#harness.commit(async (tx) => {
+		const mode = invocation?.mode;
+		let submission: SubmissionId | undefined;
+		if (!same || invocation?.bound || mode !== undefined) {
+			submission = await this.#harness.commit(async (tx) => {
 				if (!same && (await tx.doc(LiveDoc, conversation.id)).run) {
 					throw new Error(
 						"The chat is busy; stop it or wait before changing its model or reasoning effort",
 					);
 				}
-				await bound?.(tx);
+				await invocation?.bound?.(tx);
 				if (!same) await configure(tx, conversation.id, { model, thinkingLevel });
+				if (mode !== undefined && invocation) {
+					return submitModeChange(tx, conversation.id, mode, invocation.input);
+				}
 			}, context);
-		} catch (error) {
-			// A system wake can start a run after the mode commit and before model selection.
-			if (modeChanged) this.#agentChanged(conversation.id, current ?? model, agent.thinkingLevel, mode);
-			throw error;
 		}
-		if (!same || modeChanged) this.#agentChanged(conversation.id, model, thinkingLevel, modeChanged ? mode : undefined);
-		return { model, effort: thinkingLevel };
+		if (!same || submission !== undefined) this.#agentChanged(conversation.id, model, thinkingLevel, submission === undefined ? undefined : mode);
+		if (submission !== undefined) this.#harness.resume();
+		return { model, effort: thinkingLevel, ...(submission === undefined ? {} : { submission }) };
 	}
 
 	#agentChanged(chat: ChatId, model: ModelRef, effort: Effort, mode?: ChatMode) {

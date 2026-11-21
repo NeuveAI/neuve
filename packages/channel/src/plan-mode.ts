@@ -5,10 +5,15 @@ import {
 	defineExtension,
 	GenerationTask,
 	hook,
+	InboxDoc,
 	LiveDoc,
+	UserEntry,
 	type ConversationId,
 	type Cursor,
+	type EntryDraft,
 	type Harness,
+	type InputSubmissionDraft,
+	type SubmissionId,
 	type Tx,
 } from "@earendil-works/pi-durable";
 import type { ChatMode } from "./protocol";
@@ -58,23 +63,78 @@ async function checkIdle(tx: Tx, chat: ConversationId, modes: Readonly<Record<st
 	} while (cursor);
 }
 
-export async function setChatMode(tx: Tx, chat: ConversationId, mode: ChatMode): Promise<boolean> {
+/** Place the input that changes an idle chat's mode in the same commit as that mode. */
+export async function submitModeChange(tx: Tx, chat: ConversationId, mode: ChatMode, input: InputSubmissionDraft) {
 	const { chats } = await tx.doc(ChatModesDoc);
-	if ((chats[chat] ?? "ace") === mode) return false;
+	if ((chats[chat] ?? "ace") === mode) return;
 	await checkIdle(tx, chat, chats);
+	const live = await tx.doc(LiveDoc, chat);
+	const inbox = await tx.doc(InboxDoc, chat);
+	let head = inbox.items.some(item => item.mode === "write") ? (await tx.latestHeadMarker(chat))?.head : undefined;
+	const { id } = await tx.createSubmission({
+		conversationId: chat, type: "input", status: "queued",
+		...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+	});
+	inbox.items.push({ id, mode: "steer", content: input.content });
+
+	// Match pi's idle boundary: place passive writes first and take one input of each queue mode.
+	const placed = new Set<SubmissionId>();
+	for (const item of inbox.items) {
+		if (item.mode !== "write") continue;
+		// Pi stores previously admitted EntryDraft values as JSON in the inbox.
+		const draft = item.entry as unknown as EntryDraft;
+		if (typeof draft.head === "number" && head !== undefined && draft.head < head) {
+			tx.settleSubmission(item.id, { status: "unanswered", reason: "stale" });
+		} else {
+			const entry = await tx.appendEntry(chat, draft);
+			if (draft.head !== undefined) head = draft.head === "self" ? entry.id : draft.head;
+			tx.placeSubmission(item.id, entry.id);
+		}
+		placed.add(item.id);
+	}
+	const inputs: SubmissionId[] = [];
+	const modes = new Set<"steer" | "followUp">();
+	const timestamp = Date.now();
+	for (const item of inbox.items) {
+		if (item.mode === "write" || modes.has(item.mode)) continue;
+		modes.add(item.mode);
+		const entry = await tx.appendEntry(UserEntry, chat, {
+			model: [{ role: "user", content: item.content, timestamp }],
+		});
+		tx.placeSubmission(item.id, entry.id);
+		inputs.push(item.id);
+		placed.add(item.id);
+	}
+	for (let index = inbox.items.length - 1; index >= 0; index--) {
+		if (placed.has(inbox.items[index]!.id)) inbox.items.splice(index, 1);
+	}
+	const taskId = await tx.createTask(GenerationTask, {}, { conversationId: chat, ownership: { kind: "conversation" } });
 	chats[chat] = mode;
-	return true;
+	live.run = { taskId, inputs };
+	return id;
 }
 
-/** The bridge reads this non-enumerable request marker. It never enters the transcript or prompt. */
+// The bridge consumes this transient marker before its request becomes a runtime turn.
 const planningRequest = Symbol.for("neuve.chat.plan-request");
+const planningSignals = new WeakSet<NonNullable<Context["abortSignal"]>>();
 
 /** Pi can commit a streamed partial instead of calling afterResponse when a run is interrupted. */
 export function planModeModels(models: Models): Models {
 	const streamSimple: Models["streamSimple"] = (model, request, options) => {
+		const mode: ChatMode = options?.signal && planningSignals.has(options.signal) ? "plan" : "ace";
+		if (mode === "plan") {
+			const { messages } = request;
+			// Add the marker after all request hooks, which may copy the transcript.
+			const offer: SystemMessage = {
+				role: "system",
+				content: "",
+				timestamp: messages.at(-1)?.timestamp ?? 0,
+				toolsRemoved: getCurrentTools(messages).filter(tool => !planTools.has(tool.name)).map(({ name }) => ({ name })),
+			};
+			Object.defineProperty(offer, planningRequest, { value: true });
+			request = { ...request, messages: [...messages, offer] };
+		}
 		const stream = models.streamSimple(model, request, options);
-		const mode: ChatMode = request.messages.some(message => Reflect.get(message, planningRequest) === true)
-			? "plan" : "ace";
 		return new Proxy(stream, {
 			get(target, property) {
 				if (property === Symbol.asyncIterator) return async function* () {
@@ -102,17 +162,10 @@ export function planModeExtension(planning: IsPlanning) {
 	return defineExtension({
 		name: "neuve-chat-mode",
 		hooks: [hook(GenerationTask, {
-			async beforeRequest({ messages }, api, context) {
+			async beforeRequest(_request, api, context) {
 				if (!await planning(api.conversationId, context)) return;
-				// Pi keeps all registrations for execution and safe replay. Only the model's offer changes.
-				const offer: SystemMessage = {
-					role: "system",
-					content: "",
-					timestamp: messages.at(-1)?.timestamp ?? 0,
-					toolsRemoved: getCurrentTools(messages).filter(tool => !planTools.has(tool.name)).map(({ name }) => ({ name })),
-				};
-				Object.defineProperty(offer, planningRequest, { value: true });
-				return { messages: [...messages, offer] };
+				if (!context.abortSignal) throw new Error("A planning request requires pi's task signal.");
+				planningSignals.add(context.abortSignal);
 			},
 			async afterResponse(message, api, context) {
 				// Pi persists this message in its assistant entry. Mode must travel with the reply
