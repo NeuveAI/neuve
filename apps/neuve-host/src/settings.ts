@@ -154,25 +154,34 @@ export async function removeKey(id: ProviderId): Promise<void> {
 	}
 }
 
-/** A model this host has credentials for, as the default and `ace new --model` both need. */
-export async function checkModel(model: ModelRef): Promise<void> {
+/**
+ * A model this host can run, as the default and `ace new --model` both need: one a provider key
+ * gives, or one a signed-in account's model rows list. `found` is the list to check against; the
+ * command line passes the running host's, which alone knows the accounts' models.
+ */
+export async function checkModel(
+	model: ModelRef,
+	found: readonly ModelRef[] | Promise<readonly ModelRef[]> = models(),
+): Promise<void> {
 	if (!isModel(model)) throw new Error("Choose a provider and model");
-	if (!keyed().getProvider(model.provider)) {
-		throw new Error(`There's no model provider named ${model.provider}.`);
-	}
-	const found = await models();
-	if (found.some((item) => item.provider === model.provider && item.modelId === model.modelId)) {
+	const listed = await found;
+	if (listed.some((item) => item.provider === model.provider && item.modelId === model.modelId)) {
 		return;
 	}
-	// With its key set, the provider lists every model it has.
-	if (found.some((item) => item.provider === model.provider)) {
+	// With its key set, or its account signed in, the provider lists every model it has.
+	if (listed.some((item) => item.provider === model.provider)) {
 		throw new Error(`${model.provider} has no model named ${model.modelId}.`);
+	}
+	if (!keyed().getProvider(model.provider)) {
+		throw new Error(
+			`There's no model provider or signed-in account named ${model.provider}. An account's models are listed while the workspace runs and the account is signed in; check it with neuve auth status ${model.provider} --check.`,
+		);
 	}
 	throw new Error("This model is unavailable. Add its provider key first.");
 }
 
-export async function setModel(model: ModelRef | null): Promise<void> {
-	if (model !== null) await checkModel(model);
+export async function setModel(model: ModelRef | null, found?: readonly ModelRef[]): Promise<void> {
+	if (model !== null) await checkModel(model, found);
 	savePreference(model);
 }
 

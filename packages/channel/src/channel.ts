@@ -941,8 +941,9 @@ export class Channel {
 		room.checkContext(selected, attached);
 		const levels = getSupportedThinkingLevels(selected);
 		if (effort !== undefined && effort !== "off" && !levels.includes(effort)) {
+			const listed = levels.filter((level) => level !== "off");
 			throw new Error(
-				`Unsupported reasoning effort ${effort} for ${model.provider}/${model.modelId}`,
+				`Unsupported reasoning effort ${effort} for ${model.provider}/${model.modelId}: ${listed.length ? `it lists ${listed.join(", ")}` : "it lists no effort levels"}, and off.`,
 			);
 		}
 		// Pi's "off" means omit reasoning, allowing provider defaults on always-thinking models.
