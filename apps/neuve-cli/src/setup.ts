@@ -46,6 +46,7 @@ import {
   repositorySteps,
   repositoryStepsRecord,
   runSteps,
+  SKILL_LEFT_OUT,
   type SetupStep,
   type StepsOutcome,
 } from "./setup-steps.ts";
@@ -261,7 +262,16 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   });
   await runSteps({
     ...steps,
-    steps: repositorySteps(layout.directory, programs.found, !noSkills),
+    // --agents none names no program, so there is no one to offer the skill to: decided, not asked.
+    steps: repositorySteps(
+      layout.directory,
+      programs.found,
+      noSkills
+        ? SKILL_LEFT_OUT.noSkills
+        : wanted.length === 0
+          ? SKILL_LEFT_OUT.noAgents
+          : undefined,
+    ),
     record: repositoryStepsRecord(layout.directory),
     where: repository,
   });
@@ -429,7 +439,18 @@ export const upgradeSetup = async (input: {
       continue;
     }
     // Only a repository set up here gets setup's steps; an upgrade never sets one up.
-    const set = await readInstallation(repository).catch(() => undefined);
+    // A setup record that can't be read is said, and counts as not up to date.
+    let set: Awaited<ReturnType<typeof readInstallation>>;
+    try {
+      set = await readInstallation(repository);
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      await input.out(
+        `Skipped ${repository}: its setup record can't be read (${why}). neuve setup there writes it again.\n`,
+      );
+      behind.push(`${repository}, whose setup record can't be read`);
+      continue;
+    }
     const layout =
       set === undefined ? undefined : await storeSetupLayout(repository);
     if (set === undefined || layout === undefined) continue;
@@ -479,7 +500,7 @@ export const runSetupUpgrade = async (
       repositorySteps(
         stateDirectory,
         programs.found,
-        !noSkills,
+        noSkills ? SKILL_LEFT_OUT.noSkills : undefined,
         programs.narrow,
       ),
     ...stepsAtTerminal(),

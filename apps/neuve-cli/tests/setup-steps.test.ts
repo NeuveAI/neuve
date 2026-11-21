@@ -621,7 +621,7 @@ test("the skill offer records no 'no program found' from the upgrade's narrow lo
     const record = repositoryStepsRecord(state);
     await runner(
       record,
-      repositorySteps(state, async () => [], true, narrow, context),
+      repositorySteps(state, async () => [], undefined, narrow, context),
     );
     const kept = await readFile(record, "utf8").catch(() => null);
     if (narrow) expect(kept).toBe(null);
@@ -652,5 +652,39 @@ test("a list of repositories that exists but is a folder is said to be unreadabl
   expect(said).toContain(
     `Neuve's list of repositories, ${registry}, can't be read`,
   );
+  expect(said).not.toContain("are up to date");
+});
+
+test("a repository whose setup record can't be read is said, and counts as not up to date", async () => {
+  const root = await scratch();
+  const repo = join(root, "repo");
+  await mkdir(repo);
+  Bun.spawnSync(["git", "init", "-q", repo]);
+  const { layout } = await writeInstallation(repo, {
+    cliBinary: "/opt/neuve/bin/neuve",
+    graphBinary: "/opt/neuve/lib/neuve/entire-graph",
+  });
+  await writeFile(layout.config, "{ damaged");
+  const registry = join(root, "repositories.json");
+  await writeFile(
+    registry,
+    JSON.stringify({
+      version: 1,
+      repositories: [{ store: join(repo, ".git/neuve"), repository: repo }],
+    }),
+  );
+  let said = "";
+  await upgradeSetup({
+    home: join(root, "home"),
+    registry,
+    machine: [],
+    repository: () => [],
+    isTerminal: false,
+    version: "0.3.0",
+    out: async (text) => {
+      said += text;
+    },
+  });
+  expect(said).toContain(`Skipped ${repo}: its setup record can't be read`);
   expect(said).not.toContain("are up to date");
 });

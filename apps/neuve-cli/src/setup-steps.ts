@@ -351,10 +351,17 @@ export const machineSteps = (
  * again. An offer that couldn't be made is considered, with the reason, so doctor names it rather
  * than calling it not applied.
  */
+/** The reasons setup leaves the skill offer out, as the person's flags say. */
+export const SKILL_LEFT_OUT = {
+  noSkills: "--no-skills left the skill offer out",
+  noAgents: "--agents none named no agent program to offer it to",
+} as const;
+
 export const repositorySteps = (
   stateDirectory: string,
   agents: () => Promise<ReadonlyArray<AgentHarness>>,
-  offer = true,
+  /** Why this run leaves the offer out, when it does: recorded as considered for it. */
+  leftOut?: string,
   /** `agents` comes from the upgrade's narrow look, so finding none is no reason to record. */
   narrow = false,
   /** For tests: the skill offer's surroundings, in place of the person's terminal and home. */
@@ -370,7 +377,7 @@ export const repositorySteps = (
       scope: "repository",
       does: "offers the Neuve skill to the agent programs found",
       asks: true,
-      ...(offer ? {} : { leftOut: "--no-skills left the skill offer out" }),
+      ...(leftOut === undefined ? {} : { leftOut }),
       done: offered,
       run: async () => {
         const found = await agents();
