@@ -19,6 +19,7 @@ import {
   rm,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { Registry } from "@neuve/records-core";
 import { existsSync } from "node:fs";
 import { settingsPath } from "../../../packages/harness/src/settings.ts";
 import { readInstallation, writeInstallation } from "../src/installation.ts";
@@ -366,11 +367,12 @@ test.skipIf(prerequisite.skip)(
 
 // Why: a tester re-runs setup (doctor's own fix) while a worker runs. Since the worker's socket left
 // the store, the engine accepts the repository then: setup's check, doctor and a refresh all work.
+// An upgrade says nothing of workers when none runs, and restarts a running one on its version.
 test.skipIf(prerequisite.skip)(
-  "setup, doctor and a refresh work while the repository's worker runs",
+  "setup, doctor and a refresh work while the repository's worker runs, and an upgrade restarts it",
   async () => {
     prerequisite.require();
-    const { repository, git, commit, run, setup } = await scratch();
+    const { home, repository, git, commit, run, setup } = await scratch();
     await commit(
       "greeting.ts",
       "export function greetingFor(name: string) {\n  return `Hello, ${name}`;\n}\n",
@@ -378,9 +380,69 @@ test.skipIf(prerequisite.skip)(
     expect((await setup()).code).toBe(0);
     const neuve = (...args: string[]) =>
       run([process.execPath, "--no-env-file", CLI, ...args]);
+    // An installed copy's upgrade restarts only workers that started before it was installed.
+    const prefix = join(home, ".neuve");
+    const install = async () => {
+      await mkdir(join(prefix, "lib/neuve"), { recursive: true });
+      const sha256 = "0".repeat(64);
+      await writeFile(
+        join(prefix, "lib/neuve/install.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          installedAt: new Date().toISOString(),
+          cli: { path: join(prefix, "bin/neuve"), sha256 },
+          graph: {
+            path: join(prefix, "lib/neuve/entire-graph"),
+            sha256,
+            version: "test",
+            workspaceRevision: null,
+          },
+        }),
+      );
+    };
+    const upgrade = async () => {
+      const { stdout, stderr, code } = await run(
+        [process.execPath, "--no-env-file", CLI, "setup", "upgrade"],
+        { NEUVE_INSTALL_PREFIX: prefix },
+      );
+      expect(code, stderr).toBe(0);
+      return stdout + stderr;
+    };
+    const workerPid = async () =>
+      /^Worker pid (\d+) /.exec(
+        (await neuve("worker", "status", "--repo", repository)).stdout,
+      )?.[1];
+    // A test worker lists its repository beside its budget; the upgrade reads the person's list.
+    const list = Registry.registryPath(home);
+    await mkdir(dirname(list), { recursive: true });
+    await writeFile(
+      list,
+      JSON.stringify({
+        version: 1,
+        repositories: [{ store: join(repository, ".git/neuve"), repository }],
+      }),
+    );
+    await install();
+    expect(await upgrade()).not.toContain("Workers");
     const started = await neuve("worker", "start", "--repo", repository);
     expect(started.code, started.stderr).toBe(0);
     try {
+      const before = await workerPid();
+      expect(before).toBeDefined();
+      // Started after this version was installed: left running, and nothing is said.
+      expect(await upgrade()).not.toContain("Workers");
+      expect(await workerPid()).toBe(before);
+      await install();
+      const said = await upgrade();
+      expect(said).toMatch(
+        new RegExp(`Workers +restarted on ${CLI_VERSION} in 1 repository\n`),
+      );
+      expect(said.match(/Workers/g)).toHaveLength(1);
+      const after = await workerPid();
+      expect(after).toBeDefined();
+      expect(after).not.toBe(before);
+      expect(await upgrade()).not.toContain("Workers");
+      expect(await workerPid()).toBe(after);
       const again = await setup();
       expect(again.code, again.stderr).toBe(0);
       expect(JSON.parse(again.stdout).initialIndexStatus).toBe("ok");
