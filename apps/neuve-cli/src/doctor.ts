@@ -756,7 +756,11 @@ export const runDoctor = async (args: readonly string[], version: string) => {
   await screen.header(`neuve doctor ${version}`);
   for (const line of result.checks) {
     await screen.step(
-      line.status === "ok" ? "done" : "needs",
+      line.status === "ok"
+        ? "done"
+        : line.status === "missing"
+          ? "failed"
+          : "needs",
       line.check,
       line.detail,
     );

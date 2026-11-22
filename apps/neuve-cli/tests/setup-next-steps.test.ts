@@ -117,10 +117,10 @@ test.skipIf(prerequisite.skip)(
     const lines = [
       `ok      Repository   ${repository}, recorded in .git/neuve/setup`,
       `ok      Graph engine checked at ${git("rev-parse", "HEAD").slice(0, 12)}`,
-      "to do   Reviews      choose openai (ChatGPT), anthropic (an API key) or claude (a Claude subscription): neuve setup --route <openai|anthropic|claude>",
+      `to do   Reviews      choose openai (ChatGPT), anthropic (an API key) or claude (a Claude subscription): neuve setup${repo} --route <openai|anthropic|claude>`,
       "",
-      "One thing is left for you:",
-      "  neuve setup --route <openai|anthropic|claude>",
+      "Left for you:",
+      `  neuve setup${repo} --route <openai|anthropic|claude>`,
       `Then: neuve review HEAD~1..HEAD${repo}`,
       "",
     ];
@@ -465,6 +465,9 @@ process.exit(result.exitCode);
           "Install Git 2.45 or later, for example with brew install git, or use a full clone.",
         );
         expect(stderr).not.toContain("source-unavailable");
+        // A failed check never ends as ready.
+        expect(stderr).not.toContain("Neuve is ready");
+        expect(stderr).toContain("\nNot finished. Left for you:\n");
       }
     },
   );

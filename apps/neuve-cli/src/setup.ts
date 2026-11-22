@@ -282,7 +282,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     "Graph engine",
     `checked at ${revision.slice(0, 12)}`,
   );
-  await reviewsStep(screen, repository, route.route);
+  await reviewsStep(screen, repository, route.route, repo);
   // Then the named steps: this machine's, then this repository's.
   const programs = agentLooks(wanted, "setup", askAgain, { screen });
   const steps = { mode: "setup", version: CLI_VERSION, screen } as const;
@@ -818,6 +818,8 @@ const reviewsStep = async (
   screen: Screen,
   repository: string,
   route: RouteName | undefined,
+  /** ` --repo <path>` when run from outside the repository, else empty. */
+  repo: string,
 ) => {
   const label = "Reviews";
   if (route === "claude") {
@@ -838,7 +840,7 @@ const reviewsStep = async (
           "needs",
           label,
           "choose openai (ChatGPT), anthropic (an API key) or claude (a Claude subscription)",
-          "neuve setup --route <openai|anthropic|claude>",
+          `neuve setup${repo} --route <openai|anthropic|claude>`,
         );
   if (signIn.status === "ok")
     return screen.step(

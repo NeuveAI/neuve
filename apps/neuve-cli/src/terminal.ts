@@ -118,7 +118,7 @@ export interface Screen {
   header: (title: string) => Promise<void>;
   /**
    * One step's line. `command` is the exact command that finishes it: shown after the text, and,
-   * on a step that needs the person, kept for the closing summary.
+   * on a step that needs the person or failed, kept for the closing summary.
    */
   step: (
     mark: Mark,
@@ -144,9 +144,10 @@ export interface Screen {
    * Undefined at the end of input, which is no answer at all.
    */
   confirm: (question: string) => Promise<boolean | undefined>;
-  /** The commands of the steps that need the person, in order, each once. */
-  readonly left: () => ReadonlyArray<string>;
-  /** The closing summary: ready, or what is left for the person as exact commands, then the next one. */
+  /**
+   * The closing summary: ready, or what is left for the person as exact commands, then the next
+   * one. Never ready once a step failed.
+   */
   closing: (input: { readonly next?: string }) => Promise<void>;
 }
 
@@ -167,6 +168,7 @@ export const makeScreen = (input: {
   // A styled `working` line waits for the next line to replace it.
   let pending = false;
   const left: string[] = [];
+  let failed = false;
   const write = async (text: string) => {
     if (pending) {
       pending = false;
@@ -194,13 +196,17 @@ export const makeScreen = (input: {
     print: write,
     header: (title) => write(`${paint("bold", title)}\n\n`),
     step: async (mark, label, text, command) => {
-      if (mark === "needs" && command !== undefined && !left.includes(command))
+      if (mark === "failed") failed = true;
+      if (
+        (mark === "needs" || mark === "failed") &&
+        command !== undefined &&
+        !left.includes(command)
+      )
         left.push(command);
       await write(
         `${line(mark, label, command === undefined ? text : `${text}: ${paint("cyan", command)}`)}\n`,
       );
     },
-    left: () => [...left],
     detail: async (lines) => {
       if (lines.length > 0)
         await write(
@@ -248,7 +254,7 @@ export const makeScreen = (input: {
     closing: async ({ next }) => {
       const command = (text: string) => `  ${paint("cyan", text)}`;
       const lines =
-        left.length === 0
+        left.length === 0 && !failed
           ? [
               paint("bold", "Neuve is ready."),
               ...(next === undefined ? [] : [`  Next: ${paint("cyan", next)}`]),
@@ -256,9 +262,7 @@ export const makeScreen = (input: {
           : [
               paint(
                 "bold",
-                left.length === 1
-                  ? "One thing is left for you:"
-                  : "Left for you:",
+                failed ? "Not finished. Left for you:" : "Left for you:",
               ),
               ...left.map(command),
               ...(next === undefined ? [] : [`Then: ${paint("cyan", next)}`]),

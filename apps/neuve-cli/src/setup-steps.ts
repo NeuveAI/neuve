@@ -47,7 +47,12 @@ import { z } from "zod";
 import { Settings } from "@neuve/harness";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
 import { writePrivateEnvironment } from "./private-environment.ts";
-import { offerSkillsAfterSetup, type SkillsContext } from "./skills-cli.ts";
+import {
+  defaultSkillsContext,
+  inspectInstalled,
+  offerSkillsAfterSetup,
+  type SkillsContext,
+} from "./skills-cli.ts";
 import { shown, type Screen } from "./terminal.ts";
 
 export type StepScope = "machine" | "repository";
@@ -392,6 +397,14 @@ export const repositorySteps = (
     (await lstat(join(stateDirectory, "skills-offered.json")).catch(
       () => undefined,
     )) !== undefined;
+  // Installed some other way (neuve skills install after a yes) is the offer's work done too.
+  const installed = async () => {
+    const skills = context ?? defaultSkillsContext();
+    return (await inspectInstalled(skills).catch(() => [])).some(
+      (skill) =>
+        skill.state === "installed" && skill.version === skills.version,
+    );
+  };
   return [
     {
       id: "skill-offer",
@@ -401,7 +414,7 @@ export const repositorySteps = (
       does: "offers the Neuve skill to the agent programs found",
       asks: true,
       ...(leftOut === undefined ? {} : { leftOut }),
-      done: offered,
+      done: async () => (await offered()) || (await installed()),
       run: async () => {
         const found = await agents();
         const result = await offerSkillsAfterSetup({
