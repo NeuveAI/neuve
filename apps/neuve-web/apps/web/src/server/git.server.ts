@@ -32,20 +32,24 @@ export const spawnGit = (
   })
 
 /**
- * Its exit code and stdout. A failed git's output is not waited for: a
- * process it started may still hold the pipe.
+ * Its exit code and stdout. A process git started may hold the pipe past
+ * git's exit: a failed git's output is not waited for, and a successful
+ * one's only until the deadline, past which it reads as killed.
  */
 export const git = async (
   at: string,
   args: ReadonlyArray<string>,
   input?: string | ReadableStream<Uint8Array>
 ) => {
+  const deadline = Date.now() + GIT_DEADLINE_MS
   const child = spawnGit(at, args, input)
   const out = new Response(child.stdout).text()
+  out.catch(() => undefined)
   const code = await child.exited
-  if (code !== 0) {
-    out.catch(() => undefined)
-    return { code, out: "" }
-  }
-  return { code, out: await out }
+  if (code !== 0) return { code, out: "" }
+  const read = await Promise.race([
+    out,
+    Bun.sleep(Math.max(0, deadline - Date.now())).then(() => undefined),
+  ])
+  return read === undefined ? { code: 143, out: "" } : { code, out: read }
 }
