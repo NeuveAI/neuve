@@ -10,6 +10,7 @@ import {
   foundIds,
   machineOffers,
   offerInstall,
+  willAsk,
   summary,
   type Finding,
   type LookForPrograms,
@@ -46,7 +47,6 @@ import {
   Worker,
 } from "@neuve/records-core";
 import { CLI_VERSION } from "./cli-version.ts";
-import { readInstalledManifest } from "./installed-copy.ts";
 import { isCompiled } from "./version-skew.ts";
 import {
   machineSteps,
@@ -303,6 +303,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     // --agents none names no program, so there is no one to offer the skill to: decided, not asked.
     steps: repositorySteps(
       layout.directory,
+      repository,
       programs.found,
       noSkills
         ? SKILL_LEFT_OUT.noSkills
@@ -451,42 +452,33 @@ const folderGone = async (path: string) => {
 const repositoriesCount = (count: number) =>
   `${count} ${count === 1 ? "repository" : "repositories"}`;
 
-/** When this installed copy was installed; undefined from source, so no worker is restarted. */
-const installedAt = () => {
-  if (!isCompiled() && !process.env["NEUVE_INSTALL_PREFIX"]) return undefined;
-  const manifest = readInstalledManifest();
-  return typeof manifest === "object"
-    ? Date.parse(manifest.installedAt)
-    : undefined;
-};
-
-const startedAt = z.object({ startedAt: z.string() });
+/** What a worker's status says of its version; absent from an older build that doesn't say. */
+const workerVersion = z.object({ version: z.string().optional() });
 
 /**
- * A worker that started before this version was installed is stopped, as `neuve worker stop` does
- * (its job goes back to waiting), and started again on `command`. Undefined when none was, or when
- * its start is unknown: a worker on this version is never interrupted.
+ * A worker that runs another version than `version` (or doesn't say, as an older build) is
+ * stopped, as `neuve worker stop` does (its job goes back to waiting), and started again on
+ * `command`. Undefined when none was, or when its reply can't be read: a worker on this version is
+ * never interrupted.
  */
 const restartWorker = async (
   store: string,
   repository: string,
   command: ReadonlyArray<string>,
-  installed: number,
+  version: string,
 ) => {
   const location = storeLocationIn(dirname(store));
   const found = await Effect.runPromise(
     Worker.reachStoreWorker(location, "status"),
   ).catch(() => undefined);
   if (found?.reach._tag !== "Answered") return undefined;
-  let started: number;
+  let running: string | undefined;
   try {
-    started = Date.parse(
-      startedAt.parse(JSON.parse(found.reach.reply)).startedAt,
-    );
+    running = workerVersion.parse(JSON.parse(found.reach.reply)).version;
   } catch {
     return undefined;
   }
-  if (!(started < installed)) return undefined;
+  if (running === version) return undefined;
   try {
     const reach = await Worker.stopWorker(
       found.socket,
@@ -514,7 +506,10 @@ export const upgradeSetup = async (input: {
   readonly home: string;
   readonly registry?: string;
   readonly machine: ReadonlyArray<SetupStep>;
-  readonly repository: (stateDirectory: string) => ReadonlyArray<SetupStep>;
+  readonly repository: (
+    stateDirectory: string,
+    repository: string,
+  ) => ReadonlyArray<SetupStep>;
   readonly version: string;
   readonly screen: Screen;
   /** How to run this version's `neuve`, for the workers it restarts. */
@@ -611,7 +606,7 @@ export const upgradeSetup = async (input: {
     // One repository that fails is said so, and the others still get their steps.
     const outcome = await runSteps({
       ...steps,
-      steps: input.repository(layout.directory),
+      steps: input.repository(layout.directory, repository),
       record: repositoryStepsRecord(layout.directory),
       where: set.repository,
     }).catch(stopped(set.repository));
@@ -640,15 +635,15 @@ export const upgradeSetup = async (input: {
     );
   }
   // Workers still running the version before this one restart on it: one line, none when none ran.
+  // From source, no worker is restarted: its version says nothing of the program it runs.
   const workers = { restarted: 0, stopped: 0, running: 0 };
-  const installed = installedAt();
-  if (installed !== undefined)
+  if (isCompiled() || process.env["NEUVE_INSTALL_PREFIX"])
     for (const { repository, store } of registry.repositories) {
       const outcome = await restartWorker(
         store,
         repository,
         input.command ?? Starter.currentCliCommand(),
-        installed,
+        input.version,
       );
       if (outcome !== undefined) workers[outcome] += 1;
     }
@@ -703,9 +698,10 @@ export const runSetupUpgrade = async (
   return upgradeSetup({
     home: homedir(),
     machine: machineSteps(programs.look),
-    repository: (stateDirectory) =>
+    repository: (stateDirectory, repository) =>
       repositorySteps(
         stateDirectory,
+        repository,
         programs.found,
         noSkills ? SKILL_LEFT_OUT.noSkills : undefined,
         programs.narrow,
@@ -737,15 +733,20 @@ export const setUpAgentPrograms = async (
   const { screen } = context;
   await screen.working("Agents", "looking for Claude Code and Codex");
   const findings = [...(await look("find", { path: context.path }, ids))];
-  // A missing program is left for the person only when none was found: one is enough.
-  const optional = findings.some((finding) => finding.found !== undefined);
+  // Only a program that is missing is offered; one whose look failed is not known to be.
+  const missing = (finding: Finding) =>
+    finding.found === undefined && finding.problem === undefined;
+  for (const finding of findings)
+    if (!missing(finding)) await showFinding(screen, finding);
+  // The offers that ask come first, so what they install counts below.
+  const waiting: Finding[] = [];
   for (const [index, finding] of findings.entries()) {
-    // Only a program that is missing is offered; one whose look failed is not known to be.
-    if (finding.found !== undefined || finding.problem !== undefined) {
-      await showFinding(screen, finding);
+    if (!missing(finding)) continue;
+    if (!(await willAsk(finding.program, context))) {
+      waiting.push(finding);
       continue;
     }
-    if (!(await offerInstall(finding, context, optional))) continue;
+    if (!(await offerInstall(finding, context))) continue;
     const [again] = await look("find", { path: context.path }, [
       finding.program.id,
     ]);
@@ -753,6 +754,9 @@ export const setUpAgentPrograms = async (
     findings[index] = again;
     await showFinding(screen, again);
   }
+  // A missing program is left for the person only when none is here: one is enough.
+  const optional = findings.some((finding) => finding.found !== undefined);
+  for (const finding of waiting) await offerInstall(finding, context, optional);
   return foundIds(findings);
 };
 
@@ -1000,8 +1004,8 @@ const reviewsStep = async (
       : screen.step(
           "needs",
           label,
-          "choose openai (ChatGPT), anthropic (an API key) or claude (a Claude subscription)",
-          `neuve setup${repo} --route <openai|anthropic|claude>`,
+          "choose how reviews run: --route anthropic for an Anthropic API key, --route claude for a Claude subscription, or for ChatGPT",
+          `neuve setup${repo} --route openai`,
         );
   if (signIn.status === "ok")
     return screen.step(
@@ -1019,8 +1023,7 @@ const reviewsStep = async (
     : screen.step(
         "needs",
         label,
-        "an Anthropic API key (not a Claude subscription token) in the shell you run neuve from",
-        "export ANTHROPIC_API_KEY=<your API key>",
+        "put an Anthropic API key (not a Claude subscription token) in ANTHROPIC_API_KEY, in the shell you run neuve from",
       );
 };
 

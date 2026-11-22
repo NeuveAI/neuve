@@ -72,6 +72,7 @@ import { heldForAccount, readHeldReviews } from "@neuve/harness/held-reviews";
 import { execute, withStore, write } from "./records-cli.ts";
 import { prepareWorkerStore, warnIfPaused } from "./installed-copy.ts";
 import { runStackFetchChild, runStackIndexChild } from "./stack-cli.ts";
+import { CLI_VERSION } from "./cli-version.ts";
 
 export const WORKER_HELP = `Usage:
   neuve worker run [--repo <path> | --store <Records dir>] [--idle-seconds <n>]
@@ -795,6 +796,7 @@ const runForeground = (
       // prune also sweeps run folders (8.10).
       Worker.run({
         location,
+        version: CLI_VERSION,
         idleTimeout: `${idleSeconds} seconds`,
         beforeIdleExit: Effect.promise(() => closeWorkerBudget()),
         handlers: {
@@ -1018,6 +1020,7 @@ export const runWorkerCli = async (
           prepareWorkerStore(location),
           Worker.run({
             location,
+            version: CLI_VERSION,
             idleTimeout: `${idleSeconds} seconds`,
             beforeIdleExit: Effect.promise(() => closeWorkerBudget()),
             beforeComputationRecovery: joinMachineBudget,

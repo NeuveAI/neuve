@@ -39,6 +39,7 @@ import { commandScreen } from "./terminal.ts";
 import { inspectSkillForDoctor } from "./skills-cli.ts";
 import {
   findAgentPrograms,
+  foundIds,
   headline,
   installAdvice,
   type Finding,
@@ -136,7 +137,13 @@ export const checkSignIn = (
   repository: string | undefined,
   home = homedir(),
   available = RouteProvider.credentialPresent,
-  claude: () => string | undefined = findClaude,
+  /** Claude Code as the agent programs' look found it, or a `claude` there that didn't answer. */
+  claude: () => Pick<Finding, "found" | "strangers"> | undefined = () => {
+    const path = findClaude();
+    return path === undefined
+      ? undefined
+      : { found: { path, how: "found on the PATH" }, strangers: [] };
+  },
 ): DoctorCheck => {
   const path = Settings.settingsPath(home);
   let settings: Option.Option<Settings.Settings>;
@@ -158,12 +165,14 @@ export const checkSignIn = (
       ? "neuve worker stop && neuve worker start"
       : `neuve worker stop --repo ${quote(repository)} && neuve worker start --repo ${quote(repository)}`;
   if (route.provider === "claude") {
-    const found = claude();
+    const finding = claude();
+    const found = finding?.found?.path;
+    const silent = finding?.strangers[0];
     return found === undefined
       ? {
           check: "sign-in",
           status: "missing",
-          detail: `Reviews use ${which}, and Claude Code isn't installed: there's no claude on PATH. A review waits until a worker has it`,
+          detail: `Reviews use ${which}, and Claude Code ${silent === undefined ? "isn't installed: there's no claude on PATH" : `doesn't answer: ${silent} was asked its version and didn't answer`}. A review waits until a worker has it`,
           fix: "install Claude Code, then run claude auth login && neuve auth status claude --check",
         }
       : ok(
@@ -327,6 +336,13 @@ export const inspectDoctor = async (input: {
   const fix =
     prefix === undefined ? SOURCE_DESK_FIX : await reinstallFix(prefix, home);
   const checks: DoctorCheck[] = [];
+  // The agent programs, in setup's words; only what run time would start is asked. The capture
+  // and sign-in checks read the same look, and each program's own check comes later.
+  const agents = await findAgentPrograms("check", {
+    path: input.path ?? process.env["PATH"] ?? "",
+    home,
+    ...(input.findCodex === undefined ? {} : { findCodex: input.findCodex }),
+  });
 
   // This copy, and the files its install recorded.
   if (prefix === undefined)
@@ -543,25 +559,14 @@ export const inspectDoctor = async (input: {
         await captureCheck(
           repository,
           input.hookFiles ?? ((harness) => defaultHookFile(harness, home)),
+          foundIds(agents),
         ),
       );
     }
   }
-  // The agent programs, in setup's words; only what run time would start is asked. The sign-in
-  // check reads the same look's claude.
-  const agents = await findAgentPrograms("check", {
-    path: input.path ?? process.env["PATH"] ?? "",
-    home,
-    ...(input.findCodex === undefined ? {} : { findCodex: input.findCodex }),
-  });
   checks.push(
-    checkSignIn(
-      repository,
-      home,
-      RouteProvider.credentialPresent,
-      () =>
-        agents.find((finding) => finding.program.id === "claude-code")?.found
-          ?.path,
+    checkSignIn(repository, home, RouteProvider.credentialPresent, () =>
+      agents.find((finding) => finding.program.id === "claude-code"),
     ),
   );
   if (repository !== undefined) checks.push(await checkWorker(repository));
@@ -601,8 +606,10 @@ export const DOCTOR_HELP = `Usage: neuve doctor [--repo <path>] [--json]
 const captureCheck = async (
   repository: string,
   hookFiles: Parameters<typeof inspectCapture>[1],
+  /** The agent programs found here, from doctor's own look. */
+  programs: Parameters<typeof inspectCapture>[2],
 ): Promise<DoctorCheck> => {
-  const found = await inspectCapture(repository, hookFiles);
+  const found = await inspectCapture(repository, hookFiles, programs);
   const fix = `neuve setup hooks --repo ${quote(repository)}`;
   const parts = found?.parts ?? [];
   const off = parts.filter((part) => part.state !== "ok");
@@ -661,7 +668,7 @@ const stepsCheck = async (
       ? []
       : [
           await pendingSteps(
-            repositorySteps(layout.directory, nothing),
+            repositorySteps(layout.directory, repository, nothing),
             repositoryStepsRecord(layout.directory),
           ),
         ]),

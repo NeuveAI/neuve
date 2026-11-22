@@ -376,15 +376,25 @@ test("the Claude route names a missing Claude Code with its fix, and never opens
     detail: `Reviews use your Claude subscription through Claude Code (review.route in ${settings}), and Claude Code isn't installed: there's no claude on PATH. A review waits until a worker has it`,
     fix: "install Claude Code, then run claude auth login && neuve auth status claude --check",
   });
-  const ran = join(root, "claude-ran");
+  // A claude that doesn't answer its version is not taken for Claude Code, and is named.
   const claude = join(tools, "claude");
+  await writeFile(claude, "#!/bin/sh\nexit 1\n");
+  await chmod(claude, 0o755);
+  expect((await doctor()).check("sign-in")).toEqual({
+    check: "sign-in",
+    status: "missing",
+    detail: `Reviews use your Claude subscription through Claude Code (review.route in ${settings}), and Claude Code doesn't answer: ${claude} was asked its version and didn't answer. A review waits until a worker has it`,
+    fix: "install Claude Code, then run claude auth login && neuve auth status claude --check",
+  });
+  // Doctor asks its version only; anything else would open it.
+  const ran = join(root, "claude-ran");
   await writeFile(
     claude,
     `#!/bin/sh
-touch '${ran}'
+if [ "$1" = --version ]; then echo '2.1.0 (Claude Code)'; exit 0; fi
+/usr/bin/touch '${ran}'
 `,
   );
-  await chmod(claude, 0o755);
   expect((await doctor()).check("sign-in")).toEqual({
     check: "sign-in",
     status: "ok",

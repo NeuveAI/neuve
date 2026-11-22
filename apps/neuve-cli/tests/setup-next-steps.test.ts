@@ -118,10 +118,10 @@ test.skipIf(prerequisite.skip)(
     const lines = [
       `ok      Repository   ${repository}, recorded in .git/neuve/setup`,
       `ok      Graph engine checked at ${git("rev-parse", "HEAD").slice(0, 12)}`,
-      `to do   Reviews      choose openai (ChatGPT), anthropic (an API key) or claude (a Claude subscription): neuve setup${repo} --route <openai|anthropic|claude>`,
+      `to do   Reviews      choose how reviews run: --route anthropic for an Anthropic API key, --route claude for a Claude subscription, or for ChatGPT: neuve setup${repo} --route openai`,
       "",
       "Left for you:",
-      `  neuve setup${repo} --route <openai|anthropic|claude>`,
+      `  neuve setup${repo} --route openai`,
       `Then: neuve review HEAD~1..HEAD${repo}`,
       "",
     ];
@@ -367,7 +367,8 @@ test.skipIf(prerequisite.skip)(
 
 // Why: a tester re-runs setup (doctor's own fix) while a worker runs. Since the worker's socket left
 // the store, the engine accepts the repository then: setup's check, doctor and a refresh all work.
-// An upgrade says nothing of workers when none runs, and restarts a running one on its version.
+// An upgrade says nothing of workers when none runs or one runs its version, and restarts one that
+// runs another version, whenever that one started (an install's time says nothing of the binary).
 test.skipIf(prerequisite.skip)(
   "setup, doctor and a refresh work while the repository's worker runs, and an upgrade restarts it",
   async () => {
@@ -380,26 +381,8 @@ test.skipIf(prerequisite.skip)(
     expect((await setup()).code).toBe(0);
     const neuve = (...args: string[]) =>
       run([process.execPath, "--no-env-file", CLI, ...args]);
-    // An installed copy's upgrade restarts only workers that started before it was installed.
+    // An installed copy's upgrade restarts only workers that run another version than its own.
     const prefix = join(home, ".neuve");
-    const install = async () => {
-      await mkdir(join(prefix, "lib/neuve"), { recursive: true });
-      const sha256 = "0".repeat(64);
-      await writeFile(
-        join(prefix, "lib/neuve/install.json"),
-        JSON.stringify({
-          schemaVersion: 1,
-          installedAt: new Date().toISOString(),
-          cli: { path: join(prefix, "bin/neuve"), sha256 },
-          graph: {
-            path: join(prefix, "lib/neuve/entire-graph"),
-            sha256,
-            version: "test",
-            workspaceRevision: null,
-          },
-        }),
-      );
-    };
     const upgrade = async () => {
       const { stdout, stderr, code } = await run(
         [process.execPath, "--no-env-file", CLI, "setup", "upgrade"],
@@ -422,17 +405,37 @@ test.skipIf(prerequisite.skip)(
         repositories: [{ store: join(repository, ".git/neuve"), repository }],
       }),
     );
-    await install();
     expect(await upgrade()).not.toContain("Workers");
     const started = await neuve("worker", "start", "--repo", repository);
     expect(started.code, started.stderr).toBe(0);
+    let older: Promise<unknown> | undefined;
     try {
-      const before = await workerPid();
-      expect(before).toBeDefined();
-      // Started after this version was installed: left running, and nothing is said.
+      const current = await workerPid();
+      expect(current).toBeDefined();
+      // Running this version: left running, and nothing is said.
       expect(await upgrade()).not.toContain("Workers");
-      expect(await workerPid()).toBe(before);
-      await install();
+      expect(await workerPid()).toBe(current);
+      expect((await neuve("worker", "stop", "--repo", repository)).code).toBe(
+        0,
+      );
+      // A worker on an older build, started now: the release build's stamp names its version.
+      older = run([
+        process.execPath,
+        "--no-env-file",
+        "--define",
+        'NEUVE_BUILD_VERSION:"0.0.1-older"',
+        CLI,
+        "worker",
+        "run",
+        "--repo",
+        repository,
+      ]);
+      let before: string | undefined;
+      for (let tries = 0; before === undefined && tries < 100; tries += 1) {
+        await Bun.sleep(100);
+        before = await workerPid();
+      }
+      expect(before).toBeDefined();
       const said = await upgrade();
       expect(said).toMatch(
         new RegExp(`Workers +restarted on ${CLI_VERSION} in 1 repository\n`),
@@ -475,6 +478,7 @@ test.skipIf(prerequisite.skip)(
       expect(JSON.parse(query.stdout).retrieval.status).toBe("ok");
     } finally {
       await neuve("worker", "stop", "--repo", repository);
+      await older;
     }
   },
   120_000,

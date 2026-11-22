@@ -28,9 +28,12 @@ import {
   pendingSteps,
   repositoryStepsRecord,
   runSteps,
+  SKILL_LEFT_OUT,
   type SetupStep,
   type StepsRun,
 } from "../src/setup-steps.ts";
+import { runSkillsCli } from "../src/skills-cli.ts";
+import { found } from "./fixtures/agent-programs.ts";
 
 const scratches: string[] = [];
 const scratch = async () => {
@@ -671,7 +674,7 @@ test("the skill offer records no 'no program found' from the upgrade's narrow lo
     const record = repositoryStepsRecord(state);
     await runner(
       record,
-      repositorySteps(state, async () => [], undefined, narrow, context),
+      repositorySteps(state, root, async () => [], undefined, narrow, context),
     );
     const kept = await readFile(record, "utf8").catch(() => null);
     if (narrow) expect(kept).toBe(null);
@@ -743,4 +746,96 @@ test("a repository whose setup record can't be read is said, and counts as not u
     `to do   Repository   ${repo}: its setup record can't be read`,
   );
   expect(said).not.toContain("are up to date");
+});
+
+/** A context for the real skill offer, in `root`, that never asks; the skill installs from source. */
+const skillContext = async (root: string, cwd = root) => ({
+  home: join(root, "home"),
+  claudeConfigDir: undefined,
+  cwd,
+  version: "0.1.0",
+  source: async () =>
+    (await import("../src/skills-cli.ts")).findSkillSource({
+      version: "0.1.0",
+    }),
+  programs: () => found(["claude-code"]),
+  isTerminal: false,
+  ask: async () => null,
+  out: async () => {},
+  now: () => new Date(),
+});
+
+// Why: a person who left the offer out (--no-skills) and then installed the skill themselves must
+// not be told on the next setup that the offer waits for them, and doctor must not call it undone.
+test("a skill installed after the offer was left out counts as the offer's work, for setup and doctor", async () => {
+  const root = await scratch();
+  const state = join(root, "state");
+  const record = repositoryStepsRecord(state);
+  const context = await skillContext(root);
+  const repo = join(root, "repo");
+  await runner(
+    record,
+    repositorySteps(
+      state,
+      repo,
+      async () => [],
+      SKILL_LEFT_OUT.noSkills,
+      false,
+      context,
+    ),
+    { mode: "setup", isTerminal: false },
+  );
+  expect((await written(record))["skill-offer"]).toMatchObject({
+    outcome: "considered",
+  });
+  expect(
+    await runSkillsCli(["install", "--agents", "claude-code"], context),
+  ).toBe(0);
+  const steps = repositorySteps(
+    state,
+    repo,
+    async () => [],
+    undefined,
+    false,
+    context,
+  );
+  expect((await pendingSteps(steps, record)).considered).toEqual([]);
+  const outcome = await runner(record, steps, {
+    mode: "setup",
+    isTerminal: false,
+  });
+  expect(outcome.said).toBe("");
+  expect((await written(record))["skill-offer"]).not.toHaveProperty("outcome");
+});
+
+// Why: `neuve skills install --scope repo` is a way to install the skill; setup must count it.
+test("a skill installed in the repository counts as the offer's work", async () => {
+  const root = await scratch();
+  const repo = join(root, "repo");
+  await mkdir(repo);
+  Bun.spawnSync(["git", "init", "-q", repo]);
+  const state = join(repo, ".git/neuve/setup");
+  const record = repositoryStepsRecord(state);
+  const context = await skillContext(root, repo);
+  expect(
+    await runSkillsCli(
+      ["install", "--scope", "repo", "--agents", "claude-code"],
+      context,
+    ),
+  ).toBe(0);
+  const steps = repositorySteps(
+    state,
+    repo,
+    async () => [],
+    undefined,
+    false,
+    context,
+  );
+  expect((await pendingSteps(steps, record)).waiting).toEqual([]);
+  const outcome = await runner(record, steps, {
+    mode: "setup",
+    isTerminal: false,
+  });
+  expect(outcome.said).toBe("");
+  expect((await written(record))["skill-offer"]).not.toHaveProperty("outcome");
 });

@@ -722,42 +722,51 @@ export const runSetupHooks = async (
     );
   // Named, the person's choice. Otherwise the agent programs found here, and every one this
   // repository's capture.json already lists: a program not found adds nothing new and never takes
-  // away what is there; only --agents removes one.
+  // away what is there; only --agents removes one. Agent hooks are written only for those named or
+  // found, so a program that is gone doesn't get its hook file back.
   const notFound: Array<{ mark: Mark; label: string; text: string }> = [];
-  const agents =
-    agentsFlag(values.agents) ??
-    (await (async () => {
-      const earlier = await readCaptureConfig(location);
-      if (earlier === undefined && (await exists(captureConfigPath(location))))
-        notFound.push({
-          mark: "needs",
-          label: "Capture",
-          text: `${shown(captureConfigPath(location))} couldn't be read, so no earlier list of agents was kept; it is written again`,
-        });
-      const previous = earlier?.agents ?? [];
-      const findings = await (
-        options.programs ?? (() => findAgentPrograms("check"))
-      )();
-      const kept: AgentHarness[] = [];
-      for (const finding of findings) {
-        const id = finding.program.id;
-        if (finding.found !== undefined) kept.push(id);
-        else if (previous.includes(id)) {
-          kept.push(id);
-          notFound.push({
-            mark: "done",
-            label: finding.program.name,
-            text: `${missingText(finding)}; its capture is already set up, so it is kept (--agents names the agents to keep)`,
-          });
-        } else
-          notFound.push({
-            mark: "skipped",
-            label: finding.program.name,
-            text: `${missingText(finding)}; no hooks written: ${installAdvice(finding)}, or name it with --agents`,
-          });
-      }
-      return kept;
-    })());
+  const named = agentsFlag(values.agents);
+  const { agents, hooked } =
+    named !== undefined
+      ? { agents: named, hooked: named }
+      : await (async () => {
+          const earlier = await readCaptureConfig(location);
+          if (
+            earlier === undefined &&
+            (await exists(captureConfigPath(location)))
+          )
+            notFound.push({
+              mark: "needs",
+              label: "Capture",
+              text: `${shown(captureConfigPath(location))} couldn't be read, so no earlier list of agents was kept; it is written again`,
+            });
+          const previous = earlier?.agents ?? [];
+          const findings = await (
+            options.programs ?? (() => findAgentPrograms("check"))
+          )();
+          const kept: AgentHarness[] = [];
+          const present: AgentHarness[] = [];
+          for (const finding of findings) {
+            const id = finding.program.id;
+            if (finding.found !== undefined) {
+              kept.push(id);
+              present.push(id);
+            } else if (previous.includes(id)) {
+              kept.push(id);
+              notFound.push({
+                mark: "done",
+                label: finding.program.name,
+                text: `${missingText(finding)}; its capture stays listed, and no hooks are written for it until it is found (--agents names the agents to keep)`,
+              });
+            } else
+              notFound.push({
+                mark: "skipped",
+                label: finding.program.name,
+                text: `${missingText(finding)}; no hooks written: ${installAdvice(finding)}, or name it with --agents`,
+              });
+          }
+          return { agents: kept, hooked: present };
+        })();
 
   const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
   const changes: Array<Change> = [];
@@ -785,7 +794,7 @@ export const runSetupHooks = async (
     action: dryRun ? "would write" : "written",
   });
 
-  for (const harness of agents)
+  for (const harness of hooked)
     changes.push(
       await installAgentHooks(hookFile(harness), harness, command, dryRun),
     );
@@ -803,7 +812,7 @@ export const runSetupHooks = async (
   );
   for (const line of notFound)
     await screen.step(line.mark, line.label, line.text);
-  if (agents.includes("codex"))
+  if (hooked.includes("codex"))
     await screen.detail([
       "Codex asks you to review and trust new hooks the next time it starts.",
     ]);
@@ -916,6 +925,8 @@ export const inspectCapture = async (
   root: string,
   hookFiles: (harness: AgentHarness) => string = (harness) =>
     defaultHookFile(harness),
+  /** The agent programs found here; a listed one not among them has no hooks to miss. All when absent. */
+  found?: ReadonlyArray<AgentHarness>,
 ): Promise<
   { configured: boolean; parts: ReadonlyArray<CapturePart> } | undefined
 > => {
@@ -1006,11 +1017,19 @@ export const inspectCapture = async (
         : ({ state: "missing" } as const);
     if (judged.state === "missing") {
       if (config?.agents.includes(harness) === true)
-        parts.push({
-          path,
-          state: "missing",
-          why: `there are no Neuve ${harness} hooks`,
-        });
+        parts.push(
+          found === undefined || found.includes(harness)
+            ? {
+                path,
+                state: "missing",
+                why: `there are no Neuve ${harness} hooks`,
+              }
+            : {
+                path,
+                state: "ok",
+                why: `capture.json lists ${harness}, which isn't found here, so it has no hooks until neuve setup hooks finds it`,
+              },
+        );
     } else if (judged.state === "update")
       parts.push({ path, state: "update", why: judged.why });
     else
