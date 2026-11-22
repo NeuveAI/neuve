@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { PublishedPackets } from "@neuve/records-core"
+import { HumanCommands, PublishedPackets } from "@neuve/records-core"
 import type { ReviewList } from "@neuve/records-core"
 import type {
   HomeBatch,
@@ -11,7 +11,8 @@ import type { ReviewLane, ReviewSummary } from "@workspace/ui/neuve/types"
 import { LANE_FACTS } from "./lane-facts"
 import type { DeskBatch, LaneFacts } from "./lane-facts"
 import { withoutLocalIds } from "./projection"
-import { readRecords } from "./records.server"
+import { gitPerson } from "./feedback.server"
+import { readRecords, writeRecords } from "./records.server"
 import {
   LANE_ORDER,
   asks,
@@ -173,4 +174,19 @@ export async function homeLoad(options: {
     })
   )
   return { status: "ready", data: { ...read.data, reviews } }
+}
+
+/**
+ * "Clear" on the default list, or its undo (`restore`), as the person git
+ * names in the repository (ID1), through `HumanCommands.clearReviewList`.
+ */
+export async function clearList(restore: boolean): Promise<void> {
+  const person = await gitPerson()
+  if (!person)
+    throw new Error(
+      "git names no email here (git config user.email), so Neuve cannot record who cleared the list"
+    )
+  await writeRecords("web.command.clear-list", () =>
+    HumanCommands.clearReviewList({ person, restore })
+  )
 }

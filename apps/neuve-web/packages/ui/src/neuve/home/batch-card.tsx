@@ -88,7 +88,7 @@ export function BatchCard({
       )}
     >
       <header className="flex items-start justify-between gap-3">
-        <h4
+        <h5
           className={cn(
             "m-0 min-w-0 text-[15.5px] leading-[22px] font-semibold tracking-[-0.01em] text-pretty",
             older && "text-ink-2"
@@ -100,7 +100,7 @@ export function BatchCard({
           >
             {batch.title}
           </NeuveLink>
-        </h4>
+        </h5>
         <WaitingMark batch={batch} />
       </header>
       {batch.digest ? (

@@ -7,7 +7,7 @@ import type { ReviewStart } from "@workspace/ui/neuve/states/review-start"
 import type { StartReviewHandler } from "@workspace/ui/neuve/states/start-review"
 import type { ReviewsFilter } from "@workspace/ui/neuve/types"
 import { PENDING, RouteError } from "@/components/route-states"
-import { loadHome } from "@/server/home-load"
+import { loadHome, requestClear } from "@/server/home-load"
 import { nextStart } from "@/components/next-start"
 import { loadMovedPast } from "@/server/branch-moved"
 import { loadStart, requestStart } from "@/server/start-review"
@@ -126,12 +126,21 @@ function ReviewsRoute() {
   const navigate = useNavigate({ from: "/" })
   const onStartReview = useStartHandler(start)
   const started = useAtomValue(startedAtom)
+  const router = useRouter()
   return (
     <HomePage
       load={load}
       start={start}
       onStartReview={onStartReview}
       focusTitle={started}
+      // "Clear" or its undo, then the list as Records now holds it.
+      onClear={async (restore) => {
+        try {
+          await requestClear({ data: { restore } })
+        } finally {
+          await router.invalidate()
+        }
+      }}
       // A new filter starts at its first page, at the top of the list.
       onFilterChange={(filter) =>
         void navigate({

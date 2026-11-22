@@ -493,3 +493,36 @@ export const recordFeedback = (input: {
       },
     }),
   );
+
+/**
+ * Clears the repository's default review list ("Clear"), or undoes the latest clear (`restore`),
+ * as the person git names (10.5). Nothing is deleted: the repository's latest such event decides
+ * what "Waiting on you" holds (`ReviewList.cleared`). Each call is a new event, so a repeat is a
+ * later clear.
+ */
+export const clearReviewList = (input: {
+  readonly person: Person;
+  readonly restore?: boolean | undefined;
+}) =>
+  Effect.gen(function* () {
+    const { actor, event: registered } = yield* registration(input.person);
+    const id = mintUlid();
+    const occurredAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+    yield* appended([
+      registered,
+      {
+        id,
+        kind: "review-list.cleared@1",
+        idempotencyKey: `human:${actor}:review-list:${id}`,
+        actor,
+        occurredAt,
+        attribution: {},
+        payload: input.restore ? { restore: true } : {},
+      },
+    ]);
+    return { actor, eventId: id, occurredAt };
+  }).pipe(
+    Effect.withSpan("records.human.clear-review-list", {
+      attributes: { "neuve.review_list.restore": input.restore === true },
+    }),
+  );

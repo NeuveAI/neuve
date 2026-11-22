@@ -1,8 +1,9 @@
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import { Lane } from "@neuve/records-schema";
 import { dispositionRowsOn, liveDisposition } from "./dispositions.ts";
 import { CorruptRecord } from "./errors.ts";
+import { toStored } from "./log.ts";
 import { standingManifest } from "./published-packets.ts";
 import { assertCompatible } from "./store.ts";
 
@@ -338,3 +339,27 @@ export const feedbackGiven = (cycleIds: ReadonlyArray<string>) =>
     }
     return given;
   }).pipe(Effect.withSpan("records.review-list.feedback-given"));
+
+/**
+ * When the repository's default list was last cleared ("Clear"), as its event's `occurredAt`; none
+ * when it never was, or the latest clear was undone (`restore`). One read through the events' kind
+ * index.
+ */
+export const cleared = Effect.gen(function* () {
+  yield* assertCompatible;
+  const sql = yield* SqlClient;
+  const [row] = yield* sql<{
+    seq: number;
+    recordedAt: string;
+    kind: string;
+    envelope: string;
+  }>`SELECT seq, recorded_at, kind, envelope FROM events
+    WHERE kind = 'review-list.cleared@1' ORDER BY seq DESC LIMIT 1`;
+  if (row === undefined) return undefined;
+  const stored = yield* toStored(row);
+  if (Option.isNone(stored)) return undefined;
+  const event = stored.value.event;
+  if (event.kind !== "review-list.cleared@1" || event.payload.restore)
+    return undefined;
+  return event.occurredAt;
+}).pipe(Effect.withSpan("records.review-list.cleared"));
