@@ -29,11 +29,15 @@ export const spawnGit = (
     stdout: "pipe",
     stderr: "ignore",
     timeout: GIT_DEADLINE_MS,
+    // A page never fetches: in a partial clone a missing object fails at once
+    // instead of starting a fetch that outlives git's kill and holds the pipe.
+    env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
   })
 
 /**
- * Its exit code and stdout. The read commands here start no process of their
- * own, so git's exit, or its kill at the deadline, closes the pipe.
+ * Its exit code and stdout. With lazy fetch off, the read commands here start
+ * no process of their own, so git's exit, or its kill at the deadline, closes
+ * the pipe.
  */
 export const git = async (
   at: string,
