@@ -208,13 +208,19 @@ function ReviewGroup({
 
 export type ClearHandler = (restore: boolean) => Promise<void>
 
-/** While a clear or its undo is recorded: the button waits, so one press records one. */
-const clearingAtom = atom(false)
+/**
+ * A clear or its undo: pending while it is recorded (the button waits, so one
+ * press records one), or the reason the last one was not.
+ */
+const clearingAtom = atom<{ pending: boolean; failure?: string }>({
+  pending: false,
+})
 
 /**
  * "Clear" empties "Waiting on you" until later reviews run, while what
- * waits on you still counts above it; "Undo" brings it back. Nothing is
- * deleted.
+ * waits on you still counts above it; "Undo", offered while that clear still
+ * empties the list, brings back what it hid. Nothing is deleted. A refused
+ * one leaves the list as it was and says why beside the button.
  */
 function ClearButton({
   cleared,
@@ -225,20 +231,39 @@ function ClearButton({
 }) {
   const [clearing, setClearing] = useAtom(clearingAtom)
   return (
-    <Button
-      type="button"
-      variant="quiet"
-      disabled={clearing}
-      onClick={() => {
-        setClearing(true)
-        // A refused press leaves the list as Records holds it; the host reloads it.
-        void onClear(cleared === true)
-          .catch(() => undefined)
-          .finally(() => setClearing(false))
-      }}
-    >
-      {cleared ? "Undo" : "Clear"}
-    </Button>
+    <>
+      {clearing.failure && (
+        <p
+          role="alert"
+          className="m-0 text-[12.5px] leading-[18px] text-req-fg"
+        >
+          {clearing.failure}
+        </p>
+      )}
+      <Button
+        type="button"
+        variant="quiet"
+        disabled={clearing.pending}
+        onClick={() => {
+          setClearing({ pending: true })
+          void onClear(cleared === true).then(
+            () => setClearing({ pending: false }),
+            (error: unknown) =>
+              setClearing({
+                pending: false,
+                failure:
+                  error instanceof Error && error.message
+                    ? error.message
+                    : cleared
+                      ? "The list wasn’t restored."
+                      : "The list wasn’t cleared.",
+              })
+          )
+        }}
+      >
+        {cleared ? "Undo" : "Clear"}
+      </Button>
+    </>
   )
 }
 
@@ -246,7 +271,7 @@ export interface HomeScreenProps {
   data: HomeData
   /** Shows the list's other filter; the host moves to it (the page's address). */
   onFilterChange?: (filter: ReviewsFilter) => void
-  /** "Clear" on "Waiting on you", or its undo (`restore`); the host reloads the list. */
+  /** "Clear" on "Waiting on you", or its undo (`restore`); once recorded, the host reloads the list. */
   onClear?: ClearHandler
   /** What "Start a review" would review now, once the branch moved on. */
   start?: ReviewStart

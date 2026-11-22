@@ -133,13 +133,11 @@ function ReviewsRoute() {
       start={start}
       onStartReview={onStartReview}
       focusTitle={started}
-      // "Clear" or its undo, then the list as Records now holds it.
+      // "Clear" or its undo, then, once recorded, the list as Records holds it.
+      // A refused one throws to the button, which says so; the list stays.
       onClear={async (restore) => {
-        try {
-          await requestClear({ data: { restore } })
-        } finally {
-          await router.invalidate()
-        }
+        await requestClear({ data: { restore } })
+        await router.invalidate()
       }}
       // A new filter starts at its first page, at the top of the list.
       onFilterChange={(filter) =>

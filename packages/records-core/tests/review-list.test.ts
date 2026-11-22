@@ -519,10 +519,11 @@ test("decided reads every person's standing decision, never an agent's; feedback
 });
 
 // Why (22 November 2026, NEU-460): "Clear" on the Reviews page is a person's event, never a deletion,
-// and the repository's latest clear or its undo decides the default list. The event must pass the
-// log's strict parse as appended, and the read must follow the latest one: a clear's time, then
-// nothing once undone, then a later clear's time.
-test("the default list's latest clear decides, and an undo restores it", async () => {
+// and the clears still standing decide the default list. The event must pass the log's strict parse
+// as appended, and the read must treat clears as a stack: an undo takes back only the most recent
+// clear still standing (so a second clear's undo shows what came after the first), an undo with
+// none standing does nothing, and a later clear stands again.
+test("an undo takes back the most recent clear still standing", async () => {
   const location = freshLocation();
   const steps = await runOn(
     location,
@@ -531,18 +532,25 @@ test("the default list's latest clear decides, and an undo restores it", async (
       const first = yield* HumanCommands.clearReviewList({ person: owner });
       const afterFirst = yield* ReviewList.cleared;
       const appended = yield* Log.get(first.eventId);
+      yield* HumanCommands.clearReviewList({ person: other });
       yield* HumanCommands.clearReviewList({ person: owner, restore: true });
       const afterUndo = yield* ReviewList.cleared;
-      const second = yield* HumanCommands.clearReviewList({ person: other });
-      const afterSecond = yield* ReviewList.cleared;
+      yield* HumanCommands.clearReviewList({ person: owner, restore: true });
+      const afterBoth = yield* ReviewList.cleared;
+      yield* HumanCommands.clearReviewList({ person: owner, restore: true });
+      const afterNone = yield* ReviewList.cleared;
+      const later = yield* HumanCommands.clearReviewList({ person: other });
+      const afterLater = yield* ReviewList.cleared;
       return {
         never,
         first,
         afterFirst,
         appended,
         afterUndo,
-        second,
-        afterSecond,
+        afterBoth,
+        afterNone,
+        later,
+        afterLater,
       };
     }),
   );
@@ -551,6 +559,8 @@ test("the default list's latest clear decides, and an undo restores it", async (
   const event = Option.getOrThrow(steps.appended).event;
   expect(event.kind).toBe("review-list.cleared@1");
   expect(event.actor).toBe(ownerId);
-  expect(steps.afterUndo).toBeUndefined();
-  expect(steps.afterSecond).toBe(steps.second.occurredAt);
+  expect(steps.afterUndo).toBe(steps.first.occurredAt);
+  expect(steps.afterBoth).toBeUndefined();
+  expect(steps.afterNone).toBeUndefined();
+  expect(steps.afterLater).toBe(steps.later.occurredAt);
 });

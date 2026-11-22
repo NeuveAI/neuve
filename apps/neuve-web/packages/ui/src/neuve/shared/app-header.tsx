@@ -336,19 +336,14 @@ function FullHeader({
       >
         <BrandMark logotypeClassName="max-[360px]:hidden" />
       </NeuveLink>
+      {/* The logo leads to the Reviews page, so its one crumb is the page. */}
       {repo && current === "reviews" && (
-        <nav
-          aria-label="Breadcrumb"
-          className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-muted max-[600px]:order-last max-[600px]:min-h-[21px] max-[600px]:basis-full max-[600px]:flex-nowrap"
+        <span
+          aria-current="page"
+          className="flex min-w-0 items-center text-[13px] font-medium text-ink max-[600px]:order-last max-[600px]:min-h-[21px] max-[600px]:basis-full"
         >
-          <span className="max-[600px]:min-w-0 max-[600px]:truncate">
-            {repo}
-          </span>
-          <span aria-hidden="true">/</span>
-          <span aria-current="page" className="font-medium text-ink">
-            Reviews
-          </span>
-        </nav>
+          Reviews
+        </span>
       )}
       {repo && branch && current !== "reviews" && (
         // On a phone at least the loading header's second row

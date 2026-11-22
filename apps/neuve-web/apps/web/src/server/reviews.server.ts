@@ -731,7 +731,9 @@ export async function reviewsRead(options: {
       summaryOf(review, pageStanding, feedback, subjects[index])
     ),
     filter: options.cycle ? "all" : options.filter,
-    ...(read?.cleared ? { cleared: true as const } : {}),
+    // Undo stays offered only while the clear still empties the list; once a
+    // newer review is listed, Clear clears it.
+    ...(read?.cleared && shown.length === 0 ? { cleared: true as const } : {}),
     page,
     pageSize: PAGE_SIZE,
     total,
