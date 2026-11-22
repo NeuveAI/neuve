@@ -1606,6 +1606,18 @@ export const FeedbackRecordedV2 = event(
 ).extend({ refs: z.never().optional() });
 
 /**
+ * A person cleared the Reviews page's default list ("Clear"), or undid it (`restore`). The
+ * repository's latest one decides: after a clear, "Waiting on you" lists only the reviews run after
+ * it, while what waits on a person still counts every review; after a restore, it lists what it
+ * listed before. Nothing is deleted and All is unchanged. Older builds skip it (12.24).
+ */
+export const ReviewListCleared = event(
+  "review-list.cleared@1",
+  z.strictObject({ restore: z.literal(true).optional() }),
+  z.strictObject({}),
+).extend({ refs: z.never().optional() });
+
+/**
  * How a git hook tied a change to who made it (D23). `ancestry`, `override` and `declared` name the
  * agent session, which is the event's actor. `declared` (8.13) is used only when the process table
  * could not be read: the session ID the harness sets in its shells named a live session here. It is
@@ -1787,6 +1799,7 @@ export const RecordEvent = z.discriminatedUnion("kind", [
   VentRecorded,
   FeedbackRecorded,
   FeedbackRecordedV2,
+  ReviewListCleared,
 ]);
 
 /** An event as read back from the log: the producer's envelope plus the writer's order and time. */

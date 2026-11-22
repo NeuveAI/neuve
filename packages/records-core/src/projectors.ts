@@ -442,6 +442,8 @@ export const project = (event: RecordEvent) =>
       case "capture.filed@1":
       case "capture.sealed@1":
       case "capture.marked@1":
+      // Read from the log: the latest one decides (`ReviewList.cleared`).
+      case "review-list.cleared@1":
         return;
       default:
         // Every kind has a case, so a new kind without a projector fails to typecheck.

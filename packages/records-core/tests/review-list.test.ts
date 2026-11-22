@@ -6,7 +6,7 @@
 // (the page tracks no viewer's own share), so an agent's disposition must not count; feedback counts
 // whoever gave it.
 import { afterAll, expect, test } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import {
   Blobs,
@@ -516,4 +516,41 @@ test("decided reads every person's standing decision, never an agent's; feedback
   ]);
   // C had none.
   expect([...read.feedback].sort()).toEqual([a.cycleId, b.cycleId].sort());
+});
+
+// Why (22 November 2026, NEU-460): "Clear" on the Reviews page is a person's event, never a deletion,
+// and the repository's latest clear or its undo decides the default list. The event must pass the
+// log's strict parse as appended, and the read must follow the latest one: a clear's time, then
+// nothing once undone, then a later clear's time.
+test("the default list's latest clear decides, and an undo restores it", async () => {
+  const location = freshLocation();
+  const steps = await runOn(
+    location,
+    Effect.gen(function* () {
+      const never = yield* ReviewList.cleared;
+      const first = yield* HumanCommands.clearReviewList({ person: owner });
+      const afterFirst = yield* ReviewList.cleared;
+      const appended = yield* Log.get(first.eventId);
+      yield* HumanCommands.clearReviewList({ person: owner, restore: true });
+      const afterUndo = yield* ReviewList.cleared;
+      const second = yield* HumanCommands.clearReviewList({ person: other });
+      const afterSecond = yield* ReviewList.cleared;
+      return {
+        never,
+        first,
+        afterFirst,
+        appended,
+        afterUndo,
+        second,
+        afterSecond,
+      };
+    }),
+  );
+  expect(steps.never).toBeUndefined();
+  expect(steps.afterFirst).toBe(steps.first.occurredAt);
+  const event = Option.getOrThrow(steps.appended).event;
+  expect(event.kind).toBe("review-list.cleared@1");
+  expect(event.actor).toBe(ownerId);
+  expect(steps.afterUndo).toBeUndefined();
+  expect(steps.afterSecond).toBe(steps.second.occurredAt);
 });

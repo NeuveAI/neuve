@@ -60,7 +60,7 @@ const DIGESTS: ReadonlyArray<DigestContent> = [
 ]
 
 /** The person git names in the repository (10.5, ID1), as the harness reads them. */
-const gitPerson = async () => {
+export const gitPerson = async () => {
   const human = Option.getOrUndefined(
     await Effect.runPromise(gitHuman(repository()))
   )

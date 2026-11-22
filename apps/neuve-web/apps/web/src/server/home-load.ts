@@ -3,7 +3,7 @@ import { Ulid } from "@neuve/records-schema"
 import { z } from "zod"
 import type { HomeLoad } from "@workspace/ui/neuve/home/home-data"
 
-import { homeLoad } from "./home.server"
+import { clearList, homeLoad } from "./home.server"
 
 /**
  * `/`: the home page's load, a page and a filter of the repository's
@@ -19,3 +19,11 @@ export const loadHome = createServerFn({ method: "GET" })
     })
   )
   .handler(({ data }): Promise<HomeLoad> => homeLoad(data))
+
+/**
+ * "Clear" on the default list, or its undo: a POST behind the CSRF
+ * middleware in src/start.ts (ID2).
+ */
+export const requestClear = createServerFn({ method: "POST" })
+  .validator(z.strictObject({ restore: z.boolean() }))
+  .handler(({ data }): Promise<void> => clearList(data.restore))

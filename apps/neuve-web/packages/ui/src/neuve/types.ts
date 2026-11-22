@@ -1241,7 +1241,7 @@ export type ReviewsFilter = "all" | "waiting"
 export interface ReviewSummary {
   /** The cycle's Records ID. */
   id: string
-  /** Its first batch's title; while it has none, its head commit's subject. */
+  /** Its head commit's subject; else its first batch's title; else its range. */
   title: string
   /** Its range as `base..head`, each shortened. */
   range: string
@@ -1279,6 +1279,8 @@ export interface ReviewsData {
   newestHead?: string
   /** A cycle's own address: the list holds that one review. */
   cycle?: string
+  /** The default list was cleared ("Clear"): it offers "Undo" until a later clear. */
+  cleared?: true
 }
 
 export type ReviewsLoad =

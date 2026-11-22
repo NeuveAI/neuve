@@ -83,7 +83,7 @@ export const laneOf = (lane: RecordedLane) =>
 
 const short = (oid: string) => oid.slice(0, 7)
 
-/** A commit's subject line, for a review that has no batch to name it yet. */
+/** A commit's subject line, the title a review reads by (`summaryOf`). */
 const subjectOf = async (at: string, oid: string) => {
   const child = Bun.spawn(
     ["git", "-C", at, "log", "-1", "--format=%s", oid, "--"],
@@ -274,6 +274,18 @@ export const defaultListOf = (
     .map(({ review }) => review)
 }
 
+/**
+ * What "Waiting on you" lists after a clear ("Clear"): the reviews run after
+ * it. What waits on a person still counts every review, cleared or not.
+ */
+export const afterClear = (
+  reviews: ReadonlyArray<Listed>,
+  cleared: string | undefined
+): ReadonlyArray<Listed> =>
+  cleared === undefined
+    ? reviews
+    : reviews.filter((review) => Date.parse(review.at) > Date.parse(cleared))
+
 /** Every human unit of the review is held by a later review: it asks for nothing. */
 const isOlder = (review: Listed, standing: UnitStanding) => {
   const human = units(review).filter((unit) => humanLane(unit) !== undefined)
@@ -284,8 +296,8 @@ const isOlder = (review: Listed, standing: UnitStanding) => {
 }
 
 /**
- * One review as the page shows it; `title` is its first batch's, else
- * `subject`. Its batches are those its standing packet publishes: a batch
+ * One review as the page shows it; `title` is its head commit's `subject`,
+ * else its first batch's, else its range. Its batches are those its standing packet publishes: a batch
  * not published yet has no units in Records, so none of it is counted as
  * waiting on a person, only as pending. An older review (`isOlder`) shows
  * no square and no unit to decide: a newer review holds them.
@@ -317,8 +329,8 @@ export const summaryOf = (
   return {
     id: review.cycleId,
     title:
-      batches[0]?.title ||
       subject ||
+      batches[0]?.title ||
       `${short(review.range.baseOid)}..${short(review.range.headOid)}`,
     range: `${short(review.range.baseOid)}..${short(review.range.headOid)}`,
     at: review.at,
@@ -605,6 +617,7 @@ export async function reviewsRead(options: {
       return {
         recent,
         reviews,
+        cleared: yield* ReviewList.cleared,
         ...(yield* answers(reviews, replaced)),
       }
     })
@@ -674,17 +687,18 @@ export async function reviewsRead(options: {
     standing,
     ends
   )
+  const shown = afterClear(waiting, read?.cleared)
   const own = reviews.filter((review) => review.cycleId === options.cycle)
   const listed = options.cycle
     ? own
     : options.filter === "waiting"
-      ? waiting
+      ? shown
       : reviews
   const across = waitingOf(options.cycle ? own : waiting, standing)
   const total = options.cycle
     ? own.length
     : options.filter === "waiting"
-      ? waiting.length
+      ? shown.length
       : (read?.recent.total ?? 0)
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const page = Math.min(Math.max(1, Math.trunc(options.page) || 1), pageCount)
@@ -707,11 +721,7 @@ export async function reviewsRead(options: {
     for (const cycleId of older.feedback) feedback.add(cycleId)
   }
   const subjects = await Promise.all(
-    onPage.map((review) =>
-      review.batches.length > 0
-        ? Promise.resolve(undefined)
-        : subjectOf(at, review.range.headOid)
-    )
+    onPage.map((review) => subjectOf(at, review.range.headOid))
   )
   const inWaiting = new Set(waiting.map((review) => review.cycleId))
   const data: ReviewsData = {
@@ -721,6 +731,7 @@ export async function reviewsRead(options: {
       summaryOf(review, pageStanding, feedback, subjects[index])
     ),
     filter: options.cycle ? "all" : options.filter,
+    ...(read?.cleared ? { cleared: true as const } : {}),
     page,
     pageSize: PAGE_SIZE,
     total,
@@ -730,7 +741,7 @@ export async function reviewsRead(options: {
           all: own.length,
           waiting: own.filter((review) => inWaiting.has(review.cycleId)).length,
         }
-      : { all: read?.recent.total ?? 0, waiting: waiting.length },
+      : { all: read?.recent.total ?? 0, waiting: shown.length },
     waiting: {
       units: across.units,
       reviews: across.waiting.length,

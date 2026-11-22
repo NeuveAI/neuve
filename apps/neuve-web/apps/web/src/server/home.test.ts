@@ -10,7 +10,13 @@ import { expect, test } from "bun:test"
 import type { ReviewList } from "@neuve/records-core"
 
 import { homeBatchOf, homeBatchesOf, plainDigest } from "./home.server"
-import { NO_STANDING, summaryOf } from "./reviews.server"
+import {
+  NO_STANDING,
+  afterClear,
+  defaultListOf,
+  summaryOf,
+  waitingOf,
+} from "./reviews.server"
 import type { UnitStanding } from "./reviews.server"
 
 test("a digest reads as plain prose: phrase links as their phrase, local IDs dropped", () => {
@@ -129,4 +135,49 @@ test("a cycle's own address puts the batches with human-required work first; the
     )
   expect(order(true)).toEqual(["b3", "b1", "b2", "b4"])
   expect(order(false)).toEqual(["b1", "b2", "b3", "b4"])
+})
+
+// Why (22 November 2026, NEU-460): a review sits under a title a person reads, not its hour and
+// hash. Its head commit's subject names it; a commit git no longer has (an empty subject) falls
+// back to its first batch's title, and a review with neither reads as its range.
+test("a review's title is its head commit's subject, else its first batch's title, else its range", () => {
+  const titled = (subject: string, batches = review.batches) =>
+    summaryOf({ ...review, batches }, standing, new Set(), subject).title
+  expect(titled("Keep cleanup off refused runs")).toBe(
+    "Keep cleanup off refused runs"
+  )
+  expect(titled("")).toBe("Refusal and cleanup hardening")
+  expect(titled("", [])).toBe("a3a7bd3..08443d4")
+})
+
+// Why (22 November 2026, NEU-460): "Clear" empties "Waiting on you" of the current reviews, the
+// owner's "clear current batches", but waiting human-required work is never lost. After a clear
+// the list holds only reviews run after it, human-required ones from before included in the
+// hiding, while what waits on you (the count and Open next) still counts them. Undo is the list
+// read with no clear, so it holds what it held before.
+test("after a clear, the default list holds only later reviews while earlier waiting work still counts, and undo restores it", () => {
+  const lanes = (
+    id: string,
+    at: string,
+    lane: ReviewList.ListedUnit["lane"]
+  ): ReviewList.ListedReview => ({
+    ...review,
+    cycleId: id,
+    at,
+    batches: [{ ...listed, units: [{ unitId: `${id}-u`, lane }] }],
+  })
+  const reviews = [
+    lanes("later", "2026-11-22T12:00:00.000Z", "human-suggested"),
+    lanes("required", "2026-11-21T09:00:00.000Z", "human-required"),
+    lanes("earlier", "2026-11-21T08:00:00.000Z", "human-suggested"),
+  ]
+  const waiting = defaultListOf(reviews, NO_STANDING, new Map())
+  const listedIds = (cleared?: string) =>
+    afterClear(waiting, cleared).map((entry) => entry.cycleId)
+  expect(listedIds("2026-11-22T10:00:00.000Z")).toEqual(["later"])
+  // The count still holds the hidden human-required review, and Open next leads to it first.
+  const counted = waitingOf(waiting, NO_STANDING)
+  expect(counted.units).toBe(3)
+  expect(counted.nextUnitId).toBe("required-u")
+  expect(listedIds()).toEqual(["required", "later", "earlier"])
 })

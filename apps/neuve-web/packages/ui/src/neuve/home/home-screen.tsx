@@ -6,6 +6,7 @@
  *          stand (contentFade 160ms); the page returns to the list's top
  *          under its bar
  *    0ms   a batch card hovered: see the batch card's storyboard
+ *    0ms   a review's "Show all" opened: see the disclosure's storyboard
  *  rest    a running review's mark turns (pendingSpin), static under
  *          reduced motion
  *
@@ -13,10 +14,12 @@
  * 150ms, from globals.css).
  * ───────────────────────────────────────────────────────── */
 
-import { Provider } from "jotai"
+import type * as React from "react"
+import { Provider, atom, useAtom } from "jotai"
 import { MotionConfig } from "motion/react"
 import { LoaderCircleIcon } from "lucide-react"
 
+import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import { NewWorkNotice } from "@workspace/ui/neuve/batch-overview/new-work-notice"
 import { BatchCard } from "@workspace/ui/neuve/home/batch-card"
@@ -36,6 +39,7 @@ import {
   dayGroups,
 } from "@workspace/ui/neuve/reviews/reviews-screen"
 import { AppHeader } from "@workspace/ui/neuve/shared/app-header"
+import { Disclosure } from "@workspace/ui/neuve/shared/disclosure"
 import { Segmented } from "@workspace/ui/neuve/shared/segmented"
 import { regionTransition } from "@workspace/ui/neuve/shared/view-transitions"
 import { NoBatchEmpty } from "@workspace/ui/neuve/states/empty-states"
@@ -87,79 +91,154 @@ function PendingBatches({ review }: { review: HomeReview }) {
   )
 }
 
-/** A review with no batch yet: running, or stopped before it published one. */
+/** A review with no batch yet: running, or stopped before it published one; its title heads it. */
 function NoBatchYet({ review }: { review: HomeReview }) {
   return (
-    <div className="flex flex-col gap-1 rounded-[14px] border border-dashed border-line-strong px-5 py-4">
-      <span className="text-[15px] leading-[22px] font-semibold text-pretty text-ink-2">
-        {review.title}
-      </span>
-      <span className="text-[13px] text-ink-muted">
-        {review.state === "running"
-          ? "Its batches appear here as the review publishes them."
-          : "This review published no batch."}
-      </span>
-    </div>
+    <p className="m-0 rounded-[14px] border border-dashed border-line-strong px-5 py-4 text-[13px] text-ink-muted">
+      {review.state === "running"
+        ? "Its batches appear here as the review publishes them."
+        : "This review published no batch."}
+    </p>
+  )
+}
+
+/** The batches a review shows before "Show all": its first row. */
+const FIRST_ROW = 2
+
+/** A list of batch cards, two to a row. */
+function BatchGrid({ children }: { children: React.ReactNode }) {
+  return (
+    <ul className="m-0 grid list-none grid-cols-2 gap-3 p-0 max-[900px]:grid-cols-1">
+      {children}
+    </ul>
   )
 }
 
 /**
- * One review: when it ran, its range, where its run stands, how many
- * batches it has and its units by lane across all of them, then each batch
- * as a card. An older review says a newer
- * one replaced it, and its batches ask for nothing (14.33).
+ * One review under its title, then when it ran, its range, where its run
+ * stands, how many batches it has and its units by lane across all of them.
+ * One row of its batches shows, those that wait on the reader first;
+ * "Show all" opens the rest. At a cycle's own address, every batch shows. An older review says a newer one
+ * replaced it, and its batches ask for nothing (14.33).
  */
-function ReviewGroup({ review, time }: { review: HomeReview; time: string }) {
+function ReviewGroup({
+  review,
+  time,
+  whole,
+}: {
+  review: HomeReview
+  time: string
+  /** A cycle's own address shows every batch. */
+  whole: boolean
+}) {
   const older = review.newer === true
+  const card = (batch: HomeReview["batches"][number]) => (
+    <li key={batch.id} className="flex min-w-0">
+      <BatchCard batch={batch} older={older} />
+    </li>
+  )
+  // Batches that wait on the reader take the first row, each side in packet order.
+  const ordered = [
+    ...review.batches.filter((batch) => batch.needYou > 0),
+    ...review.batches.filter((batch) => batch.needYou === 0),
+  ]
+  const shown = whole ? review.batches : ordered.slice(0, FIRST_ROW)
+  const rest = whole ? [] : ordered.slice(FIRST_ROW)
   return (
-    <section
-      aria-label={`Review ${review.range}`}
-      className="flex flex-col gap-3"
-    >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-ink-muted">
-        <span className="font-mono tabular-nums">{time}</span>
-        <Dot />
-        <span translate="no" className="font-mono">
-          {review.range}
-        </span>
-        <Dot />
-        <RunState state={review.state} />
-        {review.batches.length > 0 && (
-          <>
-            <Dot />
-            <span>{batchCount(review)}</span>
-          </>
-        )}
-        {review.lanes.length > 0 && (
-          <>
-            <Dot />
-            <LaneCountsInline lanes={review.lanes} />
-          </>
-        )}
-        {older && (
-          <>
-            <Dot />
-            <span className="text-ink-2">Replaced by a newer review</span>
-          </>
-        )}
+    <section aria-label={review.title} className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <h4 className="m-0 text-[17px] leading-6 font-semibold tracking-[-0.01em] text-pretty">
+          {review.title}
+        </h4>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-ink-muted">
+          <span className="font-mono tabular-nums">{time}</span>
+          <Dot />
+          <span translate="no" className="font-mono">
+            {review.range}
+          </span>
+          <Dot />
+          <RunState state={review.state} />
+          {review.batches.length > 0 && (
+            <>
+              <Dot />
+              <span>{batchCount(review)}</span>
+            </>
+          )}
+          {review.lanes.length > 0 && (
+            <>
+              <Dot />
+              <LaneCountsInline lanes={review.lanes} />
+            </>
+          )}
+          {older && (
+            <>
+              <Dot />
+              <span className="text-ink-2">Replaced by a newer review</span>
+            </>
+          )}
+        </div>
       </div>
       {review.batches.length === 0 && (review.pendingBatches ?? 0) === 0 ? (
         <NoBatchYet review={review} />
       ) : (
-        <ul className="m-0 grid list-none grid-cols-2 gap-3 p-0 max-[900px]:grid-cols-1">
-          {review.batches.map((batch) => (
-            <li key={batch.id} className="flex min-w-0">
-              <BatchCard batch={batch} older={older} />
-            </li>
-          ))}
-          {(review.pendingBatches ?? 0) > 0 && (
-            <li className="min-w-0">
-              <PendingBatches review={review} />
-            </li>
+        <>
+          <BatchGrid>
+            {shown.map(card)}
+            {(review.pendingBatches ?? 0) > 0 && (
+              <li className="min-w-0">
+                <PendingBatches review={review} />
+              </li>
+            )}
+          </BatchGrid>
+          {rest.length > 0 && (
+            <Disclosure
+              label={`Show all ${review.batches.length} batches`}
+              className="-mt-1"
+              summaryClassName="-ml-2.5 w-fit"
+              contentClassName="p-0 pt-2"
+            >
+              <BatchGrid>{rest.map(card)}</BatchGrid>
+            </Disclosure>
           )}
-        </ul>
+        </>
       )}
     </section>
+  )
+}
+
+export type ClearHandler = (restore: boolean) => Promise<void>
+
+/** While a clear or its undo is recorded: the button waits, so one press records one. */
+const clearingAtom = atom(false)
+
+/**
+ * "Clear" empties "Waiting on you" until later reviews run, while what
+ * waits on you still counts above it; "Undo" brings it back. Nothing is
+ * deleted.
+ */
+function ClearButton({
+  cleared,
+  onClear,
+}: {
+  cleared?: true
+  onClear: ClearHandler
+}) {
+  const [clearing, setClearing] = useAtom(clearingAtom)
+  return (
+    <Button
+      type="button"
+      variant="quiet"
+      disabled={clearing}
+      onClick={() => {
+        setClearing(true)
+        // A refused press leaves the list as Records holds it; the host reloads it.
+        void onClear(cleared === true)
+          .catch(() => undefined)
+          .finally(() => setClearing(false))
+      }}
+    >
+      {cleared ? "Undo" : "Clear"}
+    </Button>
   )
 }
 
@@ -167,6 +246,8 @@ export interface HomeScreenProps {
   data: HomeData
   /** Shows the list's other filter; the host moves to it (the page's address). */
   onFilterChange?: (filter: ReviewsFilter) => void
+  /** "Clear" on "Waiting on you", or its undo (`restore`); the host reloads the list. */
+  onClear?: ClearHandler
   /** What "Start a review" would review now, once the branch moved on. */
   start?: ReviewStart
   onStartReview?: StartReviewHandler
@@ -178,6 +259,7 @@ export interface HomeScreenProps {
 function Home({
   data,
   onFilterChange,
+  onClear,
   start,
   onStartReview,
   now = new Date(),
@@ -231,19 +313,27 @@ function Home({
                   ? "Waiting on you"
                   : "All reviews"}
             </h2>
-            <Segmented
-              label="Show"
-              value={data.filter}
-              onValueChange={onFilterChange}
-              options={[
-                { value: "all", label: "All", count: data.counts.all },
-                {
-                  value: "waiting",
-                  label: "Waiting on you",
-                  count: data.counts.waiting,
-                },
-              ]}
-            />
+            <div className="flex items-center gap-2">
+              {onClear &&
+                data.filter === "waiting" &&
+                !data.cycle &&
+                (data.cleared || data.total > 0) && (
+                  <ClearButton cleared={data.cleared} onClear={onClear} />
+                )}
+              <Segmented
+                label="Show"
+                value={data.filter}
+                onValueChange={onFilterChange}
+                options={[
+                  { value: "all", label: "All", count: data.counts.all },
+                  {
+                    value: "waiting",
+                    label: "Waiting on you",
+                    count: data.counts.waiting,
+                  },
+                ]}
+              />
+            </div>
           </div>
           {/* Keyed by page and filter: each page fades in where it stands. */}
           <div
@@ -252,7 +342,8 @@ function Home({
           >
             {groups.length === 0 && (
               <p className="m-0 text-ink-muted">
-                {data.filter === "waiting"
+                {/* A cleared list may hide work that still waits: the count above says so. */}
+                {data.filter === "waiting" && !data.cleared
                   ? "Nothing waits on you."
                   : "No reviews on this page."}
               </p>
@@ -269,7 +360,12 @@ function Home({
                 </h3>
                 <div className="flex flex-col gap-8">
                   {group.reviews.map(({ review, time }) => (
-                    <ReviewGroup key={review.id} review={review} time={time} />
+                    <ReviewGroup
+                      key={review.id}
+                      review={review}
+                      time={time}
+                      whole={data.cycle !== undefined}
+                    />
                   ))}
                 </div>
               </section>
