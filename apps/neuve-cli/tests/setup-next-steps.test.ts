@@ -395,6 +395,15 @@ test.skipIf(prerequisite.skip)(
       /^Worker pid (\d+) /.exec(
         (await neuve("worker", "status", "--repo", repository)).stdout,
       )?.[1];
+    // worker start returns once the worker is spawned, before its socket answers.
+    const startedPid = async () => {
+      let pid: string | undefined;
+      for (let tries = 0; pid === undefined && tries < 100; tries += 1) {
+        await Bun.sleep(100);
+        pid = await workerPid();
+      }
+      return pid;
+    };
     // A test worker lists its repository beside its budget; the upgrade reads the person's list.
     const list = Registry.registryPath(home);
     await mkdir(dirname(list), { recursive: true });
@@ -410,7 +419,7 @@ test.skipIf(prerequisite.skip)(
     expect(started.code, started.stderr).toBe(0);
     let older: Promise<unknown> | undefined;
     try {
-      const current = await workerPid();
+      const current = await startedPid();
       expect(current).toBeDefined();
       // Running this version: left running, and nothing is said.
       expect(await upgrade()).not.toContain("Workers");
@@ -430,11 +439,7 @@ test.skipIf(prerequisite.skip)(
         "--repo",
         repository,
       ]);
-      let before: string | undefined;
-      for (let tries = 0; before === undefined && tries < 100; tries += 1) {
-        await Bun.sleep(100);
-        before = await workerPid();
-      }
+      const before = await startedPid();
       expect(before).toBeDefined();
       const said = await upgrade();
       expect(said).toMatch(

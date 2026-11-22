@@ -527,6 +527,7 @@ test("a captured agent that is gone stays listed, gets no hooks until it is foun
   expect(await run(() => found())).toContain(
     "Codex asks you to review and trust new hooks",
   );
+  const written = await readFile(codexHooks, "utf8");
   // Codex is removed, and its hook file with it.
   await rm(join(root, "codex"), { recursive: true });
   const printed = await run(() => found(["claude-code"]));
@@ -547,20 +548,38 @@ test("a captured agent that is gone stays listed, gets no hooks until it is foun
     cliBinary: "/opt/neuve/bin/neuve",
     graphBinary: "/opt/neuve/lib/neuve/entire-graph",
   });
-  const capture = (
-    await inspectDoctor({
-      repository: repo,
-      version: "0.1.0",
-      home,
-      path: join(root, "no-programs"),
-      findCodex: runtimeOnly,
-      hookFiles: (harness) => (harness === "codex" ? codexHooks : settings),
-    })
-  ).checks.find((entry) => entry.check === "capture");
+  const doctor = async () =>
+    (
+      await inspectDoctor({
+        repository: repo,
+        version: "0.1.0",
+        home,
+        path: join(root, "no-programs"),
+        findCodex: runtimeOnly,
+        hookFiles: (harness) => (harness === "codex" ? codexHooks : settings),
+      })
+    ).checks.find((entry) => entry.check === "capture");
+  const capture = await doctor();
   expect(capture?.status).toBe("ok");
   expect(capture?.detail).toContain(
     `${codexHooks}: capture.json lists codex, which isn't found here, so it has no hooks until neuve setup hooks finds it`,
   );
+  // Its hook file left behind and out of date: setup hooks leaves it as it is while Codex is gone,
+  // so doctor says so rather than offer a fix that writes nothing.
+  const stale = written.replace(/"timeout": \d+/, '"timeout": 1');
+  expect(stale).not.toBe(written);
+  await mkdir(join(root, "codex"));
+  await writeFile(codexHooks, stale);
+  const left = await doctor();
+  expect(left?.status).toBe("ok");
+  expect(left?.detail).toContain(
+    `${codexHooks}: Neuve's codex hooks here are out of date (`,
+  );
+  expect(left?.detail).toContain(
+    "codex isn't found here, so they are left as they are until neuve setup hooks finds it",
+  );
+  await run(() => found(["claude-code"]));
+  expect(await readFile(codexHooks, "utf8")).toBe(stale);
 });
 
 test("a capture.json that can't be read is written again, and setup hooks says so", async () => {

@@ -925,7 +925,10 @@ export const inspectCapture = async (
   root: string,
   hookFiles: (harness: AgentHarness) => string = (harness) =>
     defaultHookFile(harness),
-  /** The agent programs found here; a listed one not among them has no hooks to miss. All when absent. */
+  /**
+   * The agent programs found here. One not among them has no hooks to miss, and its out-of-date
+   * hooks are left as they are, since setup hooks writes nothing for it. All when absent.
+   */
   found?: ReadonlyArray<AgentHarness>,
 ): Promise<
   { configured: boolean; parts: ReadonlyArray<CapturePart> } | undefined
@@ -1015,10 +1018,12 @@ export const inspectCapture = async (
       read.kind === "read"
         ? await judgeAgentHooks(read.file, harness)
         : ({ state: "missing" } as const);
+    // setup hooks writes nothing for a program not found here, so nothing of its own is to fix.
+    const absent = found !== undefined && !found.includes(harness);
     if (judged.state === "missing") {
       if (config?.agents.includes(harness) === true)
         parts.push(
-          found === undefined || found.includes(harness)
+          !absent
             ? {
                 path,
                 state: "missing",
@@ -1031,7 +1036,15 @@ export const inspectCapture = async (
               },
         );
     } else if (judged.state === "update")
-      parts.push({ path, state: "update", why: judged.why });
+      parts.push(
+        absent
+          ? {
+              path,
+              state: "ok",
+              why: `Neuve's ${harness} hooks here are out of date (${judged.why}), but ${harness} isn't found here, so they are left as they are until neuve setup hooks finds it`,
+            }
+          : { path, state: "update", why: judged.why },
+      );
     else
       parts.push({
         path,
