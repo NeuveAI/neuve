@@ -1388,10 +1388,15 @@ if [ "$dry_run" = 1 ]; then
     else say 'Then, in your repository: neuve setup'; fi
     exit 0
 fi
-[ "$route" = archive ] || download_release
+# The download and the checks before anything changes take a while; each says it is under way.
+if [ "$route" != archive ]; then
+    if [ -n "$tag" ]; then say "Downloading neuve $tag for $target."; else say "Downloading the newest neuve for $target."; fi
+    download_release
+fi
 # The token is needed only for the download.
 unset GH_TOKEN GITHUB_TOKEN 2>/dev/null || :
 token=
+say 'Checking the release against SHA256SUMS and unpacking it.'
 verify_archive
 # A file downloaded through a browser carries macOS's quarantine mark, which tar passes to every file
 # it unpacks. macOS then holds the unsigned neuve at its first run, so stop before running anything.

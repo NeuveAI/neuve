@@ -316,6 +316,27 @@ test("an installed desk serves any set-up repository without Bun, one desk per r
     ).exec(requested.stdout)?.[1];
     expect(link, requested.stdout).toBeDefined();
     expect((await fetch(link!)).status).toBe(200);
+    // A reinstall under the open desk: its page says the desk restarts and reloads by itself; the
+    // desk waits while the installer holds the prefix, then restarts on the same address.
+    await writeFile(metadata, valid);
+    await mkdir(join(prefix, ".install.lock"));
+    const restarting = await fetch(first.address);
+    expect(restarting.status).toBe(503);
+    expect(await restarting.text()).toContain("this page reloads by itself");
+    await Bun.sleep(500);
+    expect((await fetch(first.address)).status).toBe(503);
+    await rm(join(prefix, ".install.lock"), { recursive: true });
+    await fetch(first.address);
+    const deadline = Date.now() + 20_000;
+    let restarted = 0;
+    while (restarted !== 200 && Date.now() < deadline) {
+      await Bun.sleep(100);
+      restarted = await fetch(first.address).then(
+        (response) => response.status,
+        () => 0,
+      );
+    }
+    expect(restarted).toBe(200);
     expect(await first.stop("SIGINT")).toEqual({ code: 0, stderr: "" });
     expect(await answers(first.address)).toBe(false);
 

@@ -10,7 +10,8 @@ import { xdgPath } from "./xdg-path.ts";
 
 /**
  * The user-level list of repositories with a Records store (8.6), read by the launchd sweep. Each
- * worker adds its repository when it starts. Writers share a lock through read, merge and rename.
+ * worker adds its repository when it starts; setup's upgrade drops those whose folder is gone. Writers
+ * share a lock through read, merge and rename.
  * It holds paths only.
  */
 export const registryPath = (home = homedir()) =>
@@ -50,11 +51,13 @@ export const readRegistry = (path = registryPath()) =>
     }
   });
 
-/** Adds the repository unless its store is listed; written to a temporary file, then renamed. */
-export const registerRepository = (
-  location: StoreLocation,
-  repository: string,
-  path = registryPath(),
+/**
+ * Changes the list under its lock: `change` gets the list as read and returns the next one, or
+ * undefined to leave the file as it is. Written to a temporary file, then renamed.
+ */
+const updateRegistry = (
+  path: string,
+  change: (registry: Registry) => Registry | undefined,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem;
@@ -64,23 +67,11 @@ export const registerRepository = (
         () =>
           Effect.runPromise(
             Effect.gen(function* () {
-              const registry = yield* readRegistry(path);
-              if (
-                registry.repositories.some(
-                  (entry) => entry.store === location.directory,
-                )
-              )
-                return false;
+              const next = change(yield* readRegistry(path));
+              if (next === undefined) return false;
               const stored = (yield* fs.exists(path))
                 ? yield* fs.readFileString(path)
                 : undefined;
-              const next: Registry = {
-                version: 1,
-                repositories: [
-                  ...registry.repositories,
-                  { store: location.directory, repository },
-                ],
-              };
               const output =
                 stored === undefined
                   ? next
@@ -111,4 +102,53 @@ export const registerRepository = (
         signal,
       ),
     );
+  });
+
+/**
+ * Where a worker adds its repository. A test process keeps its own list beside its own budget, so
+ * no test's scratch checkout reaches the person's list.
+ */
+const workerRegistryPath = () => {
+  if (process.env.NEUVE_TEST_PROCESS !== "1") return registryPath();
+  if (!process.env.NEUVE_BUDGET_DIRECTORY)
+    throw new Error("Test processes require NEUVE_BUDGET_DIRECTORY");
+  return join(process.env.NEUVE_BUDGET_DIRECTORY, "repositories.json");
+};
+
+/** Adds the repository unless its store is listed. */
+export const registerRepository = (
+  location: StoreLocation,
+  repository: string,
+  path?: string,
+) =>
+  Effect.try(() => path ?? workerRegistryPath()).pipe(
+    Effect.flatMap((list) =>
+      updateRegistry(list, (registry) =>
+        registry.repositories.some(
+          (entry) => entry.store === location.directory,
+        )
+          ? undefined
+          : {
+              version: 1,
+              repositories: [
+                ...registry.repositories,
+                { store: location.directory, repository },
+              ],
+            },
+      ),
+    ),
+  );
+
+/** Drops the entries whose working directory is one of `gone`; the file is left alone when none is. */
+export const forgetRepositories = (
+  gone: ReadonlySet<string>,
+  path = registryPath(),
+) =>
+  updateRegistry(path, (registry) => {
+    const kept = registry.repositories.filter(
+      (entry) => !gone.has(entry.repository),
+    );
+    return kept.length === registry.repositories.length
+      ? undefined
+      : { version: 1, repositories: kept };
   });

@@ -2,6 +2,11 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
+import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
+import { Effect } from "effect";
+import type * as FileSystem from "effect/FileSystem";
+import { readRegistry, registerRepository } from "../src/registry.ts";
+import { storeLocationIn } from "../src/location.ts";
 
 for (const platform of ["linux", "darwin"]) {
   for (const value of [undefined, "", "relative", "/absolute"]) {
@@ -80,3 +85,27 @@ for (const platform of ["linux", "darwin"]) {
     });
   }
 }
+
+// Why: tests start real workers with the person's HOME, and each worker adds its repository to the
+// list; scratch checkouts then filled the person's list. A test process's worker writes beside its
+// own budget instead, which this pins at the one place every worker registers.
+test("a worker in a test process lists its repository beside the test budget", async () => {
+  const root = mkdtempSync(join(tmpdir(), "registry-test-process-"));
+  const previous = process.env.NEUVE_BUDGET_DIRECTORY;
+  process.env.NEUVE_BUDGET_DIRECTORY = root;
+  try {
+    const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
+      Effect.runPromise(effect.pipe(Effect.provide(BunFileSystem.layer)));
+    expect(process.env.NEUVE_TEST_PROCESS).toBe("1");
+    const location = storeLocationIn(join(root, "git"));
+    expect(await run(registerRepository(location, "repository"))).toBe(true);
+    expect(await run(readRegistry(join(root, "repositories.json")))).toEqual({
+      version: 1,
+      repositories: [{ store: location.directory, repository: "repository" }],
+    });
+  } finally {
+    if (previous === undefined) delete process.env.NEUVE_BUDGET_DIRECTORY;
+    else process.env.NEUVE_BUDGET_DIRECTORY = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

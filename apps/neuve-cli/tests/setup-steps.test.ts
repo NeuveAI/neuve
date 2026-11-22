@@ -3,7 +3,8 @@
 // fake step lists, at the boundary that matters: what the record says against what runs and what
 // is written. Each failure of the slice's done-when has a case: a step added and one dropped, a
 // second run, a step that asks without a terminal, a record from a newer version, a run stopped
-// midway, and a listed repository whose folder is gone.
+// midway, and a listed repository whose folder is gone. That last one is dropped from the list,
+// which must never drop a repository on a volume that isn't mounted now, or one whose store lives.
 import { afterEach, expect, test } from "bun:test";
 import {
   mkdir,
@@ -304,7 +305,7 @@ test("a run stopped midway keeps what it applied, and the next run finishes", as
   expect(Object.keys(await written(record))).toEqual(["first", "second"]);
 });
 
-test("the upgrade visits each repository set up here, skips one whose folder is gone, and sets none up", async () => {
+test("the upgrade visits each repository set up here, drops those whose folder is gone, keeps one on a volume not mounted, and sets none up", async () => {
   const root = await scratch();
   const home = join(root, "home");
   const repository = async (name: string) => {
@@ -320,15 +321,33 @@ test("the upgrade visits each repository set up here, skips one whose folder is 
     graphBinary: "/opt/neuve/lib/neuve/entire-graph",
   });
   const registry = join(root, "repositories.json");
-  const gone = join(root, "gone");
+  const unmounted = `/Volumes/neuve-not-mounted-${process.pid}/project`;
+  const entry = (path: string) => ({
+    store: join(path, ".git/neuve"),
+    repository: path,
+  });
+  // A removed worktree whose store lives on in its main checkout.
+  const store = join(root, "main", ".git", "neuve");
+  await mkdir(store, { recursive: true });
+  // A key a later version may add stays on the entries that are kept.
+  const kept = [
+    { ...entry(setUp), later: true },
+    entry(bare),
+    entry(unmounted),
+    { store, repository: join(root, "removed worktree") },
+  ];
   await writeFile(
     registry,
     JSON.stringify({
       version: 1,
-      repositories: [setUp, bare, gone].map((path) => ({
-        store: join(path, ".git/neuve"),
-        repository: path,
-      })),
+      repositories: [
+        kept[0],
+        entry(join(root, "gone")),
+        kept[1],
+        entry(join(root, "gone too", "checkout")),
+        kept[2],
+        kept[3],
+      ],
     }),
   );
   const ran: string[] = [];
@@ -350,8 +369,13 @@ test("the upgrade visits each repository set up here, skips one whose folder is 
   await upgrade();
   expect(ran).toEqual(["machine-step", `in ${layout.directory}`]);
   expect(said).toContain(
-    `skipped Repository   ${gone}: its folder is gone; Neuve's list of repositories still names it\n`,
+    "ok      Repositories Neuve's list of repositories no longer names 2 folders that are gone\n",
   );
+  expect(said).not.toContain(unmounted);
+  expect(JSON.parse(await readFile(registry, "utf8"))).toEqual({
+    version: 1,
+    repositories: kept,
+  });
   expect(said).toContain("in 1 repository set up here");
   expect(Object.keys(await written(machineStepsRecord(home)))).toEqual([
     "machine-step",
@@ -364,8 +388,10 @@ test("the upgrade visits each repository set up here, skips one whose folder is 
       () => null,
     ),
   ).toBe(null);
+  said = "";
   await upgrade();
   expect(ran).toHaveLength(2);
+  expect(said).not.toContain("Repositories");
 });
 
 test("a step the person's flag leaves out is not run or reported, and is recorded as considered for it", async () => {
