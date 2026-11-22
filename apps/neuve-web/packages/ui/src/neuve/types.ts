@@ -1279,7 +1279,7 @@ export interface ReviewsData {
   newestHead?: string
   /** A cycle's own address: the list holds that one review. */
   cycle?: string
-  /** The default list was cleared ("Clear"): it offers "Undo" until a later clear. */
+  /** The clear ("Clear", on both lists) still empties the list shown: it offers "Undo" until that list holds a newer review. */
   cleared?: true
 }
 

@@ -10,6 +10,7 @@ import { afterAll, expect, test } from "bun:test"
 import { Effect } from "effect"
 import {
   Blobs,
+  HumanCommands,
   Lineage,
   Log,
   ReviewList,
@@ -685,6 +686,76 @@ test("a cycle's address reads that one review from Records, and its desk opens o
     const none = await reviewsRead({ page: 1, filter: "all", cycle: unknown })
     expect(none.status === "ready" && none.data.reviews).toEqual([])
     expect(await cycleEntry(unknown)).toBeUndefined()
+  } finally {
+    if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
+    else process.env[REPOSITORY_VARIABLE] = before
+    rmSync(repo, { recursive: true, force: true })
+  }
+})
+
+test("a clear empties both lists and offers Undo only while the list shown is empty; a newer review offers Clear again", async () => {
+  // Why (22 November 2026, NEU-463): before this fix the page kept offering only Undo after a clear,
+  // even once a newer review was listed, so clearing again took two presses (Undo, then Clear).
+  // The owner then decided one clear applies to both lists, All included (it had no Clear).
+  const repo = mkdtempSync(join(tmpdir(), "reviews-cleared-"))
+  const before = process.env[REPOSITORY_VARIABLE]
+  try {
+    Bun.spawnSync(["git", "init", "--quiet", repo])
+    const location = storeLocationIn(join(repo, ".git"))
+    const hidden = oldReview("aaaaaaa", [{ lane: "human-required" }])
+    await seed([hidden], location)
+    const clear = await read(
+      location,
+      HumanCommands.clearReviewList({
+        person: { email: "owner@example.com", displayName: "Owner" },
+      })
+    )
+    process.env[REPOSITORY_VARIABLE] = repo
+    const afterClear = await reviewsRead({ page: 1, filter: "waiting" })
+    if (afterClear.status !== "ready") throw new Error("no reviews read")
+    expect(afterClear.data.reviews).toEqual([])
+    expect(afterClear.data.cleared).toBe(true)
+    // What waits on you still counts the review the clear hid.
+    expect(afterClear.data.waiting.units).toBe(1)
+    // One clear applies to both lists.
+    const allAfterClear = await reviewsRead({ page: 1, filter: "all" })
+    if (allAfterClear.status !== "ready") throw new Error("no reviews read")
+    expect(allAfterClear.data.reviews).toEqual([])
+    expect(allAfterClear.data.cleared).toBe(true)
+    expect(allAfterClear.data.counts.all).toBe(0)
+
+    // Requested after the clear, whatever the clock says now.
+    const later = new Date(Date.parse(clear.occurredAt) + 1000).toISOString()
+    const fresh = oldReview("ccccccc", [{ lane: "human-required" }])
+    const newer = { ...fresh, request: { ...fresh.request, occurredAt: later } }
+    await read(
+      location,
+      Effect.gen(function* () {
+        const held = yield* (yield* Blobs.BlobStore).put({
+          bytes: new TextEncoder().encode(newer.manifest),
+          mediaType: "application/json",
+          retention: "durable",
+        })
+        yield* Log.append([
+          ...newer.structure,
+          newer.packet(held.blob.hash),
+          newer.request,
+        ])
+      })
+    )
+    const afterNewer = await reviewsRead({ page: 1, filter: "waiting" })
+    if (afterNewer.status !== "ready") throw new Error("no reviews read")
+    expect(afterNewer.data.reviews.map((review) => review.id)).toEqual([
+      newer.cycleId,
+    ])
+    expect(afterNewer.data.cleared).toBeUndefined()
+    expect(afterNewer.data.waiting.units).toBe(2)
+
+    const all = await reviewsRead({ page: 1, filter: "all" })
+    if (all.status !== "ready") throw new Error("no reviews read")
+    expect(all.data.reviews.map((review) => review.id)).toEqual([newer.cycleId])
+    expect(all.data.cleared).toBeUndefined()
+    expect(all.data.counts.all).toBe(1)
   } finally {
     if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
     else process.env[REPOSITORY_VARIABLE] = before

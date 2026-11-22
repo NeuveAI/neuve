@@ -26,7 +26,7 @@ import {
  * The header while loading: the brand is real, the rest is reserved at the
  * loaded header's sizes, so it wraps where that header wraps and the page
  * holds still when it arrives. Each page's header differs: the Reviews
- * page's breadcrumb is the repository and "Reviews", with no Agents
+ * page's breadcrumb is "Reviews" alone, with no Agents
  * control; a batch's (overview, desk, lineage) is the branch and
  * the commit, then the Agents control. On a phone (narrower than 600px)
  * both take the header's two rows (app-header.tsx), the breadcrumb below
@@ -46,13 +46,13 @@ function HeaderSkeleton({ page }: { page: "reviews" | "batch" }) {
       <span
         className={cn(
           "flex min-w-0 items-center gap-2 max-[600px]:order-last max-[600px]:h-[21px] max-[600px]:w-auto max-[600px]:basis-full",
-          batch ? "h-[20.4px] w-[315px]" : "h-[18.6px] w-[109px]"
+          batch ? "h-[20.4px] w-[315px]" : "h-[18.6px] w-[54px]"
         )}
       >
         <Skeleton
           className={cn(
             "h-4 max-[600px]:min-w-0",
-            batch ? "w-[220px]" : "w-[109px]"
+            batch ? "w-[220px]" : "w-[54px]"
           )}
         />
         {batch && <Skeleton className="h-5 w-16 shrink-0" />}
