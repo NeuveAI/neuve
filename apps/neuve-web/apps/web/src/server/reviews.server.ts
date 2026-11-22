@@ -275,8 +275,9 @@ export const defaultListOf = (
 }
 
 /**
- * What "Waiting on you" lists after a clear ("Clear"): the reviews run after
- * it. What waits on a person still counts every review, cleared or not.
+ * What a list ("Waiting on you" or All) holds after a clear ("Clear"): the
+ * reviews run after it. What waits on a person still counts every review,
+ * cleared or not.
  */
 export const afterClear = (
   reviews: ReadonlyArray<Listed>,
@@ -688,25 +689,37 @@ export async function reviewsRead(options: {
     ends
   )
   const shown = afterClear(waiting, read?.cleared)
+  // One clear applies to both lists. Cleared, All holds what ran after it
+  // among the newest WAITING_CAP, as "Waiting on you" does.
+  const all = read?.cleared
+    ? afterClear(read.recent.reviews, read.cleared)
+    : undefined
+  const allTotal = all?.length ?? read?.recent.total ?? 0
   const own = reviews.filter((review) => review.cycleId === options.cycle)
   const listed = options.cycle
     ? own
     : options.filter === "waiting"
       ? shown
-      : reviews
+      : (all ?? reviews)
   const across = waitingOf(options.cycle ? own : waiting, standing)
   const total = options.cycle
     ? own.length
     : options.filter === "waiting"
       ? shown.length
-      : (read?.recent.total ?? 0)
+      : allTotal
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const page = Math.min(Math.max(1, Math.trunc(options.page) || 1), pageCount)
   const offset = (page - 1) * PAGE_SIZE
   // The newest WAITING_CAP reviews hold every page of All but those past
   // them; a page past them reads its reviews, and Records' word on them, apart.
+  // Cleared, All has no such page: what it lists is already read.
   let onPage: ReadonlyArray<Listed> = listed.slice(offset, offset + PAGE_SIZE)
-  if (!options.cycle && options.filter === "all" && offset >= listed.length) {
+  if (
+    !options.cycle &&
+    options.filter === "all" &&
+    !all &&
+    offset >= listed.length
+  ) {
     const older = await readRecords("web.load.reviews.page", () =>
       Effect.gen(function* () {
         const reviews = (yield* ReviewList.reviews({
@@ -731,9 +744,11 @@ export async function reviewsRead(options: {
       summaryOf(review, pageStanding, feedback, subjects[index])
     ),
     filter: options.cycle ? "all" : options.filter,
-    // Undo stays offered only while the clear still empties the list; once a
-    // newer review is listed, Clear clears it.
-    ...(read?.cleared && shown.length === 0 ? { cleared: true as const } : {}),
+    // Undo stays offered only while the clear still empties the list shown;
+    // once it lists a newer review, Clear clears it.
+    ...(read?.cleared && !options.cycle && listed.length === 0
+      ? { cleared: true as const }
+      : {}),
     page,
     pageSize: PAGE_SIZE,
     total,
@@ -743,7 +758,7 @@ export async function reviewsRead(options: {
           all: own.length,
           waiting: own.filter((review) => inWaiting.has(review.cycleId)).length,
         }
-      : { all: read?.recent.total ?? 0, waiting: shown.length },
+      : { all: allTotal, waiting: shown.length },
     waiting: {
       units: across.units,
       reviews: across.waiting.length,

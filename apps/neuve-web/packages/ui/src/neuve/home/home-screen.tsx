@@ -146,7 +146,8 @@ function ReviewGroup({
   const rest = whole ? [] : ordered.slice(FIRST_ROW)
   return (
     <section aria-label={review.title} className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
+      {/* Pinned under the list bar while its cards scroll, above their links (z-10); the next review pushes it off. Like the bar, its paper reaches 2px past each side over the cards' rings. */}
+      <div className="sticky top-(--nv-list-bar-h,60px) z-15 flex flex-col gap-1 bg-paper shadow-[-2px_0_var(--nv-bg),2px_0_var(--nv-bg)]">
         <h4 className="m-0 text-[17px] leading-6 font-semibold tracking-[-0.01em] text-pretty">
           {review.title}
         </h4>
@@ -206,6 +207,26 @@ function ReviewGroup({
   )
 }
 
+/**
+ * Publishes the list bar's height to its section as `--nv-list-bar-h`, so
+ * each review's pinned heading sits right beneath it, however the bar wraps.
+ * A ref callback owns the ResizeObserver, so no effect is needed.
+ */
+function measureListBar(node: HTMLDivElement | null) {
+  const section = node?.parentElement
+  if (!node || !section || typeof ResizeObserver === "undefined") return
+  const observer = new ResizeObserver(([entry]) => {
+    if (!entry) return
+    const height = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height
+    section.style.setProperty("--nv-list-bar-h", `${Math.ceil(height)}px`)
+  })
+  observer.observe(node)
+  return () => {
+    observer.disconnect()
+    section.style.removeProperty("--nv-list-bar-h")
+  }
+}
+
 export type ClearHandler = (restore: boolean) => Promise<void>
 
 /**
@@ -217,9 +238,9 @@ const clearingAtom = atom<{ pending: boolean; failure?: string }>({
 })
 
 /**
- * "Clear" empties "Waiting on you" until later reviews run, while what
- * waits on you still counts above it; "Undo", offered while that clear still
- * empties the list, brings back what it hid. Nothing is deleted. A refused
+ * "Clear" empties both lists, "Waiting on you" and All, until later reviews
+ * run, while what waits on you still counts above them; "Undo", offered
+ * while that clear still empties the list shown, brings back what it hid. Nothing is deleted. A refused
  * one leaves the list as it was and says why beside the button.
  */
 function ClearButton({
@@ -271,7 +292,7 @@ export interface HomeScreenProps {
   data: HomeData
   /** Shows the list's other filter; the host moves to it (the page's address). */
   onFilterChange?: (filter: ReviewsFilter) => void
-  /** "Clear" on "Waiting on you", or its undo (`restore`); once recorded, the host reloads the list. */
+  /** "Clear" on either list, or its undo (`restore`); once recorded, the host reloads the list. */
   onClear?: ClearHandler
   /** What "Start a review" would review now, once the branch moved on. */
   start?: ReviewStart
@@ -327,7 +348,10 @@ function Home({
           className="flex scroll-mt-0 flex-col gap-6"
         >
           {/* The list's bar stays in view while the list scrolls. */}
-          <div className="sticky top-0 z-20 -my-3 flex flex-wrap items-center justify-between gap-3 bg-paper py-3">
+          <div
+            ref={measureListBar}
+            className="sticky top-0 z-20 -my-3 flex flex-wrap items-center justify-between gap-3 bg-paper py-3 shadow-[-2px_0_var(--nv-bg),2px_0_var(--nv-bg)]"
+          >
             <h2
               id="reviews-heading"
               className="m-0 text-[22px] font-semibold tracking-[-0.02em]"
@@ -339,12 +363,9 @@ function Home({
                   : "All reviews"}
             </h2>
             <div className="flex items-center gap-2">
-              {onClear &&
-                data.filter === "waiting" &&
-                !data.cycle &&
-                (data.cleared || data.total > 0) && (
-                  <ClearButton cleared={data.cleared} onClear={onClear} />
-                )}
+              {onClear && !data.cycle && (data.cleared || data.total > 0) && (
+                <ClearButton cleared={data.cleared} onClear={onClear} />
+              )}
               <Segmented
                 label="Show"
                 value={data.filter}

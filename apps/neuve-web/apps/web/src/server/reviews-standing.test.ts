@@ -693,9 +693,10 @@ test("a cycle's address reads that one review from Records, and its desk opens o
   }
 })
 
-test("a clear offers Undo only while it empties Waiting on you; a newer review offers Clear again", async () => {
+test("a clear empties both lists and offers Undo only while the list shown is empty; a newer review offers Clear again", async () => {
   // Why (22 November 2026, NEU-463): before this fix the page kept offering only Undo after a clear,
   // even once a newer review was listed, so clearing again took two presses (Undo, then Clear).
+  // The owner then decided one clear applies to both lists, All included (it had no Clear).
   const repo = mkdtempSync(join(tmpdir(), "reviews-cleared-"))
   const before = process.env[REPOSITORY_VARIABLE]
   try {
@@ -716,6 +717,12 @@ test("a clear offers Undo only while it empties Waiting on you; a newer review o
     expect(afterClear.data.cleared).toBe(true)
     // What waits on you still counts the review the clear hid.
     expect(afterClear.data.waiting.units).toBe(1)
+    // One clear applies to both lists.
+    const allAfterClear = await reviewsRead({ page: 1, filter: "all" })
+    if (allAfterClear.status !== "ready") throw new Error("no reviews read")
+    expect(allAfterClear.data.reviews).toEqual([])
+    expect(allAfterClear.data.cleared).toBe(true)
+    expect(allAfterClear.data.counts.all).toBe(0)
 
     // Requested after the clear, whatever the clock says now.
     const later = new Date(Date.parse(clear.occurredAt) + 1000).toISOString()
@@ -746,9 +753,9 @@ test("a clear offers Undo only while it empties Waiting on you; a newer review o
 
     const all = await reviewsRead({ page: 1, filter: "all" })
     if (all.status !== "ready") throw new Error("no reviews read")
-    expect(all.data.reviews.map((review) => review.id).sort()).toEqual(
-      [hidden.cycleId, newer.cycleId].sort()
-    )
+    expect(all.data.reviews.map((review) => review.id)).toEqual([newer.cycleId])
+    expect(all.data.cleared).toBeUndefined()
+    expect(all.data.counts.all).toBe(1)
   } finally {
     if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
     else process.env[REPOSITORY_VARIABLE] = before
