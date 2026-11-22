@@ -41,7 +41,8 @@ export const resolveStoreLocation = (repository: string) =>
       try: async () => {
         const child = Bun.spawn(
           ["git", "-C", repository, "rev-parse", "--git-common-dir"],
-          { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+          // A stalled git fails like one that refuses the repository (exit 143), so no caller waits on it.
+          { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 10_000 },
         );
         const [stdout, stderr, exitCode] = await Promise.all([
           new Response(child.stdout).text(),
