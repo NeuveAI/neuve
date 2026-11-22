@@ -368,7 +368,7 @@ describe.skipIf(process.platform !== "darwin")("the token route", () => {
     const result = await install(context, undefined, ["--dry-run"]);
     expect(result.code, result.output).toBe(0);
     expect(result.output).toContain(
-      `Release: v0.2.0-preview.1 (the newest release) of ${REPO}, downloaded with the token in GH_TOKEN or GITHUB_TOKEN, sent only to GitHub.`,
+      `Release: v0.2.0-preview.1 (the newest release) of ${REPO}, downloaded with the token in GH_TOKEN or GITHUB_TOKEN, sent only to GitHub; checked against SHA256SUMS before anything is installed.`,
     );
     expect(seen.map((request) => new URL(request.url).pathname)).toEqual([
       `/repos/${REPO}/releases`,
@@ -594,7 +594,7 @@ describe("the public route", () => {
     const result = await install(context, undefined, ["--dry-run"]);
     expect(result.code, result.output).toBe(0);
     expect(result.output).toContain(
-      `Release: the newest release of ${REPO} that isn't a preview, downloaded without a sign-in, from http://127.0.0.1:${publicFiles.port}.`,
+      `Release: the newest release of ${REPO} that isn't a preview, downloaded without a sign-in, from http://127.0.0.1:${publicFiles.port}; checked against SHA256SUMS before anything is installed.`,
     );
     expect(seen).toEqual([]);
   });

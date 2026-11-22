@@ -1598,7 +1598,7 @@ script=$1; shift; . "$script"
               await readFile(`${replacement}.calls`),
             );
             expect(failed.stderr).toContain(
-              "neuve install: Left the launchd agent dev.neuve.worker in place instead of undoing it. Its plist changed since this install registered it, or the plist is no longer safe to change.\n",
+              "  Left the launchd agent dev.neuve.worker in place instead of undoing it. Its plist changed since this install registered it, or the plist is no longer safe to change.\n",
             );
           },
           120_000,
@@ -4372,14 +4372,14 @@ shift
           expect(await readlink(rc)).toBe("managed-zshrc");
           if (originalTarget !== null) {
             expect(failed.stdout).toContain(
-              `neuve install: ${rc} isn't a plain file, so the installer left it alone.`,
+              `  ${rc} isn't a plain file, so the installer left it alone.`,
             );
             expect(await readFile(target)).toEqual(original);
             expect((await stat(target)).ino).toBe(originalTarget.ino);
           } else {
             expect(await lstat(target).catch(() => null)).toBeNull();
             expect(failed.stdout).toContain(
-              `neuve install: ${rc} links to a file that doesn't exist, so the installer left it alone.\nneuve install: Add this line to your shell startup file: export PATH="${context.prefix}/bin:$PATH"\n`,
+              `  ${rc} links to a file that doesn't exist, so the installer left it alone.\n  Add this line to your shell startup file: export PATH="${context.prefix}/bin:$PATH"\n`,
             );
           }
           expect(await stat(context.prefix).catch(() => null)).toBeNull();
@@ -4665,8 +4665,10 @@ shift
       expect(first.stdout).toContain(
         `In this terminal, the neuve command still runs ${otherCli}.`,
       );
-      expect(first.stdout.indexOf("Run exec $SHELL")).toBeLessThan(
-        first.stdout.indexOf("Next, in a repository, run neuve setup"),
+      expect(
+        first.stdout.indexOf("Open a new terminal, or run: exec $SHELL"),
+      ).toBeLessThan(
+        first.stdout.indexOf("Next, in your repository: neuve setup"),
       );
       // Forced: without the agent the same version again would change nothing.
       const second = await install(context, ["--force"]);
@@ -5285,7 +5287,7 @@ esac
         ]);
         success(upgraded);
         expect(upgraded.stdout).toContain(
-          "neuve install: The launchd agent already runs this install.\n",
+          "  The launchd agent already runs this install.\n",
         );
         expect(await readFile(plist)).toEqual(previousPlist);
         expect(await mutationCalls()).toEqual(previousCalls);

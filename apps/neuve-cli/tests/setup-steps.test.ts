@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { writeInstallation } from "../src/installation.ts";
 import { AGENT_PROGRAMS } from "../src/agent-programs.ts";
 import { agentLooks, SETUP_HELP, upgradeSetup } from "../src/setup.ts";
+import { plainScreen } from "../src/terminal.ts";
 import {
   machineSteps,
   machineStepsRecord,
@@ -67,7 +68,10 @@ const step = (
 const runner = async (
   record: string,
   steps: ReadonlyArray<SetupStep>,
-  overrides: Partial<StepsRun> = {},
+  {
+    isTerminal = true,
+    ...overrides
+  }: Partial<StepsRun> & { isTerminal?: boolean } = {},
 ) => {
   let said = "";
   const outcome = await runSteps({
@@ -75,11 +79,13 @@ const runner = async (
     record,
     mode: "upgrade",
     where: "the repository",
-    isTerminal: true,
     version: "0.3.0",
-    out: async (text) => {
-      said += text;
-    },
+    screen: plainScreen(
+      async (text) => {
+        said += text;
+      },
+      { canAsk: isTerminal },
+    ),
     now: () => new Date("2026-11-21T00:00:00.000Z"),
     ...overrides,
   });
@@ -135,9 +141,11 @@ test("an older record gains the step a new version adds and loses the ones it dr
   const first = await runner(record, steps);
   expect(ran).toEqual(["added"]);
   expect(undone).toBe(1);
-  expect(first.said).toContain("Removed the file Neuve wrote.");
   expect(first.said).toContain(
-    "Setup no longer writes another in the repository. This step has no undo, so what it did there is left as it is.",
+    "ok      Setup step   Removed the file Neuve wrote. (the repository)\n",
+  );
+  expect(first.said).toContain(
+    "ok      Setup step   setup no longer writes another; this step has no undo, so what it did is left as it is (the repository)\n",
   );
   expect(Object.keys(await written(record)).sort()).toEqual(["added", "kept"]);
   // The second run runs nothing, says nothing and leaves the record's bytes as they are.
@@ -171,8 +179,8 @@ test("a step that asks waits without a terminal, writes nothing, and is asked at
   const quiet = await runner(record, steps, { isTerminal: false });
   expect(ran).toEqual([]);
   expect(quiet.waiting.map((entry) => entry.id)).toEqual(["offer"]);
-  expect(quiet.said).toContain(
-    "Waiting in the repository for an answer at a terminal: setup does offer.",
+  expect(quiet.said).toBe(
+    "to do   Setup step   waiting for a yes at a terminal (the repository): neuve setup\n",
   );
   expect(await readFile(record, "utf8").catch(() => null)).toBe(null);
   expect((await pendingSteps(steps, record)).waiting).toHaveLength(1);
@@ -208,7 +216,9 @@ test("a record naming a step this build doesn't know, or a newer schema, or a da
     const record = join(directory, `${name}.json`);
     await writeFile(record, bytes);
     const outcome = await runner(record, steps);
-    expect(outcome.said, name).toContain("were left as they are");
+    expect(outcome.said, name).toContain(
+      "to do   Setup steps  left as they are (the repository): ",
+    );
     expect(outcome.said, name).toContain(
       name === "damaged" ? "is damaged" : "a newer Neuve wrote",
     );
@@ -329,15 +339,19 @@ test("the upgrade visits each repository set up here, skips one whose folder is 
       registry,
       machine: [{ ...step("machine-step", ran), scope: "machine" }],
       repository: (stateDirectory) => [step(`in ${stateDirectory}`, ran)],
-      isTerminal: false,
       version: "0.3.0",
-      out: async (text) => {
-        said += text;
-      },
+      screen: plainScreen(
+        async (text) => {
+          said += text;
+        },
+        { canAsk: false },
+      ),
     });
   await upgrade();
   expect(ran).toEqual(["machine-step", `in ${layout.directory}`]);
-  expect(said).toContain(`Skipped ${gone}: its folder is gone.`);
+  expect(said).toContain(
+    `skipped Repository   ${gone}: its folder is gone; Neuve's list of repositories still names it\n`,
+  );
   expect(said).toContain("in 1 repository set up here");
   expect(Object.keys(await written(machineStepsRecord(home)))).toEqual([
     "machine-step",
@@ -417,16 +431,18 @@ test("a repository whose steps stop is said so, the others still get theirs, and
         fails: stateDirectory.includes("/first/"),
       }),
     ],
-    isTerminal: false,
     version: "0.3.0",
-    out: async (text) => {
-      said += text;
-    },
+    screen: plainScreen(
+      async (text) => {
+        said += text;
+      },
+      { canAsk: false },
+    ),
   });
   expect(code).toBe(1);
   expect(ran).toEqual(["second"]);
   expect(said).toContain(
-    `Setup's steps stopped on ${paths[0]}: first was stopped.`,
+    `failed  Setup steps  stopped in ${paths[0]}: first was stopped. To finish them: neuve setup upgrade\n`,
   );
 });
 
@@ -450,15 +466,17 @@ test("the upgrade's own look is recorded as checked, and when it finds nothing i
           strangers: [],
         },
       ],
-      out: async (text) => {
+      screen: plainScreen(async (text) => {
         said += text;
-      },
+      }),
     });
     await runner(record, machineSteps(looks.look));
     return said;
   };
   const nothing = await run(false);
-  expect(nothing).toContain("neuve setup looks everywhere");
+  expect(nothing).toContain(
+    "to do   Agents       none found where run time looks; to look everywhere: neuve setup\n",
+  );
   expect(await readFile(record, "utf8").catch(() => null)).toBe(null);
   await run(true);
   expect((await written(record))["agent-programs"]).toMatchObject({
@@ -476,11 +494,13 @@ test("a list of repositories that can't be read is said, and the upgrade fails",
     registry,
     machine: [],
     repository: () => [],
-    isTerminal: false,
     version: "0.3.0",
-    out: async (text) => {
-      said += text;
-    },
+    screen: plainScreen(
+      async (text) => {
+        said += text;
+      },
+      { canAsk: false },
+    ),
   });
   expect(code).toBe(1);
   expect(said).toContain(
@@ -544,14 +564,18 @@ test("the summary names a machine or repository with a step still to do, as doct
       registry,
       machine: [machine],
       repository: () => [repository],
-      isTerminal: false,
       version: "0.3.0",
-      out: async (text) => {
-        said += text;
-      },
+      screen: plainScreen(
+        async (text) => {
+          said += text;
+        },
+        { canAsk: false },
+      ),
     });
     expect(said, where).not.toContain("are up to date");
-    expect(said, where).toContain(`Still to do: ${where}.`);
+    expect(said, where).toContain(
+      `still to do (${where.startsWith("this machine") ? "this machine" : repo}): neuve setup\n`,
+    );
     // Doctor says the same of each place.
     const machinePending = await pendingSteps(
       [machine],
@@ -642,11 +666,13 @@ test("a list of repositories that exists but is a folder is said to be unreadabl
     registry,
     machine: [],
     repository: () => [],
-    isTerminal: false,
     version: "0.3.0",
-    out: async (text) => {
-      said += text;
-    },
+    screen: plainScreen(
+      async (text) => {
+        said += text;
+      },
+      { canAsk: false },
+    ),
   });
   expect(code).toBe(1);
   expect(said).toContain(
@@ -679,12 +705,16 @@ test("a repository whose setup record can't be read is said, and counts as not u
     registry,
     machine: [],
     repository: () => [],
-    isTerminal: false,
     version: "0.3.0",
-    out: async (text) => {
-      said += text;
-    },
+    screen: plainScreen(
+      async (text) => {
+        said += text;
+      },
+      { canAsk: false },
+    ),
   });
-  expect(said).toContain(`Skipped ${repo}: its setup record can't be read`);
+  expect(said).toContain(
+    `to do   Repository   ${repo}: its setup record can't be read`,
+  );
   expect(said).not.toContain("are up to date");
 });

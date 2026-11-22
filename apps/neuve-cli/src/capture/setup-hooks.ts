@@ -25,7 +25,6 @@ import {
 } from "@neuve/records-core";
 import {
   agentsFlag,
-  describeFinding,
   findAgentPrograms,
   foundIds,
   installAdvice,
@@ -40,6 +39,14 @@ import {
 import { GIT_HOOKS, TRAILER_HOOK } from "./git-hooks.ts";
 import { Identity } from "@neuve/records-core/capture";
 import { setupStack } from "../stack-cli.ts";
+import { CLI_VERSION } from "../cli-version.ts";
+import { commandScreen, shown, type Mark } from "../terminal.ts";
+
+/** A program not found, as its own line says it after its name. */
+const missingText = (finding: Finding) =>
+  finding.problem === undefined
+    ? "not found"
+    : `looking for it failed (${finding.problem})`;
 
 export const SETUP_HOOKS_HELP = `Usage:
   neuve setup hooks [--repo <path>] [--agents claude-code,codex|none] [--command <executable>]
@@ -716,15 +723,17 @@ export const runSetupHooks = async (
   // Named, the person's choice. Otherwise the agent programs found here, and every one this
   // repository's capture.json already lists: a program not found adds nothing new and never takes
   // away what is there; only --agents removes one.
-  const notFound: string[] = [];
+  const notFound: Array<{ mark: Mark; label: string; text: string }> = [];
   const agents =
     agentsFlag(values.agents) ??
     (await (async () => {
       const earlier = await readCaptureConfig(location);
       if (earlier === undefined && (await exists(captureConfigPath(location))))
-        notFound.push(
-          `${captureConfigPath(location)} couldn't be read, so no earlier list of agents was kept; it is written again.`,
-        );
+        notFound.push({
+          mark: "needs",
+          label: "Capture",
+          text: `${shown(captureConfigPath(location))} couldn't be read, so no earlier list of agents was kept; it is written again`,
+        });
       const previous = earlier?.agents ?? [];
       const findings = await (
         options.programs ?? (() => findAgentPrograms("check"))
@@ -735,13 +744,17 @@ export const runSetupHooks = async (
         if (finding.found !== undefined) kept.push(id);
         else if (previous.includes(id)) {
           kept.push(id);
-          notFound.push(
-            `${describeFinding(finding)}\n${finding.program.name}'s capture is already set up, so it is kept; neuve setup hooks --agents names the agents to keep.`,
-          );
+          notFound.push({
+            mark: "done",
+            label: finding.program.name,
+            text: `${missingText(finding)}; its capture is already set up, so it is kept (--agents names the agents to keep)`,
+          });
         } else
-          notFound.push(
-            `${describeFinding(finding)}\nNo ${finding.program.name} hooks were written: ${installAdvice(finding)}, or name it with --agents.`,
-          );
+          notFound.push({
+            mark: "skipped",
+            label: finding.program.name,
+            text: `${missingText(finding)}; no hooks written: ${installAdvice(finding)}, or name it with --agents`,
+          });
       }
       return kept;
     })());
@@ -777,28 +790,34 @@ export const runSetupHooks = async (
       await installAgentHooks(hookFile(harness), harness, command, dryRun),
     );
 
-  const lines = [
-    `${dryRun ? "Would enable" : "Enabled"} capture in ${root}`,
-    `Hooks run: ${command}`,
-    ...changes.map((change) => `  ${change.path}: ${change.action}`),
-    ...notFound,
-  ];
-  if (agents.includes("codex"))
-    lines.push(
-      "Codex asks you to review and trust new hooks the next time it starts.",
-    );
-  // Stack sources (11.15): their own lines, so what is fetched and its caps are named.
-  lines.push(
-    ...(await setupStack({
-      root,
-      dryRun,
-      ...(values["no-stack"] === true ? { off: "--no-stack" as const } : {}),
-      ...(options.stackStore === undefined
-        ? {}
-        : { storeRoot: options.stackStore }),
-    })),
+  const screen = commandScreen({});
+  await screen.header(`neuve setup hooks ${CLI_VERSION}`);
+  const mark: Mark = dryRun ? "skipped" : "done";
+  await screen.step(
+    mark,
+    "Capture",
+    `${dryRun ? "dry run: would enable" : "enabled"} in ${shown(root)}; hooks run ${command}`,
   );
-  await Bun.write(Bun.stdout, `${lines.join("\n")}\n`);
+  await screen.detail(
+    changes.map((change) => `${change.path}: ${change.action}`),
+  );
+  for (const line of notFound)
+    await screen.step(line.mark, line.label, line.text);
+  if (agents.includes("codex"))
+    await screen.detail([
+      "Codex asks you to review and trust new hooks the next time it starts.",
+    ]);
+  // Stack sources (11.15): their own lines, so what is fetched and its caps are named.
+  const [first = "", ...rest] = await setupStack({
+    root,
+    dryRun,
+    ...(values["no-stack"] === true ? { off: "--no-stack" as const } : {}),
+    ...(options.stackStore === undefined
+      ? {}
+      : { storeRoot: options.stackStore }),
+  });
+  await screen.step(mark, "Stack sources", first);
+  await screen.detail(rest.map((line) => line.trim()));
   return 0;
 };
 

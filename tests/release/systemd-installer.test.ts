@@ -631,7 +631,7 @@ for (const shell of shells) {
     try {
       const installed = await run(c.args(shell), c.env);
       success(installed);
-      expect(installed.stdout).toContain(`neuve install: ${INSTALLED}\n`);
+      expect(installed.stdout).toContain(`  ${INSTALLED}\n`);
       const service = await readFile(c.paths.service, "utf8");
       const timer = await readFile(c.paths.timer, "utf8");
       expect(service.toString()).toBe(
@@ -676,9 +676,7 @@ for (const shell of shells) {
         );
         success(result);
         if (kind !== "opt-out")
-          expect(result.stdout).toContain(
-            `neuve install: ${NO_USER_SYSTEMD}\n`,
-          );
+          expect(result.stdout).toContain(`  ${NO_USER_SYSTEMD}\n`);
         expect(await exists(join(c.prefix, "bin/neuve"))).toBe(true);
         expect(await exists(c.paths.service)).toBe(false);
         expect(mutations(await c.calls())).toEqual([]);

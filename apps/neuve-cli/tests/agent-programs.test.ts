@@ -30,6 +30,7 @@ import {
 import { runSetupHooks } from "../src/capture/setup-hooks.ts";
 import { inspectDoctor } from "../src/doctor.ts";
 import { setUpAgentPrograms, switches } from "../src/setup.ts";
+import { plainScreen } from "../src/terminal.ts";
 import { runHook } from "../src/capture/hook-cli.ts";
 import { offerSkillsAfterSetup } from "../src/skills-cli.ts";
 import { found } from "./fixtures/agent-programs.ts";
@@ -83,22 +84,27 @@ const codexMissing = (strangers: ReadonlyArray<string> = []): Finding => ({
 
 /** An offer context that records what it said and asked; a terminal unless told otherwise. */
 const offer = (
-  answer: string | null,
+  answer: string | null | ReadonlyArray<string | null>,
   path: string,
   isTerminal = true,
 ): OfferContext & { said: () => string; asked: string[] } => {
   let said = "";
   const asked: string[] = [];
+  const answers = Array.isArray(answer) ? [...answer] : [answer];
   return {
-    isTerminal,
+    screen: plainScreen(
+      async (text) => {
+        said += text;
+      },
+      {
+        canAsk: isTerminal,
+        ask: async (question) => {
+          asked.push(question);
+          return answers.length > 1 ? answers.shift()! : (answers[0] ?? null);
+        },
+      },
+    ),
     path,
-    ask: async (question) => {
-      asked.push(question);
-      return answer;
-    },
-    out: async (text) => {
-      said += text;
-    },
     said: () => said,
     asked,
   };
@@ -125,9 +131,9 @@ test("with only Claude Code here, setup says Codex was not found, prints its com
   );
   expect(ids).toEqual(["claude-code"]);
   expect(context.asked).toEqual([]);
-  expect(context.said()).toContain("Codex was not found.");
+  // Claude Code is enough, so the missing Codex is left out, not left for the person.
   expect(context.said()).toContain(
-    `To install Codex: npm install -g @openai/codex (${codex.page}). Nothing was installed: there is no terminal to ask.`,
+    "skipped Codex        not found: npm install -g @openai/codex\n",
   );
 
   // Hooks: only Claude Code's settings are written; Codex's file is never created.
@@ -181,15 +187,16 @@ test("with only Claude Code here, setup says Codex was not found, prints its com
   expect(existsSync(join(home, ".agents"))).toBe(false);
 });
 
-test("answering no, or nothing, installs nothing and runs nothing", async () => {
+test("answering no, or nothing, installs nothing and runs nothing; an answer that is neither is asked again", async () => {
   const npm = await fakeNpm(0);
-  for (const answer of ["n", "", null, "yes please"]) {
+  const question = "Install Codex with npm install -g @openai/codex? [y/N] ";
+  for (const answer of ["n", "", null, ["yes please", "n"]]) {
     const context = offer(answer, npm.bin);
     expect(await offerInstall(codexMissing(), context)).toBe(false);
-    expect(context.asked).toEqual([
-      `Install Codex with npm install -g @openai/codex? Its own page is ${codex.page}. [y/N] `,
-    ]);
-    expect(context.said()).toContain("Not installed.");
+    expect(context.asked).toEqual(
+      Array.isArray(answer) ? [question, question] : [question],
+    );
+    expect(context.said()).toContain(`Codex        not found (${codex.page})`);
   }
   expect(await npm.args()).toBeUndefined();
 });
@@ -211,7 +218,8 @@ test("answering yes runs only the npm package's own install, then setup looks fo
     expect(await npm.args()).toEqual([...args]);
     expect(looked).toBe(2);
     expect(ids).toEqual([program.id]);
-    expect(context.said()).toContain(`${program.name} at /test/bin/`);
+    expect(context.said()).toContain(`ok      ${program.name}`);
+    expect(context.said()).toContain("/test/bin/");
   }
 });
 
@@ -219,14 +227,14 @@ test("npm absent or refusing: setup says so and nothing else is changed", async 
   const absent = offer("y", await scratch());
   expect(await offerInstall(codexMissing(), absent)).toBe(false);
   expect(absent.said()).toContain(
-    "npm isn't on the PATH, so Codex wasn't installed and nothing was changed.",
+    "failed  Codex        not installed: npm isn't on the PATH. Install npm, then run: npm install -g @openai/codex",
   );
   const npm = await fakeNpm(1);
   const refused = offer("y", npm.bin);
   expect(await offerInstall(codexMissing(), refused)).toBe(false);
   expect(await npm.args()).toEqual(["install", "-g", "@openai/codex"]);
   expect(refused.said()).toContain(
-    "npm did not install Codex (it exited 1); setup changed nothing else.",
+    "not installed: npm exited 1; nothing else was changed",
   );
 });
 
@@ -248,13 +256,13 @@ test("an unrelated codex on the PATH: no offer when Codex was found elsewhere, a
   ).toEqual(["codex"]);
   expect(context.asked).toEqual([]);
   expect(context.said()).toContain(
-    `${stranger} (on the PATH): did not answer as Codex, skipped`,
+    "ok      Codex        0.0.1 · /opt/apps/Example.app/Contents/Resources/codex/bin/codex\n",
   );
 
   const missing = offer("n", "");
   await offerInstall(codexMissing([stranger]), missing);
   expect(missing.said()).toContain(
-    `Another program with its name is on the PATH (${stranger}), and it did not answer as Codex.`,
+    `Another program named like it is on the PATH (${stranger}) and did not answer as Codex; npm may refuse or replace it.`,
   );
 });
 
@@ -381,7 +389,7 @@ test("setup stores the Codex it finds as the account's program, asking the store
   const again = discovery(app);
   const look = await lookForCodex("find", { home, findCodex: again.find });
   expect(again.asked[0]?.setting).toBe(app);
-  expect(look.lines).toContain(`Stored ${app} as codex's program.`);
+  expect(look.stored?.path).toBe(app);
 });
 
 test("rerunning setup hooks with Codex not found keeps both agents captured; only --agents removes one", async () => {
@@ -499,7 +507,7 @@ test("a capture.json that can't be read is written again, and setup hooks says s
     Bun.write = write;
   }
   expect(printed).toContain(
-    `${config} couldn't be read, so no earlier list of agents was kept; it is written again.`,
+    `capture.json couldn't be read, so no earlier list of agents was kept; it is written again\n`,
   );
   expect(
     (JSON.parse(await readFile(config, "utf8")) as { agents: string[] }).agents,
@@ -543,7 +551,8 @@ test("a skill already installed is kept up to date when its program isn't found"
     agents: ["claude-code"],
     context: context(["claude-code"], "n"),
   });
-  expect(said).toContain("Codex (user)");
+  // Codex's copy is current, so only Claude Code's would change.
+  expect(said).toContain("for Claude Code: 8 files in ");
 });
 
 test("the install offer asks once per machine; a yes is remembered only once npm installed it; --ask-install-again asks again", async () => {
@@ -588,8 +597,12 @@ test("the install offer asks once per machine; a yes is remembered only once npm
 test("setup's command line: --ask-install-again asks again, and --agents only says which programs", () => {
   expect(switches(["--ask-install-again", "--repo", "/r"])).toEqual({
     askAgain: true,
+    json: false,
   });
-  expect(switches(["--agents", "codex"])).toEqual({ askAgain: false });
+  expect(switches(["--agents", "codex", "--json"])).toEqual({
+    askAgain: false,
+    json: true,
+  });
 });
 
 test("the hook says in its log when capture.json can't be read, and captures nothing", async () => {

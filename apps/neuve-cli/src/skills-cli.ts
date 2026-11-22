@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import {
   mkdir,
   readdir,
@@ -34,6 +34,13 @@ import {
 } from "./agent-programs.ts";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
 import { CLI_VERSION } from "./cli-version.ts";
+import {
+  isStyled,
+  makeScreen,
+  readLine,
+  shown,
+  type Screen,
+} from "./terminal.ts";
 import {
   SKILL_NAME,
   lstatIfPresent,
@@ -117,6 +124,11 @@ export type SkillsContext = Readonly<{
   programs: () => Promise<ReadonlyArray<Finding>>;
   /** Whether a person can answer a question: standard input and output are a terminal. */
   isTerminal: boolean;
+  /**
+   * Where the offer speaks and asks, in the look setup uses; built from `out` and `ask`, in plain
+   * lines, when absent. Its own text is made terminal-safe before it is printed.
+   */
+  screen?: Screen;
   /** Prints the question and reads one line; null at the end of input. */
   ask: (question: string) => Promise<string | null>;
   out: (text: string) => Promise<void>;
@@ -172,43 +184,6 @@ export const findSkillSource = async (
       };
   }
   return { found: false, looked };
-};
-
-/**
- * One line from standard input, read with blocking reads of fd 0. Bun's own stdin stream watches
- * the descriptor with kqueue, which macOS refuses for /dev/tty (EINVAL), and the installer points
- * the offer's input at /dev/tty so it can ask even when it was piped in from curl.
- */
-const readLine = async (question: string) => {
-  await Bun.write(Bun.stdout, question);
-  const bytes: Array<number> = [];
-  const byte = new Uint8Array(1);
-  let ended = false;
-  for (;;) {
-    let read: number;
-    try {
-      read = readSync(0, byte, 0, 1, null);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        "code" in error &&
-        error.code === "EAGAIN"
-      ) {
-        Bun.sleepSync(20);
-        continue;
-      }
-      throw error;
-    }
-    if (read === 0) {
-      ended = true;
-      break;
-    }
-    if (byte[0] === 0x0a) break;
-    bytes.push(byte[0] ?? 0);
-  }
-  // The end of input with nothing typed is no answer at all.
-  if (ended && bytes.length === 0) return null;
-  return new TextDecoder().decode(new Uint8Array(bytes)).replace(/\r$/, "");
 };
 
 export const defaultSkillsContext = (): SkillsContext => {
@@ -892,8 +867,6 @@ const requireSource = async (context: SkillsContext) => {
 const names = (plans: ReadonlyArray<TargetPlan>) =>
   [...new Set(plans.map((plan) => agentName(plan.target.agent)))].join(" and ");
 
-const LATER = "To install the skill later, run neuve skills install.";
-
 /** Plans and, unless refused or asked not to, installs; returns the exit code. */
 const install = async (
   context: SkillsContext,
@@ -910,6 +883,7 @@ const install = async (
   const plans = await Promise.all(
     targets.map((target) => planInstall(target, bundle)),
   );
+  if (mode === "offer") return offer(context, plans, bundle);
   const refused = plans.some((plan) => plan.refusals.length > 0);
   const lines = [
     `The Neuve skill ${bundle.version}, which teaches an agent to use Neuve:`,
@@ -918,8 +892,7 @@ const install = async (
   await context.out(`${lines.join("\n")}\n`);
   if (refused) {
     await context.out("Nothing was installed.\n");
-    // The offer runs at the end of another command and never fails it.
-    return mode === "offer" ? 0 : 1;
+    return 1;
   }
   if (plans.every((plan) => plan.current)) {
     await context.out(
@@ -927,31 +900,108 @@ const install = async (
     );
     return 0;
   }
-  // Only the agents whose copy would change are named in the question and the result.
+  // Only the agents whose copy would change are named in the result.
   const changing = plans.filter((plan) => !plan.current);
   if (mode === "dry-run") {
     await context.out("Dry run: nothing was written.\n");
     return 0;
   }
-  if (mode === "offer") {
-    if (!context.isTerminal) {
-      await context.out(
-        `Not installed: there is no terminal to ask. ${LATER}\n`,
-      );
-      return 0;
-    }
-    const answer = await context.ask(
-      `Install the Neuve skill for ${names(changing)}? [y/N] `,
-    );
-    if (!/^\s*y(es)?\s*$/i.test(answer ?? "")) {
-      await context.out(`Not installed. ${LATER}\n`);
-      return 0;
-    }
-  }
   const now = context.now();
   for (const plan of changing) await executeInstall(plan, bundle, now);
   await context.out(
     `Installed the Neuve skill ${bundle.version} for ${names(changing)}. New agent sessions load it.\n`,
+  );
+  return 0;
+};
+
+/**
+ * The offer, at the end of setup or the install script: one line naming the version, the agents
+ * and where the files go (their count), then the question, default
+ * no. Without a terminal it asks nothing and gives the command. It never fails the command it
+ * ends.
+ */
+const offer = async (
+  context: SkillsContext,
+  plans: ReadonlyArray<TargetPlan>,
+  bundle: SkillBundle,
+) => {
+  const { version } = bundle;
+  const screen =
+    context.screen ??
+    makeScreen({
+      out: context.out,
+      canAsk: context.isTerminal,
+      styled: false,
+      ask: context.ask,
+    });
+  const safe = PacketView.terminalSafe;
+  const label = "Neuve skill";
+  if (plans.some((plan) => plan.refusals.length > 0)) {
+    await screen.step(
+      "failed",
+      label,
+      "not installed: a folder it would write isn't safe to change",
+    );
+    await screen.detail(
+      plans.flatMap((plan) =>
+        plan.refusals.map((refusal) =>
+          safe(`${shown(plan.target.folder)}: ${refusal}`),
+        ),
+      ),
+    );
+    return 0;
+  }
+  if (plans.every((plan) => plan.current)) {
+    await screen.step(
+      "done",
+      label,
+      `${version} for ${names(plans)}, up to date`,
+    );
+    return 0;
+  }
+  const changing = plans.filter((plan) => !plan.current);
+  const counts = [...new Set(changing.map((plan) => plan.steps.length))];
+  const folders = changing
+    .map((plan) => safe(shown(plan.target.folder)))
+    .join(" and ");
+  const where =
+    counts.length === 1
+      ? `${counts[0]} files${changing.length > 1 ? " each" : ""} in ${folders}`
+      : changing
+          .map(
+            (plan) =>
+              `${plan.steps.length} files in ${safe(shown(plan.target.folder))}`,
+          )
+          .join(", ");
+  // Without a terminal nothing is asked: one line, with the command that installs it after a yes.
+  await screen.step(
+    "needs",
+    label,
+    screen.canAsk
+      ? `${version} for ${names(changing)}: ${where}`
+      : `${version} for ${names(changing)} (${where}), not installed without a yes`,
+    screen.canAsk ? undefined : "neuve skills install",
+  );
+  if (!screen.canAsk) return 0;
+  if (
+    (await screen.confirm(
+      `Install the Neuve skill for ${names(changing)}?`,
+    )) !== true
+  ) {
+    await screen.step(
+      "skipped",
+      label,
+      "not installed; to add it later",
+      "neuve skills install",
+    );
+    return 0;
+  }
+  const now = context.now();
+  for (const plan of changing) await executeInstall(plan, bundle, now);
+  await screen.step(
+    "done",
+    label,
+    `${version} installed for ${names(changing)}; new agent sessions load it`,
   );
   return 0;
 };
@@ -1241,7 +1291,6 @@ export const offerSkillsAfterSetup = async (
     const agents = [...input.agents, ...installed];
     if (agents.length === 0)
       return { reason: "no agent program was found to offer it to" };
-    await context.out("\n");
     await install(
       context,
       agents.map((agent) => ({
@@ -1295,7 +1344,20 @@ export const runSkillsCli = async (
   given: SkillsContext = defaultSkillsContext(),
 ): Promise<number> => {
   try {
-    return await runCommand(args, guarded(given));
+    return await runCommand(
+      args,
+      guarded({
+        ...given,
+        screen:
+          given.screen ??
+          makeScreen({
+            out: given.out,
+            styled: isStyled(process.stdout),
+            canAsk: given.isTerminal,
+            ask: given.ask,
+          }),
+      }),
+    );
   } catch (error) {
     // A refusal can name a path from a repository; it leaves through the same filter as output.
     throw new Error(PacketView.terminalSafe(message(error)));

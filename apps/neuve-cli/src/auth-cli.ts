@@ -169,7 +169,7 @@ const withAccounts = async <A>(
           ),
         );
       }),
-    ).pipe(Effect.provide(stderrLogs)),
+    ).pipe(Effect.provide(personLogs)),
   );
 };
 
@@ -200,6 +200,8 @@ export interface CodexLook {
   readonly strangers: ReadonlyArray<string>;
   /** The path stored for the account, when it no longer answers as Codex. */
   readonly stale?: string;
+  /** In `find`: the path stored as the account's program, and the account's checked status. */
+  readonly stored?: { readonly path: string; readonly account: AccountStatus };
 }
 
 const WHERE = {
@@ -290,7 +292,7 @@ export const lookForCodex = async (
           environment,
           setting: AccountStore.programPath(home, name),
           scan: false,
-        }).pipe(Effect.provide(stderrLogs)),
+        }).pipe(Effect.provide(personLogs)),
       ),
       false,
     );
@@ -340,11 +342,7 @@ const findAndStore = (
     // Said once it is saved, not before.
     return {
       ...look,
-      lines: [
-        ...look.lines,
-        `Stored ${path} as ${name}'s program.`,
-        accountDescription(yield* statuses.check(name)),
-      ],
+      stored: { path, account: yield* statuses.check(name) },
     } satisfies CodexLook;
   });
 
@@ -507,7 +505,18 @@ const runAccountCommand = async (
               (yield* Effect.promise(() => import("@neuve/harness/runtimes")))
                 .findCodexProgram,
           );
-          yield* output(["Looked for Codex:", ...look.lines].join("\n"));
+          yield* output(
+            [
+              "Looked for Codex:",
+              ...look.lines,
+              ...(look.stored === undefined
+                ? []
+                : [
+                    `Stored ${look.stored.path} as ${name.data}'s program.`,
+                    accountDescription(look.stored.account),
+                  ]),
+            ].join("\n"),
+          );
           return look.found === undefined ? 1 : 0;
         }
         yield* Effect.try({
@@ -651,15 +660,31 @@ const runAccountCommand = async (
 };
 
 /**
- * A runtime's log lines (a candidate program skipped, an effort level left out) go to standard
- * error, so what these commands print, `--json` included, stays the account's alone.
+ * A runtime's log lines reach a person only as a sentence meant for them: a warning that carries
+ * `advice` (Codex's own word on an unsupported version) prints that advice, and an error its
+ * message. The rest (a candidate program skipped, an effort level left out) restates what the
+ * command already says, or matters only to Neuve's own code; one-off commands keep no log file, so
+ * it is dropped. Everything goes to standard error, so what these commands print, `--json`
+ * included, stays the account's alone.
  */
-const stderrLogs = Logger.layer([
+const personLogs = Logger.layer([
   Logger.make(({ logLevel, message }) => {
+    const parts = Array.isArray(message) ? message : [message];
+    const advice = parts
+      .map((part) =>
+        typeof part === "object" && part !== null && "advice" in part
+          ? part.advice
+          : undefined,
+      )
+      .find((part): part is string => typeof part === "string");
+    const sentence =
+      advice ??
+      (logLevel === "Error" || logLevel === "Fatal"
+        ? parts.find((part): part is string => typeof part === "string")
+        : undefined);
+    if (sentence === undefined) return;
     try {
-      process.stderr.write(
-        `neuve: ${String(logLevel).toLowerCase()}: ${JSON.stringify(message)}\n`,
-      );
+      process.stderr.write(`neuve: ${sentence}\n`);
     } catch {}
   }),
 ]);

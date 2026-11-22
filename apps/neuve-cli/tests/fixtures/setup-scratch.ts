@@ -118,6 +118,8 @@ export const scratch = async (parent = tmpdir()) => {
         // These tests are about setup itself; the agent programs have their own.
         "--agents",
         "none",
+        // The record on standard output, the lines on standard error.
+        "--json",
       ],
       extra,
     );

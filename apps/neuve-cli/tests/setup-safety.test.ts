@@ -59,7 +59,7 @@ test.skipIf(prerequisite.skip)(
     for (const round of [1, 2]) {
       const { stderr, code } = await setup();
       expect({ round, code }, stderr).toEqual({ round, code: 0 });
-      expect(stderr).toStartWith(
+      expect(stderr).toContain(
         `An old neuve/ folder was left in place at ${folder}: its config.json isn't Neuve's setup record.\n`,
       );
       expect(await snapshot()).toEqual(before);
@@ -85,7 +85,7 @@ test.skipIf(prerequisite.skip)(
     await commit("b.ts", "export const b = 2;\n");
     const tracked = await setup();
     expect(tracked.code, tracked.stderr).toBe(0);
-    expect(tracked.stderr).toStartWith(
+    expect(tracked.stderr).toContain(
       `An old neuve/ folder was left in place at ${folder}: Git tracks`,
     );
     expect(git("status", "--porcelain")).toBe("");
@@ -218,7 +218,7 @@ test.skipIf(prerequisite.skip)(
     const before = await snapshot(folder);
     const done = await setup();
     expect(done.code, done.stderr).toBe(0);
-    expect(done.stderr).toStartWith(
+    expect(done.stderr).toContain(
       `An old neuve/ folder was left in place at ${folder}: ${join(folder, "initial-index.json")} isn't an index setup wrote.\n`,
     );
     expect(await snapshot(folder)).toEqual(before);
@@ -240,7 +240,7 @@ test.skipIf(prerequisite.skip)(
     const before = await snapshot(folder);
     const done = await setup();
     expect(done.code, done.stderr).toBe(0);
-    expect(done.stderr).toStartWith(
+    expect(done.stderr).toContain(
       `An old neuve/ folder was left in place at ${folder}: it holds notes.md, which setup didn't write.\n`,
     );
     expect(await snapshot(folder)).toEqual(before);
@@ -374,6 +374,7 @@ test.skipIf(prerequisite.skip)(
       ENGINE,
       "--agents",
       "none",
+      "--json",
     ]);
     expect(done.code, done.stderr).toBe(0);
     expect(JSON.parse(done.stdout).initialIndexStatus).toBe("ok");

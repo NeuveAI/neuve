@@ -15,11 +15,11 @@ import {
 } from "@neuve/runtime";
 import { Settings } from "../../../packages/harness/src/settings.ts";
 import { checkClaudeSignIn } from "../src/auth-cli.ts";
+import { plainScreen } from "../src/terminal.ts";
 import {
   claudeSignInStep,
   ROUTE_CHOICES,
   ROUTE_QUESTION,
-  routeAnswer,
 } from "../src/setup.ts";
 
 const homes: string[] = [];
@@ -88,40 +88,32 @@ const step = async (probed: SignInState | "not-installed") => {
   return { ...claudeSignInStep(status), calls };
 };
 
-const login = [
-  "  1. Sign in to Claude Code with your Claude subscription:",
-  "       claude auth login",
-];
-
 test("a signed-in Claude Code is ready, with no sign-in command, checked once through the built-in account", async () => {
   expect(await step({ state: "signed-in" })).toEqual({
     status: "ok",
     detail: "Claude Code is signed in",
-    lines: ["  1. Ready: Claude Code is signed in."],
     calls: ["probe:claude"],
   });
 });
 
-test("Claude Code that isn't signed in names claude auth login first", async () => {
+test("Claude Code that isn't signed in names claude auth login", async () => {
   const result = await step({
     state: "not-signed-in",
     hint: { kind: "command", command: "claude auth login" },
   });
   expect(result).toMatchObject({
     status: "missing",
-    detail: "Claude Code isn't signed in",
-    lines: login,
+    detail: "sign in to Claude Code with your Claude subscription",
+    command: "claude auth login",
   });
 });
 
 test("a missing Claude Code is installed before the sign-in", async () => {
   expect(await step("not-installed")).toEqual({
     status: "missing",
-    detail: "Claude Code isn't installed: there's no claude on PATH",
-    lines: [
-      "  1. Install Claude Code, then sign in to it with your Claude subscription:",
-      "       claude auth login",
-    ],
+    detail:
+      "Claude Code isn't installed: there's no claude on PATH. Install it, then",
+    command: "claude auth login",
     calls: [],
   });
 });
@@ -130,24 +122,87 @@ test("a check that couldn't run points at the status command", () => {
   expect(claudeSignInStep(undefined)).toMatchObject({
     status: "missing",
     detail:
-      "Neuve couldn't check the Claude Code sign-in. neuve auth status claude --check checks it again, without spending usage",
+      "Neuve couldn't check the Claude Code sign-in; to check again without spending usage",
+    command: "neuve auth status claude --check",
   });
 });
 
-test("the question offers the three routes, and each answer is a route the settings accept", () => {
-  expect(ROUTE_QUESTION).toBe(
-    "How should reviews sign in?\n  1. ChatGPT\n  2. An Anthropic API key\n  3. Your Claude subscription, through Claude Code\nType 1, 2 or 3: ",
+test("the question offers the three routes, asks again until an answer is one of them, and each is a route the settings accept", async () => {
+  const asked: string[] = [];
+  let said = "";
+  const answers = ["y", "4", "claude please", "2", "1"];
+  const screen = plainScreen(
+    async (text) => {
+      said += text;
+    },
+    {
+      canAsk: true,
+      ask: async (question) => {
+        asked.push(question);
+        return answers.shift() ?? null;
+      },
+    },
   );
-  expect(["1", "2", "3", " 3 "].map(routeAnswer)).toEqual([
-    "openai",
+  const choices = ROUTE_CHOICES.map((choice) => ({
+    value: choice.route,
+    label: choice.label,
+  }));
+  const fallback = { label: "decide later" };
+  expect(await screen.choose(ROUTE_QUESTION, choices, fallback)).toBe(
     "anthropic",
-    "claude",
-    "claude",
-  ]);
-  for (const answer of ["", "0", "4", "claude", "1.5"])
-    expect(routeAnswer(answer)).toBeUndefined();
+  );
+  expect(said).toStartWith(
+    "How should reviews sign in?\n  1. ChatGPT\n  2. An Anthropic API key\n  3. Your Claude subscription, through Claude Code\n",
+  );
+  // The three answers that weren't a choice were asked again, and the one after them is untouched.
+  expect(asked).toHaveLength(4);
+  expect(answers).toEqual(["1"]);
+  // Enter, or the end of input, decides later.
+  for (const answer of ["", null]) {
+    const later = plainScreen(async () => {}, {
+      canAsk: true,
+      ask: async () => answer,
+    });
+    expect(await later.choose(ROUTE_QUESTION, choices, fallback)).toBe(
+      undefined,
+    );
+  }
   for (const { route } of ROUTE_CHOICES)
     expect(Settings.safeParse({ version: 1, review: { route } }).success).toBe(
       true,
     );
+});
+
+// Why: the skill and install offers show a needs-you line, then ask. The answer settles it, so a
+// run whose questions were all answered ends ready; a needs-you line nothing settles does not.
+test("a question answered settles the line before it, and an unsettled one leaves setup not finished", async () => {
+  const run = async (answer: string | undefined) => {
+    let said = "";
+    const screen = plainScreen(
+      async (text) => {
+        said += text;
+      },
+      { canAsk: true, ask: async () => "n" },
+    );
+    await screen.step("needs", "Neuve skill", "0.2.1 for Codex: 8 files");
+    if (answer !== undefined) {
+      expect(await screen.confirm("Install the Neuve skill for Codex?")).toBe(
+        false,
+      );
+      await screen.step(
+        "skipped",
+        "Neuve skill",
+        "not installed; to add it later",
+        "neuve skills install",
+      );
+    }
+    await screen.closing({ next: "neuve review HEAD~1..HEAD" });
+    return said;
+  };
+  expect(await run("n")).toEndWith(
+    "\nNeuve is ready.\n  Next: neuve review HEAD~1..HEAD\n",
+  );
+  expect(await run(undefined)).toEndWith(
+    "\nNot finished: see the lines above.\n",
+  );
 });

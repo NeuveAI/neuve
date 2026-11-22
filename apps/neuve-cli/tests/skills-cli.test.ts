@@ -396,8 +396,9 @@ test("an offer without a terminal writes nothing and says how to install later",
   const h = await harness(realSkill);
   expect(await h.run(["install", "--offer"])).toBe(0);
   expect(await tree(h.home)).toEqual({});
-  expect(h.output()).toContain("Not installed: there is no terminal to ask.");
-  expect(h.output()).toContain("neuve skills install");
+  expect(h.output()).toContain(
+    "), not installed without a yes: neuve skills install\n",
+  );
 });
 
 test("an offer at a terminal installs only on yes, and defaults to no", async () => {
@@ -740,7 +741,7 @@ test("the offer names only the agents whose copy would change, and doctor quotes
   ).toBe(0);
   expect(asked).toEqual(["Install the Neuve skill for Claude Code? [y/N] "]);
   expect(h.output()).toContain(
-    "Installed the Neuve skill 0.1.0 for Claude Code. New agent sessions load it.",
+    "ok      Neuve skill  0.1.0 installed for Claude Code; new agent sessions load it\n",
   );
 
   const repository = join(await scratch("skills-doctor"), "Sam's repo");
@@ -1072,7 +1073,9 @@ test.skipIf(!existsSync("/usr/bin/expect"))(
       expect(code, output).toBe(0);
       expect(output).not.toContain("EINVAL");
       expect(output).toContain(
-        installed ? "Installed the Neuve skill" : "Not installed.",
+        installed
+          ? " installed for Codex; new agent sessions load it"
+          : "not installed; to add it later",
       );
       expect(existsSync(join(home, ".agents/skills/neuve/SKILL.md"))).toBe(
         installed,

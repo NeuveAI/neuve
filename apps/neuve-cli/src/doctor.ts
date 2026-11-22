@@ -35,6 +35,7 @@ import {
 } from "./setup-steps.ts";
 import { defaultHookFile, inspectCapture } from "./capture/setup-hooks.ts";
 import { quote } from "./shell-quote.ts";
+import { commandScreen } from "./terminal.ts";
 import { inspectSkillForDoctor } from "./skills-cli.ts";
 import {
   findAgentPrograms,
@@ -65,9 +66,6 @@ const ok = (check: string, detail: string): DoctorCheck => ({
   status: "ok",
   detail,
 });
-
-export const formatDoctorCheck = (line: DoctorCheck) =>
-  `${line.status.padEnd(7)} ${line.check}: ${line.detail}${line.fix === undefined ? "" : `\n        Fix: ${line.fix}`}`;
 
 const run = async (argv: readonly string[]) => {
   const child = Bun.spawn([...argv], {
@@ -749,11 +747,24 @@ export const runDoctor = async (args: readonly string[], version: string) => {
     repository: values.repo ?? process.cwd(),
     version,
   });
-  await Bun.write(
-    Bun.stdout,
-    values.json === true
-      ? `${JSON.stringify(result)}\n`
-      : `${result.checks.map(formatDoctorCheck).join("\n")}\n`,
-  );
+  if (values.json === true) {
+    await Bun.write(Bun.stdout, `${JSON.stringify(result)}\n`);
+    return result.exitCode;
+  }
+  // The same look as setup: a header, then one line per check, each fix under its check.
+  const screen = commandScreen({});
+  await screen.header(`neuve doctor ${version}`);
+  for (const line of result.checks) {
+    await screen.step(
+      line.status === "ok"
+        ? "done"
+        : line.status === "missing"
+          ? "failed"
+          : "needs",
+      line.check,
+      line.detail,
+    );
+    if (line.fix !== undefined) await screen.detail([`Fix: ${line.fix}`]);
+  }
   return result.exitCode;
 };

@@ -1,16 +1,17 @@
 import { checkSignIn } from "./doctor.ts";
 import { writePrivateEnvironment } from "./private-environment.ts";
-import { REVIEW_DESK_COMMAND } from "./review-desk-config.ts";
 import { quote } from "./shell-quote.ts";
-import { defaultSkillsContext } from "./skills-cli.ts";
+import { defaultSkillsContext, type SkillsContext } from "./skills-cli.ts";
+import { commandScreen, shown, type Screen } from "./terminal.ts";
 import {
   AGENT_IDS,
   agentsFlag,
-  describeFinding,
   findAgentPrograms,
   foundIds,
   machineOffers,
   offerInstall,
+  summary,
+  type Finding,
   type LookForPrograms,
   type OfferContext,
 } from "./agent-programs.ts";
@@ -35,7 +36,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { Effect } from "effect";
 import { Registry } from "@neuve/records-core";
@@ -96,7 +97,7 @@ const flagsSchema = z
   })
   .strict();
 
-export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|anthropic|claude] [--agents claude-code,codex|none] [--ask-install-again] [--graph-binary <path>] [--cli-binary <path>] [--no-skills]
+export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|anthropic|claude] [--agents claude-code,codex|none] [--ask-install-again] [--graph-binary <path>] [--cli-binary <path>] [--no-skills] [--json]
   Set Neuve up in a Git repository (the current one by default): record this neuve and the Graph
   engine beside it, and check that the engine can work on the repository. It keeps its state with
   the repository's Records, in <git common directory>/neuve/setup/, and writes nothing in the
@@ -113,7 +114,7 @@ export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|an
   started once as its app server to ask its version. The first that answers as Codex is stored
   as the codex account's program. --agents names which to look for, or none.
   For a program not found, setup offers its npm package at a terminal (default no) and otherwise
-  prints the command; it installs nothing without your yes. Each program is asked about once per
+  gives the command; it installs nothing without your yes. Each program is asked about once per
   machine; --ask-install-again asks again.
   At a terminal, setup then offers the Neuve skill, which teaches the agent programs it found to
   use Neuve, once per repository (default no); --no-skills skips the offer.
@@ -121,6 +122,9 @@ export const SETUP_HELP = `Usage: neuve setup [--repo <path>] [--route openai|an
   per machine beside your Neuve settings and per repository in its setup folder, in
   setup-steps.json. neuve setup upgrade, which the install script runs after an upgrade, runs the
   steps a new version adds and undoes those it drops.
+  It prints one line per step and ends with what is left for you as exact commands; without a
+  terminal the same lines are plain and nothing is asked. --json prints only setup's record on
+  standard output, the lines going to standard error.
   Run neuve setup hooks --help and neuve setup stack --help for those.
 `;
 
@@ -137,9 +141,14 @@ const executableFile = async (path: string) => {
 /** Asks the install offer again for a program not found, whatever was answered before. */
 export const ASK_INSTALL_AGAIN = "--ask-install-again";
 
+/** Setup's flags that take no value. */
+const SWITCHES = ["--no-skills", ASK_INSTALL_AGAIN, "--json"];
+
 /** Setup's flags that take no value; `--agents` only ever says which programs. */
 export const switches = (given: readonly string[]) => ({
   askAgain: given.includes(ASK_INSTALL_AGAIN),
+  /** Only the setup record on standard output; what a person reads goes to standard error. */
+  json: given.includes("--json"),
 });
 
 export const runSetup = async (given: readonly string[]): Promise<number> => {
@@ -147,12 +156,10 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     await Bun.write(Bun.stdout, SETUP_HELP);
     return 0;
   }
-  // --no-skills and --ask-install-again take no value.
+  // The switches take no value.
   const noSkills = given.includes("--no-skills");
-  const { askAgain } = switches(given);
-  const args = given.filter(
-    (arg) => arg !== "--no-skills" && arg !== ASK_INSTALL_AGAIN,
-  );
+  const { askAgain, json } = switches(given);
+  const args = given.filter((arg) => !SWITCHES.includes(arg));
   const raw: Record<string, string> = {};
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index],
@@ -173,8 +180,10 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   const repository = await realpath(
     await git(resolve(options["--repo"]), ["rev-parse", "--show-toplevel"]),
   );
+  const screen = commandScreen({ json });
+  await screen.header(`neuve setup ${CLI_VERSION}`);
   // The route before anything else is written: a settings file setup can't read stops it here.
-  const route = await chooseRoute(options["--route"]);
+  const route = await chooseRoute(options["--route"], screen);
   if ("refused" in route) {
     await Bun.write(Bun.stderr, `${route.refused}\n`);
     return 1;
@@ -220,40 +229,62 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   });
   await removeStoreLinks(layout);
   const moved = await removeLegacySetup(repository, layout.directory);
+  await screen.step(
+    "done",
+    "Repository",
+    `${shown(repository)}, recorded in ${shown(relative(repository, layout.directory).startsWith("..") ? layout.directory : relative(repository, layout.directory))}`,
+  );
+  if (moved !== "") await screen.detail([moved.trim()]);
   const revision = await git(repository, ["rev-parse", "HEAD"]);
   // A check, not an index: a review builds what it reads under its own keys.
+  await screen.working("Graph engine", "checking");
   const check = await checkGraphEngine(repository, graph, revision);
   await validateInstallationState(layout);
   await writePrivateEnvironment(
     layout.initialIndex,
     JSON.stringify(check, null, 2) + "\n",
   );
-  await Bun.write(
-    Bun.stdout,
-    JSON.stringify(
-      {
-        installation,
-        revision,
-        workingTreeDirty:
-          (await git(repository, ["status", "--porcelain"])).length > 0,
-        indexedSource:
-          "nothing: the engine is checked, and reviews index what they read",
-        initialIndexStatus: check.status,
-        git: check.git,
-        observation: layout.initialIndex,
-      },
-      null,
-      2,
-    ) + "\n",
+  if (json)
+    await Bun.write(
+      Bun.stdout,
+      JSON.stringify(
+        {
+          installation,
+          revision,
+          workingTreeDirty:
+            (await git(repository, ["status", "--porcelain"])).length > 0,
+          indexedSource:
+            "nothing: the engine is checked, and reviews index what they read",
+          initialIndexStatus: check.status,
+          git: check.git,
+          observation: layout.initialIndex,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+  const here = await realpath(process.cwd()).catch(() => process.cwd());
+  const inside = here === repository || here.startsWith(`${repository}/`);
+  const repo = inside ? "" : ` --repo ${quote(repository)}`;
+  if (check.status === "error") {
+    await screen.step(
+      "failed",
+      "Graph engine",
+      `can't work on this repository: ${check.error}. Fix that, then run`,
+      `neuve setup${repo}`,
+    );
+    await screen.closing({});
+    return 1;
+  }
+  await screen.step(
+    "done",
+    "Graph engine",
+    `checked at ${revision.slice(0, 12)}`,
   );
-  await Bun.write(
-    Bun.stderr,
-    `${moved}${route.line === undefined ? "" : `${route.line}\n`}${await nextSteps(repository, check, route.route)}`,
-  );
-  if (check.status === "error") return 1;
-  // After the next steps, the named steps: this machine's, then this repository's.
-  const programs = agentLooks(wanted, "setup", askAgain);
-  const steps = { mode: "setup", ...stepsAtTerminal() } as const;
+  await reviewsStep(screen, repository, route.route, repo, route.unreadable);
+  // Then the named steps: this machine's, then this repository's.
+  const programs = agentLooks(wanted, "setup", askAgain, { screen });
+  const steps = { mode: "setup", version: CLI_VERSION, screen } as const;
   await runSteps({
     ...steps,
     steps: machineSteps(programs.look),
@@ -271,20 +302,22 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
         : wanted.length === 0
           ? SKILL_LEFT_OUT.noAgents
           : undefined,
+      false,
+      skillsContext(screen),
     ),
     record: repositoryStepsRecord(layout.directory),
     where: repository,
   });
+  await screen.closing({ next: `neuve review HEAD~1..HEAD${repo}` });
   return 0;
 };
 
-/** Where steps say what they do, and whether there is a terminal to ask at. */
-const stepsAtTerminal = () => ({
-  isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
-  version: CLI_VERSION,
-  out: async (text: string) => {
-    await Bun.write(Bun.stderr, text);
-  },
+/** The skill offer's surroundings: setup's own screen, so it looks and asks the same way. */
+const skillsContext = (screen: Screen): SkillsContext => ({
+  ...defaultSkillsContext(),
+  isTerminal: screen.canAsk,
+  out: screen.print,
+  screen,
 });
 
 /**
@@ -298,36 +331,34 @@ export const agentLooks = (
   wanted: ReadonlyArray<AgentHarness>,
   mode: "setup" | "upgrade",
   askAgain = false,
-  /** For tests: the narrow look and where it says what it found. */
+  /** Where it speaks, and for tests the narrow look. */
   narrow: {
     find?: typeof findAgentPrograms;
-    out?: (text: string) => Promise<void>;
+    screen?: Screen;
   } = {},
 ) => {
   const find = narrow.find ?? findAgentPrograms;
-  const out = narrow.out ?? offerContext().out;
+  const screen = narrow.screen ?? commandScreen({});
   let found: Promise<ReadonlyArray<AgentHarness>> | undefined;
   const check = async () => {
+    await screen.working("Agents", "asking each program its version");
     const findings = await find("check", undefined, wanted);
+    for (const finding of findings) {
+      await showFinding(screen, finding);
+      if (finding.stale !== undefined)
+        await screen.detail([
+          `The path stored for it, ${shown(finding.stale)}, no longer answers.`,
+        ]);
+    }
     const ids = foundIds(findings);
-    await out(
-      `\nAgent programs on this machine:\n${findings
-        .map((finding) =>
-          [
-            describeFinding(finding),
-            ...(finding.stale === undefined
-              ? []
-              : [
-                  `The path stored for it, ${finding.stale}, no longer answers; neuve setup looks for it again.`,
-                ]),
-          ].join("\n"),
-        )
-        .join("\n")}\n${
-        ids.length === 0
-          ? "The upgrade looks only where run time would start a program, so this step stays to do: neuve setup looks everywhere, the installed apps included.\n"
-          : ""
-      }`,
-    );
+    // The upgrade looks only where run time would start a program; setup looks everywhere.
+    if (ids.length === 0)
+      await screen.step(
+        "needs",
+        "Agents",
+        "none found where run time looks; to look everywhere",
+        "neuve setup",
+      );
     return ids;
   };
   return {
@@ -339,7 +370,7 @@ export const agentLooks = (
       found ??=
         mode === "upgrade"
           ? check()
-          : setUpAgentPrograms(wanted, { ...offerContext(), askAgain });
+          : setUpAgentPrograms(wanted, { ...offerContext(screen), askAgain });
       const ids = await found;
       if (mode === "setup") return "applied";
       return ids.length === 0 ? "skipped" : "checked";
@@ -348,6 +379,23 @@ export const agentLooks = (
     /** Whether `found` comes from the narrow look, which can't say no program is here. */
     narrow: mode === "upgrade",
   };
+};
+
+/** One program's line: found with its summary, or why looking failed; a missing one is the offer's. */
+const showFinding = async (screen: Screen, finding: Finding) => {
+  const line = summary(finding);
+  if (line !== undefined)
+    return screen.step("done", finding.program.name, line);
+  await screen.step(
+    finding.problem === undefined ? "needs" : "failed",
+    finding.program.name,
+    finding.problem === undefined
+      ? "not found"
+      : `looking for it failed: ${finding.problem}`,
+    finding.problem === undefined
+      ? finding.program.install.join(" ")
+      : undefined,
+  );
 };
 
 export const SETUP_UPGRADE_HELP = `Usage: neuve setup upgrade [--no-skills]
@@ -367,21 +415,19 @@ export const upgradeSetup = async (input: {
   readonly registry?: string;
   readonly machine: ReadonlyArray<SetupStep>;
   readonly repository: (stateDirectory: string) => ReadonlyArray<SetupStep>;
-  readonly isTerminal: boolean;
   readonly version: string;
-  readonly out: (text: string) => Promise<void>;
+  readonly screen: Screen;
 }) => {
-  const steps = {
-    mode: "upgrade",
-    isTerminal: input.isTerminal,
-    version: input.version,
-    out: input.out,
-  } as const;
+  const { screen } = input;
+  const steps = { mode: "upgrade", version: input.version, screen } as const;
   let failed = 0;
   const stopped = (where: string) => async (error: unknown) => {
     failed += 1;
-    await input.out(
-      `Setup's steps stopped on ${where}: ${error instanceof Error ? error.message : String(error)}. neuve setup upgrade finishes them.\n`,
+    await screen.step(
+      "failed",
+      "Setup steps",
+      `stopped in ${shown(where)}: ${error instanceof Error ? error.message : String(error)}. To finish them`,
+      "neuve setup upgrade",
     );
     return undefined;
   };
@@ -391,19 +437,17 @@ export const upgradeSetup = async (input: {
     record: machineStepsRecord(input.home),
     where: "this machine",
   }).catch(stopped("this machine"));
-  // What is not up to date, per place, by the rule doctor uses: a record left alone, or steps it
-  // still lacks, waiting for a terminal or not.
-  const behind: string[] = [];
-  const note = (where: string, outcome: StepsOutcome | undefined) => {
-    if (outcome === undefined) return;
-    if (outcome.left !== undefined)
-      behind.push(`${where}, whose record is left as it is`);
-    else if (outcome.toDo.length > 0)
-      behind.push(
-        `${where}, where setup ${outcome.toDo.map((step) => step.does).join("; ")}`,
-      );
+  // What is not up to date, by the rule doctor uses: a record left alone, or steps it still
+  // lacks, waiting for a terminal or not. runSteps said each one with its command.
+  let behind = 0;
+  const note = (outcome: StepsOutcome | undefined) => {
+    if (
+      outcome !== undefined &&
+      (outcome.left !== undefined || outcome.toDo.length > 0)
+    )
+      behind += 1;
   };
-  note("this machine", machine);
+  note(machine);
   const list = input.registry ?? Registry.registryPath(input.home);
   const registry = await Effect.runPromise(
     Registry.readRegistry(list).pipe(Effect.provide(BunFileSystem.layer)),
@@ -425,16 +469,21 @@ export const upgradeSetup = async (input: {
     }
     if (!readable) {
       failed += 1;
-      await input.out(
-        `Neuve's list of repositories, ${list}, can't be read, so no repository's steps ran. neuve setup in each repository runs them.\n`,
+      await screen.step(
+        "failed",
+        "Repositories",
+        `Neuve's list of repositories, ${shown(list)}, can't be read, so no repository's steps ran. In each repository, run`,
+        "neuve setup",
       );
     }
   }
   let visited = 0;
   for (const { repository } of registry.repositories) {
     if ((await stat(repository).catch(() => undefined)) === undefined) {
-      await input.out(
-        `Skipped ${repository}: its folder is gone. Neuve's list of repositories still names it.\n`,
+      await screen.step(
+        "skipped",
+        "Repository",
+        `${shown(repository)}: its folder is gone; Neuve's list of repositories still names it`,
       );
       continue;
     }
@@ -445,10 +494,13 @@ export const upgradeSetup = async (input: {
       set = await readInstallation(repository);
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
-      await input.out(
-        `Skipped ${repository}: its setup record can't be read (${why}). neuve setup there writes it again.\n`,
+      await screen.step(
+        "needs",
+        "Repository",
+        `${shown(repository)}: its setup record can't be read (${why}). To write it again`,
+        `neuve setup --repo ${quote(repository)}`,
       );
-      behind.push(`${repository}, whose setup record can't be read`);
+      behind += 1;
       continue;
     }
     const layout =
@@ -462,18 +514,21 @@ export const upgradeSetup = async (input: {
       record: repositoryStepsRecord(layout.directory),
       where: set.repository,
     }).catch(stopped(set.repository));
-    note(set.repository, outcome);
+    note(outcome);
   }
   const repositories = `${visited} ${visited === 1 ? "repository" : "repositories"} set up here`;
-  await input.out(
-    behind.length === 0 && failed === 0
-      ? `Setup's steps are up to date on this machine and in ${repositories}.\n`
-      : `Setup's steps ran on this machine and in ${repositories}, and are not all up to date.${
-          behind.length === 0
-            ? ""
-            : ` Still to do: ${behind.join("; ")}. neuve setup there does it, asking at a terminal where a step asks.`
-        }${failed === 0 ? "" : " Some stopped, as said above; neuve setup upgrade finishes them."}\n`,
-  );
+  if (behind === 0 && failed === 0)
+    await screen.step(
+      "done",
+      "Setup steps",
+      `up to date on this machine and in ${repositories}`,
+    );
+  else
+    await screen.step(
+      failed === 0 ? "needs" : "failed",
+      "Setup steps",
+      `ran on this machine and in ${repositories}; ${failed === 0 ? "some still need you, as said above" : "some stopped, as said above"}`,
+    );
   // Nonzero when a repository's steps stopped, so the install script says how to finish them.
   return failed === 0 ? 0 : 1;
 };
@@ -492,7 +547,8 @@ export const runSetupUpgrade = async (
     throw new Error(
       `neuve setup upgrade takes only --no-skills, not ${other}.`,
     );
-  const programs = agentLooks(AGENT_IDS, "upgrade");
+  const screen = commandScreen({});
+  const programs = agentLooks(AGENT_IDS, "upgrade", false, { screen });
   return upgradeSetup({
     home: homedir(),
     machine: machineSteps(programs.look),
@@ -502,53 +558,50 @@ export const runSetupUpgrade = async (
         programs.found,
         noSkills ? SKILL_LEFT_OUT.noSkills : undefined,
         programs.narrow,
+        skillsContext(screen),
       ),
-    ...stepsAtTerminal(),
+    version: CLI_VERSION,
+    screen,
   });
 };
 
-/**
- * Setup's look at the agent programs: each found is shown with how it was found (Codex's path
- * stored as `auth program codex --find` stores it), and each missing one is offered from npm.
- * The ids of those found, for the skill offer.
- */
-/** Setup's install offer at the person's terminal, with the machine's memory of earlier answers. */
-const offerContext = (): OfferContext => ({
-  isTerminal: process.stdin.isTTY === true && process.stdout.isTTY === true,
-  ask: defaultSkillsContext().ask,
-  out: async (text) => {
-    await Bun.write(Bun.stderr, text);
-  },
+/** Setup's install offer, on setup's screen, with the machine's memory of earlier answers. */
+const offerContext = (screen: Screen): OfferContext => ({
+  screen,
   path: process.env["PATH"] ?? "",
   offers: machineOffers(),
 });
 
+/**
+ * Setup's look at the agent programs: one line for each found (Codex's path stored as `auth
+ * program codex --find` stores it), and each missing one offered from npm. The ids of those found,
+ * for the skill offer.
+ */
 export const setUpAgentPrograms = async (
   ids: ReadonlyArray<AgentHarness>,
-  context: OfferContext = offerContext(),
+  context: OfferContext,
   look: LookForPrograms = findAgentPrograms,
 ) => {
   if (ids.length === 0) return [];
+  const { screen } = context;
+  await screen.working("Agents", "looking for Claude Code and Codex");
   const findings = [...(await look("find", { path: context.path }, ids))];
-  await context.out(
-    `\nAgent programs on this machine:\n${findings.map(describeFinding).join("\n")}\n`,
-  );
-  for (const [index, finding] of findings.entries())
+  // A missing program is left for the person only when none was found: one is enough.
+  const optional = findings.some((finding) => finding.found !== undefined);
+  for (const [index, finding] of findings.entries()) {
     // Only a program that is missing is offered; one whose look failed is not known to be.
-    if (
-      finding.found === undefined &&
-      finding.problem === undefined &&
-      (await offerInstall(finding, context))
-    ) {
-      const [again] = await look("find", { path: context.path }, [
-        finding.program.id,
-      ]);
-      if (again === undefined) continue;
-      findings[index] = again;
-      await context.out(
-        `npm finished. Looked for ${again.program.name} again:\n${describeFinding(again)}\n`,
-      );
+    if (finding.found !== undefined || finding.problem !== undefined) {
+      await showFinding(screen, finding);
+      continue;
     }
+    if (!(await offerInstall(finding, context, optional))) continue;
+    const [again] = await look("find", { path: context.path }, [
+      finding.program.id,
+    ]);
+    if (again === undefined) continue;
+    findings[index] = again;
+    await showFinding(screen, again);
+  }
   return foundIds(findings);
 };
 
@@ -705,13 +758,9 @@ const removeLegacySetup = async (repository: string, store: string) => {
 };
 
 /**
- * What setup tells a person after its JSON record (stdout, for scripts): the sign-in a review needs,
- * by either route, then the review and the desk.
- */
-/**
- * How reviews sign in: the `--route` flag, else the route the settings already name, else on a
- * terminal the person's answer, ChatGPT first. Without a terminal nothing is asked or written.
- * Setup never signs in itself; it names the next step.
+ * How reviews sign in: the `--route` flag, else the route the settings already name, else at a
+ * terminal the person's answer, ChatGPT first; Enter decides later and writes nothing. Without a
+ * terminal nothing is asked or written. Setup never signs in itself; it names the next step.
  */
 /** The route each answer to setup's question picks, in the order the question lists them. */
 export const ROUTE_CHOICES = [
@@ -720,118 +769,108 @@ export const ROUTE_CHOICES = [
   { route: "claude", label: "Your Claude subscription, through Claude Code" },
 ] as const satisfies ReadonlyArray<{ route: RouteName; label: string }>;
 
-/** What setup asks on a terminal when no route is set yet. */
-export const ROUTE_QUESTION = `How should reviews sign in?\n${ROUTE_CHOICES.map((choice, index) => `  ${index + 1}. ${choice.label}`).join("\n")}\nType 1, 2 or 3: `;
-
-/** The route an answer to `ROUTE_QUESTION` picks, or undefined for anything else. */
-export const routeAnswer = (answer: string): RouteName | undefined =>
-  ROUTE_CHOICES[Number(answer.trim()) - 1]?.route;
-
-/** Said when setup can't ask (no terminal) or the answer picked nothing. */
-export const CHOOSE_ROUTE =
-  "Reviews sign in with ChatGPT, an Anthropic API key or your Claude subscription through Claude Code. Choose with neuve setup --route openai, neuve setup --route anthropic or neuve setup --route claude.";
-
-const routeLabel = (route: RouteName) =>
-  route === "openai"
-    ? "ChatGPT (the OpenAI route)"
-    : route === "claude"
-      ? "your Claude subscription, through Claude Code"
-      : "an Anthropic API key";
+/** What setup asks at a terminal when no route is set yet. */
+export const ROUTE_QUESTION = "How should reviews sign in?";
 
 const chooseRoute = async (
   flag: string | undefined,
+  screen: Screen,
 ): Promise<
-  { refused: string } | { route: RouteName | undefined; line?: string }
+  { refused: string } | { route: RouteName | undefined; unreadable?: true }
 > => {
-  const name = routeLabel;
-  if (flag !== undefined) {
+  const write = async (route: string) => {
     try {
-      const path = await writeRoute(flag);
-      return {
-        route: flag as RouteName,
-        line: `Reviews sign in with ${name(flag as RouteName)} (review.route in ${path}).`,
-      };
+      await writeRoute(route);
+      return { route: route as RouteName };
     } catch (error) {
       if (error instanceof SettingsUnreadable || error instanceof RouteRefused)
         return { refused: error.message };
       throw error;
     }
-  }
+  };
+  if (flag !== undefined) return write(flag);
   let current: RouteName | undefined;
   try {
     current = await settingsRoute();
   } catch {
-    // Doctor and the next steps say the settings can't be read; nothing is asked or written.
-    return { route: undefined };
+    // The sign-in step and doctor say the settings can't be read; nothing is asked or written.
+    return { route: undefined, unreadable: true };
   }
-  if (current !== undefined) return { route: current };
-  const choose = CHOOSE_ROUTE;
-  if (!(process.stdin.isTTY === true && process.stderr.isTTY === true))
-    return { route: undefined, line: choose };
-  await Bun.write(Bun.stderr, ROUTE_QUESTION);
-  let answer = "";
-  for await (const line of console) {
-    answer = line.trim();
-    break;
-  }
-  const picked = routeAnswer(answer);
-  if (picked === undefined) return { route: undefined, line: choose };
-  const path = await writeRoute(picked);
-  return {
-    route: picked,
-    line: `Reviews sign in with ${name(picked)} (review.route in ${path}).`,
-  };
+  if (current !== undefined || !screen.canAsk) return { route: current };
+  const picked = await screen.choose(
+    ROUTE_QUESTION,
+    ROUTE_CHOICES.map((choice) => ({
+      value: choice.route,
+      label: choice.label,
+    })),
+    { label: "decide later" },
+  );
+  return picked === undefined ? { route: undefined } : write(picked);
 };
 
-const nextSteps = async (
+const ROUTE_NAME: Record<RouteName, string> = {
+  openai: "ChatGPT",
+  anthropic: "an Anthropic API key",
+  claude: "your Claude subscription, through Claude Code",
+};
+
+/** The sign-in a review needs, as one step: done when it is there, else the exact command. */
+const reviewsStep = async (
+  screen: Screen,
   repository: string,
-  check: GraphEngineCheck,
   route: RouteName | undefined,
+  /** ` --repo <path>` when run from outside the repository, else empty. */
+  repo: string,
+  /** The settings can't be read, so no route can be chosen until they are fixed. */
+  unreadable = false,
 ) => {
-  if (check.status === "error")
-    return `Neuve is set up in ${repository}, but the Graph engine can't work on it: ${check.error}\nFix that, then run neuve setup --repo ${quote(repository)} again.\n`;
-  const here = await realpath(process.cwd()).catch(() => process.cwd());
-  const inside = here === repository || here.startsWith(`${repository}/`);
-  const repo = inside ? "" : ` --repo ${quote(repository)}`;
-  const claude =
-    route === "claude"
-      ? claudeSignInStep(await claudeSignInStatus())
-      : undefined;
-  const signIn = claude ?? checkSignIn(repository);
-  return [
-    `Neuve is set up in ${repository}.`,
-    "",
-    "Next steps:",
-    ...(route === "openai"
-      ? ["  1. Sign in with ChatGPT:", "       neuve auth login openai"]
-      : route === "anthropic"
-        ? [
-            "  1. Set ANTHROPIC_API_KEY to an Anthropic API key in the shell you run neuve from.",
-            "     It must be an API key; a Claude subscription token doesn't work here.",
-          ]
-        : claude !== undefined
-          ? claude.lines
-          : [
-              "  1. Choose how reviews sign in, then sign in:",
-              "       neuve setup --route openai, then neuve auth login openai (ChatGPT)",
-              "       neuve setup --route anthropic, then set ANTHROPIC_API_KEY to an Anthropic API key",
-              "       (an API key: a Claude subscription token doesn't work here)",
-              "       neuve setup --route claude, then claude auth login (your Claude subscription,",
-              "       through Claude Code)",
-            ]),
-    // A signed-in Claude Code needs no step: its one line already says it's ready.
-    ...(claude?.status === "ok"
-      ? []
-      : [
-          `     ${signIn.status === "ok" ? "Ready:" : "Not yet:"} ${signIn.detail}.`,
-        ]),
-    "  2. Request a review of a commit range, for example the last commit:",
-    `       neuve review HEAD~1..HEAD${repo}`,
-    "  3. Open the batch overview and the review desk:",
-    `       neuve review ${REVIEW_DESK_COMMAND}${repo}`,
-    "neuve doctor checks all of this and says how to fix what is missing.",
-    "",
-  ].join("\n");
+  const label = "Reviews";
+  if (route === "claude") {
+    const step = claudeSignInStep(await claudeSignInStatus());
+    return step.status === "ok"
+      ? screen.step("done", label, `${ROUTE_NAME.claude}, signed in`)
+      : screen.step("needs", label, step.detail, step.command);
+  }
+  const signIn = checkSignIn(repository);
+  // Settings that can't be read: choosing a route would be refused too, so say what to fix.
+  if (route === undefined && unreadable)
+    return screen.step(
+      "needs",
+      label,
+      `${signIn.detail}; correct or remove that file, then run setup again`,
+    );
+  if (route === undefined)
+    return signIn.status === "ok"
+      ? screen.step(
+          "done",
+          label,
+          `${ROUTE_NAME.anthropic} (the default), set in this shell`,
+        )
+      : screen.step(
+          "needs",
+          label,
+          "choose openai (ChatGPT), anthropic (an API key) or claude (a Claude subscription)",
+          `neuve setup${repo} --route <openai|anthropic|claude>`,
+        );
+  if (signIn.status === "ok")
+    return screen.step(
+      "done",
+      label,
+      `${ROUTE_NAME[route]}, ${route === "openai" ? "signed in" : "set in this shell"}`,
+    );
+  return route === "openai"
+    ? screen.step(
+        "needs",
+        label,
+        "sign in with ChatGPT",
+        "neuve auth login openai",
+      )
+    : screen.step(
+        "needs",
+        label,
+        "an Anthropic API key (not a Claude subscription token) in the shell you run neuve from",
+        "export ANTHROPIC_API_KEY=<your API key>",
+      );
 };
 
 /** The Claude account's status from its check, or undefined when the check couldn't run. */
@@ -841,53 +880,46 @@ const claudeSignInStatus = async () => {
 };
 
 /**
- * Setup's closing check for the Claude route, from the built-in account's checked status: the
- * first step, which comes before the review, says to install Claude Code when it's missing, then
- * to sign in with `claude auth login`.
+ * Setup's sign-in step for the Claude route, from the built-in account's checked status: done when
+ * Claude Code is signed in, else what is missing and the command that fixes it.
  */
 export const claudeSignInStep = (
   status: AccountStatus | undefined,
 ): {
   status: "ok" | "missing";
   detail: string;
-  lines: ReadonlyArray<string>;
+  command?: string;
 } => {
-  const signIn = ["       claude auth login"];
-  const missing = (detail: string, lines: ReadonlyArray<string>) => ({
-    status: "missing" as const,
-    detail,
-    lines,
-  });
-  const login = [
-    "  1. Sign in to Claude Code with your Claude subscription:",
-    ...signIn,
-  ];
   const state = status?.signIn;
+  const login = "claude auth login";
   if (state === undefined || state.state === "unknown")
-    return missing(
-      "Neuve couldn't check the Claude Code sign-in. neuve auth status claude --check checks it again, without spending usage",
-      login,
-    );
-  if (state.state === "signed-in")
     return {
-      status: "ok",
-      detail: "Claude Code is signed in",
-      lines: ["  1. Ready: Claude Code is signed in."],
+      status: "missing",
+      detail:
+        "Neuve couldn't check the Claude Code sign-in; to check again without spending usage",
+      command: "neuve auth status claude --check",
     };
+  if (state.state === "signed-in")
+    return { status: "ok", detail: "Claude Code is signed in" };
   if (state.state === "runtime-unavailable")
     return state.reason === "not-installed"
-      ? missing("Claude Code isn't installed: there's no claude on PATH", [
-          "  1. Install Claude Code, then sign in to it with your Claude subscription:",
-          ...signIn,
-        ])
-      : missing(
-          `Claude Code couldn't start (${state.reason}). neuve auth status claude --check checks it again`,
-          login,
-        );
-  return missing(
-    state.state === "credential-rejected"
-      ? "Claude Code's sign-in was refused. Sign in again"
-      : "Claude Code isn't signed in",
-    login,
-  );
+      ? {
+          status: "missing",
+          detail:
+            "Claude Code isn't installed: there's no claude on PATH. Install it, then",
+          command: login,
+        }
+      : {
+          status: "missing",
+          detail: `Claude Code couldn't start (${state.reason}); to check again`,
+          command: "neuve auth status claude --check",
+        };
+  return {
+    status: "missing",
+    detail:
+      state.state === "credential-rejected"
+        ? "Claude Code's sign-in was refused; sign in again"
+        : "sign in to Claude Code with your Claude subscription",
+    command: login,
+  };
 };

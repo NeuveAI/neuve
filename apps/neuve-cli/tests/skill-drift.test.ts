@@ -398,7 +398,7 @@ describe("every command the skill shows exists in the CLI's help", () => {
     ]);
     expect(shown).toContainEqual(["auth login openai"]);
     expect(shown).toContainEqual(["review", "--route"]);
-    expect(shown).toContainEqual(["setup", "--route", "--no-skills"]);
+    expect(shown).toContainEqual(["setup", "--route"]);
     expect(shown).toContainEqual(["doctor"]);
     expect(shown).toContainEqual(["review desk"]);
     expect(shown).toContainEqual(["skills install"]);

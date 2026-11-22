@@ -12,15 +12,19 @@ say() {
     if (
         trap - EXIT
         if [ "$cleaning_up" = 0 ]; then trap 'exit 141' PIPE; fi
-        printf 'neuve install: %s\n' "$*" 2>/dev/null || :
+        printf "$say_prefix%s\n" "$*" 2>/dev/null || :
     ); then :
     else
         message_status=$?
         if [ "$message_status" = 141 ]; then handle_signal 141; else exit "$message_status"; fi
     fi
 }
-fail() { say "$*" >&2; exit 1; }
+# Errors name the installer, since its output may be piped; progress sits under its header. The
+# prefix is part of the format, so the message stays printf's one argument; it holds no %.
+say_prefix='neuve install: '
+fail() { say_prefix='neuve install: '; say "$*" >&2; exit 1; }
 show_error() {
+    say_prefix='neuve install: '
     while IFS= read -r line || [ -n "$line" ]; do say "$line" >&2; done <"$1"
 }
 # The one place the repository is named.
@@ -1333,7 +1337,8 @@ download_release() {
 
 latest_note=
 choose_route
-[ "$dry_run" = 0 ] || say "Dry run: nothing is downloaded, installed or changed."
+if [ "$dry_run" = 0 ]; then say_prefix=; say 'Neuve installer'; else say_prefix=; say 'Neuve installer (dry run: nothing is downloaded, installed or changed)'; fi
+say_prefix='  '
 if [ "$route" = none ]; then
     [ "$dry_run" = 0 ] || fail "A real install would stop here: $signin_message"
     fail "$signin_message"
@@ -1353,7 +1358,7 @@ if [ "$dry_run" = 1 ]; then
             fail 'The release doesn'\''t match the version you asked for.'
         fi
         compare_installed "$archive_version"
-        say "Release: neuve $archive_version from $archive, which matches $checksums."
+        say "Release: neuve $archive_version from $archive, checked against $checksums."
         if xattr -p com.apple.quarantine "$archive" >/dev/null 2>&1; then say "A real install would stop here: macOS marks $archive as downloaded from the internet. To clear the mark, run: xattr -d com.apple.quarantine \"$archive\"."; fi
     else
         case "$route" in
@@ -1362,11 +1367,10 @@ if [ "$dry_run" = 1 ]; then
             *) how="downloaded without a sign-in, from $downloads" ;;
         esac
         if [ -n "$tag" ]; then release_label="$tag$latest_note of $repo"; else release_label="the newest release of $repo that isn't a preview"; fi
-        say "Release: $release_label, $how."
-        say "Would download $asset and SHA256SUMS into a private temporary folder, check the archive against SHA256SUMS before anything is installed, then remove that folder."
+        say "Release: $release_label, $how; checked against SHA256SUMS before anything is installed."
     fi
     if [ "$owned" = 1 ] && [ -n "$old_version" ]; then installed_note="replacing neuve $old_version"; else installed_note="a new install"; fi
-    say "Would install into $prefix ($installed_note): bin/neuve, lib/neuve and share/neuve."
+    say "Would install into $prefix ($installed_note)."
     case ":$PATH:" in
         *":$prefix/bin:"*) say "PATH: $prefix/bin is already on PATH." ;;
         *)
@@ -1374,12 +1378,14 @@ if [ "$dry_run" = 1 ]; then
             else say "PATH: would add this line to $path_file, after the comment # Added by the Neuve installer: $path_line"; fi ;;
     esac
     if [ "$no_skills" = 1 ]; then say "Agent skills: not offered (--no-skills)."
-    else say "Agent skills: would offer them with neuve skills install --offer, if this release includes them. Nothing is written without your yes."; fi
+    else say "Agent skills: would be offered; nothing is written without your yes."; fi
     winner=$(command -v neuve || :)
     if [ -n "$winner" ] && [ "$winner" != "$prefix/bin/neuve" ]; then say "In this terminal, the neuve command runs $winner."; fi
-    if [ "$owned" = 1 ]; then say 'Setup: would run neuve setup upgrade, for the setup steps this version adds or drops on this machine and in each repository set up here, if this release has it. A step that needs an answer waits for a terminal.'; fi
-    if [ "$owned" = 1 ]; then say 'Then: repositories already set up keep their setup and records; in one of them, run neuve doctor.'
-    else say 'Then: in a repository, run neuve setup, then neuve doctor.'; fi
+    if [ "$owned" = 1 ]; then say 'Setup: would run neuve setup upgrade for what this version adds.'; fi
+    say_prefix=
+    say ''
+    if [ "$owned" = 1 ]; then say 'Then, in a repository already set up: neuve doctor'
+    else say 'Then, in your repository: neuve setup'; fi
     exit 0
 fi
 [ "$route" = archive ] || download_release
@@ -1612,7 +1618,7 @@ fi
 # rolls back, and from the next line on nothing is.
 say "Installed neuve $installed_version at $prefix/bin/neuve."
 transaction=0
-if [ "$owned" = 1 ]; then say 'Background workers already running keep the old version until they stop. Run neuve worker stop in a repository to stop its worker.'; fi
+if [ "$owned" = 1 ]; then say 'Workers already running keep the old version until they stop: neuve worker stop'; fi
 # macOS refuses to run files marked as downloaded from the internet until the mark is cleared.
 quarantined=0
 for path in "$prefix/bin/neuve" "$lib" "$share"; do
@@ -1634,7 +1640,6 @@ if [ -n "$winner" ] && [ "$winner" != "$prefix/bin/neuve" ]; then
         say "The neuve command runs $winner. To run this install, put $prefix/bin first on PATH, or run $prefix/bin/neuve."
     fi
 fi
-if [ "$path_changed" = 1 ]; then say 'Run exec $SHELL or open a new terminal to pick up the new PATH.'; fi
 # The agent skills: offered by neuve itself, which lists the files and asks first. The installer
 # never writes any agent's configuration.
 if [ "$no_skills" = 0 ]; then
@@ -1662,9 +1667,14 @@ if [ "$owned" = 1 ]; then
         fi
     fi
 fi
-# An upgrade leaves each repository's setup and records where they are; the new CLI opens them.
-if [ "$owned" = 1 ]; then say 'Repositories already set up keep their setup and records. Next, in one of them, run neuve doctor.'
-else say 'Next, in a repository, run neuve setup, then neuve doctor.'; fi
+# One summary with the next command. An upgrade leaves each repository's setup and records where
+# they are; the new CLI opens them.
+say_prefix=
+say ''
+say 'Neuve is installed.'
+if [ "$path_changed" = 1 ]; then say '  Open a new terminal, or run: exec $SHELL'; fi
+if [ "$owned" = 1 ]; then say '  Next, in a repository already set up: neuve doctor'
+else say '  Next, in your repository: neuve setup'; fi
 }
 
 main "$@"
