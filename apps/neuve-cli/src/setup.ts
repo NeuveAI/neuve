@@ -510,9 +510,11 @@ export const upgradeSetup = async (input: {
   }
   let visited = 0;
   const gone = new Set<string>();
-  for (const { repository } of registry.repositories) {
+  for (const { repository, store } of registry.repositories) {
     if ((await stat(repository).catch(() => undefined)) === undefined) {
-      if (await folderGone(repository)) gone.add(repository);
+      // A removed worktree's store may live on in its main checkout, so both must be gone.
+      if ((await folderGone(repository)) && (await folderGone(store)))
+        gone.add(repository);
       continue;
     }
     // Only a repository set up here gets setup's steps; an upgrade never sets one up.

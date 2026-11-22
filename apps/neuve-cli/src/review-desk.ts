@@ -106,7 +106,8 @@ export const runReviewDesk = async (
   const stopped = Promise.withResolvers<boolean>();
   const stop = () => stopped.resolve(false);
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-  for (const signal of signals) process.once(signal, stop);
+  // Kept for the whole run: a second Ctrl-C, or one passed on from a desk that restarted, only stops.
+  for (const signal of signals) process.on(signal, stop);
   let server: Bun.Server<undefined> | undefined;
   // Set when the desk is to restart on a reinstalled version: the port to restart on.
   let restartOn: number | undefined;
