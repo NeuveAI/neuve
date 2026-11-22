@@ -763,6 +763,81 @@ test("a clear empties both lists and offers Undo only while the list shown is em
   }
 })
 
+test("past the newest 200 reviews, a cleared All counts and pages every review after the clear, and a review's own address counts what of it waits", async () => {
+  // Why (22 November 2026, the owner's requested changes): All after a clear read only the newest
+  // 200 reviews, so its count stopped at 200 and older reviews run after the clear could not be
+  // reached; and a review's own address past those 200 said nothing of it waits while its units
+  // did. Reproducing needs more than 200 reviews, so this seeds a real store.
+  const repo = mkdtempSync(join(tmpdir(), "reviews-window-"))
+  const before = process.env[REPOSITORY_VARIABLE]
+  try {
+    Bun.spawnSync(["git", "init", "--quiet", repo])
+    const location = storeLocationIn(join(repo, ".git"))
+    const hidden = oldReview("aaaaaaa", [{ lane: "human-required" }])
+    await seed([hidden], location)
+    const clear = await read(
+      location,
+      HumanCommands.clearReviewList({
+        person: { email: "owner@example.com", displayName: "Owner" },
+      })
+    )
+    // Requested after the clear, whatever the clock says now; the oldest has a person's approval.
+    const later = new Date(Date.parse(clear.occurredAt) + 1000).toISOString()
+    const ran = Array.from({ length: 201 }, (_, index) => {
+      const review = oldReview(index.toString(16).padStart(7, "1"), [
+        {
+          lane: "human-required",
+          ...(index === 0 ? { person: "approve" as const } : {}),
+        },
+      ])
+      return { ...review, request: { ...review.request, occurredAt: later } }
+    })
+    await read(
+      location,
+      Effect.gen(function* () {
+        const blobs = yield* Blobs.BlobStore
+        for (const review of ran) {
+          const held = yield* blobs.put({
+            bytes: new TextEncoder().encode(review.manifest),
+            mediaType: "application/json",
+            retention: "durable",
+          })
+          yield* Log.append([
+            ...review.structure,
+            review.packet(held.blob.hash),
+            review.request,
+          ])
+        }
+      })
+    )
+    process.env[REPOSITORY_VARIABLE] = repo
+
+    const all = await reviewsRead({ page: 21, filter: "all" })
+    if (all.status !== "ready") throw new Error("no reviews read")
+    expect(all.data.counts.all).toBe(201)
+    expect(all.data).toMatchObject({ page: 21, total: 201 })
+    // The oldest review run after the clear, with Records' word on it.
+    expect(all.data.reviews).toMatchObject([
+      {
+        id: ran[0]?.cycleId,
+        gate: [{ lane: "human-required", mark: "approved" }],
+      },
+    ])
+
+    const own = await reviewsRead({
+      page: 1,
+      filter: "all",
+      cycle: hidden.cycleId,
+    })
+    if (own.status !== "ready") throw new Error("no reviews read")
+    expect(own.data.counts).toEqual({ all: 1, waiting: 1 })
+  } finally {
+    if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
+    else process.env[REPOSITORY_VARIABLE] = before
+    rmSync(repo, { recursive: true, force: true })
+  }
+})
+
 test("the list counts a rebased review once, even beside a review whose commits the repository no longer holds", async () => {
   // Why (NEU-433, final review): one unreadable range must not cost the rebase rule its answers,
   // or a pull request reviewed before and after a rebase waits twice.

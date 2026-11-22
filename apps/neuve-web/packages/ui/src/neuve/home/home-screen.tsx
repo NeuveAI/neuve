@@ -363,9 +363,11 @@ function Home({
                   : "All reviews"}
             </h2>
             <div className="flex items-center gap-2">
-              {onClear && !data.cycle && (data.cleared || data.total > 0) && (
-                <ClearButton cleared={data.cleared} onClear={onClear} />
-              )}
+              {onClear &&
+                !data.cycle &&
+                (data.cleared || data.counts.all > 0) && (
+                  <ClearButton cleared={data.cleared} onClear={onClear} />
+                )}
               <Segmented
                 label="Show"
                 value={data.filter}

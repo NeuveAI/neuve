@@ -20,6 +20,7 @@ import type {
 import { successorOf } from "./desk.server"
 import type { OpensCache } from "./desk.server"
 import { repositoryName } from "./git-source.server"
+import { git } from "./git.server"
 import { LANE_FACTS } from "./lane-facts"
 import type { LaneFacts } from "./lane-facts"
 import { ancestryOf, rangeEnds, rangePatchesOf } from "./range-done.server"
@@ -84,17 +85,8 @@ export const laneOf = (lane: RecordedLane) =>
 const short = (oid: string) => oid.slice(0, 7)
 
 /** A commit's subject line, the title a review reads by (`summaryOf`). */
-const subjectOf = async (at: string, oid: string) => {
-  const child = Bun.spawn(
-    ["git", "-C", at, "log", "-1", "--format=%s", oid, "--"],
-    { stdin: "ignore", stdout: "pipe", stderr: "ignore" }
-  )
-  const [out, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    child.exited,
-  ])
-  return code === 0 ? out.trim() : ""
-}
+const subjectOf = async (at: string, oid: string) =>
+  (await git(at, ["log", "-1", "--format=%s", oid, "--"])).out.trim()
 
 /** What Records says of the listed reviews' units, read once per load. */
 export interface UnitStanding {
@@ -286,6 +278,32 @@ export const afterClear = (
   cleared === undefined
     ? reviews
     : reviews.filter((review) => Date.parse(review.at) > Date.parse(cleared))
+
+/**
+ * Every review run after the clear `cleared`, from the page `first` on, in
+ * the store's order. The store orders reviews by their newest run's request
+ * and a clear cuts on when a run ended, so a run requested before the clear
+ * that ended after it can sit among reviews the clear hid: older pages are
+ * read while one still holds a review run after the clear.
+ */
+const ranAfter = (first: ReviewList.ReviewPage, cleared: string) =>
+  Effect.gen(function* () {
+    let page = first
+    let after = afterClear(page.reviews, cleared)
+    const held = [...after]
+    while (page.next !== undefined && after.length > 0) {
+      page = yield* ReviewList.reviews({
+        limit: WAITING_CAP,
+        before: page.next,
+      })
+      after = afterClear(page.reviews, cleared)
+      held.push(...after)
+    }
+    yield* Effect.annotateCurrentSpan({
+      "neuve.reviews.after-clear": held.length,
+    })
+    return held
+  }).pipe(Effect.withSpan("web.reviews.after-clear"))
 
 /** Every human unit of the review is held by a later review: it asks for nothing. */
 const isOlder = (review: Listed, standing: UnitStanding) => {
@@ -530,6 +548,13 @@ export const waitingOf = (
   }
 }
 
+/** Records' word on two sets of reviews, whose units are their own. */
+const both = (a: UnitStanding, b: UnitStanding): UnitStanding => ({
+  takenOver: new Set([...a.takenOver, ...b.takenOver]),
+  decided: new Map([...a.decided, ...b.decided]),
+  notRead: new Set([...a.notRead, ...b.notRead]),
+})
+
 /** Records' word on `reviews`' units, and where anyone gave feedback. */
 const answers = (
   reviews: ReadonlyArray<Listed>,
@@ -615,10 +640,17 @@ export async function reviewsRead(options: {
         )
       )
       const replaced = replacedOf(reviews, descends)
+      const cleared = yield* ReviewList.cleared
       return {
         recent,
         reviews,
-        cleared: yield* ReviewList.cleared,
+        cleared,
+        // Cleared, All holds every review run after the clear; a cycle's
+        // address lists its one review.
+        all:
+          cleared === undefined || cycle !== undefined
+            ? undefined
+            : yield* ranAfter(recent, cleared),
         ...(yield* answers(reviews, replaced)),
       }
     })
@@ -689,11 +721,8 @@ export async function reviewsRead(options: {
     ends
   )
   const shown = afterClear(waiting, read?.cleared)
-  // One clear applies to both lists. Cleared, All holds what ran after it
-  // among the newest WAITING_CAP, as "Waiting on you" does.
-  const all = read?.cleared
-    ? afterClear(read.recent.reviews, read.cleared)
-    : undefined
+  // One clear applies to both lists: All holds every review run after it.
+  const all = read?.all
   const allTotal = all?.length ?? read?.recent.total ?? 0
   const own = reviews.filter((review) => review.cycleId === options.cycle)
   const listed = options.cycle
@@ -711,35 +740,40 @@ export async function reviewsRead(options: {
   const page = Math.min(Math.max(1, Math.trunc(options.page) || 1), pageCount)
   const offset = (page - 1) * PAGE_SIZE
   // The newest WAITING_CAP reviews hold every page of All but those past
-  // them; a page past them reads its reviews, and Records' word on them, apart.
-  // Cleared, All has no such page: what it lists is already read.
+  // them; a page past them reads its reviews apart. Records' word on a
+  // review past them, on any page, is read apart too.
   let onPage: ReadonlyArray<Listed> = listed.slice(offset, offset + PAGE_SIZE)
-  if (
+  const pastWindow =
     !options.cycle &&
     options.filter === "all" &&
     !all &&
     offset >= listed.length
-  ) {
-    const older = await readRecords("web.load.reviews.page", () =>
+  const answered = new Set(reviews.map((review) => review.cycleId))
+  if (pastWindow || onPage.some((review) => !answered.has(review.cycleId))) {
+    const apart = await readRecords("web.load.reviews.page", () =>
       Effect.gen(function* () {
-        const reviews = (yield* ReviewList.reviews({
-          limit: PAGE_SIZE,
-          offset,
-        })).reviews
-        return { reviews, ...(yield* answers(reviews)) }
+        const page = pastWindow
+          ? (yield* ReviewList.reviews({ limit: PAGE_SIZE, offset })).reviews
+          : onPage
+        return {
+          page,
+          ...(yield* answers(
+            page.filter((review) => !answered.has(review.cycleId))
+          )),
+        }
       })
     )
-    onPage = older.reviews
-    pageStanding = older.standing
-    for (const cycleId of older.feedback) feedback.add(cycleId)
+    onPage = apart.page
+    pageStanding = both(standing, apart.standing)
+    for (const cycleId of apart.feedback) feedback.add(cycleId)
   }
-  const subjects = await Promise.all(
-    onPage.map((review) => subjectOf(at, review.range.headOid))
-  )
-  const inWaiting = new Set(waiting.map((review) => review.cycleId))
+  const [subjects, repo] = await Promise.all([
+    Promise.all(onPage.map((review) => subjectOf(at, review.range.headOid))),
+    repositoryName(at),
+  ])
   const data: ReviewsData = {
     ...(options.cycle ? { cycle: options.cycle } : {}),
-    repo: await repositoryName(at),
+    repo,
     reviews: onPage.map((review, index) =>
       summaryOf(review, pageStanding, feedback, subjects[index])
     ),
@@ -756,7 +790,7 @@ export async function reviewsRead(options: {
     counts: options.cycle
       ? {
           all: own.length,
-          waiting: own.filter((review) => inWaiting.has(review.cycleId)).length,
+          waiting: defaultListOf(own, standing, ends).length,
         }
       : { all: allTotal, waiting: shown.length },
     waiting: {

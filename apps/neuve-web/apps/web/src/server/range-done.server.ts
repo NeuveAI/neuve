@@ -1,6 +1,8 @@
 import { SharedWork } from "@neuve/records-core/shared-work"
 import type { SharedOutcome } from "@neuve/records-core/shared-work"
 
+import { git as run, spawnGit } from "./git.server"
+
 /*
  * What git says of the reviewed ranges (NEU-433), read at page load as the
  * user's last fetch left the repository:
@@ -21,8 +23,9 @@ import type { SharedOutcome } from "@neuve/records-core/shared-work"
  * (`refs/neuve/reviews/<head>`, record 0015) and other tools' refs keep
  * commits from pruning, not a range open.
  *
- * A git failure (a repository git refuses, a broken object database) is
- * never an answer: every read throws, and the caller treats git as silent.
+ * A git failure (a repository git refuses, a broken object database, a git
+ * past its deadline) is never an answer: every read throws, and the caller
+ * treats git as silent.
  *
  * Each read runs once per key through records-core's shared work (record
  * 0016): concurrent loads join the run in flight, and an answer that commit
@@ -40,29 +43,6 @@ const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 /** Git exited with an error: it said nothing about the ranges. */
 export class GitSilent extends Error {
   override readonly name = "GitSilent"
-}
-
-/** Runs `git -C at …`, with `input` on its stdin: its exit code and stdout. */
-const run = async (
-  at: string,
-  args: ReadonlyArray<string>,
-  input?: string | ReadableStream<Uint8Array>
-) => {
-  const child = Bun.spawn(["git", "-C", at, ...args], {
-    stdin:
-      input === undefined
-        ? "ignore"
-        : typeof input === "string"
-          ? new Blob([input])
-          : input,
-    stdout: "pipe",
-    stderr: "ignore",
-  })
-  const [out, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    child.exited,
-  ])
-  return { code, out }
 }
 
 /** Stdout of a git command that must succeed. */
@@ -89,11 +69,7 @@ const lines = (text: string | undefined) =>
 
 /** Each change's patch-id in `git <args>`'s output, with the commit it names (none for a plain diff). */
 const patchIds = async (at: string, args: ReadonlyArray<string>) => {
-  const diff = Bun.spawn(["git", "-C", at, ...args], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-  })
+  const diff = spawnGit(at, args)
   const ids = await must(at, ["patch-id", "--stable"], diff.stdout)
   const code = await diff.exited
   if (code !== 0) throw new GitSilent(`git ${args[0]} exited ${code}`)
