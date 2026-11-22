@@ -169,8 +169,14 @@ export const makeScreen = (input: {
   let pending = false;
   const left: string[] = [];
   let failed = false;
-  // A step that needs the person, with or without a command for it.
-  let needed = false;
+  // Steps that need the person, with or without a command for it. A question settles the step
+  // shown just before it: its answer's own line says what came of it.
+  let needed = 0;
+  let unsettled = false;
+  const settle = () => {
+    if (unsettled) needed -= 1;
+    unsettled = false;
+  };
   const write = async (text: string) => {
     if (pending) {
       pending = false;
@@ -202,7 +208,8 @@ export const makeScreen = (input: {
     header: (title) => write(`${paint("bold", title)}\n\n`),
     step: async (mark, label, text, command) => {
       if (mark === "failed") failed = true;
-      if (mark === "needs") needed = true;
+      unsettled = mark === "needs";
+      if (unsettled) needed += 1;
       if (
         (mark === "needs" || mark === "failed") &&
         command !== undefined &&
@@ -227,6 +234,7 @@ export const makeScreen = (input: {
       pending = true;
     },
     choose: async (text, choices, fallback) => {
+      settle();
       const listed = choices
         .map((choice, index) => `  ${index + 1}. ${choice.label}`)
         .join("\n");
@@ -249,6 +257,7 @@ export const makeScreen = (input: {
       }
     },
     confirm: async (text) => {
+      settle();
       for (;;) {
         const answer = await asked(question(text, "[y/N]"));
         if (answer === null) return undefined;
@@ -260,7 +269,7 @@ export const makeScreen = (input: {
     closing: async ({ next }) => {
       const command = (text: string) => `  ${paint("cyan", text)}`;
       const lines =
-        left.length === 0 && (failed || needed)
+        left.length === 0 && (failed || needed > 0)
           ? [paint("bold", "Not finished: see the lines above.")]
           : left.length === 0
             ? [

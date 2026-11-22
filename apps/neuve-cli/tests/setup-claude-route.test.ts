@@ -172,3 +172,37 @@ test("the question offers the three routes, asks again until an answer is one of
       true,
     );
 });
+
+// Why: the skill and install offers show a needs-you line, then ask. The answer settles it, so a
+// run whose questions were all answered ends ready; a needs-you line nothing settles does not.
+test("a question answered settles the line before it, and an unsettled one leaves setup not finished", async () => {
+  const run = async (answer: string | undefined) => {
+    let said = "";
+    const screen = plainScreen(
+      async (text) => {
+        said += text;
+      },
+      { canAsk: true, ask: async () => "n" },
+    );
+    await screen.step("needs", "Neuve skill", "0.2.1 for Codex: 8 files");
+    if (answer !== undefined) {
+      expect(await screen.confirm("Install the Neuve skill for Codex?")).toBe(
+        false,
+      );
+      await screen.step(
+        "skipped",
+        "Neuve skill",
+        "not installed; to add it later",
+        "neuve skills install",
+      );
+    }
+    await screen.closing({ next: "neuve review HEAD~1..HEAD" });
+    return said;
+  };
+  expect(await run("n")).toEndWith(
+    "\nNeuve is ready.\n  Next: neuve review HEAD~1..HEAD\n",
+  );
+  expect(await run(undefined)).toEndWith(
+    "\nNot finished: see the lines above.\n",
+  );
+});
