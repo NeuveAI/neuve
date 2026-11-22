@@ -44,12 +44,19 @@ export const resolveStoreLocation = (repository: string) =>
           // A stalled git fails like one that refuses the repository (exit 143), so no caller waits on it.
           { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 10_000 },
         );
-        const [stdout, stderr, exitCode] = await Promise.all([
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-          child.exited,
-        ]);
-        return { stdout, stderr, exitCode };
+        // Read while it runs, so a full pipe never stalls it; after a failed or killed git, a
+        // process it started may still hold the pipes, so its stderr is waited for only briefly.
+        const stdout = new Response(child.stdout).text();
+        const stderr = new Response(child.stderr).text().catch(() => "");
+        const exitCode = await child.exited;
+        if (exitCode === 0)
+          return { stdout: await stdout, stderr: "", exitCode };
+        stdout.catch(() => undefined);
+        return {
+          stdout: "",
+          stderr: await Promise.race([stderr, Bun.sleep(100).then(() => "")]),
+          exitCode,
+        };
       },
       catch: (cause) => new RepositoryUnavailable({ repository, cause }),
     });
