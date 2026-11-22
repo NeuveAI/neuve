@@ -1,10 +1,10 @@
-import { mkdir, realpath, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, realpath, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { Effect } from "effect";
 import { z } from "zod";
-import { resolveStoreLocation } from "@neuve/records-core";
+import { resolveStoreLocation, Starter } from "@neuve/records-core";
 import { reviewFetch } from "../../neuve-web/apps/web/serve-handler.ts";
 import { claimDesk, deskSocket, liveDesk } from "./review-desk-claim.ts";
 import { diagnoseDesk, REVIEW_DESK_COMMAND } from "./review-desk-config.ts";
@@ -26,6 +26,14 @@ const fetchHandler = z.custom<
 >((value) => typeof value === "function");
 const serverEntry = z.object({ default: z.object({ fetch: fetchHandler }) });
 const portNumber = z.coerce.number().int().min(0).max(65535);
+
+// What a page asks for while the desk restarts on a reinstalled version; it reloads by itself.
+const RESTARTING_PAGE = `<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="2">
+<title>Neuve review desk</title>
+<p>Neuve was reinstalled. The review desk is restarting on the new version, and this page reloads by itself.</p>
+`;
 
 const addressInUse = (error: unknown) =>
   error instanceof Error && "code" in error && error.code === "EADDRINUSE";
@@ -95,11 +103,13 @@ export const runReviewDesk = async (
       return 1;
     }
   }
-  const stopped = Promise.withResolvers<void>();
-  const stop = () => stopped.resolve();
+  const stopped = Promise.withResolvers<boolean>();
+  const stop = () => stopped.resolve(false);
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
   for (const signal of signals) process.once(signal, stop);
   let server: Bun.Server<undefined> | undefined;
+  // Set when the desk is to restart on a reinstalled version: the port to restart on.
+  let restartOn: number | undefined;
   try {
     // The web app's server reads these when it loads; the workspace-only addresses never apply.
     process.env["NEUVE_REPOSITORY"] = repository;
@@ -117,24 +127,32 @@ export const runReviewDesk = async (
       entry.default.fetch(request),
     );
     // This process keeps the server it loaded; an install replaces the folder beside it. Once
-    // desk.json is another file, no page mixes the new client with the old server.
+    // desk.json is another file, no page mixes the new client with the old server: the desk
+    // restarts on the new version once the installer has let go of the prefix.
     const metadata = join(desk.directory, "desk.json");
+    const installing = resolve(desk.directory, "../../../.install.lock");
     const loaded = await stat(metadata);
     const fetch = async (request: Request) => {
       const now = await stat(metadata).catch(() => undefined);
       if (
-        now === undefined ||
-        now.ino !== loaded.ino ||
-        now.mtimeMs !== loaded.mtimeMs
+        now !== undefined &&
+        now.ino === loaded.ino &&
+        now.mtimeMs === loaded.mtimeMs
       )
-        return new Response(
-          `The review desk was reinstalled. Stop this neuve review ${REVIEW_DESK_COMMAND} with Ctrl-C and run it again.\n`,
-          {
-            status: 503,
-            headers: { "Content-Type": "text/plain; charset=utf-8" },
-          },
-        );
-      return served(request);
+        return served(request);
+      if (
+        now !== undefined &&
+        (await access(installing).then(
+          () => false,
+          () => true,
+        ))
+      )
+        // After this response has gone out.
+        setTimeout(() => stopped.resolve(true), 200);
+      return new Response(RESTARTING_PAGE, {
+        status: 503,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
     };
     const serve = (at: number) =>
       Bun.serve({ hostname: "127.0.0.1", port: at, idleTimeout: 0, fetch });
@@ -152,8 +170,7 @@ export const runReviewDesk = async (
     const address = `http://127.0.0.1:${server.port}/`;
     claim.publish(address);
     await Bun.write(Bun.stdout, `Review desk: ${address}\n`);
-    await stopped.promise;
-    return 0;
+    if (await stopped.promise) restartOn = server.port;
   } finally {
     try {
       await server?.stop(true);
@@ -161,5 +178,30 @@ export const runReviewDesk = async (
       await claim.close();
       for (const signal of signals) process.off(signal, stop);
     }
+  }
+  if (restartOn === undefined) return 0;
+  // The new version's desk takes over this terminal, on the same address.
+  await Bun.write(
+    Bun.stdout,
+    "Neuve was reinstalled. The review desk restarts on the new version.\n",
+  );
+  const child = Bun.spawn(
+    [
+      ...Starter.currentCliCommand(),
+      "review",
+      REVIEW_DESK_COMMAND,
+      "--port",
+      String(restartOn),
+      ...(values.repo === undefined ? [] : ["--repo", repository]),
+    ],
+    { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+  );
+  const forward = (signal: NodeJS.Signals) => () => child.kill(signal);
+  const forwards = signals.map((signal) => [signal, forward(signal)] as const);
+  for (const [signal, handler] of forwards) process.on(signal, handler);
+  try {
+    return await child.exited;
+  } finally {
+    for (const [signal, handler] of forwards) process.off(signal, handler);
   }
 };

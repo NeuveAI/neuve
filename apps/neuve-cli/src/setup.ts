@@ -36,7 +36,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { Effect } from "effect";
 import { Registry } from "@neuve/records-core";
@@ -402,12 +402,43 @@ export const SETUP_UPGRADE_HELP = `Usage: neuve setup upgrade [--no-skills]
   What the install script runs once it has installed a new version: the setup steps this version
   adds, on this machine and in each repository set up here, and the undoing of those it drops.
   The repositories are those in Neuve's list of repositories with a Records store; one whose folder
-  is gone is skipped and said so, and one that was never set up is left alone. A step that needs
+  is gone is dropped from the list, one on a volume that isn't mounted is kept, and one that was
+  never set up is left alone. A step that needs
   an answer is asked at a terminal and otherwise waits; neuve doctor shows it. --no-skills leaves
   the skill offer out. Running it again changes nothing. It looks for the agent programs only as
   run time would start them (the stored path, else the PATH's codex) and installs nothing; neuve
   setup does the full look.
 `;
+
+// Folders that hold mount points. A repository whose nearest existing folder is one of them, or an
+// empty mount point left on the same disk as it, is on a volume that isn't mounted now.
+const MOUNT_FOLDERS = ["/Volumes", "/mnt", "/media"];
+
+/** Whether a listed repository is surely gone: absent, under a folder that is there on its own disk. */
+const folderGone = async (path: string) => {
+  const absent = await stat(path).then(
+    () => false,
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR"),
+  );
+  if (!absent) return false;
+  for (let parent = dirname(path); ; parent = dirname(parent)) {
+    const real = await realpath(parent).catch(() => undefined);
+    if (real === undefined) {
+      if (parent === "/") return false;
+      continue;
+    }
+    if (real === "/" || MOUNT_FOLDERS.includes(real)) return false;
+    const holder = MOUNT_FOLDERS.find((folder) =>
+      real.startsWith(`${folder}/`),
+    );
+    if (holder === undefined) return true;
+    const [own, held] = await Promise.all([stat(real), stat(holder)]);
+    return own.dev !== held.dev;
+  }
+};
 
 /** `neuve setup upgrade`, with the steps and the list of repositories given, for tests. */
 export const upgradeSetup = async (input: {
@@ -478,13 +509,10 @@ export const upgradeSetup = async (input: {
     }
   }
   let visited = 0;
+  const gone = new Set<string>();
   for (const { repository } of registry.repositories) {
     if ((await stat(repository).catch(() => undefined)) === undefined) {
-      await screen.step(
-        "skipped",
-        "Repository",
-        `${shown(repository)}: its folder is gone; Neuve's list of repositories still names it`,
-      );
+      if (await folderGone(repository)) gone.add(repository);
       continue;
     }
     // Only a repository set up here gets setup's steps; an upgrade never sets one up.
@@ -515,6 +543,28 @@ export const upgradeSetup = async (input: {
       where: set.repository,
     }).catch(stopped(set.repository));
     note(outcome);
+  }
+  // The list corrects itself: one line for the entries dropped, never one per entry.
+  if (gone.size > 0) {
+    const folders = `${gone.size} ${gone.size === 1 ? "folder that is" : "folders that are"} gone`;
+    await Effect.runPromise(
+      Registry.forgetRepositories(gone, list).pipe(
+        Effect.provide(BunFileSystem.layer),
+      ),
+    ).then(
+      () =>
+        screen.step(
+          "done",
+          "Repositories",
+          `Neuve's list of repositories no longer names ${folders}`,
+        ),
+      (error: unknown) =>
+        screen.step(
+          "skipped",
+          "Repositories",
+          `Neuve's list of repositories still names ${folders}; it couldn't be changed (${error instanceof Error ? error.message : String(error)})`,
+        ),
+    );
   }
   const repositories = `${visited} ${visited === 1 ? "repository" : "repositories"} set up here`;
   if (behind === 0 && failed === 0)
