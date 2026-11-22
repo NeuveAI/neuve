@@ -105,6 +105,8 @@ export const readLine = async (question: string) => {
     bytes.push(byte[0] ?? 0);
   }
   if (ended && bytes.length === 0) return null;
+  // Input ended after a partial answer: keep the answer, end the prompt's line.
+  if (ended) await Bun.write(Bun.stdout, "\n");
   return new TextDecoder().decode(new Uint8Array(bytes)).replace(/\r$/, "");
 };
 
@@ -170,12 +172,16 @@ export const makeScreen = (input: {
   const left: string[] = [];
   let failed = false;
   // Steps that need the person, with or without a command for it. A question settles the step
-  // shown just before it: its answer's own line says what came of it.
+  // shown just before it: its answer's own line says what came of it, so its command is not left.
   let needed = 0;
   let unsettled = false;
+  let unsettledCommand: string | undefined;
   const settle = () => {
     if (unsettled) needed -= 1;
+    if (unsettledCommand !== undefined)
+      left.splice(left.indexOf(unsettledCommand), 1);
     unsettled = false;
+    unsettledCommand = undefined;
   };
   const write = async (text: string) => {
     if (pending) {
@@ -209,13 +215,16 @@ export const makeScreen = (input: {
     step: async (mark, label, text, command) => {
       if (mark === "failed") failed = true;
       unsettled = mark === "needs";
+      unsettledCommand = undefined;
       if (unsettled) needed += 1;
       if (
         (mark === "needs" || mark === "failed") &&
         command !== undefined &&
         !left.includes(command)
-      )
+      ) {
         left.push(command);
+        if (unsettled) unsettledCommand = command;
+      }
       await write(
         `${line(mark, label, command === undefined ? text : `${text}: ${paint("cyan", command)}`)}\n`,
       );

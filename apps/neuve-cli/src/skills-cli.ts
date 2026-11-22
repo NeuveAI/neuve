@@ -1267,7 +1267,10 @@ export const offerSkillsAfterSetup = async (
   input: Readonly<{
     /** Setup's folder for this repository's state, where the marker goes. */
     stateDirectory: string;
-    /** The agent programs setup found; the skill is offered for those, and kept current wherever it is installed. */
+    /**
+     * The agent programs setup found; the skill is offered for those alone, as setup writes hooks
+     * only for them. `neuve skills install` keeps a copy current for a program not found.
+     */
     agents: ReadonlyArray<Agent>;
     context?: SkillsContext;
   }>,
@@ -1280,15 +1283,7 @@ export const offerSkillsAfterSetup = async (
     const source = await context.source();
     if (!source.found)
       return { reason: "this neuve carries no Neuve skill to offer" };
-    // A skill already installed is kept up to date even when setup didn't find its program.
-    const installed = await keptAgents(
-      { ...context, out: async () => {} },
-      AGENT_PROGRAMS.filter(
-        (program) => !input.agents.includes(program.id),
-      ).map((program) => ({ program, lines: [], strangers: [] })),
-      "user",
-    );
-    const agents = [...input.agents, ...installed];
+    const agents = input.agents;
     if (agents.length === 0)
       return { reason: "no agent program was found to offer it to" };
     await install(

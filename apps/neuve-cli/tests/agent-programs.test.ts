@@ -18,7 +18,7 @@ import {
 } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AGENT_PROGRAMS,
   describeFinding,
@@ -38,6 +38,7 @@ import { findCodexProgram } from "@neuve/harness/runtimes";
 import { AccountName, AccountStore } from "@neuve/runtime";
 import { findAgentPrograms, machineOffers } from "../src/agent-programs.ts";
 import { lookForCodex } from "../src/auth-cli.ts";
+import { writeInstallation } from "../src/installation.ts";
 import { runSkillsCli } from "../src/skills-cli.ts";
 
 const folders: string[] = [];
@@ -304,6 +305,20 @@ test("doctor reports each program in setup's words, and a stored path that stops
   });
   expect(describeFinding(claudeFinding)).toBe(`${headline(claudeFinding)}.`);
 
+  // A claude that doesn't answer its version (a stale shim, say) is not Claude Code: not found,
+  // and the line says what was asked, so the file that is there isn't called absent.
+  const silent = await script(join(root, "silent"), "claude", "exit 1");
+  const [shim] = await findAgentPrograms(
+    "check",
+    { path: dirname(silent), home },
+    ["claude-code"],
+  );
+  expect(shim?.found).toBeUndefined();
+  expect(shim?.strangers).toEqual([silent]);
+  expect(describeFinding(shim!)).toBe(
+    `Claude Code was not found.\n  ${silent} (on the PATH): was asked its version and didn't answer`,
+  );
+
   // Nothing stored: only the PATH's codex is asked, and it is skipped.
   const none = await check("Codex");
   expect(none?.status).toBe("ok");
@@ -465,6 +480,108 @@ test("rerunning setup hooks with Codex not found keeps both agents captured; onl
   ).toEqual(["claude-code"]);
 });
 
+// Why: a program removed from the machine must not get its hook file written back by a rerun of
+// setup hooks; its capture stays listed (nothing is taken away), and doctor gives no fix that
+// would not fix it.
+test("a captured agent that is gone stays listed, gets no hooks until it is found, and doctor says so plainly", async () => {
+  const root = await scratch();
+  const home = join(root, "home");
+  const repo = join(root, "repo");
+  await mkdir(repo);
+  Bun.spawnSync(["git", "init", "-q", repo]);
+  const settings = join(root, "claude", "settings.json");
+  const codexHooks = join(root, "codex", "hooks.json");
+  const neuve = await script(join(root, "bin"), "neuve", "exit 0");
+  const run = async (programs: () => Promise<ReadonlyArray<Finding>>) => {
+    let printed = "";
+    const write = Bun.write;
+    Bun.write = (async (to: unknown, data: unknown) => {
+      if (to === Bun.stdout) {
+        printed += String(data);
+        return String(data).length;
+      }
+      return write(to as never, data as never);
+    }) as typeof Bun.write;
+    try {
+      expect(
+        await runSetupHooks(
+          [
+            "--repo",
+            repo,
+            "--claude-settings",
+            settings,
+            "--codex-hooks",
+            codexHooks,
+            "--command",
+            neuve,
+            "--no-stack",
+          ],
+          { programs, stackStore: join(root, "stack") },
+        ),
+      ).toBe(0);
+    } finally {
+      Bun.write = write;
+    }
+    return printed;
+  };
+  expect(await run(() => found())).toContain(
+    "Codex asks you to review and trust new hooks",
+  );
+  const written = await readFile(codexHooks, "utf8");
+  // Codex is removed, and its hook file with it.
+  await rm(join(root, "codex"), { recursive: true });
+  const printed = await run(() => found(["claude-code"]));
+  expect(existsSync(codexHooks)).toBe(false);
+  expect(
+    (
+      JSON.parse(
+        await readFile(join(repo, ".git", "neuve", "capture.json"), "utf8"),
+      ) as { agents: string[] }
+    ).agents,
+  ).toEqual(["claude-code", "codex"]);
+  expect(printed).toContain(
+    "Codex        not found; its capture stays listed, and no hooks are written for it until it is found (--agents names the agents to keep)\n",
+  );
+  expect(printed).not.toContain("Codex asks you to review and trust");
+  // Doctor's capture check, in a repository set up for it.
+  await writeInstallation(repo, {
+    cliBinary: "/opt/neuve/bin/neuve",
+    graphBinary: "/opt/neuve/lib/neuve/entire-graph",
+  });
+  const doctor = async () =>
+    (
+      await inspectDoctor({
+        repository: repo,
+        version: "0.1.0",
+        home,
+        path: join(root, "no-programs"),
+        findCodex: runtimeOnly,
+        hookFiles: (harness) => (harness === "codex" ? codexHooks : settings),
+      })
+    ).checks.find((entry) => entry.check === "capture");
+  const capture = await doctor();
+  expect(capture?.status).toBe("ok");
+  expect(capture?.detail).toContain(
+    `${codexHooks}: capture.json lists codex, which isn't found here, so it has no hooks until neuve setup hooks finds it`,
+  );
+  // Its hook file left behind and out of date: setup hooks leaves it as it is while Codex is gone,
+  // so doctor says so rather than offer a fix that writes nothing.
+  const stale = written.replace(/"timeout": \d+/, '"timeout": 1');
+  expect(stale).not.toBe(written);
+  await mkdir(join(root, "codex"));
+  await writeFile(codexHooks, stale);
+  const left = await doctor();
+  expect(left?.status).toBe("ok");
+  expect(left?.detail).toContain(
+    `${codexHooks}: Neuve's codex hooks here are out of date (`,
+  );
+  expect(left?.detail).toContain(
+    "codex isn't found here, so they are left as they are until neuve setup hooks finds it",
+  );
+  await run(() => found(["claude-code"]));
+  expect(await readFile(codexHooks, "utf8")).toBe(stale);
+});
+
 test("a capture.json that can't be read is written again, and setup hooks says so", async () => {
   const root = await scratch();
   const repo = join(root, "repo");
@@ -514,7 +631,9 @@ test("a capture.json that can't be read is written again, and setup hooks says s
   ).toEqual(["claude-code"]);
 });
 
-test("a skill already installed is kept up to date when its program isn't found", async () => {
+// Why: `neuve skills install` (and the installer's --offer) keep a copy current for a program not
+// found, as doctor's fix relies on; setup's own offer is for the programs found, as its hooks are.
+test("a skill already installed is kept up to date when its program isn't found, but setup's offer leaves it out", async () => {
   const home = await scratch();
   let said = "";
   const context = (programs: ReadonlyArray<string>, answer = "y") => ({
@@ -544,15 +663,25 @@ test("a skill already installed is kept up to date when its program isn't found"
   );
   expect(said).toContain("Codex (user)");
   expect(said).toContain("Claude Code (user)");
-  // The offer after setup covers it too, though setup found only Claude Code.
+  // Setup's offer is for the program setup found, Claude Code, even when Codex's copy is older.
+  expect(
+    await runSkillsCli(["install", "--agents", "codex"], {
+      ...context([]),
+      version: "0.0.9",
+      source: (async () =>
+        (await import("../src/skills-cli.ts")).findSkillSource({
+          version: "0.0.9",
+        })) as never,
+    }),
+  ).toBe(0);
   said = "";
   await offerSkillsAfterSetup({
     stateDirectory: join(home, "state"),
     agents: ["claude-code"],
     context: context(["claude-code"], "n"),
   });
-  // Codex's copy is current, so only Claude Code's would change.
   expect(said).toContain("for Claude Code: 8 files in ");
+  expect(said).not.toContain("Codex");
 });
 
 test("the install offer asks once per machine; a yes is remembered only once npm installed it; --ask-install-again asks again", async () => {
@@ -638,4 +767,37 @@ test("an answer that can't be remembered is said once and never fails the offer"
   expect(context.said().match(/couldn't remember this answer/g)).toHaveLength(
     1,
   );
+});
+
+// Why: one program is enough, so a missing one is left for the person only when none is there once
+// the offers are answered; deciding that before an install leaves a "to do" for nothing.
+test("a program installed by an offer makes the other missing one optional, whichever is asked", async () => {
+  for (const [declined, asked] of [
+    [codex, claude],
+    [claude, codex],
+  ] as const) {
+    const npm = await fakeNpm(0);
+    const offers = machineOffers(join(await scratch(), "home"));
+    await offers.record(declined.id);
+    const context = { ...offer("y", npm.bin), offers };
+    let installed = false;
+    const ids = await setUpAgentPrograms(
+      ["claude-code", "codex"],
+      context,
+      async (_look, _where, wanted = ["claude-code", "codex"]) => {
+        if (wanted.length === 1) installed = true;
+        return (await found(installed ? [asked.id] : [])).filter((finding) =>
+          wanted.includes(finding.program.id),
+        );
+      },
+    );
+    expect(ids).toEqual([asked.id]);
+    expect(context.asked).toHaveLength(1);
+    expect(context.said(), declined.name).toContain(
+      `skipped ${declined.name.padEnd(12)} not found: ${declined.install.join(" ")}\n`,
+    );
+    expect(context.said(), declined.name).not.toContain(
+      `to do   ${declined.name.padEnd(12)} not found:`,
+    );
+  }
 });

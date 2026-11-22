@@ -246,6 +246,8 @@ export const handlersFor = (
 
 export interface WorkerOptions {
   readonly location: StoreLocation;
+  /** The version of the program this worker runs, said in its status reply. */
+  readonly version?: string;
   readonly handlers?: Partial<Record<JobKind, JobHandler>>;
   /** Exit after this long with no jobs and no open ACP session (D19). Default 60 s. */
   readonly idleTimeout?: Duration.Input;
@@ -363,6 +365,8 @@ class Aborted {
 /** What `neuve worker status` hears from a live worker over its socket. */
 export interface WorkerStatusReply {
   readonly pid: number;
+  /** The version of the program it runs; absent from a worker that doesn't say (an older build). */
+  readonly version?: string;
   readonly startedAt: string;
   readonly socket: string;
   /** Each slot's running job, or null when the slot is free (10.31). */
@@ -745,6 +749,9 @@ export const run = (options: WorkerOptions) =>
         case "status": {
           const reply: WorkerStatusReply = {
             pid,
+            ...(options.version === undefined
+              ? {}
+              : { version: options.version }),
             startedAt,
             socket: path,
             slots: { ...slots },

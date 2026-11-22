@@ -89,17 +89,20 @@ export const AGENT_PROGRAMS: ReadonlyArray<AgentProgram> = [
     name: "Claude Code",
     install: ["npm", "install", "-g", "@anthropic-ai/claude-code@latest"],
     page: "https://code.claude.com/docs/en/setup",
-    // As the Claude runtime finds it: the PATH's `claude`.
+    // As the Claude runtime finds it: the PATH's `claude`, when it answers its version.
     look: async (_look, { path }) => {
       const found = findProgram("claude", undefined, path);
       if (found === undefined) return { lines: [], strangers: [] };
       const version = await versionOf(found);
+      if (version === undefined)
+        return {
+          lines: [
+            `  ${found} (on the PATH): was asked its version and didn't answer`,
+          ],
+          strangers: [found],
+        };
       return {
-        found: {
-          path: found,
-          ...(version === undefined ? {} : { version }),
-          how: "found on the PATH",
-        },
+        found: { path: found, version, how: "found on the PATH" },
         lines: [],
         strangers: [],
       };
@@ -290,6 +293,15 @@ const inherit = async (argv: ReadonlyArray<string>) => {
   }
 };
 
+/** This machine was asked about the program before, and `--ask-install-again` wasn't given. */
+const askedBefore = async (program: AgentProgram, context: OfferContext) =>
+  context.askAgain !== true &&
+  (await context.offers?.asked(program.id)) === true;
+
+/** Whether the offer for a missing program asks: at a terminal, and once per machine. */
+export const willAsk = async (program: AgentProgram, context: OfferContext) =>
+  context.screen.canAsk && !(await askedBefore(program, context));
+
 /**
  * The offer for one missing program, default no. It says the program is missing and the command
  * that installs it; at a terminal, once per machine, it asks. On yes it runs the npm package's own
@@ -318,12 +330,10 @@ export const offerInstall = async (
     await screen.step(mark, program.name, "not found", command);
     await screen.detail([...extra, ...another]);
   };
-  const askedBefore =
-    context.askAgain !== true && (await context.offers?.asked(program.id));
-  if (!screen.canAsk || askedBefore) {
+  if (!(await willAsk(program, context))) {
     await missing(
       optional ? "skipped" : "needs",
-      askedBefore === true
+      (await askedBefore(program, context))
         ? [
             "Asked on this machine before; neuve setup --ask-install-again asks again.",
           ]

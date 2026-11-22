@@ -281,8 +281,12 @@ export const runSteps = async (run: StepsRun): Promise<StepsOutcome> => {
     )
       continue;
     // Work already there counts before the person's flag: a repository offered the skill before
-    // steps were recorded has it applied, whatever this run leaves out.
-    if (earlier === undefined && (await step.done?.()) === true) {
+    // steps were recorded has it applied, whatever this run leaves out, and so does one whose
+    // offer was considered and whose skill was installed since.
+    if (
+      (earlier === undefined || outcomeOf(earlier) !== "applied") &&
+      (await step.done?.()) === true
+    ) {
       await keep(step.id, "applied");
       continue;
     }
@@ -344,7 +348,8 @@ export const pendingSteps = async (
     if (
       step.dropped === undefined &&
       entry !== undefined &&
-      outcomeOf(entry) === "considered"
+      outcomeOf(entry) === "considered" &&
+      (await step.done?.()) !== true
     )
       considered.push({ step, reason: entry.reason ?? "no reason was kept" });
   }
@@ -385,6 +390,8 @@ export const SKILL_LEFT_OUT = {
 
 export const repositorySteps = (
   stateDirectory: string,
+  /** The repository, whose own copy of the skill (`--scope repo`) counts as installed too. */
+  repository: string,
   agents: () => Promise<ReadonlyArray<AgentHarness>>,
   /** Why this run leaves the offer out, when it does: recorded as considered for it. */
   leftOut?: string,
@@ -400,7 +407,7 @@ export const repositorySteps = (
   // Installed some other way (neuve skills install after a yes) is the offer's work done too.
   const installed = async () => {
     const skills = context ?? defaultSkillsContext();
-    return (await inspectInstalled(skills).catch(() => [])).some(
+    return (await inspectInstalled(skills, repository).catch(() => [])).some(
       (skill) =>
         skill.state === "installed" && skill.version === skills.version,
     );
