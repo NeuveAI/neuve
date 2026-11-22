@@ -62,10 +62,19 @@ export const resolveStoreLocation = (repository: string) =>
           .catch(() => undefined);
         const exitCode = await child.exited;
         if (exitCode !== 0) return { stdout: "", stderr, exitCode };
+        // The timer is cleared once stdout wins, so it never keeps a short command alive.
+        let stop = () => {};
         const out = await Promise.race([
           stdout,
-          Bun.sleep(Math.max(0, deadline - Date.now())).then(() => undefined),
+          new Promise<undefined>((resolve) => {
+            const timer = setTimeout(
+              resolve,
+              Math.max(0, deadline - Date.now()),
+            );
+            stop = () => clearTimeout(timer);
+          }),
         ]);
+        stop();
         return out === undefined
           ? { stdout: "", stderr, exitCode: 143 }
           : { stdout: out, stderr: "", exitCode };

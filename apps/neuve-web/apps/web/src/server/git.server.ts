@@ -47,9 +47,15 @@ export const git = async (
   out.catch(() => undefined)
   const code = await child.exited
   if (code !== 0) return { code, out: "" }
+  // The timer is cleared once stdout wins, so it never keeps a process alive.
+  let stop = () => {}
   const read = await Promise.race([
     out,
-    Bun.sleep(Math.max(0, deadline - Date.now())).then(() => undefined),
+    new Promise<undefined>((resolve) => {
+      const timer = setTimeout(resolve, Math.max(0, deadline - Date.now()))
+      stop = () => clearTimeout(timer)
+    }),
   ])
+  stop()
   return read === undefined ? { code: 143, out: "" } : { code, out: read }
 }
