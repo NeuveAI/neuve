@@ -394,6 +394,78 @@ test("pages follow the cursor without repeating a review, and the last page has 
   ).toBe(fixture.a.cycleId);
 });
 
+test("endedAfter keeps the reviews whose newest run ended after a time, whenever it was requested, and counts and pages only them", async () => {
+  // Why: the Reviews page's All, after a clear, lists every review run after it. The list orders
+  // by request and the clear cuts on when a run ended, so a run requested early that ended after
+  // the clear must still be found, and only a time comparison (not the stored text) decides it.
+  const location = freshLocation();
+  const cutoff = "2026-10-20T12:00:00.500Z";
+  const ids = await runOn(
+    location,
+    Effect.gen(function* () {
+      yield* Log.append([
+        envelope("actor.registered@1", `actor:${agent}`, agent, undefined, {
+          actorKind: "agent",
+          harness: "neuve",
+          sessionId: "s",
+        }),
+      ]);
+      const ran = (label: string, endedAt?: string) =>
+        Effect.gen(function* () {
+          const review = cycle(label, []);
+          const request = review.request(label);
+          yield* Log.append([...review.structure, request]);
+          if (endedAt)
+            yield* Log.append([
+              review.completed(request.id, "completed", endedAt),
+            ]);
+          return { cycleId: review.cycleId, requestId: request.id };
+        });
+      // Requested first, still running at the cutoff, ended after it.
+      const early = yield* ran("early", "2026-10-20T12:00:05.000Z");
+      // Ended half a second before the cutoff; as text it sorts after it.
+      const justBefore = yield* ran("just-before", "2026-10-20T12:00:00Z");
+      yield* ran("before", "2026-10-20T11:00:00.000Z");
+      const late = yield* ran("late", "2026-10-20T13:00:00.000Z");
+      // No receipt: its job's end decides.
+      const finished = yield* ran("finished");
+      yield* setJob(
+        finished.requestId,
+        "completed",
+        "2026-10-20T14:00:00.000Z",
+      );
+      return { early, justBefore, late, finished };
+    }),
+  );
+  const page = (options: { limit: number; offset?: number }) =>
+    runOn(
+      location,
+      ReviewList.reviews({ ...options, endedAfter: cutoff }).pipe(
+        Effect.provide(Blobs.layer(location)),
+      ),
+    );
+  const first = await page({ limit: 2 });
+  expect(first.reviews.map((review) => review.cycleId)).toEqual([
+    ids.finished.cycleId,
+    ids.late.cycleId,
+  ]);
+  const second = await page({ limit: 2, offset: 2 });
+  expect(second.reviews.map((review) => review.cycleId)).toEqual([
+    ids.early.cycleId,
+  ]);
+  const past = await page({ limit: 2, offset: 4 });
+  expect(past.reviews).toEqual([]);
+  expect([first.total, second.total, past.total]).toEqual([3, 3, 3]);
+  // Without it, every review counts.
+  const every = await runOn(
+    location,
+    ReviewList.reviews({ limit: 10 }).pipe(
+      Effect.provide(Blobs.layer(location)),
+    ),
+  );
+  expect(every.total).toBe(5);
+});
+
 test("decided reads every person's standing decision, never an agent's; feedbackGiven anyone's", async () => {
   const location = freshLocation();
   const fixture = await runOn(location, scenario(location));

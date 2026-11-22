@@ -174,6 +174,24 @@ export const NothingWaits: Story = {
   },
 }
 
+/** Nothing waits, yet All lists reviews: Clear, which clears both lists, is offered here too. */
+export const NothingWaitsUnderWaiting: Story = {
+  args: {
+    data: {
+      ...realHomeWaiting,
+      reviews: [],
+      total: 0,
+      counts: { ...realHomeWaiting.counts, waiting: 0 },
+      waiting: { units: 0, reviews: 0 },
+    },
+    onClear: async () => {},
+  },
+  play: async ({ canvas }) => {
+    await visible(canvas.getByText("Nothing waits on you."))
+    await visible(canvas.getByRole("button", { name: "Clear" }))
+  },
+}
+
 /** The branch moved past the newest review: Start a review offers the new work. */
 export const NewWork: Story = {
   args: { start: startPreviewFixture, onStartReview: async () => {} },

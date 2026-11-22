@@ -104,13 +104,15 @@ export interface ReviewPage {
  * first, for numbered pages; it pages by position, so a review re-run between two reads shifts the
  * others by one. A `limit` that is not a finite number reads one page of `LIMIT_MAX`; a `before` or
  * `offset` that is not one reads from the newest. `cycleId` reads that one review, wherever it
- * stands.
+ * stands. `endedAfter` keeps only the reviews whose newest run's `at` is later than that time, and
+ * `total` and paging count only them.
  */
 export const reviews = (options: {
   readonly limit: number;
   readonly before?: number | undefined;
   readonly offset?: number | undefined;
   readonly cycleId?: string | undefined;
+  readonly endedAfter?: string | undefined;
 }) =>
   Effect.gen(function* () {
     yield* assertCompatible;
@@ -127,20 +129,30 @@ export const reviews = (options: {
         ? Math.max(0, Math.trunc(options.offset))
         : 0;
     const cycle = options.cycleId ?? null;
+    const endedAfter = options.endedAfter ?? null;
+    // The newest run's `at`, as `listed` below reads it, compared as a time: stored times are ISO
+    // strings whose fractional seconds vary, so they don't compare as text.
+    const ended = sql`(${endedAfter} IS NULL OR julianday((SELECT coalesce(
+        (SELECT r.ended_at FROM projection_runs r WHERE r.run_id = q.id),
+        (SELECT coalesce(j.finished_at, j.started_at) FROM jobs j
+          WHERE j.event_id = q.id AND j.kind IN ('review.run', 'review.run@2')
+          ORDER BY j.job_seq DESC LIMIT 1),
+        q.occurred_at) FROM events q WHERE q.seq = n.seq)) > julianday(${endedAfter}))`;
     // One row more than the page tells whether an older page exists; the window counts every
     // review the read pages through, in the same grouping pass.
     const runs = yield* sql<{
       cycleId: string;
       seq: number;
       total: number;
-    }>`SELECT json_extract(e.envelope, '$.attribution.cycleId') AS cycle_id, max(e.seq) AS seq,
-        count(*) OVER () AS total
-      FROM events e
-      WHERE e.kind = 'review.requested@1'
-        AND (EXISTS (SELECT 1 FROM jobs j WHERE j.event_id = e.id AND j.kind IN ('review.run', 'review.run@2'))
-          OR EXISTS (SELECT 1 FROM projection_runs r WHERE r.run_id = e.id))
-        AND (${cycle} IS NULL OR json_extract(e.envelope, '$.attribution.cycleId') = ${cycle})
-      GROUP BY cycle_id HAVING ${before} IS NULL OR max(e.seq) < ${before}
+    }>`SELECT cycle_id, seq, count(*) OVER () AS total FROM (
+        SELECT json_extract(e.envelope, '$.attribution.cycleId') AS cycle_id, max(e.seq) AS seq
+        FROM events e
+        WHERE e.kind = 'review.requested@1'
+          AND (EXISTS (SELECT 1 FROM jobs j WHERE j.event_id = e.id AND j.kind IN ('review.run', 'review.run@2'))
+            OR EXISTS (SELECT 1 FROM projection_runs r WHERE r.run_id = e.id))
+          AND (${cycle} IS NULL OR json_extract(e.envelope, '$.attribution.cycleId') = ${cycle})
+        GROUP BY cycle_id HAVING ${before} IS NULL OR max(e.seq) < ${before}) n
+      WHERE ${ended}
       ORDER BY seq DESC LIMIT ${limit + 1} OFFSET ${offset}`;
     const page = runs.slice(0, limit);
     // Past the last review no row carries the window's count, so it is read on its own.
@@ -156,8 +168,8 @@ export const reviews = (options: {
                   OR EXISTS (SELECT 1 FROM projection_runs r WHERE r.run_id = e.id))
                 AND (${cycle} IS NULL OR json_extract(e.envelope, '$.attribution.cycleId') = ${cycle})
               GROUP BY json_extract(e.envelope, '$.attribution.cycleId')
-              HAVING ${before} IS NULL OR max(e.seq) < ${before})`)[0]?.total ??
-          0));
+              HAVING ${before} IS NULL OR max(e.seq) < ${before}) n
+              WHERE ${ended}`)[0]?.total ?? 0));
     const listed: Array<ListedReview> = [];
     for (const { cycleId, seq } of page) {
       const [request] = yield* sql<{

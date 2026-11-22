@@ -12,6 +12,8 @@ import {
   projectSubmittedChangedRanges,
 } from "@neuve/review-rules"
 
+import { git } from "./git.server"
+
 import type {
   HunkHeader,
   HunkHeaders,
@@ -228,18 +230,8 @@ export const sourcesFor = (
   )
 
 /** One `git config` value in the repository, or "" when it is unset. */
-const config = async (repository: string, key: string) => {
-  const child = Bun.spawn(["git", "-C", repository, "config", "--get", key], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-  })
-  const [out, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    child.exited,
-  ])
-  return code === 0 ? out.trim() : ""
-}
+const config = async (repository: string, key: string) =>
+  (await git(repository, ["config", "--get", key])).out.trim()
 
 /** The repository's name as the header shows it: its origin's, else its folder's. */
 export const repositoryName = async (repository: string) => {

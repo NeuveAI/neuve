@@ -11,6 +11,7 @@ import type {
   RunningPhase,
 } from "@workspace/ui/neuve/states/review-start"
 
+import { git as run } from "./git.server"
 import { NoStore, readRecords, repository } from "./records.server"
 import { requestFromWeb } from "./review-request.server"
 
@@ -29,14 +30,7 @@ import { requestFromWeb } from "./review-request.server"
 /* ── What the press reviews (ST2, 10.103) ──────────────────── */
 
 const git = async (at: string, args: ReadonlyArray<string>) => {
-  const child = Bun.spawn(["git", "-C", at, ...args], {
-    stdout: "pipe",
-    stderr: "ignore",
-  })
-  const [out, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    child.exited,
-  ])
+  const { code, out } = await run(at, args)
   return code === 0 ? out.trim() : undefined
 }
 

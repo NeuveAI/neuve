@@ -5,13 +5,10 @@
  * head, is not new work since the review.
  */
 
-const isAncestor = async (at: string, ancestor: string, head: string) => {
-  const child = Bun.spawn(
-    ["git", "-C", at, "merge-base", "--is-ancestor", ancestor, head],
-    { stdout: "ignore", stderr: "ignore" }
-  )
-  return (await child.exited) === 0
-}
+import { git } from "./git.server"
+
+const isAncestor = async (at: string, ancestor: string, head: string) =>
+  (await git(at, ["merge-base", "--is-ancestor", ancestor, head])).code === 0
 
 /**
  * True when `head` descends from `reviewed` and is not `reviewed` itself.

@@ -9,11 +9,13 @@ import type { SqlClient } from "effect/sql/SqlClient"
 import {
   Blobs,
   Computations,
+  RepositoryUnavailable,
   Store,
-  resolveStoreLocation,
+  storeLocationIn,
 } from "@neuve/records-core"
 import type { StoreLocation } from "@neuve/records-core"
 
+import { git } from "./git.server"
 import { notifyRecordsChanged } from "./records-changes.server"
 
 /**
@@ -59,10 +61,25 @@ type Mode = "read" | "write" | "create"
  */
 const locations = new Map<string, StoreLocation>()
 
-const locationWork = new SharedWork<
-  StoreLocation,
-  Effect.Error<ReturnType<typeof resolveStoreLocation>>
->()
+const locationWork = new SharedWork<StoreLocation, RepositoryUnavailable>()
+
+/**
+ * Records' `resolveStoreLocation`, read through the web app's git runner so a
+ * stalled git fails the page at its deadline instead of holding it.
+ */
+const resolveStoreLocation = (at: string) =>
+  Effect.tryPromise({
+    try: () => git(at, ["rev-parse", "--git-common-dir"]),
+    catch: (cause) => new RepositoryUnavailable({ repository: at, cause }),
+  }).pipe(
+    Effect.flatMap(({ code, out }) =>
+      code === 0
+        ? Effect.succeed(storeLocationIn(resolve(at, out.trim())))
+        : Effect.fail(
+            new RepositoryUnavailable({ repository: at, cause: { code } })
+          )
+    )
+  )
 
 const locate = (at: string) =>
   Effect.suspend(() => {
