@@ -169,6 +169,8 @@ export const makeScreen = (input: {
   let pending = false;
   const left: string[] = [];
   let failed = false;
+  // A step that needs the person, with or without a command for it.
+  let needed = false;
   const write = async (text: string) => {
     if (pending) {
       pending = false;
@@ -188,7 +190,10 @@ export const makeScreen = (input: {
       : `${text} ${hint} `;
   const asked = async (text: string) => {
     await write("");
-    return ask(text);
+    const answer = await ask(text);
+    // The end of input typed no newline; end the prompt's line here.
+    if (answer === null) await out("\n");
+    return answer;
   };
   return {
     styled,
@@ -197,6 +202,7 @@ export const makeScreen = (input: {
     header: (title) => write(`${paint("bold", title)}\n\n`),
     step: async (mark, label, text, command) => {
       if (mark === "failed") failed = true;
+      if (mark === "needs") needed = true;
       if (
         (mark === "needs" || mark === "failed") &&
         command !== undefined &&
@@ -254,19 +260,23 @@ export const makeScreen = (input: {
     closing: async ({ next }) => {
       const command = (text: string) => `  ${paint("cyan", text)}`;
       const lines =
-        left.length === 0 && !failed
-          ? [
-              paint("bold", "Neuve is ready."),
-              ...(next === undefined ? [] : [`  Next: ${paint("cyan", next)}`]),
-            ]
-          : [
-              paint(
-                "bold",
-                failed ? "Not finished. Left for you:" : "Left for you:",
-              ),
-              ...left.map(command),
-              ...(next === undefined ? [] : [`Then: ${paint("cyan", next)}`]),
-            ];
+        left.length === 0 && (failed || needed)
+          ? [paint("bold", "Not finished: see the lines above.")]
+          : left.length === 0
+            ? [
+                paint("bold", "Neuve is ready."),
+                ...(next === undefined
+                  ? []
+                  : [`  Next: ${paint("cyan", next)}`]),
+              ]
+            : [
+                paint(
+                  "bold",
+                  failed ? "Not finished. Left for you:" : "Left for you:",
+                ),
+                ...left.map(command),
+                ...(next === undefined ? [] : [`Then: ${paint("cyan", next)}`]),
+              ];
       await write(`\n${lines.join("\n")}\n`);
     },
   };

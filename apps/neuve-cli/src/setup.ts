@@ -1,6 +1,5 @@
 import { checkSignIn } from "./doctor.ts";
 import { writePrivateEnvironment } from "./private-environment.ts";
-import { REVIEW_DESK_COMMAND } from "./review-desk-config.ts";
 import { quote } from "./shell-quote.ts";
 import { defaultSkillsContext, type SkillsContext } from "./skills-cli.ts";
 import { commandScreen, shown, type Screen } from "./terminal.ts";
@@ -282,7 +281,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     "Graph engine",
     `checked at ${revision.slice(0, 12)}`,
   );
-  await reviewsStep(screen, repository, route.route, repo);
+  await reviewsStep(screen, repository, route.route, repo, route.unreadable);
   // Then the named steps: this machine's, then this repository's.
   const programs = agentLooks(wanted, "setup", askAgain, { screen });
   const steps = { mode: "setup", version: CLI_VERSION, screen } as const;
@@ -776,7 +775,9 @@ export const ROUTE_QUESTION = "How should reviews sign in?";
 const chooseRoute = async (
   flag: string | undefined,
   screen: Screen,
-): Promise<{ refused: string } | { route: RouteName | undefined }> => {
+): Promise<
+  { refused: string } | { route: RouteName | undefined; unreadable?: true }
+> => {
   const write = async (route: string) => {
     try {
       await writeRoute(route);
@@ -793,7 +794,7 @@ const chooseRoute = async (
     current = await settingsRoute();
   } catch {
     // The sign-in step and doctor say the settings can't be read; nothing is asked or written.
-    return { route: undefined };
+    return { route: undefined, unreadable: true };
   }
   if (current !== undefined || !screen.canAsk) return { route: current };
   const picked = await screen.choose(
@@ -820,6 +821,8 @@ const reviewsStep = async (
   route: RouteName | undefined,
   /** ` --repo <path>` when run from outside the repository, else empty. */
   repo: string,
+  /** The settings can't be read, so no route can be chosen until they are fixed. */
+  unreadable = false,
 ) => {
   const label = "Reviews";
   if (route === "claude") {
@@ -829,6 +832,13 @@ const reviewsStep = async (
       : screen.step("needs", label, step.detail, step.command);
   }
   const signIn = checkSignIn(repository);
+  // Settings that can't be read: choosing a route would be refused too, so say what to fix.
+  if (route === undefined && unreadable)
+    return screen.step(
+      "needs",
+      label,
+      `${signIn.detail}; correct or remove that file, then run setup again`,
+    );
   if (route === undefined)
     return signIn.status === "ok"
       ? screen.step(
