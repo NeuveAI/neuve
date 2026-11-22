@@ -1623,7 +1623,6 @@ fi
 # rolls back, and from the next line on nothing is.
 say "Installed neuve $installed_version at $prefix/bin/neuve."
 transaction=0
-if [ "$owned" = 1 ]; then say 'Workers already running keep the old version until they stop: neuve worker stop'; fi
 # macOS refuses to run files marked as downloaded from the internet until the mark is cleared.
 quarantined=0
 for path in "$prefix/bin/neuve" "$lib" "$share"; do

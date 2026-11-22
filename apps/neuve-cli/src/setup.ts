@@ -39,8 +39,15 @@ import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { Effect } from "effect";
-import { Registry } from "@neuve/records-core";
+import {
+  Registry,
+  Starter,
+  storeLocationIn,
+  Worker,
+} from "@neuve/records-core";
 import { CLI_VERSION } from "./cli-version.ts";
+import { readInstalledManifest } from "./installed-copy.ts";
+import { isCompiled } from "./version-skew.ts";
 import {
   machineSteps,
   machineStepsRecord,
@@ -440,6 +447,68 @@ const folderGone = async (path: string) => {
   }
 };
 
+/** `n repositories`, singular for one. */
+const repositoriesCount = (count: number) =>
+  `${count} ${count === 1 ? "repository" : "repositories"}`;
+
+/** When this installed copy was installed; undefined from source, so no worker is restarted. */
+const installedAt = () => {
+  if (!isCompiled() && !process.env["NEUVE_INSTALL_PREFIX"]) return undefined;
+  const manifest = readInstalledManifest();
+  return typeof manifest === "object"
+    ? Date.parse(manifest.installedAt)
+    : undefined;
+};
+
+const startedAt = z.object({ startedAt: z.string() });
+
+/**
+ * A worker that started before this version was installed is stopped, as `neuve worker stop` does
+ * (its job goes back to waiting), and started again on `command`. Undefined when none was, or when
+ * its start is unknown: a worker on this version is never interrupted.
+ */
+const restartWorker = async (
+  store: string,
+  repository: string,
+  command: ReadonlyArray<string>,
+  installed: number,
+) => {
+  const location = storeLocationIn(dirname(store));
+  const found = await Effect.runPromise(
+    Worker.reachStoreWorker(location, "status"),
+  ).catch(() => undefined);
+  if (found?.reach._tag !== "Answered") return undefined;
+  let started: number;
+  try {
+    started = Date.parse(
+      startedAt.parse(JSON.parse(found.reach.reply)).startedAt,
+    );
+  } catch {
+    return undefined;
+  }
+  if (!(started < installed)) return undefined;
+  try {
+    const reach = await Worker.stopWorker(
+      found.socket,
+      AbortSignal.timeout(10_000),
+    );
+    if (reach._tag === "Absent" || reach._tag === "Refused") return undefined;
+    if (reach._tag === "Unanswered") return "running" as const;
+  } catch {
+    return "running" as const;
+  }
+  return Effect.runPromise(
+    Starter.ensureWorkerAt(location, {
+      repository,
+      command,
+      waitForReady: true,
+    }),
+  ).then(
+    () => "restarted" as const,
+    () => "stopped" as const,
+  );
+};
+
 /** `neuve setup upgrade`, with the steps and the list of repositories given, for tests. */
 export const upgradeSetup = async (input: {
   readonly home: string;
@@ -448,6 +517,8 @@ export const upgradeSetup = async (input: {
   readonly repository: (stateDirectory: string) => ReadonlyArray<SetupStep>;
   readonly version: string;
   readonly screen: Screen;
+  /** How to run this version's `neuve`, for the workers it restarts. */
+  readonly command?: ReadonlyArray<string>;
 }) => {
   const { screen } = input;
   const steps = { mode: "upgrade", version: input.version, screen } as const;
@@ -568,7 +639,35 @@ export const upgradeSetup = async (input: {
         ),
     );
   }
-  const repositories = `${visited} ${visited === 1 ? "repository" : "repositories"} set up here`;
+  // Workers still running the version before this one restart on it: one line, none when none ran.
+  const workers = { restarted: 0, stopped: 0, running: 0 };
+  const installed = installedAt();
+  if (installed !== undefined)
+    for (const { repository, store } of registry.repositories) {
+      const outcome = await restartWorker(
+        store,
+        repository,
+        input.command ?? Starter.currentCliCommand(),
+        installed,
+      );
+      if (outcome !== undefined) workers[outcome] += 1;
+    }
+  if (workers.restarted + workers.stopped + workers.running > 0)
+    await screen.step(
+      workers.stopped + workers.running === 0 ? "done" : "skipped",
+      "Workers",
+      [
+        workers.restarted > 0 &&
+          `restarted on ${input.version} in ${repositoriesCount(workers.restarted)}`,
+        workers.stopped > 0 &&
+          `stopped in ${repositoriesCount(workers.stopped)}, to start on ${input.version} with the next job`,
+        workers.running > 0 &&
+          `still on the older version in ${repositoriesCount(workers.running)}, which didn't stop within 10 s`,
+      ]
+        .filter((part) => part !== false)
+        .join("; "),
+    );
+  const repositories = `${repositoriesCount(visited)} set up here`;
   if (behind === 0 && failed === 0)
     await screen.step(
       "done",
