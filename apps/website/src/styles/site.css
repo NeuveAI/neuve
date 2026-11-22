@@ -424,6 +424,55 @@ body::before {
   color: var(--muted);
   user-select: none;
 }
+/* Human or agent: the human version shows unless the switch picks the agent one. */
+.install pre[data-version="agent"] {
+  display: none;
+  white-space: pre-wrap;
+}
+.install:has(input[value="agent"]:checked) pre[data-version="agent"] {
+  display: block;
+}
+.install:has(input[value="agent"]:checked) pre[data-version="human"] {
+  display: none;
+}
+.seg {
+  margin-left: auto;
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.seg label {
+  position: relative;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  transition:
+    background-color 120ms var(--e-std),
+    color 120ms var(--e-std);
+}
+.seg label:hover,
+.seg label:has(:checked) {
+  color: var(--ink);
+}
+.seg label:has(:checked) {
+  background: var(--raised);
+}
+.seg label:has(:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.seg input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
 .copybtn {
   min-height: 32px;
   padding: 0 10px;
@@ -462,6 +511,9 @@ body::before {
 @media (pointer: coarse) {
   .copybtn {
     min-height: 44px;
+  }
+  .seg label {
+    min-height: 40px;
   }
 }
 @media (max-width: 26.25em) {

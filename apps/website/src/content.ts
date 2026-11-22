@@ -29,10 +29,16 @@ export const META = {
     "Large code changes never felt so small. Focus only on parts that require human attention or approval, with the certainty your codebase deserves. Neuve: open source, MIT, early.",
 };
 
+const INSTALL_SH = `curl -fsSL ${SITE_URL}/install.sh | sh`;
+
 export const INSTALL = {
   // Not true today: the installer ships with the first release (oss-frontdoor, decision 13.5).
   label: "Coming with the first release",
-  lines: [`curl -fsSL ${SITE_URL}/install.sh | sh`, "neuve setup"],
+  lines: [INSTALL_SH, "neuve setup"],
+  // What a person hands their coding agent (the owner, NEU-457). Without a terminal,
+  // `neuve setup` prints plain lines and names anything left as an exact command.
+  prompt: `Install Neuve with \`${INSTALL_SH}\`, then run \`neuve setup\` in this repository and tell me the commands it leaves for me.`,
+  versions: { label: "Install for", human: "Human", agent: "Agent" },
   // No "Build from source" link: the owner removed it (11 November).
 };
 
@@ -473,7 +479,7 @@ export const UI = {
   copy: "Copy",
   copied: "Copied",
   selected: "Selected",
-  copyLabel: "Copy the install commands",
+  copyLabel: "Copy the selected install",
   copiedLive: "Copied",
   selectedLive: "Selected. Press Command-C or Control-C to copy.",
 };
