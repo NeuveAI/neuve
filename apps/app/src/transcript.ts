@@ -128,6 +128,9 @@ export function apply(state: Transcript, event: Event): Transcript {
 	switch (event.kind) {
 		case "review-cards":
 			return { ...state, reviews: event.cards };
+		// The Plan tab and the plan's card read these; until then the transcript keeps nothing.
+		case "plans":
+			return state;
 		case "neuve:review:new-commits":
 			return { ...state, items: [...state.items, reviewCommits(event)] };
 		case "queue": {

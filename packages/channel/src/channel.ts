@@ -490,6 +490,10 @@ export class Channel {
 				const { id } = await this.#conversation(request.chat);
 				return answer(this.#harness, id, request.call, request.author, null, context);
 			}
+			// The backend lane builds these; until then they refuse rather than answer nothing.
+			case "plan":
+			case "plan-approve":
+				throw new Error("Plans are not available on this host yet.");
 			case "react": {
 				this.#author(request.author);
 				const { id } = await this.#conversation(request.chat);
