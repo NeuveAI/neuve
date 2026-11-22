@@ -11,6 +11,8 @@ import {
 import { Button } from "../../ui/button";
 import { cn } from "../../lib/utils";
 
+import { RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead } from "./card";
+
 import { isAnswered } from "./question-state";
 
 export type QuestionItem = {
@@ -175,25 +177,17 @@ export function QuestionView(
 
 	let extra = count > 1 ? count - 1 : 0;
 	return (
-		<section
+		<RequestCard
 			aria-label="Neuve questionnaire"
 			{...props}
 			onKeyDownCapture={navigate}
-			className={cn(
-				"mb-2 rounded-xl squircle border border-border bg-background text-sm text-foreground shadow-composer",
-				className,
-			)}
+			className={cn("mb-2", className)}
 		>
-			<header className="flex items-start justify-between gap-3 border-b border-border px-3 py-2.5">
-				<div className="min-w-0">
-					<p className="font-medium">{title}</p>
-					<p className="mt-0.5 text-xs text-muted-foreground">
-						Requested by {requester}
-						{extra > 0 && ` · ${extra} more pending`}
-					</p>
-				</div>
-				{syncing && <span className="shrink-0 text-xs text-muted-foreground">Syncing…</span>}
-			</header>
+			<RequestCardHead
+				title={title}
+				meta={<>Requested by {requester}{extra > 0 && ` · ${extra} more pending`}</>}
+				aside={syncing && <span className="shrink-0 text-xs text-muted-foreground">Syncing…</span>}
+			/>
 
 			{tabs && (
 				<QuestionTabs
@@ -207,20 +201,22 @@ export function QuestionView(
 				/>
 			)}
 
-			<div className="flex max-h-[min(56vh,32rem)] flex-col gap-4 overflow-y-auto px-3 py-3">
-				{question && (
-					<div
-						role={tabs ? "tabpanel" : undefined}
-						id={tabs ? panelId() : undefined}
-						aria-labelledby={tabs ? tabId(question.id) : undefined}
-					>
-						<QuestionAnswer form={form} question={question} index={index} item={id} />
-					</div>
-				)}
-			</div>
+			<RequestCardBody bare>
+				<div className="flex max-h-[min(56vh,32rem)] flex-col gap-4 overflow-y-auto px-3 py-3">
+					{question && (
+						<div
+							role={tabs ? "tabpanel" : undefined}
+							id={tabs ? panelId() : undefined}
+							aria-labelledby={tabs ? tabId(question.id) : undefined}
+						>
+							<QuestionAnswer form={form} question={question} index={index} item={id} />
+						</div>
+					)}
+				</div>
+			</RequestCardBody>
 
 			<QuestionFooter form={form} index={index} select={select} />
-		</section>
+		</RequestCard>
 	);
 }
 
@@ -236,7 +232,7 @@ function QuestionFooter(
 	let tabs = questions.length > 1;
 	let last = index === questions.length - 1;
 	return (
-		<footer className="flex items-center justify-between gap-3 border-t border-border px-3 py-2.5">
+		<RequestCardFooter className="items-center justify-between gap-3">
 			<p
 				role={error || validation ? "alert" : undefined}
 				className="min-w-0 text-xs text-muted-foreground"
@@ -285,7 +281,7 @@ function QuestionFooter(
 						</Button>
 					)}
 			</div>
-		</footer>
+		</RequestCardFooter>
 	);
 }
 
@@ -369,10 +365,11 @@ function QuestionTabs({ questions, index, view, presence, tabId, panelId, select
 	select: (index: number) => void;
 }) {
 	return (
-		<div
+		<RequestCardBody
+			bare
 			role="tablist"
 			aria-label="Questions"
-			className="scrollbar-none flex min-w-0 overflow-x-auto border-b border-border bg-muted/30"
+			className="scrollbar-none flex min-w-0 overflow-x-auto bg-muted/30"
 		>
 			{questions.map((item, tab) => {
 				let selected = tab === index;
@@ -413,6 +410,6 @@ function QuestionTabs({ questions, index, view, presence, tabId, panelId, select
 					</button>
 				);
 			})}
-		</div>
+		</RequestCardBody>
 	);
 }
