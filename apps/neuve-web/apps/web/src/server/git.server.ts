@@ -32,9 +32,34 @@ export const spawnGit = (
   })
 
 /**
+ * A pipe read as text: `text` is undefined if the pipe failed or was
+ * cancelled, and `cancel` stops reading it.
+ */
+const collect = (pipe: ReadableStream<Uint8Array>) => {
+  const abort = new AbortController()
+  const decoder = new TextDecoder()
+  let text = ""
+  const done = pipe
+    .pipeTo(
+      new WritableStream({
+        write: (chunk: Uint8Array) => {
+          text += decoder.decode(chunk, { stream: true })
+        },
+      }),
+      { signal: abort.signal }
+    )
+    .then(
+      () => text + decoder.decode(),
+      () => undefined
+    )
+  return { done, cancel: () => abort.abort() }
+}
+
+/**
  * Its exit code and stdout. A process git started may hold the pipe past
  * git's exit: a failed git's output is not waited for, and a successful
- * one's only until the deadline, past which it reads as killed.
+ * one's only until the deadline, past which it reads as killed. Either way
+ * the pipe is then cancelled, so nothing keeps filling it.
  */
 export const git = async (
   at: string,
@@ -43,19 +68,23 @@ export const git = async (
 ) => {
   const deadline = Date.now() + GIT_DEADLINE_MS
   const child = spawnGit(at, args, input)
-  const out = new Response(child.stdout).text()
-  out.catch(() => undefined)
+  const out = collect(child.stdout)
   const code = await child.exited
-  if (code !== 0) return { code, out: "" }
-  // The timer is cleared once stdout wins, so it never keeps a process alive.
+  if (code !== 0) {
+    out.cancel()
+    return { code, out: "" }
+  }
+  // The timer is cleared once stdout ends, so it never keeps a process alive.
   let stop = () => {}
   const read = await Promise.race([
-    out,
+    out.done,
     new Promise<undefined>((resolve) => {
       const timer = setTimeout(resolve, Math.max(0, deadline - Date.now()))
       stop = () => clearTimeout(timer)
     }),
   ])
   stop()
-  return read === undefined ? { code: 143, out: "" } : { code, out: read }
+  if (read !== undefined) return { code, out: read }
+  out.cancel()
+  return { code: 143, out: "" }
 }

@@ -34,6 +34,30 @@ export interface GitCommandFailed {
   readonly stderr: string;
 }
 
+/**
+ * A pipe read as text: `done` gives it all, or undefined if the pipe failed or was cancelled;
+ * `text` gives what was read so far; `cancel` stops reading it.
+ */
+const collect = (pipe: ReadableStream<Uint8Array>) => {
+  const abort = new AbortController();
+  const decoder = new TextDecoder();
+  let text = "";
+  const done = pipe
+    .pipeTo(
+      new WritableStream({
+        write: (chunk: Uint8Array) => {
+          text += decoder.decode(chunk, { stream: true });
+        },
+      }),
+      { signal: abort.signal },
+    )
+    .then(
+      () => text + decoder.decode(),
+      () => undefined,
+    );
+  return { done, text: () => text, cancel: () => abort.abort() };
+};
+
 /** Resolves the store location for a repository or any of its worktrees. */
 export const resolveStoreLocation = (repository: string) =>
   Effect.gen(function* () {
@@ -47,25 +71,24 @@ export const resolveStoreLocation = (repository: string) =>
           ["git", "-C", repository, "rev-parse", "--git-common-dir"],
           { stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 10_000 },
         );
-        const stdout = new Response(child.stdout).text();
-        stdout.catch(() => undefined);
-        let stderr = "";
-        const decoder = new TextDecoder();
-        void child.stderr
-          .pipeTo(
-            new WritableStream({
-              write: (chunk: Uint8Array) => {
-                stderr += decoder.decode(chunk, { stream: true });
-              },
-            }),
-          )
-          .catch(() => undefined);
+        const stdout = collect(child.stdout);
+        const stderr = collect(child.stderr);
         const exitCode = await child.exited;
-        if (exitCode !== 0) return { stdout: "", stderr, exitCode };
-        // The timer is cleared once stdout wins, so it never keeps a short command alive.
+        // The pipes are cancelled once the answer is known, so nothing keeps filling them.
+        const done = (exit: number, out: string) => {
+          stdout.cancel();
+          stderr.cancel();
+          return {
+            stdout: out,
+            stderr: exit === 0 ? "" : stderr.text(),
+            exitCode: exit,
+          };
+        };
+        if (exitCode !== 0) return done(exitCode, "");
+        // The timer is cleared once stdout ends, so it never keeps a short command alive.
         let stop = () => {};
         const out = await Promise.race([
-          stdout,
+          stdout.done,
           new Promise<undefined>((resolve) => {
             const timer = setTimeout(
               resolve,
@@ -75,9 +98,7 @@ export const resolveStoreLocation = (repository: string) =>
           }),
         ]);
         stop();
-        return out === undefined
-          ? { stdout: "", stderr, exitCode: 143 }
-          : { stdout: out, stderr: "", exitCode };
+        return out === undefined ? done(143, "") : done(exitCode, out);
       },
       catch: (cause) => new RepositoryUnavailable({ repository, cause }),
     });
