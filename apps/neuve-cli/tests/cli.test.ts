@@ -37,6 +37,10 @@ import {
   readScopeOpening,
   scopeFolder,
 } from "../../../packages/harness/src/scope.ts";
+import {
+  readRunLog,
+  runLogPath,
+} from "../../../packages/harness/src/run-log.ts";
 
 import { parseQueryInvocation } from "../src/boundary.ts";
 import type {
@@ -744,6 +748,56 @@ describe("neuve CLI boundary", () => {
         run([...queryArgs(root, base), ...options], env),
     };
   };
+
+  // A failed scope copy must leave a plain gap and log the filesystem cause.
+  test("logs the cause when a named scope copy cannot be written", async () => {
+    const { root, plan, query } = await scopeQueryFixture();
+    const location = storeLocationIn(join(root, ".git"));
+    await Bun.write(join(location.directory, "scope"), "Blocks the folder");
+
+    const result = await query(["--scope", plan]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      retrieval: { status: "ok" },
+      scope_gaps: [
+        `${plan}: The file was read but its copy could not be kept.`,
+      ],
+    });
+    const [{ event }] = await queryHistory(root);
+    expect(readRunLog(runLogPath(location, event.id))).toContainEqual(
+      expect.objectContaining({
+        type: "query.scope-write-failed",
+        path: plan,
+        cause: expect.stringContaining("ENOTDIR"),
+      }),
+    );
+  });
+
+  // A query that cannot read the branch tip must log Git's cause for leaving scope unheld.
+  test("logs why a query with an unreadable branch tip could not hold scope", async () => {
+    const { root, plan, query } = await scopeQueryFixture();
+    expect(
+      execute(["git", "symbolic-ref", "HEAD", "refs/heads/unborn"], root)
+        .exitCode,
+    ).toBe(0);
+
+    const result = await query(["--scope", plan]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      retrieval: { status: "ok" },
+      scope_gaps: [
+        `${plan}: The file was read without a held copy because the checked-out branch has no readable tip.`,
+      ],
+    });
+    const [{ event }] = await queryHistory(root);
+    const location = storeLocationIn(join(root, ".git"));
+    expect(readRunLog(runLogPath(location, event.id))).toContainEqual(
+      expect.objectContaining({
+        type: "query.branch-read-failed",
+        cause: expect.stringContaining("refs/heads/unborn"),
+      }),
+    );
+  });
 
   // A discovered Git link holds a path and cannot supply document text.
   test("cites a found committed symlink as a scope gap", async () => {

@@ -11,6 +11,7 @@ import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import {
   Blobs,
   Computations,
+  mintUlid,
   Store,
   storeLocationIn,
 } from "@neuve/records-core";
@@ -48,6 +49,7 @@ import {
   queryUnheldLocalScope,
 } from "../src/scope.ts";
 import { candidateObligations } from "../src/scope-text.ts";
+import { readRunLog, runLogPath } from "../src/run-log.ts";
 import type { ManifestHunk } from "../src/manifest.ts";
 import { MAP_LOCKFILES } from "../src/review-map.ts";
 import { parseDiff, type CommitText } from "../src/git-objects.ts";
@@ -784,6 +786,50 @@ test("the complete Frame remains plain text, its cited section is inlined, and t
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
+});
+
+// A review lookup must log the filesystem cause behind an unavailable scope section.
+test("logs the cause when a review cannot read a held scope copy", async () => {
+  const runId = mintUlid();
+  const source: ScopeSnapshot["sources"][number] = {
+    id: "S1",
+    kind: "working-file",
+    stratum: "plan-or-ticket-at-base",
+    fetchedAt: "2026-11-06T00:00:00Z",
+    ms: 0,
+    status: "fetched",
+    ref: { path: "plan.md", found: "named by the request" },
+    title: "plan.md",
+    sections: sectionsOf("S1", "# Done when\nPreserve the saved value"),
+    capture: null,
+    gap: null,
+  };
+  const snapshot: ScopeSnapshot = {
+    cycleId: "cycle",
+    fetchedAt: source.fetchedAt,
+    ms: 0,
+    range: { baseOid: "base", headOid: "head", mergeBase: "base" },
+    integrations: { file: "absent", detail: null, servers: [] },
+    named: [],
+    sources: [source],
+    strata: { strongest: source.stratum, present: [source.stratum] },
+    gaps: [],
+  };
+  const read = await call(
+    scopeSectionTool(lookup({ snapshot, attempt: { runId, agent: "review" } })),
+    { id: "S1.1" },
+  );
+  expect(read.text).toContain(
+    "Not available: The held copy could not be read.",
+  );
+  expect(read.empty).toBe(true);
+  expect(readRunLog(runLogPath(location, runId))).toContainEqual(
+    expect.objectContaining({
+      type: "scope.read-failed",
+      sourceId: "S1",
+      cause: expect.stringContaining("ENOENT"),
+    }),
+  );
 });
 
 // Why: a Frame can cite a section the run's snapshot does not hold. It takes no room, so it must

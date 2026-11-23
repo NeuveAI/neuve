@@ -741,7 +741,11 @@ type ScopeCopy = { location: StoreLocation; cycleId: string };
 
 const localSourceId = (index: number) => `S${index + 1}`;
 
-export const keepLocalScope = (copy: ScopeCopy, read: LocalScopeRead) =>
+export const keepLocalScope = (
+  copy: ScopeCopy,
+  read: LocalScopeRead,
+  onWriteFailure: (path: string, cause: string) => void,
+) =>
   Effect.gen(function* () {
     if (read.sources.length === 0) return undefined;
     const sources = yield* Effect.forEach(read.sources, (source) => {
@@ -755,14 +759,15 @@ export const keepLocalScope = (copy: ScopeCopy, read: LocalScopeRead) =>
         bytes,
       ).pipe(
         Effect.as<LocalPin>(pin),
-        Effect.catchTag("ScopeNotKept", () =>
-          Effect.succeed({
+        Effect.catchTag("ScopeNotKept", (error) => {
+          onWriteFailure(pin.path, error.message);
+          return Effect.succeed({
             kind: "gap" as const,
             path: pin.path,
             namedAs: pin.namedAs,
             reason: "The file was read but its copy could not be kept.",
-          }),
-        ),
+          });
+        }),
       );
     });
     return {

@@ -18,6 +18,7 @@ import { resolveCommit } from "../../../packages/harness/src/git.ts";
 import {
   AGENT_GUIDE,
   SCOPE_FETCH_BOUND_MS,
+  keepLocalScope,
   queryLocalScope,
   queryUnheldLocalScope,
   readLocalScope,
@@ -686,6 +687,7 @@ const recordQuery = async (
   cycle?: QueryBranch & { onFailure: (error: unknown) => void },
   local?: LocalScopeRead,
 ): Promise<RecordedQuery> => {
+  const scopeWriteFailures: RunLogRecord[] = [];
   const result = await Effect.runPromiseExit(
     withStore(request.repository, "write", (location) => {
       diagnostics.location = location;
@@ -699,6 +701,17 @@ const recordQuery = async (
             Effect.orElseSucceed(() => null),
           ));
         if (registration !== undefined) yield* Log.append([registration]);
+        const selectScope =
+          local === undefined
+            ? undefined
+            : (cycleId: string) =>
+                keepLocalScope({ location, cycleId }, local, (path, cause) =>
+                  scopeWriteFailures.push({
+                    type: "query.scope-write-failed",
+                    path,
+                    cause,
+                  }),
+                );
         const cycleId =
           revision !== null && cycle !== undefined
             ? yield* openQueryCycle(
@@ -712,7 +725,7 @@ const recordQuery = async (
                 },
                 actor,
                 cycle.onFailure,
-                local,
+                selectScope,
               )
             : undefined;
         const sessionId =
@@ -759,6 +772,8 @@ const recordQuery = async (
       );
     }),
   );
+  for (const failure of scopeWriteFailures)
+    writeDiagnostic(diagnostics, failure);
   if (result._tag === "Success") return result.value;
   const error = Option.getOrUndefined(Cause.findErrorOption(result.cause));
   if (error instanceof StoreMissing) {
@@ -922,6 +937,15 @@ export const runQueryGraph = async (
         : undefined,
       local,
     );
+    if (
+      cycleFailure !== undefined &&
+      "reason" in branch &&
+      branch.cause !== undefined
+    )
+      writeDiagnostic(diagnostics, {
+        type: "query.branch-read-failed",
+        cause: branch.cause,
+      });
     if (read?._tag === "Failure")
       writeDiagnostic(diagnostics, {
         type: "query.local-read-failed",
