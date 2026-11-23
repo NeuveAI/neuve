@@ -8,9 +8,11 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  AccountRejected,
   RuntimeUnavailable,
   SignInRequired,
   TurnFailed,
+  runtimeErrorToFailure,
   type AccountName,
   type ContentBlock,
   type InterruptReason,
@@ -60,6 +62,7 @@ import {
   type OwnSettings,
 } from "./launch.ts";
 import { protocolLog, type LogEntry } from "./log.ts";
+import { replaceKnown } from "./redact.ts";
 import { CodexProcess } from "./services.ts";
 import { serveTools, toolHandler, type RunTool } from "./tools.ts";
 import { judge, versionOf } from "./version.ts";
@@ -85,12 +88,27 @@ export const capabilities: RuntimeCapabilities = {
   byteExactCapture: false,
 };
 
+export interface CodexAccessToken {
+  readonly token: string;
+  /** Epoch milliseconds. */
+  readonly expiresAt: number;
+}
+
+export type CodexTokenSource = (
+  rejectedToken?: string,
+) => Effect.Effect<
+  CodexAccessToken,
+  SignInRequired | AccountRejected | TurnFailed
+>;
+
 export interface CodexSessionOptions {
   readonly account: AccountName;
   /** The program the account names, found by the caller; never looked up here. */
   readonly program: string;
-  /** The account's Codex home; absent is the person's own default. */
+  /** Required on Neuve's sign-in. Otherwise absent selects the person's default. */
   readonly codexHome?: string | undefined;
+  /** Present for an account on Neuve's sign-in. */
+  readonly accessToken?: CodexTokenSource | undefined;
   /** The thread's working folder: the chat's own worktree. */
   readonly cwd: string;
   readonly environment: Readonly<Record<string, string | undefined>>;
@@ -145,6 +163,11 @@ interface Current {
   ended: boolean;
 }
 
+interface SessionAccess {
+  readonly token: string;
+  readonly state: "available" | "replacement" | "rejected";
+}
+
 const EMPTY: OwnSettings = {
   mcpServers: [],
   plugins: [],
@@ -169,6 +192,11 @@ const infoName = (info: unknown) =>
     : info !== null && typeof info === "object"
       ? Object.keys(info)[0]
       : undefined;
+const HttpStatus = z.object({ httpStatusCode: z.number() });
+const httpStatusOf = (info: unknown, name: string | undefined) =>
+  name !== undefined && typeof info === "object" && info !== null
+    ? HttpStatus.safeParse(Object.values(info)[0]).data?.httpStatusCode
+    : undefined;
 const minus = (a: Decode.Breakdown, b: Decode.Breakdown): Decode.Breakdown => ({
   inputTokens: a.inputTokens - b.inputTokens,
   cachedInputTokens: a.cachedInputTokens - b.cachedInputTokens,
@@ -246,6 +274,8 @@ export const openCodexSession = Effect.fnUntraced(function* (
   const context = yield* Effect.context<never>();
   const runPromise = Effect.runPromiseWith(context);
   const { account, policy } = options;
+  if (options.accessToken !== undefined && options.codexHome === undefined)
+    return yield* new RuntimeUnavailable({ account, reason: "start-failed" });
   const events = yield* Queue.unbounded<RuntimeEvent, Cause.Done>();
   const token = randomBytes(32).toString("base64url");
   const codexHome = options.codexHome ?? join(homedir(), ".codex");
@@ -255,14 +285,17 @@ export const openCodexSession = Effect.fnUntraced(function* (
   log?.know(codexHome, "<codex-home>");
   log?.know(options.program, "<program>");
   // Signed in by the program the session runs: a bare `codex` on the PATH may be another one.
-  const hint: SignInHint = {
-    kind: "command",
-    command: "codex login",
-    ...(options.codexHome === undefined
-      ? {}
-      : { environment: { CODEX_HOME: options.codexHome } }),
-    program: options.program,
-  };
+  const hint: SignInHint =
+    options.accessToken !== undefined
+      ? { kind: "command", command: "neuve auth login", account }
+      : {
+          kind: "command",
+          command: "codex login",
+          ...(options.codexHome === undefined
+            ? {}
+            : { environment: { CODEX_HOME: options.codexHome } }),
+          program: options.program,
+        };
   const turnFailed = (reason: TurnFailureReason) =>
     new TurnFailed({ account, reason });
   const now = () => new Date().toISOString();
@@ -275,6 +308,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
   let threadId = "";
   let own: OwnSettings | undefined;
   let current: Current | undefined;
+  let access: SessionAccess | undefined;
   let generation = 0;
   let dead = false;
   let turn: Turn | undefined;
@@ -367,9 +401,24 @@ export const openCodexSession = Effect.fnUntraced(function* (
         yield* stop();
     });
 
+  const acceptAccess = () => {
+    if (access?.state === "replacement")
+      access = { token: access.token, state: "available" };
+  };
+
   /** What a Codex error on a turn means for the contract. */
   const errorOutcome = (info: unknown): TurnOutcome => {
     const name = infoName(info);
+    if (
+      access !== undefined &&
+      (name === "unauthorized" || httpStatusOf(info, name) === 401)
+    ) {
+      const replacement = access.state === "replacement";
+      access = { token: access.token, state: "rejected" };
+      return replacement
+        ? failure({ _tag: "AccountRejected", account, hint, reason: "other" })
+        : turnFailure("provider-failed");
+    }
     if (name === "unauthorized")
       return failure({ _tag: "SignInRequired", account, hint });
     if (name === "usageLimitExceeded") {
@@ -392,7 +441,11 @@ export const openCodexSession = Effect.fnUntraced(function* (
   };
   const requestOutcome = (error: CodexFailure): TurnOutcome =>
     error._tag === "CodexRequestFailed"
-      ? errorOutcome(error.type)
+      ? errorOutcome(
+          error.code === 401 && access !== undefined
+            ? "unauthorized"
+            : error.type,
+        )
       : turnFailure("provider-failed", "broken");
 
   /**
@@ -483,13 +536,15 @@ export const openCodexSession = Effect.fnUntraced(function* (
         }
         case "item/agentMessage/delta": {
           const delta = Decode.Delta.safeParse(params);
-          if (active && delta.success && matches(active, delta.data.turnId))
+          if (active && delta.success && matches(active, delta.data.turnId)) {
+            acceptAccess();
             emit({
               type: "text",
               turnId: active.id,
               at: now(),
               text: delta.data.delta,
             });
+          }
           return;
         }
         case "item/started": {
@@ -526,6 +581,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
             return;
           }
           if (item.data.type === "agentMessage") {
+            acceptAccess();
             active.lastText = item.data.text;
             emit({
               type: "message.finished",
@@ -564,6 +620,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           const usage = Decode.TokenUsage.safeParse(params);
           if (!active || !usage.success || !matches(active, usage.data.turnId))
             return;
+          acceptAccess();
           const { total, last, modelContextWindow } = usage.data.tokenUsage;
           active.baseline ??= minus(total, last);
           const name = model?.id ?? threadModel;
@@ -635,6 +692,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           if (!matches(active, completed.data.turn.id)) return;
           const { status, error } = completed.data.turn;
           if (status === "completed") {
+            acceptAccess();
             if (!active.final)
               return yield* finish(
                 active,
@@ -831,6 +889,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
     settings: OwnSettings,
     toolServer: string | undefined,
     cwd: string,
+    accessToken?: string,
   ) =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();
@@ -847,6 +906,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         settings,
         toolServer,
         cwd,
+        accessToken,
       ).pipe(
         // A start cut short leaves no process behind.
         Effect.onInterrupt(() => closeScope(scope)),
@@ -858,21 +918,35 @@ export const openCodexSession = Effect.fnUntraced(function* (
     settings: OwnSettings,
     toolServer: string | undefined,
     cwd: string,
+    accessToken: string | undefined,
   ) =>
     Effect.gen(function* () {
       const gen = ++generation;
+      const secrets = [
+        ...(toolServer === undefined ? [] : [token]),
+        ...(accessToken === undefined ? [] : [accessToken]),
+      ];
       const connected = yield* connect({
         program: options.program,
-        args: launchArguments(configuration, settings, toolServer),
+        args: launchArguments(
+          configuration,
+          settings,
+          toolServer,
+          accessToken !== undefined,
+        ),
         env: codexEnvironment(
           options.environment,
           options.codexHome,
           toolServer === undefined ? undefined : token,
+          accessToken,
         ),
+        secrets,
         cwd,
         clientInfo: { name: "neuve", title: "Neuve", version: "0.1.0" },
         answer: answerRequest,
-        ...(log === undefined ? {} : { onLine: log.onLine }),
+        ...(log === undefined
+          ? {}
+          : { onLine: (line) => log.onLine(line, accessToken) }),
         ...(options.handshakeTimeout === undefined
           ? {}
           : { handshakeTimeout: options.handshakeTimeout }),
@@ -898,7 +972,12 @@ export const openCodexSession = Effect.fnUntraced(function* (
         Decode.Initialize.safeParse(connection.initialize).data?.userAgent ===
           undefined
           ? undefined
-          : versionOf(connection.initialize.userAgent),
+          : versionOf(
+              replaceKnown(
+                connection.initialize.userAgent,
+                secrets.map((value) => [value, "<token>"]),
+              ),
+            ),
         options.broken,
       );
       if (verdict.kind === "broken") {
@@ -1129,7 +1208,20 @@ export const openCodexSession = Effect.fnUntraced(function* (
    */
   const ensure = (configuration: Configuration, active?: Turn) =>
     Effect.gen(function* () {
-      if (current?.configuration === configuration) return;
+      const rejectedToken =
+        access?.state === "rejected" ? access.token : undefined;
+      const accessToken =
+        options.accessToken === undefined
+          ? undefined
+          : (yield* options.accessToken(rejectedToken)).token;
+      yield* still(active);
+      if (accessToken !== undefined && accessToken === rejectedToken)
+        return yield* new AccountRejected({ account, hint, reason: "other" });
+      if (
+        current?.configuration === configuration &&
+        access?.token === accessToken
+      )
+        return;
       const previous = current;
       current = undefined;
       if (previous !== undefined) yield* closeScope(previous.scope);
@@ -1153,6 +1245,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         own ?? EMPTY,
         toolServer,
         options.cwd,
+        accessToken,
       );
       yield* prepare(next, configuration, active).pipe(
         // A process that died after its last answer failed its preparation too.
@@ -1170,6 +1263,12 @@ export const openCodexSession = Effect.fnUntraced(function* (
         ),
       );
       current = next;
+      // A mode change can restart Codex without changing the token.
+      if (accessToken !== undefined && accessToken !== access?.token)
+        access = {
+          token: accessToken,
+          state: rejectedToken === undefined ? "available" : "replacement",
+        };
     });
   /** The clean check, then the thread loaded into the new process; it is not current yet. */
   const prepare = (
@@ -1241,15 +1340,17 @@ export const openCodexSession = Effect.fnUntraced(function* (
         : Effect.fail(error),
     ),
   );
-  const signedIn = yield* request(Decode.AccountAnswer, (c) =>
-    c.request("account/read", { refreshToken: false }),
-  ).pipe(Effect.option);
-  if (
-    signedIn._tag === "Some" &&
-    signedIn.value.account == null &&
-    signedIn.value.requiresOpenaiAuth
-  )
-    return yield* new SignInRequired({ account, hint });
+  if (options.accessToken === undefined) {
+    const signedIn = yield* request(Decode.AccountAnswer, (c) =>
+      c.request("account/read", { refreshToken: false }),
+    ).pipe(Effect.option);
+    if (
+      signedIn._tag === "Some" &&
+      signedIn.value.account == null &&
+      signedIn.value.requiresOpenaiAuth
+    )
+      return yield* new SignInRequired({ account, hint });
+  }
   const { start } = options;
   if (start.kind === "new") yield* newThread(current!.connection);
   else {
@@ -1336,11 +1437,10 @@ export const openCodexSession = Effect.fnUntraced(function* (
         const disposition = dead ? "broken" : "reusable";
         return yield* finish(
           active,
-          error?._tag === "RuntimeUnavailable"
-            ? failure(
-                { _tag: "RuntimeUnavailable", account, reason: error.reason },
-                disposition,
-              )
+          error?._tag === "RuntimeUnavailable" ||
+            error?._tag === "SignInRequired" ||
+            error?._tag === "AccountRejected"
+            ? failure(runtimeErrorToFailure(error), disposition)
             : turnFailure("provider-failed", disposition),
         );
       }
@@ -1384,6 +1484,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         })
         .pipe(Effect.exit);
       if (Exit.isFailure(answered)) {
+        if (active.finished) return;
         const error = errorOf(answered.cause);
         return yield* finish(
           active,

@@ -224,8 +224,8 @@ export interface FindOptions {
 
 /**
  * Asks each candidate in order, as its app server with the person's additions switched off and
- * nothing of a session (no token, no tool server, a temporary folder), until one answers as Codex;
- * runs `use` on that one before it is stopped. Every candidate's answer is returned.
+ * nothing of a session (no token, no tool server, a temporary folder), until one answers as Codex.
+ * Runs `use` on that one before it is stopped. Every candidate's answer is returned.
  */
 export const findCodex = <A, E>(
   options: FindOptions,

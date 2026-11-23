@@ -10,6 +10,7 @@ import type { SandboxPolicy } from "./generated/v2/SandboxPolicy";
 
 /** The variable Neuve's tool server token is in; Codex's shell never passes it on. */
 export const TOKEN_VARIABLE = "NEUVE_CODEX_TOOL_TOKEN";
+export const ACCESS_TOKEN_VARIABLE = "NEUVE_CODEX_ACCESS_TOKEN";
 /** Neuve's tool server, by the name Codex knows it under. */
 export const NEUVE_SERVER = "neuve";
 /** OpenAI's key and address variables, removed so Codex uses its own login, as T3 Code does. */
@@ -23,7 +24,20 @@ export const REMOVED_ENVIRONMENT = [
   "OPENAI_PROJECT_ID",
   "CODEX_API_KEY",
   "CODEX_HOME",
+  TOKEN_VARIABLE,
+  ACCESS_TOKEN_VARIABLE,
 ] as const;
+
+const CHATGPT_PROVIDER = "model_providers.openai_chatgpt_plan";
+const CHATGPT_PLAN = [
+  'model_provider="openai_chatgpt_plan"',
+  `${CHATGPT_PROVIDER}.name="ChatGPT plan"`,
+  `${CHATGPT_PROVIDER}.base_url="https://api.openai.com/v1"`,
+  `${CHATGPT_PROVIDER}.env_key=${JSON.stringify(ACCESS_TOKEN_VARIABLE)}`,
+  `${CHATGPT_PROVIDER}.wire_api="responses"`,
+  `${CHATGPT_PROVIDER}.requires_openai_auth=false`,
+  `${CHATGPT_PROVIDER}.supports_websockets=false`,
+];
 
 /** The names of the person's own settings, read through the protocol before a clean start. */
 export interface OwnSettings {
@@ -80,8 +94,14 @@ export const launchArguments = (
   configuration: Configuration,
   own: OwnSettings,
   toolServer: string | undefined,
-): ReadonlyArray<string> =>
-  flags([
+  usesAccessToken = false,
+): ReadonlyArray<string> => {
+  const excluded = [
+    ...(toolServer === undefined ? [] : [TOKEN_VARIABLE]),
+    ...(usesAccessToken ? [ACCESS_TOKEN_VARIABLE] : []),
+  ];
+  return flags([
+    ...(usesAccessToken ? CHATGPT_PLAN : []),
     ...(toolServer === undefined
       ? []
       : [
@@ -90,11 +110,11 @@ export const launchArguments = (
           `mcp_servers.${NEUVE_SERVER}.default_tools_approval_mode="approve"`,
           // A year: a call ends when its handler does, or the turn or the session ends.
           `mcp_servers.${NEUVE_SERVER}.tool_timeout_sec=31536000`,
-          // Only a process that holds the token sets the list, so the probe that reads the
-          // person's own list reads it unchanged.
-          `shell_environment_policy.exclude=[${[...own.exclude, TOKEN_VARIABLE]
-            .map((pattern) => JSON.stringify(pattern))
-            .join(",")}]`,
+        ]),
+    ...(excluded.length === 0
+      ? []
+      : [
+          `shell_environment_policy.exclude=${JSON.stringify([...own.exclude, ...excluded])}`,
         ]),
     "tools.experimental_request_user_input.enabled=false",
     ...(configuration === "own"
@@ -119,6 +139,7 @@ export const launchArguments = (
           "notify=[]",
         ]),
   ]);
+};
 
 /**
  * Codex asks nothing. T3 Code sends a granular policy here that lets only an MCP server's prompt
@@ -170,10 +191,12 @@ export const codexEnvironment = (
   codexHome: string | undefined,
   /** Only a process that serves Neuve's tools is given the token. */
   token: string | undefined,
+  accessToken?: string,
 ): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...base };
   for (const name of REMOVED_ENVIRONMENT) delete env[name];
   if (codexHome !== undefined) env.CODEX_HOME = codexHome;
   if (token !== undefined) env[TOKEN_VARIABLE] = token;
+  if (accessToken !== undefined) env[ACCESS_TOKEN_VARIABLE] = accessToken;
   return env;
 };

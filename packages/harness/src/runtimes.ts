@@ -3,12 +3,15 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  AccountRejected,
   DEFAULT_ACCOUNTS,
   type AccountName,
   AccountDirectory,
   AccountStore,
   RuntimeRegistry,
   RuntimeUnavailable,
+  SignInRequired,
+  TurnFailed,
   inMemoryAccountDirectoryLayer,
   runtimeRegistryLayerEffect,
   type RuntimeRegistryShape,
@@ -22,9 +25,16 @@ import {
 } from "@neuve/runtime-codex";
 export {
   findCodexProgram,
+  prepareCodexHome,
   PROGRAM as CODEX_PROGRAM,
 } from "@neuve/runtime-codex";
 import { Context, Effect, Layer, ManagedRuntime, Scope } from "effect";
+import {
+  accessToken,
+  authOptionsFor,
+  OpenAiAuthError,
+  signOut,
+} from "./openai-auth.ts";
 import type { ReadinessStatuses } from "./route-provider.ts";
 import {
   piStatusRuntime,
@@ -53,6 +63,46 @@ export interface HarnessRuntimesOptions<E, R> extends PiStatusRuntimeOptions {
 export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
   home,
   programPath: (name) => AccountStore.programPath(home, name),
+  neuveSignIn: {
+    accessToken: ({ name: account, credential }, rejected) => {
+      const hint = {
+        kind: "command",
+        command: "neuve auth login",
+        account,
+      } as const;
+      return Effect.tryPromise({
+        try: (signal) =>
+          accessToken({ ...authOptionsFor(credential), signal }, rejected),
+        catch: (error) => {
+          if (error instanceof OpenAiAuthError) {
+            switch (error.code) {
+              case "signed-out":
+                return new SignInRequired({ account, hint });
+              case "access-expired":
+                return new AccountRejected({
+                  account,
+                  hint,
+                  reason: "expired",
+                });
+              case "refresh-unusable":
+              case "plan-usage-not-granted":
+              case "access-denied":
+              case "account-mismatch":
+              case "invalid-id-token":
+                return new AccountRejected({ account, hint, reason: "other" });
+            }
+          }
+          return new TurnFailed({ account, reason: "provider-unavailable" });
+        },
+      });
+    },
+    signOut: ({ name: account, credential }) =>
+      Effect.tryPromise({
+        try: () => signOut(authOptionsFor(credential)),
+        catch: () =>
+          new RuntimeUnavailable({ account, reason: "start-failed" }),
+      }).pipe(Effect.asVoid),
+  },
 });
 
 /**

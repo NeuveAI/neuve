@@ -122,11 +122,16 @@ export const protocolLog = (sink: (entry: LogEntry) => void) => {
     know: (value: string, label: string) => {
       if (value.length > 1) known.push([value, label]);
     },
-    onLine: (line: Line) =>
+    onLine: (line: Line, accessToken?: string) =>
       sink({
         at: new Date().toISOString(),
         direction: line.direction,
-        message: redact(scrub(shape(line)), known),
+        message: redact(
+          scrub(shape(line)),
+          accessToken === undefined
+            ? known
+            : [...known, [accessToken, "<token>"]],
+        ),
       }),
   };
 };

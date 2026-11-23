@@ -25,7 +25,7 @@ import {
 import { Effect, Layer, type Scope } from "effect";
 import { authFilePath, readAuth, writeAuth } from "../src/openai-auth.ts";
 import { piStatusRuntime } from "../src/pi/status-runtime.ts";
-import { harnessRuntimes } from "../src/runtimes.ts";
+import { codexRuntimeOptions, harnessRuntimes } from "../src/runtimes.ts";
 import { harnessRuntimes as publicHarnessRuntimes } from "@neuve/harness/runtimes";
 
 const scratch = mkdtempSync(join(tmpdir(), "neuve-runtimes-"));
@@ -488,6 +488,52 @@ test("ChatGPT probes local sign-in and plan permission without fetching, so chec
   expect(JSON.stringify(failed)).not.toContain("fake-private-invalid-file");
   expect(JSON.stringify(failed)).not.toContain(directory);
   expect(requests).toBe(0);
+});
+
+// The Codex account must distinguish an absent sign-in, a refused plan, and an expired token.
+test("Codex uses the named Neuve sign-in and tells the person which account to sign in to", async () => {
+  const directory = folder();
+  const account = Account.parse({
+    name: "work",
+    kind: "chatgpt-subscription",
+    runtime: "codex",
+    credential: { kind: "neuve-sign-in", folder: directory },
+  });
+  const registry = harnessRuntimes({
+    claude: false,
+    codex: { ...codexRuntimeOptions(scratch), environment: { PATH: "" } },
+    accountDirectory: inMemoryAccountDirectoryLayer([account]),
+  });
+  const check = () =>
+    Effect.runPromise(probe("work").pipe(Effect.provide(registry)));
+  const hint = {
+    kind: "command",
+    command: "neuve auth login",
+    account: account.name,
+  } as const;
+  expect((await check()).signIn).toEqual({ state: "not-signed-in", hint });
+  fakeSignIn(directory);
+  const stored = readAuth(directory);
+  if (stored?.session === undefined) throw new Error("missing fake sign-in");
+  writeAuth(directory, {
+    ...stored,
+    session: { ...stored.session, scopes: [] },
+  });
+  expect((await check()).signIn).toEqual({
+    state: "credential-rejected",
+    reason: "other",
+    hint,
+  });
+  const { refreshToken: _refresh, ...session } = stored.session;
+  writeAuth(directory, {
+    ...stored,
+    session: { ...session, expiresAt: Date.now() - 1 },
+  });
+  expect((await check()).signIn).toEqual({
+    state: "credential-rejected",
+    reason: "expired",
+    hint,
+  });
 });
 
 test("continuation identifies only credential references, so aliases share sessions without carrying credential values", async () => {

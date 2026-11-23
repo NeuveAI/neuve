@@ -81,6 +81,35 @@ const fakeRuntime = (calls: string[], signedIn = false): RuntimeShape => ({
       };
     }),
 });
+
+// A named Codex account must reach the ChatGPT sign-in command before a Codex installation is needed.
+test("add chatgpt with Codex creates a named sign-in and reports its login command", async () => {
+  const home = scratch();
+  try {
+    const args = ["add", "chatgpt", "work", "--runtime", "codex"];
+    expect(await capture(() => runAuthCli(args, { home }))).toEqual({
+      value: 0,
+      out: "neuve auth login work\n",
+    });
+    const account = AccountStore.readAccounts(home).find(
+      ({ account }) => account.name === "work",
+    )?.account;
+    expect(account).toMatchObject({
+      runtime: "codex",
+      kind: "chatgpt-subscription",
+      credential: { kind: "neuve-sign-in" },
+    });
+    expect(
+      await capture(() => runAuthCli(["login", "work", "--print"], { home })),
+    ).toEqual({ value: 0, out: "neuve auth login work\n" });
+    const status = await capture(() =>
+      runAuthCli(["status", "work", "--check"], { home }),
+    );
+    expect(status.out).toContain("not-signed-in\n  neuve auth login work");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 const scratch = () => mkdtempSync(join(tmpdir(), "auth-accounts-cli-"));
 async function capture<A>(run: () => Promise<A>) {
   const out: string[] = [];

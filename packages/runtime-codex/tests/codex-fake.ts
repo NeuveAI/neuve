@@ -13,6 +13,9 @@ export interface Process {
   readonly program: string;
   readonly args: ReadonlyArray<string>;
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly commandEnvironment: () => Readonly<
+    Record<string, string | undefined>
+  >;
   /** Whether the process was started with the person's own settings off. */
   readonly clean: boolean;
 }
@@ -176,6 +179,12 @@ export const codex = (reply: Reply = () => undefined) => {
           program: command[0],
           args,
           env: options.env,
+          commandEnvironment: () =>
+            Object.fromEntries(
+              Object.entries(options.env).filter(
+                ([key]) => !excludeOf(args)?.includes(key),
+              ),
+            ),
           clean: args.includes("features.hooks=false"),
         };
         processes.push(process);

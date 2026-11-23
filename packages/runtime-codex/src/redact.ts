@@ -35,6 +35,14 @@ const TILDE = /(?<![\w/])~\/[\w.@+/-]+/g;
 const ABSOLUTE = /(?<![:\w/.])\/(?:[\w.@+-]+(?: [\w.@+-]+)*\/)+[\w.@+-]+/g;
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const replaceKnown = (
+  input: string,
+  known: ReadonlyArray<readonly [string, string]>,
+) => {
+  let out = input;
+  for (const [found, label] of known) out = out.split(found).join(label);
+  return out;
+};
 /** The machine's name, whole and as its first label, only where it stands as a word of its own. */
 const host = (() => {
   const full = hostname();
@@ -66,9 +74,7 @@ export const redact = (
     .filter(([found]) => found.length > 1)
     .sort(([a], [b]) => b.length - a.length);
   const text = (input: string) => {
-    let out = input;
-    for (const [found, label] of ordered) out = out.split(found).join(label);
-    out = out
+    const out = replaceKnown(input, ordered)
       .replace(JWT, "<token>")
       .replace(TOKEN, "<token>")
       .replace(BEARER, "$1$2<token>")
