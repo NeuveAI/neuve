@@ -32,6 +32,7 @@ import { useAgentAvatar } from "./agent-avatar";
 import { agentMode, askMode, useChatMode } from "./composer-mode";
 import { host } from "./host";
 import { attachments } from "./attachments";
+import { key, modelChoices } from "./model-choices";
 
 const AGENT_MODE = {
 	id: "ace",
@@ -63,7 +64,6 @@ export const EFFORTS: Record<Effort, string> = {
 	max: "Max",
 };
 
-const key = (model: ModelRef) => `${model.provider}/${model.modelId}`;
 /** The latest pick in this client, as `provider/id` or `auto`; new channels start on it. */
 export const LAST_MODEL = `ace:last-model:${host.url}`;
 
@@ -258,7 +258,11 @@ export function Composer(
 	const chosen = `${current ? key(current) : "auto"} ${currentEffort || "off"}`;
 	const [picking, setPicking] = useState<{ model: string; effort?: Effort; from: string }>();
 	if (picking && picking.from !== chosen) setPicking(undefined);
-	const model = picking?.model || (current ? key(current) : "auto");
+	const { model, choices, unoffered } = modelChoices(
+		models,
+		picking?.model || (current ? key(current) : "auto"),
+		automatic,
+	);
 	const levels = models?.find((value) => key(value) === model)?.efforts;
 	const requestedEffort = picking?.effort || currentEffort || "off";
 	const effort = requestedEffort === "off" || levels?.includes(requestedEffort)
@@ -270,20 +274,6 @@ export function Composer(
 			name: id === "off" && !levels.includes("off") ? "Default" : EFFORTS[id],
 		}))
 		: undefined;
-	const choices = (models || []).map((value) => ({
-		id: key(value),
-		name: value.modelId,
-		vendor: value.provider,
-	}));
-	if (model !== "auto" && !choices.some((value) => value.id === model)) {
-		choices.unshift({ id: model, name: model.split("/").slice(1).join("/"), vendor: "" });
-	}
-	// Automatic stays offered so a chat whose model lost its key can hand the choice back.
-	choices.unshift({
-		id: "auto",
-		name: automatic ? `Automatic (${automatic.modelId})` : "Automatic",
-		vendor: "",
-	});
 	// Formatting tools crowd a phone's composer; they stay one tap away.
 	const phone = useMedia("(width < 40rem)");
 
@@ -468,6 +458,9 @@ export function Composer(
 						? `The last run failed on ${model}. Retry switches this chat to Automatic.`
 						: "The last run failed."}
 				</Notice>
+			)}
+			{agentic && unoffered && (
+				<Notice>{unoffered} is no longer offered, so this chat uses Automatic.</Notice>
 			)}
 			{agentic && !offline && models?.length === 0 && (
 				<Notice
