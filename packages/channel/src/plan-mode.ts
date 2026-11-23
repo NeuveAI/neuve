@@ -11,7 +11,7 @@ import {
 	type Harness,
 	type Tx,
 } from "@earendil-works/pi-durable";
-import type { ChatMode } from "./protocol";
+import { PLAN_TOOL, type ChatMode } from "./protocol";
 
 export const ChatModesDoc = defineDoc<{ chats: Record<string, ChatMode> }>({
 	kind: "neuve.chat-modes",
@@ -27,6 +27,7 @@ export const planTools: ReadonlySet<string> = new Set([
 	"planning_issue",
 	"planning_dependencies",
 	"question",
+	PLAN_TOOL,
 	"runtime_work",
 ]);
 
