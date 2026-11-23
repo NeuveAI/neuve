@@ -105,6 +105,7 @@ export const project = (event: RecordEvent) =>
       }
       case "cycle.scope-selected@1":
       case "cycle.external-context-selected@1":
+      case "cycle.local-scope-selected@1":
       case "cycle.opened@2":
         return;
       case "review.origin-recorded@1": {

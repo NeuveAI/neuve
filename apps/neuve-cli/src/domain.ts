@@ -2,6 +2,7 @@ import type {
   GraphPreparedFailureReason,
   GraphProfile,
 } from "@neuve/graph-client";
+import type { ScopeSource } from "../../../packages/harness/src/scope.ts";
 
 export type PublicPreparedRead = Readonly<{
   policy_id: string;
@@ -30,6 +31,7 @@ export type QueryRequest = Readonly<{
   maxResults: number;
   maxContextBytes: number;
   relationships: readonly RelationshipRequest[];
+  scope?: readonly string[];
   cache?: "reuse" | "refresh" | "prepared";
   profile?: GraphProfile;
 }>;
@@ -328,6 +330,17 @@ export type PublicCapabilities = Readonly<{
 
 export type PublicQueryEnvelope = Readonly<{ schema_version: 2 }>;
 
+export type PublicQueryScopeSource = ScopeSource &
+  Readonly<{
+    text?: string;
+    text_omitted?: "max-context-bytes";
+  }>;
+
+type PublicQueryScope = Readonly<{
+  cycle_id?: string;
+  scope_gaps?: readonly string[];
+}>;
+
 export type PublicQueryResult = Readonly<{
   provider: Readonly<{
     name: "entire-graph";
@@ -342,8 +355,10 @@ export type PublicQueryResult = Readonly<{
   }>;
   retrieval: PublicRetrieval;
   structural_observations: readonly PublicStructuralOutcome[];
+  scope?: readonly PublicQueryScopeSource[];
 }> &
-  PublicQueryEnvelope;
+  PublicQueryEnvelope &
+  PublicQueryScope;
 
 export type PublicQueryIdentity = Readonly<{
   provider: PublicQueryResult["provider"];
@@ -370,6 +385,12 @@ export type PublicQueryEvent =
       }>)
   | (PublicQueryEventBase &
       Readonly<{
+        kind: "scope";
+        source: PublicQueryScopeSource;
+      }>)
+  | (PublicQueryEventBase &
+      Readonly<{
         kind: "complete";
         relationship_count: number;
-      }>);
+      }> &
+      PublicQueryScope);

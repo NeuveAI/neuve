@@ -49,6 +49,7 @@ import { indexOf, retrieverFor, type RetrieverScope } from "./retrievers.ts";
 import type { SearchConfig } from "./search-config.ts";
 import type { StackRun } from "./stack/tools.ts";
 import {
+  heldLocalText,
   readScopeText,
   type ScopeSnapshot,
   type ScopeSource,
@@ -1619,6 +1620,10 @@ export const sourceText = (ctx: LookupContext, source: ScopeSource) =>
           .join("\n\n"),
         disclosure: undefined,
       } satisfies SectionText;
+    if (source.kind === "working-file") {
+      const { text, gap } = heldLocalText(ctx, source.id, source.sha256);
+      return { text, disclosure: gap } satisfies SectionText;
+    }
     const unmasked = readScopeText(ctx.location, ctx.cycleId, source.id);
     if (Option.isSome(unmasked))
       return {

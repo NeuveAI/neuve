@@ -7,8 +7,12 @@ import {
   test,
 } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { Effect, Layer } from "effect";
 import {
   Ancestry,
+  Blobs,
+  Computations,
   Identity,
   Log,
   mintUlid,
@@ -19,8 +23,18 @@ import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { settingsPath } from "../../../packages/harness/src/settings.ts";
+import { mcpClientsLayer } from "../../../packages/harness/src/mcp-client.ts";
+import {
+  fetchCyclePart,
+  readScopeOpening,
+  scopeFolder,
+} from "../../../packages/harness/src/scope.ts";
 
 import { parseQueryInvocation } from "../src/boundary.ts";
+import type {
+  PublicQueryEvent,
+  PublicQueryScopeSource,
+} from "../src/domain.ts";
 import { execute as executeRecords, withStore } from "../src/records-cli.ts";
 
 // Built into a temporary directory, never dist/neuve, which an installed
@@ -171,8 +185,11 @@ const run = async (
   return { stdout, stderr, exitCode };
 };
 
-const createRecords = async (root: string) => {
-  const result = await run(["records", "migrate", "--repo", root]);
+const createRecords = async (
+  root: string,
+  env?: Readonly<Record<string, string>>,
+) => {
+  const result = await run(["records", "migrate", "--repo", root], env);
   expect(result.exitCode, result.stderr).toBe(0);
 };
 
@@ -291,6 +308,25 @@ describe("neuve CLI boundary", () => {
     expect(withoutNdjson.exitCode).toBe(0);
     expect(withoutJson.stderr).toBe("");
     expect(withoutNdjson.stderr).toBe("");
+    expect(Object.keys(JSON.parse(withoutJson.stdout))).toEqual([
+      "schema_version",
+      "provider",
+      "query",
+      "source",
+      "retrieval",
+      "structural_observations",
+    ]);
+    expect(
+      Object.keys(
+        JSON.parse(withoutNdjson.stdout.trimEnd().split("\n").at(-1)!),
+      ),
+    ).toEqual([
+      "schema_version",
+      "sequence",
+      "identity",
+      "kind",
+      "relationship_count",
+    ]);
     expect(await Bun.file(database).exists()).toBe(false);
 
     await createRecords(root);
@@ -374,6 +410,294 @@ describe("neuve CLI boundary", () => {
       retention: "raw-capture",
       content: new TextEncoder().encode(question),
     });
+  });
+
+  // The cycle job and a later query must read the same pinned bytes after the working file changes.
+  test("holds named scope at the opening read and returns it on a join", async () => {
+    const { root } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-cli-scope-"));
+    roots.push(scratch);
+    const plan = join(scratch, "approved-plan");
+    const note =
+      "# Done when\n- Preserve the approved text.\n\nRead also handbook/details.\n";
+    const original = Buffer.from("\uFEFF" + note);
+    const sha256 = createHash("sha256").update(original).digest("hex");
+    await Bun.write(plan, original);
+    await Bun.write(join(root, "AGENTS.md"), "Read [guide](guide).\n");
+    await Bun.write(join(root, "guide"), "Guide context.\n");
+    await Bun.write(join(root, "handbook", "details"), "Found context.\n");
+    const committed = "# Approved decision\nUse the Git version.\n";
+    await Bun.write(join(root, "decision"), committed);
+    expect(
+      execute(
+        ["git", "add", "AGENTS.md", "guide", "handbook/details", "decision"],
+        root,
+      ).exitCode,
+    ).toBe(0);
+    expect(
+      execute(["git", "commit", "--quiet", "-m", "scope documents"], root)
+        .exitCode,
+    ).toBe(0);
+    const revision = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+    const blob = execute(
+      ["git", "rev-parse", "HEAD:decision"],
+      root,
+    ).stdout.trim();
+    await rm(join(root, "decision"));
+    const graph = await fakeGraph();
+    const env = {
+      HOME: join(scratch, "home"),
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+    };
+    await mkdir(env.HOME);
+    await createRecords(root, env);
+
+    const args = [
+      ...queryArgs(root, revision),
+      "--scope",
+      plan,
+      "--scope",
+      "decision",
+    ];
+    const first = await run(args, env);
+    expect(first.exitCode, first.stderr).toBe(0);
+    const answer = JSON.parse(first.stdout);
+    const pinEvents = await queryHistory(root, "cycle.local-scope-selected@1");
+    expect(pinEvents).toHaveLength(1);
+    const { event } = pinEvents[0];
+    expect(event.attribution.cycleId).toBe(answer.cycle_id);
+    const [pin] = event.payload.sources;
+    expect(event.payload.sources).toEqual([
+      {
+        kind: "working-file",
+        path: plan,
+        sourceId: "S1",
+        fetchedAt: expect.any(String),
+        sha256,
+      },
+      { kind: "repository-document", path: "decision", blob },
+    ]);
+    expect(new Date(pin.fetchedAt).toISOString()).toBe(pin.fetchedAt);
+    const [opening] = await queryHistory(root, "cycle.opened@2");
+    expect(opening.event.occurredAt).toBe(event.occurredAt);
+    expect(scopeJobs(root)).toEqual([
+      {
+        kind: "scope.fetch@2",
+        dedupe_key: `scope.fetch:${answer.cycle_id}`,
+        state: "waiting",
+      },
+    ]);
+    expect(answer.scope_gaps).toEqual([]);
+    expect(
+      answer.scope.map(({ ref }: { ref: { path: string } }) => ref.path),
+    ).toEqual([plan, "decision", "AGENTS.md", "guide", "handbook/details"]);
+    const [held, document, guide, linked, named] = answer.scope;
+    expect(held).toMatchObject({
+      kind: "working-file",
+      fetchedAt: pin.fetchedAt,
+      sha256,
+      ref: { path: plan },
+      text: note,
+    });
+    expect(document).toMatchObject({
+      kind: "repository-document",
+      ref: { path: "decision", blob, revision, found: "named by the request" },
+      text: committed,
+      sections: [
+        {
+          startLine: 1,
+          endLine: 3,
+          sha256: createHash("sha256").update(committed).digest("hex"),
+        },
+      ],
+    });
+    expect(
+      [guide, linked, named].map(
+        ({ ref, contextOnly }: PublicQueryScopeSource) => [
+          ref.found,
+          contextOnly,
+        ],
+      ),
+    ).toEqual([
+      ["agent guide (agents-md-root-v1)", true],
+      ["linked from AGENTS.md", true],
+      [`named in ${plan}`, true],
+    ]);
+    const location = storeLocationIn(join(root, ".git"));
+    const heldPath = join(scopeFolder(location, answer.cycle_id), "S1.txt");
+    expect(await Bun.file(heldPath).bytes()).toEqual(new Uint8Array(original));
+    await Bun.write(plan, "Changed after the first read.\n");
+
+    const integrations = { status: "absent", path: "(none)" } as const;
+    const readCycle = () =>
+      executeRecords(
+        withStore(
+          root,
+          "write",
+          Effect.gen(function* () {
+            const event = yield* readScopeOpening(answer.cycle_id);
+            if (event === undefined)
+              throw new Error("Expected a recorded cycle opening");
+            return (yield* fetchCyclePart(
+              {
+                repository: root,
+                location,
+                cycleId: answer.cycle_id,
+                integrations,
+              },
+              event,
+            )).value;
+          }).pipe(
+            Effect.provide(mcpClientsLayer(integrations)),
+            Effect.provide(
+              Computations.layer.pipe(
+                Layer.provideMerge(Blobs.layer(location)),
+              ),
+            ),
+          ),
+        ),
+      );
+    const cycle = await readCycle();
+    expect(cycle.sources).toEqual(
+      answer.scope.map(
+        ({ text: _text, ...source }: PublicQueryScopeSource) => source,
+      ),
+    );
+
+    const late = join(scratch, "late-plan");
+    await Bun.write(late, "A later plan.\n");
+    const branch = execute(
+      ["git", "branch", "--show-current"],
+      root,
+    ).stdout.trim();
+    const reviewer = join(scratch, "reviewer");
+    expect(
+      execute(["git", "worktree", "add", "--detach", reviewer, revision], root)
+        .exitCode,
+    ).toBe(0);
+    const joined = await run(
+      [
+        ...queryArgs(reviewer, revision),
+        "--branch",
+        branch,
+        "--scope",
+        late,
+        "--stream",
+      ],
+      env,
+    );
+    expect(joined.exitCode, joined.stderr).toBe(0);
+    const events: PublicQueryEvent[] = joined.stdout
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.map(({ kind, sequence }) => [kind, sequence])).toEqual([
+      ["retrieval", 1],
+      ["relationship", 2],
+      ["scope", 3],
+      ["scope", 4],
+      ["scope", 5],
+      ["scope", 6],
+      ["scope", 7],
+      ["complete", 8],
+    ]);
+    expect(
+      events.flatMap((event) => (event.kind === "scope" ? [event.source] : [])),
+    ).toEqual(answer.scope);
+    expect(events.at(-1)).toMatchObject({
+      cycle_id: answer.cycle_id,
+      scope_gaps: [
+        `${late}: The path was named after this cycle's scope was read.`,
+      ],
+    });
+    expect(await queryHistory(root, "cycle.local-scope-selected@1")).toEqual(
+      pinEvents,
+    );
+
+    await Bun.write(heldPath, "The copy has changed.\n");
+    expect((await readCycle()).sources[0]).toMatchObject({
+      id: "S1",
+      status: "gap",
+      gap: "The held copy's SHA-256 differs from its citation.",
+    });
+    const damaged = await run(args, env);
+    expect(damaged.exitCode, damaged.stderr).toBe(0);
+    const damagedAnswer = JSON.parse(damaged.stdout);
+    expect(damagedAnswer.scope[0]).toMatchObject({
+      id: "S1",
+      status: "gap",
+      sha256,
+      gap: "The held copy's SHA-256 differs from its citation.",
+    });
+    expect(damagedAnswer.scope[0].text).toBeUndefined();
+  });
+
+  // Unavailable scope must leave code intact, and the scope text limit must leave citations intact.
+  test("discloses unavailable scope and preserves citations outside a cycle", async () => {
+    const { root, revision } = await fixtureRepository();
+    const graph = await fakeGraph();
+    const home = join(root, "home");
+    await mkdir(home);
+    await Bun.write(join(root, "working"), "See other.custom.\n");
+    await Bun.write(join(root, "opaque"), new Uint8Array([0xff, 0x00]));
+    await Bun.write(join(root, "large"), Buffer.alloc(262_145, 0x61));
+    const env = {
+      HOME: home,
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+    };
+    const args = queryArgs(root, revision);
+    const result = await run(
+      [
+        ...args.map((arg) => (arg === "4096" ? "8" : arg)),
+        "--scope",
+        "missing",
+        "--scope",
+        "source.custom",
+        "--scope",
+        "working",
+        "--scope",
+        "home",
+        "--scope",
+        "opaque",
+        "--scope",
+        "large",
+      ],
+      env,
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+    const answer = JSON.parse(result.stdout);
+    expect(answer.retrieval).toMatchObject({
+      status: "ok",
+      candidates: [{ symbol: "target" }, expect.any(Object)],
+    });
+    expect(answer.cycle_id).toBeUndefined();
+    expect(answer.scope_gaps).toEqual([
+      "missing: The path was absent from the working tree and the base revision.",
+      "working: The file was read without a held copy because the read joined no review cycle (no Records store was found).",
+      "home: The path is not a regular file.",
+      "opaque: The file is not readable as text.",
+      "large: The file exceeds 262144 bytes.",
+    ]);
+    expect(answer.scope).toEqual([
+      expect.objectContaining({
+        kind: "repository-document",
+        ref: expect.objectContaining({ path: "source.custom", revision }),
+        text_omitted: "max-context-bytes",
+        sections: [expect.objectContaining({ startLine: 1, endLine: 5 })],
+      }),
+      expect.objectContaining({
+        contextOnly: true,
+        ref: expect.objectContaining({
+          path: "other.custom",
+          found: "named in working",
+          revision,
+        }),
+        text_omitted: "max-context-bytes",
+      }),
+    ]);
+    expect(answer.scope[0].text).toBeUndefined();
   });
 
   // A linked agent must own the cycle and the query even when Git names a human.

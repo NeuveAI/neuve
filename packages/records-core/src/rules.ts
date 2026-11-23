@@ -23,6 +23,7 @@ export const checkWorkflowRules = (event: RecordEvent) =>
   Effect.gen(function* () {
     if (
       event.kind === "cycle.external-context-selected@1" ||
+      event.kind === "cycle.local-scope-selected@1" ||
       event.kind === "cycle.scope-selected@1"
     ) {
       const sql = yield* SqlClient;
@@ -38,7 +39,9 @@ export const checkWorkflowRules = (event: RecordEvent) =>
           message:
             event.kind === "cycle.scope-selected@1"
               ? "A cycle's explicit scope is selected once, before the cycle opens."
-              : "A cycle's external context is pinned once, before the cycle opens.",
+              : event.kind === "cycle.local-scope-selected@1"
+                ? "A cycle's local scope is selected once, before the cycle opens."
+                : "A cycle's external context is pinned once, before the cycle opens.",
         });
       return;
     }

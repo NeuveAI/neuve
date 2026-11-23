@@ -71,7 +71,8 @@ export const PROJECTOR_VERSION = 11;
 // 18: `review-list.cleared@1`, which older builds skip (12.24).
 // 19: `query.recorded@1`, which older builds skip.
 // 20: `cycle.opened@2` and `scope.fetch@2`, which older builds skip.
-export const WRITER_VERSION = 20;
+// 21: `cycle.local-scope-selected@1`, which older builds skip.
+export const WRITER_VERSION = 21;
 
 /**
  * The oldest projector whose rows, for the event kinds it knows, are this build's (12.24). It is what

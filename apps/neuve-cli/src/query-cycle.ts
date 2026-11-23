@@ -3,6 +3,10 @@ import { GitOid } from "@neuve/records-schema";
 import { Effect } from "effect";
 import { isSqlError } from "effect/sql/SqlError";
 import { describeFailure } from "./records-cli.ts";
+import {
+  keepLocalScope,
+  type LocalScopeRead,
+} from "../../../packages/harness/src/scope.ts";
 
 export type QueryBranch = Pick<
   Parameters<typeof Cycles.openOrJoinCycle>[0],
@@ -56,9 +60,18 @@ export const openQueryCycle = (
   payload: Parameters<typeof Cycles.openOrJoinCycle>[0],
   actor: string,
   onFailure: (reason: string) => void,
+  local?: LocalScopeRead,
 ) =>
   Effect.gen(function* () {
-    const result = yield* Effect.result(Cycles.openOrJoinCycle(payload, actor));
+    const result = yield* Effect.result(
+      Cycles.openOrJoinCycle(
+        payload,
+        actor,
+        local === undefined
+          ? undefined
+          : (cycleId) => keepLocalScope({ location, cycleId }, local),
+      ),
+    );
     if (result._tag === "Failure") {
       const error = result.failure;
       onFailure(

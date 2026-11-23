@@ -1,6 +1,7 @@
 import { PAGE_BODY_BYTES } from "./budget.ts";
 import { createHash } from "node:crypto";
 import {
+  constants,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -9,7 +10,8 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { join, posix } from "node:path";
+import { open, realpath } from "node:fs/promises";
+import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { Clock, Context, Data, Duration, Effect, Option, Tracer } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import { z } from "zod";
@@ -26,12 +28,14 @@ import {
 import {
   GitHubExternalRefSchema,
   GitOid,
+  MAX_SCOPE_DOCUMENTS,
   safeRead,
+  type CycleLocalScopeSelected,
   type CycleOpenedV2,
   type Range,
 } from "@neuve/records-schema";
 import { dataBlock } from "./data-block.ts";
-import { git } from "./git.ts";
+import { git, resolveCommit } from "./git.ts";
 import {
   commitTexts,
   type CommitText,
@@ -56,6 +60,8 @@ import { readSettings, telemetryMode } from "./settings.ts";
 import {
   keepExternalFetched,
   keepFetched,
+  keepScopeText,
+  readScopeBytes,
   scopeFolder,
   ScopeNotKept,
 } from "./scope-storage.ts";
@@ -99,6 +105,7 @@ export const ScopeSource = z.strictObject({
     "ticket",
     "pull-request",
     "repository-document",
+    "working-file",
     "commit-text",
     "addition",
   ]),
@@ -107,6 +114,7 @@ export const ScopeSource = z.strictObject({
   ms: z.int().min(0),
   status: z.enum(["fetched", "gap"]),
   complete: z.boolean().optional(),
+  contextOnly: z.literal(true).optional(),
   /** Where it came from: the server, tool and item; the path and blob at a revision; the commits. */
   ref: z.strictObject({
     server: z.string().optional(),
@@ -226,14 +234,14 @@ export const SCOPE_FETCH_BOUND_MS = 60_000;
 
 /** Bounds on the cycle-start fetch. */
 const MAX_TICKETS = 20;
-const MAX_DOCUMENTS = 20;
+const MAX_DOCUMENTS = MAX_SCOPE_DOCUMENTS;
 const MAX_DOCUMENT_BYTES = 262_144;
 /** Understand's additions per run (10.53). */
 export const MAX_ADDITIONS_PER_RUN = 10;
 /** A proxied tool's page shown to an agent, in bytes: the result cap less its frame (10.18). */
 const RESULT_BYTES = PAGE_BODY_BYTES;
 
-const sha256 = (text: string) =>
+const sha256 = (text: string | Uint8Array) =>
   createHash("sha256").update(text).digest("hex");
 
 /** The SHA-256 of fetched text, as a source's pin holds it (11.17). */
@@ -333,9 +341,9 @@ export const keyCandidates = (text: string) =>
 const namedPaths = (text: string, blobs: ReadonlyMap<string, TreeEntry>) =>
   [
     ...new Set(
-      (text.match(/[A-Za-z0-9_.\-/]+/g) ?? [])
-        .map((token) => token.replace(/^\.\//, "").replace(/[.,:;]+$/, ""))
-        .filter((token) => token.includes("/") || token.includes(".")),
+      (text.match(/[A-Za-z0-9_.\-/]+/g) ?? []).map((token) =>
+        token.replace(/^\.\//, "").replace(/[.,:;]+$/, ""),
+      ),
     ),
   ].filter((token) => blobs.has(token));
 
@@ -358,7 +366,7 @@ export const linkedPaths = (from: string, text: string) => {
       continue;
     }
     const path = posix.normalize(posix.join(posix.dirname(from), decoded));
-    if (!path.startsWith("..")) paths.add(path);
+    if (path !== ".." && !path.startsWith("../")) paths.add(path);
   }
   return { paths: [...paths], undecodable };
 };
@@ -449,12 +457,598 @@ const rangeCommits = (
     ),
   );
 
+type LocalSelection = CycleLocalScopeSelected["payload"];
+type LocalPin = LocalSelection["sources"][number];
+type NamedLocalSource =
+  | Exclude<LocalPin, { kind: "working-file" }>
+  | (Extract<LocalPin, { kind: "working-file" }> & { bytes: Uint8Array });
+
+const scopePath = (root: string, path: string) => {
+  const within = relative(root, path);
+  return within === ".." || within.startsWith("../") || isAbsolute(within)
+    ? path
+    : within || ".";
+};
+
+const fileOverBound = `The file exceeds ${MAX_DOCUMENT_BYTES} bytes.`;
+type WorkingRead =
+  | { kind: "missing" }
+  | { kind: "gap"; reason: string }
+  | { kind: "file"; bytes: Uint8Array; fetchedAt: string };
+
+const readWorkingFile = async (path: string): Promise<WorkingRead> => {
+  try {
+    await using file = await open(
+      path,
+      constants.O_RDONLY | constants.O_NONBLOCK,
+    );
+    const stat = await file.stat();
+    if (!stat.isFile())
+      return { kind: "gap", reason: "The path is not a regular file." };
+    if (stat.size > MAX_DOCUMENT_BYTES)
+      return { kind: "gap", reason: fileOverBound };
+    const bytes = Buffer.alloc(MAX_DOCUMENT_BYTES + 1);
+    let size = 0;
+    while (size < bytes.length) {
+      const { bytesRead } = await file.read(
+        bytes,
+        size,
+        bytes.length - size,
+        size,
+      );
+      if (bytesRead === 0) break;
+      size += bytesRead;
+    }
+    return size > MAX_DOCUMENT_BYTES
+      ? { kind: "gap", reason: fileOverBound }
+      : {
+          kind: "file",
+          bytes: bytes.subarray(0, size),
+          fetchedAt: new Date().toISOString(),
+        };
+  } catch (error) {
+    return typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+      ? { kind: "missing" }
+      : { kind: "gap", reason: "The file could not be read." };
+  }
+};
+
+const blobsOf = (listing: ReadonlyArray<TreeEntry>) =>
+  new Map(
+    listing
+      .filter((entry) => entry.type === "blob")
+      .map((entry) => [entry.path, entry]),
+  );
+
+const localTree = (repository: string, base: string) =>
+  Effect.map(lsTree(repository, base), blobsOf);
+
+const documentBlobs = (
+  repository: string,
+  entries: ReadonlyArray<TreeEntry | undefined>,
+  known?: ReadonlyMap<string, Uint8Array>,
+) =>
+  Effect.map(
+    readBlobs(repository, [
+      ...new Set(
+        entries.flatMap((entry) =>
+          entry === undefined ||
+          (entry.size ?? 0) > MAX_DOCUMENT_BYTES ||
+          known?.has(entry.oid)
+            ? []
+            : [entry.oid],
+        ),
+      ),
+    ]),
+    (fresh) => (known === undefined ? fresh : new Map([...known, ...fresh])),
+  );
+
+const namedScope = (
+  sourceId: string,
+  path: string,
+  read: WorkingRead,
+  entry: TreeEntry | undefined,
+  blob: Uint8Array | undefined,
+): NamedLocalSource => {
+  if (read.kind === "gap") return { ...read, path };
+  if (
+    entry !== undefined &&
+    (read.kind === "missing" ||
+      (blob !== undefined && Buffer.compare(read.bytes, blob) === 0))
+  ) {
+    const oid = GitOid.safeParse(entry.oid);
+    if (oid.success)
+      return { kind: "repository-document", path, blob: oid.data };
+  }
+  if (read.kind === "missing")
+    return {
+      kind: "gap",
+      path,
+      reason: isAbsolute(path)
+        ? "The file was not found."
+        : "The path was absent from the working tree and the base revision.",
+    };
+  if (blobText(read.bytes) === undefined)
+    return { kind: "gap", path, reason: "The file is not readable as text." };
+  return {
+    kind: "working-file",
+    sourceId,
+    path,
+    bytes: read.bytes,
+    fetchedAt: read.fetchedAt,
+    sha256: sha256(read.bytes),
+  };
+};
+
+export const readLocalScope = (
+  repository: string,
+  revision: string,
+  names: readonly string[],
+) =>
+  Effect.gen(function* () {
+    const [base, top, directory] = yield* Effect.all(
+      [
+        resolveCommit(repository, revision),
+        git(repository, ["rev-parse", "--show-toplevel"]),
+        Effect.tryPromise(() => realpath(repository)),
+      ],
+      { concurrency: "unbounded" },
+    );
+    const root = top.replace(/\n$/, "");
+    const paths = [
+      ...new Set(
+        names.map((name) => {
+          const fromRepo = scopePath(repository, resolve(repository, name));
+          return scopePath(root, resolve(directory, fromRepo));
+        }),
+      ),
+    ];
+    const selected = paths.slice(0, MAX_DOCUMENTS);
+    const [entries, reads] = yield* Effect.all(
+      [
+        localTree(repository, base),
+        Effect.promise(() =>
+          Promise.all(
+            selected.map((path) => readWorkingFile(resolve(root, path))),
+          ),
+        ),
+      ],
+      { concurrency: 2 },
+    );
+    const contents = yield* documentBlobs(repository, [
+      entries.get(AGENT_GUIDE.path),
+      ...selected.flatMap((path, index) =>
+        reads[index]?.kind === "gap" ? [] : [entries.get(path)],
+      ),
+    ]);
+    const sources = reads.map((read, index) => {
+      const path = selected[index]!;
+      const entry = entries.get(path);
+      return namedScope(
+        localSourceId(index),
+        path,
+        read,
+        entry,
+        entry === undefined ? undefined : contents.get(entry.oid),
+      );
+    });
+    return {
+      base,
+      root,
+      entries,
+      contents,
+      sources,
+      omitted: paths.length - selected.length,
+    };
+  }).pipe(Effect.timeout(SCOPE_FETCH_BOUND_MS));
+
+export type LocalScopeRead = Effect.Success<ReturnType<typeof readLocalScope>>;
+type ScopeCopy = { location: StoreLocation; cycleId: string };
+
+const localSourceId = (index: number) => `S${index + 1}`;
+
+export const keepLocalScope = (copy: ScopeCopy, read: LocalScopeRead) =>
+  Effect.gen(function* () {
+    if (read.sources.length === 0) return undefined;
+    const sources = yield* Effect.forEach(read.sources, (source) => {
+      if (source.kind !== "working-file")
+        return Effect.succeed<LocalPin>(source);
+      const { bytes, ...pin } = source;
+      return keepScopeText(
+        copy.location,
+        copy.cycleId,
+        pin.sourceId,
+        bytes,
+      ).pipe(
+        Effect.as<LocalPin>(pin),
+        Effect.catchTag("ScopeNotKept", () =>
+          Effect.succeed({
+            kind: "gap" as const,
+            path: pin.path,
+            reason: "The file was read but its copy could not be kept.",
+          }),
+        ),
+      );
+    });
+    return {
+      root: read.root,
+      sources,
+      omitted: read.omitted,
+    } satisfies LocalSelection;
+  });
+
+export const heldLocalText = (
+  copy: ScopeCopy,
+  id: string,
+  hash: string | undefined,
+) => {
+  const bytes = Option.getOrUndefined(
+    readScopeBytes(copy.location, copy.cycleId, id),
+  );
+  if (bytes === undefined) return { gap: "The held copy could not be read." };
+  if (sha256(bytes) !== hash)
+    return { gap: "The held copy's SHA-256 differs from its citation." };
+  const text = blobText(bytes);
+  return text === undefined
+    ? { gap: "The held copy is not readable as text." }
+    : { text };
+};
+
+const LocalScope = z.strictObject({
+  sources: z.array(ScopeSource),
+  gaps: z.array(z.string()),
+  guideMissing: z.boolean(),
+});
+type LocalScope = z.infer<typeof LocalScope>;
+
+const gitDocumentText = (
+  entry: TreeEntry | undefined,
+  bytes: Uint8Array | undefined,
+) => {
+  if (
+    (entry?.size ?? 0) > MAX_DOCUMENT_BYTES ||
+    (bytes?.byteLength ?? 0) > MAX_DOCUMENT_BYTES
+  )
+    return { gap: fileOverBound };
+  if (bytes === undefined)
+    return { gap: "The document's Git blob could not be read." };
+  const text = blobText(bytes);
+  return text === undefined
+    ? { gap: "The document's Git blob is not readable as text." }
+    : { text };
+};
+
+const localScopeSources = (
+  repository: string,
+  base: string,
+  pins: LocalSelection,
+  tree: Pick<LocalScopeRead, "entries"> &
+    Partial<Pick<LocalScopeRead, "contents">>,
+  local: ScopeCopy | ReadonlyArray<readonly [string, string]>,
+) =>
+  Effect.gen(function* () {
+    const { entries } = tree;
+    const copy = "cycleId" in local ? local : undefined;
+    const sources: ScopeSource[] = [];
+    const gaps: string[] = [];
+    const disclose = (path: string, reason: string) =>
+      gaps.push(`${path}: ${reason}`);
+    const at = yield* nowIso;
+    const named = new Map("cycleId" in local ? [] : local);
+    const found = new Map<string, string>();
+    const pinned = new Set(pins.sources.map((pin) => pin.path));
+    const find = (path: string, reason: string) => {
+      if (entries.has(path) && !pinned.has(path) && !found.has(path))
+        found.set(path, reason);
+    };
+    const add = (
+      source: Pick<
+        ScopeSource,
+        "id" | "kind" | "ref" | "fetchedAt" | "sha256" | "contextOnly"
+      >,
+      read: { text?: string; gap?: string },
+    ) => {
+      const { text, gap } = read;
+      const path = source.ref.path!;
+      if (gap !== undefined) disclose(path, gap);
+      sources.push({
+        ...source,
+        stratum: "plan-or-ticket-at-base",
+        ms: 0,
+        status: text === undefined ? "gap" : "fetched",
+        title: path,
+        sections: text === undefined ? [] : sectionsOf(source.id, text),
+        capture: null,
+        gap: gap ?? null,
+      });
+    };
+    const document = (
+      id: string,
+      path: string,
+      blob: string,
+      reason: string,
+      contents: ReadonlyMap<string, Uint8Array>,
+      contextOnly?: true,
+    ) => {
+      const read = gitDocumentText(entries.get(path), contents.get(blob));
+      add(
+        {
+          id,
+          kind: "repository-document",
+          fetchedAt: at,
+          ref: { path, blob, revision: base, found: reason },
+          ...(contextOnly ? { contextOnly } : {}),
+        },
+        read,
+      );
+      return read.text;
+    };
+    const links = (path: string, text: string) => {
+      const { paths, undecodable } = linkedPaths(path, text);
+      for (const target of paths)
+        find(
+          isAbsolute(target) ? scopePath(pins.root, target) : target,
+          `linked from ${path}`,
+        );
+      for (const target of undecodable)
+        disclose(
+          path,
+          `A link could not be decoded (${JSON.stringify(target.slice(0, 200))}).`,
+        );
+    };
+
+    const guide = entries.get(AGENT_GUIDE.path);
+    const contents = yield* documentBlobs(
+      repository,
+      [
+        ...pins.sources.flatMap((pin) =>
+          pin.kind === "repository-document" ? [entries.get(pin.path)] : [],
+        ),
+        guide,
+      ],
+      tree.contents,
+    );
+    for (const [index, pin] of pins.sources.entries()) {
+      const id =
+        pin.kind === "working-file" ? pin.sourceId : localSourceId(index);
+      if (pin.kind === "gap") {
+        disclose(pin.path, pin.reason);
+        continue;
+      }
+      let text: string | undefined;
+      if (pin.kind === "repository-document") {
+        text = document(
+          id,
+          pin.path,
+          pin.blob,
+          "named by the request",
+          contents,
+        );
+      } else if (copy !== undefined) {
+        const read = heldLocalText(copy, id, pin.sha256);
+        add(
+          {
+            id,
+            kind: pin.kind,
+            fetchedAt: pin.fetchedAt,
+            sha256: pin.sha256,
+            ref: { path: pin.path, found: "named by the request" },
+          },
+          read,
+        );
+        text = read.text;
+      }
+      if (text !== undefined) named.set(pin.path, text);
+    }
+    if (guide !== undefined) {
+      find(guide.path, `agent guide (${AGENT_GUIDE.reader})`);
+      const text = gitDocumentText(guide, contents.get(guide.oid)).text;
+      if (text !== undefined && text !== named.get(guide.path))
+        links(guide.path, text);
+    }
+    for (const [path, text] of named) {
+      links(path, text);
+      for (const target of namedPaths(text, entries))
+        find(target, `named in ${path}`);
+    }
+    const room = MAX_DOCUMENTS - pins.sources.length;
+    const omitted = pins.omitted + Math.max(0, found.size - room);
+    if (omitted > 0)
+      gaps.push(
+        `${omitted} more document(s) exceeded the ${MAX_DOCUMENTS}-document limit.`,
+      );
+    const documents = [...found].slice(0, room);
+    const foundContents = yield* documentBlobs(
+      repository,
+      documents.map(([path]) => entries.get(path)),
+      contents,
+    );
+    for (const [index, [path, reason]] of documents.entries()) {
+      const entry = entries.get(path)!;
+      document(
+        localSourceId(pins.sources.length + index),
+        path,
+        entry.oid,
+        reason,
+        foundContents,
+        true,
+      );
+    }
+    return {
+      sources,
+      gaps,
+      guideMissing: guide === undefined,
+    } satisfies LocalScope;
+  });
+
+const selectedLocalScope = (cycleId: string) =>
+  Effect.map(
+    Log.history({ kind: "cycle.local-scope-selected@1", cycleId, limit: 1 }),
+    ([entry]) =>
+      entry?.event.kind === "cycle.local-scope-selected@1"
+        ? entry.event.payload
+        : undefined,
+  );
+
+const fetchCycleLocalScope = (
+  repository: string,
+  copy: ScopeCopy,
+  base: string,
+  pins: LocalSelection | undefined,
+  read?: LocalScopeRead,
+) => {
+  const run = jsonComputation(
+    {
+      op: "harness.cycle-local-scope",
+      opVersion: 1,
+      inputs: { cycle: `cycle:${copy.cycleId}` },
+    },
+    LocalScope,
+    Effect.gen(function* () {
+      return yield* localScopeSources(
+        repository,
+        base,
+        pins ?? { root: repository, sources: [], omitted: 0 },
+        read ?? { entries: yield* localTree(repository, base) },
+        copy,
+      );
+    }),
+  );
+  return run.pipe(
+    Effect.catchTag("SharedAttemptFailed", () => run),
+    Effect.map(({ value }) => value),
+  );
+};
+
+type LocalScopeSource = ScopeSource & { text?: string };
+
+const sourceWithGap = (source: ScopeSource, gap: string): ScopeSource => ({
+  ...source,
+  status: "gap",
+  gap,
+});
+
+const validateHeldScope = <T extends Pick<LocalScope, "sources" | "gaps">>(
+  copy: ScopeCopy,
+  scope: T,
+): T => {
+  const gaps = [...scope.gaps];
+  const sources = scope.sources.map((source) => {
+    if (source.kind !== "working-file" || source.status !== "fetched")
+      return source;
+    const { gap } = heldLocalText(copy, source.id, source.sha256);
+    if (gap === undefined) return source;
+    gaps.push(`${source.title}: ${gap}`);
+    return sourceWithGap(source, gap);
+  });
+  return { ...scope, sources, gaps };
+};
+
+const localScopeAnswer = (
+  repository: string,
+  read: LocalScopeRead,
+  scope: LocalScope,
+  copy?: ScopeCopy,
+) =>
+  Effect.gen(function* () {
+    const gaps = [...scope.gaps];
+    const documents = yield* documentBlobs(
+      repository,
+      scope.sources.flatMap((source) =>
+        source.kind === "repository-document" && source.status === "fetched"
+          ? [read.entries.get(source.title)]
+          : [],
+      ),
+      read.contents,
+    );
+    const sources: LocalScopeSource[] = scope.sources.map((source) => {
+      if (source.status === "gap") return source;
+      const text =
+        source.kind === "working-file" && copy !== undefined
+          ? heldLocalText(copy, source.id, source.sha256)
+          : gitDocumentText(
+              read.entries.get(source.title),
+              documents.get(source.ref.blob ?? ""),
+            );
+      if (text.gap !== undefined) {
+        gaps.push(`${source.title}: ${text.gap}`);
+        return sourceWithGap(source, text.gap);
+      }
+      return { ...source, text: text.text };
+    });
+    return { sources, gaps };
+  });
+
+export const queryLocalScope = (
+  repository: string,
+  read: LocalScopeRead,
+  copy: ScopeCopy,
+) =>
+  Effect.gen(function* () {
+    const pins = yield* selectedLocalScope(copy.cycleId);
+    const held = new Set(pins?.sources.map(({ path }) => path));
+    const gaps = read.sources
+      .filter(({ path }) => !held.has(path))
+      .map(
+        ({ path }) =>
+          `${path}: The path was named after this cycle's scope was read.`,
+      );
+    if (read.omitted > (pins?.omitted ?? 0))
+      gaps.push(`The request named more than ${MAX_DOCUMENTS} documents.`);
+    if (pins === undefined && !read.entries.has(AGENT_GUIDE.path))
+      return { sources: [], gaps };
+    const scope = yield* fetchCycleLocalScope(
+      repository,
+      copy,
+      read.base,
+      pins,
+      read,
+    );
+    const answer = yield* localScopeAnswer(repository, read, scope, copy);
+    return { ...answer, gaps: [...answer.gaps, ...gaps] };
+  });
+
+export const queryUnheldLocalScope = (
+  repository: string,
+  read: LocalScopeRead,
+  reason: string,
+) =>
+  Effect.gen(function* () {
+    const scope = yield* localScopeSources(
+      repository,
+      read.base,
+      {
+        root: read.root,
+        omitted: read.omitted,
+        sources: read.sources.map((source) =>
+          source.kind !== "working-file"
+            ? source
+            : {
+                kind: "gap" as const,
+                path: source.path,
+                reason: `The file was read without a held copy because the read joined no review cycle (${reason}).`,
+              },
+        ),
+      },
+      read,
+      read.sources.flatMap((source) => {
+        const text =
+          source.kind === "working-file" ? blobText(source.bytes) : undefined;
+        return text === undefined ? [] : [[source.path, text] as const];
+      }),
+    );
+    return yield* localScopeAnswer(repository, read, scope);
+  });
+
 const documentSources = (options: {
   repository: string;
   base: string;
   head: string;
   commits: ReadonlyArray<CommitText>;
-  part: "cycle" | "review" | "range";
+  part: "review" | "range";
   sourceId: () => string;
   gap: NoteGap;
 }) =>
@@ -465,12 +1059,6 @@ const documentSources = (options: {
       const baseListing = yield* lsTree(repository, base);
       const headListing =
         head === base ? baseListing : yield* lsTree(repository, head);
-      const blobsOf = (listing: ReadonlyArray<TreeEntry>) =>
-        new Map(
-          listing
-            .filter((entry) => entry.type === "blob")
-            .map((entry) => [entry.path, entry]),
-        );
       const atBase = blobsOf(baseListing);
       const atHead = blobsOf(headListing);
       const wanted = new Map<string, string>();
@@ -516,14 +1104,7 @@ const documentSources = (options: {
           `${wanted.size - MAX_DOCUMENTS} more repository document(s) weren't read: a review reads at most ${MAX_DOCUMENTS}.`,
         );
       const entries = documents.map(([path]) => entryOf(path));
-      const contents = yield* readBlobs(
-        repository,
-        entries.flatMap((entry) =>
-          entry === undefined || (entry.size ?? 0) > MAX_DOCUMENT_BYTES
-            ? []
-            : [entry.oid],
-        ),
-      );
+      const contents = yield* documentBlobs(repository, entries);
       for (const [path, found] of documents) {
         const entry = entryOf(path);
         if (entry === undefined) continue;
@@ -619,7 +1200,10 @@ const strataOf = (
 ): ScopeSnapshot["strata"] => {
   const present = STRATUM_ORDER.filter((stratum) =>
     sources.some(
-      (source) => source.status === "fetched" && source.stratum === stratum,
+      (source) =>
+        source.status === "fetched" &&
+        !source.contextOnly &&
+        source.stratum === stratum,
     ),
   );
   return { strongest: present[0] ?? "nothing", present };
@@ -667,7 +1251,8 @@ const fetchSources = (ctx: Omit<SnapshotContext, "range">, input: ScopeInput) =>
           ]).pipe(Effect.orElseSucceed(() => "")))
             .split("\n")
             .filter(Boolean);
-    let next = 1;
+    // Local documents and tickets assign source IDs independently.
+    let next = input.part === "cycle" ? MAX_DOCUMENTS + 1 : 1;
     const sourceId = () => `S${next++}`;
     const external = yield* selectedExternalContext(cycleId);
     for (const pin of external?.sources ?? []) {
@@ -938,17 +1523,30 @@ const fetchSources = (ctx: Omit<SnapshotContext, "range">, input: ScopeInput) =>
       }
 
     const reviewCommits = input.part === "review" ? commits : [];
-    sources.push(
-      ...(yield* documentSources({
-        repository,
-        base: merge,
-        head,
-        commits: reviewCommits,
-        part: input.part,
-        sourceId,
-        gap,
-      })),
-    );
+    if (input.part === "cycle") {
+      const pins = yield* selectedLocalScope(cycleId);
+      const local = validateHeldScope(
+        ctx,
+        yield* fetchCycleLocalScope(repository, ctx, merge, pins),
+      );
+      sources.push(...local.sources);
+      gaps.push(...local.gaps);
+      if (local.guideMissing)
+        gap(
+          `The repository has no ${AGENT_GUIDE.path} at the base, so its own conventions weren't read as scope.`,
+        );
+    } else
+      sources.push(
+        ...(yield* documentSources({
+          repository,
+          base: merge,
+          head,
+          commits: reviewCommits,
+          part: input.part,
+          sourceId,
+          gap,
+        })),
+      );
     const commitSource = yield* commitScope(
       reviewCommits,
       merge,
@@ -1016,7 +1614,7 @@ export const snapshotSpec = (
 
 const cycleScopeSpec = (cycleId: string): Computations.ComputationSpec => ({
   ...snapshotSpec(cycleId),
-  opVersion: 3,
+  opVersion: 4,
 });
 
 const rangeScopeSpec = (range: ScopeRange): Computations.ComputationSpec => ({
@@ -1066,6 +1664,14 @@ const storedCyclePart = (cycleId: string) =>
     const split = yield* storedOutput(spec, CycleScope);
     if (Option.isSome(split))
       return { key: Computations.computationKey(spec).key, value: split.value };
+    if ((yield* selectedLocalScope(cycleId)) !== undefined) return undefined;
+    const priorSplit = { ...spec, opVersion: 3 };
+    const prior = yield* storedOutput(priorSplit, CycleScope);
+    if (Option.isSome(prior))
+      return {
+        key: Computations.computationKey(priorSplit).key,
+        value: prior.value,
+      };
     const legacy = snapshotSpec(cycleId);
     const full = yield* storedOutput(legacy, ScopeSnapshot);
     if (Option.isSome(full))
@@ -1081,7 +1687,12 @@ export const fetchCyclePart = (
 ) =>
   Effect.gen(function* () {
     const held = yield* storedCyclePart(ctx.cycleId);
-    if (held !== undefined) return { ...held, status: "reused" as const };
+    if (held !== undefined)
+      return {
+        ...held,
+        value: validateHeldScope(ctx, held.value),
+        status: "reused" as const,
+      };
     const run = jsonComputation(
       cycleScopeSpec(ctx.cycleId),
       CycleScope,
@@ -1222,7 +1833,7 @@ export const snapshotByKey = (key: string) =>
     const record = parts.get(cycleKey);
     if (record?.op !== SCOPE_SNAPSHOT_OP) return undefined;
     const cycle =
-      record.opVersion === 3
+      record.opVersion === 3 || record.opVersion === 4
         ? yield* snapshotOutput(record, CycleScope)
         : record.opVersion === 2
           ? yield* snapshotOutput(record, ScopeSnapshot)
@@ -1309,16 +1920,10 @@ export const readScopeText = (
   location: StoreLocation,
   cycleId: string,
   sourceId: string,
-) => {
-  const path = join(scopeFolder(location, cycleId), `${sourceId}.txt`);
-  try {
-    return existsSync(path)
-      ? Option.some(readFileSync(path, "utf8"))
-      : Option.none<string>();
-  } catch {
-    return Option.none<string>();
-  }
-};
+) =>
+  Option.map(readScopeBytes(location, cycleId, sourceId), (bytes) =>
+    Buffer.from(bytes).toString("utf8"),
+  );
 
 /** 10.79's cap: a cycle's unmasked scope copy goes after this long with no run in the cycle. */
 export const SCOPE_COPY_IDLE_MS = 7 * 24 * 60 * 60 * 1_000;

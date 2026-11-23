@@ -1,6 +1,6 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Data, Effect } from "effect";
+import { Data, Effect, Option } from "effect";
 import {
   Blobs,
   STORE_DIRECTORY_MODE,
@@ -20,9 +20,38 @@ export class ScopeNotKept extends Data.TaggedError("ScopeNotKept")<{
 export const scopeFolder = (location: StoreLocation, cycleId: string) =>
   join(location.directory, "scope", cycleId);
 
-const writePrivate = (path: string, text: string) => {
-  mkdirSync(join(path, ".."), { recursive: true, mode: STORE_DIRECTORY_MODE });
-  writeFileSync(path, text, { mode: STORE_FILE_MODE });
+export const keepScopeText = (
+  location: StoreLocation,
+  cycleId: string,
+  sourceId: string,
+  text: string | Uint8Array,
+) =>
+  Effect.try({
+    try: () => {
+      const folder = scopeFolder(location, cycleId);
+      mkdirSync(folder, { recursive: true, mode: STORE_DIRECTORY_MODE });
+      writeFileSync(join(folder, `${sourceId}.txt`), text, {
+        mode: STORE_FILE_MODE,
+      });
+    },
+    catch: (cause) =>
+      new ScopeNotKept({
+        message: `the unmasked copy was not written: ${String(cause).slice(0, 200)}`,
+      }),
+  });
+
+export const readScopeBytes = (
+  location: StoreLocation,
+  cycleId: string,
+  sourceId: string,
+) => {
+  try {
+    return Option.some(
+      readFileSync(join(scopeFolder(location, cycleId), `${sourceId}.txt`)),
+    );
+  } catch {
+    return Option.none<Uint8Array>();
+  }
 };
 
 /** Stores the masked capture of fetched text and keeps the unmasked copy in the cycle's folder. */
@@ -34,7 +63,7 @@ export const keepFetched = (
   response: unknown,
   server: IntegrationServer,
 ) =>
-  keepScopeText(
+  keepCapturedText(
     location,
     cycleId,
     sourceId,
@@ -48,11 +77,11 @@ export const keepExternalFetched = (
   sourceId: string,
   source: ExternalReviewSource,
 ) =>
-  keepScopeText(location, cycleId, sourceId, source.text, [
+  keepCapturedText(location, cycleId, sourceId, source.text, [
     { value: source.item.url, kind: "url" },
   ]);
 
-const keepScopeText = (
+const keepCapturedText = (
   location: StoreLocation,
   cycleId: string,
   sourceId: string,
@@ -61,17 +90,7 @@ const keepScopeText = (
 ) =>
   Effect.gen(function* () {
     const blobs = yield* Blobs.BlobStore;
-    yield* Effect.try({
-      try: () =>
-        writePrivate(
-          join(scopeFolder(location, cycleId), `${sourceId}.txt`),
-          text,
-        ),
-      catch: (cause) =>
-        new ScopeNotKept({
-          message: `the unmasked copy was not written: ${String(cause).slice(0, 200)}`,
-        }),
-    });
+    yield* keepScopeText(location, cycleId, sourceId, text);
     const masker = scopeMasker(identifiers);
     const masked = masker.mask(text);
     const stored = yield* blobs.put({

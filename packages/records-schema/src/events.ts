@@ -335,6 +335,37 @@ export const CycleExternalContextSelected = event(
   Attribution.extend({ cycleId: Ulid, range: Range }),
 );
 
+export const MAX_SCOPE_DOCUMENTS = 20;
+
+const LocalScopePath = z.strictObject({ path: z.string().min(1) });
+export const CycleLocalScopeSelected = event(
+  "cycle.local-scope-selected@1",
+  z.strictObject({
+    root: z.string().min(1),
+    sources: z
+      .array(
+        z.discriminatedUnion("kind", [
+          LocalScopePath.extend({
+            kind: z.literal("repository-document"),
+            blob: GitOid,
+          }),
+          LocalScopePath.extend({
+            kind: z.literal("working-file"),
+            sourceId: z.string().regex(/^S[1-9][0-9]?$/),
+            fetchedAt: Instant,
+            sha256: Sha256,
+          }),
+          LocalScopePath.extend({ kind: z.literal("gap"), reason: z.string() }),
+        ]),
+      )
+      .min(1)
+      .max(MAX_SCOPE_DOCUMENTS),
+    omitted: z.int().nonnegative(),
+  }),
+  Attribution.omit({ range: true }).extend({ cycleId: Ulid }),
+);
+export type CycleLocalScopeSelected = z.infer<typeof CycleLocalScopeSelected>;
+
 export const ReviewOriginRecorded = event(
   "review.origin-recorded@1",
   z.strictObject({ identity: Sha256, origin: ReviewOriginSchema }),
@@ -1805,6 +1836,7 @@ export const RecordEvent = z.discriminatedUnion("kind", [
   CycleOpenedV2,
   CycleScopeSelected,
   CycleExternalContextSelected,
+  CycleLocalScopeSelected,
   ReviewOriginRecorded,
   ReviewRequested,
   JudgementPreparationRequested,

@@ -24,7 +24,11 @@ export const candidateObligations = (ctx: LookupContext) =>
   Effect.gen(function* () {
     const out: Array<ChangeMap["candidates"][number]> = [];
     for (const source of ctx.snapshot?.sources ?? []) {
-      if (source.status !== "fetched" || source.kind === "commit-text")
+      if (
+        source.status !== "fetched" ||
+        source.kind === "commit-text" ||
+        source.contextOnly
+      )
         continue;
       const read = yield* sourceText(ctx, source);
       if (read.text === undefined) continue;
@@ -124,7 +128,7 @@ export const scopeBlock = (
     );
     for (const source of sources) {
       listing.push(
-        `${source.id} ${source.kind} · ${source.stratum} · fetched ${source.fetchedAt} · ${source.title}${source.status === "gap" ? ` · gap: ${source.gap ?? ""}` : ""}`,
+        `${source.id} ${source.kind} · ${source.contextOnly ? "context only" : source.stratum} · fetched ${source.fetchedAt} · ${source.title}${source.status === "gap" ? ` · gap: ${source.gap ?? ""}` : ""}`,
       );
       for (const section of mode === "frame" && source.kind === "commit-text"
         ? []

@@ -1,12 +1,26 @@
 import { readInstallation } from "./installation.ts";
 import { viewFolder } from "./graph-views.ts";
-import { Data, Effect } from "effect";
+import { Data, Effect, Layer } from "effect";
 import { isSqlError } from "effect/sql/SqlError";
-import { Blobs, Log, Queries, StoreMissing } from "@neuve/records-core";
+import {
+  Blobs,
+  Computations,
+  Log,
+  Queries,
+  StoreMissing,
+} from "@neuve/records-core";
 import { budgetDirectory } from "@neuve/records-core/budget-directory";
 import { GitOid, type QueryRecorded } from "@neuve/records-schema";
 import { requesterAttribution, resolveRequester } from "@neuve/harness/request";
 import { resolveCommit } from "../../../packages/harness/src/git.ts";
+import {
+  AGENT_GUIDE,
+  SCOPE_FETCH_BOUND_MS,
+  queryLocalScope,
+  queryUnheldLocalScope,
+  readLocalScope,
+  type LocalScopeRead,
+} from "../../../packages/harness/src/scope.ts";
 import { execute, withStore } from "./records-cli.ts";
 import type { QueryInvocation } from "./boundary.ts";
 import {
@@ -61,6 +75,7 @@ import type {
   PublicLimitation,
   PublicLocation,
   PublicQueryResult,
+  PublicQueryScopeSource,
   PublicQueryEvent,
   PublicQueryIdentity,
   PublicRange,
@@ -595,6 +610,9 @@ export const collectPublicQueryResult = (
   if (retrieval?.kind !== "retrieval" || complete?.kind !== "complete") {
     throw new Error("Public query event stream is incomplete.");
   }
+  const scope = events.flatMap((event) =>
+    event.kind === "scope" ? [event.source] : [],
+  );
   return {
     schema_version: 2,
     provider: retrieval.identity.provider,
@@ -604,6 +622,10 @@ export const collectPublicQueryResult = (
     structural_observations: events.flatMap((event) =>
       event.kind === "relationship" ? [event.outcome] : [],
     ),
+    ...(complete.scope_gaps === undefined
+      ? {}
+      : { scope, scope_gaps: complete.scope_gaps }),
+    ...(complete.cycle_id === undefined ? {} : { cycle_id: complete.cycle_id }),
   };
 };
 
@@ -614,11 +636,21 @@ export type QuerySourceContext = Readonly<
   } & ({ kind: "unrecorded" } | { kind: "recorded"; eventId: string })
 >;
 
+type QueryScopeAnswer = Effect.Success<ReturnType<typeof queryLocalScope>>;
+type RecordedQuery = {
+  eventId?: string;
+  cycleId?: string;
+  scope?: QueryScopeAnswer;
+  scopeGap?: string;
+  reason?: string;
+};
+
 const recordQuery = async (
   request: QueryRequest,
   payload: QueryRecorded["payload"],
   cycle?: QueryBranch & { onFailure: (reason: string) => void },
-): Promise<string | undefined> => {
+  local?: LocalScopeRead,
+): Promise<RecordedQuery> => {
   try {
     return await execute(
       withStore(request.repository, "write", (location) =>
@@ -648,11 +680,12 @@ const recordQuery = async (
                   },
                   actor,
                   cycle.onFailure,
+                  local,
                 )
               : undefined;
           const sessionId =
             requester._tag === "Actor" ? requester.sessionId : undefined;
-          return yield* Queries.record({
+          const eventId = yield* Queries.record({
             actor,
             attribution:
               sessionId === undefined && cycleId === undefined
@@ -661,11 +694,30 @@ const recordQuery = async (
             question: request.question,
             payload: { ...payload, revision },
           });
-        }).pipe(Effect.provide(Blobs.layer(location))),
+          if (cycleId === undefined) return { eventId };
+          if (local === undefined) return { eventId, cycleId };
+          const scope = yield* Effect.exit(
+            queryLocalScope(request.repository, local, {
+              location,
+              cycleId,
+            }).pipe(Effect.timeout(SCOPE_FETCH_BOUND_MS)),
+          );
+          return scope._tag === "Success"
+            ? { eventId, cycleId, scope: scope.value }
+            : {
+                eventId,
+                cycleId,
+                scopeGap: "The cycle's local scope could not be read.",
+              };
+        }).pipe(
+          Effect.provide(
+            Computations.layer.pipe(Layer.provideMerge(Blobs.layer(location))),
+          ),
+        ),
       ).pipe(
         Effect.catchIf(
           (error) => error instanceof StoreMissing,
-          () => Effect.succeed(undefined),
+          () => Effect.succeed({ reason: "no Records store was found" }),
         ),
         Effect.mapError((error) =>
           isSqlError(error) && error.reason._tag === "LockTimeoutError"
@@ -684,7 +736,7 @@ const recordQuery = async (
       Bun.stderr,
       `neuve: Query run was not recorded (${reason}).\n`,
     ).catch(() => undefined);
-    return undefined;
+    return { reason };
   }
 };
 
@@ -756,7 +808,14 @@ export const runQueryGraph = async (
   let budget: GraphQueryBudget | undefined;
   let relationships = 0;
   let outcome: QueryRecorded["payload"]["outcome"] = "failed";
-  let eventId: string | undefined;
+  let complete: Extract<PublicQueryEvent, { kind: "complete" }> | undefined;
+  let recorded: RecordedQuery;
+  let local: LocalScopeRead | undefined;
+  const localRead = Effect.runPromise(
+    readLocalScope(request.repository, request.revision, request.scope ?? []),
+    { signal: input.signal },
+  ).catch(() => undefined);
+  let cycleFailure: string | undefined;
   try {
     await inspectQuery(
       request,
@@ -766,7 +825,9 @@ export const runQueryGraph = async (
           budget = event.outcome.value.budget;
         if (event.kind === "relationship" && event.outcome.kind === "success")
           relationships += event.outcome.value.observations.length;
-        await input.emit(toPublicQueryEvent(request, event));
+        const publicEvent = toPublicQueryEvent(request, event);
+        if (publicEvent.kind === "complete") complete = publicEvent;
+        else await input.emit(publicEvent);
       },
       input.signal,
     );
@@ -780,10 +841,14 @@ export const runQueryGraph = async (
       outcome = "interrupted";
     throw error;
   } finally {
-    let cycleFailure =
+    cycleFailure =
       outcome === "completed" && "reason" in branch ? branch.reason : undefined;
-    // The collected answer waits for Records so it can name the cycle when the output adds it.
-    eventId = await recordQuery(
+    const elapsedMs = Math.round(performance.now() - start);
+    if (complete !== undefined) {
+      const read = await localRead;
+      if (revision === read?.base) local = read;
+    }
+    recorded = await recordQuery(
       request,
       {
         revision,
@@ -799,7 +864,7 @@ export const runQueryGraph = async (
         resultsDroppedByBudget: budget?.resultsDroppedByBudget ?? 0,
         snippetsTruncatedByBudget: budget?.snippetsTruncatedByBudget ?? 0,
         startedAt,
-        elapsedMs: Math.round(performance.now() - start),
+        elapsedMs,
       },
       outcome === "completed" && "branch" in branch
         ? {
@@ -809,10 +874,72 @@ export const runQueryGraph = async (
             },
           }
         : undefined,
+      local,
     );
-    if (eventId !== undefined && cycleFailure !== undefined)
+    if (recorded.eventId !== undefined && cycleFailure !== undefined)
       await warnQueryCycle(cycleFailure);
   }
+  if (complete !== undefined) {
+    const namedScope = (request.scope?.length ?? 0) > 0;
+    const mightHaveScope = namedScope || local?.entries.has(AGENT_GUIDE.path);
+    let scope = recorded.scope;
+    let gap = recorded.scopeGap;
+    if (
+      local !== undefined &&
+      recorded.cycleId === undefined &&
+      mightHaveScope
+    ) {
+      const fallback = await Effect.runPromise(
+        Effect.exit(
+          queryUnheldLocalScope(
+            request.repository,
+            local,
+            recorded.reason ??
+              cycleFailure ??
+              "the Graph read did not complete",
+          ).pipe(Effect.timeout(SCOPE_FETCH_BOUND_MS)),
+        ),
+      );
+      if (fallback._tag === "Success") scope = fallback.value;
+      else gap = "Local scope could not be read.";
+    } else if (local === undefined && namedScope) {
+      gap = "The named local scope could not be read at the resolved revision.";
+    }
+    const gaps =
+      scope?.gaps ?? (gap !== undefined && mightHaveScope ? [gap] : []);
+    const sources = scope?.sources ?? [];
+    if (sources.length === 0 && gaps.length === 0) await input.emit(complete);
+    else {
+      let sequence = complete.sequence;
+      let remaining = request.maxContextBytes;
+      for (const { text, ...citation } of sources) {
+        let source: PublicQueryScopeSource = citation;
+        if (text !== undefined) {
+          const bytes = Buffer.byteLength(text);
+          if (bytes <= remaining) {
+            remaining -= bytes;
+            source = { ...citation, text };
+          } else source = { ...citation, text_omitted: "max-context-bytes" };
+        }
+        await input.emit({
+          schema_version: complete.schema_version,
+          sequence: sequence++,
+          identity: complete.identity,
+          kind: "scope",
+          source,
+        });
+      }
+      await input.emit({
+        ...complete,
+        sequence,
+        scope_gaps: gaps,
+        ...(recorded.cycleId === undefined
+          ? {}
+          : { cycle_id: recorded.cycleId }),
+      });
+    }
+  }
+  const { eventId } = recorded;
   return eventId === undefined
     ? { kind: "unrecorded", request }
     : { kind: "recorded", request, eventId };
