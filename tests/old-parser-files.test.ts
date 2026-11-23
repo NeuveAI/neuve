@@ -24,6 +24,8 @@ test("each of the old parser's real file names is a match", () => {
     `${NAME}/lib/neuve/node_modules/@oxc-parser/binding-darwin-arm64/parser.darwin-arm64.node`,
     `${NAME}/lib/neuve/node_modules/@oxc-project/types/package.json`,
     `${NAME}/lib/neuve/parser.linux-x64-gnu.node`,
+    `${NAME}/lib/neuve/oxc-parser-0.127.0.tgz`,
+    `${NAME}/lib/neuve/oxc_parser.node`,
   ])
     expect(isOldParserFile(member)).toBe(true);
 });
