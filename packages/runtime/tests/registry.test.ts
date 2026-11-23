@@ -70,7 +70,7 @@ const session: RuntimeSession = {
   steerTurn: () => Effect.void,
   interruptTurn: () => Effect.void,
   setModel: () => Effect.void,
-  respondToApproval: () => Effect.void,
+  respondToApproval: () => Effect.succeed({ delivered: true }),
   events: Stream.empty,
 };
 function fakeRuntime(
@@ -547,6 +547,7 @@ test("class-backed sessions keep text and image inputs, every control and its re
     ) {
       return Effect.sync(() => {
         this.received.push({ operation: "respondToApproval", input });
+        return { delivered: true } as const;
       });
     }
   }
@@ -947,7 +948,7 @@ for (const denied of [
           },
           respondToApproval: () => {
             calls.push("respondToApproval");
-            return Effect.void;
+            return Effect.succeed({ delivered: true });
           },
         }),
     };

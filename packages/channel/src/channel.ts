@@ -1,5 +1,5 @@
 import { ReviewCardsDoc } from "./review-cards";
-import { answerApproval, type ApprovalAdmission, ApprovalRequestsDoc, Approvals, requirePerson, watchApprovals } from "./approvals";
+import { type ApprovalAdmission, ApprovalRequestsDoc, Approvals, requirePerson, watchApprovals } from "./approvals";
 import type { Context } from "@earendil-works/chord";
 import { type Admission, type ChannelExtension, install, observe, price } from "./extensions";
 import { admitted, claim, digest } from "./requests";
@@ -257,7 +257,8 @@ export class Channel {
 		registry.install(handoffs.extension);
 		const waits = new PersonWaits((chat, phase) => { void Promise.resolve().then(() => channel.#asked(chat, phase)); });
 		const questions = new Questions(waits);
-		const approvals = new Approvals(waits, error => log("warn", "approval.dismiss.failed", failure(error)));
+		const approvals = new Approvals(waits, error => log("warn", "approval.dismiss.failed", failure(error)),
+			(chat, work) => channel.#admitted(chat, work));
 		registry.install(questions.extension);
 		const execute = options.desktop;
 		if (execute) {
@@ -426,6 +427,7 @@ export class Channel {
 			invoke: async (author) => { channel.#author(author); await channel.#mayInvoke(author); },
 			serialize: (chat, work) => channel.#admitted(chat, work),
 			onStop: stop => approvals.registerStop(stop),
+			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
 		channel.#feed = await options.feed?.(harness);
@@ -519,12 +521,13 @@ export class Channel {
 				const { id } = await this.#conversation(request.chat);
 				return answer(this.#harness, id, request.call, request.author, null, context);
 			}
-			case "approval-answer": {
-				requirePerson(request.author);
-				this.#author(request.author);
-				await this.#mayInvoke(request.author);
-				return answerApproval(this.#harness, (await this.#conversation(request.chat)).id, request);
-			}
+			case "approval-answer":
+				return this.#admitted(request.chat, async () => {
+					requirePerson(request.author);
+					this.#author(request.author);
+					await this.#mayInvoke(request.author);
+					return this.#approvals.answer(this.#harness, (await this.#conversation(request.chat)).id, request);
+				});
 			case "plan":
 				return this.#admitted(request.chat, async () => {
 					const { id } = await this.#conversation(request.chat);

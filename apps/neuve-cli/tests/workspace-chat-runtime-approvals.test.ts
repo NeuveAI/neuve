@@ -133,15 +133,22 @@ test("commits and forwards approvals while a question holds recording, then clos
         state: { kind: "open" },
       },
     ]);
-    await run.harness.commit(async (tx) => {
-      const state = await tx.doc(doc, run.chat);
-      state.requests[0]!.state = {
-        kind: "answered",
-        by: "person",
-        at: 1,
-        decision: "allow",
-      };
-    }, context);
+    expect(
+      await run.bridge.replyToApproval(
+        run.chat,
+        { requestId: "request-1", decision: "allow" },
+        () =>
+          run.harness.commit(async (tx) => {
+            const state = await tx.doc(doc, run.chat);
+            state.requests[0]!.state = {
+              kind: "answered",
+              by: "person",
+              at: 1,
+              decision: "allow",
+            };
+          }, context),
+      ),
+    ).toBe(true);
     await until(() => run.session.approvalAnswers.length === 1);
     expect(run.session.approvalAnswers).toEqual([
       { requestId: "request-1", decision: "allow" },

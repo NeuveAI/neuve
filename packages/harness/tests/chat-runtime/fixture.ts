@@ -237,6 +237,7 @@ export class FakeSession {
   respondToApproval: RuntimeSession["respondToApproval"] = (answer) =>
     Effect.sync(() => {
       this.approvalAnswers.push(answer);
+      return { delivered: true };
     });
   private record(input: unknown) {
     if (this.fake.admitted === 0) this.fake.unrecordedRequests++;

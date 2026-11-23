@@ -24,6 +24,10 @@ async function channel(onRun?: (run: RunEnd) => void, stop?: (harness: Harness, 
 		attach(bound, admission) {
 			harness = bound;
 			admission.requestAttendance?.(provider => provider === "faux");
+			admission.onApprovalAnswer?.(async (_chat, _answer, record) => {
+				await record();
+				return true;
+			});
 			if (stop) admission.onStop?.(chat => stop(bound, chat));
 		},
 	} });

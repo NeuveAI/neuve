@@ -1884,13 +1884,13 @@ export const openClaudeSession = (
         state(
           Effect.gen(function* () {
             const request = approvals.get(input.requestId);
-            if (
-              request === undefined ||
-              active !== request.turn ||
-              request.turn.ending !== undefined ||
-              Deferred.isDoneUnsafe(request.answer)
-            )
-              return yield* failure("previous-turn-active");
+            if (request === undefined) return { delivered: false } as const;
+            if (active !== request.turn || request.turn.ending !== undefined)
+              return { delivered: false, reason: "turn-ended" } as const;
+            if (Deferred.isDoneUnsafe(request.answer))
+              return { delivered: false } as const;
+            // This releases Claude's live permission callback. The SDK does not acknowledge
+            // whether Claude then used the permission.
             yield* Deferred.succeed(
               request.answer,
               input.decision === "allow"
@@ -1900,6 +1900,7 @@ export const openClaudeSession = (
                     message: input.message ?? "Denied by the user.",
                   },
             );
+            return { delivered: true } as const;
           }),
         ),
       setModel: (model) =>

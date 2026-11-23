@@ -109,6 +109,9 @@ Plan mode extends the upstream `packages/channel/src/channel.ts` admission and w
 | `packages/channel/tests/approvals.test.ts` | Exercises approval authorization, document races, Stop, message delivery, attendance and opted-in watches across the channel boundary. |
 | `packages/channel/src/questions.ts` | Questions accept any queued invocation. Approvals accept a person's queued invocation. Plain messages dismiss neither. |
 | `packages/channel/src/approvals.ts` | Refusals describe the recorded decision or closure without repeating the person's sign-in ID. |
+| `packages/channel/src/channel.ts` | Gives the runtime an answer callback and orders approval answers with messages in the same chat. |
+| `packages/channel/src/approvals.ts` | Records an answer after the runtime reports delivery. A refused reply returns the request's closure reason. |
+| `packages/channel/tests/approvals.test.ts` | Registers a runtime answer callback for the channel's approval admission tests. |
 
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 

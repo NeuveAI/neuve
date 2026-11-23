@@ -14,6 +14,7 @@ import {
   TurnFailed,
   runtimeErrorToFailure,
   type AccountName,
+  type ApprovalDelivery,
   type ContentBlock,
   type InterruptReason,
   type LimitWindow,
@@ -49,6 +50,7 @@ import {
   type Answer,
   type CodexConnection,
   type Notification,
+  type Reply,
   type ServerRequest,
 } from "./client.ts";
 import * as Decode from "./decode.ts";
@@ -127,10 +129,12 @@ export interface CodexSessionOptions {
   readonly broken?: ReadonlyArray<string> | undefined;
 }
 
+type ApprovalChoice = "allow" | "deny" | "automatic-deny" | "resolved";
 interface Pending {
   readonly codexId: ServerRequest["id"];
-  readonly decision: Deferred.Deferred<"allow" | "deny">;
-  readonly cancelReply: Effect.Effect<void>;
+  readonly decision: Deferred.Deferred<ApprovalChoice>;
+  readonly delivery: Deferred.Deferred<ApprovalDelivery>;
+  resolved: boolean;
 }
 interface Turn {
   readonly id: string;
@@ -334,6 +338,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
   let generation = 0;
   let dead = false;
   let turn: Turn | undefined;
+  const closedApprovals = new Map<string, "runtime-resolved" | "turn-ended">();
   /** Whether any turn was ever sent to Codex on this thread. */
   let turnSent = false;
   let rateLimits: Decode.RateLimits | undefined;
@@ -382,9 +387,10 @@ export const openCodexSession = Effect.fnUntraced(function* (
       active.finished = true;
       if (turn === active) turn = undefined;
       yield* Deferred.succeed(active.started, active.codexId);
-      for (const pending of active.approvals.values())
-        yield* Deferred.succeed(pending.decision, "deny");
-      active.approvals.clear();
+      for (const [id, pending] of active.approvals) {
+        if (!closedApprovals.has(id)) closedApprovals.set(id, "turn-ended");
+        yield* Deferred.succeed(pending.decision, "automatic-deny");
+      }
       // Taken out of the map before any is aborted: an abort can resume its handler at once, and
       // a handler that still found its call there would report it a second time.
       const running = [...active.calls];
@@ -704,14 +710,11 @@ export const openCodexSession = Effect.fnUntraced(function* (
           if (!active || !resolved.success) return;
           for (const [id, pending] of active.approvals)
             if (pending.codexId === resolved.data.requestId) {
-              active.approvals.delete(id);
-              yield* pending.cancelReply;
-              emit({
-                type: "approval.resolved",
-                turnId: active.id,
-                at: now(),
-                requestId: id,
-              });
+              if (Deferred.isDoneUnsafe(pending.delivery)) return;
+              pending.resolved = true;
+              closedApprovals.set(id, "runtime-resolved");
+              yield* Deferred.succeed(pending.decision, "resolved");
+              yield* Deferred.await(pending.delivery);
               return;
             }
           return;
@@ -785,6 +788,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
     kind: WorkKind,
     itemId: string,
     answer: (decision: "allow" | "deny") => unknown,
+    reply: Reply,
     changes?: FileUpdateChange[],
   ) =>
     Effect.gen(function* () {
@@ -799,33 +803,74 @@ export const openCodexSession = Effect.fnUntraced(function* (
         return { result: answer("deny") } satisfies Answer;
       }
       const requestId = `approval-${crypto.randomUUID()}`;
-      const decision = yield* Deferred.make<"allow" | "deny">();
-      // Codex can resolve the request itself. Interrupt this reply before it reaches the wire.
-      const cancelReply = yield* Effect.withFiberSucceed(Fiber.interrupt);
-      active.approvals.set(requestId, {
+      const pending: Pending = {
         codexId: request.id,
-        decision,
-        cancelReply,
-      });
-      emit({
-        type: "approval.requested",
-        turnId: active.id,
-        at: now(),
-        requestId,
-        callId: itemId,
-        work: kind,
-        input: asJson(
-          changes === undefined
-            ? request.params
-            : { ...request.params, changes },
+        decision: yield* Deferred.make<ApprovalChoice>(),
+        delivery: yield* Deferred.make<ApprovalDelivery>(),
+        resolved: false,
+      };
+      yield* Effect.sync(() => {
+        active.approvals.set(requestId, pending);
+        emit({
+          type: "approval.requested",
+          turnId: active.id,
+          at: now(),
+          requestId,
+          callId: itemId,
+          work: kind,
+          input: asJson(
+            changes === undefined
+              ? request.params
+              : { ...request.params, changes },
+          ),
+          asked: describeApproval(request, changes),
+        });
+      }).pipe(
+        Effect.andThen(Deferred.await(pending.decision)),
+        Effect.flatMap((decision) =>
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (pending.resolved || decision === "resolved") return;
+              if (decision === "automatic-deny") {
+                yield* reply({ result: answer("deny") });
+              } else if (!active.finished) {
+                const result = yield* reply({ result: answer(decision) });
+                if (result === "written") {
+                  closedApprovals.delete(requestId);
+                  yield* Deferred.succeed(pending.delivery, {
+                    delivered: true,
+                  });
+                }
+                if (result === "resolved") pending.resolved = true;
+              }
+            }),
+          ),
         ),
-        asked: describeApproval(request, changes),
-      });
-      return {
-        result: answer(yield* Deferred.await(decision)),
-      } satisfies Answer;
+        Effect.ensuring(
+          Effect.suspend(() => {
+            active.approvals.delete(requestId);
+            if (Deferred.isDoneUnsafe(pending.delivery)) return Effect.void;
+            const reason = pending.resolved ? "runtime-resolved" : "turn-ended";
+            closedApprovals.set(requestId, reason);
+            if (reason === "runtime-resolved")
+              emit({
+                type: "approval.resolved",
+                turnId: active.id,
+                at: now(),
+                requestId,
+              });
+            return Deferred.succeed(pending.delivery, {
+              delivered: false,
+              reason,
+            });
+          }),
+        ),
+      );
     });
-  const answerRequest = (request: ServerRequest): Effect.Effect<Answer> =>
+  const answerRequest = (
+    request: ServerRequest,
+    reply: Reply,
+  ): Effect.Effect<Answer | undefined> =>
     Effect.gen(function* () {
       switch (request.method) {
         case "item/commandExecution/requestApproval":
@@ -847,6 +892,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
             (decision) => ({
               decision: decision === "allow" ? "accept" : "decline",
             }),
+            reply,
             changes,
           );
         }
@@ -871,6 +917,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
                   : {},
               scope: "turn",
             }),
+            reply,
           );
         }
         case "mcpServer/elicitation/request": {
@@ -889,6 +936,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
                     _meta: null,
                   }
                 : refuse,
+            reply,
           );
         }
         case "item/tool/requestUserInput":
@@ -1443,6 +1491,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         calls: new Map(),
         work: new Map(),
       };
+      closedApprovals.clear();
       turn = active;
       emit({ type: "turn.started", turnId: active.id, at: now() });
       return yield* begin(
@@ -1605,12 +1654,16 @@ export const openCodexSession = Effect.fnUntraced(function* (
         model = next;
       }),
     respondToApproval: (input) =>
-      Effect.gen(function* () {
-        const active = turn;
-        const pending = active?.approvals.get(input.requestId);
-        if (active === undefined || pending === undefined) return;
-        active.approvals.delete(input.requestId);
-        yield* Deferred.succeed(pending.decision, input.decision);
+      Effect.gen(function* (): Effect.fn.Return<ApprovalDelivery> {
+        const reason = closedApprovals.get(input.requestId);
+        if (reason !== undefined) return { delivered: false, reason };
+        const pending = turn?.approvals.get(input.requestId);
+        if (
+          !pending ||
+          !(yield* Deferred.succeed(pending.decision, input.decision))
+        )
+          return { delivered: false };
+        return yield* Deferred.await(pending.delivery);
       }),
     events: Stream.fromQueue(events),
   } satisfies RuntimeSession as RuntimeSession;

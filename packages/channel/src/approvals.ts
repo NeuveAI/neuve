@@ -12,7 +12,16 @@ export type ApprovalAdmission = {
 	onStop?(listener: (chat: ConversationId) => Promise<void>): void;
 	/** Only providers handled by the bridge receive the attendance section. */
 	requestAttendance?(owns: (provider: string) => boolean): void;
+	/** The runtime calls record only after delivering the answer. */
+	onApprovalAnswer?(send: SendApprovalAnswer): void;
 };
+
+type ApprovalAnswer = Extract<Request, { op: "approval-answer" }>;
+type SendApprovalAnswer = (
+	chat: ConversationId,
+	answer: Pick<ApprovalAnswer, "requestId" | "decision">,
+	record: () => Promise<void>,
+) => Promise<boolean>;
 
 const AttendanceDoc = defineDoc<{ attended: boolean }>({
 	kind: "neuve.chat-attendance", version: 1, scope: "conversation", history: "latest", fork: "initial",
@@ -33,7 +42,7 @@ function closedReason(state: Extract<ApprovalRequest["state"], { kind: "closed" 
 	}
 }
 
-export async function answerApproval(harness: Harness, chat: ConversationId, answer: Extract<Request, { op: "approval-answer" }>) {
+async function openApproval(harness: Harness, chat: ConversationId, answer: ApprovalAnswer, record = false) {
 	await harness.commit(async tx => {
 		const doc = await tx.doc(ApprovalRequestsDoc, chat);
 		const request = doc.requests.find(record => record.requestId === answer.requestId);
@@ -44,7 +53,7 @@ export async function answerApproval(harness: Harness, chat: ConversationId, ans
 			const choice = state.decision === "allow" ? "Allow" : "Deny";
 			throw new Error(`This approval request already has an answer. It was ${choice}.`);
 		}
-		request.state = { kind: "answered", by: answer.author, at: Date.now(), decision: answer.decision };
+		if (record) request.state = { kind: "answered", by: answer.author, at: Date.now(), decision: answer.decision };
 	}, context);
 }
 
@@ -71,9 +80,26 @@ export class Approvals {
 	#admitting = new Map<ConversationId, Promise<unknown>>();
 	#closing = false;
 	#stop?: (chat: ConversationId) => Promise<void>;
+	#send?: SendApprovalAnswer;
 	#runtimeModels?: (provider: string) => boolean;
 
-	constructor(private readonly waits: PersonWaits, private readonly report: (error: unknown) => void) {}
+	constructor(
+		private readonly waits: PersonWaits,
+		private readonly report: (error: unknown) => void,
+		private readonly serialize: (chat: ConversationId, work: () => Promise<void>) => Promise<void>,
+	) {}
+
+	registerAnswer(send: SendApprovalAnswer) {
+		this.#send = send;
+	}
+
+	async answer(harness: Harness, chat: ConversationId, answer: ApprovalAnswer) {
+		await openApproval(harness, chat, answer);
+		const { requestId, decision } = answer;
+		if (await this.#send?.(chat, { requestId, decision }, () => openApproval(harness, chat, answer, true))) return;
+		await openApproval(harness, chat, answer);
+		throw new Error("This approval answer did not reach the runtime.");
+	}
 
 	readonly extension = defineExtension({
 		name: "neuve-chat-attendance",
@@ -149,13 +175,13 @@ export class Approvals {
 				const waiting = this.#waiting.get(chat)?.ids;
 				if (!waiting || this.#closing) return;
 				// The commit listener must return before asking pi to commit another document.
-				const task = Promise.resolve().then(() => harness.commit(async tx => {
+				const task = Promise.resolve().then(() => this.serialize(chat, () => harness.commit(async tx => {
 					const doc = await tx.doc(ApprovalRequestsDoc, chat);
 					for (const request of doc.requests) {
 						if (request.state.kind === "open" && waiting.has(request.requestId))
 							request.state = { kind: "closed", reason: "message", by };
 					}
-				}, context)).catch(this.report);
+				}, context))).catch(this.report);
 				this.#pending.add(task);
 				void task.finally(() => this.#pending.delete(task));
 			};

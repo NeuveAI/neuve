@@ -260,6 +260,7 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
           respondToApproval: () =>
             Effect.sync(() => {
               released++;
+              return { delivered: true } as const;
             }),
           events: Stream.fromQueue(queue),
         } satisfies RuntimeSession as RuntimeSession;
@@ -465,7 +466,7 @@ test("a call to one of Neuve's tools between two pieces of Codex's own work is r
           steerTurn: () => Effect.void,
           interruptTurn: () => Effect.void,
           setModel: () => Effect.void,
-          respondToApproval: () => Effect.void,
+          respondToApproval: () => Effect.succeed({ delivered: true }),
           events: Stream.fromQueue(queue),
         } satisfies RuntimeSession as RuntimeSession;
       }),
@@ -602,7 +603,7 @@ test("a message sent after Codex's turn ended, while its work is recorded, start
                 ),
           interruptTurn: () => Effect.void,
           setModel: () => Effect.void,
-          respondToApproval: () => Effect.void,
+          respondToApproval: () => Effect.succeed({ delivered: true }),
           events: Stream.fromQueue(queue),
         } satisfies RuntimeSession as RuntimeSession;
       }),
@@ -687,7 +688,7 @@ const scripted = (
           steerTurn: () => Effect.void,
           interruptTurn: () => Effect.void,
           setModel: () => Effect.void,
-          respondToApproval: () => Effect.void,
+          respondToApproval: () => Effect.succeed({ delivered: true }),
           events: Stream.fromQueue(queue),
         } satisfies RuntimeSession as RuntimeSession;
       }),
@@ -867,7 +868,7 @@ test("a call to a withheld tool is never run by pi, and the turn still completes
           steerTurn: () => Effect.void,
           interruptTurn: () => Effect.void,
           setModel: () => Effect.void,
-          respondToApproval: () => Effect.void,
+          respondToApproval: () => Effect.succeed({ delivered: true }),
           events: Stream.fromQueue(queue),
         } satisfies RuntimeSession as RuntimeSession;
       }),

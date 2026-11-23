@@ -210,10 +210,12 @@ export function chatRuntimeExtension(
     harness: Harness,
     access?: {
       onStop?: (listener: (chat: ConversationId) => Promise<void>) => void;
+      onApprovalAnswer?: (send: ChatRuntimeBridge["replyToApproval"]) => void;
     },
   ) {
     if (approvals) await bridge.attachApprovals(approvals(harness));
     access?.onStop?.((chat) => bridge.stopApprovals(chat));
+    access?.onApprovalAnswer?.((...args) => bridge.replyToApproval(...args));
     attached = harness;
     // inspect is queued before resume or new submissions. Successors retain the conversation gate.
     const captured = harness.inspect(BACKGROUND_CONTEXT).then(async (view) => {

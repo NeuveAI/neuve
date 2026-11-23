@@ -1118,10 +1118,12 @@ describe("Codex's requests", () => {
               asked: { kind: "command", command, folder: "/work" },
             });
             if (event.type !== "approval.requested") throw new Error("fixture");
-            yield* session.respondToApproval({
-              requestId: event.requestId,
-              decision,
-            });
+            expect(
+              yield* session.respondToApproval({
+                requestId: event.requestId,
+                decision,
+              }),
+            ).toEqual({ delivered: true });
             yield* until(() => answer(process, id) !== undefined);
             expect(answer(process, id)).toEqual({
               id,
@@ -1135,9 +1137,16 @@ describe("Codex's requests", () => {
             { itemId: "f1" },
             103,
           );
-          yield* read.next("approval.requested");
+          const last = yield* read.next("approval.requested");
+          if (last.type !== "approval.requested") throw new Error("fixture");
           fake.send("turn/completed", completed("completed"));
           yield* read.next("turn.finished");
+          expect(
+            yield* session.respondToApproval({
+              requestId: last.requestId,
+              decision: "allow",
+            }),
+          ).toEqual({ delivered: false, reason: "turn-ended" });
           yield* until(() => answer(process, 103) !== undefined);
           expect(answer(process, 103)).toMatchObject({
             result: { decision: "decline" },
@@ -1185,14 +1194,18 @@ describe("Codex's requests", () => {
           if (second.type !== "approval.requested") throw new Error("fixture");
           expect(second.callId).toBe("c1");
           expect(second.requestId).not.toBe(first.requestId);
-          yield* session.respondToApproval({
-            requestId: first.requestId,
-            decision: "allow",
-          });
-          yield* session.respondToApproval({
-            requestId: "unknown",
-            decision: "allow",
-          });
+          expect(
+            yield* session.respondToApproval({
+              requestId: first.requestId,
+              decision: "allow",
+            }),
+          ).toEqual({ delivered: false, reason: "runtime-resolved" });
+          expect(
+            yield* session.respondToApproval({
+              requestId: "unknown",
+              decision: "allow",
+            }),
+          ).toEqual({ delivered: false });
           yield* session.respondToApproval({
             requestId: second.requestId,
             decision: "deny",

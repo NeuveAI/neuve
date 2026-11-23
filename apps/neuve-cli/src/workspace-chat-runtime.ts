@@ -205,7 +205,10 @@ export type WorkerChatRuntime = {
   extensions: readonly Extension[];
   attach(
     harness: Harness,
-    admission?: Pick<WorkerAdmission, "onStop" | "requestAttendance">,
+    admission?: Pick<
+      WorkerAdmission,
+      "onStop" | "onApprovalAnswer" | "requestAttendance"
+    >,
   ): void | Promise<void>;
   close(): Promise<void>;
 };
@@ -277,8 +280,6 @@ export function approvalRecords(harness: Harness): ApprovalStore {
       if (!watch) throw new Error("The approval request document is missing.");
       const publish = async (doc: typeof watch.value) => {
         for (const { requestId, state } of doc?.requests ?? []) {
-          if (state.kind === "answered")
-            await reply({ requestId, decision: state.decision });
           if (state.kind === "closed" && state.reason === "message")
             await reply({ requestId, decision: "deny" });
         }

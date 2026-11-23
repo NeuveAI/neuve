@@ -425,6 +425,13 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
 ]);
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>;
 
+export type ApprovalDelivery =
+  | { readonly delivered: true }
+  | {
+      readonly delivered: false;
+      readonly reason?: "runtime-resolved" | "turn-ended";
+    };
+
 export interface RuntimeSession {
   /**
    * Native session id for a later resume. May change on fork or a conversation reset.
@@ -462,12 +469,12 @@ export interface RuntimeSession {
   readonly setModel: (
     model: NonNullable<SessionPolicy["model"]>,
   ) => Effect.Effect<void, RuntimeError>;
-  /** Fails with CapabilityUnsupported for approvals when approvals is false. */
+  /** Reports delivery to the live request, or why it closed when known. Fails with CapabilityUnsupported when approvals is false. */
   readonly respondToApproval: (input: {
     readonly requestId: string;
     readonly decision: "allow" | "deny";
     readonly message?: string | undefined;
-  }) => Effect.Effect<void, RuntimeError>;
+  }) => Effect.Effect<ApprovalDelivery, RuntimeError>;
   /**
    * Single consumer, no error channel. Session death finishes each open turn as failed
    * with disposition broken, then ends. Scope closure finishes open turns as interrupted,

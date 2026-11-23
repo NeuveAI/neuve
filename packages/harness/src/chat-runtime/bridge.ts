@@ -104,6 +104,11 @@ type ApprovalRequestEvent = Extract<
 >;
 type ApprovalReply = Parameters<RuntimeSession["respondToApproval"]>[0];
 type ApprovalEnd = "turn-ended" | "runtime-resolved" | "stopped";
+type LiveApproval = {
+  turn: string;
+  reply?: Promise<boolean>;
+  closing?: Promise<void>;
+};
 export interface ApprovalStore {
   restart(): Promise<void>;
   open(chat: ConversationId, event: ApprovalRequestEvent): Promise<void>;
@@ -120,7 +125,7 @@ export interface ApprovalStore {
 type Live = {
   owner: string;
   chat?: ConversationId;
-  approvals: Map<string, string>;
+  approvals: Map<string, LiveApproval>;
   approvalWatch?: () => Promise<void>;
   approvalEnd?: "stopped";
   scope: Scope.Closeable;
@@ -920,26 +925,10 @@ export class ChatRuntimeBridge {
     if (!store || chat === undefined) return;
     if (event.type === "approval.requested") {
       if (live.closing || live.approvalEnd === "stopped") return;
-      live.approvals.set(event.requestId, event.turnId);
+      live.approvals.set(event.requestId, { turn: event.turnId });
       await store.open(chat, event);
       live.approvalWatch ??= await store.watch(chat, async (answer) => {
-        if (
-          live.closing ||
-          live.state.kind !== "open" ||
-          !live.approvals.delete(answer.requestId)
-        )
-          return;
-        try {
-          await Effect.runPromise(
-            live.state.session.respondToApproval(answer),
-            { signal: live.cancellation.signal },
-          );
-        } catch {
-          if (!live.closing)
-            this.log("chat-runtime.approval.reply.failed", {
-              requestId: answer.requestId,
-            });
-        }
+        await this.replyToApproval(chat, answer);
       });
     } else if (event.type === "approval.resolved") {
       await this.closeApprovals(live, "runtime-resolved", [event.requestId]);
@@ -948,20 +937,93 @@ export class ChatRuntimeBridge {
         live,
         live.approvalEnd ?? "turn-ended",
         [...live.approvals]
-          .filter(([, turn]) => turn === event.turnId)
+          .filter(([, approval]) => approval.turn === event.turnId)
           .map(([id]) => id),
       );
     }
   }
+  async replyToApproval(
+    chat: ConversationId,
+    answer: ApprovalReply,
+    record?: () => Promise<void>,
+  ): Promise<boolean> {
+    const { requestId } = answer;
+    const live = [...this.sessions].find(
+      (session) => session.chat === chat && session.approvals.has(requestId),
+    );
+    const approval = live?.approvals.get(requestId);
+    if (!live || !approval || live.state.kind !== "open") return false;
+    if (approval.closing) {
+      await approval.closing;
+      return false;
+    }
+    if (live.closing || live.approvalEnd || approval.reply) return false;
+    const session = live.state.session;
+    const reply = Promise.resolve().then(async () => {
+      const delivered = await Effect.runPromise(
+        session.respondToApproval(answer),
+      );
+      if (delivered.delivered) {
+        await record?.();
+        live.approvals.delete(requestId);
+        return true;
+      }
+      if (delivered.reason !== undefined) {
+        const reason =
+          delivered.reason === "turn-ended"
+            ? (live.approvalEnd ?? delivered.reason)
+            : delivered.reason;
+        await this.approvals?.close(chat, new Set([requestId]), reason);
+        live.approvals.delete(requestId);
+      }
+      return false;
+    });
+    approval.reply = reply;
+    try {
+      return await reply;
+    } catch (error) {
+      this.log("chat-runtime.approval.reply.failed", {
+        requestId,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+      if (record) throw error;
+      return false;
+    } finally {
+      delete approval.reply;
+    }
+  }
+
   private async closeApprovals(
     live: Live,
     reason: ApprovalEnd,
     ids: Iterable<string>,
   ) {
-    const requests = new Set(ids);
-    if (!this.approvals || live.chat === undefined || !requests.size) return;
-    await this.approvals.close(live.chat, requests, reason);
-    for (const id of requests) live.approvals.delete(id);
+    const { approvals: store } = this;
+    const { chat } = live;
+    if (!store || chat === undefined) return;
+    const closing = new Map<string, LiveApproval>();
+    const previous = new Set<Promise<void>>();
+    for (const id of ids) {
+      const approval = live.approvals.get(id);
+      if (approval?.closing) previous.add(approval.closing);
+      else if (approval) closing.set(id, approval);
+    }
+    const closed = Promise.resolve().then(async () => {
+      // A reply that reached the process must keep its recorded answer even if the turn ends.
+      await Promise.allSettled([...closing.values()].map(({ reply }) => reply));
+      const requests = new Set(
+        [...closing.keys()].filter((id) => live.approvals.has(id)),
+      );
+      if (!requests.size) return;
+      await store.close(chat, requests, reason);
+      for (const id of requests) live.approvals.delete(id);
+    });
+    for (const approval of closing.values()) approval.closing = closed;
+    try {
+      await Promise.all([closed, ...previous]);
+    } finally {
+      for (const approval of closing.values()) delete approval.closing;
+    }
   }
   private async endReader(
     live: Live,
