@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
-import type { ApprovalAsked, ApprovalRequest } from "@ace/channel/protocol";
+import type { ApprovalAsked, ApprovalPath, ApprovalRequest } from "@ace/channel/protocol";
 
 // The component is clicked in a real DOM; React reads these globals when it loads.
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
@@ -154,32 +154,85 @@ test("a long or many-line command is shown in full and wraps", () => {
 	}
 });
 
-// Why: Allow grants everything asked. Each kind's fixture sets every field its schema has, and
-// every value must reach the card; a field added to the contract fails here until the card shows it.
+// What a person reads for each closed value, as the card must word it.
+const ACCESS = { read: "Read", write: "Write", deny: "No access" } as const;
+const CHANGE = { add: "Added", delete: "Deleted", update: "Changed" } as const;
+const NETWORK = (value: boolean | null) => value === null ? "Not asked" : value ? "On" : "Off";
+const TARGET = (value: ApprovalPath, folder?: string) => {
+	const where = folder === undefined ? "" : ` (${folder})`;
+	switch (value.kind) {
+		case "path": return value.path;
+		case "glob": return `${value.pattern} (pattern)`;
+		case "project-roots": return `${value.subpath === undefined ? "This chat's" : `${value.subpath} in this chat's`} working folders${where}`;
+		case "root": return "/ (the whole disk)";
+		case "minimal": return "The system's minimal folders";
+		case "tmpdir": return "The temporary folder ($TMPDIR)";
+		case "slash-tmp": return "/tmp";
+	}
+};
+
+/** The lines a card must show for what is asked: each field, with its label where it has one. */
+function expected(asked: ApprovalAsked): string[] {
+	const reason = asked.reason === undefined ? [] : [asked.reason];
+	switch (asked.kind) {
+		case "command":
+			return [asked.command, `Folder ${asked.folder}`, ...(asked.network ? [`Network ${asked.network.host} (${asked.network.protocol})`] : []), ...reason];
+		case "file-change":
+			return [
+				...(asked.changes ?? []).flatMap((change) => [
+					`${CHANGE[change.kind]} ${change.path}`,
+					...(change.kind === "update" && change.newPath !== undefined ? [`Moved to ${change.newPath}`] : []),
+				]),
+				...reason,
+			];
+		case "wider-access":
+			return [
+				...asked.paths.map((path) => `${ACCESS[path.access]} ${TARGET(path.target, asked.folder)}`),
+				`Network ${NETWORK(asked.network)}`,
+				...(asked.folder === undefined ? [] : [`Folder ${asked.folder}`]),
+				...(asked.globDepthLimit === undefined ? [] : [`Pattern depth ${asked.globDepthLimit}`]),
+				...reason,
+			];
+		case "server-prompt":
+			return [`Prompt from ${asked.server}`, asked.message, ...(asked.url === undefined ? [] : [`Link ${asked.url}`]), ...reason];
+		case "unrecognised":
+			return reason;
+	}
+}
+
+// Why: Allow grants everything asked. Each kind's fixtures set every field its schema has and
+// every value of each closed list (access, kind of path, kind of change, network on, off and not
+// asked), and each must reach the card as a person reads it; a field or value added to the contract
+// fails here until the card shows it.
 test("every field of every kind of request is on the card", () => {
-	const leaves = (value: unknown): string[] =>
-		typeof value === "string" ? [value] : typeof value === "number" ? [`${value}`]
-			: Array.isArray(value) ? value.flatMap(leaves)
-			: typeof value === "object" && value !== null
-			? Object.entries(value).flatMap(([key, item]) => ["kind", "access", "diff"].includes(key) ? [] : leaves(item))
-			: [];
+	const all = [...KINDS, ...PROBES].map((value) => value.asked);
 	for (const option of ApprovalAskedSchema.options) {
 		const kind = option.shape.kind.value;
-		const full = [...KINDS, ...PROBES].filter((value) => value.asked.kind === kind);
-		const keys = new Set(full.flatMap((value) => Object.keys(value.asked)));
+		const keys = new Set(all.filter((value) => value.kind === kind).flatMap((value) => Object.keys(value)));
 		expect([...keys].sort()).toEqual(Object.keys(option.shape).sort());
-		for (const value of full) {
-			// Details holds the raw input; what is asked must show outside it.
-			const card = html(fixture(value)).replace(/<details[\s\S]*<\/details>/, "").replace(/<[^>]+>/g, " ");
-			const decoded = card.replaceAll("&amp;", "&").replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&quot;", '"').replaceAll("&#x27;", "'");
-			for (const leaf of leaves(value.asked)) {
-				expect([visibleOf(leaf), visiblePath(leaf)].some((form) => decoded.includes(form))).toBe(true);
-			}
-			// A diff goes whole to the diff view, which draws it after mounting.
-			const patches = view(fixture(value)).changes.map((change) => change.patch).join("\n");
-			for (const change of value.asked.kind === "file-change" ? value.asked.changes ?? [] : []) {
-				expect(patches).toContain(visibleOf(change.diff));
-			}
+	}
+	const access = all.flatMap((value) => value.kind === "wider-access" ? value.paths : []);
+	expect(new Set(access.map((path) => path.access))).toEqual(new Set(Object.keys(ACCESS)));
+	const targets = ApprovalAskedSchema.options.find((option) => option.shape.kind.value === "wider-access")!
+		.shape.paths.element.shape.target.options.flatMap((option) => option.shape.kind.options ?? [option.shape.kind.value]);
+	expect(new Set(access.map((path) => path.target.kind))).toEqual(new Set(targets));
+	expect(new Set(all.flatMap((value) => value.kind === "wider-access" ? [value.network] : []))).toEqual(new Set([true, false, null]));
+	expect(new Set(all.flatMap((value) => value.kind === "file-change" ? (value.changes ?? []).map((change) => change.kind) : [])))
+		.toEqual(new Set(Object.keys(CHANGE)));
+
+	for (const value of [...KINDS, ...PROBES]) {
+		// Details holds the raw input; what is asked must show outside it, as text a person reads.
+		const card = html(fixture(value)).replace(/<details[\s\S]*<\/details>/, "").replace(/<[^>]+>/g, " ")
+			.replaceAll("&amp;", "&").replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&quot;", '"').replaceAll("&#x27;", "'")
+			.replace(/[ ]+/g, " ");
+		for (const line of expected(value.asked)) {
+			const forms = [visibleOf(line), visiblePath(line)].map((form) => form.replace(/[ ]+/g, " "));
+			expect(forms.some((form) => card.includes(form))).toBe(true);
+		}
+		// A diff goes whole to the diff view, which draws it after mounting.
+		const patches = view(fixture(value)).changes.map((change) => change.patch).join("\n");
+		for (const change of value.asked.kind === "file-change" ? value.asked.changes ?? [] : []) {
+			expect(patches).toContain(visibleOf(change.diff));
 		}
 	}
 });

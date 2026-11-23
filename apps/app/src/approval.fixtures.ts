@@ -34,6 +34,7 @@ export const KINDS: Fixture[] = [
 				{ kind: "update", path: "src/worker/retry.ts", diff: DIFF },
 				{ kind: "update", path: "src/worker/old-name.ts", newPath: "src/worker/backoff.ts", diff: "" },
 				{ kind: "add", path: "../shared/limits.ts", diff: "@@ -0,0 +1 @@\n+export const MAX_ATTEMPTS = 3;" },
+				{ kind: "delete", path: "src/worker/legacy-retry.ts", diff: "@@ -1 +0,0 @@\n-export {};" },
 			],
 			reason: "Write outside the folder",
 		},
@@ -91,6 +92,18 @@ export const PROBES: Fixture[] = [
 	{
 		label: "A newline in a file's path",
 		asked: { kind: "file-change", changes: [{ kind: "update", path: "a.ts\n+++ b/evil.ts", diff: "@@ -1 +1 @@\n-a\n+b" }] },
+	},
+	{
+		label: "Special folders, no network",
+		asked: {
+			kind: "wider-access",
+			paths: [
+				{ access: "read", target: { kind: "minimal" } },
+				{ access: "write", target: { kind: "tmpdir" } },
+				{ access: "read", target: { kind: "project-roots" } },
+			],
+			network: false,
+		},
 	},
 	{ label: "Not summarised", asked: { kind: "unrecognised" }, input: { argv: ["rm", "-rf", "/"], cwd: "/repo" } },
 	{ label: "A plain string", asked: { kind: "unrecognised" }, input: "rm -rf /" },

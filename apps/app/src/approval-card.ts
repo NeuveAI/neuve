@@ -94,17 +94,24 @@ function patch(path: string, kind: string, diff: string) {
 	return `--- ${before}\n+++ ${after}\n${diff}`;
 }
 
-const ACCESS = { read: "Read", write: "Write", deny: "Deny" } as const;
+// "No access", not "Deny", so a path row is never read as the answer beside the Deny button.
+const ACCESS = { read: "Read", write: "Write", deny: "No access" } as const;
 const CHANGE = { add: "Added", delete: "Deleted", update: "Changed" } as const;
 
-function target(value: ApprovalPath): string {
+/** A path asked for; `folder` is the request's folder, shown beside the runtime's working folders. */
+function target(value: ApprovalPath, folder: string | undefined): string {
 	switch (value.kind) {
 		case "path":
 			return visiblePath(value.path);
 		case "glob":
 			return `${visiblePath(value.pattern)} (pattern)`;
-		case "project-roots":
-			return value.subpath === undefined ? "The project's folders" : `${visiblePath(value.subpath)} in the project's folders`;
+		case "project-roots": {
+			// The runtime's working folders: on a lane, its worktree, not the project.
+			const where = folder === undefined ? "" : ` (${visiblePath(folder)})`;
+			return value.subpath === undefined
+				? `This chat's working folders${where}`
+				: `${visiblePath(value.subpath)} in this chat's working folders${where}`;
+		}
 		case "root":
 			return "/ (the whole disk)";
 		case "minimal":
@@ -151,7 +158,7 @@ function parts(asked: ApprovalAsked, toolName: string | undefined): Parts {
 			return {
 				title: "More access",
 				rows: [
-					...asked.paths.map((path) => ({ key: ACCESS[path.access], value: target(path.target) })),
+					...asked.paths.map((path) => ({ key: ACCESS[path.access], value: target(path.target, asked.folder) })),
 					...(asked.paths.length ? [] : [{ key: "Paths", value: "None" }]),
 					{ key: "Network", value: NETWORK(asked.network) },
 					...(asked.folder === undefined ? [] : [{ key: "Folder", value: visiblePath(asked.folder) }]),
