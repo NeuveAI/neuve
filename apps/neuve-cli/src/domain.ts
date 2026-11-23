@@ -2,7 +2,10 @@ import type {
   GraphPreparedFailureReason,
   GraphProfile,
 } from "@neuve/graph-client";
-import type { ScopeSource } from "../../../packages/harness/src/scope.ts";
+import type {
+  ScopeSource,
+  scopeStratum,
+} from "../../../packages/harness/src/scope.ts";
 
 export type PublicPreparedRead = Readonly<{
   policy_id: string;
@@ -330,8 +333,9 @@ export type PublicCapabilities = Readonly<{
 
 export type PublicQueryEnvelope = Readonly<{ schema_version: 2 }>;
 
-export type PublicQueryScopeSource = ScopeSource &
+export type PublicQueryScopeSource = Omit<ScopeSource, "stratum"> &
   Readonly<{
+    stratum: ReturnType<typeof scopeStratum>;
     text?: string;
     text_omitted?: "max-context-bytes";
   }>;

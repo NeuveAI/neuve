@@ -480,11 +480,17 @@ describe("neuve CLI boundary", () => {
       {
         kind: "working-file",
         path: plan,
+        namedAs: [plan],
         sourceId: "S1",
         fetchedAt: expect.any(String),
         sha256,
       },
-      { kind: "repository-document", path: "decision", blob },
+      {
+        kind: "repository-document",
+        path: "decision",
+        namedAs: ["decision"],
+        blob,
+      },
     ]);
     expect(new Date(pin.fetchedAt).toISOString()).toBe(pin.fetchedAt);
     const [opening] = await queryHistory(root, "cycle.opened@2");
@@ -522,15 +528,16 @@ describe("neuve CLI boundary", () => {
     });
     expect(
       [guide, linked, named].map(
-        ({ ref, contextOnly }: PublicQueryScopeSource) => [
+        ({ ref, contextOnly, stratum }: PublicQueryScopeSource) => [
           ref.found,
           contextOnly,
+          stratum,
         ],
       ),
     ).toEqual([
-      ["agent guide (agents-md-root-v1)", true],
-      ["linked from AGENTS.md", true],
-      [`named in ${plan}`, true],
+      ["agent guide (agents-md-root-v1)", true, "context only"],
+      ["linked from AGENTS.md", true, "context only"],
+      [`named in ${plan}`, true, "context only"],
     ]);
     const location = storeLocationIn(join(root, ".git"));
     const heldPath = join(scopeFolder(location, answer.cycle_id), "S1.txt");
@@ -567,7 +574,12 @@ describe("neuve CLI boundary", () => {
         ),
       );
     const cycle = await readCycle();
-    expect(cycle.sources).toEqual(
+    expect(
+      cycle.sources.map((source) => ({
+        ...source,
+        stratum: source.contextOnly ? "context only" : source.stratum,
+      })),
+    ).toEqual(
       answer.scope.map(
         ({ text: _text, ...source }: PublicQueryScopeSource) => source,
       ),
@@ -792,6 +804,100 @@ describe("neuve CLI boundary", () => {
     );
   });
 
+  // A joining read must log the filesystem cause behind an unreadable held copy.
+  test("logs the cause of a held-copy read error", async () => {
+    const { root, plan, query } = await scopeQueryFixture();
+    const first = await query(["--scope", plan]);
+    expect(first.exitCode, first.stderr).toBe(0);
+    const { cycle_id: cycleId } = JSON.parse(first.stdout);
+    await rm(
+      join(scopeFolder(storeLocationIn(join(root, ".git")), cycleId), "S1.txt"),
+    );
+
+    const joined = await query([]);
+    expect(joined.exitCode, joined.stderr).toBe(0);
+    const gap = `${plan}: The held copy could not be read.`;
+    expect(JSON.parse(joined.stdout)).toMatchObject({
+      cycle_id: cycleId,
+      scope_gaps: [gap],
+      scope: [{ status: "gap", gap: "The held copy could not be read." }],
+    });
+    const logs = join(root, ".git", "neuve", "run-logs");
+    const entries = await Promise.all(
+      (await readdir(logs)).map((file) => Bun.file(join(logs, file)).text()),
+    );
+    expect(
+      entries.flatMap((log) =>
+        log
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: "query.scope-read-failed",
+        gap,
+        cause: expect.stringContaining("ENOENT"),
+      }),
+    );
+  });
+
+  // Scope parsing should explain gaps in the answer and keep decoder details in the run log.
+  test("logs scope text and link decoding failures", async () => {
+    const { root, query } = await scopeQueryFixture();
+    const invalidUtf8 = new Uint8Array([0xff]);
+    await Bun.write(join(root, "working.md"), invalidUtf8);
+    await Bun.write(join(root, "committed.md"), invalidUtf8);
+    await Bun.write(
+      join(root, "AGENTS.md"),
+      "[Document](committed.md) and [broken](100%.md)\n",
+    );
+    expect(
+      execute(["git", "add", "AGENTS.md", "committed.md"], root).exitCode,
+    ).toBe(0);
+    expect(
+      execute(["git", "commit", "--quiet", "-m", "add scope documents"], root)
+        .exitCode,
+    ).toBe(0);
+    const base = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+
+    const result = await query(["--scope", "working.md"], base);
+    expect(result.exitCode, result.stderr).toBe(0);
+    const linkGap = 'AGENTS.md: A link could not be decoded ("100%.md").';
+    const blobGap =
+      "committed.md: The document's Git blob is not readable as text.";
+    expect(JSON.parse(result.stdout).scope_gaps).toEqual([
+      "working.md: The file is not readable as text.",
+      linkGap,
+      blobGap,
+    ]);
+    const logs = join(root, ".git", "neuve", "run-logs");
+    const [log] = await readdir(logs);
+    const records = (await Bun.file(join(logs, log!)).text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "query.local-read-failed",
+          path: "working.md",
+          cause: expect.stringContaining("ERR_ENCODING_INVALID_ENCODED_DATA"),
+        }),
+        expect.objectContaining({
+          type: "query.scope-read-failed",
+          gap: linkGap,
+          cause: expect.stringContaining("URIError"),
+        }),
+        expect.objectContaining({
+          type: "query.scope-read-failed",
+          gap: blobGap,
+          cause: expect.stringContaining("ERR_ENCODING_INVALID_ENCODED_DATA"),
+        }),
+      ]),
+    );
+  });
+
   // The citation must name the file that supplied the bytes.
   test("cites the real path of a named symlink outside the repository", async () => {
     const { plan, query } = await scopeQueryFixture();
@@ -813,39 +919,58 @@ describe("neuve CLI boundary", () => {
     });
   });
 
-  // An alias must add provenance without adding a source or changing its order.
-  test("keeps one ordered source when a file is named directly and through a link", async () => {
-    const { root, plan, query } = await scopeQueryFixture();
-    const result = await query([
-      "--scope",
-      plan,
-      "--scope",
-      "other.custom",
-      "--scope",
-      "plan-link.md",
-    ]);
-    expect(result.exitCode, result.stderr).toBe(0);
-    const answer = JSON.parse(result.stdout);
-    expect(
-      answer.scope.map(({ id, ref }: PublicQueryScopeSource) => [
-        id,
-        ref.path,
-        ref.found,
-      ]),
-    ).toEqual([
-      [
-        "S1",
-        plan,
-        "named by the request and also named through a link at plan-link.md",
-      ],
-      ["S2", "other.custom", "named by the request"],
-    ]);
-    expect(
-      await readdir(
-        join(scopeFolder(storeLocationIn(join(root, ".git")), answer.cycle_id)),
-      ),
-    ).toEqual(["S1.txt"]);
-  });
+  // The cycle and answer keep both names in request order on one source.
+  test.each([
+    [
+      "direct first",
+      false,
+      "named by the request and also named through a link at plan-link.md",
+    ],
+    [
+      "link first",
+      true,
+      "named by the request through a link at plan-link.md and also named directly",
+    ],
+  ])(
+    "keeps one ordered source when a file is named directly and through a link (%s)",
+    async (_order, linkFirst, found) => {
+      const { root, plan, query } = await scopeQueryFixture();
+      const first = linkFirst ? "plan-link.md" : plan;
+      const last = linkFirst ? plan : "plan-link.md";
+      const result = await query([
+        "--scope",
+        first,
+        "--scope",
+        "other.custom",
+        "--scope",
+        last,
+      ]);
+      expect(result.exitCode, result.stderr).toBe(0);
+      const answer = JSON.parse(result.stdout);
+      expect(
+        answer.scope.map(({ id, ref }: PublicQueryScopeSource) => [
+          id,
+          ref.path,
+          ref.found,
+        ]),
+      ).toEqual([
+        ["S1", plan, found],
+        ["S2", "other.custom", "named by the request"],
+      ]);
+      const [selection] = await queryHistory(
+        root,
+        "cycle.local-scope-selected@1",
+      );
+      expect(selection.event.payload.sources[0].namedAs).toEqual([first, last]);
+      expect(
+        await readdir(
+          join(
+            scopeFolder(storeLocationIn(join(root, ".git")), answer.cycle_id),
+          ),
+        ),
+      ).toEqual(["S1.txt"]);
+    },
+  );
 
   // An invalid Git email must leave schema details in the run log.
   test("returns a one-sentence scope gap when recording fails", async () => {

@@ -21,6 +21,7 @@ import {
   queryLocalScope,
   queryUnheldLocalScope,
   readLocalScope,
+  scopeStratum,
   type LocalScopeRead,
 } from "../../../packages/harness/src/scope.ts";
 import {
@@ -967,6 +968,11 @@ export const runQueryGraph = async (
     } else if (local === undefined && namedScope) {
       gap = "The named local scope could not be read at the resolved revision.";
     }
+    for (const cause of scope?.causes ?? [])
+      writeDiagnostic(diagnostics, {
+        type: "query.scope-read-failed",
+        ...cause,
+      });
     const gaps =
       scope?.gaps ?? (gap !== undefined && mightHaveScope ? [gap] : []);
     const sources = scope?.sources ?? [];
@@ -974,8 +980,12 @@ export const runQueryGraph = async (
     else {
       let sequence = complete.sequence;
       let remaining = request.maxContextBytes;
-      for (const { text, ...citation } of sources) {
-        let source: PublicQueryScopeSource = citation;
+      for (const { text, ...record } of sources) {
+        const citation: PublicQueryScopeSource = {
+          ...record,
+          stratum: scopeStratum(record),
+        };
+        let source = citation;
         if (text !== undefined) {
           const bytes = Buffer.byteLength(text);
           if (bytes <= remaining) {

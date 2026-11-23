@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Data, Effect, Option } from "effect";
+import { Data, Effect } from "effect";
 import {
   Blobs,
   STORE_DIRECTORY_MODE,
@@ -46,11 +46,13 @@ export const readScopeBytes = (
   sourceId: string,
 ) => {
   try {
-    return Option.some(
-      readFileSync(join(scopeFolder(location, cycleId), `${sourceId}.txt`)),
-    );
-  } catch {
-    return Option.none<Uint8Array>();
+    return {
+      bytes: readFileSync(
+        join(scopeFolder(location, cycleId), `${sourceId}.txt`),
+      ),
+    };
+  } catch (error) {
+    return { cause: String(error) };
   }
 };
 

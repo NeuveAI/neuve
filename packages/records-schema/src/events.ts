@@ -339,8 +339,10 @@ export const MAX_SCOPE_DOCUMENTS = 20;
 
 const LocalScopePath = z.strictObject({
   path: z.string().min(1),
-  linkedFrom: z.string().min(1).optional(),
-  alsoLinkedFrom: z.array(z.string().min(1)).optional(),
+  namedAs: z
+    .array(z.string().min(1))
+    .min(1)
+    .describe("Paths in request order."),
 });
 export const CycleLocalScopeSelected = event(
   "cycle.local-scope-selected@1",
