@@ -36,6 +36,12 @@ test("a never-checked account shows no check time", async () => {
 	expect(text).not.toContain("Checked");
 });
 
+test("an account whose saved status needs a newer build shows no check time", async () => {
+	const text = await card(accountFixtures.needsNewerBuild);
+	expect(text).toContain("Couldn't check this account");
+	expect(text).not.toContain("Checked");
+});
+
 test("an account whose check failed still shows when it was checked", async () => {
 	expect(await card(accountFixtures.checkFailed)).toContain("Checked");
 });

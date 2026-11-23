@@ -65,6 +65,12 @@ export const accountFixtures = {
       checkedAt: "1970-01-01T00:00:00.000Z",
     },
   ],
+  needsNewerBuild: [
+    {
+      ...account("work", { state: "unknown", reason: "needs-newer-build" }),
+      checkedAt: "1970-01-01T00:00:00.000Z",
+    },
+  ],
   checkFailed: [
     account("work", { state: "unknown", reason: "check-failed", hint }),
   ],

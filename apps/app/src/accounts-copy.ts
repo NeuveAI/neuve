@@ -88,7 +88,7 @@ export function currentLimits(
 export function showsCheckTime(signIn: SignInState) {
   return (
     signIn.state === "credential-rejected" ||
-    (signIn.state === "unknown" && signIn.reason !== "not-checked")
+    (signIn.state === "unknown" && signIn.reason === "check-failed")
   );
 }
 
