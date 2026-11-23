@@ -88,6 +88,7 @@ export interface ToolSpec<I = unknown> extends Omit<
   "handle"
 > {
   readonly handle: (input: I, call?: ToolCall) => Effect.Effect<ToolOutcome>;
+  readonly available?: false;
   /** A larger result cap the tool declares (`ResultCap`); absent, 10.18's `TOOL_RESULT_CAP`. */
   readonly resultCap?: ResultCap | undefined;
 }
@@ -215,10 +216,86 @@ const describeLimits = (node: Json): string | undefined => {
 };
 
 /** The JSON Schema zod produces for a tool or output schema, as the provider will see it. */
-export const wireSchema = (schema: z.ZodType) =>
-  stripForProvider(z.toJSONSchema(schema, { target: "draft-2020-12" }));
+export const wireSchema = (
+  schema: z.ZodType,
+  io: "input" | "output" = "output",
+) => stripForProvider(z.toJSONSchema(schema, { target: "draft-2020-12", io }));
 
 export const describeZodError = (error: z.ZodError) => z.prettifyError(error);
+
+export const toolInputRefusal = (
+  name: string,
+  schema: z.ZodType,
+  error: z.ZodError,
+  raw: unknown,
+) => {
+  const input = z.toJSONSchema(schema, { io: "input", unrepresentable: "any" });
+  const show = (value: unknown) => JSON.stringify(value) ?? "no value";
+  const sentences = error.issues.map((issue) => {
+    let path = "";
+    let received = raw;
+    let node: unknown = input;
+    for (const key of issue.path) {
+      if (typeof key === "number") {
+        path += `[${key}]`;
+        received = Array.isArray(received) ? received[key] : undefined;
+        node = isObject(node)
+          ? ((Array.isArray(node["prefixItems"])
+              ? node["prefixItems"][key]
+              : undefined) ?? node["items"])
+          : undefined;
+      } else {
+        const field = String(key);
+        path += path === "" ? field : `.${field}`;
+        received = isObject(received) ? received[field] : undefined;
+        const properties = isObject(node) ? node["properties"] : undefined;
+        node = isObject(properties) ? properties[field] : undefined;
+      }
+    }
+    const field = path === "" ? `${name} arguments` : `${name} ${path}`;
+    if (issue.code === "unrecognized_keys") {
+      const properties = isObject(node) ? node["properties"] : undefined;
+      const keys = Object.keys(isObject(properties) ? properties : {});
+      const accepted =
+        keys.length === 0
+          ? "no keys"
+          : `only the keys ${keys.map(show).join(", ")}`;
+      return `${field} accepts ${accepted} and received unknown ${issue.keys.length === 1 ? "key" : "keys"} ${issue.keys.map(show).join(", ")}.`;
+    }
+    const acceptsNull =
+      isObject(node) &&
+      Array.isArray(node["anyOf"]) &&
+      node["anyOf"].some(
+        (option: unknown) => isObject(option) && option["type"] === "null",
+      );
+    if (received === undefined && acceptsNull)
+      return `${field} received no value and accepts explicit null.`;
+    const value = show(received);
+    if (issue.code === "invalid_value") {
+      const choices = [
+        ...issue.values.map(show),
+        ...(acceptsNull ? ["null"] : []),
+      ];
+      return `${field} accepts ${choices.join(" or ")} and received ${value}.`;
+    }
+    const type =
+      isObject(node) && typeof node["type"] === "string"
+        ? node["type"]
+        : undefined;
+    const limits = isObject(node) ? describeLimits(node) : undefined;
+    if (
+      issue.code === "invalid_type" ||
+      (limits !== undefined &&
+        (issue.code === "too_big" || issue.code === "too_small"))
+    ) {
+      const expected =
+        type ?? (issue.code === "invalid_type" ? issue.expected : issue.origin);
+      return `${field} takes ${/^[aeiou]/.test(expected) ? "an" : "a"} ${expected}${limits === undefined ? "" : ` (${limits})`}${acceptsNull ? " or null" : ""} and received ${value}.`;
+    }
+    return `${field} received ${value} (${issue.message.replace(/\.$/, "")}).`;
+  });
+  return capResult(sentences.join("\n"), undefined);
+};
 
 /**
  * A tool result as the agent reads it: the text and the budget line, held to the hard cap (10.18),

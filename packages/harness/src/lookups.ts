@@ -12,7 +12,7 @@ export {
   HandleRegistryState,
 } from "./handle-schema.ts";
 import { createHash } from "node:crypto";
-import { Context, Effect, Exit, Fiber, Metric, Option } from "effect";
+import { Cause, Context, Effect, Exit, Fiber, Metric, Option } from "effect";
 import { z } from "zod";
 import {
   Blobs,
@@ -357,11 +357,13 @@ export const pageText = (
     body,
     paged: pages.length > 1,
     note:
-      index + 1 < pages.length
-        ? `[page ${index + 1} of ${pages.length}; ${more(index + 2)}]`
-        : pages.length > 1
-          ? `[page ${index + 1} of ${pages.length}, the last]`
-          : "",
+      page > pages.length
+        ? `[Requested ${page}, showing page ${pages.length} of ${pages.length}.]`
+        : index + 1 < pages.length
+          ? `[page ${index + 1} of ${pages.length}; ${more(index + 2)}]`
+          : pages.length > 1
+            ? `[page ${index + 1} of ${pages.length}, the last]`
+            : "",
     pages: pages.length,
   };
 };
@@ -403,9 +405,14 @@ export const blobTextOf = (
     return stored.text;
   });
 
-/** A failure's message as a lookup's answer gives it. */
 const failureText = (error: unknown) =>
-  String((error as { message?: unknown }).message ?? error).slice(0, 300);
+  String(
+    typeof error === "object" && error !== null && "message" in error
+      ? (error.message ?? error)
+      : error,
+  )
+    .slice(0, 300)
+    .replace(/\.$/, "");
 
 /** Runs a tool body with the stage's Records services, turning any failure into data. */
 const answer = (
@@ -418,12 +425,17 @@ const answer = (
 ): Effect.Effect<ToolOutcome> =>
   effect.pipe(
     Effect.provide(ctx.records),
-    Effect.catch((error) =>
-      Effect.succeed({
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
+      const error = Cause.squash(cause);
+      return Effect.succeed({
         text: `The lookup failed: ${failureText(error)}. Try other arguments or another lookup.`,
-        error: String((error as { _tag?: unknown })._tag ?? "LookupFailed"),
-      }),
-    ),
+        error:
+          typeof error === "object" && error !== null && "_tag" in error
+            ? String(error._tag ?? "LookupFailed")
+            : "LookupFailed",
+      });
+    }),
   );
 
 const RevInput = Revision.optional().describe(
@@ -501,6 +513,11 @@ type ReadInput = z.infer<typeof ReadInput>;
 
 export const READ_LINES = 200;
 
+const lineOrderProblem = (start: number, end: number | undefined) =>
+  end !== undefined && end < start
+    ? `endLine ${end} is before startLine ${start} and must be at least ${start}.`
+    : undefined;
+
 /** A blob's text as `read` numbers it: its lines, without their line ends. */
 const fileLines = (text: string) =>
   splitLines(text).map((line) => line.replace(/\n$/, ""));
@@ -560,6 +577,11 @@ export const readTool = (ctx: LookupContext): ToolSpec<unknown> =>
               text: `${parent.id} is a region of a stack source, not of the repository. Read it with stack_read.`,
               empty: true,
             };
+          const start = input.startLine ?? parent?.startLine ?? 1;
+          const requestedEnd = input.endLine ?? parent?.endLine;
+          const lineOrder = lineOrderProblem(start, requestedEnd);
+          if (lineOrder !== undefined)
+            return { text: lineOrder, error: "InvalidInput" };
           if (parent !== undefined) {
             ({ blob, path, rev, commit } = parent);
           } else {
@@ -587,14 +609,13 @@ export const readTool = (ctx: LookupContext): ToolSpec<unknown> =>
               empty: true,
             };
           const lines = fileLines(text);
-          const start = input.startLine ?? parent?.startLine ?? 1;
           if (start > lines.length)
             return {
               text: `${path} at ${rev} has ${lines.length} lines.`,
               empty: true,
             };
           const wanted = Math.min(
-            input.endLine ?? parent?.endLine ?? start + READ_LINES - 1,
+            requestedEnd ?? start + READ_LINES - 1,
             lines.length,
           );
           // Keep the page under the result cap.
@@ -1112,22 +1133,16 @@ export const readManyTool = (
                   : yield* blobTextOf(ctx.repository, blob);
               const all = text === null ? [] : fileLines(text);
               const start = entry.startLine ?? parent?.startLine ?? 1;
+              const requestedEnd = entry.endLine ?? parent?.endLine;
               if (text === null || start > all.length) {
                 const refused = yield* refusals.handle(
                   asRead(entry.startLine, entry.endLine),
                 );
                 return say(entry, label, refused.text);
               }
-              const end = Math.min(
-                entry.endLine ?? parent?.endLine ?? all.length,
-                all.length,
-              );
-              if (end < start)
-                return say(
-                  entry,
-                  label,
-                  `endLine ${end} is before startLine ${start}; nothing read.`,
-                );
+              const lineOrder = lineOrderProblem(start, requestedEnd);
+              if (lineOrder !== undefined) return say(entry, label, lineOrder);
+              const end = Math.min(requestedEnd ?? all.length, all.length);
               const path = parent?.path ?? entry.path!;
               const rev = parent?.rev ?? entry.rev ?? "head";
               const header = linesHeader(
@@ -2904,8 +2919,13 @@ export const symbolAtTool = (ctx: LookupContext): ToolSpec<unknown> =>
         Effect.gen(function* () {
           const view = viewOf(ctx, input.rev ?? "head");
           const found = yield* fileChunks(ctx, view.label, input.path);
-          const enclosing = enclosingAt(found?.chunks, input.line);
-          if (found === undefined || enclosing === undefined)
+          if (found === undefined)
+            return {
+              text: `${input.path} is not a file at ${view.label}. tree lists paths.`,
+              empty: true,
+            };
+          const enclosing = enclosingAt(found.chunks, input.line);
+          if (enclosing === undefined)
             return {
               text: `No line ${input.line} in ${input.path} at ${view.label}.`,
               empty: true,
@@ -2935,6 +2955,7 @@ const TreeInput = z.strictObject({
   prefix: z
     .string()
     .max(4_096)
+    .default("")
     .describe("A directory or path prefix; empty for the root."),
   rev: RevInput,
   page: PageInput,

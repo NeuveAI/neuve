@@ -49,6 +49,7 @@ import {
   capResult,
   describeZodError,
   nearCap,
+  toolInputRefusal,
   wireSchema,
   type ChildRequest,
   type ResultCap,
@@ -135,7 +136,9 @@ const schemaObject = (schema: unknown): JsonObject => {
 const parametersOf = (spec: ToolShape): JsonObject =>
   spec.input === undefined
     ? NO_INPUT
-    : schemaObject(wireSchema(spec.input).schema);
+    : schemaObject(
+        wireSchema(spec.input, spec.strict ? "output" : "input").schema,
+      );
 
 /**
  * A tool as its agent kind declares it. A proxied integration read reaches outside the run, so a
@@ -200,7 +203,7 @@ const preparedArguments =
       const parsed = input.safeParse(prepared);
       if (!parsed.success)
         throw new Error(
-          `Invalid input for ${declaration.name}: ${describeZodError(parsed.error)}`,
+          toolInputRefusal(declaration.name, input, parsed.error, args),
         );
     }
     if (!isJsonObject(prepared))
@@ -214,20 +217,20 @@ const preparedArguments =
  * number or a string is required into 0 or "": the tool, the submit tool and the agent step task
  * all judge a call from the model's own arguments, so each judges it as the others did.
  */
-export const toolInput = (
-  spec: ToolShape,
+export const parseToolInput = (
+  declaration: ToolDeclaration,
+  schema: z.ZodType | undefined,
   raw: unknown,
 ):
   | { readonly success: true; readonly data: unknown }
   | { readonly success: false; readonly message: string } => {
-  const prepared = strictArguments(declarationOf(spec, false))?.(raw) ?? raw;
-  if (spec.input === undefined) return { success: true, data: undefined };
-  const parsed = spec.input.safeParse(prepared);
+  if (schema === undefined) return { success: true, data: undefined };
+  const parsed = schema.safeParse(strictArguments(declaration)?.(raw) ?? raw);
   return parsed.success
     ? { success: true, data: parsed.data }
     : {
         success: false,
-        message: `Invalid input for ${spec.name}: ${describeZodError(parsed.error)}`,
+        message: toolInputRefusal(declaration.name, schema, parsed.error, raw),
       };
 };
 
@@ -264,7 +267,8 @@ export const submitShape = <O>(spec: AgentSpec<O>): ToolShape => ({
 export const submissionOf =
   <O>(spec: AgentSpec<O>) =>
   (raw: unknown) => {
-    const input = toolInput(submitShape(spec), raw);
+    const shape = submitShape(spec);
+    const input = parseToolInput(declarationOf(shape, false), shape.input, raw);
     return input.success
       ? parseOutput(spec)(input.data)
       : { success: false as const, data: undefined, message: input.message };
@@ -442,14 +446,18 @@ const registration = (
       // which coerces a null where a value is required.
       const raw = at === -1 ? args : facts.calls[at]?.arguments;
       const input = spec?.input ?? (isSubmit ? agent.submit.schema : undefined);
-      const prepared = strictArguments(declaration)?.(raw) ?? raw;
-      const parsed =
-        input === undefined
-          ? { success: true as const, data: undefined }
-          : input.safeParse(prepared);
+      const call = {
+        stage: agent.stage,
+        agent: agent.agent,
+        turn,
+        tool: declaration.name,
+        callId: api.callId,
+      };
+      tools.log.write({ type: "tool.started", ...call });
+      const parsed = parseToolInput(declaration, input, raw);
       const outcome: ToolOutcome = !parsed.success
         ? {
-            text: `Invalid input for ${declaration.name}: ${describeZodError(parsed.error)}`,
+            text: parsed.message,
             error: "InvalidInput",
           }
         : spec === undefined
@@ -477,10 +485,7 @@ const registration = (
             );
       tools.log.write({
         type: "tool.call",
-        stage: agent.stage,
-        agent: agent.agent,
-        turn,
-        tool: declaration.name,
+        ...call,
         argsHash: sha256Hex(canonicalJson(copyJson(raw ?? null))).slice(0, 16),
         // UN9's estimate of the result before the budget line; the answer, line included, is held
         // to the 3,000-token cap, or to the larger cap its tool declares (`ResultCap`).
@@ -756,9 +761,19 @@ export const kindExtension = (
             context,
           );
           if (doc === undefined) return;
-          // No request leaves unless the step holds its claim here (record 0016), before any slot.
-          if (doc.step !== null)
+          const unavailable = new Set<string>();
+          if (doc.step !== null) {
             await tools.admitted?.(doc.step.taskId, context.abortSignal);
+            if (kind === "find") {
+              const { step } = await tools.resolve(
+                api,
+                api.conversationId,
+                context,
+              );
+              for (const tool of step.spec.tools)
+                if (tool.available === false) unavailable.add(tool.name);
+            }
+          }
           // Only joined results of calls rejected by the original schema have an applied answer
           // here. The immutable native result retains pi's structured validation diagnostic.
           const rejected = new Set<string>();
@@ -779,6 +794,17 @@ export const kindExtension = (
           }
           return {
             messages: messages.map((message) => {
+              if (
+                unavailable.size > 0 &&
+                message.role === "system" &&
+                message.toolsAdded !== undefined
+              )
+                return {
+                  ...message,
+                  toolsAdded: message.toolsAdded.filter(
+                    (tool) => !unavailable.has(tool.name),
+                  ),
+                };
               if (
                 message.role !== "toolResult" ||
                 !message.isError ||
@@ -871,14 +897,15 @@ export const kindExtension = (
                     schema === undefined
                   )
                     continue;
-                  const raw =
-                    strictArguments(declaration)?.(call.arguments) ??
-                    call.arguments;
-                  const parsed = schema.safeParse(raw);
+                  const parsed = parseToolInput(
+                    declaration,
+                    schema,
+                    call.arguments,
+                  );
                   if (parsed.success) continue;
                   doc.applied[call.id] = {
                     text: capResult(
-                      `Invalid input for ${call.name}: ${describeZodError(parsed.error)}`,
+                      parsed.message,
                       budgetLine(step.spec, facts.turns),
                     ),
                     terminate: roundEnds(

@@ -62,7 +62,9 @@ test("primary anchors use review-rules owned ranges and the correct rename side"
       }),
       checks,
     ),
-  ).toEqual(["finding 1: primary anchor must overlap owned changed lines"]);
+  ).toEqual([
+    'finding 1: anchors[0] on the new side of "new.ts" received lines 1-1 and must overlap an owned changed range on that side (2-2).',
+  ]);
   expect(
     findChecks(
       submit({
@@ -71,7 +73,9 @@ test("primary anchors use review-rules owned ranges and the correct rename side"
       }),
       checks,
     ),
-  ).toEqual(["finding 1: primary anchor must overlap owned changed lines"]);
+  ).toEqual([
+    'finding 1: anchors[0] on the old side of "new.ts" received lines 2-2 and must overlap an owned changed range on that side (none, see hunks for changed paths and sides).',
+  ]);
   // Map's groups hold no lockfile or declared-generated file: a finding there has no group.
   expect(
     findChecks(submit(), {
@@ -97,7 +101,9 @@ test("primary anchors use review-rules owned ranges and the correct rename side"
       }),
       checks,
     ),
-  ).toEqual(["finding 1: primary anchor must overlap owned changed lines"]);
+  ).toEqual([
+    'finding 1: anchors[0] on the new side of "new.ts" received endLine 1 before startLine 3 and accepts endLine 3 or later.',
+  ]);
 });
 test("secondary anchors need owned lines or a complete recorded head read; ids and signals resolve", () => {
   const f = {
@@ -108,7 +114,7 @@ test("secondary anchors need owned lines or a complete recorded head read; ids a
     ],
   };
   expect(findChecks(submit(f), checks)).toEqual([
-    "finding 1: secondary anchor must be owned or read head lines",
+    'finding 1: anchors[1] on the new side of "unchanged" received lines 10-12 and must fit within an owned range (none) or a head range already read (none).',
   ]);
   expect(
     findChecks(submit(f), {
@@ -126,7 +132,11 @@ test("secondary anchors need owned lines or a complete recorded head read; ids a
       }),
       checks,
     ),
-  ).toHaveLength(3);
+  ).toEqual([
+    'finding 1: doneWhen received "D9" and accepts "D1" or null.',
+    'finding 1: evidence received unknown IDs "invented" and accepts only IDs in ["h1"].',
+    "finding 1: a signal (forged) belongs only to a finding about tests or proof",
+  ]);
   expect(
     repairFind(submit(), {
       ...checks,

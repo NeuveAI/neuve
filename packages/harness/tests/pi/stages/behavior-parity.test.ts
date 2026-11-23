@@ -40,12 +40,12 @@ test("original coercible-invalid input gets the exact Neuve budgeted result with
       {
         name: "probe",
         error: true,
-        text: "Invalid input for probe: ✖ Invalid input: expected number, received null\n  → at n\n\n[turn 1 / 6; results are capped at about 3,000 tokens; lookup allowance 0 / 4]",
+        text: "probe n takes an integer and received null.\n\n[turn 1 / 6; results are capped at about 3,000 tokens; lookup allowance 0 / 4]",
       },
       {
         name: "submit_frame",
         error: true,
-        text: "Invalid input for submit_frame: ✖ Invalid input: expected number, received null\n  → at answer\n\n[turn 1 / 6; results are capped at about 3,000 tokens; lookup allowance 0 / 4]",
+        text: "submit_frame answer takes an integer and received null.\n\n[turn 1 / 6; results are capped at about 3,000 tokens; lookup allowance 0 / 4]",
       },
     ]);
     expect(record.agentResult?.turnsUsed).toBe(2);
@@ -163,7 +163,7 @@ test("an oversized validation diagnostic keeps the cap and budget suffix", async
     const result = toolResults(run.sent[1]!.messages)[0]!;
     expect(run.probes).toEqual([]);
     expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(12_000);
-    expect(result.text).toStartWith("Invalid input for probe:");
+    expect(result.text).toStartWith("probe n takes an integer");
     expect(result.text).toEndWith(
       "[result cut at the 3,000-token cap; ask for the next page or narrow the lookup]\n\n[turn 1 / 6; results are capped at about 3,000 tokens; lookup allowance 0 / 4]",
     );
@@ -209,7 +209,7 @@ test("a close after native invalid settlement replays one budgeted result and sp
       {
         name: "probe",
         error: true,
-        text: "Invalid input for probe: ✖ Invalid input: expected number, received null\n  → at n\n\n[turn 1 / 6; results are capped at about 3,000 tokens; lookup allowance 0 / 4]",
+        text: "probe n takes an integer and received null.\n\n[turn 1 / 6; results are capped at about 3,000 tokens; lookup allowance 0 / 4]",
       },
     ]);
     expect(record.agentResult?.turnsUsed).toBe(2);

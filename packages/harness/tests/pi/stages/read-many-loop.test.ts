@@ -1,9 +1,9 @@
-// Why: no agent offers read_many yet, so nothing else runs it through the agent loop's tool
-// registration (pi/stages/tools.ts). This runs it there, wrapped as a finder would wrap it (a
-// recording read, under a reading budget), and observes what reading the code cannot prove: the
-// budget line names this tool's own cap, the cap still holds on the wrapped spec, the `tool.call`
-// row measures the larger result without calling it near the cap, and the row and the tool-call
-// span carry counts and names only, never the repository's text.
+// Why: this runs read_many through the agent loop, wrapped as a finder would wrap it (a
+// recording read, under a reading budget). The budget line names this tool's own cap, the cap
+// still holds on the wrapped spec, the `tool.call` row measures the larger result without calling
+// it near the cap, and the row and the tool-call span carry counts and names only, never the
+// repository's text.
+// Pi validates calls before dispatch, so direct tool tests cannot catch rejected defaults.
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -95,7 +95,7 @@ test("read_many through the agent loop: its own cap on the wrapped spec, its bud
             remaining: () => FIND_READING_CHARS - budget.save().used,
           }),
         ]);
-        return budget.tools;
+        return [L.logTool(ctx), L.treeTool(ctx), ...budget.tools];
       },
     },
   );
@@ -131,6 +131,12 @@ test("read_many through the agent loop: its own cap on the wrapped spec, its bud
     () =>
       fauxAssistantMessage(
         [
+          fauxToolCall("log", {}, { id: "log-default" }),
+          fauxToolCall("tree", {}, { id: "tree-default" }),
+          fauxToolCall("log", { format: "full" }, { id: "log-invalid" }),
+          fauxToolCall("read_many", {
+            entries: [{ path: "a.ts", startLine: "2", lines: [1, 2] }],
+          }),
           fauxToolCall(
             "read_many",
             { entries: [{ path: "big.ts" }, { path: "a.ts", diff: true }] },
@@ -154,9 +160,32 @@ test("read_many through the agent loop: its own cap on the wrapped spec, its bud
   }
   await run.ctx.log.flush?.();
 
-  const [answer] = toolResults(run.sent[1]!.messages).filter(
-    (result) => result.name === "read_many",
+  const [log, tree, invalid, badRead, answer] = toolResults(
+    run.sent[1]!.messages,
   );
+  expect(log).toMatchObject({ name: "log", error: false });
+  expect(log?.text).toMatch(/[a-f0-9]{8} change/);
+  expect(tree).toMatchObject({ name: "tree", error: false });
+  expect(tree?.text).toContain("a.ts 10 B");
+  expect(invalid).toMatchObject({ name: "log", error: true });
+  expect(invalid?.text).toStartWith(
+    'log format accepts "oneline" or "message" and received "full".',
+  );
+  expect(badRead?.text).toContain(
+    'read_many entries[0].startLine takes an integer (from 1) and received "2".',
+  );
+  expect(badRead?.text).toContain(
+    'read_many entries[0] accepts only the keys "handle", "path", "rev", "startLine", "endLine", "diff", "hunk", "fromHunk", "page" and received unknown key "lines".',
+  );
+  expect(
+    run.ctx.log.read().filter((row) => row["callId"] === "log-invalid"),
+  ).toEqual([]);
+  expect(
+    run.ctx.log
+      .read()
+      .filter((row) => row["callId"] === "log-default")
+      .map((row) => row.type),
+  ).toEqual(["tool.started", "tool.call"]);
   const line =
     "[turn 1 / 6; results are capped at about 3,000 tokens (this one at about 20,000); lookup allowance 0 / 4]";
   expect(answer!.error).toBe(false);
@@ -192,6 +221,7 @@ test("read_many through the agent loop: its own cap on the wrapped spec, its bud
   ).toEqual([
     "agent",
     "argsHash",
+    "callId",
     "empty",
     "latencyMs",
     "paged",

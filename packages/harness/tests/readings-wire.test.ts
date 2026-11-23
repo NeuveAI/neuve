@@ -14,8 +14,8 @@ import {
 import type { AgentSpec } from "../src/pi/stages/agent.ts";
 import {
   declarationOf,
+  parseToolInput,
   submitShape,
-  toolInput,
 } from "../src/pi/stages/tools.ts";
 import { claimVerifyStep } from "../src/readings/claims.ts";
 import { planReadings } from "../src/readings/plan.ts";
@@ -282,7 +282,10 @@ test("a value in the strict form, nulls where a field is absent, reads back and 
     expect(back).toEqual(value);
     expect(spec.submit.schema.safeParse(back).success).toBe(true);
     // The submit tool's call, read as the tool and the step read it.
-    expect(toolInput(submitShape(spec), value)).toEqual({
+    const shape = submitShape(spec);
+    expect(
+      parseToolInput(declarationOf(shape, false), shape.input, value),
+    ).toEqual({
       success: true,
       data: value,
     });
