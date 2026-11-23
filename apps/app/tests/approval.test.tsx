@@ -36,7 +36,7 @@ const { approvalView, HIDDEN_NOTE, shownApprovals, visiblePath } = await import(
 const { fixture, KINDS, PROBES } = await import("../src/approval.fixtures");
 const { ApprovalAskedSchema } = await import("@ace/channel/frame");
 const { patchFile } = await import("@ace/ui");
-const { Approval, ApprovalCard, NOT_ALLOWED_TO_ANSWER } = await import("../src/approval");
+const { Approval, ApprovalCard } = await import("../src/approval");
 type Transcript = Parameters<typeof apply>[0];
 type Item = Transcript["items"][number];
 
@@ -146,12 +146,13 @@ test("a closed request shows its reason and nothing under its head", () => {
 	expect(html(request({ kind: "closed", reason: "message", by: "alice" }))).toContain("Alice sent a message instead");
 });
 
-// Why: only someone the channel lets ask its agents may answer; live buttons for anyone else would
-// only collect refusals.
-test("a teammate who may not answer sees Deny and Allow disabled, with why on hover", () => {
+// Why: only someone the channel lets ask its agents may answer; buttons anyone else can never press
+// would only collect refusals.
+test("a teammate who may not answer sees the card without its buttons", () => {
 	const card = html(request({ kind: "open" }), { mayAnswer: false });
-	expect(card.match(/aria-disabled="true"/g)).toHaveLength(2);
-	expect(card.match(new RegExp(`title="${NOT_ALLOWED_TO_ANSWER.replace("'", "&#x27;")}"`, "g"))).toHaveLength(2);
+	expect(card).not.toContain(">Deny<");
+	expect(card).not.toContain(">Allow<");
+	expect(card).not.toContain("<footer");
 });
 
 const probe = (label: string) => fixture(PROBES.find((value) => value.label === label)!);

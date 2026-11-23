@@ -7,8 +7,6 @@ import { host } from "./host";
 
 type Decision = "allow" | "deny";
 
-export const NOT_ALLOWED_TO_ANSWER = "Only people who may ask this channel's agents can answer";
-
 /**
  * Sends one answer and resolves to the channel's refusal, if any. The reply is not read: the card
  * changes only when the channel's approval-requests event says so.
@@ -68,7 +66,6 @@ export function ApprovalCard({ view, mayAnswer, sending, error, answer }: {
 			</RequestCard>
 		);
 	}
-	const off = !mayAnswer || !!sending;
 	return (
 		<RequestCard aria-label={view.title} className="mb-2 overflow-hidden">
 			<RequestCardHead title={<span className="min-w-0 [overflow-wrap:anywhere]">{view.title}</span>} />
@@ -110,30 +107,30 @@ export function ApprovalCard({ view, mayAnswer, sending, error, answer }: {
 					<Code className={`${CODE} mt-1`} source={view.details} language="json" />
 				</details>
 			</RequestCardBody>
-			<RequestCardFooter className="items-center justify-between gap-3">
-				<p role={error ? "alert" : undefined} className="min-w-0 text-xs text-muted-foreground">{error}</p>
-				<div className="flex shrink-0 gap-1.5">
-					<Button
-						size="sm"
-						variant="secondary"
-						className="aria-disabled:opacity-50"
-						aria-disabled={off || undefined}
-						title={mayAnswer ? undefined : NOT_ALLOWED_TO_ANSWER}
-						onClick={() => !off && answer("deny")}
-					>
-						{sending === "deny" ? "Denying…" : "Deny"}
-					</Button>
-					<Button
-						size="sm"
-						className="aria-disabled:opacity-50"
-						aria-disabled={off || undefined}
-						title={mayAnswer ? undefined : NOT_ALLOWED_TO_ANSWER}
-						onClick={() => !off && answer("allow")}
-					>
-						{sending === "allow" ? "Allowing…" : "Allow"}
-					</Button>
-				</div>
-			</RequestCardFooter>
+			{mayAnswer && (
+				<RequestCardFooter className="items-center justify-between gap-3">
+					<p role={error ? "alert" : undefined} className="min-w-0 text-xs text-muted-foreground">{error}</p>
+					<div className="flex shrink-0 gap-1.5">
+						<Button
+							size="sm"
+							variant="secondary"
+							className="aria-disabled:opacity-50"
+							aria-disabled={!!sending || undefined}
+							onClick={() => !sending && answer("deny")}
+						>
+							{sending === "deny" ? "Denying…" : "Deny"}
+						</Button>
+						<Button
+							size="sm"
+							className="aria-disabled:opacity-50"
+							aria-disabled={!!sending || undefined}
+							onClick={() => !sending && answer("allow")}
+						>
+							{sending === "allow" ? "Allowing…" : "Allow"}
+						</Button>
+					</div>
+				</RequestCardFooter>
+			)}
 		</RequestCard>
 	);
 }
