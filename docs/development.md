@@ -90,7 +90,7 @@ The [pi implementation map](../architecture/decisions/0014-ace-style-pi-harness.
 
 ## Linear planning integration
 
-The planning scope in the maintainers' Linear (NEU-59) holds acceptance and current status. The [optional integration boundary](../architecture/decisions/0014-ace-style-pi-harness.md#optional-linear-scope) defines trusted local configuration, credential ownership and cycle attribution. Real-account setup and the planning entry in the adopted Ace app remain deferred until the owner completes the current questions and validations. The former reduced workspace's Linear dialog is not the Ace interface.
+The planning scope in the maintainers' Linear (NEU-59) holds acceptance and current status. The [optional integration boundary](../architecture/decisions/0014-ace-style-pi-harness.md#optional-linear-scope) defines trusted local configuration, credential ownership and cycle attribution. Real-account setup and the planning entry in the adopted Ace app wait only on the owner's Linear sign-in. The former reduced workspace's Linear dialog is not the Ace interface.
 
 Selection identifies the source for review admission. Records keeps the cycle's dated excerpt and existing freshness behavior. Reading or selecting a changed issue cannot silently replace a running cycle's scope. A cleared selection does not rewrite an admitted cycle. Issue completion never supplies a review disposition.
 

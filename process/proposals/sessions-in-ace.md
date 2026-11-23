@@ -90,7 +90,7 @@ This is the record the ruling describes. The [pi capture boundary](../../archite
 
 > "We can setup as such but maybe should expose as a setting option on ace. Some people will prefer to use the default git user."
 >
-> The owner, 23 November 2026, answering the recommendation to credit a commit to the chat that made it, with the Git hook recording and Ace naming the chat, and to turn hooks off for Ace's Codex. The decisions record does not carry it yet.
+> The owner, 23 November 2026, answering the recommendation to credit a commit to the chat that made it, with the Git hook recording and Ace naming the chat, and to turn hooks off for Ace's Codex.
 
 **Where a commit's author comes from today.** Ace sets no `GIT_AUTHOR_*` or `GIT_COMMITTER_*` variable and no `user.name` or `user.email` for a chat. A pi chat's shell runs in the worker's environment ([`worker.ts`](../../apps/neuve-host/src/worker.ts), lines 100–104), the host's own minus Git's repository-local variables ([`host-config.ts`](../../apps/neuve-host/src/host-config.ts), lines 32–48 and 78–79). So Git resolves the author and committer as in the person's terminal: the repository's config, shared by all its worktrees, then the person's global config. That pair is the default Git user: asked on 23 November 2026 what it means, the owner said "as in whatever is configured on git config" ([decisions record](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026)). On this machine only, this clone's unversioned `.git/config` names Neuve, so an Ace chat's commit here is authored by Neuve. A teammate's clone sets no identity unless they set one, so their commits carry their global one.
 
