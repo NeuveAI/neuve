@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
-import type { ApprovalAsked, ApprovalPath, ApprovalRequest } from "@ace/channel/protocol";
+import type { ApprovalAsked, ApprovalFileChange, ApprovalPath, ApprovalRequest } from "@ace/channel/protocol";
 
 // The component is clicked in a real DOM; React reads these globals when it loads.
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
@@ -55,13 +55,14 @@ const message = (at: number): Item => ({ kind: "message", key: `m${at}`, entry: 
 
 /** Mounts the answering card for one request; `show` re-renders it as a new event would. */
 function mount(value: ApprovalRequest) {
-	const root = createRoot(document.body.appendChild(document.createElement("div")));
+	const container = document.body.appendChild(document.createElement("div"));
+	const root = createRoot(container);
 	const show = (next: ApprovalRequest) =>
 		act(() => root.render(<Approval channel="ch" chat={1} user="me" view={view(next)} mayAnswer />));
-	const card = () => document.querySelector("section")!;
+	const card = () => container.querySelector("section")!;
 	const button = (label: string) =>
 		[...card().querySelectorAll("button")].find((item) => item.textContent?.startsWith(label))!;
-	return { show, card, button, unmount: () => act(() => root.unmount()) };
+	return { show, card, button, unmount: () => act(() => (root.unmount(), container.remove())) };
 }
 
 // Why: Allow runs work outside the runtime's sandbox. If the card believed its own click, a person
@@ -108,11 +109,23 @@ test("an answer the channel refuses shows the refusal on the card and can be sen
 
 // Why: one piece of work can ask twice (a command, then wider access for it). Cards keyed by
 // the call would merge them, and an Allow meant for one would answer the other.
-test("two requests for one call are two cards, each answered by its own id", () => {
+test("two requests for one call are two cards, each answered by its own id", async () => {
+	refusal = undefined;
+	const command = request({ kind: "open" });
 	const access = request({ kind: "open" }, "r2", { kind: "wider-access", paths: [], network: true });
-	const shown = shownApprovals([request({ kind: "open" }), access], []);
-	expect(shown.map((value) => view(value).request)).toEqual(["r1", "r2"]);
-	expect(view(access).rows).toContainEqual({ key: "Network", value: "On" });
+	expect(command.callId).toBe(access.callId);
+	const shown = shownApprovals([command, access], []);
+	expect(shown.map((value) => value.requestId)).toEqual(["r1", "r2"]);
+	const cards = shown.map((value) => mount(value));
+	await Promise.all(cards.map((card, index) => card.show(shown[index]!)));
+	expect(cards.map((card) => card.card().getAttribute("aria-label"))).toEqual(["Command, Waiting", "More access, Waiting"]);
+
+	const count = sent.length;
+	await act(async () => cards[1]!.button("Deny").click());
+	expect(sent.slice(count)).toEqual([{ op: "approval-answer", chat: 1, author: "me", requestId: "r2", decision: "deny" }]);
+	// The first card is untouched: still answerable, not waiting on the second's answer.
+	expect(cards[0]!.button("Allow").getAttribute("aria-disabled")).toBeNull();
+	for (const card of cards) await card.unmount();
 });
 
 // Why: a closed request can no longer be answered; buttons there would invite an answer the channel
@@ -201,6 +214,50 @@ function expected(asked: ApprovalAsked): string[] {
 	}
 }
 
+/** The lines the diff view draws for a patch, with + or - for an added or removed line. */
+function drawn(patch: string): string[] {
+	if (!patch) return [];
+	const file = patchFile(patch)!;
+	expect(file).not.toBeNull();
+	return file.hunks.flatMap((hunk) => hunk.hunkContent.flatMap((part) =>
+		part.type === "context"
+			? file.additionLines.slice(part.additionLineIndex, part.additionLineIndex + part.lines).map((line) => ` ${line.replace(/\n$/, "")}`)
+			: [
+				...file.deletionLines.slice(part.deletionLineIndex, part.deletionLineIndex + part.deletions).map((line) => `-${line.replace(/\n$/, "")}`),
+				...file.additionLines.slice(part.additionLineIndex, part.additionLineIndex + part.additions).map((line) => `+${line.replace(/\n$/, "")}`),
+			]
+	));
+}
+
+/** The lines a change asks to write: an added or deleted file's every line, or an update's diff lines. */
+function lines(change: ApprovalFileChange): string[] {
+	if (change.kind !== "update") {
+		const sign = change.kind === "add" ? "+" : "-";
+		return change.diff ? visibleOf(change.diff).replace(/\n$/, "").split("\n").map((line) => sign + line) : [];
+	}
+	return visibleOf(change.diff).split("\n").filter((line) => /^[ +-]/.test(line) && !/^(?:---|\+\+\+) /.test(line));
+}
+
+/** Every field path a schema allows, nested ones included: `changes[].newPath`, `network.host`. */
+function fieldsIn(schema: unknown, prefix = ""): string[] {
+	const def = (schema as { _zod: { def: Record<string, unknown> } })._zod.def;
+	if (def.type === "object") {
+		return Object.entries(def.shape as Record<string, unknown>)
+			.flatMap(([key, value]) => [`${prefix}${key}`, ...fieldsIn(value, `${prefix}${key}.`)]);
+	}
+	if (def.type === "array") return fieldsIn(def.element, `${prefix.slice(0, -1)}[].`);
+	if (def.type === "union") return (def.options as unknown[]).flatMap((option) => fieldsIn(option, prefix));
+	if (def.innerType) return fieldsIn(def.innerType, prefix);
+	return [];
+}
+
+/** Every field path a fixture sets. */
+function fieldsOf(value: unknown, prefix = ""): string[] {
+	if (Array.isArray(value)) return value.flatMap((item) => fieldsOf(item, `${prefix.slice(0, -1)}[].`));
+	if (typeof value !== "object" || value === null) return [];
+	return Object.entries(value).flatMap(([key, item]) => [`${prefix}${key}`, ...fieldsOf(item, `${prefix}${key}.`)]);
+}
+
 // Why: Allow grants everything asked. Each kind's fixtures set every field its schema has and
 // every value of each closed list (access, kind of path, kind of change, network on, off and not
 // asked), and each must reach the card as a person reads it; a field or value added to the contract
@@ -209,8 +266,8 @@ test("every field of every kind of request is on the card", () => {
 	const all = [...KINDS, ...PROBES].map((value) => value.asked);
 	for (const option of ApprovalAskedSchema.options) {
 		const kind = option.shape.kind.value;
-		const keys = new Set(all.filter((value) => value.kind === kind).flatMap((value) => Object.keys(value)));
-		expect([...keys].sort()).toEqual(Object.keys(option.shape).sort());
+		const keys = new Set(all.filter((value) => value.kind === kind).flatMap((value) => fieldsOf(value)));
+		expect([...keys].sort()).toEqual([...new Set(fieldsIn(option))].sort());
 	}
 	const access = all.flatMap((value) => value.kind === "wider-access" ? value.paths : []);
 	expect(new Set(access.map((path) => path.access))).toEqual(new Set(Object.keys(ACCESS)));
@@ -230,10 +287,11 @@ test("every field of every kind of request is on the card", () => {
 			const forms = [visibleOf(line), visiblePath(line)].map((form) => form.replace(/[ ]+/g, " "));
 			expect(forms.some((form) => card.includes(form))).toBe(true);
 		}
-		// A diff goes whole to the diff view, which draws it after mounting.
-		const patches = view(fixture(value)).changes.map((change) => change.patch).join("\n");
-		for (const change of value.asked.kind === "file-change" ? value.asked.changes ?? [] : []) {
-			for (const line of change.diff.split("\n").filter(Boolean)) expect(patches).toContain(visibleOf(line));
+		// The diff view draws a change in a custom element only after highlighting, which this test
+		// environment cannot run, so what it would draw is read with the view's own parser instead.
+		const changes = view(fixture(value)).changes;
+		for (const [index, change] of (value.asked.kind === "file-change" ? value.asked.changes ?? [] : []).entries()) {
+			expect(drawn(changes[index]!.patch)).toEqual(lines(change));
 		}
 	}
 });
@@ -270,7 +328,16 @@ test("an added file sent as its content shows as added lines in the diff view", 
 	const shown = view(probe("Added file sent as its content"));
 	const patch = shown.changes[0]!.patch;
 	expect(patch).toBe("--- /dev/null\n+++ /Volumes/LaCie Blu/code/neuve-lanes/approvals/outside/notes.md\n@@ -0,0 +1,1 @@\n+hello");
-	expect(patchFile(patch)).not.toBeNull();
+	expect(drawn(patch)).toEqual(["+hello"]);
+});
+
+// Why: an added or deleted file's content is whole lines, whatever it looks like. A .patch file being
+// added would otherwise be read as a patch, and the card would show a change to src/retry.ts
+// instead of the file Allow writes.
+test("an added file whose content looks like a diff shows every line as added", () => {
+	const value = probe("Added patch file");
+	const content = (value.asked as Extract<ApprovalAsked, { kind: "file-change" }>).changes![0]!.diff;
+	expect(drawn(view(value).changes[0]!.patch)).toEqual(content.replace(/\n$/, "").split("\n").map((line) => `+${line}`));
 });
 
 // Why: a right-to-left override can make a command read as another one, escape or backspace

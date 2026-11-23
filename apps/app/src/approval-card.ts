@@ -87,16 +87,18 @@ function status(request: ApprovalRequest, name: (author: string) => string): [Ap
 }
 
 /**
- * A file's diff with file headers, which the diff view needs, added when it has none. A runtime
- * may send an added or deleted file's whole content instead of a diff (Codex does for an add);
- * that content becomes the hunk that adds or removes every line.
+ * A file's change as a unified diff with file headers, which the diff view needs. An added or
+ * deleted file's `diff` is its whole content (Codex sends it so), always shown as lines added or
+ * removed, whatever they look like: a `.patch` file being added is never read as a patch. Only an
+ * update's `diff` is a diff; it gets headers when it has none.
  */
 function patch(path: string, kind: string, diff: string) {
-	if (!diff || /^(?:diff --git |--- )/.test(diff)) return diff;
+	if (!diff) return diff;
+	if (kind === "update" && /^(?:diff --git |--- )/.test(diff)) return diff;
 	const name = (side: "a" | "b") => path.startsWith("/") ? path : `${side}/${path}`;
 	const before = kind === "add" ? "/dev/null" : name("a");
 	const after = kind === "delete" ? "/dev/null" : name("b");
-	return `--- ${before}\n+++ ${after}\n${kind === "update" || /^@@ /m.test(diff) ? diff : whole(kind, diff)}`;
+	return `--- ${before}\n+++ ${after}\n${kind === "update" ? diff : whole(kind, diff)}`;
 }
 
 /** A whole file's content as the one hunk that adds it, or removes it. */

@@ -33,8 +33,8 @@ export const KINDS: Fixture[] = [
 			changes: [
 				{ kind: "update", path: "src/worker/retry.ts", diff: DIFF },
 				{ kind: "update", path: "src/worker/old-name.ts", newPath: "src/worker/backoff.ts", diff: "" },
-				{ kind: "add", path: "../shared/limits.ts", diff: "@@ -0,0 +1 @@\n+export const MAX_ATTEMPTS = 3;" },
-				{ kind: "delete", path: "src/worker/legacy-retry.ts", diff: "@@ -1 +0,0 @@\n-export {};" },
+				{ kind: "add", path: "../shared/limits.ts", diff: "export const MAX_ATTEMPTS = 3;\n" },
+				{ kind: "delete", path: "src/worker/legacy-retry.ts", diff: "export {};\n" },
 			],
 			reason: "Write outside the folder",
 		},
@@ -109,6 +109,14 @@ export const PROBES: Fixture[] = [
 		// As Codex sent it in the live run: an added file's diff is its whole content.
 		label: "Added file sent as its content",
 		asked: { kind: "file-change", changes: [{ kind: "add", path: "/Volumes/LaCie Blu/code/neuve-lanes/approvals/outside/notes.md", diff: "hello\n" }] },
+	},
+	{
+		// A patch file being added: its content looks like a diff and must still show as plain added lines.
+		label: "Added patch file",
+		asked: {
+			kind: "file-change",
+			changes: [{ kind: "add", path: "fixes/retry.patch", diff: "--- a/src/retry.ts\n+++ b/src/retry.ts\n@@ -1 +1 @@\n-old\n+new\n" }],
+		},
 	},
 	{ label: "Not summarised", asked: { kind: "unrecognised" }, input: { argv: ["rm", "-rf", "/"], cwd: "/repo" } },
 	{ label: "A plain string", asked: { kind: "unrecognised" }, input: "rm -rf /" },
