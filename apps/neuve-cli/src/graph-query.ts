@@ -12,7 +12,7 @@ import {
   StoreMissing,
 } from "@neuve/records-core";
 import { budgetDirectory } from "@neuve/records-core/budget-directory";
-import { GitOid, type QueryRecorded } from "@neuve/records-schema";
+import type { QueryRecorded } from "@neuve/records-schema";
 import { requesterAttribution, resolveRequester } from "@neuve/harness/request";
 import { resolveCommit } from "../../../packages/harness/src/git.ts";
 import {
@@ -646,6 +646,7 @@ export type QuerySourceContext = Readonly<
 >;
 
 type QueryScopeAnswer = Effect.Success<ReturnType<typeof queryLocalScope>>;
+const localScopeGap = "Retry neuve query to read local scope.";
 type RecordedQuery = {
   eventId?: string;
   cycleId?: string;
@@ -672,9 +673,7 @@ const writeDiagnostic = (
       false,
     );
     diagnostics.log.write(record);
-  } catch {
-    // A log write must not fail the query.
-  }
+  } catch {}
 };
 
 const storeLocked = (error: unknown) =>
@@ -697,7 +696,6 @@ const recordQuery = async (
         const revision =
           payload.revision ??
           (yield* resolveCommit(request.repository, request.revision).pipe(
-            Effect.map((oid) => GitOid.safeParse(oid).data ?? null),
             Effect.orElseSucceed(() => null),
           ));
         if (registration !== undefined) yield* Log.append([registration]);
@@ -763,7 +761,7 @@ const recordQuery = async (
           : {
               eventId,
               cycleId,
-              scopeGap: "The cycle's local scope could not be read.",
+              scopeGap: localScopeGap,
             };
       }).pipe(
         Effect.provide(
@@ -789,7 +787,7 @@ const recordQuery = async (
     : "the query could not be recorded";
   await Bun.write(
     Bun.stderr,
-    "neuve: The Records store could not record this query.\n",
+    `neuve: ${reason.charAt(0).toUpperCase()}${reason.slice(1)}. Run neuve query again.\n`,
   ).catch(() => undefined);
   return { reason };
 };
@@ -987,7 +985,7 @@ export const runQueryGraph = async (
           type: "query.scope-failed",
           cause: Cause.pretty(fallback.cause),
         });
-        gap = "Local scope could not be read.";
+        gap = localScopeGap;
       }
     } else if (local === undefined && namedScope) {
       gap = "The named local scope could not be read at the resolved revision.";
@@ -1004,10 +1002,11 @@ export const runQueryGraph = async (
     else {
       let sequence = complete.sequence;
       let remaining = request.maxContextBytes;
-      for (const { text, ...record } of sources) {
+      for (const item of sources) {
+        const { text, contextOnly: _contextOnly, ...record } = item;
         const citation: PublicQueryScopeSource = {
           ...record,
-          stratum: scopeStratum(record),
+          stratum: scopeStratum(item),
         };
         let source = citation;
         if (text !== undefined) {

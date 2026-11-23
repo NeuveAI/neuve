@@ -128,8 +128,9 @@ export const scopeBlock = (
         : order.indexOf(a.stratum) - order.indexOf(b.stratum),
     );
     for (const source of sources) {
+      const stratum = scopeStratum(source);
       listing.push(
-        `${source.id} ${source.kind} · ${scopeStratum(source)} · fetched ${source.fetchedAt} · ${source.title}${source.status === "gap" ? ` · gap: ${source.gap ?? ""}` : ""}`,
+        `${source.id} ${source.kind} · ${stratum} · fetched ${source.fetchedAt} · ${source.title}${source.status === "gap" ? ` · gap: ${source.gap ?? ""}` : ""}`,
       );
       for (const section of mode === "frame" && source.kind === "commit-text"
         ? []
@@ -144,7 +145,7 @@ export const scopeBlock = (
               tokens += cost;
               inlined = true;
               bodies.push(
-                `${read.disclosure === undefined ? "" : `(Note: ${read.disclosure}.)\n`}${dataBlock("scope", { section: section.id, source: source.id, stratum: source.stratum, fetched: source.fetchedAt, title: section.title }, read.text)}`,
+                `${read.disclosure === undefined ? "" : `(Note: ${read.disclosure}.)\n`}${dataBlock("scope", { section: section.id, source: source.id, stratum, fetched: source.fetchedAt, title: section.title }, read.text)}`,
               );
             } else if (read.disclosure !== undefined)
               listing.push(`  ${section.id} not available: ${read.disclosure}`);

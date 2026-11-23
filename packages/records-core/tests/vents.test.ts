@@ -11,7 +11,7 @@ import { Duration, Effect, Layer } from "effect";
 import type { FileSystem } from "effect/FileSystem";
 import { SqlClient } from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
-import { RecordEvent, VENT_MEDIA_TYPE } from "@neuve/records-schema";
+import { RecordEvent, TEXT_CAPTURE_MEDIA_TYPE } from "@neuve/records-schema";
 import {
   Blobs,
   Identity,
@@ -169,12 +169,12 @@ test("through the spool, a second vent keeps the earlier one, and inline or dura
       const blobs = yield* Blobs.BlobStore;
       const text = yield* blobs.put({
         bytes: new TextEncoder().encode("A second."),
-        mediaType: VENT_MEDIA_TYPE,
+        mediaType: TEXT_CAPTURE_MEDIA_TYPE,
         retention: "raw-capture",
       });
       const durable = yield* blobs.put({
         bytes: new TextEncoder().encode("Kept forever."),
-        mediaType: VENT_MEDIA_TYPE,
+        mediaType: TEXT_CAPTURE_MEDIA_TYPE,
         retention: "durable",
       });
       const spooled = (kind: string, sessionId: string, extra: object) =>

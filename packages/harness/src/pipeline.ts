@@ -413,23 +413,12 @@ const filesOf = (manifest: RangeManifest): ReadonlyArray<ChangedFile> => {
   return [...files].map(([path, counts]) => ({ path, ...counts }));
 };
 
-/**
- * The Precompute stage (proposal §5, 10.20): the range manifest, computed once per range from what
- * commit preparation stored, and the cycle's scope snapshot, fetched once per cycle and shared with
- * the `scope.fetch` job's attempt when one is in flight. The stage's own computation is keyed by the
- * range and the cycle, because the snapshot it references belongs to the cycle. Scope gaps are
- * disclosed as the stage's gaps (10.76).
- */
-/**
- * Precompute's computation: the range, the cycle and the manifest's settings. Version 3 holds no
- * leads retriever: the leads are their own computation, off the review's path (NEU-148).
- * Version 4 references the two scope computations for a read-opened cycle.
- */
+/** The computation includes the cycle because its result refers to that cycle's scope snapshot. */
 const precomputeSpec = (
   range: { readonly baseOid: string; readonly headOid: string },
   cycleId: string,
   settings: ManifestSettings | FrontSettings,
-  splitScope = false,
+  splitScope: boolean,
 ): Computations.ComputationSpec => ({
   op: "harness.precompute",
   opVersion: splitScope ? 4 : 3,

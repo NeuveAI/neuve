@@ -80,7 +80,7 @@ function checkedName(tree: Tree, path: string): string {
 	return name;
 }
 
-function checkGitMetadata(tree: Tree, path: string, name = path) {
+function checkGitMetadata(tree: Tree, path: string, name: string) {
 	if (tree.gitDirectories.some(dir => below(dir, path) !== undefined)
 		|| name.split(sep).some(part => part.toLowerCase() === ".git")) {
 		error("permission_denied", "Plan mode cannot read Git metadata.");
@@ -160,25 +160,25 @@ async function skillPath(tree: Tree, env: ExecutionEnv, path: string, kind: "fil
 export function planFileAccess(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv {
 	let currentTree: Promise<Tree> | undefined;
 	const getTree = (context: Context) => currentTree ??= tree(env.cwd, context);
+	const regularFileRequired = "Plan mode can only read regular files.";
 	const read: ExecutionEnv["readBinaryFile"] = async (path, context) => {
 		try {
 			const worktree = await getTree(context);
 			const skill = await skillPath(worktree, env, path, "file", context);
 			const actual = skill ?? (await confined(worktree, path, context)).actual;
 			const expected = await lstat(actual);
-			if (!expected.isFile()) error("permission_denied", "Plan mode can only read regular files.");
+			if (!expected.isFile()) error("permission_denied", regularFileRequired);
 			const file = await open(actual, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 			try {
 				const opened = await file.stat();
 				const checked = skill
 					? await skillPath(worktree, env, path, "file", context)
 					: await realpath(resolve(worktree.root, path));
-				if (checked !== actual) error("permission_denied", "Plan mode needs a stable file path.");
-				const current = await lstat(checked);
-				if (!opened.isFile() || !current.isFile()
-					|| opened.dev !== expected.dev || opened.ino !== expected.ino
+				const current = checked === actual ? await lstat(actual) : undefined;
+				if (!opened.isFile() || current?.isFile() === false) error("permission_denied", regularFileRequired);
+				if (current === undefined || opened.dev !== expected.dev || opened.ino !== expected.ino
 					|| opened.dev !== current.dev || opened.ino !== current.ino) {
-					error("permission_denied", "Plan mode needs a regular file that stays at the verified path.");
+					error("permission_denied", "The file changed while Plan mode was opening it.");
 				}
 				return ok(await file.readFile({ signal: context.abortSignal }));
 			} finally {
@@ -186,7 +186,7 @@ export function planFileAccess(env: ExecutionEnv, isPlanning: (context: Context)
 			}
 		} catch (e) {
 			return err(e instanceof FileError ? e : new FileError("permission_denied",
-				"Plan mode could not verify or read this file inside the working tree."));
+				"Plan mode could not verify or read this file."));
 		}
 	};
 	// The prompt builder skips missing files. Hide files it cannot read so it drops any old text.

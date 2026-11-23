@@ -59,8 +59,10 @@ export interface HarnessRuntimesOptions<E, R> extends PiStatusRuntimeOptions {
   readonly codex?: CodexRuntimeConfig | false;
 }
 
-/** The Codex runtime as the worker, the workspace and `neuve auth` register it for a home. */
-export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
+export const codexRuntimeOptions = (
+  home = homedir(),
+  { localAuthDiagnostics = false }: { localAuthDiagnostics?: boolean } = {},
+): CodexRuntimeConfig => ({
   home,
   programPath: (name) => AccountStore.programPath(home, name),
   neuveSignIn: {
@@ -73,7 +75,16 @@ export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
       return Effect.tryPromise({
         try: (signal) =>
           accessToken({ ...authOptionsFor(credential), signal }, rejected),
-        catch: (error) => {
+        catch: (error) => error,
+      }).pipe(
+        Effect.tapError((error) =>
+          localAuthDiagnostics &&
+          error instanceof OpenAiAuthError &&
+          error.code.startsWith("file-")
+            ? Effect.logError(error.message)
+            : Effect.void,
+        ),
+        Effect.mapError((error) => {
           if (error instanceof OpenAiAuthError) {
             switch (error.code) {
               case "signed-out":
@@ -93,14 +104,20 @@ export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
             }
           }
           return new TurnFailed({ account, reason: "provider-unavailable" });
-        },
-      });
+        }),
+      );
     },
     signOut: ({ name: account, credential }) =>
       Effect.tryPromise({
         try: () => signOut(authOptionsFor(credential)),
-        catch: () =>
-          new RuntimeUnavailable({ account, reason: "start-failed" }),
+        catch: (error) =>
+          new RuntimeUnavailable({
+            account,
+            reason: "start-failed",
+            ...(localAuthDiagnostics && error instanceof OpenAiAuthError
+              ? { fix: error.message }
+              : {}),
+          }),
       }).pipe(Effect.asVoid),
   },
 });

@@ -46,7 +46,7 @@ import {
   READING_RECIPE_SCOPE_AND_TESTS,
 } from "./readings/plan.ts";
 import { readIntegrations, type Integrations } from "./integrations.ts";
-import { git, resolveCommit } from "./git.ts";
+import { git, GitFailed, resolveCommit } from "./git.ts";
 import type { RetrieverConfig } from "./retriever.ts";
 import {
   ClaudeRouteConfig,
@@ -476,8 +476,10 @@ const branchesContaining = (repository: string, headOid: string) =>
     "--format=%(refname:strip=2)",
     "refs/heads/",
   ]).pipe(
-    Effect.orElseSucceed(() => ""),
-    Effect.map((refs) => new Set(refs.split("\n").filter(Boolean))),
+    Effect.match({
+      onFailure: (error) => error,
+      onSuccess: (refs) => new Set(refs.split("\n").filter(Boolean)),
+    }),
   );
 
 export const requestReview = (options: ReviewOptions) =>
@@ -556,7 +558,7 @@ export const requestReview = (options: ReviewOptions) =>
     const branches =
       selected === undefined && contextIdentity === undefined
         ? yield* branchesContaining(options.repository, range.headOid)
-        : new Set<string>();
+        : undefined;
     // The cycle, the generation and the append are one write transaction (`BEGIN IMMEDIATE`), so
     // two first requests for a range cannot open two cycles or pick different generations.
     return yield* sql.withTransaction(
@@ -652,10 +654,18 @@ export const requestReview = (options: ReviewOptions) =>
             event.event.attribution.range.headOid === range.headOid,
         );
         const joined = cycles[cycles.length - 1];
+        const containing = joined === undefined ? branches : undefined;
+        if (containing instanceof GitFailed)
+          return yield* Effect.fail(
+            new Error(
+              `Git could not list the local branches: ${containing.message || `git for-each-ref exited with code ${containing.exitCode}`}`,
+              { cause: containing },
+            ),
+          );
         const readCycle =
-          joined === undefined && branches.size > 0
+          containing !== undefined && containing.size > 0
             ? (yield* Cycles.unboundReadCycles(range.baseOid)).find((cycle) =>
-                branches.has(cycle.branch),
+                containing.has(cycle.branch),
               )
             : undefined;
         const cycleId =

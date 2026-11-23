@@ -153,22 +153,19 @@ test("masking covers declared identifiers and the shapes fetched, and nothing el
   expect(masked).toBe(
     "[ticket-1] links [ticket-2] at [url-1] for [person-1] ([email-1]); keep UTF-8, SHA-256 and ABC-12.",
   );
-  // Ticket candidates are only candidates: the generic shape also finds `UTF-8`.
   expect(keyCandidates("fix NEU-13, keep UTF-8")).toEqual(["NEU-13", "UTF-8"]);
 });
 
-// Why: an agent guide is repository text; a link that is not valid percent-encoding must become a
-// disclosed gap, never a thrown error that stops the scope fetch (1.8).
-test("links that do not decode are returned as undecodable, never thrown", () => {
+test("reports invalid link targets and still resolves the other links", () => {
+  const failures: string[] = [];
   expect(
     linkedPaths(
       "docs/AGENTS.md",
       "[a](reports/100%.md) [b](a%20b.md) [c](https://x.test/y) [d](../up.md)",
+      (target) => failures.push(target),
     ),
-  ).toEqual({
-    paths: ["docs/a b.md", "up.md"],
-    undecodable: ["reports/100%.md"],
-  });
+  ).toEqual(["docs/a b.md", "up.md"]);
+  expect(failures).toEqual(["reports/100%.md"]);
 });
 
 const scopeFixture = async (name: string, branch: string, message: string) => {
@@ -264,7 +261,7 @@ const scopeFixture = async (name: string, branch: string, message: string) => {
         );
         return {
           status,
-          value: Option.getOrThrow(yield* storedSnapshot(cycleId)),
+          value: Option.getOrThrow(yield* storedSnapshot(cycleId, w.ctx.range)),
         };
       }),
     );
@@ -524,7 +521,9 @@ test("a review-opened cycle keeps its ticket, documents, commit text, and gaps",
     });
     expect(snapshot.gaps).toEqual([NO_PR_TEXT]);
     expect(
-      Option.getOrUndefined(await f.run(storedSnapshot(review.cycleId))),
+      Option.getOrUndefined(
+        await f.run(storedSnapshot(review.cycleId, review.range)),
+      ),
     ).toEqual(snapshot);
     expect(
       Option.getOrUndefined(

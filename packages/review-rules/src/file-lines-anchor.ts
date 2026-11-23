@@ -53,13 +53,7 @@ const LINK = /!?\[([^\]]*)\]\([^)]*\)/g;
 const EMPHASIS = /(?<![\p{L}\p{N}])[*_]+|[*_]+(?![\p{L}\p{N}])/gu;
 const CODE_OR_STRIKE = /`+|~~/g;
 
-/**
- * Text as the plan tab shows it, for comparing a quote with a file's lines. This lane's rule, not
- * the design's: the design says the quote must match, and a selection on screen is rendered text,
- * so both sides are compared after leaving out each line's Markdown prefix (heading, list, task and
- * quotation marks), link targets, code and strike marks, and emphasis marks at a word's edge, and
- * after taking each run of whitespace as one space. A mark inside a word, as in `snake_case`, stays.
- */
+/** Normalize Markdown prefixes, inline marks and spacing to match a rendered selection. Preserve marks inside words like `snake_case`. */
 export function plainText(text: string): string {
   return text
     .split(/\r?\n/)
@@ -127,12 +121,21 @@ export function matchesFileLines(
   );
 }
 
-/** The heading at or above `line`, as the plan tab shows it; empty when there is none. */
 export function fileLinesSection(text: string, line: number): string {
-  const file = fileLines(text).slice(0, line);
-  const heading = file
-    .reverse()
-    .find((candidate) => /^\s*#{1,6}\s/.test(candidate.text));
+  let heading: FileLine | undefined;
+  let fence: string | undefined;
+  for (const candidate of fileLines(text).slice(0, line)) {
+    const marker = /^\s*(`{3,}|~{3,})/.exec(candidate.text);
+    if (marker?.[1] !== undefined) {
+      const run = marker[1];
+      const rest = candidate.text.slice(marker[0].length);
+      if (fence !== undefined) {
+        if (run.startsWith(fence) && !/[^ ]/.test(rest)) fence = undefined;
+      } else if (run[0] === "~" || !rest.includes("`")) fence = run;
+    }
+    if (fence === undefined && /^\s*#{1,6}\s/.test(candidate.text))
+      heading = candidate;
+  }
   return heading
     ? plainLines([{ ...heading, text: heading.text.replace(/\s#+\s*$/, "") }])
     : "";

@@ -11,6 +11,7 @@ import {
   type RuntimeRegistryShape,
   type RuntimeShape,
   type SignInHint,
+  RuntimeUnavailable,
   signInCommand,
 } from "@neuve/runtime";
 import { Route, RouteProvider } from "@neuve/harness";
@@ -21,13 +22,6 @@ import {
   prepareCodexHome,
 } from "@neuve/harness/runtimes";
 import { write } from "./records-cli.ts";
-
-/**
- * `neuve auth`: the sign-in a model route needs (10.85). `openai` keeps OpenAI's "Sign in
- * with ChatGPT", so the OpenAI route spends the owner's ChatGPT plan. The owner signs in in their
- * own browser; this command never sees a password, and never prints a token. `status` shows the
- * account and expiry only.
- */
 
 export const AUTH_HELP = `Usage:
   neuve auth login openai [--no-browser]
@@ -59,7 +53,7 @@ export const AUTH_HELP = `Usage:
   neuve auth add claude <name>
   neuve auth add chatgpt <name> [--runtime codex]
               Add a separate sign-in and print the command to sign in.
-              For ChatGPT, --runtime codex uses that sign-in in a separate Codex home.
+              Add --runtime codex to run the account on Codex.
   neuve auth login <account> [--print]
               Sign in using the account's own command. --print only shows the command.
   neuve auth program <account> [<path> | --find | --unset]
@@ -125,7 +119,8 @@ export const authRuntimes = ({
   harnessRuntimes({
     accountDirectory: Layer.succeed(AccountDirectory, directory),
     claude: { cwd: defaultClaudeWorkingFolder(home) },
-    codex: codexRuntimeOptions(home),
+    codex: codexRuntimeOptions(home, { localAuthDiagnostics: true }),
+    localAuthDiagnostics: true,
   });
 
 export interface AuthCliOptions {
@@ -342,7 +337,6 @@ const findAndStore = (
               message: "The program path could not be saved.",
             }),
     });
-    // Said once it is saved, not before.
     return {
       ...look,
       stored: { path, account: yield* statuses.check(name) },
@@ -370,7 +364,8 @@ const accountDescription = (status: AccountStatus) => {
         : signIn.state === "unknown"
           ? `${signIn.state}: ${signIn.reason}`
           : signIn.state === "credential-rejected" &&
-              signIn.reason !== undefined
+              signIn.reason !== undefined &&
+              signIn.reason !== "other"
             ? `${signIn.state}: ${signIn.reason}`
             : signIn.state;
   const fix =
@@ -550,10 +545,21 @@ const runAccountCommand = async (
         return 0;
       }
       if (command === "remove") {
-        yield* store.remove(name.data, registry, {
-          force: values.force === true,
-          onStep: (step) => output(removalMessages[step]),
-        });
+        yield* store
+          .remove(name.data, registry, {
+            force: values.force === true,
+            onStep: (step) => output(removalMessages[step]),
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              error instanceof RuntimeUnavailable &&
+              error.reason === "start-failed"
+                ? new Error(
+                    `Could not sign out of ${name.data}. ${error.fix === undefined ? "" : `${error.fix} `}Run neuve auth remove ${name.data} again.`,
+                  )
+                : error,
+            ),
+          );
         return 0;
       }
       const account = yield* store.directory.lookup(name.data, "use");
@@ -672,14 +678,7 @@ const runAccountCommand = async (
   );
 };
 
-/**
- * A runtime's log lines reach a person only as a sentence meant for them: a warning that carries
- * `advice` (Codex's own word on an unsupported version) prints that advice, and an error its
- * message. The rest (a candidate program skipped, an effort level left out) restates what the
- * command already says, or matters only to Neuve's own code; one-off commands keep no log file, so
- * it is dropped. Everything goes to standard error, so what these commands print, `--json`
- * included, stays the account's alone.
- */
+/** Send runtime diagnostics to stderr so stdout can carry JSON. */
 const personLogs = Logger.layer([
   Logger.make(({ logLevel, message }) => {
     const parts = Array.isArray(message) ? message : [message];

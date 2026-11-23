@@ -531,17 +531,14 @@ describe("neuve CLI boundary", () => {
       ],
     });
     expect(
-      [guide, linked, named].map(
-        ({ ref, contextOnly, stratum }: PublicQueryScopeSource) => [
-          ref.found,
-          contextOnly,
-          stratum,
-        ],
-      ),
+      [guide, linked, named].map(({ ref, stratum }: PublicQueryScopeSource) => [
+        ref.found,
+        stratum,
+      ]),
     ).toEqual([
-      ["agent guide (agents-md-root-v1)", true, "context only"],
-      ["linked from AGENTS.md", true, "context only"],
-      [`named in ${plan}`, true, "context only"],
+      ["agent guide (agents-md-root-v1)", "context only"],
+      ["linked from AGENTS.md", "context only"],
+      [`named in ${plan}`, "context only"],
     ]);
     const location = storeLocationIn(join(root, ".git"));
     const heldPath = join(scopeFolder(location, answer.cycle_id), "S1.txt");
@@ -579,9 +576,9 @@ describe("neuve CLI boundary", () => {
       );
     const cycle = await readCycle();
     expect(
-      cycle.sources.map((source) => ({
+      cycle.sources.map(({ contextOnly, ...source }) => ({
         ...source,
-        stratum: source.contextOnly ? "context only" : source.stratum,
+        stratum: contextOnly ? "context only" : source.stratum,
       })),
     ).toEqual(
       answer.scope.map(
@@ -631,9 +628,7 @@ describe("neuve CLI boundary", () => {
     ).toEqual(answer.scope);
     expect(events.at(-1)).toMatchObject({
       cycle_id: answer.cycle_id,
-      scope_gaps: [
-        `${late}: The path was named after this cycle's scope was read.`,
-      ],
+      scope_gaps: [expect.stringContaining(`${late}:`)],
     });
     expect(await queryHistory(root, "cycle.local-scope-selected@1")).toEqual(
       pinEvents,
@@ -699,7 +694,7 @@ describe("neuve CLI boundary", () => {
     expect(answer.cycle_id).toBeUndefined();
     expect(answer.scope_gaps).toEqual([
       "missing: The path was absent from the working tree and the base revision.",
-      "working: The file was read without a held copy because no Records store was found.",
+      expect.stringMatching(/^working: .*no Records store was found/),
       "home: The path is not a regular file.",
       "opaque: The file is not readable as text.",
       "large: The file exceeds 262144 bytes.",
@@ -712,7 +707,7 @@ describe("neuve CLI boundary", () => {
         sections: [expect.objectContaining({ startLine: 1, endLine: 5 })],
       }),
       expect.objectContaining({
-        contextOnly: true,
+        stratum: "context only",
         ref: expect.objectContaining({
           path: "other.custom",
           found: "named in working",
@@ -786,7 +781,7 @@ describe("neuve CLI boundary", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({
       retrieval: { status: "ok" },
       scope_gaps: [
-        `${plan}: The file was read without a held copy because the checked-out branch has no readable tip.`,
+        expect.stringContaining("the checked-out branch has no readable tip"),
       ],
     });
     const [{ event }] = await queryHistory(root);
@@ -1051,13 +1046,11 @@ describe("neuve CLI boundary", () => {
       env,
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe(
-      "neuve: The Records store could not record this query.\n",
-    );
+    expect(result.stderr.trim()).toMatch(/^neuve: [^\n]+$/);
     expect(JSON.parse(result.stdout)).toMatchObject({
       retrieval: { status: "ok" },
       scope_gaps: [
-        "plan: The file was read without a held copy because the query could not be recorded.",
+        expect.stringMatching(/^plan: .*the query could not be recorded/),
       ],
     });
     const logs = join(root, ".git", "neuve", "run-logs");

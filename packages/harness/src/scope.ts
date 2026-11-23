@@ -234,17 +234,11 @@ const describeError = (error: unknown) =>
     ? String((error as { message: unknown }).message).slice(0, 300)
     : String(error).slice(0, 300);
 
-/**
- * The whole fetch's time bound (10.15): connecting and every ticket call share it, so a slow or
- * silent server never holds a review; what is not fetched by then is a disclosed gap.
- */
+/** Connecting and fetching tickets share one deadline. Unfetched sources become gaps. */
 export const SCOPE_FETCH_BOUND_MS = 60_000;
 
-/** Bounds on the cycle-start fetch. */
 const MAX_TICKETS = 20;
-const MAX_DOCUMENTS = MAX_SCOPE_DOCUMENTS;
 const MAX_DOCUMENT_BYTES = 262_144;
-/** Understand's additions per run (10.53). */
 export const MAX_ADDITIONS_PER_RUN = 10;
 /** A proxied tool's page shown to an agent, in bytes: the result cap less its frame (10.18). */
 const RESULT_BYTES = PAGE_BODY_BYTES;
@@ -357,18 +351,12 @@ const namedPaths = (text: string, blobs: ReadonlyMap<string, TreeEntry>) =>
     (token) => (token.includes(".") || token.includes("/")) && blobs.has(token),
   );
 
-/**
- * Relative link targets of a Markdown text, resolved against its directory. A target that is not
- * valid percent-encoding (`reports/100%.md`) cannot name a path; it is returned as undecodable, for
- * the snapshot to disclose, never thrown.
- */
 export const linkedPaths = (
   from: string,
   text: string,
-  onFailure?: (target: string, cause: string) => void,
+  onFailure: (target: string, cause: string) => void,
 ) => {
   const paths = new Set<string>();
-  const undecodable: Array<string> = [];
   for (const match of text.matchAll(/\]\(([^)\s#]+)(?:#[^)]*)?\)/g)) {
     const target = match[1] ?? "";
     if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("/")) continue;
@@ -376,14 +364,13 @@ export const linkedPaths = (
     try {
       decoded = decodeURI(target);
     } catch (error) {
-      undecodable.push(target);
-      onFailure?.(target, String(error));
+      onFailure(target, String(error));
       continue;
     }
     const path = posix.normalize(posix.join(posix.dirname(from), decoded));
     if (path !== ".." && !path.startsWith("../")) paths.add(path);
   }
-  return { paths: [...paths], undecodable };
+  return [...paths];
 };
 
 /**
@@ -552,7 +539,7 @@ const readNamedFiles = (root: string, paths: readonly string[]) =>
           requested,
           target: await resolveWorkingPath(resolve(root, requested)),
         })),
-      { concurrency: MAX_DOCUMENTS },
+      { concurrency: MAX_SCOPE_DOCUMENTS },
     );
     const unique = new Map<
       string,
@@ -568,7 +555,7 @@ const readNamedFiles = (root: string, paths: readonly string[]) =>
         unique.set(path, { target, namedAs: [requested] });
       else first.namedAs.push(requested);
     }
-    const selected = [...unique].slice(0, MAX_DOCUMENTS);
+    const selected = [...unique].slice(0, MAX_SCOPE_DOCUMENTS);
     const files = yield* Effect.forEach(
       selected,
       ([path, { target, namedAs }]) =>
@@ -580,7 +567,7 @@ const readNamedFiles = (root: string, paths: readonly string[]) =>
               : target,
           namedAs,
         })),
-      { concurrency: MAX_DOCUMENTS },
+      { concurrency: MAX_SCOPE_DOCUMENTS },
     );
     return { files, omitted: unique.size - selected.length };
   });
@@ -629,17 +616,8 @@ const namedScope = (
     entry !== undefined &&
     (read.kind === "missing" ||
       (blob !== undefined && Buffer.compare(read.bytes, blob) === 0))
-  ) {
-    const oid = GitOid.safeParse(entry.oid);
-    if (oid.success)
-      return { kind: "repository-document" as const, path, blob: oid.data };
-    onFailure(oid.error.message);
-    return {
-      kind: "gap" as const,
-      path,
-      reason: "The Git document has no valid blob ID.",
-    };
-  }
+  )
+    return { kind: "repository-document" as const, path, blob: entry.oid };
   if (read.kind === "missing")
     return {
       kind: "gap" as const,
@@ -726,11 +704,6 @@ export const readLocalScope = (
       entries,
       contents,
       sources,
-      missingPaths: new Set(
-        resolved.flatMap(({ read, path, entry }) =>
-          read.kind === "missing" && entry === undefined ? [path] : [],
-        ),
-      ),
       readFailures,
       omitted,
     };
@@ -901,7 +874,7 @@ const localScopeSources = (
       return read.text;
     };
     const links = (path: string, text: string) => {
-      const { paths } = linkedPaths(path, text, (target, cause) =>
+      const paths = linkedPaths(path, text, (target, cause) =>
         disclose(
           path,
           `A link could not be decoded (${JSON.stringify(target.slice(0, 200))}).`,
@@ -970,11 +943,11 @@ const localScopeSources = (
       for (const target of namedPaths(text, entries))
         find(target, `named in ${path}`);
     }
-    const room = MAX_DOCUMENTS - pins.sources.length;
+    const room = MAX_SCOPE_DOCUMENTS - pins.sources.length;
     const omitted = pins.omitted + Math.max(0, found.size - room);
     if (omitted > 0)
       gaps.push(
-        `${omitted} more document(s) exceeded the ${MAX_DOCUMENTS}-document limit.`,
+        `${omitted} more document(s) exceeded the ${MAX_SCOPE_DOCUMENTS}-document limit.`,
       );
     const documents = [...found].slice(0, room);
     const foundContents = yield* documentBlobs(
@@ -1010,6 +983,11 @@ const selectedLocalScope = (cycleId: string) =>
         : undefined,
   );
 
+const retrySharedAttempt = Effect.retry({
+  times: 1,
+  while: (error: unknown) => error instanceof Computations.SharedAttemptFailed,
+});
+
 const fetchCycleLocalScope = (
   repository: string,
   copy: ScopeCopy,
@@ -1035,7 +1013,7 @@ const fetchCycleLocalScope = (
     }),
   );
   return run.pipe(
-    Effect.catchTag("SharedAttemptFailed", () => run),
+    retrySharedAttempt,
     Effect.map(({ value }) => value),
   );
 };
@@ -1106,6 +1084,9 @@ const localScopeAnswer = (
     return { sources, gaps, causes };
   });
 
+const firstQueryScope =
+  "Only the first query can add files to a review cycle's scope.";
+
 export const queryLocalScope = (
   repository: string,
   read: LocalScopeRead,
@@ -1118,13 +1099,11 @@ export const queryLocalScope = (
     );
     const gaps = read.sources
       .filter(({ path }) => !held.has(path))
-      .map(({ path }) =>
-        read.missingPaths.has(path)
-          ? `${path}: No file was found at the path named after this cycle's scope was read.`
-          : `${path}: The path was named after this cycle's scope was read.`,
-      );
+      .map(({ path }) => `${path}: ${firstQueryScope}`);
     if (read.omitted > (pins?.omitted ?? 0))
-      gaps.push(`The request named more than ${MAX_DOCUMENTS} documents.`);
+      gaps.push(
+        `The request named more than ${MAX_SCOPE_DOCUMENTS} documents.`,
+      );
     if (pins === undefined && !read.entries.has(AGENT_GUIDE.path))
       return { sources: [], gaps, causes: [] };
     const scope = yield* fetchCycleLocalScope(
@@ -1157,7 +1136,7 @@ export const queryUnheldLocalScope = (
                 kind: "gap" as const,
                 path: source.path,
                 namedAs: source.namedAs,
-                reason: `The file was read without a held copy because ${reason}.`,
+                reason: `Neuve read the file without keeping a copy for review because ${reason}. ${firstQueryScope}`,
               },
         ),
       },
@@ -1200,14 +1179,14 @@ const documentSources = (options: {
           const text = bytes === undefined ? undefined : blobText(bytes);
           const links =
             text === undefined
-              ? { paths: [], undecodable: [] }
+              ? []
               : linkedPaths(guide.path, text, (target, cause) =>
                   gap(
                     `A link in ${guide.path} couldn't be followed because it isn't a valid path: "${target.slice(0, 200)}".`,
                     cause,
                   ),
                 );
-          for (const path of links.paths)
+          for (const path of links)
             if ((atBase.has(path) || atHead.has(path)) && !wanted.has(path))
               wanted.set(path, `linked from ${guide.path}`);
         } else
@@ -1227,10 +1206,10 @@ const documentSources = (options: {
         part === "range"
           ? (atHead.get(path) ?? atBase.get(path))
           : (atBase.get(path) ?? atHead.get(path));
-      const documents = [...wanted].slice(0, MAX_DOCUMENTS);
-      if (wanted.size > MAX_DOCUMENTS)
+      const documents = [...wanted].slice(0, MAX_SCOPE_DOCUMENTS);
+      if (wanted.size > MAX_SCOPE_DOCUMENTS)
         gap(
-          `${wanted.size - MAX_DOCUMENTS} more repository document(s) weren't read: a review reads at most ${MAX_DOCUMENTS}.`,
+          `${wanted.size - MAX_SCOPE_DOCUMENTS} more repository document(s) weren't read: a review reads at most ${MAX_SCOPE_DOCUMENTS}.`,
         );
       const entries = documents.map(([path]) => entryOf(path));
       const contents = yield* documentBlobs(repository, entries);
@@ -1380,27 +1359,24 @@ const fetchSources = (ctx: Omit<SnapshotContext, "range">, input: ScopeInput) =>
             .split("\n")
             .filter(Boolean);
     // Local documents and tickets assign source IDs independently.
-    let next = input.part === "cycle" ? MAX_DOCUMENTS + 1 : 1;
+    let next = input.part === "cycle" ? MAX_SCOPE_DOCUMENTS + 1 : 1;
     const sourceId = () => `S${next++}`;
     const external = yield* selectedExternalContext(cycleId);
     for (const pin of external?.sources ?? []) {
-      let cause: string | undefined;
-      const copy = readScopeText(
+      const { text: copy, cause } = readScopeText(
         ctx.location,
         cycleId,
         pin.sourceId,
-        (error) => {
-          cause = error;
-        },
       );
-      const blob = Option.isSome(copy)
-        ? undefined
-        : yield* (yield* Blobs.BlobStore).get(pin.capture.blob);
-      const text = Option.isSome(copy)
-        ? copy.value
-        : blob?._tag === "Present"
-          ? new TextDecoder().decode(blob.bytes)
+      const blob =
+        copy === undefined
+          ? yield* (yield* Blobs.BlobStore).get(pin.capture.blob)
           : undefined;
+      const text =
+        copy ??
+        (blob?._tag === "Present"
+          ? new TextDecoder().decode(blob.bytes)
+          : undefined);
       sources.push({
         id: pin.sourceId,
         kind: pin.item.kind === "issue" ? "ticket" : "pull-request",
@@ -1793,7 +1769,7 @@ const fetchReviewSnapshot = (ctx: SnapshotContext) =>
           asSnapshot(cycle, snapshotRange(ctx.range, merge)),
       ),
     );
-    return yield* run.pipe(Effect.catchTag("SharedAttemptFailed", () => run));
+    return yield* run.pipe(retrySharedAttempt);
   });
 
 const storedCyclePart = (cycleId: string) =>
@@ -1803,13 +1779,6 @@ const storedCyclePart = (cycleId: string) =>
     if (Option.isSome(split))
       return { key: Computations.computationKey(spec).key, value: split.value };
     if ((yield* selectedLocalScope(cycleId)) !== undefined) return undefined;
-    const priorSplit = { ...spec, opVersion: 3 };
-    const prior = yield* storedOutput(priorSplit, CycleScope);
-    if (Option.isSome(prior))
-      return {
-        key: Computations.computationKey(priorSplit).key,
-        value: prior.value,
-      };
     const legacy = snapshotSpec(cycleId);
     const full = yield* storedOutput(legacy, ScopeSnapshot);
     if (Option.isSome(full))
@@ -1839,7 +1808,7 @@ export const fetchCyclePart = (
         ({ cycle }) => cycle,
       ),
     );
-    return yield* run.pipe(Effect.catchTag("SharedAttemptFailed", () => run));
+    return yield* run.pipe(retrySharedAttempt);
   });
 
 const cycleScopeView = (cycle: CycleScope, baseOid: string) =>
@@ -1971,7 +1940,7 @@ export const snapshotByKey = (key: string) =>
     const record = parts.get(cycleKey);
     if (record?.op !== SCOPE_SNAPSHOT_OP) return undefined;
     const cycle =
-      record.opVersion === 3 || record.opVersion === 4
+      record.opVersion === 4
         ? yield* snapshotOutput(record, CycleScope)
         : record.opVersion === 2
           ? yield* snapshotOutput(record, ScopeSnapshot)
@@ -2026,7 +1995,7 @@ export const selectedExternalContext = (cycleId: string) =>
 
 export const storedSnapshot = (
   cycleId: string,
-  range?: ScopeRange,
+  range: ScopeRange,
   key?: string,
 ) =>
   Effect.gen(function* () {
@@ -2036,10 +2005,7 @@ export const storedSnapshot = (
     if (opening !== undefined) {
       const cycle = yield* storedCyclePart(cycleId);
       if (cycle === undefined) return Option.none();
-      const rangePart =
-        range === undefined
-          ? Option.none<RangeScope>()
-          : yield* storedOutput(rangeScopeSpec(range), RangeScope);
+      const rangePart = yield* storedOutput(rangeScopeSpec(range), RangeScope);
       return Option.some(
         Option.isSome(rangePart)
           ? composeSnapshot(cycle.value, rangePart.value)
@@ -2058,23 +2024,15 @@ export const readScopeText = (
   location: StoreLocation,
   cycleId: string,
   sourceId: string,
-  onFailure?: (cause: string) => void,
 ) => {
   const { bytes, cause } = readScopeBytes(location, cycleId, sourceId);
-  if (bytes !== undefined) return Option.some(bytes.toString("utf8"));
-  onFailure?.(cause);
-  return Option.none<string>();
+  return bytes === undefined ? { cause } : { text: bytes.toString("utf8") };
 };
 
 /** 10.79's cap: a cycle's unmasked scope copy goes after this long with no run in the cycle. */
 export const SCOPE_COPY_IDLE_MS = 7 * 24 * 60 * 60 * 1_000;
 
-/**
- * Deletes a cycle's unmasked scope copy. The idle sweep below calls it today; when cycles gain a
- * close event (10.74, 10.79), its handler calls it too, so the copy goes when the cycle closes or
- * after 7 idle days, whichever comes first. The masked captures are blobs with their own 30-day
- * retention and are not touched.
- */
+/** Masked captures have their own 30-day retention. */
 export const deleteCycleScope = (location: StoreLocation, cycleId: string) =>
   Effect.sync(() => {
     const folder = scopeFolder(location, cycleId);
@@ -2253,26 +2211,25 @@ export const additionTools = (options: {
               input,
             );
             const held = yield* storedOutput(spec, Addition);
-            // The first page of the item; the rest is read by section, never cut silently. A copy
-            // swept after 7 idle days (10.79) is said to be gone, never shown as an empty body.
             const respond = (source: ScopeSource) => {
               if (source.status === "gap")
                 return { text: `Not added: ${source.gap ?? "no text"}` };
-              const held = readScopeText(
+              const { text, cause } = readScopeText(
                 options.location,
                 options.cycleId,
                 source.id,
-                (cause) => logScopeReadFailure(options, source.id, cause),
               );
+              if (cause !== undefined)
+                logScopeReadFailure(options, source.id, cause);
               const sections = source.sections
                 .map((section) => `${section.id} "${section.title}"`)
                 .join(", ");
-              if (Option.isNone(held))
+              if (text === undefined)
                 return {
                   text: `${source.id} is in the cycle's snapshot (fetched ${source.fetchedAt}), but its unmasked copy is gone (swept after 7 days with no run in the cycle, 10.79, or lost). Read its sections with scope_section, which shows the masked capture: ${sections}`,
                   empty: true,
                 };
-              return scopeItemPage(source, held.value, sections);
+              return scopeItemPage(source, text, sections);
             };
             if (Option.isSome(held)) return respond(held.value.source);
             if (options.frozen)
@@ -2439,9 +2396,7 @@ export const logScopeReadFailure = (
       sourceId,
       cause,
     });
-  } catch {
-    // A log write must not fail the read.
-  }
+  } catch {}
 };
 
 const writeScopeLog = (

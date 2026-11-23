@@ -9,6 +9,7 @@ import {
 } from "@neuve/runtime";
 import { Effect } from "effect";
 import {
+  OpenAiAuthError,
   signInProblem,
   signOut,
   status,
@@ -19,12 +20,9 @@ import { isClaudeSubscriptionToken } from "../subscription-token.ts";
 
 export interface PiStatusRuntimeOptions {
   readonly auth?: AuthOptions;
+  readonly localAuthDiagnostics?: boolean;
   readonly environment?: Readonly<Record<string, string | undefined>>;
-  /**
-   * Presence only, without prompting, including Keychain dialogs. Consumers that
-   * seal keys, such as neuve-host, must supply a resolver from their key store;
-   * the accounts or signin-ui track wires that consumer.
-   */
+  /** Presence only, without prompting, including Keychain dialogs. */
   readonly keyPresence?: (
     reference: Extract<CredentialReference, { kind: "environment" | "vault" }>,
   ) => Promise<"absent" | "present" | "subscription-token">;
@@ -96,7 +94,7 @@ export function piStatusRuntime(
       return { runtime: "pi", key: JSON.stringify([reference.kind, name]) };
     },
     probe: (account) =>
-      Effect.promise(async () => {
+      Effect.gen(function* () {
         let signIn: SignInState;
         switch (account.kind) {
           case "chatgpt-subscription": {
@@ -130,7 +128,12 @@ export function piStatusRuntime(
                         account: account.name,
                       },
                     };
-            } catch {
+            } catch (error) {
+              if (
+                options.localAuthDiagnostics &&
+                error instanceof OpenAiAuthError
+              )
+                yield* Effect.logError(error.message);
               signIn = { state: "unknown", reason: "check-failed" };
             }
             break;
@@ -139,18 +142,19 @@ export function piStatusRuntime(
           case "openai-api-key": {
             const reference = account.credential;
             const hint = { kind: "settings", entry: "accounts" } as const;
-            try {
-              const presence = await keyPresence(reference);
-              signIn =
-                presence === "absent"
+            const presence = yield* Effect.tryPromise({
+              try: () => keyPresence(reference),
+              catch: () => undefined,
+            }).pipe(Effect.orElseSucceed(() => undefined));
+            signIn =
+              presence === undefined
+                ? { state: "unknown", reason: "check-failed" }
+                : presence === "absent"
                   ? { state: "not-signed-in", hint }
                   : account.kind === "anthropic-api-key" &&
                       presence === "subscription-token"
                     ? { state: "credential-rejected", reason: "other", hint }
                     : { state: "signed-in", credentialSource: reference.kind };
-            } catch {
-              signIn = { state: "unknown", reason: "check-failed" };
-            }
             break;
           }
           case "claude-subscription":
@@ -163,10 +167,14 @@ export function piStatusRuntime(
       account.kind === "chatgpt-subscription"
         ? Effect.tryPromise({
             try: () => signOut(authOptions(account)),
-            catch: () =>
+            catch: (error) =>
               new RuntimeUnavailable({
                 account: account.name,
                 reason: "start-failed",
+                ...(options.localAuthDiagnostics &&
+                error instanceof OpenAiAuthError
+                  ? { fix: error.message }
+                  : {}),
               }),
           }).pipe(Effect.asVoid)
         : Effect.void,

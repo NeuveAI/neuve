@@ -1644,18 +1644,10 @@ export const sourceText = (ctx: LookupContext, source: ScopeSource) =>
       if (cause !== undefined) logScopeReadFailure(ctx, source.id, cause);
       return { text, disclosure: gap } satisfies SectionText;
     }
-    let cause: string | undefined;
-    const unmasked = readScopeText(
-      ctx.location,
-      ctx.cycleId,
-      source.id,
-      (error) => {
-        cause = error;
-      },
-    );
-    if (Option.isSome(unmasked))
+    const { text, cause } = readScopeText(ctx.location, ctx.cycleId, source.id);
+    if (text !== undefined)
       return {
-        text: unmasked.value,
+        text,
         disclosure: undefined,
       } satisfies SectionText;
     if (source.capture === null) {

@@ -304,3 +304,43 @@ test("a section heading is named as the plan tab shows it", () => {
   const text = "## Exports &amp; reports\n\nA line";
   expect(fileLinesSection(text, 3)).toBe("Exports & reports");
 });
+
+test("plan sections ignore headings in closed and unclosed code fences", () => {
+  const closed = [
+    "## Retry the upload",
+    "   ````sh",
+    "# clear the cache first",
+    "```",
+    "~~~~",
+    "```` still inside",
+    "# still code",
+    " `````   ",
+    "Then upload again.",
+    "## Confirm the upload",
+  ].join("\n");
+  expect(fileLinesSection(closed, 3)).toBe("Retry the upload");
+  expect(fileLinesSection(closed, 7)).toBe("Retry the upload");
+  expect(fileLinesSection(closed, 9)).toBe("Retry the upload");
+  expect(fileLinesSection(closed, 10)).toBe("Confirm the upload");
+
+  const unclosed = "## Retry the upload\n~~~sh\n# clear the cache first";
+  expect(fileLinesSection(unclosed, 3)).toBe("Retry the upload");
+
+  const indented = [
+    "# Plan",
+    "## Retry the upload",
+    "1. Clear the cache:",
+    "",
+    "    ```sh",
+    "    # clear the cache first",
+    "    rm -rf cache",
+    "    ```",
+    "",
+    "2. Upload again.",
+  ].join("\n");
+  expect(fileLinesSection(indented, 10)).toBe("Retry the upload");
+
+  const nonFences = "```bad`info\n## Retry\n    ~~\n## Confirm";
+  expect(fileLinesSection(nonFences, 2)).toBe("Retry");
+  expect(fileLinesSection(nonFences, 4)).toBe("Confirm");
+});
