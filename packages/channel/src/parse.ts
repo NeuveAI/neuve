@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { EffortSchema } from "./effort";
 import type { Request } from "./protocol";
-import { reservedReviewRequestId } from "./protocol";
+import { reservedBuildRequestId, reservedReviewRequestId } from "./protocol";
 
 export { EffortSchema };
 
@@ -14,6 +14,8 @@ const images = z.array(z.strictObject({ mimeType: z.string(), data: z.string() }
 const files = z.array(z.strictObject({ name: z.string(), text: z.string() })).optional();
 const requestId = z.string().min(1).max(200).refine(value => !reservedReviewRequestId(value), {
 	message: "The neuve.review: request-ID namespace is reserved for the host",
+}).refine(value => !reservedBuildRequestId(value), {
+	message: "The neuve.build: request-ID namespace is reserved for the host",
 }).optional();
 /**
  * The author a client claims, which the host replaces with the participant it verified. Defaulted,
@@ -134,6 +136,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 	z.strictObject({ op: z.literal("edit"), chat, author, entry: id, text: z.string() }),
 	z.strictObject({ op: z.literal("stop"), chat, author }),
 	z.strictObject({ op: z.literal("kill"), author }),
+	z.strictObject({ op: z.literal("build-stop"), author, build: z.string().regex(/^\d+:[a-f0-9]{64}$/) }),
 	z.strictObject({ op: z.literal("desktop"), author, enabled: z.boolean() }),
 	z.strictObject({ op: z.literal("share"), author, shared: z.boolean() }),
 	z.strictObject({ op: z.literal("rename"), author, name: z.string() }),
@@ -160,6 +163,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 		stops: z.boolean().optional(),
 		plans: z.boolean().optional(),
 		planComments: z.boolean().optional(),
+		builds: z.boolean().optional(),
 	}),
 	ApprovalAnswerSchema,
 ]);

@@ -5,13 +5,16 @@ import type { ReviewCard } from "./review-cards";
 
 import { EffortSchema } from "./effort";
 import { ApprovalAnswerSchema, ChatModeSchema, ModelRefSchema } from "./parse";
-import type { ApprovalRequest, Event, Frame, Plan, PlanComment } from "./protocol";
+import type { ApprovalRequest, Build, Event, Frame, Plan, PlanComment, WorkMessage } from "./protocol";
 
 const id = z.int().nonnegative();
 const text = z.string();
 const images = z.array(z.object({ mimeType: text, data: text })).optional();
 const files = z.array(z.object({ name: text, text })).optional();
-const system = z.object({ kind: z.literal("neuve:review:terminal"), review: text }).optional();
+const system = z.discriminatedUnion("kind", [
+	z.object({ kind: z.literal("neuve:review:terminal"), review: text }),
+	z.object({ kind: z.literal("neuve:build:brief"), build: text }),
+]).optional();
 const queued = z.object({
 	submission: id,
 	author: text,
@@ -156,10 +159,38 @@ export const PlanCommentSchema = z.object({
 }) satisfies z.ZodType<PlanComment>;
 // End of comments on a plan.
 
+export const BuildSchema = z.object({
+	id: text,
+	chat: id,
+	plan: z.object({ id: text, hash: text, title: text, call: text }),
+	approved: z.object({ by: text, at: z.number() }),
+	state: z.discriminatedUnion("kind", [
+		z.object({ kind: z.literal("starting") }),
+		z.object({ kind: z.literal("started") }),
+		z.object({ kind: z.literal("delivered"), to: text }),
+		z.object({ kind: z.literal("unavailable"), reason: z.enum(["shared", "hosted"]) }),
+		z.object({ kind: z.literal("paused"), reason: z.literal("shared") }),
+		z.object({ kind: z.literal("stopped"), by: text, at: z.number() }),
+		z.object({ kind: z.literal("failed"), detail: text }),
+	]),
+	agents: z.array(z.object({
+		role: z.enum(["implementer", "reviewer"]),
+		part: text.optional(),
+		chat: id,
+		by: id.optional(),
+		started: z.number(),
+		state: z.enum(["running", "waiting", "done", "failed", "stopped"]),
+		caption: text.optional(),
+	})),
+}) satisfies z.ZodType<Build>;
+
+export const WorkMessageSchema = z.object({ build: text, from: id, to: id, at: z.number(), text }) satisfies z.ZodType<WorkMessage>;
+
 export const EventSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("review-cards"), ...base, cards: z.record(text, ReviewCardSchema) }),
 	z.object({ kind: z.literal("plans"), ...base, plans: z.array(PlanSchema) }),
 	z.object({ kind: z.literal("plan-comments"), ...base, comments: z.array(PlanCommentSchema) }),
+	z.object({ kind: z.literal("builds"), ...base, builds: z.array(BuildSchema), messages: z.array(WorkMessageSchema) }),
 	z.object({ kind: z.literal("neuve:review:new-commits"), ...base, entry: id, at: z.number(), review: text, branch: text, reviewedHead: text, head: text, label: text }),
 	z.object({
 		kind: z.literal("queue"),

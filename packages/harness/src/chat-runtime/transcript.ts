@@ -31,17 +31,16 @@ const PLAN_COMMENT_TOOL = "plan_comment_answer";
 export const ATTENDED_SECTION = "neuve.chat.request-attended";
 const planningRequest = Symbol.for("neuve.chat.plan-request");
 /**
- * The only chat tools Neuve runs for a runtime with its own sandbox. Neuve
- * runs every chat tool outside that sandbox, so a tool is listed only when it cannot widen what the
- * runtime may write or reach. It can ask the person a question or write a plan to a host-chosen
- * file in host storage, or answer in one of this chat's plan comment threads. The answer only
- * updates session state. Any other tool (a lane, a subagent on any model, a review, Linear, the
- * browser, the desktop, other channels, a new tool) is withheld until someone classifies it.
+ * Neuve runs these tools outside the runtime sandbox. Questions and comment answers stay in the
+ * chat, and plans use a host-chosen file. The host chooses build agent worktrees in owner-only
+ * channels and limits agent messages to the same build.
  */
 const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
   "question",
   PLAN_TOOL,
   PLAN_COMMENT_TOOL,
+  "agent_start",
+  "agent_message",
 ]);
 
 export type Log = (

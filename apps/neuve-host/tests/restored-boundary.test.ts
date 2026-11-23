@@ -39,13 +39,13 @@ test("complete browser windows and original team, directory, provider, move and 
 });
 
 // Refusing the new tab kind would leave the host listing the window's previous layout.
-test("the host accepts and lists a window after it opens a Plan tab", () => {
+test("the host lists Plan and Work log tabs from a window update", () => {
 	const socket = { send() {} };
 	const chat = { id: "chat", name: "coding", type: "chat", active: true } as const;
 	const before: WindowState = { channel: { id: "abcd", name: "coding" }, focused: true, tabs: [chat] };
 	const after: WindowState = {
 		...before,
-		tabs: [{ ...chat, active: false }, { id: "draft-tab", name: "Plan", type: "plan", active: true }],
+		tabs: [{ ...chat, active: false }, { id: "draft-tab", name: "Plan", type: "plan", active: false }, { id: "work", name: "Work log", type: "work", active: true }],
 	};
 	const publish = (value: WindowState) => {
 		const update = parseHostEnvelope(JSON.stringify({ id: 7, op: "window", value }), "owner");

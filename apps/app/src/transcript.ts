@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type {
 	ApprovalRequest,
+	Build,
+	BuildNotice,
 	ChatMode,
 	Image,
 	Plan,
@@ -10,13 +12,14 @@ import type {
 	QueuedMessage,
 	Reactions,
 	TextFile,
+	WorkMessage,
 } from "@ace/channel/protocol";
 import type { ReviewCard } from "@ace/channel/review-cards";
 import { DISCONNECTED } from "@ace/host/gateway-client";
 import { CHANNEL_CLOSED, type ChannelInfo, type Event } from "@ace/host/protocol";
 
 import { host, onOpen } from "./host";
-import { reviewCommits, reviewNotice } from "./review-card";
+import { reviewCommits } from "./review-card";
 
 export type Tool = {
 	call: string;
@@ -46,8 +49,8 @@ export type Item =
 		images?: Image[];
 		files?: TextFile[];
 		invoked: boolean;
-		/** The host's mark on its review wake; such a message is no person's. */
-		system?: ReviewNotice;
+		/** The host's mark on its review wake or on its brief to a build's agent; such a message is no person's. */
+		system?: ReviewNotice | BuildNotice;
 		deleted?: boolean;
 		/** When its author last edited it, in ms. */
 		edited?: number;
@@ -106,6 +109,10 @@ export type Transcript = {
 	approvals: ApprovalRequest[];
 	/** The comments on the chat's plans, oldest first, as the host last sent them. */
 	planComments: PlanComment[];
+	/** The channel's builds, oldest approval first, as the host last sent them. */
+	builds: Build[];
+	/** What the builds' agents said to each other, in the order said. */
+	messages: WorkMessage[];
 	/** Every submission that sent plan comments, seen while watched. */
 	commentSends: number[];
 	/** When each person last said they were typing, in ms; their message ends it. */
@@ -131,6 +138,8 @@ const EMPTY: Transcript = {
 	plans: [],
 	approvals: [],
 	planComments: [],
+	builds: [],
+	messages: [],
 	commentSends: [],
 	typing: {},
 	draft: "",
@@ -156,6 +165,8 @@ export function apply(state: Transcript, event: Event): Transcript {
 			}
 			return { ...state, planComments: event.comments, commentSends: [...sends] };
 		}
+		case "builds":
+			return { ...state, builds: event.builds, messages: event.messages };
 		case "neuve:review:new-commits":
 			return { ...state, items: [...state.items, reviewCommits(event)] };
 		case "queue": {
@@ -360,7 +371,7 @@ function withdraw(items: Item[], messages: QueuedMessage[]): Item[] {
 
 function pick(event: Extract<Event, { kind: "message" }>) {
 	const { entry, at, author, text, images, files, invoked, deleted, edited } = event;
-	const system = reviewNotice(event);
+	const { system } = event;
 	return {
 		entry,
 		at,
@@ -394,6 +405,12 @@ export function useTyping(typing: Record<string, number>): string[] {
 
 const RECOVERIES = 3;
 const STABLE = 60_000;
+
+/**
+ * Watches open per channel. `release` drops every watch this client has on a channel, so the work
+ * log's watch of an agent's chat releases only when the channel's own chat is not watched too.
+ */
+const watching = new Map<string, number>();
 
 /**
  * Watches one chat of a channel. Owns the watch: re-watches after the host reconnects, the watch
@@ -437,6 +454,7 @@ export function useTranscript(
 	}
 	useEffect(() => {
 		if (!channel) return;
+		watching.set(channel, (watching.get(channel) ?? 0) + 1);
 		let active = true;
 		let generation = 0;
 		let recoveries = 0;
@@ -476,6 +494,7 @@ export function useTranscript(
 				plans: true,
 				approvals: true,
 				planComments: true,
+				builds: true,
 				...(chat === undefined ? {} : { chat }),
 			}, {
 				event(event) {
@@ -518,6 +537,9 @@ export function useTranscript(
 		return () => {
 			active = false;
 			off();
+			const left = watching.get(channel)! - 1;
+			if (left) return void watching.set(channel, left);
+			watching.delete(channel);
 			host.request({ op: "release", channel }).catch(() => {});
 		};
 	}, [channel, chat, attempt]);

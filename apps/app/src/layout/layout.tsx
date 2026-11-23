@@ -39,6 +39,7 @@ import {
 import {
 	IconChevronDown,
 	IconFileDiff,
+	IconFork,
 	IconListTree,
 	IconMessage,
 	IconMonitor,
@@ -86,6 +87,8 @@ type Item = {
 	kind: Kind;
 	chat: boolean;
 	icon: Icon;
+	/** Something new arrived since it was last shown. */
+	fresh?: boolean;
 };
 
 /** Renders a tab's content; `update` merges into the tab's persisted content. */
@@ -117,6 +120,13 @@ type Props = {
 	plan?: string;
 	/** Receives the function that shows the chat's Plan tab at a plan, opening one if needed. */
 	planOpener?: { current?: (plan?: string) => void };
+	/**
+	 * How many agents and messages the channel's work log holds; absent while the channel has no
+	 * build, when Work log is not offered. The first agent opens a Work log tab behind the chat, once.
+	 */
+	work?: number;
+	/** Receives the function that shows the Work log tab at an agent's chat, opening one if needed. */
+	workOpener?: { current?: (chat?: number) => void };
 	/** Running shells no client shows; each without a tab here opens as a background Terminal tab. */
 	shells?: { terminal: string; chat?: number }[];
 	/** Whether this host opens the channel's shells; only then is Terminal offered. */
@@ -126,8 +136,7 @@ type Props = {
 const MIN = 350;
 const CHAT_MIN = 450;
 // The old app also offered Browse and Browser Preview; they return when their backends do.
-const CHOICES: Choice[] = ["chat", "plan", "diff", "terminal", "review"];
-const SHELLESS: Choice[] = ["chat", "plan", "diff", "review"];
+const CHOICES: Choice[] = ["chat", "plan", "work", "diff", "terminal", "review"];
 const ICONS: Record<Kind, Icon> = {
 	blank: IconSplitView,
 	chat: IconMessage,
@@ -136,6 +145,7 @@ const ICONS: Record<Kind, Icon> = {
 	terminal: IconTerminal,
 	live: IconMonitor,
 	review: IconListTree,
+	work: IconFork,
 };
 const TITLES: Record<Kind, string> = {
 	blank: "Blank",
@@ -145,6 +155,7 @@ const TITLES: Record<Kind, string> = {
 	terminal: "Terminal",
 	live: "Live",
 	review: "Review",
+	work: "Work log",
 };
 
 function minimum(tab?: Split.Tab) {
@@ -551,6 +562,7 @@ function Tab({
 				/>
 			</span>
 			<span className="min-w-0 flex-1 truncate">{item.name}</span>
+			{item.fresh && <span role="img" aria-label="New" className="size-2 shrink-0 rounded-full bg-primary" />}
 		</div>
 	);
 
@@ -826,13 +838,27 @@ function Pane(props: PaneProps) {
 }
 
 function useLayout(
-	{ id, name, icon = ICONS.chat, chat, changed, onTabClose, opener, plan, planOpener, shells }: Props,
+	{
+		id,
+		name,
+		icon = ICONS.chat,
+		chat,
+		changed,
+		onTabClose,
+		opener,
+		plan,
+		planOpener,
+		shells,
+		work,
+		workOpener,
+	}: Props,
 ) {
 	const [data] = useState(() => read(id));
 	const [api] = useState(() => Split.create(data.state, { min: minimum }));
 	const [meta, setMeta] = useState<Meta>(data.meta);
 	const [diff, setDiff] = useState(data.diff);
 	const [planned, setPlanned] = useState(data.plans);
+	const [seen, setSeen] = useState(data.work);
 	const state = useSyncExternalStore(api.subscribe, api.get, api.get);
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
 	const focused = useSyncExternalStore(onFocus, isFocused);
@@ -844,14 +870,18 @@ function useLayout(
 	const fit = { width: box.width, height: box.height, min: minimum } satisfies Split.Fit;
 	const dnd = useDnd(api, flat, fit);
 	const items = list(view.tabs, name, icon, meta);
+	const shown = view.panes.some((pane) => pane.active && meta[pane.active]?.type === "work");
+	if (!shown && work !== undefined && work > (seen ?? 0)) {
+		for (const item of items.values()) if (item.kind === "work") item.fresh = true;
+	}
 	const ghost = dnd.drag;
 	const drag = ghost
 		? items.get(ghost.uid) || item(ghost.uid, name, icon, meta[ghost.uid])
 		: undefined;
 
 	useEffect(() => {
-		write(id, state, meta, diff, planned);
-	}, [id, state, meta, diff, planned]);
+		write(id, state, meta, diff, planned, seen);
+	}, [id, state, meta, diff, planned, seen]);
 
 	const snapshot = useEffectEvent((): WindowState => {
 		const active = new Set(view.panes.map((pane) => pane.active));
@@ -866,7 +896,7 @@ function useLayout(
 			focused,
 		};
 	});
-	const persist = useEffectEvent(() => write(id, api.get(), meta, diff, planned));
+	const persist = useEffectEvent(() => write(id, api.get(), meta, diff, planned, seen));
 	const command = useEffectEvent((request: TabRename) => {
 		if (request.expires <= Date.now()) throw new Error("Tab rename expired");
 		if (request.channel !== id) throw new Error("This window is showing another channel");
@@ -954,6 +984,48 @@ function useLayout(
 		};
 		return () => void (planOpener.current = undefined);
 	}, [planOpener]);
+
+	// The work log's tab opens behind the chat once, when the channel's first agent starts; a
+	// closed one stays closed. Showing it marks everything in it seen.
+	useEffect(() => {
+		if (!work) return;
+		if (shown) {
+			if (seen !== work) setSeen(work);
+			return;
+		}
+		if (seen !== undefined) return;
+		setSeen(0);
+		if (Object.values(meta).some((value) => value.type === "work")) return;
+		const uid = `tab-${api.get().seq + 1}`;
+		const pane = Split.host(api.get(), CHAT)?.uid;
+		if (!api.open({ tab: uid, to: { pane }, background: true })) return;
+		setMeta((meta) => ({ ...meta, [uid]: { type: "work" } }));
+	}, [api, work, seen, shown, meta]);
+
+	const toWork = useEffectEvent((target?: number) => {
+		const at: Content = { type: "work", ...(target ? { chat: target } : undefined) };
+		const open = api.get().tabs.find((uid) => meta[uid]?.type === "work");
+		if (open) {
+			setMeta((meta) => {
+				const name = meta[open]?.name;
+				return { ...meta, [open]: { ...at, ...(name ? { name } : undefined) } };
+			});
+			return activate(open);
+		}
+		const uid = `tab-${api.get().seq + 1}`;
+		const pane = Split.host(api.get(), CHAT)?.uid;
+		const side = !flat && Split.can(api.get(), { ...fit, open: { to: { pane, side: "right" } } });
+		const to: Split.Target | undefined = side ? { pane, side: "right" } : flat ? undefined : { pane };
+		if (!api.open({ tab: uid, to, ...(side ? { fit } : {}) })) return;
+		setMeta((meta) => ({ ...meta, [uid]: at }));
+		requestAnimationFrame(() => focus(uid));
+	});
+
+	useLayoutEffect(() => {
+		if (!workOpener) return;
+		workOpener.current = toWork;
+		return () => void (workOpener.current = undefined);
+	}, [workOpener]);
 
 	// Tabs are kept per browser window, so a shell whose tab was lost would otherwise run unseen.
 	const adopt = useEffectEvent((shells: { terminal: string; chat?: number }[]) => {
@@ -1076,8 +1148,9 @@ function useLayout(
 	}
 
 	function add(pane: Split.Pane, choice: Choice | "blank", side?: "right" | "bottom") {
-		// There is one Chat tab per chat, so choosing Chat shows it rather than opening another.
+		// There is one Chat tab per chat and one Work log per channel, so choosing either shows it.
 		if (choice === "chat") return activate(CHAT);
+		if (choice === "work") return toWork();
 		const uid = `tab-${api.get().seq + 1}`;
 		const to: Split.Target | undefined = side
 			? { pane: pane.uid, side }
@@ -1124,6 +1197,10 @@ function useLayout(
 		if (choice === "chat") {
 			close(uid);
 			return activate(CHAT);
+		}
+		if (choice === "work" && api.get().tabs.some((tab) => meta[tab]?.type === "work")) {
+			close(uid);
+			return toWork();
 		}
 		setMeta((meta) => ({ ...meta, [uid]: content(choice, chat) }));
 		requestAnimationFrame(() => focus(uid));
@@ -1231,7 +1308,9 @@ export function Layout(props: Props) {
 			onFork: (side: "right" | "bottom") => add(pane, "blank", side),
 			can: (side: "right" | "bottom") => allow(pane, side),
 			onSelect: (uid: string) => choose(uid, pane),
-			choices: props.terminals ? CHOICES : SHELLESS,
+			choices: CHOICES.filter((choice) =>
+				(choice !== "terminal" || props.terminals) && (choice !== "work" || props.work !== undefined)
+			),
 			onAdd: (choice: Choice) => add(pane, choice),
 			onClose: close,
 			onRename: rename,

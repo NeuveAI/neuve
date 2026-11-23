@@ -73,7 +73,7 @@ const USAGE = `ace — channels on this host
   ace ask <channel> [--chat <id>] [--model <provider/id>] [--effort <level>] [--detach] <text…>
                                                 exits 1 if the run fails or is stopped; --effort
                                                  is one the model lists, kept for the chat's later runs
-  ace watch <channel> [--chat <id>] [--plans]
+  ace watch <channel> [--chat <id>] [--plans] [--builds]
   ace answer <channel> [--chat <id>] <text…>     answer the chat's waiting question in writing
   ace plan <channel> [--chat <id>] <plan> [--json]
   ace chat <channel> [--model <provider/id>]     open another chat
@@ -128,6 +128,7 @@ const OPTIONS = {
 	port: { type: "string" },
 	all: { type: "boolean" },
 	plans: { type: "boolean" },
+	builds: { type: "boolean" },
 	team: { type: "boolean" },
 	detach: { type: "boolean" },
 	yes: { type: "boolean" },
@@ -223,6 +224,15 @@ function render(event: Event, info: ChannelInfo) {
 		case "plans":
 			for (const plan of event.plans) console.log(`${tag}${plan.state} plan ${plan.id}  ${plan.title}`);
 			return;
+		case "builds":
+			for (const { plan, state } of event.builds) {
+				const detail = state.kind === "failed" ? state.detail
+					: state.kind === "unavailable" ? state.reason === "shared"
+						? "The channel is shared." : "The channel is hosted."
+					: undefined;
+				console.log(`${tag}${plan.title} (${state.kind})${detail ? ` ${detail}` : ""}`);
+			}
+			return;
 		case "plan-comments":
 			for (const comment of event.comments) {
 				console.log(`${tag}${comment.author}: ${comment.text}`);
@@ -246,7 +256,7 @@ async function watch(session: Session, replay = true): Promise<{ ended: Promise<
 	const info = await session.request<ChannelInfo>({ op: "info" });
 	let live = false;
 	const ended = Promise.withResolvers<void>();
-	await session.request({ op: "watch", chat: chat(), stops: true, ...(replay && flags.plans ? { plans: true, planComments: true } : {}) }, {
+	await session.request({ op: "watch", chat: chat(), stops: true, ...(replay && flags.plans ? { plans: true, planComments: true } : {}), ...(flags.builds ? { builds: true } : {}) }, {
 		event(event) {
 			if (event.kind === "live") return void (live = true);
 			if (live || replay) render(event, info);

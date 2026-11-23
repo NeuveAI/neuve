@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { clearCache, layout, prepare } from "@chenglou/pretext";
 
 import {
+	buildCard as buildCardBlock,
 	call as callBlock,
 	code as codeBlock,
 	commit as commitBlock,
@@ -224,6 +225,8 @@ function key(
 			return joinKey("review", mode, chunk.call, JSON.stringify(chunk.card));
 		case "plan-card":
 			return joinKey("plan", mode, JSON.stringify(chunk.card));
+		case "build-card":
+			return joinKey("build", mode, JSON.stringify(chunk.card));
 		case "review-new-commits":
 			return joinKey("reviewnc", mode, chunk.review, chunk.branch, chunk.head, chunk.label);
 		case "review-told":
@@ -331,6 +334,8 @@ function build(
 			return [reviewCardBlock(chunk.call, chunk.card)];
 		case "plan-card":
 			return [planCardBlock(chunk.card)];
+		case "build-card":
+			return [buildCardBlock(chunk.card)];
 		case "review-new-commits":
 			return [reviewNewCommitsBlock(chunk.review, chunk.branch, chunk.head, chunk.label)];
 		case "review-told":

@@ -2,12 +2,11 @@ import * as catalog from "./catalog";
 import { nativeReview, startReviewFeed } from "./native-review";
 import {NativeSourceRequestSchema, NativeAuthorityReceiptSchema, type NativeSourceRequest, type NativeAuthorityReceipt} from "./native-source-protocol";
 import * as privateLog from "./private-log";
-import {lanes as externalLanes, isPlaced} from "@ace/channel/external-lanes";
-import {join as joinPath} from "node:path";
-const catalogLanes = (id: string) => joinPath(config.lanes, id);
+import {buildWorktree, lanes as externalLanes, isPlaced} from "@ace/channel/external-lanes";
+import { SharedWork } from "@neuve/records-core/shared-work";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
@@ -134,7 +133,22 @@ export async function runWorker(setup: WorkerSetup): Promise<void> {
 
 export async function openChannel(options: Options, stateDirectory: string): Promise<Channel> {
 	const setup = runtimeHooks().worker;
-	const planOptions = { ...options, planFileAccess, planFiles: planFiles(join(stateDirectory, "plans")) };
+	const plans = resolve(stateDirectory, "plans");
+	const place = config.lanes && {
+		name: options.prefix || options.name, project: options.project, lanes: join(config.lanes, options.id), env: options.env,
+	};
+	const starts = new SharedWork<void>();
+	const build: Options["build"] = place ? {
+		async share(key, run) {
+			const { outcome } = await starts.run({
+				scope: "build", key, run: async () => ({ kind: "succeeded", value: await run() }),
+			});
+			if (outcome.kind === "failed") throw outcome.error;
+		},
+		worktree: (name, source) => buildWorktree(place, name, BACKGROUND_CONTEXT, source),
+		planPath: file => join(plans, file),
+	} : undefined;
+	const planOptions = { ...options, ...(build ? { build } : {}), planFileAccess, planFiles: planFiles(plans) };
 	if (!setup) return Channel.open({
 		...planOptions,
 		extension: { ...options.extension, extensions: [...(options.extension?.extensions ?? []), planExplore] },
@@ -151,7 +165,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		const extension = {
 			environment: (cwd: string) => isPlaced(cwd, options.project),
 			...operations.extension,
-			extensions: [...operations.extension.extensions, externalLanes({name: options.prefix || options.name, project: options.project, lanes: catalogLanes(options.id), env: options.env}), ...(additional?.extensions ?? []), planExplore],
+			extensions: [...operations.extension.extensions, ...(place ? [externalLanes(place)] : []), ...(additional?.extensions ?? []), planExplore],
 			attach: async (harness: Harness, admission: WorkerAdmission) => {
 				await operations.extension.attach?.(harness, admission);
 				await additional?.attach?.(harness, admission);

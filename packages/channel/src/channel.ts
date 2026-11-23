@@ -52,6 +52,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 
 import { type Directory, messaging, subagent } from "./agents";
 import { type Browser, browser } from "./browser";
+import { Builds, BuildsDoc, buildTools, isWorkMessageSubmission, workLog, type BuildHost, type BuildsState } from "./build";
 import {
 	caption,
 	CaptionsDoc,
@@ -91,6 +92,7 @@ import { progress } from "./progress";
 import { answer, PersonWaits, Questions } from "./questions";
 import type {
 	ApprovalRequestsState,
+	BuildNotice,
 	ChannelInfo,
 	Chat,
 	ChatId,
@@ -108,7 +110,7 @@ import type {
 	Said,
 	Usage,
 } from "./protocol";
-import { MENTION, reservedReviewRequestId, ReviewFeedDefinition } from "./protocol";
+import { buildId, MENTION, reservedBuildRequestId, reservedReviewRequestId, ReviewFeedDefinition } from "./protocol";
 import { queue, withdrawn } from "./queue";
 import * as room from "./room";
 import { exportSeed, importSeed, type Seed } from "./seed";
@@ -167,6 +169,7 @@ export type Options = {
 	planFileAccess?(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv;
 	/** The channel's Markdown files, in storage the host owns outside the project. */
 	planFiles?: PlanFiles;
+	build?: BuildHost;
 	desktop?: Desktop;
 	browser?: Browser;
 	images?: Images;
@@ -220,6 +223,7 @@ export class Channel {
 	#log: Log;
 	#metadata: Metadata;
 	#plans: Plans;
+	#builds: Builds;
 	#planState?: Readonly<PlansState>;
 	#planPlacements = new Map<ConversationId, PlanCommentPlacements>();
 	#pendingPlanDeliveries: PlanDelivery[][] = [];
@@ -258,6 +262,15 @@ export class Channel {
 		this.#metadata = value;
 		this.#settings = settings;
 		this.#plans = plans;
+		this.#builds = new Builds(harness, log, {
+			shared: () => this.#settings.shared,
+			canInvoke: (author, shared) => this.#canInvoke(author, shared),
+			admit: (chat, action) => this.#admitted(chat, action),
+			submitInput: this.submitInput.bind(this),
+			stop: async (chat, by, at, requestId) =>
+				this.#stopChat(await this.#conversation(chat), requestId ? { by, at, requestId } : undefined, true),
+			host: options.build,
+		});
 		this.#approvals = approvals;
 	}
 
@@ -299,11 +312,13 @@ export class Channel {
 		if (options.images) registry.install(images(options.images));
 		if (options.tabs) registry.install(tabs(options.tabs));
 		registry.install(lanes({ ...options, name: options.prefix || options.name }));
-		registry.install(subagent((...args) => channel.submitInput(...args), questions.extension));
+		registry.install(subagent((handle, input, scope) => channel.submitInput(handle, input, scope), questions.extension));
 		registry.install(metadata((value) => channel.#changed(value), options.claim));
 		registry.install(messaging(options.directory));
 		registry.install(
-			defineExtension({ name: "ace-channel", sections: [room.section(options), instructions] }),
+			defineExtension({ name: "ace-channel", sections: [
+				room.section(options, chat => channel.#builds.agent(chat)?.role), instructions,
+			] }),
 		);
 		registry.install(approvals.extension);
 		registry.install(planModeExtension(planning));
@@ -311,7 +326,8 @@ export class Channel {
 		const plan = plans.extension(planning, (chat, work) => channel.#admitted(chat, work), log);
 		if (plan) registry.install(plan);
 		registry.install(planCommentAnswers(planning));
-		install(registry, options.extension, planning, !!options.planFileAccess, log);
+		registry.install(buildTools(() => channel.#builds));
+		install(registry, options.extension, planning, !!options.planFileAccess, log, (chat, scope) => channel.#builds.paused(chat, scope));
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider)),
 			registry,
@@ -372,16 +388,33 @@ export class Channel {
 		// Scheduling has not resumed and no caller has this channel yet, so the initial snapshot
 		// and subscription cannot miss a run transition. LiveDoc forks start empty in pi.
 		channel.#planState = await recoverPlanCommentSends(harness, await harness.snapshot(PlansDoc, context), context);
-		await channel.#snapshotBusy();
+		channel.#builds.observe(await harness.snapshot(BuildsDoc, context));
+		await channel.#restoreRunsAndHandoffs(handoffs);
 		channel.#unsubscribe = harness.subscribeCommits(({ changes }) => {
 			const commentMessages = channel.#observePlanCommentSends(changes);
+			const unannouncedEntries = new Set<EntryId>();
+			for (const change of changes) {
+				if (change.type !== "submission") continue;
+				const submission = change.value;
+				const workMessage = isWorkMessageSubmission(submission);
+				if (workMessage) handoffs.buildSteer(submission);
+				if (submission.entry !== undefined && (workMessage || channel.#builds.isBrief(submission))) {
+					unannouncedEntries.add(submission.entry);
+				}
+			}
 			const ended: [ConversationId, readonly SubmissionId[]][] = [];
 			for (const change of changes) {
 				if (change.type === "entry" && change.value.model?.[0]?.role === "assistant") {
 					channel.#caption(change.value.conversationId);
 				}
-				if (change.type === "entry") channel.#said(change.value, commentMessages?.has(change.value.id));
+				if (change.type === "entry" && !unannouncedEntries.has(change.value.id)) {
+					channel.#said(change.value, commentMessages?.has(change.value.id));
+				}
 				if (change.type !== "document") continue;
+				if (change.record.kind === BuildsDoc.definition.kind) {
+					channel.#builds.observe(change.value as BuildsState | null);
+					continue;
+				}
 				// Commit order, not request completion order, decides the state clients see.
 				if (change.record.kind === SettingsDoc.definition.kind) {
 					channel.#settings = change.value as Settings;
@@ -415,8 +448,12 @@ export class Channel {
 				if (scope.kind !== "conversation") continue;
 				const { run } = (change.value || {}) as LiveState;
 				const inputs = channel.#runs.get(scope.conversationId);
-				if (run) channel.#runs.set(scope.conversationId, run.inputs);
-				else if (inputs) {
+				if (run) {
+					channel.#runs.set(scope.conversationId, run.inputs);
+					if (inputs?.[0] !== run.inputs[0]) {
+						void channel.#builds.state(scope.conversationId, "running", run.inputs[0]);
+					}
+				} else if (inputs) {
 					channel.#runs.delete(scope.conversationId);
 					channel.#caption(scope.conversationId);
 					ended.push([scope.conversationId, inputs]);
@@ -454,7 +491,11 @@ export class Channel {
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
 		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
-		if (options.resume !== false) harness.resume();
+		if (options.resume !== false) {
+			await channel.#builds.finishStops();
+			harness.resume();
+			void channel.#builds.resume();
+		}
 		log("info", "channel.open", { name: value.name, project: options.project });
 		return channel;
 		} catch (error) {
@@ -556,30 +597,43 @@ export class Channel {
 					const { id } = await this.#conversation(request.chat);
 					return this.#plans.read(this.#harness, id, request.plan, context);
 				});
-			case "plan-approve":
-				return this.#admitted(request.chat, async () => {
+			case "plan-approve": {
+				const { id, plan, state } = await this.#admitted(request.chat, async () => {
 					this.#author(request.author);
 					if (room.isAgent(request.author)) throw new Error("Only a person can approve a plan.");
 					await this.#mayInvoke(request.author);
 					const { id } = await this.#conversation(request.chat);
-					return this.#plans.approve(this.#harness, id, request.plan, request.hash, request.author, context);
+					let admission: ReturnType<Builds["approve"]> | undefined;
+					const plan = await this.#plans.approve(this.#harness, id, request.plan, request.hash, request.author, context,
+						async (tx, stored, approved) => {
+							// Pi publishes the previous settings commit before running this transaction.
+							admission = this.#builds.approve(tx, id, stored.plan.hash, { stored, approved });
+							await admission;
+						});
+					const state = await (admission ?? this.#harness.commit(tx => this.#builds.approve(tx, id, plan.hash), context));
+					return { id, plan, state };
 				});
+				const build = buildId(id, plan.hash);
+				if (state) this.#log("info", "build.recorded", { build, state });
+				if (this.#options.resume !== false) void this.#builds.resume([build]);
+				return plan;
+			}
 			case "plan-comment":
 			case "plan-comment-reply":
 			case "plan-comment-edit":
 			case "plan-comment-remove":
 			case "plan-comments-send":
 				return this.#admitted(request.chat, async settled => {
+					const conversation = await this.#writableChat(request.chat);
 					this.#author(request.author);
 					if (room.isAgent(request.author)) throw new Error("Only a person can manage plan comments.");
 					await this.#flushPlanDeliveries();
 					if (request.op === "plan-comments-send") {
 						this.#clientRequestId(request.requestId);
 						await this.#mayInvoke(request.author);
-						const conversation = await this.#conversation(request.chat);
 						return this.#recordPlanCommentSend(conversation, request, settled);
 					}
-					const { id } = await this.#conversation(request.chat);
+					const { id } = conversation;
 					return request.op === "plan-comment"
 						? keepPlanComment(this.#plans, this.#harness, id, request, context)
 						: changePlanComment(this.#harness, id, request, this.#planPlacementCache(id), context);
@@ -591,36 +645,29 @@ export class Channel {
 				const reaction = { from: request.author, emoji: request.emoji };
 				return react(this.#harness, id, entry, reaction, !!request.remove, context);
 			}
-			case "delete": {
-				this.#author(request.author);
-				const { id } = await this.#conversation(request.chat);
-				const entry = request.entry as EntryId;
-				await this.#mayChangeMessage(id, entry);
-				return remove(this.#harness, id, entry, request.author, context);
-			}
+			case "delete":
 			case "edit": {
 				this.#author(request.author);
-				const { id } = await this.#conversation(request.chat);
+				const { id } = await this.#writableChat(request.chat);
 				const entry = request.entry as EntryId;
 				await this.#mayChangeMessage(id, entry);
-				return edit(this.#harness, id, entry, request.author, request.text, context);
+				return request.op === "edit"
+					? edit(this.#harness, id, entry, request.author, request.text, context)
+					: remove(this.#harness, id, entry, request.author, context);
 			}
 			case "stop": {
 				this.#author(request.author);
 				// Whoever can't start a run here can't end the owner's either.
 				await this.#mayInvoke(request.author);
 				const conversation = await this.#conversation(request.chat);
-				const running = this.#runs.has(conversation.id);
-				await this.#approvals.stop(conversation.id);
-				await conversation.abort(context);
-				await this.#flushPlanDeliveries();
-				if (!running) return;
-				await conversation.submit(
-					{ type: "write", entry: room.stop(request.author, Date.now()) },
-					context,
-				);
-				return;
+				return this.#stopChat(conversation, this.#runs.has(conversation.id)
+					? { by: request.author, at: Date.now() } : undefined);
 			}
+			case "build-stop":
+				this.#author(request.author);
+				if (room.isAgent(request.author)) throw new Error("Only a person can stop the plan's agents.");
+				await this.#mayInvoke(request.author);
+				return this.#builds.stop(request.build, request.author);
 			case "kill":
 				this.#author(request.author);
 				await this.#mayInvoke(request.author);
@@ -697,6 +744,11 @@ export class Channel {
 			const lane = cwd && byPath.get(cwd);
 			const chat: Chat = { id: record.id, busy: !!live?.run, usage: price(usage(spent), [...Object.keys(spent?.models || {}), ...Object.keys(spent?.tools || {})], this.#options.extension?.priced) };
 			chat.mode = modes[record.id] ?? "ace";
+			const membership = this.#builds.agent(record.id);
+			if (membership) {
+				const { build, role, part } = membership;
+				chat.build = { id: build, role, ...(part === undefined ? {} : { part }) };
+			}
 			const window = agent?.model
 				&& this.#options.models.getModel(agent.model.provider, agent.model.modelId)?.contextWindow;
 			const used = window && await this.#used(record.id);
@@ -743,10 +795,10 @@ export class Channel {
 	get observing(): boolean { return this.#feed?.pending() ?? false; }
 
 	async isIdle(): Promise<boolean> {
-		return !this.busy;
+		return !this.busy && !this.#builds.pending;
 	}
 
-	async #snapshotBusy(): Promise<void> {
+	async #restoreRunsAndHandoffs(handoffs: Handoffs): Promise<void> {
 		let cursor: Cursor | undefined;
 		do {
 			const page = await this.#harness.commit(
@@ -756,6 +808,13 @@ export class Channel {
 			for (const { id } of page.items) {
 				const live = await this.#harness.snapshot(LiveDoc, id, context);
 				if (live?.run) this.#runs.set(id, live.run.inputs);
+				if (!this.#builds.agent(id)) continue;
+				const inbox = await this.#harness.snapshot(InboxDoc, id, context);
+				for (const item of inbox?.items ?? []) {
+					if (item.mode === "write") continue;
+					const submission = await (await this.#harness.submission(item.id, context))?.status(context);
+					if (submission && isWorkMessageSubmission(submission)) handoffs.buildSteer(submission);
+				}
 			}
 			cursor = page.next;
 		} while (cursor);
@@ -789,6 +848,7 @@ export class Channel {
 			: last.reason === "aborted"
 			? "stopped"
 			: "failed";
+		await this.#builds.state(chat, outcome, undefined);
 		await this.#publishRun(chat, inputs.map((id) => settled.get(id)), outcome);
 	}
 
@@ -862,6 +922,7 @@ export class Channel {
 	async #asked(chat: ConversationId, phase: "question" | "answered"): Promise<void> {
 		const inputs = this.#runs.get(chat);
 		if (!inputs) return;
+		await this.#builds.state(chat, phase === "question" ? "waiting" : "running", inputs[0]);
 		const submissions = await Promise.all(inputs.map(async (id) => {
 			const submission = await this.#harness.submission(id, context);
 			return submission?.status(context);
@@ -879,6 +940,7 @@ export class Channel {
 			const input = await this.#harness.commit(async (tx) => {
 				for (const submission of submissions.toReversed()) {
 					if (submission?.type !== "input" || submission.conversationId !== chat || submission.entry === undefined) continue;
+					if (this.#builds.isBrief(submission)) continue;
 					const human = room.human((await tx.entry(submission.entry))!);
 					if (human && !room.isAgent(human.author)) return { author: human.author, submission: submission.id };
 				}
@@ -933,11 +995,13 @@ export class Channel {
 				errors.push(error);
 			}
 			this.#closing.abort();
+			const builds = this.#builds.close();
 			try { await this.#feed?.close(); } catch (error) { errors.push(error); }
 			// Native close seals admission and joins generation and tool tasks before storage closes.
 			// Caption calls are external producers, so join them before entering that boundary.
 			await Promise.allSettled(this.#captionTasks);
 			await Promise.allSettled(this.#admissions.values());
+			await builds;
 			await this.#approvals.close();
 			await this.#flushPlanDeliveries().catch(error => errors.push(error));
 			try {
@@ -986,6 +1050,19 @@ export class Channel {
 		return conversation;
 	}
 
+	async #writableChat(chat: ChatId | undefined): Promise<Conversation> {
+		const conversation = await this.#conversation(chat);
+		if (this.#builds.agent(conversation.id)) throw new Error("An agent's chat is read-only.");
+		return conversation;
+	}
+
+	async #stopChat(conversation: Conversation, note?: { by: string; at: number; requestId?: string }, background = false) {
+		await this.#approvals.stop(conversation.id);
+		await conversation.abort(context, { background });
+		await this.#flushPlanDeliveries();
+		if (note) await conversation.submit({ type: "write", entry: room.stop(note.by, note.at), requestId: note.requestId }, context);
+	}
+
 	#author(author: string) {
 		if (!room.isAuthor(author)) throw new Error(`Invalid author ${author}`);
 	}
@@ -1010,7 +1087,7 @@ export class Channel {
 	async #say(request: Extract<Request, { op: "say" }>) {
 		this.#clientRequestId(request.requestId);
 		this.#author(request.author);
-		const conversation = await this.#conversation(request.chat);
+		const conversation = await this.#writableChat(request.chat);
 		room.checkAttachments(request);
 		// The chat's next run reads this message, so it must fit the model the chat has now.
 		const { model } = await conversation.agent(context);
@@ -1082,6 +1159,7 @@ export class Channel {
 
 	#clientRequestId(requestId: string | undefined) {
 		if (reservedReviewRequestId(requestId)) throw new Error("The neuve.review: request-ID namespace is reserved for the host");
+		if (reservedBuildRequestId(requestId)) throw new Error("The neuve.build: request-ID namespace is reserved for the host.");
 	}
 
 	async #admitted<T>(id: ChatId | undefined, admit: (settled: Promise<T>) => Promise<T>): Promise<T> {
@@ -1097,9 +1175,13 @@ export class Channel {
 		}
 	}
 
-	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context): Promise<Submission> {
+	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context): Promise<Submission>;
+	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit: () => boolean): Promise<Submission | undefined>;
+	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
 		return this.#admitted(handle.id, async () => {
+			if (canSubmit?.() === false) return;
 			await this.#select(await this.#conversation(handle.id), {}, undefined, callContext);
+			if (canSubmit?.() === false) return;
 			return handle.submit(input, callContext);
 		});
 	}
@@ -1108,7 +1190,7 @@ export class Channel {
 		this.#author(request.author);
 		room.checkAttachments(request);
 		await this.#mayInvoke(request.author);
-		const conversation = await this.#conversation(request.chat);
+		const conversation = await this.#writableChat(request.chat);
 		const { requestId, author, text, images, files, model, automatic, effort, mode, attended } = request;
 		if (mode !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's mode.");
 		if (attended !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's attendance.");
@@ -1141,16 +1223,22 @@ export class Channel {
 		this.#author(request.author);
 		await this.#mayInvoke(request.author);
 		const conversation = await this.#conversation(request.chat);
+		const agent = this.#builds.agent(conversation.id);
+		if (agent && !await this.#harness.commit(tx => tx.submissionByRequest(conversation.id, agent.requestId), context)) {
+			throw new Error("Wait for the host to send the agent’s brief.");
+		}
 		return this.#select(conversation, request);
+	}
+
+	#canInvoke(author: string, shared: boolean): boolean {
+		// Hosts rewrite every client's author, so an agent author is another channel's agent on this
+		// host, already running as the owner's user. Sharing gates teammates, not those handoffs.
+		return author === this.#options.owner || room.isAgent(author) || shared;
 	}
 
 	async #mayInvoke(author: string) {
 		const settings = await this.#harness.snapshot(SettingsDoc, context);
-		// Hosts rewrite every client's author, so an agent author is another channel's agent on this
-		// host, already running as the owner's user. Sharing gates teammates, not those handoffs.
-		if (author === this.#options.owner || room.isAgent(author) || settings?.shared !== false) {
-			return;
-		}
+		if (this.#canInvoke(author, settings?.shared !== false)) return;
 		throw new Error(
 			`Agent access is off in this channel, so only its owner, ${this.#options.owner}, can ask its agents.`,
 		);
@@ -1287,9 +1375,11 @@ export class Channel {
 		if (request.author !== this.#options.owner) {
 			throw new Error("Only the owner can change sharing");
 		}
-		await this.#harness.commit(async (tx) => {
+		const resumed = await this.#harness.commit(async (tx) => {
 			(await tx.doc(SettingsDoc)).shared = request.shared;
+			return this.#builds.share(tx, request.shared);
 		}, context);
+		if (this.#options.resume !== false && resumed.length) void this.#builds.resume(resumed);
 	}
 
 	async #desktop(request: Extract<Request, { op: "desktop" }>) {
@@ -1429,6 +1519,7 @@ export class Channel {
 				const value = { calls: group.calls.map((call) => call.id), text, done: group.closed };
 				await this.#harness.commit(async (tx) => {
 					(await tx.doc(CaptionsDoc, id)).groups[key] = value;
+					await this.#builds.updateAgent(tx, id, { caption: text });
 					spend(await tx.doc(UsageDoc, id), usage);
 				}, context);
 				captions[key] = value;
@@ -1480,7 +1571,7 @@ export class Channel {
 		const stream = await watchEvents(this.#harness, conversation.id, context);
 		const observedChats = new Set<ConversationId>([conversation.id]);
 		type NoticeIndex = {
-			entries: Map<number, ReviewNotice>; submissions: Map<number, ReviewNotice>;
+			entries: Map<number, ReviewNotice | BuildNotice>; submissions: Map<number, ReviewNotice | BuildNotice>;
 			pendingEntries: Set<number>; pendingSubmissions: Set<number>;
 		};
 		const notices = new Map<number, NoticeIndex>();
@@ -1498,6 +1589,15 @@ export class Channel {
 					if (stopped) return;
 					observedChats.add(chat);
 					const index: NoticeIndex = { entries: new Map(), submissions: new Map(), pendingEntries: new Set(), pendingSubmissions: new Set() };
+					const brief = this.#builds.agent(chat);
+					if (brief) {
+						const record = await this.#harness.commit(tx => tx.submissionByRequest(chat, brief.requestId), context);
+						if (record?.type === "input") {
+							const system: BuildNotice = { kind: "neuve:build:brief", build: brief.build };
+							index.submissions.set(record.id, system);
+							if (record.entry !== undefined) index.entries.set(record.entry, system);
+						}
+					}
 					const feed = await this.#harness.snapshot(ReviewFeedDoc, chat, context);
 					for (const [review, notice] of Object.entries(feed?.notices ?? {})) {
 						if (notice.chat !== chat) continue;
@@ -1551,20 +1651,32 @@ export class Channel {
 		const harness = this.#harness;
 		let reviews: DocumentWatch<{ cards: Record<string, ReviewCard> }> | undefined;
 		let plans: DocumentWatch<PlansState> | undefined;
+		let builds: DocumentWatch<BuildsState> | undefined;
 		let approvals: Awaited<ReturnType<typeof watchApprovals>> | undefined;
-		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop(), approvals?.stop()]);
+		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop(), builds?.stop(), approvals?.stop()]);
 		try {
 			if (request.planComments) await this.#flushPlanDeliveries();
 			await harness.commit(async tx => {
 				await tx.doc(ReviewCardsDoc, conversation.id);
 				if (request.plans || request.planComments) await tx.doc(PlansDoc);
+				if (request.builds) await tx.doc(BuildsDoc);
 			}, context);
 			reviews = await harness.watchDoc(ReviewCardsDoc, conversation.id, context);
 			if (request.plans || request.planComments) plans = await harness.watchDoc(PlansDoc, context);
+			if (request.builds) builds = await harness.watchDoc(BuildsDoc, context);
 			const sendReviews = (value: Readonly<{ cards: Record<string, ReviewCard> }> | null | undefined) =>
 				send({ kind: "review-cards", chat: conversation.id, cards: value?.cards || {} });
 			sendReviews(reviews?.value);
 			reviews?.start(async value => { sendReviews(value); });
+			if (builds) {
+				const sendBuilds = (value: Readonly<BuildsState> | null) => send({
+					kind: "builds", chat: conversation.id,
+					builds: Object.values(value?.records ?? {}).map(({ build }) => build),
+					messages: workLog(value),
+				});
+				sendBuilds(builds.value);
+				builds.start(async value => sendBuilds(value));
+			}
 			if (request.approvals) approvals = await watchApprovals(harness, conversation.id, send);
 			if (plans) {
 				let lastPlans: string | undefined;

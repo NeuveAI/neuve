@@ -1,4 +1,4 @@
-import type { QueuedMessage } from "@ace/channel/protocol";
+import type { AgentName, QueuedMessage } from "@ace/channel/protocol";
 import type { Listing } from "@ace/host/protocol";
 
 import { AGENT_ALIAS } from "./agent-mention";
@@ -6,10 +6,13 @@ import { reviewNotice } from "./review-card";
 import { authorName } from "./timeline";
 
 /** Authors are named as the timeline names them. */
-export function MessageQueue({ messages, people, channels }: {
+export function MessageQueue({ messages, people, channels, agents, locked }: {
 	messages: QueuedMessage[];
 	people: Record<string, string>;
 	channels: Map<string, Listing>;
+	agents?: ReadonlyMap<string, AgentName>;
+	/** A build's agent's chat, where every input asks the agent. */
+	locked?: boolean;
 }) {
 	if (!messages.length) return null;
 	return (
@@ -38,9 +41,11 @@ export function MessageQueue({ messages, people, channels }: {
 						<li key={message.submission} className="px-3 py-2">
 							<div className="mb-1 flex min-w-0 items-center gap-2 text-muted-foreground">
 								<span className="truncate font-medium">
-									{authorName(message.author, people, channels)}
+									{message.system ? AGENT_ALIAS.label : authorName(message.author, people, channels, agents)}
 								</span>
-								<span className="shrink-0">{message.invoked ? `@${AGENT_ALIAS.name}` : "Chat"}</span>
+								{!locked && (
+									<span className="shrink-0">{message.invoked ? `@${AGENT_ALIAS.name}` : "Chat"}</span>
+								)}
 							</div>
 							{message.text && (
 								<p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">

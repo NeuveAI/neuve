@@ -64,6 +64,8 @@ export {
 } from "./components/requests/question";
 export { QuestionInput } from "./components/requests/question-input";
 export { NOT_ALLOWED_TO_APPROVE, PlanActionsProvider, type PlanActions, PlanCard } from "./components/requests/plan";
+export { BuildActionsProvider } from "./components/requests/build";
+export { AgentLabel, AgentStateIcon, RoleAvatar } from "./components/agents/agents";
 export { PlanView, type PlanViewProps } from "./components/plan/plan-view";
 export {
 	type PlanCommentActions,

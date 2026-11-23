@@ -1,8 +1,9 @@
-import { MENTION, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
+import { type AgentName, MENTION, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
 import type { Listing, People } from "@ace/host/protocol";
 import type { Event } from "@ace/ui";
 
 import { AGENT_ALIAS, withAgentMention } from "./agent-mention";
+import { agentName } from "./build-card";
 import { placement } from "./placement";
 import { planTool } from "./plan-card";
 import { type ReviewCards, reviewNotice, reviewTool, wakeNote, wakePhase } from "./review-card";
@@ -25,13 +26,17 @@ export function sources(channels: Listing[], host: string): Map<string, Listing>
 
 /**
  * Human authors are Tailscale logins; without a known GitHub login, the name before the domain
- * reads as a handle. Agent authors name the chat or channel after the `@`, so they stay whole.
+ * reads as a handle. A build's agent goes by its role; other agent authors name the chat or
+ * channel after the `@`, so they stay whole.
  */
 export function authorName(
 	author: string,
 	people: People,
 	channels: Map<string, Listing>,
+	agents?: ReadonlyMap<string, AgentName>,
 ): string {
+	const agent = agents?.get(author);
+	if (agent) return agentName(agent);
 	const source = channels.get(author);
 	if (source) return `#${source.name}`;
 	if (author.startsWith("agent@")) return author;
@@ -46,12 +51,13 @@ function withdrawal(
 	messages: QueuedMessage[],
 	people: People,
 	channels: Map<string, Listing>,
+	roles: ReadonlyMap<string, AgentName>,
 ): string {
 	const names = (authors: string[]) =>
-		[...new Set(authors)].map((author) => authorName(author, people, channels)).join(", ");
+		[...new Set(authors)].map((author) => authorName(author, people, channels, roles)).join(", ");
 	// The host's review wake belongs to no person, so it is neither returned nor named.
 	const notes = messages.filter((message) => reviewNotice(message));
-	const others = messages.filter((message) => !reviewNotice(message));
+	const others = messages.filter((message) => !message.system);
 	const humans = others.filter((message) => !message.author.startsWith("agent@"));
 	const agents = others.filter((message) => message.author.startsWith("agent@"));
 	const lines = [];
@@ -185,15 +191,19 @@ export function toEvents(
 	by: (asker: string) => string | undefined,
 	reviews: ReviewCards,
 	quoting: ReadonlySet<number> = new Set(),
+	agents: ReadonlyMap<string, AgentName> = new Map(),
+	/** The build's agent this chat is, whose replies go by its role. */
+	self?: { author: string; agent: AgentName },
 ): Event[] {
 	// A run answers the newest message that invoked it, as the channel's run end reports.
 	let asker: string | undefined;
+	const name = (author: string) => authorName(author, people, channels, agents);
 	const sender = (model: string | undefined): Event.Sender.Agent => {
 		const value = [model, asker && by(asker)].filter(Boolean).join(" · ");
 		return {
 			kind: "agent",
-			value: AGENT,
-			display: AGENT_ALIAS.label,
+			value: self?.author ?? AGENT,
+			display: self ? agentName(self.agent) : AGENT_ALIAS.label,
 			...(value ? { credit: value } : {}),
 		};
 	};
@@ -209,7 +219,7 @@ export function toEvents(
 				? {
 					reactions: reacted.map(({ from, emoji }) => ({
 						from,
-						display: authorName(from, people, channels),
+						display: name(from),
 						emoji,
 					})),
 				}
@@ -227,17 +237,19 @@ export function toEvents(
 			} as Event;
 		}
 		if (item.kind === "message") {
-			if (item.invoked) asker = item.author;
+			// The host's brief to a build's agent is Neuve's, and the run it starts was asked by no one.
+			const brief = item.system?.kind === "neuve:build:brief";
+			if (brief) asker = undefined;
+			else if (item.invoked) asker = item.author;
 			return {
 				...base,
-				sender: {
-					kind: "user",
-					value: item.author,
-					display: authorName(item.author, people, channels),
-				},
+				sender: brief
+					? { kind: "user", value: AGENT, display: AGENT_ALIAS.label }
+					: { kind: "user", value: item.author, display: name(item.author) },
 				...(item.edited && !item.deleted ? { last_updated: Math.floor(item.edited / 1000) } : {}),
 				content: item.deleted ? [text("Message deleted")] : [
-					text(withMention(item, quoting)),
+					// Every input to a build's agent asks that agent, so no @neuve is drawn there.
+					text(brief || self ? item.text : withMention(item, quoting)),
 					...(item.images || []).map((image) => ({
 						type: "image" as const,
 						image: `data:${image.mimeType};base64,${image.data}`,
@@ -285,12 +297,12 @@ export function toEvents(
 			content.push(
 				text(
 					item.stopper
-						? `Stopped by ${authorName(item.stopper, people, channels)}.`
+						? `Stopped by ${name(item.stopper)}.`
 						: "Stopped.",
 				),
 			);
 		}
-		if (item.withdrawn) content.push(text(withdrawal(item.withdrawn, people, channels)));
+		if (item.withdrawn) content.push(text(withdrawal(item.withdrawn, people, channels, agents)));
 		return {
 			...base,
 			sender: sender(item.model),
