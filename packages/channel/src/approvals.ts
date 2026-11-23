@@ -6,7 +6,7 @@ import type { PersonWaits } from "./questions";
 import { isAgent } from "./room";
 
 export const ATTENDED_SECTION = "neuve.chat.request-attended";
-export const ApprovalRequestsDoc = defineDoc(ApprovalRequestsDefinition);
+export const ApprovalRequestsDoc = defineDoc<ApprovalRequestsState>(ApprovalRequestsDefinition);
 export type ApprovalAdmission = {
 	/** Stop waits for the listener before it aborts the conversation. */
 	onStop?(listener: (chat: ConversationId) => Promise<void>): void;

@@ -1,5 +1,4 @@
-import type { JsonValue } from "@earendil-works/chord";
-import type { DocDefinition, JsonObject } from "@earendil-works/pi-durable";
+import type { JSONType } from "zod";
 import type { ReviewCard } from "./review-cards";
 export type { ReviewCard } from "./review-cards";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -97,17 +96,17 @@ export type ApprovalAsked = { reason?: string } & (
  * One runtime request. A single call can raise several requests, each with its own `requestId`.
  * The record and its state are JSON objects so pi-durable can store the same union the wire uses.
  */
-export type ApprovalRequest = JsonObject & {
+export type ApprovalRequest = Record<string, JSONType> & {
 	requestId: string;
 	callId: string;
 	/** The runtime's input for the card's details. */
-	input: JsonValue;
+	input: JSONType;
 	/** What Allow grants. An unrecognised request uses its raw input for display. */
 	asked: ApprovalAsked;
 	/** When the request opened, in milliseconds since the Unix epoch. */
 	openedAt: number;
 	/** An answer names the verified participant and its time in milliseconds since the Unix epoch. */
-	state: JsonObject & (
+	state: Record<string, JSONType> & (
 		| { kind: "open"; by?: never; at?: never; decision?: never; reason?: never }
 		| { kind: "answered"; by: string; at: number; decision: ApprovalDecision; reason?: never }
 		| {
@@ -131,7 +130,7 @@ export type ApprovalRequestsState = { requests: ApprovalRequest[] };
 export const ApprovalRequestsDefinition = {
 	kind: "neuve.approval-requests", version: 1, scope: "conversation", history: "latest", fork: "initial",
 	initial: (): ApprovalRequestsState => ({ requests: [] }),
-} as const satisfies DocDefinition<ApprovalRequestsState>;
+} as const;
 
 /** An @mention in message text; the channel counts what the app links, so both use this one. */
 export const MENTION = /(?<=^|\s)@([a-zA-Z0-9_-]+)/g;

@@ -112,6 +112,8 @@ Plan mode extends the upstream `packages/channel/src/channel.ts` admission and w
 | `packages/channel/src/channel.ts` | Gives the runtime an answer callback and orders approval answers with messages in the same chat. |
 | `packages/channel/src/approvals.ts` | Records an answer after the runtime reports delivery. A refused reply returns the request's closure reason. |
 | `packages/channel/tests/approvals.test.ts` | Registers a runtime answer callback for the channel's approval admission tests. |
+| `packages/channel/src/protocol.ts` | Uses the frame validator's JSON type and keeps the shared document definition independent of storage declarations. |
+| `packages/channel/src/approvals.ts` | Checks the shared document definition where the channel opens the store. |
 
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 
