@@ -336,7 +336,7 @@ test("the first read fetches a ticket named by a branch commit", async () => {
   }
 }, 30_000);
 
-// A ticket committed after scope was read must be disclosed and cause no integration call.
+// Joined scope cites documents named by commits. A late ticket is disclosed without a tracker call.
 test("a joined review adds range sources without starting or calling the integration", async () => {
   process.env["FIXTURE_TOKEN"] = "fixture-token-value";
   const f = await scopeFixture(
@@ -356,28 +356,27 @@ test("a joined review adds range sources without starting or calling the integra
       ["S2", "repository-document", "plan-or-ticket-at-base", "AGENTS.md"],
       ["S3", "repository-document", "plan-or-ticket-at-base", "base.md"],
       ["S4", "repository-document", "plan-inside-range", "named.md"],
-      ["S5", "repository-document", "plan-inside-range", "added.md"],
-      ["S6", "commit-text", "commit-or-pr-text", [review.range.headOid]],
+      ["S5", "commit-text", "commit-or-pr-text", [review.range.headOid]],
     ]);
     expect(snapshot.sources[0]).toEqual(first.value.sources[0]);
     expect(snapshot.branchTipOid).toBe(f.base);
     expect(
-      snapshot.sources[5]?.sections.map(({ id, title }) => [id, title]),
-    ).toEqual([["S6.1", "Read named.md for NEU-14"]]);
+      snapshot.sources[4]?.sections.map(({ id, title }) => [id, title]),
+    ).toEqual([["S5.1", "Read named.md for NEU-14"]]);
     expect(facts.scopeGaps).toEqual([
       NO_PR_TEXT,
-      "Ticket NEU-14 was named after this cycle's scope was read. The next cycle will read it.",
+      "Ticket NEU-14 was named after this cycle's scope was read.",
     ]);
     expect(
       describeSnapshot(snapshot).find((line) => line.includes("commit-text")),
-    ).toContain("S6");
+    ).toContain("S5");
     const scopeLog = f.ctx.log
       .read()
       .findLast((row) => row.type === "precompute.scope");
     expect(scopeLog?.["key"]).toBe(scopeKey);
     expect(
       (scopeLog?.["sources"] as Array<{ id: string }>).map(({ id }) => id),
-    ).toEqual(["S1", "S2", "S3", "S4", "S5", "S6"]);
+    ).toEqual(["S1", "S2", "S3", "S4", "S5"]);
     const logged = readFileSync(
       join(f.ctx.location.directory, "scope-logs", cycleId + ".jsonl"),
       "utf8",
@@ -439,7 +438,7 @@ test("pins commits at the first read and fetches the deferred ticket next cycle"
     const review = await f.request(head);
     expect(review.cycleId).toBe(first.cycleId);
     expect((await f.precompute()).facts.scopeGaps).toContain(
-      "Ticket NEU-13 was named after this cycle's scope was read. The next cycle will read it.",
+      "Ticket NEU-13 was named after this cycle's scope was read.",
     );
     expect(f.calls()).toEqual(["start"]);
     const request = review.events.find(
@@ -543,7 +542,7 @@ test("fetches queued cycle scope once and reuses it on the next review", async (
   const f = await scopeFixture(
     "queued-scope",
     "work/NEU-13",
-    "Read named.md for NEU-13",
+    "Read named.md and added.md for NEU-13",
   );
   try {
     const { cycleId } = await f.run(f.open());

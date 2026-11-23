@@ -506,14 +506,6 @@ const documentSources = (options: {
         ))
           if (!wanted.has(path))
             wanted.set(path, `named in commit ${commit.oid.slice(0, 12)}`);
-      if (part === "range")
-        for (const path of atHead.keys())
-          if (
-            !atBase.has(path) &&
-            !wanted.has(path) &&
-            /\.(md|mdx|rst)$/i.test(path)
-          )
-            wanted.set(path, "added in the review range");
       const entryOf = (path: string) =>
         part === "range"
           ? (atHead.get(path) ?? atBase.get(path))
@@ -1180,7 +1172,7 @@ const composeSnapshot = (
       ...range.gaps,
       ...named.map(
         ({ key }) =>
-          `Ticket ${key} was named after this cycle's scope was read. The next cycle will read it.`,
+          `Ticket ${key} was named after this cycle's scope was read.`,
       ),
     ],
     ...(causes.length === 0 ? {} : { causes }),
