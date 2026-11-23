@@ -28,7 +28,7 @@ import { MessageQueue } from "./message-queue";
 import { OfflineHost, useRoster } from "./onboarding";
 import { present } from "./presence";
 import { planCards } from "./plan-card";
-import { commentSends } from "./plan-comments";
+import { commentSends, commentWords } from "./plan-comments";
 import { pendingQuestion, Question } from "./question";
 import { reviewActions, reviewTab, withCards } from "./review-card";
 import { AGENT, credit, sources, toEvents } from "./timeline";
@@ -141,10 +141,9 @@ export function Conversation(
 			),
 		[transcript.approvals, transcript.items, user, people],
 	);
-	// The sends of comments on a plan, as the person's words, queued and then in the chat.
 	const sends = useMemo(() => commentSends(transcript.planComments), [transcript.planComments]);
 	const said = useMemo(
-		() => new Map([...sends.values()].flatMap(({ entry, text }) => entry === undefined ? [] : [[entry, text]])),
+		() => new Map([...sends.values()].flatMap(({ entry, said }) => entry === undefined ? [] : [[entry, said]])),
 		[sends],
 	);
 	const events = useMemo(
@@ -417,12 +416,15 @@ export function Conversation(
 											);
 											act({ op: "react", emoji, remove }, uid);
 										}}
-										onCopy={(uid) =>
-											navigator.clipboard.writeText(said.get(byKey.get(uid)!.entry!) ?? byKey.get(uid)!.text).then(
+										onCopy={(uid) => {
+											const item = byKey.get(uid)!;
+											const sent = said.get(item.entry!);
+											navigator.clipboard.writeText(sent ? commentWords(sent) : item.text).then(
 												() => toast("Copied message"),
 												(error) =>
 													toast.error("Could not copy the message", { description: error.message }),
-											)}
+											);
+										}}
 										onDelete={setDeleting}
 										editable={editable}
 										editing={edited?.key}

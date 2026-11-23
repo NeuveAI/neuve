@@ -268,7 +268,7 @@ export type PlanViewProps = {
 export function PlanView({ plan, text, error, approve, comments, send, className }: PlanViewProps) {
 	let scroller = useRef<HTMLDivElement>(null);
 	let paper = useRef<HTMLDivElement>(null);
-	let [chip, setChip] = useState<PlanSelection & { top: number; left: number; side: "top" | "bottom" }>();
+	let [chip, setChip] = useState<PlanSelection & { top: number; left: number; side: "top" | "bottom"; closing?: boolean }>();
 	let [composing, setComposing] = useState<PlanSelection & { key: number }>();
 	usePlanHighlights(paper, comments?.list ?? [], composing, text);
 	let kept = comments ? keptCount(comments.list) : 0;
@@ -276,14 +276,15 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 	let select = () => {
 		let root = paper.current;
 		let found = root && text !== undefined && comments?.keep ? selectionIn(root, text) : undefined;
-		if (!root || !found) return setChip(undefined);
-		// Above the selection's first line, where the person has already read; under its last line
-		// when that would leave the pane.
+		if (!root || !found) return setChip((open) => open && { ...open, closing: true });
+		// Above the selection's first line, else under its last, and always inside the pane's
+		// visible band, whatever part of the selection is scrolled out.
 		let box = root.getBoundingClientRect();
-		let above = found.first.top - scroller.current!.getBoundingClientRect().top >= CHIP;
+		let pane = scroller.current!.getBoundingClientRect();
+		let above = found.first.top - pane.top >= CHIP;
 		let left = Math.max(0, Math.min((above ? found.first.left : found.last.right - 48) - box.left, root.clientWidth - 96));
-		let top = above ? found.first.top - box.top - CHIP : found.last.bottom - box.top + 4;
-		setChip({ lines: found.lines, quote: found.quote, top, left, side: above ? "top" : "bottom" });
+		let top = Math.min(Math.max(above ? found.first.top - CHIP : found.last.bottom + 4, pane.top), pane.bottom - CHIP);
+		setChip({ lines: found.lines, quote: found.quote, top: top - box.top, left, side: above ? "top" : "bottom" });
 	};
 	// A selection can end outside the plan, or by keyboard, so the document's events decide.
 	let latest = useRef(select);
@@ -360,12 +361,14 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 							top={chip.top}
 							left={chip.left}
 							side={chip.side}
+							closing={chip.closing}
 							onComment={() => {
 								target.current = undefined;
 								setComposing({ lines: chip.lines, quote: chip.quote, key: Date.now() });
-								setChip(undefined);
+								setChip({ ...chip, closing: true });
 								getSelection()?.removeAllRanges();
 							}}
+							onGone={() => setChip((open) => open?.closing ? undefined : open)}
 						/>
 					)}
 				</div>

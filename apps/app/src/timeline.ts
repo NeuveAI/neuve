@@ -6,6 +6,7 @@ import { AGENT_ALIAS, withAgentMention } from "./agent-mention";
 import { agentName } from "./build-card";
 import { placement } from "./placement";
 import { planTool } from "./plan-card";
+import { commentWords, type Said } from "./plan-comments";
 import { type ReviewCards, reviewNotice, reviewTool, wakeNote, wakePhase } from "./review-card";
 import type { Item, Tool } from "./transcript";
 
@@ -177,10 +178,10 @@ function tool(
  * A message's text as the timeline draws it. A send of plan comments is drawn as the person's own
  * words from `sends`, and the channel names no one in it, so no `@name` in it is drawn as a mention.
  */
-export function withMention(item: { entry?: number; invoked: boolean; text: string }, sends: ReadonlyMap<number, string>) {
+export function withMention(item: { entry?: number; invoked: boolean; text: string }, sends: ReadonlyMap<number, Said[]>) {
 	let said = item.entry === undefined ? undefined : sends.get(item.entry);
 	// A word joiner after the @ keeps the words as written and makes them no mention token.
-	if (said !== undefined) return said.replace(/(^|[\s([{])@(?=[\w-])/gm, "$1@\u2060");
+	if (said) return commentWords(said, true).replace(/(^|[\s([{])@(?=[\w-])/gm, "$1@\u2060");
 	return item.invoked ? withAgentMention(item.text) : item.text;
 }
 
@@ -196,7 +197,7 @@ export function toEvents(
 	reactions: Reactions,
 	by: (asker: string) => string | undefined,
 	reviews: ReviewCards,
-	sends: ReadonlyMap<number, string> = new Map(),
+	sends: ReadonlyMap<number, Said[]> = new Map(),
 	agents: ReadonlyMap<string, AgentName> = new Map(),
 	/** The build's agent this chat is, whose replies go by its role. */
 	self?: { author: string; agent: AgentName },

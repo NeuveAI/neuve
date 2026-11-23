@@ -2,13 +2,16 @@ import { expect, test } from "bun:test";
 
 import type { PlanComment } from "@ace/channel/protocol";
 
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { MessageQueue } from "../src/message-queue";
 import { commentSends } from "../src/plan-comments";
 import { toEvents, withMention } from "../src/timeline";
 import type { Item } from "../src/transcript";
 
 const sent = { at: 1, submission: 3, entry: 7 };
 const said = (comments: PlanComment[]) =>
-	new Map([...commentSends(comments).values()].map(({ entry, text }) => [entry!, text]));
+	new Map([...commentSends(comments).values()].map(({ entry, said }) => [entry!, said]));
 const comment: PlanComment = {
 	id: "8c070ef5-6aa3-473a-bf90-f56aa1391f1a",
 	plan: "p1",
@@ -55,4 +58,20 @@ test("an answered comment reads as the agent's words, a running or refused answe
 	const content = (event as { content: { type: string; text?: string; arguments?: object }[] }).content;
 	expect(content.map(({ type, text, arguments: args }) => type === "text" ? text : args)).toEqual(["Kept short.", {}, {}]);
 	expect(JSON.stringify(content)).not.toContain(comment.id);
+});
+
+// Why: the queue shows a send as plain text, so the Markdown the chat draws from would show its
+// escapes there. A send waiting in the queue reads as the passage and the person's words.
+test("a queued send of plan comments reads as plain words", () => {
+	const queued = { ...comment, sent: { at: 1, submission: 3 }, replies: [] };
+	const html = renderToStaticMarkup(
+		<MessageQueue
+			messages={[{ submission: 3, author: "me", text: "Comments on the plan. Comment 8c070ef5, lines 34-34", invoked: true }]}
+			said={commentSends([queued])}
+			people={{}}
+			channels={new Map()}
+		/>,
+	);
+	expect(html).toContain("&gt; Ask @vivienne *first*\n\nShould @vivienne review this first?");
+	expect(html).not.toContain("8c070ef5");
 });

@@ -37,12 +37,11 @@ export function planCommentViews(
 	}));
 }
 
-/**
- * The person's words in each send of plan comments, by its submission, with the chat entry it
- * became once placed: each under the passage it is on.
- */
-export function commentSends(comments: PlanComment[]): Map<number, { entry?: number; text: string }> {
-	const sends = new Map<number, { entry?: number; said: { at: number; quote: string; text: string }[] }>();
+export type Said = { quote: string; text: string };
+
+/** Each send of plan comments by its submission, with the chat entry it became once placed. */
+export function commentSends(comments: PlanComment[]): Map<number, { entry?: number; said: Said[] }> {
+	const sends = new Map<number, { entry?: number; said: (Said & { at: number })[] }>();
 	for (const comment of comments) {
 		for (const { sent, at, text } of [comment, ...comment.replies.filter((reply) => reply.kind === "person")]) {
 			if (!sent) continue;
@@ -51,13 +50,12 @@ export function commentSends(comments: PlanComment[]): Map<number, { entry?: num
 			sends.set(sent.submission, send);
 		}
 	}
-	return new Map([...sends].map(([submission, { entry, said }]) => [submission, {
-		entry,
-		text: said.sort((a, b) => a.at - b.at).map(({ quote, text }) => `${quoted(quote)}\n\n${text}`).join("\n\n"),
-	}]));
+	for (const send of sends.values()) send.said.sort((a, b) => a.at - b.at);
+	return sends;
 }
 
-/** A passage's plain words as a Markdown quotation, its marks kept as written. */
-function quoted(passage: string) {
-	return passage.split("\n").map((line) => `> ${line.replace(/[\\`*_[\]<>#|~]/g, "\\$&")}`).join("\n");
+/** The words of a send, each under its passage quoted; as Markdown, the passage's marks are escaped. */
+export function commentWords(said: Said[], markdown = false) {
+	const line = (text: string) => `> ${markdown ? text.replace(/[\\`*_[\]<>#|~]/g, "\\$&") : text}`;
+	return said.map(({ quote, text }) => `${quote.split("\n").map(line).join("\n")}\n\n${text}`).join("\n\n");
 }

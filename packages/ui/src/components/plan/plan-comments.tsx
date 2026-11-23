@@ -5,7 +5,6 @@ import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, use
 import { IconMessage } from "../../icons";
 import { cn } from "../../lib/utils";
 import { Button } from "../../ui/button";
-import { motion } from "../../ui/popup";
 
 /** One message under a comment, the comment itself first. */
 export type PlanCommentMessageView = {
@@ -53,6 +52,9 @@ export function keptCount(list: PlanCommentView[]) {
 }
 
 const LINES = /^(\d+)-(\d+)$/;
+
+/** The composer's `scroll-my-3.5`, kept clear above and below it in the pane. */
+const SCROLL_MARGIN = 14;
 
 /** The plan file's lines a rendered block came from, as the plan view marks them. */
 export function blockLines(element: Element): [number, number] | undefined {
@@ -252,27 +254,65 @@ export function usePlanHighlights(
 	}, [root, key]);
 }
 
-/** The chip at a selection that opens the composer under its passage. */
+/**
+ * The popover's enter and exit, timed by the `popover-content` slot's tokens, and none under reduced
+ * motion. Written here rather than taken from `ui/popup`, whose classes the stylesheet never scans.
+ */
+const MOTION =
+	"motion-safe:data-open:animate-in motion-safe:data-open:fade-in-0 motion-safe:data-closed:animate-out motion-safe:data-closed:fade-out-0 motion-safe:data-closed:fill-mode-forwards";
+
+/** Calls `gone` once `element`'s exit animation has played, at once when it has none. */
+function afterExit(element: Element | null, gone: () => void) {
+	let running = element?.getAnimations() ?? [];
+	if (!running.length) return gone();
+	void Promise.allSettled(running.map((animation) => animation.finished)).then(gone);
+}
+
+/** The chip at a selection that opens the composer under its passage; `closing` plays its exit, then `onGone`. */
 export function CommentChip(
-	{ top, left, side, onComment }: { top: number; left: number; side: "top" | "bottom"; onComment: () => void },
+	{ top, left, side, closing, onComment, onGone }: {
+		top: number;
+		left: number;
+		side: "top" | "bottom";
+		closing?: boolean;
+		onComment: () => void;
+		onGone: () => void;
+	},
 ) {
+	let root = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		if (closing) afterExit(root.current, onGone);
+	}, [closing]);
 	return (
-		<Button
-			variant="ghost"
-			size="sm"
+		<div
+			ref={root}
 			data-plan-comment=""
-			className={cn("absolute z-10 bg-popover shadow-popover hover:bg-popover", motion)}
-			data-open=""
+			data-slot="popover-content"
+			data-open={closing ? undefined : ""}
+			data-closed={closing ? "" : undefined}
 			data-side={side}
+			className={cn("absolute z-10 flex", MOTION)}
 			style={{ top, left }}
-			// Keeps the selection: a press would otherwise collapse it before the click.
-			onPointerDown={(event) => event.preventDefault()}
-			onClick={onComment}
 		>
-			<IconMessage className="size-3.5" />
-			Comment
-		</Button>
+			<Button
+				variant="ghost"
+				size="sm"
+				className="bg-popover shadow-popover hover:bg-popover"
+				// Keeps the selection: a press would otherwise collapse it before the click.
+				onPointerDown={(event) => event.preventDefault()}
+				onClick={onComment}
+			>
+				<IconMessage className="size-3.5" />
+				Comment
+			</Button>
+		</div>
 	);
+}
+
+function scrollerOf(element: HTMLElement) {
+	let parent = element.parentElement;
+	while (parent && !/auto|scroll/.test(getComputedStyle(parent).overflowY)) parent = parent.parentElement;
+	return parent;
 }
 
 /** A text box with its two actions, as the comment composer and a reply or edit in a card. */
@@ -289,16 +329,32 @@ export function CommentComposer(
 	let [text, setText] = useState(initial);
 	let [busy, setBusy] = useState(false);
 	let [error, setError] = useState<string>();
+	let [closing, setClosing] = useState(false);
 	let root = useRef<HTMLDivElement>(null);
 	let field = useRef<HTMLTextAreaElement>(null);
 	useEffect(() => field.current?.focus({ preventScroll: true }), []);
-	// The box grows with the words, and the whole composer, its actions too, stays in view.
 	useLayoutEffect(() => {
+		if (closing) afterExit(root.current, onCancel);
+	}, [closing]);
+	// The box grows with the words up to what leaves its actions in the pane, scrolls past that,
+	// and the whole composer stays in view as the words or the pane change.
+	let fit = () => {
 		let box = field.current!;
+		let element = root.current!;
+		let pane = scrollerOf(element);
 		box.style.height = "auto";
-		box.style.height = `${box.scrollHeight}px`;
-		root.current!.scrollIntoView({ block: "nearest" });
-	}, [text]);
+		let room = pane ? pane.clientHeight - (element.offsetHeight - box.offsetHeight) - 2 * SCROLL_MARGIN : Infinity;
+		box.style.height = `${Math.min(box.scrollHeight, room)}px`;
+		element.scrollIntoView({ block: "nearest" });
+	};
+	useLayoutEffect(fit, [text]);
+	useEffect(() => {
+		let pane = scrollerOf(root.current!);
+		if (!pane) return;
+		let observer = new ResizeObserver(() => fit());
+		observer.observe(pane);
+		return () => observer.disconnect();
+	}, []);
 	let empty = !text.trim();
 	async function submit() {
 		if (empty || busy) return;
@@ -316,11 +372,12 @@ export function CommentComposer(
 			ref={root}
 			data-plan-comment=""
 			data-slot={popover ? "popover-content" : undefined}
-			data-open={popover ? "" : undefined}
+			data-open={popover && !closing ? "" : undefined}
+			data-closed={popover && closing ? "" : undefined}
 			data-side={popover ? "bottom" : undefined}
 			className={cn(
-				"flex scroll-my-3.5 flex-col",
-				popover && ["w-[420px] max-w-full rounded-(--r-popover) squircle bg-popover p-2 text-popover-foreground shadow-popover", motion],
+				"flex scroll-my-3.5 flex-col rounded-md has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/30",
+				popover && ["w-[420px] max-w-full rounded-(--r-popover) squircle bg-popover p-2 text-popover-foreground shadow-popover", MOTION],
 			)}
 		>
 			<textarea
@@ -328,16 +385,16 @@ export function CommentComposer(
 				value={text}
 				rows={2}
 				aria-label={action}
-				className="min-h-10 w-full resize-none overflow-hidden bg-transparent px-1 pt-0.5 pb-2 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground"
+				className="min-h-10 w-full resize-none bg-transparent px-1 pt-0.5 pb-2 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground"
 				onChange={(event) => setText(event.target.value)}
 				onKeyDown={(event) => {
-					if (event.key === "Escape") onCancel();
+					if (event.key === "Escape") setClosing(true);
 					if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submit();
 				}}
 			/>
 			{error && <p role="alert" className="px-1 pb-1.5 text-xs leading-4 text-destructive">{error}</p>}
 			<div className="flex items-center justify-end gap-1.5">
-				<Button variant="ghost" size="sm" className="text-muted-foreground" onClick={onCancel}>Cancel</Button>
+				<Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setClosing(true)}>Cancel</Button>
 				<Button size="sm" aria-disabled={empty || busy || undefined} className="aria-disabled:opacity-50" onClick={() => void submit()}>
 					{action}
 				</Button>
@@ -377,10 +434,10 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 	let out = placement.kind === "changed" ? changeOf(placement.removed, placement.added).out : "";
 	let first = comment.messages[0]!.id;
 	let last = comment.messages.at(-1)!;
-	// The person's kept words take Edit and Remove under them, never a column beside them.
-	let changes = (message: PlanCommentMessageView) =>
+	// The last message's Edit and Remove share the row with Reply.
+	let changes = (message: PlanCommentMessageView, className?: string) =>
 		message.kept && message.mine && !open && (actions.edit || actions.remove) && (
-			<>
+			<div className={cn("flex gap-1", className)}>
 				{actions.edit && (
 					<Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => setOpen({ kind: "edit", message: message.id })}>
 						Edit
@@ -400,9 +457,9 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 						Remove
 					</Button>
 				)}
-			</>
+			</div>
 		);
-	let own = new Map(comment.messages.map((message) => [message, changes(message)]));
+	let lastChanges = changes(last);
 	return (
 		<article
 			data-plan-comment={comment.id}
@@ -433,7 +490,7 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 								<Avatar message={message} agentAvatar={actions.agentAvatar} />
 								<p className="min-w-0 flex-1 text-[13px] leading-5 whitespace-pre-wrap">{message.text}</p>
 							</div>
-							{message !== last && own.get(message) && <div className="flex gap-1 pl-5">{own.get(message)}</div>}
+							{message !== last && changes(message, "pl-5")}
 						</div>
 					)
 			)}
@@ -448,9 +505,9 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 				/>
 			)}
 			{refused && <p role="alert" className="pl-7 text-xs leading-4 text-destructive">{refused}</p>}
-			{(failed || own.get(last) || (actions.reply && !open)) && (
+			{(failed || lastChanges || (actions.reply && !open)) && (
 				<div className="flex items-center gap-1 pl-5">
-					{own.get(last)}
+					{lastChanges}
 					{failed && <p role="alert" className="min-w-0 flex-1 truncate pl-2 text-xs leading-4 text-muted-foreground">{failed}</p>}
 					{actions.reply && !open && (
 						<Button variant="ghost" size="xs" className="ml-auto text-muted-foreground" onClick={() => setOpen({ kind: "reply" })}>
