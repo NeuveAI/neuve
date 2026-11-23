@@ -7,11 +7,12 @@ import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteDatabase, openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { Event, Plan, Request } from "@ace/channel/protocol";
+import type { Event, Plan, PlanComment, Request } from "@ace/channel/protocol";
 import { EventSchema } from "@ace/channel/frame";
 import { RequestSchema } from "@ace/channel/parse";
 import { exportSnapshot, importSnapshot } from "@ace/channel/transfer";
 import { git, until, Watch } from "../../../packages/channel/tests/helpers";
+import { placeFileLinesAnchor } from "../../../packages/review-rules/src/file-lines-anchor";
 import { backup, restore } from "../src/backup";
 import * as catalog from "../src/catalog";
 import { config } from "../src/host-config";
@@ -35,9 +36,9 @@ async function open(project: string, state: string, id = "plans", name = "plans"
 		log: () => {},
 	}, state);
 	const request = async <T = unknown>(input: Request) => channel.handle(input, () => {}) as Promise<T>;
-	const watch = async (plans?: boolean, chat?: number) => {
+	const watch = async (plans?: boolean, chat?: number, planComments?: boolean) => {
 		const events: Event[] = [];
-		const watchRequest = RequestSchema.parse({ op: "watch", plans, chat });
+		const watchRequest = RequestSchema.parse({ op: "watch", plans, chat, planComments });
 		const handle = await channel.handle(watchRequest, event => events.push(EventSchema.parse(event)));
 		if (!handle || typeof handle !== "object" || !("stop" in handle) || typeof handle.stop !== "function") {
 			throw new Error("The channel did not open a watch.");
@@ -186,13 +187,13 @@ test("plan approvals are versioned, human-only, idempotent and confined to the c
 	} finally { await rm(root, { recursive: true, force: true }); }
 });
 
-// The Plan tab can still say Approved after another process changes its Markdown file.
-test("reading an approved plan repairs its file and serves the approved bytes", async () => {
+// An approved card can look right while a comment-driven revision overwrites its Markdown file.
+test("reading repairs the approved file and a comment send writes a separate draft", async () => {
 	const { root, project, state } = await folders();
 	try {
 		const run = await open(project, state);
 		try {
-			const watch = await run.watch(true);
+			const watch = await run.watch(true, undefined, true);
 			const text = "# Approved plan\r\n\r\nShip this version.\r\n";
 			await run.write(text, "approved-copy");
 			const { plans: [draft] } = await watch.until("plans", event => event.plans.length === 1);
@@ -203,7 +204,26 @@ test("reading an approved plan repairs its file and serves the approved bytes", 
 			await writeFile(path, "# A different plan\n");
 			expect(await run.request({ op: "plan", plan: approved.id })).toEqual({ hash: hash(text), text });
 			expect(await readFile(path, "utf8")).toBe(text);
-			expect(watch.of("plans").at(-1)?.plans).toEqual([approved]);
+			const kept = await run.request<PlanComment>({
+				op: "plan-comment", author: owner, plan: approved.id, hash: approved.hash,
+				lines: [{ line: 3, text: "Ship this version." }], quote: "Ship this version.", text: "Revise the rollout.",
+			});
+			const revisionText = "# Revised plan\n\nRoll out gradually.\n";
+			run.fake.appendResponses([fauxAssistantMessage(fauxToolCall("plan_write", { text: revisionText }, { id: "revision" }), { stopReason: "toolUse" })]);
+			const receipt = await run.request<{ submission: number; entry: number; comments: string[] }>({
+				op: "plan-comments-send", author: owner, plan: approved.id, requestId: "revise-approved",
+			});
+			expect(receipt).toEqual({ submission: expect.any(Number), entry: expect.any(Number), comments: [kept.id] });
+			expect(await run.request({ op: "wait", submission: receipt.submission })).toBe("done");
+			const { plans: [original, revision] } = await watch.until("plans", event => event.plans.length === 2);
+			expect(original).toEqual(approved);
+			expect(revision).toMatchObject({ state: "draft", hash: hash(revisionText) });
+			expect(revision.id).not.toBe(approved.id);
+			expect(await readdir(join(state, "plans"))).toHaveLength(2);
+			expect(await readFile(path, "utf8")).toBe(text);
+			expect(await run.request({ op: "plan", plan: revision.id })).toEqual({ hash: hash(revisionText), text: revisionText });
+			const { comments: [sent] } = await watch.until("plan-comments", event => event.comments[0]?.sent?.entry === receipt.entry);
+			expect(sent).toMatchObject({ plan: approved.id, placement: kept.placement, sent: { entry: receipt.entry, submission: receipt.submission } });
 			await watch.stop();
 		} finally { await run.channel.close(); }
 	} finally { await rm(root, { recursive: true, force: true }); }
@@ -237,8 +257,8 @@ test("a mixed tool round must retry the plan as a standalone call", async () => 
 	} finally { await rm(root, { recursive: true, force: true }); }
 });
 
-// A snapshot can preserve approval while losing the Markdown or leaving an older copy on disk.
-test("approved Markdown survives a native backup, restore and move snapshot and goes with the channel", async () => {
+// A snapshot can preserve the current Markdown while dropping the anchor version and the thread.
+test("approved Markdown and anchored comments survive a native backup, restore and move", async () => {
 	const { root, project, state } = await folders();
 	const previous = runtimeHooks();
 	const scope = { home: catalog.home, user: catalog.user, local: config.channelScope === "local" };
@@ -254,12 +274,28 @@ test("approved Markdown survives a native backup, restore and move snapshot and 
 		catalog.save(source);
 		const run = await open(project, sourcePaths.base, source.id, source.name);
 		const text = "# Durable plan\n\nKeep the approval and the bytes.\n";
+		const earlier = "# Durable plan\n\nKeep the draft and the bytes.\n";
 		let approved: Plan;
+		let kept: PlanComment;
 		try {
-			const watch = await run.watch(true);
+			const watch = await run.watch(true, undefined, true);
+			await run.write(earlier, "earlier");
+			const { plans: [original] } = await watch.until("plans", event => event.plans[0]?.call === "earlier");
+			const comment = await run.request<PlanComment>({
+				op: "plan-comment", author: owner, plan: original.id, hash: original.hash,
+				lines: [{ line: 3, text: "Keep the draft and the bytes." }], quote: "Keep the draft", text: "Keep this with the revision.",
+			});
+			const thread = await run.request<PlanComment>({
+				op: "plan-comment-reply", author: owner, comment: comment.id, text: "Keep the reply too.",
+			});
 			await run.write(text, "durable");
-			const { plans: [draft] } = await watch.until("plans", event => event.plans.length === 1);
+			const { plans: [draft] } = await watch.until("plans", event => event.plans[0]?.call === "durable");
 			approved = await run.request<Plan>({ op: "plan-approve", author: owner, plan: draft.id, hash: hash(text) });
+			kept = {
+				...thread,
+				placement: placeFileLinesAnchor(thread.anchor, earlier, { hash: draft.hash, text }),
+			};
+			expect((await watch.until("plan-comments", event => event.comments[0]?.placement.hash === draft.hash)).comments).toEqual([kept]);
 			await watch.stop();
 		} finally { await run.channel.close(); }
 		const [filename] = await readdir(sourcePaths.plans);
@@ -281,8 +317,9 @@ test("approved Markdown survives a native backup, restore and move snapshot and 
 		for (const target of [catalog.paths(restored.id).base, state]) {
 			const copy = await open(project, target);
 			try {
-				const watch = await copy.watch(true);
+				const watch = await copy.watch(true, undefined, true);
 				expect(watch.of("plans").map(event => event.plans)).toEqual([[approved]]);
+				expect(watch.of("plan-comments").map(event => event.comments)).toEqual([[kept]]);
 				expect(await copy.request({ op: "plan", plan: approved.id })).toEqual({ hash: hash(text), text });
 				expect(await readFile(join(target, "plans", filename), "utf8")).toBe(text);
 				await watch.stop();

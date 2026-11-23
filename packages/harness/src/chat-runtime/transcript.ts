@@ -27,15 +27,21 @@ export const RUNTIME_WORK_TOOL = "runtime_work";
 /** pi's shell and file tools, which a runtime with its own tools has already: never served to it. */
 const CODING_TOOLS = new Set(CodingTools.tools?.map((tool) => tool.name) ?? []);
 const PLAN_TOOL = "plan_write";
+const PLAN_COMMENT_TOOL = "plan_comment_answer";
 const planningRequest = Symbol.for("neuve.chat.plan-request");
 /**
  * The only chat tools Neuve runs for a runtime with its own sandbox that works unattended. Neuve
  * runs every chat tool outside that sandbox, so a tool is listed only when it cannot widen what the
  * runtime may write or reach. It can ask the person a question or write a plan to a host-chosen
- * file in host storage. Any other tool (a lane, a subagent on any model, a review, Linear, the
+ * file in host storage, or answer in one of this chat's plan comment threads. The answer only
+ * updates session state. Any other tool (a lane, a subagent on any model, a review, Linear, the
  * browser, the desktop, other channels, a new tool) is withheld until someone classifies it.
  */
-const UNATTENDED_TOOLS: ReadonlySet<string> = new Set(["question", PLAN_TOOL]);
+const UNATTENDED_TOOLS: ReadonlySet<string> = new Set([
+  "question",
+  PLAN_TOOL,
+  PLAN_COMMENT_TOOL,
+]);
 
 export type Log = (
   event: string,

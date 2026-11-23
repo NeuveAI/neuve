@@ -27,6 +27,7 @@ import {
 	defineExtension,
 	type EntryId,
 	type EntryRecord,
+	GenerationTask,
 	Harness,
 	InboxDoc,
 	type InboxState,
@@ -77,7 +78,11 @@ import {
 } from "./messages";
 import { metadata, MetadataDoc, validateName } from "./metadata";
 import { available, choose, usable } from "./models";
-import { Plans, PlansDoc, type PlanFiles, type PlansState } from "./plan";
+import { Plans, PlansDoc, type PlanCommentReceipt, type PlanFiles, type PlansState } from "./plan";
+import {
+	changePlanComment, discardPlanCommentBatch, keepPlanComment, planCommentAnswers, planCommentBatch, planComments,
+	PlanCommentPlacements, preparePlanCommentSend, recoverPlanCommentSends, stagePlanCommentBatch, updatePlanCommentDelivery,
+} from "./plan-comments";
 import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode } from "./plan-mode";
 import { progress } from "./progress";
 import { answer, Questions } from "./questions";
@@ -107,6 +112,8 @@ import { type Tabs, tabs } from "./tabs";
 
 const ReviewNewCommitsEntry = defineEntry<ReviewNewCommits & { at: number }>("neuve:review:new-commits");
 const ReviewFeedDoc = defineDoc(ReviewFeedDefinition);
+
+declare const crypto: { randomUUID(): string };
 
 type Settings = { shared: boolean; desktop: boolean };
 
@@ -183,6 +190,13 @@ export type Options = {
 };
 
 type Send = (event: Event) => void;
+type PlanDelivery = {
+	chat: ConversationId;
+	requestId: string;
+	record: SubmissionRecord;
+	pickedUp: boolean;
+	runError?: string;
+};
 /** `reacted` once a reactions event, which carries the chat's whole state, has been sent. */
 type Listener = {
 	chat: ChatId;
@@ -200,6 +214,10 @@ export class Channel {
 	#log: Log;
 	#metadata: Metadata;
 	#plans: Plans;
+	#planState?: Readonly<PlansState>;
+	#planPlacements = new Map<ConversationId, PlanCommentPlacements>();
+	#pendingPlanDeliveries: PlanDelivery[][] = [];
+	#planDeliveries?: Promise<void>;
 	/** Committed settings, maintained from pi's commit stream before native dispatch. */
 	#settings: Settings;
 	#active = 0;
@@ -279,6 +297,7 @@ export class Channel {
 		const plans = new Plans(options.planFiles);
 		const plan = plans.extension(planning, (chat, work) => channel.#admitted(chat, work), log);
 		if (plan) registry.install(plan);
+		registry.install(planCommentAnswers(planning));
 		install(registry, options.extension, planning, !!options.planFileAccess, log);
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models),
@@ -338,14 +357,16 @@ export class Channel {
 		channel.#changed(value);
 		// Scheduling has not resumed and no caller has this channel yet, so the initial snapshot
 		// and subscription cannot miss a run transition. LiveDoc forks start empty in pi.
+		channel.#planState = await recoverPlanCommentSends(harness, await harness.snapshot(PlansDoc, context), context);
 		await channel.#snapshotBusy();
 		channel.#unsubscribe = harness.subscribeCommits(({ changes }) => {
+			const commentMessages = channel.#observePlanCommentSends(changes);
 			const ended: [ConversationId, readonly SubmissionId[]][] = [];
 			for (const change of changes) {
 				if (change.type === "entry" && change.value.model?.[0]?.role === "assistant") {
 					channel.#caption(change.value.conversationId);
 				}
-				if (change.type === "entry") channel.#said(change.value);
+				if (change.type === "entry") channel.#said(change.value, commentMessages?.has(change.value.id));
 				if (change.type !== "document") continue;
 				// Commit order, not request completion order, decides the state clients see.
 				if (change.record.kind === SettingsDoc.definition.kind) {
@@ -514,6 +535,26 @@ export class Channel {
 					const { id } = await this.#conversation(request.chat);
 					return this.#plans.approve(this.#harness, id, request.plan, request.hash, request.author, context);
 				});
+			case "plan-comment":
+			case "plan-comment-reply":
+			case "plan-comment-edit":
+			case "plan-comment-remove":
+			case "plan-comments-send":
+				return this.#admitted(request.chat, async settled => {
+					this.#author(request.author);
+					if (room.isAgent(request.author)) throw new Error("Only a person can manage plan comments.");
+					await this.#flushPlanDeliveries();
+					if (request.op === "plan-comments-send") {
+						this.#clientRequestId(request.requestId);
+						await this.#mayInvoke(request.author);
+						const conversation = await this.#conversation(request.chat);
+						return this.#recordPlanCommentSend(conversation, request, settled);
+					}
+					const { id } = await this.#conversation(request.chat);
+					return request.op === "plan-comment"
+						? keepPlanComment(this.#plans, this.#harness, id, request, context)
+						: changePlanComment(this.#harness, id, request, this.#planPlacementCache(id), context);
+				});
 			case "react": {
 				this.#author(request.author);
 				const { id } = await this.#conversation(request.chat);
@@ -542,6 +583,7 @@ export class Channel {
 				const conversation = await this.#conversation(request.chat);
 				const running = this.#runs.has(conversation.id);
 				await conversation.abort(context);
+				await this.#flushPlanDeliveries();
 				if (!running) return;
 				await conversation.submit(
 					{ type: "write", entry: room.stop(request.author, Date.now()) },
@@ -720,6 +762,72 @@ export class Channel {
 		await this.#publishRun(chat, inputs.map((id) => settled.get(id)), outcome);
 	}
 
+	#planPlacementCache(chat: ConversationId): PlanCommentPlacements {
+		let placements = this.#planPlacements.get(chat);
+		if (!placements) {
+			placements = new PlanCommentPlacements();
+			placements.retain(this.#planState, chat);
+			this.#planPlacements.set(chat, placements);
+		}
+		return placements;
+	}
+
+	#observePlanCommentSends(changes: readonly CommitChange[]): Set<EntryId> | undefined {
+		const plans = changes.find(change => change.type === "document" && change.record.kind === PlansDoc.definition.kind);
+		if (plans?.type === "document") {
+			this.#planState = (plans.value as PlansState | null) ?? undefined;
+			for (const [chat, placements] of this.#planPlacements) placements.retain(this.#planState, chat);
+		}
+		if (!this.#planState?.sends) return;
+		const entries = new Set<EntryId>();
+		const deliveries = changes.flatMap((change): PlanDelivery[] => {
+			if (change.type !== "submission") return [];
+			const { conversationId: chat, requestId, entry, id } = change.value;
+			if (change.value.type !== "input" || requestId === undefined) return [];
+			const batch = planCommentBatch(this.#planState, chat, requestId);
+			if (!batch || (batch.receipt && batch.receipt.submission !== id)) return [];
+			if (entry !== undefined) entries.add(entry);
+			if (batch.settled) return [];
+			const live = changes.find(change => change.type === "document" && change.record.kind === LiveDoc.definition.kind
+				&& change.conversationId === chat);
+			const run = live?.type === "document" ? (live.value as LiveState | null)?.run : undefined;
+			const failed = changes.find(change => change.type === "task" && change.value.conversationId === chat
+				&& change.value.kind === GenerationTask.definition.name && change.value.state.outcome?.error);
+			const runError = failed?.type === "task" ? failed.value.state.outcome?.error?.message : undefined;
+			return [{ chat, requestId, record: change.value, pickedUp: run?.inputs.includes(id) ?? false, runError }];
+		});
+		if (deliveries.length) {
+			this.#pendingPlanDeliveries.push(deliveries);
+			void this.#flushPlanDeliveries().catch(error => this.#log("warn", "plan.comments.delivery.failed", failure(error)));
+		}
+		return entries;
+	}
+
+	#flushPlanDeliveries(): Promise<void> {
+		if (this.#planDeliveries) return this.#planDeliveries;
+		if (!this.#pendingPlanDeliveries.length) return Promise.resolve();
+		// A watcher can see Pi's transcript entry before the carried items are marked sent.
+		// A crash there leaves the entry and staged batch. Retry drains these updates in-process.
+		// Reopening reconciles the staged batch against Pi's durable submission.
+		this.#planDeliveries = Promise.resolve().then(async () => {
+			try {
+				for (let deliveries; (deliveries = this.#pendingPlanDeliveries[0]);) {
+					await this.#harness.commit(async tx => {
+						const state = await tx.doc(PlansDoc);
+						for (const { chat, requestId, record, pickedUp, runError } of deliveries) {
+							const batch = planCommentBatch(state, chat, requestId);
+							if (batch) updatePlanCommentDelivery(state, batch, record, pickedUp, runError);
+						}
+					}, context);
+					this.#pendingPlanDeliveries.shift();
+				}
+			} finally {
+				this.#planDeliveries = undefined;
+			}
+		});
+		return this.#planDeliveries;
+	}
+
 	/** A run waiting on a question needs the same attention as one that ended, until it is answered. */
 	async #asked(chat: ConversationId, phase: "question" | "answered"): Promise<void> {
 		const inputs = this.#runs.get(chat);
@@ -777,6 +885,7 @@ export class Channel {
 			const conversation = await this.#harness.conversation(chat.id as ConversationId, context);
 			await conversation?.abort(context, { background: true });
 		}));
+		await this.#flushPlanDeliveries();
 		if (!author) return;
 		const at = Date.now();
 		await Promise.all(busy.map(async (chat) => {
@@ -799,6 +908,7 @@ export class Channel {
 			// Caption calls are external producers, so join them before entering that boundary.
 			await Promise.allSettled(this.#captionTasks);
 			await Promise.allSettled(this.#admissions.values());
+			await this.#flushPlanDeliveries().catch(error => errors.push(error));
 			try {
 				await this.#harness.close(context);
 			} catch (error) {
@@ -897,6 +1007,46 @@ export class Channel {
 	#ask(request: Extract<Request, { op: "ask" }>) {
 		this.#clientRequestId(request.requestId);
 		return this.#admitted(request.chat, settled => this.#admit(request, settled));
+	}
+
+	async #recordPlanCommentSend(
+		conversation: Conversation, request: Extract<Request, { op: "plan-comments-send" }>, settled: Promise<unknown>,
+	): Promise<PlanCommentReceipt> {
+		const chat = conversation.id;
+		const requestId = request.requestId ?? crypto.randomUUID();
+		const value = await digest({ op: request.op, author: request.author, plan: request.plan });
+		const existing = await this.#harness.commit(tx => admitted(tx, chat, requestId, value), context);
+		if (existing !== undefined) {
+			const receipt = planCommentBatch(this.#planState, chat, requestId)?.receipt;
+			if (!receipt || receipt.submission !== existing) throw new Error("The plan comment send receipt is missing.");
+			return receipt;
+		}
+		const batch = await preparePlanCommentSend(this.#planState, chat, request, this.#planPlacementCache(chat));
+		const bound = async (tx: Tx) => {
+			if (await claim(tx, chat, requestId, value) !== undefined) {
+				throw new Error(`Request ${requestId} was admitted by a concurrent request`);
+			}
+			await stagePlanCommentBatch(tx, chat, requestId, batch);
+		};
+		const input: InputSubmissionDraft = {
+			type: "input", content: room.content(request.author, batch.message.text), whenBusy: "steer", requestId,
+		};
+		let submission: SubmissionId | undefined;
+		try {
+			({ submission } = await this.#select(conversation, {}, undefined, undefined, undefined, {
+				bound, mode: "plan", input, settled,
+			}));
+		} catch (error) {
+			if (planCommentBatch(this.#planState, chat, requestId)) {
+				await this.#harness.commit(tx => discardPlanCommentBatch(tx, chat, requestId), context)
+					.catch(cleanup => this.#log("warn", "plan.comments.cleanup.failed", failure(cleanup)));
+			}
+			throw error;
+		}
+		await this.#flushPlanDeliveries();
+		const receipt = planCommentBatch(this.#planState, chat, requestId)?.receipt;
+		if (!receipt || receipt.submission !== submission) throw new Error("The plan comment send receipt is missing.");
+		return receipt;
 	}
 
 	#clientRequestId(requestId: string | undefined) {
@@ -1161,10 +1311,10 @@ export class Channel {
 		return { kind: "metadata", chat, ...this.#metadata, ...this.#settings };
 	}
 
-	#said(entry: EntryRecord): void {
+	#said(entry: EntryRecord, suppressMentions = false): void {
 		const human = room.human(entry);
 		if (!human) return;
-		const names = [...human.text.matchAll(MENTION)].map((match) => match[1]!.toLowerCase());
+		const names = suppressMentions ? [] : [...human.text.matchAll(MENTION)].map(match => match[1]!.toLowerCase());
 		const mentions = [...new Set(names)];
 		try {
 			this.#options.onSaid?.({
@@ -1365,27 +1515,40 @@ export class Channel {
 		let plans: DocumentWatch<PlansState> | undefined;
 		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop()]);
 		try {
+			if (request.planComments) await this.#flushPlanDeliveries();
 			await harness.commit(async tx => {
 				await tx.doc(ReviewCardsDoc, conversation.id);
-				if (request.plans) await tx.doc(PlansDoc);
+				if (request.plans || request.planComments) await tx.doc(PlansDoc);
 			}, context);
 			reviews = await harness.watchDoc(ReviewCardsDoc, conversation.id, context);
-			if (request.plans) plans = await harness.watchDoc(PlansDoc, context);
+			if (request.plans || request.planComments) plans = await harness.watchDoc(PlansDoc, context);
 			const sendReviews = (value: Readonly<{ cards: Record<string, ReviewCard> }> | null | undefined) =>
 				send({ kind: "review-cards", chat: conversation.id, cards: value?.cards || {} });
 			sendReviews(reviews?.value);
 			reviews?.start(async value => { sendReviews(value); });
-			if (request.plans) {
-				let last: string | undefined;
+			if (plans) {
+				let lastPlans: string | undefined;
+				let lastComments: string | undefined;
 				const sendPlans = (value: Readonly<PlansState> | null | undefined) => {
+					if (!request.plans) return;
 					const current = value?.chats[conversation.id]?.map(({ plan }) => plan) ?? [];
 					const key = JSON.stringify(current);
-					if (key === last) return;
-					last = key;
+					if (key === lastPlans) return;
+					lastPlans = key;
 					send({ kind: "plans", chat: conversation.id, plans: current });
 				};
-				sendPlans(plans?.value);
-				plans?.start(async value => { sendPlans(value); });
+				const sendPlanComments = async (value: Readonly<PlansState> | null | undefined) => {
+					if (!request.planComments) return;
+					const chat = conversation.id;
+					const comments = await planComments(value, chat, this.#planPlacementCache(chat));
+					const key = JSON.stringify(comments);
+					if (key === lastComments) return;
+					lastComments = key;
+					send({ kind: "plan-comments", chat: conversation.id, comments });
+				};
+				sendPlans(plans.value);
+				await sendPlanComments(plans.value);
+				plans.start(async value => { sendPlans(value); await sendPlanComments(value); });
 			}
 		} catch (error) {
 			await stopDocs();
