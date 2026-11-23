@@ -8,9 +8,4 @@
  * There is no read receipt: "picked up" (the agent's turn started) is the closest signal to read.
  */
 export type CommentThreadState =
-  | "queued"
-  | "sent"
-  | "picked-up"
-  | "working"
-  | "replied"
-  | "failed";
+  "queued" | "sent" | "picked-up" | "working" | "replied" | "failed";
