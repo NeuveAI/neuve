@@ -88,7 +88,7 @@ export class Plans {
 			name: "neuve-plan",
 			tools: [defineTool({
 				name: PLAN_TOOL,
-				description: "In Plan mode, save the complete Markdown plan for human approval. Call this tool on its own when the plan is ready.",
+				description: "Deliver a plan or revision in Plan mode. Call once, on its own, with the full Markdown. Ends the turn.",
 				parameters: Type.Object({ text: Type.String() }),
 				async execute({ text }, api, context) {
 					const chat = api.conversationId;

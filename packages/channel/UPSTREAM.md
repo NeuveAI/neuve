@@ -59,7 +59,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/src/operations.ts` | Reexport the unchanged request schema/type from the data-only operations-protocol leaf. The channelOperations body remains byte-identical. Separate typed extension operations and native pi harness binding. Review/planning docs retain their original kinds/versions. Mutating extension operations obey worker lifecycle gates; host-only association writes never enter from browser clients. |
 | `packages/channel/src/parse.ts` | Strict complete native ingress schema and verified-author stamping live beside original protocol declarations; extension schema is separate. |
 | `packages/channel/src/planning-protocol.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
-| `packages/channel/src/plan.ts` | Stores the Markdown and plan lifecycle in session state and checks returned bytes against the committed hash. The writer returns the plan text in the transcript and ends the tool round. |
+| `packages/channel/src/plan.ts` | Stores the Markdown and plan lifecycle in session state and checks returned bytes against the committed hash. The writer describes how to deliver a plan or revision, returns its text, and ends the tool round. |
 | `packages/channel/src/planning.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
 | `packages/channel/src/requests.ts` | Generic durable pi-document digest claims prevent same-ID/different-payload retries without new SQL tables. Existing document kind/version are retained. |
 | `packages/channel/src/review-context.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
@@ -90,8 +90,8 @@ Plan mode extends the upstream `packages/channel/src/channel.ts` admission and w
 | `packages/channel/src/extensions.ts` | The existing tool wrapper checks the chat's effective mode inside execute, including safe replays. |
 | `packages/channel/src/frame.ts` | Agent and reply frames retain the mode through relay. |
 | `packages/channel/src/parse.ts` | The ask schema accepts the mode at both channel and gateway ingress. |
-| `packages/channel/src/plan-mode.ts` | Stores the chat mode, resolves inheritance from the chat's creator, and includes the plan writer in the allowlist. |
-| `packages/channel/tests/plan-mode.test.ts` | Exercises admission, busy chats, inheritance, and interrupted tool replay. |
+| `packages/channel/src/plan-mode.ts` | Stores and inherits the chat mode, limits the tools offered in Plan mode, and tells planning agents to deliver the full plan or revision with the available plan writer. |
+| `packages/channel/tests/plan-mode.test.ts` | Exercises admission, busy chats, inheritance, interrupted tool replay, and the instruction delivered to planning agents. |
 
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 

@@ -90,11 +90,14 @@ export function planModeModels(models: Models): Models {
 		const messages = request.messages.filter(message => message !== decision);
 		if (mode === "plan") {
 			// Add the marker after all request hooks, which may copy the transcript.
+			const tools = getCurrentTools(messages);
 			const offer: SystemMessage = {
 				role: "system",
-				content: "",
+				content: tools.some(tool => tool.name === PLAN_TOOL)
+					? `When ready, deliver the full plan or revision in one \`${PLAN_TOOL}\` call on its own. That ends the turn.`
+					: "",
 				timestamp: messages.at(-1)?.timestamp ?? 0,
-				toolsRemoved: getCurrentTools(messages).filter(tool => !planTools.has(tool.name)).map(({ name }) => ({ name })),
+				toolsRemoved: tools.filter(tool => !planTools.has(tool.name)).map(({ name }) => ({ name })),
 			};
 			Object.defineProperty(offer, planningRequest, { value: true });
 			messages.push(offer);
