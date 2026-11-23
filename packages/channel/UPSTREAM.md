@@ -99,6 +99,9 @@ Plan mode extends the upstream `packages/channel/src/channel.ts` admission and w
 | `packages/channel/src/parse.ts` | Parses the attended and watch flags. Requires an author and a runtime request ID for an approval answer. |
 | `packages/channel/src/frame.ts` | Validates each approval request state and preserves the complete list in watch frames. |
 | `packages/channel/tests/approvals-protocol.test.ts` | Checks that malformed answers are refused, the verified author replaces the claimed one, and every request state survives the event boundary. |
+| `packages/channel/src/protocol.ts` | Requires a typed description of what Allow grants beside the runtime input used for details. |
+| `packages/channel/src/frame.ts` | Validates the shared approval descriptions and refuses a record with no description. |
+| `packages/channel/tests/approvals-protocol.test.ts` | Exercises each description through a watch frame and checks that a missing description or an empty patch is refused. |
 
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 
