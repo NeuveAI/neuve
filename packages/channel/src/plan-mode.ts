@@ -11,7 +11,7 @@ import {
 	type Harness,
 	type Tx,
 } from "@earendil-works/pi-durable";
-import { PLAN_TOOL, type ChatMode } from "./protocol";
+import { PLAN_COMMENT_TOOL, PLAN_TOOL, type ChatMode } from "./protocol";
 import { ATTENDED_SECTION } from "./approvals";
 
 export const ChatModesDoc = defineDoc<{ chats: Record<string, ChatMode> }>({
@@ -29,6 +29,7 @@ export const planTools: ReadonlySet<string> = new Set([
 	"planning_dependencies",
 	"question",
 	PLAN_TOOL,
+	PLAN_COMMENT_TOOL,
 	"runtime_work",
 ]);
 
@@ -91,7 +92,10 @@ export function planModeModels(models: Models, receivesAttendance: (provider: st
 		const keepAttendance = receivesAttendance(model.provider);
 		const messages = request.messages.filter(message => message !== decision && (
 			keepAttendance || message.role !== "system" || !Object.hasOwn(message.sections ?? {}, ATTENDED_SECTION)
-		));
+		)).map(message =>
+			mode === "ace" && message.role === "system" && message.toolsAdded
+				? { ...message, toolsAdded: message.toolsAdded.filter(tool => tool.name !== PLAN_COMMENT_TOOL) }
+				: message);
 		if (mode === "plan") {
 			// Add the marker after all request hooks, which may copy the transcript.
 			const tools = getCurrentTools(messages);

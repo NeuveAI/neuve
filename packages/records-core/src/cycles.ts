@@ -7,6 +7,10 @@ import { mintUlid } from "./ids.ts";
 import { append, get } from "./log.ts";
 
 type ReadOpening = Extract<RecordEvent, { kind: "cycle.opened@2" }>;
+type LocalScopeSelection = Extract<
+  RecordEvent,
+  { kind: "cycle.local-scope-selected@1" }
+>;
 
 const readCycles = (baseOid: string, branch?: string) =>
   Effect.gen(function* () {
@@ -43,9 +47,12 @@ const readCycles = (baseOid: string, branch?: string) =>
 export const unboundReadCycles = (baseOid: string) => readCycles(baseOid);
 
 /** A read joins the latest cycle for its base and branch until that cycle publishes. */
-export const openOrJoinCycle = (
+export const openOrJoinCycle = <E = never, R = never>(
   payload: ReadOpening["payload"],
   actor: string,
+  selectScope?: (
+    cycleId: string,
+  ) => Effect.Effect<LocalScopeSelection["payload"] | undefined, E, R>,
 ) =>
   Effect.gen(function* () {
     const [latest] = yield* readCycles(payload.baseOid, payload.branch);
@@ -66,7 +73,21 @@ export const openOrJoinCycle = (
       attribution: { cycleId },
       payload,
     };
-    return yield* append([event]).pipe(
+    const selection =
+      selectScope === undefined ? undefined : yield* selectScope(cycleId);
+    const events: Array<ReadOpening | LocalScopeSelection> = [];
+    if (selection !== undefined)
+      events.push({
+        id: mintUlid(),
+        kind: "cycle.local-scope-selected@1",
+        idempotencyKey: `cycle.local-scope:${cycleId}`,
+        actor,
+        occurredAt: event.occurredAt,
+        attribution: event.attribution,
+        payload: selection,
+      });
+    events.push(event);
+    return yield* append(events).pipe(
       Effect.as({ cycleId, opened: true }),
       Effect.catchTag("IdempotencyConflict", (conflict) =>
         Effect.gen(function* () {

@@ -49,6 +49,8 @@ import { indexOf, retrieverFor, type RetrieverScope } from "./retrievers.ts";
 import type { SearchConfig } from "./search-config.ts";
 import type { StackRun } from "./stack/tools.ts";
 import {
+  heldLocalText,
+  logScopeReadFailure,
   readScopeText,
   type ScopeSnapshot,
   type ScopeSource,
@@ -367,22 +369,38 @@ export const pageText = (
 const viewOf = (ctx: LookupContext, rev: Revision) =>
   rev === "head" ? ctx.head : ctx.base;
 
-const texts = new Map<string, string | null>();
+const texts = new Map<string, { text: string | null; cause?: string }>();
 const TEXT_CACHE = 256;
 
 /** A blob's text, or null when it is binary or missing. Kept in a small memory cache. */
-export const blobTextOf = (repository: string, blob: string) =>
+export const blobTextOf = (
+  repository: string,
+  blob: string,
+  onFailure?: (cause: string) => void,
+) =>
   Effect.gen(function* () {
-    if (texts.has(blob)) return texts.get(blob) ?? null;
-    const bytes = (yield* readBlobs(repository, [blob])).get(blob);
-    const text = bytes === undefined ? null : (blobText(bytes) ?? null);
-    texts.set(blob, text);
-    while (texts.size > TEXT_CACHE) {
-      const oldest = texts.keys().next().value;
-      if (oldest === undefined) break;
-      texts.delete(oldest);
+    let stored = texts.get(blob);
+    if (stored === undefined) {
+      const bytes = (yield* readBlobs(repository, [blob])).get(blob);
+      let cause: string | undefined;
+      const text =
+        bytes === undefined
+          ? null
+          : (blobText(bytes, (error) => {
+              cause = error;
+            }) ?? null);
+      if (bytes === undefined)
+        cause = `Git returned no bytes for blob ${blob}.`;
+      stored = { text, ...(cause === undefined ? {} : { cause }) };
+      texts.set(blob, stored);
+      while (texts.size > TEXT_CACHE) {
+        const oldest = texts.keys().next().value;
+        if (oldest === undefined) break;
+        texts.delete(oldest);
+      }
     }
-    return text;
+    if (stored.cause !== undefined) onFailure?.(stored.cause);
+    return stored.text;
   });
 
 /** A failure's message as a lookup's answer gives it. */
@@ -1603,7 +1621,9 @@ export const sourceText = (ctx: LookupContext, source: ScopeSource) =>
       const text =
         source.ref.blob === undefined
           ? null
-          : yield* blobTextOf(ctx.repository, source.ref.blob);
+          : yield* blobTextOf(ctx.repository, source.ref.blob, (cause) =>
+              logScopeReadFailure(ctx, source.id, cause),
+            );
       return {
         text: text ?? undefined,
         disclosure:
@@ -1619,20 +1639,37 @@ export const sourceText = (ctx: LookupContext, source: ScopeSource) =>
           .join("\n\n"),
         disclosure: undefined,
       } satisfies SectionText;
-    const unmasked = readScopeText(ctx.location, ctx.cycleId, source.id);
+    if (source.kind === "working-file") {
+      const { text, gap, cause } = heldLocalText(ctx, source.id, source.sha256);
+      if (cause !== undefined) logScopeReadFailure(ctx, source.id, cause);
+      return { text, disclosure: gap } satisfies SectionText;
+    }
+    let cause: string | undefined;
+    const unmasked = readScopeText(
+      ctx.location,
+      ctx.cycleId,
+      source.id,
+      (error) => {
+        cause = error;
+      },
+    );
     if (Option.isSome(unmasked))
       return {
         text: unmasked.value,
         disclosure: undefined,
       } satisfies SectionText;
-    if (source.capture === null)
+    if (source.capture === null) {
+      if (cause !== undefined) logScopeReadFailure(ctx, source.id, cause);
       return {
         text: undefined,
         disclosure:
           "the unmasked copy of this source is gone (swept after 7 days with no run in the cycle, 10.79, or lost) and it has no masked capture",
       } satisfies SectionText;
+    }
     const blobs = yield* Blobs.BlobStore;
     const read = yield* blobs.get(source.capture.blob);
+    if (read._tag !== "Present" && cause !== undefined)
+      logScopeReadFailure(ctx, source.id, cause);
     return read._tag === "Present"
       ? ({
           text: new TextDecoder().decode(read.bytes),

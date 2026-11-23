@@ -1,8 +1,6 @@
 import { Cycles, Starter, type StoreLocation } from "@neuve/records-core";
 import { GitOid } from "@neuve/records-schema";
 import { Effect } from "effect";
-import { isSqlError } from "effect/sql/SqlError";
-import { describeFailure } from "./records-cli.ts";
 
 export type QueryBranch = Pick<
   Parameters<typeof Cycles.openOrJoinCycle>[0],
@@ -12,23 +10,30 @@ export type QueryBranch = Pick<
 export const readQueryBranch = (
   repository: string,
   branch?: string,
-): QueryBranch | { reason: string } => {
+): QueryBranch | { reason: string; cause?: string } => {
   const prefix = "refs/heads/";
   let ref = branch === undefined ? undefined : prefix + branch;
   if (ref === undefined) {
     const result = Bun.spawnSync(
       ["git", "-C", repository, "symbolic-ref", "--quiet", "HEAD"],
-      { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
     );
+    if (!result.success && result.exitCode !== 1)
+      return {
+        reason: "the checked-out branch could not be read",
+        cause:
+          result.stderr.toString().trim() ||
+          `git symbolic-ref exited with code ${result.exitCode}`,
+      };
     ref = result.stdout.toString().trim();
     if (!result.success || !ref.startsWith(prefix))
-      return { reason: "HEAD is detached, so pass --branch <name>" };
+      return { reason: "HEAD is detached" };
   }
 
   // Capture the checked-out or named branch's tip at the read, before any Records transaction.
   const result = Bun.spawnSync(
     ["git", "-C", repository, "show-ref", "--verify", "--hash", ref],
-    { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
   const tip = GitOid.safeParse(result.stdout.toString().trim());
   if (!result.success || !tip.success) {
@@ -36,7 +41,14 @@ export const readQueryBranch = (
       throw new Error(
         `--branch names no local branch ${JSON.stringify(branch)} in --repo.`,
       );
-    return { reason: "the checked-out branch has no readable tip" };
+    return {
+      reason: "the checked-out branch has no readable tip",
+      cause:
+        result.success && !tip.success
+          ? tip.error.message
+          : result.stderr.toString().trim() ||
+            `git show-ref exited with code ${result.exitCode}`,
+    };
   }
   return { branch: ref.slice(prefix.length), branchTipOid: tip.data };
 };
@@ -44,10 +56,7 @@ export const readQueryBranch = (
 export const warnQueryCycle = (reason: string) =>
   Bun.write(
     Bun.stderr,
-    `neuve: Query did not join a review cycle (${reason
-      .replace(/[\r\n]+/g, " ")
-      .trim()
-      .replace(/\.$/, "")}).\n`,
+    `neuve: Query did not join a review cycle (${reason === "HEAD is detached" ? "HEAD is detached, so pass --branch <name>" : reason}).\n`,
   ).catch(() => undefined);
 
 export const openQueryCycle = (
@@ -55,17 +64,15 @@ export const openQueryCycle = (
   location: StoreLocation,
   payload: Parameters<typeof Cycles.openOrJoinCycle>[0],
   actor: string,
-  onFailure: (reason: string) => void,
+  onFailure: (error: unknown) => void,
+  selectScope?: Parameters<typeof Cycles.openOrJoinCycle<never, never>>[2],
 ) =>
   Effect.gen(function* () {
-    const result = yield* Effect.result(Cycles.openOrJoinCycle(payload, actor));
+    const result = yield* Effect.result(
+      Cycles.openOrJoinCycle(payload, actor, selectScope),
+    );
     if (result._tag === "Failure") {
-      const error = result.failure;
-      onFailure(
-        isSqlError(error) && error.reason._tag === "LockTimeoutError"
-          ? "Records store is locked"
-          : describeFailure(error),
-      );
+      onFailure(result.failure);
       return undefined;
     }
     const { cycleId, opened } = result.success;

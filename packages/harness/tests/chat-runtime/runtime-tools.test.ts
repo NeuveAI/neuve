@@ -47,16 +47,21 @@ test("pi's shell and file tools and the pass-through are kept from a runtime wit
 
 // Why: Neuve runs every chat tool outside the runtime's sandbox, and the bridge hands pi every call
 // to a served tool, so serving one is running it. An unattended runtime with its own sandbox must
-// only get tools that preserve its access limits. The plan writer writes to a host-chosen file.
+// only get tools that preserve its access limits. The plan writer uses a host-chosen file and
+// the answer tool writes to a comment thread in the chat's session state.
 // The runtime must hear which tools were withheld because its prompt still describes them.
 test("an unattended runtime with its own sandbox is served only the tools that cannot widen it, and told which are withheld", () => {
-  const offered = conversation(["plan_write", ...ace]);
+  const offered = conversation(["plan_write", "plan_comment_answer", ...ace]);
   const own = policy(offered, handle, undefined, {
     folder: "/work",
     ownTools: true,
   });
   expect(own.approvalPolicy).toBe("allow");
-  expect(own.tools.map((t) => t.name)).toEqual(["question", "plan_write"]);
+  expect(own.tools.map((t) => t.name)).toEqual([
+    "question",
+    "plan_write",
+    "plan_comment_answer",
+  ]);
   const attended = policy(offered, handle, undefined, {
     ownTools: true,
     approvals: true,
@@ -84,6 +89,7 @@ test("an unattended runtime with its own sandbox is served only the tools that c
     ...coding,
     "question",
     "plan_write",
+    "plan_comment_answer",
     ...ace,
   ]);
   expect(other.systemPrompt).toBe("prompt");

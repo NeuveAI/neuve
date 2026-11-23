@@ -180,11 +180,18 @@ const chunkSpec = (
 const strict = new TextDecoder("utf-8", { fatal: true });
 
 /** Text of a blob, or undefined when it is binary (a NUL in its first 8,000 bytes, or not UTF-8). */
-export const blobText = (bytes: Uint8Array) => {
-  if (bytes.subarray(0, 8_000).includes(0)) return undefined;
+export const blobText = (
+  bytes: Uint8Array,
+  onFailure?: (cause: string) => void,
+) => {
+  if (bytes.subarray(0, 8_000).includes(0)) {
+    onFailure?.("The first 8,000 bytes contain a NUL byte.");
+    return undefined;
+  }
   try {
     return strict.decode(bytes);
-  } catch {
+  } catch (error) {
+    onFailure?.(String(error));
     return undefined;
   }
 };

@@ -223,6 +223,14 @@ function render(event: Event, info: ChannelInfo) {
 		case "plans":
 			for (const plan of event.plans) console.log(`${tag}${plan.state} plan ${plan.id}  ${plan.title}`);
 			return;
+		case "plan-comments":
+			for (const comment of event.comments) {
+				console.log(`${tag}${comment.author}: ${comment.text}`);
+				for (const reply of comment.replies) {
+					console.log(`${tag}  ${reply.kind === "person" ? reply.author : reply.model}: ${reply.text}`);
+				}
+			}
+			return;
 		case "run":
 			if (event.state !== "end") return;
 			ended = true;
@@ -238,7 +246,7 @@ async function watch(session: Session, replay = true): Promise<{ ended: Promise<
 	const info = await session.request<ChannelInfo>({ op: "info" });
 	let live = false;
 	const ended = Promise.withResolvers<void>();
-	await session.request({ op: "watch", chat: chat(), stops: true, ...(replay && flags.plans ? { plans: true } : {}) }, {
+	await session.request({ op: "watch", chat: chat(), stops: true, ...(replay && flags.plans ? { plans: true, planComments: true } : {}) }, {
 		event(event) {
 			if (event.kind === "live") return void (live = true);
 			if (live || replay) render(event, info);

@@ -7,20 +7,46 @@ import {
   test,
 } from "bun:test";
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { Effect, Layer } from "effect";
 import {
   Ancestry,
+  Blobs,
+  Computations,
   Identity,
   Log,
   mintUlid,
   Sessions,
   storeLocationIn,
 } from "@neuve/records-core";
-import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { settingsPath } from "../../../packages/harness/src/settings.ts";
+import { mcpClientsLayer } from "../../../packages/harness/src/mcp-client.ts";
+import {
+  fetchCyclePart,
+  readScopeOpening,
+  scopeFolder,
+} from "../../../packages/harness/src/scope.ts";
+import {
+  readRunLog,
+  runLogPath,
+} from "../../../packages/harness/src/run-log.ts";
 
 import { parseQueryInvocation } from "../src/boundary.ts";
+import type {
+  PublicQueryEvent,
+  PublicQueryScopeSource,
+} from "../src/domain.ts";
 import { execute as executeRecords, withStore } from "../src/records-cli.ts";
 
 // Built into a temporary directory, never dist/neuve, which an installed
@@ -171,8 +197,11 @@ const run = async (
   return { stdout, stderr, exitCode };
 };
 
-const createRecords = async (root: string) => {
-  const result = await run(["records", "migrate", "--repo", root]);
+const createRecords = async (
+  root: string,
+  env?: Readonly<Record<string, string>>,
+) => {
+  const result = await run(["records", "migrate", "--repo", root], env);
   expect(result.exitCode, result.stderr).toBe(0);
 };
 
@@ -291,6 +320,25 @@ describe("neuve CLI boundary", () => {
     expect(withoutNdjson.exitCode).toBe(0);
     expect(withoutJson.stderr).toBe("");
     expect(withoutNdjson.stderr).toBe("");
+    expect(Object.keys(JSON.parse(withoutJson.stdout))).toEqual([
+      "schema_version",
+      "provider",
+      "query",
+      "source",
+      "retrieval",
+      "structural_observations",
+    ]);
+    expect(
+      Object.keys(
+        JSON.parse(withoutNdjson.stdout.trimEnd().split("\n").at(-1)!),
+      ),
+    ).toEqual([
+      "schema_version",
+      "sequence",
+      "identity",
+      "kind",
+      "relationship_count",
+    ]);
     expect(await Bun.file(database).exists()).toBe(false);
 
     await createRecords(root);
@@ -373,6 +421,650 @@ describe("neuve CLI boundary", () => {
     expect(blob).toEqual({
       retention: "raw-capture",
       content: new TextEncoder().encode(question),
+    });
+  });
+
+  // The cycle job and a later query must read the same pinned bytes after the working file changes.
+  test("holds named scope at the opening read and returns it on a join", async () => {
+    const { root } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-cli-scope-"));
+    roots.push(scratch);
+    const plan = join(await realpath(scratch), "approved-plan");
+    const note =
+      "# Done when\n- Preserve the approved text.\n\nRead also handbook/details.\n";
+    const original = Buffer.from("\uFEFF" + note);
+    const sha256 = createHash("sha256").update(original).digest("hex");
+    await Bun.write(plan, original);
+    await Bun.write(join(root, "AGENTS.md"), "Read [guide](guide).\n");
+    await Bun.write(join(root, "guide"), "Guide context.\n");
+    await Bun.write(join(root, "handbook", "details"), "Found context.\n");
+    const committed = "# Approved decision\nUse the Git version.\n";
+    await Bun.write(join(root, "decision"), committed);
+    expect(
+      execute(
+        ["git", "add", "AGENTS.md", "guide", "handbook/details", "decision"],
+        root,
+      ).exitCode,
+    ).toBe(0);
+    expect(
+      execute(["git", "commit", "--quiet", "-m", "scope documents"], root)
+        .exitCode,
+    ).toBe(0);
+    const revision = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+    const blob = execute(
+      ["git", "rev-parse", "HEAD:decision"],
+      root,
+    ).stdout.trim();
+    await rm(join(root, "decision"));
+    const graph = await fakeGraph();
+    const env = {
+      HOME: join(scratch, "home"),
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+    };
+    await mkdir(env.HOME);
+    await createRecords(root, env);
+
+    const args = [
+      ...queryArgs(root, revision),
+      "--scope",
+      plan,
+      "--scope",
+      "decision",
+    ];
+    const first = await run(args, env);
+    expect(first.exitCode, first.stderr).toBe(0);
+    const answer = JSON.parse(first.stdout);
+    const pinEvents = await queryHistory(root, "cycle.local-scope-selected@1");
+    expect(pinEvents).toHaveLength(1);
+    const { event } = pinEvents[0];
+    expect(event.attribution.cycleId).toBe(answer.cycle_id);
+    const [pin] = event.payload.sources;
+    expect(event.payload.sources).toEqual([
+      {
+        kind: "working-file",
+        path: plan,
+        namedAs: [plan],
+        sourceId: "S1",
+        fetchedAt: expect.any(String),
+        sha256,
+      },
+      {
+        kind: "repository-document",
+        path: "decision",
+        namedAs: ["decision"],
+        blob,
+      },
+    ]);
+    expect(new Date(pin.fetchedAt).toISOString()).toBe(pin.fetchedAt);
+    const [opening] = await queryHistory(root, "cycle.opened@2");
+    expect(opening.event.occurredAt).toBe(event.occurredAt);
+    expect(scopeJobs(root)).toEqual([
+      {
+        kind: "scope.fetch@2",
+        dedupe_key: `scope.fetch:${answer.cycle_id}`,
+        state: "waiting",
+      },
+    ]);
+    expect(answer.scope_gaps).toEqual([]);
+    expect(
+      answer.scope.map(({ ref }: { ref: { path: string } }) => ref.path),
+    ).toEqual([plan, "decision", "AGENTS.md", "guide", "handbook/details"]);
+    const [held, document, guide, linked, named] = answer.scope;
+    expect(held).toMatchObject({
+      kind: "working-file",
+      fetchedAt: pin.fetchedAt,
+      sha256,
+      ref: { path: plan },
+      text: note,
+    });
+    expect(document).toMatchObject({
+      kind: "repository-document",
+      ref: { path: "decision", blob, revision, found: "named by the request" },
+      text: committed,
+      sections: [
+        {
+          startLine: 1,
+          endLine: 3,
+          sha256: createHash("sha256").update(committed).digest("hex"),
+        },
+      ],
+    });
+    expect(
+      [guide, linked, named].map(
+        ({ ref, contextOnly, stratum }: PublicQueryScopeSource) => [
+          ref.found,
+          contextOnly,
+          stratum,
+        ],
+      ),
+    ).toEqual([
+      ["agent guide (agents-md-root-v1)", true, "context only"],
+      ["linked from AGENTS.md", true, "context only"],
+      [`named in ${plan}`, true, "context only"],
+    ]);
+    const location = storeLocationIn(join(root, ".git"));
+    const heldPath = join(scopeFolder(location, answer.cycle_id), "S1.txt");
+    expect(await Bun.file(heldPath).bytes()).toEqual(new Uint8Array(original));
+    await Bun.write(plan, "Changed after the first read.\n");
+
+    const integrations = { status: "absent", path: "(none)" } as const;
+    const readCycle = () =>
+      executeRecords(
+        withStore(
+          root,
+          "write",
+          Effect.gen(function* () {
+            const event = yield* readScopeOpening(answer.cycle_id);
+            if (event === undefined)
+              throw new Error("Expected a recorded cycle opening");
+            return (yield* fetchCyclePart(
+              {
+                repository: root,
+                location,
+                cycleId: answer.cycle_id,
+                integrations,
+              },
+              event,
+            )).value;
+          }).pipe(
+            Effect.provide(mcpClientsLayer(integrations)),
+            Effect.provide(
+              Computations.layer.pipe(
+                Layer.provideMerge(Blobs.layer(location)),
+              ),
+            ),
+          ),
+        ),
+      );
+    const cycle = await readCycle();
+    expect(
+      cycle.sources.map((source) => ({
+        ...source,
+        stratum: source.contextOnly ? "context only" : source.stratum,
+      })),
+    ).toEqual(
+      answer.scope.map(
+        ({ text: _text, ...source }: PublicQueryScopeSource) => source,
+      ),
+    );
+
+    const late = join(await realpath(scratch), "late-plan");
+    await Bun.write(late, "A later plan.\n");
+    const branch = execute(
+      ["git", "branch", "--show-current"],
+      root,
+    ).stdout.trim();
+    const reviewer = join(scratch, "reviewer");
+    expect(
+      execute(["git", "worktree", "add", "--detach", reviewer, revision], root)
+        .exitCode,
+    ).toBe(0);
+    const joined = await run(
+      [
+        ...queryArgs(reviewer, revision),
+        "--branch",
+        branch,
+        "--scope",
+        late,
+        "--stream",
+      ],
+      env,
+    );
+    expect(joined.exitCode, joined.stderr).toBe(0);
+    const events: PublicQueryEvent[] = joined.stdout
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.map(({ kind, sequence }) => [kind, sequence])).toEqual([
+      ["retrieval", 1],
+      ["relationship", 2],
+      ["scope", 3],
+      ["scope", 4],
+      ["scope", 5],
+      ["scope", 6],
+      ["scope", 7],
+      ["complete", 8],
+    ]);
+    expect(
+      events.flatMap((event) => (event.kind === "scope" ? [event.source] : [])),
+    ).toEqual(answer.scope);
+    expect(events.at(-1)).toMatchObject({
+      cycle_id: answer.cycle_id,
+      scope_gaps: [
+        `${late}: The path was named after this cycle's scope was read.`,
+      ],
+    });
+    expect(await queryHistory(root, "cycle.local-scope-selected@1")).toEqual(
+      pinEvents,
+    );
+
+    await Bun.write(heldPath, "The copy has changed.\n");
+    expect((await readCycle()).sources[0]).toMatchObject({
+      id: "S1",
+      status: "gap",
+      gap: "The held copy's SHA-256 differs from its citation.",
+    });
+    const damaged = await run(args, env);
+    expect(damaged.exitCode, damaged.stderr).toBe(0);
+    const damagedAnswer = JSON.parse(damaged.stdout);
+    expect(damagedAnswer.scope[0]).toMatchObject({
+      id: "S1",
+      status: "gap",
+      sha256,
+      gap: "The held copy's SHA-256 differs from its citation.",
+    });
+    expect(damagedAnswer.scope[0].text).toBeUndefined();
+  });
+
+  // Unavailable scope must leave code intact, and the scope text limit must leave citations intact.
+  test("discloses unavailable scope and preserves citations outside a cycle", async () => {
+    const { root, revision } = await fixtureRepository();
+    const graph = await fakeGraph();
+    const home = join(root, "home");
+    await mkdir(home);
+    await Bun.write(join(root, "working"), "See other.custom.\n");
+    await Bun.write(join(root, "opaque"), new Uint8Array([0xff, 0x00]));
+    await Bun.write(join(root, "large"), Buffer.alloc(262_145, 0x61));
+    const env = {
+      HOME: home,
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+    };
+    const args = queryArgs(root, revision);
+    const result = await run(
+      [
+        ...args.map((arg) => (arg === "4096" ? "8" : arg)),
+        "--scope",
+        "missing",
+        "--scope",
+        "source.custom",
+        "--scope",
+        "working",
+        "--scope",
+        "home",
+        "--scope",
+        "opaque",
+        "--scope",
+        "large",
+      ],
+      env,
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+    const answer = JSON.parse(result.stdout);
+    expect(answer.retrieval).toMatchObject({
+      status: "ok",
+      candidates: [{ symbol: "target" }, expect.any(Object)],
+    });
+    expect(answer.cycle_id).toBeUndefined();
+    expect(answer.scope_gaps).toEqual([
+      "missing: The path was absent from the working tree and the base revision.",
+      "working: The file was read without a held copy because no Records store was found.",
+      "home: The path is not a regular file.",
+      "opaque: The file is not readable as text.",
+      "large: The file exceeds 262144 bytes.",
+    ]);
+    expect(answer.scope).toEqual([
+      expect.objectContaining({
+        kind: "repository-document",
+        ref: expect.objectContaining({ path: "source.custom", revision }),
+        text_omitted: "max-context-bytes",
+        sections: [expect.objectContaining({ startLine: 1, endLine: 5 })],
+      }),
+      expect.objectContaining({
+        contextOnly: true,
+        ref: expect.objectContaining({
+          path: "other.custom",
+          found: "named in working",
+          revision,
+        }),
+        text_omitted: "max-context-bytes",
+      }),
+    ]);
+    expect(answer.scope[0].text).toBeUndefined();
+  });
+
+  const scopeQueryFixture = async () => {
+    const { root, revision } = await fixtureRepository();
+    const graph = await fakeGraph();
+    const scratch = await realpath(
+      await mkdtemp(join(tmpdir(), "neuve-cli-scope-query-")),
+    );
+    roots.push(scratch);
+    const env = {
+      HOME: join(scratch, "home"),
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+    };
+    await mkdir(env.HOME);
+    await createRecords(root, env);
+    const plan = join(scratch, "plan.md");
+    await Bun.write(plan, "# Approved plan\n");
+    await symlink(plan, join(root, "plan-link.md"));
+    return {
+      root,
+      plan,
+      query: (options: readonly string[], base = revision) =>
+        run([...queryArgs(root, base), ...options], env),
+    };
+  };
+
+  // A failed scope copy must leave a plain gap and log the filesystem cause.
+  test("logs the cause when a named scope copy cannot be written", async () => {
+    const { root, plan, query } = await scopeQueryFixture();
+    const location = storeLocationIn(join(root, ".git"));
+    await Bun.write(join(location.directory, "scope"), "Blocks the folder");
+
+    const result = await query(["--scope", plan]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      retrieval: { status: "ok" },
+      scope_gaps: [
+        `${plan}: The file was read but its copy could not be kept.`,
+      ],
+    });
+    const [{ event }] = await queryHistory(root);
+    expect(readRunLog(runLogPath(location, event.id))).toContainEqual(
+      expect.objectContaining({
+        type: "query.scope-write-failed",
+        path: plan,
+        cause: expect.stringContaining("ENOTDIR"),
+      }),
+    );
+  });
+
+  // A query that cannot read the branch tip must log Git's cause for leaving scope unheld.
+  test("logs why a query with an unreadable branch tip could not hold scope", async () => {
+    const { root, plan, query } = await scopeQueryFixture();
+    expect(
+      execute(["git", "symbolic-ref", "HEAD", "refs/heads/unborn"], root)
+        .exitCode,
+    ).toBe(0);
+
+    const result = await query(["--scope", plan]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      retrieval: { status: "ok" },
+      scope_gaps: [
+        `${plan}: The file was read without a held copy because the checked-out branch has no readable tip.`,
+      ],
+    });
+    const [{ event }] = await queryHistory(root);
+    const location = storeLocationIn(join(root, ".git"));
+    expect(readRunLog(runLogPath(location, event.id))).toContainEqual(
+      expect.objectContaining({
+        type: "query.branch-read-failed",
+        cause: expect.stringContaining("refs/heads/unborn"),
+      }),
+    );
+  });
+
+  // A discovered Git link holds a path and cannot supply document text.
+  test("cites a found committed symlink as a scope gap", async () => {
+    const { root, query } = await scopeQueryFixture();
+    await Bun.write(join(root, "AGENTS.md"), "[Policy](policy.md)\n");
+    await Bun.write(join(root, "actual.md"), "# Policy\n");
+    await symlink("actual.md", join(root, "policy.md"));
+    expect(
+      execute(["git", "add", "AGENTS.md", "actual.md", "policy.md"], root)
+        .exitCode,
+    ).toBe(0);
+    expect(
+      execute(["git", "commit", "--quiet", "-m", "add guide"], root).exitCode,
+    ).toBe(0);
+    const base = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+
+    const result = await query([], base);
+    expect(result.exitCode, result.stderr).toBe(0);
+    const answer = JSON.parse(result.stdout);
+    expect(answer.scope[1]).toMatchObject({
+      status: "gap",
+      ref: {
+        path: "policy.md",
+        revision: base,
+        found: "linked from AGENTS.md",
+      },
+      gap: "The Git path is a symbolic link.",
+    });
+    expect(answer.scope[1].text).toBeUndefined();
+    expect(answer.scope_gaps).toEqual([
+      "policy.md: The Git path is a symbolic link.",
+    ]);
+  });
+
+  // The run log must retain the filesystem cause behind the public gap.
+  test("logs the cause of a working-file read error", async () => {
+    const { root, query } = await scopeQueryFixture();
+    await symlink("loop", join(root, "loop"));
+
+    const result = await query(["--scope", "loop"]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      retrieval: { status: "ok" },
+      scope_gaps: ["loop: The file could not be read."],
+    });
+    const logs = join(root, ".git", "neuve", "run-logs");
+    const [log] = await readdir(logs);
+    const diagnostics = (await Bun.file(join(logs, log!)).text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "query.local-read-failed",
+        path: "loop",
+        cause: expect.stringContaining("ELOOP"),
+      }),
+    );
+  });
+
+  // A joining read must log the filesystem cause behind an unreadable held copy.
+  test("logs the cause of a held-copy read error", async () => {
+    const { root, plan, query } = await scopeQueryFixture();
+    const first = await query(["--scope", plan]);
+    expect(first.exitCode, first.stderr).toBe(0);
+    const { cycle_id: cycleId } = JSON.parse(first.stdout);
+    await rm(
+      join(scopeFolder(storeLocationIn(join(root, ".git")), cycleId), "S1.txt"),
+    );
+
+    const joined = await query([]);
+    expect(joined.exitCode, joined.stderr).toBe(0);
+    const gap = `${plan}: The held copy could not be read.`;
+    expect(JSON.parse(joined.stdout)).toMatchObject({
+      cycle_id: cycleId,
+      scope_gaps: [gap],
+      scope: [{ status: "gap", gap: "The held copy could not be read." }],
+    });
+    const logs = join(root, ".git", "neuve", "run-logs");
+    const entries = await Promise.all(
+      (await readdir(logs)).map((file) => Bun.file(join(logs, file)).text()),
+    );
+    expect(
+      entries.flatMap((log) =>
+        log
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: "query.scope-read-failed",
+        gap,
+        cause: expect.stringContaining("ENOENT"),
+      }),
+    );
+  });
+
+  // Scope parsing should explain gaps in the answer and keep decoder details in the run log.
+  test("logs scope text and link decoding failures", async () => {
+    const { root, query } = await scopeQueryFixture();
+    const invalidUtf8 = new Uint8Array([0xff]);
+    await Bun.write(join(root, "working.md"), invalidUtf8);
+    await Bun.write(join(root, "committed.md"), invalidUtf8);
+    await Bun.write(
+      join(root, "AGENTS.md"),
+      "[Document](committed.md) and [broken](100%.md)\n",
+    );
+    expect(
+      execute(["git", "add", "AGENTS.md", "committed.md"], root).exitCode,
+    ).toBe(0);
+    expect(
+      execute(["git", "commit", "--quiet", "-m", "add scope documents"], root)
+        .exitCode,
+    ).toBe(0);
+    const base = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+
+    const result = await query(["--scope", "working.md"], base);
+    expect(result.exitCode, result.stderr).toBe(0);
+    const linkGap = 'AGENTS.md: A link could not be decoded ("100%.md").';
+    const blobGap =
+      "committed.md: The document's Git blob is not readable as text.";
+    expect(JSON.parse(result.stdout).scope_gaps).toEqual([
+      "working.md: The file is not readable as text.",
+      linkGap,
+      blobGap,
+    ]);
+    const logs = join(root, ".git", "neuve", "run-logs");
+    const [log] = await readdir(logs);
+    const records = (await Bun.file(join(logs, log!)).text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "query.local-read-failed",
+          path: "working.md",
+          cause: expect.stringContaining("ERR_ENCODING_INVALID_ENCODED_DATA"),
+        }),
+        expect.objectContaining({
+          type: "query.scope-read-failed",
+          gap: linkGap,
+          cause: expect.stringContaining("URIError"),
+        }),
+        expect.objectContaining({
+          type: "query.scope-read-failed",
+          gap: blobGap,
+          cause: expect.stringContaining("ERR_ENCODING_INVALID_ENCODED_DATA"),
+        }),
+      ]),
+    );
+  });
+
+  // The citation must name the file that supplied the bytes.
+  test("cites the real path of a named symlink outside the repository", async () => {
+    const { plan, query } = await scopeQueryFixture();
+    const result = await query(["--scope", "plan-link.md"]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).scope[0]).toMatchObject({
+      ref: { path: plan },
+      text: "# Approved plan\n",
+    });
+  });
+
+  // The citation must also identify the link the request named.
+  test("cites the link used to reach a named document", async () => {
+    const { query } = await scopeQueryFixture();
+    const result = await query(["--scope", "plan-link.md"]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).scope[0]).toMatchObject({
+      ref: { found: "named by the request through a link at plan-link.md" },
+    });
+  });
+
+  // The cycle and answer keep both names in request order on one source.
+  test.each([
+    [
+      "direct first",
+      false,
+      "named by the request and also named through a link at plan-link.md",
+    ],
+    [
+      "link first",
+      true,
+      "named by the request through a link at plan-link.md and also named directly",
+    ],
+  ])(
+    "keeps one ordered source when a file is named directly and through a link (%s)",
+    async (_order, linkFirst, found) => {
+      const { root, plan, query } = await scopeQueryFixture();
+      const first = linkFirst ? "plan-link.md" : plan;
+      const last = linkFirst ? plan : "plan-link.md";
+      const result = await query([
+        "--scope",
+        first,
+        "--scope",
+        "other.custom",
+        "--scope",
+        last,
+      ]);
+      expect(result.exitCode, result.stderr).toBe(0);
+      const answer = JSON.parse(result.stdout);
+      expect(
+        answer.scope.map(({ id, ref }: PublicQueryScopeSource) => [
+          id,
+          ref.path,
+          ref.found,
+        ]),
+      ).toEqual([
+        ["S1", plan, found],
+        ["S2", "other.custom", "named by the request"],
+      ]);
+      const [selection] = await queryHistory(
+        root,
+        "cycle.local-scope-selected@1",
+      );
+      expect(selection.event.payload.sources[0].namedAs).toEqual([first, last]);
+      expect(
+        await readdir(
+          join(
+            scopeFolder(storeLocationIn(join(root, ".git")), answer.cycle_id),
+          ),
+        ),
+      ).toEqual(["S1.txt"]);
+    },
+  );
+
+  // An invalid Git email must leave schema details in the run log.
+  test("returns a one-sentence scope gap when recording fails", async () => {
+    const { root, revision } = await fixtureRepository();
+    const graph = await fakeGraph();
+    const home = join(root, "home");
+    await mkdir(home);
+    const env = {
+      HOME: home,
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+      CLAUDE_CODE_SESSION_ID: "",
+      CODEX_THREAD_ID: "",
+    };
+    await createRecords(root, env);
+    expect(
+      execute(["git", "config", "user.email", "invalid".repeat(128)], root)
+        .exitCode,
+    ).toBe(0);
+    await Bun.write(join(root, "plan"), "# Scope\n");
+
+    const result = await run(
+      [...queryArgs(root, revision), "--scope", "plan"],
+      env,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "neuve: The Records store could not record this query.\n",
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      retrieval: { status: "ok" },
+      scope_gaps: [
+        "plan: The file was read without a held copy because the query could not be recorded.",
+      ],
+    });
+    const logs = join(root, ".git", "neuve", "run-logs");
+    const [log] = await readdir(logs);
+    expect(JSON.parse(await Bun.file(join(logs, log!)).text())).toMatchObject({
+      type: "query.record-failed",
+      cause: expect.stringContaining("Invalid email address"),
     });
   });
 

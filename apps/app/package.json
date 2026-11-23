@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsgo --noEmit",
-    "test": "bun ../../scripts/test-budget.ts ./tests"
+    "test": "bun ../../scripts/test-budget.ts --isolate ./tests"
   },
   "dependencies": {
     "@ace/split-tabs": "workspace:*",
@@ -22,6 +22,7 @@
     "@ace/channel": "workspace:*",
     "@ace/host": "workspace:*",
     "@ace/desktop": "workspace:*",
+    "@neuve/review-rules": "workspace:*",
     "@neuve/runtime": "workspace:*"
   },
   "devDependencies": {

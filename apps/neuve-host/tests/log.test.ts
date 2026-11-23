@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// A request or tool can succeed while its operational log drops the name or leaks its words.
 test("operational files exclude payload families and stay private on create, reopen and rotation", async () => {
 	if (!process.env.TMPDIR)
 		throw new Error("Set TMPDIR to the external temporary directory");
@@ -28,6 +29,10 @@ modes.push(statSync(path).mode & 0o777);
 writeFileSync(path, " ".repeat(10 * 1024 * 1024));
 open("probe");
 log("info", "tool.end", { tool: "bash", call: "id", chat: 3, task: 4, error: false, ms: 1 });
+for (const op of ["plan-comment", "plan-comment-reply", "plan-comment-edit", "plan-comment-remove", "plan-comments-send"]) {
+	log("info", "request", { op, text: secret });
+}
+log("info", "tool.start", { tool: "plan_comment_answer", args: { text: secret } });
 modes.push(statSync(path).mode & 0o777, statSync(path.replace(".jsonl", ".1.jsonl")).mode & 0o777);
 writeFileSync(config.home + "/receipt.json", JSON.stringify({ modes, dir: statSync(config.home + "/logs").mode & 0o777, contains: bytes.includes(secret), records: bytes.trim().split("\\n").map(JSON.parse), rotated: readFileSync(path, "utf8").trim().split("\\n").map(JSON.parse) }));
 `;
@@ -68,6 +73,11 @@ writeFileSync(config.home + "/receipt.json", JSON.stringify({ modes, dir: statSy
 			error: false,
 			ms: 1,
 		});
+		expect(receipt.rotated.slice(1).map(({ op, tool }: { op?: string; tool?: string }) => op ?? tool)).toEqual([
+			"plan-comment", "plan-comment-reply", "plan-comment-edit", "plan-comment-remove",
+			"plan-comments-send", "plan_comment_answer",
+		]);
+		expect(JSON.stringify(receipt.rotated)).not.toContain("synthetic-operational-payload");
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

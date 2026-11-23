@@ -4,15 +4,23 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./comment-thread": "./src/comment-thread.ts",
+    "./file-lines-anchor": "./src/file-lines-anchor.ts"
+  },
   "dependencies": {
     "@neuve/records-schema": "workspace:*",
-    "zod": "4"
+    "zod": "4",
+    "markdown-it": "14.3.3"
   },
   "scripts": {
     "format": "prettier --write src tests package.json tsconfig.json",
     "format:check": "prettier --check src tests package.json tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun ../../scripts/test-budget.ts ./tests"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "14.1.2"
   }
 }

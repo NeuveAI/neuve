@@ -93,6 +93,35 @@ export const RequestSchema = z.discriminatedUnion("op", [
 		plan: z.string().min(1),
 		hash: z.string().regex(/^[a-f0-9]{64}$/),
 	}),
+	// Comments on a plan.
+	z.strictObject({
+		op: z.literal("plan-comment"),
+		chat,
+		author,
+		plan: z.string().min(1),
+		hash: z.string().regex(/^[a-f0-9]{64}$/),
+		lines: z.array(z.strictObject({ line: z.int().positive(), text: z.string() })).min(1),
+		quote: z.string().min(1),
+		text: z.string(),
+	}),
+	z.strictObject({ op: z.literal("plan-comment-reply"), chat, author, comment: z.string().min(1), text: z.string() }),
+	z.strictObject({
+		op: z.literal("plan-comment-edit"),
+		chat,
+		author,
+		comment: z.string().min(1),
+		reply: z.string().min(1).optional(),
+		text: z.string(),
+	}),
+	z.strictObject({
+		op: z.literal("plan-comment-remove"),
+		chat,
+		author,
+		comment: z.string().min(1),
+		reply: z.string().min(1).optional(),
+	}),
+	z.strictObject({ op: z.literal("plan-comments-send"), chat, author, plan: z.string().min(1), requestId }),
+	// End of comments on a plan.
 	z.strictObject({
 		op: z.literal("react"),
 		chat,
@@ -130,6 +159,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 		agent: z.boolean().optional(),
 		stops: z.boolean().optional(),
 		plans: z.boolean().optional(),
+		planComments: z.boolean().optional(),
 	}),
 	ApprovalAnswerSchema,
 ]);

@@ -28,6 +28,9 @@ import { tabs } from "./tabs";
 const RETIRE_AFTER = 10 * 60_000;
 /** An archived channel keeps its history as it was archived. */
 const ARCHIVED = new Set(["say", "ask", "select", "chat", "react", "delete", "edit", "plan-approve", "approval-answer"]);
+for (const op of ["plan-comment", "plan-comment-reply", "plan-comment-edit", "plan-comment-remove", "plan-comments-send"]) {
+	ARCHIVED.add(op);
+}
 
 seal();
 
