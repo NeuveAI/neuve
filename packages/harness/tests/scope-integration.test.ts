@@ -201,7 +201,12 @@ const scopeFixture = async (name: string, branch: string, message: string) => {
   const base = commit("base", "AGENTS.md", "base.md");
   const open = (branchName = branch) =>
     Cycles.openOrJoinCycle(
-      { baseOid: base, baseRef: base, branch: branchName },
+      {
+        baseOid: base,
+        baseRef: base,
+        branch: branchName,
+        branchTipOid: git("rev-parse", "refs/heads/" + branchName),
+      },
       Identity.UNRESOLVED_ACTOR,
     );
   const trace = join(w.root, "mcp-calls");
@@ -411,8 +416,8 @@ test("a joined review adds range sources without starting or calling the integra
   }
 }, 30_000);
 
-// Publication must let the next cycle fetch a ticket that arrived after the first cycle read scope.
-test("the first read after publication fetches the deferred ticket", async () => {
+// A commit between the first read and the scope fetch belongs to the next cycle.
+test("pins commits at the first read and fetches the deferred ticket next cycle", async () => {
   process.env["FIXTURE_TOKEN"] = "fixture-token-value";
   const f = await scopeFixture(
     "next-cycle-scope",
@@ -421,10 +426,17 @@ test("the first read after publication fetches the deferred ticket", async () =>
   );
   try {
     const first = await f.run(f.open());
-    await f.fetchCycle(first.cycleId);
+    const head = f.commitRange();
+    expect(await f.run(f.open())).toEqual({
+      cycleId: first.cycleId,
+      opened: false,
+    });
+    const firstScope = await f.fetchCycle(first.cycleId);
     expect(f.calls()).toEqual(["start"]);
+    expect(firstScope.value.branchTipOid).toBe(f.base);
+    expect(firstScope.value.named).toEqual([]);
 
-    const review = await f.request();
+    const review = await f.request(head);
     expect(review.cycleId).toBe(first.cycleId);
     expect((await f.precompute()).facts.scopeGaps).toContain(
       "Ticket NEU-13 was named after this cycle's scope was read. The next cycle will read it.",

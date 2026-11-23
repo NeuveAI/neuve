@@ -12,6 +12,7 @@ import type { QueryInvocation } from "./boundary.ts";
 import {
   openQueryCycle,
   readQueryBranch,
+  type QueryBranch,
   warnQueryCycle,
 } from "./query-cycle.ts";
 
@@ -616,7 +617,7 @@ export type QuerySourceContext = Readonly<
 const recordQuery = async (
   request: QueryRequest,
   payload: QueryRecorded["payload"],
-  cycle?: { branch: string; onFailure: (reason: string) => void },
+  cycle?: QueryBranch & { onFailure: (reason: string) => void },
 ): Promise<string | undefined> => {
   try {
     return await execute(
@@ -643,6 +644,7 @@ const recordQuery = async (
                     baseRef: request.revision,
                     baseOid: revision,
                     branch: cycle.branch,
+                    branchTipOid: cycle.branchTipOid,
                   },
                   actor,
                   cycle.onFailure,
@@ -779,9 +781,7 @@ export const runQueryGraph = async (
     throw error;
   } finally {
     let cycleFailure =
-      outcome === "completed" && branch === undefined
-        ? "HEAD is detached, so pass --branch <name>"
-        : undefined;
+      outcome === "completed" && "reason" in branch ? branch.reason : undefined;
     // The collected answer waits for Records so it can name the cycle when the output adds it.
     eventId = await recordQuery(
       request,
@@ -801,9 +801,9 @@ export const runQueryGraph = async (
         startedAt,
         elapsedMs: Math.round(performance.now() - start),
       },
-      outcome === "completed" && branch !== undefined
+      outcome === "completed" && "branch" in branch
         ? {
-            branch,
+            ...branch,
             onFailure: (reason) => {
               cycleFailure = reason;
             },

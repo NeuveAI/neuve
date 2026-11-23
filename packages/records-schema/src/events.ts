@@ -321,6 +321,7 @@ export const CycleOpenedV2 = event(
     baseRef: Range.shape.baseRef,
     baseOid: GitOid,
     branch: z.string().min(1).max(4_096),
+    branchTipOid: GitOid,
   }),
   Attribution.omit({ range: true }).extend({ cycleId: Ulid }),
 );

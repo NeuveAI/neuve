@@ -308,6 +308,7 @@ describe("neuve CLI boundary", () => {
       baseOid: revision,
       baseRef: revision.slice(0, 12),
       branch,
+      branchTipOid: revision,
     });
     const jobs = [
       {
@@ -427,7 +428,22 @@ describe("neuve CLI boundary", () => {
     await createRecords(root);
     const graph = await fakeGraph();
     expect(execute(["git", "branch", "feature-a"], root).exitCode).toBe(0);
-    expect(execute(["git", "branch", "feature-b"], root).exitCode).toBe(0);
+    expect(execute(["git", "switch", "-c", "feature-b"], root).exitCode).toBe(
+      0,
+    );
+    expect(
+      execute(
+        ["git", "commit", "--allow-empty", "-m", "Advance feature-b"],
+        root,
+      ).exitCode,
+    ).toBe(0);
+    const featureBTip = execute(
+      ["git", "rev-parse", "HEAD"],
+      root,
+    ).stdout.trim();
+    expect(
+      execute(["git", "switch", "--detach", revision], root).exitCode,
+    ).toBe(0);
     for (const branch of ["feature-a", "feature-b"])
       expect(
         (
@@ -438,8 +454,24 @@ describe("neuve CLI boundary", () => {
       ).toBe(0);
     const openings = await queryHistory(root, "cycle.opened@2");
     expect(openings).toMatchObject([
-      { event: { payload: { branch: "feature-a", baseOid: revision } } },
-      { event: { payload: { branch: "feature-b", baseOid: revision } } },
+      {
+        event: {
+          payload: {
+            branch: "feature-a",
+            baseOid: revision,
+            branchTipOid: revision,
+          },
+        },
+      },
+      {
+        event: {
+          payload: {
+            branch: "feature-b",
+            baseOid: revision,
+            branchTipOid: featureBTip,
+          },
+        },
+      },
     ]);
     expect(openings[1].event.attribution.cycleId).not.toBe(
       openings[0].event.attribution.cycleId,
@@ -458,6 +490,15 @@ describe("neuve CLI boundary", () => {
       root,
     ).stdout.trim();
     expect((await run(queryArgs(root, revision), env)).exitCode).toBe(0);
+    const openings = await queryHistory(root, "cycle.opened@2");
+    expect(openings).toHaveLength(1);
+    expect(openings[0].event.payload.branchTipOid).toBe(revision);
+    expect(
+      execute(
+        ["git", "commit", "--allow-empty", "-m", "Advance the branch"],
+        root,
+      ).exitCode,
+    ).toBe(0);
     const worktree = join(root, "second");
     expect(
       execute(["git", "worktree", "add", "--detach", worktree, revision], root)
@@ -474,7 +515,7 @@ describe("neuve CLI boundary", () => {
     expect(history[1].event.attribution.cycleId).toBe(
       history[0].event.attribution.cycleId,
     );
-    expect(await queryHistory(root, "cycle.opened@2")).toHaveLength(1);
+    expect(await queryHistory(root, "cycle.opened@2")).toEqual(openings);
     expect(scopeJobs(root)).toHaveLength(1);
   });
 

@@ -1,34 +1,44 @@
 import { Cycles, Starter, type StoreLocation } from "@neuve/records-core";
+import { GitOid } from "@neuve/records-schema";
 import { Effect } from "effect";
 import { isSqlError } from "effect/sql/SqlError";
 import { describeFailure } from "./records-cli.ts";
 
-export const readQueryBranch = (repository: string, branch?: string) => {
+export type QueryBranch = Pick<
+  Parameters<typeof Cycles.openOrJoinCycle>[0],
+  "branch" | "branchTipOid"
+>;
+
+export const readQueryBranch = (
+  repository: string,
+  branch?: string,
+): QueryBranch | { reason: string } => {
+  const prefix = "refs/heads/";
+  let ref = branch === undefined ? undefined : prefix + branch;
+  if (ref === undefined) {
+    const result = Bun.spawnSync(
+      ["git", "-C", repository, "symbolic-ref", "--quiet", "HEAD"],
+      { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+    );
+    ref = result.stdout.toString().trim();
+    if (!result.success || !ref.startsWith(prefix))
+      return { reason: "HEAD is detached, so pass --branch <name>" };
+  }
+
+  // Capture the checked-out or named branch's tip at the read, before any Records transaction.
   const result = Bun.spawnSync(
-    branch === undefined
-      ? ["git", "-C", repository, "symbolic-ref", "--quiet", "HEAD"]
-      : [
-          "git",
-          "-C",
-          repository,
-          "show-ref",
-          "--verify",
-          "--quiet",
-          `refs/heads/${branch}`,
-        ],
+    ["git", "-C", repository, "show-ref", "--verify", "--hash", ref],
     { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
   );
-  if (branch !== undefined) {
-    if (!result.success)
+  const tip = GitOid.safeParse(result.stdout.toString().trim());
+  if (!result.success || !tip.success) {
+    if (branch !== undefined)
       throw new Error(
         `--branch names no local branch ${JSON.stringify(branch)} in --repo.`,
       );
-    return branch;
+    return { reason: "the checked-out branch has no readable tip" };
   }
-  const ref = result.stdout.toString().trim();
-  return result.success && ref.startsWith("refs/heads/")
-    ? ref.slice("refs/heads/".length)
-    : undefined;
+  return { branch: ref.slice(prefix.length), branchTipOid: tip.data };
 };
 
 export const warnQueryCycle = (reason: string) =>

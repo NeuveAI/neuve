@@ -65,7 +65,12 @@ const fixture = () => {
     });
   const read = (branch = "work") =>
     Cycles.openOrJoinCycle(
-      { baseOid: base, baseRef: base, branch },
+      {
+        baseOid: base,
+        baseRef: base,
+        branch: branch,
+        branchTipOid: git("rev-parse", "refs/heads/" + branch),
+      },
       Identity.UNRESOLVED_ACTOR,
     );
   const run = <A, E>(
@@ -125,6 +130,9 @@ test("binds the newest eligible read cycle without adding a second scope job", a
     "cycle.opened@1",
     "review.requested@1",
   ]);
+  expect(result.events[0]?.event).toMatchObject({
+    payload: { branch: "work", branchTipOid: repo.tip },
+  });
   expect(result.events[1]?.event).toMatchObject({
     idempotencyKey: `cycle:${cycleId}`,
     attribution: { cycleId, range: { baseOid: repo.base, headOid: repo.head } },

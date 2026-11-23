@@ -27,10 +27,11 @@ import {
   GitHubExternalRefSchema,
   GitOid,
   safeRead,
+  type CycleOpenedV2,
   type Range,
 } from "@neuve/records-schema";
 import { dataBlock } from "./data-block.ts";
-import { git, resolveCommit } from "./git.ts";
+import { git } from "./git.ts";
 import {
   commitTexts,
   type CommitText,
@@ -417,12 +418,9 @@ const snapshotRange = (
   headOid,
   mergeBase,
 });
+type ReadScopeOpening = z.infer<typeof CycleOpenedV2.shape.payload>;
 type ScopeInput =
-  | {
-      readonly part: "cycle";
-      readonly baseOid: string;
-      readonly branch: string;
-    }
+  | ({ readonly part: "cycle" } & ReadScopeOpening)
   | { readonly part: "review"; readonly range: ScopeRange };
 
 const commitKeys = (commits: ReadonlyArray<CommitText>) => {
@@ -658,24 +656,13 @@ const fetchSources = (ctx: Omit<SnapshotContext, "range">, input: ScopeInput) =>
       (now) => deadline - now,
     );
     const branchTipOid =
-      input.part === "cycle"
-        ? yield* resolveCommit(repository, `refs/heads/${input.branch}`).pipe(
-            Effect.catch((error) =>
-              Effect.sync(() => {
-                gap(
-                  `The tip of branch ${input.branch} couldn't be read, so its commit messages weren't checked for tickets.`,
-                  describeError(error),
-                );
-                return undefined;
-              }),
-            ),
-          )
-        : undefined;
-    const commitHead = input.part === "cycle" ? branchTipOid : head;
-    const commits =
-      commitHead === undefined
-        ? []
-        : yield* rangeCommits(repository, merge, commitHead, gap);
+      input.part === "cycle" ? input.branchTipOid : undefined;
+    const commits = yield* rangeCommits(
+      repository,
+      merge,
+      branchTipOid ?? head,
+      gap,
+    );
     const branches =
       input.part === "cycle"
         ? [input.branch]
@@ -1096,7 +1083,7 @@ const storedCyclePart = (cycleId: string) =>
 
 export const fetchCyclePart = (
   ctx: Omit<SnapshotContext, "range">,
-  opening: { baseOid: string; branch: string },
+  opening: ReadScopeOpening,
 ) =>
   Effect.gen(function* () {
     const held = yield* storedCyclePart(ctx.cycleId);
