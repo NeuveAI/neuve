@@ -59,6 +59,7 @@ export {
   StoreError,
   accountsPath,
   neuveFolder,
+  privateDirectory,
   statusesPath,
 } from "./files.ts";
 export * from "./status.ts";
@@ -451,6 +452,7 @@ export interface AccountStoreShape {
   readonly add: (
     kind: "claude" | "chatgpt",
     name: string,
+    runtime?: "codex",
   ) => Effect.Effect<Account, StoreError>;
   /**
    * Other processes close their own sessions when their record watch runs. Until then,
@@ -671,7 +673,7 @@ export const make = (
       directory,
       checkTurn,
       list: storeIO(() => readAccounts(home).map((entry) => entry.account)),
-      add: (kind, name) =>
+      add: (kind, name, runtime) =>
         storeIO(() => {
           const entries = readAccounts(home);
           const parsedName = AccountName.safeParse(name);
@@ -707,7 +709,7 @@ export const make = (
               : {
                   name: parsedName.data,
                   kind: "chatgpt-subscription",
-                  runtime: "pi",
+                  runtime: runtime ?? "pi",
                   credential: { kind: "neuve-sign-in", folder },
                 },
           );

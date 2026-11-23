@@ -20,6 +20,7 @@ export { judge, versionOf, type Verdict } from "./version.ts";
 export {
   discoverCodex,
   makeRuntime,
+  prepareCodexHome,
   unavailable,
   type CodexRuntimeConfig,
 } from "./runtime.ts";

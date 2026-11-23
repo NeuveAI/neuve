@@ -352,6 +352,16 @@ test("an expiring token is refreshed once for concurrent callers, and the refres
   // A token with time left is used as stored: no refresh.
   await accessToken({ directory, issuer: issuer.issuer });
   expect(issuer.state.refreshes - refreshes).toBe(1);
+
+  // Concurrent callers recovering from a refusal must renew once even with time left on the token.
+  const recovered = await Promise.all(
+    [1, 2, 3, 4].map(() =>
+      accessToken({ directory, issuer: issuer.issuer }, after.accessToken),
+    ),
+  );
+  expect(issuer.state.refreshes - refreshes).toBe(2);
+  expect(new Set(recovered.map((t) => t.token)).size).toBe(1);
+  expect(recovered[0]!.token).not.toBe(after.accessToken);
 });
 
 test("an unusable refresh token ends the session without leaking it, and keeps the registration", async () => {

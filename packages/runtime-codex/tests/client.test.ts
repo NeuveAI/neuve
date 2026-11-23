@@ -727,27 +727,36 @@ describe("the client's own failures stay contained", () => {
   // The standard-error tail may hold anything the program printed: it is redacted, and left out
   // of anything that serialises the failure.
   test("the error tail is redacted and not serialised", async () => {
+    const access = "opaque.fixture.access.value";
+    const logs: string[] = [];
     const played = fake((message, io) => {
       answerHandshake(message, io);
       if (message.method === "model/list") {
+        io.send({ method: `unknown/${access}` });
         io.stderr(
           `signed in as a@b.co, home /Users/someone/.codex on ${hostname()}\n` +
             "key sk-proj-abcdefgh12345678 refresh rt_abcdefgh12345678\n" +
             "Authorization: Bearer abcdefgh.ijk\n",
         );
+        io.stderr(`access ${access.slice(0, 9)}`);
+        io.stderr(`${access.slice(9)}\n`);
         io.exit({ exitCode: 1 });
       }
     });
     const failure = await run(
       played.layer,
-      connect(options()).pipe(
+      connect(options({ secrets: [access] })).pipe(
         Effect.flatMap((c) => Effect.flip(c.request("model/list", {}))),
       ),
+      logs,
     );
     expect(failure).toMatchObject({ _tag: "CodexExited", exitCode: 1 });
     const tail = (failure as { stderrTail: string }).stderrTail;
     expect(tail).toContain("<email>");
     expect(tail).toContain("<path>");
+    expect(tail).toContain("access <token>");
+    expect(logs.join("\n")).toContain("unknown/<token>");
+    expect(logs.join("\n")).not.toContain(access);
     expect(tail).not.toContain("a@b.co");
     for (const secret of [
       hostname(),
@@ -755,6 +764,7 @@ describe("the client's own failures stay contained", () => {
       "rt_abcdefgh",
       "abcdefgh.ijk",
       "/Users/someone",
+      access,
     ])
       expect(tail).not.toContain(secret);
     expect(JSON.stringify(failure)).not.toContain("signed in");

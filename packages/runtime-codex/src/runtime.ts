@@ -1,16 +1,21 @@
 /**
  * The `codex` runtime behind the contract: an account on the person's own Codex login, its program
  * found by the probe's order, its state and models asked of Codex itself, and its sessions opened
- * on the program found. Modelled on the Claude runtime's `makeRuntime`.
+ * on the program found. Accounts on Neuve's sign-in use Neuve's token source in a separate Codex
+ * home. Modelled on the Claude runtime's `makeRuntime`.
  */
-import { resolve as resolvePath } from "node:path";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { join, resolve as resolvePath } from "node:path";
 import {
+  AccountStore,
   EffortLevel,
   RuntimeUnavailable,
   TurnFailed,
   type Account,
   type AccountName,
   type AccountProbe,
+  type RuntimeError,
   type RuntimeModel,
   type RuntimeShape,
   type SignInHint,
@@ -32,11 +37,20 @@ import {
   runtimeCandidates,
   type Asked,
   type Candidate,
+  type FindOptions,
 } from "./program.ts";
 import { CodexProcess } from "./services.ts";
-import { capabilities, openCodexSession, windows } from "./session.ts";
+import {
+  capabilities,
+  openCodexSession,
+  windows,
+  type CodexTokenSource,
+} from "./session.ts";
 
 type CodexAccount = Extract<Account, { runtime: "codex" }>;
+type NeuveAccount = CodexAccount & {
+  credential: Extract<Account["credential"], { kind: "neuve-sign-in" }>;
+};
 
 export interface CodexRuntimeConfig {
   /** The program the person set for an account (`neuve auth program`), asked before any other. */
@@ -50,20 +64,77 @@ export interface CodexRuntimeConfig {
   readonly log?:
     | ((account: AccountName) => ((entry: LogEntry) => void) | undefined)
     | undefined;
+  readonly neuveSignIn?:
+    | {
+        readonly accessToken: (
+          account: NeuveAccount,
+          rejected?: string,
+        ) => ReturnType<CodexTokenSource>;
+        readonly signOut: (
+          account: NeuveAccount,
+        ) => Effect.Effect<void, RuntimeUnavailable>;
+      }
+    | undefined;
   /** For tests: where discovery looks for apps, and the releases refused as broken. */
   readonly apps?: (() => ReadonlyArray<string>) | undefined;
   readonly broken?: ReadonlyArray<string> | undefined;
 }
 
-const supported = (account: Account) =>
+const supported = (
+  account: Account,
+): Effect.Effect<CodexAccount, RuntimeUnavailable> =>
   account.runtime === "codex"
-    ? Effect.succeed(account as CodexAccount)
+    ? Effect.succeed(account)
     : Effect.fail(
         new RuntimeUnavailable({
           account: account.name,
           reason: "not-registered",
         }),
       );
+
+const usesNeuveSignIn = (account: CodexAccount): account is NeuveAccount =>
+  account.credential.kind === "neuve-sign-in";
+
+const codexHomeOf = (home: string, account: CodexAccount) => {
+  const folder = account.credential.folder;
+  if (!usesNeuveSignIn(account)) return folder;
+  const key =
+    folder === undefined
+      ? "default"
+      : createHash("sha256").update(resolvePath(folder)).digest("hex");
+  return join(AccountStore.neuveFolder(home), "codex", account.name, key);
+};
+
+const unavailableStart = (account: CodexAccount) =>
+  new RuntimeUnavailable({ account: account.name, reason: "start-failed" });
+
+const signInFailure = (error: RuntimeError): SignInState => {
+  switch (error._tag) {
+    case "SignInRequired":
+      return { state: "not-signed-in", hint: error.hint };
+    case "AccountRejected":
+      return {
+        state: "credential-rejected",
+        hint: error.hint,
+        reason: error.reason,
+      };
+    case "RuntimeUnavailable":
+      return { state: "runtime-unavailable", reason: error.reason };
+    default:
+      return { state: "unknown", reason: "check-failed" };
+  }
+};
+
+export const prepareCodexHome = (home: string, account: CodexAccount) =>
+  Effect.try({
+    try: () => {
+      const folder = codexHomeOf(home, account);
+      if (usesNeuveSignIn(account) && folder !== undefined)
+        AccountStore.privateDirectory(home, folder);
+      return folder;
+    },
+    catch: () => unavailableStart(account),
+  });
 
 /** Codex's own sign-in, run by the Codex the account uses: a bare `codex` may be another program. */
 const hintOf = (account: CodexAccount, program: string): SignInHint => ({
@@ -230,20 +301,23 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
   Effect.gen(function* () {
     const processes = yield* CodexProcess;
     const environment = config.environment ?? process.env;
+    const home = config.home ?? homedir();
+    const { neuveSignIn } = config;
+    const accessTokenFor = (
+      account: CodexAccount,
+    ): Effect.Effect<CodexTokenSource | undefined, RuntimeUnavailable> => {
+      if (!usesNeuveSignIn(account)) return Effect.succeed(undefined);
+      if (neuveSignIn === undefined)
+        return Effect.fail(unavailableStart(account));
+      return Effect.succeed((rejected) =>
+        neuveSignIn.accessToken(account, rejected),
+      );
+    };
     /** The program each account last used, per process; forgotten when it stops answering. */
     const known = new Map<
       AccountName,
       { readonly candidate: Candidate; readonly setting: string | undefined }
     >();
-    const options = (
-      account: CodexAccount,
-      list: ReadonlyArray<Candidate>,
-    ) => ({
-      candidates: list,
-      environment,
-      codexHome: account.credential.folder,
-      broken: config.broken,
-    });
     /** The person's setting; a file of settings that cannot be read is a state of its own. */
     const settingOf = (account: CodexAccount) =>
       Effect.try({
@@ -256,11 +330,17 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
     const find = <A, E>(
       account: CodexAccount,
       setting: string | undefined,
+      launch: Pick<FindOptions, "codexHome" | "accessToken">,
       use: (c: CodexConnection, found: Candidate) => Effect.Effect<A, E>,
     ) =>
       // Run time never scans: the set path, or the PATH's one `codex`.
       findCodex(
-        options(account, runtimeCandidates(setting, environment.PATH)),
+        {
+          candidates: runtimeCandidates(setting, environment.PATH),
+          environment,
+          broken: config.broken,
+          ...launch,
+        },
         use,
       ).pipe(
         Effect.tap(({ found }) =>
@@ -275,7 +355,7 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
         ),
         Effect.provideService(CodexProcess, processes),
       );
-    const program = (account: CodexAccount) =>
+    const program = (account: CodexAccount, codexHome: string | undefined) =>
       Effect.gen(function* () {
         // The person's setting is read at every open, so one set or unset from the CLI is used by
         // a workspace that is already running.
@@ -294,6 +374,7 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
         const { found, tried } = yield* find(
           account,
           setting,
+          { codexHome },
           () => Effect.void,
         );
         if (found !== undefined) return found.asked.candidate;
@@ -307,14 +388,14 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
       });
     return {
       kind: "codex",
-      continuation: (account) => ({
-        runtime: "codex",
-        key:
-          account.credential.kind === "codex-home" &&
-          account.credential.folder !== undefined
-            ? resolvePath(account.credential.folder)
-            : "default",
-      }),
+      continuation: (account) => {
+        const folder =
+          account.runtime === "codex" ? codexHomeOf(home, account) : undefined;
+        return {
+          runtime: "codex",
+          key: folder === undefined ? "default" : resolvePath(folder),
+        };
+      },
       // Whether the program can be found is the account's state, never its capabilities, so an
       // account whose Codex is missing still lists and its chat fails with that state.
       capabilities: (account) =>
@@ -327,11 +408,14 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
               account: account.name,
               reason: "protocol-error",
             });
-          const found = yield* program(codex);
+          const accessToken = yield* accessTokenFor(codex);
+          const codexHome = yield* prepareCodexHome(home, codex);
+          const found = yield* program(codex, codexHome);
           return yield* openCodexSession({
             account: account.name,
             program: found.path,
-            codexHome: codex.credential.folder,
+            codexHome,
+            accessToken,
             cwd: policy.folder,
             environment,
             policy,
@@ -353,6 +437,19 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
         Effect.gen(function* () {
           const codex = yield* supported(account);
           const checkedAt = new Date().toISOString();
+          const settings = yield* Effect.gen(function* () {
+            const source = yield* accessTokenFor(codex);
+            const access = source === undefined ? undefined : yield* source();
+            const codexHome = yield* prepareCodexHome(home, codex);
+            return { accessToken: access?.token, codexHome };
+          }).pipe(Effect.result);
+          if (settings._tag === "Failure")
+            return {
+              signIn: signInFailure(settings.failure),
+              limits: [],
+              checkedAt,
+            } satisfies AccountProbe;
+          const { accessToken } = settings.success;
           const setting = yield* settingOf(codex).pipe(Effect.result);
           if (setting._tag === "Failure") {
             const unreadable: AccountProbe = {
@@ -370,35 +467,45 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
           const { found, tried } = yield* find(
             codex,
             setting.success,
+            settings.success,
             (connection, candidate) =>
               Effect.gen(function* () {
-                const signed = yield* connection
-                  .request("account/read", { refreshToken: false })
-                  .pipe(
-                    Effect.flatMap((answer) => {
-                      const read = Decode.AccountAnswer.safeParse(answer);
-                      return read.success
-                        ? Effect.succeed(read.data)
-                        : Effect.fail("account-undecodable" as const);
+                let signIn: SignInState = {
+                  state: "signed-in",
+                  credentialSource: "neuve-sign-in",
+                };
+                if (accessToken === undefined) {
+                  const signed = Decode.AccountAnswer.safeParse(
+                    yield* connection.request("account/read", {
+                      refreshToken: false,
                     }),
                   );
-                const signIn: SignInState =
-                  signed.account == null && signed.requiresOpenaiAuth
-                    ? {
-                        state: "not-signed-in",
-                        hint: hintOf(codex, candidate.path),
-                      }
-                    : { state: "signed-in" };
+                  if (!signed.success)
+                    return yield* Effect.fail("account-undecodable" as const);
+                  signIn =
+                    signed.data.account == null &&
+                    signed.data.requiresOpenaiAuth
+                      ? {
+                          state: "not-signed-in",
+                          hint: hintOf(codex, candidate.path),
+                        }
+                      : { state: "signed-in" };
+                }
                 const models = yield* modelsOf(connection).pipe(Effect.option);
-                const limits = yield* connection
-                  .request("account/rateLimits/read", {})
-                  .pipe(
-                    Effect.map((answer) => {
-                      const read = Decode.RateLimits.safeParse(answer);
-                      return read.success ? windows(read.data.rateLimits) : [];
-                    }),
-                    Effect.orElseSucceed(() => []),
-                  );
+                const limits =
+                  accessToken !== undefined
+                    ? []
+                    : yield* connection
+                        .request("account/rateLimits/read", {})
+                        .pipe(
+                          Effect.map((answer) => {
+                            const read = Decode.RateLimits.safeParse(answer);
+                            return read.success
+                              ? windows(read.data.rateLimits)
+                              : [];
+                          }),
+                          Effect.orElseSucceed(() => []),
+                        );
                 return {
                   signIn,
                   limits,
@@ -408,10 +515,12 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
                 Effect.timeout("25 seconds"),
                 Effect.orElseSucceed(() => ({
                   // A check that failed is not a sign-in to ask for.
-                  signIn: {
-                    state: "unknown",
-                    reason: "check-failed",
-                  } as SignInState,
+                  signIn: (accessToken === undefined
+                    ? { state: "unknown", reason: "check-failed" }
+                    : {
+                        state: "signed-in",
+                        credentialSource: "neuve-sign-in",
+                      }) satisfies SignInState,
                   limits: [],
                   models: undefined,
                 })),
@@ -439,7 +548,14 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
           };
           return used;
         }),
-      // The login is the person's own Codex's: Neuve never signs them out of it.
-      signOut: (account) => supported(account).pipe(Effect.asVoid),
+      signOut: (account) =>
+        supported(account).pipe(
+          Effect.flatMap((codex) =>
+            usesNeuveSignIn(codex)
+              ? (neuveSignIn?.signOut(codex) ??
+                Effect.fail(unavailableStart(codex)))
+              : Effect.void,
+          ),
+        ),
     } satisfies RuntimeShape;
   });
