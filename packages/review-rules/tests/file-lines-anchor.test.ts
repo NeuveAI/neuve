@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   type FileLinesAnchor,
   fileLines,
+  fileLinesPlacer,
   fileLinesSection,
   matchesFileLines,
   placeFileLinesAnchor,
@@ -250,4 +251,22 @@ test("lines must be consecutive, with their exact text, and hold the quote", () 
   ).toBe(false);
   expect(matchesFileLines(plan, [file[3]!], "the person")).toBe(false);
   expect(matchesFileLines(plan, [file[3]!], "**")).toBe(false);
+});
+
+test("one placer places several anchors as placing each alone does", () => {
+  const scope = commentOn(plan, 8, 8, "Exports that failed before");
+  const revised = plan
+    .replace("## Goal", "## Context\nNightly batch.\n\n## Goal")
+    .replace("up to three times", "up to five times");
+  const current = { hash: hash("b"), text: revised };
+  const place = fileLinesPlacer(plan, current);
+  const anchors = [goal, scope, { ...scope, hash: hash("b") }];
+  expect(anchors.map(place)).toEqual(
+    anchors.map((anchor) => placeFileLinesAnchor(anchor, plan, current)),
+  );
+  expect(anchors.map(place).map((placement) => placement.kind)).toEqual([
+    "changed",
+    "stays",
+    "stays",
+  ]);
 });

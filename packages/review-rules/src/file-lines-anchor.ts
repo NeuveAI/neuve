@@ -161,53 +161,65 @@ function carried(
 }
 
 /**
- * Where `anchor`, made on the version whose text is `anchorText`, sits on the version `current`.
+ * Places anchors made on the version whose text is `anchorText` on the version `current`. The
+ * comparison of the two versions runs once, here; the function it returns places each anchor.
  * The anchor's own lines are followed from their version to this one by a plain line comparison,
  * so a line inserted above moves them and a copy of them elsewhere does not take them.
  */
+export function fileLinesPlacer(
+  anchorText: string,
+  current: { hash: string; text: string },
+): (anchor: FileLinesAnchor) => FileLinesPlacement {
+  const { hash } = current;
+  const before = fileLines(anchorText);
+  const file = fileLines(current.text);
+  const map = carried(before, file);
+  const placed = new Set(map);
+  return (anchor) => {
+    if (hash === anchor.hash)
+      return { kind: "stays", hash, lines: anchor.lines };
+    const first = anchor.lines[0]!.line - 1;
+    const last = anchor.lines.at(-1)!.line - 1;
+    const targets = Array.from(
+      { length: last - first + 1 },
+      (_, offset) => map[first + offset]!,
+    );
+    if (
+      targets.every(
+        (target, offset) => target >= 0 && target === targets[0]! + offset,
+      )
+    ) {
+      const lines = file.slice(targets[0]!, targets[0]! + targets.length);
+      if (contains(lines, anchor.quote)) return { kind: "stays", hash, lines };
+    }
+    // The lines the comparison kept just before and just after the passage bound where it was.
+    let previous = first - 1;
+    while (previous >= 0 && map[previous]! < 0) previous--;
+    let next = last + 1;
+    while (next < before.length && map[next]! < 0) next++;
+    const from = previous >= 0 ? map[previous]! + 1 : 0;
+    const to = next < before.length ? map[next]! : file.length;
+    const place = file.slice(from, to);
+    // A quote counts as surviving only in the lines that took the passage's place, so a deleted
+    // passage whose words occur elsewhere in the plan is changed, not ambiguous.
+    if (contains(place, anchor.quote))
+      return { kind: "ambiguous", hash, section: anchor.section };
+    return {
+      kind: "changed",
+      hash,
+      removed: before
+        .slice(previous + 1, next)
+        .filter((line) => map[line.line - 1]! < 0),
+      added: place.filter((line) => !placed.has(line.line - 1)),
+    };
+  };
+}
+
+/** Where `anchor`, made on the version whose text is `anchorText`, sits on the version `current`. */
 export function placeFileLinesAnchor(
   anchor: FileLinesAnchor,
   anchorText: string,
   current: { hash: string; text: string },
 ): FileLinesPlacement {
-  const { hash } = current;
-  if (hash === anchor.hash) return { kind: "stays", hash, lines: anchor.lines };
-  const before = fileLines(anchorText);
-  const file = fileLines(current.text);
-  const map = carried(before, file);
-  const first = anchor.lines[0]!.line - 1;
-  const last = anchor.lines.at(-1)!.line - 1;
-  const targets = Array.from(
-    { length: last - first + 1 },
-    (_, offset) => map[first + offset]!,
-  );
-  if (
-    targets.every(
-      (target, offset) => target >= 0 && target === targets[0]! + offset,
-    )
-  ) {
-    const lines = file.slice(targets[0]!, targets[0]! + targets.length);
-    if (contains(lines, anchor.quote)) return { kind: "stays", hash, lines };
-  }
-  // The lines the comparison kept just before and just after the passage bound where it was.
-  let previous = first - 1;
-  while (previous >= 0 && map[previous]! < 0) previous--;
-  let next = last + 1;
-  while (next < before.length && map[next]! < 0) next++;
-  const from = previous >= 0 ? map[previous]! + 1 : 0;
-  const to = next < before.length ? map[next]! : file.length;
-  const place = file.slice(from, to);
-  // A quote counts as surviving only in the lines that took the passage's place, so a deleted
-  // passage whose words occur elsewhere in the plan is changed, not ambiguous.
-  if (contains(place, anchor.quote))
-    return { kind: "ambiguous", hash, section: anchor.section };
-  const placed = new Set(map);
-  return {
-    kind: "changed",
-    hash,
-    removed: before
-      .slice(previous + 1, next)
-      .filter((line) => map[line.line - 1]! < 0),
-    added: place.filter((line) => !placed.has(line.line - 1)),
-  };
+  return fileLinesPlacer(anchorText, current)(anchor);
 }
