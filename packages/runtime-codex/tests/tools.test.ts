@@ -1,4 +1,7 @@
-// Verify the HTTP replies and runtime events Codex gets for Neuve's tools.
+// Why: Neuve's tools reach Codex over a local HTTP server, so the token is the only thing that
+// keeps another process on the machine from calling them, and a call must appear on the contract
+// as Neuve's own tool, with its own events and its handler's checks, whatever Codex does.
+// The session tests bind a local port: run them outside a sandbox that forbids that.
 import { expect, test } from "bun:test";
 import {
   AccountName,

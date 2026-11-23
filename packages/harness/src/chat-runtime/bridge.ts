@@ -1715,7 +1715,6 @@ export class ChatRuntimeBridge {
     }
     const closed = Promise.withResolvers<void>();
     live.closing = closed.promise;
-    this.settleWork(live, stoppedCall.text);
     live.holding = false;
     live.backlog.length = 0;
     live.followUp = undefined;

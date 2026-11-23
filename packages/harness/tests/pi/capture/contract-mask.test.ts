@@ -1,4 +1,3 @@
-// Verify restricted captures mask content and preserve readable runtime state.
 import { expect, test } from "bun:test";
 import { TurnOutcome } from "@neuve/runtime";
 import { z } from "zod";
@@ -94,6 +93,7 @@ const project = (data: ContractState, declared: string[] = []) =>
     },
   );
 
+// Why: A captured start can expose credentials even if the command never finishes.
 test("a saved command start masks the same input as its finish", async () => {
   const secret = "sk-012345678901234567890123";
   const command = {

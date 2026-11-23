@@ -1,4 +1,8 @@
-// Verify the chat shows runtime work at start and records its result in transcript order.
+// Why: a runtime with tools of its own (Codex) reports its commands and file changes as work it
+// starts, and goes on with its turn while pi records each one. The chat must show each as a
+// tool call that is running, with the outcome the runtime reported, keep the turn's later output
+// in order, release nothing back to the runtime, and send the turn the chat's own folder. pi's
+// shell and file tools and the pass-through itself are never served to such a runtime.
 import { expect, test } from "bun:test";
 import type { SystemMessage } from "@earendil-works/pi-ai";
 import {

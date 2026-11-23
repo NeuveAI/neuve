@@ -462,6 +462,7 @@ describe("each way a turn ends gives exactly one terminal event", () => {
     );
   });
 
+  // Seen live: Codex completes no item for a command an interrupt cut short.
   test("an interrupted command reports a stopped result without an item completion", async () => {
     const fake = codex((message, process) => {
       if (message.method === "turn/interrupt")
