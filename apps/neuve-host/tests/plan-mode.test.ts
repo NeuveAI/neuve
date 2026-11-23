@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeF
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, type Models } from "@earendil-works/pi-ai";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import { MemoryStorage, type JsonObject } from "@earendil-works/pi-durable";
 import { ok } from "@earendil-works/pi-durable/env";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { Channel, Event, Request } from "@ace/channel";
@@ -672,7 +672,7 @@ test("explore rejects options and leaves files, the index, and configured progra
 		const { fake, models } = faux();
 		const channel = await open(repo, models, join(root, "home"));
 		try {
-			const invalid = ["--output=fixture", "-Ofixture", "--ext-diff", "-c fixture", "--no-index"].flatMap(value => [
+			const invalid = ["--output=fixture", "-Ofixture", "--ext-diff", "-c fixture", "--no-index"].flatMap((value): JsonObject[] => [
 				{ action: value },
 				{ action: "list", path: value },
 				{ action: "search", pattern: value },
@@ -685,7 +685,22 @@ test("explore rejects options and leaves files, the index, and configured progra
 				{ action: "compare", from: "HEAD", to: value },
 				{ action: "compare", from: "HEAD~1", to: "HEAD", path: value },
 			]);
-			const valid = [
+			const refusals: [JsonObject, string[]][] = [
+				[{ action: "open", typo: true }, [
+					'action: Expected one of "list", "search", "history", "show", "compare".',
+					"typo: Unknown argument",
+				]],
+				[{ action: "show", lines: 3 }, [
+					'revision: Missing required value, so supply a Git revision such as "HEAD"',
+					"path: Missing required value, so supply a path inside the working tree",
+					"lines: Unknown argument, use only action, revision, path.",
+				]],
+				[{ action: "compare", from: "no-such-from", to: "no-such-to" }, [
+					'from: "no-such-from" names no commit in this repository',
+					'to: "no-such-to" names no commit in this repository',
+				]],
+			];
+			const valid: JsonObject[] = [
 				{ action: "list" },
 				{ action: "search", pattern: "version", path: "notes.txt" },
 				{ action: "history", revision: "HEAD", count: 1 },
@@ -695,6 +710,7 @@ test("explore rejects options and leaves files, the index, and configured progra
 			fake.appendResponses([
 				fauxAssistantMessage([
 					...invalid.map((args, n) => fauxToolCall("explore", args, { id: `invalid-${n}` })),
+					...refusals.map(([args], n) => fauxToolCall("explore", args, { id: `refusal-${n}` })),
 					...valid.map((args, n) => fauxToolCall("explore", args, { id: `valid-${n}` })),
 					fauxToolCall("explore", { action: "list", path: "external-link" }, { id: "outside" }),
 					fauxToolCall("write", { path: join(root, "written"), content: "unexpected" }, { id: "write-outside" }),
@@ -705,6 +721,13 @@ test("explore rejects options and leaves files, the index, and configured progra
 			await ask(channel, { mode: "plan" });
 			const transcript = await results(channel);
 			for (const n of invalid.keys()) expect(transcript.get(`invalid-${n}`)).toMatchObject({ error: true });
+			for (const [n, [args, problems]] of refusals.entries()) {
+				const result = transcript.get(`refusal-${n}`);
+				expect(result?.error).toBe(true);
+				expect(result?.text).toContain('Tool "explore" refused the call.');
+				for (const problem of problems) expect(result?.text).toContain(problem);
+				expect(result?.text).toContain(`Received arguments:\n${JSON.stringify(args, null, 2)}`);
+			}
 			for (const [n, text] of ["untracked.txt", "notes.txt:1:second version", "Update fixture", "first version", "+second version"].entries()) {
 				expect(transcript.get(`valid-${n}`)).toMatchObject({ error: false, text: expect.stringContaining(text) });
 			}

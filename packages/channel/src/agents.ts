@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord";
-import { type AssistantMessage, type Message, type TextContent, Type } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, TextContent } from "@earendil-works/pi-ai";
 import {
+	AgentDoc,
 	AssistantEntry,
 	configure,
 	defineExtension,
@@ -11,11 +12,13 @@ import {
 	hook,
 	type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
+import { z } from "zod";
 
 import type { Delivery } from "./protocol";
 import type { Channel } from "./channel";
 import { MetadataExtension } from "./metadata";
 import * as room from "./room";
+import { toolArguments, toolRefusal } from "./tool-arguments";
 
 async function answer(api: ToolExecutionApi, id: EntryId, context: Context): Promise<string> {
 	const entry = await api.commit((tx) => tx.entry(AssistantEntry, id), context);
@@ -23,14 +26,12 @@ async function answer(api: ToolExecutionApi, id: EntryId, context: Context): Pro
 	return message ? room.text(message) : "";
 }
 
-function model(value: string | undefined) {
-	if (!value) return;
-	const split = value.indexOf("/");
-	if (split < 1) {
-		throw new Error("A model is written provider/model-id, such as openai/gpt-6-astra");
-	}
-	return { provider: value.slice(0, split), modelId: value.slice(split + 1) };
-}
+const SubagentModel = z.string().regex(/^(?:[^/\s]+\/\S+)?$/)
+	.describe("A model in provider/model-id form. Omit to inherit the parent chat's model.");
+const subagentArguments = toolArguments("subagent", z.strictObject({
+	task: z.string().describe("What the subagent should do"),
+	model: SubagentModel.optional(),
+}), { model: "a model in provider/model-id form, or omit model to inherit the parent chat's model" }, { coerce: true });
 
 /**
  * A subagent works in a child chat owned by this tool call's task, so stopping or killing the parent
@@ -42,19 +43,16 @@ export const subagent = (submitInput: Channel["submitInput"], ...without: Extens
 		name: "ace-subagent",
 		tools: [
 			defineTool({
-				name: "subagent",
+				...subagentArguments,
 				description:
-					"Delegate a self-contained piece of work to a subagent in a new chat of this channel and wait for its answer. It does not see this chat, so give it everything it needs. It starts in your current lane; tell it to start its own lane for separate work.",
-				parameters: Type.Object({
-					task: Type.String({ description: "What the subagent should do" }),
-					model: Type.Optional(
-						Type.String({ description: "provider/model-id; defaults to your model" }),
-					),
-				}),
+					"Delegate a self-contained piece of work to a subagent in a new chat of this channel and wait for its answer. It does not see this chat, so give it everything it needs. It starts in your current work lane; tell it to start its own work lane for separate work.",
 				// A rerun after a crash finds the child it created and the submission it made.
 				replay: "safe",
 				execute: async (args, api, context) => {
-					const change = model(args.model);
+					// Pi recovery can execute a stored call without preparing its arguments again.
+					if (args.model && !SubagentModel.safeParse(args.model).success) subagentArguments.prepareArguments(args);
+					const split = args.model?.indexOf("/") ?? 0;
+					const change = args.model && { provider: args.model.slice(0, split), modelId: args.model.slice(split + 1) };
 					const child = await api.commit(async (tx) => {
 						const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
 						if (existing) return existing.id;
@@ -77,8 +75,17 @@ export const subagent = (submitInput: Channel["submitInput"], ...without: Extens
 					} as const;
 					const submission = await (change ? handle.submit(request, context) : submitInput(handle, request, context));
 					const settled = await submission.wait(context);
-					if (settled.status !== "done" || settled.type !== "input") {
-						throw new Error(`Subagent chat ${child} ended ${settled.status}`);
+					if (settled.answer === undefined) {
+						if (args.model && settled.reason === "no_model") {
+							throw toolRefusal("subagent", args, [
+								`model: Model ${JSON.stringify(args.model)} is not available in this channel, so omit model to use your own.`,
+							]);
+						}
+						const childModel = (await api.snapshot(AgentDoc, child, context))?.model;
+						const requested = args.model || (childModel ? `${childModel.provider}/${childModel.modelId}` : "automatic model selection");
+						const detail = typeof settled.detail === "string" ? settled.detail : JSON.stringify(settled.detail);
+						const reason = [settled.reason, detail].filter(Boolean).join(": ") || "no answer was recorded";
+						throw new Error(`Subagent chat ${child} ended unanswered with ${requested} (${reason})`);
 					}
 					const text = await answer(api, settled.answer, context);
 					return { content: [{ type: "text", text }], details: { chat: child } };
@@ -99,6 +106,18 @@ export type Directory = {
 	}[]>;
 	deliver(delivery: Delivery, context: Context): Promise<void>;
 };
+
+const channelsArguments = toolArguments("channels", z.strictObject({}));
+const messageArguments = toolArguments("message", z.strictObject({
+	channel: z.string().describe("Channel id or unique name. Use the id when names repeat."),
+	chat: z.int().nonnegative().optional().describe("Chat id. Omit for the channel's first chat."),
+	text: z.string(),
+	invoke: z.boolean(),
+}), {
+	channel: "a channel id or unique name from channels",
+	chat: "a nonnegative integer chat id in the destination channel, or omit chat for its first chat",
+	invoke: "true to start the destination chat's agent or false to deliver the message without starting it",
+}, { coerce: true });
 
 /**
  * Other channels' current names, as `#name`, keyed by the author their agents' messages carry. That
@@ -148,10 +167,9 @@ export function messaging(directory: Directory): Extension {
 		],
 		tools: [
 			defineTool({
-				name: "channels",
+				...channelsArguments,
 				description:
 					"List the channels on this host that you can message, with their rolling summaries.",
-				parameters: Type.Object({}),
 				replay: "safe",
 				execute: async (_args, _api, context) => {
 					const channels = await directory.list(context);
@@ -163,19 +181,9 @@ export function messaging(directory: Directory): Extension {
 				},
 			}),
 			defineTool({
-				name: "message",
+				...messageArguments,
 				description:
 					"Post a message to another channel's chat. Set invoke to start that chat's agent on it, which also stops any shell command that agent is running so it reads your message next; otherwise people and the agent there only see it. Delivery does not wait for an answer: to get one, ask that agent to message this channel with invoke set when it is ready, say in your chat what you are waiting for, and end your run.",
-				parameters: Type.Object({
-					channel: Type.String({
-						description: "Channel id or unique name; use the id when names repeat",
-					}),
-					chat: Type.Optional(
-						Type.Number({ description: "Chat id; defaults to the channel's first chat" }),
-					),
-					text: Type.String(),
-					invoke: Type.Boolean(),
-				}),
 				// The request ID makes redelivery after a crash a no-op at the destination.
 				replay: "safe",
 				execute: async (args, api, context) => {
@@ -188,11 +196,15 @@ export function messaging(directory: Directory): Extension {
 					if (!target && !saved) {
 						const matches = channels.filter((channel) => channel.name === ref);
 						if (matches.length > 1) {
-							throw new Error(`More than one channel is named ${ref}; use its channel id`);
+							throw toolRefusal("message", args, [
+								`channel: More than one channel is named ${JSON.stringify(ref)}, so use one of their ids (${matches.map(channel => JSON.stringify(channel.id)).join(", ")}).`,
+							]);
 						}
 						target = matches[0];
 					}
-					if (!target) throw new Error(`No channel ${ref}`);
+					if (!target) throw toolRefusal("message", args, [
+						`channel: No channel matches ${JSON.stringify(ref)}, so use an id or unique name returned by channels.`,
+					]);
 					await api.memo("channel", target.id, context);
 					await directory.deliver({
 						channel: target.id,
