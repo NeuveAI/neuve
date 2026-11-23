@@ -4,6 +4,7 @@ import type {
 	ChatMode,
 	Image,
 	Plan,
+	PlanComment,
 	ReviewNotice,
 	QueuedMessage,
 	Reactions,
@@ -100,6 +101,8 @@ export type Transcript = {
 	reviews: Record<string, ReviewCard>;
 	/** The chat's plans, oldest first, as the host last sent them. */
 	plans: Plan[];
+	/** The comments on the chat's plans, oldest first, as the host last sent them. */
+	planComments: PlanComment[];
 	/** When each person last said they were typing, in ms; their message ends it. */
 	typing: Record<string, number>;
 	/** Text streamed for the reply being generated. */
@@ -121,6 +124,7 @@ const EMPTY: Transcript = {
 	reactions: {},
 	reviews: {},
 	plans: [],
+	planComments: [],
 	typing: {},
 	draft: "",
 	busy: false,
@@ -134,6 +138,8 @@ export function apply(state: Transcript, event: Event): Transcript {
 			return { ...state, reviews: event.cards };
 		case "plans":
 			return { ...state, plans: event.plans };
+		case "plan-comments":
+			return { ...state, planComments: event.comments };
 		case "neuve:review:new-commits":
 			return { ...state, items: [...state.items, reviewCommits(event)] };
 		case "queue": {

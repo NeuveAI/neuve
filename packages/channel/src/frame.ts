@@ -5,7 +5,7 @@ import type { ReviewCard } from "./review-cards";
 
 import { EffortSchema } from "./effort";
 import { ChatModeSchema, ModelRefSchema } from "./parse";
-import type { Event, Frame, Plan } from "./protocol";
+import type { Event, Frame, Plan, PlanComment } from "./protocol";
 
 const id = z.int().nonnegative();
 const text = z.string();
@@ -47,9 +47,35 @@ export const PlanSchema = z.object({
 	approved: z.object({ by: text, at: z.number() }).optional(),
 }) satisfies z.ZodType<Plan>;
 
+// Comments on a plan.
+const fileLine = z.object({ line: id, text });
+const send = z.object({ at: z.number(), entry: id });
+export const PlanCommentSchema = z.object({
+	id: text,
+	plan: text,
+	author: text,
+	at: z.number(),
+	text,
+	sent: send.optional(),
+	anchor: z.object({ hash: text, lines: z.array(fileLine), quote: text, section: text }),
+	placement: z.discriminatedUnion("kind", [
+		z.object({ kind: z.literal("stays"), hash: text, lines: z.array(fileLine) }),
+		z.object({ kind: z.literal("changed"), hash: text, removed: z.array(fileLine), added: z.array(fileLine) }),
+		z.object({ kind: z.literal("ambiguous"), hash: text, section: text }),
+	]),
+	state: z.enum(["queued", "sent", "picked-up", "working", "replied", "failed"]).optional(),
+	failure: text.optional(),
+	replies: z.array(z.discriminatedUnion("kind", [
+		z.object({ kind: z.literal("person"), id: text, author: text, at: z.number(), text, sent: send.optional() }),
+		z.object({ kind: z.literal("agent"), id: text, model: text, at: z.number(), text }),
+	])),
+}) satisfies z.ZodType<PlanComment>;
+// End of comments on a plan.
+
 export const EventSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("review-cards"), ...base, cards: z.record(text, ReviewCardSchema) }),
 	z.object({ kind: z.literal("plans"), ...base, plans: z.array(PlanSchema) }),
+	z.object({ kind: z.literal("plan-comments"), ...base, comments: z.array(PlanCommentSchema) }),
 	z.object({ kind: z.literal("neuve:review:new-commits"), ...base, entry: id, at: z.number(), review: text, branch: text, reviewedHead: text, head: text, label: text }),
 	z.object({
 		kind: z.literal("queue"),

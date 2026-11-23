@@ -1,6 +1,10 @@
 import type { ReviewCard } from "./review-cards";
 export type { ReviewCard } from "./review-cards";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { CommentThreadState } from "@neuve/review-rules/comment-thread";
+import type { FileLine, FileLinesAnchor, FileLinesPlacement } from "@neuve/review-rules/file-lines-anchor";
+export type { CommentThreadState } from "@neuve/review-rules/comment-thread";
+export type { FileLine, FileLinesAnchor, FileLinesPlacement } from "@neuve/review-rules/file-lines-anchor";
 
 /** The wire contract between a channel and its clients: one JSON value per line. */
 
@@ -120,6 +124,57 @@ export type Plan = {
 
 /** The tool by which a planning chat's agent writes its plan; the only writer of plan files. */
 export const PLAN_TOOL = "plan_write";
+
+// Comments on a plan.
+
+/**
+ * A person's comment on lines of one of the chat's plans, with the replies under it. A person
+ * keeps comments and replies with the plan, then sends all of their own kept ones at once, as one
+ * message to the chat's agent (`plan-comments-send`). Comments live in the chat's session state,
+ * not in Records, and are never deleted once sent.
+ */
+export type PlanComment = {
+	/** Names the comment for the channel's life. */
+	id: string;
+	plan: string;
+	/** The verified participant who wrote it. */
+	author: string;
+	/** When it was kept, in ms. */
+	at: number;
+	text: string;
+	/** Absent while the comment is kept and not yet sent; a kept comment can be edited or removed. */
+	sent?: PlanCommentSend;
+	/** Where the comment was made, on the version it was made on. Never changes. */
+	anchor: FileLinesAnchor;
+	/** Where the comment sits on the plan's current version, by the file-lines anchor rule. */
+	placement: FileLinesPlacement;
+	/**
+	 * Where the latest send that carried this comment or a reply under it is on its way to the
+	 * agent. Absent before the first such send. `working` is not used here.
+	 */
+	state?: CommentThreadState;
+	/** Why the latest send failed, with `failed`. */
+	failure?: string;
+	/** Replies under the comment, oldest first. */
+	replies: PlanCommentReply[];
+};
+
+export type PlanCommentReply =
+	/** A person's reply; kept like a comment, and sent with the next send of its author. */
+	| { kind: "person"; id: string; author: string; at: number; text: string; sent?: PlanCommentSend }
+	/** The agent's answer, written by `PLAN_COMMENT_TOOL`; `model` is the model that wrote it. */
+	| { kind: "agent"; id: string; model: string; at: number; text: string };
+
+/** The send that carried a comment or reply: when, and the chat message it became. */
+export type PlanCommentSend = { at: number; entry: EntryId };
+
+/**
+ * The plan-mode tool by which the agent answers one comment, with `{ comment, text }`. It writes
+ * only into that comment's thread, and only for a comment on one of its own chat's plans.
+ */
+export const PLAN_COMMENT_TOOL = "plan_comment_answer";
+
+// End of comments on a plan.
 
 export type Chat = {
 	id: ChatId;
@@ -340,6 +395,47 @@ export type Request =
 	 * and a replaced one; approving an approved version again changes nothing.
 	 */
 	| { op: "plan-approve"; chat?: ChatId; author: string; plan: string; hash: string }
+	// Comments on a plan. Each refuses an agent author: agents answer with PLAN_COMMENT_TOOL.
+	/**
+	 * Keep a comment on lines of version `hash` of plan `plan`, as the person read it. `lines` are
+	 * consecutive, 1-based, with their exact text in that version, and `quote` is inside them; the
+	 * host checks both against the file's bytes and sets the section itself. Answers with the
+	 * `PlanComment`. Refused for an unknown or replaced plan, a hash the plan no longer has, lines or
+	 * a quote that do not match, and empty text.
+	 */
+	| {
+		op: "plan-comment";
+		chat?: ChatId;
+		author: string;
+		plan: string;
+		hash: string;
+		lines: FileLine[];
+		quote: string;
+		text: string;
+	}
+	/** Keep a reply under comment `comment`. Answers with the `PlanComment`. Refused for empty text. */
+	| { op: "plan-comment-reply"; chat?: ChatId; author: string; comment: string; text: string }
+	/**
+	 * Replace the text of the author's own kept comment, or of its kept reply `reply`. Answers with
+	 * the `PlanComment`. Refused once sent, for another person's, and for empty text.
+	 */
+	| { op: "plan-comment-edit"; chat?: ChatId; author: string; comment: string; reply?: string; text: string }
+	/**
+	 * Remove the author's own kept comment with its kept replies, or only its kept reply `reply`.
+	 * Refused once sent and for another person's.
+	 */
+	| { op: "plan-comment-remove"; chat?: ChatId; author: string; comment: string; reply?: string }
+	/**
+	 * Send every comment and reply the author keeps on plan `plan`, together, as one message of the
+	 * author's to the chat the plan belongs to, invoking its agent in plan mode as `ask` with mode
+	 * `plan` would, and refused as that `ask` would be. The host writes the message: for each comment
+	 * its id, section and lines, the quoted plan text marked as quotation, and the words; for each
+	 * reply the comment it answers and the words. Mentions in it are never published. Answers with
+	 * the message's entry and the ids of the comments it carried. Refused when the author keeps
+	 * nothing on the plan and for a replaced plan. A retried `requestId` answers as the first send.
+	 */
+	| { op: "plan-comments-send"; chat?: ChatId; author: string; plan: string; requestId?: string }
+	// End of comments on a plan.
 	/** Add, or `remove`, the author's reaction to a human message or agent reply. */
 	| { op: "react"; chat?: ChatId; author: string; entry: EntryId; emoji: string; remove?: boolean }
 	/** Replace the author's own human message with a tombstone, for people and later model context. */
@@ -381,6 +477,8 @@ export type Request =
 		stops?: boolean;
 		/** Include plans events; older clients do not understand them. */
 		plans?: boolean;
+		/** Include plan-comments events; older clients do not understand them. */
+		planComments?: boolean;
 	};
 
 export type ReviewNewCommits = { review: string; branch: string; reviewedHead: string; head: string; label: string };
@@ -389,6 +487,8 @@ export type Event =
 	| { kind: "review-cards"; chat: ChatId; cards: Record<string, ReviewCard> }
 	/** The chat's complete plans, oldest first, sent on attachment and on every change. */
 	| { kind: "plans"; chat: ChatId; plans: Plan[] }
+	/** The comments on all the chat's plans, oldest first, sent on attachment and on every change. */
+	| { kind: "plan-comments"; chat: ChatId; comments: PlanComment[] }
 	| ({ kind: "neuve:review:new-commits"; chat: ChatId; entry: EntryId; at: number } & ReviewNewCommits)
 	/**
 	 * The complete current message queue, sent on attachment and every committed change.
