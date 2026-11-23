@@ -27,9 +27,9 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	const [sendError, setSendError] = useState<string>();
 	// Why the last send held some of the person's replies back, as the channel said it.
 	const [held, setHeld] = useState<string>();
-	// What the person kept when their send was answered. The channel's comments event can come
-	// after the answer, so until it shows those words sent, a second send is not offered.
-	const [answered, setAnswered] = useState<string>();
+	// The send the channel answered, until its comments event shows the outcome: the answer can
+	// come first, and until then the words still look unsent and must not be offered again.
+	const [awaiting, setAwaiting] = useState<{ submission: number; ids: string[]; before: string }>();
 	const people = useSyncExternalStore(host.subscribe, () => host.people);
 	const list = plans?.chat === chat ? plans.list : undefined;
 	// The channel shows one chat's plans; a tab saved for another chat's plan cannot read it here.
@@ -94,17 +94,21 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	);
 	const comments = planComments?.chat === chat ? planComments.list : [];
 	const replaced = shown.state === "replaced";
-	const kept = keptKey(comments, shown.id, user);
+	const sends = planComments?.chat === chat ? planComments.sends ?? [] : [];
+	// The event showed this send's submission, or changed one of the comments it carried.
+	const settled = !awaiting || sends.includes(awaiting.submission) || carried(comments, awaiting.ids) !== awaiting.before;
 
 	async function send() {
 		setSending(true);
 		setSendError(undefined);
 		setHeld(undefined);
-		const before = kept;
+		setAwaiting(undefined);
+		// The comments as the person saw them when sending; the answer may come after the event.
+		const shownComments = comments;
 		try {
 			const sent = await sendKept();
 			setHeld(sent.keptReplies?.reason);
-			setAnswered(before);
+			setAwaiting({ submission: sent.submission, ids: sent.comments, before: carried(shownComments, sent.comments) });
 		} catch (cause) {
 			setSendError((cause as Error).message);
 		} finally {
@@ -126,21 +130,14 @@ export function Plan({ channel, chat, user, plan }: Props) {
 				agentAvatar,
 				...(mayApprove && !replaced ? actions : {}),
 			}}
-			send={mayApprove && !replaced ? { onSend: () => void send(), sending: sending || answered === kept, error: sendError, note: held } : undefined}
+			send={mayApprove && !replaced ? { onSend: () => void send(), sending: sending || !settled, error: sendError, note: held } : undefined}
 		/>
 	);
 }
 
-/** The person's kept words on a plan and where each comment's latest send stands. */
-function keptKey(comments: PlanComment[], plan: string, user: string) {
-	return JSON.stringify(comments
-		.filter((comment) => comment.plan === plan)
-		.map((comment) => [
-			comment.id,
-			comment.state,
-			comment.author === user && !comment.sent,
-			comment.replies.filter((reply) => reply.kind === "person" && reply.author === user && !reply.sent).length,
-		]));
+/** The comments a send carried, as the channel last showed them. */
+function carried(comments: PlanComment[], ids: string[]) {
+	return JSON.stringify(comments.filter((comment) => ids.includes(comment.id)));
 }
 
 function Note({ children }: { children: string }) {

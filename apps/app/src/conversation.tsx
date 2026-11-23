@@ -316,10 +316,10 @@ export function Conversation(
 		if (transcript.live) {
 			publish(channel.id, {
 				plans: { chat: id, list: transcript.plans },
-				planComments: { chat: id, list: transcript.planComments },
+				planComments: { chat: id, list: transcript.planComments, sends: transcript.commentSends },
 			});
 		}
-	}, [channel.id, id, transcript.live, transcript.plans, transcript.planComments]);
+	}, [channel.id, id, transcript.live, transcript.plans, transcript.planComments, transcript.commentSends]);
 
 	useEffect(() => {
 		if (transcript.live) onWork?.();
