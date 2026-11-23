@@ -6,7 +6,7 @@ import type {
   Revision,
   SourcePath,
 } from "./domain.ts";
-import { argumentRefusal } from "./records-cli.ts";
+import { argumentRefusal, unknownOptionRefusal } from "./records-cli.ts";
 
 const positiveInteger = (raw: string, name: string): number => {
   const value = Number(raw);
@@ -264,9 +264,7 @@ export const parseQueryInvocation = (
       const hasValue =
         name.startsWith("--") && value !== undefined && !value.startsWith("--");
       if (hasValue) index += 1;
-      problems.push(
-        `Unknown query option ${JSON.stringify(name)}${hasValue ? ` with value ${JSON.stringify(value)}` : ""}. Run neuve query --help for accepted options.`,
-      );
+      problems.push(unknownOptionRefusal(name.split("=", 1)[0], "neuve query"));
       continue;
     }
     const duplicate = seen.has(name) && name !== "--scope";

@@ -194,6 +194,17 @@ export const argumentRefusal = (
     ? `${argument} takes ${accepted}. No value was supplied.`
     : `${argument} takes ${accepted}, not ${JSON.stringify(received)}.`;
 
+export const unknownOptionRefusal = (
+  name: string | undefined,
+  command: string,
+) => {
+  const option =
+    name !== undefined && /^-{1,2}[a-zA-Z][a-zA-Z0-9-]{0,63}$/.test(name)
+      ? ` '${name}'`
+      : "";
+  return `Unknown option${option}. Run ${command} --help for accepted options.`;
+};
+
 const bytes = (count: number) => {
   if (count < 1024) return `${count} B`;
   const units = ["KiB", "MiB", "GiB"];

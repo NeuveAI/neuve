@@ -1728,11 +1728,11 @@ describe("neuve CLI boundary", () => {
     ],
     [
       ["--refresh-cache", "true"],
-      'Unknown query option "true". Run neuve query --help for accepted options.',
+      "Unknown option. Run neuve query --help for accepted options.",
     ],
     [
       ["--refresh-cache=false"],
-      'Unknown query option "--refresh-cache=false". Run neuve query --help for accepted options.',
+      "Unknown option '--refresh-cache'. Run neuve query --help for accepted options.",
     ],
   ] as const)("rejects invalid refresh flags %j", async (extra, message) => {
     const result = await run(
@@ -1960,6 +1960,96 @@ describe("neuve CLI boundary", () => {
     });
   });
 
+  // A bad kind must not hide a malformed range, and neither error requires a session.
+  test("refuses malformed or missing proof ranges as usage errors", async () => {
+    const { root } = await fixtureRepository();
+    await createRecords(root);
+    const flags = [
+      "--claim",
+      "claim",
+      "--requirement",
+      "requirement",
+      "--text",
+      "output",
+      "--repo",
+      root,
+    ];
+    const malformed = await run(
+      ["proof", "record", "a b", "--kind", "bogus", ...flags],
+      { NEUVE_SESSION: "" },
+    );
+    expect(malformed.exitCode).toBe(2);
+    expect(malformed.stdout).toContain("kind: Invalid option");
+    expect(malformed.stdout).toContain("range: Expected <base>..<head>");
+    const missing = await run(
+      ["proof", "record", "--kind", "test-run", ...flags],
+      { NEUVE_SESSION: "" },
+    );
+    expect(missing.exitCode).toBe(2);
+    expect(missing.stdout).toContain(
+      "range: Invalid input: expected string, received undefined",
+    );
+  });
+
+  // A plain shell can be outside capture even when the repository already has hooks installed.
+  test("makes the hooks advice conditional for a plain shell", async () => {
+    const { root } = await fixtureRepository();
+    await createRecords(root);
+    const home = join(root, "home");
+    await mkdir(home);
+    const hooks = join(root, "codex-hooks.json");
+    const setup = await run(
+      [
+        "setup",
+        "hooks",
+        "--repo",
+        root,
+        "--agents",
+        "codex",
+        "--codex-hooks",
+        hooks,
+        "--no-stack",
+      ],
+      { HOME: home },
+    );
+    expect(setup.exitCode, setup.stderr).toBe(0);
+    expect(await Bun.file(hooks).exists()).toBe(true);
+    const ps = join(root, "ps");
+    await Bun.write(
+      ps,
+      '#!/bin/sh\nprintf "%s 0 Mon Nov 23 18:00:00 2026 neuve\\n" "$PPID"\n',
+    );
+    await chmod(ps, 0o755);
+    const env = {
+      PATH: `${root}:${process.env.PATH ?? ""}`,
+      NEUVE_SESSION: "",
+    };
+    const commands = [
+      ["vent", "from a plain shell"],
+      [
+        "proof",
+        "record",
+        "HEAD..HEAD",
+        "--kind",
+        "test-run",
+        "--claim",
+        "claim",
+        "--requirement",
+        "requirement",
+        "--text",
+        "output",
+      ],
+    ];
+    for (const args of commands) {
+      expect(await run([...args, "--repo", root], env)).toEqual({
+        stdout:
+          "Not recorded: this call ran outside a captured agent session. If the agent hooks are not set up for this agent, ask the person to run neuve setup hooks.\n",
+        stderr: "",
+        exitCode: 1,
+      });
+    }
+  });
+
   // Proof and vent must show independent input problems alongside the missing session.
   test("refuses invalid proof and vent inputs without a captured session", async () => {
     const { root } = await fixtureRepository();
@@ -2004,15 +2094,27 @@ describe("neuve CLI boundary", () => {
       '--reconciliation-id takes the harness\'s review cycle ID of 1 to 256 characters. Received "".',
     );
     for (const output of [proof.stdout, vent.stdout]) {
-      const hint = "Ask the person to run neuve setup hooks.";
+      const hint = "ask the person to run neuve setup hooks";
       if (output.includes("the process table cannot be read here"))
         expect(output).not.toContain(hint);
       else {
-        expect(output).toContain("no live agent session recorded");
+        expect(output).toContain(
+          "this call ran outside a captured agent session",
+        );
         expect(output).toContain(hint);
       }
       expect(output).not.toContain("--session");
     }
+  });
+
+  // A repository without Records cannot start a review using the advice for an empty store.
+  test("review show reports a missing Records store", async () => {
+    const { root } = await fixtureRepository();
+    expect(await run(["review", "show", "--repo", root])).toEqual({
+      stdout: "",
+      stderr: `neuve: No Records store at ${join(root, ".git", "neuve", "records.sqlite")}.\n`,
+      exitCode: 2,
+    });
   });
 
   // A queued review is a successful lookup. A fabricated ID must never look queued.
@@ -2184,10 +2286,29 @@ describe("neuve CLI boundary", () => {
     expect(result).toEqual({
       stdout: "",
       stderr: [
-        'neuve: Unknown query option "--target-file" with value "source.custom". Run neuve query --help for accepted options.',
-        'Unknown query option "--target-symbol" with value "target". Run neuve query --help for accepted options.',
+        "neuve: Unknown option '--target-file'. Run neuve query --help for accepted options.",
+        "Unknown option '--target-symbol'. Run neuve query --help for accepted options.",
         "",
       ].join("\n"),
+      exitCode: 2,
+    });
+  });
+
+  // Unknown query options can contain credentials or unsafe characters in their names or values.
+  test("does not echo values or unsafe names for unknown query options", async () => {
+    expect(
+      await run([
+        ...queryArgs("/tmp/example", "abcdef0", "q", []),
+        "--token",
+        "sample-secret",
+        "--header=inline-secret",
+        "--bad\x1b[31m",
+        "another-secret",
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr:
+        "neuve: Unknown option '--token'. Run neuve query --help for accepted options.\nUnknown option '--header'. Run neuve query --help for accepted options.\nUnknown option. Run neuve query --help for accepted options.\n",
       exitCode: 2,
     });
   });

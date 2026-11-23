@@ -45,7 +45,6 @@ import {
   PublishedPackets,
   REVIEW_RUN_KINDS,
   ReviewStats,
-  StoreMissing,
   Starter,
   Worker,
   resolveStoreLocation,
@@ -1531,11 +1530,6 @@ const show = async (
           : undefined;
       }),
       location,
-    ).pipe(
-      Effect.catchIf(
-        (error) => error instanceof StoreMissing,
-        () => Effect.succeed(undefined),
-      ),
     ),
   );
   if (runId === undefined) {

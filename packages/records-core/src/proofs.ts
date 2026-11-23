@@ -6,10 +6,10 @@ import { SqlClient } from "effect/sql/SqlClient";
 import {
   PROOF_ARTEFACT_MAX_BYTES,
   PROOF_MEDIA_TYPES,
-  ProofInput,
   ProofPayload,
   mediaTypeFits,
   type BlobRetention,
+  type ProofInput,
   type ProofKind,
   type ProofWorktree,
   type Range,
@@ -635,33 +635,21 @@ const prepareProof = ({
     const media = mediaTypeOf(input);
     const checks = yield* Effect.all(
       {
-        range: ProofInput.shape.range.safeParse(input.range).success
-          ? resolveRange(repository, input.range)
-          : Effect.fail(
-              refuse(
-                `Proof range takes <base>..<head> without spaces, not ${JSON.stringify(input.range)}.`,
-              ),
-            ),
+        range: resolveRange(repository, input.range),
         revision:
           input.revision === undefined
             ? Effect.succeed(undefined)
-            : !ProofInput.shape.revision.safeParse(input.revision).success
-              ? Effect.fail(
-                  refuse(
-                    `--revision takes a commit at the range's head or in its history without spaces or a leading dash, not ${JSON.stringify(input.revision)}.`,
-                  ),
-                )
-              : commitOf(repository, input.revision).pipe(
-                  Effect.flatMap((commit) =>
-                    Option.isSome(commit)
-                      ? Effect.succeed(commit.value)
-                      : Effect.fail(
-                          refuse(
-                            `--revision takes a commit at the range's head or in its history. ${JSON.stringify(input.revision)} names no commit in this repository.`,
-                          ),
+            : commitOf(repository, input.revision).pipe(
+                Effect.flatMap((commit) =>
+                  Option.isSome(commit)
+                    ? Effect.succeed(commit.value)
+                    : Effect.fail(
+                        refuse(
+                          `--revision takes a commit at the range's head or in its history. ${JSON.stringify(input.revision)} names no commit in this repository.`,
                         ),
-                  ),
+                      ),
                 ),
+              ),
         bytes: artefactBytes(repository, input, mask).pipe(
           Effect.flatMap((bytes) =>
             bytes.byteLength === 0
@@ -892,7 +880,7 @@ export const describeRecord = (result: CallerRecordResult) => {
       case "Unavailable":
         return `Not recorded: the process table cannot be read here, and no session ID set by a supported harness names a live session here, so this call is not linked to an agent session.${problems}`;
       case "None":
-        return `Not recorded: no live agent session recorded in this repository owns this process.\nThe agent hooks are not capturing this session. Ask the person to run neuve setup hooks.${problems}`;
+        return `Not recorded: this call ran outside a captured agent session. If the agent hooks are not set up for this agent, ask the person to run neuve setup hooks.${problems}`;
     }
   }
   const what = `${result.kind} proof at ${result.revision.slice(0, 12)} (${result.artefact.mediaType}, ${result.artefact.bytes} bytes; ${describeWorktree(result.worktree, result.revision)})`;

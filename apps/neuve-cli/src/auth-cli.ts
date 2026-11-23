@@ -410,9 +410,7 @@ const removalMessages: Record<AccountStore.RemovalStep, string> = {
 };
 
 const unknownAccount = (name: string, accounts: readonly { name: string }[]) =>
-  accounts.length === 0
-    ? `Account ${JSON.stringify(name)} was not found. No accounts are available. Add one with neuve auth add chatgpt <name>.`
-    : `Account ${JSON.stringify(name)} was not found. Use one of ${accounts.map(({ name }) => JSON.stringify(name)).join(", ")}.`;
+  `Account ${JSON.stringify(name)} was not found. Use one of ${accounts.map(({ name }) => JSON.stringify(name)).join(", ")}.`;
 
 const runAccountCommand = async (
   command: string,

@@ -5,7 +5,7 @@ import { runAuthCli } from "./auth-cli.ts";
 import { parseQueryInvocation, QUERY_DEFAULTS } from "./boundary.ts";
 import { collectPublicQueryResult, runQueryGraph } from "./graph-query.ts";
 import type { PublicQueryEvent } from "./domain.ts";
-import { runRecordsCli } from "./records-cli.ts";
+import { runRecordsCli, unknownOptionRefusal } from "./records-cli.ts";
 import { runRelationsCli } from "./relations-cli.ts";
 import { runReviewCli, PublicReviewError } from "./review-cli.ts";
 import { runMcp } from "./mcp.ts";
@@ -163,6 +163,13 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
         }
       },
     });
+    if (invocation.output === "json") {
+      await Bun.write(
+        Bun.stdout,
+        `${JSON.stringify({ ...collectPublicQueryResult(events), ...assumptions }, null, 2)}\n`,
+      );
+    }
+    return 0;
   } catch (error) {
     if (
       error instanceof DOMException &&
@@ -175,18 +182,17 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
       );
       return interrupted.exitCode;
     }
-    throw error;
+    const repository = invocation.assumedOptions?.["--repo"];
+    if (repository === undefined) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${message}\n--repo was assumed to be ${JSON.stringify(repository)}. Pass --repo to choose another repository.`,
+      { cause: error },
+    );
   } finally {
     process.off("SIGINT", onInterrupt);
     process.off("SIGTERM", onTerminate);
   }
-  if (invocation.output === "json") {
-    await Bun.write(
-      Bun.stdout,
-      `${JSON.stringify({ ...collectPublicQueryResult(events), ...assumptions }, null, 2)}\n`,
-    );
-  }
-  return 0;
 };
 
 const main = async (args: readonly string[]): Promise<number> => {
@@ -275,9 +281,7 @@ try {
     "code" in error &&
     error.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION";
   const option = unknownOption
-    ? /^Unknown option '(-{1,2}[a-zA-Z][a-zA-Z0-9-]{0,63})'/.exec(
-        error.message,
-      )?.[1]
+    ? /^Unknown option '([^']*)'/.exec(error.message)?.[1]
     : undefined;
   const command = Bun.argv[2];
   const helpCommand =
@@ -286,7 +290,10 @@ try {
       ? `${command} ${Bun.argv[3]}`
       : command;
   const message = unknownOption
-    ? `Unknown option${option === undefined ? "" : ` '${option}'`}. Run neuve ${helpCommand} --help for accepted options.`
+    ? unknownOptionRefusal(
+        option,
+        helpCommand === undefined ? "neuve" : `neuve ${helpCommand}`,
+      )
     : captureCommand
       ? error instanceof PublicReviewError
         ? error.message

@@ -227,7 +227,7 @@ export const describe = (result: CallerVentResult) => {
         case "Unavailable":
           return `Not recorded: the process table cannot be read here (agent sandboxes may forbid it), and no session ID set by a supported harness names a live session here, so this call is not linked to an agent session.${problems}`;
         case "None":
-          return `Not recorded: no live agent session recorded in this repository owns this process.\nThe agent hooks are not capturing this session. Ask the person to run neuve setup hooks.${problems}`;
+          return `Not recorded: this call ran outside a captured agent session. If the agent hooks are not set up for this agent, ask the person to run neuve setup hooks.${problems}`;
       }
     }
   }
