@@ -120,6 +120,10 @@ export interface CodexSessionOptions {
 }
 
 type ApprovalChoice = "allow" | "deny" | "automatic-deny" | "resolved";
+type OwnWork = Pick<
+  Extract<RuntimeEvent, { type: "work.finished" }>,
+  "kind" | "input" | "output" | "errored" | "durationMs"
+>;
 interface Pending {
   readonly codexId: ServerRequest["id"];
   readonly decision: Deferred.Deferred<ApprovalChoice>;
@@ -150,8 +154,8 @@ interface Turn {
   readonly work: Map<
     string,
     {
-      readonly kind: WorkKind;
-      readonly input: unknown;
+      readonly kind: OwnWork["kind"];
+      readonly input: OwnWork["input"];
       readonly changes?: FileUpdateChange[];
     }
   >;
@@ -397,7 +401,8 @@ export const openCodexSession = Effect.fnUntraced(function* (
           at: now(),
           workId,
           kind: work.kind,
-          input: asJson(work.input),
+          input: work.input,
+          ...(outcome.status === "interrupted" ? { output: "Stopped." } : {}),
           errored: true,
         });
       active.work.clear();
@@ -460,17 +465,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
     active.codexId !== undefined &&
     active.codexId === codexTurnId;
 
-  const workOf = (
-    item: Decode.KnownItem,
-  ):
-    | {
-        kind: WorkKind;
-        input: unknown;
-        output?: string;
-        errored: boolean;
-        durationMs?: number;
-      }
-    | undefined => {
+  const workOf = (item: Decode.KnownItem): OwnWork | undefined => {
     switch (item.type) {
       case "commandExecution":
         return {
@@ -522,6 +517,30 @@ export const openCodexSession = Effect.fnUntraced(function* (
     }
   };
 
+  const reportWorkStart = (
+    active: Turn,
+    item: Decode.KnownItem,
+    { kind, input }: OwnWork,
+  ) => {
+    const changes =
+      item.type === "fileChange"
+        ? FileChanges.safeParse(item.changes).data
+        : undefined;
+    active.work.set(item.id, {
+      kind,
+      input,
+      ...(changes === undefined ? {} : { changes }),
+    });
+    emit({
+      type: "work.started",
+      turnId: active.id,
+      at: now(),
+      workId: item.id,
+      kind,
+      input,
+    });
+  };
+
   const onNotification = (notification: Notification) =>
     Effect.gen(function* () {
       const active = turn;
@@ -554,17 +573,8 @@ export const openCodexSession = Effect.fnUntraced(function* (
           if (!matches(active, started.data.turnId)) return;
           const item = Decode.KnownItem.safeParse(started.data.item);
           const work = item.success ? workOf(item.data) : undefined;
-          if (item.success && work !== undefined) {
-            const changes =
-              item.data.type === "fileChange"
-                ? FileChanges.safeParse(item.data.changes).data
-                : undefined;
-            active.work.set(item.data.id, {
-              kind: work.kind,
-              input: work.input,
-              ...(changes === undefined ? {} : { changes }),
-            });
-          }
+          if (item.success && work !== undefined)
+            reportWorkStart(active, item.data, work);
           return;
         }
         case "item/completed": {
@@ -605,21 +615,18 @@ export const openCodexSession = Effect.fnUntraced(function* (
             return;
           }
           const work = workOf(item.data);
-          active.work.delete(item.data.id);
-          if (work !== undefined)
+          if (work !== undefined) {
+            if (!active.work.has(item.data.id))
+              reportWorkStart(active, item.data, work);
+            active.work.delete(item.data.id);
             emit({
               type: "work.finished",
               turnId: active.id,
               at: now(),
               workId: item.data.id,
-              kind: work.kind,
-              input: asJson(work.input),
-              ...(work.output === undefined ? {} : { output: work.output }),
-              errored: work.errored,
-              ...(work.durationMs === undefined
-                ? {}
-                : { durationMs: work.durationMs }),
+              ...work,
             });
+          }
           return;
         }
         case "thread/tokenUsage/updated": {
@@ -1197,17 +1204,20 @@ export const openCodexSession = Effect.fnUntraced(function* (
           input: json,
         });
         const controller = new AbortController();
-        signal.addEventListener("abort", () => controller.abort(), {
-          once: true,
-        });
+        const toolSignal = AbortSignal.any([signal, controller.signal]);
         active.calls.set(callId, { toolName, controller });
         const began = Date.now();
         const outcome = yield* definition
-          .handle(input, { callId, signal: controller.signal })
+          .handle(input, { callId, signal: toolSignal })
           .pipe(Effect.exit);
         const settled = active.calls.delete(callId);
+        const stopped = Exit.isFailure(outcome)
+          ? Cause.hasInterruptsOnly(outcome.cause)
+          : toolSignal.aborted;
         const errored =
-          Exit.isFailure(outcome) || outcome.value.error !== undefined;
+          stopped ||
+          Exit.isFailure(outcome) ||
+          outcome.value.error !== undefined;
         if (settled)
           emit({
             type: "tool.finished",
@@ -1222,9 +1232,11 @@ export const openCodexSession = Effect.fnUntraced(function* (
           content: [
             {
               type: "text" as const,
-              text: Exit.isSuccess(outcome)
-                ? outcome.value.text
-                : "The tool failed.",
+              text: stopped
+                ? "Stopped."
+                : Exit.isSuccess(outcome)
+                  ? outcome.value.text
+                  : "The tool failed.",
             },
           ],
           isError: errored,

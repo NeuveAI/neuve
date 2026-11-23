@@ -315,9 +315,17 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     requestId: z.string().min(1),
   }),
   /**
-   * One piece of work a runtime that declares ownTools did itself, once, when it ended: what kind,
-   * what it was asked, what came back, and whether it failed. Neuve ran none of it.
+   * A runtime that declares `ownTools` emits `work.started` for each piece of its own work.
+   * It emits `work.finished` with the same `workId` before `turn.finished` and sets
+   * `errored: true` for work still open at turn end.
    */
+  z.strictObject({
+    ...eventFields,
+    type: z.literal("work.started"),
+    workId: z.string().min(1),
+    kind: WorkKind,
+    input: z.json(),
+  }),
   z.strictObject({
     ...eventFields,
     type: z.literal("work.finished"),
