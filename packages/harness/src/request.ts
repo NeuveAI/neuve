@@ -46,7 +46,7 @@ import {
   READING_RECIPE_SCOPE_AND_TESTS,
 } from "./readings/plan.ts";
 import { readIntegrations, type Integrations } from "./integrations.ts";
-import { git, GitFailed, resolveCommit } from "./git.ts";
+import { git, resolveCommit } from "./git.ts";
 import type { RetrieverConfig } from "./retriever.ts";
 import {
   ClaudeRouteConfig,
@@ -471,29 +471,93 @@ export const prepareReviewConfig = (
     return config;
   });
 
-const branchesContaining = (repository: string, headOid: string) =>
+const localBranches = (repository: string, filter: string) =>
   git(repository, [
     "for-each-ref",
-    `--contains=${headOid}`,
+    filter,
     "--format=%(refname:strip=2)",
     "refs/heads/",
   ]).pipe(
-    Effect.match({
-      onFailure: (error) => error,
-      onSuccess: (refs) => new Set(refs.split("\n").filter(Boolean)),
-    }),
+    Effect.map((refs) => refs.split("\n").filter(Boolean)),
+    Effect.mapError(
+      (error) =>
+        new Error(
+          `Git could not list the local branches: ${error.message || `git for-each-ref exited with code ${error.exitCode}`}`,
+          { cause: error },
+        ),
+    ),
   );
 
-const checkedOutBranch = (repository: string) =>
-  git(repository, ["symbolic-ref", "--quiet", "HEAD"]).pipe(
-    Effect.match({
-      onSuccess: (ref) =>
-        ref.startsWith("refs/heads/")
-          ? ref.trimEnd().slice("refs/heads/".length)
-          : undefined,
-      onFailure: (error) => (error.exitCode === 1 ? undefined : error),
-    }),
+const formatBranchNames = (
+  branches: readonly string[],
+  type: "conjunction" | "disjunction",
+) =>
+  new Intl.ListFormat("en", { type }).format(
+    branches.map((name) => JSON.stringify(name)),
   );
+
+const localPlanIdentity = (cycleId: string) =>
+  Effect.gen(function* () {
+    const [entry] = yield* Log.history({
+      kind: "cycle.local-scope-selected@1",
+      cycleId,
+      limit: 1,
+    });
+    if (entry?.event.kind !== "cycle.local-scope-selected@1") return undefined;
+    const { sources, omitted } = entry.event.payload;
+    return sha256Hex(
+      canonicalJson({
+        omitted,
+        sources: sources.map((source) => {
+          switch (source.kind) {
+            case "repository-document":
+              return [source.kind, source.blob];
+            case "working-file":
+              return [source.kind, source.sha256];
+            case "gap":
+              return [source.kind, source.path];
+          }
+        }),
+      }),
+    );
+  });
+
+type ReviewBranch = {
+  readonly branch: string | undefined;
+  readonly ambiguous?: readonly string[];
+};
+
+const selectReviewCycle = (range: Range, target: ReviewBranch | undefined) =>
+  Effect.gen(function* () {
+    const boundCycles = yield* Cycles.boundToRange(range);
+    const read =
+      target?.branch === undefined
+        ? undefined
+        : yield* Cycles.branchReadCycle(target.branch);
+    if (read !== undefined && boundCycles.includes(read.cycleId))
+      return { cycleId: read.cycleId, bound: true };
+    const [bound] = boundCycles;
+    if (bound !== undefined) {
+      if (read?.open) {
+        const plan = yield* localPlanIdentity(read.cycleId);
+        if (plan !== undefined) {
+          for (const cycleId of boundCycles)
+            if ((yield* localPlanIdentity(cycleId)) === plan)
+              return { cycleId, bound: true, plan };
+          return { cycleId: read.cycleId, bound: false, plan };
+        }
+      }
+      return { cycleId: bound, bound: true };
+    }
+    if (read?.open) return { cycleId: read.cycleId, bound: false };
+    if (target?.ambiguous !== undefined)
+      return yield* Effect.fail(
+        new Error(
+          `${formatBranchNames(target.ambiguous, "conjunction")} end at this review's head, so pass --branch <name> with the branch to review.`,
+        ),
+      );
+    return undefined;
+  });
 
 export const requestReview = (options: ReviewOptions) =>
   Effect.gen(function* () {
@@ -545,20 +609,18 @@ export const requestReview = (options: ReviewOptions) =>
       baseOid: yield* resolveCommit(options.repository, base),
       headOid: yield* resolveCommit(options.repository, head),
     };
-    const config = options.frozenConfig
+    const { localPlan: _localPlan, ...preparedConfig } = options.frozenConfig
       ? PipelineConfig.parse(options.frozenConfig)
       : {
           ...(yield* prepareReviewConfig(options)),
           ...(contextIdentity ? { externalContext: contextIdentity } : {}),
         };
     if (options.frozenConfig !== undefined && options.runtimes !== undefined)
-      yield* routeOwnsLoop(config.route, options.runtimes);
-    if (config.externalContext !== contextIdentity)
+      yield* routeOwnsLoop(preparedConfig.route, options.runtimes);
+    if (preparedConfig.externalContext !== contextIdentity)
       throw new Error(
         "Frozen review configuration does not match its external context",
       );
-    const runKey = runKeyFor(range, config);
-    const prefix = `review.run:${runKey}:`;
     const { actor, registration } = requesterAttribution(options.requester);
     const requestId =
       options.requestId === undefined
@@ -568,29 +630,67 @@ export const requestReview = (options: ReviewOptions) =>
     const sql = yield* SqlClient;
     const store = yield* Computations.ComputationStore;
     const blobs = yield* Blobs.BlobStore;
-    const canJoinReadCycle =
-      selected === undefined && contextIdentity === undefined;
-    const branch =
-      options.branch ??
-      (canJoinReadCycle
-        ? yield* checkedOutBranch(options.branchCheckout ?? options.repository)
-        : undefined);
-    const branches =
-      canJoinReadCycle || options.branch !== undefined
-        ? yield* branchesContaining(options.repository, range.headOid)
+    const branchSelection =
+      selected === undefined && contextIdentity === undefined
+        ? yield* Effect.gen(function* () {
+            const tips = yield* localBranches(
+              options.repository,
+              `--points-at=${range.headOid}`,
+            );
+            const named = options.branch;
+            if (named !== undefined) {
+              const accepted =
+                tips.length === 0
+                  ? yield* localBranches(
+                      options.repository,
+                      `--contains=${range.headOid}`,
+                    )
+                  : tips;
+              if (accepted.includes(named)) return { branch: named };
+              const received = JSON.stringify(named);
+              const message =
+                tips.length === 0
+                  ? `${received} does not hold this review's head. Pass --branch <name> with a local branch that does.`
+                  : `${received} does not end at this review's head, so pass --branch with ${formatBranchNames(tips, "disjunction")}${tips.length === 1 ? " or leave it out" : ""}.`;
+              return yield* Effect.fail(new Error(message));
+            }
+            if (tips.length < 2) return { branch: tips[0] };
+            const checkout = (yield* git(
+              options.branchCheckout ?? options.repository,
+              ["symbolic-ref", "--quiet", "HEAD"],
+            ).pipe(
+              Effect.catchIf(
+                (error) => error.exitCode === 1,
+                () => Effect.succeed(""),
+              ),
+            )).trimEnd();
+            return {
+              branch: tips.find((name) => `refs/heads/${name}` === checkout),
+              ambiguous: tips,
+            };
+          })
         : undefined;
     // The cycle, the generation and the append are one write transaction (`BEGIN IMMEDIATE`), so
-    // two first requests for a range cannot open two cycles or pick different generations.
+    // two first requests for the same range and plan cannot open two cycles or pick different generations.
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const previous = yield* Log.get(requestId);
         if (Option.isSome(previous)) {
           const event = previous.value.event;
+          const recordedPlan =
+            event.kind === "review.requested@1"
+              ? readData(PipelineConfig, event.payload.pipeline.config)
+                  .localPlan
+              : undefined;
+          const config =
+            recordedPlan !== undefined
+              ? { ...preparedConfig, localPlan: recordedPlan }
+              : preparedConfig;
           if (
             event.kind !== "review.requested@1" ||
             event.actor !== actor ||
             canonicalJson(event.attribution.range) !== canonicalJson(range) ||
-            event.payload.runKey !== runKey ||
+            event.payload.runKey !== runKeyFor(range, config) ||
             canonicalJson(event.payload.pipeline.config) !==
               canonicalJson(config) ||
             event.causation?.correlationId !== intent
@@ -598,6 +698,7 @@ export const requestReview = (options: ReviewOptions) =>
             throw new Error(
               "Review request identity was reused for different source, configuration, actor or provenance",
             );
+          const { runKey, generation } = event.payload;
           const cycleId = event.attribution.cycleId;
           const association =
             origin === undefined
@@ -616,13 +717,13 @@ export const requestReview = (options: ReviewOptions) =>
             range,
             config,
             runKey,
-            generation: event.payload.generation,
+            generation,
             cycleId,
             openedCycle: false,
             actor,
             complete: undefined,
             events: [event],
-            dedupeKey: `${prefix}${event.payload.generation}`,
+            dedupeKey: `review.run:${runKey}:${generation}`,
             ...(association ? { association } : {}),
           } satisfies ReviewRequest;
         }
@@ -646,6 +747,27 @@ export const requestReview = (options: ReviewOptions) =>
               "The selected issue does not belong to this configured scope source",
             );
         }
+        const cycle = yield* selectReviewCycle(range, branchSelection);
+        const cycleId = cycle?.cycleId ?? mintUlid();
+        const joined = cycle?.bound === true;
+        const plan =
+          branchSelection === undefined || cycle === undefined
+            ? undefined
+            : (cycle.plan ?? (yield* localPlanIdentity(cycleId)));
+        const existingKey =
+          joined && plan !== undefined
+            ? yield* Cycles.requestedRunKey(
+                cycleId,
+                runKeyFor(range, preparedConfig),
+              )
+            : undefined;
+        const localPlan = existingKey === undefined ? plan : undefined;
+        const config =
+          localPlan === undefined
+            ? preparedConfig
+            : { ...preparedConfig, localPlan };
+        const runKey = existingKey ?? runKeyFor(range, config);
+        const prefix = `review.run:${runKey}:`;
         // A complete run of this key is the range's review: the request joins its job.
         const stored = yield* store.lookup(runKey);
         const complete = Option.isNone(stored)
@@ -664,75 +786,15 @@ export const requestReview = (options: ReviewOptions) =>
         // starts the next generation instead of joining the ended job (8.19).
         const ended = yield* JobQueue.endedWithPrefix(prefix);
         const generation = complete?.generation ?? ended;
-        const cycles = (yield* Log.history({
-          kind: "cycle.opened@1",
-          limit: 10_000,
-        })).filter(
-          (event) =>
-            event.event.kind === "cycle.opened@1" &&
-            event.event.attribution.range.baseOid === range.baseOid &&
-            event.event.attribution.range.headOid === range.headOid,
-        );
-        const joined = cycles[cycles.length - 1];
-        const findReadCycle = joined === undefined && canJoinReadCycle;
-        let readCycleId: string | undefined;
-        if (
-          branches !== undefined &&
-          (findReadCycle || options.branch !== undefined)
-        ) {
-          if (branches instanceof GitFailed)
-            return yield* Effect.fail(
-              new Error(
-                `Git could not list the local branches: ${branches.message || `git for-each-ref exited with code ${branches.exitCode}`}`,
-                { cause: branches },
-              ),
-            );
-          if (branch instanceof GitFailed) return yield* branch;
-          const holdsHead = branch !== undefined && branches.has(branch);
-          if (options.branch !== undefined && !holdsHead)
-            return yield* Effect.fail(
-              new Error(
-                `${JSON.stringify(options.branch)} does not hold this review's head. Pass --branch <name> with a local branch that does.`,
-              ),
-            );
-          if (findReadCycle) {
-            const cycle = holdsHead
-              ? yield* Cycles.branchReadCycle(branch)
-              : undefined;
-            if (cycle?.open) readCycleId = cycle.cycleId;
-            else if (options.branch === undefined) {
-              const openBranches = yield* Effect.filter(branches, (name) =>
-                Effect.map(
-                  Cycles.branchReadCycle(name),
-                  (cycle) => cycle?.open === true,
-                ),
-              );
-              if (openBranches.length > 0) {
-                const names = new Intl.ListFormat("en").format(
-                  openBranches.map((name) => JSON.stringify(name)),
-                );
-                return yield* Effect.fail(
-                  new Error(
-                    `${names} ${openBranches.length === 1 ? "has" : "each have"} an open review cycle, and Neuve cannot tell which branch this review is for. Pass --branch <name> with the branch to review.`,
-                  ),
-                );
-              }
-            }
-          }
-        }
-        const cycleId =
-          joined !== undefined && joined.event.kind === "cycle.opened@1"
-            ? joined.event.attribution.cycleId
-            : (readCycleId ?? mintUlid());
         const selections =
-          selected && joined !== undefined
+          selected && joined
             ? yield* Log.history({
                 kind: "cycle.scope-selected@1",
                 cycleId,
                 limit: 2,
               })
             : [];
-        if (selected && joined !== undefined) {
+        if (selected && joined) {
           const existing = selections[0]?.event;
           if (
             existing?.kind !== "cycle.scope-selected@1" ||
@@ -754,14 +816,14 @@ export const requestReview = (options: ReviewOptions) =>
         }))[0]?.event;
         if (
           contextIdentity !== undefined &&
-          joined !== undefined &&
+          joined &&
           (externalSelection?.kind !== "cycle.external-context-selected@1" ||
             externalSelection.payload.identity !== contextIdentity)
         )
           throw new Error(
             "This range already belongs to a cycle with different external context. Its pinned source cannot be replaced.",
           );
-        if (joined === undefined && contextIdentity !== undefined) {
+        if (!joined && contextIdentity !== undefined) {
           const pins: ExternalReviewPin[] = [];
           for (const [index, source] of externalSources.entries()) {
             const sourceId = `E${index + 1}`;
@@ -794,7 +856,7 @@ export const requestReview = (options: ReviewOptions) =>
             })),
           });
         }
-        if (joined === undefined && selected)
+        if (!joined && selected)
           events.push({
             id: mintUlid(),
             kind: "cycle.scope-selected@1",
@@ -805,7 +867,7 @@ export const requestReview = (options: ReviewOptions) =>
             payload: selected,
           });
         // Bind a read-opened cycle with a second opening event so older readers can see its head.
-        if (joined === undefined)
+        if (!joined)
           events.push({
             id: mintUlid(),
             kind: "cycle.opened@1",
@@ -860,7 +922,7 @@ export const requestReview = (options: ReviewOptions) =>
           runKey,
           generation,
           cycleId,
-          openedCycle: joined === undefined && readCycleId === undefined,
+          openedCycle: cycle === undefined,
           actor,
           complete,
           events: events.map((event) => RecordEvent.parse(event)),

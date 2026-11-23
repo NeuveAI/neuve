@@ -1,6 +1,6 @@
 import { Clock, Effect, Option } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
-import type { RecordEvent } from "@neuve/records-schema";
+import type { Range, RecordEvent } from "@neuve/records-schema";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { CorruptRecord } from "./errors.ts";
 import { mintUlid } from "./ids.ts";
@@ -47,6 +47,28 @@ export const branchReadCycle = (branch: string) =>
       cycleId: cycle.cycleId,
       open: Option.exists(last, (at) => !isIdle(now, at)),
     };
+  });
+
+export const requestedRunKey = (cycleId: string, runKey: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const [request] = yield* sql<{ runKey: string }>`SELECT
+      json_extract(e.envelope, '$.payload.runKey') AS run_key
+      FROM event_cycles c JOIN events e ON e.seq = c.event_seq
+      WHERE c.cycle_id = ${cycleId} AND e.kind = 'review.requested@1'
+        AND json_extract(e.envelope, '$.payload.runKey') = ${runKey}
+      LIMIT 1`;
+    return request?.runKey;
+  });
+
+export const boundToRange = (range: Pick<Range, "baseOid" | "headOid">) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const rows = yield* sql<{ cycleId: string }>`SELECT c.cycle_id
+      FROM projection_cycles c JOIN events e ON e.id = c.event_id
+      WHERE c.base_oid = ${range.baseOid} AND c.head_oid = ${range.headOid}
+      ORDER BY e.seq`;
+    return rows.map(({ cycleId }) => cycleId);
   });
 
 export const openOrJoinCycle = <E = never, R = never>(

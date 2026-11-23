@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Computations } from "@neuve/records-core";
-import type { Range } from "@neuve/records-schema";
+import { Sha256, type Range } from "@neuve/records-schema";
 import {
   CALLS_IN_FLIGHT,
   RUN_LIFETIME,
@@ -97,6 +97,7 @@ export const PipelineConfig = z.strictObject({
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
+  localPlan: Sha256.optional(),
   route: RouteConfig,
   budgets: z.strictObject({
     turnLimits: z.strictObject({
@@ -313,6 +314,9 @@ export const runSpec = (
       ...(config.externalContext === undefined
         ? {}
         : { externalContext: config.externalContext }),
+      ...(config.localPlan === undefined
+        ? {}
+        : { localPlan: config.localPlan }),
     }),
   ) as never,
   route: computationRoute(config.route),
