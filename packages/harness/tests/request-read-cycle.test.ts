@@ -399,12 +399,13 @@ test("racing first reads at different revisions share one cycle", async () => {
   ]);
 });
 
-// An explicit scope selection must be recorded before its own opening.
-test("keeps explicitly selected scope out of a read-opened cycle", async () => {
+// A detached ticket review needs its own cycle even when read scope is open.
+test("opens a separate cycle for explicitly selected scope from a detached checkout", async () => {
   const repo = fixture();
   const { read, review } = await repo.run(
     Effect.gen(function* () {
       const read = yield* repo.read();
+      repo.git("switch", "--detach", repo.head);
       const review = yield* repo.request(repo.head, {
         scopeSource: { server: "linear", item: "WORK-7", workspace: null },
         scopeIntegrations: {

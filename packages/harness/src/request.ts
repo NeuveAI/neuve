@@ -568,13 +568,17 @@ export const requestReview = (options: ReviewOptions) =>
     const sql = yield* SqlClient;
     const store = yield* Computations.ComputationStore;
     const blobs = yield* Blobs.BlobStore;
+    const canJoinReadCycle =
+      selected === undefined && contextIdentity === undefined;
     const branch =
       options.branch ??
-      (yield* checkedOutBranch(options.branchCheckout ?? options.repository));
-    const branches = yield* branchesContaining(
-      options.repository,
-      range.headOid,
-    );
+      (canJoinReadCycle
+        ? yield* checkedOutBranch(options.branchCheckout ?? options.repository)
+        : undefined);
+    const branches =
+      canJoinReadCycle || options.branch !== undefined
+        ? yield* branchesContaining(options.repository, range.headOid)
+        : undefined;
     // The cycle, the generation and the append are one write transaction (`BEGIN IMMEDIATE`), so
     // two first requests for a range cannot open two cycles or pick different generations.
     return yield* sql.withTransaction(
@@ -670,8 +674,12 @@ export const requestReview = (options: ReviewOptions) =>
             event.event.attribution.range.headOid === range.headOid,
         );
         const joined = cycles[cycles.length - 1];
+        const findReadCycle = joined === undefined && canJoinReadCycle;
         let readCycleId: string | undefined;
-        if (joined === undefined || options.branch !== undefined) {
+        if (
+          branches !== undefined &&
+          (findReadCycle || options.branch !== undefined)
+        ) {
           if (branches instanceof GitFailed)
             return yield* Effect.fail(
               new Error(
@@ -680,22 +688,17 @@ export const requestReview = (options: ReviewOptions) =>
               ),
             );
           if (branch instanceof GitFailed) return yield* branch;
-          if (branch !== undefined && branches.has(branch)) {
-            if (
-              joined === undefined &&
-              selected === undefined &&
-              contextIdentity === undefined
-            ) {
-              const cycle = yield* Cycles.branchReadCycle(branch);
-              if (cycle?.open) readCycleId = cycle.cycleId;
-            }
-          } else if (options.branch !== undefined) {
+          const holdsHead = branch !== undefined && branches.has(branch);
+          if (options.branch !== undefined && !holdsHead)
             return yield* Effect.fail(
               new Error(
                 `${JSON.stringify(options.branch)} does not hold this review's head. Pass --branch <name> with a local branch that does.`,
               ),
             );
-          } else {
+          if (findReadCycle && holdsHead) {
+            const cycle = yield* Cycles.branchReadCycle(branch);
+            if (cycle?.open) readCycleId = cycle.cycleId;
+          } else if (findReadCycle) {
             const openBranches = yield* Effect.filter(branches, (name) =>
               Effect.map(
                 Cycles.branchReadCycle(name),
