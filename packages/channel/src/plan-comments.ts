@@ -153,7 +153,7 @@ function quotePlanText(text: string): string {
 
 export function buildPlanCommentMessage(title: string, items: readonly Carried[]) {
 	const sections = items.map(({ comment, reply }) => {
-		if (reply) return `Reply to comment ${comment.id}:\n\n${reply.text}`;
+		if (reply) return `Reply by ${reply.author} to comment ${comment.id}:\n\n${quotePlanText(reply.text)}`;
 		const stays = comment.placement.kind === "stays";
 		const lines = comment.placement.kind === "stays" ? comment.placement.lines : comment.anchor.lines;
 		const range = `${lines[0]!.line}-${lines.at(-1)!.line}${stays ? "" : " of an earlier version"}`;
@@ -182,7 +182,7 @@ export async function preparePlanCommentSend(
 		if (comment.plan !== request.plan) continue;
 		const kept = comment.author === request.author && !comment.sent;
 		const replies = comment.replies.filter((reply): reply is PersonReply =>
-			reply.kind === "person" && reply.author === request.author && !reply.sent);
+			reply.kind === "person" && !reply.sent && (kept || reply.author === request.author));
 		if (!kept && !replies.length) continue;
 		if (!kept && comment.state !== "queued" && comment.sent?.entry === undefined) {
 			keptReplyIds.push(...replies.map(reply => reply.id));
@@ -198,10 +198,8 @@ export async function preparePlanCommentSend(
 	if (!items.length) {
 		throw new Error(keptReplies ? `Nothing was sent. ${keptReplies.reason}` : "You have no kept comments or replies on this plan.");
 	}
-	items.sort((a, b) => {
-		const byTime = (a.reply ?? a.comment).at - (b.reply ?? b.comment).at;
-		return byTime || Number(a.reply !== undefined) - Number(b.reply !== undefined);
-	});
+	const sectionTime = ({ comment, reply }: Carried) => comment.sent && reply ? reply.at : comment.at;
+	items.sort((a, b) => sectionTime(a) - sectionTime(b));
 	return { message: buildPlanCommentMessage(plan.plan.title, items), items, keptReplies };
 }
 
