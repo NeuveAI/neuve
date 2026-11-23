@@ -1,6 +1,6 @@
 import MarkdownIt from "markdown-it";
 import type Token from "markdown-it/lib/token.mjs";
-import { plainText } from "@neuve/review-rules/file-lines-anchor";
+import { plainLines } from "@neuve/review-rules/file-lines-anchor";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import type { PlanCardView } from "../../types";
@@ -94,7 +94,7 @@ function blockAt(nodes: Node[], line: number): Node | undefined {
 /** The section heading whose words are `section`, as the anchor rule names a section. */
 function headingFor(nodes: Node[], section: string): Node | undefined {
 	for (let node of nodes) {
-		if (node.token.type === "heading_open" && plainText(node.children[0]?.token.content ?? "") === section) return node;
+		if (node.token.type === "heading_open" && plainLines([{ line: 0, text: node.children[0]?.token.content ?? "" }]) === section) return node;
 		let found = headingFor(node.children, section);
 		if (found) return found;
 	}

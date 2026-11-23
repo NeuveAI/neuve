@@ -1,3 +1,5 @@
+import { unescapeAll } from "markdown-it/lib/common/utils.mjs";
+
 /**
  * A comment anchored to lines of one version of a text file, such as a plan. Beside the diff
  * anchor, and on the same principle: an anchor holds only where the stored text matches exactly.
@@ -73,12 +75,35 @@ export function plainText(text: string): string {
     .trim();
 }
 
+const CODE_SPAN = /(`+)[\s\S]*?\1/g;
+const AUTOLINK = /<([a-z][a-z0-9+.-]{1,31}:[^<>\s]*)>/gi;
+
+/** Markdown outside code spans as the plan tab renders it: links as their words, escapes undone. */
+function rendered(markdown: string): string {
+  const shown = (text: string) =>
+    // The plan tab renders with markdown-it, so its own decoding of escapes and entities is used.
+    unescapeAll(text.replace(LINK, "$1").replace(AUTOLINK, "$1"));
+  let out = "";
+  let last = 0;
+  for (const span of markdown.matchAll(CODE_SPAN)) {
+    out += shown(markdown.slice(last, span.index)) + span[0];
+    last = span.index + span[0].length;
+  }
+  return out + shown(markdown.slice(last));
+}
+
+/**
+ * File lines as the plan tab shows them, for comparing with a quote: what `plainText` leaves of
+ * them once their escapes, entities and links are rendered as the screen renders them. Code spans
+ * keep their text as typed, as on screen.
+ */
+export function plainLines(lines: readonly FileLine[]): string {
+  return plainText(lines.map((line) => rendered(line.text)).join("\n"));
+}
+
 function contains(lines: readonly FileLine[], quote: string): boolean {
   const words = plainText(quote);
-  return (
-    words !== "" &&
-    plainText(lines.map((line) => line.text).join("\n")).includes(words)
-  );
+  return words !== "" && plainLines(lines).includes(words);
 }
 
 /**
@@ -108,7 +133,9 @@ export function fileLinesSection(text: string, line: number): string {
   const heading = file
     .reverse()
     .find((candidate) => /^\s*#{1,6}\s/.test(candidate.text));
-  return heading ? plainText(heading.text.replace(/\s#+\s*$/, "")) : "";
+  return heading
+    ? plainLines([{ ...heading, text: heading.text.replace(/\s#+\s*$/, "") }])
+    : "";
 }
 
 /**

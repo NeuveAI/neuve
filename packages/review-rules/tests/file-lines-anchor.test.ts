@@ -270,3 +270,37 @@ test("one placer places several anchors as placing each alone does", () => {
     "stays",
   ]);
 });
+
+// The plan tab renders with markdown-it, so a quote is the file's text as it decodes it: entities,
+// backslash escapes and autolinks, but not inside code spans, which show their text as typed.
+test("a quote matches the file as the plan tab renders its entities, escapes and autolinks", () => {
+  const entity = "Exports A &amp; B, then &#169; and &lt;done&gt;";
+  expect(
+    matchesFileLines(entity, fileLines(entity), "A & B, then © and <done>"),
+  ).toBe(true);
+  const escaped = "Costs \\$5 and \\*not emphasis\\*";
+  expect(matchesFileLines(escaped, fileLines(escaped), "Costs $5")).toBe(true);
+  const autolink = "See <https://example.com/spec> first";
+  expect(
+    matchesFileLines(
+      autolink,
+      fileLines(autolink),
+      "See https://example.com/spec first",
+    ),
+  ).toBe(true);
+});
+
+test("a code span keeps its text as typed, so a decoded quote does not match it", () => {
+  const code = "Write `&amp;` in the header";
+  expect(
+    matchesFileLines(code, fileLines(code), "Write &amp; in the header"),
+  ).toBe(true);
+  expect(matchesFileLines(code, fileLines(code), "Write & in the header")).toBe(
+    false,
+  );
+});
+
+test("a section heading is named as the plan tab shows it", () => {
+  const text = "## Exports &amp; reports\n\nA line";
+  expect(fileLinesSection(text, 3)).toBe("Exports & reports");
+});

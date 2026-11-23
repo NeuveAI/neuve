@@ -1,5 +1,5 @@
 import { type CommentThreadState, deliveryLine } from "@neuve/review-rules/comment-thread";
-import { type FileLine, fileLines, type FileLinesPlacement, matchesFileLines, plainText } from "@neuve/review-rules/file-lines-anchor";
+import { type FileLine, fileLines, type FileLinesPlacement, matchesFileLines, plainLines } from "@neuve/review-rules/file-lines-anchor";
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { IconMessage } from "../../icons";
@@ -163,7 +163,7 @@ function rangeOf(blocks: Element[], passage: string, [from, to] = [0, Infinity])
 	return range;
 }
 
-const words = (lines: FileLine[]) => plainText(lines.map((line) => line.text).join("\n"));
+const words = (lines: FileLine[]) => plainLines(lines);
 const inWord = (text: string, index: number) => /\S/.test(text[index - 1] ?? " ") && /\S/.test(text[index] ?? " ");
 
 /**
@@ -194,6 +194,23 @@ export function changeOf(removed: FileLine[], added: FileLine[]) {
 		/** Where the words put in sit in the added lines' words. */
 		at: [from, to] as [number, number],
 	};
+}
+
+/**
+ * What to tint of the lines a revision put in a passage's place: each run of consecutive lines on
+ * its own, since lines between them that the revision kept would break a search for them all. A
+ * single run is tinted word by word, as the card shows it.
+ */
+export function addedMarks(removed: FileLine[], added: FileLine[]) {
+	let runs: FileLine[][] = [];
+	for (let line of added) {
+		let run = runs.at(-1);
+		if (run && run.at(-1)!.line + 1 === line.line) run.push(line);
+		else runs.push([line]);
+	}
+	return runs
+		.filter((lines) => words(lines))
+		.map((lines) => ({ lines, at: runs.length === 1 ? changeOf(removed, lines).at : undefined }));
 }
 
 const HIGHLIGHTS = { kept: "plan-comment", added: "plan-added", selected: "plan-selected" } as const;
@@ -231,9 +248,10 @@ export function usePlanHighlights(
 			let { placement } = comment;
 			if (placement.kind === "stays") {
 				mark("kept", placement.lines[0]!.line, placement.lines.at(-1)!.line, comment.quote);
-			} else if (placement.kind === "changed" && placement.added.length) {
-				let { added } = placement;
-				mark("added", added[0]!.line, added.at(-1)!.line, words(added), changeOf(placement.removed, added).at);
+			} else if (placement.kind === "changed") {
+				for (let { lines, at } of addedMarks(placement.removed, placement.added)) {
+					mark("added", lines[0]!.line, lines.at(-1)!.line, words(lines), at);
+				}
 			}
 		}
 		if (selected) mark("selected", selected.lines[0]!.line, selected.lines.at(-1)!.line, selected.quote);

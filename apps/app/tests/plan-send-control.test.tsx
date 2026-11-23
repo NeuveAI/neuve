@@ -130,7 +130,7 @@ test("a refused send gives the control back at once and says why", async () => {
 test("a send that keeps replies back says so and waits for its own event", async () => {
 	const held = { kind: "person" as const, id: "r", author: "me", at: 1, text: "And then?" };
 	const answered_ = comment({ sent: { at: 1, submission: 5 }, state: "queued", replies: [held] });
-	await open([comment(), comment({ id: "d", ...answered_ })], [5]);
+	await open([comment(), comment({ ...answered_, id: "d" })], [5]);
 	await press();
 	await answered({ submission: 8, comments: ["c"], keptReplies: { ids: ["r"], reason: "Your replies were kept." } });
 	expect(line()).toBe("Your replies were kept.");

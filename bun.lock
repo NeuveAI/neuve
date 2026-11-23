@@ -328,7 +328,11 @@
       "version": "0.1.0",
       "dependencies": {
         "@neuve/records-schema": "workspace:*",
+        "markdown-it": "14.3.3",
         "zod": "4",
+      },
+      "devDependencies": {
+        "@types/markdown-it": "14.1.2",
       },
     },
     "packages/runtime": {
