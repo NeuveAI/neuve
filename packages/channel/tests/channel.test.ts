@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { fauxAssistantMessage, fauxToolCall, type TranscriptContext } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, type TranscriptContext } from "@earendil-works/pi-ai";
 import { defineDoc, type Harness, type JsonObject, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { EventSchema } from "../src/frame";
@@ -264,11 +264,30 @@ describe("runs and committed history", () => {
 		await watch.stop();
 	});
 
+	// Chats can outlive the providers they were configured to use.
+	test("an ask uses the automatic model when the chat's stored provider is gone", async () => {
+		fixture = await Fixture.create();
+		const retired = { provider: "retired", modelId: "old-model" };
+		const { models } = fixture.scripted;
+		models.setProvider(fauxProvider({ provider: retired.provider, models: [{ id: retired.modelId }] }).provider);
+		await fixture.request({ op: "select", author: OWNER, model: retired });
+		models.deleteProvider(retired.provider);
+		await fixture.restart();
+		const info = await fixture.request<ChannelInfo>({ op: "info" });
+		expect(info.chats[0]?.model).toEqual(retired);
+		fixture.script(fauxAssistantMessage("Reply from the automatic model"));
+		const { submission } = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, text: "hello" });
+		await settled(fixture, submission);
+		const watch = await fixture.watch();
+		expect(await watch.until("reply")).toMatchObject({ model: "coder", text: "Reply from the automatic model" });
+		await watch.stop();
+	});
+
 	test("an unknown model and an unsupported effort are refused before anything is committed", async () => {
 		fixture = await Fixture.create();
 		await expect(
 			fixture.request({ op: "ask", author: OWNER, text: "hi", model: { provider: "faux", modelId: "none" } }),
-		).rejects.toThrow("Unknown model faux/none");
+		).rejects.toThrow("Model faux/none is not offered. Choose another model.");
 		// The refusal names the levels the model lists, so a person can pick one from the command line.
 		await expect(
 			fixture.request({ op: "ask", author: OWNER, text: "hi", model: MODEL, effort: "max" }),

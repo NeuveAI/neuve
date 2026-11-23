@@ -32,7 +32,6 @@ export const CaptionsDoc = defineDoc<{
 export const FAST = [
 	"anthropic/claude-haiku-4-5",
 	"openai/gpt-6-luna",
-	"openai-codex/gpt-6-luna",
 	"github-copilot/claude-haiku-4.5",
 	"github-copilot/gpt-6-luna",
 	"google/gemini-flash-lite-latest",
@@ -42,7 +41,6 @@ export const FAST = [
 export const STRONG = [
 	"anthropic/claude-sonnet-5-5",
 	"openai/gpt-6-sol",
-	"openai-codex/gpt-6-sol",
 	"github-copilot/claude-sonnet-5.5",
 	"github-copilot/gpt-6-sol",
 	"google/gemini-3.8-flash",

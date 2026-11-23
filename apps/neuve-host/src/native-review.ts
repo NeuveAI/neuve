@@ -3,7 +3,7 @@ import { ReviewAdmissionSchema, ReviewStatusSchema, ReviewOutcomeSchema, ReviewR
 import { ReviewFeedReplySchema, ReviewSubmissionSchema, reviewFeedFailure } from "./review-protocol";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import { defineDoc, type Harness, type Cursor, type ConversationId } from "@earendil-works/pi-durable";
-import type { Log } from "@ace/channel";
+import type { Channel, Log } from "@ace/channel";
 import { z } from "zod";
 import type { ReviewFeedSource } from "./review-protocol";
 import { ReviewCardsDoc, type ReviewCard } from "@ace/channel/review-cards";
@@ -169,6 +169,7 @@ type FeedWatch = {
 export async function startReviewFeed(
 	harness: Harness,
 	source: ReviewFeedSource,
+	submitInput: Channel["submitInput"],
 	options: { log: Log; branchIntervalMs?: number; enabled?(): boolean; now?(): number },
 ): Promise<{ close(): Promise<void>; pending(): boolean }> {
 	const watches = new Map<string, FeedWatch>();
@@ -217,7 +218,7 @@ export async function startReviewFeed(
 		if (!notice) return;
 		const conversation = await harness.conversation(chat, BACKGROUND_CONTEXT);
 		if (!conversation) return;
-		const submission = await conversation.submit({
+		const submission = await submitInput(conversation, {
 			type: "input", whenBusy: "followUp", requestId: notice.requestId,
 			content: `[Neuve system note] Review ${review} is ${notice.phase}. Point the person at the review card without summarizing findings. Completing a review does not approve the change.`,
 		}, BACKGROUND_CONTEXT);
