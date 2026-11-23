@@ -10,7 +10,7 @@ import {
 	type Model,
 	type Models,
 } from "@earendil-works/pi-ai";
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT as context, withCancel } from "@earendil-works/chord/context";
 import {
 	AgentDoc,
 	type AgentChange,
@@ -84,8 +84,8 @@ import { metadata, MetadataDoc, validateName } from "./metadata";
 import { available, choose, usable } from "./models";
 import { Plans, PlansDoc, type PlanCommentReceipt, type PlanFiles, type PlansState } from "./plan";
 import {
-	changePlanComment, discardPlanCommentBatch, keepPlanComment, planCommentAnswers, planCommentBatch, planComments,
-	PlanCommentPlacements, preparePlanCommentSend, recoverPlanCommentSends, stagePlanCommentBatch, updatePlanCommentDelivery,
+	changePlanComment, discardPlanCommentBatch, keepPlanComment, KEPT_PLAN_REPLIES_REASON, planCommentAnswers, planCommentBatch,
+	planComments, PlanCommentPlacements, preparePlanCommentSend, recoverPlanCommentSends, stagePlanCommentBatch, updatePlanCommentDelivery,
 } from "./plan-comments";
 import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode } from "./plan-mode";
 import { progress } from "./progress";
@@ -1139,17 +1139,35 @@ export class Channel {
 		const input: InputSubmissionDraft = {
 			type: "input", content: room.content(request.author, batch.message.text), whenBusy: "steer", requestId,
 		};
+		const queuedParents = new Set(batch.items.flatMap(({ comment, reply }) =>
+			reply && comment.sent && comment.sent.entry === undefined ? [comment.sent.submission] : []));
+		const cancellation = queuedParents.size ? withCancel(context) : undefined;
+		const refusal = `Nothing was sent. ${KEPT_PLAN_REPLIES_REASON}`;
+		// Pi publishes each withdrawal before checking cancellation for the next submission commit.
+		const unsubscribe = cancellation && this.#harness.subscribeCommits(({ changes }) => {
+			if (changes.some(change => change.type === "submission" && queuedParents.has(change.value.id)
+				&& change.value.status === "unanswered" && change.value.entry === undefined)) {
+				cancellation.cancel(new Error(refusal));
+			}
+		});
 		let submission: SubmissionId | undefined;
 		try {
+			for (const parent of queuedParents) {
+				const handle = await this.#harness.submission(parent as SubmissionId, context);
+				const record = await handle?.status(context);
+				if (record?.entry === undefined && record?.status !== "queued") throw new Error(refusal);
+			}
 			({ submission } = await this.#select(conversation, {}, {
 				bound, mode: "plan", attended: undefined, input, settled,
-			}));
+			}, cancellation?.context ?? context));
 		} catch (error) {
 			if (planCommentBatch(this.#planState, chat, requestId)) {
 				await this.#harness.commit(tx => discardPlanCommentBatch(tx, chat, requestId), context)
 					.catch(cleanup => this.#log("warn", "plan.comments.cleanup.failed", failure(cleanup)));
 			}
 			throw error;
+		} finally {
+			unsubscribe?.();
 		}
 		await this.#flushPlanDeliveries();
 		const receipt = planCommentBatch(this.#planState, chat, requestId)?.receipt;

@@ -287,6 +287,61 @@ test("Stop withdraws a queued comment and its separately queued reply together",
 	} finally { release.resolve(); await fixture.dispose(); }
 });
 
+// The agent can otherwise read a reply whose comment Stop removed from the queue.
+test("Stop withdraws the comment while its in-flight reply stays kept", async () => {
+	const fixture = await open();
+	const release = Promise.withResolvers<void>();
+	try {
+		const watch = await fixture.watch({ op: "watch", plans: true, planComments: true });
+		const plan = await write(fixture, watch, markdown, "draft");
+		const comment = await keep(fixture, plan);
+		const started = Promise.withResolvers<void>();
+		fixture.script(async (_request, options) => {
+			const aborted = Promise.withResolvers<void>();
+			options?.signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
+			started.resolve();
+			await Promise.race([aborted.promise, release.promise]);
+			return fauxAssistantMessage("Stopped.", { stopReason: "aborted" });
+		}, fauxAssistantMessage("Read the reply alone."));
+		await fixture.request({ op: "ask", author: OWNER, mode: "plan", text: "Keep this run active." });
+		await started.promise;
+		const parent = await send(fixture, plan, "parent");
+		await fixture.request({ op: "plan-comment-reply", author: OWNER, comment: comment.id, text: "The reply." });
+		await watch.until("plan-comments", event => event.comments[0]?.state === "queued" && event.comments[0].replies.length === 1);
+
+		const preparing = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const project = PlanCommentPlacements.prototype.project;
+		const placement = spyOn(PlanCommentPlacements.prototype, "project").mockImplementationOnce(async function (this: PlanCommentPlacements, ...args) {
+			preparing.resolve();
+			await resume.promise;
+			return project.apply(this, args);
+		});
+		try {
+			const reply = send(fixture, plan, "reply");
+			void reply.catch(() => {});
+			await preparing.promise;
+			await Promise.all([
+				fixture.request({ op: "stop", author: OWNER }),
+				watch.until("plan-comments", event => event.comments[0]?.state === "failed"),
+			]);
+			resume.resolve();
+			await expect(reply).rejects.toThrow("Nothing was sent. Your replies were kept because their parent comments have not reached the chat.");
+		} finally {
+			resume.resolve();
+			placement.mockRestore();
+		}
+		expect(await fixture.request({ op: "wait", submission: parent.submission })).toBe("unanswered");
+		const replay = await fixture.watch({ op: "watch", planComments: true });
+		const [kept] = (await replay.until("plan-comments")).comments;
+		expect(kept).toMatchObject({ failure: "Stopped before the agent read it", replies: [{ kind: "person", text: "The reply." }] });
+		expect(kept).not.toHaveProperty("sent");
+		expect(kept?.replies[0]).not.toHaveProperty("sent");
+		expect(replay.of("message").map(event => event.text)).toEqual(["Write the plan", "Keep this run active."]);
+		await Promise.all([watch.stop(), replay.stop()]);
+	} finally { release.resolve(); await fixture.dispose(); }
+});
+
 // A run error must reach each unanswered thread without overwriting one the same run already answered.
 test("a run error sets failed with the provider error only on unanswered threads", async () => {
 	const fixture = await open();
