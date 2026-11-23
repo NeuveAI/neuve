@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { ROOT_CONVERSATION_ID, StorageRejected, type Harness } from "@earendil-works/pi-durable";
 import * as fileAnchors from "@neuve/review-rules/file-lines-anchor";
+import { Approvals } from "../src/approvals";
 import { buildPlanCommentMessage, PlanCommentPlacements, preparePlanCommentSend } from "../src/plan-comments";
 import { PlansDoc, type PlanCommentReceipt } from "../src/plan";
 import type { Plan, PlanComment, Request, Said } from "../src/protocol";
@@ -163,8 +164,8 @@ test.each(["retry", "restart"])("%s recovers a refused comment update without su
 	} finally { release.resolve(); await fixture.dispose(); }
 });
 
-// A queued receipt can silently change after placement, or the entry can appear without its new state.
-test("a queued send retains its first receipt and advances through placement and pickup to the thread answer", async () => {
+// A teammate should only have to press Send once while the comment is queued.
+test("a queued send retains its first receipt and a teammate's reply follows it in the transcript", async () => {
 	const said: Said[] = [];
 	const fixture = await open({ onSaid: event => said.push(event) });
 	const release = Promise.withResolvers<void>();
@@ -194,24 +195,35 @@ test("a queued send retains its first receipt and advances through placement and
 		expect(queued.replies[0]).toMatchObject({ sent: queued.sent });
 		await fixture.request({ op: "share", author: OWNER, shared: true });
 		await fixture.request({ op: "plan-comment-reply", author: "teammate", comment: comment.id, text: "Still queued." });
-		await expect(fixture.request({
+		const followUp = await fixture.request<PlanCommentReceipt>({
 			op: "plan-comments-send", author: "teammate", plan: plan.id, requestId: "reply-before-placement",
-		})).rejects.toThrow("Your replies were kept because their parent comments have not reached the chat.");
+		});
+		expect(followUp).toEqual({ submission: expect.any(Number), comments: [comment.id] });
+		const queuedReply = await watch.until("plan-comments", event =>
+			event.comments[0]?.replies.some(reply => reply.kind === "person" && reply.sent?.submission === followUp.submission));
+		expect(queuedReply.comments[0]).toMatchObject({ state: "queued", sent: queued.sent });
 		release.resolve();
 		await picked.promise;
 		const pickedUp = (await watch.until("plan-comments", event => event.comments[0]?.state === "picked-up")).comments[0]!;
 		const message = await watch.until("message", event => event.text.startsWith("Comments on the plan"));
-		expect(said.at(-1)).toEqual({ chat: ROOT_CONVERSATION_ID, author: OWNER, at: message.at });
+		expect(said).toContainEqual({ chat: ROOT_CONVERSATION_ID, author: OWNER, at: message.at });
 		expect(pickedUp.sent).toEqual({ ...queued.sent!, entry: message.entry });
 		expect(pickedUp.replies[0]).toMatchObject({ sent: pickedUp.sent });
 		expect(await send(fixture, plan, "queued")).toEqual(receipt);
 		answer.resolve();
 		expect(await fixture.request({ op: "wait", submission: receipt.submission })).toBe("done");
-		const replied = (await watch.until("plan-comments", event => event.comments[0]?.state === "replied")).comments[0]!;
-		expect(replied.replies.at(-1)).toMatchObject({ kind: "agent", text: "Verified." });
+		expect(await fixture.request({ op: "wait", submission: followUp.submission })).toBe("done");
+		const replyMessage = await watch.until("message", event => event.author === "teammate");
+		const { comments: [replied] } = await watch.until("plan-comments", event =>
+			event.comments[0]?.replies.some(reply => reply.kind === "person" && reply.sent?.entry === replyMessage.entry));
+		expect(replied).toMatchObject({ state: "replied", sent: pickedUp.sent });
+		expect(replied?.replies.at(-1)).toMatchObject({ kind: "agent", text: "Verified." });
 		const states = [...new Set(watch.of("plan-comments").flatMap(event => event.comments[0]?.state ?? []))];
 		expect(states).toEqual(["queued", "picked-up", "replied"]);
-		expect(watch.of("message").filter(event => event.text.startsWith("Comments on the plan"))).toHaveLength(1);
+		expect(watch.of("message").filter(event => event.text.startsWith("Comments on the plan"))).toMatchObject([
+			{ author: OWNER, text: expect.stringContaining("Check this with @reviewer.") },
+			{ author: "teammate", text: expect.stringContaining(`Reply to comment ${comment.id}:\n\nStill queued.`) },
+		]);
 		await watch.stop();
 	} finally {
 		release.resolve();
@@ -220,8 +232,8 @@ test("a queued send retains its first receipt and advances through placement and
 	}
 });
 
-// Stop can silently leave an unplaced comment locked or allow its old retry to send it again.
-test("Stop releases only the withdrawn batch and a new send can carry it again", async () => {
+// A partial withdrawal can leave a reply locked behind a comment the agent never saw.
+test("Stop withdraws a queued comment and its separately queued reply together", async () => {
 	const fixture = await open();
 	const release = Promise.withResolvers<void>();
 	try {
@@ -232,7 +244,6 @@ test("Stop releases only the withdrawn batch and a new send can carry it again",
 		const placed = await send(fixture, plan, "placed");
 		expect(await fixture.request({ op: "wait", submission: placed.submission })).toBe("done");
 		const target = await keep(fixture, plan, { text: "Will be withdrawn." });
-		await fixture.request({ op: "plan-comment-reply", author: OWNER, comment: target.id, text: "Withdraw this too." });
 		const started = Promise.withResolvers<void>();
 		fixture.script(async (_request, options) => {
 			started.resolve();
@@ -246,7 +257,9 @@ test("Stop releases only the withdrawn batch and a new send can carry it again",
 		await started.promise;
 		const withdrawn = await send(fixture, plan, "stopped");
 		expect(withdrawn).toEqual({ submission: expect.any(Number), comments: [target.id] });
-		await watch.until("plan-comments", event => event.comments[1]?.state === "queued");
+		await fixture.request({ op: "plan-comment-reply", author: OWNER, comment: target.id, text: "Withdraw this too." });
+		const withdrawnReply = await send(fixture, plan, "stopped-reply");
+		expect(withdrawnReply).toEqual({ submission: expect.any(Number), comments: [target.id] });
 		await fixture.request({ op: "stop", author: OWNER });
 		const { comments } = await watch.until("plan-comments", event => event.comments[1]?.state === "failed");
 		expect(comments[0]).toMatchObject({ id: first.id, state: "picked-up", sent: { submission: placed.submission, entry: placed.entry } });
@@ -254,6 +267,7 @@ test("Stop releases only the withdrawn batch and a new send can carry it again",
 		expect(comments[1]).not.toHaveProperty("sent");
 		expect(comments[1]!.replies[0]).not.toHaveProperty("sent");
 		expect(await send(fixture, plan, "stopped")).toEqual(withdrawn);
+		expect(await send(fixture, plan, "stopped-reply")).toEqual(withdrawnReply);
 		expect(await fixture.request<PlanComment>({
 			op: "plan-comment-edit", author: OWNER, comment: target.id, text: "Send this version.",
 		})).toMatchObject({ text: "Send this version." });
@@ -266,8 +280,73 @@ test("Stop releases only the withdrawn batch and a new send can carry it again",
 		expect(placedAgain.replies[0]).toMatchObject({ sent: { submission: resent.submission, entry: resent.entry } });
 		expect(await fixture.request({ op: "wait", submission: resent.submission })).toBe("done");
 		expect(watch.of("message").filter(event => event.text.startsWith("Comments on the plan")))
-			.toMatchObject([{ entry: placed.entry }, { entry: resent.entry }]);
+			.toMatchObject([
+				{ entry: placed.entry },
+				{ entry: resent.entry, text: expect.stringContaining(`Send this version.\n\nReply to comment ${target.id}:\n\nWithdraw this too.`) },
+			]);
 		await watch.stop();
+	} finally { release.resolve(); await fixture.dispose(); }
+});
+
+// Stop can land before or after the parent re-read; either way the reply must not reach the agent alone.
+test.each(["during placement", "before Pi submits"])("Stop %s withdraws the comment and keeps its in-flight reply", async when => {
+	const fixture = await open();
+	const release = Promise.withResolvers<void>();
+	try {
+		const watch = await fixture.watch({ op: "watch", plans: true, planComments: true });
+		const plan = await write(fixture, watch, markdown, "draft");
+		const comment = await keep(fixture, plan);
+		const started = Promise.withResolvers<void>();
+		fixture.script(async (_request, options) => {
+			const aborted = Promise.withResolvers<void>();
+			options?.signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
+			started.resolve();
+			await Promise.race([aborted.promise, release.promise]);
+			return fauxAssistantMessage("Stopped.", { stopReason: "aborted" });
+		}, fauxAssistantMessage("Read the reply alone."));
+		await fixture.request({ op: "ask", author: OWNER, mode: "plan", text: "Keep this run active." });
+		await started.promise;
+		const parent = await send(fixture, plan, "parent");
+		await fixture.request({ op: "plan-comment-reply", author: OWNER, comment: comment.id, text: "The reply." });
+		await watch.until("plan-comments", event => event.comments[0]?.state === "queued" && event.comments[0].replies.length === 1);
+
+		const paused = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const project = PlanCommentPlacements.prototype.project;
+		const admit = Approvals.prototype.admit;
+		const intercept = when === "during placement"
+			? spyOn(PlanCommentPlacements.prototype, "project").mockImplementationOnce(async function (this: PlanCommentPlacements, ...args) {
+				paused.resolve();
+				await resume.promise;
+				return project.apply(this, args);
+			})
+			: spyOn(Approvals.prototype, "admit").mockImplementationOnce(async function (this: Approvals, ...args) {
+				paused.resolve();
+				await resume.promise;
+				return admit.bind(this)(...args);
+			});
+		try {
+			const reply = send(fixture, plan, "reply");
+			void reply.catch(() => {});
+			await paused.promise;
+			await Promise.all([
+				fixture.request({ op: "stop", author: OWNER }),
+				watch.until("plan-comments", event => event.comments[0]?.state === "failed"),
+			]);
+			resume.resolve();
+			await expect(reply).rejects.toThrow("Nothing was sent. Your replies were kept because their parent comments have not reached the chat.");
+		} finally {
+			resume.resolve();
+			intercept.mockRestore();
+		}
+		expect(await fixture.request({ op: "wait", submission: parent.submission })).toBe("unanswered");
+		const replay = await fixture.watch({ op: "watch", planComments: true });
+		const [kept] = (await replay.until("plan-comments")).comments;
+		expect(kept).toMatchObject({ failure: "Stopped before the agent read it", replies: [{ kind: "person", text: "The reply." }] });
+		expect(kept).not.toHaveProperty("sent");
+		expect(kept?.replies[0]).not.toHaveProperty("sent");
+		expect(replay.of("message").map(event => event.text)).toEqual(["Write the plan", "Keep this run active."]);
+		await Promise.all([watch.stop(), replay.stop()]);
 	} finally { release.resolve(); await fixture.dispose(); }
 });
 
@@ -394,6 +473,9 @@ test("a teammate cannot send a reply by itself before the owner sends the commen
 			op: "plan-comments-send", author: "teammate", plan: plan.id, requestId: "only-held-reply",
 		})).rejects.toThrow("Nothing was sent. Your replies were kept because their parent comments have not reached the chat.");
 		expect(watch.of("plan-comments").at(-1)?.comments).toEqual(kept.comments);
+		expect(kept.comments[0]).toMatchObject({
+			id: comment.id, replies: [{ kind: "person", author: "teammate", text: "Let me check." }],
+		});
 		expect(watch.of("message").map(message => message.text)).toEqual(["Write the plan"]);
 		await fixture.request({ op: "plan-comment-remove", author: OWNER, comment: comment.id });
 		await watch.until("plan-comments", event => event.comments.length === 0 && event === watch.of("plan-comments").at(-1));

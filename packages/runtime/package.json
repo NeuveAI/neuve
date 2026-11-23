@@ -9,6 +9,10 @@
       "types": "./.types/src/index.d.ts",
       "default": "./src/index.ts"
     },
+    "./approval": {
+      "types": "./.types/src/approval.d.ts",
+      "default": "./src/approval.ts"
+    },
     "./status": {
       "types": "./.types/src/status.d.ts",
       "default": "./src/status.ts"

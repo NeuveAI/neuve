@@ -1,7 +1,6 @@
 // A held pi question must leave approval document commits and runtime replies running.
-// This workspace also sees both work kinds and can detect drift between them.
 import { expect, test } from "bun:test";
-import { ApprovalAskedSchema, ApprovalRequestSchema } from "@ace/channel/frame";
+import { ApprovalRequestSchema } from "@ace/channel/frame";
 import {
   ApprovalRequestsDefinition,
   type ApprovalRequest,
@@ -10,7 +9,6 @@ import { defineDoc } from "@earendil-works/pi-durable";
 import { STOP_ENTRY_KIND } from "@neuve/harness/chat-runtime";
 import { ApprovalAsked, WorkKind } from "@neuve/runtime";
 import { Queue } from "effect";
-import { z } from "zod";
 import { ATTENDED_SECTION as CHANNEL_ATTENDED_SECTION } from "../../../packages/channel/src/approvals.ts";
 import {
   Questions,
@@ -40,14 +38,7 @@ test("the channel and bridge agree on the attendance section", () => {
   expect(CHANNEL_ATTENDED_SECTION).toBe(BRIDGE_ATTENDED_SECTION);
 });
 
-test("the channel and runtime agree on the kinds of work and approval descriptions", () => {
-  type ChannelWork = Exclude<ApprovalRequest["work"], undefined>;
-  true satisfies [ChannelWork] extends [WorkKind] ? true : never;
-  true satisfies [WorkKind] extends [ChannelWork] ? true : never;
-  expect(z.toJSONSchema(ApprovalAskedSchema)).toEqual(
-    z.toJSONSchema(ApprovalAsked),
-  );
-
+test("channel approval requests parse every runtime work kind", () => {
   const { requestId, callId, input } = request;
   for (const work of WorkKind.options) {
     const record = {
