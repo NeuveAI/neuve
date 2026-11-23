@@ -103,13 +103,14 @@ export function credit(
 	return `asked by ${name(asker)} · ${where}`;
 }
 
-function text(value: string): Event.Message.Content.Text {
-	const parts = [...value.matchAll(MENTION)].map((match) => ({
+function text(value: string, listed: ReadonlySet<string> = new Set()): Event.Message.Content.Text {
+	const words = withAgents(value, listed);
+	const parts = [...words.matchAll(MENTION)].map((match) => ({
 		type: "mention" as const,
 		value: match[1]!,
 		index: match.index,
 	}));
-	return parts.length ? { type: "text", text: value, parts } : { type: "text", text: value };
+	return parts.length ? { type: "text", text: words, parts } : { type: "text", text: words };
 }
 
 const NOT_RUN = "Not run";
@@ -185,11 +186,8 @@ export function withMention(item: { entry?: number; invoked: boolean; text: stri
 	return item.invoked ? withAgentMention(item.text) : item.text;
 }
 
-/**
- * A message's text with every agent's name its list of agents does not hold kept as words: the
- * channel delivers only to the list, so only the list draws an agent as mentioned.
- */
-export function withAgents(value: string, listed: ReadonlySet<string>): string {
+/** Text with every agent's name `listed` does not hold kept as words: the channel delivers only to the list. */
+function withAgents(value: string, listed: ReadonlySet<string>): string {
 	return value.replace(
 		/(^|[\s([{])@([\w-]+)/gm,
 		(whole, lead: string, name: string) =>
@@ -274,7 +272,7 @@ export function toEvents(
 				...(item.edited && !item.deleted ? { last_updated: Math.floor(item.edited / 1000) } : {}),
 				content: item.deleted ? [text("Message deleted")] : [
 					// Every input to a build's agent asks that agent, so no @neuve is drawn there.
-					text(withAgents(brief || self ? item.text : withMention(item, sends), listed)),
+					text(brief || self ? item.text : withMention(item, sends), listed),
 					...(item.images || []).map((image) => ({
 						type: "image" as const,
 						image: `data:${image.mimeType};base64,${image.data}`,

@@ -681,7 +681,7 @@ function RichText({ className, ...props }: Props) {
 								<button
 									key={item.key}
 									className={cn(
-										"flex min-h-7 w-full items-center gap-2 rounded-md squircle px-2 py-1 text-xs/relaxed outline-hidden select-none",
+										"flex min-h-7 w-full items-center gap-2 rounded-md squircle px-2 py-1 text-left text-xs/relaxed outline-hidden select-none",
 										i === shown.index
 											? "bg-accent text-accent-foreground"
 											: "text-popover-foreground",

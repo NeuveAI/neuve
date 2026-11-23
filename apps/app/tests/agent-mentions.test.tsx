@@ -44,7 +44,7 @@ const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { Composer } = await import("../src/composer");
 const { toEvents } = await import("../src/timeline");
-const { agentAuthors } = await import("../src/build-card");
+const { agentAuthors, mentionable } = await import("../src/build-card");
 
 const build: Build = {
 	id: `1:${"a".repeat(64)}`,
@@ -177,4 +177,34 @@ test("a posted message draws an agent as mentioned only from its list of agents"
 	expect(posted()).toEqual(["vivienne"]);
 	expect(posted([2])).toEqual(["vivienne"]);
 	expect(posted([3])).toEqual(["reviewer", "vivienne"]);
+});
+
+test("an agent's reply that names another agent draws no mention", () => {
+	const [event] = toEvents(
+		[{ kind: "reply", key: "e1", entry: 1, at: 0, model: "m", text: "Ask @reviewer, not @vivienne", tools: [] }],
+		"c1",
+		false,
+		{ text: "" },
+		{},
+		new Map(),
+		{},
+		{},
+		{},
+		() => undefined,
+		new Map(),
+	);
+	const [content] = (event as { content: { text: string }[] }).content;
+	expect([...content!.text.matchAll(/(?<=^|\s)@([\w-]+)/g)].map((match) => match[1])).toEqual(["vivienne"]);
+});
+
+// Why: a revision approved while agents work goes to them and starts no one, so its loop has no
+// agents. Offering the newest loop regardless would leave the person nothing to mention.
+test("the list offers each planning chat's newest loop that has agents, and tells same-named agents apart by plan", () => {
+	const later = { ...build, id: "1:b", approved: { by: "me", at: 5 }, state: { kind: "delivered", to: build.id }, agents: [] } satisfies Build;
+	const other = { ...build, id: "9:a", chat: 9, plan: { ...build.plan, title: "Docs" }, agents: [{ chat: 10, role: "implementer", started: 0, state: "running" }] } satisfies Build;
+	expect(mentionable([build, later, other]).map(({ name, id, agent }) => [name, id, agent?.caption])).toEqual([
+		["implementer", "2", "Retry"],
+		["reviewer", "3", undefined],
+		["implementer", "10", "Docs"],
+	]);
 });
