@@ -11,12 +11,14 @@ import {
   type RuntimeRegistryShape,
   type RuntimeShape,
   type SignInHint,
+  signInCommand,
 } from "@neuve/runtime";
 import { Route, RouteProvider } from "@neuve/harness";
 import {
   codexRuntimeOptions,
   defaultClaudeWorkingFolder,
   harnessRuntimes,
+  prepareCodexHome,
 } from "@neuve/harness/runtimes";
 import { write } from "./records-cli.ts";
 
@@ -55,8 +57,9 @@ export const AUTH_HELP = `Usage:
   neuve auth status <account> [--check] [--json]
               Show one account's saved state, or check it now.
   neuve auth add claude <name>
-  neuve auth add chatgpt <name>
+  neuve auth add chatgpt <name> [--runtime codex]
               Add a separate sign-in and print the command to sign in.
+              For ChatGPT, --runtime codex uses that sign-in in a separate Codex home.
   neuve auth login <account> [--print]
               Sign in using the account's own command. --print only shows the command.
   neuve auth program <account> [<path> | --find | --unset]
@@ -320,7 +323,7 @@ const findAndStore = (
     const found = yield* find({
       home,
       environment,
-      codexHome: account.credential.folder,
+      codexHome: yield* prepareCodexHome(home, account),
       setting: AccountStore.programPath(home, name),
     });
     const look = lookOf(found, true);
@@ -366,7 +369,14 @@ const accountDescription = (status: AccountStatus) => {
         ? `${signIn.state}: ${signIn.reason}${signIn.fix === undefined ? "" : `\n  ${signIn.fix}`}`
         : signIn.state === "unknown"
           ? `${signIn.state}: ${signIn.reason}`
-          : signIn.state;
+          : signIn.state === "credential-rejected" &&
+              signIn.reason !== undefined
+            ? `${signIn.state}: ${signIn.reason}`
+            : signIn.state;
+  const fix =
+    "hint" in signIn && signIn.hint !== undefined
+      ? signInCommand(signIn.hint)
+      : undefined;
   const program =
     status.program === undefined
       ? ""
@@ -385,7 +395,7 @@ const accountDescription = (status: AccountStatus) => {
       (limit) =>
         `  ${limit.window}${limit.model === undefined ? "" : ` (${limit.model})`}: ${limit.status}${limit.utilization === undefined ? "" : ` ${Math.round(limit.utilization * 100)}%`}${limit.resetsAt === undefined ? "" : `, resets ${limit.resetsAt}`}`,
     )
-    .join("")}${program}${models}`;
+    .join("")}${fix === undefined ? "" : `\n  ${fix}`}${program}${models}`;
 };
 const PROGRAM_FOUND: Record<
   NonNullable<AccountStatus["program"]>["found"],
@@ -415,11 +425,12 @@ const runAccountCommand = async (
     force?: boolean;
     unset?: boolean;
     find?: boolean;
+    runtime?: string;
     "no-browser"?: boolean;
   },
   options: AuthCliOptions,
 ) => {
-  const { AccountName, AccountStore, signInCommand, unavailableText } =
+  const { AccountName, AccountStore, unavailableText } =
     await import("@neuve/runtime");
   return withAccounts(options, ({ home, store, registry, statuses }) =>
     Effect.gen(function* () {
@@ -430,13 +441,15 @@ const runAccountCommand = async (
         if (
           (kind !== "claude" && kind !== "chatgpt") ||
           name === undefined ||
-          positionals.length !== 2
+          positionals.length !== 2 ||
+          (values.runtime !== undefined &&
+            (kind !== "chatgpt" || values.runtime !== "codex"))
         )
           return yield* new AccountStore.StoreError({
             message:
-              "Use neuve auth add claude <name> or neuve auth add chatgpt <name>.",
+              "Use neuve auth add claude <name> or neuve auth add chatgpt <name> [--runtime codex].",
           });
-        const account = yield* store.add(kind, name);
+        const account = yield* store.add(kind, name, values.runtime);
         yield* output(
           signInCommand(
             account.credential.kind === "claude-config-folder" &&
@@ -709,6 +722,7 @@ export const runAuthCli = async (
       force: { type: "boolean" },
       unset: { type: "boolean" },
       find: { type: "boolean" },
+      runtime: { type: "string" },
     },
   });
   const provider = positionals[0];

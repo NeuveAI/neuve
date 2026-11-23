@@ -39,6 +39,7 @@ import {
   type Notifications,
   type ServerRequests,
 } from "./generated/methods.ts";
+import { replaceKnown } from "./redact.ts";
 import { CodexProcess, type CodexChild } from "./services.ts";
 
 export type Method = keyof ClientMethods;
@@ -95,6 +96,8 @@ export interface ConnectOptions {
    * before anything else is done with it: the runtime's protocol log and the recorder use it.
    */
   readonly onLine?: (line: Line) => void;
+  /** Process secrets to remove from diagnostic text. */
+  readonly secrets?: ReadonlyArray<string> | undefined;
   readonly handshakeTimeout?: Duration.Input;
   /** How long a program asked to stop has before it is killed; five seconds by default. */
   readonly stopWait?: Duration.Input;
@@ -165,6 +168,13 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       } = { kind: "open" };
   let nextId = 0;
   let stderrTail = "";
+  const secrets = (options.secrets ?? [])
+    .filter((value) => value.length > 0)
+    .map((value) => [value, "<token>"] as const)
+    .sort(([a], [b]) => b.length - a.length);
+  const safeText = (text: string) => replaceKnown(text, secrets);
+  const tail = () => safeText(stderrTail).slice(-STDERR_TAIL_CHARS);
+  const tailCapacity = STDERR_TAIL_CHARS + (secrets[0]?.[0].length ?? 0);
   const logged = new Set<string>();
   const logOnce = (kind: CodexUnknownMessage["kind"], method: string) => {
     const label = `${kind}:${method}`;
@@ -174,7 +184,10 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
           Effect.andThen(
             Effect.logWarning(
               "codex-app-server ignored",
-              new CodexUnknownMessage({ kind, method: printable(method) }),
+              new CodexUnknownMessage({
+                kind,
+                method: printable(safeText(method)),
+              }),
             ),
           ),
         );
@@ -286,10 +299,12 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
               {
                 method: entry.method,
                 code: typeof error.code === "number" ? error.code : 0,
-                ...(typeof type === "string" ? { type: printable(type) } : {}),
+                ...(typeof type === "string"
+                  ? { type: printable(safeText(type)) }
+                  : {}),
               },
               typeof error.message === "string"
-                ? error.message.slice(0, 500)
+                ? safeText(error.message).slice(0, 500)
                 : "",
             ),
           );
@@ -364,7 +379,7 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
     Effect.sync(() => {
       stderrTail = (
         stderrTail + stderrDecoder.decode(chunk, { stream: true })
-      ).slice(-STDERR_TAIL_CHARS);
+      ).slice(-tailCapacity);
     }),
   ).pipe(Effect.forkIn(scope));
   // The reader ending for any reason ends the connection, so no caller waits on output that will
@@ -376,7 +391,7 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
     end((method) =>
       CodexOutputEnded.of(
         { reason, ...(method === undefined ? {} : { method }) },
-        stderrTail,
+        tail(),
       ),
     );
   const reader = yield* Stream.runForEach(child.stdout, onChunk).pipe(
@@ -405,7 +420,7 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       end((method) =>
         CodexExited.of(
           { ...exit, ...(method === undefined ? {} : { method }) },
-          stderrTail,
+          tail(),
         ),
       ),
     ),
@@ -472,10 +487,8 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
     capabilities: { experimentalApi: false, requestAttestation: false },
   }).pipe(Effect.timeoutOption(options.handshakeTimeout ?? "30 seconds"));
   if (answered._tag === "None") {
-    yield* end(() =>
-      CodexExited.of({ exitCode: null, signal: null }, stderrTail),
-    );
-    return yield* CodexHandshakeTimeout.of(stderrTail);
+    yield* end(() => CodexExited.of({ exitCode: null, signal: null }, tail()));
+    return yield* CodexHandshakeTimeout.of(tail());
   }
   yield* send({ method: "initialized" });
   return {

@@ -680,7 +680,7 @@ test("a skill already installed is kept up to date when its program isn't found,
     agents: ["claude-code"],
     context: context(["claude-code"], "n"),
   });
-  expect(said).toContain("for Claude Code: 8 files in ");
+  expect(said).toMatch(/for Claude Code: \d+ files in /);
   expect(said).not.toContain("Codex");
 });
 

@@ -5,7 +5,9 @@ import {fauxAssistantMessage, fauxToolCall} from "@earendil-works/pi-ai";
 import {openNodeSqliteDatabase, openNodeSqliteStorage} from "@earendil-works/pi-durable/storage/sqlite/node";
 import {BACKGROUND_CONTEXT} from "@earendil-works/chord/context";
 import {backupSnapshot, exportSnapshot, importSnapshot} from "../src/transfer";
-import {Fixture, faux, OWNER, MODEL, scratch} from "./helpers";
+import {Fixture, faux, OWNER, MODEL, isolateClaudeConfig, scratch} from "./helpers";
+
+isolateClaudeConfig();
 
 const item = {provider: "github", repo: "githubnext/ace", kind: "pull-request", number: 711, url: "https://github.com/githubnext/ace/pull/711"};
 

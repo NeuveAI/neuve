@@ -6,16 +6,16 @@ import { join, relative } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { type JsonObject, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
-import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 
 import { Channel, type ChannelInfo, type Changes, type Delivery } from "../src/index";
-import { faux, Fixture, git, MODEL, OWNER, project, scratch, until } from "./helpers";
+import { faux, Fixture, git, isolateClaudeConfig, MODEL, OWNER, project, scratch, scratchEnv, until } from "./helpers";
 
 const fixtures: Fixture[] = [];
 afterEach(async () => {
 	for (const fixture of fixtures.splice(0)) await fixture.dispose();
 });
+isolateClaudeConfig();
 const create = async (...args: Parameters<typeof Fixture.create>) => {
 	const fixture = await Fixture.create(...args);
 	fixtures.push(fixture);
@@ -147,7 +147,7 @@ describe("children and other channels", () => {
 				defaultModel: async () => MODEL,
 				storage: await openNodeSqliteStorage(join(root, id, "channel.sqlite")),
 				models: scripted.models,
-				env: (cwd) => new NodeExecutionEnv({ cwd }),
+				env: (cwd) => scratchEnv(cwd, root),
 				directory: {
 					self: { id, name: id },
 					list: async () =>

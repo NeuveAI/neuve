@@ -8,7 +8,7 @@ import type {
 	JsonObject,
 	ToolExecutionResult,
 } from "@earendil-works/pi-durable";
-import { Fixture, MODEL, OWNER } from "./helpers";
+import { Fixture, isolateClaudeConfig, MODEL, OWNER } from "./helpers";
 import {
 	ReviewBranchInputSchema,
 	ReviewPullRequestInputSchema,
@@ -57,6 +57,7 @@ afterEach(async () => {
 	toolErrors = [];
 	expect(errors).toEqual([]);
 });
+isolateClaudeConfig();
 const id = "01JB0000000000000000000000";
 const other = "01JB0000000000000000000001";
 const range = {

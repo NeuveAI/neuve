@@ -158,15 +158,13 @@ test("a dry run lists every file with its full path and writes nothing", async (
 test("an install writes exactly the skill's files and a receipt, and a rerun changes nothing", async () => {
   const h = await harness(realSkill);
   const bundle = await realSkill();
-  expect(bundle.files.map((file) => file.path)).toEqual([
-    "SKILL.md",
-    "references/desk.md",
-    "references/lanes-and-dispositions.md",
-    "references/proof.md",
-    "references/request-review.md",
-    "references/setup.md",
-    "references/stack.md",
-  ]);
+  // The exact list lives in skill-drift.test.ts, beside the SKILL.md table that names it.
+  expect(bundle.files[0]!.path).toBe("SKILL.md");
+  expect(
+    bundle.files
+      .slice(1)
+      .filter((file) => !/^references\/[\w-]+\.md$/.test(file.path)),
+  ).toEqual([]);
   expect(await h.run(["install"])).toBe(0);
   const expected: Record<string, string> = {};
   for (const folder of [

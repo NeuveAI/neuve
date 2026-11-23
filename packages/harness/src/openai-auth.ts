@@ -43,8 +43,9 @@ import { z } from "zod";
  * The credential file lives in `$XDG_CONFIG_HOME/neuve/` (or `~/.config/neuve/`), or the folder
  * `NEUVE_OPENAI_AUTH_DIR` names, written atomically with mode 0600 in a 0700 folder, and refused when
  * anyone else could read it. No token ever leaves this module except as the bearer value handed to
- * the provider's HTTP request, and as the lease below: errors name OAuth error codes and HTTP
- * statuses, never token text, and `status` reports the account and expiry only.
+ * the provider's HTTP request, as the lease below, or as the value `accessToken` supplies for the
+ * environment of a session whose program has answered as Codex. Errors name OAuth error codes
+ * and HTTP statuses, never token text, and `status` reports the account and expiry only.
  *
  * Cloud machines (10.129) share one sign-in through a single refresher. Refresh tokens rotate and
  * this module's lock serialises refreshes only within one filesystem, so machines that each held the
@@ -98,6 +99,7 @@ const UNUSABLE_REFRESH = new Set([
 
 export type AuthErrorCode =
   | "signed-out"
+  | "access-expired"
   | "plan-usage-not-granted"
   | "refresh-unusable"
   | "file-mode"
@@ -970,9 +972,11 @@ export const signIn = async (options: SignInOptions): Promise<AuthStatus> => {
  * A usable access token: the stored one while it has more than five minutes left, otherwise a
  * refreshed one. Refreshes are serialised across processes; after taking the lock the file is read
  * again, so a token another process just refreshed is used rather than refreshed twice.
+ * A rejected token is refreshed even when it has more than five minutes left.
  */
 export const accessToken = async (
   options: AuthOptions = {},
+  rejected?: string,
 ): Promise<{ readonly token: string; readonly expiresAt: number }> => {
   const command = tokenCommandOf(options);
   if (command !== undefined)
@@ -981,12 +985,16 @@ export const accessToken = async (
       options.now ?? Date.now,
       options.tokenCommandTimeoutMs ?? LEASE_TIMEOUT_MS,
       options.leaseRetryDelaysMs ?? LEASE_RETRY_DELAYS_MS,
+      rejected,
     );
   const { directory, fetch: fetcher, now } = resolve(options);
   /** The stored session's token while it has time left; undefined when it needs a refresh. */
   const usable = (auth: StoredAuth | undefined) => {
     const session = sessionProblem(auth, now());
-    return session.expiresAt - now() > REFRESH_MARGIN_MS ? session : undefined;
+    return session.accessToken !== rejected &&
+      session.expiresAt - now() > REFRESH_MARGIN_MS
+      ? session
+      : undefined;
   };
   const current = usable(readAuth(directory));
   if (current !== undefined)
@@ -1004,7 +1012,7 @@ export const accessToken = async (
       const spent = session.refreshToken;
       if (clientId === undefined || spent === undefined)
         throw new OpenAiAuthError(
-          "signed-out",
+          session.expiresAt <= now() ? "access-expired" : "signed-out",
           "the OpenAI session cannot be renewed; run neuve auth login openai",
         );
       const saveSession = sessionWriter(directory, stored);
@@ -1143,7 +1151,7 @@ const sessionProblem = (auth: StoredAuth | undefined, now: number) => {
     session.expiresAt - now <= REFRESH_MARGIN_MS
   )
     throw new OpenAiAuthError(
-      "signed-out",
+      session.expiresAt <= now ? "access-expired" : "signed-out",
       "the OpenAI session cannot be renewed; run neuve auth login openai",
     );
   return session;
@@ -1411,11 +1419,16 @@ const leased = async (
   now: () => number,
   timeoutMs: number,
   delaysMs: ReadonlyArray<number>,
+  rejected?: string,
 ) => {
   const cached = leases.get(command);
   if (cached !== undefined) {
     const lease = await cached.catch(() => undefined);
-    if (lease !== undefined && lease.expiresAt - now() > REFRESH_MARGIN_MS)
+    if (
+      lease !== undefined &&
+      lease.token !== rejected &&
+      lease.expiresAt - now() > REFRESH_MARGIN_MS
+    )
       return lease;
     const current = leases.get(command);
     if (current !== undefined && current !== cached) return current;

@@ -3,8 +3,10 @@ name: neuve
 description: >
   Use Neuve, the code-review tool, from an agent session. Load it when the person asks you to set
   Neuve up, request or read a Neuve review, act on a Neuve review's findings or requests for
-  changes, record proof for a change, or point them to the review desk, or when the repository's
-  own instructions (AGENTS.md, CLAUDE.md) tell you to use Neuve. Not for general Git or coding work.
+  changes, record proof for a change, or point them to the review desk; when you are the
+  independent reviewer of an implementer's work before a Neuve review, or a final reviewer
+  alongside a Neuve review of a finished range; or when the repository's own instructions (AGENTS.md, CLAUDE.md) tell you to use
+  Neuve. Not for general Git or coding work.
 metadata:
   version: "{{NEUVE_VERSION}}"
 ---
@@ -17,6 +19,7 @@ Neuve reviews a commit range: it splits the range into batches, each with one fo
 
 - A repository where Neuve isn't set up, unless the person asks you to set it up.
 - General Git or coding work, even in a repository where Neuve is set up, when neither the person nor the repository's instructions ask for a Neuve review.
+- Reviewing code that no Neuve review will follow and no Neuve review has covered, unless the person or the repository's instructions ask you to act as Neuve's inner-loop or final reviewer.
 - Neuve's own maintenance commands (`neuve records`, `neuve review recompose`, `neuve hybrid`, `neuve semantic`, `neuve workspace`). They are for the people who build Neuve, not for using it.
 
 ## Rules
@@ -43,7 +46,12 @@ Read the one you need, when you need it:
 | [references/desk.md](references/desk.md) | Sending a person to the batch overview and review desk |
 | [references/proof.md](references/proof.md) | Recording proof for a range, and saying what makes your session hard |
 | [references/stack.md](references/stack.md) | Reading the pinned sources of the repository's frameworks and dependencies |
+| [references/inner-loop-reviewer.md](references/inner-loop-reviewer.md) | Reviewing an implementer's work before a Neuve review: how you work, what you own, and your report |
+| [references/final-reviewer.md](references/final-reviewer.md) | Reviewing a finished range in final review: what your verdict becomes on each lane, and suggested reviews |
+| [references/review-verification.md](references/review-verification.md) | As a reviewer: what the offered tests and proof actually establish |
+| [references/review-independence.md](references/review-independence.md) | As a reviewer: judging in a fresh context, before you see others' verdicts |
+| [references/review-against-scope.md](references/review-against-scope.md) | As a reviewer: judging against the scope row by row, and what findings become |
 
-**Where a review sits.** Neuve is the final review of finished work, not a check inside the loop that produces it. When a repository works with an implementer and a separate reviewer, those two finish first: the reviewer judges the work and requires corrections on its own. Once it approves, the reviewer requests one Neuve review of the whole range. The implementer doesn't request it, and nobody requests one per correction round.
+**Where a review sits.** Neuve is the final review of finished work, not a check inside the loop that produces it. When a repository works with an implementer and a separate reviewer, those two finish first: the reviewer judges the work and requires corrections on its own ([references/inner-loop-reviewer.md](references/inner-loop-reviewer.md)). Once it approves, the reviewer requests one Neuve review of the whole range. The implementer doesn't request it, and nobody requests one per correction round.
 
 A typical pass, when the person asks for a review or the repository's instructions say to request one: check the work is committed (ask before committing it yourself), run `neuve review <base>..<head> --detach`, read it with `neuve review show <base>..<head>`, fix what the findings ask with the person's goal in mind, and tell the person which units need their decision.

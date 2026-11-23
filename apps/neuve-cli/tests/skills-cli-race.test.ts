@@ -135,6 +135,7 @@ test("uninstall: references swapped for a link inside the removal removes nothin
   const folder = join(home, ".claude/skills/neuve");
   const other = join(root, "other");
   cpSync(join(folder, "references"), other, { recursive: true });
+  const copied = readdirSync(other).sort();
   trigger = (path) => {
     if (!path.endsWith("desk.md")) return;
     trigger = undefined;
@@ -149,14 +150,7 @@ test("uninstall: references swapped for a link inside the removal removes nothin
   // stopped the uninstall.
   expect(result).toContain(`${join(folder, "references")} is a symbolic link`);
   expect(readdirSync(join(root, "references-moved"))).not.toContain("desk.md");
-  expect(readdirSync(other).sort()).toEqual([
-    "desk.md",
-    "lanes-and-dispositions.md",
-    "proof.md",
-    "request-review.md",
-    "setup.md",
-    "stack.md",
-  ]);
+  expect(readdirSync(other).sort()).toEqual(copied);
 });
 
 test("uninstall: neuve/ swapped for a link while the plan is printed removes nothing there", async () => {

@@ -11,11 +11,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  Account,
+  AccountRejected,
   AccountName,
   DEFAULT_ACCOUNTS,
+  SignInRequired,
   TurnLimit,
   signInCommand,
-  type Account,
   type SignInHint,
 } from "@neuve/runtime";
 import { Effect, Exit } from "effect";
@@ -120,6 +122,126 @@ const probe = (
       Effect.provide(fake.layer),
     ),
   );
+
+// Neuve's sign-in owns the status check and uses a separate home even when Codex reports signed out.
+test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
+  const home = scratchFolder();
+  const program = file(home);
+  const fake = fakeWith([], true);
+  const named = Account.parse({
+    name: "work",
+    kind: "chatgpt-subscription",
+    runtime: "codex",
+    credential: { kind: "neuve-sign-in", folder: join(home, "sign-in") },
+  });
+  const options: CodexRuntimeConfig = {
+    home,
+    environment: {
+      PATH: "",
+      CODEX_HOME: join(home, ".codex"),
+      NEUVE_CODEX_ACCESS_TOKEN: "ambient-value",
+    },
+    programPath: () => program,
+    neuveSignIn: {
+      accessToken: () =>
+        Effect.succeed({
+          token: "opaque.fixture.probe",
+          expiresAt: Date.now() + 3_600_000,
+        }),
+      signOut: () => Effect.void,
+    },
+  };
+  const result = await probe(fake, options, named);
+  expect(result.signIn).toEqual({
+    state: "signed-in",
+    credentialSource: "neuve-sign-in",
+  });
+  expect(result.models?.map(({ id }) => id)).toEqual(["main", "other"]);
+  expect(result.limits).toEqual([]);
+  const child = fake.current();
+  expect(child.env.NEUVE_CODEX_ACCESS_TOKEN).toBeUndefined();
+  const managedHome = child.env.CODEX_HOME;
+  if (managedHome === undefined)
+    throw new Error("expected a Neuve-owned Codex home");
+  expect(managedHome).toStartWith(home);
+  expect(child.env.CODEX_HOME).not.toBe(join(home, ".codex"));
+  expect(child.env.CODEX_HOME).not.toBe(join(home, "sign-in"));
+  const keys = await Effect.runPromise(
+    makeRuntime(options).pipe(
+      Effect.map((runtime) => [
+        runtime.continuation(named).key,
+        runtime.continuation(account).key,
+      ]),
+      Effect.provide(fake.layer),
+    ),
+  );
+  expect(keys).toEqual([managedHome, "default"]);
+  expect(child.io.written.map(({ method }) => method)).toEqual([
+    "initialize",
+    "initialized",
+    "model/list",
+    "model/list",
+  ]);
+  const policy = {
+    systemPrompt: "",
+    tools: [],
+    approvalPolicy: "allow" as const,
+    turnLimit: TurnLimit.parse(1),
+    folder: home,
+  };
+  const open = (config: CodexRuntimeConfig) =>
+    Effect.runPromise(
+      Effect.scoped(
+        makeRuntime(config).pipe(
+          Effect.flatMap((runtime) =>
+            runtime.openSession(named, policy, { kind: "new" }),
+          ),
+          Effect.map((session) => session.nativeSessionId),
+          Effect.provide(fake.layer),
+        ),
+      ),
+    );
+  expect(await open(options)).toBe("thread-1");
+  const session = fake.current();
+  expect(session.env.CODEX_HOME).toBe(child.env.CODEX_HOME);
+  expect(session.env.NEUVE_CODEX_ACCESS_TOKEN).toBe("opaque.fixture.probe");
+  expect(session.commandEnvironment().NEUVE_CODEX_ACCESS_TOKEN).toBeUndefined();
+  expect(session.args).not.toContain("--listen");
+  expect(session.args).toEqual(
+    expect.arrayContaining([
+      'model_provider="openai_chatgpt_plan"',
+      'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
+      'model_providers.openai_chatgpt_plan.base_url="https://api.openai.com/v1"',
+      'model_providers.openai_chatgpt_plan.env_key="NEUVE_CODEX_ACCESS_TOKEN"',
+      'model_providers.openai_chatgpt_plan.wire_api="responses"',
+      "model_providers.openai_chatgpt_plan.requires_openai_auth=false",
+      "model_providers.openai_chatgpt_plan.supports_websockets=false",
+    ]),
+  );
+  expect(
+    session.io.written.some(({ method }) => method === "account/read"),
+  ).toBe(false);
+
+  const hint = {
+    kind: "command",
+    command: "neuve auth login",
+    account: named.name,
+  } as const;
+  for (const error of [
+    new SignInRequired({ account: named.name, hint }),
+    new AccountRejected({ account: named.name, hint, reason: "other" }),
+  ]) {
+    await expect(
+      open({
+        ...options,
+        neuveSignIn: {
+          accessToken: () => Effect.fail(error),
+          signOut: () => Effect.void,
+        },
+      }),
+    ).rejects.toMatchObject({ _tag: error._tag, hint });
+  }
+});
 
 // Why: the account's states table (the hand-over's first table). Each state is detected from what
 // the candidates answer, in the probe's order, and carries its fix; none is an error.

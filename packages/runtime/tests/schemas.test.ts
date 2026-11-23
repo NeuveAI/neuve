@@ -62,6 +62,7 @@ const permitted = new Set([
   "anthropic-api-key/claude-code/environment",
   "chatgpt-subscription/pi/neuve-sign-in",
   "chatgpt-subscription/codex/codex-home",
+  "chatgpt-subscription/codex/neuve-sign-in",
   "openai-api-key/pi/vault",
   "openai-api-key/pi/environment",
 ]);

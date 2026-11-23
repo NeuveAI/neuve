@@ -78,7 +78,7 @@ export const Account = z.discriminatedUnion("kind", [
     runtime: z.enum(["pi", "claude-code"]),
     credential: ApiKeyReference,
   }),
-  // A ChatGPT plan runs on pi with Neuve's sign-in, or on Codex with Codex's own login.
+  // A ChatGPT plan runs on pi with Neuve's sign-in, or on Codex with its own login or Neuve's sign-in.
   z.discriminatedUnion("runtime", [
     z.strictObject({
       name: AccountName,
@@ -90,7 +90,7 @@ export const Account = z.discriminatedUnion("kind", [
       name: AccountName,
       kind: z.literal("chatgpt-subscription"),
       runtime: z.literal("codex"),
-      credential: CodexHome,
+      credential: z.discriminatedUnion("kind", [CodexHome, NeuveSignIn]),
     }),
   ]),
   z.strictObject({

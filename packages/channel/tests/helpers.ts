@@ -1,3 +1,4 @@
+import { afterEach, beforeEach } from "bun:test";
 import {channelOperations, ExtensionRequestSchema, type ExtensionRequest} from "@ace/channel/operations";
 import {parseRequest} from "@ace/channel/parse";
 import type {ChannelExtension} from "@ace/channel/extensions";
@@ -21,6 +22,7 @@ import {
 	type Models,
 } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { ok } from "@earendil-works/pi-durable/env";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 
 import { Channel, type Directory, type Event, type Options, type Request as NativeRequest } from "@ace/channel";
@@ -28,10 +30,32 @@ import { Channel, type Directory, type Event, type Options, type Request as Nati
 export const OWNER = "owner";
 export const MODEL = { provider: "faux", modelId: "coder" };
 
+export function isolateClaudeConfig() {
+	let previous: string | undefined;
+	beforeEach(() => {
+		previous = process.env["CLAUDE_CONFIG_DIR"];
+		delete process.env["CLAUDE_CONFIG_DIR"];
+	});
+	afterEach(() => {
+		if (previous === undefined) delete process.env["CLAUDE_CONFIG_DIR"];
+		else process.env["CLAUDE_CONFIG_DIR"] = previous;
+	});
+}
+
 /** Every test's files live under TMPDIR, which the runner points at the external volume. */
 export async function scratch(): Promise<string> {
 	if (!process.env.TMPDIR) throw new Error("Set TMPDIR to the external temporary directory");
 	return realpath(await mkdtemp(join(tmpdir(), "neuve channel ")));
+}
+
+export function scratchEnv(cwd: string, root: string): NodeExecutionEnv {
+	const home = join(root, "home");
+	return new class extends NodeExecutionEnv {
+		override async absolutePath(...args: Parameters<NodeExecutionEnv["absolutePath"]>): ReturnType<NodeExecutionEnv["absolutePath"]> {
+			const [path] = args;
+			return path === "~" || path.startsWith("~/") ? ok(join(home, path.slice(2))) : super.absolutePath(...args);
+		}
+	}({ cwd });
 }
 
 export function git(dir: string, ...args: string[]): string {
@@ -140,7 +164,7 @@ export class Fixture {
 			models: this.scripted.models,
 			env: (cwd) => {
 				let env = this.envs.get(cwd);
-				if (!env) this.envs.set(cwd, env = new NodeExecutionEnv({ cwd }));
+				if (!env) this.envs.set(cwd, env = scratchEnv(cwd, this.root));
 				return env;
 			},
 			directory,
@@ -150,7 +174,7 @@ export class Fixture {
 			extension: {
 				...this.options,
 				...operations.extension,
-				extensions: [...operations.extension.extensions, externalLanes({name: "one", project: this.project, lanes: this.lanes, env: (cwd) => new NodeExecutionEnv({cwd})})],
+				extensions: [...operations.extension.extensions, externalLanes({name: "one", project: this.project, lanes: this.lanes, env: (cwd) => scratchEnv(cwd, this.root)})],
 				environment: (cwd) => isPlaced(cwd, this.project),
 			},
 		});

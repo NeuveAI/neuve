@@ -23,10 +23,16 @@
 // Known limits, which the skill's text doesn't use and a reviewer should keep out of it: a command
 // in prose without backticks, an inline code span broken across lines, and `text` or `json` blocks,
 // which are skipped by design.
+//
+// Links: an installed skill has nothing beside it, so every link in its prose must stay inside the
+// skill folder and name a file it holds (anchors aren't checked). Inline links and images, reference
+// definitions, autolinks and bare web addresses are read; links inside code are not. A raw HTML link
+// (`<a href>`) isn't read, so keep HTML out of the skill's text.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   frontmatterVersion,
   VERSION_PLACEHOLDER,
@@ -193,10 +199,60 @@ export const invocationsOf = (
 const hasFlag = (text: string, flag: string) =>
   new RegExp(`(?<![\\w-])${flag}(?![\\w-])`).test(text);
 
+/**
+ * The link targets in a Markdown file's prose: inline links and images, reference definitions,
+ * autolinks and bare web addresses. Code blocks and inline code are not links, so they are left out.
+ */
+export const linksOf = (markdown: string): ReadonlyArray<string> => {
+  const prose = markdown
+    .replace(/^---\n[\s\S]*?\n---\n/, "")
+    .replace(FENCE, "\n")
+    .replace(/`[^`\n]+`/g, "");
+  return [
+    ...[...prose.matchAll(/\]\(\s*<?([^)\s>]+)/g)].map((match) => match[1]!),
+    ...[...prose.matchAll(/^\s*\[[^\]]+\]:\s*<?([^\s>]+)/gm)].map(
+      (match) => match[1]!,
+    ),
+    ...[...prose.matchAll(/<([a-z][a-z0-9+.-]*:[^>\s]+)>/gi)].map(
+      (match) => match[1]!,
+    ),
+    ...[...prose.matchAll(/(?<![(<\w])https?:\/\/[^\s)>\]]+/g)].map(
+      (match) => match[0]!,
+    ),
+  ];
+};
+
+/**
+ * Why a link in `file` (a path inside the skill folder `root`) leaves the folder, or undefined when
+ * it stays inside: an installed skill has nothing beside it, so any other target is dead for a user.
+ */
+export const leavesSkill = (
+  root: string,
+  file: string,
+  target: string,
+): string | undefined => {
+  if (target.startsWith("#")) return undefined;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target))
+    return "an address outside the skill";
+  if (target.startsWith("/") || target.startsWith("~"))
+    return "an absolute path";
+  const absolute = resolve(
+    root,
+    dirname(file),
+    decodeURI(target.split("#")[0]!),
+  );
+  const inside = relative(resolve(root), absolute);
+  if (inside === "" || inside.startsWith(".."))
+    return "a path outside the skill folder";
+  if (!existsSync(absolute)) return "a file the skill does not hold";
+  return undefined;
+};
+
 const skillFiles = async () => {
   const files = ["SKILL.md"];
+  // Hidden entries are skipped, as the bundle reader skips them, so they are never installed.
   for (const name of (await readdir(join(TEMPLATE, "references"))).sort())
-    files.push(`references/${name}`);
+    if (!name.startsWith(".")) files.push(`references/${name}`);
   return Promise.all(
     files.map(async (file) => ({
       file,
@@ -302,8 +358,53 @@ describe("the extractor", () => {
   });
 });
 
+describe("the link check", () => {
+  test("finds links in prose, not in code, and refuses any that leave the skill folder", () => {
+    const markdown = [
+      "See [proof](proof.md#record-it), [the entry](../SKILL.md) and [here](#the-words).",
+      "Not [a decision](../../../process/decisions.md#area-7) nor ![a picture](/tmp/a.png).",
+      "Nor <https://example.com/docs>, https://example.com/raw or [x][ref].",
+      "",
+      "[ref]: ../../outside.md",
+      "",
+      "`[not a link](../../outside.md)`",
+      "```sh",
+      "echo '[nor this](https://example.com)'",
+      "```",
+    ].join("\n");
+    const links = linksOf(markdown);
+    expect(links).toEqual([
+      "proof.md#record-it",
+      "../SKILL.md",
+      "#the-words",
+      "../../../process/decisions.md#area-7",
+      "/tmp/a.png",
+      "../../outside.md",
+      "https://example.com/docs",
+      "https://example.com/raw",
+    ]);
+    expect(
+      links.map((target) =>
+        leavesSkill(TEMPLATE, "references/stack.md", target),
+      ),
+    ).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      "a path outside the skill folder",
+      "an absolute path",
+      "a path outside the skill folder",
+      "an address outside the skill",
+      "an address outside the skill",
+    ]);
+    expect(leavesSkill(TEMPLATE, "SKILL.md", "references/missing.md")).toBe(
+      "a file the skill does not hold",
+    );
+  });
+});
+
 describe("the skill text", () => {
-  test("has its frontmatter, the version placeholder, and the six references it names", async () => {
+  test("has its frontmatter, the version placeholder, and the eleven references it names", async () => {
     const files = await skillFiles();
     const entry = files.find((file) => file.file === "SKILL.md")!.text;
     expect(entry).toMatch(/^---\nname: neuve\ndescription: >\n/);
@@ -313,9 +414,14 @@ describe("the skill text", () => {
       .filter((file) => file.startsWith("references/"));
     expect(references).toEqual([
       "references/desk.md",
+      "references/final-reviewer.md",
+      "references/inner-loop-reviewer.md",
       "references/lanes-and-dispositions.md",
       "references/proof.md",
       "references/request-review.md",
+      "references/review-against-scope.md",
+      "references/review-independence.md",
+      "references/review-verification.md",
       "references/setup.md",
       "references/stack.md",
     ]);
@@ -335,6 +441,17 @@ describe("the skill text", () => {
           /\bsections?\b|reading group|code risk floor|backstop/gi,
         ),
       }).toEqual({ file, found: null });
+  });
+
+  test("links only to files inside the skill folder", async () => {
+    const problems: Array<string> = [];
+    for (const { file, text } of await skillFiles())
+      for (const target of linksOf(text)) {
+        const reason = leavesSkill(TEMPLATE, file, target);
+        if (reason !== undefined)
+          problems.push(`${file}: ${target}: ${reason}`);
+      }
+    expect(problems).toEqual([]);
   });
 });
 
@@ -408,9 +525,14 @@ describe("every command the skill shows exists in the CLI's help", () => {
     for (const file of [
       "SKILL.md",
       "references/desk.md",
+      "references/final-reviewer.md",
+      "references/inner-loop-reviewer.md",
       "references/lanes-and-dispositions.md",
       "references/proof.md",
       "references/request-review.md",
+      "references/review-against-scope.md",
+      "references/review-independence.md",
+      "references/review-verification.md",
       "references/setup.md",
       "references/stack.md",
     ])

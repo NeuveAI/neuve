@@ -2,17 +2,18 @@
 
 Status: how Neuve's own build lanes are reviewed, from the owner's [design decisions](decisions.md) 7.1–7.3. It is also an example of what Neuve skills can prescribe (7.4). The product meaning of the inner-loop adversarial reviewer is in the [review modes foundation](../foundations/02-review-modes-and-cycles.md#adversarial-review).
 
-## Reviewer skills
+## Reviewer guidance
 
-Reviewers load the [`inner-loop-reviewer` skill](../.agents/skills/inner-loop-reviewer/SKILL.md), which combines three skills that carry the frame of reference for adversarial review ([11.7](decisions.md#area-11-verification-and-review-delivery-19-october-2026)):
+Reviewers load the installed `neuve` skill and read its [inner-loop reviewer reference](../apps/neuve-cli/skills/neuve/references/inner-loop-reviewer.md), which says how to work (skepticism, reading first, results against the scope, a planted problem, a short review), what the role owns and the report. It sends the reviewer to the references below, which carry the frame of reference for adversarial review ([11.7](decisions.md#area-11-verification-and-review-delivery-19-october-2026) as amended by [14.36](decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026); 14.38):
 
-| Skill | What it carries |
+| Reference | What it carries |
 | --- | --- |
-| [`review-verification`](../.agents/skills/review-verification/SKILL.md) | Proof converges (11.1, 11.9); the kinds of proof and what each can establish; who recorded it and stale (outdated, not forged) proof (11.10); good tests (11.2); bogus or forged tests and proof (10.63) |
-| [`review-independence`](../.agents/skills/review-independence/SKILL.md) | Fresh context, decide before you reveal, skepticism, defects versus preferences (11.4) |
-| [`review-against-scope`](../.agents/skills/review-against-scope/SKILL.md) | Judging against the scope and definition of done, criteria rows, finding kinds, the hard rules (11.3, 11.5) |
+| [`review-verification`](../apps/neuve-cli/skills/neuve/references/review-verification.md) | Proof converges (11.1, 11.9); the kinds of proof and what each can establish; who recorded it and out-of-date (not forged) proof (11.10); good tests (11.2); bogus or forged tests and proof (10.63) |
+| [`review-independence`](../apps/neuve-cli/skills/neuve/references/review-independence.md) | Fresh context, decide before you reveal, skepticism, defects versus preferences (11.4) |
+| [`review-against-scope`](../apps/neuve-cli/skills/neuve/references/review-against-scope.md) | Judging against the scope and definition of done, criteria rows, finding kinds, the hard rules (11.3, 11.5) |
+| [`final-reviewer`](../apps/neuve-cli/skills/neuve/references/final-reviewer.md) | Final review never blocks (11.11); lane-blind review (10.33); what the verdict becomes by lane (4.5, 4.13, 4.14); suggested reviews; later reviews (10.68) |
 
-Those skills are the single authority for how to judge. This standard keeps only the process for Neuve's build lanes: setup, code quality, time box, what blocks, evidence to supply and the report.
+The installed release carries these references only from the next release on; until then, read any reference the installed skill lacks from this checkout at the links above. Those references are the single authority for how to judge; they are written for anyone who installs the CLI, so they carry no decision numbers. This standard keeps only the process for Neuve's build lanes: setup, code quality, time box, what blocks, evidence to supply and the report. A change to the references reaches lanes with the next release, as the [lane loop](neuve-in-the-loop.md#which-neuve-runs) says.
 
 ## Setup
 
@@ -43,16 +44,16 @@ About 30 minutes per review (7.1). Spend it on what could be wrong in ways that 
 | Correctness defect | Blocks |
 | Security defect | Blocks |
 | Bogus or forged tests or proof, including a record that claims to describe the reviewed code while its artefact shows another revision ([10.63](decisions.md#area-10-harness-m3-18-october-2026); [11.10](decisions.md#area-11-verification-and-review-delivery-19-october-2026)) | Blocks |
-| [Stale proof](../.agents/skills/review-verification/SKILL.md#who-recorded-it-and-when) ([11.10](decisions.md#area-11-verification-and-review-delivery-19-october-2026)): honest but possibly outdated | Disclosed; not a defect. Like missing proof, the reviewer weighs it |
+| [Stale proof](../apps/neuve-cli/skills/neuve/references/review-verification.md#who-recorded-it-and-when) ([11.10](decisions.md#area-11-verification-and-review-delivery-19-october-2026)): honest but possibly outdated | Disclosed; not a defect. Like missing proof, the reviewer weighs it |
 | Architecture violation: a responsibility in the wrong layer, a second authority, or a dependency cycle between layers (7.11). This includes shared work that departs from [record 0016](../architecture/decisions/0016-shared-work.md): a duplicate run accepted, readiness polled, or a new claim or keys-in-flight map | Blocks |
 | Non-canonical implementation: a patch, copied library logic, or hand-rolled code where the chosen stack (Effect, the official SDKs, zod) already provides it (6.1, 7.11) | Blocks |
-| Missing proof, including a behaviour no test covers ([11.11](decisions.md#area-11-verification-and-review-delivery-19-october-2026)) | The reviewer's judgement, not an automatic block or follow-up: proceed if the proof present gives enough signal that the change is correct ([`inner-loop-reviewer`](../.agents/skills/inner-loop-reviewer/SKILL.md#what-this-role-owns)) |
+| Missing proof, including a behaviour no test covers ([11.11](decisions.md#area-11-verification-and-review-delivery-19-october-2026)) | The reviewer's judgement, not an automatic block or follow-up: proceed if the proof present gives enough signal that the change is correct ([`inner-loop-reviewer`](../apps/neuve-cli/skills/neuve/references/inner-loop-reviewer.md#what-this-role-owns)) |
 | Test bloat | A follow-up, recorded with the lane; does not block |
 | Preference, style, or a possible improvement | Noted; does not block |
 
 ## Evidence
 
-What each lane supplies (7.2), judged as [`review-verification`](../.agents/skills/review-verification/SKILL.md) describes:
+What each lane supplies (7.2), judged as [`review-verification`](../apps/neuve-cli/skills/neuve/references/review-verification.md) describes:
 
 | Work | Evidence |
 | --- | --- |
@@ -60,12 +61,12 @@ What each lane supplies (7.2), judged as [`review-verification`](../.agents/skil
 | Backend, CLI or library | Logs and adequate telemetry, alongside tests where they are needed |
 | Documentation | The content and its links; no capture needed |
 
-Evidence goes into Records through the CLI once Records can take it (7.6). Ad-hoc verify scripts are not evidence.
+Evidence goes into Records through the CLI: lanes record proof for the range with `neuve proof record`, and reviewers read it with `neuve proof list` (7.6). Judge DevTools captures and logs a lane supplies outside Records directly for convergence. Ad-hoc verify scripts are not evidence.
 
 ## Report
 
-Use the report shape in [`inner-loop-reviewer`](../.agents/skills/inner-loop-reviewer/SKILL.md#report). Blocking findings say which row of [what blocks](#what-blocks) they fall under; missing proof you let pass says why the proof present was enough.
+Use the report shape in [`inner-loop-reviewer`](../apps/neuve-cli/skills/neuve/references/inner-loop-reviewer.md#report). Blocking findings say which row of [what blocks](#what-blocks) they fall under; missing proof you let pass says why the proof present was enough.
 
 ## Sources
 
-This standard and the reviewer skills draw on pstack's reviewer prompt and lead-judgment guidance (`references/reviewer-prompt.md` and `references/lead-judgment.md` in its `interrogate` skill), but replace the prompt's instruction to assume the stated intent is correct: the reviewer challenges intent and ownership first.
+This standard and the reviewer references draw on pstack's reviewer prompt and lead-judgment guidance (`references/reviewer-prompt.md` and `references/lead-judgment.md` in its `interrogate` skill), but replace the prompt's instruction to assume the stated intent is correct: the reviewer challenges intent and ownership first.
