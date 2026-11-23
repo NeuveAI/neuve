@@ -36,7 +36,7 @@ import {
   unitGuidedBasis,
 } from "./disposition.ts";
 import { ChangeMap } from "./review-map.ts";
-import { ScopeSnapshot } from "./scope.ts";
+import { snapshotByKey, type ScopeSnapshot } from "./scope.ts";
 import { RangeManifest } from "./manifest.ts";
 import { qualificationWords } from "./reader-text.ts";
 import type { StageRecord } from "./pipeline.ts";
@@ -685,12 +685,7 @@ export const publishPacket = (ctx: PublishContext, inputs: PublishInputs) =>
     const scopeRead =
       inputs.sources.scope === null
         ? undefined
-        : yield* Effect.result(
-            readOutput(inputs.sources.scope, (value) => {
-              const parsed = safeRead(ScopeSnapshot, value);
-              return parsed.success ? parsed.data : undefined;
-            }),
-          );
+        : yield* Effect.result(snapshotByKey(inputs.sources.scope));
     const snapshot =
       scopeRead?._tag === "Success" ? scopeRead.success : undefined;
     // The range manifest, read once and only when a unit owns nothing (null: not read yet).

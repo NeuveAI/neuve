@@ -34,7 +34,6 @@ import {
 import {
   codeStage,
   lookupContext,
-  precomputeKey,
   type RangeView,
   type RunContext,
 } from "../../pipeline.ts";
@@ -45,6 +44,7 @@ const sha256 = (text: string) =>
   createHash("sha256").update(text).digest("hex");
 export const frameStep = (
   ctx: RunContext["Service"],
+  precompute: string,
   view: RangeView,
   candidates: ChangeMap["candidates"],
 ) =>
@@ -86,7 +86,7 @@ export const frameStep = (
       opVersion: FRAME_PROMPT_VERSION,
       inputs: {
         // Precompute's key holds no leads retriever, so it is Frame's basis as it stands.
-        precompute: `computation:${precomputeKey(ctx)}`,
+        precompute: `computation:${precompute}`,
         task: sha256(task.text),
         ...(view.scopeRefresh === undefined
           ? {}

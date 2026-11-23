@@ -6,11 +6,22 @@ import {
   expect,
   test,
 } from "bun:test";
+import { Database } from "bun:sqlite";
+import {
+  Ancestry,
+  Identity,
+  Log,
+  mintUlid,
+  Sessions,
+  storeLocationIn,
+} from "@neuve/records-core";
 import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { settingsPath } from "../../../packages/harness/src/settings.ts";
 
 import { parseQueryInvocation } from "../src/boundary.ts";
+import { execute as executeRecords, withStore } from "../src/records-cli.ts";
 
 // Built into a temporary directory, never dist/neuve, which an installed
 // command may still be running.
@@ -160,6 +171,36 @@ const run = async (
   return { stdout, stderr, exitCode };
 };
 
+const createRecords = async (root: string) => {
+  const result = await run(["records", "migrate", "--repo", root]);
+  expect(result.exitCode, result.stderr).toBe(0);
+};
+
+const queryHistory = async (root: string, kind = "query.recorded@1") => {
+  const history = await run([
+    "records",
+    "history",
+    "--kind",
+    kind,
+    "--repo",
+    root,
+    "--json",
+  ]);
+  expect(history.exitCode, history.stderr).toBe(0);
+  return JSON.parse(history.stdout);
+};
+
+const scopeJobs = (root: string) => {
+  using db = new Database(join(root, ".git", "neuve", "records.sqlite"), {
+    readonly: true,
+  });
+  return db
+    .query(
+      "SELECT kind, dedupe_key, state FROM jobs WHERE dedupe_key LIKE 'scope.fetch:%' ORDER BY job_seq",
+    )
+    .all();
+};
+
 const lineReader = (stream: ReadableStream<Uint8Array>) => {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -225,6 +266,408 @@ const queryArgs = (
 ];
 
 describe("neuve CLI boundary", () => {
+  // The first read opens a cycle and the next joins it. Neither may change JSON or NDJSON output.
+  test("opens and joins a cycle in JSON and NDJSON with telemetry off", async () => {
+    const { root, revision } = await fixtureRepository();
+    const graph = await fakeGraph();
+    const home = join(root, "home");
+    const settings = settingsPath(home);
+    await Bun.write(
+      settings,
+      JSON.stringify({ telemetry: { enabled: false } }),
+    );
+    const env = {
+      HOME: home,
+      NEUVE_GRAPH_BINARY: graph.executable,
+      FAKE_GRAPH_LOG: graph.log,
+    };
+    const question = "  Preserve this question exactly?  ";
+    const json = queryArgs(root, revision.slice(0, 12), question);
+    const ndjson = [...json, "--stream"];
+    const database = join(root, ".git", "neuve", "records.sqlite");
+    const withoutJson = await run(json, env);
+    const withoutNdjson = await run(ndjson, env);
+    expect(withoutJson.exitCode).toBe(0);
+    expect(withoutNdjson.exitCode).toBe(0);
+    expect(withoutJson.stderr).toBe("");
+    expect(withoutNdjson.stderr).toBe("");
+    expect(await Bun.file(database).exists()).toBe(false);
+
+    await createRecords(root);
+    expect(await run(json, env)).toEqual(withoutJson);
+    const branch = execute(
+      ["git", "branch", "--show-current"],
+      root,
+    ).stdout.trim();
+    const openings = await queryHistory(root, "cycle.opened@2");
+    expect(openings).toHaveLength(1);
+    const opening = openings[0].event;
+    const cycleId = opening.attribution.cycleId;
+    expect(opening.attribution).toEqual({ cycleId });
+    expect(opening.payload).toEqual({
+      baseOid: revision,
+      baseRef: revision.slice(0, 12),
+      branch,
+      branchTipOid: revision,
+    });
+    const jobs = [
+      {
+        kind: "scope.fetch@2",
+        dedupe_key: `scope.fetch:${cycleId}`,
+        state: "waiting",
+      },
+    ];
+    expect(scopeJobs(root)).toEqual(jobs);
+    expect(await run(ndjson, env)).toEqual(withoutNdjson);
+    expect(await queryHistory(root, "cycle.opened@2")).toEqual(openings);
+    expect(scopeJobs(root)).toEqual(jobs);
+    const history = await queryHistory(root);
+    expect(history).toHaveLength(2);
+    const [first, second] = history;
+    expect(first.event.id).not.toBe(second.event.id);
+    expect(await queryHistory(root, "actor.registered@1")).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          actor: first.event.actor,
+          payload: {
+            actorKind: "human",
+            harness: "git",
+            email: "cli@example.test",
+            displayName: "Neuve CLI Test",
+          },
+        }),
+      }),
+    ]);
+    for (const { event } of history) {
+      expect(event.kind).toBe("query.recorded@1");
+      expect(event.idempotencyKey).toBe(`query:${event.id}`);
+      expect(event.actor).toBe(
+        "a95c31428577cbc202767502c04ab7d0c623cb73d61d7e33991b1dfa07edb9d2",
+      );
+      expect(event.attribution).toEqual({ cycleId });
+      expect(event.payload).toEqual({
+        revision,
+        maxResults: 5,
+        maxContextBytes: 4096,
+        cache: "reuse",
+        profile: "full",
+        relationshipPlanSize: 1,
+        outcome: "completed",
+        candidatesReturned: 2,
+        relationships: 1,
+        resultBytes: 50,
+        resultsDroppedByBudget: 0,
+        snippetsTruncatedByBudget: 0,
+        startedAt: expect.any(String),
+        elapsedMs: expect.any(Number),
+      });
+    }
+    expect(first.event.refs).toEqual(second.event.refs);
+    expect(first.event.refs).toEqual([
+      { role: "question", ref: expect.stringMatching(/^blob:[0-9a-f]{64}$/) },
+    ]);
+    using db = new Database(database, { readonly: true });
+    const blob = db
+      .query("SELECT retention, content FROM blobs WHERE hash = ?")
+      .get(first.event.refs[0].ref.slice("blob:".length));
+    expect(blob).toEqual({
+      retention: "raw-capture",
+      content: new TextEncoder().encode(question),
+    });
+  });
+
+  // A linked agent must own the cycle and the query even when Git names a human.
+  test("attributes a query and its opening to the linked agent session", async () => {
+    const { root, revision } = await fixtureRepository();
+    await createRecords(root);
+    const graph = await fakeGraph();
+    const session = { harness: "claude-code", sessionId: "query-session" };
+    const actor = Identity.agentFingerprint(session);
+    const processRow = Ancestry.snapshotProcesses()?.get(process.pid);
+    await executeRecords(
+      withStore(
+        root,
+        "write",
+        Sessions.writeSession(storeLocationIn(join(root, ".git")), {
+          version: 1,
+          ...session,
+          actorId: actor,
+          ...(processRow === undefined
+            ? {}
+            : { owner: Ancestry.identityOf(processRow) }),
+        }),
+      ),
+    );
+    const result = await run(queryArgs(root, revision), {
+      NEUVE_GRAPH_BINARY: graph.executable,
+      CLAUDE_CODE_SESSION_ID: session.sessionId,
+      CODEX_THREAD_ID: "",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    const openings = await queryHistory(root, "cycle.opened@2");
+    expect(openings).toHaveLength(1);
+    expect(openings[0].event.actor).toBe(actor);
+    expect(await queryHistory(root)).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          actor,
+          attribution: {
+            cycleId: openings[0].event.attribution.cycleId,
+            sessionId: session.sessionId,
+          },
+        }),
+      }),
+    ]);
+    expect(await queryHistory(root, "actor.registered@1")).toEqual([]);
+  });
+
+  // Branches can share a base without sharing their review cycle or scope fetch.
+  test("opens separate cycles for two branches at one base", async () => {
+    const { root, revision } = await fixtureRepository();
+    await createRecords(root);
+    const graph = await fakeGraph();
+    expect(execute(["git", "branch", "feature-a"], root).exitCode).toBe(0);
+    expect(execute(["git", "switch", "-c", "feature-b"], root).exitCode).toBe(
+      0,
+    );
+    expect(
+      execute(
+        ["git", "commit", "--allow-empty", "-m", "Advance feature-b"],
+        root,
+      ).exitCode,
+    ).toBe(0);
+    const featureBTip = execute(
+      ["git", "rev-parse", "HEAD"],
+      root,
+    ).stdout.trim();
+    expect(
+      execute(["git", "switch", "--detach", revision], root).exitCode,
+    ).toBe(0);
+    for (const branch of ["feature-a", "feature-b"])
+      expect(
+        (
+          await run([...queryArgs(root, revision), "--branch", branch], {
+            NEUVE_GRAPH_BINARY: graph.executable,
+          })
+        ).exitCode,
+      ).toBe(0);
+    const openings = await queryHistory(root, "cycle.opened@2");
+    expect(openings).toMatchObject([
+      {
+        event: {
+          payload: {
+            branch: "feature-a",
+            baseOid: revision,
+            branchTipOid: revision,
+          },
+        },
+      },
+      {
+        event: {
+          payload: {
+            branch: "feature-b",
+            baseOid: revision,
+            branchTipOid: featureBTip,
+          },
+        },
+      },
+    ]);
+    expect(openings[1].event.attribution.cycleId).not.toBe(
+      openings[0].event.attribution.cycleId,
+    );
+    expect(scopeJobs(root)).toHaveLength(2);
+  });
+
+  // An explicit branch in another worktree must address the cycle in Git's common store.
+  test("joins the named branch from a second worktree", async () => {
+    const { root, revision } = await fixtureRepository();
+    await createRecords(root);
+    const graph = await fakeGraph();
+    const env = { NEUVE_GRAPH_BINARY: graph.executable };
+    const branch = execute(
+      ["git", "branch", "--show-current"],
+      root,
+    ).stdout.trim();
+    expect((await run(queryArgs(root, revision), env)).exitCode).toBe(0);
+    const openings = await queryHistory(root, "cycle.opened@2");
+    expect(openings).toHaveLength(1);
+    expect(openings[0].event.payload.branchTipOid).toBe(revision);
+    expect(
+      execute(
+        ["git", "commit", "--allow-empty", "-m", "Advance the branch"],
+        root,
+      ).exitCode,
+    ).toBe(0);
+    const worktree = join(root, "second");
+    expect(
+      execute(["git", "worktree", "add", "--detach", worktree, revision], root)
+        .exitCode,
+    ).toBe(0);
+    const result = await run(
+      [...queryArgs(worktree, revision), "--branch", branch],
+      env,
+    );
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    const history = await queryHistory(root);
+    expect(history).toHaveLength(2);
+    expect(history[1].event.attribution.cycleId).toBe(
+      history[0].event.attribution.cycleId,
+    );
+    expect(await queryHistory(root, "cycle.opened@2")).toEqual(openings);
+    expect(scopeJobs(root)).toHaveLength(1);
+  });
+
+  // Either packet version closes the read cycle so the next read can fetch fresh scope.
+  test.each(["packet.published@1", "packet.published@2"])(
+    "opens the next cycle after %s",
+    async (kind) => {
+      const { root, revision } = await fixtureRepository();
+      await createRecords(root);
+      const graph = await fakeGraph();
+      const args = queryArgs(root, revision);
+      const env = { NEUVE_GRAPH_BINARY: graph.executable };
+      const before = await run(args, env);
+      expect(before.exitCode).toBe(0);
+      const [first] = await queryHistory(root, "cycle.opened@2");
+      const id = mintUlid();
+      const counts = {
+        batches: 0,
+        units: 0,
+        contextReferences: 0,
+        assessments: 0,
+        deliveries: 0,
+        dispositions: 0,
+        comments: 0,
+        gaps: 0,
+      };
+      await executeRecords(
+        withStore(
+          root,
+          "write",
+          Log.append([
+            {
+              id,
+              kind,
+              idempotencyKey: `packet:${id}`,
+              actor: first.event.actor,
+              occurredAt: new Date().toISOString(),
+              attribution: {
+                cycleId: first.event.attribution.cycleId,
+                range: {
+                  baseRef: revision,
+                  baseOid: revision,
+                  headOid: revision,
+                },
+                runId: "published",
+              },
+              refs: [{ ref: `blob:${"a".repeat(64)}`, role: "manifest" }],
+              payload:
+                kind === "packet.published@1"
+                  ? { complete: true, counts }
+                  : {
+                      complete: true,
+                      ordinal: 1,
+                      counts: {
+                        ...counts,
+                        sections: 0,
+                        pending: { batches: 0, sections: 0 },
+                        undecided: {},
+                      },
+                      added: {
+                        batches: 0,
+                        units: 0,
+                        sections: 0,
+                        undecided: {},
+                      },
+                    },
+            },
+          ]),
+        ),
+      );
+      expect(await run(args, env)).toEqual(before);
+      const openings = await queryHistory(root, "cycle.opened@2");
+      expect(openings).toHaveLength(2);
+      expect(openings[1].event.attribution.cycleId).not.toBe(
+        first.event.attribution.cycleId,
+      );
+      expect(openings[1].event.idempotencyKey).not.toBe(
+        first.event.idempotencyKey,
+      );
+      expect(scopeJobs(root)).toHaveLength(2);
+    },
+  );
+
+  // Detached reads only need branch advice when they can record a cycle.
+  test("warns once for detached HEAD without an explicit branch", async () => {
+    const { root, revision } = await fixtureRepository();
+    expect(
+      execute(["git", "checkout", "--detach", revision], root).exitCode,
+    ).toBe(0);
+    const graph = await fakeGraph();
+    const args = queryArgs(root, revision);
+    const env = { NEUVE_GRAPH_BINARY: graph.executable };
+    const without = await run(args, env);
+    expect(without.stderr).toBe("");
+    await createRecords(root);
+    const result = await run(args, env);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(without.stdout);
+    expect(JSON.parse(result.stdout).retrieval.status).toBe("ok");
+    expect(result.stderr).toBe(
+      "neuve: Query did not join a review cycle (HEAD is detached, so pass --branch <name>).\n",
+    );
+    const history = await queryHistory(root);
+    expect(history).toHaveLength(1);
+    expect(history[0].event.attribution).toBeUndefined();
+    expect(await queryHistory(root, "cycle.opened@2")).toEqual([]);
+  });
+
+  // An invalid explicit branch must be refused before Graph or Records sees the request.
+  test("rejects an unknown branch before invoking Graph", async () => {
+    const { root, revision } = await fixtureRepository();
+    await createRecords(root);
+    const graph = await fakeGraph();
+    expect(
+      await run([...queryArgs(root, revision), "--branch", "missing"], {
+        NEUVE_GRAPH_BINARY: graph.executable,
+      }),
+    ).toEqual({
+      stdout: "",
+      stderr: 'neuve: --branch names no local branch "missing" in --repo.\n',
+      exitCode: 2,
+    });
+    expect(await Bun.file(graph.log).exists()).toBe(false);
+    expect(await queryHistory(root)).toEqual([]);
+  });
+
+  // A cycle write can fail while the query and its run record both succeed.
+  test("warns once when Records refuses the cycle opening", async () => {
+    const { root, revision } = await fixtureRepository();
+    await createRecords(root);
+    {
+      using db = new Database(join(root, ".git", "neuve", "records.sqlite"));
+      db.exec(`CREATE TRIGGER reject_opening BEFORE INSERT ON events
+        WHEN NEW.kind = 'cycle.opened@2'
+        BEGIN SELECT RAISE(ABORT, 'cycle write refused'); END`);
+    }
+    const graph = await fakeGraph();
+    const result = await run(queryArgs(root, revision), {
+      NEUVE_GRAPH_BINARY: graph.executable,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout).retrieval.status).toBe("ok");
+    expect(result.stderr).toMatch(
+      /^neuve: Query did not join a review cycle \([^\n]+\)\.\n$/,
+    );
+    const history = await queryHistory(root);
+    expect(history).toHaveLength(1);
+    expect(history[0].event.attribution).toBeUndefined();
+    expect(await queryHistory(root, "cycle.opened@2")).toEqual([]);
+    expect(scopeJobs(root)).toEqual([]);
+  });
+
   // Why: worktree creation for query must not execute the caller's post-checkout hook.
   test("query works with a Husky-style env sh post-checkout hook", async () => {
     const repository = await fixtureRepository();
@@ -863,8 +1306,10 @@ describe("neuve CLI boundary", () => {
     ).not.toContain("neuve-graph-client-");
   });
 
+  // An interrupt must keep the signal exit and record the retrieval already emitted.
   test("SIGTERM during a blocked relationship emits no completion and cleans up", async () => {
     const repository = await fixtureRepository();
+    await createRecords(repository.root);
     const graph = await fakeGraph("delayed-neighbor");
     const child = Bun.spawn(
       [binary, ...queryArgs(repository.root, repository.revision), "--stream"],
@@ -890,6 +1335,19 @@ describe("neuve CLI boundary", () => {
     expect(await new Response(child.stderr).text()).toBe(
       "neuve: interrupted by SIGTERM\n",
     );
+    expect(await queryHistory(repository.root)).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          payload: expect.objectContaining({
+            revision: repository.revision,
+            outcome: "interrupted",
+            candidatesReturned: 2,
+            relationships: 0,
+          }),
+        }),
+      }),
+    ]);
+    expect(await queryHistory(repository.root, "cycle.opened@2")).toEqual([]);
     expect(() => process.kill(neighborPid, 0)).toThrow();
     expect(
       execute(["git", "worktree", "list", "--porcelain"], repository.root)
@@ -1117,16 +1575,32 @@ describe("neuve CLI boundary", () => {
     },
   );
 
+  // A failure before the first Graph event must keep the original diagnostic and exit.
   test("does not fall back when the explicit graph binary is unavailable", async () => {
     const repository = await fixtureRepository();
+    await createRecords(repository.root);
     const missing = join(repository.root, "missing-graph");
-    const result = await run(queryArgs(repository.root, repository.revision), {
-      NEUVE_GRAPH_BINARY: missing,
-    });
+    const result = await run(
+      queryArgs(repository.root, repository.revision.slice(0, 12)),
+      { NEUVE_GRAPH_BINARY: missing },
+    );
     expect(result).toEqual({
       stdout: "",
       stderr: `neuve: NEUVE_GRAPH_BINARY does not name an executable file: ${missing}\n`,
       exitCode: 2,
     });
+    expect(await queryHistory(repository.root)).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          payload: expect.objectContaining({
+            revision: repository.revision,
+            outcome: "failed",
+            candidatesReturned: 0,
+            relationships: 0,
+          }),
+        }),
+      }),
+    ]);
+    expect(await queryHistory(repository.root, "cycle.opened@2")).toEqual([]);
   });
 });

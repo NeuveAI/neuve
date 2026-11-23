@@ -21,20 +21,24 @@ import { WorkflowRuleViolation } from "./errors.ts";
  */
 export const checkWorkflowRules = (event: RecordEvent) =>
   Effect.gen(function* () {
-    if (event.kind === "cycle.external-context-selected@1") {
+    if (
+      event.kind === "cycle.external-context-selected@1" ||
+      event.kind === "cycle.scope-selected@1"
+    ) {
       const sql = yield* SqlClient;
-      const [opened] = yield* sql<{
-        n: number;
-      }>`SELECT count(*) AS n FROM projection_cycles WHERE cycle_id = ${event.attribution.cycleId}`;
-      const [selected] = yield* sql<{
-        n: number;
-      }>`SELECT count(*) AS n FROM events e JOIN event_cycles c ON c.event_seq = e.seq WHERE c.cycle_id = ${event.attribution.cycleId} AND e.kind = 'cycle.external-context-selected@1'`;
-      if (opened?.n || 0 || selected?.n || 0)
+      const [held] = yield* sql<{ found: 1 }>`SELECT 1 AS found
+        FROM event_cycles c JOIN events e ON c.event_seq = e.seq
+        WHERE c.cycle_id = ${event.attribution.cycleId}
+          AND e.kind IN ('cycle.opened@1', 'cycle.opened@2', ${event.kind})
+        LIMIT 1`;
+      if (held !== undefined)
         return yield* new WorkflowRuleViolation({
           eventId: event.id,
           rule: "cycle-scope-already-bound",
           message:
-            "A cycle's external context is pinned once, before the cycle opens.",
+            event.kind === "cycle.scope-selected@1"
+              ? "A cycle's explicit scope is selected once, before the cycle opens."
+              : "A cycle's external context is pinned once, before the cycle opens.",
         });
       return;
     }
@@ -54,24 +58,6 @@ export const checkWorkflowRules = (event: RecordEvent) =>
           rule: "cycle-scope-already-bound",
           message:
             "A review origin must name an existing cycle's exact submitted range.",
-        });
-      return;
-    }
-    if (event.kind === "cycle.scope-selected@1") {
-      const sql = yield* SqlClient;
-      const cycleId = event.attribution.cycleId;
-      const [opened] = yield* sql<{
-        n: number;
-      }>`SELECT count(*) AS n FROM projection_cycles WHERE cycle_id = ${cycleId}`;
-      const [selected] = yield* sql<{
-        n: number;
-      }>`SELECT count(*) AS n FROM events e JOIN event_cycles c ON c.event_seq = e.seq WHERE c.cycle_id = ${cycleId} AND e.kind = 'cycle.scope-selected@1'`;
-      if ((opened?.n || 0) > 0 || (selected?.n || 0) > 0)
-        return yield* new WorkflowRuleViolation({
-          eventId: event.id,
-          rule: "cycle-scope-already-bound",
-          message:
-            "A cycle's explicit scope is selected once, before the cycle opens.",
         });
       return;
     }

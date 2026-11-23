@@ -44,6 +44,7 @@ export const JobKind = z.enum([
   "review.run@2",
   "judgement.prepare@1",
   "scope.fetch",
+  "scope.fetch@2",
   "stack.fetch",
   "stack.index",
   "commit.hybrid",

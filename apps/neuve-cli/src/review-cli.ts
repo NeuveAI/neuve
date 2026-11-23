@@ -39,7 +39,6 @@ import { z } from "zod";
 import { ReceiptLists, Ulid } from "@neuve/records-schema";
 import {
   Blobs,
-  Caller,
   Computations,
   JobQueue,
   Log,
@@ -939,20 +938,6 @@ export const follow = async (
   }
 };
 
-/** Who asks (ST1): the agent session this command runs in, else the human git names, else unresolved. */
-const requester = (location: StoreLocation, repository: string) =>
-  Effect.gen(function* () {
-    const caller = yield* Caller.resolveCaller(location).pipe(
-      Effect.orElseSucceed(() => ({ _tag: "None" }) as const),
-    );
-    if (caller._tag === "Linked")
-      return { _tag: "Actor", actorId: caller.actorId } as const;
-    return Option.getOrElse(
-      yield* Request.gitHuman(repository),
-      (): Request.Requester => ({ _tag: "Unresolved" }),
-    );
-  });
-
 export type RangeReviewOptions = {
   readonly requester?: Request.Requester | undefined;
   readonly requestId?: string | undefined;
@@ -1036,7 +1021,8 @@ export const requestRangeReview = async (
               ? { externalSources: values.externalSources }
               : {}),
             requester:
-              values.requester ?? (yield* requester(store, repository)),
+              values.requester ??
+              (yield* Request.resolveRequester(store, repository)),
             stub,
             route,
             ...(leads === undefined ? {} : { leads }),
@@ -1330,7 +1316,16 @@ const precomputed = (repository: string, runId: string, at?: StoreLocation) => {
           // is there: a run whose leads are not stored either still runs them or ended without.
           const ended = leadsRecord?.["status"];
           const leadsEnd = typeof ended === "string" ? ended : undefined;
-          const scope = yield* Scope.storedSnapshot(cycleId);
+          const scopeKey = log.findLast(
+            (record) => record.type === "precompute.scope",
+          )?.["key"];
+          const scope = yield* Scope.storedSnapshot(
+            cycleId,
+            range,
+            typeof scopeKey === "string" && Scope.hasFixedScope(scopeKey)
+              ? scopeKey
+              : undefined,
+          );
           // The masked raw captures of fetched items (10.8): what a capture keeps, never the
           // unmasked text agents read.
           const captures = new Map<string, string>();

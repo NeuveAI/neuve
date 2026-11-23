@@ -24,7 +24,7 @@ import { Frame } from "./frame.ts";
 import { FindStored } from "./find.ts";
 import { ReviewMap, ChangeMap } from "./review-map.ts";
 import { RangeManifest } from "./manifest.ts";
-import { ScopeSnapshot } from "./scope.ts";
+import { snapshotByKey, type ScopeSnapshot } from "./scope.ts";
 import {
   codeStage,
   storedOutput,
@@ -305,7 +305,7 @@ export const fill = (
     const snapshot =
       input.setup.scopeKey === null
         ? undefined
-        : yield* storedOutput(ctx, input.setup.scopeKey, ScopeSnapshot);
+        : yield* withRecords(ctx, snapshotByKey(input.setup.scopeKey));
     const listed = yield* withRecords(
       ctx,
       Effect.result(
@@ -618,7 +618,7 @@ export const link = (
     const snapshot =
       input.setup.scopeKey === null
         ? undefined
-        : yield* storedOutput(ctx, input.setup.scopeKey, ScopeSnapshot);
+        : yield* withRecords(ctx, snapshotByKey(input.setup.scopeKey));
     const findings: Finding[] = [];
     const conditions: NonNullable<FindStored["conditions"]> = [];
     const disclosures: Disclosure[] = [];

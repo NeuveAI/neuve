@@ -2,6 +2,7 @@ import { accountReadRefused } from "@neuve/runtime";
 import { z } from "zod";
 import { safeRead } from "@neuve/records-schema";
 import { readData } from "@neuve/records-core";
+import { scopeFetchHandler } from "./scope.ts";
 import { INDEX_BOUNDS } from "./search-index.ts";
 import { withGitReadSnapshot } from "./git-read-snapshot.ts";
 import { startLogSpan, scopedLogSpan } from "./log-span.ts";
@@ -1400,6 +1401,7 @@ export const workerHandlers = (
   return {
     "review.run": handler,
     "review.run@2": handler,
+    "scope.fetch@2": scopeFetchHandler(options),
     // Complete queued trial-era preparation jobs without starting a review.
     "judgement.prepare@1": () => Effect.void,
   };
