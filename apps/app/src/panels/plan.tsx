@@ -1,12 +1,16 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+import type { Request } from "@ace/channel/protocol";
 import type { Listing } from "@ace/host/protocol";
-import { NOT_ALLOWED_TO_APPROVE, PlanView } from "@ace/ui";
+import { NOT_ALLOWED_TO_APPROVE, type PlanCommentActions, type PlanSelection, PlanView } from "@ace/ui";
 
+import { useAgentAvatar } from "../agent-avatar";
+import { AGENT_ALIAS } from "../agent-mention";
 import { useDetails } from "../details";
 import { host } from "../host";
 import { approvePlan } from "../plan-approve";
 import { planView } from "../plan-card";
+import { planCommentViews } from "../plan-comments";
 
 type Props = { channel: Listing; chat: number; user: string; plan?: string };
 
@@ -17,7 +21,10 @@ const NEWER = "The plan changed; its new version is loading";
 
 /** The chat's plan, at `plan` or its newest, read through the channel since its file is the host's. */
 export function Plan({ channel, chat, user, plan }: Props) {
-	const { plans, shared } = useDetails(channel.id);
+	const { plans, planComments, shared } = useDetails(channel.id);
+	const agentAvatar = useAgentAvatar();
+	const [sending, setSending] = useState(false);
+	const [sendError, setSendError] = useState<string>();
 	const people = useSyncExternalStore(host.subscribe, () => host.people);
 	const list = plans?.chat === chat ? plans.list : undefined;
 	// The channel shows one chat's plans; a tab saved for another chat's plan cannot read it here.
@@ -72,6 +79,29 @@ export function Plan({ channel, chat, user, plan }: Props) {
 		}
 	}
 
+	// Commenting asks the chat's agent, so it needs what approving needs, on the version read.
+	const { send: sendKept, ...actions } = planCommentRequests(
+		channel.id,
+		chat,
+		user,
+		shown.id,
+		current?.hash === shown.hash ? current.hash : undefined,
+	);
+	const comments = planComments?.chat === chat ? planComments.list : [];
+	const replaced = shown.state === "replaced";
+
+	async function send() {
+		setSending(true);
+		setSendError(undefined);
+		try {
+			await sendKept();
+		} catch (cause) {
+			setSendError((cause as Error).message);
+		} finally {
+			setSending(false);
+		}
+	}
+
 	return (
 		<PlanView
 			plan={planView(shown, (author) => author === user ? "you" : people[author] || author)}
@@ -80,6 +110,13 @@ export function Plan({ channel, chat, user, plan }: Props) {
 			approve={shown.state === "draft"
 				? { onApprove: () => void approve(), approving, blocked, error }
 				: undefined}
+			comments={{
+				list: planCommentViews(comments, shown.id, user, (author) => people[author] || author),
+				agent: AGENT_ALIAS.label,
+				agentAvatar,
+				...(mayApprove && !replaced ? actions : {}),
+			}}
+			send={mayApprove && !replaced ? { onSend: () => void send(), sending, error: sendError } : undefined}
 		/>
 	);
 }
@@ -90,4 +127,31 @@ function Note({ children }: { children: string }) {
 			{children}
 		</section>
 	);
+}
+
+/**
+ * The channel requests behind the Plan tab's comments. Nothing is shown from their answers: the
+ * tab draws what the channel's plan-comments event says.
+ */
+function planCommentRequests(
+	channel: string,
+	chat: number,
+	author: string,
+	plan: string,
+	hash: string | undefined,
+): Pick<PlanCommentActions, "keep" | "reply" | "edit" | "remove"> & { send: () => Promise<void> } {
+	const ask = async (request: Request) => {
+		await host.channel(channel, request);
+	};
+	return {
+		// Only the version the person read can be commented on.
+		keep: hash
+			? (selection: PlanSelection, text: string) =>
+				ask({ op: "plan-comment", chat, author, plan, hash, lines: selection.lines, quote: selection.quote, text })
+			: undefined,
+		reply: (comment, text) => ask({ op: "plan-comment-reply", chat, author, comment, text }),
+		edit: (comment, reply, text) => ask({ op: "plan-comment-edit", chat, author, comment, reply, text }),
+		remove: (comment, reply) => ask({ op: "plan-comment-remove", chat, author, comment, reply }),
+		send: () => ask({ op: "plan-comments-send", chat, author, plan, requestId: crypto.randomUUID() }),
+	};
 }

@@ -456,6 +456,7 @@ export function useTranscript(
 				agent: true,
 				stops: true,
 				plans: true,
+				planComments: true,
 				...(chat === undefined ? {} : { chat }),
 			}, {
 				event(event) {

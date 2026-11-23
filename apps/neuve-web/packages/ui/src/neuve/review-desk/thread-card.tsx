@@ -49,7 +49,11 @@ import { AgentAvatar } from "@workspace/ui/neuve/agents/agent-avatar"
 import { agentByIdAtom } from "@workspace/ui/neuve/agents/atoms"
 import { commentThreadAuthor } from "@workspace/ui/neuve/review-comments/record"
 import type { ReviewCommentRecord } from "@workspace/ui/neuve/review-comments/record"
-import { relativeTime } from "@workspace/ui/neuve/review-comments/thread"
+import {
+  deliveryLine,
+  relativeTime,
+  THREAD_STATUS,
+} from "@neuve/review-rules/comment-thread"
 import type {
   ReviewThread,
   ThreadAuthor,
@@ -191,12 +195,6 @@ function WorkingDots() {
       )}
     </span>
   )
-}
-
-const DELIVERY: Partial<Record<ThreadState, (agent: string) => string>> = {
-  queued: (agent) => `Queued · reaches ${agent} when it’s free`,
-  sent: (agent) => `Sent to ${agent}`,
-  "picked-up": (agent) => `Picked up by ${agent}`,
 }
 
 /** The state row under the latest message: working, needs input, failed. */
@@ -411,13 +409,9 @@ export function CommentPreviewCard({
   const reduce = useReducedMotion()
   const replies = thread?.messages.length ?? 0
   const status: Record<ThreadState, string> = {
-    queued: "queued",
-    sent: "sent",
-    "picked-up": "picked up",
-    working: "working",
-    replied: replies > 0 ? "replied" : "",
+    ...THREAD_STATUS,
+    replied: replies > 0 ? THREAD_STATUS.replied : "",
     "needs-input": "needs your input",
-    failed: "failed",
   }
   const state = thread ? status[thread.state] : ""
   return (
@@ -519,7 +513,8 @@ export function ThreadCard({
   const lastHuman = [...messages]
     .reverse()
     .find((message) => message.author.kind === "human")
-  const deliveryText = DELIVERY[state]?.(agent.name)
+  const deliveryText =
+    state === "needs-input" ? undefined : deliveryLine(state, agent.name)
   const draft = drafts[record.id] ?? ""
   const canReply = agentId !== undefined && (state === "replied" || !thread)
   const resolved = record.status === "resolved"

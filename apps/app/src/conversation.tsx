@@ -303,8 +303,13 @@ export function Conversation(
 	]);
 
 	useEffect(() => {
-		if (transcript.live) publish(channel.id, { plans: { chat: id, list: transcript.plans } });
-	}, [channel.id, id, transcript.live, transcript.plans]);
+		if (transcript.live) {
+			publish(channel.id, {
+				plans: { chat: id, list: transcript.plans },
+				planComments: { chat: id, list: transcript.planComments },
+			});
+		}
+	}, [channel.id, id, transcript.live, transcript.plans, transcript.planComments]);
 
 	useEffect(() => {
 		if (transcript.live) onWork?.();
