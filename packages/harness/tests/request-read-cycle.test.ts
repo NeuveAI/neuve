@@ -3,9 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import { Effect, Layer } from "effect";
+import { Deferred, Duration, Effect, Fiber, Layer } from "effect";
 import type { FileSystem } from "effect/FileSystem";
 import type { SqlClient } from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import {
   Blobs,
   Computations,
@@ -13,6 +14,7 @@ import {
   Identity,
   JobQueue,
   Log,
+  Queries,
   Store,
   storeLocationIn,
 } from "@neuve/records-core";
@@ -63,15 +65,20 @@ const fixture = () => {
       frozenConfig: defaultConfig(),
       ...overrides,
     });
-  const read = (branch = "work") =>
+  const read = (
+    branch = "work",
+    revision = base,
+    selectScope?: Parameters<typeof Cycles.openOrJoinCycle<never, never>>[2],
+  ) =>
     Cycles.openOrJoinCycle(
       {
-        baseOid: base,
-        baseRef: base,
+        baseOid: revision,
+        baseRef: revision,
         branch: branch,
         branchTipOid: git("rev-parse", "refs/heads/" + branch),
       },
       Identity.UNRESOLVED_ACTOR,
+      selectScope,
     );
   const run = <A, E>(
     effect: Effect.Effect<
@@ -108,13 +115,13 @@ const scopeJobs = Effect.gen(function* () {
   );
 });
 
-// A request can join a read even after the branch advances, and the binding preserves its first fetch.
-test("binds the newest eligible read cycle without adding a second scope job", async () => {
+// A different review base can silently select another branch's scope.
+test("binds the newest eligible read cycle across bases without a second scope job", async () => {
   const repo = fixture();
   const result = await repo.run(
     Effect.gen(function* () {
       yield* repo.read("earlier");
-      const read = yield* repo.read();
+      const read = yield* repo.read("work", repo.head);
       yield* repo.read("unrelated");
       const review = yield* repo.request();
       const events = yield* Log.history({ cycleId: read.cycleId });
@@ -131,7 +138,7 @@ test("binds the newest eligible read cycle without adding a second scope job", a
     "review.requested@1",
   ]);
   expect(result.events[0]?.event).toMatchObject({
-    payload: { branch: "work", branchTipOid: repo.tip },
+    payload: { baseOid: repo.head, branch: "work", branchTipOid: repo.tip },
   });
   expect(result.events[1]?.event).toMatchObject({
     idempotencyKey: `cycle:${cycleId}`,
@@ -244,24 +251,113 @@ test("refuses to open a review cycle when Git cannot list local branches", async
   expect(openings).toEqual([]);
 });
 
-// A second head must keep its own range even when both heads belong to the read's branch.
-test("opens a separate cycle when the read cycle is bound to another head", async () => {
+// A request that has yet to publish can silently absorb the next round's scope.
+test("the next read starts a cycle that a review of the newer head joins", async () => {
   const repo = fixture();
-  const { read, first, second } = await repo.run(
+  const { read, first, nextRead, second } = await repo.run(
     Effect.gen(function* () {
       const read = yield* repo.read();
       const first = yield* repo.request();
+      const nextRead = yield* repo.read();
       const second = yield* repo.request(repo.tip);
-      return { read, first, second };
+      return { read, first, nextRead, second };
     }),
   );
   expect(first.cycleId).toBe(read.cycleId);
-  expect(second.cycleId).not.toBe(read.cycleId);
-  expect(second.openedCycle).toBe(true);
+  expect(nextRead.opened).toBe(true);
+  expect(nextRead.cycleId).not.toBe(read.cycleId);
+  expect(second.cycleId).toBe(nextRead.cycleId);
+  expect(second.openedCycle).toBe(false);
   expect(second.events[0]).toMatchObject({
     kind: "cycle.opened@1",
     attribution: { range: { headOid: repo.tip } },
   });
+});
+
+// Counting from the opening can discard active scope, and waiting past seven days can reuse swept scope.
+test("a recorded query resets the seven-day idle window", async () => {
+  const repo = fixture();
+  const { first, inside, expired, jobs } = await repo.run(
+    Effect.gen(function* () {
+      const now = Date.UTC(2026, 10, 1);
+      const day = Duration.toMillis(Duration.days(1));
+      yield* TestClock.setTime(now);
+      const first = yield* repo.read();
+      yield* TestClock.setTime(now + day);
+      yield* Queries.record({
+        actor: Identity.UNRESOLVED_ACTOR,
+        attribution: { cycleId: first.cycleId },
+        question: "What is the scope?",
+        payload: {
+          revision: repo.base,
+          maxResults: 1,
+          maxContextBytes: 1_000,
+          cache: "reuse",
+          profile: "full",
+          relationshipPlanSize: 0,
+          outcome: "completed",
+          candidatesReturned: 0,
+          relationships: 0,
+          resultBytes: 0,
+          resultsDroppedByBudget: 0,
+          snippetsTruncatedByBudget: 0,
+          startedAt: new Date(now + day).toISOString(),
+          elapsedMs: 0,
+        },
+      });
+      yield* TestClock.setTime(now + 8 * day - 1);
+      const inside = yield* repo.read();
+      yield* TestClock.setTime(now + 8 * day);
+      const expired = yield* repo.read();
+      return { first, inside, expired, jobs: yield* scopeJobs };
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+  expect(inside).toEqual({ cycleId: first.cycleId, opened: false });
+  expect(expired.opened).toBe(true);
+  expect(expired.cycleId).not.toBe(first.cycleId);
+  expect(jobs.map((job) => job.dedupeKey)).toEqual([
+    `scope.fetch:${first.cycleId}`,
+    `scope.fetch:${expired.cycleId}`,
+  ]);
+});
+
+// Racing first reads at different revisions can silently split a branch's scope.
+test("racing first reads at different revisions share one cycle", async () => {
+  const repo = fixture();
+  const { first, second, openings, jobs } = await repo.run(
+    Effect.gen(function* () {
+      const selecting = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const first = yield* Effect.forkChild(
+        repo.read("work", repo.base, () =>
+          Deferred.succeed(selecting, undefined).pipe(
+            Effect.andThen(Deferred.await(resume)),
+            Effect.as(undefined),
+          ),
+        ),
+      );
+      yield* Deferred.await(selecting);
+      const second = yield* repo.read("work", repo.head);
+      yield* Deferred.succeed(resume, undefined);
+      return {
+        first: yield* Fiber.join(first),
+        second,
+        openings: yield* Log.history({ kind: "cycle.opened@2" }),
+        jobs: yield* scopeJobs,
+      };
+    }),
+  );
+  expect(second.opened).toBe(true);
+  expect(first).toEqual({ cycleId: second.cycleId, opened: false });
+  expect(openings.map(({ event }) => event)).toEqual([
+    expect.objectContaining({
+      attribution: { cycleId: second.cycleId },
+      payload: expect.objectContaining({ baseOid: repo.head }),
+    }),
+  ]);
+  expect(jobs.map((job) => job.dedupeKey)).toEqual([
+    `scope.fetch:${second.cycleId}`,
+  ]);
 });
 
 // An explicit scope selection must be recorded before its own opening.

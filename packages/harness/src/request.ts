@@ -662,16 +662,14 @@ export const requestReview = (options: ReviewOptions) =>
               { cause: containing },
             ),
           );
-        const readCycle =
+        const readCycleId =
           containing !== undefined && containing.size > 0
-            ? (yield* Cycles.unboundReadCycles(range.baseOid)).find((cycle) =>
-                containing.has(cycle.branch),
-              )
+            ? yield* Cycles.newestOpenReadCycle(containing)
             : undefined;
         const cycleId =
           joined !== undefined && joined.event.kind === "cycle.opened@1"
             ? joined.event.attribution.cycleId
-            : (readCycle?.cycleId ?? mintUlid());
+            : (readCycleId ?? mintUlid());
         const selections =
           selected && joined !== undefined
             ? yield* Log.history({
@@ -808,7 +806,7 @@ export const requestReview = (options: ReviewOptions) =>
           runKey,
           generation,
           cycleId,
-          openedCycle: joined === undefined && readCycle === undefined,
+          openedCycle: joined === undefined && readCycleId === undefined,
           actor,
           complete,
           events: events.map((event) => RecordEvent.parse(event)),

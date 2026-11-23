@@ -13,9 +13,9 @@ import {
   Ancestry,
   Blobs,
   Computations,
+  Cycles,
   Identity,
-  Log,
-  mintUlid,
+  JobQueue,
   Sessions,
   storeLocationIn,
   WRITER_VERSION,
@@ -31,8 +31,10 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { settingsPath } from "../../../packages/harness/src/settings.ts";
+import { defaultConfig } from "../../../packages/harness/src/config.ts";
 import { mcpClientsLayer } from "../../../packages/harness/src/mcp-client.ts";
+import { requestReview } from "../../../packages/harness/src/request.ts";
+import { settingsPath } from "../../../packages/harness/src/settings.ts";
 import {
   fetchCyclePart,
   readScopeOpening,
@@ -425,7 +427,7 @@ describe("neuve CLI boundary", () => {
     });
   });
 
-  // The cycle job and a later query must read the same pinned bytes after the working file changes.
+  // A later tree can hide a pinned document or its linked context.
   test("holds named scope at the opening read and returns it on a join", async () => {
     const { root } = await fixtureRepository();
     const scratch = await mkdtemp(join(tmpdir(), "neuve-cli-scope-"));
@@ -592,18 +594,30 @@ describe("neuve CLI boundary", () => {
 
     const late = join(await realpath(scratch), "late-plan");
     await Bun.write(late, "A later plan.\n");
+    await Bun.write(join(root, "decision"), "# A later decision\n");
+    await rm(join(root, "guide"));
+    expect(
+      execute(["git", "commit", "-qam", "Change scope documents"], root)
+        .exitCode,
+    ).toBe(0);
+    const laterRevision = execute(
+      ["git", "rev-parse", "HEAD"],
+      root,
+    ).stdout.trim();
     const branch = execute(
       ["git", "branch", "--show-current"],
       root,
     ).stdout.trim();
     const reviewer = join(scratch, "reviewer");
     expect(
-      execute(["git", "worktree", "add", "--detach", reviewer, revision], root)
-        .exitCode,
+      execute(
+        ["git", "worktree", "add", "--detach", reviewer, laterRevision],
+        root,
+      ).exitCode,
     ).toBe(0);
     const joined = await run(
       [
-        ...queryArgs(reviewer, revision),
+        ...queryArgs(reviewer, laterRevision),
         "--branch",
         branch,
         "--scope",
@@ -747,6 +761,82 @@ describe("neuve CLI boundary", () => {
         run([...queryArgs(root, base), ...options], env),
     };
   };
+
+  // A cycle with no pins or guide can silently ignore a file named on a later read.
+  test("discloses late named scope in an empty cycle", async () => {
+    const { root, plan, query } = await scopeQueryFixture();
+    const first = await query([]);
+    expect(first.exitCode, first.stderr).toBe(0);
+    const [opening] = await queryHistory(root, "cycle.opened@2");
+
+    const later = await query(["--scope", plan]);
+    expect(later.exitCode, later.stderr).toBe(0);
+    expect(JSON.parse(later.stdout)).toMatchObject({
+      cycle_id: opening.event.attribution.cycleId,
+      scope: [],
+      scope_gaps: [
+        `${plan}: Only the first query can add files to a review cycle's scope.`,
+      ],
+    });
+  });
+
+  // A later query can cache the wrong guide or report a lost blob as still fetched.
+  test("builds scope from the opening guide and discloses a lost blob", async () => {
+    const { root, query } = await scopeQueryFixture();
+    const guide = join(root, "AGENTS.md");
+    const text = "# Opening guide\n";
+    await Bun.write(guide, text);
+    expect(execute(["git", "add", "AGENTS.md"], root).exitCode).toBe(0);
+    expect(execute(["git", "commit", "-qm", "Add guide"], root).exitCode).toBe(
+      0,
+    );
+    const base = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+    const blob = execute(
+      ["git", "rev-parse", "HEAD:AGENTS.md"],
+      root,
+    ).stdout.trim();
+    const branch = execute(
+      ["git", "branch", "--show-current"],
+      root,
+    ).stdout.trim();
+    const { cycleId } = await executeRecords(
+      withStore(
+        root,
+        "write",
+        Cycles.openOrJoinCycle(
+          { baseRef: base, baseOid: base, branch, branchTipOid: base },
+          Identity.UNRESOLVED_ACTOR,
+        ),
+      ),
+    );
+    await Bun.write(guide, "# Current guide\n");
+    expect(
+      execute(["git", "commit", "-qam", "Edit guide"], root).exitCode,
+    ).toBe(0);
+    const head = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+
+    const result = await query([], head);
+    expect(result.exitCode, result.stderr).toBe(0);
+    const ref = { path: "AGENTS.md", blob, revision: base };
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      cycle_id: cycleId,
+      scope: [{ ref, text, contextOnly: true, stratum: "context only" }],
+      scope_gaps: [],
+    });
+
+    await rm(join(root, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+    const missing = await query([], head);
+    expect(missing.exitCode, missing.stderr).toBe(0);
+    const gap = "The document's Git blob could not be read.";
+    const answer = JSON.parse(missing.stdout);
+    expect(answer).toMatchObject({
+      cycle_id: cycleId,
+      retrieval: { status: "ok" },
+      scope: [{ ref, status: "gap", gap }],
+      scope_gaps: [`AGENTS.md: ${gap}`],
+    });
+    expect(answer.scope[0].text).toBeUndefined();
+  });
 
   // A failed scope copy must leave a plain gap and log the filesystem cause.
   test("logs the cause when a named scope copy cannot be written", async () => {
@@ -1232,85 +1322,55 @@ describe("neuve CLI boundary", () => {
     expect(scopeJobs(root)).toHaveLength(1);
   });
 
-  // Either packet version closes the read cycle so the next read can fetch fresh scope.
-  test.each(["packet.published@1", "packet.published@2"])(
-    "opens the next cycle after %s",
-    async (kind) => {
-      const { root, revision } = await fixtureRepository();
-      await createRecords(root);
-      const graph = await fakeGraph();
-      const args = queryArgs(root, revision);
-      const env = { NEUVE_GRAPH_BINARY: graph.executable };
-      const before = await run(args, env);
-      expect(before.exitCode).toBe(0);
-      const [first] = await queryHistory(root, "cycle.opened@2");
-      const id = mintUlid();
-      const counts = {
-        batches: 0,
-        units: 0,
-        contextReferences: 0,
-        assessments: 0,
-        deliveries: 0,
-        dispositions: 0,
-        comments: 0,
-        gaps: 0,
-      };
-      await executeRecords(
-        withStore(
-          root,
-          "write",
-          Log.append([
-            {
-              id,
-              kind,
-              idempotencyKey: `packet:${id}`,
-              actor: first.event.actor,
-              occurredAt: new Date().toISOString(),
-              attribution: {
-                cycleId: first.event.attribution.cycleId,
-                range: {
-                  baseRef: revision,
-                  baseOid: revision,
-                  headOid: revision,
-                },
-                runId: "published",
-              },
-              refs: [{ ref: `blob:${"a".repeat(64)}`, role: "manifest" }],
-              payload:
-                kind === "packet.published@1"
-                  ? { complete: true, counts }
-                  : {
-                      complete: true,
-                      ordinal: 1,
-                      counts: {
-                        ...counts,
-                        sections: 0,
-                        pending: { batches: 0, sections: 0 },
-                        undecided: {},
-                      },
-                      added: {
-                        batches: 0,
-                        units: 0,
-                        sections: 0,
-                        undecided: {},
-                      },
-                    },
-            },
-          ]),
+  // A query can silently keep using the previous scope while its review is queued.
+  test("opens the next cycle after a review request", async () => {
+    const { root, revision } = await fixtureRepository();
+    await createRecords(root);
+    const graph = await fakeGraph();
+    const args = queryArgs(root, revision);
+    const env = {
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+    };
+    const before = await run(args, env);
+    expect(before.exitCode, before.stderr).toBe(0);
+    const [first] = await queryHistory(root, "cycle.opened@2");
+    expect(
+      execute(["git", "commit", "--allow-empty", "-qm", "Reviewed head"], root)
+        .exitCode,
+    ).toBe(0);
+    const review = await executeRecords(
+      withStore(root, "write", (location) =>
+        requestReview({
+          repository: root,
+          location,
+          range: `${revision}..HEAD`,
+          requester: { _tag: "Unresolved" },
+          frozenConfig: defaultConfig(),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              JobQueue.layer,
+              Computations.layer.pipe(
+                Layer.provideMerge(Blobs.layer(location)),
+              ),
+            ),
+          ),
         ),
-      );
-      expect(await run(args, env)).toEqual(before);
-      const openings = await queryHistory(root, "cycle.opened@2");
-      expect(openings).toHaveLength(2);
-      expect(openings[1].event.attribution.cycleId).not.toBe(
-        first.event.attribution.cycleId,
-      );
-      expect(openings[1].event.idempotencyKey).not.toBe(
-        first.event.idempotencyKey,
-      );
-      expect(scopeJobs(root)).toHaveLength(2);
-    },
-  );
+      ),
+    );
+    expect(review.cycleId).toBe(first.event.attribution.cycleId);
+    expect(await run(args, env)).toEqual(before);
+    const openings = await queryHistory(root, "cycle.opened@2");
+    expect(openings).toHaveLength(2);
+    const next = openings[1].event.attribution.cycleId;
+    expect(next).not.toBe(review.cycleId);
+    expect(await queryHistory(root)).toMatchObject([
+      { event: { attribution: { cycleId: review.cycleId } } },
+      { event: { attribution: { cycleId: next } } },
+    ]);
+    expect(scopeJobs(root)).toHaveLength(2);
+  });
 
   // Detached reads only need branch advice when they can record a cycle.
   test("warns once for detached HEAD without an explicit branch", async () => {
