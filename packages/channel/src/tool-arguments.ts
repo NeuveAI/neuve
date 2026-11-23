@@ -43,7 +43,8 @@ export function toolArguments<Arguments>(
 	const parameters = actions
 		? z.strictObject({ action: z.enum([...actions.keys()]), ...properties })
 		: schema;
-	const jsonSchema = z.toJSONSchema(parameters, { target: "draft-07" });
+	// zod hides its validators on the result; TypeBox would copy them into the schema a runtime is served.
+	const jsonSchema: z.core.JSONSchema.BaseSchema = JSON.parse(JSON.stringify(z.toJSONSchema(parameters, { target: "draft-07" })));
 	// Pi's native TypeBox fields accept conversions that its JSON-schema fallback does not.
 	const coercers = coerce ? Object.entries(jsonSchema.properties ?? {}).map(([key, field]) => {
 		const type = typeof field === "object" ? field.type : undefined;
