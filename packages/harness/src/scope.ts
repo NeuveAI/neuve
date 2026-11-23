@@ -13,11 +13,11 @@ import {
 import { open, realpath } from "node:fs/promises";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { Clock, Context, Data, Duration, Effect, Option, Tracer } from "effect";
-import { SqlClient } from "effect/sql/SqlClient";
 import { z } from "zod";
 import {
   Blobs,
   Computations,
+  Cycles,
   Log,
   STORE_DIRECTORY_MODE,
   STORE_FILE_MODE,
@@ -788,6 +788,23 @@ const LocalScope = z.strictObject({
 });
 type LocalScope = z.infer<typeof LocalScope>;
 
+const gitBlobText = (
+  blob: string | undefined,
+  bytes: Uint8Array | undefined,
+): ScopeTextRead =>
+  bytes === undefined
+    ? {
+        gap: "The document's Git blob could not be read.",
+        cause:
+          blob === undefined
+            ? "Git has no blob ID for the citation."
+            : `Git returned no bytes for blob ${blob}.`,
+      }
+    : decodeScopeText(
+        bytes,
+        "The document's Git blob is not readable as text.",
+      );
+
 const gitDocumentText = (
   entry: TreeEntry | undefined,
   bytes: Uint8Array | undefined,
@@ -799,18 +816,7 @@ const gitDocumentText = (
     (bytes?.byteLength ?? 0) > MAX_DOCUMENT_BYTES
   )
     return { gap: fileOverBound };
-  if (bytes === undefined)
-    return {
-      gap: "The document's Git blob could not be read.",
-      cause:
-        entry === undefined
-          ? "Git has no tree entry for the citation."
-          : `Git returned no bytes for blob ${entry.oid}.`,
-    };
-  return decodeScopeText(
-    bytes,
-    "The document's Git blob is not readable as text.",
-  );
+  return gitBlobText(entry?.oid, bytes);
 };
 
 const localScopeSources = (
@@ -993,7 +999,6 @@ const fetchCycleLocalScope = (
   copy: ScopeCopy,
   base: string,
   pins: LocalSelection | undefined,
-  read?: LocalScopeRead,
 ) => {
   const run = jsonComputation(
     {
@@ -1007,7 +1012,7 @@ const fetchCycleLocalScope = (
         repository,
         base,
         pins ?? { root: repository, sources: [], omitted: 0 },
-        read ?? { entries: yield* localTree(repository, base) },
+        { entries: yield* localTree(repository, base) },
         copy,
       );
     }),
@@ -1051,35 +1056,29 @@ const validateHeldScope = <
 
 const localScopeAnswer = (
   repository: string,
-  read: LocalScopeRead,
   scope: LocalScope,
   copy?: ScopeCopy,
 ) =>
   Effect.gen(function* () {
     const { gaps, causes, gap: disclose } = gapsOf(scope);
-    const documents = yield* documentBlobs(
+    const documents = yield* readBlobs(
       repository,
-      scope.sources.flatMap((source) =>
-        source.kind === "repository-document" && source.status === "fetched"
-          ? [read.entries.get(source.title)]
-          : [],
+      scope.sources.flatMap(({ ref, status }) =>
+        status === "fetched" && ref.blob !== undefined ? [ref.blob] : [],
       ),
-      read.contents,
     );
     const sources: LocalScopeSource[] = scope.sources.map((source) => {
       if (source.status === "gap") return source;
-      const text =
+      const { blob } = source.ref;
+      const read =
         source.kind === "working-file" && copy !== undefined
           ? heldLocalText(copy, source.id, source.sha256)
-          : gitDocumentText(
-              read.entries.get(source.title),
-              documents.get(source.ref.blob ?? ""),
-            );
-      if (text.gap !== undefined) {
-        disclose(`${source.title}: ${text.gap}`, text.cause);
-        return sourceWithGap(source, text.gap);
+          : gitBlobText(blob, documents.get(blob ?? ""));
+      if (read.gap !== undefined) {
+        disclose(`${source.title}: ${read.gap}`, read.cause);
+        return sourceWithGap(source, read.gap);
       }
-      return { ...source, text: text.text };
+      return { ...source, text: read.text };
     });
     return { sources, gaps, causes };
   });
@@ -1093,6 +1092,9 @@ export const queryLocalScope = (
   copy: ScopeCopy,
 ) =>
   Effect.gen(function* () {
+    const { baseOid } = yield* Effect.fromNullishOr(
+      yield* readScopeOpening(copy.cycleId),
+    );
     const pins = yield* selectedLocalScope(copy.cycleId);
     const held = new Set(
       pins?.sources.flatMap((pin) => [pin.path, ...pin.namedAs]),
@@ -1104,16 +1106,8 @@ export const queryLocalScope = (
       gaps.push(
         `The request named more than ${MAX_SCOPE_DOCUMENTS} documents.`,
       );
-    if (pins === undefined && !read.entries.has(AGENT_GUIDE.path))
-      return { sources: [], gaps, causes: [] };
-    const scope = yield* fetchCycleLocalScope(
-      repository,
-      copy,
-      read.base,
-      pins,
-      read,
-    );
-    const answer = yield* localScopeAnswer(repository, read, scope, copy);
+    const scope = yield* fetchCycleLocalScope(repository, copy, baseOid, pins);
+    const answer = yield* localScopeAnswer(repository, scope, copy);
     return { ...answer, gaps: [...answer.gaps, ...gaps] };
   });
 
@@ -1147,7 +1141,7 @@ export const queryUnheldLocalScope = (
         return text === undefined ? [] : [[source.path, text] as const];
       }),
     );
-    return yield* localScopeAnswer(repository, read, scope);
+    return yield* localScopeAnswer(repository, scope);
   });
 
 const documentSources = (options: {
@@ -2029,9 +2023,6 @@ export const readScopeText = (
   return bytes === undefined ? { cause } : { text: bytes.toString("utf8") };
 };
 
-/** 10.79's cap: a cycle's unmasked scope copy goes after this long with no run in the cycle. */
-export const SCOPE_COPY_IDLE_MS = 7 * 24 * 60 * 60 * 1_000;
-
 /** Masked captures have their own 30-day retention. */
 export const deleteCycleScope = (location: StoreLocation, cycleId: string) =>
   Effect.sync(() => {
@@ -2039,24 +2030,6 @@ export const deleteCycleScope = (location: StoreLocation, cycleId: string) =>
     const existed = existsSync(folder);
     rmSync(folder, { recursive: true, force: true });
     return existed;
-  });
-
-/**
- * When the cycle last saw a run, from Records: the latest of its opening, its review requests (a
- * run's start) and its stage and run completions (a run's progress and finish). None when Records
- * holds nothing for the cycle.
- */
-const lastRunActivity = (cycleId: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient;
-    const [row] = yield* sql<{
-      at: string | null;
-    }>`SELECT max(e.recorded_at) AS at
-      FROM events e LEFT JOIN event_cycles c ON c.event_seq = e.seq
-      WHERE c.cycle_id = ${cycleId} OR json_extract(e.envelope, '$.attribution.cycleId') = ${cycleId}`;
-    return row?.at === null || row?.at === undefined
-      ? Option.none<number>()
-      : Option.some(Date.parse(row.at));
   });
 
 /**
@@ -2070,11 +2043,11 @@ const dueScopeCopies = (location: StoreLocation) =>
     const now = yield* Clock.currentTimeMillis;
     const due: Array<{ cycleId: string; reason: string }> = [];
     for (const cycleId of readdirSync(root)) {
-      const last = yield* lastRunActivity(cycleId);
+      const last = yield* Cycles.lastRunActivity(cycleId);
       const at = Option.isSome(last)
         ? last.value
         : statSync(join(root, cycleId)).mtimeMs;
-      if (now - at >= SCOPE_COPY_IDLE_MS)
+      if (Cycles.isIdle(now, at))
         due.push({
           cycleId,
           reason: `no run in the cycle since ${new Date(at).toISOString()} (${Option.isSome(last) ? "from Records" : "folder time; Records holds no run for it"})`,

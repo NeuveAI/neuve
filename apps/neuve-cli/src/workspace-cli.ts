@@ -1037,6 +1037,7 @@ async function workspace(args: readonly string[]): Promise<number> {
           web.project,
           `${base}..${head}`,
           {
+            branchCheckout: handoff.cwd,
             ...(origin === undefined ? {} : { origin }),
             ...(externalSources === undefined ? {} : { externalSources }),
             ...(handoff.source

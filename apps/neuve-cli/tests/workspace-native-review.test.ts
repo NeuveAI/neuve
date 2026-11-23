@@ -16,6 +16,8 @@ import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import {
   Blobs,
+  Cycles,
+  Identity,
   JobQueue,
   Log,
   ReviewOrigins,
@@ -979,6 +981,61 @@ test("abandoned and rejected admissions are not discovered as review runs", asyn
     ),
   ).toBeFalse();
 }, 30000);
+
+// A lane's review can lose its scope if admission uses the project's checkout.
+test("a workspace review takes the lane checkout's open cycle", async () => {
+  const cwd = join(root, "feature-checkout");
+  git("worktree", "add", "-q", "-b", "feature", cwd, head);
+  try {
+    git("-C", cwd, "commit", "--allow-empty", "-qm", "Lane change");
+    const laneHead = git("-C", cwd, "rev-parse", "HEAD");
+    const { cycleId } = await execute(
+      withStore(
+        root,
+        "create",
+        Cycles.openOrJoinCycle(
+          {
+            baseRef: head,
+            baseOid: head,
+            branch: "feature",
+            branchTipOid: laneHead,
+          },
+          Identity.UNRESOLVED_ACTOR,
+        ),
+      ),
+    );
+    const intent = prepared();
+    const review = requireReview(
+      await callbacks.reviewSubmit(
+        {
+          ...intent,
+          target: { kind: "lane" },
+          handoff: {
+            ...intent.handoff,
+            cwd,
+            lane: "feature",
+            branch: "feature",
+            base: head,
+            head: laneHead,
+            channel: "native-lane-fixture",
+            origin: {
+              kind: "channel",
+              host: "fixture",
+              channel: "native-lane-fixture",
+              chat: 0,
+              lane: "feature",
+              items: [],
+            },
+          },
+        },
+        async () => {},
+      ),
+    );
+    expect(review.reference).toBe(cycleId);
+  } finally {
+    git("worktree", "remove", cwd);
+  }
+});
 
 // Why: the card is what Ace shows a person. A run of the new shape publishes a chain of cumulative
 // packets, so the card's own packet is the run's newest, not its first: it is exact while it

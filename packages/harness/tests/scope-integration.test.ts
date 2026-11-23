@@ -6,13 +6,7 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Context, Effect, Exit, Option, Scope } from "effect";
-import {
-  Computations,
-  Cycles,
-  Identity,
-  Log,
-  mintUlid,
-} from "@neuve/records-core";
+import { Computations, Cycles, Identity, mintUlid } from "@neuve/records-core";
 import { IntegrationServer, type Integrations } from "../src/integrations.ts";
 import { sourceFreshness } from "../src/freshness.ts";
 import {
@@ -413,7 +407,7 @@ test("a joined review adds range sources without starting or calling the integra
   }
 }, 30_000);
 
-// A commit between the first read and the scope fetch belongs to the next cycle.
+// A ticket first named after the opening read can be missed if the next read reuses that scope.
 test("pins commits at the first read and fetches the deferred ticket next cycle", async () => {
   process.env["FIXTURE_TOKEN"] = "fixture-token-value";
   const f = await scopeFixture(
@@ -439,42 +433,6 @@ test("pins commits at the first read and fetches the deferred ticket next cycle"
       "Ticket NEU-13 was named after this cycle's scope was read.",
     );
     expect(f.calls()).toEqual(["start"]);
-    const request = review.events.find(
-      (event) => event.kind === "review.requested@1",
-    );
-    if (request === undefined) throw new Error("No review request to publish");
-    const id = mintUlid();
-    await f.run(
-      Log.append([
-        {
-          id,
-          kind: "packet.published@1",
-          idempotencyKey: "packet:" + id,
-          actor: review.actor,
-          occurredAt: new Date().toISOString(),
-          attribution: {
-            cycleId: review.cycleId,
-            range: review.range,
-            runId: request.id,
-          },
-          refs: [{ ref: "blob:" + "a".repeat(64), role: "manifest" }],
-          payload: {
-            complete: true,
-            counts: {
-              batches: 0,
-              units: 0,
-              contextReferences: 0,
-              assessments: 0,
-              deliveries: 0,
-              dispositions: 0,
-              comments: 0,
-              gaps: 0,
-            },
-          },
-        },
-      ]),
-    );
-
     const second = await f.run(f.open());
     expect(second.opened).toBe(true);
     expect(second.cycleId).not.toBe(first.cycleId);

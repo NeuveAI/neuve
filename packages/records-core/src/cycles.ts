@@ -12,43 +12,41 @@ type LocalScopeSelection = Extract<
   { kind: "cycle.local-scope-selected@1" }
 >;
 
-export const unboundReadCycles = (baseOid: string) =>
+const SCOPE_COPY_IDLE_MS = 7 * 24 * 60 * 60 * 1_000;
+
+export const isIdle = (now: number, lastRunAt: number) =>
+  now - lastRunAt >= SCOPE_COPY_IDLE_MS;
+
+export const lastRunActivity = (cycleId: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
-    return yield* sql<{ cycleId: string; branch: string }>`WITH openings AS (
-      SELECT seq,
-        json_extract(envelope, '$.attribution.cycleId') AS cycle_id,
-        json_extract(envelope, '$.payload.branch') AS branch
-      FROM events WHERE kind = 'cycle.opened@2'
-        AND json_extract(envelope, '$.payload.baseOid') = ${baseOid}
-    )
-    SELECT cycle_id, branch FROM openings
-    WHERE NOT EXISTS (
-        SELECT 1 FROM event_cycles c JOIN events p ON p.seq = c.event_seq
-        WHERE c.cycle_id = openings.cycle_id
-          AND p.kind IN ('packet.published@1', 'packet.published@2')
-      ) AND NOT EXISTS (
-        SELECT 1 FROM projection_cycles p WHERE p.cycle_id = openings.cycle_id
-      )
-    ORDER BY seq DESC`;
+    const [row] = yield* sql<{
+      at: string | null;
+    }>`SELECT max(e.recorded_at) AS at
+      FROM events e LEFT JOIN event_cycles c ON c.event_seq = e.seq
+      WHERE c.cycle_id = ${cycleId} OR json_extract(e.envelope, '$.attribution.cycleId') = ${cycleId}`;
+    return Option.map(Option.fromNullishOr(row?.at), Date.parse);
   });
 
-const latestReadCycle = (baseOid: string, branch: string) =>
+export const branchReadCycle = (branch: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
-    const [latest] = yield* sql<{ cycleId: string; published: 0 | 1 }>`SELECT
+    const [cycle] = yield* sql<{ cycleId: string; taken: 0 | 1 }>`SELECT
       json_extract(e.envelope, '$.attribution.cycleId') AS cycle_id,
-      EXISTS (
-        SELECT 1 FROM event_cycles c JOIN events p ON p.seq = c.event_seq
-        WHERE c.cycle_id = json_extract(e.envelope, '$.attribution.cycleId')
-          AND p.kind IN ('packet.published@1', 'packet.published@2')
-      ) AS published
+      p.cycle_id IS NOT NULL AS taken
     FROM events e
+    LEFT JOIN projection_cycles p ON p.cycle_id = json_extract(e.envelope, '$.attribution.cycleId')
     WHERE e.kind = 'cycle.opened@2'
-      AND json_extract(e.envelope, '$.payload.baseOid') = ${baseOid}
       AND json_extract(e.envelope, '$.payload.branch') = ${branch}
     ORDER BY e.seq DESC LIMIT 1`;
-    return latest;
+    if (cycle === undefined) return undefined;
+    if (cycle.taken) return { cycleId: cycle.cycleId, open: false };
+    const last = yield* lastRunActivity(cycle.cycleId);
+    const now = yield* Clock.currentTimeMillis;
+    return {
+      cycleId: cycle.cycleId,
+      open: Option.exists(last, (at) => !isIdle(now, at)),
+    };
   });
 
 export const openOrJoinCycle = <E = never, R = never>(
@@ -59,14 +57,13 @@ export const openOrJoinCycle = <E = never, R = never>(
   ) => Effect.Effect<LocalScopeSelection["payload"] | undefined, E, R>,
 ) =>
   Effect.gen(function* () {
-    const latest = yield* latestReadCycle(payload.baseOid, payload.branch);
-    if (latest?.published === 0)
-      return { cycleId: latest.cycleId, opened: false };
+    const latest = yield* branchReadCycle(payload.branch);
+    if (latest?.open) return { cycleId: latest.cycleId, opened: false };
 
     const cycleId = mintUlid();
     const id = mintUlid();
     const key = sha256Hex(
-      canonicalJson([payload.baseOid, payload.branch, latest?.cycleId ?? null]),
+      canonicalJson([payload.branch, latest?.cycleId ?? null]),
     );
     const event: ReadOpening = {
       id,
@@ -100,7 +97,6 @@ export const openOrJoinCycle = <E = never, R = never>(
           )?.event;
           if (
             held?.kind !== "cycle.opened@2" ||
-            held.payload.baseOid !== payload.baseOid ||
             held.payload.branch !== payload.branch
           )
             return yield* new CorruptRecord({
