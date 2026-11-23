@@ -32,7 +32,6 @@ import { useAgentAvatar } from "./agent-avatar";
 import { agentMode, askMode, useChatMode } from "./composer-mode";
 import { host } from "./host";
 import { attachments } from "./attachments";
-import { key, modelChoices } from "./model-choices";
 
 const AGENT_MODE = {
 	id: "ace",
@@ -64,6 +63,7 @@ export const EFFORTS: Record<Effort, string> = {
 	max: "Max",
 };
 
+const key = (model: ModelRef) => `${model.provider}/${model.modelId}`;
 /** The latest pick in this client, as `provider/id` or `auto`; new channels start on it. */
 export const LAST_MODEL = `ace:last-model:${host.url}`;
 
@@ -258,7 +258,9 @@ export function Composer(
 	const chosen = `${current ? key(current) : "auto"} ${currentEffort || "off"}`;
 	const [picking, setPicking] = useState<{ model: string; effort?: Effort; from: string }>();
 	if (picking && picking.from !== chosen) setPicking(undefined);
-	const { model, choices } = modelChoices(models, picking?.model || (current ? key(current) : "auto"), automatic);
+	const kept = picking?.model || (current ? key(current) : "auto");
+	// The channel runs Automatic for a stored model missing from the models it offers.
+	const model = models?.length && !models.some((value) => key(value) === kept) ? "auto" : kept;
 	const levels = models?.find((value) => key(value) === model)?.efforts;
 	const requestedEffort = picking?.effort || currentEffort || "off";
 	const effort = requestedEffort === "off" || levels?.includes(requestedEffort)
@@ -270,6 +272,20 @@ export function Composer(
 			name: id === "off" && !levels.includes("off") ? "Default" : EFFORTS[id],
 		}))
 		: undefined;
+	const choices = (models || []).map((value) => ({
+		id: key(value),
+		name: value.modelId,
+		vendor: value.provider,
+	}));
+	if (model !== "auto" && !choices.some((value) => value.id === model)) {
+		choices.unshift({ id: model, name: model.split("/").slice(1).join("/"), vendor: "" });
+	}
+	// Automatic stays offered so a chat whose model lost its key can hand the choice back.
+	choices.unshift({
+		id: "auto",
+		name: automatic ? `Automatic (${automatic.modelId})` : "Automatic",
+		vendor: "",
+	});
 	// Formatting tools crowd a phone's composer; they stay one tap away.
 	const phone = useMedia("(width < 40rem)");
 
