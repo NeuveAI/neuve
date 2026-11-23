@@ -227,7 +227,7 @@ export type People = Record<string, string>;
 export type Tab = {
 	id: string;
 	name: string;
-	type: "blank" | "chat" | "diff" | "terminal" | "live" | "review";
+	type: "blank" | "chat" | "plan" | "diff" | "terminal" | "live" | "review";
 	/** Selected in its pane; split layouts can show several active tabs. */
 	active: boolean;
 };

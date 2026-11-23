@@ -29,11 +29,11 @@ const CODING_TOOLS = new Set(CodingTools.tools?.map((tool) => tool.name) ?? []);
 /**
  * The only chat tools Neuve runs for a runtime with its own sandbox that works unattended. Neuve
  * runs every chat tool outside that sandbox, so a tool is listed only when it cannot widen what the
- * runtime may write or reach: asking the person a question. Any other (a lane, a subagent on any
- * model, a review, the plan, Linear, the browser, the desktop, other channels, a new tool) is
- * withheld until someone classifies it.
+ * runtime may write or reach. It can ask the person a question or write a plan to a host-chosen
+ * file in host storage. Any other tool (a lane, a subagent on any model, a review, Linear, the
+ * browser, the desktop, other channels, a new tool) is withheld until someone classifies it.
  */
-const UNATTENDED_TOOLS: ReadonlySet<string> = new Set(["question"]);
+const UNATTENDED_TOOLS: ReadonlySet<string> = new Set(["question", "plan_write"]);
 
 export type Log = (
   event: string,
