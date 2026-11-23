@@ -4,6 +4,7 @@ import {
   AccountRejected,
   AccountName,
   RuntimeEvent,
+  SignInRequired,
   TurnLimit,
   type RuntimeSession,
   type SessionPolicy,
@@ -199,10 +200,14 @@ const unauthorized = completed("failed", {
   codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
 });
 
-// The next turn renews the refused token and keeps the Codex process.
-test("the next turn renews a refused token and completes in the same process", async () => {
+test("a new session on the same account uses the renewed sign-in", async () => {
   const fake = codex();
   let token = "stored-token";
+  const checkSignIn: CodexSignInCheck = (rejected) =>
+    Effect.sync(() => {
+      if (rejected === token) token = "renewed-token";
+      return token;
+    });
   await run(
     fake,
     (session, read) =>
@@ -239,44 +244,48 @@ test("the next turn renews a refused token and completes in the same process", a
             },
           },
         });
-        yield* session.startTurn({
-          turnId: "next",
-          message: "continue",
-          workspace: readOnly,
-        });
-        expect(token).toBe("renewed-token");
         expect(fake.current()).toBe(process);
-        fake.send("turn/completed", completed("completed"));
+      }),
+    { checkSignIn },
+  );
+
+  const next = codex();
+  await run(
+    next,
+    (session, read) =>
+      Effect.gen(function* () {
+        expect(token === "renewed-token").toBe(true);
+        yield* startOn(next, session, readOnly);
+        next.send("turn/completed", completed("completed"));
         expect(yield* read.next("turn.finished")).toMatchObject({
-          turnId: "next",
           outcome: { status: "completed" },
         });
       }),
-    {
-      checkSignIn: (rejected) =>
-        Effect.sync(() => {
-          if (rejected === token) token = "renewed-token";
-          return token;
-        }),
-    },
+    { checkSignIn },
   );
 });
 
-// A refused renewal tells the person to sign in before another turn reaches Codex.
-test("a refused renewal gives the account's sign-in command", async () => {
+test("a refused renewal leaves the failed turn reusable and the next check asks for sign-in", async () => {
   const fake = codex();
   const hint = {
     kind: "command",
     command: "neuve auth login",
     account,
   } as const;
+  let signedIn = true;
   await run(
     fake,
     (session, read) =>
       Effect.gen(function* () {
         yield* startOn(fake, session, readOnly);
         fake.send("turn/completed", unauthorized);
-        yield* read.next("turn.finished");
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          outcome: {
+            status: "failed",
+            disposition: "reusable",
+            failure: { _tag: "TurnFailed", account, reason: "provider-failed" },
+          },
+        });
         yield* session.startTurn({
           turnId: "next",
           message: "continue",
@@ -287,21 +296,23 @@ test("a refused renewal gives the account's sign-in command", async () => {
           outcome: {
             status: "failed",
             disposition: "reusable",
-            failure: {
-              _tag: "AccountRejected",
-              account,
-              hint,
-              reason: "other",
-            },
+            failure: { _tag: "SignInRequired", account, hint },
           },
         });
         expect(written(fake.current(), "turn/start")).toHaveLength(1);
       }),
     {
       checkSignIn: (rejected) =>
-        rejected === "stored-token"
-          ? Effect.fail(new AccountRejected({ account, hint, reason: "other" }))
-          : Effect.succeed("stored-token"),
+        Effect.suspend((): ReturnType<CodexSignInCheck> => {
+          if (!signedIn)
+            return Effect.fail(new SignInRequired({ account, hint }));
+          if (rejected !== "stored-token")
+            return Effect.succeed("stored-token");
+          signedIn = false;
+          return Effect.fail(
+            new AccountRejected({ account, hint, reason: "other" }),
+          );
+        }),
     },
   );
 });

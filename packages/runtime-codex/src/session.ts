@@ -319,12 +319,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
   let threadId = "";
   let own: OwnSettings | undefined;
   let current: Current | undefined;
-  let access:
-    | {
-        readonly token: string;
-        state: "available" | "rejected" | "replacement";
-      }
-    | undefined;
+  let lastCheckedToken: string | undefined;
   let generation = 0;
   let dead = false;
   let turn: Turn | undefined;
@@ -417,29 +412,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         yield* stop();
     });
 
-  const acceptReplacement = () => {
-    if (access?.state === "replacement") access.state = "available";
-  };
-
-  const errorOutcome = (info: unknown, requestCode?: number): TurnOutcome => {
-    const name = infoName(info);
-    if (
-      access !== undefined &&
-      (name === "unauthorized" ||
-        httpStatusOf(info) === 401 ||
-        requestCode === 401)
-    ) {
-      if (access.state !== "replacement") {
-        access.state = "rejected";
-        return turnFailure("provider-failed");
-      }
-      return failure({
-        _tag: "AccountRejected",
-        account,
-        hint,
-        reason: "other",
-      });
-    }
+  const errorOutcome = (name: string | undefined): TurnOutcome => {
     if (name === "unauthorized")
       return failure({ _tag: "SignInRequired", account, hint });
     if (name === "usageLimitExceeded") {
@@ -460,10 +433,27 @@ export const openCodexSession = Effect.fnUntraced(function* (
       return turnFailure("provider-unavailable");
     return turnFailure("provider-failed");
   };
-  const requestOutcome = (error: CodexFailure): TurnOutcome =>
-    error._tag === "CodexRequestFailed"
-      ? errorOutcome(error.type, error.code)
-      : turnFailure("provider-failed", "broken");
+  const finishError = (active: Turn, info: unknown, requestCode?: number) =>
+    Effect.gen(function* () {
+      if (active.finished) return;
+      const name = infoName(info);
+      if (
+        neuveSignIn !== undefined &&
+        (name === "unauthorized" ||
+          httpStatusOf(info) === 401 ||
+          requestCode === 401)
+      ) {
+        if (lastCheckedToken !== undefined) {
+          const renewed = yield* neuveSignIn
+            .checkSignIn(lastCheckedToken)
+            .pipe(Effect.timeout("90 seconds"), Effect.exit);
+          if (!active.finished && Exit.isSuccess(renewed))
+            lastCheckedToken = renewed.value;
+        }
+        return yield* finish(active, turnFailure("provider-failed"));
+      }
+      return yield* finish(active, errorOutcome(name));
+    });
 
   /**
    * Whether a notification is the open turn's. Codex names the turn in turn/start's answer and in
@@ -554,7 +544,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
         case "item/agentMessage/delta": {
           const delta = Decode.Delta.safeParse(params);
           if (active && delta.success && matches(active, delta.data.turnId)) {
-            acceptReplacement();
             emit({
               type: "text",
               turnId: active.id,
@@ -604,7 +593,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
             return;
           }
           if (item.data.type === "agentMessage") {
-            acceptReplacement();
             active.lastText = item.data.text;
             emit({
               type: "message.finished",
@@ -643,7 +631,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
           const usage = Decode.TokenUsage.safeParse(params);
           if (!active || !usage.success || !matches(active, usage.data.turnId))
             return;
-          acceptReplacement();
           const { total, last, modelContextWindow } = usage.data.tokenUsage;
           active.baseline ??= minus(total, last);
           const name = model?.id ?? threadModel;
@@ -719,7 +706,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
           if (!matches(active, completed.data.turn.id)) return;
           const { status, error } = completed.data.turn;
           if (status === "completed") {
-            acceptReplacement();
             if (!active.final)
               return yield* finish(
                 active,
@@ -754,11 +740,9 @@ export const openCodexSession = Effect.fnUntraced(function* (
                 : { reason: active.interrupt.reason }),
             });
           if (status === "failed")
-            return yield* finish(
+            return yield* finishError(
               active,
-              errorOutcome(
-                error?.codexErrorInfo ?? active.lastError?.codexErrorInfo,
-              ),
+              error?.codexErrorInfo ?? active.lastError?.codexErrorInfo,
             );
           return;
         }
@@ -1262,19 +1246,8 @@ export const openCodexSession = Effect.fnUntraced(function* (
     live(active) ? Effect.void : Effect.fail(turnFailed("session-stopped"));
   const ensure = (configuration: Configuration, active?: Turn) =>
     Effect.gen(function* () {
-      if (neuveSignIn !== undefined) {
-        const rejected =
-          access?.state === "rejected" ? access.token : undefined;
-        const token = yield* neuveSignIn.checkSignIn(rejected);
-        access = {
-          token,
-          state:
-            rejected !== undefined ||
-            (access?.token === token && access.state === "replacement")
-              ? "replacement"
-              : "available",
-        };
-      }
+      if (neuveSignIn !== undefined)
+        lastCheckedToken = yield* neuveSignIn.checkSignIn();
       yield* still(active);
       if (current?.configuration === configuration) return;
       const previous = current;
@@ -1530,12 +1503,9 @@ export const openCodexSession = Effect.fnUntraced(function* (
       if (Exit.isFailure(answered)) {
         if (active.finished) return;
         const error = errorOf(answered.cause);
-        return yield* finish(
-          active,
-          error === undefined
-            ? turnFailure("provider-failed", "broken")
-            : requestOutcome(error),
-        );
+        if (error?._tag === "CodexRequestFailed")
+          return yield* finishError(active, error.type, error.code);
+        return yield* finish(active, turnFailure("provider-failed", "broken"));
       }
       const decoded = Decode.TurnAnswer.safeParse(answered.value);
       if (!decoded.success)

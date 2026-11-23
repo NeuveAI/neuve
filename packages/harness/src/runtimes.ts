@@ -36,6 +36,7 @@ import {
   OpenAiAuthError,
   signInFileFix,
   signOut,
+  type AuthOptions,
 } from "./openai-auth.ts";
 import type { ReadinessStatuses } from "./route-provider.ts";
 import {
@@ -64,6 +65,7 @@ export interface HarnessRuntimesOptions<E, R> extends PiStatusRuntimeOptions {
 export const codexRuntimeOptions = (
   home = homedir(),
   command: ReadonlyArray<string> = [],
+  auth: Pick<AuthOptions, "fetch"> = {},
 ): CodexRuntimeConfig => ({
   home,
   programPath: (name) => AccountStore.programPath(home, name),
@@ -79,7 +81,7 @@ export const codexRuntimeOptions = (
         try: async (signal) =>
           (
             await accessToken(
-              { ...authOptionsFor(credential), signal },
+              { ...authOptionsFor(credential), ...auth, signal },
               rejected,
             )
           ).token,

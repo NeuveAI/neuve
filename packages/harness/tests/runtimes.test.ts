@@ -122,10 +122,11 @@ const issuer = "https://fake-issuer.invalid";
 function fakeSignIn(
   directory: string,
   email: string | null = "fake@example.invalid",
+  authIssuer = issuer,
 ) {
   writeAuth(directory, {
     version: 1,
-    issuer,
+    issuer: authIssuer,
     hostId: "urn:uuid:00000000-0000-0000-0000-000000000000",
     registration: {
       clientId: "fake-client",
@@ -540,6 +541,50 @@ test("Codex uses the named Neuve sign-in and tells the person which account to s
     reason: "expired",
     hint,
   });
+});
+
+test("Codex sign-in renews an unexpired token named as refused", async () => {
+  const directory = folder();
+  const authIssuer = "https://codex-refusal.invalid";
+  fakeSignIn(directory, undefined, authIssuer);
+  const account = {
+    name: name("work"),
+    kind: "chatgpt-subscription",
+    runtime: "codex",
+    credential: { kind: "neuve-sign-in", folder: directory },
+  } as const;
+  let refreshes = 0;
+  const fetcher = Object.assign(
+    async (url: URL | RequestInfo) => {
+      if (String(url) === `${authIssuer}/.well-known/openid-configuration`)
+        return Response.json({
+          issuer: authIssuer,
+          authorization_endpoint: `${authIssuer}/authorize`,
+          token_endpoint: `${authIssuer}/token`,
+          jwks_uri: `${authIssuer}/jwks`,
+        });
+      if (String(url) !== `${authIssuer}/token`)
+        throw new Error("unexpected fake request");
+      refreshes++;
+      return Response.json({
+        access_token: "renewed-fixture",
+        refresh_token: "rotated-fixture",
+        expires_in: 3600,
+      });
+    },
+    { preconnect: globalThis.fetch.preconnect },
+  );
+  const signIn = codexRuntimeOptions(scratch, ["/neuve"], {
+    fetch: fetcher,
+  }).neuveSignIn!;
+  const refused = await Effect.runPromise(signIn.checkSignIn(account));
+  expect(refreshes).toBe(0);
+  const renewed = await Effect.runPromise(signIn.checkSignIn(account, refused));
+  expect(refreshes).toBe(1);
+  expect(
+    renewed !== refused &&
+      readAuth(directory)?.session?.accessToken === renewed,
+  ).toBe(true);
 });
 
 test("continuation identifies only credential references, so aliases share sessions without carrying credential values", async () => {
