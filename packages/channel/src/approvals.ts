@@ -29,7 +29,7 @@ function closedReason(state: Extract<ApprovalRequest["state"], { kind: "closed" 
 		case "runtime-resolved": return "This approval request closed because the runtime resolved it.";
 		case "stopped": return "This approval request closed when the chat was stopped.";
 		case "restarted": return "This approval request closed when Neuve restarted.";
-		case "message": return `This approval request closed because ${state.by} sent a message instead.`;
+		case "message": return "This approval request closed because a message was sent instead.";
 	}
 }
 
@@ -42,7 +42,7 @@ export async function answerApproval(harness: Harness, chat: ConversationId, ans
 		if (state.kind === "closed") throw new Error(closedReason(state));
 		if (state.kind === "answered") {
 			const choice = state.decision === "allow" ? "Allow" : "Deny";
-			throw new Error(`${state.by} already answered ${choice}.`);
+			throw new Error(`This approval request already has an answer. It was ${choice}.`);
 		}
 		request.state = { kind: "answered", by: answer.author, at: Date.now(), decision: answer.decision };
 	}, context);
@@ -159,11 +159,11 @@ export class Approvals {
 				this.#pending.add(task);
 				void task.finally(() => this.#pending.delete(task));
 			};
-			const wait = this.waits.listen(chat, dismiss);
+			const wait = this.waits.listen(chat, "approval", dismiss);
 			this.#waiting.set(chat, { ids, wait, dismiss });
 			wait.start();
 		}
-		const author = this.waits.queued(chat);
+		const author = this.waits.queued(chat, "approval");
 		if (author) this.#waiting.get(chat)?.dismiss(author);
 	}
 

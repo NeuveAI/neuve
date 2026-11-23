@@ -73,47 +73,53 @@ function dismissed(author: string): ToolExecutionResult {
 	};
 }
 
-/** The first person who sent a message while the chat was waiting. */
-function queued(state: Readonly<InboxState> | null | undefined): string | undefined {
+type WaitKind = "question" | "approval";
+
+/** Questions accept any queued input. Approvals require a person's invocation. */
+function queued(state: Readonly<InboxState> | null | undefined): Partial<Record<WaitKind, string>> {
+	const authors: Partial<Record<WaitKind, string>> = {};
 	for (const item of state?.items ?? []) {
-		if (item.mode === "write") {
-			const { kind, data } = item.entry;
-			if (kind === room.MessageEntry.kind && data && typeof data === "object" && !Array.isArray(data)
-				&& typeof data.author === "string" && !room.isAgent(data.author)) return data.author;
-			continue;
-		}
+		if (item.mode === "write") continue;
 		const author = room.input(item.content).author;
+		authors.question ??= author;
 		const first = typeof item.content === "string" ? item.content : item.content[0];
 		const text = typeof first === "string" ? first : first?.type === "text" ? first.text : undefined;
-		if (!room.isAgent(author) && text?.startsWith(`${author}: `)) return author;
+		if (!room.isAgent(author) && text?.startsWith(`${author}: `)) {
+			authors.approval = author;
+			break;
+		}
 	}
+	return authors;
 }
 
 type WaitPhase = Extract<RunEnd["outcome"], "question" | "answered">;
-type Wait = { dismiss: (author: string) => void; active: boolean };
+type Wait = { kind: WaitKind; dismiss: (author: string) => void; active: boolean };
 
 /** A chat can wait on a question and a runtime request at the same time. */
 export class PersonWaits {
-	#queued = new Map<ConversationId, string>();
+	#queued = new Map<ConversationId, ReturnType<typeof queued>>();
 	#waiting = new Map<ConversationId, Set<Wait>>();
 	constructor(private readonly onWait: (chat: ConversationId, phase: WaitPhase) => void) {}
 
 	inbox(chat: ConversationId, state: Readonly<InboxState> | null | undefined) {
-		const author = queued(state);
-		if (!author) return void this.#queued.delete(chat);
-		this.#queued.set(chat, author);
-		for (const wait of this.#waiting.get(chat) ?? []) wait.dismiss(author);
+		const authors = queued(state);
+		if (!authors.question) return void this.#queued.delete(chat);
+		this.#queued.set(chat, authors);
+		for (const wait of this.#waiting.get(chat) ?? []) {
+			const author = authors[wait.kind];
+			if (author) wait.dismiss(author);
+		}
 	}
 
-	queued(chat: ConversationId) {
-		return this.#queued.get(chat);
+	queued(chat: ConversationId, kind: WaitKind) {
+		return this.#queued.get(chat)?.[kind];
 	}
 
-	listen(chat: ConversationId, dismiss: Wait["dismiss"]) {
+	listen(chat: ConversationId, kind: WaitKind, dismiss: Wait["dismiss"]) {
 		let waits = this.#waiting.get(chat);
 		if (!waits) this.#waiting.set(chat, waits = new Set());
 		const active = waits;
-		const wait = { dismiss, active: false };
+		const wait = { kind, dismiss, active: false };
 		active.add(wait);
 		const marked = () => [...active].some(source => source.active);
 		return {
@@ -164,10 +170,10 @@ export class Questions {
 					const call = api.callId;
 					const { promise, resolve, reject } = Promise.withResolvers<ToolExecutionResult>();
 					// Listen before reading the inbox, so a message queued in between is not missed.
-					const waiting = this.#waits.listen(chat, author => resolve(dismissed(author)));
+					const waiting = this.#waits.listen(chat, "question", author => resolve(dismissed(author)));
 					try {
-						const before = this.#waits.queued(chat)
-							|| queued(await api.snapshot(InboxDoc, chat, context));
+						const before = this.#waits.queued(chat, "question")
+							|| queued(await api.snapshot(InboxDoc, chat, context)).question;
 						if (before) return dismissed(before);
 						const created = await api.commit(async (tx) => {
 							const doc = await tx.doc(QuestionsDoc, chat);

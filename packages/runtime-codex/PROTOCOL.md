@@ -218,6 +218,16 @@ A call to one of Neuve's tools still running is reported as `tool.finished`, err
 | A file approval carries `input.changes` when the runtime has seen the matching `fileChange` item start. Each change preserves `path`, `kind`, and `diff`, including `move_path` for an update. Without that item, the input omits `changes`. | [`ItemStartedNotification.ts`](src/generated/v2/ItemStartedNotification.ts), [`FileUpdateChange.ts`](src/generated/v2/FileUpdateChange.ts), [`FileChangeRequestApprovalParams.ts`](src/generated/v2/FileChangeRequestApprovalParams.ts), and the session fake | Shapes documented. The fake covers both arrival cases. Live arrival order is unproved. |
 | The runtime sends the session's current `developerInstructions` on thread start, resume, and fork. | [`ThreadResumeParams.ts`](src/generated/v2/ThreadResumeParams.ts), [`ThreadForkParams.ts`](src/generated/v2/ThreadForkParams.ts), and the session fake | Both schemas declare the field. The fake checks the sent field. Whether Codex replaces an existing thread's instructions with it is unproved on a live thread. |
 
+### Attended chat on 23 November 2026
+
+The live run raised command and file-change requests. Asking Codex to use its permissions tool still produced no wider-access request.
+
+- The command arrived as `<shell> -lc 'curl -sI https://example.com'`, with `commandActions`, a `proposedExecpolicyAmendment`, and `availableDecisions` containing `accept`, `acceptWithExecpolicyAmendment`, and `cancel`. The amendment offered to allow that pattern in the future. Neuve's `accept` let the request's shell-wrapped command run. Codex accepted Neuve's `decline` outside the advertised choices, resolved the request, and continued the turn. The next turn asked for approval again after an Allow.
+- The file-change request carried `{threadId, turnId, itemId, startedAtMs, reason: null, grantRoot: null}`. The matching item started 2 ms earlier and carried the changes in `changes`. For an added file, `diff` was its full content, `"hello\n"`.
+- The order was Codex's request, Neuve's reply, `serverRequest/resolved`, then the item's end.
+
+The typed command description preserves the full shell-wrapped text as sent. The typed file description copies the change content from the item. Wider access, another server's prompt, an update with a unified diff, and the lifetime of a granted permission remain unproved in a live run. Neuve sends `scope: "turn"` for wider access.
+
 ## What the protocol log keeps
 
 Every line each way, redacted as it is written ([`src/log.ts`](src/log.ts)): Codex's own commands, their output and file changes, and calls to Neuve's tools, whole, since they are the run's record of what was done. Not kept: streamed text (its length only), the person's configuration and skill list (their size only), their plan and balance, the operating system's release, and every MCP server's name but Neuve's. A call to one of the person's own servers keeps its tool's name and its status, and loses its arguments, result and error, which are theirs. The session's token, folders and program, and the names of the person's settings, are replaced by labels wherever they appear.

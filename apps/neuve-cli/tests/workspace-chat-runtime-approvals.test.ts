@@ -267,3 +267,26 @@ test("attach closes approvals left open in the stored channel before any turn st
     await source.work;
   }
 });
+
+test("logs why a request could not be closed when storage admission is sealed", async () => {
+  const run = await heldQuestion();
+  try {
+    run.session.emit(request);
+    await until(async () => (await run.records()).length === 1);
+    await run.harness.close(context);
+    Queue.endUnsafe(run.session.queue);
+    const event = "chat-runtime.approval.close.failed";
+    await until(() => run.fake.logs.some((line) => line.event === event));
+    expect(run.fake.logs.find((line) => line.event === event)).toEqual({
+      event,
+      fields: {
+        owner: String(run.chat),
+        reason: "turn-ended",
+        cause: "Session is closed",
+      },
+    });
+  } finally {
+    await run.close();
+    await run.work;
+  }
+});

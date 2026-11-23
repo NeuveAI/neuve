@@ -49,7 +49,7 @@ test("approval refusals check the author first and preserve the recorded respons
 		await expect(answer("closed")).rejects.toThrow("This approval request closed because the runtime resolved it.");
 		expect((await harness.snapshot(ApprovalRequestsDoc, root, context))?.requests[1]?.state).toEqual({ kind: "open" });
 		await answer("open", OWNER, "deny");
-		await expect(answer("open")).rejects.toThrow(`${OWNER} already answered Deny.`);
+		await expect(answer("open")).rejects.toThrow(/^This approval request already has an answer\. It was Deny\.$/);
 		const requests = (await harness.snapshot(ApprovalRequestsDoc, root, context))?.requests;
 		expect(requests?.map(({ state }) => state)).toEqual([
 			{ kind: "closed", reason: "runtime-resolved" },
@@ -58,7 +58,7 @@ test("approval refusals check the author first and preserve the recorded respons
 		await fixture.request({ op: "share", author: OWNER, shared: true });
 		await open(record("shared"));
 		await answer("shared", "teammate");
-		await expect(answer("shared", OWNER, "deny")).rejects.toThrow("teammate already answered Allow.");
+		await expect(answer("shared", OWNER, "deny")).rejects.toThrow(/^This approval request already has an answer\. It was Allow\.$/);
 	} finally { await fixture.dispose(); }
 });
 
@@ -104,7 +104,7 @@ test("only opted-in watches get complete approval snapshots at attach and on cha
 	} finally { await fixture.dispose(); }
 });
 
-test.each(["ask", "say"] as const)("a person's %s dismisses both waits and reaches the same chat", async (op) => {
+test("a person's invocation dismisses both waits and reaches the same chat", async () => {
 	const runs: RunEnd[] = [];
 	const { fixture, open, ask, wait, answer, harness } = await channel(run => runs.push(run));
 	try {
@@ -117,15 +117,33 @@ test.each(["ask", "say"] as const)("a person's %s dismisses both waits and reach
 			await answer("also-waiting");
 			await until(() => runs.some(run => run.outcome === "question"));
 			expect(runs.map(run => run.outcome)).toEqual(["question"]);
-			await fixture.request({ op: "say", author: "agent@other", text: "An agent's message" });
-			expect((await harness.snapshot(ApprovalRequestsDoc, root, context))?.requests[0]?.state).toEqual({ kind: "open" });
-			await fixture.request({ op, author: OWNER, text: "Continue without the approval" });
+			await ask("Continue without the approval");
 			const event = await watch.until("approval-requests", event => event.requests[0]?.state.kind === "closed");
 			expect(event.requests[0]?.state).toEqual({ kind: "closed", reason: "message", by: OWNER });
 			expect(await wait(work)).toBe("done");
 			expect(await watch.until("message", message => message.text === "Continue without the approval")).toMatchObject({ author: OWNER });
 			expect(await watch.until("result", result => result.call === "question")).toMatchObject({ text: expect.stringContaining(`${OWNER} sent a message`) });
-			await expect(answer("waiting")).rejects.toThrow(`This approval request closed because ${OWNER} sent a message instead.`);
+			await expect(answer("waiting")).rejects.toThrow(/^This approval request closed because a message was sent instead\.$/);
+		} finally { await watch.stop(); }
+	} finally { await fixture.dispose(); }
+});
+
+test("a plain message leaves both waits open and an agent invocation dismisses only the question", async () => {
+	const { fixture, open, ask, wait, harness } = await channel();
+	try {
+		const watch = await fixture.watch({ op: "watch", approvals: true });
+		try {
+			fixture.script(question(), fauxAssistantMessage("Agent message received."));
+			const work = await ask("Ask a question");
+			await until(async () => (await harness.snapshot(QuestionsDoc, root, context))?.questions.question);
+			await open(record("waiting"));
+			await fixture.request({ op: "say", author: OWNER, text: "A plain message" });
+			await ask("Continue on the question", { author: "agent@other" });
+			expect(await watch.until("result", result => result.call === "question")).toMatchObject({
+				text: "Not answered: agent@other sent a message to this chat instead. Read it before asking again.",
+			});
+			expect(await wait(work)).toBe("done");
+			expect((await harness.snapshot(ApprovalRequestsDoc, root, context))?.requests[0]?.state).toEqual({ kind: "open" });
 		} finally { await watch.stop(); }
 	} finally { await fixture.dispose(); }
 });

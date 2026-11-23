@@ -107,6 +107,8 @@ Plan mode extends the upstream `packages/channel/src/channel.ts` admission and w
 | `packages/channel/src/plan-mode.ts` | Keeps the attendance section available to the runtime bridge without adding it to the model prompt. |
 | `packages/channel/tests/helpers.ts` | Attaches an injected runtime fixture beside the usual channel operations. |
 | `packages/channel/tests/approvals.test.ts` | Exercises approval authorization, document races, Stop, message delivery, attendance and opted-in watches across the channel boundary. |
+| `packages/channel/src/questions.ts` | Questions accept any queued invocation. Approvals accept a person's queued invocation. Plain messages dismiss neither. |
+| `packages/channel/src/approvals.ts` | Refusals describe the recorded decision or closure without repeating the person's sign-in ID. |
 
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 

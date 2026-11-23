@@ -967,15 +967,16 @@ export class ChatRuntimeBridge {
     live: Live,
     status: NonNullable<Live["streamEnded"]>,
   ) {
+    const reason = live.approvalEnd ?? "turn-ended";
     try {
-      await this.closeApprovals(
-        live,
-        live.approvalEnd ?? "turn-ended",
-        live.approvals.keys(),
-      );
-    } catch {
+      await this.closeApprovals(live, reason, live.approvals.keys());
+    } catch (error) {
       status = "failed";
-      this.log("chat-runtime.approval.close.failed", { owner: live.owner });
+      this.log("chat-runtime.approval.close.failed", {
+        owner: live.owner,
+        reason,
+        cause: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       await live.approvalWatch?.();
       live.streamEnded = status;

@@ -1076,6 +1076,8 @@ describe("Codex's requests", () => {
 
   test("attended: raised as the contract's request, and both answers reach Codex", async () => {
     const fake = codex();
+    const command = "/bin/zsh -lc 'curl -sI https://example.com'";
+    const execpolicy = ["curl", "-sI"];
     await run(
       fake,
       (session, read) =>
@@ -1089,14 +1091,31 @@ describe("Codex's requests", () => {
             ask(
               process,
               "item/commandExecution/requestApproval",
-              { itemId: `c${id}`, command: "rm x", cwd: "/work" },
+              {
+                itemId: `c${id}`,
+                kind: "command",
+                command,
+                cwd: "/work",
+                commandActions: [{ type: "unknown", command }],
+                proposedExecpolicyAmendment: execpolicy,
+                availableDecisions: [
+                  "accept",
+                  {
+                    acceptWithExecpolicyAmendment: {
+                      execpolicy_amendment: execpolicy,
+                    },
+                  },
+                  "cancel",
+                ],
+              },
               id,
             );
             const event = yield* read.next("approval.requested");
             expect(event).toMatchObject({
               work: "command",
               callId: `c${id}`,
-              input: { command: "rm x" },
+              input: { command },
+              asked: { kind: "command", command, folder: "/work" },
             });
             if (event.type !== "approval.requested") throw new Error("fixture");
             yield* session.respondToApproval({
@@ -1104,7 +1123,8 @@ describe("Codex's requests", () => {
               decision,
             });
             yield* until(() => answer(process, id) !== undefined);
-            expect(answer(process, id)).toMatchObject({
+            expect(answer(process, id)).toEqual({
+              id,
               result: { decision: expected },
             });
           }
@@ -1178,7 +1198,8 @@ describe("Codex's requests", () => {
             decision: "deny",
           });
           yield* until(() => answer(process, 302) !== undefined);
-          expect(answer(process, 302)).toMatchObject({
+          expect(answer(process, 302)).toEqual({
+            id: 302,
             result: { permissions: {}, scope: "turn" },
           });
           fake.send("serverRequest/resolved", {
@@ -1199,6 +1220,66 @@ describe("Codex's requests", () => {
     );
   });
 
+  test("answers two simultaneous requests for one item by request ID", async () => {
+    const fake = codex();
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session);
+          const process = fake.current();
+          ask(
+            process,
+            "item/commandExecution/requestApproval",
+            { itemId: "c1" },
+            301,
+          );
+          const command = yield* read.next("approval.requested");
+          ask(
+            process,
+            "item/permissions/requestApproval",
+            {
+              itemId: "c1",
+              permissions: { network: { enabled: true }, fileSystem: null },
+            },
+            302,
+          );
+          const permissions = yield* read.next("approval.requested");
+          if (
+            command.type !== "approval.requested" ||
+            permissions.type !== "approval.requested"
+          )
+            throw new Error("fixture");
+          expect([command.callId, permissions.callId]).toEqual(["c1", "c1"]);
+          yield* session.respondToApproval({
+            requestId: permissions.requestId,
+            decision: "allow",
+          });
+          yield* session.respondToApproval({
+            requestId: command.requestId,
+            decision: "deny",
+          });
+          yield* until(
+            () =>
+              answer(process, 301) !== undefined &&
+              answer(process, 302) !== undefined,
+          );
+          expect(answer(process, 301)).toEqual({
+            id: 301,
+            result: { decision: "decline" },
+          });
+          expect(answer(process, 302)).toEqual({
+            id: 302,
+            result: {
+              permissions: { network: { enabled: true } },
+              scope: "turn",
+            },
+          });
+        }),
+      { policy: { ...policy, approvalPolicy: "ask" } },
+    );
+  });
+
   test("a file approval includes the earlier item's changes and omits them when the item is missing", async () => {
     const fake = codex();
     await run(
@@ -1208,7 +1289,7 @@ describe("Codex's requests", () => {
           yield* startOn(fake, session);
           const process = fake.current();
           const changes = [
-            { path: "/work/add", kind: { type: "add" }, diff: "+new" },
+            { path: "/work/add", kind: { type: "add" }, diff: "hello\n" },
             { path: "/work/delete", kind: { type: "delete" }, diff: "-old" },
             {
               path: "/work/update",
@@ -1230,18 +1311,17 @@ describe("Codex's requests", () => {
           ask(
             process,
             "item/fileChange/requestApproval",
-            { itemId: "f1", reason: "apply patch" },
+            { itemId: "f1", startedAtMs: 3, reason: null, grantRoot: null },
             401,
           );
           expect(yield* read.next("approval.requested")).toMatchObject({
             work: "file-change",
             callId: "f1",
-            input: { reason: "apply patch", changes },
+            input: { reason: null, grantRoot: null, changes },
             asked: {
               kind: "file-change",
-              reason: "apply patch",
               changes: [
-                { path: "/work/add", kind: "add", diff: "+new" },
+                { path: "/work/add", kind: "add", diff: "hello\n" },
                 { path: "/work/delete", kind: "delete", diff: "-old" },
                 {
                   path: "/work/update",
