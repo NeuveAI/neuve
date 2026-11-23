@@ -316,8 +316,8 @@ test.each(["turn-ended", "runtime-resolved", "write refused"] as const)(
       proceed.resolve();
       await expect(answering).rejects.toThrow(
         resolved
-          ? "This approval request closed because the runtime resolved it."
-          : "This approval request closed when its turn ended.",
+          ? "This request was withdrawn before an answer."
+          : "This request closed when its turn ended.",
       );
       const reason = resolved ? "runtime-resolved" : "turn-ended";
       await until(() => run.snapshot()?.[0]?.state.kind === "closed");

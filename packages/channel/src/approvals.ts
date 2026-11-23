@@ -29,16 +29,16 @@ const AttendanceDoc = defineDoc<{ attended: boolean }>({
 });
 
 export function requirePerson(author: string) {
-	if (isAgent(author)) throw new Error("Only a person can answer an approval request.");
+	if (isAgent(author)) throw new Error("Only a person can answer this request.");
 }
 
 function closedReason(state: Extract<ApprovalRequest["state"], { kind: "closed" }>): string {
 	switch (state.reason) {
-		case "turn-ended": return "This approval request closed when its turn ended.";
-		case "runtime-resolved": return "This approval request closed because the runtime resolved it.";
-		case "stopped": return "This approval request closed when the chat was stopped.";
-		case "restarted": return "This approval request closed when Neuve restarted.";
-		case "message": return "This approval request closed because a message was sent instead.";
+		case "turn-ended": return "This request closed when its turn ended.";
+		case "runtime-resolved": return "This request was withdrawn before an answer.";
+		case "stopped": return "This request closed when the chat was stopped.";
+		case "restarted": return "This request closed when Neuve restarted.";
+		case "message": return "This request closed because a message was sent instead.";
 	}
 }
 
@@ -46,12 +46,12 @@ async function openApproval(harness: Harness, chat: ConversationId, answer: Appr
 	await harness.commit(async tx => {
 		const doc = await tx.doc(ApprovalRequestsDoc, chat);
 		const request = doc.requests.find(record => record.requestId === answer.requestId);
-		if (!request) throw new Error("This approval request could not be found in this chat.");
+		if (!request) throw new Error("This request could not be found in this chat.");
 		const { state } = request;
 		if (state.kind === "closed") throw new Error(closedReason(state));
 		if (state.kind === "answered") {
 			const choice = state.decision === "allow" ? "Allow" : "Deny";
-			throw new Error(`This approval request already has an answer. It was ${choice}.`);
+			throw new Error(`This request already has an answer. It was ${choice}.`);
 		}
 		if (record) request.state = { kind: "answered", by: answer.author, at: Date.now(), decision: answer.decision };
 	}, context);
@@ -98,7 +98,7 @@ export class Approvals {
 		const { requestId, decision } = answer;
 		if (await this.#send?.(chat, { requestId, decision }, () => openApproval(harness, chat, answer, true))) return;
 		await openApproval(harness, chat, answer);
-		throw new Error("This approval answer did not reach the runtime.");
+		throw new Error("This answer could not be delivered, so it was not applied.");
 	}
 
 	readonly extension = defineExtension({

@@ -47,13 +47,13 @@ test("approval refusals check the author first and preserve the recorded respons
 	try {
 		await fixture.request({ op: "share", author: OWNER, shared: false });
 		await open(record("closed", { kind: "closed", reason: "runtime-resolved" }), record("open"));
-		await expect(answer("missing", "agent@other")).rejects.toThrow("Only a person can answer an approval request.");
+		await expect(answer("missing", "agent@other")).rejects.toThrow("Only a person can answer this request.");
 		await expect(answer("missing", "teammate")).rejects.toThrow(`Agent access is off in this channel, so only its owner, ${OWNER}, can ask its agents.`);
-		await expect(answer("missing")).rejects.toThrow("This approval request could not be found in this chat.");
-		await expect(answer("closed")).rejects.toThrow("This approval request closed because the runtime resolved it.");
+		await expect(answer("missing")).rejects.toThrow("This request could not be found in this chat.");
+		await expect(answer("closed")).rejects.toThrow("This request was withdrawn before an answer.");
 		expect((await harness.snapshot(ApprovalRequestsDoc, root, context))?.requests[1]?.state).toEqual({ kind: "open" });
 		await answer("open", OWNER, "deny");
-		await expect(answer("open")).rejects.toThrow(/^This approval request already has an answer\. It was Deny\.$/);
+		await expect(answer("open")).rejects.toThrow(/^This request already has an answer\. It was Deny\.$/);
 		const requests = (await harness.snapshot(ApprovalRequestsDoc, root, context))?.requests;
 		expect(requests?.map(({ state }) => state)).toEqual([
 			{ kind: "closed", reason: "runtime-resolved" },
@@ -62,7 +62,7 @@ test("approval refusals check the author first and preserve the recorded respons
 		await fixture.request({ op: "share", author: OWNER, shared: true });
 		await open(record("shared"));
 		await answer("shared", "teammate");
-		await expect(answer("shared", OWNER, "deny")).rejects.toThrow(/^This approval request already has an answer\. It was Allow\.$/);
+		await expect(answer("shared", OWNER, "deny")).rejects.toThrow(/^This request already has an answer\. It was Allow\.$/);
 	} finally { await fixture.dispose(); }
 });
 
@@ -78,7 +78,7 @@ test("an answer and a close race for one state in the same document", async () =
 		}, context)]);
 		const state = (await harness.snapshot(ApprovalRequestsDoc, root, context))?.requests[0]?.state;
 		if (closed.status === "fulfilled" && closed.value) {
-			expect(answered).toMatchObject({ status: "rejected", reason: { message: "This approval request closed when its turn ended." } });
+			expect(answered).toMatchObject({ status: "rejected", reason: { message: "This request closed when its turn ended." } });
 			expect(state).toEqual({ kind: "closed", reason: "turn-ended" });
 		} else {
 			expect(closed).toEqual({ status: "fulfilled", value: false });
@@ -127,7 +127,7 @@ test("a person's invocation dismisses both waits and reaches the same chat", asy
 			expect(await wait(work)).toBe("done");
 			expect(await watch.until("message", message => message.text === "Continue without the approval")).toMatchObject({ author: OWNER });
 			expect(await watch.until("result", result => result.call === "question")).toMatchObject({ text: expect.stringContaining(`${OWNER} sent a message`) });
-			await expect(answer("waiting")).rejects.toThrow(/^This approval request closed because a message was sent instead\.$/);
+			await expect(answer("waiting")).rejects.toThrow(/^This request closed because a message was sent instead\.$/);
 		} finally { await watch.stop(); }
 	} finally { await fixture.dispose(); }
 });
@@ -167,7 +167,7 @@ test("Stop awaits the bridge before it aborts the conversation", async () => {
 		await open(record("waiting"));
 		await fixture.request({ op: "stop", author: OWNER });
 		expect(await wait(work)).toBe("unanswered");
-		await expect(answer("waiting")).rejects.toThrow("This approval request closed when the chat was stopped.");
+		await expect(answer("waiting")).rejects.toThrow("This request closed when the chat was stopped.");
 	} finally { await fixture.dispose(); }
 });
 

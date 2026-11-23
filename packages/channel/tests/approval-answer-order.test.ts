@@ -54,7 +54,7 @@ test("concurrent approval answers in one chat are recorded in request order", as
 		const [first, duplicate] = await together("shared", "shared");
 		expect(duplicate).toMatchObject({
 			status: "rejected",
-			reason: { message: "This approval request already has an answer. It was Allow." },
+			reason: { message: "This request already has an answer. It was Allow." },
 		});
 		expect(first.status).toBe("fulfilled");
 
