@@ -311,8 +311,8 @@ export function chatRuntimeExtension(
           const automatic =
             input === undefined ||
             agentInput ||
-            ["subagent:", "message:", "neuve.review:"].some((prefix) =>
-              request?.startsWith(prefix),
+            ["subagent:", "message:", "neuve.review:", "neuve.build:"].some(
+              (prefix) => request?.startsWith(prefix),
             );
           if (!automatic) release(record.conversationId);
           else if (

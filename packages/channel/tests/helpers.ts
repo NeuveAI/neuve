@@ -19,7 +19,7 @@ import {
 	type FauxProviderHandle,
 	fauxProvider,
 	type FauxResponseStep,
-	type Models,
+	type MutableModels,
 } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { ok } from "@earendil-works/pi-durable/env";
@@ -90,7 +90,7 @@ export async function project(
 }
 
 /** A pi-ai `Models` with only the no-network faux provider, scripted per test. */
-export function faux(): { faux: FauxProviderHandle; models: Models } {
+export function faux(): { faux: FauxProviderHandle; models: MutableModels } {
 	const handle = fauxProvider({
 		provider: "faux",
 		models: [{ id: "coder", contextWindow: 200_000, reasoning: true }],
@@ -122,7 +122,7 @@ export class Fixture {
 		readonly project: string,
 		readonly lanes: string,
 		readonly lane: { name: string; path: string; base: string },
-		readonly scripted: { faux: FauxProviderHandle; models: Models },
+		readonly scripted: ReturnType<typeof faux>,
 		readonly options: FixtureOptions = {},
 	) {}
 

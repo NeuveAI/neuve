@@ -1,6 +1,6 @@
 import type { Context } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
-import { defineDoc, defineExtension, defineTool, LiveDoc, type ConversationId, type EntryId, type Harness, type SubmissionId } from "@earendil-works/pi-durable";
+import { defineDoc, defineExtension, defineTool, LiveDoc, type ConversationId, type EntryId, type Harness, type SubmissionId, type Tx } from "@earendil-works/pi-durable";
 import type { Admission } from "./extensions";
 import type { Log } from "./log";
 import type { IsPlanning } from "./plan-mode";
@@ -96,7 +96,9 @@ export class Plans {
 		return decoder.decode(await this.bytes(record));
 	}
 
-	async approve(harness: Harness, chat: ConversationId, id: string, hash: string, author: string, context: Context) {
+	async approve(harness: Harness, chat: ConversationId, id: string, hash: string, author: string, context: Context,
+		onApprove: (tx: Tx, plan: StoredPlan, approved: NonNullable<Plan["approved"]>) => Promise<void>,
+	) {
 		// The chat's admission queue covers the file read and the approval commit.
 		const doc = await harness.snapshot(PlansDoc, context);
 		const record = unreplacedPlan(doc?.chats[chat], id);
@@ -105,12 +107,14 @@ export class Plans {
 			throw new Error("The plan has changed. Read the current version before approving it.");
 		}
 		if (record.plan.state === "approved") return record.plan;
-		const approved: Plan = { ...record.plan, state: "approved", approved: { by: author, at: Date.now() } };
+		const approval = { by: author, at: Date.now() };
+		const approved: Plan = { ...record.plan, state: "approved", approved: approval };
 		await harness.commit(async tx => {
 			for (const stored of (await tx.doc(PlansDoc)).chats[chat] ?? []) {
 				if (stored.plan.id === id) stored.plan = approved;
 				else if (stored.plan.state === "approved") stored.plan.state = "replaced";
 			}
+			await onApprove(tx, record, approval);
 		}, context);
 		return approved;
 	}

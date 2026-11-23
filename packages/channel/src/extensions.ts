@@ -1,3 +1,4 @@
+import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import type { ConversationId, Cursor, Extension, Harness, Registry, ToolRegistration } from "@earendil-works/pi-durable";
@@ -28,6 +29,7 @@ export function install(
 	planning: IsPlanning,
 	confinedReads: boolean,
 	log: Log,
+	buildPaused: (chat: ConversationId, context: Context) => Promise<string | undefined>,
 ): void {
 	for (const item of extension?.extensions || []) registry.install(item);
 	const guard = (registration: ToolRegistration): ToolRegistration => {
@@ -35,6 +37,8 @@ export function install(
 		return {
 			...tool,
 			async execute(args, api, context) {
+				const paused = await buildPaused(api.conversationId, context);
+				if (paused) return { content: [{ type: "text", text: paused }], isError: true };
 				// Pi re-enters execute directly when recovering an interrupted replay-safe tool.
 				const allowed = planTools.has(registration.name)
 					&& (registration.name !== "read" || confinedReads);

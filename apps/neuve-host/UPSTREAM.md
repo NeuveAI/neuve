@@ -132,6 +132,15 @@ The native extension binding installs before harness open/recovery and attaches 
 
 The existing SQLite backups and transfer snapshots carry the session document with each plan's Markdown and approval record. The session is the source of truth. The worker materializes missing files and repairs stale copies on read. The snapshot-only hosting service can read or approve a transferred plan from those bytes. Writing a new plan there requires a host-owned file adapter.
 
+| Integration file | Approval and build behavior |
+| --- | --- |
+| `apps/neuve-host/src/cli.ts` | Adds the opt-in `ace watch --builds` flag and prints build updates. |
+| `apps/neuve-host/src/parse.ts`, `apps/neuve-host/src/protocol.ts` | Add the Work log tab to window snapshots. |
+| `apps/neuve-host/src/private-log.ts` | Records build, branch, and part hashes, the agent’s role, build tool names, and the stop-all operation. |
+| `apps/neuve-host/src/worker-runtime.ts` | Supplies shared work, worktree creation, and the absolute plan path. Creates a reviewer’s worktree from the implementer’s branch. |
+| `apps/neuve-host/tests/host.test.ts` | Checks stop-all through the archived channel gateway and lists a published Work log tab through `ace tabs`. |
+| `apps/neuve-host/tests/restored-boundary.test.ts` | Checks that the window parser and registry keep a Work log tab. |
+
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 
 The coordinator runs the full composed check and isolated browser/CLI journeys at the frozen product hashes. Team membership, cloud deploy/compute, real keychain/provider authentication and remote transfers are not established by these tests. External independent review remains owner-operated; implementation completion and passing tests do not grant approval.

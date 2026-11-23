@@ -95,6 +95,25 @@ test("an unattended runtime with its own sandbox is served only the tools that c
   expect(other.systemPrompt).toBe("prompt");
 });
 
+// A runtime may silently lose the build tools even though pi registered them for its chat.
+test("both build tools reach runtimes with or without their own tools", () => {
+  const buildTools = ["agent_start", "agent_message"];
+  const offered = conversation([...buildTools, "lane"]);
+  const own = policy(offered, handle, undefined, { ownTools: true });
+  expect(own.tools.map((tool) => tool.name)).toEqual([
+    "question",
+    ...buildTools,
+  ]);
+  expect(own.systemPrompt).toContain("Neuve withholds them: lane.");
+  const other = policy(offered, handle, undefined, { ownTools: false });
+  expect(other.tools.map((tool) => tool.name)).toEqual([
+    ...coding,
+    "question",
+    ...buildTools,
+    "lane",
+  ]);
+});
+
 // A read-only runtime can see the writer and still assume saving requires its own file tools.
 test("a read-only planning session is served the plan writer and told how to save", () => {
   const planning = {

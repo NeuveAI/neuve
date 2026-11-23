@@ -5,6 +5,8 @@ import {
 	defineExtension,
 	type Extension,
 	type InboxState,
+	type SubmissionId,
+	type SubmissionRecord,
 	type ToolExecutionResult,
 	wrapTool,
 } from "@earendil-works/pi-durable";
@@ -31,6 +33,7 @@ export class Handoffs {
 	/** The author of each chat's queued handoff, from pi's inbox commits. */
 	#queued = new Map<ConversationId, string>();
 	#running = new Map<ConversationId, Set<(author: string) => void>>();
+	#buildSteers = new Set<SubmissionId>();
 
 	#directory: Directory;
 
@@ -43,9 +46,14 @@ export class Handoffs {
 		return (await senders(this.#directory, context)).get(author) || author;
 	}
 
+	buildSteer(submission: SubmissionRecord) {
+		if (submission.status === "queued") this.#buildSteers.add(submission.id);
+		else this.#buildSteers.delete(submission.id);
+	}
+
 	inbox(chat: ConversationId, state: InboxState | null | undefined) {
 		const author = (state?.items || []).flatMap((item) =>
-			item.mode === "write" ? [] : [room.input(item.content).author]
+			item.mode === "write" || this.#buildSteers.has(item.id) ? [] : [room.input(item.content).author]
 		).find(room.isAgent);
 		if (!author) return void this.#queued.delete(chat);
 		this.#queued.set(chat, author);

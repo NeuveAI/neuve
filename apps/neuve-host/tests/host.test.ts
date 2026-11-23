@@ -248,6 +248,49 @@ test("the archived worker refuses plan approval and changes to plan comments", a
 	} finally { archived.close(); }
 }, 30_000);
 
+// The archived worker could reject the stop even though the gateway can still see the build.
+test("an archived build can be stopped by the verified person", async () => {
+	const at = await setup([
+		{ tool: "plan_write", args: { text: "# Check exports\n" }, id: "archived-build" },
+		{ text: "Ready." },
+	]);
+	const client = await connect(await host(at));
+	const record = await client.request<ChannelRecord>({ op: "create", project: at.project });
+	const events: Event[] = [];
+	await client.channel(record.id, { op: "watch", plans: true, builds: true }, { event: event => events.push(event) });
+	const { submission } = await client.channel<{ submission: number }>(record.id, { op: "ask", author: OWNER, mode: "plan", text: "Draft the plan." });
+	await client.channel(record.id, { op: "wait", submission });
+	const draft = await until(() => events.findLast(event => event.kind === "plans")?.plans[0], "the draft");
+	await client.channel(record.id, { op: "plan-approve", author: OWNER, plan: draft.id, hash: draft.hash });
+	const build = await until(() => events.findLast(event => event.kind === "builds")?.builds.find(build => build.state.kind === "started"), "the started build");
+	await client.request({ op: "archive", channel: record.id, archived: true });
+	await client.channel(record.id, { op: "build-stop", author: "agent@claimed", build: build.id });
+	const archived = await Connection.open(record.id);
+	try {
+		const events: Event[] = [];
+		await archived.request({ op: "watch", builds: true }, { event: event => events.push(event) });
+		const stopped = await until(() => events.findLast(event => event.kind === "builds")?.builds[0], "the archived build");
+		expect(stopped.state).toEqual({ kind: "stopped", by: OWNER, at: expect.any(Number) });
+	} finally { archived.close(); }
+});
+
+// The CLI can exit successfully while the host still lists the last accepted layout.
+test("ace tabs lists a published Work log tab", async () => {
+	const at = await setup();
+	const running = await host(at);
+	const client = await connect(running);
+	await client.request({ op: "window", value: {
+		channel: { id: "work-log", name: "Exports" },
+		tabs: [{ id: "work", name: "Work log", type: "work", active: true }],
+	} });
+	const output = Bun.spawn([process.execPath, join(import.meta.dir, "../src/cli.ts"), "tabs", "--port", String(running.port)], {
+		env: { ...process.env, ACE_HOME: at.home }, stdout: "pipe", stderr: "pipe",
+	});
+	const [exit, stdout, stderr] = await Promise.all([output.exited, output.stdout.text(), output.stderr.text()]);
+	expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+	expect(stdout).toContain('\twork\twork\tyes\t"Work log"');
+});
+
 describe("channels through the gateway", () => {
 	test("an explicitly prepared Neuve lane runs the root chat outside the project, as its owner", async () => {
 		const at = await setup([{ tool: "bash", args: { command: "pwd" }, id: "call-pwd" }, { text: "done" }]);

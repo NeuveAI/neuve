@@ -119,12 +119,17 @@ const identifiers = new Set([
 	"path",
 	"cycle",
 	"batch",
+	"build",
+	"branch",
+	"part",
 	"error",
 	"stack",
 	"code",
 ]);
 const kinds = new Map<string, readonly string[]>(
 	Object.entries({
+		state: ["starting", "delivered", "unavailable"],
+		role: ["implementer", "reviewer"],
 		op: [
 			"create",
 			"list",
@@ -151,6 +156,7 @@ const kinds = new Map<string, readonly string[]>(
 			"changes",
 			"patch",
 			"stop",
+			"build-stop",
 			"fetch",
 			"rename",
 			"remove",
@@ -167,6 +173,8 @@ const kinds = new Map<string, readonly string[]>(
 			"ls",
 			"lane",
 			"subagent",
+			"agent_start",
+			"agent_message",
 			"browser_tabs",
 			"browser_inspect",
 			"browser_navigate",

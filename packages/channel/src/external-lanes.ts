@@ -109,6 +109,30 @@ async function select(
 	return { base: /^refs\/(heads|tags|remotes)\//.test(full) ? full : commit, commit };
 }
 
+async function addWorktree(env: ExecutionEnv, project: string, branch: string, path: string, commit: string, context: Context) {
+	await git(env, `-C ${quote(project)} worktree add -b ${quote(branch)} ${quote(path)} ${quote(commit)}`, context);
+}
+
+export async function buildWorktree(place: Place, name: string, context: Context, source?: { branch: string; base: string }) {
+	const env = place.env(place.project);
+	const path = `${place.lanes}/${name}`;
+	const branch = `${place.name}/${name}`;
+	const exists = await env.exists(path, context);
+	if (!exists.ok) throw exists.error;
+	if (exists.value) {
+		// Git may have created the worktree before the channel could record it.
+		const worktrees = await git(env, `-C ${quote(place.project)} worktree list --porcelain -z`, context);
+		const found = worktrees.split("\0\0").map(record => record.split("\0")).find(fields =>
+			fields[0] === `worktree ${path}` && fields.includes(`branch refs/heads/${branch}`));
+		const base = found?.find(field => field.startsWith("HEAD "))?.slice(5);
+		if (!base) throw new Error("The worktree path is already in use.");
+		return { path, branch, base: source?.base ?? base };
+	}
+	const { commit } = await select(env, place.project, source ? `refs/heads/${source.branch}` : "HEAD", context);
+	await addWorktree(env, place.project, branch, path, commit, context);
+	return { path, branch, base: source?.base ?? commit };
+}
+
 /** Only the chat that last took a lane may write to it while that chat is busy. */
 async function guard(
 	owner: ConversationId | undefined,
@@ -181,13 +205,7 @@ export function lanes(place: Place): Extension {
 					// The worktree starts at the memoized commit, so a rerun cannot start it somewhere else.
 					if (!exists.value) {
 						path = created;
-						await git(
-							env,
-							`-C ${quote(place.project)} worktree add -b ${quote(branch)} ${quote(path)} ${
-								quote(selection!.commit)
-							}`,
-							context,
-						);
+						await addWorktree(env, place.project, branch, path, selection!.commit, context);
 					}
 					// Another chat can take the lane while this call fetches, so ownership is checked again
 					// where it is claimed, and the lane keeps the base committed by then.

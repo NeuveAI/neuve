@@ -37,7 +37,7 @@ const reviewHistoryRequest = z.strictObject({
 
 const WindowStateSchema = z.strictObject({
 	channel: z.strictObject({id: z.string(), name: z.string()}),
-	tabs: z.array(z.strictObject({id: z.string(), name: z.string(), type: z.enum(["blank", "chat", "plan", "diff", "terminal", "live", "review"]), active: z.boolean()})),
+	tabs: z.array(z.strictObject({id: z.string(), name: z.string(), type: z.enum(["blank", "chat", "plan", "work", "diff", "terminal", "live", "review"]), active: z.boolean()})),
 	focused: z.boolean().optional(),
 });
 
