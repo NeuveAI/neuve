@@ -161,9 +161,14 @@ test("an install writes exactly the skill's files and a receipt, and a rerun cha
   expect(bundle.files.map((file) => file.path)).toEqual([
     "SKILL.md",
     "references/desk.md",
+    "references/final-reviewer.md",
+    "references/inner-loop-reviewer.md",
     "references/lanes-and-dispositions.md",
     "references/proof.md",
     "references/request-review.md",
+    "references/review-against-scope.md",
+    "references/review-independence.md",
+    "references/review-verification.md",
     "references/setup.md",
     "references/stack.md",
   ]);

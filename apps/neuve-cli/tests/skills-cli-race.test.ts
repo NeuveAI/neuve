@@ -151,9 +151,14 @@ test("uninstall: references swapped for a link inside the removal removes nothin
   expect(readdirSync(join(root, "references-moved"))).not.toContain("desk.md");
   expect(readdirSync(other).sort()).toEqual([
     "desk.md",
+    "final-reviewer.md",
+    "inner-loop-reviewer.md",
     "lanes-and-dispositions.md",
     "proof.md",
     "request-review.md",
+    "review-against-scope.md",
+    "review-independence.md",
+    "review-verification.md",
     "setup.md",
     "stack.md",
   ]);
