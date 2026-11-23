@@ -5,6 +5,7 @@ import * as privateLog from "./private-log";
 import {lanes as externalLanes, isPlaced} from "@ace/channel/external-lanes";
 import {join as joinPath} from "node:path";
 const catalogLanes = (id: string) => joinPath(config.lanes, id);
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Context } from "@earendil-works/chord";
@@ -209,12 +210,14 @@ function planFiles(directory: string): NonNullable<Options["planFiles"]> {
 			// Publish only a staged write whose hash the session committed.
 			try { await rename(pending, path); }
 			catch (error) { if (!missing(error)) throw error; }
-			try { return await readFile(path); }
-			catch (error) { if (!missing(error)) throw error; }
-			// Snapshots carry the committed bytes. A restored channel has no files yet.
+			try {
+				const copy = await readFile(path);
+				if (createHash("sha256").update(copy).digest("hex") === hash) return copy;
+			} catch (error) { if (!missing(error)) throw error; }
+			// Rebuild a missing or changed copy from the committed session bytes.
 			await stage(file, hash, bytes);
 			await rename(pending, path);
-			return readFile(path);
+			return bytes;
 		},
 	};
 }

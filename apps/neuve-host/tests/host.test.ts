@@ -22,7 +22,7 @@ import { join } from "node:path";
 
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 
-import type { ChannelInfo, Event } from "@ace/channel/protocol";
+import type { ChannelInfo, Event, Plan } from "@ace/channel/protocol";
 
 import type { Listing as ChannelRecord } from "../src/catalog";
 import * as catalog from "../src/catalog";
@@ -205,6 +205,33 @@ async function setup(steps: Step[] = []) {
 	places.push(at);
 	return at;
 }
+
+// The worker socket can receive approval directly, so a gateway test alone would miss this gate.
+test("the archived worker refuses approval of a saved draft", async () => {
+	const text = "# Archive this draft\n";
+	const at = await setup([{ tool: "plan_write", args: { text }, id: "archive-draft" }]);
+	const client = await connect(await host(at));
+	const record = await client.request<ChannelRecord>({ op: "create", project: at.project });
+	const active = await Connection.open(record.id);
+	let draft: Plan;
+	try {
+		const events: Event[] = [];
+		await active.request({ op: "watch", plans: true }, { event: event => events.push(event) });
+		const { submission } = await active.request<{ submission: number }>({ op: "ask", author: OWNER, mode: "plan", text: "Draft a plan." });
+		expect(await active.request({ op: "wait", submission })).toBe("done");
+		draft = await until(() => events.findLast(event => event.kind === "plans")?.plans[0], "the draft plan");
+	} finally { active.close(); }
+
+	await client.request({ op: "archive", channel: record.id, archived: true });
+	const archived = await Connection.open(record.id);
+	try {
+		const approval = { op: "plan-approve", author: OWNER, plan: draft.id, hash: draft.hash } as const;
+		await expect(archived.request(approval)).rejects.toThrow("The channel is archived");
+		expect(await archived.request({ op: "plan", plan: draft.id })).toEqual({ hash: draft.hash, text });
+		await client.request({ op: "archive", channel: record.id, archived: false });
+		expect(await archived.request(approval)).toMatchObject({ ...draft, state: "approved", approved: { by: OWNER, at: expect.any(Number) } });
+	} finally { archived.close(); }
+}, 30_000);
 
 describe("channels through the gateway", () => {
 	test("an explicitly prepared Neuve lane runs the root chat outside the project, as its owner", async () => {

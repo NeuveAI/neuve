@@ -131,7 +131,8 @@ test("plan approvals are versioned, human-only, idempotent and confined to the c
 			expect(watch.of("plans").map(event => event.plans)).toEqual([[]]);
 			await run.write("First draft", "first");
 			const first = await draft("first", watch);
-			await run.write("## Revised\n\nSecond draft", "revision");
+			const revised = "## Revised\n\nSecond draft";
+			await run.write(revised, "revision");
 			const revision = await draft("revision", watch);
 			expect(revision.id).toBe(first.id);
 			expect(await readdir(join(state, "plans"))).toHaveLength(1);
@@ -143,9 +144,9 @@ test("plan approvals are versioned, human-only, idempotent and confined to the c
 			const path = join(state, "plans", filename);
 			const altered = Buffer.from("\uFEFF## Altered outside the tool\r\n");
 			await writeFile(path, altered);
-			expect(await run.request({ op: "plan", plan: revision.id })).toEqual({ hash: hash(altered), text: altered.toString() });
-			await expect(approve(revision, { hash: hash(altered) })).rejects.toThrow("The plan file differs from the saved version.");
-			await writeFile(path, "## Revised\n\nSecond draft");
+			expect(await run.request({ op: "plan", plan: revision.id })).toEqual({ hash: hash(revised), text: revised });
+			expect(await readFile(path, "utf8")).toBe(revised);
+			await expect(approve(revision, { hash: hash(altered) })).rejects.toThrow("The plan has changed.");
 			await run.write("Another chat's plan", "other", chat);
 			const otherPlan = await draft("other", other);
 			for (const plan of ["missing", `../plans/${filename}`, otherPlan.id]) {
@@ -185,6 +186,29 @@ test("plan approvals are versioned, human-only, idempotent and confined to the c
 	} finally { await rm(root, { recursive: true, force: true }); }
 });
 
+// The Plan tab can still say Approved after another process changes its Markdown file.
+test("reading an approved plan repairs its file and serves the approved bytes", async () => {
+	const { root, project, state } = await folders();
+	try {
+		const run = await open(project, state);
+		try {
+			const watch = await run.watch(true);
+			const text = "# Approved plan\r\n\r\nShip this version.\r\n";
+			await run.write(text, "approved-copy");
+			const { plans: [draft] } = await watch.until("plans", event => event.plans.length === 1);
+			const approved = await run.request<Plan>({ op: "plan-approve", author: owner, plan: draft.id, hash: hash(text) });
+			await watch.until("plans", event => event.plans[0]?.state === "approved");
+			const [filename] = await readdir(join(state, "plans"));
+			const path = join(state, "plans", filename);
+			await writeFile(path, "# A different plan\n");
+			expect(await run.request({ op: "plan", plan: approved.id })).toEqual({ hash: hash(text), text });
+			expect(await readFile(path, "utf8")).toBe(text);
+			expect(watch.of("plans").at(-1)?.plans).toEqual([approved]);
+			await watch.stop();
+		} finally { await run.channel.close(); }
+	} finally { await rm(root, { recursive: true, force: true }); }
+});
+
 // Pi keeps generating after a mixed tool round. A plan saved there could appear ready while the agent is still working.
 test("a mixed tool round must retry the plan as a standalone call", async () => {
 	const { root, project, state } = await folders();
@@ -213,7 +237,7 @@ test("a mixed tool round must retry the plan as a standalone call", async () => 
 	} finally { await rm(root, { recursive: true, force: true }); }
 });
 
-// Transfer and backup can appear to succeed while copying the approval record without its Markdown.
+// A snapshot can preserve approval while losing the Markdown or leaving an older copy on disk.
 test("approved Markdown survives a native backup, restore and move snapshot and goes with the channel", async () => {
 	const { root, project, state } = await folders();
 	const previous = runtimeHooks();
@@ -248,6 +272,8 @@ test("approved Markdown survives a native backup, restore and move snapshot and 
 			const moved = await openNodeSqliteDatabase(join(state, "channel.sqlite"));
 			try { await importSnapshot(moved, snapshot); } finally { await moved.close(); }
 		} finally { await db.close(); }
+		await mkdir(join(state, "plans"));
+		await writeFile(join(state, "plans", filename), "# Parked copy\n");
 
 		await remove(source.id);
 		await expect(readFile(path)).rejects.toMatchObject({ code: "ENOENT" });
