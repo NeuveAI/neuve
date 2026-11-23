@@ -132,10 +132,10 @@ test("two requests for one call are two cards, each answered by its own id", asy
 // refuses, and a card without its reason leaves the person guessing why the work did not run.
 test("a closed request shows its reason and nothing under its head", () => {
 	const reasons = {
-		"turn-ended": "Closed when the turn ended",
+		"turn-ended": "The turn ended",
 		"runtime-resolved": "Withdrawn before an answer",
-		stopped: "Closed when the chat was stopped",
-		restarted: "Closed when Neuve restarted",
+		stopped: "The chat was stopped",
+		restarted: "Neuve restarted",
 	} as const;
 	for (const [reason, text] of Object.entries(reasons)) {
 		const card = html(request({ kind: "closed", reason: reason as keyof typeof reasons }));

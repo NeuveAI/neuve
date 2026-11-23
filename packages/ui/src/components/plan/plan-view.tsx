@@ -294,12 +294,12 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 	let approveOff = !!approve?.blocked || approve?.approving || text === undefined;
 	return (
 		<section aria-label="Plan" className={cn("flex h-full min-h-0 flex-col bg-background text-foreground", className)}>
-			<header className="flex shrink-0 flex-col gap-1 border-b border-border px-5 pt-3.5 pb-2.5">
+			<header className={cn("flex shrink-0 flex-col gap-1 border-b border-border px-5 pt-3.5", plan.meta ? "pb-2.5" : "pb-3.5")}>
 				<div className="flex min-w-0 items-center gap-2">
 					<h1 className="min-w-0 truncate text-base leading-[22px] font-semibold">{plan.title || "Plan"}</h1>
 					<PlanBadge state={plan.state} />
 				</div>
-				<p className="truncate text-xs leading-4 text-muted-foreground">{plan.meta}</p>
+				{plan.meta && <p className="truncate text-xs leading-4 text-muted-foreground">{plan.meta}</p>}
 			</header>
 			{/* Ace makes every element unselectable; the plan's words are selectable, its list markers not. */}
 			<div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3.5 select-text [&_*]:select-text [&_[aria-hidden]]:select-none">

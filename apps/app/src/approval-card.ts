@@ -26,7 +26,6 @@ export type ApprovalCardView = {
 	text?: string;
 	/** The runtime's reason, verbatim. */
 	reason?: string;
-	/** Plain statements about the request, shown whatever its state. */
 	notes: string[];
 	note?: string;
 	/** The runtime's raw input as JSON. */
@@ -67,10 +66,10 @@ function holdsHidden(value: unknown): boolean {
 }
 
 const CLOSED: Record<Exclude<Extract<ApprovalRequest["state"], { kind: "closed" }>["reason"], "message">, string> = {
-	"turn-ended": "Closed when the turn ended",
+	"turn-ended": "The turn ended",
 	"runtime-resolved": "Withdrawn before an answer",
-	stopped: "Closed when the chat was stopped",
-	restarted: "Closed when Neuve restarted",
+	stopped: "The chat was stopped",
+	restarted: "Neuve restarted",
 };
 
 const capital = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
