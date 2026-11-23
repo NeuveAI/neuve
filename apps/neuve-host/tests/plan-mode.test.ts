@@ -1,15 +1,26 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, type Models } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
+import { ok } from "@earendil-works/pi-durable/env";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { Channel, Event, Request } from "@ace/channel";
 import { config } from "../src/host-config";
 import { openChannel } from "../src/worker-runtime";
 import { parseHostEnvelope } from "../src/parse";
 import { configureRuntime, runtimeHooks } from "../src/runtime-hooks";
+
+let previousClaudeConfig: string | undefined;
+beforeEach(() => {
+	previousClaudeConfig = process.env["CLAUDE_CONFIG_DIR"];
+	delete process.env["CLAUDE_CONFIG_DIR"];
+});
+afterEach(() => {
+	if (previousClaudeConfig === undefined) delete process.env["CLAUDE_CONFIG_DIR"];
+	else process.env["CLAUDE_CONFIG_DIR"] = previousClaudeConfig;
+});
 
 function git(cwd: string, ...args: string[]) {
 	const child = Bun.spawnSync(["git", "-c", "user.name=Test", "-c", "user.email=test@neuve.invalid", ...args], { cwd });
@@ -24,8 +35,12 @@ function faux() {
 	return { fake, models };
 }
 
-function open(root: string, models: Models) {
-	const env = new NodeExecutionEnv({ cwd: root });
+function open(root: string, models: Models, home: string) {
+	const env = new class extends NodeExecutionEnv {
+		override async absolutePath(...args: Parameters<NodeExecutionEnv["absolutePath"]>): ReturnType<NodeExecutionEnv["absolutePath"]> {
+			return args[0] === "~" ? ok(home) : super.absolutePath(...args);
+		}
+	}({ cwd: root });
 	return openChannel({
 		id: "plan-test", name: "Plan test", owner: "owner", project: root,
 		defaultModel: async () => ({ provider: "plan-test", modelId: "agent" }),
@@ -56,6 +71,159 @@ async function results(channel: Channel, chat?: number) {
 	return collected;
 }
 
+async function writeSkill(folder: string, description: string) {
+	const skill = `---\nname: neuve\ndescription: ${description}\n---\n\n# Neuve\n`;
+	const reference = "# Reading a Neuve review\n";
+	await mkdir(join(folder, "references"), { recursive: true });
+	await writeFile(join(folder, "SKILL.md"), skill);
+	await writeFile(join(folder, "references", "review.md"), reference);
+	return { skill, reference };
+}
+
+// Exercise discovery and both pi reads through the path in the actual system prompt.
+test.each([
+	{ location: "user Codex", installed: "user-agents" },
+	{ location: "user Claude Code", installed: "user-claude" },
+	{ location: "configured Claude Code with a linked skill", installed: "configured-claude" },
+	{ location: "repository Codex", installed: "repo-agents" },
+	{ location: "ignored repository Claude Code", installed: "repo-claude" },
+	{ location: "both scopes", installed: "user-agents", duplicates: true },
+] as const)("an Ace chat can list and read the Neuve skill at $location", async (fixture) => {
+	const root = await mkdtemp(join(tmpdir(), "neuve plan skill "));
+	try {
+		const dir = await realpath(root);
+		const repo = join(dir, "checkout");
+		const home = join(dir, "home");
+		const claude = join(dir, "configured Claude home");
+		await mkdir(repo);
+		git(repo, "init", "-q");
+		await writeFile(join(repo, ".gitignore"), ".claude/\n");
+		const paths = {
+			"user-agents": join(home, ".agents", "skills", "neuve"),
+			"user-claude": join(home, ".claude", "skills", "neuve"),
+			"configured-claude": join(claude, "skills", "neuve"),
+			"repo-agents": ".agents/skills/neuve",
+			"repo-claude": ".claude/skills/neuve",
+		};
+		const listed = paths[fixture.installed];
+		let files: Awaited<ReturnType<typeof writeSkill>>;
+		if (fixture.installed === "configured-claude") {
+			process.env["CLAUDE_CONFIG_DIR"] = claude;
+			// Personal Claude installations can link back to the user's Codex installation.
+			const target = join(home, ".agents", "skills", "fixtures", "neuve");
+			files = await writeSkill(target, fixture.location);
+			const claudeFiles = join(dir, "Claude files");
+			await mkdir(join(claudeFiles, "skills"), { recursive: true });
+			await symlink(claudeFiles, claude);
+			await symlink(target, listed);
+			await symlink(join(target, "SKILL.md"), join(claude, "skills", "linked-file"));
+		} else {
+			files = await writeSkill(resolve(repo, listed), fixture.location);
+		}
+		if ("duplicates" in fixture) {
+			await writeSkill(join(home, ".claude", "skills", "claude-copy"), "ignored user copy");
+			await writeSkill(join(repo, paths["repo-agents"]), "ignored repository copy");
+			await writeSkill(join(repo, paths["repo-claude"]), "ignored Claude repository copy");
+		}
+		for (const mode of ["ace", "plan"] as const) {
+			const { fake, models } = faux();
+			const channel = await open(repo, models, home);
+			try {
+				let listing: string[] = [];
+				fake.appendResponses([
+					received => {
+						const section = getCurrentSystemPrompt(received.messages).match(/Skills in this repository[^\n]*\n(?:- [^\n]+\n?)*/)?.[0];
+						if (process.env["NEUVE_DUMP_PLAN_SKILLS"] === "1") console.log(mode, fixture.location, section);
+						listing = section?.trimEnd().split("\n").slice(1) ?? [];
+						const path = /^- neuve \((.+)\): /.exec(listing[0] ?? "")?.[1];
+						if (!path) return fauxAssistantMessage("The Neuve skill was not listed");
+						return fauxAssistantMessage([
+							fauxToolCall("read", { path }, { id: "skill" }),
+							fauxToolCall("read", { path: join(dirname(path), "references", "review.md") }, { id: "reference" }),
+						], { stopReason: "toolUse" });
+					},
+					fauxAssistantMessage("Read complete"),
+				]);
+				await ask(channel, { mode });
+				const reads = await results(channel);
+				if (process.env["NEUVE_DUMP_PLAN_SKILLS"] === "1") console.log([...reads.values()]);
+				expect(listing).toEqual([`- neuve (${listed}/SKILL.md): ${fixture.location}`]);
+				expect(reads.get("skill")).toMatchObject({ error: false, text: files.skill });
+				expect(reads.get("reference")).toMatchObject({ error: false, text: files.reference });
+			} finally {
+				await channel.close();
+			}
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+// Drive plan-mode read through the same wrapper that filters discovery and references.
+test("plan mode refuses files that resolve outside the allowed skill folders", async () => {
+	const root = await mkdtemp(join(tmpdir(), "neuve plan skill boundary "));
+	try {
+		const dir = await realpath(root);
+		const repo = join(dir, "checkout");
+		const home = join(dir, "home");
+		const skills = join(home, ".claude", "skills");
+		const skill = join(skills, "neuve");
+		const outside = join(dir, "outside");
+		await mkdir(repo);
+		git(repo, "init", "-q");
+		await writeFile(join(repo, ".gitignore"), ".claude/\nignored-skill/\n");
+		await mkdir(join(home, ".agents"), { recursive: true });
+		await writeSkill(skill, "Installed skill");
+		await writeSkill(outside, "Outside skill");
+		await writeFile(join(home, ".claude", "settings.json"), "private settings");
+		await writeFile(join(home, ".agents", "other-file"), "private data");
+		await writeFile(join(skills, "root-file.md"), "file beside the skill");
+		await symlink(outside, join(skills, "outside"));
+		await symlink(join(outside, "SKILL.md"), join(skill, "references", "outside.md"));
+		await symlink(join(skill, "references"), join(outside, "back"));
+		await symlink(join(outside, "back"), join(skill, "round-trip"));
+		await mkdir(join(repo, ".claude"));
+		await writeSkill(join(repo, "ignored-skill", "neuve"), "Unauthorized repository root");
+		await symlink("../ignored-skill", join(repo, ".claude", "skills"));
+		const denied = [
+			join(skills, "outside", "SKILL.md"), join(skill, "references", "outside.md"),
+			join(skills, "root-file.md"),
+			join(home, ".claude", "settings.json"), join(home, ".agents", "other-file"),
+			join(outside, "SKILL.md"), ".claude/skills/neuve/SKILL.md",
+		];
+		const { fake, models } = faux();
+		const channel = await open(repo, models, home);
+		try {
+			let listing = "";
+			fake.appendResponses([
+				received => {
+					listing = getCurrentSystemPrompt(received.messages);
+					return fauxAssistantMessage([
+						fauxToolCall("read", { path: join(skill, "references", "review.md") }, { id: "allowed" }),
+						// The round-trip link is allowed because its final path is inside the skill root.
+						fauxToolCall("read", { path: join(skill, "round-trip", "review.md") }, { id: "round-trip" }),
+						...denied.map((path, i) => fauxToolCall("read", { path }, { id: `denied-${i}` })),
+					], { stopReason: "toolUse" });
+				},
+				fauxAssistantMessage("Read complete"),
+			]);
+			await ask(channel, { mode: "plan" });
+			const reads = await results(channel);
+			if (process.env["NEUVE_DUMP_PLAN_SKILLS"] === "1") console.log([...reads.values()]);
+			expect(listing).toContain(`- neuve (${skill}/SKILL.md): Installed skill`);
+			expect(listing).not.toContain("Outside skill");
+			expect(listing).not.toContain("Unauthorized repository root");
+			expect(reads.get("allowed")).toMatchObject({ error: false, text: "# Reading a Neuve review\n" });
+			expect(reads.get("round-trip")).toMatchObject({ error: false, text: "# Reading a Neuve review\n" });
+			for (const i of denied.keys()) expect(reads.get(`denied-${i}`)).toMatchObject({ error: true });
+		} finally {
+			await channel.close();
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 // The gateway must retain the mode when it replaces the client's claimed author.
 test("the gateway preserves an ask's mode and stamps the verified author", () => {
 	expect(parseHostEnvelope(JSON.stringify({
@@ -85,7 +253,7 @@ test("the configured worker gives planning chats confined access without a lane"
 		await mkdir(config.lanes);
 		configureRuntime({ worker: { models: (_, defaults) => defaults } });
 		const { fake, models } = faux();
-		const channel = await open(repo, models);
+		const channel = await open(repo, models, join(dir, "home"));
 		try {
 			fake.appendResponses([
 				fauxAssistantMessage([
@@ -150,7 +318,7 @@ test.each(["main checkout", "linked worktree"])("plan reads refuse outside, Git,
 		await symlink(config, join(checkout, "config-link’s.txt"));
 		await symlink(records, join(checkout, "records-link’s.txt"));
 		const { fake, models } = faux();
-		const channel = await open(checkout, models);
+		const channel = await open(checkout, models, join(dir, "home"));
 		try {
 			const attempts = [
 				[join(root, "outside’s.txt"), "outside the working tree"],
@@ -229,7 +397,7 @@ test("explore rejects options and leaves files, the index, and configured progra
 		const files = (await readdir(repo)).sort();
 		const outside = (await readdir(root)).sort();
 		const { fake, models } = faux();
-		const channel = await open(repo, models);
+		const channel = await open(repo, models, join(root, "home"));
 		try {
 			const invalid = ["--output=fixture", "-Ofixture", "--ext-diff", "-c fixture", "--no-index"].flatMap(value => [
 				{ action: value },
@@ -303,7 +471,7 @@ test("explore compare omits paths Git now ignores in the whole tree and in a dir
 		git(repo, "add", "--", ".gitignore", "config/notes.txt", "config/example.txt");
 		git(repo, "commit", "-qm", "Update fixture");
 		const { fake, models } = faux();
-		const channel = await open(repo, models);
+		const channel = await open(repo, models, join(root, "home"));
 		try {
 			const compare = { action: "compare", from: "HEAD~1", to: "HEAD" };
 			fake.appendResponses([

@@ -1,15 +1,16 @@
-import { expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { mkdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineExtension, GenerationTask, type Harness, hook, InboxDoc, LiveDoc, MemoryStorage, ROOT_CONVERSATION_ID, StorageRejected, type StorageWrite } from "@earendil-works/pi-durable";
-import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Channel, type Options } from "../src/channel";
 import { EventSchema } from "../src/frame";
 import { parseRequest } from "../src/parse";
 import { ChatModesDoc } from "../src/plan-mode";
 import type { ChannelInfo, ChatMode, Event, Request } from "../src/protocol";
-import { Fixture, MODEL, OWNER, until } from "./helpers";
+import { Fixture, isolateClaudeConfig, MODEL, OWNER, scratch, scratchEnv, until } from "./helpers";
 
 // Both composers send through this parser before admission.
 test("an ask carries only a recognized chat mode through the parser", () => {
@@ -21,13 +22,23 @@ test("an ask carries only a recognized chat mode through the parser", () => {
 	expect(() => parseRequest({ op: "ask", text: "Draft a plan", mode: "write" }, "member")).toThrow("at mode");
 });
 
+const roots: string[] = [];
+afterEach(async () => {
+	for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
+isolateClaudeConfig();
+
 async function memoryChannel(options: Partial<Options> = {}) {
+	const root = await scratch();
+	roots.push(root);
+	const project = join(root, "checkout");
+	await mkdir(project);
 	const fake = fauxProvider({ provider: MODEL.provider, models: [{ id: MODEL.modelId }, { id: "alternate" }], tokensPerSecond: 500 });
 	const models = createModels();
 	models.setProvider(fake.provider);
 	const channel = await Channel.open({
-		id: "plan", name: "Plan", owner: OWNER, project: import.meta.dir, models,
-		storage: new MemoryStorage(), model: MODEL, env: cwd => new NodeExecutionEnv({ cwd }),
+		id: "plan", name: "Plan", owner: OWNER, project, models,
+		storage: new MemoryStorage(), model: MODEL, env: cwd => scratchEnv(cwd, root),
 		directory: { self: { id: "plan", name: "Plan" }, list: async () => [], deliver: async () => {} },
 		log: () => {},
 		...options,

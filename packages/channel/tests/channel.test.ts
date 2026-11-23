@@ -10,13 +10,14 @@ import { RequestSchema } from "../src/parse";
 import { ReviewFeedDefinition } from "../src/protocol";
 
 import type { ChannelInfo, Event, RunEnd } from "../src/index";
-import { Fixture, MODEL, OWNER, until } from "./helpers";
+import { Fixture, isolateClaudeConfig, MODEL, OWNER, until } from "./helpers";
 
 let fixture: Fixture | undefined;
 afterEach(async () => {
 	await fixture?.dispose();
 	fixture = undefined;
 });
+isolateClaudeConfig();
 
 const tool = (name: string, args: JsonObject, id?: string) =>
 	fauxAssistantMessage(fauxToolCall(name, args, id ? { id } : {}), { stopReason: "toolUse" });

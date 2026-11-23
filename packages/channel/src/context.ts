@@ -1,10 +1,10 @@
+import { join, resolve } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import type { PromptSection } from "@earendil-works/pi-durable";
-import type { ExecutionEnv, FileError } from "@earendil-works/pi-durable/env";
+import { getOrThrow, type ExecutionEnv, type FileError } from "@earendil-works/pi-durable/env";
 
 /** Instruction files at the checkout root, in the order agents conventionally read them. */
 const INSTRUCTIONS = ["AGENTS.md", "CLAUDE.md"];
-const SKILLS = [".agents/skills", ".claude/skills"];
 const RULES = ".claude/rules";
 const LIMIT = 32_000;
 
@@ -21,7 +21,7 @@ async function read(
 	path: string,
 	context: Context,
 ): Promise<string | undefined> {
-	const result = await env.readTextFile(`${env.cwd}/${path}`, context);
+	const result = await env.readTextFile(path, context);
 	if (!result.ok) return absent(result.error);
 	const text = result.value.trim();
 	return text.length > LIMIT
@@ -30,7 +30,7 @@ async function read(
 }
 
 async function list(env: ExecutionEnv, path: string, context: Context) {
-	const result = await env.listDir(`${env.cwd}/${path}`, context);
+	const result = await env.listDir(path, context);
 	if (result.ok) return result.value;
 	absent(result.error);
 	return [];
@@ -51,15 +51,29 @@ function front(text: string): Record<string, string> {
 }
 
 async function skills(env: ExecutionEnv, context: Context): Promise<string[]> {
+	const home = getOrThrow(await env.absolutePath("~", context));
+	// Keep these skill roots in step with apps/neuve-host/src/plan-git.ts.
+	const roots = [
+		join(home, ".agents", "skills"),
+		resolve(process.env["CLAUDE_CONFIG_DIR"] || join(home, ".claude"), "skills"),
+		".agents/skills",
+		".claude/skills",
+	];
+	// User skills win because the user-scope Neuve skill matches the installed command.
+	const seen = new Set<string>();
 	const out: string[] = [];
-	for (const dir of SKILLS) {
+	for (const dir of roots) {
 		for (const entry of await list(env, dir, context)) {
-			if (entry.kind !== "directory") continue;
+			if (entry.kind !== "directory" && entry.kind !== "symlink") continue;
+			// Opening this child also skips symlinks whose targets are missing or are files.
 			const path = `${dir}/${entry.name}/SKILL.md`;
 			const text = await read(env, path, context);
 			if (!text) continue;
-			const { name, description } = front(text);
-			out.push(`- ${name || entry.name} (${path})${description ? `: ${description}` : ""}`);
+			const { name: declaredName, description } = front(text);
+			const name = declaredName || entry.name;
+			if (seen.has(name)) continue;
+			seen.add(name);
+			out.push(`- ${name} (${path})${description ? `: ${description}` : ""}`);
 		}
 	}
 	return out;
@@ -101,7 +115,7 @@ export const instructions: PromptSection = {
 		const found = await skills(env, context);
 		if (found.length) {
 			parts.push(
-				`Skills in this repository. Read a skill's file before doing work it describes:\n${
+				`Skills in this repository and the user's skill folders. Read a skill's file before doing work it describes:\n${
 					found.join("\n")
 				}`,
 			);

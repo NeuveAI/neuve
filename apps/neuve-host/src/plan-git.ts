@@ -4,7 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
-import { err, FileError, ok, type ExecutionEnv } from "@earendil-works/pi-durable/env";
+import { err, FileError, getOrThrow, ok, type ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { z } from "zod";
 
 type Tree = { root: string; gitDirectories: string[] };
@@ -76,11 +76,15 @@ function below(root: string, path: string): string | undefined {
 function checkedName(tree: Tree, path: string): string {
 	const name = below(tree.root, path);
 	if (name === undefined) error("permission_denied", "Plan mode cannot read outside the working tree.");
+	checkGitMetadata(tree, path, name);
+	return name;
+}
+
+function checkGitMetadata(tree: Tree, path: string, name = path) {
 	if (tree.gitDirectories.some(dir => below(dir, path) !== undefined)
 		|| name.split(sep).some(part => part.toLowerCase() === ".git")) {
 		error("permission_denied", "Plan mode cannot read Git metadata.");
 	}
-	return name;
 }
 
 async function canonical(path: string, allowMissing: boolean): Promise<string> {
@@ -124,24 +128,60 @@ async function confined(tree: Tree, path: string, context: Context, allowMissing
 	return file;
 }
 
+async function skillPath(tree: Tree, env: ExecutionEnv, path: string, kind: "file" | "directory", context: Context) {
+	const home = getOrThrow(await env.absolutePath("~", context));
+	// Keep these skill roots in step with packages/channel/src/context.ts.
+	const userRoots = [
+		join(home, ".agents", "skills"),
+		resolve(process.env["CLAUDE_CONFIG_DIR"] || join(home, ".claude"), "skills"),
+	];
+	const candidates = [
+		...userRoots.map(alias => ({ alias, fixed: undefined })),
+		...[".agents/skills", ".claude/skills"].map(dir => ({ alias: resolve(env.cwd, dir), fixed: join(tree.root, dir) })),
+	];
+	const roots = await Promise.all(candidates.map(async ({ alias, fixed }) => {
+		const actual = await realpath(alias).catch(() => undefined);
+		// The checkout cannot make another folder an allowed root by replacing a repository root.
+		return { alias, actual: fixed === undefined || fixed === actual ? actual : undefined };
+	}));
+	const requested = resolve(env.cwd, path);
+	const matching = roots.filter(({ alias, actual }) => below(alias, requested) !== undefined
+		|| (actual !== undefined && below(actual, requested) !== undefined));
+	if (!matching.length) return;
+	const refuse = () => error("permission_denied", "Plan mode cannot read outside the allowed skill folders.");
+	if (!matching.some(root => root.actual !== undefined)) return refuse();
+	checkGitMetadata(tree, requested);
+	const actual = await realpath(requested);
+	checkGitMetadata(tree, actual);
+	if (!roots.some(root => {
+		const name = root.actual === undefined ? undefined : below(root.actual, actual);
+		return name !== undefined && (kind === "directory" || name.includes(sep));
+	})) return refuse();
+	return actual;
+}
+
 export function planFileAccess(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv {
 	let currentTree: Promise<Tree> | undefined;
 	const getTree = (context: Context) => currentTree ??= tree(env.cwd, context);
 	const read: ExecutionEnv["readBinaryFile"] = async (path, context) => {
 		try {
 			const worktree = await getTree(context);
-			const { actual } = await confined(worktree, path, context);
+			const skill = await skillPath(worktree, env, path, "file", context);
+			const actual = skill ?? (await confined(worktree, path, context)).actual;
 			const expected = await lstat(actual);
 			if (!expected.isFile()) error("permission_denied", "Plan mode can only read regular files.");
 			const file = await open(actual, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 			try {
 				const opened = await file.stat();
-				const checked = await realpath(resolve(worktree.root, path));
+				const checked = skill
+					? await skillPath(worktree, env, path, "file", context)
+					: await realpath(resolve(worktree.root, path));
+				if (checked !== actual) error("permission_denied", "Plan mode needs a stable file path.");
 				const current = await lstat(checked);
-				if (checked !== actual || !opened.isFile() || !current.isFile()
+				if (!opened.isFile() || !current.isFile()
 					|| opened.dev !== expected.dev || opened.ino !== expected.ino
 					|| opened.dev !== current.dev || opened.ino !== current.ino) {
-					error("permission_denied", "Plan mode needs a regular file that stays inside the working tree.");
+					error("permission_denied", "Plan mode needs a regular file that stays at the verified path.");
 				}
 				return ok(await file.readFile({ signal: context.abortSignal }));
 			} finally {
@@ -169,7 +209,9 @@ export function planFileAccess(env: ExecutionEnv, isPlanning: (context: Context)
 		const exists = await env.exists(path, context);
 		if (!exists.ok || !exists.value) return unavailable(path);
 		try {
-			const { actual } = await confined(await getTree(context), path, context);
+			const worktree = await getTree(context);
+			const actual = await skillPath(worktree, env, path, "directory", context)
+				?? (await confined(worktree, path, context)).actual;
 			return await env.listDir(actual, context);
 		} catch {
 			return unavailable(path);
