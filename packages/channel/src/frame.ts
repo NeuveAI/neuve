@@ -49,7 +49,7 @@ export const PlanSchema = z.object({
 
 // Comments on a plan.
 const fileLine = z.object({ line: id, text });
-const send = z.object({ at: z.number(), entry: id });
+const send = z.object({ at: z.number(), submission: id, entry: id.optional() });
 export const PlanCommentSchema = z.object({
 	id: text,
 	plan: text,
