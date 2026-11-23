@@ -473,26 +473,42 @@ const scopePath = (root: string, path: string) => {
 };
 
 const fileOverBound = `The file exceeds ${MAX_DOCUMENT_BYTES} bytes.`;
+type WorkingFailure =
+  { kind: "missing" } | { kind: "gap"; reason: string; cause?: string };
 type WorkingRead =
-  | { kind: "missing" }
-  | { kind: "gap"; reason: string }
-  | { kind: "file"; bytes: Uint8Array; fetchedAt: string };
+  WorkingFailure | { kind: "file"; bytes: Uint8Array; fetchedAt: string };
 
-const readWorkingFile = async (
-  requested: string,
-): Promise<WorkingRead & { path: string }> => {
-  let path = requested;
+const workingFailure = (error: unknown): WorkingFailure =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  (error.code === "ENOENT" || error.code === "ENOTDIR")
+    ? { kind: "missing" }
+    : {
+        kind: "gap",
+        reason: "The file could not be read.",
+        cause: String(error),
+      };
+
+const resolveWorkingPath = async (requested: string) => {
   try {
-    path = await realpath(requested);
+    return { kind: "resolved" as const, path: await realpath(requested) };
+  } catch (error) {
+    return { ...workingFailure(error), path: requested };
+  }
+};
+
+const readWorkingFile = async (path: string): Promise<WorkingRead> => {
+  try {
     await using file = await open(
       path,
       constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
     );
     const stat = await file.stat();
     if (!stat.isFile())
-      return { path, kind: "gap", reason: "The path is not a regular file." };
+      return { kind: "gap", reason: "The path is not a regular file." };
     if (stat.size > MAX_DOCUMENT_BYTES)
-      return { path, kind: "gap", reason: fileOverBound };
+      return { kind: "gap", reason: fileOverBound };
     const bytes = Buffer.alloc(MAX_DOCUMENT_BYTES + 1);
     let size = 0;
     while (size < bytes.length) {
@@ -506,22 +522,61 @@ const readWorkingFile = async (
       size += bytesRead;
     }
     return size > MAX_DOCUMENT_BYTES
-      ? { path, kind: "gap", reason: fileOverBound }
+      ? { kind: "gap", reason: fileOverBound }
       : {
-          path,
           kind: "file",
           bytes: bytes.subarray(0, size),
           fetchedAt: new Date().toISOString(),
         };
   } catch (error) {
-    return typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error.code === "ENOENT" || error.code === "ENOTDIR")
-      ? { path, kind: "missing" }
-      : { path, kind: "gap", reason: "The file could not be read." };
+    return workingFailure(error);
   }
 };
+
+const readNamedFiles = (root: string, paths: readonly string[]) =>
+  Effect.gen(function* () {
+    const resolved = yield* Effect.forEach(
+      paths,
+      (requested) =>
+        Effect.promise(async () => ({
+          requested,
+          target: await resolveWorkingPath(resolve(root, requested)),
+        })),
+      { concurrency: MAX_DOCUMENTS },
+    );
+    const unique = new Map<
+      string,
+      {
+        target: Awaited<ReturnType<typeof resolveWorkingPath>>;
+        linkedFrom: string | undefined;
+        alsoLinkedFrom: string[];
+      }
+    >();
+    for (const { requested, target } of resolved) {
+      const path = scopePath(root, target.path);
+      const linkedFrom = path === requested ? undefined : requested;
+      const first = unique.get(path);
+      if (first === undefined)
+        unique.set(path, { target, linkedFrom, alsoLinkedFrom: [] });
+      else if (linkedFrom !== undefined) first.alsoLinkedFrom.push(linkedFrom);
+    }
+    const selected = [...unique].slice(0, MAX_DOCUMENTS);
+    const files = yield* Effect.forEach(
+      selected,
+      ([path, { target, linkedFrom, alsoLinkedFrom }]) =>
+        Effect.promise(async () => ({
+          path,
+          read:
+            target.kind === "resolved"
+              ? await readWorkingFile(target.path)
+              : target,
+          ...(linkedFrom === undefined ? {} : { linkedFrom }),
+          ...(alsoLinkedFrom.length === 0 ? {} : { alsoLinkedFrom }),
+        })),
+      { concurrency: MAX_DOCUMENTS },
+    );
+    return { files, omitted: unique.size - selected.length };
+  });
 
 const blobsOf = (listing: ReadonlyArray<TreeEntry>) =>
   new Map(
@@ -560,7 +615,7 @@ const namedScope = (
   entry: TreeEntry | undefined,
   blob: Uint8Array | undefined,
 ): NamedLocalSource => {
-  if (read.kind === "gap") return { ...read, path };
+  if (read.kind === "gap") return { kind: "gap", path, reason: read.reason };
   if (
     entry !== undefined &&
     (read.kind === "missing" ||
@@ -613,26 +668,14 @@ export const readLocalScope = (
         }),
       ),
     ];
-    const selected = paths.slice(0, MAX_DOCUMENTS);
-    const [entries, reads] = yield* Effect.all(
-      [
-        localTree(repository, base),
-        Effect.promise(() =>
-          Promise.all(
-            selected.map((path) => readWorkingFile(resolve(root, path))),
-          ),
-        ),
-      ],
+    const [entries, { files, omitted }] = yield* Effect.all(
+      [localTree(repository, base), readNamedFiles(root, paths)],
       { concurrency: 2 },
     );
-    const resolved = reads.map((read, index) => {
-      const path = scopePath(root, read.path);
-      const requested = selected[index]!;
-      const entry = entries.get(path);
+    const resolved = files.map((file) => {
+      const entry = entries.get(file.path);
       return {
-        read,
-        path,
-        requested,
+        ...file,
         entry: entry?.mode === "120000" ? undefined : entry,
       };
     });
@@ -642,15 +685,15 @@ export const readLocalScope = (
         read.kind === "gap" ? [] : [entry],
       ),
     ]);
-    const sources = resolved.map(({ read, path, requested, entry }, index) => ({
+    const sources = resolved.map(({ read, path, entry, ...links }, index) => ({
       ...namedScope(
         localSourceId(index),
         path,
         read,
         entry,
-        entry === undefined ? undefined : contents.get(entry.oid),
+        entry && contents.get(entry.oid),
       ),
-      ...(path === requested ? {} : { linkedFrom: requested }),
+      ...links,
     }));
     return {
       base,
@@ -663,7 +706,12 @@ export const readLocalScope = (
           read.kind === "missing" && entry === undefined ? [path] : [],
         ),
       ),
-      omitted: paths.length - selected.length,
+      readFailures: files.flatMap(({ read, path }) =>
+        read.kind === "gap" && read.cause !== undefined
+          ? [{ path, cause: read.cause }]
+          : [],
+      ),
+      omitted,
     };
   }).pipe(Effect.timeout(SCOPE_FETCH_BOUND_MS));
 
@@ -730,6 +778,8 @@ const gitDocumentText = (
   entry: TreeEntry | undefined,
   bytes: Uint8Array | undefined,
 ) => {
+  if (entry?.mode === "120000")
+    return { gap: "The Git path is a symbolic link." };
   if (
     (entry?.size ?? 0) > MAX_DOCUMENT_BYTES ||
     (bytes?.byteLength ?? 0) > MAX_DOCUMENT_BYTES
@@ -841,10 +891,14 @@ const localScopeSources = (
         continue;
       }
       let text: string | undefined;
-      const found =
+      const found = [
         pin.linkedFrom === undefined
           ? "named by the request"
-          : `named by the request through a link at ${pin.linkedFrom}`;
+          : `named by the request through a link at ${pin.linkedFrom}`,
+        ...(pin.alsoLinkedFrom ?? []).map(
+          (path) => `also named through a link at ${path}`,
+        ),
+      ].join(" and ");
       if (pin.kind === "repository-document") {
         text = document(id, pin.path, pin.blob, found, contents);
       } else if (copy !== undefined) {
@@ -923,7 +977,7 @@ const fetchCycleLocalScope = (
   const run = jsonComputation(
     {
       op: "harness.cycle-local-scope",
-      opVersion: 1,
+      opVersion: 2,
       inputs: { cycle: `cycle:${copy.cycleId}` },
     },
     LocalScope,
@@ -1010,9 +1064,11 @@ export const queryLocalScope = (
   Effect.gen(function* () {
     const pins = yield* selectedLocalScope(copy.cycleId);
     const held = new Set(
-      pins?.sources.flatMap(({ path, linkedFrom }) =>
-        linkedFrom === undefined ? [path] : [path, linkedFrom],
-      ),
+      pins?.sources.flatMap(({ path, linkedFrom, alsoLinkedFrom }) => [
+        path,
+        ...(linkedFrom === undefined ? [] : [linkedFrom]),
+        ...(alsoLinkedFrom ?? []),
+      ]),
     );
     const gaps = read.sources
       .filter(({ path }) => !held.has(path))

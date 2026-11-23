@@ -19,7 +19,15 @@ import {
   Sessions,
   storeLocationIn,
 } from "@neuve/records-core";
-import { chmod, mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { settingsPath } from "../../../packages/harness/src/settings.ts";
@@ -698,6 +706,145 @@ describe("neuve CLI boundary", () => {
       }),
     ]);
     expect(answer.scope[0].text).toBeUndefined();
+  });
+
+  const scopeQueryFixture = async () => {
+    const { root, revision } = await fixtureRepository();
+    const graph = await fakeGraph();
+    const scratch = await realpath(
+      await mkdtemp(join(tmpdir(), "neuve-cli-scope-query-")),
+    );
+    roots.push(scratch);
+    const env = {
+      HOME: join(scratch, "home"),
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+    };
+    await mkdir(env.HOME);
+    await createRecords(root, env);
+    const plan = join(scratch, "plan.md");
+    await Bun.write(plan, "# Approved plan\n");
+    await symlink(plan, join(root, "plan-link.md"));
+    return {
+      root,
+      plan,
+      query: (options: readonly string[], base = revision) =>
+        run([...queryArgs(root, base), ...options], env),
+    };
+  };
+
+  // A discovered Git link holds a path and cannot supply document text.
+  test("cites a found committed symlink as a scope gap", async () => {
+    const { root, query } = await scopeQueryFixture();
+    await Bun.write(join(root, "AGENTS.md"), "[Policy](policy.md)\n");
+    await Bun.write(join(root, "actual.md"), "# Policy\n");
+    await symlink("actual.md", join(root, "policy.md"));
+    expect(
+      execute(["git", "add", "AGENTS.md", "actual.md", "policy.md"], root)
+        .exitCode,
+    ).toBe(0);
+    expect(
+      execute(["git", "commit", "--quiet", "-m", "add guide"], root).exitCode,
+    ).toBe(0);
+    const base = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+
+    const result = await query([], base);
+    expect(result.exitCode, result.stderr).toBe(0);
+    const answer = JSON.parse(result.stdout);
+    expect(answer.scope[1]).toMatchObject({
+      status: "gap",
+      ref: {
+        path: "policy.md",
+        revision: base,
+        found: "linked from AGENTS.md",
+      },
+      gap: "The Git path is a symbolic link.",
+    });
+    expect(answer.scope[1].text).toBeUndefined();
+    expect(answer.scope_gaps).toEqual([
+      "policy.md: The Git path is a symbolic link.",
+    ]);
+  });
+
+  // The run log must retain the filesystem cause behind the public gap.
+  test("logs the cause of a working-file read error", async () => {
+    const { root, query } = await scopeQueryFixture();
+    await symlink("loop", join(root, "loop"));
+
+    const result = await query(["--scope", "loop"]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      retrieval: { status: "ok" },
+      scope_gaps: ["loop: The file could not be read."],
+    });
+    const logs = join(root, ".git", "neuve", "run-logs");
+    const [log] = await readdir(logs);
+    const diagnostics = (await Bun.file(join(logs, log!)).text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "query.local-read-failed",
+        path: "loop",
+        cause: expect.stringContaining("ELOOP"),
+      }),
+    );
+  });
+
+  // The citation must name the file that supplied the bytes.
+  test("cites the real path of a named symlink outside the repository", async () => {
+    const { plan, query } = await scopeQueryFixture();
+    const result = await query(["--scope", "plan-link.md"]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).scope[0]).toMatchObject({
+      ref: { path: plan },
+      text: "# Approved plan\n",
+    });
+  });
+
+  // The citation must also identify the link the request named.
+  test("cites the link used to reach a named document", async () => {
+    const { query } = await scopeQueryFixture();
+    const result = await query(["--scope", "plan-link.md"]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).scope[0]).toMatchObject({
+      ref: { found: "named by the request through a link at plan-link.md" },
+    });
+  });
+
+  // An alias must add provenance without adding a source or changing its order.
+  test("keeps one ordered source when a file is named directly and through a link", async () => {
+    const { root, plan, query } = await scopeQueryFixture();
+    const result = await query([
+      "--scope",
+      plan,
+      "--scope",
+      "other.custom",
+      "--scope",
+      "plan-link.md",
+    ]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    const answer = JSON.parse(result.stdout);
+    expect(
+      answer.scope.map(({ id, ref }: PublicQueryScopeSource) => [
+        id,
+        ref.path,
+        ref.found,
+      ]),
+    ).toEqual([
+      [
+        "S1",
+        plan,
+        "named by the request and also named through a link at plan-link.md",
+      ],
+      ["S2", "other.custom", "named by the request"],
+    ]);
+    expect(
+      await readdir(
+        join(scopeFolder(storeLocationIn(join(root, ".git")), answer.cycle_id)),
+      ),
+    ).toEqual(["S1.txt"]);
   });
 
   // An invalid Git email must leave schema details in the run log.

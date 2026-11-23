@@ -926,6 +926,12 @@ export const runQueryGraph = async (
         type: "query.local-read-failed",
         cause: Cause.pretty(read.cause),
       });
+    else if (read?._tag === "Success")
+      for (const failure of read.value.readFailures)
+        writeDiagnostic(diagnostics, {
+          type: "query.local-read-failed",
+          ...failure,
+        });
     if (recorded.eventId !== undefined && cycleFailure !== undefined)
       await warnQueryCycle(cycleFailure);
   }
