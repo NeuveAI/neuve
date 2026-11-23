@@ -108,6 +108,14 @@ export function Conversation(
 		[transcript.plans, user, people],
 	);
 	const planned = transcript.plans.length > 0;
+	// The chat messages that sent comments on a plan, which quote it.
+	const quoting = useMemo(
+		() => new Set(transcript.planComments.flatMap((comment) =>
+			[comment.sent, ...comment.replies.map((reply) => reply.kind === "person" ? reply.sent : undefined)]
+				.flatMap((sent) => sent?.entry === undefined ? [] : [sent.entry])
+		)),
+		[transcript.planComments],
+	);
 	const events = useMemo(
 		() =>
 			withCards(
@@ -126,6 +134,7 @@ export function Conversation(
 					transcript.reactions,
 					(asker) => credit(asker, channel, user, people, senders),
 					reviews,
+					quoting,
 				),
 				transcript.items,
 				reviews,
@@ -150,6 +159,7 @@ export function Conversation(
 			reviews,
 			plans,
 			connected,
+			quoting,
 		],
 	);
 	const planActions = useMemo(

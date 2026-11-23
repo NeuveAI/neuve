@@ -376,6 +376,10 @@ export function commentStatus(comment: PlanCommentView, agent: string) {
  */
 export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView; actions: PlanCommentActions }) {
 	let [open, setOpen] = useState<{ kind: "reply" } | { kind: "edit"; message: string }>();
+	let [refused, setRefused] = useState<string>();
+	// The channel keeps a comment once anything under it was delivered, so it is not offered then.
+	let removable = (id: string) =>
+		id !== comment.messages[0]!.id || comment.messages.slice(1).every((message) => !message.agent && message.kept);
 	let { placement } = comment;
 	let line = commentStatus(comment, actions.agent);
 	let first = comment.messages[0]!.id;
@@ -414,12 +418,16 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 											Edit
 										</Button>
 									)}
-									{actions.remove && (
+									{actions.remove && removable(message.id) && (
 										<Button
 											variant="ghost"
 											size="xs"
 											className="text-muted-foreground"
-											onClick={() => void actions.remove?.(comment.id, message.id === first ? undefined : message.id)}
+											onClick={() => {
+												setRefused(undefined);
+												actions.remove?.(comment.id, message.id === first ? undefined : message.id)
+													.catch((cause: Error) => setRefused(cause.message));
+											}}
 										>
 											Remove
 										</Button>
@@ -439,6 +447,7 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 					}}
 				/>
 			)}
+			{refused && <p role="alert" className="pl-7 text-xs leading-4 text-destructive">{refused}</p>}
 			{(line || (actions.reply && !open)) && (
 				<div className="flex items-center gap-2 pl-7">
 					{line && (

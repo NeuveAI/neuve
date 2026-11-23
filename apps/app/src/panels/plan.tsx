@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-import type { Request } from "@ace/channel/protocol";
+import type { PlanComment, Request } from "@ace/channel/protocol";
 import type { Listing } from "@ace/host/protocol";
 import { NOT_ALLOWED_TO_APPROVE, type PlanCommentActions, type PlanSelection, PlanView } from "@ace/ui";
 
@@ -25,6 +25,9 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	const agentAvatar = useAgentAvatar();
 	const [sending, setSending] = useState(false);
 	const [sendError, setSendError] = useState<string>();
+	// What the person kept when their send was answered. The channel's comments event can come
+	// after the answer, so until it shows those words sent, a second send is not offered.
+	const [answered, setAnswered] = useState<string>();
 	const people = useSyncExternalStore(host.subscribe, () => host.people);
 	const list = plans?.chat === chat ? plans.list : undefined;
 	// The channel shows one chat's plans; a tab saved for another chat's plan cannot read it here.
@@ -89,12 +92,15 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	);
 	const comments = planComments?.chat === chat ? planComments.list : [];
 	const replaced = shown.state === "replaced";
+	const kept = keptKey(comments, shown.id, user);
 
 	async function send() {
 		setSending(true);
 		setSendError(undefined);
+		const before = kept;
 		try {
 			await sendKept();
+			setAnswered(before);
 		} catch (cause) {
 			setSendError((cause as Error).message);
 		} finally {
@@ -116,9 +122,21 @@ export function Plan({ channel, chat, user, plan }: Props) {
 				agentAvatar,
 				...(mayApprove && !replaced ? actions : {}),
 			}}
-			send={mayApprove && !replaced ? { onSend: () => void send(), sending, error: sendError } : undefined}
+			send={mayApprove && !replaced ? { onSend: () => void send(), sending: sending || answered === kept, error: sendError } : undefined}
 		/>
 	);
+}
+
+/** The person's kept words on a plan and where each comment's latest send stands. */
+function keptKey(comments: PlanComment[], plan: string, user: string) {
+	return JSON.stringify(comments
+		.filter((comment) => comment.plan === plan)
+		.map((comment) => [
+			comment.id,
+			comment.state,
+			comment.author === user && !comment.sent,
+			comment.replies.filter((reply) => reply.kind === "person" && reply.author === user && !reply.sent).length,
+		]));
 }
 
 function Note({ children }: { children: string }) {
