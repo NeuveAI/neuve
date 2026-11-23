@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, type Models } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { ok } from "@earendil-works/pi-durable/env";
@@ -38,7 +38,8 @@ function faux() {
 function open(root: string, models: Models, home: string, reverseEntries = false) {
 	const env = new class extends NodeExecutionEnv {
 		override async absolutePath(...args: Parameters<NodeExecutionEnv["absolutePath"]>): ReturnType<NodeExecutionEnv["absolutePath"]> {
-			return args[0] === "~" ? ok(home) : super.absolutePath(...args);
+			const [path] = args;
+			return path === "~" || path.startsWith("~/") ? ok(join(home, path.slice(2))) : super.absolutePath(...args);
 		}
 		override async listDir(...args: Parameters<NodeExecutionEnv["listDir"]>): ReturnType<NodeExecutionEnv["listDir"]> {
 			const result = await super.listDir(...args);
@@ -84,6 +85,12 @@ async function writeSkill(folder: string, description: string, name = "neuve") {
 	return { skill, reference };
 }
 
+function skillSection(prompt: string) {
+	return prompt.match(/^Skills by folder\.[^\n]*\n[\s\S]*?(?=\n<\/project-instructions>)/m)?.[0] ?? "";
+}
+
+const folderHeader = (folder: string) => `Folder: ${folder} (skill file: <folder>/<name>/SKILL.md)`;
+
 // Exercise discovery and both pi reads through the path in the actual system prompt.
 test.each([
 	{ location: "user Codex", installed: "user-agents" },
@@ -103,13 +110,15 @@ test.each([
 		git(repo, "init", "-q");
 		await writeFile(join(repo, ".gitignore"), ".claude/\n");
 		const paths = {
-			"user-agents": join(home, ".agents", "skills", "neuve"),
-			"user-claude": join(home, ".claude", "skills", "neuve"),
-			"configured-claude": join(claude, "skills", "neuve"),
-			"repo-agents": ".agents/skills/neuve",
-			"repo-claude": ".claude/skills/neuve",
-		};
-		const listed = paths[fixture.installed];
+			"user-agents": [join(home, ".agents", "skills"), "~/.agents/skills"],
+			"user-claude": [join(home, ".claude", "skills"), "~/.claude/skills"],
+			"configured-claude": [join(claude, "skills"), join(claude, "skills")],
+			"repo-agents": [join(repo, ".agents", "skills"), ".agents/skills"],
+			"repo-claude": [join(repo, ".claude", "skills"), ".claude/skills"],
+		} as const;
+		const [directory, display] = paths[fixture.installed];
+		const folderName = fixture.installed === "configured-claude" ? "linked-neuve" : "neuve";
+		const installed = join(directory, folderName);
 		let files: Awaited<ReturnType<typeof writeSkill>>;
 		if (fixture.installed === "configured-claude") {
 			process.env["CLAUDE_CONFIG_DIR"] = claude;
@@ -119,15 +128,15 @@ test.each([
 			const claudeFiles = join(dir, "Claude files");
 			await mkdir(join(claudeFiles, "skills"), { recursive: true });
 			await symlink(claudeFiles, claude);
-			await symlink(target, listed);
+			await symlink(target, installed);
 			await symlink(join(target, "SKILL.md"), join(claude, "skills", "linked-file"));
 		} else {
-			files = await writeSkill(resolve(repo, listed), fixture.location);
+			files = await writeSkill(installed, fixture.location);
 		}
 		if ("duplicates" in fixture) {
 			await writeSkill(join(home, ".claude", "skills", "claude-copy"), "ignored user copy");
-			await writeSkill(join(repo, paths["repo-agents"]), "ignored repository copy");
-			await writeSkill(join(repo, paths["repo-claude"]), "ignored Claude repository copy");
+			await writeSkill(join(paths["repo-agents"][0], "neuve"), "ignored repository copy");
+			await writeSkill(join(paths["repo-claude"][0], "neuve"), "ignored Claude repository copy");
 		}
 		for (const mode of ["ace", "plan"] as const) {
 			const { fake, models } = faux();
@@ -136,14 +145,16 @@ test.each([
 				let listing: string[] = [];
 				fake.appendResponses([
 					received => {
-						const section = getCurrentSystemPrompt(received.messages).match(/Skills in this repository[^\n]*\n(?:- [^\n]+\n?)*/)?.[0];
+						const section = skillSection(getCurrentSystemPrompt(received.messages));
 						if (process.env["NEUVE_DUMP_PLAN_SKILLS"] === "1") console.log(mode, fixture.location, section);
-						listing = section?.trimEnd().split("\n").slice(1) ?? [];
-						const path = /^- neuve \((.+)\): /.exec(listing[0] ?? "")?.[1];
-						if (!path) return fauxAssistantMessage("The Neuve skill was not listed");
+						listing = section.split("\n").slice(1);
+						const folder = /^Folder: (.+) \(skill file:/.exec(listing[0] ?? "")?.[1];
+						const name = /^- (.+?)(?: \([^()]+\))?: /.exec(listing[1] ?? "")?.[1];
+						if (!folder || !name) return fauxAssistantMessage("The Neuve skill was not listed");
+						const path = join(folder, name);
 						return fauxAssistantMessage([
-							fauxToolCall("read", { path }, { id: "skill" }),
-							fauxToolCall("read", { path: join(dirname(path), "references", "review.md") }, { id: "reference" }),
+							fauxToolCall("read", { path: join(path, "SKILL.md") }, { id: "skill" }),
+							fauxToolCall("read", { path: join(path, "references", "review.md") }, { id: "reference" }),
 						], { stopReason: "toolUse" });
 					},
 					fauxAssistantMessage("Read complete"),
@@ -151,7 +162,8 @@ test.each([
 				await ask(channel, { mode });
 				const reads = await results(channel);
 				if (process.env["NEUVE_DUMP_PLAN_SKILLS"] === "1") console.log([...reads.values()]);
-				expect(listing).toEqual([`- neuve (${listed}/SKILL.md): ${fixture.location}`]);
+				const label = folderName === "neuve" ? folderName : `${folderName} (neuve)`;
+				expect(listing).toEqual([folderHeader(display), `- ${label}: ${fixture.location}`]);
 				expect(reads.get("skill")).toMatchObject({ error: false, text: files.skill });
 				expect(reads.get("reference")).toMatchObject({ error: false, text: files.reference });
 			} finally {
@@ -169,7 +181,7 @@ async function skillListing(repo: string, home: string, reverseEntries = false) 
 	try {
 		let listing = "";
 		fake.appendResponses([received => {
-			listing = getCurrentSystemPrompt(received.messages).match(/Skills in this repository[^\n]*\n[\s\S]*?(?=\n<\/project-instructions>)/)?.[0] ?? "";
+			listing = skillSection(getCurrentSystemPrompt(received.messages));
 			return fauxAssistantMessage("Read complete");
 		}]);
 		await ask(channel, { mode: "ace" });
@@ -179,9 +191,31 @@ async function skillListing(repo: string, home: string, reverseEntries = false) 
 	}
 }
 
-const descriptionNotice = "Some descriptions were shortened or left out to fit; read a skill's file for its full description.";
+// The shipped skill uses folded front matter for the description Ace shows.
+test("Ace lists the shipped Neuve skill's description", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve shipped skill ")));
+	try {
+		const repo = join(root, "checkout");
+		const home = join(root, "home");
+		const folder = join(home, ".agents", "skills", "neuve");
+		await mkdir(repo);
+		await mkdir(folder, { recursive: true });
+		const template = await readFile(new URL("../../neuve-cli/skills/neuve/SKILL.md", import.meta.url));
+		const path = join(folder, "SKILL.md");
+		await writeFile(path, template);
+		const prefix = "- neuve: ";
+		const listing = await skillListing(repo, home);
+		const description = listing.split("\n").find(line => line.startsWith(prefix))?.slice(prefix.length);
+		expect(description).toMatch(/^Use Neuve, the code-review tool/);
+		expect(description).not.toContain(">");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
 
-// A large user skill set must keep every name and the winning Neuve path in either directory order.
+const descriptionNotice = "Some descriptions were shortened to fit; read a skill's file for its full description.";
+
+// A crowded list must retain every name and the full repository descriptions in either directory order.
 test("Ace bounds descriptions and keeps all skill names in a deterministic order", async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve skill budget ")));
 	try {
@@ -191,24 +225,30 @@ test("Ace bounds descriptions and keeps all skill names in a deterministic order
 		const repoSkills = join(repo, ".agents", "skills");
 		const description = "d".repeat(1_536);
 		await writeSkill(join(repoSkills, "neuve"), "Repository copy");
-		await writeSkill(join(repoSkills, "a-folder"), `${description} clipped`, "z-guide");
+		await writeSkill(join(repoSkills, "a-folder"), `${description} clipped`, "Z-guide");
 		await writeSkill(join(repoSkills, "z-folder"), "Read first", "a-guide");
+		await writeSkill(join(repo, ".claude", "skills", "claude-repo"), "Repository Claude skill", "claude-repo");
 		await writeSkill(join(userSkills, "z-copy"), "Other user copy");
 		await writeSkill(join(userSkills, "neuve"), "User copy");
+		await writeSkill(join(home, ".claude", "skills", "claude-user"), "User Claude skill", "claude-user");
 		const names = Array.from({ length: 30 }, (_, i) => `user-${String(i).padStart(2, "0")}`);
 		for (const name of names) await writeSkill(join(userSkills, name), "u".repeat(1_000), name);
 		const listing = await skillListing(repo, home);
-		expect(listing.match(/^- .+?\/SKILL\.md\)/gm)).toEqual([
-			"- a-guide (.agents/skills/z-folder/SKILL.md)",
-			"- z-guide (.agents/skills/a-folder/SKILL.md)",
-			`- neuve (${userSkills}/neuve/SKILL.md)`,
-			...names.map(name => `- ${name} (${userSkills}/${name}/SKILL.md)`),
+		const lines = listing.split("\n").slice(1, -1);
+		expect(lines.map(line => line.startsWith("- ") ? line.split(": ")[0] : line)).toEqual([
+			folderHeader(".agents/skills"),
+			"- z-folder (a-guide)",
+			"- a-folder (Z-guide)",
+			folderHeader(".claude/skills"),
+			"- claude-repo",
+			folderHeader("~/.agents/skills"),
+			"- neuve",
+			...names.map(name => `- ${name}`),
+			folderHeader("~/.claude/skills"),
+			"- claude-user",
 		]);
-		const lines = listing.split("\n");
-		expect(lines[2]).toBe(`- z-guide (.agents/skills/a-folder/SKILL.md): ${description}`);
-		const lengths = lines.slice(4, -1).map(line => line.split("): ")[1]?.length ?? 0);
-		expect(lengths).toEqual(lengths.toSorted((a, b) => b - a));
-		expect(listing.length).toBeGreaterThanOrEqual(7_998);
+		expect(lines).toContain(`- a-folder (Z-guide): ${description}`);
+		expect(listing).toMatch(/^- user-\d+: u+…$/m);
 		expect(listing.length).toBeLessThanOrEqual(8_000);
 		expect(listing.endsWith(`\n${descriptionNotice}`)).toBe(true);
 		expect(await skillListing(repo, home, true)).toBe(listing);
@@ -217,24 +257,78 @@ test("Ace bounds descriptions and keeps all skill names in a deterministic order
 	}
 });
 
-// Names must still be discoverable when the paths alone exhaust the prompt budget.
-test("Ace lists every skill without descriptions when names and paths exceed the budget", async () => {
+// Names must still be discoverable when the headers and names alone exhaust the prompt budget.
+test("Ace lists every skill without descriptions when headers and names exceed the budget", async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve skill budget ")));
 	try {
 		const repo = join(root, "checkout");
 		const home = join(root, "home");
 		const userSkills = join(home, ".agents", "skills");
 		await writeSkill(join(repo, ".agents", "skills", "neuve"), "Repository copy");
-		const names = Array.from({ length: 40 }, (_, i) => `user-${String(i).padStart(2, "0")}-${"x".repeat(110)}`);
+		const names = Array.from({ length: 40 }, (_, i) => `user-${String(i).padStart(2, "0")}-${"x".repeat(210)}`);
 		for (const name of names) await writeSkill(join(userSkills, name), "User description", name);
 		const listing = await skillListing(repo, home);
 		const [, ...lines] = listing.split("\n");
 		expect(lines.slice(0, -1).join("\n").length).toBeGreaterThan(8_000);
 		expect(lines).toEqual([
-			"- neuve (.agents/skills/neuve/SKILL.md)",
-			...names.map(name => `- ${name} (${userSkills}/${name}/SKILL.md)`),
+			folderHeader(".agents/skills"),
+			"- neuve",
+			folderHeader("~/.agents/skills"),
+			...names.map(name => `- ${name}`),
 			descriptionNotice,
 		]);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+// Late-sorting skills need a usable description even when earlier skills have long descriptions.
+test("Ace shares the budget across many long descriptions", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve skill shares ")));
+	try {
+		const repo = join(root, "checkout");
+		await mkdir(repo);
+		const home = join(root, "home");
+		const userSkills = join(home, ".agents", "skills");
+		const names = [...Array.from({ length: 24 }, (_, i) => `guide-${i}`), "neuve"];
+		const description = "word ".repeat(250).trimEnd();
+		for (const name of names) await writeSkill(join(userSkills, name), description, name);
+		const listing = await skillListing(repo, home);
+		const lines = listing.split("\n").slice(2, -1);
+		const details = lines.map(line => line.split(": ")[1] ?? "");
+		expect(details).toHaveLength(names.length);
+		expect(details.every(detail => /^(?:word )*word…$/.test(detail))).toBe(true);
+		const lengths = details.map(detail => detail.length);
+		expect(Math.max(...lengths) - Math.min(...lengths)).toBeLessThanOrEqual(5);
+		expect(lines.at(-1)).toMatch(/^- neuve: word/);
+		expect(listing.length).toBeLessThanOrEqual(8_000);
+		expect(listing.endsWith(`\n${descriptionNotice}`)).toBe(true);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+// Short descriptions should stay whole and leave their spare room for longer descriptions.
+test("Ace gives the unused share of short descriptions to long ones", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve skill shares ")));
+	try {
+		const repo = join(root, "checkout");
+		const home = join(root, "home");
+		const repoSkills = join(repo, ".agents", "skills");
+		const long = Array.from({ length: 8 }, (_, i) => `long-${i}`);
+		const short = Array.from({ length: 8 }, (_, i) => `short-${i}`);
+		for (const name of long) await writeSkill(join(repoSkills, name), "x".repeat(1_400), name);
+		for (const name of short) await writeSkill(join(repoSkills, name), `Read ${name}.`, name);
+		await writeSkill(join(home, ".agents", "skills", "user-only"), "Personal skill", "user-only");
+		const listing = await skillListing(repo, home);
+		const lines = listing.split("\n");
+		const descriptions = lines.slice(2, -3).map(line => line.split(": ")[1] ?? "");
+		const fixedLength = lines.map(line => line.replace(/^(- [^:]+): .*$/, "$1")).join("\n").length;
+		const evenSplit = Math.floor((8_000 - fixedLength) / (long.length + short.length)) - 2;
+		expect(descriptions.slice(long.length)).toEqual(short.map(name => `Read ${name}.`));
+		expect(descriptions.slice(0, long.length).every(detail => detail.length > evenSplit && detail.endsWith("…"))).toBe(true);
+		expect(lines.slice(-3)).toEqual([folderHeader("~/.agents/skills"), "- user-only", descriptionNotice]);
+		expect(listing.length).toBeLessThanOrEqual(8_000);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
@@ -267,14 +361,14 @@ test.each([
 			let listing: string[] = [];
 			fake.appendResponses([
 				received => {
-					listing = getCurrentSystemPrompt(received.messages).match(/^- neuve .*$/gm) ?? [];
+					listing = skillSection(getCurrentSystemPrompt(received.messages)).split("\n").slice(1);
 					return fauxAssistantMessage(fauxToolCall("read", { path }, { id: "read" }), { stopReason: "toolUse" });
 				},
 				fauxAssistantMessage("Read complete"),
 			]);
 			await ask(channel, { mode: "plan" });
 			expect((await results(channel)).get("read")).toMatchObject({ error: false, text: linked ? skill : readme });
-			if (linked) expect(listing).toEqual(["- neuve (.agents/skills/neuve/SKILL.md): Repository skill"]);
+			if (linked) expect(listing).toEqual([folderHeader(".agents/skills"), "- neuve: Repository skill"]);
 		} finally {
 			await channel.close();
 		}
@@ -334,7 +428,7 @@ test("plan mode refuses files that resolve outside the allowed skill folders", a
 			await ask(channel, { mode: "plan" });
 			const reads = await results(channel);
 			if (process.env["NEUVE_DUMP_PLAN_SKILLS"] === "1") console.log([...reads.values()]);
-			expect(listing).toContain(`- neuve (${skill}/SKILL.md): Installed skill`);
+			expect(skillSection(listing).split("\n").slice(1)).toEqual([folderHeader("~/.claude/skills"), "- neuve: Installed skill"]);
 			expect(listing).not.toContain("Outside skill");
 			expect(listing).not.toContain("Unauthorized repository root");
 			expect(reads.get("allowed")).toMatchObject({ error: false, text: "# Reading a Neuve review\n" });

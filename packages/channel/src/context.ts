@@ -1,4 +1,4 @@
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import type { PromptSection } from "@earendil-works/pi-durable";
 import { getOrThrow, type ExecutionEnv, type FileError } from "@earendil-works/pi-durable/env";
@@ -11,8 +11,9 @@ const LIMIT = 32_000;
 const SKILL_DESCRIPTION_LIMIT = 1_536;
 // Codex uses this budget when the context window is unknown.
 const SKILL_LIST_LIMIT = 8_000;
-const SKILL_HEADING = "Skills in this repository and the user's skill folders. Read a skill's file before doing work it describes:";
-const SKILL_NOTICE = "Some descriptions were shortened or left out to fit; read a skill's file for its full description.";
+const SKILL_HEADING = "Skills by folder. Read the skill file before use. Use the first name on each line.";
+const SKILL_NOTICE = "Some descriptions were shortened to fit; read a skill's file for its full description.";
+const SKILL_SEPARATOR = ": ";
 
 /**
  * Only a missing file means "none". Any other failure, such as an unreachable workspace, throws, so
@@ -42,42 +43,79 @@ async function list(env: ExecutionEnv, path: string, context: Context) {
 	return [];
 }
 
-/** The YAML front matter's flat `key: value` lines, which is all skills and rules use. */
+/** Read front matter fields and fold block values into a single line. */
 function front(text: string): Record<string, string> {
 	const match = /^---\n([\s\S]*?)\n---/.exec(text);
 	if (!match) return {};
 	const fields: Record<string, string> = {};
-	for (const line of match[1]!.split("\n")) {
+	const lines = match[1]!.split("\n");
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i]!;
 		const split = line.indexOf(":");
-		if (split > 0) {
-			fields[line.slice(0, split).trim()] = line.slice(split + 1).trim().replace(/^"|"$/g, "");
+		if (split <= 0) continue;
+		const key = line.slice(0, split).trim();
+		const value = line.slice(split + 1).trim();
+		if (!/^[>|][+-]?$/.test(value)) {
+			fields[key] = value.replace(/^"|"$/g, "");
+			continue;
 		}
+		const indent = line.search(/\S/);
+		const block: string[] = [];
+		while (i + 1 < lines.length) {
+			const next = lines[i + 1]!;
+			const start = next.search(/\S/);
+			if (start >= 0 && start <= indent) break;
+			i++;
+			if (start >= 0) block.push(next.trim());
+		}
+		fields[key] = block.join(" ");
 	}
 	return fields;
 }
 
-function byName(a: { name: string }, b: { name: string }): number {
-	return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+function compareNames(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function shareDescriptions(descriptions: string[], remaining: number): string[] {
+	const suffixes = descriptions.map(() => "");
+	const shortestFirst = descriptions.map((text, index) => ({ text, index }))
+		.filter(({ text }) => text.length > 0)
+		.sort((a, b) => a.text.length - b.text.length);
+	for (const [placed, { text, index }] of shortestFirst.entries()) {
+		const share = Math.floor(remaining / (shortestFirst.length - placed)) - SKILL_SEPARATOR.length;
+		const length = Math.min(text.length, share);
+		if (length < 1 || (length === 1 && text.length > length)) continue;
+		let detail = text;
+		if (length < text.length) {
+			const prefix = text.slice(0, length - 1);
+			const boundary = text.slice(0, length).search(/\s+\S*$/);
+			const excerpt = (boundary >= prefix.length * 0.8 ? prefix.slice(0, boundary) : prefix).trimEnd();
+			if (!excerpt) continue;
+			detail = `${excerpt}…`;
+		}
+		suffixes[index] = `${SKILL_SEPARATOR}${detail}`;
+		remaining -= SKILL_SEPARATOR.length + length;
+	}
+	return suffixes;
 }
 
 async function skills(env: ExecutionEnv, context: Context): Promise<string | undefined> {
 	const home = getOrThrow(await env.absolutePath("~", context));
 	// Keep these skill roots in step with apps/neuve-host/src/plan-git.ts.
-	const roots = [
+	const userRoots = [
 		join(home, ".agents", "skills"),
 		resolve(process.env["CLAUDE_CONFIG_DIR"] || join(home, ".claude"), "skills"),
-		".agents/skills",
-		".claude/skills",
 	];
+	const repoRoots = [".agents/skills", ".claude/skills"];
 	// User skills win because the user-scope Neuve skill matches the installed command.
 	const seen = new Set<string>();
 	type SkillEntry = { name: string; label: string; description: string };
-	const user: SkillEntry[] = [];
-	const repository: SkillEntry[] = [];
+	const groups = new Map([...repoRoots, ...userRoots].map(dir => [dir, new Array<SkillEntry>()]));
 	let descriptionCapped = false;
-	for (const dir of roots) {
-		const entries = isAbsolute(dir) ? user : repository;
-		for (const entry of (await list(env, dir, context)).toSorted(byName)) {
+	for (const dir of [...userRoots, ...repoRoots]) {
+		const entries = groups.get(dir)!;
+		for (const entry of (await list(env, dir, context)).toSorted((a, b) => compareNames(a.name, b.name))) {
 			if (entry.kind !== "directory" && entry.kind !== "symlink") continue;
 			// Opening this child also skips symlinks whose targets are missing or are files.
 			const path = `${dir}/${entry.name}/SKILL.md`;
@@ -89,25 +127,44 @@ async function skills(env: ExecutionEnv, context: Context): Promise<string | und
 			seen.add(name);
 			const detail = description.slice(0, SKILL_DESCRIPTION_LIMIT);
 			descriptionCapped ||= detail.length < description.length;
-			entries.push({ name, label: `- ${name} (${path})`, description: detail });
+			const label = name === entry.name ? entry.name : `${entry.name} (${name})`;
+			entries.push({ name, label: `- ${label}`, description: detail });
 		}
 	}
-	const entries = [...repository.sort(byName), ...user.sort(byName)];
-	if (!entries.length) return;
-	const separator = ": ";
-	const baseLength = entries.reduce((sum, { label }) => sum + label.length + 1, SKILL_HEADING.length);
-	const descriptionLength = entries.reduce((sum, { description }) =>
-		sum + (description ? separator.length + description.length : 0), 0);
-	const shortened = descriptionCapped || baseLength + descriptionLength > SKILL_LIST_LIMIT;
+	const byDisplayName = (a: SkillEntry, b: SkillEntry) =>
+		compareNames(a.name.toLowerCase(), b.name.toLowerCase()) || compareNames(a.name, b.name);
+	const lines = [SKILL_HEADING];
+	const slots: number[] = [];
+	const repository: string[] = [];
+	const user: string[] = [];
+	for (const [dir, entries] of groups) {
+		if (!entries.length) continue;
+		const personal = isAbsolute(dir);
+		const fromHome = personal ? relative(home, dir) : "";
+		const display = personal && !isAbsolute(fromHome) && fromHome !== ".." && !fromHome.startsWith(`..${sep}`)
+			? `~/${fromHome.split(sep).join("/")}` : dir;
+		lines.push(`Folder: ${display} (skill file: <folder>/<name>/SKILL.md)`);
+		const descriptions = personal ? user : repository;
+		for (const entry of entries.sort(byDisplayName)) {
+			descriptions.push(entry.description);
+			slots.push(lines.length);
+			lines.push(entry.label);
+		}
+	}
+	if (!slots.length) return;
+	const suffix = (description: string) => description ? `${SKILL_SEPARATOR}${description}` : "";
+	const repoSuffixes = repository.map(suffix);
+	const repoLength = repoSuffixes.join("").length;
+	const baseLength = lines.join("\n").length;
+	const shortened = descriptionCapped || baseLength + repoLength + user.map(suffix).join("").length > SKILL_LIST_LIMIT;
 	// Like Claude Code, keep every name and path even when the bare list exceeds the budget.
-	let remaining = SKILL_LIST_LIMIT - baseLength - (shortened ? SKILL_NOTICE.length + 1 : 0);
-	const lines = entries.map(({ label, description }) => {
-		const detail = description.slice(0, Math.max(0, remaining - separator.length));
-		if (!detail) return label;
-		remaining -= separator.length + detail.length;
-		return `${label}${separator}${detail}`;
-	});
-	return [SKILL_HEADING, ...lines, ...(shortened ? [SKILL_NOTICE] : [])].join("\n");
+	const room = SKILL_LIST_LIMIT - baseLength - (shortened ? SKILL_NOTICE.length + 1 : 0);
+	const suffixes = repoLength <= room
+		? [...repoSuffixes, ...shareDescriptions(user, room - repoLength)]
+		: shareDescriptions(repository, room);
+	for (const [index, detail] of suffixes.entries()) lines[slots[index]!] += detail;
+	if (shortened) lines.push(SKILL_NOTICE);
+	return lines.join("\n");
 }
 
 /** Rule files, nested one directory deep, with the paths each applies to. */

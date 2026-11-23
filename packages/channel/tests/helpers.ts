@@ -52,7 +52,8 @@ export function scratchEnv(cwd: string, root: string): NodeExecutionEnv {
 	const home = join(root, "home");
 	return new class extends NodeExecutionEnv {
 		override async absolutePath(...args: Parameters<NodeExecutionEnv["absolutePath"]>): ReturnType<NodeExecutionEnv["absolutePath"]> {
-			return args[0] === "~" ? ok(home) : super.absolutePath(...args);
+			const [path] = args;
+			return path === "~" || path.startsWith("~/") ? ok(join(home, path.slice(2))) : super.absolutePath(...args);
 		}
 	}({ cwd });
 }
