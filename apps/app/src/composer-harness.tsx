@@ -1,6 +1,6 @@
 // Dev-only page (composer.html, served by `vite` but not built): the chat's real composer against a
 // stand-in host. `?scene=unoffered` stores a model the channel no longer offers, `?scene=offered`
-// one it offers; `?theme=dark` for the dark theme.
+// one it offers; each ask is logged to the console; `?theme=dark` for the dark theme.
 import { createRoot } from "react-dom/client";
 
 import type { ModelOption, ModelRef } from "@ace/channel/protocol";
@@ -30,6 +30,8 @@ class StandInSocket extends EventTarget {
 	}
 	send(data: string) {
 		const { id, op, request } = JSON.parse(data);
+		// The request as the host would receive it, for DevTools to read.
+		if (request?.op === "ask") console.info("ask", JSON.stringify(request));
 		const value = op !== "channel" ? [] : request.op === "models" ? MODELS : request.op === "select"
 			? { model: request.model ?? MODELS[0], effort: request.effort ?? "off" }
 			: {};

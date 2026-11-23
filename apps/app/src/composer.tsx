@@ -17,6 +17,7 @@ import {
 	type ModelOption,
 	type ModelRef,
 	type QueuedMessage,
+	type Request,
 } from "@ace/channel/protocol";
 import type { Listing } from "@ace/host/protocol";
 
@@ -317,6 +318,17 @@ export function Composer(
 		}
 	}
 
+	// Asks for what the control shows: a stored model that isn't offered hands the choice to Automatic.
+	function ask(request: Omit<Extract<Request, { op: "ask" }>, "op" | "chat" | "author">) {
+		return host.channel(channel.id, {
+			op: "ask",
+			chat: id,
+			author: user,
+			...request,
+			...(unoffered ? { automatic: true } : {}),
+		});
+	}
+
 	async function send(text: string, mode: string, attached: Attachment[]) {
 		if (sending.current) return;
 		// Posted, a blocked teammate's "@neuve" would read as an ask nobody answers.
@@ -342,16 +354,7 @@ export function Composer(
 		try {
 			const encoded = await attachments(attached);
 			if (invoke) {
-				// The chat holds the pick; asking without a model lets the channel replace one whose
-				// provider lost its key.
-				await host.channel(channel.id, {
-					op: "ask",
-					chat: id,
-					author: user,
-					text: body,
-					...encoded,
-					...(change ? { mode: change } : {}),
-				});
+				await ask({ text: body, ...encoded, ...(change ? { mode: change } : {}) });
 			} else {
 				await host.channel(channel.id, {
 					op: "say",
@@ -385,13 +388,7 @@ export function Composer(
 		sending.current = true;
 		setPending(true);
 		try {
-			await host.channel(channel.id, {
-				op: "ask",
-				chat: id,
-				author: user,
-				text: RETRY,
-				...(reset ? { automatic: true } : {}),
-			});
+			await ask({ text: RETRY, ...(reset ? { automatic: true } : {}) });
 			if (reset) {
 				toast("Switched this chat to Automatic", {
 					description: `${model} failed, so Retry let Neuve choose the model.`,
