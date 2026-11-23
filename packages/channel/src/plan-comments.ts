@@ -159,7 +159,7 @@ export function buildPlanCommentMessage(title: string, items: readonly Carried[]
 		const range = `${lines[0]!.line}-${lines.at(-1)!.line}${stays ? "" : " of an earlier version"}`;
 		const section = quotePlanText(comment.anchor.section);
 		const quote = quotePlanText(comment.anchor.quote);
-		return `Comment ${comment.id}, lines ${range}:\nSection heading:\n${section}\nQuoted passage:\n${quote}\n\n${comment.text}`;
+		return `Comment ${comment.id}, lines ${range}:\nSection heading:\n${section}\nQuoted passage:\n${quote}\n\n${quotePlanText(comment.text)}`;
 	});
 	return {
 		text: [
