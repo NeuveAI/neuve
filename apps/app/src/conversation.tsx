@@ -28,6 +28,7 @@ import { MessageQueue } from "./message-queue";
 import { OfflineHost, useRoster } from "./onboarding";
 import { present } from "./presence";
 import { planCards } from "./plan-card";
+import { commentSends } from "./plan-comments";
 import { pendingQuestion, Question } from "./question";
 import { reviewActions, reviewTab, withCards } from "./review-card";
 import { AGENT, credit, sources, toEvents } from "./timeline";
@@ -140,13 +141,11 @@ export function Conversation(
 			),
 		[transcript.approvals, transcript.items, user, people],
 	);
-	// The chat messages that sent comments on a plan, which quote it.
-	const quoting = useMemo(
-		() => new Set(transcript.planComments.flatMap((comment) =>
-			[comment.sent, ...comment.replies.map((reply) => reply.kind === "person" ? reply.sent : undefined)]
-				.flatMap((sent) => sent?.entry === undefined ? [] : [sent.entry])
-		)),
-		[transcript.planComments],
+	// The sends of comments on a plan, as the person's words, queued and then in the chat.
+	const sends = useMemo(() => commentSends(transcript.planComments), [transcript.planComments]);
+	const said = useMemo(
+		() => new Map([...sends.values()].flatMap(({ entry, text }) => entry === undefined ? [] : [[entry, text]])),
+		[sends],
 	);
 	const events = useMemo(
 		() =>
@@ -166,7 +165,7 @@ export function Conversation(
 					transcript.reactions,
 					(asker) => credit(asker, channel, user, people, senders),
 					reviews,
-					quoting,
+					said,
 					agents,
 					own,
 				),
@@ -194,7 +193,7 @@ export function Conversation(
 			reviews,
 			plans,
 			connected,
-			quoting,
+			said,
 			agents,
 			own,
 			builds,
@@ -277,17 +276,18 @@ export function Conversation(
 		return { react: open, copy: stored && !!item.text, delete: open && !locked, permalink: false };
 	};
 	const [deleting, setDeleting] = useState<string>();
-	// Only a person's own stored messages are edited, and an archived channel refuses edits.
+	// Only a person's own stored messages are edited, and an archived channel refuses edits. Plan
+	// comments are edited in the Plan tab, not as the message that sent them.
 	const editable = useMemo(
 		() =>
 			new Set(
 				channel.state === "archived" || locked
 					? []
 					: transcript.items.flatMap((item) =>
-						item.kind === "message" && item.author === user && !item.deleted ? [item.key] : []
+						item.kind === "message" && item.author === user && !item.deleted && !said.has(item.entry) ? [item.key] : []
 					),
 			),
-		[transcript.items, user, channel.state, locked],
+		[transcript.items, user, channel.state, locked, said],
 	);
 	const [editing, setEditing] = useState<string>();
 	const edited = editing === undefined || !editable.has(editing) ? undefined : byKey.get(editing);
@@ -418,7 +418,7 @@ export function Conversation(
 											act({ op: "react", emoji, remove }, uid);
 										}}
 										onCopy={(uid) =>
-											navigator.clipboard.writeText(byKey.get(uid)!.text).then(
+											navigator.clipboard.writeText(said.get(byKey.get(uid)!.entry!) ?? byKey.get(uid)!.text).then(
 												() => toast("Copied message"),
 												(error) =>
 													toast.error("Could not copy the message", { description: error.message }),
@@ -511,6 +511,7 @@ export function Conversation(
 				{transcript.live && (
 					<MessageQueue
 						messages={transcript.queue}
+						said={sends}
 						people={people}
 						channels={senders}
 						agents={agents}

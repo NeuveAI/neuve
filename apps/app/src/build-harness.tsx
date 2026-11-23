@@ -269,7 +269,7 @@ function Agent({ chat }: { chat: BuildAgent }) {
 		{},
 		() => undefined,
 		{},
-		new Set(),
+		new Map(),
 		agents,
 		{ author: agentAuthor(chat.chat), agent: chat },
 	);

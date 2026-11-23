@@ -6,8 +6,10 @@ import { reviewNotice } from "./review-card";
 import { authorName } from "./timeline";
 
 /** Authors are named as the timeline names them. */
-export function MessageQueue({ messages, people, channels, agents, locked }: {
+export function MessageQueue({ messages, said, people, channels, agents, locked }: {
 	messages: QueuedMessage[];
+	/** A send of plan comments, as the person's words. */
+	said: ReadonlyMap<number, { text: string }>;
 	people: Record<string, string>;
 	channels: Map<string, Listing>;
 	agents?: ReadonlyMap<string, AgentName>;
@@ -49,7 +51,7 @@ export function MessageQueue({ messages, people, channels, agents, locked }: {
 							</div>
 							{message.text && (
 								<p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-									{message.text}
+									{said.get(message.submission)?.text ?? message.text}
 								</p>
 							)}
 							{message.images && (

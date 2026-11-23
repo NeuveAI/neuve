@@ -1,4 +1,4 @@
-import { type AgentName, MENTION, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
+import { type AgentName, MENTION, PLAN_COMMENT_TOOL, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
 import type { Listing, People } from "@ace/host/protocol";
 import type { Event } from "@ace/ui";
 
@@ -113,6 +113,13 @@ function text(value: string): Event.Message.Content.Text {
 
 const NOT_RUN = "Not run";
 
+/** The agent's answer to a plan comment, which is its words to the person, not a tool's output. */
+function commentAnswer(tool: Tool) {
+	if (tool.name !== PLAN_COMMENT_TOOL || !tool.result || tool.result.error) return;
+	const { text } = tool.args as { text?: unknown };
+	return typeof text === "string" ? text : undefined;
+}
+
 function tool(
 	tool: Tool,
 	busy: boolean,
@@ -167,15 +174,14 @@ function tool(
  * the timeline as the newest agent message so it is laid out and scrolled like the rest.
  */
 /**
- * A message's text as the timeline draws it. A send of plan comments quotes the plan, and the
- * channel names no one in it, so no `@name` in it is drawn as a mention.
+ * A message's text as the timeline draws it. A send of plan comments is drawn as the person's own
+ * words from `sends`, and the channel names no one in it, so no `@name` in it is drawn as a mention.
  */
-export function withMention(item: { entry?: number; invoked: boolean; text: string }, quoting: ReadonlySet<number>) {
-	let text = item.entry !== undefined && quoting.has(item.entry)
-		// A word joiner after the @ keeps the words as written and makes them no mention token.
-		? item.text.replace(/(^|[\s([{])@(?=[\w-])/gm, "$1@\u2060")
-		: item.text;
-	return item.invoked ? withAgentMention(text) : text;
+export function withMention(item: { entry?: number; invoked: boolean; text: string }, sends: ReadonlyMap<number, string>) {
+	let said = item.entry === undefined ? undefined : sends.get(item.entry);
+	// A word joiner after the @ keeps the words as written and makes them no mention token.
+	if (said !== undefined) return said.replace(/(^|[\s([{])@(?=[\w-])/gm, "$1@\u2060");
+	return item.invoked ? withAgentMention(item.text) : item.text;
 }
 
 export function toEvents(
@@ -190,7 +196,7 @@ export function toEvents(
 	reactions: Reactions,
 	by: (asker: string) => string | undefined,
 	reviews: ReviewCards,
-	quoting: ReadonlySet<number> = new Set(),
+	sends: ReadonlyMap<number, string> = new Map(),
 	agents: ReadonlyMap<string, AgentName> = new Map(),
 	/** The build's agent this chat is, whose replies go by its role. */
 	self?: { author: string; agent: AgentName },
@@ -249,7 +255,7 @@ export function toEvents(
 				...(item.edited && !item.deleted ? { last_updated: Math.floor(item.edited / 1000) } : {}),
 				content: item.deleted ? [text("Message deleted")] : [
 					// Every input to a build's agent asks that agent, so no @neuve is drawn there.
-					text(brief || self ? item.text : withMention(item, quoting)),
+					text(brief || self ? item.text : withMention(item, sends)),
 					...(item.images || []).map((image) => ({
 						type: "image" as const,
 						image: `data:${image.mimeType};base64,${image.data}`,
@@ -279,7 +285,8 @@ export function toEvents(
 		// Models narrate before calling tools, so the text introduces the group that follows it.
 		const content: Event.Message.Agent["content"] = item.text ? [text(item.text)] : [];
 		for (const call of item.tools) {
-			content.push(tool(call, busy, reviews, captions[call.call], recaps[call.call]));
+			const answer = commentAnswer(call);
+			content.push(answer === undefined ? tool(call, busy, reviews, captions[call.call], recaps[call.call]) : text(answer));
 		}
 		for (const call of item.tools) {
 			const name = (reviewTool(call, reviews) ?? planTool(call))?.name ?? call.name;

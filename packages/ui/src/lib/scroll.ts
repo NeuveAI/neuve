@@ -58,3 +58,21 @@ export function visible(
 
 	return { start, end: low };
 }
+
+const INTENT = 500;
+const INPUTS = ["wheel", "touchstart", "touchmove", "pointerdown", "keydown"] as const;
+
+/** Whether a scroll of `el` now is the person's own: their wheel, touch, press or key on it just before. */
+export function intent(el: HTMLElement) {
+	let at = Number.NEGATIVE_INFINITY;
+	let mark = () => {
+		at = performance.now();
+	};
+	for (let input of INPUTS) el.addEventListener(input, mark, { passive: true });
+	return {
+		manual: () => performance.now() - at < INTENT,
+		stop: () => {
+			for (let input of INPUTS) el.removeEventListener(input, mark);
+		},
+	};
+}

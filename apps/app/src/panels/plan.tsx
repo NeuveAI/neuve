@@ -58,10 +58,12 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	if (!shown) return <Note>{plan ? "This plan is no longer in the chat." : undefined}</Note>;
 
 	const current = loaded?.plan === shown.id && loaded.listed === shown.hash ? loaded : undefined;
+	// While a revision loads, the version read before stays in the pane, so the pane keeps its place.
+	const stale = !current && loaded?.plan === shown.id ? loaded : undefined;
 	const mayApprove = channel.owner === user || shared !== false;
 	const blocked = !mayApprove
 		? NOT_ALLOWED_TO_APPROVE
-		: current?.hash && current.hash !== shown.hash
+		: stale || (current?.hash && current.hash !== shown.hash)
 		? NEWER
 		: undefined;
 
@@ -113,7 +115,7 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	return (
 		<PlanView
 			plan={planView(shown, (author) => author === user ? "you" : people[author] || author)}
-			text={current?.text}
+			text={(current ?? stale)?.text}
 			error={current?.error}
 			approve={shown.state === "draft"
 				? { onApprove: () => void approve(), approving, blocked, error }

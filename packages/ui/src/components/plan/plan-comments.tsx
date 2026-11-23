@@ -72,7 +72,7 @@ function quoteOf(range: Range) {
 }
 
 /** The selection inside `root` as whole plan lines and a quote that matches them, or nothing. */
-export function selectionIn(root: HTMLElement, text: string): (PlanSelection & { rect: DOMRect }) | undefined {
+export function selectionIn(root: HTMLElement, text: string): (PlanSelection & { first: DOMRect; last: DOMRect }) | undefined {
 	let selection = getSelection();
 	if (!selection || selection.isCollapsed || !selection.rangeCount) return;
 	let range = selection.getRangeAt(0);
@@ -88,8 +88,8 @@ export function selectionIn(root: HTMLElement, text: string): (PlanSelection & {
 	let lines = fileLines(text).slice(first - 1, last);
 	if (!matchesFileLines(text, lines, quote)) return;
 	let rects = range.getClientRects();
-	let rect = rects[rects.length - 1] ?? range.getBoundingClientRect();
-	return { lines, quote, rect };
+	let whole = range.getBoundingClientRect();
+	return { lines, quote, first: rects[0] ?? whole, last: rects[rects.length - 1] ?? whole };
 }
 
 /** The outermost rendered blocks in `root` that hold any of lines `first` to `last`, or the innermost. */
@@ -253,7 +253,9 @@ export function usePlanHighlights(
 }
 
 /** The chip at a selection that opens the composer under its passage. */
-export function CommentChip({ top, left, onComment }: { top: number; left: number; onComment: () => void }) {
+export function CommentChip(
+	{ top, left, side, onComment }: { top: number; left: number; side: "top" | "bottom"; onComment: () => void },
+) {
 	return (
 		<Button
 			variant="ghost"
@@ -261,7 +263,7 @@ export function CommentChip({ top, left, onComment }: { top: number; left: numbe
 			data-plan-comment=""
 			className={cn("absolute z-10 bg-popover shadow-popover hover:bg-popover", motion)}
 			data-open=""
-			data-side="bottom"
+			data-side={side}
 			style={{ top, left }}
 			// Keeps the selection: a press would otherwise collapse it before the click.
 			onPointerDown={(event) => event.preventDefault()}
@@ -287,8 +289,16 @@ export function CommentComposer(
 	let [text, setText] = useState(initial);
 	let [busy, setBusy] = useState(false);
 	let [error, setError] = useState<string>();
+	let root = useRef<HTMLDivElement>(null);
 	let field = useRef<HTMLTextAreaElement>(null);
-	useEffect(() => field.current?.focus(), []);
+	useEffect(() => field.current?.focus({ preventScroll: true }), []);
+	// The box grows with the words, and the whole composer, its actions too, stays in view.
+	useLayoutEffect(() => {
+		let box = field.current!;
+		box.style.height = "auto";
+		box.style.height = `${box.scrollHeight}px`;
+		root.current!.scrollIntoView({ block: "nearest" });
+	}, [text]);
 	let empty = !text.trim();
 	async function submit() {
 		if (empty || busy) return;
@@ -303,12 +313,13 @@ export function CommentComposer(
 	}
 	return (
 		<div
+			ref={root}
 			data-plan-comment=""
 			data-slot={popover ? "popover-content" : undefined}
 			data-open={popover ? "" : undefined}
 			data-side={popover ? "bottom" : undefined}
 			className={cn(
-				"flex flex-col",
+				"flex scroll-my-3.5 flex-col",
 				popover && ["w-[420px] max-w-full rounded-(--r-popover) squircle bg-popover p-2 text-popover-foreground shadow-popover", motion],
 			)}
 		>
@@ -317,7 +328,7 @@ export function CommentComposer(
 				value={text}
 				rows={2}
 				aria-label={action}
-				className="min-h-10 w-full resize-none bg-transparent px-1 pt-0.5 pb-2 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground"
+				className="min-h-10 w-full resize-none overflow-hidden bg-transparent px-1 pt-0.5 pb-2 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground"
 				onChange={(event) => setText(event.target.value)}
 				onKeyDown={(event) => {
 					if (event.key === "Escape") onCancel();
@@ -365,11 +376,38 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 	let failed = comment.state === "failed" ? comment.failure ? `Not delivered: ${comment.failure}` : "Not delivered" : undefined;
 	let out = placement.kind === "changed" ? changeOf(placement.removed, placement.added).out : "";
 	let first = comment.messages[0]!.id;
+	let last = comment.messages.at(-1)!;
+	// The person's kept words take Edit and Remove under them, never a column beside them.
+	let changes = (message: PlanCommentMessageView) =>
+		message.kept && message.mine && !open && (actions.edit || actions.remove) && (
+			<>
+				{actions.edit && (
+					<Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => setOpen({ kind: "edit", message: message.id })}>
+						Edit
+					</Button>
+				)}
+				{actions.remove && removable(message.id) && (
+					<Button
+						variant="ghost"
+						size="xs"
+						className="text-muted-foreground"
+						onClick={() => {
+							setRefused(undefined);
+							actions.remove?.(comment.id, message.id === first ? undefined : message.id)
+								.catch((cause: Error) => setRefused(cause.message));
+						}}
+					>
+						Remove
+					</Button>
+				)}
+			</>
+		);
+	let own = new Map(comment.messages.map((message) => [message, changes(message)]));
 	return (
 		<article
-			data-plan-comment=""
+			data-plan-comment={comment.id}
 			aria-label={`Comment on “${comment.quote}”`}
-			className="timeline-stream-in flex w-[440px] max-w-full flex-col gap-1.5 overflow-hidden rounded-lg bg-popover px-2.5 py-2 text-popover-foreground shadow-surface"
+			className="timeline-stream-in flex w-[440px] max-w-full scroll-my-3.5 flex-col gap-1.5 overflow-hidden rounded-lg bg-popover px-2.5 py-2 text-popover-foreground shadow-surface"
 		>
 			{out && <s className="text-[13px] leading-5 text-muted-foreground">{out}</s>}
 			{placement.kind === "ambiguous" && (
@@ -390,32 +428,12 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 						/>
 					)
 					: (
-						<div key={message.id} className="group/message flex items-start gap-2">
-							<Avatar message={message} agentAvatar={actions.agentAvatar} />
-							<p className="min-w-0 flex-1 text-[13px] leading-5 whitespace-pre-wrap">{message.text}</p>
-							{message.kept && message.mine && (actions.edit || actions.remove) && (
-								<span className="flex shrink-0 gap-1 opacity-0 transition-opacity duration-120 group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none">
-									{actions.edit && (
-										<Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => setOpen({ kind: "edit", message: message.id })}>
-											Edit
-										</Button>
-									)}
-									{actions.remove && removable(message.id) && (
-										<Button
-											variant="ghost"
-											size="xs"
-											className="text-muted-foreground"
-											onClick={() => {
-												setRefused(undefined);
-												actions.remove?.(comment.id, message.id === first ? undefined : message.id)
-													.catch((cause: Error) => setRefused(cause.message));
-											}}
-										>
-											Remove
-										</Button>
-									)}
-								</span>
-							)}
+						<div key={message.id} data-plan-message={message.id} className="flex scroll-my-3.5 flex-col gap-0.5">
+							<div className="flex items-start gap-2">
+								<Avatar message={message} agentAvatar={actions.agentAvatar} />
+								<p className="min-w-0 flex-1 text-[13px] leading-5 whitespace-pre-wrap">{message.text}</p>
+							</div>
+							{message !== last && own.get(message) && <div className="flex gap-1 pl-5">{own.get(message)}</div>}
 						</div>
 					)
 			)}
@@ -430,9 +448,10 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 				/>
 			)}
 			{refused && <p role="alert" className="pl-7 text-xs leading-4 text-destructive">{refused}</p>}
-			{(failed || (actions.reply && !open)) && (
-				<div className="flex items-center gap-2 pl-7">
-					{failed && <p role="alert" className="min-w-0 flex-1 truncate text-xs leading-4 text-muted-foreground">{failed}</p>}
+			{(failed || own.get(last) || (actions.reply && !open)) && (
+				<div className="flex items-center gap-1 pl-5">
+					{own.get(last)}
+					{failed && <p role="alert" className="min-w-0 flex-1 truncate pl-2 text-xs leading-4 text-muted-foreground">{failed}</p>}
 					{actions.reply && !open && (
 						<Button variant="ghost" size="xs" className="ml-auto text-muted-foreground" onClick={() => setOpen({ kind: "reply" })}>
 							Reply

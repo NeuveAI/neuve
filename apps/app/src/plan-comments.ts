@@ -36,3 +36,28 @@ export function planCommentViews(
 		],
 	}));
 }
+
+/**
+ * The person's words in each send of plan comments, by its submission, with the chat entry it
+ * became once placed: each under the passage it is on.
+ */
+export function commentSends(comments: PlanComment[]): Map<number, { entry?: number; text: string }> {
+	const sends = new Map<number, { entry?: number; said: { at: number; quote: string; text: string }[] }>();
+	for (const comment of comments) {
+		for (const { sent, at, text } of [comment, ...comment.replies.filter((reply) => reply.kind === "person")]) {
+			if (!sent) continue;
+			const send = sends.get(sent.submission) ?? { entry: sent.entry, said: [] };
+			send.said.push({ at, quote: comment.anchor.quote, text });
+			sends.set(sent.submission, send);
+		}
+	}
+	return new Map([...sends].map(([submission, { entry, said }]) => [submission, {
+		entry,
+		text: said.sort((a, b) => a.at - b.at).map(({ quote, text }) => `${quoted(quote)}\n\n${text}`).join("\n\n"),
+	}]));
+}
+
+/** A passage's plain words as a Markdown quotation, its marks kept as written. */
+function quoted(passage: string) {
+	return passage.split("\n").map((line) => `> ${line.replace(/[\\`*_[\]<>#|~]/g, "\\$&")}`).join("\n");
+}

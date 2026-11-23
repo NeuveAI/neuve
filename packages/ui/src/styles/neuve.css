@@ -552,6 +552,14 @@
 	background-color: var(--nv-land);
 }
 
+/* A card between the plan's lines can fall inside a passage's range; its words are not the plan's. */
+[data-plan-comment] ::highlight(plan-comment),
+[data-plan-comment] ::highlight(plan-added),
+[data-plan-comment] ::highlight(plan-selected) {
+	background-color: transparent;
+	text-decoration: none;
+}
+
 /* Where the highlight API is missing, the whole block of a comment's passage is marked. */
 [data-plan-mark~="plan-comment"] {
 	text-decoration: underline 2px var(--nv-accent);
