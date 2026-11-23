@@ -414,16 +414,21 @@ export function Conversation(
 						mayAnswer={channel.owner === user || transcript.shared !== false}
 					/>
 				)}
-				{transcript.live && approvals.map((view) => (
-					<Approval
-						key={view.request}
-						channel={channel.id}
-						chat={id}
-						user={user}
-						view={view}
-						mayAnswer={mayAsk}
-					/>
-				))}
+				{/* Cards show in full; past this height they scroll, and each card's buttons follow all of its content. */}
+				{transcript.live && approvals.length > 0 && (
+					<div className="max-h-[60vh] overflow-y-auto">
+						{approvals.map((view) => (
+							<Approval
+								key={view.request}
+								channel={channel.id}
+								chat={id}
+								user={user}
+								view={view}
+								mayAnswer={mayAsk}
+							/>
+						))}
+					</div>
+				)}
 				{transcript.live && <Checks channel={channel} chat={id} user={user} />}
 				{transcript.live && (
 					<MessageQueue messages={transcript.queue} people={people} channels={senders} />

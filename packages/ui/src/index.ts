@@ -7,6 +7,8 @@ export { Panel } from "./components/app-layout/panel";
 export { AppearanceProvider, useAppearance } from "./components/appearance";
 export { ChatStatus, type ChatStatusProps } from "./components/chat-status/chat-status";
 export { Code, type CodeProps } from "./components/code/code";
+export { Diff } from "./components/diff/diff";
+export { patchFile } from "./lib/highlighter";
 export { ChecksNotice, type ChecksNoticeProps } from "./components/checks/checks";
 export {
 	CommandPalette,

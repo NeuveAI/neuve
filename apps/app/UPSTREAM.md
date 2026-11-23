@@ -16,8 +16,8 @@ The plan, the Plan tab and approval (NEU-458) change these upstream files furthe
 
 Approval requests in the chat change these upstream files further:
 
-- `packages/ui/src/components/requests/approval.tsx`, Ace's unused approval view, is deleted. `packages/ui/src/index.ts` exports the shared card shell and the `Code` block instead, which the app's approval card uses.
-- `transcript.ts` keeps the chat's approval requests, `conversation.tsx` shows their cards above the composer where the question shows, and `composer.tsx` marks the chat attended on every ask it sends.
+- `packages/ui/src/components/requests/approval.tsx`, Ace's unused approval view, is deleted. `packages/ui/src/index.ts` exports the shared card shell, the `Code` block, `Diff` and `patchFile` instead, which the app's approval card uses. `components/diff/diff.tsx` and `lib/highlighter.ts` let a diff wrap its long lines instead of scrolling them.
+- `transcript.ts` keeps the chat's approval requests, `conversation.tsx` shows their cards above the composer where the question shows, and `composer.tsx` and the new channel's first message in `app.tsx` mark the chat attended. `package.json` gains `jsdom` for the card's tests.
 
 The app is called Neuve, with Ace credited (decision 12.18 of the [design decisions](../../process/decisions.md)). Settings › General credits Ace, and [UPSTREAM-LICENSE](UPSTREAM-LICENSE) is kept as it is. The naming changes these places:
 
