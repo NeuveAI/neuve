@@ -24,13 +24,14 @@ export type FileLinesAnchor = {
 /**
  * Where an anchor sits on a later version of the file, found by content, not by line number.
  *
- * - `stays`: the anchor's lines occur, consecutive and with the same text, exactly once in the
- *   version, and the quote is inside them. `lines` are those lines at their numbers there.
- * - `changed`: the anchor's lines occur nowhere in the version and the quote occurs nowhere.
- *   `removed` are lines of the anchor's version and `added` lines of this one, from a plain
- *   line comparison of the two: what was taken out of the passage and what replaced it.
- * - `ambiguous`: the quote occurs in the version, but the anchor's lines do not occur exactly
- *   once. The comment is shown at its section and marked, never as unchanged.
+ * A plain line comparison of the two versions follows each of the anchor's lines into this one.
+ *
+ * - `stays`: the comparison carries every one of the anchor's lines across unchanged and still
+ *   adjacent, and the quote is inside them. `lines` are those lines at their numbers here.
+ * - `ambiguous`: not every line was carried, but the quote is still inside the lines that took
+ *   the passage's place. The comment is shown at its section and marked, never as unchanged.
+ * - `changed`: otherwise. `removed` are lines of the anchor's version and `added` lines of this
+ *   one: what the comparison took out of the passage and what it put in its place.
  */
 export type FileLinesPlacement =
   | { kind: "stays"; hash: string; lines: FileLine[] }
@@ -110,44 +111,59 @@ export function fileLinesSection(text: string, line: number): string {
   return heading ? plainText(heading.text.replace(/\s#+\s*$/, "")) : "";
 }
 
-/** Indices in `file` where `run` occurs as consecutive lines with the same text. */
-function occurrences(
-  file: readonly FileLine[],
-  run: readonly FileLine[],
-): number[] {
-  const found: number[] = [];
-  for (let start = 0; start + run.length <= file.length; start++)
-    if (run.every((line, offset) => file[start + offset]!.text === line.text))
-      found.push(start);
-  return found;
-}
-
-/** Pairs of equal lines in a longest common subsequence of two versions, in order. */
-function commonLines(
+/**
+ * Which line of `after` each line of `before` became, by a longest common subsequence of the two
+ * versions; -1 for a line the comparison took out. The shared start and end are matched first, so
+ * the table covers only the lines between them.
+ */
+function carried(
   before: readonly FileLine[],
   after: readonly FileLine[],
-): Array<[number, number]> {
-  const lengths = Array.from({ length: before.length + 1 }, () =>
-    new Array<number>(after.length + 1).fill(0),
-  );
-  for (let i = before.length - 1; i >= 0; i--)
-    for (let j = after.length - 1; j >= 0; j--)
-      lengths[i]![j] =
-        before[i]!.text === after[j]!.text
-          ? lengths[i + 1]![j + 1]! + 1
-          : Math.max(lengths[i + 1]![j]!, lengths[i]![j + 1]!);
-  const pairs: Array<[number, number]> = [];
-  for (let i = 0, j = 0; i < before.length && j < after.length;) {
-    if (before[i]!.text === after[j]!.text) pairs.push([i++, j++]);
-    else if (lengths[i + 1]![j]! >= lengths[i]![j + 1]!) i++;
+): Int32Array {
+  const map = new Int32Array(before.length).fill(-1);
+  let head = 0;
+  while (
+    head < before.length &&
+    head < after.length &&
+    before[head]!.text === after[head]!.text
+  )
+    map[head] = head++;
+  let tail = 0;
+  while (
+    tail < before.length - head &&
+    tail < after.length - head &&
+    before[before.length - 1 - tail]!.text ===
+      after[after.length - 1 - tail]!.text
+  ) {
+    map[before.length - 1 - tail] = after.length - 1 - tail;
+    tail++;
+  }
+  const rows = before.length - head - tail;
+  const columns = after.length - head - tail;
+  const width = columns + 1;
+  const lengths = new Uint32Array((rows + 1) * width);
+  for (let i = rows - 1; i >= 0; i--)
+    for (let j = columns - 1; j >= 0; j--)
+      lengths[i * width + j] =
+        before[head + i]!.text === after[head + j]!.text
+          ? lengths[(i + 1) * width + j + 1]! + 1
+          : Math.max(
+              lengths[(i + 1) * width + j]!,
+              lengths[i * width + j + 1]!,
+            );
+  for (let i = 0, j = 0; i < rows && j < columns;) {
+    if (before[head + i]!.text === after[head + j]!.text)
+      map[head + i++] = head + j++;
+    else if (lengths[(i + 1) * width + j]! >= lengths[i * width + j + 1]!) i++;
     else j++;
   }
-  return pairs;
+  return map;
 }
 
 /**
  * Where `anchor`, made on the version whose text is `anchorText`, sits on the version `current`.
- * Always computed from the anchor's own version, never from an earlier placement.
+ * The anchor's own lines are followed from their version to this one by a plain line comparison,
+ * so a line inserted above moves them and a copy of them elsewhere does not take them.
  */
 export function placeFileLinesAnchor(
   anchor: FileLinesAnchor,
@@ -156,34 +172,42 @@ export function placeFileLinesAnchor(
 ): FileLinesPlacement {
   const { hash } = current;
   if (hash === anchor.hash) return { kind: "stays", hash, lines: anchor.lines };
-  const file = fileLines(current.text);
-  const found = occurrences(file, anchor.lines);
-  if (found.length === 1) {
-    const lines = file.slice(found[0]!, found[0]! + anchor.lines.length);
-    if (contains(lines, anchor.quote)) return { kind: "stays", hash, lines };
-  }
-  if (found.length > 0 || contains(file, anchor.quote))
-    return { kind: "ambiguous", hash, section: anchor.section };
-  // The passage is gone: what the comparison took out around it, and what it put in its place.
   const before = fileLines(anchorText);
-  const pairs = commonLines(before, file);
+  const file = fileLines(current.text);
+  const map = carried(before, file);
   const first = anchor.lines[0]!.line - 1;
   const last = anchor.lines.at(-1)!.line - 1;
-  const previous = pairs.filter(([index]) => index < first).at(-1) ?? [-1, -1];
-  const next = pairs.find(([index]) => index > last) ?? [
-    before.length,
-    file.length,
-  ];
-  const kept = new Set(pairs.map(([index]) => index));
-  const placed = new Set(pairs.map(([, index]) => index));
+  const targets = Array.from(
+    { length: last - first + 1 },
+    (_, offset) => map[first + offset]!,
+  );
+  if (
+    targets.every(
+      (target, offset) => target >= 0 && target === targets[0]! + offset,
+    )
+  ) {
+    const lines = file.slice(targets[0]!, targets[0]! + targets.length);
+    if (contains(lines, anchor.quote)) return { kind: "stays", hash, lines };
+  }
+  // The lines the comparison kept just before and just after the passage bound where it was.
+  let previous = first - 1;
+  while (previous >= 0 && map[previous]! < 0) previous--;
+  let next = last + 1;
+  while (next < before.length && map[next]! < 0) next++;
+  const from = previous >= 0 ? map[previous]! + 1 : 0;
+  const to = next < before.length ? map[next]! : file.length;
+  const place = file.slice(from, to);
+  // A quote counts as surviving only in the lines that took the passage's place, so a deleted
+  // passage whose words occur elsewhere in the plan is changed, not ambiguous.
+  if (contains(place, anchor.quote))
+    return { kind: "ambiguous", hash, section: anchor.section };
+  const placed = new Set(map);
   return {
     kind: "changed",
     hash,
     removed: before
-      .slice(previous[0] + 1, next[0])
-      .filter((line) => !kept.has(line.line - 1)),
-    added: file
-      .slice(previous[1] + 1, next[1])
-      .filter((line) => !placed.has(line.line - 1)),
+      .slice(previous + 1, next)
+      .filter((line) => map[line.line - 1]! < 0),
+    added: place.filter((line) => !placed.has(line.line - 1)),
   };
 }
