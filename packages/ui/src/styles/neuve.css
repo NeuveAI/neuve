@@ -551,3 +551,17 @@
 ::highlight(plan-selected) {
 	background-color: var(--nv-land);
 }
+
+/* Where the highlight API is missing, the whole block of a comment's passage is marked. */
+[data-plan-mark~="plan-comment"] {
+	text-decoration: underline 2px var(--nv-accent);
+	text-underline-offset: 4px;
+}
+
+[data-plan-mark~="plan-added"] {
+	background-color: color-mix(in oklab, var(--success) 16%, transparent);
+}
+
+[data-plan-mark~="plan-selected"] {
+	background-color: var(--nv-land);
+}

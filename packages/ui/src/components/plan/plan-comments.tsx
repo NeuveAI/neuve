@@ -107,13 +107,15 @@ export function selectionIn(root: HTMLElement, text: string): (PlanSelection & {
 	return { lines, quote, rect };
 }
 
-/** The outermost rendered blocks in `root` that hold any of lines `first` to `last`. */
-function blocksFor(root: HTMLElement, first: number, last: number) {
+/** The outermost rendered blocks in `root` that hold any of lines `first` to `last`, or the innermost. */
+function blocksFor(root: HTMLElement, first: number, last: number, innermost = false) {
 	let found = [...root.querySelectorAll("[data-lines]")].filter((element) => {
 		let lines = blockLines(element);
 		return !element.closest("[data-plan-comment]") && lines && lines[0] <= last && lines[1] >= first;
 	});
-	return found.filter((element) => !found.some((other) => other !== element && other.contains(element)));
+	return found.filter((element) =>
+		!found.some((other) => other !== element && (innermost ? element.contains(other) : other.contains(element)))
+	);
 }
 
 /**
@@ -203,9 +205,17 @@ export function usePlanHighlights(
 	let key = JSON.stringify([list.map((comment) => [comment.placement, comment.quote]), selected, text]);
 	useLayoutEffect(() => {
 		let element = root.current;
-		if (!element || typeof CSS === "undefined" || !("highlights" in CSS)) return;
+		if (!element) return;
+		// WebKit has the highlight API, underline included, from Safari 17.2. Without it the
+		// passage's whole block is marked instead, so no comment's passage goes unmarked.
+		let precise = typeof CSS !== "undefined" && "highlights" in CSS;
 		let ranges = { kept: [] as Range[], added: [] as Range[], selected: [] as Range[] };
+		let marked: [Element, string][] = [];
 		let mark = (kind: keyof typeof ranges, first: number, last: number, text: string, at?: [number, number]) => {
+			if (!precise) {
+				for (let block of blocksFor(element, first, last, true)) marked.push([block, HIGHLIGHTS[kind]]);
+				return;
+			}
 			let range = rangeOf(blocksFor(element, first, last), text, at);
 			if (range) ranges[kind].push(range);
 		};
@@ -219,6 +229,12 @@ export function usePlanHighlights(
 			}
 		}
 		if (selected) mark("selected", selected.lines[0]!.line, selected.lines.at(-1)!.line, selected.quote);
+		if (!precise) {
+			for (let [block, name] of marked) block.setAttribute("data-plan-mark", `${block.getAttribute("data-plan-mark") ?? ""} ${name}`.trim());
+			return () => {
+				for (let [block] of marked) block.removeAttribute("data-plan-mark");
+			};
+		}
 		// Every open Plan tab adds its own ranges to the one highlight of each kind, and takes them back.
 		let added = (Object.keys(ranges) as (keyof typeof ranges)[]).flatMap((kind) => {
 			let name = HIGHLIGHTS[kind];
@@ -347,7 +363,7 @@ function Change({ removed, added }: { removed: FileLine[]; added: FileLine[] }) 
 }
 
 /** What the card says under its messages: kept, on its way, or failed. */
-function status(comment: PlanCommentView, agent: string) {
+export function commentStatus(comment: PlanCommentView, agent: string) {
 	if (comment.state === "failed") return comment.failure ? `Not delivered: ${comment.failure}` : "Not delivered";
 	if (comment.messages.some((message) => message.kept)) return "Not sent yet";
 	return comment.state ? deliveryLine(comment.state, agent) : undefined;
@@ -361,7 +377,7 @@ function status(comment: PlanCommentView, agent: string) {
 export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView; actions: PlanCommentActions }) {
 	let [open, setOpen] = useState<{ kind: "reply" } | { kind: "edit"; message: string }>();
 	let { placement } = comment;
-	let line = status(comment, actions.agent);
+	let line = commentStatus(comment, actions.agent);
 	let first = comment.messages[0]!.id;
 	return (
 		<article
