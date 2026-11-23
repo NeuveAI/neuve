@@ -79,6 +79,21 @@ test("text inserted or removed above a comment moves its lines and keeps it", ()
   });
 });
 
+test("a line inserted inside a passage does not keep the comment on the lines either side", () => {
+  const short = commentOn(plan, 4, 5, "three");
+  const split = plan.replace(
+    "**up to three times**,\n",
+    "**up to three times**,\nwith a minute between attempts,\n",
+  );
+  expect(
+    placeFileLinesAnchor(short, plan, { hash: hash("b"), text: split }),
+  ).toEqual({
+    kind: "ambiguous",
+    hash: hash("b"),
+    section: "Goal",
+  });
+});
+
 test("an edited passage whose quote is gone shows what was removed and what replaced it", () => {
   const rewritten = plan
     .replace("**up to three times**,", "**up to five times**,")
