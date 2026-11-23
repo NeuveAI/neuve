@@ -538,7 +538,6 @@ The owner's questions are answered. The same test was applied to what remained: 
 | --- | --- | --- |
 | Committing a plan against the earlier rule | An earlier ruling says no plan is committed to the repository. The coordinator reads that as a rule for Neuve's own process, and keeping a copy as a choice a user makes for their own repository. Confirm or overrule | As read |
 | The fuller wording of the two vocabulary entries | The vocabulary holds the two names and the one approved line. Whether to add that approving agrees the scope, that the approval carries the ask for the final review of every cycle of the plan, that plan mode is read-only by code, and that the cycle opens at the first read | Add them once the slices land |
-| The guarantees beyond the two the owner named | The reading the owner confirmed said code enforces that a planning chat cannot write and that only a person approves. This design also has code guarantee a reviewer's fresh start, that the review's scope is an approved plan, that people do not write in the work log, and the sandbox wait | Confirm the four, each with its reason in the guarantees table |
 | Whether agents may tag each other from threads | The owner said "we can '@' tag agents". This design reads "we" as people: agents message each other freely on the work log, and only a person's typed mention is delivered from threads | As read |
 | When the plan file goes | With the planning chat, or with its channel | With the channel, so an approved plan outlives a closed chat |
 
