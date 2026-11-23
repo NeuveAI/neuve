@@ -1,8 +1,8 @@
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { toolArguments, toolRefusal } from "@ace/channel/review";
 import type { Context } from "@earendil-works/chord";
-import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { err, FileError, getOrThrow, ok, type ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { z } from "zod";
@@ -228,52 +228,69 @@ export function planFileAccess(env: ExecutionEnv, isPlanning: (context: Context)
 }
 
 const safeText = z.string().min(1).refine(value => !value.trimStart().startsWith("-") && !value.includes("\0"));
-const revision = z.string().regex(/^[\w@][\w./@-]*(?:[~^]\d*)*$/);
-const count = z.int().positive();
-const path = safeText.optional();
+const revision = z.string().regex(/^[\w@][\w./@-]*(?:[~^]\d*)*$/)
+	.describe("A Git revision such as HEAD, HEAD~1, a tag, or a branch.");
+const count = z.int().positive().describe("Number of history entries.");
+const filePath = safeText.describe("A path inside the working tree.");
+const path = filePath.optional();
 const Explore = z.discriminatedUnion("action", [
 	z.strictObject({ action: z.literal("list"), path }),
-	z.strictObject({ action: z.literal("search"), pattern: safeText, path }),
+	z.strictObject({ action: z.literal("search"), pattern: safeText.describe("Literal text to search for."), path }),
 	z.strictObject({ action: z.literal("history"), revision: revision.optional(), count: count.optional(), path }),
-	z.strictObject({ action: z.literal("show"), revision, path: safeText }),
+	z.strictObject({ action: z.literal("show"), revision, path: filePath }),
 	z.strictObject({ action: z.literal("compare"), from: revision, to: revision, path }),
 ]);
-type Explore = z.infer<typeof Explore>;
-
-// Providers such as Anthropic read the top-level properties when presenting a tool to the model.
-const ExploreParameters = z.strictObject({
-	action: z.enum(Explore.options.map(option => option.shape.action.value)),
-	path: path.describe("A path inside the working tree. Required for show."),
-	pattern: safeText.optional().describe("Literal text for search."),
-	revision: revision.optional().describe("A commit, branch, or tag for show or history."),
-	count: count.optional().describe("Number of history entries."),
-	from: revision.optional().describe("Starting revision for compare."),
-	to: revision.optional().describe("Ending revision for compare."),
-});
+const gitRevision = 'a Git revision such as "HEAD", "HEAD~1", a branch, or a tag';
+const readablePath = "a path inside the working tree that is neither Git metadata nor ignored by Git";
 
 export const planExplore = defineExtension({
 	name: "neuve-explore",
 	tools: [defineTool({
-		name: "explore",
-		description: "List files, search the Git index for literal text, read history, show a file at a revision, or compare two revisions.",
-		parameters: Type.Unsafe<Explore>(z.toJSONSchema(ExploreParameters, { target: "draft-07" })),
-		prepareArguments: args => Explore.parse(args),
+		...toolArguments("explore", Explore, {
+			path: `${readablePath}, without a leading dash or NUL character`,
+			pattern: "nonempty literal search text without a leading dash or NUL character",
+			revision: gitRevision,
+			from: gitRevision,
+			to: gitRevision,
+			count: "a positive integer number of history entries",
+		}),
+		description: "Use list to list files, search with pattern for literal text in the Git index, history with optional revision and count, show with revision and path for a file, or compare with from and to for two revisions.",
 		replay: "safe",
 		async execute(args, api, context) {
 			const cwd = api.env?.cwd;
-			if (!cwd) throw new Error("This chat has no working tree.");
+			if (!cwd) throw toolRefusal("explore", args, [
+				"arguments: Explore needs a chat with a Git working tree.",
+			]);
 			const worktree = await tree(cwd, context);
-			const file = args.path === undefined ? undefined : (await confined(worktree, args.path, context, true)).name;
+			const problems: string[] = [];
+			const file = args.path === undefined ? undefined : await confined(worktree, args.path, context, true)
+				.then(({ name }) => name, cause => {
+					if (context.abortSignal?.aborted) throw cause;
+					const reason = cause instanceof Error ? cause.message.replace(/\.$/, "") : String(cause);
+					problems.push(`path: ${reason}, so use ${readablePath}.`);
+					return undefined;
+				});
+			const commit = async (rev: string, field: "revision" | "from" | "to") => {
+				const text = await git(worktree.root,
+					["rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`], context, { accepted: [0, 1] });
+				const oid = text.trim();
+				if (!objectId.test(oid)) problems.push(
+					`${field}: ${JSON.stringify(rev)} names no commit in this repository, so use a revision that resolves to a commit.`,
+				);
+				return oid;
+			};
+			if (args.action === "show" && file === "") {
+				problems.push("path: Show needs a file path inside the working tree.");
+			}
+			const revisions = args.action === "compare"
+				? [await commit(args.from, "from"), await commit(args.to, "to")]
+				: args.action === "history" || args.action === "show"
+				? [await commit(args.revision ?? "HEAD", "revision")]
+				: [];
+			if (problems.length) throw toolRefusal("explore", args, problems);
 			const paths = ["--", ...(file ? [file] : [])];
 			const run = (command: string[], accepted = [0]) =>
 				git(worktree.root, command, context, { accepted, output: api.output });
-			const commit = async (rev: string) => {
-				const text = await git(worktree.root,
-					["rev-parse", "--verify", "--end-of-options", `${rev}^{commit}`], context);
-				const oid = text.trim();
-				if (!objectId.test(oid)) throw new Error("Git did not return a commit ID.");
-				return oid;
-			};
 			const noDrivers = ["--no-ext-diff", "--no-textconv"];
 			switch (args.action) {
 				case "list":
@@ -285,17 +302,17 @@ export const planExplore = defineExtension({
 				case "history":
 					await run(["log", ...noDrivers, "--no-patch", "--no-show-signature", "--no-notes", "--no-decorate", "--no-use-mailmap",
 						"--format=%h %s", `--max-count=${args.count ?? 20}`,
-						"--end-of-options", await commit(args.revision ?? "HEAD"), ...paths]);
+						"--end-of-options", ...revisions, ...paths]);
 					break;
 				case "show": {
-					if (!file) throw new Error("Showing a file needs a path inside the working tree.");
 					const text = await git(worktree.root, [
-						"ls-tree", "-z", "--full-tree", "--end-of-options", await commit(args.revision), ...paths,
+						"ls-tree", "-z", "--full-tree", "--end-of-options", ...revisions, ...paths,
 					], context);
-					const [header] = text.split("\t", 1);
-					const [, kind, oid] = header.split(" ");
-					if (kind !== "blob" || !oid || !objectId.test(oid) || text.indexOf("\0") !== text.length - 1) {
-						throw new Error("The revision does not have a file at that path.");
+					const oid = /^\d+ blob (\S+)\t/.exec(text)?.[1];
+					if (!oid || !objectId.test(oid) || text.indexOf("\0") !== text.length - 1) {
+						throw toolRefusal("explore", args, [
+							"path: The revision does not have a file at that path, so use a file path that exists at the requested revision.",
+						]);
 					}
 					await run(["cat-file", "blob", "--end-of-options", oid]);
 					break;
@@ -303,7 +320,7 @@ export const planExplore = defineExtension({
 				case "compare": {
 					// Treat each side of a rename separately so an ignored source can't enter the patch.
 					const diff = ["diff", ...noDrivers, "--no-renames", "--ignore-submodules=all", "--no-relative", "--no-color"];
-					const selection = ["--end-of-options", await commit(args.from), await commit(args.to), "--",
+					const selection = ["--end-of-options", ...revisions, "--",
 						...(file ? [`:(top,literal)${file}`] : [])];
 					const names = (await git(worktree.root, [...diff, "--name-only", "-z", ...selection], context))
 						.split("\0").filter(Boolean);

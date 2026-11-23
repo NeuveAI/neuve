@@ -41,7 +41,7 @@ describe("lanes", () => {
 		await watch.until("reply", (event) => event.text === "Started");
 		await watch.stop();
 		const lane = join(fixture.lanes, "fix-bug");
-		expect(started.text).toContain(`Started lane fix-bug on branch one/fix-bug`);
+		expect(started.text).toContain(`Started work lane fix-bug on branch one/fix-bug`);
 		expect(pwd.text.trim()).toBe(await realpath(lane));
 		expect(relative(fixture.project, lane).startsWith("..")).toBe(true);
 		expect(git(fixture.project, "worktree", "list", "--porcelain")).toContain(`worktree ${await realpath(lane)}`);
@@ -83,6 +83,7 @@ describe("lanes", () => {
 		expect(pwd.text.trim()).toBe(await realpath(fixture.lane.path));
 	});
 
+	// The tool must teach a valid name without creating a worktree outside the assigned directory.
 	test("a lane name that could escape the lanes directory is refused by the tool", async () => {
 		const fixture = await create();
 		fixture.script(tool("lane", { action: "start", name: "../outside" }, "call-lane"), fauxAssistantMessage("ok"));
@@ -92,7 +93,9 @@ describe("lanes", () => {
 		await watch.until("reply");
 		await watch.stop();
 		expect(result.error).toBe(true);
-		expect(result.text).toContain("A lane name must be lowercase kebab-case");
+		expect(result.text).toContain("name: Expected a lowercase kebab-case work lane name");
+		expect(result.text).toContain('such as "implement-auth".');
+		expect(result.text).toContain('"name": "../outside"');
 		expect(git(fixture.project, "worktree", "list", "--porcelain").match(/^worktree /gm)?.length).toBe(2);
 	});
 

@@ -1,4 +1,3 @@
-import { Type } from "@earendil-works/pi-ai";
 import {
 	defineExtension,
 	defineTool,
@@ -32,24 +31,17 @@ import { PlanningDoc, emptyPlanningState } from "./planning";
 import { LanesDoc } from "./lanes";
 import { ReviewContextDoc } from "./review-context";
 import { ReviewCardsDoc, type ReviewCard } from "./review-cards";
+import { toolArguments } from "./tool-arguments";
+
 export * from "./review-protocol";
+export { toolArguments, toolRefusal, type ToolParameters } from "./tool-arguments";
 export type Review = ReviewAdapter;
 
 export const REVIEW_CLOSING =
 	"Completing a review does not approve the change. Point the person at the review card.";
 export const REVIEW_NO_SUBSTITUTE = "No chat review replaces a Neuve review.";
-const notify = Type.Optional(
-	Type.Boolean({
-		description:
-			"Set only when the person asks to be told when this review finishes.",
-	}),
-);
-const lookup = Type.Object(
-	{
-		review: Type.Optional(Type.String({ pattern: "^[0-9A-HJKMNP-TV-Z]{26}$" })),
-	},
-	{ additionalProperties: false },
-);
+const lookupExpected = { review: "a review ULID, or omit review for this chat's latest review" };
+const notifyExpected = "false, or true if the person asked to be told when the review finishes";
 const json = (value: unknown) =>
 	z.json().parse(JSON.parse(JSON.stringify(value)));
 
@@ -213,7 +205,7 @@ export function review(adapter?: Review): Extension {
 						if (!snapshot.lane)
 							throw new ReviewRefusalError(
 								"no_lane",
-								"This chat has no lane to review",
+								"This chat has no work lane to review",
 							);
 						if (
 							snapshot.planning.selection &&
@@ -221,7 +213,7 @@ export function review(adapter?: Review): Extension {
 						)
 							throw new ReviewRefusalError(
 								"scope_mismatch",
-								"The selected Linear scope belongs to another lane",
+								"The selected Linear scope belongs to another work lane",
 							);
 					}
 					prepared = PreparedReviewSchema.parse(
@@ -265,11 +257,10 @@ export function review(adapter?: Review): Extension {
 
 	async function read(
 		kind: "status" | "outcome",
-		args: unknown,
+		input: z.infer<typeof ReviewLookupInputSchema>,
 		api: ToolExecutionApi,
 		context: Context,
 	) {
-		const input = ReviewLookupInputSchema.parse(args);
 		try {
 			if (!adapter)
 				throw new ReviewRefusalError(
@@ -311,22 +302,14 @@ export function review(adapter?: Review): Extension {
 		],
 		tools: [
 			defineTool({
-				name: "neuve_review_branch",
-				prepareArguments: (args) => ReviewBranchInputSchema.parse(args),
+				...toolArguments("neuve_review_branch", ReviewBranchInputSchema, {
+					against: "a nonempty comparison revision of at most 1000 characters, or omit against for the default base",
+					notify: notifyExpected,
+				}),
 				description:
 					"Start a native Neuve review of the connected project's current branch when asked to review code, changes or a branch. Omit against for the default comparison base. Set notify only when the person asks to be told when it finishes. The host updates the review card; do not poll.",
-				parameters: Type.Object(
-					{
-						against: Type.Optional(
-							Type.String({ minLength: 1, maxLength: 1000 }),
-						),
-						notify,
-					},
-					{ additionalProperties: false },
-				),
 				replay: "safe",
-				execute: async (args, api, context) => {
-					const { against, notify } = ReviewBranchInputSchema.parse(args);
+				execute: async ({ against, notify }, api, context) => {
 					return start(
 						{ kind: "project-branch", ...(against ? { against } : {}) },
 						notify ?? false,
@@ -336,25 +319,16 @@ export function review(adapter?: Review): Extension {
 				},
 			}),
 			defineTool({
-				name: "neuve_review_pull_request",
-				prepareArguments: (args) => ReviewPullRequestInputSchema.parse(args),
+				...toolArguments("neuve_review_pull_request", ReviewPullRequestInputSchema, {
+					repo: 'an owner/repository name, such as "NeuveAI/neuve"',
+					number: "a positive integer pull request number",
+					expected_head: "a full lowercase Git commit ID of 40 or 64 hexadecimal characters",
+					notify: notifyExpected,
+				}),
 				description:
 					"Start a native Neuve review when asked to review a named pull request. Supply its owner/repository and number; expected_head pins the head shown to the person. Set notify only when the person asks to be told when it finishes. The host updates the review card; do not poll.",
-				parameters: Type.Object(
-					{
-						repo: Type.String({ pattern: "^[\\w.-]+/[\\w.-]+$" }),
-						number: Type.Integer({ minimum: 1 }),
-						expected_head: Type.Optional(
-							Type.String({ pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" }),
-						),
-						notify,
-					},
-					{ additionalProperties: false },
-				),
 				replay: "safe",
-				execute: async (args, api, context) => {
-					const { repo, number, expected_head, notify } =
-						ReviewPullRequestInputSchema.parse(args);
+				execute: async ({ repo, number, expected_head, notify }, api, context) => {
 					return start(
 						{
 							kind: "pull-request",
@@ -369,35 +343,29 @@ export function review(adapter?: Review): Extension {
 				},
 			}),
 			defineTool({
-				name: "neuve_review_lane",
-				prepareArguments: (args) => ReviewLaneInputSchema.parse(args),
+				...toolArguments("neuve_review_lane", ReviewLaneInputSchema, { notify: notifyExpected }),
 				description:
-					"Start a native Neuve review only when the person explicitly asks to review this chat's lane, meaning its own Git worktree. Never create a lane to request review. Neuve's responsibility category is always called a review lane. Set notify only when asked to be told when it finishes. The host updates the review card; do not poll.",
-				parameters: Type.Object({ notify }, { additionalProperties: false }),
+					"Start a native Neuve review only when the person explicitly asks to review this chat's work lane. Never start a work lane to request a review. Neuve's responsibility category is always called a review lane. Set notify only when asked to be told when it finishes. The host updates the review card; do not poll.",
 				replay: "safe",
-				execute: async (args, api, context) =>
+				execute: async ({ notify }, api, context) =>
 					start(
 						{ kind: "lane" },
-						ReviewLaneInputSchema.parse(args).notify ?? false,
+						notify ?? false,
 						api,
 						context,
 					),
 			}),
 			defineTool({
-				name: "neuve_review_status",
-				prepareArguments: (args) => ReviewLookupInputSchema.parse(args),
+				...toolArguments("neuve_review_status", ReviewLookupInputSchema, lookupExpected),
 				description:
 					"Read where a requested Neuve review is when the person asks for progress. Omit review for this chat's latest review. Returns status without findings. The host updates the review card; do not poll.",
-				parameters: lookup,
 				replay: "safe",
 				execute: (args, api, context) => read("status", args, api, context),
 			}),
 			defineTool({
-				name: "neuve_review_outcome",
-				prepareArguments: (args) => ReviewLookupInputSchema.parse(args),
+				...toolArguments("neuve_review_outcome", ReviewLookupInputSchema, lookupExpected),
 				description:
 					"Read what Records recorded when the person asks for a Neuve review's result. Omit review for this chat's latest review. Point the person at the review card. Completing a review does not approve the change.",
-				parameters: lookup,
 				replay: "safe",
 				execute: (args, api, context) => read("outcome", args, api, context),
 			}),
