@@ -1,6 +1,7 @@
 import { ReviewRefusalError } from "@ace/channel/review-protocol";
 import type { ReviewCard } from "@ace/channel/review-cards";
 import { ReviewFeedDefinition } from "@ace/channel/protocol";
+import { Channel } from "@ace/channel";
 import "./fixtures/memory-secrets";
 import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile, symlink, rename } from "node:fs/promises";
@@ -8,7 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { Harness, createRegistry, ROOT_CONVERSATION_ID as chat, defineDoc } from "@earendil-works/pi-durable";
+import { type Harness, ROOT_CONVERSATION_ID as chat, defineDoc } from "@earendil-works/pi-durable";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { ReviewCardsDoc, startReviewFeed, updateReviewBranch, configureReviewPreparation, reviewPreparationRetryDelay, reviewFeedRetryDelay } from "../src/native-review";
 import { ReviewFeedSnapshotSchema, reviewFeedFailure, type ReviewFeedSnapshot, type ReviewFeedSource } from "../src/review-protocol";
@@ -63,13 +65,20 @@ async function fixture(notify = false) {
 	const provider = fauxProvider({ provider: "faux", models: [{ id: "coder", contextWindow: 100000 }] });
 	provider.appendResponses([fauxAssistantMessage("Pointing at the review card.")]);
 	const models = createModels(); models.setProvider(provider.provider);
-	const open = async () => {
-		const harness = await Harness.open(await openNodeSqliteStorage(join(root, "chat.sqlite")), { registry: createRegistry(), models }, context);
-		await harness.root(context, { agent: { model: { provider: "faux", modelId: "coder" } } });
-		return harness;
-	};
-	let harness = await open();
-	closes.push(() => harness.close(context));
+	let harness!: Harness;
+	const open = async () => Channel.open({
+		id: "review-feed", name: "review-feed", owner: "owner", project, models,
+		model: { provider: "faux", modelId: "coder" },
+		storage: await openNodeSqliteStorage(join(root, "chat.sqlite")),
+		env: () => new NodeExecutionEnv({ cwd: project }),
+		log: () => {},
+		directory: { self: { id: "review-feed", name: "review-feed" }, list: async () => [], deliver: async () => {} },
+		extension: { extensions: [], attach: async bound => { harness = bound; } },
+	});
+	let channel = await open();
+	closes.push(() => channel.close());
+	const openFeed = (source: ReviewFeedSource, options: Parameters<typeof startReviewFeed>[3]) =>
+		startReviewFeed(harness, source, channel.submitInput.bind(channel), options);
 	const card: ReviewCard = { kind: "review", review, source: "branch", label: "feature against main",
 		range: { branch: "feature", base, head, commits: 1 }, recovered: false, notify,
 		phase: "queued", stage: null, stages: [], finished: null, stopped: null, newCommits: null, links: null, updatedAt: 1 };
@@ -78,12 +87,12 @@ async function fixture(notify = false) {
 	const logs: string[] = [];
 	const start = async (enabled?: () => boolean, interval = 100000) => {
 		const before = source.initialized;
-		const feed = await startReviewFeed(harness, source, { log: (_level, event) => logs.push(event), branchIntervalMs: interval, ...(enabled ? { enabled } : {}) });
+		const feed = await openFeed(source, { log: (_level, event) => logs.push(event), branchIntervalMs: interval, ...(enabled ? { enabled } : {}) });
 		closes.push(() => feed.close());
 		await until(async () => (await harness.snapshot(ReviewCardsDoc, chat, context))?.cards.start?.kind === "review" && source.initialized > before);
 		return feed;
 	};
-	return { project, source, logs, start, provider,
+	return { project, source, logs, start, provider, openFeed,
 		notice: async () => (await harness.snapshot(FeedDoc, chat, context))?.notices[review],
 		submission: async () => {
 			const key = (await harness.snapshot(FeedDoc, chat, context))?.notices[review]?.requestId;
@@ -91,10 +100,24 @@ async function fixture(notify = false) {
 		},
 		get harness() { return harness; },
 		card: async () => (await harness.snapshot(ReviewCardsDoc, chat, context))!.cards.start,
-		async restart() { await harness.close(context); harness = await open(); },
+		async restart() { await channel.close(); channel = await open(); },
 	};
 }
 const finished = { units: 10, byReviewLane: { humanRequired: 3, humanSuggested: 2, agentic: 4, static: 1 }, needJudgment: 2, complete: false, gaps: 2, undecoded: 1 };
+
+// A review can finish after the chat's provider has been removed.
+test("a finished review notice wakes the chat on Automatic when its stored provider is gone", async () => {
+	const f = await fixture(true);
+	const conversation = (await f.harness.conversation(chat, context))!;
+	await conversation.configure({ model: { provider: "retired", modelId: "old-model" } }, context);
+	await f.start();
+	await f.source.emit({ phase: "finished", finished });
+	const delivery = await f.submission();
+	await (await f.harness.submission(delivery!.id, context))!.wait(context);
+	expect((await conversation.context(context)).messages.at(-1)).toMatchObject({
+		provider: "faux", model: "coder", content: [{ type: "text", text: "Pointing at the review card." }],
+	});
+});
 
 for (const kind of ["input", "write"] as const) test(`a legacy client ${kind} cannot pre-empt the host wake`, async () => {
 	const f = await fixture(true);
@@ -255,7 +278,7 @@ test("a cancelled initial subscription is disposed even when it opens after arch
 		started++; await gate.promise; await receive(f.source.current);
 		return () => { stopped++; };
 	} };
-	const feed = await startReviewFeed(f.harness, source, { enabled: () => enabled, branchIntervalMs: 10, log: () => {} });
+	const feed = await f.openFeed(source, { enabled: () => enabled, branchIntervalMs: 10, log: () => {} });
 	closes.push(async () => { gate.resolve(); await feed.close(); });
 	await until(async () => started === 1);
 	enabled = false; await Bun.sleep(40); gate.resolve();
@@ -270,7 +293,7 @@ test("failed watches back off exponentially, cap at 30 seconds and log only stat
 	let time = 0, calls = 0;
 	const states: unknown[] = [];
 	const source: ReviewFeedSource = { async watch() { calls++; throw new Error(`temporary network outage ${calls}`); } };
-	const feed = await startReviewFeed(f.harness, source, { now: () => time, branchIntervalMs: 5,
+	const feed = await f.openFeed(source, { now: () => time, branchIntervalMs: 5,
 		log: (_level, event, fields) => { if (event === "review.feed.state") states.push(fields); } });
 	closes.push(() => feed.close());
 	await until(async () => calls === 1);
@@ -289,11 +312,11 @@ test("failed watches back off exponentially, cap at 30 seconds and log only stat
 for (const reason of ["not_found", "records_mismatch"] as const) test(`a permanent ${reason} refusal ends observation across reopen`, async () => {
 	const f = await fixture(); let calls = 0;
 	const source: ReviewFeedSource = { async watch() { calls++; throw new ReviewRefusalError(reason, "Unavailable review"); } };
-	const feed = await startReviewFeed(f.harness, source, { branchIntervalMs: 5, log: () => {} });
+	const feed = await f.openFeed(source, { branchIntervalMs: 5, log: () => {} });
 	await until(async () => calls === 1 && !feed.pending());
 	await Bun.sleep(80); expect(calls).toBe(1);
 	await feed.close(); await f.restart();
-	const resumed = await startReviewFeed(f.harness, source, { branchIntervalMs: 5, log: () => {} });
+	const resumed = await f.openFeed(source, { branchIntervalMs: 5, log: () => {} });
 	closes.push(() => resumed.close());
 	await Bun.sleep(80); expect(calls).toBe(1); expect(resumed.pending()).toBe(false);
 }, 15000);
@@ -307,7 +330,7 @@ test("a persisted pending wake is delivered on reopen even while Records is unav
 	}, context);
 	await f.restart();
 	const source: ReviewFeedSource = { async watch() { throw new Error("Records temporarily unavailable"); } };
-	const feed = await startReviewFeed(f.harness, source, { log: () => {} });
+	const feed = await f.openFeed(source, { log: () => {} });
 	closes.push(() => feed.close());
 	await until(async () => (await f.harness.snapshot(FeedDoc, chat, context))?.notices[review].delivered === true && !feed.pending());
 	const submission = await f.submission();
@@ -343,7 +366,7 @@ test("an unreachable project is retried at the next open and delivers its reques
 	await rename(f.project, moved);
 	try {
 		let retrying = false;
-		const feed = await startReviewFeed(f.harness, f.source, { log: (_level, _event, fields) => { if (fields?.state === "retrying") retrying = true; } });
+		const feed = await f.openFeed(f.source, { log: (_level, _event, fields) => { if (fields?.state === "retrying") retrying = true; } });
 		await until(async () => retrying && f.source.receivers.size === 0);
 		expect(feed.pending()).toBe(true);
 		await feed.close(); await f.restart();
@@ -368,7 +391,7 @@ for (const phase of ["finished", "stopped"] as const) test(`a failed ${phase} re
 		if (calls <= 2) throw new Error("Records temporarily unavailable");
 		return f.source.watch(review, receive);
 	} };
-	const feed = await startReviewFeed(f.harness, source, { now: () => time, branchIntervalMs: 5, log: () => {} });
+	const feed = await f.openFeed(source, { now: () => time, branchIntervalMs: 5, log: () => {} });
 	closes.push(() => feed.close());
 	await until(async () => calls === 1);
 	expect(feed.pending()).toBe(false);

@@ -4,7 +4,7 @@ import { realpath, rm } from "node:fs/promises";
 import { join, relative } from "node:path";
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { type JsonObject, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 
@@ -105,6 +105,24 @@ describe("lanes", () => {
 });
 
 describe("children and other channels", () => {
+	// A provider can disappear after the parent has already asked it to delegate.
+	test("a subagent uses Automatic when its inherited provider is gone", async () => {
+		const fixture = await create();
+		const retired = { provider: "retired", modelId: "old-model" };
+		const old = fauxProvider({ provider: retired.provider, models: [{ id: retired.modelId }] });
+		const { models } = fixture.scripted;
+		models.setProvider(old.provider);
+		old.appendResponses([() => {
+			models.deleteProvider(retired.provider);
+			return tool("subagent", { task: "inspect" }, "delegate");
+		}]);
+		fixture.script(fauxAssistantMessage("Child ran on Automatic"));
+		const watch = await fixture.watch();
+		await fixture.request({ op: "ask", author: OWNER, text: "delegate", model: retired });
+		expect(await watch.until("result", event => event.call === "delegate")).toMatchObject({ text: "Child ran on Automatic", error: false });
+		await watch.stop();
+	});
+
 	test("a subagent works in a child chat its parent's call owns, and stays readable", async () => {
 		const fixture = await create();
 		fixture.script(
