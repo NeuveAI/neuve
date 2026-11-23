@@ -150,7 +150,8 @@ export type PlanComment = {
 	placement: FileLinesPlacement;
 	/**
 	 * Where the latest send that carried this comment or a reply under it is on its way to the
-	 * agent. Absent before the first such send. `working` is not used here.
+	 * agent: `queued` while its message waits as a submission, `sent` once the message is placed
+	 * in the chat. Absent before the first such send. `working` is not used here.
 	 */
 	state?: CommentThreadState;
 	/** Why the latest send failed, with `failed`. */
@@ -165,8 +166,12 @@ export type PlanCommentReply =
 	/** The agent's answer, written by `PLAN_COMMENT_TOOL`; `model` is the model that wrote it. */
 	| { kind: "agent"; id: string; model: string; at: number; text: string };
 
-/** The send that carried a comment or reply: when, and the chat message it became. */
-export type PlanCommentSend = { at: number; entry: EntryId };
+/**
+ * The send that carried a comment or reply: when it was admitted, its message's submission, and
+ * the chat entry that message became once it was placed. A send that Stop withdraws before its
+ * message is placed leaves its items kept again, without `sent`.
+ */
+export type PlanCommentSend = { at: number; submission: number; entry?: EntryId };
 
 /**
  * The plan-mode tool by which the agent answers one comment, with `{ comment, text }`. It writes
@@ -431,7 +436,8 @@ export type Request =
 	 * `plan` would, and refused as that `ask` would be. The host writes the message: for each comment
 	 * its id, section and lines, the quoted plan text marked as quotation, and the words; for each
 	 * reply the comment it answers and the words. Mentions in it are never published. Answers with
-	 * the message's entry and the ids of the comments it carried. Refused when the author keeps
+	 * the message's submission, its entry when it was placed at once, and the ids of the comments it
+	 * carried, as `{ submission, entry?, comments }`. Refused when the author keeps
 	 * nothing on the plan and for a replaced plan. A retried `requestId` answers as the first send.
 	 */
 	| { op: "plan-comments-send"; chat?: ChatId; author: string; plan: string; requestId?: string }
