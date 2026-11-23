@@ -664,3 +664,15 @@ Each call stands until the owner overrules it. None is the owner's decision: a r
 - Whether a `neuve query` read should restart the seven idle days of a cycle's unmasked ticket copy (15.21), so that a cycle no review publishes holds the copy for as long as it is read.
 - Whether a path named as scope outside the repository gets a bound (15.22).
 - Whether lanes may run as background agents when no session can be started (15.25).
+
+## Area 16: How the harness serves tools and reports a run (23 November 2026)
+
+The lesson came from a Codex chat driven from the command line on 23 November. It called the [question tool](../packages/channel/src/questions.ts) without two required fields, `header` and `multiple`. The rejection named the path, the missing fields and the call as received, and Codex corrected the call by itself twenty seconds later. The valid question then waited about four hours, because from the command line the chat showed only as busy. The coordinator drew four principles from it, and the owner endorsed them: "This is something that we can learn with. Specially for our harness", then "Beautiful learning. We can add to a decision record and task a separate opus session to use it to verify and validate our harness on those principles".
+
+| # | Decision | Consequence for the code |
+| --- | --- | --- |
+| 16.1 | A tool's rejection teaches the agent enough to fix its call in one step (owner, 23 November 2026) | Every rejection the harness returns to an agent names the exact path, what is missing or wrong, and the call as received |
+| 16.2 | A tool requires no field that has an obvious default (owner, 23 November 2026) | A field with an obvious default is optional in the tool's schema, and the default is applied before the tool runs. For the question tool, `multiple` defaults to false and `header` falls back to the question |
+| 16.3 | A run says which state it is in: calling the model, running a tool, or waiting on a person (owner, 23 November 2026) | No surface shows a single "busy" for all three, the command line included. Waiting on a person is always shown as its own state |
+| 16.4 | A tool that waits on a person needs someone who can see it (owner, 23 November 2026) | In a run nobody is watching, the question shows wherever the run is driven from, or the step ends with "needs an answer" as its result. Per 14.59 (no coded caps, counters or stops on agent flows), that is a visible state, never a timeout that ends the turn |
+| 16.5 | The harness is checked against 16.1 to 16.4 by a separate Opus session (owner, 23 November 2026) | **The coordinator's reading, beyond the words:** its findings become fix lanes, none decided here, and each fix is proved as 11.1 asks, with every applicable kind of evidence agreeing |
