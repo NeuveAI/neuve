@@ -212,7 +212,8 @@ const appendOne = (
       const [text] = yield* sql<{
         mediaType: string;
         retention: string;
-      }>`SELECT media_type, retention FROM blobs WHERE hash = ${hash}`;
+        prunedAt: string | null;
+      }>`SELECT media_type, retention, pruned_at FROM blobs WHERE hash = ${hash}`;
       if (text === undefined)
         return yield* new InvalidEvent({
           message: `${event.id}: the ${role} text blob ${hash.slice(0, 12)} is not in the store`,
@@ -223,6 +224,10 @@ const appendOne = (
       )
         return yield* new InvalidEvent({
           message: `${event.id}: ${role} text must be a raw-capture ${TEXT_CAPTURE_MEDIA_TYPE} blob, but ${hash.slice(0, 12)} is ${text.retention} ${text.mediaType}`,
+        });
+      if (event.kind === "query.recorded@1" && text.prunedAt !== null)
+        return yield* new InvalidEvent({
+          message: `${event.id}: the question text blob was pruned before the query was recorded`,
         });
     }
     if (event.kind === "proof.recorded@1") {

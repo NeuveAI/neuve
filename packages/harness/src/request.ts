@@ -469,20 +469,16 @@ export const prepareReviewConfig = (
     return config;
   });
 
-const joinableReadCycle = (repository: string, range: Range) =>
-  Effect.gen(function* () {
-    const cycles = yield* Cycles.unboundReadCycles(range.baseOid);
-    if (cycles.length === 0) return undefined;
-    const branches = new Set(
-      (yield* git(repository, [
-        "for-each-ref",
-        `--contains=${range.headOid}`,
-        "--format=%(refname:strip=2)",
-        "refs/heads/",
-      ]).pipe(Effect.orElseSucceed(() => ""))).split("\n"),
-    );
-    return cycles.find((cycle) => branches.has(cycle.branch));
-  });
+const branchesContaining = (repository: string, headOid: string) =>
+  git(repository, [
+    "for-each-ref",
+    `--contains=${headOid}`,
+    "--format=%(refname:strip=2)",
+    "refs/heads/",
+  ]).pipe(
+    Effect.orElseSucceed(() => ""),
+    Effect.map((refs) => new Set(refs.split("\n").filter(Boolean))),
+  );
 
 export const requestReview = (options: ReviewOptions) =>
   Effect.gen(function* () {
@@ -557,6 +553,10 @@ export const requestReview = (options: ReviewOptions) =>
     const sql = yield* SqlClient;
     const store = yield* Computations.ComputationStore;
     const blobs = yield* Blobs.BlobStore;
+    const branches =
+      selected === undefined && contextIdentity === undefined
+        ? yield* branchesContaining(options.repository, range.headOid)
+        : new Set<string>();
     // The cycle, the generation and the append are one write transaction (`BEGIN IMMEDIATE`), so
     // two first requests for a range cannot open two cycles or pick different generations.
     return yield* sql.withTransaction(
@@ -653,10 +653,10 @@ export const requestReview = (options: ReviewOptions) =>
         );
         const joined = cycles[cycles.length - 1];
         const readCycle =
-          joined === undefined &&
-          selected === undefined &&
-          contextIdentity === undefined
-            ? yield* joinableReadCycle(options.repository, range)
+          joined === undefined && branches.size > 0
+            ? (yield* Cycles.unboundReadCycles(range.baseOid)).find((cycle) =>
+                branches.has(cycle.branch),
+              )
             : undefined;
         const cycleId =
           joined !== undefined && joined.event.kind === "cycle.opened@1"

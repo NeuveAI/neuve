@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
@@ -165,6 +165,41 @@ test("opens the same range cycle as before when there was no read", async () => 
       dedupeKey: `scope.fetch:${first.cycleId}`,
     }),
   ]);
+});
+
+// Git must leave the Records writer available while it checks which branches contain the head.
+test("joins a read cycle while Git can acquire the store's write lock", async () => {
+  const repo = fixture();
+  const read = await repo.run(repo.read());
+  const git = Bun.which("git");
+  if (git === null) throw new Error("Git is required for the fixture");
+  const bin = join(repo.repository, "git-fixture");
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, "git"),
+    `#!${process.execPath}
+import { Database } from "bun:sqlite";
+const args = process.argv.slice(2);
+if (args.includes("for-each-ref")) {
+  using db = new Database(${JSON.stringify(repo.location.database)});
+  db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK");
+}
+const result = Bun.spawnSync([${JSON.stringify(git)}, ...args], {
+  stdout: "inherit", stderr: "inherit",
+});
+process.exit(result.exitCode);
+`,
+    { mode: 0o755 },
+  );
+  const path = process.env.PATH ?? "";
+  try {
+    process.env.PATH = `${bin}:${path}`;
+    const review = await repo.run(repo.request());
+    expect(review.cycleId).toBe(read.cycleId);
+    expect(review.openedCycle).toBe(false);
+  } finally {
+    process.env.PATH = path;
+  }
 });
 
 // A second head must keep its own range even when both heads belong to the read's branch.
