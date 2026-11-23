@@ -21,6 +21,7 @@ export const ReviewTargetSchema = z.discriminatedUnion("kind", [
 export type ReviewTarget = z.infer<typeof ReviewTargetSchema>;
 export const ReviewSnapshotSchema = z.strictObject({
 	chat: z.int().nonnegative(),
+	sourceBranch: z.string().min(1).optional(),
 	lane: z
 		.strictObject({
 			name: z.string().min(1),

@@ -14,7 +14,7 @@ Run `neuve review <base>..<head>` from any checkout. To join a branch's open cyc
 
 Use `neuve review <base>..<head> --branch <name>` to choose a local branch that ends at the head, or one that contains it if no local branch ends there. Neuve refuses any other name. If you omit the flag and the checkout has no matching open cycle at a shared tip, Neuve asks you to choose.
 
-The review opens its own cycle if its branch has no open cycle, if the head has no local tip and you omit the flag, or if you supply a ticket or external sources.
+The review opens its own cycle if its branch has no open cycle, if the head has no local tip and you omit the flag, or if you supply a ticket or external sources. Omit `--branch` when supplying a ticket or external sources to `neuve review <base>..<head>`.
 
 Prefer `neuve review <base>..<head> --detach` in an agent session to return when the job is queued. Omit the flag to follow the worker's progress and read the receipt. Once the job is queued, close the terminal whenever you need to and let the worker finish in the background.
 

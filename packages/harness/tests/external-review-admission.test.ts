@@ -96,7 +96,6 @@ const program = () =>
     );
     const first = yield* requestReview({
       ...args,
-      branch: "missing",
       origin,
       externalSources: [source],
     });
@@ -181,6 +180,22 @@ const run = <A, E>(
   );
 
 test("real provider body pins once; repeated admission and channel recovery reuse Records work", async () => {
+  await expect(
+    run(
+      Store.prepareForWrite.pipe(
+        Effect.andThen(
+          requestReview({
+            ...args,
+            branch: "missing",
+            origin,
+            externalSources: [source],
+          }),
+        ),
+      ),
+    ),
+  ).rejects.toThrow(
+    "A review with its own ticket or sources opens its own cycle, so omit --branch.",
+  );
   const result = await run(program());
   expect(result.first.openedCycle).toBe(true);
   expect(result.first.cycleId).not.toBe(result.read.cycleId);

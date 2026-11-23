@@ -508,16 +508,18 @@ const localPlanIdentity = (cycleId: string) =>
     return sha256Hex(
       canonicalJson({
         omitted,
-        sources: sources.map((source) => {
-          switch (source.kind) {
-            case "repository-document":
-              return [source.kind, source.blob];
-            case "working-file":
-              return [source.kind, source.sha256];
-            case "gap":
-              return [source.kind, source.path];
-          }
-        }),
+        sources: sources
+          .map((source) => {
+            switch (source.kind) {
+              case "repository-document":
+                return [source.kind, source.blob];
+              case "working-file":
+                return [source.kind, source.sha256];
+              case "gap":
+                return [source.kind, source.path];
+            }
+          })
+          .sort(),
       }),
     );
   });
@@ -599,6 +601,15 @@ export const requestReview = (options: ReviewOptions) =>
       options.scopeSource === undefined
         ? undefined
         : CycleScopeSource.parse(options.scopeSource);
+    if (
+      options.branch !== undefined &&
+      (selected !== undefined || contextIdentity !== undefined)
+    )
+      return yield* Effect.fail(
+        new Error(
+          "A review with its own ticket or sources opens its own cycle, so omit --branch.",
+        ),
+      );
     const { base, head } = parseRange(options.range);
     if (origin !== undefined) {
       GitOid.parse(base);

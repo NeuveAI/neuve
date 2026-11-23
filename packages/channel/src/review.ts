@@ -29,6 +29,7 @@ import {
 	type ReviewAdmission,
 } from "./review-protocol";
 import { PlanningDoc, emptyPlanningState } from "./planning";
+import { BuildsDoc } from "./build";
 import { LanesDoc } from "./lanes";
 import { ReviewContextDoc } from "./review-context";
 import { ReviewCardsDoc, type ReviewCard } from "./review-cards";
@@ -198,8 +199,12 @@ export function review(adapter?: Review): Extension {
 								"too_many_references",
 								"A review can reference at most 16 external items.",
 							);
+						const start = Object.values((await tx.doc(BuildsDoc)).records)
+							.flatMap(({ starts }) => Object.values(starts))
+							.find(({ brief }) => brief?.chat === api.conversationId);
 						return ReviewSnapshotSchema.parse({
 							chat: api.conversationId,
+							...(start?.role === "reviewer" ? { sourceBranch: start.source.branch } : {}),
 							lane: match?.[1].base
 								? { name: match[0], path: match[1].path, base: match[1].base }
 								: null,

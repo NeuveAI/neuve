@@ -231,22 +231,26 @@ test("takes the plan for each branch in a stack from the upper checkout", async 
   expect(readScopeText(repo.location, upper.cycleId, "S1").text).toBe("Plan B");
 });
 
-test.each(["same", "different"] as const)(
+test.each(["same", "reordered", "different"] as const)(
   "requests the same range from two worktrees with the %s pinned plan",
   async (plans) => {
     const repo = fixture();
     const other = join(repo.repository, "other-checkout");
     repo.git("worktree", "add", "-b", "followup", other, repo.head);
+    const otherPlan = plans === "reordered" ? "plan.md" : "other-plan.md";
     writeFileSync(join(repo.repository, "plan.md"), "Plan A");
+    writeFileSync(join(repo.repository, "details.md"), "Details");
+    writeFileSync(join(other, "details.md"), "Details");
     writeFileSync(
-      join(other, "other-plan.md"),
-      plans === "same" ? "Plan A" : "Plan B",
+      join(other, otherPlan),
+      plans === "different" ? "Plan B" : "Plan A",
     );
     const requestId = mintUlid();
     const { feature, followup, first, second, retry, jobs } = await repo.run(
       Effect.gen(function* () {
         const firstPlan = yield* readLocalScope(repo.repository, repo.base, [
           "plan.md",
+          "details.md",
         ]);
         const feature = yield* repo.read("feature", repo.base, (cycleId) =>
           keepLocalScope(
@@ -255,9 +259,13 @@ test.each(["same", "different"] as const)(
             () => {},
           ),
         );
-        const secondPlan = yield* readLocalScope(other, repo.base, [
-          "other-plan.md",
-        ]);
+        const secondPlan = yield* readLocalScope(
+          other,
+          repo.base,
+          plans === "reordered"
+            ? ["details.md", otherPlan]
+            : [otherPlan, "details.md"],
+        );
         const followup = yield* repo.read("followup", repo.base, (cycleId) =>
           keepLocalScope(
             { location: repo.location, cycleId },
@@ -293,8 +301,9 @@ test.each(["same", "different"] as const)(
     expect(retry.cycleId).toBe(first.cycleId);
     expect(retry.dedupeKey).toBe(first.dedupeKey);
     expect(retry.events.map(({ id }) => id)).toEqual([requestId]);
-    if (plans === "same") {
+    if (plans !== "different") {
       expect(second.cycleId).toBe(first.cycleId);
+      expect(second.runKey).toBe(first.runKey);
       expect(second.dedupeKey).toBe(first.dedupeKey);
       expect(jobs.map((job) => job.dedupeKey)).toEqual([first.dedupeKey]);
     } else {
@@ -629,30 +638,35 @@ test("racing first reads at different revisions share one cycle", async () => {
 test("opens a ticket review's own cycle even when branches share the head", async () => {
   const repo = fixture();
   repo.git("branch", "followup", repo.head);
+  const scope: Partial<ReviewOptions> = {
+    scopeSource: { server: "linear", item: "WORK-7", workspace: null },
+    scopeIntegrations: {
+      status: "configured",
+      path: join(repo.repository, "fixture-integrations.json"),
+      file: {
+        version: 1,
+        servers: {
+          linear: {
+            transport: { type: "stdio", command: "/usr/bin/false" },
+            variables: [],
+            tools: ["issue"],
+            fetch: { tool: "issue", argument: "id" },
+            identifiers: {},
+          },
+        },
+      },
+    },
+  };
+  await expect(
+    repo.run(repo.request(repo.head, { ...scope, branch: "missing" })),
+  ).rejects.toThrow(
+    "A review with its own ticket or sources opens its own cycle, so omit --branch.",
+  );
   const { read, review } = await repo.run(
     Effect.gen(function* () {
       const read = yield* repo.read();
       repo.git("switch", "--detach", repo.head);
-      const review = yield* repo.request(repo.head, {
-        branch: "missing",
-        scopeSource: { server: "linear", item: "WORK-7", workspace: null },
-        scopeIntegrations: {
-          status: "configured",
-          path: join(repo.repository, "fixture-integrations.json"),
-          file: {
-            version: 1,
-            servers: {
-              linear: {
-                transport: { type: "stdio", command: "/usr/bin/false" },
-                variables: [],
-                tools: ["issue"],
-                fetch: { tool: "issue", argument: "id" },
-                identifiers: {},
-              },
-            },
-          },
-        },
-      });
+      const review = yield* repo.request(repo.head, scope);
       return { read, review };
     }),
   );
