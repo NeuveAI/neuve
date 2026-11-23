@@ -14,7 +14,8 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { Event, REPO } from "../../types";
+import type { AgentRole, Event, REPO } from "../../types";
+import { RoleAvatar } from "../agents/agents";
 
 import { AceAvatar } from "../ace-avatar/ace-avatar";
 import {
@@ -704,6 +705,7 @@ function eventIcon(row: EventRow): EventIcon {
 		case "review-card":
 		case "review-told":
 		case "plan-card":
+		case "build-card":
 			return NeuveMark;
 		default:
 			return IconCommit;
@@ -719,6 +721,7 @@ type GroupProps = {
 	width: number;
 	loading: boolean;
 	avatars?: Record<string, string>;
+	roles?: Record<string, AgentRole>;
 	currentUser?: Event.Viewer;
 	alignment: "left" | "right";
 	target?: string;
@@ -752,6 +755,7 @@ function frame(
 		currentUser,
 		alignment,
 		avatars,
+		roles,
 		hover,
 		openWorking,
 		settlingWorking,
@@ -779,6 +783,7 @@ function frame(
 	let mine = alignment === "right" && own;
 	let src = group.display && avatars?.[group.display]
 		|| (group.sender != null ? avatars?.[String(group.sender)] : undefined);
+	let role = group.sender != null ? roles?.[String(group.sender)] : undefined;
 
 	let uid = turn?.final?.uid || group.rows.at(-1)?.uid;
 	let active =
@@ -817,6 +822,7 @@ function frame(
 		own,
 		mine,
 		src,
+		role,
 		uid,
 		active,
 		date,
@@ -892,10 +898,19 @@ function GroupView(props: GroupProps) {
 
 function GroupAvatar({ props, state }: GroupRender) {
 	let { group, loading } = props;
-	let { src, label } = state;
+	let { src, label, role } = state;
 	return (
 		<div className="shrink-0">
-			{group.role === "assistant"
+			{role
+				? (
+					<RoleAvatar
+						role={role}
+						size={AVATAR}
+						className="sticky top-3"
+						style={{ marginBlockStart: AVATAR_NUDGE }}
+					/>
+				)
+				: group.role === "assistant"
 				? (
 					<div
 						className="rounded-full sticky top-3"
@@ -983,14 +998,14 @@ function GroupByline({ state }: { state: GroupState }) {
 							</button>
 						)
 						: (
-							<span className="min-w-0 truncate font-medium text-foreground" title={name}>
+							<bdi className="min-w-0 truncate font-medium text-foreground" title={name}>
 								{name}
-							</span>
+							</bdi>
 						)}
 					{credit && (
-						<span className="min-w-0 truncate text-[0.625rem]" title={credit}>
+						<bdi className="min-w-0 truncate text-[0.625rem]" title={credit}>
 							{credit}
-						</span>
+						</bdi>
 					)}
 					{agent && (
 						<span
@@ -1264,6 +1279,8 @@ type TimelineProps =
 		working?: TimelineWorking;
 		/** Avatar URLs keyed by sender value (e.g. `"terkelg"`, `"ace:bot"`); an agent's replaces Ace's own. */
 		avatars?: Record<string, string>;
+		/** Roles keyed by sender value; an agent with one is drawn under its role's avatar. */
+		roles?: Record<string, AgentRole>;
 		/** Login-based mention profiles used when rendering message text. */
 		mentions?: Mention[];
 		/** Documents resolved from &name.md references, including historical aliases. */
@@ -1340,6 +1357,7 @@ function useTimeline(
 		intro,
 		working = false,
 		avatars,
+		roles,
 		mentions,
 		documents,
 		currentUser,
@@ -1727,6 +1745,7 @@ function useTimeline(
 		intro,
 		working,
 		avatars,
+		roles,
 		currentUser,
 		alignment,
 		target,
@@ -1781,6 +1800,7 @@ function Timeline(input: TimelineProps) {
 		intro,
 		working,
 		avatars,
+		roles,
 		currentUser,
 		alignment,
 		target,
@@ -1900,6 +1920,7 @@ function Timeline(input: TimelineProps) {
 									loading={!!working && index === timeline.length - 1
 										&& item.group.role === "assistant"}
 									avatars={avatars}
+									roles={roles}
 									currentUser={currentUser}
 									alignment={alignment}
 									target={target}

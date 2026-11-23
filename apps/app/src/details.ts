@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import type { Changes, GithubPull, Plan, PlanComment } from "@ace/channel/protocol";
+import type { Build, Changes, GithubPull, Plan, PlanComment, WorkMessage } from "@ace/channel/protocol";
 import type { ChannelInfo } from "@ace/host/protocol";
 
 import type { Item } from "./transcript";
@@ -43,6 +43,10 @@ export type Details = {
 	planComments?: { chat: number; list: PlanComment[]; sends?: number[] };
 	/** Shows the chat's Plan tab, opening one beside the chat when none is open, at plan `id`. */
 	plan?: (id?: string) => void;
+	/** The channel's builds and what their agents said to each other, once a chat's transcript has loaded. */
+	builds?: { list: Build[]; messages: WorkMessage[] };
+	/** Shows the channel's Work log tab, opening one when none is open, at agent chat `chat`. */
+	work?: (chat?: number) => void;
 	/** A file the chat's Diff should show once its changes list it; `null` once shown. */
 	reveal?: { chat: number; file: string; key: number } | null;
 };
@@ -69,9 +73,9 @@ export function publish(channel: string, patch: Details) {
 	for (const listener of listeners) listener();
 }
 
-/** Drops the Diff and Plan openers, which only work while the channel's tabs are mounted. */
+/** Drops the Diff, Plan and Work log openers, which only work while the channel's tabs are mounted. */
 export function forget(channel: string) {
-	const { diff: _, plan: __, ...rest } = values.get(channel) || {};
+	const { diff: _, plan: __, work: ___, ...rest } = values.get(channel) || {};
 	values.set(channel, rest);
 	for (const listener of listeners) listener();
 }

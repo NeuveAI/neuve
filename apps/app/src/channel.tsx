@@ -9,7 +9,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 
-import type { Change, Changes, GithubPull } from "@ace/channel/protocol";
+import type { Build, Change, Changes, GithubPull } from "@ace/channel/protocol";
 import type { ChannelInfo, Listing, TerminalShell } from "@ace/host/protocol";
 import {
 	Badge,
@@ -25,6 +25,7 @@ import {
 } from "@ace/ui";
 import { IconCloud, IconGlobe, IconHash } from "@ace/ui/icons";
 
+import { agentName } from "./build-card";
 import { ChannelAccess } from "./channel-access";
 import { EFFORTS } from "./composer";
 import { Conversation } from "./conversation";
@@ -37,6 +38,7 @@ import { Live } from "./panels/live";
 import { Plan } from "./panels/plan";
 import { Review } from "./panels/review";
 import { Terminal } from "./panels/terminal";
+import { WorkLog } from "./panels/work-log";
 import { placement } from "./placement";
 import { openReview } from "./review-destination";
 import type { Item } from "./transcript";
@@ -110,6 +112,18 @@ function subagents(items: Item[], busy: boolean): DetailsSubagent[] {
 				return { id: tool.call, task, model, state };
 			})
 			: []
+	);
+}
+
+/** The builds' agents, each opening its own work on the work log. */
+function workers(builds: Build[], open: ((chat?: number) => void) | undefined): DetailsSubagent[] {
+	return builds.flatMap((build) =>
+		build.agents.map((agent) => ({
+			id: `build:${agent.chat}`,
+			task: agentName(agent),
+			state: agent.state,
+			...(open ? { open: () => open(agent.chat) } : {}),
+		}))
 	);
 }
 
@@ -246,7 +260,7 @@ export function ChannelDetails({ channel, user, chat = 1 }: { channel: Listing; 
 	const right = useLayoutRight();
 	const details = useDetails(channel.id);
 	const channels = useSyncExternalStore(host.subscribe, () => host.channels);
-	const { changes, info, items, asked } = details;
+	const { changes, info, items, asked, builds } = details;
 	const busy = !!info?.chats.find((value) => value.id === chat)?.busy;
 	const pull = usePull(
 		channel.repo,
@@ -287,6 +301,7 @@ export function ChannelDetails({ channel, user, chat = 1 }: { channel: Listing; 
 	}, [changes]);
 	const mentioned = useMemo(() => items && links(items, channel.repo), [items, channel.repo]);
 	const agents = useMemo(() => items && subagents(items, busy), [items, busy]);
+	const working = useMemo(() => workers(builds?.list ?? [], details.work), [builds, details.work]);
 	const review = useCallback((path: string) => void openReview(channel.id, path), [channel.id]);
 	return (
 		<Sidebar
@@ -302,6 +317,7 @@ export function ChannelDetails({ channel, user, chat = 1 }: { channel: Listing; 
 					branch={changes?.branch}
 					pull={pull}
 					subagents={agents}
+					workers={working}
 					links={mentioned?.filter((link) => link.url !== pull?.url)}
 					facts={facts(channel, info, chat)}
 					note={workspace(channel, channels)}
@@ -373,6 +389,7 @@ export function Channel(
 
 	const opener = useRef<() => void>(undefined);
 	const planOpener = useRef<(plan?: string) => void>(undefined);
+	const workOpener = useRef<(chat?: number) => void>(undefined);
 	useEffect(() => {
 		publish(channel.id, {
 			diff: (file) => {
@@ -380,10 +397,16 @@ export function Channel(
 				opener.current?.();
 			},
 			plan: (plan) => planOpener.current?.(plan),
+			work: (chat) => workOpener.current?.(chat),
 		});
 		return () => forget(channel.id);
 	}, [channel.id, chat]);
 	const plan = useNewestPlan(channel.id, chat);
+	const { builds } = useDetails(channel.id);
+	// Agents and messages, so a new one marks the Work log tab; none while the channel has no build.
+	const work = builds?.list.length
+		? builds.list.reduce((sum, build) => sum + build.agents.length, 0) + builds.messages.length
+		: undefined;
 
 	return (
 		<Layout
@@ -405,6 +428,8 @@ export function Channel(
 			opener={opener}
 			plan={plan}
 			planOpener={planOpener}
+			work={work}
+			workOpener={workOpener}
 			shells={shells}
 			terminals={!elsewhere}
 			actions={<ChannelAccess channel={channel} user={user} />}
@@ -427,6 +452,18 @@ export function Channel(
 				}
 				if (data.type === "plan") {
 					return <Plan channel={channel} chat={data.chat} user={user} plan={data.plan} />;
+				}
+				if (data.type === "work") {
+					return (
+						<WorkLog
+							channel={channel}
+							channels={channels}
+							user={user}
+							chat={data.chat}
+							onChat={(chat) => update({ chat })}
+							onOpen={onOpen}
+						/>
+					);
 				}
 				if (data.type === "diff") {
 					return <Diff channel={channel} chat={data.chat} user={user} active={active} />;

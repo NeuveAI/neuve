@@ -8,7 +8,7 @@ export const CHAT = "chat";
 
 const STORAGE = "ace:channel-layout";
 const VERSION = 1;
-const KINDS = new Set<Kind>(["blank", "chat", "plan", "diff", "terminal", "live", "review"]);
+const KINDS = new Set<Kind>(["blank", "chat", "plan", "diff", "terminal", "live", "review", "work"]);
 
 /** Plan, Diff and Terminal tabs belong to the chat whose plan or lane they show. */
 export type Content =
@@ -25,6 +25,8 @@ export type Content =
 		// Neuve's review app at an app-relative `/review/` route; none lists the channel's reviews.
 		// `title` is the label the review app last gave the tab.
 		| { type: "review"; path?: string; title?: string }
+		// The channel's work log, showing agent chat `chat` when one is chosen.
+		| { type: "work"; chat?: number }
 	)
 	& { name?: string };
 
@@ -32,13 +34,21 @@ export type Kind = Content["type"];
 export type Meta = Record<string, Content>;
 
 /**
- * `diff` records that a Diff tab already opened for the chat's current changes, and `plans` the
- * newest plan a Plan tab opened for, by chat.
+ * `diff` records that a Diff tab already opened for the chat's current changes, `plans` the
+ * newest plan a Plan tab opened for, by chat, and `work` how much of the work log was seen, once a
+ * Work log tab opened.
  */
 export type Planned = Record<string, string>;
-type Layout = { state: Split.State; meta: Meta; diff: boolean; plans: Planned };
+type Layout = { state: Split.State; meta: Meta; diff: boolean; plans: Planned; work?: number };
 
-type Saved = { version: typeof VERSION; state: Split.Data; tabs: Meta; diff?: boolean; plans?: Planned };
+type Saved = {
+	version: typeof VERSION;
+	state: Split.Data;
+	tabs: Meta;
+	diff?: boolean;
+	plans?: Planned;
+	work?: number;
+};
 
 function object(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -72,6 +82,17 @@ function clean(state: Split.State, meta?: unknown): Meta {
 					...(typeof value.name === "string" ? { name: value.name } : undefined),
 				}
 				: fallback(uid);
+			continue;
+		}
+		if (value.type === "work") {
+			const name = typeof value.name === "string" ? value.name.trim() : "";
+			next[uid] = {
+				type: "work",
+				...(Number.isInteger(value.chat) && (value.chat as number) > 0
+					? { chat: value.chat as number }
+					: undefined),
+				...(name ? { name } : undefined),
+			};
 			continue;
 		}
 		if (value.type === "review") {
@@ -113,7 +134,8 @@ export function read(id: string): Layout {
 			const plans = Object.fromEntries(
 				Object.entries(object(data.plans) ? data.plans : {}).filter(([, id]) => typeof id === "string"),
 			) as Planned;
-			return { state, meta: clean(state, data.tabs), diff: data.diff === true, plans };
+			const work = Number.isInteger(data.work) && data.work! >= 0 ? data.work : undefined;
+			return { state, meta: clean(state, data.tabs), diff: data.diff === true, plans, work };
 		} catch {
 			remove(`${STORAGE}:${id}`);
 		}
@@ -122,13 +144,21 @@ export function read(id: string): Layout {
 	return { state, meta: clean(state), diff: false, plans: {} };
 }
 
-export function write(id: string, state: Split.State, meta: Meta, diff: boolean, plans: Planned = {}) {
+export function write(
+	id: string,
+	state: Split.State,
+	meta: Meta,
+	diff: boolean,
+	plans: Planned = {},
+	work?: number,
+) {
 	const data = {
 		version: VERSION,
 		state: Split.save(state),
 		tabs: clean(state, meta),
 		diff,
 		plans,
+		...(work === undefined ? {} : { work }),
 	} satisfies Saved;
 	save(`${STORAGE}:${id}`, JSON.stringify(data));
 }

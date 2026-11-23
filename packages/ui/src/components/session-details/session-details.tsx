@@ -10,14 +10,10 @@ import {
 import {
 	IconBranch,
 	IconChevronDown,
-	IconCircleCheck,
-	IconCircleDashed,
-	IconCircleX,
 	IconExternal,
 	IconFileDiff,
 	IconGlobe,
 	IconIssue,
-	IconLoader,
 	IconMerge,
 	IconPullRequest,
 	IconPullRequestClosed,
@@ -31,6 +27,7 @@ import { type Check, CHECK_ICONS, checkSummary, sortChecks } from "../checks/che
 import { CreatePrMenu } from "../create-pr-menu";
 import { type GitAction, GitActionButton } from "../git-action";
 import { LoadingSpinner } from "../session-item/session-item-loading";
+import { AGENT_STATE_ICONS } from "../agents/agents";
 
 export type DetailsPullState = "open" | "draft" | "closed" | "merged";
 export type DetailsCheck = Check;
@@ -45,7 +42,9 @@ export type DetailsSubagent = {
 	id: string;
 	task: string;
 	model?: string;
-	state: "running" | "done" | "failed" | "stopped";
+	state: "running" | "waiting" | "done" | "failed" | "stopped";
+	/** Opens where the agent's work is read, such as a build's agent on the work log. */
+	open?: () => void;
 };
 export type DetailsLink = { url: string; label: string; kind: "issue" | "pull" | "web" };
 export type DetailsFact = { label: string; value: string; title?: string };
@@ -68,6 +67,8 @@ export type SessionDetailsViewProps = {
 	/** `null` once looked up and none exists; absent while unknown or unavailable. */
 	pull?: DetailsPull | null;
 	subagents?: DetailsSubagent[];
+	/** The builds' agents, each opening its own work on the work log. */
+	workers?: DetailsSubagent[];
 	links?: DetailsLink[];
 	facts?: DetailsFact[];
 	/** A line under the facts, such as what the channel depends on. */
@@ -96,13 +97,6 @@ const PULL_ICONS: Record<DetailsPullState, [Icon, string]> = {
 	merged: [IconMerge, "text-merged"],
 };
 
-const SUBAGENT_ICONS: Record<DetailsSubagent["state"], [Icon, string]> = {
-	running: [IconLoader, "animate-spin text-muted-foreground"],
-	done: [IconCircleCheck, "text-success"],
-	failed: [IconCircleX, "text-destructive"],
-	stopped: [IconCircleDashed, "text-muted-foreground"],
-};
-
 const LINK_ICONS: Record<DetailsLink["kind"], Icon> = {
 	issue: IconIssue,
 	pull: IconPullRequest,
@@ -115,6 +109,36 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 			<h3 className="mb-1 text-xs font-medium text-muted-foreground">{title}</h3>
 			{children}
 		</section>
+	);
+}
+
+/** Agents with their state, each opening where its work is read when it can. */
+function Agents({ title, agents }: { title: string; agents?: DetailsSubagent[] }) {
+	if (!agents?.length) return null;
+	return (
+		<Section title={title}>
+			{agents.map((agent) => {
+				const [Icon, color] = AGENT_STATE_ICONS[agent.state];
+				const Row = agent.open ? "button" : "div";
+				return (
+					<Row
+						key={agent.id}
+						{...(agent.open ? { type: "button" as const, onClick: agent.open } : {})}
+						className={cn(ROW, agent.open && ACTIVE)}
+						title={agent.task}
+						aria-label={`${agent.state}: ${agent.task}`}
+					>
+						<Icon className={cn(GLYPH, color)} aria-hidden />
+						<bdi className="min-w-0 flex-1 truncate">{agent.task}</bdi>
+						{agent.model && (
+							<span className="max-w-[40%] shrink-0 truncate text-xs text-muted-foreground">
+								{agent.model}
+							</span>
+						)}
+					</Row>
+				);
+			})}
+		</Section>
 	);
 }
 
@@ -346,6 +370,7 @@ export function SessionDetailsView(
 		branch,
 		pull,
 		subagents,
+		workers,
 		links,
 		facts,
 		note,
@@ -413,29 +438,8 @@ export function SessionDetailsView(
 				</section>
 			)}
 
-			{subagents && subagents.length > 0 && (
-				<Section title="Subagents">
-					{subagents.map((agent) => {
-						const [Icon, color] = SUBAGENT_ICONS[agent.state];
-						return (
-							<div
-								key={agent.id}
-								className={ROW}
-								title={agent.task}
-								aria-label={`${agent.state}: ${agent.task}`}
-							>
-								<Icon className={cn(GLYPH, color)} aria-hidden />
-								<span className="min-w-0 flex-1 truncate">{agent.task}</span>
-								{agent.model && (
-									<span className="max-w-[40%] shrink-0 truncate text-xs text-muted-foreground">
-										{agent.model}
-									</span>
-								)}
-							</div>
-						);
-					})}
-				</Section>
-			)}
+			<Agents title="Subagents" agents={subagents} />
+			<Agents title="Work log" agents={workers} />
 
 			{shown && shown.length > 0 && (
 				<Section title="Links">

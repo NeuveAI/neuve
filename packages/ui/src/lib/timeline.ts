@@ -1,4 +1,4 @@
-import type { Event, PlanCardView, REPO, ReviewCardView } from "../types";
+import type { BuildCardView, Event, PlanCardView, REPO, ReviewCardView } from "../types";
 
 import { normalizeGithubComment } from "./github-comment";
 import {
@@ -89,6 +89,7 @@ type Chunk =
 	| { kind: "call"; action: "start" | "end"; sender: string }
 	| { kind: "review-card"; call: string; card: ReviewCardView }
 	| { kind: "plan-card"; card: PlanCardView }
+	| { kind: "build-card"; card: BuildCardView }
 	| { kind: "review-new-commits"; review: string; branch: string; head: string; label: string }
 	| { kind: "review-told"; review: string; phase: "finished" | "stopped" | null };
 
@@ -344,7 +345,7 @@ function eventToRow(event: Event, project?: REPO, aborted = false): Row | null {
 				role,
 				sender: event.sender.value,
 				display: event.sender.display,
-				credit: event.sender.kind === "agent" ? event.sender.credit : undefined,
+				credit: event.sender.credit,
 				...(agent ? { agent } : undefined),
 				streaming,
 				run: "run" in event ? event.run : undefined,
@@ -579,6 +580,10 @@ function eventToRow(event: Event, project?: REPO, aborted = false): Row | null {
 		case "neuve:plan:card":
 			return { ...base, role: "system", chunks: [{ kind: "plan-card", card: event.card }] };
 
+		// Neuve: the agents an approved plan started, right after the plan's card.
+		case "neuve:build:card":
+			return { ...base, role: "system", chunks: [{ kind: "build-card", card: event.card }] };
+
 		// Neuve: the reviewed branch moved after the review was admitted.
 		case "neuve:review:new-commits":
 			return {
@@ -617,6 +622,8 @@ function isSameGroup(a: Row, b: Row, ta: number, tb: number): boolean {
 	if (a.role !== b.role) return false;
 	if (a.sender !== b.sender) return false;
 	if (a.run !== b.run) return false;
+	// The byline names one credit, such as one recipient, for the whole group.
+	if (a.role === "user" && a.credit !== b.credit) return false;
 	return Math.abs(ta - tb) < GROUP_WINDOW;
 }
 
