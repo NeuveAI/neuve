@@ -23,7 +23,7 @@ const name = (author: string) => author === USER ? "you" : author.split("@")[0]!
 const STATES: { label: string; state: ApprovalRequest["state"]; error?: string; mayAnswer?: boolean; sending?: "allow" }[] = [
 	{ label: "Waiting", state: { kind: "open" } },
 	{ label: "Sending", state: { kind: "open" }, sending: "allow" },
-	{ label: "Refused", state: { kind: "open" }, error: "This request is no longer open" },
+	{ label: "Refused", state: { kind: "open" }, error: "This approval request closed when its turn ended." },
 	{ label: "May not answer", state: { kind: "open" }, mayAnswer: false },
 	{ label: "Allowed", state: { kind: "answered", by: USER, at: T + 60_000, decision: "allow" } },
 	{ label: "Denied", state: { kind: "answered", by: "alice@example.com", at: T + 60_000, decision: "deny" } },
@@ -96,7 +96,7 @@ function Live() {
 		setTimeout(() => {
 			if (id === "b") {
 				setSending((value) => ({ ...value, [id]: undefined }));
-				return setErrors((value) => ({ ...value, [id]: "This request is no longer open" }));
+				return setErrors((value) => ({ ...value, [id]: "This approval request closed when its turn ended." }));
 			}
 			setRequests((list) =>
 				list.map((value) => value.requestId === id

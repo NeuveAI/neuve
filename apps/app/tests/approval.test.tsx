@@ -94,12 +94,12 @@ test("a click changes nothing on the card until the channel's event does", async
 // Why: an answer to a request that closed meanwhile, or that someone else answered first, is
 // refused; a card that swallowed the reason would look answered when nothing ran.
 test("an answer the channel refuses shows the refusal on the card and can be sent again", async () => {
-	refusal = "this request is no longer open";
+	refusal = "vinicius@example.com already answered Allow.";
 	const open = request({ kind: "open" });
 	const card = mount(open);
 	await card.show(open);
 	await act(async () => card.button("Allow").click());
-	expect(card.card().querySelector('[role="alert"]')?.textContent).toBe("this request is no longer open");
+	expect(card.card().querySelector('[role="alert"]')?.textContent).toBe("vinicius@example.com already answered Allow.");
 	expect(card.card().getAttribute("aria-label")).toBe("Command, Waiting");
 	expect(card.button("Allow").getAttribute("aria-disabled")).toBeNull();
 	await card.unmount();
