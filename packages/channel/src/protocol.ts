@@ -69,8 +69,7 @@ export function reservedReviewRequestId(requestId: string | undefined): boolean 
 
 /**
  * The host's own inputs to a build's chats use request IDs under `neuve.build:`: a brief, a
- * delivered revision, a message between agents and a person's mention delivered to an agent. Clients
- * may not claim one.
+ * delivered revision and a message between agents. Clients may not claim one.
  */
 export function reservedBuildRequestId(requestId: string | undefined): boolean {
 	return requestId?.startsWith("neuve.build:") ?? false;

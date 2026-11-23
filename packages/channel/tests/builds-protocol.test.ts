@@ -49,8 +49,9 @@ test("clients cannot claim a build request ID", () => {
 	}
 });
 
-test("a malformed list of mentioned agents is refused", () => {
+test("say and ask carry the mentioned agents, and a malformed list is refused", () => {
 	for (const op of ["say", "ask"]) {
+		expect(parseRequest({ op, author: "claimed", text: "@reviewer hold", agents: [4] }, "owner")).toMatchObject({ agents: [4] });
 		for (const agents of [[], [-1], [1.5], ["4"], 4]) {
 			expect(() => parseRequest({ op, author: "claimed", text: "@reviewer hold", agents }, "owner")).toThrow("at agents");
 		}
