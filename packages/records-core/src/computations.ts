@@ -34,6 +34,7 @@ import {
 import {
   SharedWork,
   type PublishedSharedOutcome,
+  type SharedWorkFloorNotice,
   KeyHeld,
 } from "./shared-work.ts";
 import {
@@ -330,6 +331,12 @@ export const matchingInputs = (
   });
 
 const computationWork = new SharedWork<RunResult, SharedAttemptFailed>();
+
+export const FloorReporter = Context.Reference<
+  ((notice: SharedWorkFloorNotice) => void) | undefined
+>("@neuve/records-core/Computations/FloorReporter", {
+  defaultValue: () => undefined,
+});
 
 export const layer = Layer.effect(
   ComputationStore,
@@ -667,6 +674,7 @@ export const layer = Layer.effect(
         const hit = yield* stored(key, "reused");
         if (Option.isSome(hit)) return hit.value;
         const context = yield* Effect.context<SqlClient>();
+        const reportFloor = yield* FloorReporter;
         let ownedExecution = false;
         // Set when this caller's attempt bound the output, so the kind's cap is checked after.
         let storedHere = false;
@@ -684,6 +692,7 @@ export const layer = Layer.effect(
         const result = yield* sharedWorkEffect(computationWork, {
           scope: store,
           key,
+          ...(reportFloor === undefined ? {} : { reportFloor }),
           crossProcess: {
             store,
             transport,

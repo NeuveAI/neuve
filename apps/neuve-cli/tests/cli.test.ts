@@ -19,7 +19,7 @@ import {
   Sessions,
   storeLocationIn,
 } from "@neuve/records-core";
-import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { settingsPath } from "../../../packages/harness/src/settings.ts";
@@ -417,7 +417,7 @@ describe("neuve CLI boundary", () => {
     const { root } = await fixtureRepository();
     const scratch = await mkdtemp(join(tmpdir(), "neuve-cli-scope-"));
     roots.push(scratch);
-    const plan = join(scratch, "approved-plan");
+    const plan = join(await realpath(scratch), "approved-plan");
     const note =
       "# Done when\n- Preserve the approved text.\n\nRead also handbook/details.\n";
     const original = Buffer.from("\uFEFF" + note);
@@ -565,7 +565,7 @@ describe("neuve CLI boundary", () => {
       ),
     );
 
-    const late = join(scratch, "late-plan");
+    const late = join(await realpath(scratch), "late-plan");
     await Bun.write(late, "A later plan.\n");
     const branch = execute(
       ["git", "branch", "--show-current"],
@@ -675,7 +675,7 @@ describe("neuve CLI boundary", () => {
     expect(answer.cycle_id).toBeUndefined();
     expect(answer.scope_gaps).toEqual([
       "missing: The path was absent from the working tree and the base revision.",
-      "working: The file was read without a held copy because the read joined no review cycle (no Records store was found).",
+      "working: The file was read without a held copy because no Records store was found.",
       "home: The path is not a regular file.",
       "opaque: The file is not readable as text.",
       "large: The file exceeds 262144 bytes.",
@@ -698,6 +698,48 @@ describe("neuve CLI boundary", () => {
       }),
     ]);
     expect(answer.scope[0].text).toBeUndefined();
+  });
+
+  // An invalid Git email must leave schema details in the run log.
+  test("returns a one-sentence scope gap when recording fails", async () => {
+    const { root, revision } = await fixtureRepository();
+    const graph = await fakeGraph();
+    const home = join(root, "home");
+    await mkdir(home);
+    const env = {
+      HOME: home,
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+      CLAUDE_CODE_SESSION_ID: "",
+      CODEX_THREAD_ID: "",
+    };
+    await createRecords(root, env);
+    expect(
+      execute(["git", "config", "user.email", "invalid".repeat(128)], root)
+        .exitCode,
+    ).toBe(0);
+    await Bun.write(join(root, "plan"), "# Scope\n");
+
+    const result = await run(
+      [...queryArgs(root, revision), "--scope", "plan"],
+      env,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe(
+      "neuve: The Records store could not record this query.\n",
+    );
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      retrieval: { status: "ok" },
+      scope_gaps: [
+        "plan: The file was read without a held copy because the query could not be recorded.",
+      ],
+    });
+    const logs = join(root, ".git", "neuve", "run-logs");
+    const [log] = await readdir(logs);
+    expect(JSON.parse(await Bun.file(join(logs, log!)).text())).toMatchObject({
+      type: "query.record-failed",
+      cause: expect.stringContaining("Invalid email address"),
+    });
   });
 
   // A linked agent must own the cycle and the query even when Git names a human.

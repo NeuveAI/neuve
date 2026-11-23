@@ -74,6 +74,12 @@ export class SharedPublicationMissing extends Error {
     super("Shared work was settled without a stored outcome");
   }
 }
+export type SharedWorkFloorNotice = {
+  readonly type: "shared-work.floor";
+  readonly floor: SharedFloor;
+  readonly message: string;
+};
+
 export type SharedWorkOptions<A, E> = {
   readonly scope: string;
   readonly key: string;
@@ -82,6 +88,7 @@ export type SharedWorkOptions<A, E> = {
   readonly keepRunning?: boolean;
   readonly onTakeover?: (signal: AbortSignal) => Promise<void>;
   readonly onEvent?: (event: SharedWorkEvent) => void;
+  readonly reportFloor?: (notice: SharedWorkFloorNotice) => void;
 } & (
   | {
       readonly crossProcess?: undefined;
@@ -306,13 +313,13 @@ export class SharedWork<A, E = never> {
     const atFloor = (reason: SharedFloor) => {
       floor = reason;
       event({ role: "floor", floor: reason });
-      console.warn(
-        JSON.stringify({
-          type: "shared-work.floor",
-          floor: reason,
-          message: "work may have been duplicated",
-        }),
-      );
+      const notice: SharedWorkFloorNotice = {
+        type: "shared-work.floor",
+        floor: reason,
+        message: "work may have been duplicated",
+      };
+      if (options.reportFloor) options.reportFloor(notice);
+      else console.warn(JSON.stringify(notice));
     };
     const cross = options.crossProcess;
     const compute = async (takeover: boolean): Promise<SharedResult<A, E>> => {

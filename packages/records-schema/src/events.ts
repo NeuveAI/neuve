@@ -337,7 +337,10 @@ export const CycleExternalContextSelected = event(
 
 export const MAX_SCOPE_DOCUMENTS = 20;
 
-const LocalScopePath = z.strictObject({ path: z.string().min(1) });
+const LocalScopePath = z.strictObject({
+  path: z.string().min(1),
+  linkedFrom: z.string().min(1).optional(),
+});
 export const CycleLocalScopeSelected = event(
   "cycle.local-scope-selected@1",
   z.strictObject({

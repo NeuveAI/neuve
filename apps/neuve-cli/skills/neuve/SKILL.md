@@ -1,11 +1,12 @@
 ---
 name: neuve
 description: >
-  Use Neuve, the code-review tool, from an agent session. Load it when asked to set Neuve up, read
-  scope before starting work, request or read a Neuve review, act on review findings or requests
-  for changes, record proof, or point someone to the review desk. Use it for independent review
-  within the development loop, for final review alongside a Neuve review, or when the repository's
-  instructions tell you to use Neuve. Not for general Git or coding work.
+  Use Neuve, the code-review tool, from an agent session. Load it when the person asks you to set
+  Neuve up, request or read a Neuve review, act on a Neuve review's findings or requests for
+  changes, read scope before starting work, record proof for a change, or point them to the review desk; when you are the
+  independent reviewer of an implementer's work before a Neuve review, or a final reviewer
+  alongside a Neuve review of a finished range; or when the repository's own instructions (AGENTS.md, CLAUDE.md) tell you to use
+  Neuve. Not for general Git or coding work.
 metadata:
   version: "{{NEUVE_VERSION}}"
 ---

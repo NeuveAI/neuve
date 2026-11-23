@@ -122,6 +122,7 @@ Options:
   Relationship plan entries may opt into summary "frontier".
   --branch <name>  Use this local branch for the review cycle, defaulting to the checked-out branch.
   --scope <path>   Name a local scope file. Repeat for more files. Relative paths start at --repo.
+  --max-context-bytes <bytes>  Set the code context allowance. Scope text gets a separate allowance of the same size.
   --stream    Write ordered query events as NDJSON.
   --refresh-cache  Rebuild the committed snapshot before retrieval.
   --prepared-only Query the exact prepared revision without indexing or structural rebuilding.

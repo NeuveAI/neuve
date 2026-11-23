@@ -2,7 +2,7 @@ import { captureOutlineSource } from "../src/graph-outline.ts";
 // These tests guard the opening's lossless accounting, its bound, its order and stable text.
 // No model calls: exact output and real Git objects exercise the input boundaries directly.
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,7 +41,13 @@ import {
 } from "../src/find.ts";
 import { findCounters } from "../src/pi/stages/find-steps.ts";
 import { frame, hunk, finding, view } from "./find-fixture.ts";
-import { ScopeSnapshot, sectionsOf } from "../src/scope.ts";
+import {
+  ScopeSnapshot,
+  sectionsOf,
+  readLocalScope,
+  queryUnheldLocalScope,
+} from "../src/scope.ts";
+import { candidateObligations } from "../src/scope-text.ts";
 import type { ManifestHunk } from "../src/manifest.ts";
 import { MAP_LOCKFILES } from "../src/review-map.ts";
 import { parseDiff, type CommitText } from "../src/git-objects.ts";
@@ -603,6 +609,84 @@ test("lazy coverage rechecks a stale top candidate before spending the remaining
     cs[0]!.oid,
     cs[2]!.oid,
   ]);
+});
+
+// A guide's checklist can inform the review, while only the named plan supplies candidates.
+test("only named local documents supply validation candidates", async () => {
+  const repository = mkdtempSync(join(tmpdir(), "scope-obligations-"));
+  try {
+    const home = join(repository, "home");
+    mkdirSync(home);
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(
+        [
+          "git",
+          "-C",
+          repository,
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          ...args,
+        ],
+        { env: { ...process.env, HOME: home } },
+      );
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      return result.stdout.toString().trim();
+    };
+    git("init", "-q");
+    writeFileSync(
+      join(repository, "AGENTS.md"),
+      "# Done when\n- Update the welcome page.\n",
+    );
+    writeFileSync(
+      join(repository, "plan.md"),
+      "# Done when\n- Preserve the saved value.\n",
+    );
+    git("add", "AGENTS.md", "plan.md");
+    git("commit", "-qm", "scope");
+    const base = git("rev-parse", "HEAD");
+    const read = await Effect.runPromise(
+      readLocalScope(repository, base, ["plan.md"]),
+    );
+    const scope = await Effect.runPromise(
+      queryUnheldLocalScope(repository, read, "no Records store was found"),
+    );
+    expect(scope.sources.map(({ ref, text }) => [ref.path, text])).toEqual([
+      ["plan.md", "# Done when\n- Preserve the saved value.\n"],
+      ["AGENTS.md", "# Done when\n- Update the welcome page.\n"],
+    ]);
+    const snapshot: ScopeSnapshot = {
+      cycleId: "cycle",
+      fetchedAt: scope.sources[0]!.fetchedAt,
+      ms: 0,
+      range: { baseOid: base, headOid: base, mergeBase: base },
+      integrations: { file: "absent", detail: null, servers: [] },
+      named: [],
+      sources: scope.sources,
+      strata: {
+        strongest: "plan-or-ticket-at-base",
+        present: ["plan-or-ticket-at-base"],
+      },
+      gaps: scope.gaps,
+    };
+    expect(
+      await Effect.runPromise(
+        candidateObligations(lookup({ repository, snapshot })).pipe(
+          Effect.provide(records),
+        ),
+      ),
+    ).toEqual([
+      {
+        id: "O1",
+        sourceId: "S1",
+        sectionId: "S1.1",
+        text: "Preserve the saved value.",
+      },
+    ]);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
 });
 
 // Why: scope-fit can only read a section when the Frame supplies its resolvable id.

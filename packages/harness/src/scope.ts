@@ -345,7 +345,9 @@ const namedPaths = (text: string, blobs: ReadonlyMap<string, TreeEntry>) =>
         token.replace(/^\.\//, "").replace(/[.,:;]+$/, ""),
       ),
     ),
-  ].filter((token) => blobs.has(token));
+  ].filter(
+    (token) => (token.includes(".") || token.includes("/")) && blobs.has(token),
+  );
 
 /**
  * Relative link targets of a Markdown text, resolved against its directory. A target that is not
@@ -476,17 +478,21 @@ type WorkingRead =
   | { kind: "gap"; reason: string }
   | { kind: "file"; bytes: Uint8Array; fetchedAt: string };
 
-const readWorkingFile = async (path: string): Promise<WorkingRead> => {
+const readWorkingFile = async (
+  requested: string,
+): Promise<WorkingRead & { path: string }> => {
+  let path = requested;
   try {
+    path = await realpath(requested);
     await using file = await open(
       path,
-      constants.O_RDONLY | constants.O_NONBLOCK,
+      constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
     );
     const stat = await file.stat();
     if (!stat.isFile())
-      return { kind: "gap", reason: "The path is not a regular file." };
+      return { path, kind: "gap", reason: "The path is not a regular file." };
     if (stat.size > MAX_DOCUMENT_BYTES)
-      return { kind: "gap", reason: fileOverBound };
+      return { path, kind: "gap", reason: fileOverBound };
     const bytes = Buffer.alloc(MAX_DOCUMENT_BYTES + 1);
     let size = 0;
     while (size < bytes.length) {
@@ -500,8 +506,9 @@ const readWorkingFile = async (path: string): Promise<WorkingRead> => {
       size += bytesRead;
     }
     return size > MAX_DOCUMENT_BYTES
-      ? { kind: "gap", reason: fileOverBound }
+      ? { path, kind: "gap", reason: fileOverBound }
       : {
+          path,
           kind: "file",
           bytes: bytes.subarray(0, size),
           fetchedAt: new Date().toISOString(),
@@ -511,8 +518,8 @@ const readWorkingFile = async (path: string): Promise<WorkingRead> => {
       error !== null &&
       "code" in error &&
       (error.code === "ENOENT" || error.code === "ENOTDIR")
-      ? { kind: "missing" }
-      : { kind: "gap", reason: "The file could not be read." };
+      ? { path, kind: "missing" }
+      : { path, kind: "gap", reason: "The file could not be read." };
   }
 };
 
@@ -618,29 +625,44 @@ export const readLocalScope = (
       ],
       { concurrency: 2 },
     );
+    const resolved = reads.map((read, index) => {
+      const path = scopePath(root, read.path);
+      const requested = selected[index]!;
+      const entry = entries.get(path);
+      return {
+        read,
+        path,
+        requested,
+        entry: entry?.mode === "120000" ? undefined : entry,
+      };
+    });
     const contents = yield* documentBlobs(repository, [
       entries.get(AGENT_GUIDE.path),
-      ...selected.flatMap((path, index) =>
-        reads[index]?.kind === "gap" ? [] : [entries.get(path)],
+      ...resolved.flatMap(({ read, entry }) =>
+        read.kind === "gap" ? [] : [entry],
       ),
     ]);
-    const sources = reads.map((read, index) => {
-      const path = selected[index]!;
-      const entry = entries.get(path);
-      return namedScope(
+    const sources = resolved.map(({ read, path, requested, entry }, index) => ({
+      ...namedScope(
         localSourceId(index),
         path,
         read,
         entry,
         entry === undefined ? undefined : contents.get(entry.oid),
-      );
-    });
+      ),
+      ...(path === requested ? {} : { linkedFrom: requested }),
+    }));
     return {
       base,
       root,
       entries,
       contents,
       sources,
+      missingPaths: new Set(
+        resolved.flatMap(({ read, path, entry }) =>
+          read.kind === "missing" && entry === undefined ? [path] : [],
+        ),
+      ),
       omitted: paths.length - selected.length,
     };
   }).pipe(Effect.timeout(SCOPE_FETCH_BOUND_MS));
@@ -819,14 +841,12 @@ const localScopeSources = (
         continue;
       }
       let text: string | undefined;
+      const found =
+        pin.linkedFrom === undefined
+          ? "named by the request"
+          : `named by the request through a link at ${pin.linkedFrom}`;
       if (pin.kind === "repository-document") {
-        text = document(
-          id,
-          pin.path,
-          pin.blob,
-          "named by the request",
-          contents,
-        );
+        text = document(id, pin.path, pin.blob, found, contents);
       } else if (copy !== undefined) {
         const read = heldLocalText(copy, id, pin.sha256);
         add(
@@ -835,7 +855,7 @@ const localScopeSources = (
             kind: pin.kind,
             fetchedAt: pin.fetchedAt,
             sha256: pin.sha256,
-            ref: { path: pin.path, found: "named by the request" },
+            ref: { path: pin.path, found },
           },
           read,
         );
@@ -989,12 +1009,17 @@ export const queryLocalScope = (
 ) =>
   Effect.gen(function* () {
     const pins = yield* selectedLocalScope(copy.cycleId);
-    const held = new Set(pins?.sources.map(({ path }) => path));
+    const held = new Set(
+      pins?.sources.flatMap(({ path, linkedFrom }) =>
+        linkedFrom === undefined ? [path] : [path, linkedFrom],
+      ),
+    );
     const gaps = read.sources
       .filter(({ path }) => !held.has(path))
-      .map(
-        ({ path }) =>
-          `${path}: The path was named after this cycle's scope was read.`,
+      .map(({ path }) =>
+        read.missingPaths.has(path)
+          ? `${path}: No file was found at the path named after this cycle's scope was read.`
+          : `${path}: The path was named after this cycle's scope was read.`,
       );
     if (read.omitted > (pins?.omitted ?? 0))
       gaps.push(`The request named more than ${MAX_DOCUMENTS} documents.`);
@@ -1029,7 +1054,7 @@ export const queryUnheldLocalScope = (
             : {
                 kind: "gap" as const,
                 path: source.path,
-                reason: `The file was read without a held copy because the read joined no review cycle (${reason}).`,
+                reason: `The file was read without a held copy because ${reason}.`,
               },
         ),
       },

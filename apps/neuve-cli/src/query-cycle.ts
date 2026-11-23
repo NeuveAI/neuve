@@ -1,8 +1,6 @@
 import { Cycles, Starter, type StoreLocation } from "@neuve/records-core";
 import { GitOid } from "@neuve/records-schema";
 import { Effect } from "effect";
-import { isSqlError } from "effect/sql/SqlError";
-import { describeFailure } from "./records-cli.ts";
 import {
   keepLocalScope,
   type LocalScopeRead,
@@ -26,7 +24,7 @@ export const readQueryBranch = (
     );
     ref = result.stdout.toString().trim();
     if (!result.success || !ref.startsWith(prefix))
-      return { reason: "HEAD is detached, so pass --branch <name>" };
+      return { reason: "HEAD is detached" };
   }
 
   // Capture the checked-out or named branch's tip at the read, before any Records transaction.
@@ -48,10 +46,7 @@ export const readQueryBranch = (
 export const warnQueryCycle = (reason: string) =>
   Bun.write(
     Bun.stderr,
-    `neuve: Query did not join a review cycle (${reason
-      .replace(/[\r\n]+/g, " ")
-      .trim()
-      .replace(/\.$/, "")}).\n`,
+    `neuve: Query did not join a review cycle (${reason === "HEAD is detached" ? "HEAD is detached, so pass --branch <name>" : reason}).\n`,
   ).catch(() => undefined);
 
 export const openQueryCycle = (
@@ -59,7 +54,7 @@ export const openQueryCycle = (
   location: StoreLocation,
   payload: Parameters<typeof Cycles.openOrJoinCycle>[0],
   actor: string,
-  onFailure: (reason: string) => void,
+  onFailure: (error: unknown) => void,
   local?: LocalScopeRead,
 ) =>
   Effect.gen(function* () {
@@ -73,12 +68,7 @@ export const openQueryCycle = (
       ),
     );
     if (result._tag === "Failure") {
-      const error = result.failure;
-      onFailure(
-        isSqlError(error) && error.reason._tag === "LockTimeoutError"
-          ? "Records store is locked"
-          : describeFailure(error),
-      );
+      onFailure(result.failure);
       return undefined;
     }
     const { cycleId, opened } = result.success;
