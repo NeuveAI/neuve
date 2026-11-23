@@ -10,7 +10,9 @@ import {
   accountLabel,
   accountsCopy,
   accountTime,
+  currentLimits,
   limitDescription,
+  showsCheckTime,
 } from "./accounts-copy";
 
 const copyListeners = new Set<() => void>();
@@ -73,7 +75,7 @@ export function Accounts({
               description={accountDescription(account.kind, account.signIn)}
               footer={
                 <div className="flex min-w-0 flex-col gap-2">
-                  {account.limits.map((window, index) => {
+                  {currentLimits(account.limits).map((window, index) => {
                     return (
                       <p
                         key={index}
@@ -96,8 +98,7 @@ export function Accounts({
                       </p>
                     );
                   })}
-                  {(account.signIn.state === "unknown" ||
-                    account.signIn.state === "credential-rejected") && (
+                  {showsCheckTime(account.signIn) && (
                     <p className="text-xs text-muted-foreground">
                       {accountsCopy.checked}{" "}
                       <time dateTime={account.checkedAt}>

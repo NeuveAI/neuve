@@ -3,6 +3,7 @@ import { AccountStatus } from "@neuve/runtime/status";
 const checkedAt = "2026-11-10T10:00:00Z";
 const resetsAt = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
 const later = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+const passed = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
 const hint = {
   kind: "command",
   command: "claude auth login",
@@ -37,6 +38,17 @@ export const accountFixtures = {
       { window: "five-hour", status: "warning", utilization: 0.82, resetsAt },
     ]),
   ],
+  resetPassed: [
+    account("default", signedIn, [
+      { window: "five-hour", status: "allowed", utilization: 0.2, resetsAt },
+      {
+        window: "weekly",
+        status: "allowed",
+        utilization: 0.77,
+        resetsAt: passed,
+      },
+    ]),
+  ],
   limitReached: [
     account("default", signedIn, [
       {
@@ -47,7 +59,18 @@ export const accountFixtures = {
       },
     ]),
   ],
-  unknown: [account("work", { state: "unknown", reason: "not-checked" })],
+  unknown: [
+    {
+      ...account("work", { state: "unknown", reason: "not-checked" }),
+      checkedAt: "1970-01-01T00:00:00.000Z",
+    },
+  ],
+  needsNewerBuild: [
+    {
+      ...account("work", { state: "unknown", reason: "needs-newer-build" }),
+      checkedAt: "1970-01-01T00:00:00.000Z",
+    },
+  ],
   checkFailed: [
     account("work", { state: "unknown", reason: "check-failed", hint }),
   ],
