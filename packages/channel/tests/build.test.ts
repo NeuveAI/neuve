@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, type FauxResponseStep } from "@earendil-works/pi-ai";
-import { defineDoc, type ConversationId, type Harness, type ToolRegistration } from "@earendil-works/pi-durable";
+import { defineDoc, ROOT_CONVERSATION_ID, type ConversationId, type Harness, type ToolRegistration } from "@earendil-works/pi-durable";
 import { SharedWork } from "../../records-core/src/shared-work";
 import { ApprovalRequestsDoc } from "../src/approvals";
 import { BuildsDoc, type BuildHost } from "../src/build";
@@ -773,19 +773,141 @@ test("unsharing while a paused start is settling sends its brief once", async ()
 	}
 });
 
-async function startPair(run: Awaited<ReturnType<typeof setup>>) {
-	const first = await startBuild(run);
+async function startReviewer(run: Awaited<ReturnType<typeof setup>>, implementer: number) {
 	const { fixture } = run;
 	fixture.script(tool("agent_start", { role: "reviewer", part: "exports" }, "start-exports-review"),
 		fauxAssistantMessage("Ready."), fauxAssistantMessage("Ready."));
-	await fixture.request({ op: "wait", submission: await wake(run, "Start the exports reviewer.", first.chat) });
+	await fixture.request({ op: "wait", submission: await wake(run, "Start the exports reviewer.", implementer) });
 	await until(() => fixture.channel.isIdle());
 	const event = await run.watch.until("builds", event => event.builds[0]?.agents.some(agent => agent.role === "reviewer") ?? false);
-	const reviewer = event.builds[0]!.agents.find(agent => agent.role === "reviewer")!;
-	return { ...first, reviewer: reviewer.chat };
+	return event.builds[0]!.agents.find(agent => agent.role === "reviewer")!.chat;
+}
+
+async function startPair(run: Awaited<ReturnType<typeof setup>>) {
+	const first = await startBuild(run);
+	return { ...first, reviewer: await startReviewer(run, first.chat) };
 }
 
 const messageTool = (text: string, call: string) => tool("agent_message", { to: "reviewer", part: "exports", text }, call);
+
+function offerRetiredModel(fixture: Fixture) {
+	const model = { provider: "retired", modelId: "old-model" };
+	fixture.scripted.models.setProvider(fauxProvider({ provider: model.provider, models: [{ id: model.modelId }] }).provider);
+	return model;
+}
+
+// Approval and the work log can look complete even when the recipient's stored model cannot run.
+test("build briefs and agent messages use Automatic when the recipient's provider is gone", async () => {
+	const run = await setup({
+		onStep(step) {
+			if (step === "build.chat" && run.worktrees.length === 1) run.fixture.scripted.models.deleteProvider(retired.provider);
+		},
+	});
+	const { fixture } = run;
+	const plan = await run.draft(planText);
+	const retired = offerRetiredModel(fixture);
+	await fixture.request({ op: "select", author: OWNER, model: retired });
+	fixture.script(fauxAssistantMessage("I received the brief."));
+	await run.approve(plan);
+	await until(() => fixture.channel.isIdle());
+	const build = run.watch.of("builds").at(-1)?.builds[0];
+	expect(build?.state).toEqual({ kind: "started" });
+	const { chat } = build!.agents[0]!;
+	const sender = await fixture.watch({ op: "watch", chat });
+	expect(sender.of("reply").at(-1)).toMatchObject({ model: "coder", text: "I received the brief." });
+
+	const reviewer = await startReviewer(run, chat);
+	offerRetiredModel(fixture);
+	await fixture.request({ op: "select", author: OWNER, chat: reviewer, model: retired });
+	fixture.script(() => {
+		fixture.scripted.models.deleteProvider(retired.provider);
+		return messageTool("Check the retry path.", "send-on-automatic");
+	}, fauxAssistantMessage("I received the update."), fauxAssistantMessage("I received the update."));
+	const submission = await wake(run, "Ask the reviewer to check the retry path.", chat);
+	expect(await fixture.request({ op: "wait", submission })).toBe("done");
+	expect(await sender.until("result", event => event.call === "send-on-automatic")).toMatchObject({
+		error: false, text: "The message was sent.",
+	});
+	await until(() => fixture.channel.isIdle());
+	const target = await fixture.watch({ op: "watch", chat: reviewer });
+	expect(target.of("reply").at(-1)).toMatchObject({ model: "coder", text: "I received the update." });
+	expect(target.of("message").at(-1)).toMatchObject({ author: `agent@${chat}`, text: "Check the retry path." });
+});
+
+// Sharing could change a paused agent's model or wake it with an input already on its way.
+test("sharing blocks a pending build brief and an agent message during model selection", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { models } = fixture.scripted;
+	const plan = await run.draft(planText);
+	const retired = offerRetiredModel(fixture);
+	await fixture.request({ op: "select", author: OWNER, model: retired });
+	const briefLookup = Promise.withResolvers<ConversationId>();
+	const releaseBrief = Promise.withResolvers<void>();
+	const conversation = run.harness.conversation.bind(run.harness);
+	const lookup = spyOn(run.harness, "conversation").mockImplementation(async (chat, scope) => {
+		const target = await conversation(chat, scope);
+		if (chat === ROOT_CONVERSATION_ID || !target) return target;
+		lookup.mockRestore();
+		briefLookup.resolve(chat);
+		await releaseBrief.promise;
+		return target;
+	});
+	const share = (shared: boolean) => fixture.request({ op: "share", author: OWNER, shared });
+	try {
+		await run.approve(plan);
+		const chat = await briefLookup.promise;
+		models.deleteProvider(retired.provider);
+		await share(true);
+		await buildAt(watch, 0, "paused");
+		releaseBrief.resolve();
+		await until(() => fixture.channel.isIdle());
+		expect((await fixture.channel.info()).chats.find(item => item.id === chat)).toMatchObject({ model: retired, busy: false });
+		const sender = await fixture.watch({ op: "watch", chat });
+		expect(sender.of("message")).toEqual([]);
+
+		fixture.script(fauxAssistantMessage("Ready."));
+		await share(false);
+		await sender.until("reply", event => event.text === "Ready.");
+		await buildAt(watch, 0, "started");
+		await until(() => fixture.channel.isIdle());
+		const reviewer = await startReviewer(run, chat);
+		offerRetiredModel(fixture);
+		await fixture.request({ op: "select", author: OWNER, chat: reviewer, model: retired });
+		const selecting = Promise.withResolvers<void>();
+		const releaseSelection = Promise.withResolvers<void>();
+		const available = models.getAvailable.bind(models);
+		const selection = spyOn(models, "getAvailable").mockImplementation(async (provider, options) => {
+			if (provider === retired.provider) {
+				selecting.resolve();
+				await releaseSelection.promise;
+			}
+			return available(provider, options);
+		});
+		try {
+			fixture.script(messageTool("Check the retry path.", "send-during-pause"), fauxAssistantMessage("Message attempt finished."));
+			const submission = await wake(run, "Ask the reviewer to check the retry path.", chat);
+			await selecting.promise;
+			await share(true);
+			await watch.until("builds", event => event.builds[0]?.state.kind === "paused"
+				&& event.builds[0].agents.some(agent => agent.chat === reviewer));
+			releaseSelection.resolve();
+			expect(await fixture.request({ op: "wait", submission })).toBe("done");
+			expect(await sender.until("result", event => event.call === "send-during-pause")).toMatchObject({
+				error: true, text: "The host has not finished sending this message.",
+			});
+			const target = await fixture.watch({ op: "watch", chat: reviewer, builds: true });
+			expect(target.of("message").map(event => event.system?.kind)).toEqual(["neuve:build:brief"]);
+			expect(target.of("builds").at(-1)?.messages).toEqual([]);
+		} finally {
+			releaseSelection.resolve();
+			selection.mockRestore();
+		}
+	} finally {
+		releaseBrief.resolve();
+		lookup.mockRestore();
+	}
+});
 
 // A queued agent input can stop the shell or notify teammates even when the work log looks right.
 test("messages by role and part steer after the shell, stay private, and appear in send order", async () => {
