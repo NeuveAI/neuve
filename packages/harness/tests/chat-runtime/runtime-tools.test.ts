@@ -47,7 +47,7 @@ test("pi's shell and file tools and the pass-through are kept from a runtime wit
 
 // Why: Neuve runs every chat tool outside the runtime's sandbox, and the bridge hands pi every call
 // to a served tool, so serving one is running it. An unattended runtime with its own sandbox must
-// get tools that widen its access. A tool that writes only to the host's plan file can be served.
+// only get tools that preserve its access limits. The plan writer writes to a host-chosen file.
 // The runtime must hear which tools were withheld because its prompt still describes them.
 test("an unattended runtime with its own sandbox is served only the tools that cannot widen it, and told which are withheld", () => {
   const offered = conversation(["plan_write", ...ace]);
@@ -70,4 +70,32 @@ test("an unattended runtime with its own sandbox is served only the tools that c
     ...ace,
   ]);
   expect(other.systemPrompt).toBe("prompt");
+});
+
+// A read-only runtime can see the writer and still assume saving requires its own file tools.
+test("a read-only planning session is served the plan writer and told how to save", () => {
+  const planning = {
+    role: "system" as const,
+    content: "",
+    timestamp: 1,
+    toolsRemoved: [...coding, RUNTIME_WORK_TOOL].map((name) => ({ name })),
+  };
+  Object.defineProperty(planning, Symbol.for("neuve.chat.plan-request"), {
+    value: true,
+  });
+  const session = policy(
+    [...conversation(["plan_write", "explore"]), planning],
+    handle,
+    undefined,
+    { folder: "/work", ownTools: true },
+  );
+  expect(session.tools.map((tool) => tool.name)).toEqual([
+    "question",
+    "plan_write",
+  ]);
+  expect(session.systemPrompt).toContain("while no one is attending: explore.");
+  expect(session.systemPrompt).toContain(
+    "Save the plan with Neuve's MCP tool `plan_write`. It works in a read-only workspace.",
+  );
+  expect(session.systemPrompt).not.toContain("with your own tools instead");
 });
