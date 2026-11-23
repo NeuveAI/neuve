@@ -40,7 +40,7 @@ const WORKSPACE_HELP = RELEASE_BUILD
 const HELP = `Usage:
   neuve query --repo <absolute-path> --revision <commit> --question <text> \\
     --max-results <count> --max-context-bytes <bytes> \\
-    --relationship-plan <json-array> [--stream] [--refresh-cache | --prepared-only] [--profile full|syntax-only]
+    --relationship-plan <json-array> [--branch <name>] [--stream] [--refresh-cache | --prepared-only] [--profile full|syntax-only]
 
 Commands:
   upgrade [--version vX.Y.Z]
@@ -120,6 +120,7 @@ Commands:
 
 Options:
   Relationship plan entries may opt into summary "frontier".
+  --branch <name>  Use this local branch for the review cycle, defaulting to the checked-out branch.
   --stream    Write ordered query events as NDJSON.
   --refresh-cache  Rebuild the committed snapshot before retrieval.
   --prepared-only Query the exact prepared revision without indexing or structural rebuilding.

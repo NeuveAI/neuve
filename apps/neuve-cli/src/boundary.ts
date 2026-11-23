@@ -55,10 +55,10 @@ const optionNames = [
   "--relationship-plan",
 ] as const;
 
-type OptionName = (typeof optionNames)[number];
+type OptionName = (typeof optionNames)[number] | "--branch";
 
 const isOptionName = (value: string): value is OptionName =>
-  optionNames.some((name) => name === value);
+  value === "--branch" || optionNames.some((name) => name === value);
 
 const record = (value: unknown, label: string): Record<string, unknown> => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -207,7 +207,7 @@ const relationshipPlan = (raw: string): readonly RelationshipRequest[] => {
 };
 
 export type QueryInvocation = Readonly<{
-  request: QueryRequest;
+  request: QueryRequest & Readonly<{ branch?: string }>;
   output: "json" | "ndjson";
 }>;
 
@@ -283,6 +283,7 @@ export const parseQueryInvocation = (
   const maxResults = values.get("--max-results");
   const maxContextBytes = values.get("--max-context-bytes");
   const relationships = values.get("--relationship-plan");
+  const branch = values.get("--branch");
   if (
     repo === undefined ||
     revisionValue === undefined ||
@@ -311,6 +312,7 @@ export const parseQueryInvocation = (
       maxResults: positiveInteger(maxResults, "--max-results"),
       maxContextBytes: positiveInteger(maxContextBytes, "--max-context-bytes"),
       relationships: relationshipPlan(relationships),
+      ...(branch === undefined ? {} : { branch: text(branch, "--branch") }),
       ...(profile === undefined ? {} : { profile }),
       ...(preparedOnly
         ? { cache: "prepared" as const }
@@ -321,5 +323,6 @@ export const parseQueryInvocation = (
   };
 };
 
-export const parseQueryRequest = (args: readonly string[]): QueryRequest =>
-  parseQueryInvocation(args).request;
+export const parseQueryRequest = (
+  args: readonly string[],
+): QueryInvocation["request"] => parseQueryInvocation(args).request;

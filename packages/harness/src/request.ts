@@ -16,7 +16,9 @@ import {
 } from "@neuve/records-schema";
 import {
   Blobs,
+  Caller,
   Computations,
+  Cycles,
   Identity,
   JobQueue,
   Log,
@@ -249,7 +251,11 @@ export type Requester =
       readonly subagentId?: string | undefined;
     }
   /** An actor already registered in Records, such as the agent session a CLI call runs in. */
-  | { readonly _tag: "Actor"; readonly actorId: string }
+  | {
+      readonly _tag: "Actor";
+      readonly actorId: string;
+      readonly sessionId?: string | undefined;
+    }
   /** A person, registered as a human actor by the request (10.5). */
   | {
       readonly _tag: "Human";
@@ -276,8 +282,25 @@ export const gitHuman = (repository: string) =>
     });
   });
 
+/** Who asks for a CLI read or review: a linked session, the human Git names, or unresolved. */
+export const resolveRequester = (location: StoreLocation, repository: string) =>
+  Effect.gen(function* () {
+    const caller = yield* Caller.resolveCaller(location).pipe(
+      Effect.orElseSucceed(() => ({ _tag: "None" }) as const),
+    );
+    if (caller._tag === "Linked")
+      return {
+        _tag: "Actor",
+        actorId: caller.actorId,
+        sessionId: caller.sessionId,
+      } as const;
+    return Option.getOrElse(yield* gitHuman(repository), (): Requester => ({
+      _tag: "Unresolved",
+    }));
+  });
+
 /** The requester's actor ID and idempotent registration for a named person or native agent. */
-const attribution = (requester: Requester) => {
+export const requesterAttribution = (requester: Requester) => {
   if (requester._tag === "Agent") {
     const actor = Identity.agentFingerprint(requester);
     const payload = {
@@ -446,6 +469,21 @@ export const prepareReviewConfig = (
     return config;
   });
 
+const joinableReadCycle = (repository: string, range: Range) =>
+  Effect.gen(function* () {
+    const cycles = yield* Cycles.unboundReadCycles(range.baseOid);
+    if (cycles.length === 0) return undefined;
+    const branches = new Set(
+      (yield* git(repository, [
+        "for-each-ref",
+        `--contains=${range.headOid}`,
+        "--format=%(refname:strip=2)",
+        "refs/heads/",
+      ]).pipe(Effect.orElseSucceed(() => ""))).split("\n"),
+    );
+    return cycles.find((cycle) => branches.has(cycle.branch));
+  });
+
 export const requestReview = (options: ReviewOptions) =>
   Effect.gen(function* () {
     const origin =
@@ -510,7 +548,7 @@ export const requestReview = (options: ReviewOptions) =>
       );
     const runKey = runKeyFor(range, config);
     const prefix = `review.run:${runKey}:`;
-    const { actor, registration } = attribution(options.requester);
+    const { actor, registration } = requesterAttribution(options.requester);
     const requestId =
       options.requestId === undefined
         ? mintUlid()
@@ -614,10 +652,16 @@ export const requestReview = (options: ReviewOptions) =>
             event.event.attribution.range.headOid === range.headOid,
         );
         const joined = cycles[cycles.length - 1];
+        const readCycle =
+          joined === undefined &&
+          selected === undefined &&
+          contextIdentity === undefined
+            ? yield* joinableReadCycle(options.repository, range)
+            : undefined;
         const cycleId =
           joined !== undefined && joined.event.kind === "cycle.opened@1"
             ? joined.event.attribution.cycleId
-            : mintUlid();
+            : (readCycle?.cycleId ?? mintUlid());
         const selections =
           selected && joined !== undefined
             ? yield* Log.history({
@@ -698,6 +742,7 @@ export const requestReview = (options: ReviewOptions) =>
             attribution: { cycleId, range },
             payload: selected,
           });
+        // Bind a read-opened cycle with a second opening event so older readers can see its head.
         if (joined === undefined)
           events.push({
             id: mintUlid(),
@@ -753,7 +798,7 @@ export const requestReview = (options: ReviewOptions) =>
           runKey,
           generation,
           cycleId,
-          openedCycle: joined === undefined,
+          openedCycle: joined === undefined && readCycle === undefined,
           actor,
           complete,
           events: events.map((event) => RecordEvent.parse(event)),

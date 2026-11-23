@@ -314,6 +314,17 @@ export const CycleOpened = event(
   Attribution.extend({ cycleId: Ulid, range: Range }),
 );
 
+/** A review cycle opened by a read, before a review gives it a head. */
+export const CycleOpenedV2 = event(
+  "cycle.opened@2",
+  z.strictObject({
+    baseRef: Range.shape.baseRef,
+    baseOid: GitOid,
+    branch: z.string().min(1).max(4_096),
+  }),
+  Attribution.omit({ range: true }).extend({ cycleId: Ulid }),
+);
+
 export const CycleExternalContextSelected = event(
   "cycle.external-context-selected@1",
   z.strictObject({
@@ -1790,6 +1801,7 @@ export const RecordEvent = z.discriminatedUnion("kind", [
   CaptureSealed,
   CaptureMarked,
   CycleOpened,
+  CycleOpenedV2,
   CycleScopeSelected,
   CycleExternalContextSelected,
   ReviewOriginRecorded,

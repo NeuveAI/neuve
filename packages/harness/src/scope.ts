@@ -398,7 +398,7 @@ const nowIso = Effect.map(Clock.currentTimeMillis, (ms) =>
 );
 
 /** Fetches the snapshot; `cycleSnapshot` stores it. */
-const fetchSnapshot = (ctx: SnapshotContext) =>
+const fetchSnapshot = (ctx: SnapshotContext, branch?: string) =>
   Effect.gen(function* () {
     const started = yield* Clock.currentTimeMillis;
     const fetchedAt = new Date(started).toISOString();
@@ -438,15 +438,18 @@ const fetchSnapshot = (ctx: SnapshotContext) =>
         }),
       ),
     );
-    const branches = (yield* git(repository, [
-      "for-each-ref",
-      "--points-at",
-      ctx.range.headOid,
-      "--format=%(refname:short)",
-      "refs/heads",
-    ]).pipe(Effect.orElseSucceed(() => "")))
-      .split("\n")
-      .filter((line) => line !== "");
+    const branches =
+      branch === undefined
+        ? (yield* git(repository, [
+            "for-each-ref",
+            "--points-at",
+            ctx.range.headOid,
+            "--format=%(refname:short)",
+            "refs/heads",
+          ]).pipe(Effect.orElseSucceed(() => "")))
+            .split("\n")
+            .filter((line) => line !== "")
+        : [branch];
     let next = 1;
     const sourceId = () => `S${next++}`;
     const external = yield* selectedExternalContext(cycleId);
@@ -908,6 +911,11 @@ export const snapshotSpec = (
   },
 });
 
+const baseScopeRange = (baseOid: string) => ({
+  baseOid,
+  headOid: baseOid,
+});
+
 /**
  * The cycle's snapshot: stored, shared with an attempt in flight in this worker, or fetched now. A
  * shared attempt that failed (the background job's fetch) is fetched again here, once.
@@ -915,10 +923,22 @@ export const snapshotSpec = (
 export const cycleSnapshot = (ctx: SnapshotContext) =>
   Effect.gen(function* () {
     const external = yield* selectedExternalContext(ctx.cycleId);
+    const opening = (yield* Log.history({
+      cycleId: ctx.cycleId,
+      kind: "cycle.opened@2",
+      limit: 1,
+    }))[0]?.event;
+    const read =
+      opening?.kind === "cycle.opened@2" ? opening.payload : undefined;
     const run = jsonComputation(
       snapshotSpec(ctx.cycleId, external?.identity),
       ScopeSnapshot,
-      fetchSnapshot(ctx),
+      fetchSnapshot(
+        read === undefined
+          ? ctx
+          : { ...ctx, range: baseScopeRange(read.baseOid) },
+        read?.branch,
+      ),
     );
     return yield* run.pipe(Effect.catchTag("SharedAttemptFailed", () => run));
   });
@@ -1314,12 +1334,18 @@ export const scopeFetchHandler =
       const stored =
         job.eventId === null ? Option.none() : yield* Log.get(job.eventId);
       const event = Option.getOrUndefined(stored)?.event;
-      if (event?.kind !== "cycle.opened@1")
+      if (event?.kind !== "cycle.opened@1" && event?.kind !== "cycle.opened@2")
         return yield* new NotACycle({
-          message: `job ${job.seq} has no cycle.opened@1 event`,
+          message: `job ${job.seq} has no cycle opening event`,
           retryable: false,
         });
-      const { cycleId, range } = event.attribution;
+      const { cycleId } = event.attribution;
+      // A read-opened cycle fetches at the base. Commit text and documents from the review range
+      // will be read separately when the snapshot is split.
+      const range =
+        event.kind === "cycle.opened@1"
+          ? event.attribution.range
+          : baseScopeRange(event.payload.baseOid);
       const log = scopeLog(options.location, cycleId);
       const integrations = readIntegrations();
       log.write({

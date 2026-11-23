@@ -6,6 +6,7 @@ export * as ByteStorage from "./byte-storage.ts";
 export * as Checkpoints from "./checkpoints.ts";
 export * as Caller from "./caller.ts";
 export * as Computations from "./computations.ts";
+export * as Cycles from "./cycles.ts";
 export * as Dispositions from "./dispositions.ts";
 export * as Feedback from "./feedback.ts";
 export * as HumanCommands from "./human-commands.ts";

@@ -2,10 +2,18 @@ import { readInstallation } from "./installation.ts";
 import { viewFolder } from "./graph-views.ts";
 import { Data, Effect } from "effect";
 import { isSqlError } from "effect/sql/SqlError";
-import { Blobs, Caller, Identity, Queries } from "@neuve/records-core";
+import { Blobs, Log, Queries, StoreMissing } from "@neuve/records-core";
 import { budgetDirectory } from "@neuve/records-core/budget-directory";
 import { GitOid, type QueryRecorded } from "@neuve/records-schema";
+import { requesterAttribution, resolveRequester } from "@neuve/harness/request";
+import { resolveCommit } from "../../../packages/harness/src/git.ts";
 import { execute, withStore } from "./records-cli.ts";
+import type { QueryInvocation } from "./boundary.ts";
+import {
+  openQueryCycle,
+  readQueryBranch,
+  warnQueryCycle,
+} from "./query-cycle.ts";
 
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
@@ -605,62 +613,58 @@ export type QuerySourceContext = Readonly<
   } & ({ kind: "unrecorded" } | { kind: "recorded"; eventId: string })
 >;
 
-const readQueryGit = (repository: string, ...args: string[]) => {
-  const result = Bun.spawnSync(["git", "-C", repository, ...args], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-    env: {
-      ...process.env,
-      GIT_ALLOW_PROTOCOL: "",
-      GIT_NO_LAZY_FETCH: "1",
-      GIT_NO_REPLACE_OBJECTS: "1",
-    },
-  });
-  return result.success ? result.stdout.toString().trim() : undefined;
-};
-
 const recordQuery = async (
   request: QueryRequest,
   payload: QueryRecorded["payload"],
+  cycle?: { branch: string; onFailure: (reason: string) => void },
 ): Promise<string | undefined> => {
   try {
     return await execute(
       withStore(request.repository, "write", (location) =>
         Effect.gen(function* () {
-          const caller = yield* Caller.resolveCaller(location);
-          const email =
-            caller._tag === "Linked"
-              ? undefined
-              : readQueryGit(request.repository, "config", "user.email");
+          const requester = yield* resolveRequester(
+            location,
+            request.repository,
+          );
+          const { actor, registration } = requesterAttribution(requester);
           const revision =
             payload.revision ??
-            GitOid.safeParse(
-              readQueryGit(
-                request.repository,
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                `${request.revision}^{commit}`,
-              ),
-            ).data ??
-            null;
+            (yield* resolveCommit(request.repository, request.revision).pipe(
+              Effect.map((oid) => GitOid.safeParse(oid).data ?? null),
+              Effect.orElseSucceed(() => null),
+            ));
+          if (registration !== undefined) yield* Log.append([registration]);
+          const cycleId =
+            revision !== null && cycle !== undefined
+              ? yield* openQueryCycle(
+                  request.repository,
+                  location,
+                  {
+                    baseRef: request.revision,
+                    baseOid: revision,
+                    branch: cycle.branch,
+                  },
+                  actor,
+                  cycle.onFailure,
+                )
+              : undefined;
+          const sessionId =
+            requester._tag === "Actor" ? requester.sessionId : undefined;
           return yield* Queries.record({
-            actor:
-              caller._tag === "Linked"
-                ? caller.actorId
-                : email
-                  ? Identity.humanFingerprint(email)
-                  : Identity.UNRESOLVED_ACTOR,
+            actor,
             attribution:
-              caller._tag === "Linked"
-                ? { sessionId: caller.sessionId }
-                : undefined,
+              sessionId === undefined && cycleId === undefined
+                ? undefined
+                : { sessionId, cycleId },
             question: request.question,
             payload: { ...payload, revision },
           });
         }).pipe(Effect.provide(Blobs.layer(location))),
       ).pipe(
+        Effect.catchIf(
+          (error) => error instanceof StoreMissing,
+          () => Effect.succeed(undefined),
+        ),
         Effect.mapError((error) =>
           isSqlError(error) && error.reason._tag === "LockTimeoutError"
             ? new Error("Records store is locked")
@@ -730,7 +734,7 @@ const inspectQuery = async (
 };
 
 export const runQueryGraph = async (
-  request: QueryRequest,
+  request: QueryInvocation["request"],
   input: Readonly<{
     emit: (event: PublicQueryEvent) => Promise<void>;
     signal?: AbortSignal;
@@ -743,6 +747,7 @@ export const runQueryGraph = async (
       message: "Query requests must contain cloneable data.",
     });
   }
+  const branch = readQueryBranch(request.repository, request.branch);
   const startedAt = new Date().toISOString();
   const start = performance.now();
   let revision: string | null = null;
@@ -773,22 +778,40 @@ export const runQueryGraph = async (
       outcome = "interrupted";
     throw error;
   } finally {
-    eventId = await recordQuery(request, {
-      revision,
-      maxResults: request.maxResults,
-      maxContextBytes: request.maxContextBytes,
-      cache: request.cache ?? "reuse",
-      profile: request.profile ?? "full",
-      relationshipPlanSize: request.relationships.length,
-      outcome,
-      candidatesReturned: budget?.returnedResults ?? 0,
-      relationships,
-      resultBytes: budget?.providerResultBytes ?? 0,
-      resultsDroppedByBudget: budget?.resultsDroppedByBudget ?? 0,
-      snippetsTruncatedByBudget: budget?.snippetsTruncatedByBudget ?? 0,
-      startedAt,
-      elapsedMs: Math.round(performance.now() - start),
-    });
+    let cycleFailure =
+      outcome === "completed" && branch === undefined
+        ? "HEAD is detached, so pass --branch <name>"
+        : undefined;
+    // The collected answer waits for Records so it can name the cycle when the output adds it.
+    eventId = await recordQuery(
+      request,
+      {
+        revision,
+        maxResults: request.maxResults,
+        maxContextBytes: request.maxContextBytes,
+        cache: request.cache ?? "reuse",
+        profile: request.profile ?? "full",
+        relationshipPlanSize: request.relationships.length,
+        outcome,
+        candidatesReturned: budget?.returnedResults ?? 0,
+        relationships,
+        resultBytes: budget?.providerResultBytes ?? 0,
+        resultsDroppedByBudget: budget?.resultsDroppedByBudget ?? 0,
+        snippetsTruncatedByBudget: budget?.snippetsTruncatedByBudget ?? 0,
+        startedAt,
+        elapsedMs: Math.round(performance.now() - start),
+      },
+      outcome === "completed" && branch !== undefined
+        ? {
+            branch,
+            onFailure: (reason) => {
+              cycleFailure = reason;
+            },
+          }
+        : undefined,
+    );
+    if (eventId !== undefined && cycleFailure !== undefined)
+      await warnQueryCycle(cycleFailure);
   }
   return eventId === undefined
     ? { kind: "unrecorded", request }

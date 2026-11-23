@@ -39,7 +39,6 @@ import { z } from "zod";
 import { ReceiptLists, Ulid } from "@neuve/records-schema";
 import {
   Blobs,
-  Caller,
   Computations,
   JobQueue,
   Log,
@@ -939,20 +938,6 @@ export const follow = async (
   }
 };
 
-/** Who asks (ST1): the agent session this command runs in, else the human git names, else unresolved. */
-const requester = (location: StoreLocation, repository: string) =>
-  Effect.gen(function* () {
-    const caller = yield* Caller.resolveCaller(location).pipe(
-      Effect.orElseSucceed(() => ({ _tag: "None" }) as const),
-    );
-    if (caller._tag === "Linked")
-      return { _tag: "Actor", actorId: caller.actorId } as const;
-    return Option.getOrElse(
-      yield* Request.gitHuman(repository),
-      (): Request.Requester => ({ _tag: "Unresolved" }),
-    );
-  });
-
 export type RangeReviewOptions = {
   readonly requester?: Request.Requester | undefined;
   readonly requestId?: string | undefined;
@@ -1036,7 +1021,8 @@ export const requestRangeReview = async (
               ? { externalSources: values.externalSources }
               : {}),
             requester:
-              values.requester ?? (yield* requester(store, repository)),
+              values.requester ??
+              (yield* Request.resolveRequester(store, repository)),
             stub,
             route,
             ...(leads === undefined ? {} : { leads }),
