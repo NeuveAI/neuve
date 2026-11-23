@@ -16,6 +16,7 @@ export * as Lineage from "./lineage.ts";
 export * as Log from "./log.ts";
 export * as JobQueue from "./queue.ts";
 export * as Proofs from "./proofs.ts";
+export * as Queries from "./queries.ts";
 export * as PublishedPackets from "./published-packets.ts";
 export * as Registry from "./registry.ts";
 export * as Retention from "./retention.ts";

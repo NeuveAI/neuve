@@ -5,7 +5,7 @@ import {
   StoredEvent,
   NewCaptureCounts,
   PublicRefusal,
-  VENT_MEDIA_TYPE,
+  TEXT_CAPTURE_MEDIA_TYPE,
   type RecordEvent,
   type RecordEventKind,
 } from "@neuve/records-schema";
@@ -206,23 +206,23 @@ const appendOne = (
         return kept;
       }
     }
-    if (event.kind === "vent.recorded@2") {
+    if (event.kind === "vent.recorded@2" || event.kind === "query.recorded@1") {
       const hash = event.refs[0].ref.slice("blob:".length);
+      const role = event.refs[0].role;
       const [text] = yield* sql<{
         mediaType: string;
         retention: string;
       }>`SELECT media_type, retention FROM blobs WHERE hash = ${hash}`;
       if (text === undefined)
         return yield* new InvalidEvent({
-          message: `${event.id}: the vent's text blob ${hash.slice(0, 12)} is not in the store`,
+          message: `${event.id}: the ${role} text blob ${hash.slice(0, 12)} is not in the store`,
         });
-      // The text must be a raw capture the pruner removes (8.17); a durable blob would never expire.
       if (
         text.retention !== "raw-capture" ||
-        text.mediaType !== VENT_MEDIA_TYPE
+        text.mediaType !== TEXT_CAPTURE_MEDIA_TYPE
       )
         return yield* new InvalidEvent({
-          message: `${event.id}: the vent's text blob ${hash.slice(0, 12)} is ${text.retention} ${text.mediaType}; vent text must be a raw-capture ${VENT_MEDIA_TYPE} blob`,
+          message: `${event.id}: ${role} text must be a raw-capture ${TEXT_CAPTURE_MEDIA_TYPE} blob, but ${hash.slice(0, 12)} is ${text.retention} ${text.mediaType}`,
         });
     }
     if (event.kind === "proof.recorded@1") {

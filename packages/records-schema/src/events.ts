@@ -12,6 +12,7 @@ import {
   Attribution,
   Causation,
   GitOid,
+  Instant,
   Range,
   Ulid,
   UnitIds,
@@ -217,8 +218,9 @@ export const VentRecordedInline = event(
 /** The harness's per-review-cycle session ID that ties a vent to the right agent session (8.16). */
 export const ReconciliationId = z.string().min(1).max(256);
 
-/** Media type of a vent's text blob. */
-export const VENT_MEDIA_TYPE = "text/plain; charset=utf-8";
+/** Media type of raw text captures, including vents and query questions. */
+export const TEXT_CAPTURE_MEDIA_TYPE = "text/plain; charset=utf-8";
+export const VENT_MEDIA_TYPE = TEXT_CAPTURE_MEDIA_TYPE;
 
 /**
  * What an agent found difficult in its session, in its own words (2.15, 8.8). Optional and at most
@@ -242,6 +244,41 @@ export const VentRecorded = event(
     }),
   ]),
 });
+
+/** A finished query run. Its question is a raw capture and expires with the other captures. */
+export const QueryRecorded = event(
+  "query.recorded@1",
+  z
+    .strictObject({
+      revision: GitOid.nullable(),
+      maxResults: z.int().positive(),
+      maxContextBytes: z.int().positive(),
+      cache: z.enum(["reuse", "refresh", "prepared"]),
+      profile: z.enum(["full", "syntax-only"]),
+      relationshipPlanSize: z.int().nonnegative(),
+      outcome: z.enum(["completed", "failed", "interrupted"]),
+      candidatesReturned: z.int().nonnegative(),
+      relationships: z.int().nonnegative(),
+      resultBytes: z.int().nonnegative(),
+      resultsDroppedByBudget: z.int().nonnegative(),
+      snippetsTruncatedByBudget: z.int().nonnegative(),
+      startedAt: Instant,
+      elapsedMs: z.int().nonnegative(),
+    })
+    .refine(
+      (run) => run.outcome !== "completed" || run.revision !== null,
+      "A completed query needs a resolved revision",
+    ),
+  Attribution.optional(),
+).extend({
+  refs: z.tuple([
+    z.strictObject({
+      ref: z.string().regex(/^blob:[0-9a-f]{64}$/, "Expected blob:<sha256>"),
+      role: z.literal("question"),
+    }),
+  ]),
+});
+export type QueryRecorded = z.infer<typeof QueryRecorded>;
 
 /**
  * The `vent` tool's and command's input. The text is checked as given and trimmed afterwards, so
@@ -1797,6 +1834,7 @@ export const RecordEvent = z.discriminatedUnion("kind", [
   TurnSummarized,
   VentRecordedInline,
   VentRecorded,
+  QueryRecorded,
   FeedbackRecorded,
   FeedbackRecordedV2,
   ReviewListCleared,

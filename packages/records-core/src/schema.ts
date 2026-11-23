@@ -69,7 +69,8 @@ export const PROJECTOR_VERSION = 11;
 // 17: `unit.recorded@3`, `assessment.recorded@4`, `comment.recorded@3`, `lineage.recorded@1` and
 // `packet.published@2`, which older builds skip (12.24).
 // 18: `review-list.cleared@1`, which older builds skip (12.24).
-export const WRITER_VERSION = 18;
+// 19: `query.recorded@1`, which older builds skip.
+export const WRITER_VERSION = 19;
 
 /**
  * The oldest projector whose rows, for the event kinds it knows, are this build's (12.24). It is what

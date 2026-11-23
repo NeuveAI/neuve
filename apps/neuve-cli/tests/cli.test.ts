@@ -6,9 +6,11 @@ import {
   expect,
   test,
 } from "bun:test";
+import { Database } from "bun:sqlite";
 import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { settingsPath } from "../../../packages/harness/src/settings.ts";
 
 import { parseQueryInvocation } from "../src/boundary.ts";
 
@@ -160,6 +162,25 @@ const run = async (
   return { stdout, stderr, exitCode };
 };
 
+const createRecords = async (root: string) => {
+  const result = await run(["records", "migrate", "--repo", root]);
+  expect(result.exitCode, result.stderr).toBe(0);
+};
+
+const queryHistory = async (root: string) => {
+  const history = await run([
+    "records",
+    "history",
+    "--kind",
+    "query.recorded@1",
+    "--repo",
+    root,
+    "--json",
+  ]);
+  expect(history.exitCode, history.stderr).toBe(0);
+  return JSON.parse(history.stdout);
+};
+
 const lineReader = (stream: ReadableStream<Uint8Array>) => {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -225,6 +246,82 @@ const queryArgs = (
 ];
 
 describe("neuve CLI boundary", () => {
+  // A missing store must warn without changing query output, and telemetry off must still record each run.
+  test("records each JSON and NDJSON query with telemetry off", async () => {
+    const { root, revision } = await fixtureRepository();
+    const graph = await fakeGraph();
+    const home = join(root, "home");
+    const settings = settingsPath(home);
+    await Bun.write(
+      settings,
+      JSON.stringify({ telemetry: { enabled: false } }),
+    );
+    const env = {
+      HOME: home,
+      NEUVE_GRAPH_BINARY: graph.executable,
+      FAKE_GRAPH_LOG: graph.log,
+    };
+    const question = "  Preserve this question exactly?  ";
+    const json = queryArgs(root, revision.slice(0, 12), question);
+    const ndjson = [...json, "--stream"];
+    const database = join(root, ".git", "neuve", "records.sqlite");
+    const warning = `neuve: Query run was not recorded (No Records store at ${database}).\n`;
+    const withoutJson = await run(json, env);
+    const withoutNdjson = await run(ndjson, env);
+    expect(withoutJson.exitCode).toBe(0);
+    expect(withoutNdjson.exitCode).toBe(0);
+    expect(withoutJson.stderr).toBe(warning);
+    expect(withoutNdjson.stderr).toBe(warning);
+    expect(await Bun.file(database).exists()).toBe(false);
+
+    await createRecords(root);
+    expect(await run(json, env)).toEqual({ ...withoutJson, stderr: "" });
+    expect(await run(ndjson, env)).toEqual({ ...withoutNdjson, stderr: "" });
+    const history = await queryHistory(root);
+    expect(history).toHaveLength(2);
+    const [first, second] = history;
+    expect(first.event.id).not.toBe(second.event.id);
+    for (const { event } of history) {
+      expect(event.kind).toBe("query.recorded@1");
+      expect(event.idempotencyKey).toBe(`query:${event.id}`);
+      expect(event.actor).toBe(
+        "a95c31428577cbc202767502c04ab7d0c623cb73d61d7e33991b1dfa07edb9d2",
+      );
+      expect(event.attribution).toBeUndefined();
+      expect(event.payload).toEqual({
+        revision,
+        maxResults: 5,
+        maxContextBytes: 4096,
+        cache: "reuse",
+        profile: "full",
+        relationshipPlanSize: 1,
+        outcome: "completed",
+        candidatesReturned: 2,
+        relationships: 1,
+        resultBytes: 50,
+        resultsDroppedByBudget: 0,
+        snippetsTruncatedByBudget: 0,
+        startedAt: expect.any(String),
+        elapsedMs: expect.any(Number),
+      });
+    }
+    expect(first.event.refs).toEqual(second.event.refs);
+    expect(first.event.refs).toEqual([
+      { role: "question", ref: expect.stringMatching(/^blob:[0-9a-f]{64}$/) },
+    ]);
+    using db = new Database(database, { readonly: true });
+    const blob = db
+      .query("SELECT retention, content FROM blobs WHERE hash = ?")
+      .get(first.event.refs[0].ref.slice("blob:".length));
+    expect(blob).toEqual({
+      retention: "raw-capture",
+      content: new TextEncoder().encode(question),
+    });
+    expect(db.query("SELECT count(*) AS count FROM jobs").get()).toEqual({
+      count: 0,
+    });
+  });
+
   // Why: worktree creation for query must not execute the caller's post-checkout hook.
   test("query works with a Husky-style env sh post-checkout hook", async () => {
     const repository = await fixtureRepository();
@@ -779,6 +876,7 @@ describe("neuve CLI boundary", () => {
     "streams retrieval before %s finishes with a %s relationship outcome",
     async (mode, relationshipStatus) => {
       const repository = await fixtureRepository();
+      await createRecords(repository.root);
       const graph = await fakeGraph(mode);
       const child = Bun.spawn(
         [
@@ -863,8 +961,10 @@ describe("neuve CLI boundary", () => {
     ).not.toContain("neuve-graph-client-");
   });
 
+  // An interrupt must keep the signal exit and record the retrieval already emitted.
   test("SIGTERM during a blocked relationship emits no completion and cleans up", async () => {
     const repository = await fixtureRepository();
+    await createRecords(repository.root);
     const graph = await fakeGraph("delayed-neighbor");
     const child = Bun.spawn(
       [binary, ...queryArgs(repository.root, repository.revision), "--stream"],
@@ -890,6 +990,18 @@ describe("neuve CLI boundary", () => {
     expect(await new Response(child.stderr).text()).toBe(
       "neuve: interrupted by SIGTERM\n",
     );
+    expect(await queryHistory(repository.root)).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          payload: expect.objectContaining({
+            revision: repository.revision,
+            outcome: "interrupted",
+            candidatesReturned: 2,
+            relationships: 0,
+          }),
+        }),
+      }),
+    ]);
     expect(() => process.kill(neighborPid, 0)).toThrow();
     expect(
       execute(["git", "worktree", "list", "--porcelain"], repository.root)
@@ -899,6 +1011,7 @@ describe("neuve CLI boundary", () => {
 
   test("sends the unchanged question and explicit plan to Graph", async () => {
     const repository = await fixtureRepository();
+    await createRecords(repository.root);
     const graph = await fakeGraph();
     const result = await run(queryArgs(repository.root, repository.revision), {
       NEUVE_GRAPH_BINARY: graph.executable,
@@ -1117,8 +1230,10 @@ describe("neuve CLI boundary", () => {
     },
   );
 
+  // A failure before the first Graph event must keep the original diagnostic and exit.
   test("does not fall back when the explicit graph binary is unavailable", async () => {
     const repository = await fixtureRepository();
+    await createRecords(repository.root);
     const missing = join(repository.root, "missing-graph");
     const result = await run(queryArgs(repository.root, repository.revision), {
       NEUVE_GRAPH_BINARY: missing,
@@ -1128,5 +1243,17 @@ describe("neuve CLI boundary", () => {
       stderr: `neuve: NEUVE_GRAPH_BINARY does not name an executable file: ${missing}\n`,
       exitCode: 2,
     });
+    expect(await queryHistory(repository.root)).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          payload: expect.objectContaining({
+            revision: repository.revision,
+            outcome: "failed",
+            candidatesReturned: 0,
+            relationships: 0,
+          }),
+        }),
+      }),
+    ]);
   });
 });

@@ -1,7 +1,11 @@
 import { readInstallation } from "./installation.ts";
 import { viewFolder } from "./graph-views.ts";
 import { Data, Effect } from "effect";
+import { isSqlError } from "effect/sql/SqlError";
+import { Blobs, Caller, Identity, Queries } from "@neuve/records-core";
 import { budgetDirectory } from "@neuve/records-core/budget-directory";
+import { GitOid, type QueryRecorded } from "@neuve/records-schema";
+import { execute, withStore } from "./records-cli.ts";
 
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
@@ -26,6 +30,7 @@ import {
   type GraphInspectionRequest,
   type GraphLocation,
   type GraphOutcome,
+  type GraphQueryBudget,
   type GraphQueryObservation,
   type GraphPreparedRead,
   type GraphProviderObservation,
@@ -594,26 +599,95 @@ export const collectPublicQueryResult = (
 };
 
 /** The request a query ran for; source evidence is read against it. */
-export type QuerySourceContext = Readonly<{
-  kind: "unrecorded";
-  request: QueryRequest;
-}>;
+export type QuerySourceContext = Readonly<
+  {
+    request: QueryRequest;
+  } & ({ kind: "unrecorded" } | { kind: "recorded"; eventId: string })
+>;
 
-export const runQueryGraph = async (
+const readQueryGit = (repository: string, ...args: string[]) => {
+  const result = Bun.spawnSync(["git", "-C", repository, ...args], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "ignore",
+    env: {
+      ...process.env,
+      GIT_ALLOW_PROTOCOL: "",
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_NO_REPLACE_OBJECTS: "1",
+    },
+  });
+  return result.success ? result.stdout.toString().trim() : undefined;
+};
+
+const recordQuery = async (
   request: QueryRequest,
-  input: Readonly<{
-    emit: (event: PublicQueryEvent) => Promise<void>;
-    signal?: AbortSignal;
-  }>,
-): Promise<QuerySourceContext> => {
+  payload: QueryRecorded["payload"],
+): Promise<string | undefined> => {
   try {
-    request = structuredClone(request);
-  } catch {
-    throw new QueryInputError({
-      message: "Query requests must contain cloneable data.",
-    });
+    return await execute(
+      withStore(request.repository, "write", (location) =>
+        Effect.gen(function* () {
+          const caller = yield* Caller.resolveCaller(location);
+          const email =
+            caller._tag === "Linked"
+              ? undefined
+              : readQueryGit(request.repository, "config", "user.email");
+          const revision =
+            payload.revision ??
+            GitOid.safeParse(
+              readQueryGit(
+                request.repository,
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                `${request.revision}^{commit}`,
+              ),
+            ).data ??
+            null;
+          return yield* Queries.record({
+            actor:
+              caller._tag === "Linked"
+                ? caller.actorId
+                : email
+                  ? Identity.humanFingerprint(email)
+                  : Identity.UNRESOLVED_ACTOR,
+            attribution:
+              caller._tag === "Linked"
+                ? { sessionId: caller.sessionId }
+                : undefined,
+            question: request.question,
+            payload: { ...payload, revision },
+          });
+        }).pipe(Effect.provide(Blobs.layer(location))),
+      ).pipe(
+        Effect.mapError((error) =>
+          isSqlError(error) && error.reason._tag === "LockTimeoutError"
+            ? new Error("Records store is locked")
+            : error,
+        ),
+      ),
+    );
+  } catch (error) {
+    const reason = (error instanceof Error ? error.message : String(error))
+      .replace(/[\r\n]+/g, " ")
+      .trim()
+      .replace(/\.$/, "");
+    // A broken stderr must not change the query's outcome either.
+    await Bun.write(
+      Bun.stderr,
+      `neuve: Query run was not recorded (${reason}).\n`,
+    ).catch(() => undefined);
+    return undefined;
   }
-  input.signal?.throwIfAborted();
+};
+
+const inspectQuery = async (
+  request: QueryRequest,
+  emit: (event: GraphInspectionEvent) => Promise<void>,
+  signal: AbortSignal | undefined,
+) => {
+  signal?.throwIfAborted();
   const installation = await readInstallation(request.repository);
   // The engine setup recorded, while it still runs; else the one beside this CLI.
   const recorded =
@@ -636,10 +710,8 @@ export const runQueryGraph = async (
       // `readGraphSnapshot`): one private copy of the engine for every repository, and snapshots
       // keyed by each repository's Git common directory.
       cacheDirectory: graphCacheDirectory(),
-      emit: async (event) => {
-        await input.emit(toPublicQueryEvent(request, event));
-      },
-      ...(input.signal === undefined ? {} : { signal: input.signal }),
+      emit,
+      ...(signal === undefined ? {} : { signal }),
       ...(views === undefined ? {} : { temporaryParent: views.parent }),
     });
   } catch (error) {
@@ -655,7 +727,72 @@ export const runQueryGraph = async (
   } finally {
     await views?.release();
   }
-  return { kind: "unrecorded", request };
+};
+
+export const runQueryGraph = async (
+  request: QueryRequest,
+  input: Readonly<{
+    emit: (event: PublicQueryEvent) => Promise<void>;
+    signal?: AbortSignal;
+  }>,
+): Promise<QuerySourceContext> => {
+  try {
+    request = structuredClone(request);
+  } catch {
+    throw new QueryInputError({
+      message: "Query requests must contain cloneable data.",
+    });
+  }
+  const startedAt = new Date().toISOString();
+  const start = performance.now();
+  let revision: string | null = null;
+  let budget: GraphQueryBudget | undefined;
+  let relationships = 0;
+  let outcome: QueryRecorded["payload"]["outcome"] = "failed";
+  let eventId: string | undefined;
+  try {
+    await inspectQuery(
+      request,
+      async (event) => {
+        revision = event.identity.source.revision;
+        if (event.kind === "retrieval" && event.outcome.kind === "success")
+          budget = event.outcome.value.budget;
+        if (event.kind === "relationship" && event.outcome.kind === "success")
+          relationships += event.outcome.value.observations.length;
+        await input.emit(toPublicQueryEvent(request, event));
+      },
+      input.signal,
+    );
+    if (budget !== undefined) outcome = "completed";
+  } catch (error) {
+    if (
+      input.signal?.aborted &&
+      (error === input.signal.reason ||
+        (error instanceof DOMException && error.name === "AbortError"))
+    )
+      outcome = "interrupted";
+    throw error;
+  } finally {
+    eventId = await recordQuery(request, {
+      revision,
+      maxResults: request.maxResults,
+      maxContextBytes: request.maxContextBytes,
+      cache: request.cache ?? "reuse",
+      profile: request.profile ?? "full",
+      relationshipPlanSize: request.relationships.length,
+      outcome,
+      candidatesReturned: budget?.returnedResults ?? 0,
+      relationships,
+      resultBytes: budget?.providerResultBytes ?? 0,
+      resultsDroppedByBudget: budget?.resultsDroppedByBudget ?? 0,
+      snippetsTruncatedByBudget: budget?.snippetsTruncatedByBudget ?? 0,
+      startedAt,
+      elapsedMs: Math.round(performance.now() - start),
+    });
+  }
+  return eventId === undefined
+    ? { kind: "unrecorded", request }
+    : { kind: "recorded", request, eventId };
 };
 
 /**
