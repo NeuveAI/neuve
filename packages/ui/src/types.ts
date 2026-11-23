@@ -316,7 +316,8 @@ export type PlanCardView = {
 	hash: string;
 	title: string;
 	state: "draft" | "approved" | "replaced";
-	meta: string;
+	/** Who approved it and when. */
+	meta?: string;
 };
 
 /** What a Neuve review card shows: a review card entry, or the start call still running. */

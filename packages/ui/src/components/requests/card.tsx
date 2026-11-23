@@ -73,6 +73,17 @@ export function RequestCardHead(
 	);
 }
 
+const PILL = {
+	success: "bg-success/14 text-success",
+	destructive: "bg-destructive/12 text-destructive",
+	muted: "bg-muted text-muted-foreground",
+} as const;
+
+/** How a request was settled, beside the card's title. */
+export function StatePill({ tone, children }: { tone: keyof typeof PILL; children: ReactNode }) {
+	return <span className={cn("shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-normal", PILL[tone])}>{children}</span>;
+}
+
 /** A part of the card under its head; `bare` leaves out the padding. */
 export function RequestCardBody(
 	{ bare, className, style, ...props }: ComponentPropsWithRef<"div"> & { bare?: boolean },

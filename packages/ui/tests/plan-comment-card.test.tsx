@@ -9,7 +9,7 @@ const card = (messages: PlanCommentView["messages"]) =>
 	renderToStaticMarkup(
 		<PlanCommentCard
 			comment={{ id: "c", placement: { kind: "stays", hash: "a".repeat(64), lines: [{ line: 1, text: "x" }] }, quote: "x", section: "", messages }}
-			actions={{ list: [], agent: "Neuve", edit: async () => {}, remove: async () => {} }}
+			actions={{ list: [], edit: async () => {}, remove: async () => {} }}
 		/>,
 	);
 const removes = (html: string) => html.match(/>Remove</g)?.length ?? 0;

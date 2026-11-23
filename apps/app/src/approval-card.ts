@@ -14,8 +14,8 @@ export type ApprovalCardView = {
 	request: string;
 	title: string;
 	state: ApprovalState;
-	/** Who answered and when, or why it closed, or when it was asked. */
-	meta: string;
+	/** Who answered and when, or why it closed; none while open. */
+	meta?: string;
 	/** The command, exactly as sent. */
 	code?: { text: string; language?: string };
 	/** Labelled values such as the folder, each path asked for, or the network. */
@@ -28,7 +28,6 @@ export type ApprovalCardView = {
 	reason?: string;
 	/** Plain statements about the request, shown whatever its state. */
 	notes: string[];
-	/** Shown under the request while it is open. */
 	note?: string;
 	/** The runtime's raw input as JSON. */
 	details: string;
@@ -76,9 +75,9 @@ const CLOSED: Record<Exclude<Extract<ApprovalRequest["state"], { kind: "closed" 
 
 const capital = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 
-function status(request: ApprovalRequest, name: (author: string) => string): [ApprovalState, string] {
+function status(request: ApprovalRequest, name: (author: string) => string): [ApprovalState, string?] {
 	const { state } = request;
-	if (state.kind === "open") return ["open", `Asked at ${TIME.format(request.openedAt)}`];
+	if (state.kind === "open") return ["open"];
 	if (state.kind === "answered") {
 		return [state.decision === "allow" ? "allowed" : "denied", `${name(state.by)} · ${TIME.format(state.at)}`];
 	}
@@ -113,20 +112,16 @@ function whole(kind: string, content: string) {
 const ACCESS = { read: "Read", write: "Write", deny: "No access" } as const;
 const CHANGE = { add: "Added", delete: "Deleted", update: "Changed" } as const;
 
-/** A path asked for; `folder` is the request's folder, shown beside the runtime's working folders. */
-function target(value: ApprovalPath, folder: string | undefined): string {
+function target(value: ApprovalPath): string {
 	switch (value.kind) {
 		case "path":
 			return visiblePath(value.path);
 		case "glob":
 			return `${visiblePath(value.pattern)} (pattern)`;
-		case "project-roots": {
-			// The runtime's working folders: on a lane, its worktree, not the project.
-			const where = folder === undefined ? "" : ` (${visiblePath(folder)})`;
+		case "project-roots":
 			return value.subpath === undefined
-				? `This chat's working folders${where}`
-				: `${visiblePath(value.subpath)} in this chat's working folders${where}`;
-		}
+				? "This chat's working folders"
+				: `${visiblePath(value.subpath)} in this chat's working folders`;
 		case "root":
 			return "/ (the whole disk)";
 		case "minimal":
@@ -137,8 +132,6 @@ function target(value: ApprovalPath, folder: string | undefined): string {
 			return "/tmp";
 	}
 }
-
-const NETWORK = (value: boolean | null) => value === null ? "Not asked" : value ? "On" : "Off";
 
 type Parts = Pick<ApprovalCardView, "title" | "code" | "rows" | "changes" | "text" | "note"> & { notes?: string[] };
 
@@ -173,14 +166,14 @@ function parts(asked: ApprovalAsked, toolName: string | undefined): Parts {
 			return {
 				title: "More access",
 				rows: [
-					...asked.paths.map((path) => ({ key: ACCESS[path.access], value: target(path.target, asked.folder) })),
+					...asked.paths.map((path) => ({ key: ACCESS[path.access], value: target(path.target) })),
 					...(asked.paths.length ? [] : [{ key: "Paths", value: "None" }]),
-					{ key: "Network", value: NETWORK(asked.network) },
+					...(asked.network === null ? [] : [{ key: "Network", value: asked.network ? "On" : "Off" }]),
 					...(asked.folder === undefined ? [] : [{ key: "Folder", value: visiblePath(asked.folder) }]),
 					...(asked.globDepthLimit === undefined ? [] : [{ key: "Pattern depth", value: `${asked.globDepthLimit}` }]),
 				],
 				changes: [],
-				note: "Neuve asks for this access for this turn.",
+				note: "For this turn only.",
 			};
 		case "server-prompt":
 			return {
@@ -190,11 +183,10 @@ function parts(asked: ApprovalAsked, toolName: string | undefined): Parts {
 				text: visible(asked.message),
 			};
 		case "unrecognised":
-			return { title: toolName === undefined ? "Request" : visible(toolName), rows: [], changes: [], notes: [UNRECOGNISED] };
+			return { title: toolName === undefined ? "Request" : visible(toolName), rows: [], changes: [] };
 	}
 }
 
-export const UNRECOGNISED = "This card cannot summarise this request. The whole request is below.";
 export const HIDDEN_NOTE = "This request holds hidden characters, shown here as \\u{…}.";
 
 /** The paths a request names, which show on one line each. */

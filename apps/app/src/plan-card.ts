@@ -5,16 +5,14 @@ import type { Tool } from "./transcript";
 
 const TIME = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
-/** A plan's second line: who approved it and when, or when it was written; then its version. */
-function meta(plan: Plan, name: (author: string) => string) {
-	const version = plan.hash.slice(0, 8);
-	return plan.approved
-		? `${name(plan.approved.by)} · ${TIME.format(plan.approved.at)} · ${version}`
-		: `${TIME.format(plan.written)} · ${version}`;
-}
-
 export function planView(plan: Plan, name: (author: string) => string): PlanCardView {
-	return { plan: plan.id, hash: plan.hash, title: plan.title, state: plan.state, meta: meta(plan, name) };
+	return {
+		plan: plan.id,
+		hash: plan.hash,
+		title: plan.title,
+		state: plan.state,
+		...(plan.approved ? { meta: `${name(plan.approved.by)} · ${TIME.format(plan.approved.at)}` } : {}),
+	};
 }
 
 /** Each plan's card, by the call that last wrote it. */
@@ -22,11 +20,8 @@ export function planCards(plans: Plan[], name: (author: string) => string) {
 	return new Map(plans.map((plan) => [plan.call, planView(plan, name)]));
 }
 
-/**
- * The writing tool's row: its arguments and its result hold the whole plan, which the plan's card
- * shows instead, so the row keeps only the result's first line.
- */
+/** The writing tool's row keeps a refusal's reason; a written plan shows in its card. */
 export function planTool(tool: Tool): { name: string; summary?: string; result?: string } | undefined {
 	if (tool.name !== PLAN_TOOL) return;
-	return { name: "Write plan", result: tool.result?.text.split("\n", 1)[0] };
+	return { name: "Write plan", result: tool.result?.error ? tool.result.text : "" };
 }

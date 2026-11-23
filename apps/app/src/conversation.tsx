@@ -18,7 +18,6 @@ import { host } from "./host";
 import { MessageQueue } from "./message-queue";
 import { OfflineHost, useRoster } from "./onboarding";
 import { present } from "./presence";
-import { approvePlan } from "./plan-approve";
 import { planCards } from "./plan-card";
 import { pendingQuestion, Question } from "./question";
 import { reviewActions, reviewTab, wakeNote, withCards } from "./review-card";
@@ -176,7 +175,8 @@ export function Conversation(
 			mayApprove: mayAsk,
 			open: (plan: string) => openPlan?.(plan),
 			approve: (plan: string, hash: string) =>
-				approvePlan(channel.id, id, user, plan, hash).catch(
+				host.channel(channel.id, { op: "plan-approve", chat: id, author: user, plan, hash }).then(
+					() => {},
 					(error: Error) => void toast.error("Could not approve the plan", { description: error.message }),
 				),
 		}),
@@ -429,7 +429,6 @@ export function Conversation(
 						mayAnswer={channel.owner === user || transcript.shared !== false}
 					/>
 				)}
-				{/* Cards show in full; past this height they scroll, and each card's buttons follow all of its content. */}
 				{transcript.live && approvals.length > 0 && (
 					<div className="max-h-[60vh] overflow-y-auto">
 						{approvals.map((view) => (
