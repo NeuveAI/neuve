@@ -1128,14 +1128,14 @@ export class Channel {
 	): Promise<{ model: ModelRef; effort: Effort; submission?: SubmissionId }> {
 		const agent = await conversation.agent(context);
 		const current = agent.model;
-		// A chat's inherited model can lose its provider key; only an explicit request must keep it.
+		// An inherited model may lose access or leave the catalogue.
 		const kept = !requested && !automatic && current && await usable(this.#options.models, current)
 			? current
 			: undefined;
 		const model = requested || kept || await this.#automatic();
 		const selected = this.#options.models.getModel(model.provider, model.modelId);
 		if (!selected) {
-			throw new Error(`Unknown model ${model.provider}/${model.modelId}`);
+			throw new Error(`Model ${model.provider}/${model.modelId} is not offered. Choose another model.`);
 		}
 		// Before configuring, so a refused message leaves the chat's model as it was.
 		room.checkContext(selected, attached);

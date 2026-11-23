@@ -6,8 +6,8 @@
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 
+import { createCatalogue } from "@ace/channel/models";
 import type { MutableModels } from "@earendil-works/pi-ai";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ClaudeSubscriptionTokenRefused, isClaudeSubscriptionToken } from "../../../packages/harness/src/subscription-token.ts";
 
 import { config } from "./config";
@@ -214,7 +214,7 @@ export async function latest(name: string, fresh?: boolean): Promise<CredentialS
 }
 
 function catalog(lookup: (name: string) => Promise<string | undefined>): MutableModels {
-	return builtinModels({
+	return createCatalogue({
 		authContext: {
 			env: lookup,
 			async fileExists(path) {
@@ -229,7 +229,7 @@ function catalog(lookup: (name: string) => Promise<string | undefined>): Mutable
 	});
 }
 
-/** pi-ai's built-in providers, resolving credentials through Ace. */
+/** Ace's native catalogue, resolving credentials through the host. */
 export function models(): MutableModels {
 	return catalog(key);
 }
