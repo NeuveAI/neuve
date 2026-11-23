@@ -1107,8 +1107,6 @@ export const queryLocalScope = (
         `The request named more than ${MAX_SCOPE_DOCUMENTS} documents.`,
       );
     const scope = yield* fetchCycleLocalScope(repository, copy, baseOid, pins);
-    if (pins === undefined && scope.guideMissing)
-      return { sources: [], gaps, causes: [] };
     const answer = yield* localScopeAnswer(repository, scope, copy);
     return { ...answer, gaps: [...answer.gaps, ...gaps] };
   });

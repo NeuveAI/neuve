@@ -28,34 +28,25 @@ export const lastRunActivity = (cycleId: string) =>
     return Option.map(Option.fromNullishOr(row?.at), Date.parse);
   });
 
-type ReadCycle = { cycleId: string; taken: 0 | 1 };
-
-const readCycles = (branches: readonly string[], limit = -1) =>
+export const branchReadCycle = (branch: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
-    return yield* sql<ReadCycle>`SELECT
+    const [cycle] = yield* sql<{ cycleId: string; taken: 0 | 1 }>`SELECT
       json_extract(e.envelope, '$.attribution.cycleId') AS cycle_id,
       p.cycle_id IS NOT NULL AS taken
     FROM events e
     LEFT JOIN projection_cycles p ON p.cycle_id = json_extract(e.envelope, '$.attribution.cycleId')
     WHERE e.kind = 'cycle.opened@2'
-      AND json_extract(e.envelope, '$.payload.branch') IN ${sql.in(branches)}
-    ORDER BY e.seq DESC LIMIT ${limit}`;
-  });
-
-const isOpen = (cycle: ReadCycle) =>
-  Effect.gen(function* () {
-    if (cycle.taken) return false;
+      AND json_extract(e.envelope, '$.payload.branch') = ${branch}
+    ORDER BY e.seq DESC LIMIT 1`;
+    if (cycle === undefined) return undefined;
+    if (cycle.taken) return { cycleId: cycle.cycleId, open: false };
     const last = yield* lastRunActivity(cycle.cycleId);
     const now = yield* Clock.currentTimeMillis;
-    return Option.exists(last, (at) => !isIdle(now, at));
-  });
-
-export const newestOpenReadCycle = (branches: ReadonlySet<string>) =>
-  Effect.gen(function* () {
-    const cycles = yield* readCycles([...branches]);
-    const open = yield* Effect.findFirst(cycles, isOpen);
-    return Option.getOrUndefined(open)?.cycleId;
+    return {
+      cycleId: cycle.cycleId,
+      open: Option.exists(last, (at) => !isIdle(now, at)),
+    };
   });
 
 export const openOrJoinCycle = <E = never, R = never>(
@@ -66,9 +57,8 @@ export const openOrJoinCycle = <E = never, R = never>(
   ) => Effect.Effect<LocalScopeSelection["payload"] | undefined, E, R>,
 ) =>
   Effect.gen(function* () {
-    const [latest] = yield* readCycles([payload.branch], 1);
-    if (latest !== undefined && (yield* isOpen(latest)))
-      return { cycleId: latest.cycleId, opened: false };
+    const latest = yield* branchReadCycle(payload.branch);
+    if (latest?.open) return { cycleId: latest.cycleId, opened: false };
 
     const cycleId = mintUlid();
     const id = mintUlid();

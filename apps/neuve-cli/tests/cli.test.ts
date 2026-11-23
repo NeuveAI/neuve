@@ -51,6 +51,7 @@ import type {
   PublicQueryScopeSource,
 } from "../src/domain.ts";
 import { execute as executeRecords, withStore } from "../src/records-cli.ts";
+import { markSetUp } from "./fixtures/set-up.ts";
 
 // Built into a temporary directory, never dist/neuve, which an installed
 // command may still be running.
@@ -1320,6 +1321,62 @@ describe("neuve CLI boundary", () => {
     );
     expect(await queryHistory(root, "cycle.opened@2")).toEqual(openings);
     expect(scopeJobs(root)).toHaveLength(1);
+  });
+
+  // A detached review can pick another task's scope unless it requires a branch.
+  test("requires a branch holding the head when a detached review has open scope", async () => {
+    const { root, revision } = await fixtureRepository();
+    await markSetUp(root);
+    await createRecords(root);
+    const graph = await fakeGraph();
+    const env = {
+      HOME: join(root, "home"),
+      ANTHROPIC_API_KEY: "",
+      NEUVE_GRAPH_BINARY: graph.executable,
+      NEUVE_TEST_PROCESS: "1",
+    };
+    await mkdir(env.HOME);
+    expect(execute(["git", "branch", "unrelated"], root).exitCode).toBe(0);
+    expect(
+      execute(["git", "commit", "--allow-empty", "-qm", "Reviewed head"], root)
+        .exitCode,
+    ).toBe(0);
+    const head = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+    for (const branch of ["feature", "followup"]) {
+      expect(execute(["git", "branch", branch], root).exitCode).toBe(0);
+      const read = await run(
+        [...queryArgs(root, revision), "--branch", branch],
+        env,
+      );
+      expect(read.exitCode, read.stderr).toBe(0);
+    }
+    const [feature] = await queryHistory(root, "cycle.opened@2");
+    expect(
+      execute(["git", "switch", "--detach", revision], root).exitCode,
+    ).toBe(0);
+    const args = [
+      "review",
+      `${revision}..${head}`,
+      "--repo",
+      root,
+      "--detach",
+      "--route",
+      "anthropic",
+    ];
+
+    expect((await run(args, env)).exitCode).toBe(2);
+    expect((await run([...args, "--branch", "unrelated"], env)).exitCode).toBe(
+      2,
+    );
+    expect(await queryHistory(root, "review.requested@1")).toEqual([]);
+
+    const review = await run([...args, "--branch", "feature"], env);
+    expect(review.exitCode, review.stderr).toBe(0);
+    expect(await queryHistory(root, "review.requested@1")).toMatchObject([
+      {
+        event: { attribution: { cycleId: feature.event.attribution.cycleId } },
+      },
+    ]);
   });
 
   // A query can silently keep using the previous scope while its review is queued.

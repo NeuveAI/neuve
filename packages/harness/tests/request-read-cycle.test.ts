@@ -14,12 +14,14 @@ import {
   Identity,
   JobQueue,
   Log,
+  mintUlid,
   Queries,
   Store,
   storeLocationIn,
 } from "@neuve/records-core";
 import { defaultConfig } from "../src/config.ts";
 import { requestReview, type ReviewOptions } from "../src/request.ts";
+import { keepLocalScope, readLocalScope, readScopeText } from "../src/scope.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -41,7 +43,7 @@ const fixture = () => {
     if (!result.success) throw new Error(result.stderr.toString());
     return result.stdout.toString().trim();
   };
-  git("init", "-q", "-b", "work");
+  git("init", "-q", "-b", "feature");
   git("config", "user.email", "git@example.test");
   git("config", "user.name", "Git User");
   const commit = (text: string) => {
@@ -51,10 +53,9 @@ const fixture = () => {
     return git("rev-parse", "HEAD");
   };
   const base = commit("base");
-  git("branch", "unrelated");
   const head = commit("review head");
   const tip = commit("later tip");
-  git("branch", "earlier");
+  git("branch", "followup", head);
   const location = storeLocationIn(join(repository, ".git"));
   const request = (target = head, overrides: Partial<ReviewOptions> = {}) =>
     requestReview({
@@ -66,7 +67,7 @@ const fixture = () => {
       ...overrides,
     });
   const read = (
-    branch = "work",
+    branch = "feature",
     revision = base,
     selectScope?: Parameters<typeof Cycles.openOrJoinCycle<never, never>>[2],
   ) =>
@@ -104,7 +105,7 @@ const fixture = () => {
         Effect.provide(BunFileSystem.layer),
       ),
     );
-  return { repository, location, base, head, tip, read, request, run };
+  return { repository, location, base, head, tip, git, read, request, run };
 };
 
 const scopeJobs = Effect.gen(function* () {
@@ -115,48 +116,53 @@ const scopeJobs = Effect.gen(function* () {
   );
 });
 
-// A different review base can silently select another branch's scope.
-test("binds the newest eligible read cycle across bases without a second scope job", async () => {
-  const repo = fixture();
-  const result = await repo.run(
-    Effect.gen(function* () {
-      yield* repo.read("earlier");
-      const read = yield* repo.read("work", repo.head);
-      yield* repo.read("unrelated");
-      const review = yield* repo.request();
-      const events = yield* Log.history({ cycleId: read.cycleId });
-      const jobs = yield* scopeJobs;
-      return { read, review, events, jobs };
-    }),
-  );
-  const cycleId = result.read.cycleId;
-  expect(result.review.cycleId).toBe(cycleId);
-  expect(result.review.openedCycle).toBe(false);
-  expect(result.events.map(({ event }) => event.kind)).toEqual([
-    "cycle.opened@2",
-    "cycle.opened@1",
-    "review.requested@1",
-  ]);
-  expect(result.events[0]?.event).toMatchObject({
-    payload: { baseOid: repo.head, branch: "work", branchTipOid: repo.tip },
-  });
-  expect(result.events[1]?.event).toMatchObject({
-    idempotencyKey: `cycle:${cycleId}`,
-    attribution: { cycleId, range: { baseOid: repo.base, headOid: repo.head } },
-  });
-  expect(
-    result.jobs.filter((job) => job.dedupeKey === `scope.fetch:${cycleId}`),
-  ).toEqual([
-    expect.objectContaining({
-      kind: "scope.fetch@2",
-      eventId: result.events[0]?.event.id,
-    }),
-  ]);
-});
+// Read order must not let a stacked branch supply another task's plan.
+test.each(["feature", "followup"])(
+  "takes the checked-out branch's scope with %s reading first",
+  async (first) => {
+    const repo = fixture();
+    const plans = { feature: "Plan A", followup: "Plan B" };
+    const readPlan = (branch: keyof typeof plans) =>
+      Effect.gen(function* () {
+        const path = branch + ".md";
+        const revision = branch === "feature" ? repo.head : repo.base;
+        writeFileSync(join(repo.repository, path), plans[branch]);
+        const read = yield* readLocalScope(repo.repository, revision, [path]);
+        return yield* repo.read(branch, revision, (cycleId) =>
+          keepLocalScope({ location: repo.location, cycleId }, read, () => {}),
+        );
+      });
+    const result = await repo.run(
+      Effect.gen(function* () {
+        const firstRead =
+          first === "followup" ? yield* readPlan("followup") : undefined;
+        const feature = yield* readPlan("feature");
+        const followup = firstRead ?? (yield* readPlan("followup"));
+        const review = yield* repo.request();
+        const jobs = yield* scopeJobs;
+        const later = yield* repo.read("followup");
+        return { feature, followup, review, jobs, later };
+      }),
+    );
+    const cycleId = result.feature.cycleId;
+    expect(result.review.cycleId).toBe(cycleId);
+    expect(readScopeText(repo.location, result.review.cycleId, "S1").text).toBe(
+      "Plan A",
+    );
+    expect(result.later).toEqual({
+      cycleId: result.followup.cycleId,
+      opened: false,
+    });
+    expect(
+      result.jobs.filter((job) => job.dedupeKey === `scope.fetch:${cycleId}`),
+    ).toMatchObject([{ kind: "scope.fetch@2" }]);
+  },
+);
 
-// Review-only callers still open and reuse a range cycle with the legacy scope job.
-test("opens the same range cycle as before when there was no read", async () => {
+// A detached checkout can still review a range when no branch has open scope for it.
+test("opens and reuses a range cycle from a detached checkout without an earlier read", async () => {
   const repo = fixture();
+  repo.git("switch", "--detach", repo.head);
   const { first, second, jobs } = await repo.run(
     Effect.gen(function* () {
       const first = yield* repo.request();
@@ -251,6 +257,39 @@ test("refuses to open a review cycle when Git cannot list local branches", async
   expect(openings).toEqual([]);
 });
 
+// A second review could revive older scope written by a build that opened cycles per revision.
+test("never takes an older read cycle after the newest one is taken", async () => {
+  const repo = fixture();
+  const { older, newest, first, second } = await repo.run(
+    Effect.gen(function* () {
+      const older = yield* repo.read();
+      const newest = mintUlid();
+      yield* Log.append([
+        {
+          id: mintUlid(),
+          kind: "cycle.opened@2",
+          idempotencyKey: `cycle.read:${newest}`,
+          actor: Identity.UNRESOLVED_ACTOR,
+          occurredAt: new Date().toISOString(),
+          attribution: { cycleId: newest },
+          payload: {
+            baseRef: repo.head,
+            baseOid: repo.head,
+            branch: "feature",
+            branchTipOid: repo.tip,
+          },
+        },
+      ]);
+      const first = yield* repo.request();
+      const second = yield* repo.request(repo.tip);
+      return { older, newest, first, second };
+    }),
+  );
+  expect(first.cycleId).toBe(newest);
+  expect(second.openedCycle).toBe(true);
+  expect(second.cycleId).not.toBe(older.cycleId);
+});
+
 // A request that has yet to publish can silently absorb the next round's scope.
 test("the next read starts a cycle that a review of the newer head joins", async () => {
   const repo = fixture();
@@ -329,7 +368,7 @@ test("racing first reads at different revisions share one cycle", async () => {
       const selecting = yield* Deferred.make<void>();
       const resume = yield* Deferred.make<void>();
       const first = yield* Effect.forkChild(
-        repo.read("work", repo.base, () =>
+        repo.read("feature", repo.base, () =>
           Deferred.succeed(selecting, undefined).pipe(
             Effect.andThen(Deferred.await(resume)),
             Effect.as(undefined),
@@ -337,7 +376,7 @@ test("racing first reads at different revisions share one cycle", async () => {
         ),
       );
       yield* Deferred.await(selecting);
-      const second = yield* repo.read("work", repo.head);
+      const second = yield* repo.read("feature", repo.head);
       yield* Deferred.succeed(resume, undefined);
       return {
         first: yield* Fiber.join(first),

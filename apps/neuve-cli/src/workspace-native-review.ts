@@ -273,6 +273,7 @@ export function nativeReviewCallbacks(
           await validate(Option.isNone(exists));
           const values = {
             requestId: prepared.requestId,
+            branchCheckout: h.cwd,
             frozenConfig: PipelineConfig.parse(prepared.config),
             origin: h.origin,
             externalSources: h.externalSources,

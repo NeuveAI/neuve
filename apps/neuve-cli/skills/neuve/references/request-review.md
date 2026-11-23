@@ -10,7 +10,7 @@
 
 ## Request it
 
-`neuve review <base>..<head>` opens the range's review cycle (or joins it) and queues one review job. The repository's background worker runs it, so closing the terminal doesn't stop it. Without `--detach` the command follows the run and prints its progress, then the receipt; that can take minutes. With `--detach` it returns once the job is queued. Prefer `--detach` in an agent session, then read the result later.
+`neuve review <base>..<head>` takes the checked-out branch's open cycle or opens a cycle for the range, then queues one review job. From another worktree, name the implementer's branch with `--branch <name>` on both `neuve query` and `neuve review`. The branch must hold the review head. The repository's background worker runs it, so closing the terminal doesn't stop it. Without `--detach` the command follows the run and prints its progress, then the receipt; that can take minutes. With `--detach` it returns once the job is queued. Prefer `--detach` in an agent session, then read the result later.
 
 A second request for the same range and configuration joins the same cycle and follows the same job; it never starts a second run. Requesting again is how you wait for a review someone else asked for.
 

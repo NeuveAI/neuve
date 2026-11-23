@@ -86,9 +86,10 @@ import { requireRepositorySetup } from "./setup-status.ts";
 import { gitAvailability, gitRefusal } from "./git-available.ts";
 
 export const REVIEW_HELP = `Usage:
-  neuve review <base>..<head> [--route <name>] [--leads bm25|hybrid] [--detach] [--repo <path>]
-              Request a review of a commit range and follow its run. The request opens the
-              range's review cycle (or joins it) and queues one review.run job; the worker runs
+  neuve review <base>..<head> [--branch <name>] [--route <name>] [--leads bm25|hybrid] [--detach] [--repo <path>]
+              Request a review of a commit range and follow its run. --branch selects a local
+              branch that holds the head. The checkout's branch is the default. The request
+              takes the branch's open cycle or opens one for the range and queues one job. The worker runs
               it in the background, so closing the terminal does not stop it. --detach returns
               once the job is queued. A second request for the same range and configuration
               follows the same job. Run neuve setup in the repository first.
@@ -939,6 +940,8 @@ export const follow = async (
 };
 
 export type RangeReviewOptions = {
+  readonly branch?: string | undefined;
+  readonly branchCheckout?: string | undefined;
   readonly requester?: Request.Requester | undefined;
   readonly requestId?: string | undefined;
   readonly frozenConfig?: Config.PipelineConfig | undefined;
@@ -1011,6 +1014,8 @@ export const requestRangeReview = async (
             location: store,
             repository,
             range: rangeText,
+            branch: values.branch,
+            branchCheckout: values.branchCheckout,
             ...(values.requestId ? { requestId: values.requestId } : {}),
             ...(values.frozenConfig
               ? { frozenConfig: values.frozenConfig }
@@ -1884,6 +1889,7 @@ export const runReviewCli = async (
         strict: true,
         options: {
           repo: { type: "string" },
+          branch: { type: "string" },
           json: { type: "boolean" },
           detach: { type: "boolean" },
           route: { type: "string" },
