@@ -405,7 +405,7 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 									if (!approveOff) approve.onApprove();
 								}}
 							>
-								{approve.approving ? "Approving…" : "Approve and build"}
+								{approve.approving ? "Approving…" : "Approve and implement"}
 							</Button>
 						)}
 					</div>
