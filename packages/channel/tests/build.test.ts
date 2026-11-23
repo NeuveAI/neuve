@@ -165,19 +165,37 @@ test("approval starts one ownerless implementer with the marked brief and write 
 	}
 });
 
-// A second plan card with the same bytes could start another chat after the first agent ends.
-test("approving an identical copy keeps the first build and starts no chat", async () => {
-	const run = await setup();
-	const { plan: first, build, chat } = await startBuild(run);
-	const copy = await run.draft(planText);
-	expect(copy.id).not.toBe(first.id);
-	expect(await run.approve(copy)).toMatchObject({ state: "approved" });
-	await until(() => run.fixture.channel.isIdle());
-	const attached = await run.fixture.watch({ op: "watch", builds: true });
-	expect((await attached.until("builds")).builds).toMatchObject([{ id: build.id, plan: { id: first.id } }]);
-	expect((await run.fixture.channel.info()).chats.map(chat => chat.id)).toEqual([1, chat]);
-	expect(run.worktrees).toHaveLength(1);
-});
+for (const retry of ["the same plan", "an identical copy"]) {
+	// A failed worktree could leave an approved plan with no agent, or a retry could create a second build.
+	test(`approving ${retry} retries a failed build and reuses a started or stopped build`, async () => {
+		let fail = true;
+		const run = await setup({ async beforeWorktree() { if (fail) throw new Error("Worktree unavailable"); } });
+		const { fixture, watch, draft, approve } = run;
+		const first = await draft(planText);
+		await approve(first);
+		const failed = await buildAt(watch, 0, "failed");
+		expect(failed).toMatchObject({ state: { detail: "The implementer's worktree could not be created." }, agents: [] });
+		const plan = retry === "the same plan" ? first : await draft(planText);
+		fail = false;
+		fixture.script(fauxAssistantMessage("Brief read."));
+		expect(await approve(plan)).toMatchObject({ state: "approved" });
+		await until(() => fixture.channel.isIdle());
+		const started = watch.of("builds").at(-1)?.builds;
+		expect(started).toMatchObject([{ id: failed.id, plan: { id: first.id }, state: { kind: "started" } }]);
+		const { chat } = started![0]!.agents[0]!;
+		const transcript = await fixture.watch({ op: "watch", chat });
+		expect(transcript.of("reply").at(-1)?.text).toBe("Brief read.");
+
+		await approve(await draft(planText));
+		await fixture.request({ op: "build-stop", author: OWNER, build: failed.id });
+		await approve(await draft(planText));
+		await until(() => fixture.channel.isIdle());
+		const attached = await fixture.watch({ op: "watch", builds: true });
+		expect((await attached.until("builds")).builds).toMatchObject([{ id: failed.id, state: { kind: "stopped" } }]);
+		expect((await fixture.channel.info()).chats.map(chat => chat.id)).toEqual([1, chat]);
+		expect(run.worktrees).toHaveLength(1);
+	});
+}
 
 // A restart can appear to recover while quietly creating a second worktree, chat, or brief.
 for (const step of ["build.worktree", "build.chat"]) {
@@ -248,6 +266,59 @@ for (const mode of ["hosted", "shared", "legacy"] as const) {
 		expect(run.worktrees).toEqual([]);
 	});
 }
+
+// A plan approved while shared could stay approved without ever reaching an implementer.
+test("unsharing starts the build approved while shared and sends one brief", async () => {
+	const run = await setup();
+	const { fixture, watch, draft, approve } = run;
+	const plan = await draft(planText);
+	await fixture.request({ op: "share", author: OWNER, shared: true });
+	await approve(plan);
+	const unavailable = await buildAt(watch, 0, "unavailable");
+	expect(unavailable).toMatchObject({ state: { reason: "shared" }, agents: [] });
+	await approve(plan);
+	await until(() => fixture.channel.isIdle());
+	expect(run.worktrees).toEqual([]);
+
+	fixture.script(fauxAssistantMessage("Brief read."));
+	await fixture.request({ op: "share", author: OWNER, shared: false });
+	await until(() => fixture.channel.isIdle());
+	const builds = watch.of("builds").at(-1)?.builds;
+	expect(builds).toMatchObject([{ id: unavailable.id, state: { kind: "started" }, agents: [{ role: "implementer" }] }]);
+	const { chat } = builds![0]!.agents[0]!;
+	const transcript = await fixture.watch({ op: "watch", chat });
+	expect(transcript.of("reply").at(-1)?.text).toBe("Brief read.");
+	expect(transcript.of("message").map(event => event.system?.kind)).toEqual(["neuve:build:brief"]);
+	expect(run.worktrees).toHaveLength(1);
+});
+
+// Unsharing could turn a teammate's approval into work on the owner's machine without the owner's approval.
+test("unsharing leaves a teammate's build unavailable until the owner approves identical text", async () => {
+	const run = await setup();
+	const { fixture, watch, draft, approve } = run;
+	const plan = await draft(planText);
+	await fixture.request({ op: "share", author: OWNER, shared: true });
+	await approve(plan, "teammate");
+	const unavailable = await buildAt(watch, 0, "unavailable");
+	expect(unavailable).toMatchObject({ approved: { by: "teammate" }, state: { reason: "shared" }, agents: [] });
+
+	await fixture.request({ op: "share", author: OWNER, shared: false });
+	await until(() => fixture.channel.isIdle());
+	expect(watch.of("builds").at(-1)?.builds).toEqual([unavailable]);
+	expect((await fixture.channel.info()).chats.map(chat => chat.id)).toEqual([ROOT_CONVERSATION_ID]);
+	expect(run.worktrees).toEqual([]);
+
+	const copy = await draft(planText);
+	expect(copy.id).not.toBe(plan.id);
+	fixture.script(fauxAssistantMessage("Brief read."));
+	expect(await approve(copy)).toMatchObject({ state: "approved", approved: { by: OWNER } });
+	const started = await buildAt(watch, 0, "started");
+	expect(started).toMatchObject({ id: unavailable.id, agents: [{ role: "implementer" }] });
+	const transcript = await fixture.watch({ op: "watch", chat: started.agents[0]!.chat });
+	await transcript.until("reply", event => event.text === "Brief read.");
+	expect(transcript.of("message").map(event => event.system?.kind)).toEqual(["neuve:build:brief"]);
+	expect(run.worktrees).toHaveLength(1);
+});
 
 // A revision can appear approved while it is lost between the approval commit and the first brief.
 test("approval during worktree creation delivers the revision once the implementer starts", async () => {
@@ -480,7 +551,7 @@ test("agent start refuses invalid arguments, duplicate roles, and callers outsid
 		expect(result.error).toBe(true);
 		expect(result.text).toContain(reason);
 	};
-	await refuse(agent, chat, "reviewer-brief", { role: "reviewer", brief: "My account." }, "The host writes the reviewer’s brief.");
+	await refuse(agent, chat, "reviewer-brief", { role: "reviewer", brief: "My account." }, "The host writes the reviewer's brief.");
 	await refuse(agent, chat, "missing-part", { role: "implementer", brief: "Write tests." }, "Give the implementer a part.");
 	await refuse(agent, chat, "missing-brief", { role: "implementer", part: "parser" }, "Give the implementer a brief.");
 	await refuse(agent, chat, "unknown-model", { role: "reviewer", model: "other" }, "must not have additional properties");
@@ -495,6 +566,34 @@ test("agent start refuses invalid arguments, duplicate roles, and callers outsid
 	await refuse(run.watch, 1, "planning-start", { role: "reviewer" }, "Plan mode is read-only. The agent_start tool is unavailable in plan mode.");
 	expect(run.worktrees).toHaveLength(2);
 	expect((await fixture.channel.info()).chats.filter(chat => chat.build)).toHaveLength(2);
+});
+
+// A worktree failure could reserve the reviewer's role and part permanently.
+test("retrying a failed reviewer start creates one reviewer for that part", async () => {
+	let fail = false;
+	const run = await setup({ async beforeWorktree() { if (fail) throw new Error("Worktree unavailable"); } });
+	const { fixture, watch } = run;
+	const { chat, agent } = await startBuild(run);
+	const args = { role: "reviewer", part: "exports" };
+	fail = true;
+	fixture.script(tool("agent_start", args, "fail-reviewer"), fauxAssistantMessage("The worktree failed."));
+	await fixture.request({ op: "wait", submission: await wake(run, "Start the reviewer.", chat) });
+	expect(await agent.until("result", event => event.call === "fail-reviewer")).toMatchObject({
+		error: true, text: "The reviewer's worktree could not be created.",
+	});
+
+	fail = false;
+	fixture.script(tool("agent_start", args, "retry-reviewer"), fauxAssistantMessage("Ready."), fauxAssistantMessage("Ready."));
+	await fixture.request({ op: "wait", submission: await wake(run, "Retry the reviewer.", chat) });
+	expect(await agent.until("result", event => event.call === "retry-reviewer")).toMatchObject({
+		error: false, text: "The reviewer for exports started.",
+	});
+	await until(() => fixture.channel.isIdle());
+	const agents = watch.of("builds").at(-1)?.builds[0]?.agents;
+	expect(agents).toMatchObject([{ chat, role: "implementer" }, { role: "reviewer", part: "exports" }]);
+	const transcript = await fixture.watch({ op: "watch", chat: agents![1]!.chat });
+	expect(transcript.of("message").map(event => event.system?.kind)).toEqual(["neuve:build:brief"]);
+	expect(run.worktrees).toHaveLength(2);
 });
 
 // Channel recovery and pi's replay of this call can both see the same unfinished start.
@@ -688,8 +787,8 @@ test("stop-all ends the build and its child work, and a later approval starts a 
 	expect((await buildAt(watch, 1, "started")).agents[0]?.chat).not.toBe(chat);
 });
 
-// Sharing during a tool must block the next tool without interrupting the one in progress or waking the chat on unshare.
-test("sharing pauses a working build and clearing it waits for new input", async () => {
+// Sharing can interrupt the current tool, and unsharing can start a new run when no input is pending.
+test("sharing pauses new tools and unsharing without pending input does not wake the build", async () => {
 	const run = await setup();
 	const { fixture, watch } = run;
 	const { chat, agent } = await startBuild(run);
@@ -709,7 +808,7 @@ test("sharing pauses a working build and clearing it waits for new input", async
 	const cursor = watch.events.length;
 	await fixture.request({ op: "share", author: OWNER, shared: false });
 	await until(() => watch.events.slice(cursor).find(event => event.kind === "builds" && event.builds[0]?.state.kind === "started"));
-	expect(await fixture.channel.isIdle()).toBe(true);
+	await until(() => fixture.channel.isIdle());
 	expect(fixture.faux.state.callCount).toBe(count);
 	fixture.script(tool("write", { path: "after.txt", content: "Next step." }, "resumed-write"), fauxAssistantMessage("Resumed."));
 	await fixture.request({ op: "wait", submission: await wake(run, "Continue.", chat) });
@@ -790,6 +889,64 @@ async function startPair(run: Awaited<ReturnType<typeof setup>>) {
 
 const messageTool = (text: string, call: string) => tool("agent_message", { to: "reviewer", part: "exports", text }, call);
 
+// A retry could be refused while the start for that role and part is still waiting to resume.
+test("retrying a paused reviewer start sends one brief when sharing clears", async () => {
+	const creating = Promise.withResolvers<void>();
+	const releaseWorktree = Promise.withResolvers<void>();
+	const retryEntered = Promise.withResolvers<void>();
+	const releaseRetry = Promise.withResolvers<void>();
+	const run = await setup({
+		async beforeWorktree() {
+			if (run.worktrees.length !== 2) return;
+			creating.resolve();
+			await releaseWorktree.promise;
+		},
+		wrapTool(tool) {
+			if (tool.name !== "agent_start") return tool;
+			return { ...tool, async execute(args, api, scope) {
+				if (api.callId === "retry-paused-reviewer") {
+					retryEntered.resolve();
+					await releaseRetry.promise;
+				}
+				return tool.execute(args, api, scope);
+			} };
+		},
+	});
+	const { fixture, watch } = run;
+	const { chat, reviewer, agent } = await startPair(run);
+	const other = await fixture.watch({ op: "watch", chat: reviewer });
+	const args = { role: "reviewer", part: "retry path" };
+	try {
+		fixture.script(tool("agent_start", args, "start-paused-reviewer"));
+		const first = await wake(run, "Start a retry reviewer.", chat);
+		await creating.promise;
+		fixture.script(tool("agent_start", args, "retry-paused-reviewer"));
+		const second = await wake(run, "Start the same reviewer.", reviewer);
+		await retryEntered.promise;
+		await fixture.request({ op: "share", author: OWNER, shared: true });
+		fixture.script(fauxAssistantMessage("Start recorded."), fauxAssistantMessage("Start recorded."));
+		releaseWorktree.resolve();
+		const pending = { error: false, text: "The agent start is recorded and will finish when the plan's agents are no longer paused." };
+		expect(await agent.until("result", event => event.call === "start-paused-reviewer")).toMatchObject(pending);
+		releaseRetry.resolve();
+		expect(await other.until("result", event => event.call === "retry-paused-reviewer")).toMatchObject(pending);
+		for (const submission of [first, second]) expect(await fixture.request({ op: "wait", submission })).toBe("done");
+		expect((await buildAt(watch, 0, "paused")).agents).toHaveLength(2);
+
+		fixture.script(fauxAssistantMessage("Retry brief read."));
+		await fixture.request({ op: "share", author: OWNER, shared: false });
+		const { builds: [build] } = await watch.until("builds", event => event.builds[0]?.agents.length === 3);
+		const transcript = await fixture.watch({ op: "watch", chat: build!.agents[2]!.chat });
+		await transcript.until("reply", event => event.text === "Retry brief read.");
+		expect(transcript.of("message").map(event => event.system?.kind)).toEqual(["neuve:build:brief"]);
+		expect(run.worktrees).toHaveLength(3);
+		expect(watch.of("builds").at(-1)?.builds[0]?.agents).toHaveLength(3);
+	} finally {
+		releaseWorktree.resolve();
+		releaseRetry.resolve();
+	}
+});
+
 function offerRetiredModel(fixture: Fixture) {
 	const model = { provider: "retired", modelId: "old-model" };
 	fixture.scripted.models.setProvider(fauxProvider({ provider: model.provider, models: [{ id: model.modelId }] }).provider);
@@ -834,8 +991,8 @@ test("build briefs and agent messages use Automatic when the recipient's provide
 	expect(target.of("message").at(-1)).toMatchObject({ author: `agent@${chat}`, text: "Check the retry path." });
 });
 
-// Sharing could change a paused agent's model or wake it with an input already on its way.
-test("sharing blocks a pending build brief and an agent message during model selection", async () => {
+// Sharing could change a paused agent's model, wake it early, or lose a recorded message after reopening.
+test("sharing holds the brief and delivers the pending message once after reopening and unsharing", async () => {
 	const run = await setup();
 	const { fixture, watch } = run;
 	const { models } = fixture.scripted;
@@ -894,11 +1051,26 @@ test("sharing blocks a pending build brief and an agent message during model sel
 			releaseSelection.resolve();
 			expect(await fixture.request({ op: "wait", submission })).toBe("done");
 			expect(await sender.until("result", event => event.call === "send-during-pause")).toMatchObject({
-				error: true, text: "The host has not finished sending this message.",
+				error: false, text: "The message is recorded and will be delivered when the plan's agents are no longer paused.",
 			});
 			const target = await fixture.watch({ op: "watch", chat: reviewer, builds: true });
 			expect(target.of("message").map(event => event.system?.kind)).toEqual(["neuve:build:brief"]);
 			expect(target.of("builds").at(-1)?.messages).toEqual([]);
+
+			await fixture.restart();
+			await until(() => fixture.channel.isIdle());
+			const reopened = await fixture.watch({ op: "watch", chat: reviewer, builds: true });
+			expect(reopened.of("message").map(event => event.system?.kind)).toEqual(["neuve:build:brief"]);
+			models.deleteProvider(retired.provider);
+			fixture.script(fauxAssistantMessage("I received the update."));
+			await share(false);
+			await reopened.until("reply", event => event.text === "I received the update.");
+			await until(() => fixture.channel.isIdle());
+			await fixture.restart();
+			await until(() => fixture.channel.isIdle());
+			const replay = await fixture.watch({ op: "watch", chat: reviewer, builds: true });
+			expect(replay.of("message").map(event => event.system?.kind ?? event.text)).toEqual(["neuve:build:brief", "Check the retry path."]);
+			expect(replay.of("builds").at(-1)?.messages).toMatchObject([{ from: chat, to: reviewer, text: "Check the retry path." }]);
 		} finally {
 			releaseSelection.resolve();
 			selection.mockRestore();

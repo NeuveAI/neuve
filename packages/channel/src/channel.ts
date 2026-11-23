@@ -264,6 +264,7 @@ export class Channel {
 		this.#plans = plans;
 		this.#builds = new Builds(harness, log, {
 			shared: () => this.#settings.shared,
+			canInvoke: (author, shared) => this.#canInvoke(author, shared),
 			admit: (chat, action) => this.#admitted(chat, action),
 			submitInput: this.submitInput.bind(this),
 			stop: async (chat, by, at, requestId) =>
@@ -612,7 +613,7 @@ export class Channel {
 				});
 				const build = buildId(id, plan.hash);
 				if (state) this.#log("info", "build.recorded", { build, state });
-				if (this.#options.resume !== false) void this.#builds.resume(build);
+				if (this.#options.resume !== false) void this.#builds.resumeApproved(build);
 				return plan;
 			}
 			case "plan-comment":
@@ -1227,13 +1228,15 @@ export class Channel {
 		return this.#select(conversation, request);
 	}
 
-	async #mayInvoke(author: string) {
-		const settings = await this.#harness.snapshot(SettingsDoc, context);
+	#canInvoke(author: string, shared: boolean): boolean {
 		// Hosts rewrite every client's author, so an agent author is another channel's agent on this
 		// host, already running as the owner's user. Sharing gates teammates, not those handoffs.
-		if (author === this.#options.owner || room.isAgent(author) || settings?.shared !== false) {
-			return;
-		}
+		return author === this.#options.owner || room.isAgent(author) || shared;
+	}
+
+	async #mayInvoke(author: string) {
+		const settings = await this.#harness.snapshot(SettingsDoc, context);
+		if (this.#canInvoke(author, settings?.shared !== false)) return;
 		throw new Error(
 			`Agent access is off in this channel, so only its owner, ${this.#options.owner}, can ask its agents.`,
 		);
@@ -1374,7 +1377,7 @@ export class Channel {
 			(await tx.doc(SettingsDoc)).shared = request.shared;
 			return this.#builds.share(tx, request.shared);
 		}, context);
-		if (this.#options.resume !== false) for (const id of resumed) void this.#builds.resume(id);
+		if (this.#options.resume !== false && resumed.length) void this.#builds.resume(resumed);
 	}
 
 	async #desktop(request: Extract<Request, { op: "desktop" }>) {

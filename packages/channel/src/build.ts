@@ -67,6 +67,8 @@ const StartParameters = Type.Object({
 const agentKey = (role: AgentRole, part?: string) => JSON.stringify([role, part ?? null]);
 const firstImplementer = agentKey("implementer");
 const messagePrefix = "neuve.build:message:";
+const stopped = "The plan's agents have been stopped.";
+const pendingStart = "The agent start is recorded and will finish when the plan's agents are no longer paused.";
 
 export function isWorkMessageSubmission(submission: SubmissionRecord): boolean {
 	return submission.type === "input" && (submission.requestId?.startsWith(messagePrefix) ?? false);
@@ -79,8 +81,12 @@ export function workLog(value: Readonly<BuildsState> | null): WorkMessage[] {
 		.map(({ message }) => message);
 }
 
+function answer(text: string): ToolExecutionResult {
+	return { content: [{ type: "text", text }] };
+}
+
 function refuse(text: string): ToolExecutionResult {
-	return { isError: true, content: [{ type: "text", text }] };
+	return { ...answer(text), isError: true };
 }
 
 export function buildTools(builds: () => Builds) {
@@ -107,7 +113,7 @@ export function buildTools(builds: () => Builds) {
 }
 
 function buildRefusal(state: Build["state"]["kind"]): string | undefined {
-	if (state === "stopped") return "The plan's agents have been stopped.";
+	if (state === "stopped") return stopped;
 	if (state === "paused") return "The plan's agents are paused while other people may ask them.";
 }
 
@@ -122,7 +128,7 @@ function briefText(record: StoredBuild, worktree: Worktree, planPath: string, st
 	const source = start.role === "reviewer" ? start.source.branch : undefined;
 	return [
 		...reference,
-		source ? `Review the implementer’s work on branch ${source}.` : "Implement this plan.",
+		source ? `Review the implementer's work on branch ${source}.` : "Implement this plan.",
 		"Load the Neuve skill. Fill in the question and run this command.",
 		`neuve query --repo ${quote(path)} --revision ${base}${source ? ` --branch ${quote(source)}` : ""} --question "<the plan's goal and its done-when items in one sentence>" --scope ${quote(planPath)}`,
 		...(source ? [] : ["Use agent_start to ask the host for a reviewer or another implementer."]),
@@ -151,6 +157,7 @@ export class Builds {
 
 	constructor(private readonly harness: Harness, private readonly log: Log, private readonly options: {
 		shared(): boolean;
+		canInvoke(author: string, shared: boolean): boolean;
 		admit: Admission["serialize"];
 		submitInput: Channel["submitInput"];
 		stop(chat: ConversationId, by: string, at: number, requestId?: string): Promise<void>;
@@ -188,12 +195,18 @@ export class Builds {
 
 	async share(tx: Tx, shared: boolean): Promise<string[]> {
 		const resumed: string[] = [];
-		for (const { build, starts } of Object.values((await tx.doc(BuildsDoc)).records)) {
-			if (shared && (build.state.kind === "starting" || build.state.kind === "started")) {
+		for (const record of Object.values((await tx.doc(BuildsDoc)).records)) {
+			const { build, starts } = record;
+			const { state } = build;
+			if (shared && (state.kind === "starting" || state.kind === "started")) {
 				build.state = { kind: "paused", reason: "shared" };
-			} else if (!shared && build.state.kind === "paused") {
+			} else if (!shared && state.kind === "paused") {
 				build.state = starts[firstImplementer]!.state;
-				if (Object.values(starts).some(start => start.state.kind === "starting")) resumed.push(build.id);
+				resumed.push(build.id);
+			} else if (!shared && this.options.host && state.kind === "unavailable" && state.reason === "shared"
+				&& this.options.canInvoke(build.approved.by, shared)) {
+				await this.#startFirst(tx, record);
+				resumed.push(build.id);
 			}
 		}
 		return resumed;
@@ -273,15 +286,23 @@ export class Builds {
 				break;
 			}
 		}
-		if (build.state.kind === "starting") {
-			const agent = await tx.doc(AgentDoc, chat);
-			record.starts[firstImplementer] = {
-				role: "implementer", state: { kind: "starting" }, lane: `build-${plan.id}`,
+		if (build.state.kind === "starting") await this.#startFirst(tx, record);
+		records[id] = record;
+		return build.state.kind;
+	}
+
+	async #startFirst(tx: Tx, { build, starts }: StoredBuild) {
+		const existing = starts[firstImplementer];
+		if (existing) {
+			existing.state = { kind: "starting" };
+		} else {
+			const agent = await tx.doc(AgentDoc, build.chat as ConversationId);
+			starts[firstImplementer] = {
+				role: "implementer", state: { kind: "starting" }, lane: `build-${build.plan.id}`,
 				...(agent.model ? { model: { ...agent.model } } : {}), effort: agent.thinkingLevel ?? "off",
 			};
 		}
-		records[id] = record;
-		return build.state.kind;
+		build.state = { kind: "starting" };
 	}
 
 	get pending(): boolean { return this.#pending.size > 0; }
@@ -293,7 +314,7 @@ export class Builds {
 	): Promise<ToolExecutionResult> {
 		let request: AgentStartArgs;
 		if (role === "reviewer") {
-			if (brief !== undefined) return refuse("The host writes the reviewer’s brief.");
+			if (brief !== undefined) return refuse("The host writes the reviewer's brief.");
 			if (part !== undefined && !part.trim()) return refuse("Give the reviewer a part or leave it out.");
 			request = { role, part };
 		} else {
@@ -307,25 +328,31 @@ export class Builds {
 			const caller = this.agent(api.conversationId);
 			const record = caller && records[caller.build];
 			if (!record) return { refusal: "Only an agent of a plan can ask the host to start another agent." };
-			const { build } = record;
+			const { build, starts } = record;
+			const existing = starts[key];
+			if (build.state.kind === "paused" && existing?.state.kind === "starting") return { pending: true as const };
 			const blocked = buildRefusal(build.state.kind);
 			if (blocked) return { refusal: blocked };
 			if (build.state.kind === "failed") return { refusal: "The host couldn't finish starting the plan's implementer." };
-			const { starts } = record;
-			const existing = starts[key];
-			if (existing && "task" in existing && existing.task === api.taskId) return { id: build.id };
 			if (existing) {
-				return { refusal: "This plan already has an agent with that role and part." };
+				if ("task" in existing && existing.task === api.taskId) return { id: build.id };
+				if (existing.state.kind === "started") {
+					return { refusal: "This plan already has an agent with that role and part." };
+				}
+				if (existing.state.kind === "failed") {
+					existing.state = { kind: "starting" };
+					if ("task" in existing) existing.task = api.taskId;
+				}
+				return { id: build.id };
 			}
 			const start = {
 				by: api.conversationId, task: api.taskId, lane: `build-${crypto.randomUUID()}`,
 				state: { kind: "starting" as const },
 			};
 			if (request.role === "reviewer") {
-				const implementer = starts[agentKey("implementer", caller.role === "implementer" ? caller.part : undefined)];
-				if (!implementer?.worktree || !implementer.brief) return { refusal: "The implementer’s worktree could not be found." };
-				const { branch, base } = implementer.worktree;
-				const settings = await tx.doc(AgentDoc, implementer.brief.chat);
+				const implementer = starts[agentKey("implementer", caller.role === "implementer" ? caller.part : undefined)]!;
+				const { branch, base } = implementer.worktree!;
+				const settings = await tx.doc(AgentDoc, implementer.brief!.chat);
 				starts[key] = {
 					...start, role: request.role, ...(part === undefined ? {} : { part }),
 					...(settings.model ? { model: { ...settings.model } } : {}), effort: settings.thinkingLevel ?? "off",
@@ -341,15 +368,16 @@ export class Builds {
 			return { id: build.id, fresh: true };
 		}, context);
 		if (reserved.refusal !== undefined) return refuse(reserved.refusal);
+		if (reserved.pending) return answer(pendingStart);
 		const { id } = reserved;
 		const host = this.options.host!;
 		if (reserved.fresh) this.log("info", "build.agent.recorded", { build: id, role, part });
-		await this.#track(host.share(`${id}:${key}`, () => this.#start(id, host, key)));
-		const start = (await api.snapshot(BuildsDoc, context))?.records[id]?.starts[key];
-		if (start?.state.kind === "failed") return refuse(start.state.detail);
-		if (start?.state.kind !== "started") return refuse("This agent start was interrupted.");
-		const text = part === undefined ? `The ${role} started.` : `The ${role} for ${part} started.`;
-		return { content: [{ type: "text", text }] };
+		await this.#track(this.#runStart(id, host, key));
+		const { build, starts } = (await api.snapshot(BuildsDoc, context))!.records[id]!;
+		const { state } = starts[key]!;
+		if (state.kind === "failed") return refuse(state.detail);
+		if (state.kind === "starting") return build.state.kind === "stopped" ? refuse(stopped) : answer(pendingStart);
+		return answer(part === undefined ? `The ${role} started.` : `The ${role} for ${part} started.`);
 	}
 
 	async messageAgent({ to, part, text }: AgentMessageArgs, api: ToolExecutionApi, context: Context): Promise<ToolExecutionResult> {
@@ -387,10 +415,13 @@ export class Builds {
 				this.log("error", "build.message.failed", { build, chat: from, ...failure(error) });
 				return refuse("The host could not finish sending this message.");
 			}
-			const stored = (await api.snapshot(BuildsDoc, context))?.messages.find(message => message.requestId === requestId);
-			if (stored?.submission === undefined) return refuse("The host has not finished sending this message.");
+			const { messages, records } = (await api.snapshot(BuildsDoc, context))!;
+			if (messages.find(message => message.requestId === requestId)?.submission === undefined) {
+				if (records[build]?.build.state.kind === "stopped") return refuse(stopped);
+				return answer("The message is recorded and will be delivered when the plan's agents are no longer paused.");
+			}
 		}
-		return { content: [{ type: "text", text: "The message was sent." }] };
+		return answer("The message was sent.");
 	}
 
 	async #track(task: Promise<void>): Promise<void> {
@@ -399,44 +430,64 @@ export class Builds {
 		finally { this.#pending.delete(task); }
 	}
 
-	async resume(id?: string): Promise<void> {
+	resumeApproved(id: string): Promise<void> {
+		return this.#resume([id], id);
+	}
+
+	resume(ids?: readonly string[]): Promise<void> {
+		return this.#resume(ids);
+	}
+
+	async #resume(ids?: readonly string[], approval?: string): Promise<void> {
 		const host = this.options.host;
 		if (!host || this.#closing) return;
 		const task = (async () => {
+			if (approval && this.#document?.records[approval]) await this.harness.commit(async tx => {
+				const record = (await tx.doc(BuildsDoc)).records[approval];
+				if (!record || this.options.shared()) return;
+				const { state } = record.build;
+				if (state.kind === "failed" || (state.kind === "unavailable" && state.reason === "shared")) {
+					await this.#startFirst(tx, record);
+				}
+			}, context);
 			const { records, messages } = (await this.harness.snapshot(BuildsDoc, context)) ?? { records: {}, messages: [] };
-			if (id === undefined) {
+			if (!approval) {
 				for (const { requestId, message, submission } of messages) {
 					if (this.#closing) return;
-					if (submission !== undefined) continue;
-					await host.share(requestId, () => this.#deliverMessage(requestId)).catch(error =>
+					if (submission !== undefined || (ids && !ids.includes(message.build))) continue;
+					await this.#resumePending(host, message.build, requestId, () => this.#deliverMessage(requestId),
+						() => this.#document?.messages.find(message => message.requestId === requestId)?.submission === undefined,
+					).catch(error =>
 						this.log("error", "build.message.resume.failed", { build: message.build, chat: message.to, ...failure(error) }));
 				}
 			}
-			const selected = id ? [records[id]].filter(record => record !== undefined) : Object.values(records);
+			const selected = ids ? ids.flatMap(id => records[id] ? [records[id]] : []) : Object.values(records);
 			await Promise.all(selected.map(async ({ build, revision, starts }) => {
 				try {
 					if (this.#closing) return;
 					if (build.state.kind === "delivered" && revision) {
 						await this.#deliver(build.state.to, host);
 					}
-					await Promise.all(Object.entries(starts).map(async ([key, start]) => {
-						if (start.state.kind !== "starting") return;
-						const sharedKey = `${build.id}:${key}`;
-						const run = () => this.#start(build.id, host, key);
-						await host.share(sharedKey, run);
-						// Unshare can join a start that just yielded to the pause.
-						if (this.#canSend(build.id) &&
-							this.#document?.records[build.id]?.starts[key]?.state.kind === "starting") {
-							await host.share(sharedKey, run);
-						}
-					}));
+					await Promise.all(Object.entries(starts).filter(([, start]) => start.state.kind === "starting")
+						.map(([key]) => this.#runStart(build.id, host, key)));
 					if (build.state.kind === "starting") await this.#deliver(build.id, host);
 				} catch (error) {
 					this.log("error", "build.resume.failed", { build: build.id, ...failure(error) });
 				}
 			}));
-		})().catch(error => this.log("error", "build.resume.failed", { build: id, ...failure(error) }));
+		})().catch(error => this.log("error", "build.resume.failed", { build: approval, ...failure(error) }));
 		await this.#track(task);
+	}
+
+	#runStart(id: string, host: BuildHost, key: string) {
+		return this.#resumePending(host, id, `${id}:${key}`, () => this.#start(id, host, key),
+			() => this.#document?.records[id]?.starts[key]?.state.kind === "starting");
+	}
+
+	async #resumePending(host: BuildHost, id: string, key: string, run: () => Promise<void>, pending: () => boolean) {
+		await host.share(key, run);
+		// A caller can join an attempt that already yielded to a pause.
+		if (this.#canSend(id) && pending()) await host.share(key, run);
 	}
 
 	async close(): Promise<void> {
@@ -454,7 +505,7 @@ export class Builds {
 		if (existing) return existing.id;
 		if (!this.#canSend(build)) return;
 		const conversation = await this.harness.conversation(chat, context);
-		if (!conversation) throw new Error("The agent’s chat could not be found.");
+		if (!conversation) throw new Error("The agent's chat could not be found.");
 		const submission = await this.options.submitInput(conversation, draft, context, () => this.#canSend(build));
 		return submission?.id;
 	}
@@ -497,7 +548,7 @@ export class Builds {
 				await update(saved => { saved.worktree = created; });
 				log("build.worktree", { path: worktree.path, branch: worktree.branch });
 			}
-			detail = `The ${role}’s chat could not be created.`;
+			detail = `The ${role}'s chat could not be created.`;
 			const { path, branch, base } = worktree;
 			let brief = start.brief;
 			if (!brief) {
@@ -517,7 +568,7 @@ export class Builds {
 				if (!brief) return;
 				log("build.chat", { chat: brief.chat });
 			}
-			detail = `The ${role}’s brief could not be sent.`;
+			detail = `The ${role}'s brief could not be sent.`;
 			const planPath = host.planPath(record.file);
 			const submission = await this.#send(id, brief.chat, {
 				type: "input", whenBusy: "followUp", requestId: brief.requestId,
@@ -525,7 +576,7 @@ export class Builds {
 			});
 			if (submission === undefined) return;
 			log("build.brief", { chat: brief.chat, submission });
-			detail = `The ${role}’s start could not be recorded.`;
+			detail = `The ${role}'s start could not be recorded.`;
 			await update((saved, build) => {
 				saved.state = { kind: "started" };
 				if (first && build.state.kind === "starting") build.state = saved.state;
