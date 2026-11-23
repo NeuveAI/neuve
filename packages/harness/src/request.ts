@@ -641,8 +641,14 @@ export const requestReview = (options: ReviewOptions) =>
     const sql = yield* SqlClient;
     const store = yield* Computations.ComputationStore;
     const blobs = yield* Blobs.BlobStore;
+    const recorded =
+      options.requestId === undefined
+        ? Option.none()
+        : yield* Log.get(requestId);
     const branchSelection =
-      selected === undefined && contextIdentity === undefined
+      Option.isNone(recorded) &&
+      selected === undefined &&
+      contextIdentity === undefined
         ? yield* Effect.gen(function* () {
             const tips = yield* localBranches(
               options.repository,
@@ -685,7 +691,9 @@ export const requestReview = (options: ReviewOptions) =>
     // two first requests for the same range and plan cannot open two cycles or pick different generations.
     return yield* sql.withTransaction(
       Effect.gen(function* () {
-        const previous = yield* Log.get(requestId);
+        const previous = Option.isSome(recorded)
+          ? recorded
+          : yield* Log.get(requestId);
         if (Option.isSome(previous)) {
           const event = previous.value.event;
           const recordedPlan =

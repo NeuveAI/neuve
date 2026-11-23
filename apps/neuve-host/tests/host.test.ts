@@ -1041,7 +1041,7 @@ test("a linked-worktree channel admits its pinned review even when display looku
 	if (evidence) { await mkdir(evidence, { recursive: true }); await writeFile(join(evidence, "linked-worktree-admissions.json"), JSON.stringify(admissions, null, 2)); }
 }, 30000);
 
-test("an approved plan's reviewer reviews the implementer's advanced branch and joins its plan cycle", async () => {
+async function submitAdvancedBranchReview() {
 	const plan = "# Update exports\n";
 	const at = await setup([
 		{ tool: "plan_write", args: { text: plan }, id: "review-plan" },
@@ -1058,19 +1058,23 @@ test("an approved plan's reviewer reviews the implementer's advanced branch and 
 	if (frozen.route.provider !== "anthropic") throw new Error("Unexpected fixture route");
 	frozen.route = { ...frozen.route, credentialVariable: "NEUVE_FIXTURE_MISSING_REVIEW_KEY" };
 	const callbacks = nativeReviewCallbacks(async (_project, cycle) => `http://127.0.0.1:4040/?cycle=${cycle}`, async project => project, async () => {}, () => Effect.succeed(frozen));
-	let admitted: Awaited<ReturnType<typeof callbacks.reviewSubmit>> | undefined;
+	let submission: {
+		prepared: Parameters<typeof callbacks.reviewSubmit>[0];
+		result: Awaited<ReturnType<typeof callbacks.reviewSubmit>>;
+	} | undefined;
 	const client = await connect(await host(at, undefined, {}, {
 		...callbacks,
 		async reviewSubmit(...args) {
-			admitted = await callbacks.reviewSubmit(...args);
-			return admitted;
+			const result = await callbacks.reviewSubmit(...args);
+			submission = { prepared: args[0], result };
+			return result;
 		},
 	}));
 	const record = await client.request<ChannelRecord>({ op: "create", project: at.project });
 	const events: Event[] = [];
 	await client.channel(record.id, { op: "watch", plans: true, builds: true }, { event: event => events.push(event) });
-	const { submission } = await client.channel<{ submission: number }>(record.id, { op: "ask", author: OWNER, mode: "plan", text: "Draft the plan." });
-	await client.channel(record.id, { op: "wait", submission });
+	const draftRequest = await client.channel<{ submission: number }>(record.id, { op: "ask", author: OWNER, mode: "plan", text: "Draft the plan." });
+	await client.channel(record.id, { op: "wait", submission: draftRequest.submission });
 	const draft = await until(() => events.findLast(event => event.kind === "plans")?.plans[0], "the draft");
 	await writeFile(at.script, JSON.stringify([
 		{ tool: "agent_start", args: { role: "reviewer" }, id: "start-reviewer" },
@@ -1113,11 +1117,32 @@ test("an approved plan's reviewer reviews the implementer's advanced branch and 
 		await release(reviewerCwd);
 		const receipt = await until(() => reviewerEvents.find(event => event.kind === "result" && event.call === "review-plan-range"), "the review result");
 		expect(receipt).toMatchObject({ error: false });
-		expect(admitted).toMatchObject({ kind: "review", reference: cycle.cycleId, base, head });
-		expect(readScopeText(location, cycle.cycleId, "S1").text).toBe(plan);
+		const { prepared, result } = await until(() => submission, "the review admission");
+		if (result.kind !== "review") throw new Error(result.message);
+		return { client, channel: record.id, cwd, prepared, result, cycle, location, base, head, plan };
 	} finally {
 		await Promise.all([release(cwd), release(reviewerCwd)]);
 	}
+}
+
+test("an approved plan's reviewer reviews the implementer's advanced branch and joins its plan cycle", async () => {
+	const { result, cycle, location, base, head, plan } = await submitAdvancedBranchReview();
+	expect(result).toMatchObject({ reference: cycle.cycleId, base, head });
+	expect(readScopeText(location, cycle.cycleId, "S1").text).toBe(plan);
+}, 30000);
+
+// Rechecking the branch tip after admission would reject a valid retry at the pinned head.
+test("a reviewer recovers the same submitted review after the implementer branch advances", async () => {
+	const { client, channel, cwd, prepared, result } = await submitAdvancedBranchReview();
+	await git(cwd, "commit", "--allow-empty", "-qm", "advance after review");
+	const recovered = await client.request<import("../src/review-protocol").NativeReviewResult>({
+		op: "review-submit", channel, prepared,
+	});
+	const { request, reference, run, job, base, head } = result;
+	expect(recovered).toMatchObject({
+		kind: "review", request, reference, run, job, base, head,
+		admission: { recovered: true },
+	});
 }, 30000);
 
 test("expected lane and pull acquisition refusals remain info outcomes through the gateway", async () => {
