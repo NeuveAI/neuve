@@ -93,6 +93,13 @@ Plan mode extends the upstream `packages/channel/src/channel.ts` admission and w
 | `packages/channel/src/plan-mode.ts` | Stores and inherits the chat mode, limits the tools offered in Plan mode, and tells planning agents to deliver the full plan or revision with the available plan writer. |
 | `packages/channel/tests/plan-mode.test.ts` | Exercises admission, busy chats, inheritance, interrupted tool replay, and the instruction delivered to planning agents. |
 
+| Integration file | Approval request contract |
+| --- | --- |
+| `packages/channel/src/protocol.ts` | Defines the approval request record, its per-chat document, the answer operation, and the watch event. Adds the attended flag to ask and describes when a run waits on a person. |
+| `packages/channel/src/parse.ts` | Parses the attended and watch flags. Requires an author and a runtime request ID for an approval answer. |
+| `packages/channel/src/frame.ts` | Validates each approval request state and preserves the complete list in watch frames. |
+| `packages/channel/tests/approvals-protocol.test.ts` | Checks that malformed answers are refused, the verified author replaces the claimed one, and every request state survives the event boundary. |
+
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 
 The coordinator runs the full composed check and isolated browser/CLI journeys at the frozen product hashes. Team membership, cloud deploy/compute, real keychain/provider authentication and remote transfers are not established by these tests. External independent review remains owner-operated; implementation completion and passing tests do not grant approval.

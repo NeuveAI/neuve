@@ -4,8 +4,8 @@ import { RefusalReasonSchema, ReviewRangeSchema, ReviewStatusSchema } from "./re
 import type { ReviewCard } from "./review-cards";
 
 import { EffortSchema } from "./effort";
-import { ChatModeSchema, ModelRefSchema } from "./parse";
-import type { Event, Frame, Plan } from "./protocol";
+import { ApprovalAnswerSchema, ChatModeSchema, ModelRefSchema } from "./parse";
+import type { ApprovalRequest, Event, Frame, Plan } from "./protocol";
 
 const id = z.int().nonnegative();
 const text = z.string();
@@ -23,6 +23,35 @@ const queued = z.object({
 });
 const base = { chat: id };
 const message = { ...base, entry: id, at: z.number(), text };
+
+// Approval requests.
+const approvalRequest = {
+	requestId: ApprovalAnswerSchema.shape.requestId,
+	callId: z.string().min(1),
+	input: z.json(),
+	openedAt: z.number(),
+	state: z.discriminatedUnion("kind", [
+		z.strictObject({ kind: z.literal("open") }),
+		z.strictObject({
+			kind: z.literal("answered"),
+			by: text,
+			at: z.number(),
+			decision: ApprovalAnswerSchema.shape.decision,
+		}),
+		z.discriminatedUnion("reason", [
+			z.strictObject({
+				kind: z.literal("closed"),
+				reason: z.enum(["turn-ended", "runtime-resolved", "stopped", "restarted"]),
+			}),
+			z.strictObject({ kind: z.literal("closed"), reason: z.literal("message"), by: text }),
+		]),
+	]),
+};
+
+export const ApprovalRequestSchema = z.union([
+	z.strictObject({ ...approvalRequest, toolName: z.string().min(1) }),
+	z.strictObject({ ...approvalRequest, work: z.enum(["command", "file-change", "web-search", "tool"]) }),
+]) satisfies z.ZodType<ApprovalRequest>;
 
 export const ReviewCardSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("refused"), reason: RefusalReasonSchema, title: text, detail: text, fix: text }),
@@ -134,6 +163,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
 	}),
 	z.object({ kind: z.literal("live"), ...base }),
 	z.object({ kind: z.literal("typing"), ...base, author: text }),
+	z.object({ kind: z.literal("approval-requests"), ...base, requests: z.array(ApprovalRequestSchema) }),
 ]) satisfies z.ZodType<Event>;
 
 export const FrameSchema = z.union([
