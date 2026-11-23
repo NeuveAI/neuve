@@ -371,8 +371,9 @@ function StateRow({
 
 /**
  * A comment shown in place while "Show comments" is on: author, lines, two
- * lines of the comment and where its thread stands. It does not isolate the
- * margin; clicking it opens the thread (which does).
+ * lines of the comment, and its state only when delivery failed or the agent
+ * needs your input. It does not isolate the margin; clicking it opens the
+ * thread (which does).
  */
 export function CommentPreviewCard({
   record,
