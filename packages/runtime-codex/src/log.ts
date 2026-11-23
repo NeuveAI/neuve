@@ -1,12 +1,5 @@
-/**
- * The protocol log: every line each way, redacted before it leaves the runtime, as T3 Code logs
- * decoded messages per thread without deltas (`EventNdjsonLogger.ts`, lines 54–64). Streamed text
- * and command output keep their length only. Codex's own commands, file changes and Neuve's tool
- * calls are kept whole, since they are the run's record of what was done. The person's configuration and skills, which Codex
- * returns whole, are kept as their size, and their plan and balance are removed. Their settings'
- * names, the session's token, and the session's folders and program are replaced by labels
- * everywhere else.
- */
+// Keep work and Neuve tool calls whole. Keep only lengths for deltas, configuration and skill lists.
+// Replace known private values with labels before writing.
 import { appendFileSync } from "node:fs";
 import { hostname } from "node:os";
 import type { Line } from "./client.ts";
@@ -19,7 +12,7 @@ export interface LogEntry {
   readonly message: unknown;
 }
 
-/** Fields that describe the person's plan and balance, which no redaction rule names. */
+/** Plan and balance fields that the credential redaction rules do not name. */
 const PLAN = /^(planType|credits|balance|individualLimit)$/;
 /** The operating system's release, which Codex writes into its user agent. */
 const SYSTEM = /\((Mac OS|Windows|Linux)[^)]*\)/g;
@@ -37,9 +30,7 @@ const scrub = (value: unknown): unknown =>
         ? value.replace(SYSTEM, "(<system>)")
         : value;
 
-/** Answers that hold the person's whole configuration or skill list. */
 const WHOLE = new Set(["config/read", "skills/list"]);
-/** Notifications whose body is streamed text, kept by its length. */
 const DELTA = /\/(delta|outputDelta|summaryTextDelta|textDelta)$/;
 
 /**
@@ -81,9 +72,8 @@ const named = (message: Record<string, unknown>, serving: boolean) => {
 };
 
 export const protocolLog = (sink: (entry: LogEntry) => void) => {
-  const known: Array<readonly [string, string]> = [[hostname(), "<host>"]];
+  const known = new Map([[hostname(), "<host>"]]);
   const whole = new Set<unknown>();
-  /** Set once this session serves Neuve's tools: a server of that name is then Neuve's own. */
   let serving = false;
   const shape = (line: Line): unknown => {
     const message = line.message as Record<string, unknown> | null;
@@ -118,24 +108,17 @@ export const protocolLog = (sink: (entry: LogEntry) => void) => {
     serves: () => {
       serving = true;
     },
-    /** Adds a value to replace wherever it appears, with the label that stands for it. */
     know: (value: string, label: string) => {
-      if (value.length > 1) known.push([value, label]);
+      if (!known.has(value)) known.set(value, label);
     },
-    onLine: (line: Line, accessToken?: string) =>
+    onLine: (line: Line) =>
       sink({
         at: new Date().toISOString(),
         direction: line.direction,
-        message: redact(
-          scrub(shape(line)),
-          accessToken === undefined
-            ? known
-            : [...known, [accessToken, "<token>"]],
-        ),
+        message: redact(scrub(shape(line)), known),
       }),
   };
 };
 
-/** A sink that appends each entry as one line of JSON to a file only its owner can read. */
 export const appendTo = (path: string) => (entry: LogEntry) =>
   appendFileSync(path, `${JSON.stringify(entry)}\n`, { mode: 0o600 });

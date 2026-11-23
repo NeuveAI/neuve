@@ -61,6 +61,7 @@ import {
   INDEX_BOUNDS,
   indexRecipe,
   jsonComputation,
+  retrySharedAttempt,
   storedOutputs,
 } from "./search-index.ts";
 import { METRICS, recordLate, step } from "./telemetry.ts";
@@ -846,10 +847,7 @@ export const frontManifest = (
     );
     return manifest;
   }).pipe(
-    Effect.retry({
-      times: 1,
-      while: (error) => error instanceof Computations.SharedAttemptFailed,
-    }),
+    retrySharedAttempt,
     Effect.withSpan("harness.precompute.manifest", {
       attributes: {
         "harness.base": range.baseOid,
@@ -1340,10 +1338,7 @@ export const rangeLeads = (
     });
     return leads;
   }).pipe(
-    Effect.retry({
-      times: 1,
-      while: (error) => error instanceof Computations.SharedAttemptFailed,
-    }),
+    retrySharedAttempt,
     Effect.withSpan("harness.leads", {
       attributes: {
         "harness.computation.key": Computations.computationKey(spec).key,

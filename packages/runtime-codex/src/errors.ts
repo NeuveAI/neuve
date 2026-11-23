@@ -1,5 +1,15 @@
+import { TurnFailed, type AccountName } from "@neuve/runtime";
 import { Data } from "effect";
 import { redact } from "./redact.ts";
+
+export class CodexSignInFileError extends TurnFailed {
+  constructor(
+    account: AccountName,
+    readonly fix: string,
+  ) {
+    super({ account, reason: "provider-unavailable" });
+  }
+}
 
 /** The program could not be started at all. */
 export class CodexSpawnFailed extends Data.TaggedError("CodexSpawnFailed")<{

@@ -1,9 +1,4 @@
-/**
- * One provider session on Codex: the person's own Codex program run as its app server, mapped onto
- * the runtime contract as the [Codex runtime design](../../../process/proposals/codex-runtime.md#sessions-turns-and-events)
- * maps it. The table of how a turn ends is in this package's `PROTOCOL.md`; every ending goes
- * through `finish`, which emits a turn's one terminal event and ignores every later source.
- */
+/** Every turn ends through `finish`, which emits one terminal event and ignores later endings. See `PROTOCOL.md`. */
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -72,7 +67,6 @@ import { CodexProcess } from "./services.ts";
 import { serveTools, toolHandler, type RunTool } from "./tools.ts";
 import { judge, versionOf } from "./version.ts";
 
-/** What this runtime declares; the three a review stage needs are not among them. */
 export const capabilities: RuntimeCapabilities = {
   ownsLoop: true,
   ownTools: true,
@@ -93,16 +87,10 @@ export const capabilities: RuntimeCapabilities = {
   byteExactCapture: false,
 };
 
-export interface CodexAccessToken {
-  readonly token: string;
-  /** Epoch milliseconds. */
-  readonly expiresAt: number;
-}
-
 export type CodexTokenSource = (
   rejectedToken?: string,
 ) => Effect.Effect<
-  CodexAccessToken,
+  { readonly token: string },
   SignInRequired | AccountRejected | TurnFailed
 >;
 
@@ -112,9 +100,9 @@ export interface CodexSessionOptions {
   readonly program: string;
   /** Required on Neuve's sign-in. Otherwise absent selects the person's default. */
   readonly codexHome?: string | undefined;
-  /** Present for an account on Neuve's sign-in. */
+  /** Present for accounts using Neuve's sign-in. */
   readonly accessToken?: CodexTokenSource | undefined;
-  /** The thread's working folder: the chat's own worktree. */
+  /** The chat's own worktree. */
   readonly cwd: string;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly policy: SessionPolicy;
@@ -122,10 +110,10 @@ export interface CodexSessionOptions {
   /** Receives each protocol line, already redacted. */
   readonly log?: ((entry: LogEntry) => void) | undefined;
   readonly handshakeTimeout?: Duration.Input | undefined;
-  /** How long an interrupted turn has to end before the process is stopped; ten seconds. */
+  /** Defaults to ten seconds. */
   readonly interruptWait?: Duration.Input | undefined;
+  /** Defaults to five seconds. */
   readonly stopWait?: Duration.Input | undefined;
-  /** The releases refused as broken; the compatibility table's by default. */
   readonly broken?: ReadonlyArray<string> | undefined;
 }
 
@@ -205,8 +193,8 @@ const infoName = (info: unknown) =>
       ? Object.keys(info)[0]
       : undefined;
 const HttpStatus = z.object({ httpStatusCode: z.number() });
-const httpStatusOf = (info: unknown, name: string | undefined) =>
-  name !== undefined && typeof info === "object" && info !== null
+const httpStatusOf = (info: unknown) =>
+  typeof info === "object" && info !== null
     ? HttpStatus.safeParse(Object.values(info)[0]).data?.httpStatusCode
     : undefined;
 const minus = (a: Decode.Breakdown, b: Decode.Breakdown): Decode.Breakdown => ({
@@ -339,7 +327,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
   let dead = false;
   let turn: Turn | undefined;
   const closedApprovals = new Map<string, "runtime-resolved" | "turn-ended">();
-  /** Whether any turn was ever sent to Codex on this thread. */
   let turnSent = false;
   let rateLimits: Decode.RateLimits | undefined;
   /** Every process's scope until it is closed, so none outlives the session, whatever was cut short. */
@@ -406,7 +393,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
         });
         call.controller.abort();
       }
-      // Work Codex started and never completed is reported once, as not finished.
       for (const [workId, work] of active.work)
         emit({
           type: "work.finished",
@@ -434,12 +420,11 @@ export const openCodexSession = Effect.fnUntraced(function* (
       access = { token: access.token, state: "available" };
   };
 
-  /** What a Codex error on a turn means for the contract. */
   const errorOutcome = (info: unknown): TurnOutcome => {
     const name = infoName(info);
     if (
       access !== undefined &&
-      (name === "unauthorized" || httpStatusOf(info, name) === 401)
+      (name === "unauthorized" || httpStatusOf(info) === 401)
     ) {
       const replacement = access.state === "replacement";
       access = { token: access.token, state: "rejected" };
@@ -557,7 +542,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           const started = Decode.TurnAnswer.safeParse(params);
           if (active && !active.finished && started.success) {
             active.codexId ??= started.data.turn.id;
-            // Codex has named the turn: an interrupt waiting for that can now be sent.
+            // An interrupt can be sent once Codex names the turn.
             yield* Deferred.succeed(active.started, active.codexId);
           }
           return;
@@ -778,7 +763,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
       }
     });
 
-  /** Codex's requests: approvals are the person's in an attended turn, and declined otherwise. */
   const declined = (method: string) =>
     Effect.logWarning("codex request declined: no person is attending", {
       method,
@@ -973,7 +957,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
       ? "provider-failed"
       : "protocol-error";
 
-  /** Starts one Codex process in its own scope, with the handshake and the version check. */
   const startProcess = (
     configuration: Configuration,
     settings: OwnSettings,
@@ -997,10 +980,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         toolServer,
         cwd,
         accessToken,
-      ).pipe(
-        // A start cut short leaves no process behind.
-        Effect.onInterrupt(() => closeScope(scope)),
-      );
+      ).pipe(Effect.onInterrupt(() => closeScope(scope)));
     });
   const starting = (
     scope: Scope.Closeable,
@@ -1016,6 +996,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         ...(toolServer === undefined ? [] : [token]),
         ...(accessToken === undefined ? [] : [accessToken]),
       ];
+      if (accessToken !== undefined) log?.know(accessToken, "<token>");
       const connected = yield* connect({
         program: options.program,
         args: launchArguments(
@@ -1034,9 +1015,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         cwd,
         clientInfo: { name: "neuve", title: "Neuve", version: "0.1.0" },
         answer: answerRequest,
-        ...(log === undefined
-          ? {}
-          : { onLine: (line) => log.onLine(line, accessToken) }),
+        ...(log === undefined ? {} : { onLine: log.onLine }),
         ...(options.handshakeTimeout === undefined
           ? {}
           : { handshakeTimeout: options.handshakeTimeout }),
@@ -1053,20 +1032,21 @@ export const openCodexSession = Effect.fnUntraced(function* (
         const failed = errorOf(connected.cause)?._tag;
         if (failed === "CodexSpawnFailed")
           return yield* unavailable("not-installed");
-        // It started and did not answer as Codex: the program is not the one it is named for.
+        // The program started but did not identify itself as Codex.
         yield* Effect.logWarning("codex did not answer as Codex", { failed });
         return yield* unavailable("start-failed");
       }
       const connection = connected.value;
+      const userAgent = Decode.Initialize.safeParse(connection.initialize).data
+        ?.userAgent;
       const verdict = judge(
-        Decode.Initialize.safeParse(connection.initialize).data?.userAgent ===
-          undefined
+        userAgent === undefined
           ? undefined
           : versionOf(
               replaceKnown(
-                connection.initialize.userAgent,
                 secrets.map((value) => [value, "<token>"]),
-              ),
+                1,
+              )(userAgent),
             ),
         options.broken,
       );
@@ -1125,6 +1105,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
 
   /** The names of the person's own settings, read once through a process that runs none of them. */
   const readOwn = Effect.gen(function* () {
+    // The probe serves no Neuve server, so every name it returns belongs to the person.
     const probe = yield* startProcess("clean", EMPTY, undefined, options.cwd);
     const names = yield* Effect.gen(function* () {
       const config = Decode.ConfigAnswer.parse(
@@ -1134,7 +1115,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
         yield* probe.connection.request("skills/list", { cwds: [options.cwd] }),
       );
       return {
-        // The probe serves no Neuve server, so every name here is the person's.
         mcpServers: Object.keys(config.mcp_servers ?? {}),
         plugins: Object.keys(config.plugins ?? {}),
         apps: Object.keys(config.apps ?? {}).filter(
@@ -1155,7 +1135,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
       Effect.ensuring(closeScope(probe.scope)),
       Effect.catchCause(() => Effect.fail(unavailable("start-failed"))),
     );
-    // Each name is the person's: none reaches the log as written.
     for (const [list, label] of [
       [names.mcpServers, "server"],
       [names.plugins, "plugin"],
@@ -1166,13 +1145,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
     return names;
   });
 
-  /**
-   * A clean session is refused unless the running Codex reports each of the person's additions
-   * off where it would show it running: no hook listed, each server of theirs disabled in its
-   * effective configuration and listing no tools (a server that failed to start lists none too, so
-   * the switch itself is read), none of their skills enabled, and web search, hooks, apps and
-   * plugins off.
-   */
+  /** A server that failed to start also lists no tools, so check its effective configuration. */
   const verifyClean = (connection: CodexConnection) =>
     Effect.gen(function* () {
       const config = Decode.ConfigAnswer.parse(
@@ -1210,7 +1183,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
     }).pipe(Effect.catchCause(() => Effect.succeed(false)));
 
   let toolServer: string | undefined;
-  /** A server is Neuve's only when this session started it under that name. */
+  // The server's name is ours only if this session started it.
   const ours = (name: string) =>
     toolServer !== undefined && name === NEUVE_SERVER;
   const runTool: RunTool = (definition, input, signal, nativeId) =>
@@ -1283,19 +1256,11 @@ export const openCodexSession = Effect.fnUntraced(function* (
 
   const collides = (settings: OwnSettings) =>
     policy.tools.length > 0 && settings.mcpServers.includes(NEUVE_SERVER);
-  /** Whether the session, and the turn when one is given, are still live. */
   const live = (active?: Turn) =>
     !dead && (active === undefined || !active.finished);
   /** After every wait, before anything more is written: the session and the turn still live. */
   const still = (active?: Turn) =>
     live(active) ? Effect.void : Effect.fail(turnFailed("session-stopped"));
-  /**
-   * Puts the session on the configuration a turn needs. One process at a time: the current one is
-   * closed first. The next becomes current only once its handshake, its version, its clean check
-   * and the thread's resume have all succeeded, with the session and the turn re-checked after each
-   * wait; on any failure or interruption on the way it is closed, and no process is current, so the
-   * next turn starts over. The table of the session's states is in `PROTOCOL.md`.
-   */
   const ensure = (configuration: Configuration, active?: Turn) =>
     Effect.gen(function* () {
       const rejectedToken =
@@ -1353,14 +1318,12 @@ export const openCodexSession = Effect.fnUntraced(function* (
         ),
       );
       current = next;
-      // A mode change can restart Codex without changing the token.
       if (accessToken !== undefined && accessToken !== access?.token)
         access = {
           token: accessToken,
           state: rejectedToken === undefined ? "available" : "replacement",
         };
     });
-  /** The clean check, then the thread loaded into the new process; it is not current yet. */
   const prepare = (
     next: Current,
     configuration: Configuration,
@@ -1400,7 +1363,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
       threadModel = (started as { model?: string }).model ?? threadModel;
     });
 
-  // Opening: the tool server, then a clean process, then the thread.
   if (policy.tools.length > 0)
     toolServer = yield* serveTools(
       toolHandler(policy.tools, token, runTool),
@@ -1409,8 +1371,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
       Effect.catchDefect(() => Effect.fail(unavailable("start-failed"))),
     );
   if (toolServer !== undefined) log?.serves();
-  // Every process the session ever started is closed and waited for, whether or not a death or a
-  // broken turn stopped the session first.
   yield* Effect.addFinalizer(() =>
     stop({ status: "interrupted", reason: "shutdown" }, true).pipe(
       Effect.andThen(
@@ -1543,7 +1503,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
         });
       if (!live(active))
         return yield* finish(active, turnFailure("session-stopped"));
-      // The process died after it was made current and before the turn reached it.
       if (current === undefined || !current.connection.open()) {
         const ended = current;
         current = undefined;

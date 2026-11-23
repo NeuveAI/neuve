@@ -305,7 +305,9 @@ test("a sign-in file anyone else can read is refused", async () => {
     openBrowser: browser("oaiapp_mode", []),
   });
   chmodSync(authFilePath(directory), 0o644);
-  expect(() => readAuth(directory)).toThrow(/mode 0644/);
+  expect(() => readAuth(directory)).toThrow(
+    expect.objectContaining({ code: "file-mode" }),
+  );
   await expect(
     accessToken({ directory, issuer: issuer.issuer }),
   ).rejects.toMatchObject({

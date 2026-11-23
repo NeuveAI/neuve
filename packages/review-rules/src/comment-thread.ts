@@ -37,14 +37,10 @@ export const THREAD_STATUS: Record<CommentThreadState, string> = {
   failed: "failed",
 };
 
-/** "now", "4 min", "2 h", "Oct 2", from an ISO-8601 string or ms. */
-export function relativeTime(
-  at: string | number,
-  now: Date = new Date(),
-): string {
+export function relativeTime(at: string, now: Date = new Date()): string {
   const date = new Date(at);
   const minutes = Math.round((now.getTime() - date.getTime()) / 60000);
-  if (Number.isNaN(minutes)) return String(at);
+  if (Number.isNaN(minutes)) return at;
   if (minutes < 1) return "now";
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.round(minutes / 60);

@@ -1,7 +1,7 @@
 import { Clock, Effect } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import {
-  VENT_MEDIA_TYPE,
+  TEXT_CAPTURE_MEDIA_TYPE,
   VENT_TEXT_MAX,
   VentInput,
 } from "@neuve/records-schema";
@@ -88,7 +88,7 @@ export const record = (request: VentRequest) =>
           return { status: "kept-earlier", earlier: held } satisfies VentResult;
         const blob = yield* blobs.put({
           bytes: new TextEncoder().encode(text),
-          mediaType: VENT_MEDIA_TYPE,
+          mediaType: TEXT_CAPTURE_MEDIA_TYPE,
           retention: "raw-capture",
         });
         const [result] = yield* append([

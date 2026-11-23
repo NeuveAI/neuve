@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
+import { RouteProvider } from "@neuve/harness";
 import {
   AccountName,
   AccountStatus,
@@ -121,6 +122,64 @@ async function capture<A>(run: () => Promise<A>) {
     return { value: await run(), out: out.join("") };
   } finally {
     writer.mockRestore();
+  }
+}
+
+// A removal blocked at sign-out can otherwise look like a startup failure.
+test("auth remove reports a failed Codex account sign-out and names the file to fix", async () => {
+  await withBrokenSignIn("codex", async (home, file) => {
+    const error: unknown = await capture(() =>
+      runAuthCli(["remove", "work"], { home }),
+    ).catch((error: unknown) => error);
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining(`Could not sign out of work. ${file}`),
+    );
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining("Run neuve auth remove work again."),
+    );
+    expect(existsSync(file)).toBe(true);
+  });
+});
+
+// Named accounts can use different sign-in files, so the path tells the person which one to fix.
+test("auth status --check names unusable ChatGPT sign-in files with either runtime", async () => {
+  for (const runtime of ["pi", "codex"] as const)
+    await withBrokenSignIn(runtime, async (home, file) => {
+      const { out } = await capture(() =>
+        runAuthCli(["status", "work", "--check"], { home }),
+      );
+      expect(out).toContain(
+        `unknown: check-failed\n  Remove ${file}, then sign in again.`,
+      );
+    });
+});
+
+async function withBrokenSignIn(
+  runtime: "pi" | "codex",
+  run: (home: string, file: string) => Promise<void>,
+) {
+  const home = scratch();
+  try {
+    const args = ["add", "chatgpt", "work"];
+    if (runtime === "codex") args.push("--runtime", "codex");
+    await capture(() => runAuthCli(args, { home }));
+    const account = AccountStore.readAccounts(home).find(
+      (entry) => entry.account.name === "work",
+    )?.account;
+    if (
+      account?.credential.kind !== "neuve-sign-in" ||
+      !account.credential.folder
+    )
+      throw new Error("Expected a sign-in folder for work.");
+    const file = RouteProvider.OpenAiAuth.authFilePath(
+      account.credential.folder,
+    );
+    writeFileSync(file, "{", { mode: 0o600 });
+    await run(home, file);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 }
 

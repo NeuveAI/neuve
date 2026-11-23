@@ -1,5 +1,4 @@
 import { Cycles, Starter, type StoreLocation } from "@neuve/records-core";
-import { GitOid } from "@neuve/records-schema";
 import { Effect } from "effect";
 
 export type QueryBranch = Pick<
@@ -35,8 +34,7 @@ export const readQueryBranch = (
     ["git", "-C", repository, "show-ref", "--verify", "--hash", ref],
     { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
-  const tip = GitOid.safeParse(result.stdout.toString().trim());
-  if (!result.success || !tip.success) {
+  if (!result.success) {
     if (branch !== undefined)
       throw new Error(
         `--branch names no local branch ${JSON.stringify(branch)} in --repo.`,
@@ -44,13 +42,14 @@ export const readQueryBranch = (
     return {
       reason: "the checked-out branch has no readable tip",
       cause:
-        result.success && !tip.success
-          ? tip.error.message
-          : result.stderr.toString().trim() ||
-            `git show-ref exited with code ${result.exitCode}`,
+        result.stderr.toString().trim() ||
+        `git show-ref exited with code ${result.exitCode}`,
     };
   }
-  return { branch: ref.slice(prefix.length), branchTipOid: tip.data };
+  return {
+    branch: ref.slice(prefix.length),
+    branchTipOid: result.stdout.toString().trim(),
+  };
 };
 
 export const warnQueryCycle = (reason: string) =>

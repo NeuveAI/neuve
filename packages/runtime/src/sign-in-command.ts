@@ -25,6 +25,7 @@ const UNAVAILABLE: Record<
   "not-registered": "isn't set up for Neuve",
   "unsupported-version": "needs a newer version",
   "start-failed": "couldn't start",
+  "sign-out-failed": "couldn't sign out",
   "unrecognized-program":
     "was looked for, and the file found didn't answer as it",
 };

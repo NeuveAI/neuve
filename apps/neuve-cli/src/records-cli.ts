@@ -133,7 +133,7 @@ export const withStore = <A, E>(
   }).pipe(Effect.provide(BunFileSystem.layer));
 
 /** A store or gate failure as one sentence for the person or agent reading the output. */
-export const describeFailure = (error: unknown): string => {
+export const describeFailure = (error: unknown, fallback?: string): string => {
   // The version gate's refusals name both versions and what fixes them. Every WriterTooOld and
   // StoreNewer carries its versions, so only MigrationRequired without stored versions (an
   // initialization cut short) reaches the switch below.
@@ -155,10 +155,13 @@ export const describeFailure = (error: unknown): string => {
       case "MigrationRequired":
         return "The store's initialization did not finish. Run: neuve records migrate";
       default:
-        return `${tagged._tag}: ${String(tagged["message"] ?? JSON.stringify(tagged))}`;
+        return (
+          fallback ??
+          `${tagged._tag}: ${String(tagged["message"] ?? JSON.stringify(tagged))}`
+        );
     }
   }
-  return error instanceof Error ? error.message : String(error);
+  return fallback ?? (error instanceof Error ? error.message : String(error));
 };
 
 export const execute = async <A>(

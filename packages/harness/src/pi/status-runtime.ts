@@ -9,6 +9,7 @@ import {
 } from "@neuve/runtime";
 import { Effect } from "effect";
 import {
+  signInFileFix,
   signInProblem,
   signOut,
   status,
@@ -20,11 +21,7 @@ import { isClaudeSubscriptionToken } from "../subscription-token.ts";
 export interface PiStatusRuntimeOptions {
   readonly auth?: AuthOptions;
   readonly environment?: Readonly<Record<string, string | undefined>>;
-  /**
-   * Presence only, without prompting, including Keychain dialogs. Consumers that
-   * seal keys, such as neuve-host, must supply a resolver from their key store;
-   * the accounts or signin-ui track wires that consumer.
-   */
+  /** Presence only, without prompting, including Keychain dialogs. */
   readonly keyPresence?: (
     reference: Extract<CredentialReference, { kind: "environment" | "vault" }>,
   ) => Promise<"absent" | "present" | "subscription-token">;
@@ -130,8 +127,12 @@ export function piStatusRuntime(
                         account: account.name,
                       },
                     };
-            } catch {
-              signIn = { state: "unknown", reason: "check-failed" };
+            } catch (error) {
+              signIn = {
+                state: "unknown",
+                reason: "check-failed",
+                fix: signInFileFix(error),
+              };
             }
             break;
           }
@@ -163,10 +164,11 @@ export function piStatusRuntime(
       account.kind === "chatgpt-subscription"
         ? Effect.tryPromise({
             try: () => signOut(authOptions(account)),
-            catch: () =>
+            catch: (error) =>
               new RuntimeUnavailable({
                 account: account.name,
-                reason: "start-failed",
+                reason: "sign-out-failed",
+                fix: signInFileFix(error),
               }),
           }).pipe(Effect.asVoid)
         : Effect.void,

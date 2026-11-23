@@ -12,7 +12,6 @@ import {
   accessSync,
   chmodSync,
   constants,
-  existsSync,
   linkSync,
   mkdirSync,
   readFileSync,
@@ -104,6 +103,7 @@ export type AuthErrorCode =
   | "refresh-unusable"
   | "file-mode"
   | "file-unreadable"
+  | "file-invalid"
   | "discovery"
   | "token-endpoint"
   | "invalid-token-response"
@@ -130,6 +130,14 @@ export class OpenAiAuthError extends Error {
     super(message);
   }
 }
+
+export const signInFileFix = (error: unknown): string | undefined =>
+  error instanceof OpenAiAuthError &&
+  (error.code === "file-mode" ||
+    error.code === "file-unreadable" ||
+    error.code === "file-invalid")
+    ? error.message
+    : undefined;
 
 /** Names the sign-in's folder itself, such as one on a cloud machine's mounted volume (10.129). */
 export const AUTH_DIRECTORY_VARIABLE = "NEUVE_OPENAI_AUTH_DIR";
@@ -255,35 +263,35 @@ const resolve = (options: AuthOptions) => ({
   now: options.now ?? Date.now,
 });
 
-// The credential file
-
-/** Reads the file, refusing one that anyone but the owner can read or write. */
 export const readAuth = (directory: string): StoredAuth | undefined => {
   const path = authFilePath(directory);
-  if (!existsSync(path)) return undefined;
-  const mode = statSync(path).mode & 0o777;
-  if ((mode & 0o077) !== 0)
-    throw new OpenAiAuthError(
-      "file-mode",
-      `${path} has mode ${mode.toString(8).padStart(4, "0")}; it must be readable only by you (0600). Remove it and run neuve auth login openai again.`,
-    );
-  const parsed = safeRead(
-    StoredAuth,
-    (() => {
-      try {
-        return JSON.parse(readFileSync(path, "utf8")) as unknown;
-      } catch {
-        return undefined;
-      }
-    })(),
-    { source: path },
-  );
-  if (!parsed.success)
+  let text: string;
+  try {
+    const file = statSync(path, { throwIfNoEntry: false });
+    if (file === undefined) return undefined;
+    if ((file.mode & 0o077) !== 0)
+      throw new OpenAiAuthError(
+        "file-mode",
+        `Set permissions on ${path} to 0600.`,
+      );
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if (error instanceof OpenAiAuthError) throw error;
     throw new OpenAiAuthError(
       "file-unreadable",
-      `${path} is not a Neuve sign-in file; remove it and run neuve auth login openai again.`,
+      `Check that Neuve can read ${path} and try again.`,
     );
-  return parsed.data;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {}
+  const parsed = safeRead(StoredAuth, value, { source: path });
+  if (parsed.success) return parsed.data;
+  throw new OpenAiAuthError(
+    "file-invalid",
+    `Remove ${path}, then sign in again.`,
+  );
 };
 
 /** Plan preservation before a token exchange or revocation can spend a credential. */
@@ -1538,5 +1546,12 @@ export const signOut = async (
     }
     persistAuth(directory, signedOut);
     return { hadSession: true, revoked };
+  }).catch((error: unknown) => {
+    if (error instanceof OpenAiAuthError && error.code === "file-invalid")
+      throw new OpenAiAuthError(
+        error.code,
+        `${authFilePath(directory)} is not a sign-in file. Disconnect Neuve at https://chatgpt.com/settings, then remove the file.`,
+      );
+    throw error;
   });
 };

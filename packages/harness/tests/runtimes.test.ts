@@ -484,9 +484,12 @@ test("ChatGPT probes local sign-in and plan permission without fetching, so chec
   );
   writeFileSync(authFilePath(directory), "fake-private-invalid-file");
   const failed = await run(probe("chatgpt"), options);
-  expect(failed.signIn).toEqual({ state: "unknown", reason: "check-failed" });
+  expect(failed.signIn).toEqual({
+    state: "unknown",
+    reason: "check-failed",
+    fix: `Remove ${authFilePath(directory)}, then sign in again.`,
+  });
   expect(JSON.stringify(failed)).not.toContain("fake-private-invalid-file");
-  expect(JSON.stringify(failed)).not.toContain(directory);
   expect(requests).toBe(0);
 });
 
@@ -659,7 +662,7 @@ test("ChatGPT sign-out clears the named folder through auth while key sign-out d
   expect(readAuth(other)?.session).toBeDefined();
 });
 
-test("sign-out read failures have a typed safe error, so provider or file details never escape", async () => {
+test("sign-out-failed names the unusable sign-in file without exposing its contents or provider text", async () => {
   const directory = folder();
   writeFileSync(authFilePath(directory), "fake-private-broken-signin", {
     mode: 0o600,
@@ -673,11 +676,11 @@ test("sign-out read failures have a typed safe error, so provider or file detail
   expect(result).toEqual(
     new RuntimeUnavailable({
       account: name("chatgpt"),
-      reason: "start-failed",
+      reason: "sign-out-failed",
+      fix: `${authFilePath(directory)} is not a sign-in file. Disconnect Neuve at https://chatgpt.com/settings, then remove the file.`,
     }),
   );
   expect(JSON.stringify(result)).not.toContain("fake-private-broken-signin");
-  expect(JSON.stringify(result)).not.toContain(directory);
 });
 
 test("without Claude Code registered, the default Claude account is unregistered, so a missing registration cannot select pi", async () => {

@@ -301,6 +301,63 @@ test("a code span keeps its text as typed, so a decoded quote does not match it"
 });
 
 test("a section heading is named as the plan tab shows it", () => {
-  const text = "## Exports &amp; reports\n\nA line";
-  expect(fileLinesSection(text, 3)).toBe("Exports & reports");
+  const text = "## 1. Exports &amp; reports ###\n\nA line";
+  expect(fileLinesSection(text, 3)).toBe("1. Exports & reports");
+});
+
+// A misread heading points an ambiguous comment to the wrong section.
+test("plan sections follow the Plan tab's Markdown headings", () => {
+  const closed = [
+    "## Retry the upload",
+    "   ````sh",
+    "# clear the cache first",
+    "```",
+    "~~~~",
+    "```` still inside",
+    "# still code",
+    " `````   ",
+    "Then upload again.",
+    "## Confirm the upload",
+  ].join("\n");
+  expect(fileLinesSection(closed, 3)).toBe("Retry the upload");
+  expect(fileLinesSection(closed, 7)).toBe("Retry the upload");
+  expect(fileLinesSection(closed, 9)).toBe("Retry the upload");
+  expect(fileLinesSection(closed, 10)).toBe("Confirm the upload");
+
+  const unclosed = "## Retry the upload\n~~~sh\n# clear the cache first";
+  expect(fileLinesSection(unclosed, 3)).toBe("Retry the upload");
+
+  const indented = [
+    "# Plan",
+    "## Retry the upload",
+    "1. Clear the cache:",
+    "",
+    "    ```sh",
+    "    # clear the cache first",
+    "    rm -rf cache",
+    "    ```",
+    "",
+    "2. Upload again.",
+  ].join("\n");
+  expect(fileLinesSection(indented, 10)).toBe("Retry the upload");
+
+  const nonFences = "```bad`info\n## Retry\n    ~~\n## Confirm";
+  expect(fileLinesSection(nonFences, 2)).toBe("Retry");
+  expect(fileLinesSection(nonFences, 4)).toBe("Confirm");
+
+  const cases = [
+    ["## A\n~~~\n# code\n~~~\ntext", 5, "A"],
+    ["## A\n````md\n```\n# code\n```\n````\ntext", 4, "A"],
+    ["## A\n````md\n```\n# code\n```\n````\n## B\ntext", 8, "B"],
+    ["## A\n```ts title=x\n# code\n```\n", 3, "A"],
+    ["## A\n```\nx\n```\n## B\ntext", 6, "B"],
+    ["## A\n\n    ```\n\n## B\ntext", 6, "B"],
+    ["## A\n1. step\n   ```sh\n   # code\n## B\ntext", 6, "B"],
+    ["## A\n> ```\n> # x\n\n## B\ntext", 6, "B"],
+    ["## A\n\n    # not a heading\n\ntext", 5, "A"],
+    ["## A\nB\n===\ntext", 4, "B"],
+    ["## A\n```\nx\n```\t\n## B\ntext", 6, "B"],
+  ] as const;
+  for (const [text, line, section] of cases)
+    expect(fileLinesSection(text, line)).toBe(section);
 });

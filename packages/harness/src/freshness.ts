@@ -9,7 +9,7 @@ import {
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Clock, Duration, Effect, Option } from "effect";
+import { Clock, Duration, Effect } from "effect";
 import { z } from "zod";
 import type { SourcePin } from "@neuve/records-schema";
 import {
@@ -181,14 +181,14 @@ export const checkSources = (options: {
       options.snapshotKey !== undefined && hasFixedScope(options.snapshotKey);
     const check = (source: ScopeSource) =>
       Effect.gen(function* () {
-        const copy = readScopeText(
+        const { text: copy } = readScopeText(
           options.location,
           options.cycleId,
           source.id,
         );
         const pinned =
           source.sha256 ??
-          (Option.isSome(copy) ? textHash(copy.value) : undefined) ??
+          (copy === undefined ? undefined : textHash(copy)) ??
           null;
         if (
           source.complete !== false &&
@@ -273,22 +273,21 @@ export const checkSources = (options: {
             checkedAt,
             pinned,
           } satisfies SourceCheck;
-        // The cycle's latest refresh of it, when its copy is still held and is what it records.
         const latest = refreshes[source.id];
         const kept =
           latest === undefined
-            ? Option.none<string>()
+            ? undefined
             : readScopeText(
                 options.location,
                 options.cycleId,
                 refreshedId(source.id, latest.sha256),
-              );
+              ).text;
         const refresh =
           latest !== undefined &&
-          Option.isSome(kept) &&
-          textHash(kept.value) === latest.sha256
+          kept !== undefined &&
+          textHash(kept) === latest.sha256
             ? {
-                text: kept.value,
+                text: kept,
                 response,
                 sha256: latest.sha256,
                 at: Date.parse(latest.readAt),
@@ -307,9 +306,7 @@ export const checkSources = (options: {
             changed: refresh,
           } satisfies SourceCheck;
         const read =
-          Option.isSome(copy) && textHash(copy.value) === pinned
-            ? copy.value
-            : undefined;
+          copy !== undefined && textHash(copy) === pinned ? copy : undefined;
         return {
           source: source.id,
           status: "changed",

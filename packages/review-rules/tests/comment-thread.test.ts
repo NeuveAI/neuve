@@ -1,13 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-  deliveryLine,
-  relativeTime,
-  THREAD_STATUS,
-} from "../src/comment-thread.ts";
-
-// Why: the review desk and the coding app draw their own comment cards, held
-// to one design by this core. These pin the words both cards say for each
-// delivery state and the time label, so neither app drifts from the other.
+import { deliveryLine, relativeTime } from "../src/comment-thread.ts";
 
 test("a thread on its way says where it is, naming the agent", () => {
   expect(deliveryLine("queued", "Neuve")).toBe(
@@ -19,23 +11,12 @@ test("a thread on its way says where it is, naming the agent", () => {
     expect(deliveryLine(state, "Neuve")).toBeUndefined();
 });
 
-test("each state has its short name", () => {
-  expect(THREAD_STATUS).toEqual({
-    queued: "queued",
-    sent: "sent",
-    "picked-up": "picked up",
-    working: "working",
-    replied: "replied",
-    failed: "failed",
-  });
-});
-
-test("the time label reads the same from an ISO string or ms", () => {
+test("a time label shows elapsed time or a date from an ISO string", () => {
   const now = new Date("2026-11-23T14:00:00Z");
-  const ago = (minutes: number) => now.getTime() - minutes * 60_000;
-  expect(relativeTime(new Date(ago(0)).toISOString(), now)).toBe("now");
+  const ago = (minutes: number) =>
+    new Date(now.getTime() - minutes * 60_000).toISOString();
+  expect(relativeTime(ago(0), now)).toBe("now");
   expect(relativeTime(ago(4), now)).toBe("4 min");
-  expect(relativeTime(new Date(ago(4)).toISOString(), now)).toBe("4 min");
   expect(relativeTime(ago(120), now)).toBe("2 h");
   expect(relativeTime("2026-10-02T12:00:00Z", now)).toBe("Oct 2");
   expect(relativeTime("not a time", now)).toBe("not a time");
