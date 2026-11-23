@@ -14,7 +14,6 @@ import * as scroll from "../../lib/scroll";
 import { cn } from "../../lib/utils";
 
 const EMPTY: scroll.Frame = { items: [], total: 0 };
-const INTENT = 500;
 const QUIET = 200;
 
 /** Imperative handle exposed via ref. */
@@ -79,7 +78,7 @@ function ScrollView(
 	let range = useRef({ start: 0, end: 0 });
 	let raf = useRef(0);
 	let pin = useRef(true);
-	let intent = useRef(Number.NEGATIVE_INFINITY);
+	let manual = useRef((): boolean => false);
 	let pending = useRef<number | null>(null);
 	let measured = useRef(0);
 	let resized = useRef(false);
@@ -154,8 +153,7 @@ function ScrollView(
 			resized.current = false;
 
 			let bottom = f.total - el.scrollTop - el.clientHeight < 1;
-			let manual = performance.now() - intent.current < INTENT;
-			if (bottom || manual) {
+			if (bottom || manual.current()) {
 				pin.current = bottom;
 			} else if (pin.current) {
 				el.scrollTop = Math.max(0, f.total - el.clientHeight);
@@ -263,9 +261,8 @@ function ScrollView(
 			scrolling.current = false;
 			settled.current?.();
 		};
-		let mark = () => {
-			intent.current = performance.now();
-		};
+		let person = scroll.intent(el);
+		manual.current = person.manual;
 
 		let observer = new ResizeObserver((entries) => {
 			let entry = entries[0];
@@ -288,11 +285,6 @@ function ScrollView(
 		observer.observe(el);
 		el.addEventListener("scroll", onscroll, { passive: true });
 		el.addEventListener("scrollend", done, { passive: true });
-		el.addEventListener("wheel", mark, { passive: true });
-		el.addEventListener("touchstart", mark, { passive: true });
-		el.addEventListener("touchmove", mark, { passive: true });
-		el.addEventListener("pointerdown", mark, { passive: true });
-		el.addEventListener("keydown", mark);
 		schedule();
 
 		document.fonts.ready.then(() => {
@@ -305,11 +297,7 @@ function ScrollView(
 			observer.disconnect();
 			el.removeEventListener("scroll", onscroll);
 			el.removeEventListener("scrollend", done);
-			el.removeEventListener("wheel", mark);
-			el.removeEventListener("touchstart", mark);
-			el.removeEventListener("touchmove", mark);
-			el.removeEventListener("pointerdown", mark);
-			el.removeEventListener("keydown", mark);
+			person.stop();
 			cancelAnimationFrame(raf.current);
 			raf.current = 0;
 			scrolling.current = false;

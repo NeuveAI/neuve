@@ -36,3 +36,26 @@ export function planCommentViews(
 		],
 	}));
 }
+
+export type Said = { quote: string; text: string };
+
+/** Each send of plan comments by its submission, with the chat entry it became once placed. */
+export function commentSends(comments: PlanComment[]): Map<number, { entry?: number; said: Said[] }> {
+	const sends = new Map<number, { entry?: number; said: (Said & { at: number })[] }>();
+	for (const comment of comments) {
+		for (const { sent, at, text } of [comment, ...comment.replies.filter((reply) => reply.kind === "person")]) {
+			if (!sent) continue;
+			const send = sends.get(sent.submission) ?? { entry: sent.entry, said: [] };
+			send.said.push({ at, quote: comment.anchor.quote, text });
+			sends.set(sent.submission, send);
+		}
+	}
+	for (const send of sends.values()) send.said.sort((a, b) => a.at - b.at);
+	return sends;
+}
+
+/** The words of a send, each under its passage quoted; as Markdown, the passage's marks are escaped. */
+export function commentWords(said: Said[], markdown = false) {
+	const line = (text: string) => `> ${markdown ? text.replace(/[\\`*_[\]<>#|~]/g, "\\$&") : text}`;
+	return said.map(({ quote, text }) => `${quote.split("\n").map(line).join("\n")}\n\n${text}`).join("\n\n");
+}

@@ -1,9 +1,10 @@
 import MarkdownIt from "markdown-it";
 import type Token from "markdown-it/lib/token.mjs";
 import { plainLines } from "@neuve/review-rules/file-lines-anchor";
-import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { PlanCardView } from "../../types";
+import { intent } from "../../lib/scroll";
 import { cn } from "../../lib/utils";
 import { Button } from "../../ui/button";
 import { PlanBadge } from "../requests/plan";
@@ -20,6 +21,9 @@ import {
 } from "./plan-comments";
 
 const md = new MarkdownIt({ html: false, linkify: false });
+
+/** The Comment chip's height and its gap from the selection. */
+const CHIP = 28;
 
 type Node = { token: Token; children: Node[] };
 
@@ -262,8 +266,9 @@ export type PlanViewProps = {
 
 /** The Plan tab: the plan as a document, commented on, and approved from its footer while it is a draft. */
 export function PlanView({ plan, text, error, approve, comments, send, className }: PlanViewProps) {
+	let scroller = useRef<HTMLDivElement>(null);
 	let paper = useRef<HTMLDivElement>(null);
-	let [chip, setChip] = useState<PlanSelection & { top: number; left: number }>();
+	let [chip, setChip] = useState<PlanSelection & { top: number; left: number; side: "top" | "bottom"; closing?: boolean }>();
 	let [composing, setComposing] = useState<PlanSelection & { key: number }>();
 	usePlanHighlights(paper, comments?.list ?? [], composing, text);
 	let kept = comments ? keptCount(comments.list) : 0;
@@ -271,11 +276,15 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 	let select = () => {
 		let root = paper.current;
 		let found = root && text !== undefined && comments?.keep ? selectionIn(root, text) : undefined;
-		if (!root || !found) return setChip(undefined);
-		// Under the selection's end, so it covers none of the words around the selection.
+		if (!root || !found) return setChip((open) => open && { ...open, closing: true });
+		// Above the selection's first line, else under its last, and always inside the pane's
+		// visible band, whatever part of the selection is scrolled out.
 		let box = root.getBoundingClientRect();
-		let left = Math.max(0, Math.min(found.rect.right - box.left - 48, root.clientWidth - 96));
-		setChip({ lines: found.lines, quote: found.quote, top: found.rect.bottom - box.top + 4, left });
+		let pane = scroller.current!.getBoundingClientRect();
+		let above = found.first.top - pane.top >= CHIP;
+		let left = Math.max(0, Math.min((above ? found.first.left : found.last.right - 48) - box.left, root.clientWidth - 96));
+		let top = Math.min(Math.max(above ? found.first.top - CHIP : found.last.bottom + 4, pane.top), pane.bottom - CHIP);
+		setChip({ lines: found.lines, quote: found.quote, top: top - box.top, left, side: above ? "top" : "bottom" });
 	};
 	// A selection can end outside the plan, or by keyboard, so the document's events decide.
 	let latest = useRef(select);
@@ -290,6 +299,40 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 			document.removeEventListener("keyup", keys);
 		};
 	}, []);
+	// After the person sends, the agent's latest answer stays in view with as much of its card as
+	// fits, until they scroll the pane themselves, as the chat's timeline stops following then.
+	let following = useRef(false);
+	let target = useRef<{ comment: string; message: string } | undefined>(undefined);
+	let seen = useRef<Set<string> | undefined>(undefined);
+	useEffect(() => {
+		let el = scroller.current!;
+		let person = intent(el);
+		let scrolled = () => {
+			if (!person.manual()) return;
+			following.current = false;
+			target.current = undefined;
+		};
+		el.addEventListener("scroll", scrolled, { passive: true });
+		return () => {
+			person.stop();
+			el.removeEventListener("scroll", scrolled);
+		};
+	}, []);
+	let list = comments?.list ?? [];
+	let messages = list.flatMap((comment) => comment.messages.map((message) => message.id)).join();
+	useLayoutEffect(() => {
+		let before = seen.current;
+		seen.current = new Set(messages.split(","));
+		for (let comment of list) {
+			for (let message of comment.messages) {
+				if (following.current && message.agent && !before?.has(message.id)) target.current = { comment: comment.id, message: message.id };
+			}
+		}
+		if (!target.current) return;
+		let { comment, message } = target.current;
+		scroller.current?.querySelector(`[data-plan-comment="${CSS.escape(comment)}"]`)?.scrollIntoView({ block: "nearest" });
+		scroller.current?.querySelector(`[data-plan-message="${CSS.escape(message)}"]`)?.scrollIntoView({ block: "nearest" });
+	}, [messages, text]);
 	let footer = approve || (send && (kept > 0 || send.note || send.error));
 	let approveOff = !!approve?.blocked || approve?.approving || text === undefined;
 	return (
@@ -302,7 +345,7 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 				{plan.meta && <p className="truncate text-xs leading-4 text-muted-foreground">{plan.meta}</p>}
 			</header>
 			{/* Ace makes every element unselectable; the plan's words are selectable, its list markers not. */}
-			<div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3.5 select-text [&_*]:select-text [&_[aria-hidden]]:select-none">
+			<div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-5 pb-3.5 select-text [&_*]:select-text [&_[aria-hidden]]:select-none">
 				<div ref={paper} className="relative">
 					{text !== undefined
 						? (
@@ -317,11 +360,15 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 						<CommentChip
 							top={chip.top}
 							left={chip.left}
+							side={chip.side}
+							closing={chip.closing}
 							onComment={() => {
+								target.current = undefined;
 								setComposing({ lines: chip.lines, quote: chip.quote, key: Date.now() });
-								setChip(undefined);
+								setChip({ ...chip, closing: true });
 								getSelection()?.removeAllRanges();
 							}}
+							onGone={() => setChip((open) => open?.closing ? undefined : open)}
 						/>
 					)}
 				</div>
@@ -341,7 +388,9 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 								className="aria-disabled:opacity-50"
 								aria-disabled={send.sending || undefined}
 								onClick={() => {
-									if (!send.sending) send.onSend();
+									if (send.sending) return;
+									following.current = true;
+									send.onSend();
 								}}
 							>
 								{send.sending ? "Sending…" : `Send ${kept} ${kept === 1 ? "comment" : "comments"}`}
