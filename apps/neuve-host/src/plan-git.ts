@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { toolArguments, toolRefusal } from "@ace/channel/review";
+import { toolArguments, toolRefusal } from "@ace/channel/tool-arguments";
 import type { Context } from "@earendil-works/chord";
 import { defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { err, FileError, getOrThrow, ok, type ExecutionEnv } from "@earendil-works/pi-durable/env";

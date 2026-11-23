@@ -83,7 +83,6 @@ describe("lanes", () => {
 		expect(pwd.text.trim()).toBe(await realpath(fixture.lane.path));
 	});
 
-	// The tool must teach a valid name without creating a worktree outside the assigned directory.
 	test("a lane name that could escape the lanes directory is refused by the tool", async () => {
 		const fixture = await create();
 		fixture.script(tool("lane", { action: "start", name: "../outside" }, "call-lane"), fauxAssistantMessage("ok"));

@@ -34,7 +34,6 @@ import { ReviewCardsDoc, type ReviewCard } from "./review-cards";
 import { toolArguments } from "./tool-arguments";
 
 export * from "./review-protocol";
-export { toolArguments, toolRefusal, type ToolParameters } from "./tool-arguments";
 export type Review = ReviewAdapter;
 
 export const REVIEW_CLOSING =

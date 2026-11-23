@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import type { JsonObject } from "@earendil-works/pi-durable";
+import type { Delivery } from "../src/protocol";
 import { Fixture, isolateClaudeConfig, MODEL, OWNER } from "./helpers";
 
 let fixture: Fixture | undefined;
@@ -14,7 +15,7 @@ isolateClaudeConfig();
 test("chat tools show every bad field, the accepted choices, and the original arguments", async () => {
 	fixture = await Fixture.create();
 	const calls: [string, JsonObject, string[]][] = [
-		["lane", { action: "open", name: "Bad Name", typo: true }, [
+		["lane", { action: "open", name: [], typo: true }, [
 			'action: Expected one of "start", "switch", "list".',
 			"name: Expected a lowercase kebab-case work lane name of 1 to 63 characters",
 			"typo: Unknown argument, use only action, name, base.",
@@ -30,6 +31,10 @@ test("chat tools show every bad field, the accepted choices, and the original ar
 		]],
 		["message", { channel: "two", text: "hi" }, [
 			"invoke: Missing required value, so supply true to start the destination chat's agent or false to deliver the message without starting it.",
+		]],
+		["message", { channel: "two", text: "hi", invoke: "true", chat: "bad", typo: true }, [
+			"chat: Expected a nonnegative integer chat id",
+			"typo: Unknown argument, use only channel, chat, text, invoke.",
 		]],
 		["channels", { channel: "one", "client.note": 1 }, [
 			"channel: Unknown argument, pass an empty object.",
@@ -73,6 +78,7 @@ test("chat tools show every bad field, the accepted choices, and the original ar
 			expect(result?.error, name).toBe(true);
 			expect(result?.text, name).toContain(`"${name}"`);
 			for (const problem of problems) expect(result?.text, name).toContain(problem);
+			expect(result?.text?.match(/^  - /gm), name).toHaveLength(problems.length);
 			const received = /^Received arguments:\n(\{[\s\S]*?^\})/m.exec(result?.text ?? "")?.[1];
 			expect(received && JSON.parse(received), name).toEqual(args);
 		}
@@ -81,11 +87,73 @@ test("chat tools show every bad field, the accepted choices, and the original ar
 	}
 });
 
+// The destination sees pi's converted values, which a refusal-only test cannot check.
+test("chat tools retain pi's argument coercion and declared required fields", async () => {
+	const delivered: Delivery[] = [];
+	fixture = await Fixture.create({
+		directory: {
+			self: { id: "one", name: "one" },
+			list: async () => [{ id: "two", name: "two", prefix: "two", project: "fixture" }],
+			deliver: async delivery => { delivered.push(delivery); },
+		},
+	});
+	const calls: [string, JsonObject, string, string][] = [
+		["message", { channel: "two", text: "invoke by string", invoke: "true" }, "invoke", "Delivered to two"],
+		["message", { channel: "two", text: "invoke by numeric string", invoke: "1" }, "numeric-invoke", "Delivered to two"],
+		["message", { channel: "two", text: "chat by string", invoke: false, chat: "2" }, "chat", "Delivered to two"],
+		["message", { channel: "two", text: "default chat", invoke: false, chat: null }, "null-chat", "Delivered to two"],
+		["message", { channel: "two", text: "passive by null", invoke: null }, "null-invoke", "Delivered to two"],
+		["lane", { action: "list", name: "", base: "" }, "list", "work"],
+		["lane", { action: "list", name: null, base: null }, "null-list", "work"],
+		["lane", { action: "start", name: "null-base", base: null }, "null-base", "Started work lane null-base"],
+		["channels", {}, "channels", "two"],
+	];
+	let required: Record<string, unknown> = {};
+	fixture.script(
+		({ messages }) => {
+			required = Object.fromEntries(getCurrentTools(messages)
+				.filter(tool => ["lane", "message", "subagent"].includes(tool.name))
+				.map(tool => [tool.name, tool.parameters.required]));
+			return fauxAssistantMessage(fauxToolCall("subagent", { task: "inspect", model: null }, { id: "inherited" }), { stopReason: "toolUse" });
+		},
+		fauxAssistantMessage("Child used the inherited model"),
+		fauxAssistantMessage(calls.map(([name, args, id]) => fauxToolCall(name, args, { id })), { stopReason: "toolUse" }),
+		fauxAssistantMessage("done"),
+	);
+	const watch = await fixture.watch();
+	try {
+		await fixture.request({ op: "ask", author: OWNER, text: "check accepted calls", model: MODEL });
+		await watch.until("reply", event => event.text === "done");
+		expect(required).toEqual({
+			lane: ["action"],
+			message: ["channel", "text", "invoke"],
+			subagent: ["task"],
+		});
+		const results = watch.of("result");
+		expect(results.find(event => event.call === "inherited")).toMatchObject({ error: false, text: "Child used the inherited model" });
+		for (const [, , id, expected] of calls) {
+			const result = results.find(event => event.call === id);
+			expect(result?.error, id).toBe(false);
+			expect(result?.text, id).toContain(expected);
+		}
+		expect(Object.fromEntries(delivered.map(({ text, chat, invoke }) => [text, [chat, invoke]]))).toEqual({
+			"invoke by string": [undefined, true],
+			"invoke by numeric string": [undefined, true],
+			"chat by string": [2, false],
+			"default chat": [undefined, false],
+			"passive by null": [undefined, false],
+		});
+	} finally {
+		await watch.stop();
+	}
+});
+
 // Pi records the failure on the child, so this checks what crosses back to the parent.
-test("an unanswered subagent reports the requested model and the child's failure", async () => {
+test("a subagent refuses an unavailable model and reports other child failures as errors", async () => {
 	fixture = await Fixture.create();
 	const args = { task: "inspect", model: "faux/coder" };
 	fixture.script(
+		fauxAssistantMessage(fauxToolCall("subagent", { ...args, model: "nobody/none" }, { id: "no-model" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage(fauxToolCall("subagent", args, { id: "child" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("", { stopReason: "error", errorMessage: "The model rejected the request." }),
 		fauxAssistantMessage("done"),
@@ -93,10 +161,14 @@ test("an unanswered subagent reports the requested model and the child's failure
 	const watch = await fixture.watch();
 	try {
 		await fixture.request({ op: "ask", author: OWNER, text: "delegate", model: MODEL });
+		const unavailable = await watch.until("result", event => event.call === "no-model");
+		expect(unavailable.error).toBe(true);
+		expect(unavailable.text).toContain('model: Model "nobody/none" is not available in this channel, so omit model to use your own.');
 		const result = await watch.until("result", event => event.call === "child");
 		expect(result.error).toBe(true);
 		expect(result.text).toContain("ended unanswered with faux/coder (model_error: The model rejected the request.)");
-		expect(result.text).toContain(`Received arguments:\n${JSON.stringify(args, null, 2)}`);
+		expect(result.text).not.toContain('Tool "subagent" refused the call.');
+		expect(result.text).not.toContain("Received arguments:");
 	} finally {
 		await watch.stop();
 	}

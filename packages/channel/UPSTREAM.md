@@ -16,7 +16,7 @@ The native extension binding installs before harness open/recovery and attaches 
 
 | File | Correspondence and reason | Seam ranges against pinned source |
 | --- | --- | --- |
-| `packages/channel/package.json` | Keep original @ace package identity, native dependencies and exports. Materialize exact root catalog pins, add own adapter exports/dependencies, and pair actual source with generated declaration type exports for strict Neuve callers. The runtime dependency supplies the Zod-only approval contract. | `@@ -4,23 +4,101 @@` |
+| `packages/channel/package.json` | Keep original @ace package identity, native dependencies and exports. Materialize exact root catalog pins, add own adapter exports/dependencies, and pair actual source with generated declaration type exports for strict Neuve callers. The runtime dependency supplies the Zod-only approval contract. The host imports the argument helpers through `./tool-arguments`. | `@@ -4,23 +4,101 @@` |
 | `packages/channel/src/agents.ts` | Validates chat tool arguments before pi so agents see accepted fields and values. Explains how to find a destination channel and reports a child chat's failure with its model. | Changed |
 | `packages/channel/src/browser.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/captions.ts` | Pinned upstream bytes retained. | Byte-identical |
@@ -65,7 +65,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/src/requests.ts` | Generic durable pi-document digest claims prevent same-ID/different-payload retries without new SQL tables. Existing document kind/version are retained. |
 | `packages/channel/src/review-context.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
 | `packages/channel/src/review-protocol.ts` | Channel stores preparation receipts as neutral JSON and bounded identifiers. Host adapter separately validates precise Records/GitHub preparation and attribution before admission. |
-| `packages/channel/src/review.ts` | Owns Git and Records preparation, immutable range selection, external source validation, and admission policy. Derives the review tools' parameters and argument refusals from their input schemas. Exports the argument helpers for the host's explore tool. |
+| `packages/channel/src/review.ts` | Owns Git and Records preparation, immutable range selection, external source validation, and admission policy. Derives the review tools' parameters and argument refusals from their input schemas. |
 | `packages/channel/src/tool-arguments.ts` | Derives pi parameters and repair advice from Zod, with the received call included in each refusal. |
 | `packages/channel/tests/changes.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/channel.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |

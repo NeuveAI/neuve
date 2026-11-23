@@ -1,4 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
+import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation";
+import type { JsonObject } from "@earendil-works/pi-durable";
 import { z } from "zod";
 
 type ActionSchema = z.ZodObject<z.ZodRawShape & { action: z.ZodLiteral<string> }>;
@@ -6,7 +8,7 @@ type ToolSchema = z.ZodObject | z.ZodDiscriminatedUnion<readonly ActionSchema[],
 
 export interface ToolParameters<Arguments> extends ReturnType<typeof Type.Unsafe<Arguments>> {}
 
-export type ToolArguments<Arguments> = {
+type ToolArguments<Arguments> = {
 	name: string;
 	parameters: ToolParameters<Arguments>;
 	prepareArguments(args: unknown): Arguments;
@@ -26,6 +28,7 @@ export function toolArguments<Arguments>(
 	name: string,
 	schema: z.ZodType<Arguments> & ToolSchema,
 	expected: Readonly<Record<string, string>> = {},
+	{ coerce = false }: { coerce?: boolean } = {},
 ): ToolArguments<Arguments> {
 	const actions = "options" in schema
 		? new Map(schema.options.map(option => [option.shape.action.value, option]))
@@ -40,18 +43,46 @@ export function toolArguments<Arguments>(
 	const parameters = actions
 		? z.strictObject({ action: z.enum([...actions.keys()]), ...properties })
 		: schema;
+	const jsonSchema = z.toJSONSchema(parameters, { target: "draft-07" });
+	// Pi's native TypeBox fields accept conversions that its JSON-schema fallback does not.
+	const coercers = coerce ? Object.entries(jsonSchema.properties ?? {}).map(([key, field]) => {
+		const type = typeof field === "object" ? field.type : undefined;
+		const scalar = type === "boolean" ? Type.Boolean()
+			: type === "number" || type === "integer" ? Type.Number()
+			: type === "string" ? Type.String()
+			: Type.Unsafe(field);
+		const property = jsonSchema.required?.includes(key) ? scalar : Type.Optional(scalar);
+		return { key, tool: { name, description: "", parameters: Type.Object({ [key]: property }) } };
+	}) : [];
 	return {
 		name,
-		parameters: Type.Unsafe<Arguments>(z.toJSONSchema(parameters, { target: "draft-07" })),
+		parameters: Type.Unsafe<Arguments>(jsonSchema),
 		prepareArguments(args: unknown): Arguments {
-			const parsed = schema.safeParse(args);
+			let prepared = args;
+			if (coerce && args !== null && typeof args === "object" && !Array.isArray(args)) {
+				const fields = { ...args } as JsonObject;
+				for (const { key, tool } of coercers) {
+					if (!Object.hasOwn(fields, key)) continue;
+					try {
+						const normalized: JsonObject = validateToolArguments(tool, {
+							type: "toolCall", id: "", name, arguments: { [key]: fields[key] },
+						});
+						if (Object.hasOwn(normalized, key)) fields[key] = normalized[key];
+						else delete fields[key];
+					} catch {
+						// Zod can report this field while pi still normalizes the others.
+					}
+				}
+				prepared = fields;
+			}
+			const parsed = schema.safeParse(prepared);
 			if (parsed.success) return parsed.data;
 
-			const input = args !== null && typeof args === "object" ? args : undefined;
+			const input = prepared !== null && typeof prepared === "object" ? prepared : undefined;
 			const action = input && "action" in input ? input.action : undefined;
 			const variant = typeof action === "string" ? actions?.get(action) : undefined;
 			const issues = actions && !variant
-				? parameters.safeParse(args).error?.issues ?? parsed.error.issues
+				? parameters.safeParse(prepared).error?.issues ?? parsed.error.issues
 				: parsed.error.issues;
 			const keys = Object.keys(variant?.shape ?? ("shape" in parameters ? parameters.shape : {}));
 			const allowed = keys.length ? `use only ${keys.join(", ")}` : "pass an empty object";

@@ -31,26 +31,30 @@ export const LanesDoc = defineDoc<
 	}),
 });
 
-const laneFields = {
-	name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/)
-		.describe("Lowercase kebab-case name, such as implement-auth."),
-	base: z.string().min(1).optional()
-		.describe("Branch, tag, or commit, such as HEAD, release, or origin/release."),
+const nameDescription = "Lowercase kebab-case name, such as implement-auth.";
+const baseDescription = "Branch, tag, or commit, such as HEAD, release, or origin/release.";
+const laneChangeFields = {
+	name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).describe(nameDescription),
+	base: z.string().min(1).optional().describe(baseDescription),
 };
 const LaneArguments = z.discriminatedUnion("action", [
-	z.strictObject({ action: z.literal("start"), ...laneFields }),
-	z.strictObject({ action: z.literal("switch"), ...laneFields }),
-	z.strictObject({ action: z.literal("list") }),
+	z.strictObject({ action: z.literal("start"), ...laneChangeFields }),
+	z.strictObject({ action: z.literal("switch"), ...laneChangeFields }),
+	z.strictObject({
+		action: z.literal("list"),
+		name: z.string().optional().describe(nameDescription),
+		base: z.string().optional().describe(baseDescription),
+	}),
 ]);
 export const laneArguments = toolArguments("lane", LaneArguments, {
 	name: 'a lowercase kebab-case work lane name of 1 to 63 characters starting with a letter or digit, such as "implement-auth"',
 	base: 'a branch, tag, or commit, such as "HEAD", or omit base to use the default',
-});
+}, { coerce: true });
 type LaneChange = Exclude<z.infer<typeof LaneArguments>, { action: "list" }>;
 
 export function checkWorkLaneName(args: LaneChange) {
 	// Pi recovery can execute an intent recorded before the schema required this name.
-	if (!laneFields.name.safeParse(args.name).success) laneArguments.prepareArguments(args);
+	if (!laneChangeFields.name.safeParse(args.name).success) laneArguments.prepareArguments(args);
 }
 
 /** The initial channel name remains the lane prefix after a rename. */

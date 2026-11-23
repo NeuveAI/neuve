@@ -31,7 +31,7 @@ const SubagentModel = z.string().regex(/^[^/\s]+\/\S+$/)
 const subagentArguments = toolArguments("subagent", z.strictObject({
 	task: z.string().describe("What the subagent should do"),
 	model: SubagentModel.optional(),
-}), { model: "a model in provider/model-id form, or omit model to inherit the parent chat's model" });
+}), { model: "a model in provider/model-id form, or omit model to inherit the parent chat's model" }, { coerce: true });
 
 /**
  * A subagent works in a child chat owned by this tool call's task, so stopping or killing the parent
@@ -76,16 +76,16 @@ export const subagent = (submitInput: Channel["submitInput"], ...without: Extens
 					const submission = await (change ? handle.submit(request, context) : submitInput(handle, request, context));
 					const settled = await submission.wait(context);
 					if (settled.answer === undefined) {
+						if (args.model && settled.reason === "no_model") {
+							throw toolRefusal("subagent", args, [
+								`model: Model ${JSON.stringify(args.model)} is not available in this channel, so omit model to use your own.`,
+							]);
+						}
 						const childModel = (await api.snapshot(AgentDoc, child, context))?.model;
 						const requested = args.model || (childModel ? `${childModel.provider}/${childModel.modelId}` : "automatic model selection");
 						const detail = typeof settled.detail === "string" ? settled.detail : JSON.stringify(settled.detail);
 						const reason = [settled.reason, detail].filter(Boolean).join(": ") || "no answer was recorded";
-						const failure = `Subagent chat ${child} ended unanswered with ${requested} (${reason})`;
-						throw toolRefusal("subagent", args, [
-							args.model && settled.reason === "no_model"
-								? `model: ${failure}, so use a model available in this channel.`
-								: `task: ${failure}.`,
-						]);
+						throw new Error(`Subagent chat ${child} ended unanswered with ${requested} (${reason})`);
 					}
 					const text = await answer(api, settled.answer, context);
 					return { content: [{ type: "text", text }], details: { chat: child } };
@@ -117,7 +117,7 @@ const messageArguments = toolArguments("message", z.strictObject({
 	channel: "a channel id or unique name from channels",
 	chat: "a nonnegative integer chat id in the destination channel, or omit chat for its first chat",
 	invoke: "true to start the destination chat's agent or false to deliver the message without starting it",
-});
+}, { coerce: true });
 
 /**
  * Other channels' current names, as `#name`, keyed by the author their agents' messages carry. That

@@ -64,6 +64,10 @@
 			"types": "./.types/src/review-protocol.d.ts",
 			"default": "./src/review-protocol.ts"
 		},
+		"./tool-arguments": {
+			"types": "./.types/src/tool-arguments.d.ts",
+			"default": "./src/tool-arguments.ts"
+		},
 		"./external-ref": {
 			"types": "./.types/src/external-ref.d.ts",
 			"default": "./src/external-ref.ts"
