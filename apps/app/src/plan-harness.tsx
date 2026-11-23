@@ -180,7 +180,7 @@ const TABS: { label: string; props: PlanViewProps }[] = [
 	},
 	{ label: "Approved", props: { plan: view(plan({ state: "approved", approved: APPROVED })), text: TEXT } },
 	{ label: "Replaced", props: { plan: view(plan({ state: "replaced", approved: APPROVED })), text: TEXT } },
-	{ label: "Loading", props: { plan: view(plan()), approve: { onApprove: () => {}, approving: false, blocked: "The plan is loading" } } },
+	{ label: "Loading", props: { plan: view(plan()), approve: { onApprove: () => {}, approving: false } } },
 	{ label: "Could not read", props: { plan: view(plan()), error: "No plan p1 in chat 1." } },
 	{
 		label: "Every kind of block",
@@ -305,9 +305,7 @@ const ROW = (patch: Partial<PlanComment> = {}) =>
 
 const COMMENT_STATES: { label: string; comments: PlanComment[]; state?: Plan["state"]; hash?: string }[] = [
 	{ label: "Kept, not sent", comments: [GOAL(), SCOPE()] },
-	{ label: "Queued", comments: [GOAL({ sent: ADMITTED, state: "queued" })] },
 	{ label: "Sent", comments: [GOAL({ sent: SENT, state: "sent" })] },
-	{ label: "Picked up", comments: [GOAL({ sent: SENT, state: "picked-up" })] },
 	{
 		label: "Answered, with a reply kept",
 		comments: [
@@ -337,7 +335,7 @@ const commentViews = (comments: PlanComment[]) =>
 const noop = async () => {};
 
 function commentActions(comments: PlanComment[]) {
-	return { list: commentViews(comments), agent: "Neuve", keep: noop, reply: noop, edit: noop, remove: noop };
+	return { list: commentViews(comments), keep: noop, reply: noop, edit: noop, remove: noop };
 }
 
 function CommentStates() {
@@ -422,7 +420,6 @@ function Commenting() {
 					approve={{ onApprove: () => {}, approving: false }}
 					comments={{
 						list: commentViews(comments),
-						agent: "Neuve",
 						keep: hash === plan().hash
 							? async (selection, text) => {
 								await new Promise((resolve) => setTimeout(resolve, 150));

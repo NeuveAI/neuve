@@ -1,10 +1,9 @@
 import { createContext, use, useState } from "react";
 
 import type { PlanCardView } from "../../types";
-import { cn } from "../../lib/utils";
 import { Button } from "../../ui/button";
 
-import { CARD_FOOTER, CARD_HEAD, RequestCard, RequestCardFooter, RequestCardHead } from "./card";
+import { CARD, CARD_FOOTER, CARD_HEAD, RequestCard, RequestCardFooter, RequestCardHead, StatePill } from "./card";
 
 /** What the plan card's controls do; the app provides them around the timeline. */
 export type PlanActions = {
@@ -23,31 +22,15 @@ export const NOT_ALLOWED_TO_APPROVE = "Only people who may ask this channel's ag
 
 const MAX_WIDTH = 440;
 
-const TONES = {
-	draft: "bg-(--agent-plan)/14 text-(--agent-plan)",
-	approved: "bg-success/14 text-success",
-	replaced: "bg-muted text-muted-foreground",
-} as const;
-
-const LABELS = { draft: "Draft", approved: "Approved", replaced: "Replaced" } as const;
-
-/** The plan's state as a pill beside its title. */
+/** A settled plan's state beside its title. */
 export function PlanBadge({ state }: { state: PlanCardView["state"] }) {
-	return (
-		<span
-			className={cn(
-				"shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-normal transition-colors duration-120 motion-reduce:transition-none",
-				TONES[state],
-			)}
-		>
-			{LABELS[state]}
-		</span>
-	);
+	if (state === "draft") return null;
+	return <StatePill tone={state === "approved" ? "success" : "muted"}>{state === "approved" ? "Approved" : "Replaced"}</StatePill>;
 }
 
-/** The card's height at a given width: its head, and a footer while it is a draft. */
+/** The card's height: its head, less the line under the title when it has none, and a footer while it is a draft. */
 export function planCardHeight(view: PlanCardView) {
-	return CARD_HEAD + (view.state === "draft" ? CARD_FOOTER : 0);
+	return CARD_HEAD - (view.meta === undefined ? CARD.metaGap + CARD.metaLine : 0) + (view.state === "draft" ? CARD_FOOTER : 0);
 }
 
 export function planCardWidth(available: number) {
@@ -59,6 +42,7 @@ export function PlanCard({ view, width }: { view: PlanCardView; width: number })
 	let actions = use(PlanActionsContext);
 	let [approving, setApproving] = useState(false);
 	let allowed = !!actions?.mayApprove;
+	let draft = view.state === "draft";
 	return (
 		<RequestCard
 			aria-label="Plan"
@@ -68,20 +52,24 @@ export function PlanCard({ view, width }: { view: PlanCardView; width: number })
 			<RequestCardHead
 				title={
 					<>
-						<button
-							type="button"
-							className="min-w-0 truncate text-left outline-none hover:underline focus-visible:underline"
-							onClick={() => actions?.open(view.plan)}
-						>
-							{view.title || "Plan"}
-						</button>
+						{draft
+							? <span className="min-w-0 truncate">{view.title || "Plan"}</span>
+							: (
+								<button
+									type="button"
+									className="min-w-0 truncate text-left outline-none hover:underline focus-visible:underline"
+									onClick={() => actions?.open(view.plan)}
+								>
+									{view.title || "Plan"}
+								</button>
+							)}
 						<PlanBadge state={view.state} />
 					</>
 				}
 				meta={view.meta}
-				metaProps={{ className: "truncate font-mono" }}
+				metaProps={{ className: "truncate" }}
 			/>
-			{view.state === "draft" && (
+			{draft && (
 				<RequestCardFooter className="items-center justify-end gap-1.5">
 					<Button size="sm" variant="outline" onClick={() => actions?.open(view.plan)}>
 						Open plan

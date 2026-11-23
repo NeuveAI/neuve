@@ -1,13 +1,11 @@
 import { useState } from "react";
 
-import { Button, Code, Diff, patchFile, RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead } from "@ace/ui";
+import { Button, Code, Diff, patchFile, RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead, StatePill } from "@ace/ui";
 
-import type { ApprovalCardView, ApprovalState } from "./approval-card";
+import type { ApprovalCardView } from "./approval-card";
 import { host } from "./host";
 
 type Decision = "allow" | "deny";
-
-export const NOT_ALLOWED_TO_ANSWER = "Only people who may ask this channel's agents can answer";
 
 /**
  * Sends one answer and resolves to the channel's refusal, if any. The reply is not read: the card
@@ -27,20 +25,12 @@ export async function answerApproval(
 	}
 }
 
-const TONES: Record<ApprovalState, string> = {
-	open: "bg-warning/16 text-warning-strong",
-	allowed: "bg-success/14 text-success",
-	denied: "bg-destructive/12 text-destructive",
-	closed: "bg-muted text-muted-foreground",
-};
-const LABELS: Record<ApprovalState, string> = {
-	open: "Waiting",
-	allowed: "Allowed",
-	denied: "Denied",
-	closed: "Closed",
-};
+const SETTLED = {
+	allowed: ["success", "Allowed"],
+	denied: ["destructive", "Denied"],
+	closed: ["muted", "Closed"],
+} as const;
 
-// Every line wraps and nothing is cut off: a person allows what they read, so all of it shows.
 const CODE =
 	"rounded-md border border-border bg-code px-2.5 py-2 text-xs leading-[18px] [&_pre]:!whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere]";
 
@@ -60,24 +50,25 @@ export function ApprovalCard({ view, mayAnswer, sending, error, answer }: {
 	error?: string;
 	answer: (decision: Decision) => void;
 }) {
-	const open = view.state === "open";
+	if (view.state !== "open") {
+		const [tone, label] = SETTLED[view.state];
+		return (
+			<RequestCard aria-label={`${view.title}, ${label}`} className="mb-2 overflow-hidden">
+				<RequestCardHead
+					title={
+						<>
+							<span className="min-w-0 [overflow-wrap:anywhere]">{view.title}</span>
+							<StatePill tone={tone}>{label}</StatePill>
+						</>
+					}
+					meta={view.meta}
+				/>
+			</RequestCard>
+		);
+	}
 	return (
-		<RequestCard aria-label={`${view.title}, ${LABELS[view.state]}`} className="mb-2 overflow-hidden">
-			<RequestCardHead
-				title={
-					<>
-						<span className="min-w-0 [overflow-wrap:anywhere]">{view.title}</span>
-						<span
-							className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-normal transition-colors duration-120 motion-reduce:transition-none ${
-								TONES[view.state]
-							}`}
-						>
-							{LABELS[view.state]}
-						</span>
-					</>
-				}
-				meta={view.meta}
-			/>
+		<RequestCard aria-label={view.title} className="mb-2 overflow-hidden">
+			<RequestCardHead title={<span className="min-w-0 [overflow-wrap:anywhere]">{view.title}</span>} />
 			<RequestCardBody className="flex flex-col gap-2">
 				{view.notes.map((note) => (
 					<p key={note} className="text-xs font-medium text-warning-strong">{note}</p>
@@ -110,38 +101,34 @@ export function ApprovalCard({ view, mayAnswer, sending, error, answer }: {
 				{view.reason !== undefined && (
 					<p className="text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{view.reason}</p>
 				)}
-				{open && view.note && <p className="text-xs text-muted-foreground">{view.note}</p>}
+				{view.note && <p className="text-xs text-muted-foreground">{view.note}</p>}
 				<details className="text-xs" open={view.partial || undefined}>
 					<summary className="cursor-pointer text-muted-foreground select-none">Details</summary>
 					<Code className={`${CODE} mt-1`} source={view.details} language="json" />
 				</details>
 			</RequestCardBody>
-			{open && (
+			{mayAnswer && (
 				<RequestCardFooter className="items-center justify-between gap-3">
-					<p role={error ? "alert" : undefined} className="min-w-0 text-xs text-muted-foreground">
-						{error || (mayAnswer ? "" : NOT_ALLOWED_TO_ANSWER)}
-					</p>
-					{mayAnswer && (
-						<div className="flex shrink-0 gap-1.5">
-							<Button
-								size="sm"
-								variant="secondary"
-								className="aria-disabled:opacity-50"
-								aria-disabled={!!sending || undefined}
-								onClick={() => !sending && answer("deny")}
-							>
-								{sending === "deny" ? "Denying…" : "Deny"}
-							</Button>
-							<Button
-								size="sm"
-								className="aria-disabled:opacity-50"
-								aria-disabled={!!sending || undefined}
-								onClick={() => !sending && answer("allow")}
-							>
-								{sending === "allow" ? "Allowing…" : "Allow"}
-							</Button>
-						</div>
-					)}
+					<p role={error ? "alert" : undefined} className="min-w-0 text-xs text-muted-foreground">{error}</p>
+					<div className="flex shrink-0 gap-1.5">
+						<Button
+							size="sm"
+							variant="secondary"
+							className="aria-disabled:opacity-50"
+							aria-disabled={!!sending || undefined}
+							onClick={() => !sending && answer("deny")}
+						>
+							{sending === "deny" ? "Denying…" : "Deny"}
+						</Button>
+						<Button
+							size="sm"
+							className="aria-disabled:opacity-50"
+							aria-disabled={!!sending || undefined}
+							onClick={() => !sending && answer("allow")}
+						>
+							{sending === "allow" ? "Allowing…" : "Allow"}
+						</Button>
+					</div>
 				</RequestCardFooter>
 			)}
 		</RequestCard>

@@ -32,11 +32,11 @@ const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { apply } = await import("../src/transcript");
-const { approvalView, HIDDEN_NOTE, UNRECOGNISED, shownApprovals, visiblePath } = await import("../src/approval-card");
+const { approvalView, HIDDEN_NOTE, shownApprovals, visiblePath } = await import("../src/approval-card");
 const { fixture, KINDS, PROBES } = await import("../src/approval.fixtures");
 const { ApprovalAskedSchema } = await import("@ace/channel/frame");
 const { patchFile } = await import("@ace/ui");
-const { Approval, ApprovalCard, NOT_ALLOWED_TO_ANSWER } = await import("../src/approval");
+const { Approval, ApprovalCard } = await import("../src/approval");
 type Transcript = Parameters<typeof apply>[0];
 type Item = Transcript["items"][number];
 
@@ -74,7 +74,7 @@ test("a click changes nothing on the card until the channel's event does", async
 	await card.show(open);
 	await act(async () => card.button("Allow").click());
 	expect(sent.at(-1)).toEqual({ op: "approval-answer", chat: 1, author: "me", requestId: "r1", decision: "allow" });
-	expect(card.card().getAttribute("aria-label")).toBe("Command, Waiting");
+	expect(card.card().getAttribute("aria-label")).toBe("Command");
 	expect(card.button("Allowing").getAttribute("aria-disabled")).toBe("true");
 
 	// A second click while the answer is out sends nothing more.
@@ -102,7 +102,7 @@ test("an answer the channel refuses shows the refusal on the card and can be sen
 	await card.show(open);
 	await act(async () => card.button("Allow").click());
 	expect(card.card().querySelector('[role="alert"]')?.textContent).toBe("This request already has an answer. It was Allow.");
-	expect(card.card().getAttribute("aria-label")).toBe("Command, Waiting");
+	expect(card.card().getAttribute("aria-label")).toBe("Command");
 	expect(card.button("Allow").getAttribute("aria-disabled")).toBeNull();
 	await card.unmount();
 });
@@ -118,7 +118,7 @@ test("two requests for one call are two cards, each answered by its own id", asy
 	expect(shown.map((value) => value.requestId)).toEqual(["r1", "r2"]);
 	const cards = shown.map((value) => mount(value));
 	await Promise.all(cards.map((card, index) => card.show(shown[index]!)));
-	expect(cards.map((card) => card.card().getAttribute("aria-label"))).toEqual(["Command, Waiting", "More access, Waiting"]);
+	expect(cards.map((card) => card.card().getAttribute("aria-label"))).toEqual(["Command", "More access"]);
 
 	const count = sent.length;
 	await act(async () => cards[1]!.button("Deny").click());
@@ -130,27 +130,29 @@ test("two requests for one call are two cards, each answered by its own id", asy
 
 // Why: a closed request can no longer be answered; buttons there would invite an answer the channel
 // refuses, and a card without its reason leaves the person guessing why the work did not run.
-test("a closed request shows its reason and no buttons", () => {
+test("a closed request shows its reason and nothing under its head", () => {
 	const reasons = {
-		"turn-ended": "Closed when the turn ended",
+		"turn-ended": "The turn ended",
 		"runtime-resolved": "Withdrawn before an answer",
-		stopped: "Closed when the chat was stopped",
-		restarted: "Closed when Neuve restarted",
+		stopped: "The chat was stopped",
+		restarted: "Neuve restarted",
 	} as const;
 	for (const [reason, text] of Object.entries(reasons)) {
 		const card = html(request({ kind: "closed", reason: reason as keyof typeof reasons }));
 		expect(card).toContain(text);
-		expect(card).not.toContain(">Allow<");
+		expect(card).not.toContain("<footer");
+		expect(card).not.toContain("Details");
 	}
 	expect(html(request({ kind: "closed", reason: "message", by: "alice" }))).toContain("Alice sent a message instead");
 });
 
-// Why: only someone the channel lets ask its agents may answer; buttons for anyone else would only
-// collect refusals.
+// Why: only someone the channel lets ask its agents may answer; buttons anyone else can never press
+// would only collect refusals.
 test("a teammate who may not answer sees the card without its buttons", () => {
 	const card = html(request({ kind: "open" }), { mayAnswer: false });
-	expect(card).toContain(NOT_ALLOWED_TO_ANSWER.replace("'", "&#x27;"));
 	expect(card).not.toContain(">Deny<");
+	expect(card).not.toContain(">Allow<");
+	expect(card).not.toContain("<footer");
 });
 
 const probe = (label: string) => fixture(PROBES.find((value) => value.label === label)!);
@@ -171,13 +173,11 @@ test("a long or many-line command is shown in full and wraps", () => {
 // What a person reads for each closed value, as the card must word it.
 const ACCESS = { read: "Read", write: "Write", deny: "No access" } as const;
 const CHANGE = { add: "Added", delete: "Deleted", update: "Changed" } as const;
-const NETWORK = (value: boolean | null) => value === null ? "Not asked" : value ? "On" : "Off";
-const TARGET = (value: ApprovalPath, folder?: string) => {
-	const where = folder === undefined ? "" : ` (${folder})`;
+const TARGET = (value: ApprovalPath) => {
 	switch (value.kind) {
 		case "path": return value.path;
 		case "glob": return `${value.pattern} (pattern)`;
-		case "project-roots": return `${value.subpath === undefined ? "This chat's" : `${value.subpath} in this chat's`} working folders${where}`;
+		case "project-roots": return `${value.subpath === undefined ? "This chat's" : `${value.subpath} in this chat's`} working folders`;
 		case "root": return "/ (the whole disk)";
 		case "minimal": return "The system's minimal folders";
 		case "tmpdir": return "The temporary folder ($TMPDIR)";
@@ -201,8 +201,8 @@ function expected(asked: ApprovalAsked): string[] {
 			];
 		case "wider-access":
 			return [
-				...asked.paths.map((path) => `${ACCESS[path.access]} ${TARGET(path.target, asked.folder)}`),
-				`Network ${NETWORK(asked.network)}`,
+				...asked.paths.map((path) => `${ACCESS[path.access]} ${TARGET(path.target)}`),
+				...(asked.network === null ? [] : [`Network ${asked.network ? "On" : "Off"}`]),
 				...(asked.folder === undefined ? [] : [`Folder ${asked.folder}`]),
 				...(asked.globDepthLimit === undefined ? [] : [`Pattern depth ${asked.globDepthLimit}`]),
 				...reason,
@@ -296,19 +296,18 @@ test("every field of every kind of request is on the card", () => {
 	}
 });
 
-// Why: the card cannot summarise every request; then it says so and shows the raw request open,
-// never a narrower summary than what Allow grants.
-test("an unrecognised request says so and shows the whole request open", () => {
+// Why: the card cannot summarise every request; then it shows the raw request open, never a
+// narrower summary than what Allow grants.
+test("an unrecognised request shows the whole request open", () => {
 	for (const label of ["Not summarised", "A plain string"]) {
 		const value = probe(label);
-		expect(view(value).notes).toContain(UNRECOGNISED);
 		const card = html(value);
 		expect(card).toMatch(/<details[^>]* open=""/);
 		expect(card).toContain("rm");
 	}
 	expect(html(request({ kind: "open" }))).not.toMatch(/<details[^>]* open=""/);
 	const disk = view(probe("Write access to the whole disk"));
-	expect(disk.rows).toEqual([{ key: "Write", value: "/ (the whole disk)" }, { key: "Network", value: "Not asked" }]);
+	expect(disk.rows).toEqual([{ key: "Write", value: "/ (the whole disk)" }]);
 });
 
 // Why: a file change may arrive without the change itself; the card must say so, never look like

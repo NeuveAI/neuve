@@ -1,8 +1,18 @@
-import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai";
+import { type CreateModelsOptions, getSupportedThinkingLevels, type Models, type MutableModels } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 import type { ModelOption, ModelRef } from "./protocol";
 
 const PREFERRED = ["anthropic/claude-opus-5-5", "openai/gpt-6-astra"];
+
+// Pi's legacy ChatGPT route uses a sign-in Ace cannot manage.
+const LEGACY_CHATGPT_PROVIDER = "openai-codex";
+
+export function createCatalogue(options: CreateModelsOptions): MutableModels {
+	const models = builtinModels(options);
+	models.deleteProvider(LEGACY_CHATGPT_PROVIDER);
+	return models;
+}
 
 /** One inaccessible provider must not hide another provider's usable models. */
 export async function available(models: Models): Promise<ModelOption[]> {
