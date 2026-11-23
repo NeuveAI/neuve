@@ -71,7 +71,12 @@ import {
   ScopeNotKept,
 } from "./scope-storage.ts";
 
-import { blobText, jsonComputation, storedOutput } from "./search-index.ts";
+import {
+  blobText,
+  jsonComputation,
+  retrySharedAttempt,
+  storedOutput,
+} from "./search-index.ts";
 import { READ_ONLY, defineTool, type ToolSpec } from "./toolkit.ts";
 
 export { keepExternalFetched, keepFetched, scopeFolder, ScopeNotKept };
@@ -983,11 +988,6 @@ const selectedLocalScope = (cycleId: string) =>
         : undefined,
   );
 
-const retrySharedAttempt = Effect.retry({
-  times: 1,
-  while: (error: unknown) => error instanceof Computations.SharedAttemptFailed,
-});
-
 const fetchCycleLocalScope = (
   repository: string,
   copy: ScopeCopy,
@@ -1136,7 +1136,7 @@ export const queryUnheldLocalScope = (
                 kind: "gap" as const,
                 path: source.path,
                 namedAs: source.namedAs,
-                reason: `Neuve read the file without keeping a copy for review because ${reason}. ${firstQueryScope}`,
+                reason: `Neuve read the file without keeping a copy for review because ${reason}.`,
               },
         ),
       },

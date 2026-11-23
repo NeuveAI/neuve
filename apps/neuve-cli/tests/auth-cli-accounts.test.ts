@@ -125,36 +125,35 @@ async function capture<A>(run: () => Promise<A>) {
   }
 }
 
+// A removal blocked at sign-out can otherwise look like a startup failure.
 test("auth remove reports a failed Codex account sign-out and names the file to fix", async () => {
   await withBrokenSignIn("codex", async (home, file) => {
     const error: unknown = await capture(() =>
       runAuthCli(["remove", "work"], { home }),
     ).catch((error: unknown) => error);
-    expect(error).toHaveProperty("message", expect.stringContaining(file));
     expect(error).toHaveProperty(
       "message",
-      expect.stringContaining("neuve auth remove work"),
+      expect.stringContaining(`Could not sign out of work. ${file}`),
+    );
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining("Run neuve auth remove work again."),
     );
     expect(existsSync(file)).toBe(true);
   });
 });
 
-test("auth status --check names unreadable ChatGPT sign-in files with either runtime", async () => {
-  const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
-  try {
-    for (const runtime of ["pi", "codex"] as const)
-      await withBrokenSignIn(runtime, async (home, file) => {
-        await capture(() =>
-          runAuthCli(["status", "work", "--check"], { home }),
-        );
-        const diagnostics = stderr.mock.calls
-          .map(([chunk]) => String(chunk))
-          .join("");
-        expect(diagnostics).toContain(file);
-      });
-  } finally {
-    stderr.mockRestore();
-  }
+// Named accounts can use different sign-in files, so the path tells the person which one to fix.
+test("auth status --check names unusable ChatGPT sign-in files with either runtime", async () => {
+  for (const runtime of ["pi", "codex"] as const)
+    await withBrokenSignIn(runtime, async (home, file) => {
+      const { out } = await capture(() =>
+        runAuthCli(["status", "work", "--check"], { home }),
+      );
+      expect(out).toContain(
+        `unknown: check-failed\n  Remove ${file}, then sign in again.`,
+      );
+    });
 });
 
 async function withBrokenSignIn(

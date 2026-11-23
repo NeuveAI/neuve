@@ -399,6 +399,11 @@ export const uniquePathBatches = <T>(
   return rounds.map(({ files: round }) => round);
 };
 
+export const retrySharedAttempt = Effect.retry({
+  times: 1,
+  while: (error: unknown) => error instanceof Computations.SharedAttemptFailed,
+});
+
 /** Runs a JSON computation over the store and decodes its output. */
 export const jsonComputation = <T, E, R>(
   spec: Computations.ComputationSpec,

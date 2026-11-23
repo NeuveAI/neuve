@@ -156,6 +156,7 @@ test("masking covers declared identifiers and the shapes fetched, and nothing el
   expect(keyCandidates("fix NEU-13, keep UTF-8")).toEqual(["NEU-13", "UTF-8"]);
 });
 
+// An undecodable link in the agent guide must never stop the scope fetch.
 test("reports invalid link targets and still resolves the other links", () => {
   const failures: string[] = [];
   expect(

@@ -1,3 +1,4 @@
+import MarkdownIt from "markdown-it";
 import { unescapeAll } from "markdown-it/lib/common/utils.mjs";
 
 /**
@@ -121,24 +122,16 @@ export function matchesFileLines(
   );
 }
 
+const planMarkdown = new MarkdownIt({ html: false, linkify: false });
+
 export function fileLinesSection(text: string, line: number): string {
-  let heading: FileLine | undefined;
-  let fence: string | undefined;
-  for (const candidate of fileLines(text).slice(0, line)) {
-    const marker = /^\s*(`{3,}|~{3,})/.exec(candidate.text);
-    if (marker?.[1] !== undefined) {
-      const run = marker[1];
-      const rest = candidate.text.slice(marker[0].length);
-      if (fence !== undefined) {
-        if (run.startsWith(fence) && !/[^ ]/.test(rest)) fence = undefined;
-      } else if (run[0] === "~" || !rest.includes("`")) fence = run;
-    }
-    if (fence === undefined && /^\s*#{1,6}\s/.test(candidate.text))
-      heading = candidate;
-  }
-  return heading
-    ? plainLines([{ ...heading, text: heading.text.replace(/\s#+\s*$/, "") }])
-    : "";
+  const tokens = planMarkdown.parse(text, {});
+  const heading = tokens.findLastIndex(
+    (token) => token.type === "heading_open" && token.map![0] < line,
+  );
+  return heading < 0
+    ? ""
+    : plainLines(fileLines(`# ${tokens[heading + 1]!.content}`));
 }
 
 /**

@@ -531,14 +531,17 @@ describe("neuve CLI boundary", () => {
       ],
     });
     expect(
-      [guide, linked, named].map(({ ref, stratum }: PublicQueryScopeSource) => [
-        ref.found,
-        stratum,
-      ]),
+      [guide, linked, named].map(
+        ({ ref, contextOnly, stratum }: PublicQueryScopeSource) => [
+          ref.found,
+          contextOnly,
+          stratum,
+        ],
+      ),
     ).toEqual([
-      ["agent guide (agents-md-root-v1)", "context only"],
-      ["linked from AGENTS.md", "context only"],
-      [`named in ${plan}`, "context only"],
+      ["agent guide (agents-md-root-v1)", true, "context only"],
+      ["linked from AGENTS.md", true, "context only"],
+      [`named in ${plan}`, true, "context only"],
     ]);
     const location = storeLocationIn(join(root, ".git"));
     const heldPath = join(scopeFolder(location, answer.cycle_id), "S1.txt");
@@ -576,9 +579,9 @@ describe("neuve CLI boundary", () => {
       );
     const cycle = await readCycle();
     expect(
-      cycle.sources.map(({ contextOnly, ...source }) => ({
+      cycle.sources.map((source) => ({
         ...source,
-        stratum: contextOnly ? "context only" : source.stratum,
+        stratum: source.contextOnly ? "context only" : source.stratum,
       })),
     ).toEqual(
       answer.scope.map(
@@ -707,7 +710,7 @@ describe("neuve CLI boundary", () => {
         sections: [expect.objectContaining({ startLine: 1, endLine: 5 })],
       }),
       expect.objectContaining({
-        stratum: "context only",
+        contextOnly: true,
         ref: expect.objectContaining({
           path: "other.custom",
           found: "named in working",

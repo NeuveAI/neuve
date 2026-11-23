@@ -131,6 +131,14 @@ export class OpenAiAuthError extends Error {
   }
 }
 
+export const signInFileFix = (error: unknown): string | undefined =>
+  error instanceof OpenAiAuthError &&
+  (error.code === "file-mode" ||
+    error.code === "file-unreadable" ||
+    error.code === "file-invalid")
+    ? error.message
+    : undefined;
+
 /** Names the sign-in's folder itself, such as one on a cloud machine's mounted volume (10.129). */
 export const AUTH_DIRECTORY_VARIABLE = "NEUVE_OPENAI_AUTH_DIR";
 

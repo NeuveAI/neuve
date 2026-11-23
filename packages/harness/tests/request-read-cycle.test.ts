@@ -205,6 +205,7 @@ process.exit(result.exitCode);
   }
 };
 
+// A branch lookup must leave the Records writer free for another process.
 test("joins a read cycle while Git can acquire the store's write lock", async () => {
   const repo = fixture();
   const read = await repo.run(repo.read());
@@ -218,6 +219,7 @@ test("joins a read cycle while Git can acquire the store's write lock", async ()
   expect(review.openedCycle).toBe(false);
 });
 
+// An unreadable branch list can silently open a duplicate review cycle.
 test("refuses to open a review cycle when Git cannot list local branches", async () => {
   const repo = fixture();
   await repo.run(repo.read());
@@ -242,6 +244,7 @@ test("refuses to open a review cycle when Git cannot list local branches", async
   expect(openings).toEqual([]);
 });
 
+// A second head must keep its own range even when both heads belong to the read's branch.
 test("opens a separate cycle when the read cycle is bound to another head", async () => {
   const repo = fixture();
   const { read, first, second } = await repo.run(

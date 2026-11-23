@@ -333,10 +333,7 @@ export type PublicCapabilities = Readonly<{
 
 export type PublicQueryEnvelope = Readonly<{ schema_version: 2 }>;
 
-export type PublicQueryScopeSource = Omit<
-  ScopeSource,
-  "contextOnly" | "stratum"
-> &
+export type PublicQueryScopeSource = Omit<ScopeSource, "stratum"> &
   Readonly<{
     stratum: ReturnType<typeof scopeStratum>;
     text?: string;

@@ -19,6 +19,7 @@ import {
 } from "@neuve/runtime";
 import { claudeRuntime, type ClaudeRuntimeConfig } from "@neuve/runtime-claude";
 import {
+  CodexSignInFileError,
   codexRuntime,
   type CodexRuntimeConfig,
   type LogEntry,
@@ -33,6 +34,7 @@ import {
   accessToken,
   authOptionsFor,
   OpenAiAuthError,
+  signInFileFix,
   signOut,
 } from "./openai-auth.ts";
 import type { ReadinessStatuses } from "./route-provider.ts";
@@ -59,10 +61,7 @@ export interface HarnessRuntimesOptions<E, R> extends PiStatusRuntimeOptions {
   readonly codex?: CodexRuntimeConfig | false;
 }
 
-export const codexRuntimeOptions = (
-  home = homedir(),
-  { localAuthDiagnostics = false }: { localAuthDiagnostics?: boolean } = {},
-): CodexRuntimeConfig => ({
+export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
   home,
   programPath: (name) => AccountStore.programPath(home, name),
   neuveSignIn: {
@@ -77,13 +76,6 @@ export const codexRuntimeOptions = (
           accessToken({ ...authOptionsFor(credential), signal }, rejected),
         catch: (error) => error,
       }).pipe(
-        Effect.tapError((error) =>
-          localAuthDiagnostics &&
-          error instanceof OpenAiAuthError &&
-          error.code.startsWith("file-")
-            ? Effect.logError(error.message)
-            : Effect.void,
-        ),
         Effect.mapError((error) => {
           if (error instanceof OpenAiAuthError) {
             switch (error.code) {
@@ -103,7 +95,10 @@ export const codexRuntimeOptions = (
                 return new AccountRejected({ account, hint, reason: "other" });
             }
           }
-          return new TurnFailed({ account, reason: "provider-unavailable" });
+          const fix = signInFileFix(error);
+          return fix === undefined
+            ? new TurnFailed({ account, reason: "provider-unavailable" })
+            : new CodexSignInFileError(account, fix);
         }),
       );
     },
@@ -113,10 +108,8 @@ export const codexRuntimeOptions = (
         catch: (error) =>
           new RuntimeUnavailable({
             account,
-            reason: "start-failed",
-            ...(localAuthDiagnostics && error instanceof OpenAiAuthError
-              ? { fix: error.message }
-              : {}),
+            reason: "sign-out-failed",
+            fix: signInFileFix(error),
           }),
       }).pipe(Effect.asVoid),
   },

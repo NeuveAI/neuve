@@ -19,6 +19,7 @@ import { Effect } from "effect";
 import { z } from "zod";
 import type { CodexConnection } from "./client.ts";
 import * as Decode from "./decode.ts";
+import { CodexSignInFileError } from "./errors.ts";
 import { RELEASE } from "./generated/methods.ts";
 import type { LogEntry } from "./log.ts";
 import {
@@ -114,7 +115,11 @@ const signInFailure = (error: RuntimeError): SignInState => {
     case "RuntimeUnavailable":
       return { state: "runtime-unavailable", reason: error.reason };
     default:
-      return { state: "unknown", reason: "check-failed" };
+      return {
+        state: "unknown",
+        reason: "check-failed",
+        fix: error instanceof CodexSignInFileError ? error.fix : undefined,
+      };
   }
 };
 
@@ -537,7 +542,12 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
           Effect.flatMap((codex) =>
             usesNeuveSignIn(codex)
               ? (neuveSignIn?.signOut(codex) ??
-                Effect.fail(unavailableStart(codex)))
+                Effect.fail(
+                  new RuntimeUnavailable({
+                    account: codex.name,
+                    reason: "sign-out-failed",
+                  }),
+                ))
               : Effect.void,
           ),
         ),

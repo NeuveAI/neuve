@@ -119,8 +119,7 @@ export const authRuntimes = ({
   harnessRuntimes({
     accountDirectory: Layer.succeed(AccountDirectory, directory),
     claude: { cwd: defaultClaudeWorkingFolder(home) },
-    codex: codexRuntimeOptions(home, { localAuthDiagnostics: true }),
-    localAuthDiagnostics: true,
+    codex: codexRuntimeOptions(home),
   });
 
 export interface AuthCliOptions {
@@ -359,15 +358,13 @@ const accountDescription = (status: AccountStatus) => {
   const state =
     signIn.state === "signed-in" && signIn.sourceMatchesAccount === false
       ? "signed in through another source, not this account's folder"
-      : signIn.state === "runtime-unavailable"
+      : signIn.state === "runtime-unavailable" || signIn.state === "unknown"
         ? `${signIn.state}: ${signIn.reason}${signIn.fix === undefined ? "" : `\n  ${signIn.fix}`}`
-        : signIn.state === "unknown"
+        : signIn.state === "credential-rejected" &&
+            signIn.reason !== undefined &&
+            signIn.reason !== "other"
           ? `${signIn.state}: ${signIn.reason}`
-          : signIn.state === "credential-rejected" &&
-              signIn.reason !== undefined &&
-              signIn.reason !== "other"
-            ? `${signIn.state}: ${signIn.reason}`
-            : signIn.state;
+          : signIn.state;
   const fix =
     "hint" in signIn && signIn.hint !== undefined
       ? signInCommand(signIn.hint)
@@ -553,7 +550,7 @@ const runAccountCommand = async (
           .pipe(
             Effect.mapError((error) =>
               error instanceof RuntimeUnavailable &&
-              error.reason === "start-failed"
+              error.reason === "sign-out-failed"
                 ? new Error(
                     `Could not sign out of ${name.data}. ${error.fix === undefined ? "" : `${error.fix} `}Run neuve auth remove ${name.data} again.`,
                   )

@@ -1003,7 +1003,7 @@ export const runQueryGraph = async (
       let sequence = complete.sequence;
       let remaining = request.maxContextBytes;
       for (const item of sources) {
-        const { text, contextOnly: _contextOnly, ...record } = item;
+        const { text, ...record } = item;
         const citation: PublicQueryScopeSource = {
           ...record,
           stratum: scopeStratum(item),
