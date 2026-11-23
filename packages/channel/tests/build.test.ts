@@ -647,20 +647,21 @@ test("scope paths reject escapes and scope answers redact plan paths from citati
 	const outside = join(run.fixture.root, "outside.md");
 	await writeFile(outside, "Private");
 	await symlink(outside, join(run.worktrees[0]!.path, "escape.md"));
-	const valid = await askScope(run, chat, "Read notes", ["missing.md"]);
+	await symlink(run.fixture.root, join(run.worktrees[0]!.path, "escape-dir"), "dir");
+	const valid = await askScope(run, chat, "Read notes");
 	const label = `${plan.title} (${plan.hash})`;
 	expect(JSON.parse(valid.text)).toMatchObject({
 		scope: [{ title: label, ref: { path: label } }],
-		scope_gaps: [`${label}: The held copy could not be read.`, "missing.md: The file was not found."],
+		scope_gaps: [`${label}: The held copy could not be read.`],
 	});
 	expect(valid.text).not.toContain(run.plans);
 	const broken = await askScope(run, chat, "Broken read");
 	expect(broken).toMatchObject({ error: true, text: `The host could not read scope for question "Broken read" (Could not read ${label}). Ask the channel owner to check the worker before retrying.` });
 	expect(broken.text).not.toContain(run.plans);
-	const denied = await askScope(run, chat, "Read invalid paths", [outside, "escape.md", "bad\0path"]);
+	const denied = await askScope(run, chat, "Read invalid paths", [outside, "escape.md", "bad\0path", "escape-dir/missing.md"]);
 	expect(denied).toMatchObject({
 		error: true,
-		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" outside the allowed roots and scope[2] received "bad\\u0000path" but could not resolve it, so name readable files inside the repository, its worktrees or this channel's plans folder or omit them to read the approved plan.`,
+		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" outside the allowed roots and scope[2] received "bad\\u0000path" but could not resolve it and scope[3] received "escape-dir/missing.md" outside the allowed roots, so name readable files inside the repository, its worktrees or this channel's plans folder or omit them to read the approved plan.`,
 	});
 	expect(calls).toEqual(["Read notes", "Broken read"]);
 });

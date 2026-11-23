@@ -520,7 +520,17 @@ const readWorkingFile = async (
         (checked && process.platform === "darwin"
           ? darwinNoFollowAny
           : constants.O_NOFOLLOW),
-    );
+    ).catch((error: unknown) => {
+      if (
+        checked &&
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      )
+        return undefined;
+      throw error;
+    });
+    if (file === undefined) return { kind: "missing" };
     if (
       checked &&
       process.platform === "linux" &&

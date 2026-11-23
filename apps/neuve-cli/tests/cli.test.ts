@@ -647,6 +647,113 @@ describe("neuve CLI boundary", () => {
     }
   });
 
+  test.each(["was deleted from the worktree", "never existed"] as const)(
+    "worker query keeps named scope that %s",
+    async (scenario) => {
+      const { root, revision: initial } = await fixtureRepository();
+      const stateDirectory = await mkdtemp(
+        join(tmpdir(), "neuve-worker-missing-"),
+      );
+      roots.push(stateDirectory);
+      const path = "docs/exports/scope.md";
+      const text = "# Export scope\nKeep the retry order.\n";
+      const tracked = scenario === "was deleted from the worktree";
+      let revision = initial;
+      if (tracked) {
+        await Bun.write(join(root, path), text);
+        expect(execute(["git", "add", path], root).exitCode).toBe(0);
+        expect(
+          execute(["git", "commit", "-qm", "Export scope"], root).exitCode,
+        ).toBe(0);
+        revision = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+        await rm(join(root, "docs"), { recursive: true });
+      }
+      await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+      const graph = await fakeGraph();
+      const worker = {
+        sessionId: "worker-missing-scope",
+        stateDirectory,
+        config: HostConfigSchema.parse({
+          home: stateDirectory,
+          lanes: root,
+          user: "owner",
+          port: 0,
+          environment: {},
+          worker: [process.execPath],
+        }),
+      };
+      const { query } = codingWorkerSetup(
+        await localStorageProfile(root, stateDirectory),
+        SOL_ROUTE,
+      );
+      const read = planScopeRead(
+        root,
+        join(stateDirectory, "plans"),
+        (request) => query!(worker, request),
+      );
+      const plan = "# Approved plan\nRead the export scope.\n";
+      const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+      process.env.NEUVE_GRAPH_BINARY = graph.executable;
+      try {
+        const result = await read({
+          repository: root,
+          revision,
+          question: "What is the export scope?",
+          scope: [path],
+          previousPlans: [],
+          requester: {
+            _tag: "Agent",
+            harness: "neuve-pi",
+            sessionId: worker.sessionId,
+            subagentId: "8",
+          },
+          plan: {
+            file: `${crypto.randomUUID()}.md`,
+            title: "Approved plan",
+            text: plan,
+            hash: createHash("sha256").update(plan).digest("hex"),
+          },
+        });
+        expect(result.isError).toBeUndefined();
+        const answer = JSON.parse(result.text);
+        const reason =
+          "The path was absent from the working tree and the base revision.";
+        expect(answer.scope_gaps).toEqual(
+          tracked ? [] : [`${path}: ${reason}`],
+        );
+        if (tracked) {
+          expect(answer.scope).toContainEqual(
+            expect.objectContaining({
+              kind: "repository-document",
+              ref: expect.objectContaining({ path, revision }),
+              text,
+            }),
+          );
+        }
+        const [{ event }] = await queryHistory(
+          root,
+          "cycle.local-scope-selected@1",
+        );
+        expect(event.attribution.cycleId).toBe(answer.cycle_id);
+        expect(event.payload.sources[1]).toMatchObject(
+          tracked
+            ? {
+                kind: "repository-document",
+                path,
+                blob: execute(
+                  ["git", "rev-parse", `${revision}:${path}`],
+                  root,
+                ).stdout.trim(),
+              }
+            : { kind: "gap", path, reason },
+        );
+      } finally {
+        if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+        else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+      }
+    },
+  );
+
   // A later tree can hide a pinned document or its linked context.
   test("holds named scope at the opening read and returns it on a join", async () => {
     const { root } = await fixtureRepository();
