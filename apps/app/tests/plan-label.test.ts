@@ -32,12 +32,21 @@ test("only a reply its run wrote in plan mode carries the Plan label", () => {
 });
 
 // Why: a turn that only wrote the plan sends no reply, so it has no mode of its own. Unlabelled, the
-// plan's own turn would read as an ordinary one; the plan tool runs only in plan mode.
-test("a turn that only wrote the plan carries the Plan label", () => {
+// plan's own turn would read as an ordinary one. The plan tool succeeds only in plan mode; a call it
+// refused outside plan mode says nothing about the mode, so that turn stays unlabelled.
+test("a turn that only wrote the plan carries the Plan label, a refused write does not", () => {
+  const write = (call: string, error: boolean) => ({
+    call,
+    name: "plan_write",
+    args: {},
+    result: { error, text: error ? "Plans can only be written in Plan mode." : "Plan ready for approval." },
+  });
   const items: Item[] = [
-    { ...reply("wrote"), text: "", tools: [{ call: "c1", name: "plan_write", args: {} }] },
-    { ...reply("read"), text: "", tools: [{ call: "c2", name: "read", args: {} }] },
+    { ...reply("wrote"), text: "", tools: [write("c1", false)] },
+    { ...reply("refused"), text: "", tools: [write("c2", true)] },
+    { ...reply("read"), text: "", tools: [{ call: "c3", name: "read", args: {} }] },
   ];
   const events = toEvents(items, "c", false, { text: "" }, {}, new Map(), {}, {}, {}, () => undefined, {});
-  expect(events.map((event) => (event as { agent?: { mode: string } }).agent?.mode)).toEqual(["plan", undefined]);
+  expect(events.map((event) => (event as { agent?: { mode: string } }).agent?.mode))
+    .toEqual(["plan", undefined, undefined]);
 });

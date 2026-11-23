@@ -283,8 +283,9 @@ export function toEvents(
 			sender: sender(item.model),
 			content,
 			// Each reply carries the mode its own run ran in, so earlier replies keep their label. A turn
-			// that only wrote the plan sends no reply, but the plan tool runs only in plan mode.
-			...(item.mode === "plan" || item.tools.some((tool) => tool.name === PLAN_TOOL)
+			// that only wrote the plan sends no reply, but the plan tool succeeds only in plan mode.
+			...(item.mode === "plan"
+					|| item.tools.some((tool) => tool.name === PLAN_TOOL && tool.result && !tool.result.error)
 				? { agent: { mode: "plan" } }
 				: {}),
 		} as Event;
