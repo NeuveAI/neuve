@@ -30,3 +30,14 @@ test("only a reply its run wrote in plan mode carries the Plan label", () => {
   );
   expect(labels).toEqual({ m: undefined, planned: "plan", built: undefined, older: undefined });
 });
+
+// Why: a turn that only wrote the plan sends no reply, so it has no mode of its own. Unlabelled, the
+// plan's own turn would read as an ordinary one; the plan tool runs only in plan mode.
+test("a turn that only wrote the plan carries the Plan label", () => {
+  const items: Item[] = [
+    { ...reply("wrote"), text: "", tools: [{ call: "c1", name: "plan_write", args: {} }] },
+    { ...reply("read"), text: "", tools: [{ call: "c2", name: "read", args: {} }] },
+  ];
+  const events = toEvents(items, "c", false, { text: "" }, {}, new Map(), {}, {}, {}, () => undefined, {});
+  expect(events.map((event) => (event as { agent?: { mode: string } }).agent?.mode)).toEqual(["plan", undefined]);
+});

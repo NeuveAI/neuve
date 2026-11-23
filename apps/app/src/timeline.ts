@@ -1,4 +1,4 @@
-import { MENTION, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
+import { MENTION, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
 import type { Listing, People } from "@ace/host/protocol";
 import type { Event } from "@ace/ui";
 
@@ -282,8 +282,11 @@ export function toEvents(
 			...base,
 			sender: sender(item.model),
 			content,
-			// Each reply carries the mode its own run ran in, so earlier replies keep their label.
-			...(item.mode === "plan" ? { agent: { mode: "plan" } } : {}),
+			// Each reply carries the mode its own run ran in, so earlier replies keep their label. A turn
+			// that only wrote the plan sends no reply, but the plan tool runs only in plan mode.
+			...(item.mode === "plan" || item.tools.some((tool) => tool.name === PLAN_TOOL)
+				? { agent: { mode: "plan" } }
+				: {}),
 		} as Event;
 	});
 	if (!draft.text) return events;
