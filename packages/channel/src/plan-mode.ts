@@ -11,7 +11,7 @@ import {
 	type Harness,
 	type Tx,
 } from "@earendil-works/pi-durable";
-import { PLAN_TOOL, type ChatMode } from "./protocol";
+import { PLAN_COMMENT_TOOL, PLAN_TOOL, type ChatMode } from "./protocol";
 
 export const ChatModesDoc = defineDoc<{ chats: Record<string, ChatMode> }>({
 	kind: "neuve.chat-modes",
@@ -28,6 +28,7 @@ export const planTools: ReadonlySet<string> = new Set([
 	"planning_dependencies",
 	"question",
 	PLAN_TOOL,
+	PLAN_COMMENT_TOOL,
 	"runtime_work",
 ]);
 
@@ -87,7 +88,10 @@ export function planModeModels(models: Models): Models {
 			message.role === "system" && message.sections?.[requestMode] !== undefined);
 		const mode = decision?.role === "system" && decision.sections?.[requestMode];
 		if (mode !== "ace" && mode !== "plan") throw new Error("Pi's model request is missing the chat mode.");
-		const messages = request.messages.filter(message => message !== decision);
+		const messages = request.messages.filter(message => message !== decision).map(message =>
+			mode === "ace" && message.role === "system" && message.toolsAdded
+				? { ...message, toolsAdded: message.toolsAdded.filter(tool => tool.name !== PLAN_COMMENT_TOOL) }
+				: message);
 		if (mode === "plan") {
 			// Add the marker after all request hooks, which may copy the transcript.
 			const tools = getCurrentTools(messages);

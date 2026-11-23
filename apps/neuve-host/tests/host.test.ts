@@ -206,20 +206,26 @@ async function setup(steps: Step[] = []) {
 	return at;
 }
 
-// The worker socket can receive approval directly, so a gateway test alone would miss this gate.
-test("the archived worker refuses approval of a saved draft", async () => {
+// The worker socket can receive plan writes directly, so a gateway test alone would miss this gate.
+test("the archived worker refuses plan approval and changes to plan comments", async () => {
 	const text = "# Archive this draft\n";
 	const at = await setup([{ tool: "plan_write", args: { text }, id: "archive-draft" }]);
 	const client = await connect(await host(at));
 	const record = await client.request<ChannelRecord>({ op: "create", project: at.project });
 	const active = await Connection.open(record.id);
 	let draft: Plan;
+	let comment: string;
 	try {
 		const events: Event[] = [];
 		await active.request({ op: "watch", plans: true }, { event: event => events.push(event) });
 		const { submission } = await active.request<{ submission: number }>({ op: "ask", author: OWNER, mode: "plan", text: "Draft a plan." });
 		expect(await active.request({ op: "wait", submission })).toBe("done");
 		draft = await until(() => events.findLast(event => event.kind === "plans")?.plans[0], "the draft plan");
+		const kept = await active.request<{ id: string }>({
+			op: "plan-comment", author: OWNER, plan: draft.id, hash: draft.hash,
+			lines: [{ line: 1, text: "# Archive this draft" }], quote: "Archive this draft", text: "Keep this comment.",
+		});
+		comment = kept.id;
 	} finally { active.close(); }
 
 	await client.request({ op: "archive", channel: record.id, archived: true });
@@ -227,6 +233,15 @@ test("the archived worker refuses approval of a saved draft", async () => {
 	try {
 		const approval = { op: "plan-approve", author: OWNER, plan: draft.id, hash: draft.hash } as const;
 		await expect(archived.request(approval)).rejects.toThrow("The channel is archived");
+		for (const request of [
+			{ op: "plan-comment", plan: draft.id, hash: draft.hash, lines: [{ line: 1, text: "# Archive this draft" }], quote: "Archive", text: "New." },
+			{ op: "plan-comment-reply", comment, text: "Reply." },
+			{ op: "plan-comment-edit", comment, text: "Edit." },
+			{ op: "plan-comment-remove", comment },
+			{ op: "plan-comments-send", plan: draft.id },
+		] as const) {
+			await expect(archived.request({ ...request, author: OWNER })).rejects.toThrow("The channel is archived");
+		}
 		expect(await archived.request({ op: "plan", plan: draft.id })).toEqual({ hash: draft.hash, text });
 		await client.request({ op: "archive", channel: record.id, archived: false });
 		expect(await archived.request(approval)).toMatchObject({ ...draft, state: "approved", approved: { by: OWNER, at: expect.any(Number) } });
