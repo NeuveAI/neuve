@@ -39,6 +39,7 @@ import {
   type AccountName,
 } from "@neuve/runtime";
 import { Context, Effect, Layer, ManagedRuntime, Scope, Stream } from "effect";
+import { thisBuild } from "./review-worker.ts";
 
 export type ChatRuntimeSources = {
   registry: RuntimeRegistryShape;
@@ -72,12 +73,7 @@ export function productionChatSources(options: {
             cwd: defaultClaudeWorkingFolder(options.home),
           },
           codex: {
-            ...codexRuntimeOptions(
-              options.home,
-              (yield* Effect.promise(
-                () => import("./review-worker.ts"),
-              )).thisBuild(),
-            ),
+            ...codexRuntimeOptions(options.home, thisBuild()),
             log: (account) => logs?.(account),
           },
         }).pipe(

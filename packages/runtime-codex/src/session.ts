@@ -1447,6 +1447,8 @@ export const openCodexSession = Effect.fnUntraced(function* (
       );
       if (Exit.isFailure(ready)) {
         const error = errorOf(ready.cause);
+        // No process is current after a failed hand-over, and the next turn starts over: the
+        // session stays usable unless it was stopped.
         const disposition = dead ? "broken" : "reusable";
         return yield* finish(
           active,

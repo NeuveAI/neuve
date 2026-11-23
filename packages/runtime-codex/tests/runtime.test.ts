@@ -189,7 +189,7 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
     "-c",
     'model_provider="openai_chatgpt_plan"',
     "-c",
-    'model_providers.openai_chatgpt_plan={name="ChatGPT plan",base_url="https://api.openai.com/v1",model_catalog_url="https://api.openai.com/v1/models",wire_api="responses",requires_openai_auth=false,supports_websockets=false,auth={command="/path to/bun",args=["/path to/cli.ts","auth","lease","work"],timeout_ms=80000,refresh_interval_ms=0}}',
+    'model_providers.openai_chatgpt_plan={name="ChatGPT plan",base_url="https://api.openai.com/v1",model_catalog_url="https://api.openai.com/v1/models",wire_api="responses",requires_openai_auth=false,supports_websockets=false,auth={command="/path to/bun",args=["/path to/cli.ts","auth","lease","work"],timeout_ms=90000,refresh_interval_ms=0}}',
     "-c",
     "features.api_key_model_discovery=true",
   ];

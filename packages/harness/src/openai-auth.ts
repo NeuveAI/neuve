@@ -980,11 +980,9 @@ export const signIn = async (options: SignInOptions): Promise<AuthStatus> => {
  * A usable access token: the stored one while it has more than five minutes left, otherwise a
  * refreshed one. Refreshes are serialised across processes; after taking the lock the file is read
  * again, so a token another process just refreshed is used rather than refreshed twice.
- * A rejected token is refreshed even when it has more than five minutes left.
  */
 export const accessToken = async (
   options: AuthOptions = {},
-  rejected?: string,
 ): Promise<{ readonly token: string; readonly expiresAt: number }> => {
   const command = tokenCommandOf(options);
   if (command !== undefined)
@@ -993,16 +991,12 @@ export const accessToken = async (
       options.now ?? Date.now,
       options.tokenCommandTimeoutMs ?? LEASE_TIMEOUT_MS,
       options.leaseRetryDelaysMs ?? LEASE_RETRY_DELAYS_MS,
-      rejected,
     );
   const { directory, fetch: fetcher, now } = resolve(options);
   /** The stored session's token while it has time left; undefined when it needs a refresh. */
   const usable = (auth: StoredAuth | undefined) => {
     const session = sessionProblem(auth, now());
-    return session.accessToken !== rejected &&
-      session.expiresAt - now() > REFRESH_MARGIN_MS
-      ? session
-      : undefined;
+    return session.expiresAt - now() > REFRESH_MARGIN_MS ? session : undefined;
   };
   const current = usable(readAuth(directory));
   if (current !== undefined)
@@ -1427,16 +1421,11 @@ const leased = async (
   now: () => number,
   timeoutMs: number,
   delaysMs: ReadonlyArray<number>,
-  rejected?: string,
 ) => {
   const cached = leases.get(command);
   if (cached !== undefined) {
     const lease = await cached.catch(() => undefined);
-    if (
-      lease !== undefined &&
-      lease.token !== rejected &&
-      lease.expiresAt - now() > REFRESH_MARGIN_MS
-    )
+    if (lease !== undefined && lease.expiresAt - now() > REFRESH_MARGIN_MS)
       return lease;
     const current = leases.get(command);
     if (current !== undefined && current !== cached) return current;

@@ -30,7 +30,7 @@ export type CodexTokenCommand = readonly [command: string, ...args: string[]];
 
 const chatgptPlan = ([command, ...args]: CodexTokenCommand) => [
   'model_provider="openai_chatgpt_plan"',
-  `model_providers.openai_chatgpt_plan={name="ChatGPT plan",base_url="https://api.openai.com/v1",model_catalog_url="https://api.openai.com/v1/models",wire_api="responses",requires_openai_auth=false,supports_websockets=false,auth={command=${JSON.stringify(command)},args=${JSON.stringify(args)},timeout_ms=80000,refresh_interval_ms=0}}`,
+  `model_providers.openai_chatgpt_plan={name="ChatGPT plan",base_url="https://api.openai.com/v1",model_catalog_url="https://api.openai.com/v1/models",wire_api="responses",requires_openai_auth=false,supports_websockets=false,auth={command=${JSON.stringify(command)},args=${JSON.stringify(args)},timeout_ms=90000,refresh_interval_ms=0}}`,
   "features.api_key_model_discovery=true",
 ];
 
