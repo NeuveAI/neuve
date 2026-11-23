@@ -352,31 +352,31 @@ test("a joined review adds range sources without starting or calling the integra
     expect(review.cycleId).toBe(cycleId);
     const { snapshot, scopeKey, facts } = await f.precompute();
     expect(sourcesOf(snapshot)).toEqual([
-      ["S1", "ticket", "plan-or-ticket-at-base", "NEU-13"],
-      ["S2", "repository-document", "plan-or-ticket-at-base", "AGENTS.md"],
-      ["S3", "repository-document", "plan-or-ticket-at-base", "base.md"],
-      ["S4", "repository-document", "plan-inside-range", "named.md"],
-      ["S5", "commit-text", "commit-or-pr-text", [review.range.headOid]],
+      ["S21", "ticket", "plan-or-ticket-at-base", "NEU-13"],
+      ["S1", "repository-document", "plan-or-ticket-at-base", "AGENTS.md"],
+      ["S2", "repository-document", "plan-or-ticket-at-base", "base.md"],
+      ["S3", "repository-document", "plan-inside-range", "named.md"],
+      ["S4", "commit-text", "commit-or-pr-text", [review.range.headOid]],
     ]);
     expect(snapshot.sources[0]).toEqual(first.value.sources[0]);
     expect(snapshot.branchTipOid).toBe(f.base);
     expect(
       snapshot.sources[4]?.sections.map(({ id, title }) => [id, title]),
-    ).toEqual([["S5.1", "Read named.md for NEU-14"]]);
+    ).toEqual([["S4.1", "Read named.md for NEU-14"]]);
     expect(facts.scopeGaps).toEqual([
       NO_PR_TEXT,
       "Ticket NEU-14 was named after this cycle's scope was read.",
     ]);
     expect(
       describeSnapshot(snapshot).find((line) => line.includes("commit-text")),
-    ).toContain("S5");
+    ).toContain("S4");
     const scopeLog = f.ctx.log
       .read()
       .findLast((row) => row.type === "precompute.scope");
     expect(scopeLog?.["key"]).toBe(scopeKey);
     expect(
       (scopeLog?.["sources"] as Array<{ id: string }>).map(({ id }) => id),
-    ).toEqual(["S1", "S2", "S3", "S4", "S5"]);
+    ).toEqual(["S21", "S1", "S2", "S3", "S4"]);
     const logged = readFileSync(
       join(f.ctx.location.directory, "scope-logs", cycleId + ".jsonl"),
       "utf8",
@@ -407,7 +407,7 @@ test("a joined review adds range sources without starting or calling the integra
     );
     expect(fresh.snapshot).toEqual(snapshot);
     expect(fresh.pins.map(({ source, status }) => [source, status])).toEqual([
-      ["S1", "current"],
+      ["S21", "current"],
     ]);
     expect(f.calls()).toEqual(["start", "NEU-13"]);
   } finally {
@@ -552,12 +552,12 @@ test("fetches queued cycle scope once and reuses it on the next review", async (
 
     const first = await f.precompute();
     expect(sourcesOf(first.snapshot)).toEqual([
-      ["S1", "ticket", "plan-or-ticket-at-base", "NEU-13"],
-      ["S2", "repository-document", "plan-or-ticket-at-base", "AGENTS.md"],
-      ["S3", "repository-document", "plan-or-ticket-at-base", "base.md"],
-      ["S4", "repository-document", "plan-inside-range", "named.md"],
-      ["S5", "repository-document", "plan-inside-range", "added.md"],
-      ["S6", "commit-text", "commit-or-pr-text", [review.range.headOid]],
+      ["S21", "ticket", "plan-or-ticket-at-base", "NEU-13"],
+      ["S1", "repository-document", "plan-or-ticket-at-base", "AGENTS.md"],
+      ["S2", "repository-document", "plan-or-ticket-at-base", "base.md"],
+      ["S3", "repository-document", "plan-inside-range", "named.md"],
+      ["S4", "repository-document", "plan-inside-range", "added.md"],
+      ["S5", "commit-text", "commit-or-pr-text", [review.range.headOid]],
     ]);
     expect(first.snapshot.gaps).toEqual([NO_PR_TEXT]);
     expect(f.calls()).toEqual(["start", "NEU-13"]);

@@ -215,6 +215,7 @@ export const parseQueryInvocation = (
   args: readonly string[],
 ): QueryInvocation => {
   const values = new Map<OptionName, string>();
+  const scope: string[] = [];
   let output: QueryInvocation["output"] = "json";
   let refreshCache = false;
   let preparedOnly = false;
@@ -254,16 +255,21 @@ export const parseQueryInvocation = (
       continue;
     }
     const value = args[index + 1];
-    if (name === undefined || !isOptionName(name)) {
+    if (name === undefined || (name !== "--scope" && !isOptionName(name))) {
       throw new Error(`Unknown query option: ${name ?? "<missing>"}.`);
     }
     if (value === undefined || value.startsWith("--")) {
       throw new Error(`${name} requires a value.`);
     }
-    if (values.has(name)) {
+    if (name === "--scope") {
+      if (value.length === 0 || value.includes("\0"))
+        throw new Error("--scope must be a non-empty path without null bytes.");
+      scope.push(value);
+    } else if (values.has(name)) {
       throw new Error(`${name} may be supplied only once.`);
+    } else {
+      values.set(name, value);
     }
-    values.set(name, value);
     index += 2;
   }
 
@@ -312,6 +318,7 @@ export const parseQueryInvocation = (
       maxResults: positiveInteger(maxResults, "--max-results"),
       maxContextBytes: positiveInteger(maxContextBytes, "--max-context-bytes"),
       relationships: relationshipPlan(relationships),
+      ...(scope.length === 0 ? {} : { scope }),
       ...(branch === undefined ? {} : { branch: text(branch, "--branch") }),
       ...(profile === undefined ? {} : { profile }),
       ...(preparedOnly

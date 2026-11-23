@@ -404,7 +404,7 @@ describe("the link check", () => {
 });
 
 describe("the skill text", () => {
-  test("has its frontmatter, the version placeholder, and the eleven references it names", async () => {
+  test("has its frontmatter, the version placeholder, and the twelve references it names", async () => {
     const files = await skillFiles();
     const entry = files.find((file) => file.file === "SKILL.md")!.text;
     expect(entry).toMatch(/^---\nname: neuve\ndescription: >\n/);
@@ -416,6 +416,7 @@ describe("the skill text", () => {
       "references/desk.md",
       "references/final-reviewer.md",
       "references/inner-loop-reviewer.md",
+      "references/inner-loop-scope.md",
       "references/lanes-and-dispositions.md",
       "references/proof.md",
       "references/request-review.md",
