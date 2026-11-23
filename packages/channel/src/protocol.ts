@@ -73,6 +73,25 @@ export const ReviewFeedDefinition = {
 
 // Approval requests.
 type ApprovalDecision = "allow" | "deny";
+export type ApprovalPath =
+	| { kind: "path"; path: string }
+	| { kind: "glob"; pattern: string }
+	| { kind: "root" | "minimal" | "tmpdir" | "slash-tmp" }
+	| { kind: "project-roots"; subpath?: string };
+
+export type ApprovalFileChange = { path: string; diff: string } & (
+	| { kind: "add" | "delete" }
+	| { kind: "update"; newPath?: string }
+);
+
+/** What a person is being asked to allow. The runtime owns the mapping. */
+export type ApprovalAsked = { reason?: string } & (
+	| { kind: "command"; command: string; folder: string; network?: { host: string; protocol: "http" | "https" | "socks5-tcp" | "socks5-udp" } }
+	| { kind: "file-change"; changes: ApprovalFileChange[] | null }
+	| { kind: "wider-access"; paths: { access: "read" | "write" | "deny"; target: ApprovalPath }[]; network: boolean | null; folder?: string; globDepthLimit?: number }
+	| { kind: "server-prompt"; server: string; message: string; url?: string }
+	| { kind: "unrecognised" }
+);
 
 /**
  * One runtime request. A single call can raise several requests, each with its own `requestId`.
@@ -81,8 +100,10 @@ type ApprovalDecision = "allow" | "deny";
 export type ApprovalRequest = JsonObject & {
 	requestId: string;
 	callId: string;
-	/** The runtime's input for the card. */
+	/** The runtime's input for the card's details. */
 	input: JsonValue;
+	/** What Allow grants. An unrecognised request uses its raw input for display. */
+	asked: ApprovalAsked;
 	/** When the request opened, in milliseconds since the Unix epoch. */
 	openedAt: number;
 	/** An answer names the verified participant and its time in milliseconds since the Unix epoch. */
