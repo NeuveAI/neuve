@@ -443,13 +443,8 @@ export const openCodexSession = Effect.fnUntraced(function* (
           httpStatusOf(info) === 401 ||
           requestCode === 401)
       ) {
-        if (lastCheckedToken !== undefined) {
-          const renewed = yield* neuveSignIn
-            .checkSignIn(lastCheckedToken)
-            .pipe(Effect.timeout("90 seconds"), Effect.exit);
-          if (!active.finished && Exit.isSuccess(renewed))
-            lastCheckedToken = renewed.value;
-        }
+        if (lastCheckedToken !== undefined)
+          yield* Effect.ignore(neuveSignIn.checkSignIn(lastCheckedToken));
         return yield* finish(active, turnFailure("provider-failed"));
       }
       return yield* finish(active, errorOutcome(name));

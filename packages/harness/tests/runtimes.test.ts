@@ -27,6 +27,7 @@ import { authFilePath, readAuth, writeAuth } from "../src/openai-auth.ts";
 import { piStatusRuntime } from "../src/pi/status-runtime.ts";
 import { codexRuntimeOptions, harnessRuntimes } from "../src/runtimes.ts";
 import { harnessRuntimes as publicHarnessRuntimes } from "@neuve/harness/runtimes";
+import { fakeIssuer } from "./fixtures/openai-issuer.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "neuve-runtimes-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -122,14 +123,15 @@ const issuer = "https://fake-issuer.invalid";
 function fakeSignIn(
   directory: string,
   email: string | null = "fake@example.invalid",
-  authIssuer = issuer,
+  identity?: { issuer: string; subject: string },
 ) {
   writeAuth(directory, {
     version: 1,
-    issuer: authIssuer,
+    issuer: identity?.issuer ?? issuer,
     hostId: "urn:uuid:00000000-0000-0000-0000-000000000000",
     registration: {
       clientId: "fake-client",
+      subject: identity?.subject,
       ...(email === null ? {} : { email }),
     },
     session: {
@@ -545,46 +547,32 @@ test("Codex uses the named Neuve sign-in and tells the person which account to s
 
 test("Codex sign-in renews an unexpired token named as refused", async () => {
   const directory = folder();
-  const authIssuer = "https://codex-refusal.invalid";
-  fakeSignIn(directory, undefined, authIssuer);
+  const local = await fakeIssuer();
   const account = {
     name: name("work"),
     kind: "chatgpt-subscription",
     runtime: "codex",
     credential: { kind: "neuve-sign-in", folder: directory },
   } as const;
-  let refreshes = 0;
-  const fetcher = Object.assign(
-    async (url: URL | RequestInfo) => {
-      if (String(url) === `${authIssuer}/.well-known/openid-configuration`)
-        return Response.json({
-          issuer: authIssuer,
-          authorization_endpoint: `${authIssuer}/authorize`,
-          token_endpoint: `${authIssuer}/token`,
-          jwks_uri: `${authIssuer}/jwks`,
-        });
-      if (String(url) !== `${authIssuer}/token`)
-        throw new Error("unexpected fake request");
-      refreshes++;
-      return Response.json({
-        access_token: "renewed-fixture",
-        refresh_token: "rotated-fixture",
-        expires_in: 3600,
-      });
-    },
-    { preconnect: globalThis.fetch.preconnect },
-  );
-  const signIn = codexRuntimeOptions(scratch, ["/neuve"], {
-    fetch: fetcher,
-  }).neuveSignIn!;
-  const refused = await Effect.runPromise(signIn.checkSignIn(account));
-  expect(refreshes).toBe(0);
-  const renewed = await Effect.runPromise(signIn.checkSignIn(account, refused));
-  expect(refreshes).toBe(1);
-  expect(
-    renewed !== refused &&
-      readAuth(directory)?.session?.accessToken === renewed,
-  ).toBe(true);
+  try {
+    fakeSignIn(directory, undefined, {
+      issuer: local.issuer,
+      subject: local.state.subject,
+    });
+    const signIn = codexRuntimeOptions(scratch, ["/neuve"]).neuveSignIn!;
+    const refused = await Effect.runPromise(signIn.checkSignIn(account));
+    expect(local.state.refreshes).toBe(0);
+    const renewed = await Effect.runPromise(
+      signIn.checkSignIn(account, refused),
+    );
+    expect(local.state.refreshes).toBe(1);
+    expect(
+      renewed !== refused &&
+        readAuth(directory)?.session?.accessToken === renewed,
+    ).toBe(true);
+  } finally {
+    await local.stop();
+  }
 });
 
 test("continuation identifies only credential references, so aliases share sessions without carrying credential values", async () => {

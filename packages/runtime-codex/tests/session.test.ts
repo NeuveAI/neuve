@@ -265,6 +265,42 @@ test("a new session on the same account uses the renewed sign-in", async () => {
   );
 });
 
+test("a 401 reply to turn/start renews Neuve sign-in and ends the turn as provider-failed", async () => {
+  const fake = codex((message, process) => {
+    if (message.method !== "turn/start") return;
+    queueMicrotask(() =>
+      process.io.send({
+        id: message.id,
+        error: { code: 401, message: "Unauthorized" },
+      }),
+    );
+    return SILENT;
+  });
+  let token = "stored-token";
+  await run(
+    fake,
+    (session, read) =>
+      Effect.gen(function* () {
+        yield* startOn(fake, session, readOnly);
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          outcome: {
+            status: "failed",
+            disposition: "reusable",
+            failure: { _tag: "TurnFailed", account, reason: "provider-failed" },
+          },
+        });
+        expect(token === "renewed-token").toBe(true);
+      }),
+    {
+      checkSignIn: (rejected) =>
+        Effect.sync(() => {
+          if (rejected === token) token = "renewed-token";
+          return token;
+        }),
+    },
+  );
+});
+
 test("a refused renewal leaves the failed turn reusable and the next check asks for sign-in", async () => {
   const fake = codex();
   const hint = {
