@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { MENTION } from "@ace/channel/protocol";
-import { Button, ChatStatus, ReviewActionsProvider, Timeline, toast } from "@ace/ui";
+import { Button, ChatStatus, PlanActionsProvider, ReviewActionsProvider, Timeline, toast } from "@ace/ui";
 import { channelProject, type Listing } from "@ace/host/protocol";
 
 import { useAgentAvatar } from "./agent-avatar";
@@ -16,8 +16,9 @@ import { host } from "./host";
 import { MessageQueue } from "./message-queue";
 import { OfflineHost, useRoster } from "./onboarding";
 import { present } from "./presence";
+import { planCards } from "./plan-card";
 import { pendingQuestion, Question } from "./question";
-import { reviewActions, reviewTab, wakeNote, withReviews } from "./review-card";
+import { reviewActions, reviewTab, wakeNote, withCards } from "./review-card";
 import { AGENT, credit, sources, toEvents } from "./timeline";
 import { useTranscript, useTyping } from "./transcript";
 import { Usage } from "./usage";
@@ -72,7 +73,7 @@ export function Conversation(
 	// until then is not the user's to retry.
 	const failed = !offline && !transition && transcript.error;
 	const chat = transcript.info?.chats.find((value) => value.id === id);
-	const { diff } = useDetails(channel.id);
+	const { diff, plan: openPlan } = useDetails(channel.id);
 	const model = chat?.model || channel.model;
 	const people = useSyncExternalStore(host.subscribe, () => host.people);
 	// This app's own host, or the peer host relaying this channel to it, stopped answering.
@@ -101,9 +102,14 @@ export function Conversation(
 	const reviews = transcript.reviews;
 	const connected = !offline && !stalled && !channel.stalled;
 	const mayAsk = channel.owner === user || transcript.shared !== false;
+	const plans = useMemo(
+		() => planCards(transcript.plans, (author) => author === user ? "you" : people[author] || author),
+		[transcript.plans, user, people],
+	);
+	const planned = transcript.plans.length > 0;
 	const events = useMemo(
 		() =>
-			withReviews(
+			withCards(
 				toEvents(
 					transcript.items,
 					channel.id,
@@ -122,6 +128,7 @@ export function Conversation(
 				),
 				transcript.items,
 				reviews,
+				plans,
 				channel.id,
 				transcript.busy,
 				connected,
@@ -140,8 +147,21 @@ export function Conversation(
 			channel,
 			user,
 			reviews,
+			plans,
 			connected,
 		],
+	);
+	const planActions = useMemo(
+		() => ({
+			mayApprove: mayAsk,
+			open: (plan: string) => openPlan?.(plan),
+			approve: (plan: string, hash: string) =>
+				host.channel(channel.id, { op: "plan-approve", chat: id, author: user, plan, hash }).then(
+					() => {},
+					(error: Error) => void toast.error("Could not approve the plan", { description: error.message }),
+				),
+		}),
+		[mayAsk, openPlan, channel.id, id, user],
 	);
 	const review = useMemo(
 		() =>
@@ -283,6 +303,10 @@ export function Conversation(
 	]);
 
 	useEffect(() => {
+		if (transcript.live) publish(channel.id, { plans: { chat: id, list: transcript.plans } });
+	}, [channel.id, id, transcript.live, transcript.plans]);
+
+	useEffect(() => {
 		if (transcript.live) onWork?.();
 	}, [transcript.live, transcript.busy, results, onWork]);
 	return (
@@ -291,42 +315,45 @@ export function Conversation(
 				{transcript.live
 					? (
 						<ReviewActionsProvider value={review}>
-							<Timeline
-								className="h-full min-h-0 contain-paint scroll-fade [--fade:3rem]"
-								events={events}
-								working={transcript.busy || undefined}
-								currentUser={{ login: user, own: [user] }}
-								unread={first}
-								summary={channel.summary}
-								mentioned={mentioned}
-								actions={actions}
-								onReact={(uid, emoji) => {
-									const entry = byKey.get(uid)!.entry!;
-									const remove = !!transcript.reactions[entry]?.some((value) =>
-										value.from === user && value.emoji === emoji
-									);
-									act({ op: "react", emoji, remove }, uid);
-								}}
-								onCopy={(uid) =>
-									navigator.clipboard.writeText(byKey.get(uid)!.text).then(
-										() => toast("Copied message"),
-										(error) =>
-											toast.error("Could not copy the message", { description: error.message }),
-									)}
-								onDelete={setDeleting}
-								editable={editable}
-								editing={edited?.key}
-								onEdit={setEditing}
-								avatars={timelineAvatars}
-								openSender={(sender) => {
-									const source = senders.get(sender);
-									return source && (() => onOpen(source));
-								}}
-								intro={{ name: channel.name, createdAt: Math.floor(channel.created / 1000) }}
-								onFileOpen={diff}
-								onDiffFileOpen={diff}
-								onReviewChanges={diff && (() => diff())}
-							/>
+							<PlanActionsProvider value={planActions}>
+								<Timeline
+									className="h-full min-h-0 contain-paint scroll-fade [--fade:3rem]"
+									events={events}
+									working={transcript.busy || undefined}
+									currentUser={{ login: user, own: [user] }}
+									unread={first}
+									summary={channel.summary}
+									mentioned={mentioned}
+									actions={actions}
+									onReact={(uid, emoji) => {
+										const entry = byKey.get(uid)!.entry!;
+										const remove = !!transcript.reactions[entry]?.some((value) =>
+											value.from === user && value.emoji === emoji
+										);
+										act({ op: "react", emoji, remove }, uid);
+									}}
+									onCopy={(uid) =>
+										navigator.clipboard.writeText(byKey.get(uid)!.text).then(
+											() => toast("Copied message"),
+											(error) =>
+												toast.error("Could not copy the message", { description: error.message }),
+										)}
+									onDelete={setDeleting}
+									editable={editable}
+									editing={edited?.key}
+									onEdit={setEditing}
+									avatars={timelineAvatars}
+									openSender={(sender) => {
+										const source = senders.get(sender);
+										return source && (() => onOpen(source));
+									}}
+									intro={{ name: channel.name, createdAt: Math.floor(channel.created / 1000) }}
+									onFileOpen={diff}
+									onDiffFileOpen={diff}
+									onReviewChanges={diff && (() => diff())}
+									onPlanOpen={planned && openPlan ? () => openPlan() : undefined}
+								/>
+							</PlanActionsProvider>
 						</ReviewActionsProvider>
 					)
 					: offline
@@ -414,6 +441,7 @@ export function Conversation(
 						onProviders={onProviders}
 						accessory={chat?.usage && <Usage value={chat.usage} context={chat.context} />}
 						members={members}
+						plan={planned}
 					/>
 				</div>
 			</div>

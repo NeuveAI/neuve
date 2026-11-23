@@ -9,7 +9,7 @@ import { Button, QuestionInput, type QuestionItem, QuestionView, ReviewActionsPr
 
 import "./styles.css";
 
-import { reviewActions, reviewCommits, withReviews } from "./review-card";
+import { reviewActions, reviewCommits, withCards } from "./review-card";
 import type { ReviewCard } from "@ace/channel/review-cards";
 import { toEvents } from "./timeline";
 import type { Item, Tool } from "./transcript";
@@ -335,7 +335,7 @@ function Panel({ scene, onAction }: { scene: Scene; onAction: (text: string) => 
 		),
 	];
 	let busy = !!scene.busy;
-	let events = withReviews(
+	let events = withCards(
 		toEvents(
 			list,
 			"harness",
@@ -351,6 +351,7 @@ function Panel({ scene, onAction }: { scene: Scene; onAction: (text: string) => 
 		),
 		list,
 		feed,
+		new Map(),
 		"harness",
 		busy,
 		scene.connected !== false,

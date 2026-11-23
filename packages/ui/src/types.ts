@@ -62,6 +62,7 @@ export type Event =
 	| Event.Message
 	| Event.Neuve.Review.Card
 	| Event.Neuve.Review.Told
+	| Event.Neuve.Plan.Card
 	| Event.Document
 	| Event.Exec
 	| Event.Exec.Abort
@@ -291,6 +292,11 @@ export namespace Event {
 		export type End = KIND<"call:end"> & { sender: number };
 	}
 
+	export namespace Neuve.Plan {
+		/** The app's card for one plan, under the turn whose call last wrote it. */
+		export type Card = KIND<"neuve:plan:card"> & { card: PlanCardView };
+	}
+
 	export namespace Neuve.Review {
 		/** The app's card for one review start call, placed under the turn that made it. */
 		export type Card = KIND<"neuve:review:card"> & { call: string; card: ReviewCardView };
@@ -303,6 +309,15 @@ export namespace Event {
 		};
 	}
 }
+
+/** What a plan's card shows; `meta` is its second line, worked out by the app. */
+export type PlanCardView = {
+	plan: string;
+	hash: string;
+	title: string;
+	state: "draft" | "approved" | "replaced";
+	meta: string;
+};
 
 /** What a Neuve review card shows: a review card entry, or the start call still running. */
 export type ReviewCardView =

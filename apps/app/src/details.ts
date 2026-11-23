@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import type { Changes, GithubPull } from "@ace/channel/protocol";
+import type { Changes, GithubPull, Plan } from "@ace/channel/protocol";
 import type { ChannelInfo } from "@ace/host/protocol";
 
 import type { Item } from "./transcript";
@@ -34,6 +34,10 @@ export type Details = {
 	desktopLive?: boolean;
 	/** Shows the chat's Diff tab, opening one when none is open, at `file` when it changed. */
 	diff?: (file?: string) => void;
+	/** The shown chat's plans, oldest first, once its transcript has loaded. */
+	plans?: { chat: number; list: Plan[] };
+	/** Shows the chat's Plan tab, opening one beside the chat when none is open, at plan `id`. */
+	plan?: (id?: string) => void;
 	/** A file the chat's Diff should show once its changes list it; `null` once shown. */
 	reveal?: { chat: number; file: string; key: number } | null;
 };
@@ -60,13 +64,21 @@ export function publish(channel: string, patch: Details) {
 	for (const listener of listeners) listener();
 }
 
-/** Drops the Diff opener, which only works while the channel's tabs are mounted. */
+/** Drops the Diff and Plan openers, which only work while the channel's tabs are mounted. */
 export function forget(channel: string) {
-	const { diff: _, ...rest } = values.get(channel) || {};
+	const { diff: _, plan: __, ...rest } = values.get(channel) || {};
 	values.set(channel, rest);
 	for (const listener of listeners) listener();
 }
 
 export function useDetails(channel: string): Details {
 	return useSyncExternalStore(subscribe, () => values.get(channel) || EMPTY);
+}
+
+/** The id of the chat's newest plan, once the chat's transcript has loaded and it has one. */
+export function useNewestPlan(channel: string, chat: number): string | undefined {
+	return useSyncExternalStore(subscribe, () => {
+		const plans = values.get(channel)?.plans;
+		return plans?.chat === chat ? plans.list.at(-1)?.id : undefined;
+	});
 }

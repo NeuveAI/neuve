@@ -28,12 +28,13 @@ import { IconCloud, IconGlobe, IconHash } from "@ace/ui/icons";
 import { ChannelAccess } from "./channel-access";
 import { EFFORTS } from "./composer";
 import { Conversation } from "./conversation";
-import { forget, publish, useDetails } from "./details";
+import { forget, publish, useDetails, useNewestPlan } from "./details";
 import { useAsked, useGit } from "./git";
 import { host, onOpen as onHostOpen } from "./host";
 import { CHAT, Layout } from "./layout/layout";
 import { Diff, GROUPS } from "./panels/diff";
 import { Live } from "./panels/live";
+import { Plan } from "./panels/plan";
 import { Review } from "./panels/review";
 import { Terminal } from "./panels/terminal";
 import { placement } from "./placement";
@@ -371,15 +372,18 @@ export function Channel(
 	}, [channel.id, elsewhere]);
 
 	const opener = useRef<() => void>(undefined);
+	const planOpener = useRef<(plan?: string) => void>(undefined);
 	useEffect(() => {
 		publish(channel.id, {
 			diff: (file) => {
 				if (file) publish(channel.id, { reveal: { chat, file, key: Date.now() } });
 				opener.current?.();
 			},
+			plan: (plan) => planOpener.current?.(plan),
 		});
 		return () => forget(channel.id);
 	}, [channel.id, chat]);
+	const plan = useNewestPlan(channel.id, chat);
 
 	return (
 		<Layout
@@ -399,6 +403,8 @@ export function Channel(
 			chat={chat}
 			changed={changed}
 			opener={opener}
+			plan={plan}
+			planOpener={planOpener}
 			shells={shells}
 			terminals={!elsewhere}
 			actions={<ChannelAccess channel={channel} user={user} />}
@@ -418,6 +424,9 @@ export function Channel(
 							onWork={inspect}
 						/>
 					);
+				}
+				if (data.type === "plan") {
+					return <Plan channel={channel} chat={data.chat} user={user} plan={data.plan} />;
 				}
 				if (data.type === "diff") {
 					return <Diff channel={channel} chat={data.chat} user={user} active={active} />;

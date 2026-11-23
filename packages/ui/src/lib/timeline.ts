@@ -1,4 +1,4 @@
-import type { Event, REPO, ReviewCardView } from "../types";
+import type { Event, PlanCardView, REPO, ReviewCardView } from "../types";
 
 import { normalizeGithubComment } from "./github-comment";
 import {
@@ -88,6 +88,7 @@ type Chunk =
 	| { kind: "presence"; action: "join" | "leave"; sender: string }
 	| { kind: "call"; action: "start" | "end"; sender: string }
 	| { kind: "review-card"; call: string; card: ReviewCardView }
+	| { kind: "plan-card"; card: PlanCardView }
 	| { kind: "review-new-commits"; review: string; branch: string; head: string; label: string }
 	| { kind: "review-told"; review: string; phase: "finished" | "stopped" | null };
 
@@ -573,6 +574,10 @@ function eventToRow(event: Event, project?: REPO, aborted = false): Row | null {
 				role: "system",
 				chunks: [{ kind: "review-card", call: event.call, card: event.card }],
 			};
+
+		// Neuve: a plan's card, under the turn whose call last wrote it.
+		case "neuve:plan:card":
+			return { ...base, role: "system", chunks: [{ kind: "plan-card", card: event.card }] };
 
 		// Neuve: the reviewed branch moved after the review was admitted.
 		case "neuve:review:new-commits":

@@ -17,6 +17,12 @@ export const CARD = {
 	footPadY: 10,
 } as const;
 
+/** A card's head with its border, the height of a card that has nothing under its head. */
+export const CARD_HEAD = CARD.border * 2 + CARD.headPadY * 2 + CARD.titleLine + CARD.metaGap + CARD.metaLine;
+
+/** A footer holding one row of small buttons, with its divider. */
+export const CARD_FOOTER = CARD.border + CARD.footPadY * 2 + 24;
+
 /**
  * The shell of a card that asks a person for something: a question, a review, a plan to approve.
  * Its head, then body parts and a footer, each divided from the one above.

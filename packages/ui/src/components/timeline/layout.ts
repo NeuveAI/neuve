@@ -14,6 +14,7 @@ import {
 	issueOpened as issueOpenedBlock,
 	issueUpdate as issueUpdateBlock,
 	type Mention,
+	planCard as planCardBlock,
 	pr as prBlock,
 	prComment as prCommentBlock,
 	presence as presenceBlock,
@@ -221,6 +222,8 @@ function key(
 			return joinKey("call", mode, chunk.action, chunk.sender);
 		case "review-card":
 			return joinKey("review", mode, chunk.call, JSON.stringify(chunk.card));
+		case "plan-card":
+			return joinKey("plan", mode, JSON.stringify(chunk.card));
 		case "review-new-commits":
 			return joinKey("reviewnc", mode, chunk.review, chunk.branch, chunk.head, chunk.label);
 		case "review-told":
@@ -326,6 +329,8 @@ function build(
 			return [callBlock(chunk.action, chunk.sender)];
 		case "review-card":
 			return [reviewCardBlock(chunk.call, chunk.card)];
+		case "plan-card":
+			return [planCardBlock(chunk.card)];
 		case "review-new-commits":
 			return [reviewNewCommitsBlock(chunk.review, chunk.branch, chunk.head, chunk.label)];
 		case "review-told":

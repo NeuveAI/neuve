@@ -8,7 +8,7 @@ import { IconLoader } from "../../icons";
 import { Button } from "../../ui/button";
 import { FONT } from "../blocks/constants";
 
-import { CARD, RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead } from "./card";
+import { CARD, CARD_HEAD, RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead } from "./card";
 
 type Review = Extract<ReviewCardView, { kind: "review" }>;
 
@@ -382,7 +382,7 @@ export function reviewCardPlan(view: ReviewCardView, available: number): Plan {
 		}
 	}
 
-	let height = CARD.border * 2 + CARD.headPadY * 2 + CARD.titleLine + CARD.metaGap + CARD.metaLine;
+	let height = CARD_HEAD;
 	if (plan.items.length) {
 		height += CARD.border + CARD.bodyPadY * 2
 			+ plan.items.reduce((sum, item) => sum + itemHeight(item), 0)

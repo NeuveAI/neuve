@@ -703,6 +703,7 @@ function eventIcon(row: EventRow): EventIcon {
 			return IconPullRequest;
 		case "review-card":
 		case "review-told":
+		case "plan-card":
 			return NeuveMark;
 		default:
 			return IconCommit;
