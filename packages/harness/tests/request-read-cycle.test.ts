@@ -185,6 +185,37 @@ test("opens and reuses a range cycle from a detached checkout without an earlier
   ]);
 });
 
+// A reviewer on another branch could start a cycle without the implementer's plan.
+test("requires the implementer's branch when the checked-out branch has no open cycle", async () => {
+  const repo = fixture();
+  writeFileSync(join(repo.repository, "plan.md"), "Feature plan");
+  const { read, unnamed, named } = await repo.run(
+    Effect.gen(function* () {
+      const plan = yield* readLocalScope(repo.repository, repo.base, [
+        "plan.md",
+      ]);
+      const read = yield* repo.read("feature", repo.base, (cycleId) =>
+        keepLocalScope({ location: repo.location, cycleId }, plan, () => {}),
+      );
+      repo.git("switch", "followup");
+      const unnamed = yield* Effect.result(repo.request());
+      const named = yield* repo.request(repo.head, { branch: "feature" });
+      return { read, unnamed, named };
+    }),
+  );
+  expect(unnamed).toMatchObject({
+    _tag: "Failure",
+    failure: {
+      message:
+        '"feature" has an open review cycle, and Neuve cannot tell which branch this review is for. Pass --branch <name> with the branch to review.',
+    },
+  });
+  expect(named.cycleId).toBe(read.cycleId);
+  expect(readScopeText(repo.location, named.cycleId, "S1").text).toBe(
+    "Feature plan",
+  );
+});
+
 const withBranchRead = async <A>(
   repo: ReturnType<typeof fixture>,
   branchRead: string,

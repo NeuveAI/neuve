@@ -695,25 +695,28 @@ export const requestReview = (options: ReviewOptions) =>
                 `${JSON.stringify(options.branch)} does not hold this review's head. Pass --branch <name> with a local branch that does.`,
               ),
             );
-          if (findReadCycle && holdsHead) {
-            const cycle = yield* Cycles.branchReadCycle(branch);
+          if (findReadCycle) {
+            const cycle = holdsHead
+              ? yield* Cycles.branchReadCycle(branch)
+              : undefined;
             if (cycle?.open) readCycleId = cycle.cycleId;
-          } else if (findReadCycle) {
-            const openBranches = yield* Effect.filter(branches, (name) =>
-              Effect.map(
-                Cycles.branchReadCycle(name),
-                (cycle) => cycle?.open === true,
-              ),
-            );
-            if (openBranches.length > 0) {
-              const names = new Intl.ListFormat("en").format(
-                openBranches.map((name) => JSON.stringify(name)),
-              );
-              return yield* Effect.fail(
-                new Error(
-                  `${names} ${openBranches.length === 1 ? "has" : "each have"} an open review cycle, and Neuve cannot tell which branch this review is for. Pass --branch <name> with the branch to review.`,
+            else if (options.branch === undefined) {
+              const openBranches = yield* Effect.filter(branches, (name) =>
+                Effect.map(
+                  Cycles.branchReadCycle(name),
+                  (cycle) => cycle?.open === true,
                 ),
               );
+              if (openBranches.length > 0) {
+                const names = new Intl.ListFormat("en").format(
+                  openBranches.map((name) => JSON.stringify(name)),
+                );
+                return yield* Effect.fail(
+                  new Error(
+                    `${names} ${openBranches.length === 1 ? "has" : "each have"} an open review cycle, and Neuve cannot tell which branch this review is for. Pass --branch <name> with the branch to review.`,
+                  ),
+                );
+              }
             }
           }
         }
