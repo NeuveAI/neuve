@@ -56,7 +56,7 @@ test("a plan's card follows the turn whose call last wrote it, once", () => {
 
 // Why: a saved layout is parsed again on every launch, and one that dropped the Plan tab or the
 // plan it shows would quietly lose the person's tab; one that kept a malformed id would show nothing.
-test("a saved Plan tab comes back with its chat and plan, and a malformed one loses only its plan", () => {
+test("a saved Plan tab and each chat's opened plan come back, and malformed values are dropped", () => {
 	const api = Split.create(Split.initial("chat"));
 	api.open({ tab: "tab-1" });
 	api.open({ tab: "tab-2" });
@@ -64,9 +64,9 @@ test("a saved Plan tab comes back with its chat and plan, and a malformed one lo
 	write("ch", state, {
 		"tab-1": { type: "plan", chat: 2, plan: "p7" },
 		"tab-2": { type: "plan", chat: 3, plan: 7 } as never,
-	}, false, "p7");
+	}, false, { "2": "p7", "3": 7 as never });
 	const restored = read("ch");
 	expect(restored.meta["tab-1"]).toEqual({ type: "plan", chat: 2, plan: "p7" });
 	expect(restored.meta["tab-2"]).toEqual({ type: "plan", chat: 3 });
-	expect(restored.plan).toBe("p7");
+	expect(restored.plans).toEqual({ "2": "p7" });
 });

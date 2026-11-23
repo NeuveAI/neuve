@@ -832,7 +832,7 @@ function useLayout(
 	const [api] = useState(() => Split.create(data.state, { min: minimum }));
 	const [meta, setMeta] = useState<Meta>(data.meta);
 	const [diff, setDiff] = useState(data.diff);
-	const [planned, setPlanned] = useState(data.plan);
+	const [planned, setPlanned] = useState(data.plans);
 	const state = useSyncExternalStore(api.subscribe, api.get, api.get);
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
 	const focused = useSyncExternalStore(onFocus, isFocused);
@@ -941,10 +941,10 @@ function useLayout(
 	});
 
 	useEffect(() => {
-		if (!plan || plan === planned) return;
-		setPlanned(plan);
+		if (!plan || plan === planned[chat]) return;
+		setPlanned((planned) => ({ ...planned, [chat]: plan }));
 		beside();
-	}, [plan, planned]);
+	}, [chat, plan, planned]);
 
 	useLayoutEffect(() => {
 		if (!planOpener) return;

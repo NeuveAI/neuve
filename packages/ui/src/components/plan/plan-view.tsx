@@ -65,7 +65,8 @@ function lines(token: Token) {
 	return token.map ? `${token.map[0] + 1}-${token.map[1]}` : undefined;
 }
 
-function blocks(nodes: Node[], ordered = false): ReactNode[] {
+/** `start` numbers an ordered list's items from the plan's own first number. */
+function blocks(nodes: Node[], start?: number): ReactNode[] {
 	return nodes.map(({ token, children }, index) => {
 		let line = lines(token);
 		switch (token.type) {
@@ -79,12 +80,14 @@ function blocks(nodes: Node[], ordered = false): ReactNode[] {
 				return <span key={index}>{inline(children)}</span>;
 			case "bullet_list_open":
 				return <ul key={index} data-lines={line} className="flex flex-col">{blocks(children)}</ul>;
-			case "ordered_list_open":
-				return <ol key={index} data-lines={line} className="flex flex-col">{blocks(children, true)}</ol>;
+			case "ordered_list_open": {
+				let first = Number(token.attrGet("start") ?? 1);
+				return <ol key={index} start={first} data-lines={line} className="flex flex-col">{blocks(children, first)}</ol>;
+			}
 			case "list_item_open":
 				return (
 					<li key={index} data-lines={line} className="flex py-0.5 text-sm leading-5">
-						<span aria-hidden className="w-[18px] shrink-0 text-muted-foreground">{ordered ? `${index + 1}.` : "•"}</span>
+						<span aria-hidden className="w-[18px] shrink-0 text-muted-foreground">{start === undefined ? "•" : `${start + index}.`}</span>
 						<div className="min-w-0 flex-1">{blocks(children)}</div>
 					</li>
 				);

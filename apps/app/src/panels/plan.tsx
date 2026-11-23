@@ -5,6 +5,7 @@ import { NOT_ALLOWED_TO_APPROVE, PlanView } from "@ace/ui";
 
 import { useDetails } from "../details";
 import { host } from "../host";
+import { approvePlan } from "../plan-approve";
 import { planView } from "../plan-card";
 
 type Props = { channel: Listing; chat: number; user: string; plan?: string };
@@ -19,6 +20,8 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	const { plans, shared } = useDetails(channel.id);
 	const people = useSyncExternalStore(host.subscribe, () => host.people);
 	const list = plans?.chat === chat ? plans.list : undefined;
+	// The channel shows one chat's plans; a tab saved for another chat's plan cannot read it here.
+	const elsewhere = !!plans && plans.chat !== chat;
 	const shown = plan ? list?.find((value) => value.id === plan) : list?.at(-1);
 	const [loaded, setLoaded] = useState<Loaded>();
 	const [approving, setApproving] = useState(false);
@@ -40,6 +43,7 @@ export function Plan({ channel, chat, user, plan }: Props) {
 		return () => void (live = false);
 	}, [channel.id, chat, id, listed, status]);
 
+	if (elsewhere) return <Note>This plan belongs to another chat.</Note>;
 	if (!list) return <Note>Loading the plan…</Note>;
 	if (!shown) return <Note>{plan ? "This plan is no longer in the chat." : "No plan in this chat yet."}</Note>;
 
@@ -47,6 +51,8 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	const mayApprove = channel.owner === user || shared !== false;
 	const blocked = !mayApprove
 		? NOT_ALLOWED_TO_APPROVE
+		: current?.error
+		? `The plan could not be read: ${current.error}`
 		: !current?.hash
 		? "The plan is loading"
 		: current.hash !== shown.hash
@@ -58,13 +64,7 @@ export function Plan({ channel, chat, user, plan }: Props) {
 		setApproving(true);
 		setError(undefined);
 		try {
-			await host.channel(channel.id, {
-				op: "plan-approve",
-				chat,
-				author: user,
-				plan: shown!.id,
-				hash: current.hash,
-			});
+			await approvePlan(channel.id, chat, user, shown!.id, current.hash);
 		} catch (cause) {
 			setError((cause as Error).message);
 		} finally {

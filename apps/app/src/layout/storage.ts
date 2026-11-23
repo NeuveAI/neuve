@@ -32,12 +32,13 @@ export type Kind = Content["type"];
 export type Meta = Record<string, Content>;
 
 /**
- * `diff` records that a Diff tab already opened for the chat's current changes, and `plan` the
- * newest plan a Plan tab opened for.
+ * `diff` records that a Diff tab already opened for the chat's current changes, and `plans` the
+ * newest plan a Plan tab opened for, by chat.
  */
-type Layout = { state: Split.State; meta: Meta; diff: boolean; plan?: string };
+export type Planned = Record<string, string>;
+type Layout = { state: Split.State; meta: Meta; diff: boolean; plans: Planned };
 
-type Saved = { version: typeof VERSION; state: Split.Data; tabs: Meta; diff?: boolean; plan?: string };
+type Saved = { version: typeof VERSION; state: Split.Data; tabs: Meta; diff?: boolean; plans?: Planned };
 
 function object(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -109,23 +110,25 @@ export function read(id: string): Layout {
 		try {
 			const data = JSON.parse(raw) as Saved;
 			const state = Split.restore(data.state);
-			const plan = typeof data.plan === "string" ? data.plan : undefined;
-			return { state, meta: clean(state, data.tabs), diff: data.diff === true, plan };
+			const plans = Object.fromEntries(
+				Object.entries(object(data.plans) ? data.plans : {}).filter(([, id]) => typeof id === "string"),
+			) as Planned;
+			return { state, meta: clean(state, data.tabs), diff: data.diff === true, plans };
 		} catch {
 			remove(`${STORAGE}:${id}`);
 		}
 	}
 	const state = Split.initial(CHAT);
-	return { state, meta: clean(state), diff: false };
+	return { state, meta: clean(state), diff: false, plans: {} };
 }
 
-export function write(id: string, state: Split.State, meta: Meta, diff: boolean, plan?: string) {
+export function write(id: string, state: Split.State, meta: Meta, diff: boolean, plans: Planned = {}) {
 	const data = {
 		version: VERSION,
 		state: Split.save(state),
 		tabs: clean(state, meta),
 		diff,
-		...(plan ? { plan } : undefined),
+		plans,
 	} satisfies Saved;
 	save(`${STORAGE}:${id}`, JSON.stringify(data));
 }
