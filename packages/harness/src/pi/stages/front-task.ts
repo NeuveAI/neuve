@@ -146,6 +146,7 @@ export const frontTask = (
           location: ctx.location,
           cycleId: ctx.cycleId,
           readSince: ctx.startedAt,
+          snapshotKey,
         });
         const withJudgements = yield* judgeChecks(checks, snapshot, (change) =>
           Effect.promise(() => judge(change).catch(() => undefined)),
@@ -315,7 +316,12 @@ export const frontTask = (
       held ??
       (await fallbackRecord(
         await services.run(
-          frameStep(ctx, view, await run.candidates(view, runtime.signal)),
+          frameStep(
+            ctx,
+            input.precompute,
+            view,
+            await run.candidates(view, runtime.signal),
+          ),
           runtime.signal,
         ),
         runtime,

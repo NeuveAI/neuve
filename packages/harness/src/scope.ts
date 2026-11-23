@@ -23,7 +23,13 @@ import {
   canonicalJson,
   type StoreLocation,
 } from "@neuve/records-core";
-import { GitHubExternalRefSchema, type Range } from "@neuve/records-schema";
+import {
+  GitHubExternalRefSchema,
+  GitOid,
+  safeRead,
+  type CycleOpenedV2,
+  type Range,
+} from "@neuve/records-schema";
 import { dataBlock } from "./data-block.ts";
 import { git } from "./git.ts";
 import {
@@ -60,23 +66,12 @@ import { READ_ONLY, defineTool, type ToolSpec } from "./toolkit.ts";
 export { keepExternalFetched, keepFetched, scopeFolder, ScopeNotKept };
 
 /**
- * The cycle's scope snapshot (3.12, 9.13, 10.53, 10.54, 10.74–10.76, PC5): fetched once per review
- * cycle, when the cycle opens (`scope.fetch` in the background slot), or inside Precompute when a
- * review finds it not ready, sharing the attempt already in flight. Both run the same computation,
- * keyed by the cycle: unlike every other computation, its value belongs to one cycle and is never
- * meant for reuse across cycles, because fetching again is a new snapshot in a new cycle, never a
- * silent update (3.12).
+ * A read-opened cycle fixes its external sources and base documents at the first fetch. A
+ * review adds Git sources from its range. A review-opened cycle still gathers its sources
+ * together so it can fetch tickets named by commits.
  *
- * Sources, in 10.54's order: tickets named in the branch or commit texts, through a configured
- * integration; documents at the base revision (the repository's agent guide and the documents it
- * links, and paths the commit texts name); then commit text as weak scope. Each source records its
- * stratum (9.13) and fetch time (10.76). A missing source is a disclosed gap, never a stop (1.8):
- * tickets named but not fetched, no PR text source, an integration that cannot be reached.
- *
- * Fetched ticket text is kept twice (proposal §5.2): unmasked in the cycle's scope folder beside
- * Records, which every run of the cycle reads, until the cycle closes or 7 days pass with no run in
- * it (10.79, `scopeCopySweep`); and as a masked raw capture (30 days, 8.10, 10.8), referenced by hash.
- * The snapshot itself holds no ticket text: its section index, hashes, keys and fetch times.
+ * External text is kept in the cycle's scope folder and in a masked raw capture. Snapshots
+ * hold section indexes, hashes and references to the text.
  */
 
 export const Stratum = z.enum([
@@ -143,6 +138,7 @@ export type ScopeSource = z.infer<typeof ScopeSource>;
 
 export const ScopeSnapshot = z.strictObject({
   cycleId: z.string(),
+  branchTipOid: GitOid.optional(),
   fetchedAt: z.string(),
   ms: z.int().min(0),
   range: z.strictObject({
@@ -182,6 +178,21 @@ export const ScopeSnapshot = z.strictObject({
     .optional(),
 });
 export type ScopeSnapshot = z.infer<typeof ScopeSnapshot>;
+
+const CycleScope = ScopeSnapshot.omit({ range: true, strata: true });
+type CycleScope = z.infer<typeof CycleScope>;
+
+const RangeScope = ScopeSnapshot.pick({
+  fetchedAt: true,
+  ms: true,
+  range: true,
+  sources: true,
+  gaps: true,
+  causes: true,
+}).extend({
+  named: z.array(ScopeSnapshot.shape.named.element.omit({ status: true })),
+});
+type RangeScope = z.infer<typeof RangeScope>;
 
 export const SCOPE_RECIPE = "neuve-scope-v1";
 
@@ -397,56 +408,265 @@ const nowIso = Effect.map(Clock.currentTimeMillis, (ms) =>
   new Date(ms).toISOString(),
 );
 
-/** Fetches the snapshot; `cycleSnapshot` stores it. */
-const fetchSnapshot = (ctx: SnapshotContext) =>
+type NoteGap = (text: string, cause?: string) => void;
+type ScopeRange = SnapshotContext["range"];
+const snapshotRange = (
+  { baseOid, headOid }: ScopeRange,
+  mergeBase: string,
+) => ({
+  baseOid,
+  headOid,
+  mergeBase,
+});
+type ReadScopeOpening = z.infer<typeof CycleOpenedV2.shape.payload>;
+type ScopeInput =
+  | ({ readonly part: "cycle" } & ReadScopeOpening)
+  | { readonly part: "review"; readonly range: ScopeRange };
+
+const commitKeys = (commits: ReadonlyArray<CommitText>) => {
+  const named = new Map<string, string>();
+  for (const commit of commits)
+    for (const key of keyCandidates(`${commit.subject}\n${commit.body}`))
+      if (!named.has(key)) named.set(key, `commit ${commit.oid.slice(0, 12)}`);
+  return named;
+};
+
+const rangeCommits = (
+  repository: string,
+  merge: string,
+  head: string,
+  gap: NoteGap,
+) =>
+  commitTexts(repository, merge, head).pipe(
+    Effect.catch((error) =>
+      Effect.sync(() => {
+        gap(
+          "The commit messages couldn't be read, so they weren't used as scope.",
+          describeError(error),
+        );
+        return [] as ReadonlyArray<CommitText>;
+      }),
+    ),
+  );
+
+const documentSources = (options: {
+  repository: string;
+  base: string;
+  head: string;
+  commits: ReadonlyArray<CommitText>;
+  part: "cycle" | "review" | "range";
+  sourceId: () => string;
+  gap: NoteGap;
+}) =>
+  Effect.gen(function* () {
+    const { repository, base, head, commits, part, sourceId, gap } = options;
+    const sources: Array<ScopeSource> = [];
+    yield* Effect.gen(function* () {
+      const baseListing = yield* lsTree(repository, base);
+      const headListing =
+        head === base ? baseListing : yield* lsTree(repository, head);
+      const blobsOf = (listing: ReadonlyArray<TreeEntry>) =>
+        new Map(
+          listing
+            .filter((entry) => entry.type === "blob")
+            .map((entry) => [entry.path, entry]),
+        );
+      const atBase = blobsOf(baseListing);
+      const atHead = blobsOf(headListing);
+      const wanted = new Map<string, string>();
+      if (part !== "range") {
+        const guide = atBase.get(AGENT_GUIDE.path);
+        if (guide !== undefined) {
+          wanted.set(guide.path, `agent guide (${AGENT_GUIDE.reader})`);
+          const bytes = (yield* readBlobs(repository, [guide.oid])).get(
+            guide.oid,
+          );
+          const text = bytes === undefined ? undefined : blobText(bytes);
+          const links =
+            text === undefined
+              ? { paths: [], undecodable: [] }
+              : linkedPaths(guide.path, text);
+          for (const path of links.paths)
+            if ((atBase.has(path) || atHead.has(path)) && !wanted.has(path))
+              wanted.set(path, `linked from ${guide.path}`);
+          for (const target of links.undecodable)
+            gap(
+              `A link in ${guide.path} couldn't be followed because it isn't a valid path: "${target.slice(0, 200)}".`,
+            );
+        } else
+          gap(
+            `The repository has no ${AGENT_GUIDE.path} at the base, so its own conventions weren't read as scope.`,
+          );
+      }
+      const available = new Map([...atHead, ...atBase]);
+      for (const commit of commits)
+        for (const path of namedPaths(
+          `${commit.subject}\n${commit.body}`,
+          available,
+        ))
+          if (!wanted.has(path))
+            wanted.set(path, `named in commit ${commit.oid.slice(0, 12)}`);
+      const entryOf = (path: string) =>
+        part === "range"
+          ? (atHead.get(path) ?? atBase.get(path))
+          : (atBase.get(path) ?? atHead.get(path));
+      const documents = [...wanted].slice(0, MAX_DOCUMENTS);
+      if (wanted.size > MAX_DOCUMENTS)
+        gap(
+          `${wanted.size - MAX_DOCUMENTS} more repository document(s) weren't read: a review reads at most ${MAX_DOCUMENTS}.`,
+        );
+      const entries = documents.map(([path]) => entryOf(path));
+      const contents = yield* readBlobs(
+        repository,
+        entries.flatMap((entry) =>
+          entry === undefined || (entry.size ?? 0) > MAX_DOCUMENT_BYTES
+            ? []
+            : [entry.oid],
+        ),
+      );
+      for (const [path, found] of documents) {
+        const entry = entryOf(path);
+        if (entry === undefined) continue;
+        const id = sourceId();
+        const at = yield* nowIso;
+        const bytes = contents.get(entry.oid);
+        const text =
+          bytes === undefined || bytes.length > MAX_DOCUMENT_BYTES
+            ? undefined
+            : blobText(bytes);
+        const atBaseRevision =
+          part === "range"
+            ? !atHead.has(path) || atBase.get(path)?.oid === entry.oid
+            : atBase.has(path);
+        const stratum = atBaseRevision
+          ? "plan-or-ticket-at-base"
+          : "plan-inside-range";
+        sources.push({
+          id,
+          kind: "repository-document",
+          stratum,
+          fetchedAt: at,
+          ms: 0,
+          status: text === undefined ? "gap" : "fetched",
+          ref: {
+            path,
+            blob: entry.oid,
+            revision: atBaseRevision ? base : head,
+            found,
+          },
+          title: path,
+          sections: text === undefined ? [] : sectionsOf(id, text),
+          capture: null,
+          gap: text === undefined ? "binary or over 256 KiB; not read" : null,
+        });
+      }
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.sync(() =>
+          options.gap(
+            "The repository's documents couldn't be read, so they weren't used as scope.",
+            describeError(error),
+          ),
+        ),
+      ),
+    );
+    return sources;
+  });
+
+const commitScope = (
+  commits: ReadonlyArray<CommitText>,
+  merge: string,
+  head: string,
+  sourceId: () => string,
+) =>
+  Effect.gen(function* () {
+    if (commits.length === 0) return undefined;
+    const id = sourceId();
+    const text = commits
+      .map((commit) => `# ${commit.subject}\n\n${commit.body}`)
+      .join("\n\n");
+    return {
+      id,
+      kind: "commit-text",
+      stratum: "commit-or-pr-text",
+      fetchedAt: yield* nowIso,
+      ms: 0,
+      status: "fetched",
+      ref: {
+        commits: commits.map((commit) => commit.oid),
+        found: `commits of ${merge.slice(0, 12)}..${head.slice(0, 12)}`,
+      },
+      title: `${commits.length} commit message(s)`,
+      sections: sectionsOf(id, text),
+      capture: null,
+      gap: null,
+    } satisfies ScopeSource;
+  });
+
+const gapsOf = () => {
+  const gaps: Array<string> = [];
+  const causes: NonNullable<ScopeSnapshot["causes"]> = [];
+  const gap: NoteGap = (text, cause) => {
+    gaps.push(text);
+    if (cause !== undefined)
+      causes.push({ gap: text, cause: cause.slice(0, 500) });
+  };
+  return { gaps, causes, gap };
+};
+
+const strataOf = (
+  sources: ReadonlyArray<ScopeSource>,
+): ScopeSnapshot["strata"] => {
+  const present = STRATUM_ORDER.filter((stratum) =>
+    sources.some(
+      (source) => source.status === "fetched" && source.stratum === stratum,
+    ),
+  );
+  return { strongest: present[0] ?? "nothing", present };
+};
+
+const fetchSources = (ctx: Omit<SnapshotContext, "range">, input: ScopeInput) =>
   Effect.gen(function* () {
     const started = yield* Clock.currentTimeMillis;
     const fetchedAt = new Date(started).toISOString();
     const clients = yield* McpClients;
     const { repository, cycleId } = ctx;
-    const merge = yield* mergeBase(
-      repository,
-      ctx.range.baseOid,
-      ctx.range.headOid,
-    );
+    const merge =
+      input.part === "cycle"
+        ? input.baseOid
+        : yield* mergeBase(
+            repository,
+            input.range.baseOid,
+            input.range.headOid,
+          );
+    const head = input.part === "cycle" ? input.baseOid : input.range.headOid;
     const sources: Array<ScopeSource> = [];
-    const gaps: Array<string> = [];
-    // Each gap's technical cause, for the run log of the run that discloses it, never the reader.
-    const causes: Array<{ gap: string; cause: string }> = [];
-    const gap = (text: string, cause?: string) => {
-      gaps.push(text);
-      if (cause !== undefined)
-        causes.push({ gap: text, cause: cause.slice(0, 500) });
-    };
+    const { gaps, causes, gap } = gapsOf();
     const deadline = started + SCOPE_FETCH_BOUND_MS;
     const remaining = Effect.map(
       Clock.currentTimeMillis,
       (now) => deadline - now,
     );
-    const commits = yield* commitTexts(
+    const branchTipOid =
+      input.part === "cycle" ? input.branchTipOid : undefined;
+    const commits = yield* rangeCommits(
       repository,
       merge,
-      ctx.range.headOid,
-    ).pipe(
-      Effect.catch((error) =>
-        Effect.sync(() => {
-          gap(
-            "The commit messages couldn't be read, so they weren't used as scope.",
-            describeError(error),
-          );
-          return [] as ReadonlyArray<CommitText>;
-        }),
-      ),
+      branchTipOid ?? head,
+      gap,
     );
-    const branches = (yield* git(repository, [
-      "for-each-ref",
-      "--points-at",
-      ctx.range.headOid,
-      "--format=%(refname:short)",
-      "refs/heads",
-    ]).pipe(Effect.orElseSucceed(() => "")))
-      .split("\n")
-      .filter((line) => line !== "");
+    const branches =
+      input.part === "cycle"
+        ? [input.branch]
+        : (yield* git(repository, [
+            "for-each-ref",
+            "--points-at",
+            head,
+            "--format=%(refname:short)",
+            "refs/heads",
+          ]).pipe(Effect.orElseSucceed(() => "")))
+            .split("\n")
+            .filter(Boolean);
     let next = 1;
     const sourceId = () => `S${next++}`;
     const external = yield* selectedExternalContext(cycleId);
@@ -508,10 +728,8 @@ const fetchSnapshot = (ctx: SnapshotContext) =>
     for (const branch of branches)
       for (const key of keyCandidates(branch))
         if (!named.has(key)) named.set(key, `branch ${branch}`);
-    for (const commit of commits)
-      for (const key of keyCandidates(`${commit.subject}\n${commit.body}`))
-        if (!named.has(key))
-          named.set(key, `commit ${commit.oid.slice(0, 12)}`);
+    for (const [key, where] of commitKeys(commits))
+      if (!named.has(key)) named.set(key, where);
     const selectedEvents = yield* Log.history({
       kind: "cycle.scope-selected@1",
       cycleId,
@@ -719,180 +937,68 @@ const fetchSnapshot = (ctx: SnapshotContext) =>
         );
       }
 
-    // 2. Documents at the base revision: the agent guide and what it links, and paths commits name.
-    // A failed read leaves the documents read so far and discloses the rest as a gap (1.8).
-    yield* Effect.gen(function* () {
-      const baseListing = yield* lsTree(repository, merge);
-      const headListing = yield* lsTree(repository, ctx.range.headOid);
-      const blobsOf = (listing: ReadonlyArray<TreeEntry>) =>
-        new Map(
-          listing
-            .filter((entry) => entry.type === "blob")
-            .map((entry) => [entry.path, entry]),
-        );
-      const atBase = blobsOf(baseListing);
-      const atHead = blobsOf(headListing);
-      const wanted = new Map<string, string>();
-      const guide = atBase.get(AGENT_GUIDE.path);
-      if (guide !== undefined) {
-        wanted.set(guide.path, `agent guide (${AGENT_GUIDE.reader})`);
-        const bytes = (yield* readBlobs(repository, [guide.oid])).get(
-          guide.oid,
-        );
-        const text = bytes === undefined ? undefined : blobText(bytes);
-        const links =
-          text === undefined
-            ? { paths: [], undecodable: [] }
-            : linkedPaths(guide.path, text);
-        for (const path of links.paths)
-          if ((atBase.has(path) || atHead.has(path)) && !wanted.has(path))
-            wanted.set(path, `linked from ${guide.path}`);
-        for (const target of links.undecodable)
-          gaps.push(
-            `A link in ${guide.path} couldn't be followed because it isn't a valid path: "${target.slice(0, 200)}".`,
-          );
-      } else
-        gaps.push(
-          `The repository has no ${AGENT_GUIDE.path} at the base, so its own conventions weren't read as scope.`,
-        );
-      for (const commit of commits)
-        for (const path of namedPaths(
-          `${commit.subject}\n${commit.body}`,
-          new Map([...atHead, ...atBase]),
-        ))
-          if (!wanted.has(path))
-            wanted.set(path, `named in commit ${commit.oid.slice(0, 12)}`);
-      const documents = [...wanted].slice(0, MAX_DOCUMENTS);
-      if (wanted.size > MAX_DOCUMENTS)
-        gaps.push(
-          `${wanted.size - MAX_DOCUMENTS} more repository document(s) weren't read: a review reads at most ${MAX_DOCUMENTS}.`,
-        );
-      const entries = documents.map(
-        ([path]) => atBase.get(path) ?? atHead.get(path),
-      );
-      const contents = yield* readBlobs(
+    const reviewCommits = input.part === "review" ? commits : [];
+    sources.push(
+      ...(yield* documentSources({
         repository,
-        entries.flatMap((entry) =>
-          entry === undefined || (entry.size ?? 0) > MAX_DOCUMENT_BYTES
-            ? []
-            : [entry.oid],
-        ),
-      );
-      for (const [path, found] of documents) {
-        const entry = atBase.get(path) ?? atHead.get(path);
-        if (entry === undefined) continue;
-        const id = sourceId();
-        const at = yield* nowIso;
-        const bytes = contents.get(entry.oid);
-        const text =
-          bytes === undefined || bytes.length > MAX_DOCUMENT_BYTES
-            ? undefined
-            : blobText(bytes);
-        const stratum = atBase.has(path)
-          ? "plan-or-ticket-at-base"
-          : "plan-inside-range";
-        sources.push({
-          id,
-          kind: "repository-document",
-          stratum,
-          fetchedAt: at,
-          ms: 0,
-          status: text === undefined ? "gap" : "fetched",
-          ref: {
-            path,
-            blob: entry.oid,
-            revision: atBase.has(path) ? merge : ctx.range.headOid,
-            found,
-          },
-          title: path,
-          sections: text === undefined ? [] : sectionsOf(id, text),
-          capture: null,
-          gap: text === undefined ? "binary or over 256 KiB; not read" : null,
-        });
-      }
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.sync(() => {
-          gap(
-            "The repository's documents couldn't be read, so they weren't used as scope.",
-            describeError(error),
-          );
-        }),
-      ),
+        base: merge,
+        head,
+        commits: reviewCommits,
+        part: input.part,
+        sourceId,
+        gap,
+      })),
     );
-
-    // 3. Commit text, weak scope (9.13), and no PR text source.
-    if (commits.length > 0) {
-      const id = sourceId();
-      const text = commits
-        .map((commit) => `# ${commit.subject}\n\n${commit.body}`)
-        .join("\n\n");
-      sources.push({
-        id,
-        kind: "commit-text",
-        stratum: "commit-or-pr-text",
-        fetchedAt: yield* nowIso,
-        ms: 0,
-        status: "fetched",
-        ref: {
-          commits: commits.map((commit) => commit.oid),
-          found: `commits of ${merge.slice(0, 12)}..${ctx.range.headOid.slice(0, 12)}`,
-        },
-        title: `${commits.length} commit message(s)`,
-        sections: sectionsOf(id, text),
-        capture: null,
-        gap: null,
-      });
-    }
+    const commitSource = yield* commitScope(
+      reviewCommits,
+      merge,
+      head,
+      sourceId,
+    );
+    if (commitSource !== undefined) sources.push(commitSource);
     if (
       !external?.sources.some((source) => source.item.kind === "pull-request")
     )
       gaps.push(NO_PR_TEXT);
 
-    const present = STRATUM_ORDER.filter((stratum) =>
-      sources.some(
-        (source) => source.status === "fetched" && source.stratum === stratum,
-      ),
-    );
-    const snapshot: ScopeSnapshot = {
-      cycleId,
-      fetchedAt,
-      ms: (yield* Clock.currentTimeMillis) - started,
-      range: {
-        baseOid: ctx.range.baseOid,
-        headOid: ctx.range.headOid,
-        mergeBase: merge,
-      },
-      integrations: {
-        file: ctx.integrations.status,
-        detail:
-          ctx.integrations.status === "invalid"
-            ? ctx.integrations.reason.slice(0, 500)
-            : ctx.integrations.path,
-        servers,
-      },
-      named: [...named].map(([key, where]) => ({
-        key,
-        where,
-        status: namedStatus.get(key) ?? "",
-      })),
-      sources,
-      strata: { strongest: present[0] ?? "nothing", present },
-      gaps,
-      ...(causes.length === 0 ? {} : { causes }),
+    return {
+      merge,
+      cycle: {
+        cycleId,
+        ...(branchTipOid === undefined ? {} : { branchTipOid }),
+        fetchedAt,
+        ms: (yield* Clock.currentTimeMillis) - started,
+        integrations: {
+          file: ctx.integrations.status,
+          detail:
+            ctx.integrations.status === "invalid"
+              ? ctx.integrations.reason.slice(0, 500)
+              : ctx.integrations.path,
+          servers,
+        },
+        named: [...named].map(([key, where]) => ({
+          key,
+          where,
+          status: namedStatus.get(key) ?? "",
+        })),
+        sources,
+        gaps,
+        ...(causes.length === 0 ? {} : { causes }),
+      } satisfies CycleScope,
     };
-    return snapshot;
   }).pipe(
     Effect.withSpan("harness.scope.fetch", {
       attributes: { "harness.cycle_id": ctx.cycleId },
     }),
   );
 
+const SCOPE_SNAPSHOT_OP = "harness.scope-snapshot";
+
 export const snapshotSpec = (
   cycleId: string,
   externalIdentity?: string,
 ): Computations.ComputationSpec => ({
-  op: "harness.scope-snapshot",
+  op: SCOPE_SNAPSHOT_OP,
   // 2: this build's snapshot reads the cycle's explicit scope selection and has new fields. Builds
   // before 12.24 still fetch version 1 for every cycle they see, the transition's included (their
   // `scope.fetch` job is a kind they take), so the two never share a stored snapshot (12.24).
@@ -908,22 +1014,255 @@ export const snapshotSpec = (
   },
 });
 
-/**
- * The cycle's snapshot: stored, shared with an attempt in flight in this worker, or fetched now. A
- * shared attempt that failed (the background job's fetch) is fetched again here, once.
- */
-export const cycleSnapshot = (ctx: SnapshotContext) =>
+const cycleScopeSpec = (cycleId: string): Computations.ComputationSpec => ({
+  ...snapshotSpec(cycleId),
+  opVersion: 3,
+});
+
+const rangeScopeSpec = (range: ScopeRange): Computations.ComputationSpec => ({
+  op: "harness.range-scope",
+  opVersion: 1,
+  inputs: {
+    base: `git-commit:${range.baseOid}`,
+    head: `git-commit:${range.headOid}`,
+  },
+  config: { recipe: SCOPE_RECIPE },
+});
+
+export const readScopeOpening = (cycleId: string) =>
+  Effect.map(
+    Log.history({ cycleId, kind: "cycle.opened@2", limit: 1 }),
+    ([entry]) =>
+      entry?.event.kind === "cycle.opened@2" ? entry.event.payload : undefined,
+  );
+
+const asSnapshot = (
+  cycle: CycleScope,
+  range: ScopeSnapshot["range"],
+): ScopeSnapshot => ({
+  ...cycle,
+  range,
+  strata: strataOf(cycle.sources),
+});
+
+const fetchReviewSnapshot = (ctx: SnapshotContext) =>
   Effect.gen(function* () {
     const external = yield* selectedExternalContext(ctx.cycleId);
     const run = jsonComputation(
       snapshotSpec(ctx.cycleId, external?.identity),
       ScopeSnapshot,
-      fetchSnapshot(ctx),
+      Effect.map(
+        fetchSources(ctx, { part: "review", range: ctx.range }),
+        ({ cycle, merge }) =>
+          asSnapshot(cycle, snapshotRange(ctx.range, merge)),
+      ),
     );
     return yield* run.pipe(Effect.catchTag("SharedAttemptFailed", () => run));
   });
 
-/** The stored snapshot of a cycle, if fetched. */
+const storedCyclePart = (cycleId: string) =>
+  Effect.gen(function* () {
+    const spec = cycleScopeSpec(cycleId);
+    const split = yield* storedOutput(spec, CycleScope);
+    if (Option.isSome(split))
+      return { key: Computations.computationKey(spec).key, value: split.value };
+    const legacy = snapshotSpec(cycleId);
+    const full = yield* storedOutput(legacy, ScopeSnapshot);
+    if (Option.isSome(full))
+      return {
+        key: Computations.computationKey(legacy).key,
+        value: full.value,
+      };
+  });
+
+export const fetchCyclePart = (
+  ctx: Omit<SnapshotContext, "range">,
+  opening: ReadScopeOpening,
+) =>
+  Effect.gen(function* () {
+    const held = yield* storedCyclePart(ctx.cycleId);
+    if (held !== undefined) return { ...held, status: "reused" as const };
+    const run = jsonComputation(
+      cycleScopeSpec(ctx.cycleId),
+      CycleScope,
+      Effect.map(
+        fetchSources(ctx, { ...opening, part: "cycle" }),
+        ({ cycle }) => cycle,
+      ),
+    );
+    return yield* run.pipe(Effect.catchTag("SharedAttemptFailed", () => run));
+  });
+
+const cycleScopeView = (cycle: CycleScope, baseOid: string) =>
+  asSnapshot(cycle, { baseOid, headOid: baseOid, mergeBase: baseOid });
+
+const fetchRangeScope = (repository: string, range: ScopeRange) =>
+  Effect.gen(function* () {
+    const started = yield* Clock.currentTimeMillis;
+    const { gaps, causes, gap } = gapsOf();
+    const merge = yield* mergeBase(repository, range.baseOid, range.headOid);
+    const commits = yield* rangeCommits(repository, merge, range.headOid, gap);
+    let next = 1;
+    const sourceId = () => `S${next++}`;
+    const sources = yield* documentSources({
+      repository,
+      base: merge,
+      head: range.headOid,
+      commits,
+      part: "range",
+      sourceId,
+      gap,
+    });
+    const commitSource = yield* commitScope(
+      commits,
+      merge,
+      range.headOid,
+      sourceId,
+    );
+    if (commitSource !== undefined) sources.push(commitSource);
+    return {
+      fetchedAt: new Date(started).toISOString(),
+      ms: (yield* Clock.currentTimeMillis) - started,
+      range: snapshotRange(range, merge),
+      named: [...commitKeys(commits)].map(([key, where]) => ({ key, where })),
+      sources,
+      gaps,
+      ...(causes.length === 0 ? {} : { causes }),
+    } satisfies RangeScope;
+  });
+
+const composeSnapshot = (
+  cycle: CycleScope,
+  range: RangeScope,
+): ScopeSnapshot => {
+  const knownKeys = new Set(cycle.named.map(({ key }) => key));
+  const named = range.named.filter(({ key }) => !knownKeys.has(key));
+  const sources = [...cycle.sources];
+  const pinnedPaths = new Set(sources.map((source) => source.ref.path));
+  const pinnedIds = new Set(sources.map((source) => source.id));
+  let next = 1;
+  for (const source of range.sources) {
+    if (source.ref.path !== undefined && pinnedPaths.has(source.ref.path))
+      continue;
+    while (pinnedIds.has(`S${next}`)) next++;
+    const id = `S${next++}`;
+    sources.push({
+      ...source,
+      id,
+      sections: source.sections.map((section) => ({
+        ...section,
+        id: id + section.id.slice(source.id.length),
+      })),
+    });
+  }
+  const causes = [...(cycle.causes ?? []), ...(range.causes ?? [])];
+  return {
+    ...cycle,
+    ms: cycle.ms + range.ms,
+    range: range.range,
+    named: [
+      ...cycle.named,
+      ...named.map((item) => ({
+        ...item,
+        status: "named after cycle scope was read",
+      })),
+    ],
+    sources,
+    strata: strataOf(sources),
+    gaps: [
+      ...cycle.gaps,
+      ...range.gaps,
+      ...named.map(
+        ({ key }) =>
+          `Ticket ${key} was named after this cycle's scope was read.`,
+      ),
+    ],
+    ...(causes.length === 0 ? {} : { causes }),
+  };
+};
+
+const splitKey = (cycleId: string, cycleKey: string, rangeKey: string) =>
+  `scope:${cycleId}:${cycleKey}:${rangeKey}`;
+
+export const hasFixedScope = (key: string) => key.startsWith("scope:");
+
+const snapshotOutput = <T>(
+  record: Computations.Computation | undefined,
+  schema: z.ZodType<T>,
+) =>
+  Effect.gen(function* () {
+    if (record === undefined) return undefined;
+    const blob = yield* (yield* Blobs.BlobStore).get(record.outputHash);
+    if (blob._tag === "Pruned") return undefined;
+    const parsed = safeRead(
+      schema,
+      JSON.parse(new TextDecoder().decode(blob.bytes)),
+    );
+    return parsed.success ? parsed.data : undefined;
+  });
+
+export const snapshotByKey = (key: string) =>
+  Effect.gen(function* () {
+    const store = yield* Computations.ComputationStore;
+    if (!hasFixedScope(key))
+      return yield* snapshotOutput(
+        Option.getOrUndefined(yield* store.lookup(key)),
+        ScopeSnapshot,
+      );
+    const [, cycleId, cycleKey, rangeKey] = key.split(":");
+    if (
+      cycleId === undefined ||
+      cycleKey === undefined ||
+      rangeKey === undefined
+    )
+      return undefined;
+    const parts = yield* store.lookupMany([cycleKey, rangeKey]);
+    const range = yield* snapshotOutput(parts.get(rangeKey), RangeScope);
+    if (range === undefined) return undefined;
+    const record = parts.get(cycleKey);
+    if (record?.op !== SCOPE_SNAPSHOT_OP) return undefined;
+    const cycle =
+      record.opVersion === 3
+        ? yield* snapshotOutput(record, CycleScope)
+        : record.opVersion === 2
+          ? yield* snapshotOutput(record, ScopeSnapshot)
+          : undefined;
+    return cycle === undefined || cycle.cycleId !== cycleId
+      ? undefined
+      : composeSnapshot(cycle, range);
+  });
+
+export const reviewSnapshot = (
+  ctx: SnapshotContext,
+  opening: Effect.Success<ReturnType<typeof readScopeOpening>>,
+) =>
+  Effect.gen(function* () {
+    if (opening === undefined) return yield* fetchReviewSnapshot(ctx);
+    const range = jsonComputation(
+      rangeScopeSpec(ctx.range),
+      RangeScope,
+      fetchRangeScope(ctx.repository, ctx.range),
+    );
+    const [cycleResult, rangeResult] = yield* Effect.all(
+      [fetchCyclePart(ctx, opening), range],
+      { concurrency: 2 },
+    );
+    const result = {
+      key: splitKey(ctx.cycleId, cycleResult.key, rangeResult.key),
+      status:
+        rangeResult.status === "reused"
+          ? cycleResult.status
+          : rangeResult.status,
+      value: composeSnapshot(cycleResult.value, rangeResult.value),
+    };
+    try {
+      writeScopeLog(scopeLog(ctx.location, ctx.cycleId), result);
+    } catch (error) {
+      yield* Effect.logDebug("Could not write the cycle's scope log", error);
+    }
+    return result;
+  });
+
 export const selectedExternalContext = (cycleId: string) =>
   Effect.gen(function* () {
     const event = (yield* Log.history({
@@ -936,8 +1275,28 @@ export const selectedExternalContext = (cycleId: string) =>
       : undefined;
   });
 
-export const storedSnapshot = (cycleId: string) =>
+export const storedSnapshot = (
+  cycleId: string,
+  range?: ScopeRange,
+  key?: string,
+) =>
   Effect.gen(function* () {
+    if (key !== undefined)
+      return Option.fromUndefinedOr(yield* snapshotByKey(key));
+    const opening = yield* readScopeOpening(cycleId);
+    if (opening !== undefined) {
+      const cycle = yield* storedCyclePart(cycleId);
+      if (cycle === undefined) return Option.none();
+      const rangePart =
+        range === undefined
+          ? Option.none<RangeScope>()
+          : yield* storedOutput(rangeScopeSpec(range), RangeScope);
+      return Option.some(
+        Option.isSome(rangePart)
+          ? composeSnapshot(cycle.value, rangePart.value)
+          : cycleScopeView(cycle.value, opening.baseOid),
+      );
+    }
     const external = yield* selectedExternalContext(cycleId);
     return yield* storedOutput(
       snapshotSpec(cycleId, external?.identity),
@@ -1255,6 +1614,26 @@ export const additionTools = (options: {
     ),
   );
 
+export const scopeLogFields = (snapshot: ScopeSnapshot) => ({
+  ...(snapshot.branchTipOid === undefined
+    ? {}
+    : { branchTipOid: snapshot.branchTipOid }),
+  fetchedAt: snapshot.fetchedAt,
+  ms: snapshot.ms,
+  strongest: snapshot.strata.strongest,
+  sources: snapshot.sources.map(
+    ({ id, kind, stratum, status, fetchedAt, ms }) => ({
+      id,
+      kind,
+      stratum,
+      status,
+      fetchedAt,
+      ms,
+    }),
+  ),
+  gaps: snapshot.gaps,
+});
+
 /** One line per source and gap, for logs and `neuve review show`. */
 export const describeSnapshot = (snapshot: ScopeSnapshot) => [
   `scope snapshot for cycle ${snapshot.cycleId}, fetched ${snapshot.fetchedAt} in ${snapshot.ms} ms; strongest stratum ${snapshot.strata.strongest}`,
@@ -1269,7 +1648,7 @@ export const describeSnapshot = (snapshot: ScopeSnapshot) => [
   ...snapshot.gaps.map((gap) => `  gap: ${gap}`),
 ];
 
-/** A log for a scope fetch outside a run: `<store>/scope-logs/<cycle>.jsonl`, with its spans. */
+/** Scope fetches and review snapshots for a cycle, in one log. */
 const scopeLog = (location: StoreLocation, cycleId: string): RunLog => {
   const path = join(location.directory, "scope-logs", `${cycleId}.jsonl`);
   mkdirSync(join(path, ".."), { recursive: true, mode: STORE_DIRECTORY_MODE });
@@ -1297,6 +1676,18 @@ const scopeLog = (location: StoreLocation, cycleId: string): RunLog => {
   );
 };
 
+const writeScopeLog = (
+  log: RunLog,
+  result: { key: string; status: string; value: ScopeSnapshot },
+) =>
+  log.write({
+    type: "scope.snapshot",
+    key: result.key,
+    status: result.status,
+    range: result.value.range,
+    ...scopeLogFields(result.value),
+  });
+
 /** A `scope.fetch` job without its cycle's event; no attempt can succeed. */
 export class NotACycle extends Data.TaggedError("NotACycle")<{
   readonly message: string;
@@ -1314,12 +1705,12 @@ export const scopeFetchHandler =
       const stored =
         job.eventId === null ? Option.none() : yield* Log.get(job.eventId);
       const event = Option.getOrUndefined(stored)?.event;
-      if (event?.kind !== "cycle.opened@1")
+      if (event?.kind !== "cycle.opened@1" && event?.kind !== "cycle.opened@2")
         return yield* new NotACycle({
-          message: `job ${job.seq} has no cycle.opened@1 event`,
+          message: `job ${job.seq} has no cycle opening event`,
           retryable: false,
         });
-      const { cycleId, range } = event.attribution;
+      const { cycleId } = event.attribution;
       const log = scopeLog(options.location, cycleId);
       const integrations = readIntegrations();
       log.write({
@@ -1329,32 +1720,19 @@ export const scopeFetchHandler =
         attempt: job.attempts,
         integrations: integrations.status,
       });
-      const result = yield* cycleSnapshot({
-        repository: options.repository,
-        location: options.location,
-        cycleId,
-        range,
-        integrations,
-      }).pipe(
+      const ctx = { ...options, cycleId, integrations };
+      const result = yield* (
+        event.kind === "cycle.opened@1"
+          ? fetchReviewSnapshot({ ...ctx, range: event.attribution.range })
+          : Effect.map(fetchCyclePart(ctx, event.payload), (result) => ({
+              ...result,
+              value: cycleScopeView(result.value, event.payload.baseOid),
+            }))
+      ).pipe(
         Effect.provide(mcpClientsLayer(integrations)),
         Effect.provideService(Tracer.Tracer, runLogTracer(log)),
       );
-      log.write({
-        type: "scope.snapshot",
-        status: result.status,
-        key: result.key,
-        ms: result.value.ms,
-        strongest: result.value.strata.strongest,
-        sources: result.value.sources.map((source) => ({
-          id: source.id,
-          kind: source.kind,
-          stratum: source.stratum,
-          status: source.status,
-          fetchedAt: source.fetchedAt,
-          ms: source.ms,
-        })),
-        gaps: result.value.gaps,
-      });
+      writeScopeLog(log, result);
       for (const line of describeSnapshot(result.value))
         yield* Effect.logInfo(line);
       yield* Effect.logInfo(
