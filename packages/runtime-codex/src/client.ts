@@ -61,6 +61,10 @@ export type Answer =
   | { readonly result: unknown }
   | { readonly error: { readonly code: number; readonly message: string } };
 
+export type Reply = (
+  answer: Answer,
+) => Effect.Effect<"written" | "resolved" | "unwritten">;
+
 /** JSON-RPC's "method not found", the answer to a request this release does not have. */
 export const UNSUPPORTED = -32601;
 /** JSON-RPC's "internal error", the answer when the caller's own answer fails. */
@@ -88,7 +92,11 @@ export interface ConnectOptions {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly cwd: string;
   readonly clientInfo: ClientInfo;
-  readonly answer: (request: ServerRequest) => Effect.Effect<Answer>;
+  /** A handler that writes the reply itself returns undefined. */
+  readonly answer: (
+    request: ServerRequest,
+    reply: Reply,
+  ) => Effect.Effect<Answer | undefined>;
   readonly maxLineBytes?: number;
   readonly maxQueued?: number;
   /**
@@ -233,8 +241,8 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       ),
     );
   // Suspended, so an answer that throws before it returns an effect is caught like one that fails.
-  const answerOf = (request: ServerRequest) =>
-    Effect.suspend(() => options.answer(request)).pipe(
+  const answerOf = (request: ServerRequest, reply: Reply) =>
+    Effect.suspend(() => options.answer(request, reply)).pipe(
       Effect.catchCause(() =>
         Effect.succeed<Answer>({
           error: { code: INTERNAL, message: "the client could not answer" },
@@ -242,6 +250,7 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       ),
     );
 
+  const serverReplies = new Map<string, { resolved: boolean }>();
   const onMessage = (message: Record<string, unknown>) =>
     Effect.gen(function* () {
       const { id, method } = message;
@@ -254,19 +263,52 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
           });
           return;
         }
-        yield* answerOf({
-          id,
-          method,
-          params: message.params,
-        } as ServerRequest).pipe(
+        const response = { resolved: false };
+        serverReplies.set(key(id), response);
+        const reply: Reply = (answer) =>
+          Effect.suspend(() => {
+            if (response.resolved) return Effect.succeed("resolved");
+            if (state.kind !== "open") return Effect.succeed("unwritten");
+            return send({ id, ...answer }).pipe(
+              Effect.map((written) => (written ? "written" : "unwritten")),
+            );
+          });
+        yield* answerOf(
+          {
+            id,
+            method,
+            params: message.params,
+          } as ServerRequest,
+          reply,
+        ).pipe(
           Effect.flatMap((answer) =>
-            state.kind === "open" ? send({ id, ...answer }) : Effect.void,
+            answer === undefined ? Effect.void : reply(answer),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (serverReplies.get(key(id)) === response)
+                serverReplies.delete(key(id));
+            }),
           ),
           Effect.forkIn(scope),
         );
         return;
       }
       if (typeof method === "string" && id === undefined) {
+        // Stop offering replies as soon as the wire reports resolution, before a subscriber reads it.
+        const { params } = message;
+        if (
+          method === "serverRequest/resolved" &&
+          params &&
+          typeof params === "object" &&
+          "threadId" in params &&
+          typeof params.threadId === "string" &&
+          "requestId" in params &&
+          isId(params.requestId)
+        ) {
+          const response = serverReplies.get(key(params.requestId));
+          if (response) response.resolved = true;
+        }
         if (!SERVER_NOTIFICATIONS.has(method))
           yield* logOnce("notification", method);
         else if (READ_NOTIFICATIONS.has(method)) {

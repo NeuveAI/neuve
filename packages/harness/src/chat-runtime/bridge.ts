@@ -12,6 +12,7 @@ import type {
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { Effect, Exit, Scope, Stream } from "effect";
+import type { ConversationId } from "@earendil-works/pi-durable";
 import {
   RuntimeFailure,
   runtimeErrorToFailure,
@@ -38,6 +39,7 @@ import {
 } from "./failure.ts";
 import {
   alreadyRan,
+  ATTENDED_SECTION,
   digest,
   full,
   headDigest,
@@ -46,6 +48,7 @@ import {
   pointer,
   policy,
   policyKey,
+  PLAN_TOOL,
   responseId,
   resultText,
   RUNTIME_WORK_TOOL,
@@ -62,6 +65,8 @@ export type AccountRoute = {
 type Generation = {
   settled: boolean;
   owner: string;
+  chat?: ConversationId;
+  attended: boolean;
   account: AccountName;
   cancellation: AbortController;
   key: string;
@@ -93,8 +98,36 @@ type HeldCall = {
   waiter?: ((value: ToolOutcome) => void) | undefined;
   delivered: boolean;
 };
+type ApprovalRequestEvent = Extract<
+  RuntimeEvent,
+  { type: "approval.requested" }
+>;
+type ApprovalReply = Parameters<RuntimeSession["respondToApproval"]>[0];
+type ApprovalEnd = "turn-ended" | "runtime-resolved" | "stopped";
+type LiveApproval = {
+  turn: string;
+  reply?: Promise<boolean>;
+  closing?: Promise<void>;
+};
+export interface ApprovalStore {
+  restart(): Promise<void>;
+  open(chat: ConversationId, event: ApprovalRequestEvent): Promise<void>;
+  close(
+    chat: ConversationId,
+    requests: ReadonlySet<string>,
+    reason: ApprovalEnd,
+  ): Promise<void>;
+  watch(
+    chat: ConversationId,
+    reply: (answer: ApprovalReply) => Promise<void>,
+  ): Promise<() => Promise<void>>;
+}
 type Live = {
   owner: string;
+  chat?: ConversationId;
+  approvals: Map<string, LiveApproval>;
+  approvalWatch?: () => Promise<void>;
+  approvalEnd?: "stopped";
   scope: Scope.Closeable;
   state:
     | { kind: "acquiring"; start: SessionStart }
@@ -149,7 +182,7 @@ export class ChatRuntimeBridge {
   private readonly identities = new WeakMap<
     object,
     {
-      conversation: string;
+      conversation: ConversationId;
       generation: string;
       redispatched: boolean;
       folder?: string | undefined;
@@ -188,9 +221,14 @@ export class ChatRuntimeBridge {
   private readonly log: Log;
   private closed = false;
   private readonly now: () => number;
+  private approvals?: ApprovalStore;
   constructor(private readonly options: BridgeOptions) {
     this.log = options.log ?? (() => {});
     this.now = options.now ?? Date.now;
+  }
+  async attachApprovals(store: ApprovalStore) {
+    await store.restart();
+    this.approvals = store;
   }
   identify(
     messages:
@@ -202,7 +240,7 @@ export class ChatRuntimeBridge {
   ): void {
     for (const message of messages)
       this.identities.set(message, {
-        conversation: String(conversation),
+        conversation,
         generation: String(generation),
         redispatched,
         ...(folder?.startsWith("/") ? { folder } : {}),
@@ -231,9 +269,14 @@ export class ChatRuntimeBridge {
         message.role === "system" &&
         Reflect.get(message, planningRequest) === true,
     );
-    const messages = planRequest
-      ? requested.filter((message) => message !== planRequest)
-      : requested;
+    const attendance = requested.findLast(
+      (message): message is SystemMessage =>
+        message.role === "system" &&
+        Object.hasOwn(message.sections ?? {}, ATTENDED_SECTION),
+    );
+    const messages = requested.filter(
+      (message) => message !== planRequest && message !== attendance,
+    );
     const identity = messages
       .map((message) => this.identities.get(message))
       .findLast((value) => value !== undefined);
@@ -249,7 +292,12 @@ export class ChatRuntimeBridge {
     const generation: Generation = {
       settled: false,
       key,
-      owner: identity?.conversation ?? crypto.randomUUID(),
+      owner:
+        identity === undefined
+          ? crypto.randomUUID()
+          : String(identity.conversation),
+      ...(identity === undefined ? {} : { chat: identity.conversation }),
+      attended: attendance?.sections?.[ATTENDED_SECTION] === "true",
       account: route.name,
       cancellation: new AbortController(),
       streams: [],
@@ -523,6 +571,8 @@ export class ChatRuntimeBridge {
       {
         folder: route.capabilities.ownTools ? gen.folder : undefined,
         ownTools: route.capabilities.ownTools,
+        approvals: route.capabilities.approvals,
+        attended: gen.attended,
       },
     );
     const tail = gen.messages.slice(previous.index + 1);
@@ -775,10 +825,14 @@ export class ChatRuntimeBridge {
       {
         folder: route.capabilities.ownTools ? gen.folder : undefined,
         ownTools: route.capabilities.ownTools,
+        approvals: route.capabilities.approvals,
+        attended: gen.attended,
       },
     );
     const live: Live = {
       owner: gen.owner,
+      ...(gen.chat === undefined ? {} : { chat: gen.chat }),
+      approvals: new Map(),
       scope,
       state: { kind: "acquiring", start },
       cancellation: new AbortController(),
@@ -835,27 +889,160 @@ export class ChatRuntimeBridge {
       await this.closeLive(live, false);
       throw error;
     }
-    // Register the consumer before startTurn can emit its first event. The reader only keeps each
-    // event; `pump` records them, and ends the session once the stream has ended and everything
-    // it held is recorded, so a round pi is still recording loses nothing to the stream's end.
+    // Approval records follow the reader even while pi holds transcript recording at a tool call.
     live.reader = Effect.runPromise(
-      Stream.runForEach(live.state.session.events, (event) =>
-        Effect.sync(() => {
+      Stream.runForEach(live.state.session.events, (event) => {
+        const keep = Effect.sync(() => {
           live.backlog.push(event);
           void this.pump(live);
-        }),
-      ),
+        });
+        if (
+          event.type === "approval.requested" ||
+          event.type === "approval.resolved" ||
+          event.type === "turn.finished"
+        )
+          return Effect.uninterruptible(
+            Effect.promise(() => this.trackApproval(live, event)),
+          ).pipe(Effect.andThen(keep));
+        return keep;
+      }),
       { signal: live.cancellation.signal },
     ).then(
-      () => {
-        live.streamEnded = "ended";
-      },
-      () => {
-        live.streamEnded = "failed";
-      },
+      () => this.endReader(live, "ended"),
+      () => this.endReader(live, "failed"),
     );
     void live.reader.then(() => this.pump(live));
     return live;
+  }
+  private async trackApproval(
+    live: Live,
+    event:
+      | ApprovalRequestEvent
+      | Extract<RuntimeEvent, { type: "approval.resolved" | "turn.finished" }>,
+  ) {
+    const store = this.approvals;
+    const chat = live.chat;
+    if (!store || chat === undefined) return;
+    if (event.type === "approval.requested") {
+      if (live.closing || live.approvalEnd === "stopped") return;
+      live.approvals.set(event.requestId, { turn: event.turnId });
+      await store.open(chat, event);
+      live.approvalWatch ??= await store.watch(chat, async (answer) => {
+        await this.replyToApproval(chat, answer);
+      });
+    } else if (event.type === "approval.resolved") {
+      await this.closeApprovals(live, "runtime-resolved", [event.requestId]);
+    } else {
+      await this.closeApprovals(
+        live,
+        live.approvalEnd ?? "turn-ended",
+        [...live.approvals]
+          .filter(([, approval]) => approval.turn === event.turnId)
+          .map(([id]) => id),
+      );
+    }
+  }
+  async replyToApproval(
+    chat: ConversationId,
+    answer: ApprovalReply,
+    record?: () => Promise<void>,
+  ): Promise<boolean> {
+    const { requestId } = answer;
+    const live = [...this.sessions].find(
+      (session) => session.chat === chat && session.approvals.has(requestId),
+    );
+    const approval = live?.approvals.get(requestId);
+    if (!live || !approval || live.state.kind !== "open") return false;
+    if (approval.closing) {
+      await approval.closing;
+      return false;
+    }
+    if (live.closing || live.approvalEnd || approval.reply) return false;
+    const session = live.state.session;
+    const reply = Promise.resolve().then(async () => {
+      const delivered = await Effect.runPromise(
+        session.respondToApproval(answer),
+      );
+      if (delivered.delivered) {
+        await record?.();
+        live.approvals.delete(requestId);
+        return true;
+      }
+      if (delivered.reason !== undefined) {
+        const reason =
+          delivered.reason === "turn-ended"
+            ? (live.approvalEnd ?? delivered.reason)
+            : delivered.reason;
+        await this.approvals?.close(chat, new Set([requestId]), reason);
+        live.approvals.delete(requestId);
+      }
+      return false;
+    });
+    approval.reply = reply;
+    try {
+      return await reply;
+    } catch (error) {
+      this.log("chat-runtime.approval.reply.failed", {
+        requestId,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+      if (record) throw error;
+      return false;
+    } finally {
+      delete approval.reply;
+    }
+  }
+
+  private async closeApprovals(
+    live: Live,
+    reason: ApprovalEnd,
+    ids: Iterable<string>,
+  ) {
+    const { approvals: store } = this;
+    const { chat } = live;
+    if (!store || chat === undefined) return;
+    const closing = new Map<string, LiveApproval>();
+    const previous = new Set<Promise<void>>();
+    for (const id of ids) {
+      const approval = live.approvals.get(id);
+      if (approval?.closing) previous.add(approval.closing);
+      else if (approval) closing.set(id, approval);
+    }
+    const closed = Promise.resolve().then(async () => {
+      // A reply that reached the process must keep its recorded answer even if the turn ends.
+      await Promise.allSettled([...closing.values()].map(({ reply }) => reply));
+      const requests = new Set(
+        [...closing.keys()].filter((id) => live.approvals.has(id)),
+      );
+      if (!requests.size) return;
+      await store.close(chat, requests, reason);
+      for (const id of requests) live.approvals.delete(id);
+    });
+    for (const approval of closing.values()) approval.closing = closed;
+    try {
+      await Promise.all([closed, ...previous]);
+    } finally {
+      for (const approval of closing.values()) delete approval.closing;
+    }
+  }
+  private async endReader(
+    live: Live,
+    status: NonNullable<Live["streamEnded"]>,
+  ) {
+    const reason = live.approvalEnd ?? "turn-ended";
+    try {
+      await this.closeApprovals(live, reason, live.approvals.keys());
+    } catch (error) {
+      status = "failed";
+      this.log("chat-runtime.approval.close.failed", {
+        owner: live.owner,
+        reason,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      await live.approvalWatch?.();
+      live.streamEnded = status;
+    }
   }
   private reserve(live: Live, gen: Generation) {
     clearTimeout(live.timer);
@@ -1448,7 +1635,20 @@ export class ChatRuntimeBridge {
         .map((live) => this.closeLive(live)),
     );
   }
-  async closeConversation(owner: string, forgetHead = false) {
+  /** Stop closes the records before pi aborts the turn and writes its Stop entry. */
+  async stopApprovals(chat: ConversationId) {
+    const sessions = [...this.sessions].filter(
+      (live) =>
+        live.chat === chat && (live.turn || live.generation || live.reserved),
+    );
+    for (const live of sessions) live.approvalEnd = "stopped";
+    await Promise.all(
+      sessions.map((live) =>
+        this.closeApprovals(live, "stopped", live.approvals.keys()),
+      ),
+    );
+  }
+  async closeConversation(owner: string, forgetHead = false, stopped = false) {
     this.conversationCloses.set(
       owner,
       (this.conversationCloses.get(owner) ?? 0) + 1,
@@ -1461,7 +1661,10 @@ export class ChatRuntimeBridge {
     const closing = Promise.all(
       [...this.sessions]
         .filter((live) => live.owner === owner)
-        .map((live) => this.closeLive(live)),
+        .map((live) => {
+          if (stopped) live.approvalEnd = "stopped";
+          return this.closeLive(live);
+        }),
     );
     for (const gen of this.requests.values())
       if (gen.owner === owner) this.finish(undefined, gen, "aborted");
@@ -1510,25 +1713,28 @@ export class ChatRuntimeBridge {
       ),
     );
     if (settle) live.cancellation.abort();
-    void Promise.allSettled([closingScope, live.acquisition, command]).then(
-      async () => {
-        if (command && live.generation)
-          this.finish(live, live.generation, "aborted");
-        for (const [id, call] of live.calls) {
-          call.waiter?.({ text: "Call stopped.", error: "Call stopped." });
-          // An outcome recorded for a round that will never run is let go with the session.
-          this.work.delete(id);
-        }
-        live.calls.clear();
-        try {
-          await this.resolveDelivery(live);
-        } catch {
-          this.log("chat-runtime.head.resolve.failed", { owner: live.owner });
-        }
-        this.sessions.delete(live);
-        closed.resolve();
-      },
-    );
+    void Promise.allSettled([
+      closingScope,
+      live.acquisition,
+      command,
+      live.reader,
+    ]).then(async () => {
+      if (command && live.generation)
+        this.finish(live, live.generation, "aborted");
+      for (const [id, call] of live.calls) {
+        call.waiter?.({ text: "Call stopped.", error: "Call stopped." });
+        // An outcome recorded for a round that will never run is let go with the session.
+        this.work.delete(id);
+      }
+      live.calls.clear();
+      try {
+        await this.resolveDelivery(live);
+      } catch {
+        this.log("chat-runtime.head.resolve.failed", { owner: live.owner });
+      }
+      this.sessions.delete(live);
+      closed.resolve();
+    });
     return live.closing;
   }
   async close() {
@@ -1554,11 +1760,21 @@ export class ChatRuntimeBridge {
  */
 function handOver(messages: Context["messages"], fork: number): ContentBlock[] {
   const unheld = messages.slice(fork + 1);
-  const lastReply = unheld.findLastIndex(
-    (message) =>
-      message.role === "assistant" &&
-      (message.stopReason === "stop" || message.stopReason === "length"),
-  );
+  const lastReply = unheld.findLastIndex((message, index) => {
+    if (message.role !== "assistant") return false;
+    if (message.stopReason === "stop" || message.stopReason === "length")
+      return true;
+    if (message.stopReason !== "toolUse") return false;
+    const calls = message.content.filter((part) => part.type === "toolCall");
+    const result = unheld[index + 1];
+    return (
+      calls.length === 1 &&
+      calls[0]?.name === PLAN_TOOL &&
+      result?.role === "toolResult" &&
+      result.toolCallId === calls[0].id &&
+      !result.isError
+    );
+  });
   const interrupted = unheld.some(
     (message, index) => index > lastReply && message.role === "assistant",
   );

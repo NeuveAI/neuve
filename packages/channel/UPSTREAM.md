@@ -35,7 +35,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/src/models.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/progress.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/protocol.ts` | Unknown pricing omits optional Usage.cost rather than representing an unknown price as zero. All native Request/Event fields and operations remain original, including optional metadata.shared and desktop/watch compatibility. | `@@ -15,7 +15,7 @@` |
-| `packages/channel/src/questions.ts` | Pinned upstream bytes retained. | Byte-identical |
+| `packages/channel/src/questions.ts` | Shares message dismissal and the waiting mark with runtime approvals. | Changed |
 | `packages/channel/src/queue.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/room.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/seed.ts` | Pinned upstream bytes retained. | Byte-identical |
@@ -81,7 +81,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/tests/transfer.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/tsconfig.json` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 
-21 of 27 original tracked files retain exact pinned bytes. The machine manifest records SHA-256 for every original and own file; changed originals also have full unified diffs in the review evidence. No normalization of scopes, whitespace or optional types is applied.
+20 of 27 original tracked files retain exact pinned bytes. The machine manifest records SHA-256 for every original and own file; changed originals also have full unified diffs in the review evidence. No normalization of scopes, whitespace or optional types is applied.
 
 ## Verification and limits
 
@@ -96,6 +96,28 @@ The channel dispatches comment requests through the same chat admission queue as
 | `packages/channel/src/parse.ts` | The ask schema accepts the mode at both channel and gateway ingress. |
 | `packages/channel/src/plan-mode.ts` | Stores and inherits the chat mode, limits tools in Plan mode, offers the comment answer tool only in Plan mode, and tells planning agents how to deliver a plan or revision. |
 | `packages/channel/tests/plan-mode.test.ts` | Exercises admission, busy chats, inheritance, interrupted tool replay, and the instruction delivered to planning agents. |
+
+| Integration file | Approval request contract |
+| --- | --- |
+| `packages/channel/src/protocol.ts` | Defines the approval request record, its per-chat document, the answer operation, and the watch event. Adds the attended flag to ask and describes when a run waits on a person. |
+| `packages/channel/src/parse.ts` | Parses the attended and watch flags. Requires an author and a runtime request ID for an approval answer. |
+| `packages/channel/src/frame.ts` | Validates each approval request state and preserves the complete list in watch frames. |
+| `packages/channel/tests/approvals-protocol.test.ts` | Checks that malformed answers are refused, the verified author replaces the claimed one, and every request state survives the event boundary. |
+| `packages/channel/src/protocol.ts` | Requires a typed description of what Allow grants beside the runtime input used for details. |
+| `packages/channel/src/frame.ts` | Validates the shared approval descriptions and refuses a record with no description. |
+| `packages/channel/tests/approvals-protocol.test.ts` | Exercises each description through a watch frame and checks that a missing description or an empty patch is refused. |
+| `packages/channel/src/approvals.ts` | Stores attendance, publishes approval snapshots, and commits answers and message dismissal. |
+| `packages/channel/src/channel.ts` | Admits attendance with a message, checks approval answer authors, and lets the host runtime close approvals before Stop aborts the conversation. |
+| `packages/channel/src/plan-mode.ts` | Keeps the attendance section available to the runtime bridge without adding it to the model prompt. |
+| `packages/channel/tests/helpers.ts` | Attaches an injected runtime fixture beside the usual channel operations. |
+| `packages/channel/tests/approvals.test.ts` | Exercises approval authorization, document races, Stop, message delivery, attendance and opted-in watches across the channel boundary. |
+| `packages/channel/src/questions.ts` | Questions accept any queued invocation. Approvals accept a person's queued invocation. Plain messages dismiss neither. |
+| `packages/channel/src/approvals.ts` | Refusals describe the recorded decision or closure without repeating the person's sign-in ID. |
+| `packages/channel/src/channel.ts` | Gives the runtime an answer callback and orders approval answers with messages in the same chat. |
+| `packages/channel/src/approvals.ts` | Records an answer after the runtime reports delivery. A refused reply returns the request's closure reason. |
+| `packages/channel/tests/approvals.test.ts` | Registers a runtime answer callback for the channel's approval admission tests. |
+| `packages/channel/src/protocol.ts` | Uses the frame validator's JSON type and keeps the shared document definition independent of storage declarations. |
+| `packages/channel/src/approvals.ts` | Checks the shared document definition where the channel opens the store. |
 
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 

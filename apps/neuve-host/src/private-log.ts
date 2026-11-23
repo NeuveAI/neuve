@@ -147,6 +147,7 @@ const kinds = new Map<string, readonly string[]>(
 			"plan-comment-edit",
 			"plan-comment-remove",
 			"plan-comments-send",
+			"approval-answer",
 			"changes",
 			"patch",
 			"stop",

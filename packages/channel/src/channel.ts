@@ -1,6 +1,7 @@
 import { ReviewCardsDoc } from "./review-cards";
+import { type ApprovalAdmission, ApprovalRequestsDoc, Approvals, requirePerson, watchApprovals } from "./approvals";
 import type { Context } from "@earendil-works/chord";
-import { type ChannelExtension, install, observe, price } from "./extensions";
+import { type Admission, type ChannelExtension, install, observe, price } from "./extensions";
 import { admitted, claim, digest } from "./requests";
 import {
 	type AssistantMessage,
@@ -87,8 +88,9 @@ import {
 } from "./plan-comments";
 import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode } from "./plan-mode";
 import { progress } from "./progress";
-import { answer, Questions } from "./questions";
+import { answer, PersonWaits, Questions } from "./questions";
 import type {
+	ApprovalRequestsState,
 	ChannelInfo,
 	Chat,
 	ChatId,
@@ -186,7 +188,9 @@ export type Options = {
 	/** Publish each message people and other channels' agents write, for teammates' attention. */
 	onSaid?(said: Said): void;
 	log: Log;
-	extension?: ChannelExtension;
+	extension?: Omit<ChannelExtension, "attach"> & {
+		attach?(harness: Harness, admission: Admission & ApprovalAdmission): void | Promise<void>;
+	};
 	/** Host-owned document producers join before native storage closes. */
 	feed?(harness: Harness, submitInput: Channel["submitInput"]): Promise<{ close(): Promise<void>; pending(): boolean }>;
 };
@@ -220,6 +224,7 @@ export class Channel {
 	#planPlacements = new Map<ConversationId, PlanCommentPlacements>();
 	#pendingPlanDeliveries: PlanDelivery[][] = [];
 	#planDeliveries?: Promise<void>;
+	#approvals: Approvals;
 	/** Committed settings, maintained from pi's commit stream before native dispatch. */
 	#settings: Settings;
 	#active = 0;
@@ -245,6 +250,7 @@ export class Channel {
 		value: Metadata,
 		settings: Settings,
 		plans: Plans,
+		approvals: Approvals,
 	) {
 		this.#options = options;
 		this.#harness = harness;
@@ -252,6 +258,7 @@ export class Channel {
 		this.#metadata = value;
 		this.#settings = settings;
 		this.#plans = plans;
+		this.#approvals = approvals;
 	}
 
 	static async open(options: Options): Promise<Channel> {
@@ -268,7 +275,10 @@ export class Channel {
 		registry.install(CodingTools);
 		const handoffs = new Handoffs(options.directory);
 		registry.install(handoffs.extension);
-		const questions = new Questions((chat, phase) => void channel.#asked(chat, phase));
+		const waits = new PersonWaits((chat, phase) => { void Promise.resolve().then(() => channel.#asked(chat, phase)); });
+		const questions = new Questions(waits);
+		const approvals = new Approvals(waits, error => log("warn", "approval.dismiss.failed", failure(error)),
+			(chat, work) => channel.#admitted(chat, work));
 		registry.install(questions.extension);
 		const execute = options.desktop;
 		if (execute) {
@@ -295,6 +305,7 @@ export class Channel {
 		registry.install(
 			defineExtension({ name: "ace-channel", sections: [room.section(options), instructions] }),
 		);
+		registry.install(approvals.extension);
 		registry.install(planModeExtension(planning));
 		const plans = new Plans(options.planFiles);
 		const plan = plans.extension(planning, (chat, work) => channel.#admitted(chat, work), log);
@@ -302,7 +313,7 @@ export class Channel {
 		registry.install(planCommentAnswers(planning));
 		install(registry, options.extension, planning, !!options.planFileAccess, log);
 		const harness = await Harness.open(options.storage, {
-			models: planModeModels(options.models),
+			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider)),
 			registry,
 			env: async ({ cwd, conversationId }, context) => {
 				const folder = cwd || options.project;
@@ -353,6 +364,7 @@ export class Channel {
 			value,
 			settings || LEGACY,
 			plans,
+			approvals,
 		);
 		ownedChannel = channel;
 		channel.#unbind = unbind;
@@ -389,8 +401,13 @@ export class Channel {
 					const { scope } = change.record;
 					if (scope.kind === "conversation") {
 						handoffs.inbox(scope.conversationId, change.value as InboxState | null);
-						questions.inbox(scope.conversationId, change.value as InboxState | null);
+						waits.inbox(scope.conversationId, change.value as InboxState | null);
 					}
+					continue;
+				}
+				if (change.record.kind === ApprovalRequestsDoc.definition.kind) {
+					const { scope } = change.record;
+					if (scope.kind === "conversation") approvals.changed(harness, scope.conversationId, change.value as ApprovalRequestsState | null);
 					continue;
 				}
 				if (change.record.kind !== LiveDoc.definition.kind) continue;
@@ -432,6 +449,9 @@ export class Channel {
 		await options.extension?.attach?.(harness, {
 			invoke: async (author) => { channel.#author(author); await channel.#mayInvoke(author); },
 			serialize: (chat, work) => channel.#admitted(chat, work),
+			onStop: stop => approvals.registerStop(stop),
+			onApprovalAnswer: send => approvals.registerAnswer(send),
+			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
 		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
 		if (options.resume !== false) harness.resume();
@@ -524,6 +544,13 @@ export class Channel {
 				const { id } = await this.#conversation(request.chat);
 				return answer(this.#harness, id, request.call, request.author, null, context);
 			}
+			case "approval-answer":
+				return this.#admitted(request.chat, async () => {
+					requirePerson(request.author);
+					this.#author(request.author);
+					await this.#mayInvoke(request.author);
+					return this.#approvals.answer(this.#harness, (await this.#conversation(request.chat)).id, request);
+				});
 			case "plan":
 				return this.#admitted(request.chat, async () => {
 					const { id } = await this.#conversation(request.chat);
@@ -584,6 +611,7 @@ export class Channel {
 				await this.#mayInvoke(request.author);
 				const conversation = await this.#conversation(request.chat);
 				const running = this.#runs.has(conversation.id);
+				await this.#approvals.stop(conversation.id);
 				await conversation.abort(context);
 				await this.#flushPlanDeliveries();
 				if (!running) return;
@@ -830,7 +858,7 @@ export class Channel {
 		return this.#planDeliveries;
 	}
 
-	/** A run waiting on a question needs the same attention as one that ended, until it is answered. */
+	/** A run waiting on a person needs the same attention as one that ended. */
 	async #asked(chat: ConversationId, phase: "question" | "answered"): Promise<void> {
 		const inputs = this.#runs.get(chat);
 		if (!inputs) return;
@@ -910,6 +938,7 @@ export class Channel {
 			// Caption calls are external producers, so join them before entering that boundary.
 			await Promise.allSettled(this.#captionTasks);
 			await Promise.allSettled(this.#admissions.values());
+			await this.#approvals.close();
 			await this.#flushPlanDeliveries().catch(error => errors.push(error));
 			try {
 				await this.#harness.close(context);
@@ -1036,7 +1065,7 @@ export class Channel {
 		let submission: SubmissionId | undefined;
 		try {
 			({ submission } = await this.#select(conversation, {}, {
-				bound, mode: "plan", input, settled,
+				bound, mode: "plan", attended: undefined, input, settled,
 			}));
 		} catch (error) {
 			if (planCommentBatch(this.#planState, chat, requestId)) {
@@ -1080,11 +1109,12 @@ export class Channel {
 		room.checkAttachments(request);
 		await this.#mayInvoke(request.author);
 		const conversation = await this.#conversation(request.chat);
-		const { requestId, author, text, images, files, model, automatic, effort, mode } = request;
+		const { requestId, author, text, images, files, model, automatic, effort, mode, attended } = request;
 		if (mode !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's mode.");
+		if (attended !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's attendance.");
 		let bound: ((tx: Tx) => Promise<void>) | undefined;
 		if (requestId) {
-			const value = await digest({ op: "ask", author, text, images, files, model, automatic, effort, mode });
+			const value = await digest({ op: "ask", author, text, images, files, model, automatic, effort, mode, attended });
 			// A retry gets its submission back without selecting again, so it never undoes a later choice.
 			const existing = await this.#harness.commit(
 				(tx) => admitted(tx, conversation.id, requestId, value),
@@ -1103,7 +1133,7 @@ export class Channel {
 			whenBusy: "steer",
 			...(request.requestId ? { requestId: request.requestId } : {}),
 		};
-		const { submission } = await this.#select(conversation, request, { bound, mode, input, settled });
+		const { submission } = await this.#select(conversation, request, { bound, mode, attended, input, settled });
 		return { submission };
 	}
 
@@ -1130,7 +1160,7 @@ export class Channel {
 	async #select(
 		conversation: Conversation,
 		selection: room.Attached & { model?: ModelRef; effort?: Effort; automatic?: boolean },
-		invocation?: { bound: ((tx: Tx) => Promise<void>) | undefined; mode: ChatMode | undefined; input: InputSubmissionDraft; settled: Promise<unknown> },
+		invocation?: { bound: ((tx: Tx) => Promise<void>) | undefined; mode: ChatMode | undefined; attended: boolean | undefined; input: InputSubmissionDraft; settled: Promise<unknown> },
 		callContext = context,
 	): Promise<{ model: ModelRef; effort: Effort; submission?: SubmissionId }> {
 		const { model: requested, effort, automatic } = selection;
@@ -1199,7 +1229,8 @@ export class Channel {
 			}
 			if (!same && !modeChange) this.#agentChanged(conversation.id, model, thinkingLevel);
 			if (invocation) {
-				submission = (await conversation.submit(invocation.input, callContext)).id;
+				submission = (await this.#approvals.admit(this.#harness, conversation.id, invocation.attended, invocation.settled,
+					() => conversation.submit(invocation.input, callContext))).id;
 			}
 		} catch (error) {
 			if (modeChange) {
@@ -1520,7 +1551,8 @@ export class Channel {
 		const harness = this.#harness;
 		let reviews: DocumentWatch<{ cards: Record<string, ReviewCard> }> | undefined;
 		let plans: DocumentWatch<PlansState> | undefined;
-		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop()]);
+		let approvals: Awaited<ReturnType<typeof watchApprovals>> | undefined;
+		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop(), approvals?.stop()]);
 		try {
 			if (request.planComments) await this.#flushPlanDeliveries();
 			await harness.commit(async tx => {
@@ -1533,6 +1565,7 @@ export class Channel {
 				send({ kind: "review-cards", chat: conversation.id, cards: value?.cards || {} });
 			sendReviews(reviews?.value);
 			reviews?.start(async value => { sendReviews(value); });
+			if (request.approvals) approvals = await watchApprovals(harness, conversation.id, send);
 			if (plans) {
 				let lastPlans: string | undefined;
 				let lastComments: string | undefined;

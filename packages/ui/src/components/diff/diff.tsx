@@ -25,6 +25,8 @@ type DiffProps = {
 	view?: DiffStyle;
 	virtualized?: boolean;
 	hunkSeparators?: DiffOptionsOverride["hunkSeparators"];
+	/** `wrap` breaks long lines instead of scrolling them. */
+	overflow?: DiffOptionsOverride["overflow"];
 };
 
 const PRERENDER_LINE_LIMIT = 1200;
@@ -47,6 +49,7 @@ function useDiff(
 		view = "unified",
 		virtualized = false,
 		hunkSeparators,
+		overflow,
 		streaming,
 	}: DiffProps,
 ) {
@@ -58,11 +61,11 @@ function useDiff(
 	let metadata = parsed && parsed.hunks.length === 0 ? metadataText(parsed) : undefined;
 	let prerender = !virtualized || lines <= PRERENDER_LINE_LIMIT;
 	let overrides = useMemo(
-		() => hunkSeparators ? { hunkSeparators } : undefined,
-		[hunkSeparators],
+		() => hunkSeparators || overflow ? { hunkSeparators, overflow } : undefined,
+		[hunkSeparators, overflow],
 	);
 	let key = parsed?.cacheKey ?? patch;
-	let cacheKey = `${key}\0${view}\0${hunkSeparators ?? ""}`;
+	let cacheKey = `${key}\0${view}\0${hunkSeparators ?? ""}\0${overflow ?? ""}`;
 	let [state, setState] = useState<{ key: string; html: string } | null>(() => {
 		if (streaming || !prerender || metadata) return null;
 		let html = cachedDiff(patch, view, parsed, overrides);
@@ -103,6 +106,7 @@ function Diff({
 	view = "unified",
 	virtualized = false,
 	hunkSeparators,
+	overflow,
 }: DiffProps) {
 	let { parsed, metadata, overrides, html } = useDiff({
 		patch,
@@ -112,6 +116,7 @@ function Diff({
 		view,
 		virtualized,
 		hunkSeparators,
+		overflow,
 		streaming,
 	});
 

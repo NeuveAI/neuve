@@ -13,7 +13,7 @@ import {
 	type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 
-import type { Answer } from "./protocol";
+import type { Answer, RunEnd } from "./protocol";
 import * as room from "./room";
 
 const MAX_CUSTOM = 4000;
@@ -73,11 +73,68 @@ function dismissed(author: string): ToolExecutionResult {
 	};
 }
 
-/** The author of a chat's first queued input, which a person sends instead of answering. */
-function queued(state: Readonly<InboxState> | null | undefined): string | undefined {
-	return (state?.items || []).flatMap((item) =>
-		item.mode === "write" ? [] : [room.input(item.content).author]
-	)[0];
+type WaitKind = "question" | "approval";
+
+/** Questions accept any queued input. Approvals require a person's invocation. */
+function queued(state: Readonly<InboxState> | null | undefined): Partial<Record<WaitKind, string>> {
+	const authors: Partial<Record<WaitKind, string>> = {};
+	for (const item of state?.items ?? []) {
+		if (item.mode === "write") continue;
+		const author = room.input(item.content).author;
+		authors.question ??= author;
+		const first = typeof item.content === "string" ? item.content : item.content[0];
+		const text = typeof first === "string" ? first : first?.type === "text" ? first.text : undefined;
+		if (!room.isAgent(author) && text?.startsWith(`${author}: `)) {
+			authors.approval = author;
+			break;
+		}
+	}
+	return authors;
+}
+
+type WaitPhase = Extract<RunEnd["outcome"], "question" | "answered">;
+type Wait = { kind: WaitKind; dismiss: (author: string) => void; active: boolean };
+
+/** A chat can wait on a question and a runtime request at the same time. */
+export class PersonWaits {
+	#queued = new Map<ConversationId, ReturnType<typeof queued>>();
+	#waiting = new Map<ConversationId, Set<Wait>>();
+	constructor(private readonly onWait: (chat: ConversationId, phase: WaitPhase) => void) {}
+
+	inbox(chat: ConversationId, state: Readonly<InboxState> | null | undefined) {
+		const authors = queued(state);
+		if (!authors.question) return void this.#queued.delete(chat);
+		this.#queued.set(chat, authors);
+		for (const wait of this.#waiting.get(chat) ?? []) {
+			const author = authors[wait.kind];
+			if (author) wait.dismiss(author);
+		}
+	}
+
+	queued(chat: ConversationId, kind: WaitKind) {
+		return this.#queued.get(chat)?.[kind];
+	}
+
+	listen(chat: ConversationId, kind: WaitKind, dismiss: Wait["dismiss"]) {
+		let waits = this.#waiting.get(chat);
+		if (!waits) this.#waiting.set(chat, waits = new Set());
+		const active = waits;
+		const wait = { kind, dismiss, active: false };
+		active.add(wait);
+		const marked = () => [...active].some(source => source.active);
+		return {
+			start: (notify = true) => {
+				const first = !marked();
+				wait.active = true;
+				if (first && notify) this.onWait(chat, "question");
+			},
+			stop: (answered = false) => {
+				if (!active.delete(wait)) return;
+				if (!active.size) this.#waiting.delete(chat);
+				if (answered && wait.active && !marked()) this.onWait(chat, "answered");
+			},
+		};
+	}
 }
 
 /**
@@ -87,20 +144,15 @@ function queued(state: Readonly<InboxState> | null | undefined): string | undefi
  * instead of blocking it behind the question.
  */
 export class Questions {
-	#queued = new Map<ConversationId, string>();
-	#waiting = new Map<ConversationId, Set<(author: string) => void>>();
-	#onAsk: (chat: ConversationId, phase: "question" | "answered") => void;
+	#waits: PersonWaits;
 
 	/** `onAsk` hears when a chat starts waiting on a question and when an answer or message ends it. */
-	constructor(onAsk: (chat: ConversationId, phase: "question" | "answered") => void) {
-		this.#onAsk = onAsk;
+	constructor(waits: PersonWaits | ((chat: ConversationId, phase: WaitPhase) => void)) {
+		this.#waits = waits instanceof PersonWaits ? waits : new PersonWaits(waits);
 	}
 
 	inbox(chat: ConversationId, state: InboxState | null | undefined) {
-		const author = queued(state);
-		if (!author) return void this.#queued.delete(chat);
-		this.#queued.set(chat, author);
-		for (const dismiss of this.#waiting.get(chat) || []) dismiss(author);
+		this.#waits.inbox(chat, state);
 	}
 
 	readonly extension: Extension = defineExtension({
@@ -117,14 +169,11 @@ export class Questions {
 					const chat = api.conversationId;
 					const call = api.callId;
 					const { promise, resolve, reject } = Promise.withResolvers<ToolExecutionResult>();
-					const dismiss = (author: string) => resolve(dismissed(author));
 					// Listen before reading the inbox, so a message queued in between is not missed.
-					let waiting = this.#waiting.get(chat);
-					if (!waiting) this.#waiting.set(chat, waiting = new Set());
-					waiting.add(dismiss);
+					const waiting = this.#waits.listen(chat, "question", author => resolve(dismissed(author)));
 					try {
-						const before = this.#queued.get(chat)
-							|| queued(await api.snapshot(InboxDoc, chat, context));
+						const before = this.#waits.queued(chat, "question")
+							|| queued(await api.snapshot(InboxDoc, chat, context)).question;
 						if (before) return dismissed(before);
 						const created = await api.commit(async (tx) => {
 							const doc = await tx.doc(QuestionsDoc, chat);
@@ -132,7 +181,7 @@ export class Questions {
 							doc.questions[call] = { items: args.questions };
 							return true;
 						}, context);
-						if (created) this.#onAsk(chat, "question");
+						waiting.start(created);
 						const watch = (await api.watchDoc(QuestionsDoc, chat, context))!;
 						const settle = (value: typeof watch.value) => {
 							const answer = value?.questions[call]?.answer;
@@ -145,15 +194,14 @@ export class Questions {
 							settle(watch.value);
 							watch.start(async (value) => settle(value));
 							const result = await promise;
-							this.#onAsk(chat, "answered");
+							waiting.stop(true);
 							return result;
 						} finally {
 							context.abortSignal?.removeEventListener("abort", abort);
 							await watch.stop();
 						}
 					} finally {
-						waiting.delete(dismiss);
-						if (!waiting.size) this.#waiting.delete(chat);
+						waiting.stop();
 					}
 				},
 			}),

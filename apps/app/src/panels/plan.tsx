@@ -5,10 +5,8 @@ import type { Listing } from "@ace/host/protocol";
 import { NOT_ALLOWED_TO_APPROVE, type PlanCommentActions, type PlanSelection, PlanView } from "@ace/ui";
 
 import { useAgentAvatar } from "../agent-avatar";
-import { AGENT_ALIAS } from "../agent-mention";
 import { useDetails } from "../details";
 import { host } from "../host";
-import { approvePlan } from "../plan-approve";
 import { planView } from "../plan-card";
 import { planCommentViews } from "../plan-comments";
 
@@ -57,17 +55,13 @@ export function Plan({ channel, chat, user, plan }: Props) {
 
 	if (elsewhere) return <Note>This plan belongs to another chat.</Note>;
 	if (!list) return <Note>Loading the plan…</Note>;
-	if (!shown) return <Note>{plan ? "This plan is no longer in the chat." : "No plan in this chat yet."}</Note>;
+	if (!shown) return <Note>{plan ? "This plan is no longer in the chat." : undefined}</Note>;
 
 	const current = loaded?.plan === shown.id && loaded.listed === shown.hash ? loaded : undefined;
 	const mayApprove = channel.owner === user || shared !== false;
 	const blocked = !mayApprove
 		? NOT_ALLOWED_TO_APPROVE
-		: current?.error
-		? `The plan could not be read: ${current.error}`
-		: !current?.hash
-		? "The plan is loading"
-		: current.hash !== shown.hash
+		: current?.hash && current.hash !== shown.hash
 		? NEWER
 		: undefined;
 
@@ -76,7 +70,7 @@ export function Plan({ channel, chat, user, plan }: Props) {
 		setApproving(true);
 		setError(undefined);
 		try {
-			await approvePlan(channel.id, chat, user, shown!.id, current.hash);
+			await host.channel(channel.id, { op: "plan-approve", chat, author: user, plan: shown!.id, hash: current.hash });
 		} catch (cause) {
 			setError((cause as Error).message);
 		} finally {
@@ -126,7 +120,6 @@ export function Plan({ channel, chat, user, plan }: Props) {
 				: undefined}
 			comments={{
 				list: planCommentViews(comments, shown.id, user, (author) => people[author] || author),
-				agent: AGENT_ALIAS.label,
 				agentAvatar,
 				...(mayApprove && !replaced ? actions : {}),
 			}}
@@ -140,7 +133,7 @@ function carried(comments: PlanComment[], ids: string[]) {
 	return JSON.stringify(comments.filter((comment) => ids.includes(comment.id)));
 }
 
-function Note({ children }: { children: string }) {
+function Note({ children }: { children?: string }) {
 	return (
 		<section className="grid h-full min-h-0 place-items-center bg-background px-4 text-center text-sm text-muted-foreground">
 			{children}

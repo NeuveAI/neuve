@@ -91,7 +91,7 @@ export const fakeRuntime = (input: {
         startTurn: () => Effect.void,
         steerTurn: () => Effect.void,
         interruptTurn: () => Effect.void,
-        respondToApproval: () => Effect.void,
+        respondToApproval: () => Effect.succeed({ delivered: true }),
         setModel: () => Effect.void,
         events: input.events ?? Stream.empty,
       } satisfies RuntimeSession;

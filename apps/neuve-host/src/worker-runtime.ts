@@ -32,9 +32,11 @@ export type WorkerContext = {
 	stateDirectory: string;
 };
 
+export type WorkerAdmission = Parameters<NonNullable<NonNullable<Options["extension"]>["attach"]>>[1];
+
 /** What root's worker entry provides: the provider lane's models, built in the worker's process. */
 export type WorkerSetup = {
-	extensions?(context: WorkerContext): { extensions: readonly Extension[]; attach?(harness: Harness): void | Promise<void> };
+	extensions?(context: WorkerContext): { extensions: readonly Extension[]; attach?(harness: Harness, admission?: WorkerAdmission): void | Promise<void> };
 	checkpoint?(context: WorkerContext, request: NativeSourceRequest): Promise<NativeAuthorityReceipt>;
 	/** Acquire the source before any mutable native storage opens. Cleanup follows a confirmed native close. */
 	openSource?(context: WorkerContext): (() => void) | Promise<() => void>;
@@ -150,9 +152,9 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			environment: (cwd: string) => isPlaced(cwd, options.project),
 			...operations.extension,
 			extensions: [...operations.extension.extensions, externalLanes({name: options.prefix || options.name, project: options.project, lanes: catalogLanes(options.id), env: options.env}), ...(additional?.extensions ?? []), planExplore],
-			attach: async (harness: Harness, admission: import("@ace/channel/extensions").Admission) => {
+			attach: async (harness: Harness, admission: WorkerAdmission) => {
 				await operations.extension.attach?.(harness, admission);
-				await additional?.attach?.(harness);
+				await additional?.attach?.(harness, admission);
 			},
 			...(setup.tool ? {tool: (tool: ToolRegistration) => setup.tool!(worker, tool)} : {}),
 			...(setup.onConversation ? {onConversation: (id: ConversationId) => setup.onConversation!(worker, id)} : {}),

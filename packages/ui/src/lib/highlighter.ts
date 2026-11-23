@@ -228,7 +228,7 @@ const source = {
 } satisfies FileOptions<undefined>;
 
 type DiffStyle = NonNullable<FileDiffOptions<undefined>["diffStyle"]>;
-type DiffOptionsOverride = Partial<Pick<FileDiffOptions<undefined>, "hunkSeparators">>;
+type DiffOptionsOverride = Partial<Pick<FileDiffOptions<undefined>, "hunkSeparators" | "overflow">>;
 
 function diffOptions(
 	style: DiffStyle = "unified",
@@ -288,7 +288,7 @@ function diffKey(
 	file?: FileDiffMetadata | null,
 	overrides?: DiffOptionsOverride,
 ) {
-	return `file-diff:${style}:${overrides?.hunkSeparators ?? options.hunkSeparators}\0${
+	return `file-diff:${style}:${overrides?.hunkSeparators ?? options.hunkSeparators}:${overrides?.overflow ?? ""}\0${
 		file?.cacheKey ?? patch
 	}`;
 }

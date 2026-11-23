@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { hostname } from "node:os";
-import { Effect, Fiber, Layer, Logger, Stream, type Scope } from "effect";
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Logger,
+  Stream,
+  type Scope,
+} from "effect";
 import {
   connect,
   INTERNAL,
@@ -71,6 +79,53 @@ const fixture = async (name: string) =>
 const MARKER = { method: "turn/started", params: { marker: true } } as const;
 const isMarker = (n: { readonly params: unknown }) =>
   (n.params as { marker?: unknown } | undefined)?.marker === true;
+
+test("a resolution on the wire prevents a reply before notifications are consumed", async () => {
+  const process = fake((message, io) => {
+    answerHandshake(message, io);
+    if (message.method === "account/read")
+      io.send({ id: message.id, result: {} });
+  });
+  await run(
+    process.layer,
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      const outcome = yield* Deferred.make<string>();
+      const connection = yield* connect(
+        options({
+          answer: (_request, reply) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(proceed);
+              yield* Deferred.succeed(
+                outcome,
+                yield* reply({ result: { decision: "accept" } }),
+              );
+              return undefined;
+            }),
+        }),
+      );
+      process.io.send({
+        id: 501,
+        method: "item/commandExecution/requestApproval",
+        params: {},
+      });
+      yield* Deferred.await(started);
+      process.io.send({
+        method: "serverRequest/resolved",
+        params: { threadId: "thread", requestId: 501 },
+      });
+      // The response follows the resolution on the same input stream.
+      yield* connection.request("account/read", { refreshToken: false });
+      yield* Deferred.succeed(proceed, undefined);
+      expect(yield* Deferred.await(outcome)).toBe("resolved");
+      expect(
+        process.io.written.find((line) => line.id === 501),
+      ).toBeUndefined();
+    }),
+  );
+});
 
 /**
  * Sends each recorded request of a fixture again, in order, keeping the answers by method. Before

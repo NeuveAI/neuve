@@ -1,3 +1,4 @@
+import type { JSONType } from "zod";
 import type { ReviewCard } from "./review-cards";
 export type { ReviewCard } from "./review-cards";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -38,8 +39,8 @@ export type RunEnd = {
 	chat: ChatId;
 	at: number;
 	/**
-	 * `question` is published when a run starts waiting on a question and `answered` when that wait
-	 * ends with the run still going, so a pending question is read from the host, not from a client.
+	 * The host publishes `question` when a run starts waiting on a person for a question or approval
+	 * request, and `answered` when that wait ends with the run still going.
 	 */
 	outcome: "done" | "failed" | "stopped" | "question" | "answered";
 	author: string;
@@ -71,6 +72,68 @@ export type ReviewFeedState = {
 export const ReviewFeedDefinition = {
 	kind: "neuve.review-feed", version: 1, scope: "conversation", history: "latest", fork: "current",
 	initial: (): ReviewFeedState => ({ positions: {}, rows: {}, notices: {} }),
+} as const;
+
+// Approval requests.
+type ApprovalDecision = "allow" | "deny";
+export type ApprovalPath =
+	| { kind: "path"; path: string }
+	| { kind: "glob"; pattern: string }
+	| { kind: "root" | "minimal" | "tmpdir" | "slash-tmp" }
+	| { kind: "project-roots"; subpath?: string };
+
+export type ApprovalFileChange = { path: string; diff: string } & (
+	| { kind: "add" | "delete" }
+	| { kind: "update"; newPath?: string }
+);
+
+/** What a person is being asked to allow. The runtime owns the mapping. */
+export type ApprovalAsked = { reason?: string } & (
+	| { kind: "command"; command: string; folder: string; network?: { host: string; protocol: "http" | "https" | "socks5-tcp" | "socks5-udp" } }
+	| { kind: "file-change"; changes: ApprovalFileChange[] | null }
+	| { kind: "wider-access"; paths: { access: "read" | "write" | "deny"; target: ApprovalPath }[]; network: boolean | null; folder?: string; globDepthLimit?: number }
+	| { kind: "server-prompt"; server: string; message: string; url?: string }
+	| { kind: "unrecognised" }
+);
+
+/**
+ * One runtime request. A single call can raise several requests, each with its own `requestId`.
+ * The record and its state are JSON objects so pi-durable can store the same union the wire uses.
+ */
+export type ApprovalRequest = Record<string, JSONType> & {
+	requestId: string;
+	callId: string;
+	/** The runtime's input for the card's details. */
+	input: JSONType;
+	/** What Allow grants. An unrecognised request uses its raw input for display. */
+	asked: ApprovalAsked;
+	/** When the request opened, in milliseconds since the Unix epoch. */
+	openedAt: number;
+	/** An answer names the verified participant and its time in milliseconds since the Unix epoch. */
+	state: Record<string, JSONType> & (
+		| { kind: "open"; by?: never; at?: never; decision?: never; reason?: never }
+		| { kind: "answered"; by: string; at: number; decision: ApprovalDecision; reason?: never }
+		| {
+			kind: "closed";
+			reason: "turn-ended" | "runtime-resolved" | "stopped" | "restarted";
+			by?: never;
+			at?: never;
+			decision?: never;
+		}
+		/** `by` is the person who sent a message instead of answering. */
+		| { kind: "closed"; reason: "message"; by: string; at?: never; decision?: never }
+	);
+} & (
+	| { toolName: string; work?: never }
+	| { toolName?: never; work: "command" | "file-change" | "web-search" | "tool" }
+);
+
+export type ApprovalRequestsState = { requests: ApprovalRequest[] };
+
+/** Forks start empty because each request belongs to a turn in its original chat. */
+export const ApprovalRequestsDefinition = {
+	kind: "neuve.approval-requests", version: 1, scope: "conversation", history: "latest", fork: "initial",
+	initial: (): ApprovalRequestsState => ({ requests: [] }),
 } as const;
 
 /** An @mention in message text; the channel counts what the app links, so both use this one. */
@@ -384,6 +447,8 @@ export type Request =
 		 */
 		mode?: ChatMode;
 		requestId?: string;
+		/** Whether the person's client can show approval cards, stored on the chat. Omit to keep the stored value. */
+		attended?: boolean;
 	}
 	/**
 	 * Set the model and effort the chat's next run uses, as `ask` would, without posting. Answers
@@ -476,10 +541,14 @@ export type Request =
 	| { op: "fetch"; chat?: ChatId }
 	/** One listed file's unified diff; without `state`, its worktree against the base. */
 	| { op: "patch"; chat?: ChatId; file: string; state?: Change["state"] }
+	/** Answer one open approval request by its runtime `requestId`. The host stamps the verified author. */
+	| { op: "approval-answer"; chat?: ChatId; author: string; requestId: string; decision: ApprovalDecision }
 	/** Replay the chat's transcript, then stream its events until the connection closes. */
 	| {
 		op: "watch";
 		chat?: ChatId;
+		/** Include approval-requests events; older clients do not understand them. */
+		approvals?: boolean;
 		/** Include queue events; older clients do not understand them. */
 		queue?: boolean;
 		/** Include caption and recap events; older clients do not understand them. */
@@ -618,6 +687,11 @@ export type Event =
 	| ({ kind: "metadata"; chat: ChatId; shared?: boolean; desktop?: boolean } & Metadata)
 	/** The replayed transcript has been sent; later events are live. */
 	| { kind: "live"; chat: ChatId }
+	/**
+	 * The chat's complete list of open, answered, and closed approval requests, oldest opening
+	 * first. Sent on attachment and every change when the watch opts in with `approvals`.
+	 */
+	| { kind: "approval-requests"; chat: ChatId; requests: ApprovalRequest[] }
 	/** `author` is writing in the chat; live only, and stale once a few seconds pass without another. */
 	| { kind: "typing"; chat: ChatId; author: string };
 
