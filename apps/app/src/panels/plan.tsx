@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-import type { PlanComment, Request } from "@ace/channel/protocol";
+import type { PlanComment, PlanCommentsSent, Request } from "@ace/channel/protocol";
 import type { Listing } from "@ace/host/protocol";
 import { NOT_ALLOWED_TO_APPROVE, type PlanCommentActions, type PlanSelection, PlanView } from "@ace/ui";
 
@@ -25,6 +25,8 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	const agentAvatar = useAgentAvatar();
 	const [sending, setSending] = useState(false);
 	const [sendError, setSendError] = useState<string>();
+	// Why the last send held some of the person's replies back, as the channel said it.
+	const [held, setHeld] = useState<string>();
 	// What the person kept when their send was answered. The channel's comments event can come
 	// after the answer, so until it shows those words sent, a second send is not offered.
 	const [answered, setAnswered] = useState<string>();
@@ -97,9 +99,11 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	async function send() {
 		setSending(true);
 		setSendError(undefined);
+		setHeld(undefined);
 		const before = kept;
 		try {
-			await sendKept();
+			const sent = await sendKept();
+			setHeld(sent.keptReplies?.reason);
 			setAnswered(before);
 		} catch (cause) {
 			setSendError((cause as Error).message);
@@ -122,7 +126,7 @@ export function Plan({ channel, chat, user, plan }: Props) {
 				agentAvatar,
 				...(mayApprove && !replaced ? actions : {}),
 			}}
-			send={mayApprove && !replaced ? { onSend: () => void send(), sending: sending || answered === kept, error: sendError } : undefined}
+			send={mayApprove && !replaced ? { onSend: () => void send(), sending: sending || answered === kept, error: sendError, note: held } : undefined}
 		/>
 	);
 }
@@ -157,7 +161,7 @@ function planCommentRequests(
 	author: string,
 	plan: string,
 	hash: string | undefined,
-): Pick<PlanCommentActions, "keep" | "reply" | "edit" | "remove"> & { send: () => Promise<void> } {
+): Pick<PlanCommentActions, "keep" | "reply" | "edit" | "remove"> & { send: () => Promise<PlanCommentsSent> } {
 	const ask = async (request: Request) => {
 		await host.channel(channel, request);
 	};
@@ -170,6 +174,7 @@ function planCommentRequests(
 		reply: (comment, text) => ask({ op: "plan-comment-reply", chat, author, comment, text }),
 		edit: (comment, reply, text) => ask({ op: "plan-comment-edit", chat, author, comment, reply, text }),
 		remove: (comment, reply) => ask({ op: "plan-comment-remove", chat, author, comment, reply }),
-		send: () => ask({ op: "plan-comments-send", chat, author, plan, requestId: crypto.randomUUID() }),
+		send: () =>
+			host.channel<PlanCommentsSent>(channel, { op: "plan-comments-send", chat, author, plan, requestId: crypto.randomUUID() }),
 	};
 }

@@ -127,12 +127,23 @@ function rangeOf(blocks: Element[], passage: string, [from, to] = [0, Infinity])
 	if (!target || from >= Math.min(to, target.length)) return;
 	let chars: { node: Text; offset: number }[] = [];
 	let text = "";
+	// The plan's own lines are apart: list items and paragraphs inside one block are joined by a space.
+	let line: Element | null | undefined;
+	let apart = () => {
+		if (text && !text.endsWith(" ")) {
+			text += " ";
+			chars.push(chars.at(-1)!);
+		}
+	};
 	for (let block of blocks) {
 		let walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
 			acceptNode: (node) =>
 				node.parentElement?.closest("[aria-hidden], [data-plan-comment]") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
 		});
 		for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+			let inner = node.parentElement?.closest("[data-lines]");
+			if (inner !== line) apart();
+			line = inner;
 			for (let offset = 0; offset < node.data.length; offset++) {
 				let char = /\s/.test(node.data[offset]!) ? " " : node.data[offset]!;
 				if (char === " " && text.endsWith(" ")) continue;
@@ -140,10 +151,7 @@ function rangeOf(blocks: Element[], passage: string, [from, to] = [0, Infinity])
 				chars.push({ node, offset });
 			}
 		}
-		if (!text.endsWith(" ")) {
-			text += " ";
-			chars.push(chars.at(-1)!);
-		}
+		apart();
 	}
 	let index = text.indexOf(target);
 	if (index < 0) return;

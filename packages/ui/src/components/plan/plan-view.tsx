@@ -256,7 +256,8 @@ export type PlanViewProps = {
 	/** The comments on this plan, and what the person may do with them. */
 	comments?: PlanCommentActions;
 	/** Sends every comment and reply the person keeps on the plan, together. */
-	send?: { onSend: () => void; sending: boolean; error?: string };
+	/** `note` says why the last send held something back. */
+	send?: { onSend: () => void; sending: boolean; error?: string; note?: string };
 	className?: string;
 };
 
@@ -290,7 +291,7 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 			document.removeEventListener("keyup", keys);
 		};
 	}, []);
-	let footer = approve || (send && kept > 0);
+	let footer = approve || (send && (kept > 0 || send.note || send.error));
 	return (
 		<section aria-label="Plan" className={cn("flex h-full min-h-0 flex-col bg-background text-foreground", className)}>
 			<header className="flex shrink-0 flex-col gap-1 border-b border-border px-5 pt-3.5 pb-2.5">
@@ -327,8 +328,11 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 			</div>
 			{footer && (
 				<footer className="flex shrink-0 items-center justify-between gap-3 border-t border-border px-4 py-2.5">
-					<p role={approve?.error || send?.error ? "alert" : undefined} className="min-w-0 truncate text-xs text-muted-foreground">
-						{send?.error ?? approve?.error}
+					<p
+						role={approve?.error || send?.error ? "alert" : send?.note ? "status" : undefined}
+						className="min-w-0 text-xs text-muted-foreground"
+					>
+						{send?.error ?? approve?.error ?? send?.note}
 					</p>
 					<div className="flex shrink-0 items-center gap-2.5">
 						{send && kept > 0 && (

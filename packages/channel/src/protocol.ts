@@ -174,6 +174,19 @@ export type PlanCommentReply =
 export type PlanCommentSend = { at: number; submission: number; entry?: EntryId };
 
 /**
+ * What `plan-comments-send` answers: the message's submission, its entry when it was placed at
+ * once, and the comments it carried. `keptReplies` names the author's replies the send held back,
+ * because a reply goes only with its comment or after the comment has reached the chat, and says
+ * why in a sentence for the person.
+ */
+export type PlanCommentsSent = {
+	submission: number;
+	entry?: EntryId;
+	comments: string[];
+	keptReplies?: { ids: string[]; reason: string };
+};
+
+/**
  * The plan-mode tool by which the agent answers one comment, with `{ comment, text }`. It writes
  * only into that comment's thread, and only for a comment on one of its own chat's plans.
  */
@@ -435,10 +448,10 @@ export type Request =
 	 * author's to the chat the plan belongs to, invoking its agent in plan mode as `ask` with mode
 	 * `plan` would, and refused as that `ask` would be. The host writes the message: for each comment
 	 * its id, section and lines, the quoted plan text marked as quotation, and the words; for each
-	 * reply the comment it answers and the words. Mentions in it are never published. Answers with
-	 * the message's submission, its entry when it was placed at once, and the ids of the comments it
-	 * carried, as `{ submission, entry?, comments }`. Refused when the author keeps
-	 * nothing on the plan and for a replaced plan. A retried `requestId` answers as the first send.
+	 * reply the comment it answers and the words. Mentions in it are never published. A reply goes
+	 * only with its comment or once that comment has reached the chat; the others stay kept. Answers
+	 * with `PlanCommentsSent`. Refused when nothing can be carried, saying why, and for a replaced
+	 * plan. A retried `requestId` answers as the first send.
 	 */
 	| { op: "plan-comments-send"; chat?: ChatId; author: string; plan: string; requestId?: string }
 	// End of comments on a plan.

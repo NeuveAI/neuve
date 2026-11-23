@@ -254,7 +254,8 @@ function Live() {
 const REVISED = TEXT
 	.replace("up to three times", "up to five times")
 	.replace("- The failure reason on the export row", "- The failure reason on the export row and in its log")
-	.replace("retries three times", "retries five times");
+	.replace("retries three times", "retries five times")
+	.replace("- Each attempt is logged with its reason", "- Each attempt is logged with its reason and time");
 const VERSIONS: Record<string, string> = { [plan().hash]: TEXT, ["5d".repeat(32)]: REVISED };
 const VIVIENNE = "vivienne@example.com";
 const PEOPLE: Record<string, string> = { [USER]: "Vinicius", [VIVIENNE]: "Vivienne" };
@@ -297,6 +298,8 @@ const GOAL = (patch: Partial<PlanComment> = {}) =>
 	comment("Five. Three is too few for the nightly batch.", 5, 5, "up to three times", patch);
 const SCOPE = (patch: Partial<PlanComment> = {}) =>
 	comment("Why not? Last week's are still failing.", 15, 15, "Exports that failed before this change", patch);
+const DONE = (patch: Partial<PlanComment> = {}) =>
+	comment("Both of these change if the count changes.", 19, 20, "retries three times, then stops", patch);
 const ROW = (patch: Partial<PlanComment> = {}) =>
 	comment("Should the reason show on the export row only?", 10, 10, "export row", patch);
 
@@ -323,7 +326,7 @@ const COMMENT_STATES: { label: string; comments: PlanComment[]; state?: Plan["st
 	{
 		label: "Changed, stays and ambiguous after a revision",
 		hash: "5d".repeat(32),
-		comments: revise([GOAL({ sent: SENT, state: "replied", replies: [ANSWER("Five it is; the plan says so now.")] }), SCOPE({ sent: SENT, state: "picked-up" }), ROW({ sent: SENT, state: "picked-up" })], "5d".repeat(32)),
+		comments: revise([GOAL({ sent: SENT, state: "replied", replies: [ANSWER("Five it is; the plan says so now.")] }), SCOPE({ sent: SENT, state: "picked-up" }), ROW({ sent: SENT, state: "picked-up" }), DONE({ sent: SENT, state: "picked-up" })], "5d".repeat(32)),
 	},
 	{ label: "On an approved plan", state: "approved", comments: [SCOPE({ sent: SENT, state: "sent" })] },
 ];
