@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { ROOT_CONVERSATION_ID, StorageRejected, type Harness } from "@earendil-works/pi-durable";
 import * as fileAnchors from "@neuve/review-rules/file-lines-anchor";
+import { Approvals } from "../src/approvals";
 import { buildPlanCommentMessage, PlanCommentPlacements, preparePlanCommentSend } from "../src/plan-comments";
 import { PlansDoc, type PlanCommentReceipt } from "../src/plan";
 import type { Plan, PlanComment, Request, Said } from "../src/protocol";
@@ -287,8 +288,8 @@ test("Stop withdraws a queued comment and its separately queued reply together",
 	} finally { release.resolve(); await fixture.dispose(); }
 });
 
-// The agent can otherwise read a reply whose comment Stop removed from the queue.
-test("Stop withdraws the comment while its in-flight reply stays kept", async () => {
+// Stop can land before or after the parent re-read; either way the reply must not reach the agent alone.
+test.each(["during placement", "before Pi submits"])("Stop %s withdraws the comment and keeps its in-flight reply", async when => {
 	const fixture = await open();
 	const release = Promise.withResolvers<void>();
 	try {
@@ -309,18 +310,25 @@ test("Stop withdraws the comment while its in-flight reply stays kept", async ()
 		await fixture.request({ op: "plan-comment-reply", author: OWNER, comment: comment.id, text: "The reply." });
 		await watch.until("plan-comments", event => event.comments[0]?.state === "queued" && event.comments[0].replies.length === 1);
 
-		const preparing = Promise.withResolvers<void>();
+		const paused = Promise.withResolvers<void>();
 		const resume = Promise.withResolvers<void>();
 		const project = PlanCommentPlacements.prototype.project;
-		const placement = spyOn(PlanCommentPlacements.prototype, "project").mockImplementationOnce(async function (this: PlanCommentPlacements, ...args) {
-			preparing.resolve();
-			await resume.promise;
-			return project.apply(this, args);
-		});
+		const admit = Approvals.prototype.admit;
+		const intercept = when === "during placement"
+			? spyOn(PlanCommentPlacements.prototype, "project").mockImplementationOnce(async function (this: PlanCommentPlacements, ...args) {
+				paused.resolve();
+				await resume.promise;
+				return project.apply(this, args);
+			})
+			: spyOn(Approvals.prototype, "admit").mockImplementationOnce(async function (this: Approvals, ...args) {
+				paused.resolve();
+				await resume.promise;
+				return admit.bind(this)(...args);
+			});
 		try {
 			const reply = send(fixture, plan, "reply");
 			void reply.catch(() => {});
-			await preparing.promise;
+			await paused.promise;
 			await Promise.all([
 				fixture.request({ op: "stop", author: OWNER }),
 				watch.until("plan-comments", event => event.comments[0]?.state === "failed"),
@@ -329,7 +337,7 @@ test("Stop withdraws the comment while its in-flight reply stays kept", async ()
 			await expect(reply).rejects.toThrow("Nothing was sent. Your replies were kept because their parent comments have not reached the chat.");
 		} finally {
 			resume.resolve();
-			placement.mockRestore();
+			intercept.mockRestore();
 		}
 		expect(await fixture.request({ op: "wait", submission: parent.submission })).toBe("unanswered");
 		const replay = await fixture.watch({ op: "watch", planComments: true });
