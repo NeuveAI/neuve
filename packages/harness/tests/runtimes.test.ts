@@ -662,7 +662,7 @@ test("ChatGPT sign-out clears the named folder through auth while key sign-out d
   expect(readAuth(other)?.session).toBeDefined();
 });
 
-test("sign-out read failures have a typed safe error, so provider or file details never escape", async () => {
+test("sign-out-failed names the unusable sign-in file without exposing its contents or provider text", async () => {
   const directory = folder();
   writeFileSync(authFilePath(directory), "fake-private-broken-signin", {
     mode: 0o600,
