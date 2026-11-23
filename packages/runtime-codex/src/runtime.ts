@@ -61,7 +61,10 @@ export interface CodexRuntimeConfig {
   readonly neuveSignIn?:
     | {
         readonly command: ReadonlyArray<string>;
-        readonly checkSignIn: (account: NeuveAccount) => CodexSignInCheck;
+        readonly checkSignIn: (
+          account: NeuveAccount,
+          rejected?: string,
+        ) => ReturnType<CodexSignInCheck>;
         readonly signOut: (
           account: NeuveAccount,
         ) => Effect.Effect<void, RuntimeUnavailable>;
@@ -301,7 +304,8 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
       if (neuveSignIn === undefined || command === undefined)
         return Effect.fail(unavailableStart(account));
       return Effect.succeed({
-        checkSignIn: neuveSignIn.checkSignIn(account),
+        checkSignIn: (rejected?: string) =>
+          neuveSignIn.checkSignIn(account, rejected),
         tokenCommand: [
           command,
           ...args,
@@ -436,7 +440,7 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
           const checkedAt = new Date().toISOString();
           const launch = yield* Effect.gen(function* () {
             const signIn = yield* signInFor(codex);
-            if (signIn !== undefined) yield* signIn.checkSignIn;
+            if (signIn !== undefined) yield* signIn.checkSignIn();
             return {
               codexHome: yield* prepareCodexHome(home, codex),
               tokenCommand: signIn?.tokenCommand,

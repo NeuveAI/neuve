@@ -88,10 +88,9 @@ export const capabilities: RuntimeCapabilities = {
   byteExactCapture: false,
 };
 
-export type CodexSignInCheck = Effect.Effect<
-  void,
-  SignInRequired | AccountRejected | TurnFailed
->;
+export type CodexSignInCheck = (
+  rejected?: string,
+) => Effect.Effect<string, SignInRequired | AccountRejected | TurnFailed>;
 
 export interface CodexSessionOptions {
   readonly account: AccountName;
@@ -320,6 +319,12 @@ export const openCodexSession = Effect.fnUntraced(function* (
   let threadId = "";
   let own: OwnSettings | undefined;
   let current: Current | undefined;
+  let access:
+    | {
+        readonly token: string;
+        state: "available" | "rejected" | "replacement";
+      }
+    | undefined;
   let generation = 0;
   let dead = false;
   let turn: Turn | undefined;
@@ -412,20 +417,29 @@ export const openCodexSession = Effect.fnUntraced(function* (
         yield* stop();
     });
 
+  const acceptReplacement = () => {
+    if (access?.state === "replacement") access.state = "available";
+  };
+
   const errorOutcome = (info: unknown, requestCode?: number): TurnOutcome => {
     const name = infoName(info);
     if (
-      neuveSignIn !== undefined &&
+      access !== undefined &&
       (name === "unauthorized" ||
         httpStatusOf(info) === 401 ||
         requestCode === 401)
-    )
+    ) {
+      if (access.state !== "replacement") {
+        access.state = "rejected";
+        return turnFailure("provider-failed");
+      }
       return failure({
         _tag: "AccountRejected",
         account,
         hint,
         reason: "other",
       });
+    }
     if (name === "unauthorized")
       return failure({ _tag: "SignInRequired", account, hint });
     if (name === "usageLimitExceeded") {
@@ -540,6 +554,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         case "item/agentMessage/delta": {
           const delta = Decode.Delta.safeParse(params);
           if (active && delta.success && matches(active, delta.data.turnId)) {
+            acceptReplacement();
             emit({
               type: "text",
               turnId: active.id,
@@ -589,6 +604,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
             return;
           }
           if (item.data.type === "agentMessage") {
+            acceptReplacement();
             active.lastText = item.data.text;
             emit({
               type: "message.finished",
@@ -627,6 +643,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           const usage = Decode.TokenUsage.safeParse(params);
           if (!active || !usage.success || !matches(active, usage.data.turnId))
             return;
+          acceptReplacement();
           const { total, last, modelContextWindow } = usage.data.tokenUsage;
           active.baseline ??= minus(total, last);
           const name = model?.id ?? threadModel;
@@ -702,6 +719,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           if (!matches(active, completed.data.turn.id)) return;
           const { status, error } = completed.data.turn;
           if (status === "completed") {
+            acceptReplacement();
             if (!active.final)
               return yield* finish(
                 active,
@@ -1244,7 +1262,19 @@ export const openCodexSession = Effect.fnUntraced(function* (
     live(active) ? Effect.void : Effect.fail(turnFailed("session-stopped"));
   const ensure = (configuration: Configuration, active?: Turn) =>
     Effect.gen(function* () {
-      if (neuveSignIn !== undefined) yield* neuveSignIn.checkSignIn;
+      if (neuveSignIn !== undefined) {
+        const rejected =
+          access?.state === "rejected" ? access.token : undefined;
+        const token = yield* neuveSignIn.checkSignIn(rejected);
+        access = {
+          token,
+          state:
+            rejected !== undefined ||
+            (access?.token === token && access.state === "replacement")
+              ? "replacement"
+              : "available",
+        };
+      }
       yield* still(active);
       if (current?.configuration === configuration) return;
       const previous = current;

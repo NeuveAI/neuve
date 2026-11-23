@@ -146,7 +146,7 @@ A `chatgpt-subscription` account may run on pi, as today, or on Codex. On Codex 
 - **Signed-in state** is asked of Codex (`account/read`) by a short-lived probe process that sends no model request, as T3 Code does. Signed out, the account shows the command that fixes it: `codex login`, with the folder when it is not the default. The probe also gives the plan and, where Codex reports them, the usage limits.
 - **Codex refreshes its own login.**
 - **The person's Codex settings stay theirs.** Their skills, MCP servers and settings live in that same folder and load as they do in their own Codex, as in T3 Code. Their threads and Neuve's share Codex's thread folder; Neuve resumes only threads it started.
-- **Neuve's sign-in, when needed.** Codex uses a Neuve-owned Codex home and gets its token from `neuve auth lease <account>`. It runs the command again when OpenAI refuses the token.
+- **Neuve's sign-in, when needed.** Codex gets its token from `neuve auth lease <account>` and runs it again on a refusal. After a failed turn with a refused token, Neuve renews the sign-in on the next check without restarting Codex.
 - **What OpenAI says, which the owner has seen.** Its documentation states that app-server sign-in "has never been permitted for commercial or hosted services", that a local or open-source application "can continue using it", and that it recommends Sign in with ChatGPT. The owner ruled for Codex's own login with that before them (decision 14.65). Neuve's sign-in is the path that statement recommends, which is one reason it stays.
 - **Continuation identity** is the runtime kind plus the Codex home's path, since a thread can be resumed only from the folder that holds it.
 

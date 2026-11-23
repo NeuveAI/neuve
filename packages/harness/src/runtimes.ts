@@ -69,17 +69,22 @@ export const codexRuntimeOptions = (
   programPath: (name) => AccountStore.programPath(home, name),
   neuveSignIn: {
     command,
-    checkSignIn: ({ name: account, credential }) => {
+    checkSignIn: ({ name: account, credential }, rejected) => {
       const hint = {
         kind: "command",
         command: "neuve auth login",
         account,
       } as const;
       return Effect.tryPromise({
-        try: (signal) => accessToken({ ...authOptionsFor(credential), signal }),
+        try: async (signal) =>
+          (
+            await accessToken(
+              { ...authOptionsFor(credential), signal },
+              rejected,
+            )
+          ).token,
         catch: (error) => error,
       }).pipe(
-        Effect.asVoid,
         Effect.mapError((error) => {
           if (error instanceof OpenAiAuthError) {
             switch (error.code) {

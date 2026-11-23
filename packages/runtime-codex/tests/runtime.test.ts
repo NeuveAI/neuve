@@ -144,7 +144,7 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
     programPath: () => program,
     neuveSignIn: {
       command: ["/path to/bun", "/path to/cli.ts"],
-      checkSignIn: () => Effect.void,
+      checkSignIn: () => Effect.succeed("stored-token"),
       signOut: () => Effect.void,
     },
   } satisfies CodexRuntimeConfig;

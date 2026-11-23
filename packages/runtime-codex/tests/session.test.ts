@@ -186,21 +186,32 @@ test("an expired Neuve sign-in refuses a turn before it starts", async () => {
         expect(written(fake.current(), "turn/start")).toHaveLength(0);
       }),
     {
-      checkSignIn: Effect.suspend(() =>
-        usable ? Effect.void : Effect.fail(expired),
-      ),
+      checkSignIn: () =>
+        Effect.suspend(() =>
+          usable ? Effect.succeed("stored-token") : Effect.fail(expired),
+        ),
     },
   );
 });
 
-// Keep the turn open during a retry and ask for sign-in after a terminal 401.
-test("Codex's terminal 401 on Neuve's sign-in rejects the account", async () => {
+const unauthorized = completed("failed", {
+  message: "Unauthorized",
+  codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
+});
+
+// The next turn renews the refused token and keeps the Codex process.
+test("the next turn renews a refused token and completes in the same process", async () => {
   const fake = codex();
+  let token = "stored-token";
   await run(
     fake,
     (session, read) =>
       Effect.gen(function* () {
         yield* startOn(fake, session, readOnly);
+        const process = fake.current();
+        expect(
+          JSON.stringify({ args: process.args, env: process.env }),
+        ).not.toContain(token);
         fake.send("error", {
           threadId: "thread-1",
           turnId: "codex-turn",
@@ -216,28 +227,82 @@ test("Codex's terminal 401 on Neuve's sign-in rejects the account", async () => 
           turnId: "turn",
           attempt: 1,
         });
-        fake.send(
-          "turn/completed",
-          completed("failed", {
-            message: "Unauthorized",
-            codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
-          }),
-        );
+        fake.send("turn/completed", unauthorized);
         expect(yield* read.next("turn.finished")).toMatchObject({
+          outcome: {
+            status: "failed",
+            disposition: "reusable",
+            failure: {
+              _tag: "TurnFailed",
+              account,
+              reason: "provider-failed",
+            },
+          },
+        });
+        yield* session.startTurn({
+          turnId: "next",
+          message: "continue",
+          workspace: readOnly,
+        });
+        expect(token).toBe("renewed-token");
+        expect(fake.current()).toBe(process);
+        fake.send("turn/completed", completed("completed"));
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          turnId: "next",
+          outcome: { status: "completed" },
+        });
+      }),
+    {
+      checkSignIn: (rejected) =>
+        Effect.sync(() => {
+          if (rejected === token) token = "renewed-token";
+          return token;
+        }),
+    },
+  );
+});
+
+// A refused renewal tells the person to sign in before another turn reaches Codex.
+test("a refused renewal gives the account's sign-in command", async () => {
+  const fake = codex();
+  const hint = {
+    kind: "command",
+    command: "neuve auth login",
+    account,
+  } as const;
+  await run(
+    fake,
+    (session, read) =>
+      Effect.gen(function* () {
+        yield* startOn(fake, session, readOnly);
+        fake.send("turn/completed", unauthorized);
+        yield* read.next("turn.finished");
+        yield* session.startTurn({
+          turnId: "next",
+          message: "continue",
+          workspace: readOnly,
+        });
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          turnId: "next",
           outcome: {
             status: "failed",
             disposition: "reusable",
             failure: {
               _tag: "AccountRejected",
               account,
-              hint: { kind: "command", command: "neuve auth login", account },
+              hint,
               reason: "other",
             },
           },
         });
-        expect(read.finished()).toHaveLength(1);
+        expect(written(fake.current(), "turn/start")).toHaveLength(1);
       }),
-    { checkSignIn: Effect.void },
+    {
+      checkSignIn: (rejected) =>
+        rejected === "stored-token"
+          ? Effect.fail(new AccountRejected({ account, hint, reason: "other" }))
+          : Effect.succeed("stored-token"),
+    },
   );
 });
 
