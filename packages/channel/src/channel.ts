@@ -603,17 +603,19 @@ export class Channel {
 					if (room.isAgent(request.author)) throw new Error("Only a person can approve a plan.");
 					await this.#mayInvoke(request.author);
 					const { id } = await this.#conversation(request.chat);
-					let state: Awaited<ReturnType<Builds["approve"]>>;
+					let admission: ReturnType<Builds["approve"]> | undefined;
 					const plan = await this.#plans.approve(this.#harness, id, request.plan, request.hash, request.author, context,
-						async (tx, plan, approved) => {
+						async (tx, stored, approved) => {
 							// Pi publishes the previous settings commit before running this transaction.
-							state = await this.#builds.approve(tx, id, plan, approved);
+							admission = this.#builds.approve(tx, id, stored.plan.hash, { stored, approved });
+							await admission;
 						});
+					const state = await (admission ?? this.#harness.commit(tx => this.#builds.approve(tx, id, plan.hash), context));
 					return { id, plan, state };
 				});
 				const build = buildId(id, plan.hash);
 				if (state) this.#log("info", "build.recorded", { build, state });
-				if (this.#options.resume !== false) void this.#builds.resumeApproved(build);
+				if (this.#options.resume !== false) void this.#builds.resume([build]);
 				return plan;
 			}
 			case "plan-comment":

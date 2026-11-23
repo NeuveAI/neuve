@@ -68,7 +68,7 @@ const agentKey = (role: AgentRole, part?: string) => JSON.stringify([role, part 
 const firstImplementer = agentKey("implementer");
 const messagePrefix = "neuve.build:message:";
 const stopped = "The plan's agents have been stopped.";
-const pendingStart = "The agent start is recorded and will finish when the plan's agents are no longer paused.";
+const pendingStart = "The agent start is recorded and will finish when work resumes.";
 
 export function isWorkMessageSubmission(submission: SubmissionRecord): boolean {
 	return submission.type === "input" && (submission.requestId?.startsWith(messagePrefix) ?? false);
@@ -116,6 +116,8 @@ function buildRefusal(state: Build["state"]["kind"]): string | undefined {
 	if (state === "stopped") return stopped;
 	if (state === "paused") return "The plan's agents are paused while other people may ask them.";
 }
+
+const refusedBySharing = (state: Build["state"]) => state.kind === "unavailable" && state.reason === "shared";
 
 function briefText(record: StoredBuild, worktree: Worktree, planPath: string, start: Start): string {
 	const { path, branch, base } = worktree;
@@ -194,20 +196,24 @@ export class Builds {
 	}
 
 	async share(tx: Tx, shared: boolean): Promise<string[]> {
+		const { records } = await tx.doc(BuildsDoc);
 		const resumed: string[] = [];
-		for (const record of Object.values((await tx.doc(BuildsDoc)).records)) {
-			const { build, starts } = record;
-			const { state } = build;
-			if (shared && (state.kind === "starting" || state.kind === "started")) {
+		for (const { build, starts } of Object.values(records)) {
+			if (shared && (build.state.kind === "starting" || build.state.kind === "started")) {
 				build.state = { kind: "paused", reason: "shared" };
-			} else if (!shared && state.kind === "paused") {
+			} else if (!shared && build.state.kind === "paused") {
 				build.state = starts[firstImplementer]!.state;
 				resumed.push(build.id);
-			} else if (!shared && this.options.host && state.kind === "unavailable" && state.reason === "shared"
-				&& this.options.canInvoke(build.approved.by, shared)) {
-				await this.#startFirst(tx, record);
-				resumed.push(build.id);
 			}
+		}
+		if (shared || !this.options.host) return resumed;
+		for (const record of Object.values(records)) {
+			const { build } = record;
+			if (!refusedBySharing(build.state)) continue;
+			const current = (await tx.doc(PlansDoc)).chats[build.chat]?.findLast(({ plan }) => plan.state === "approved")?.plan;
+			if (current?.hash !== build.plan.hash || !current.approved || !this.options.canInvoke(current.approved.by, shared)) continue;
+			await this.#admit(tx, records, record);
+			resumed.push(build.id);
 		}
 		return resumed;
 	}
@@ -267,31 +273,37 @@ export class Builds {
 		})));
 	}
 
-	async approve(tx: Tx, chat: ConversationId, { plan, file }: StoredPlan, approved: Build["approved"]) {
-		const id = buildId(chat, plan.hash);
+	async approve(tx: Tx, chat: ConversationId, hash: string, fresh?: { stored: StoredPlan; approved: Build["approved"] }) {
+		const id = buildId(chat, hash);
+		if (!fresh && !this.#document?.records[id]) return;
 		const { records } = await tx.doc(BuildsDoc);
-		if (records[id]) return;
-		const build: Build = {
-			id, chat, approved, agents: [], state: { kind: "starting" },
-			plan: { id: plan.id, hash: plan.hash, title: plan.title, call: plan.call },
-		};
-		const record: StoredBuild = { build, file, starts: {} };
-		if (!this.options.host) build.state = { kind: "unavailable", reason: "hosted" };
-		else if (this.options.shared()) build.state = { kind: "unavailable", reason: "shared" };
-		else {
-			for (const { build: prior } of Object.values(records).reverse()) {
-				if (prior.chat !== chat || !await alive(tx, prior)) continue;
-				build.state = { kind: "delivered", to: prior.id };
-				record.revision = { requests: {} };
-				break;
-			}
+		const refusal = !this.options.host ? "hosted" : this.options.shared() ? "shared" : undefined;
+		let record = records[id];
+		if (record) {
+			const { state } = record.build;
+			if (refusal || (state.kind !== "failed" && !refusedBySharing(state))) return;
+		} else {
+			if (!fresh) return;
+			const { stored: { plan, file }, approved } = fresh;
+			record = { file, starts: {}, build: {
+				id, chat, approved, agents: [],
+				state: refusal ? { kind: "unavailable", reason: refusal } : { kind: "starting" },
+				plan: { id: plan.id, hash, title: plan.title, call: plan.call },
+			} };
 		}
-		if (build.state.kind === "starting") await this.#startFirst(tx, record);
-		records[id] = record;
-		return build.state.kind;
+		if (!refusal) await this.#admit(tx, records, record);
+		records[id] ??= record;
+		return record.build.state.kind;
 	}
 
-	async #startFirst(tx: Tx, { build, starts }: StoredBuild) {
+	async #admit(tx: Tx, records: BuildsState["records"], record: StoredBuild) {
+		const { build, starts } = record;
+		for (const { build: prior } of Object.values(records).reverse()) {
+			if (prior.chat !== build.chat || prior.id === build.id || !await alive(tx, prior)) continue;
+			build.state = { kind: "delivered", to: prior.id };
+			record.revision = { requests: {} };
+			return;
+		}
 		const existing = starts[firstImplementer];
 		if (existing) {
 			existing.state = { kind: "starting" };
@@ -418,7 +430,7 @@ export class Builds {
 			const { messages, records } = (await api.snapshot(BuildsDoc, context))!;
 			if (messages.find(message => message.requestId === requestId)?.submission === undefined) {
 				if (records[build]?.build.state.kind === "stopped") return refuse(stopped);
-				return answer("The message is recorded and will be delivered when the plan's agents are no longer paused.");
+				return answer("The message is recorded and will be delivered when work resumes.");
 			}
 		}
 		return answer("The message was sent.");
@@ -430,36 +442,18 @@ export class Builds {
 		finally { this.#pending.delete(task); }
 	}
 
-	resumeApproved(id: string): Promise<void> {
-		return this.#resume([id], id);
-	}
-
-	resume(ids?: readonly string[]): Promise<void> {
-		return this.#resume(ids);
-	}
-
-	async #resume(ids?: readonly string[], approval?: string): Promise<void> {
+	async resume(ids?: readonly string[]): Promise<void> {
 		const host = this.options.host;
 		if (!host || this.#closing) return;
 		const task = (async () => {
-			if (approval && this.#document?.records[approval]) await this.harness.commit(async tx => {
-				const record = (await tx.doc(BuildsDoc)).records[approval];
-				if (!record || this.options.shared()) return;
-				const { state } = record.build;
-				if (state.kind === "failed" || (state.kind === "unavailable" && state.reason === "shared")) {
-					await this.#startFirst(tx, record);
-				}
-			}, context);
 			const { records, messages } = (await this.harness.snapshot(BuildsDoc, context)) ?? { records: {}, messages: [] };
-			if (!approval) {
-				for (const { requestId, message, submission } of messages) {
-					if (this.#closing) return;
-					if (submission !== undefined || (ids && !ids.includes(message.build))) continue;
-					await this.#resumePending(host, message.build, requestId, () => this.#deliverMessage(requestId),
-						() => this.#document?.messages.find(message => message.requestId === requestId)?.submission === undefined,
-					).catch(error =>
-						this.log("error", "build.message.resume.failed", { build: message.build, chat: message.to, ...failure(error) }));
-				}
+			for (const { requestId, message, submission } of messages) {
+				if (this.#closing) return;
+				if (submission !== undefined || (ids && !ids.includes(message.build))) continue;
+				await this.#resumePending(host, message.build, requestId, () => this.#deliverMessage(requestId),
+					() => this.#document?.messages.find(message => message.requestId === requestId)?.submission === undefined,
+				).catch(error =>
+					this.log("error", "build.message.resume.failed", { build: message.build, chat: message.to, ...failure(error) }));
 			}
 			const selected = ids ? ids.flatMap(id => records[id] ? [records[id]] : []) : Object.values(records);
 			await Promise.all(selected.map(async ({ build, revision, starts }) => {
@@ -475,7 +469,7 @@ export class Builds {
 					this.log("error", "build.resume.failed", { build: build.id, ...failure(error) });
 				}
 			}));
-		})().catch(error => this.log("error", "build.resume.failed", { build: approval, ...failure(error) }));
+		})().catch(error => this.log("error", "build.resume.failed", failure(error)));
 		await this.#track(task);
 	}
 

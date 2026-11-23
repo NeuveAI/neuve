@@ -320,6 +320,62 @@ test("unsharing leaves a teammate's build unavailable until the owner approves i
 	expect(run.worktrees).toHaveLength(1);
 });
 
+// Unsharing could start an implementer on a plan the owner already replaced.
+test("unsharing starts only the latest plan approved while shared", async () => {
+	const run = await setup();
+	const { fixture, watch, draft, approve } = run;
+	await fixture.request({ op: "share", author: OWNER, shared: true });
+	const first = await draft(planText);
+	await approve(first);
+	const revision = await draft(revisedText);
+	await approve(revision);
+	await buildAt(watch, 1, "unavailable");
+
+	fixture.script(fauxAssistantMessage("Brief read."), fauxAssistantMessage("Brief read."));
+	await fixture.request({ op: "share", author: OWNER, shared: false });
+	await until(() => fixture.channel.isIdle());
+	const builds = watch.of("builds").at(-1)?.builds;
+	expect(builds).toMatchObject([
+		{ plan: { id: first.id }, state: { kind: "unavailable", reason: "shared" }, agents: [] },
+		{ plan: { id: revision.id }, state: { kind: "started" }, agents: [{ role: "implementer" }] },
+	]);
+	const transcript = await fixture.watch({ op: "watch", chat: builds![1]!.agents[0]!.chat });
+	expect(transcript.of("message").map(event => event.system?.kind)).toEqual(["neuve:build:brief"]);
+	expect(run.worktrees).toHaveLength(1);
+});
+
+// Retrying an earlier failed plan could start a competing implementer while its successor is still working.
+test("approving identical text after a failure delivers to the live implementer", async () => {
+	let fail = true;
+	const run = await setup({ async beforeWorktree() { if (fail) throw new Error("Worktree unavailable"); } });
+	const { fixture, watch, draft, approve } = run;
+	await approve(await draft(planText));
+	const failed = await buildAt(watch, 0, "failed");
+	fail = false;
+	const revision = await draft(revisedText);
+	const hold = Promise.withResolvers<void>();
+	try {
+		fixture.script(async () => { await hold.promise; return fauxAssistantMessage("Ready."); });
+		await approve(revision);
+		const live = await buildAt(watch, 1, "started");
+		const { chat } = live.agents[0]!;
+		const copy = await draft(planText);
+		fixture.script(fauxAssistantMessage("Revision read."));
+		await approve(copy);
+		const transcript = await fixture.watch({ op: "watch", chat, builds: true });
+		expect(transcript.of("builds").at(-1)?.builds).toMatchObject([
+			{ id: failed.id, state: { kind: "delivered", to: live.id }, agents: [] },
+			{ id: live.id, state: { kind: "started" }, agents: [{ chat }] },
+		]);
+		hold.resolve();
+		expect(await transcript.until("message", event => event.text === planText)).toMatchObject({ author: OWNER });
+		await until(() => fixture.channel.isIdle());
+		expect(run.worktrees).toHaveLength(1);
+	} finally {
+		hold.resolve();
+	}
+});
+
 // A revision can appear approved while it is lost between the approval commit and the first brief.
 test("approval during worktree creation delivers the revision once the implementer starts", async () => {
 	const entered = Promise.withResolvers<void>();
@@ -926,7 +982,7 @@ test("retrying a paused reviewer start sends one brief when sharing clears", asy
 		await fixture.request({ op: "share", author: OWNER, shared: true });
 		fixture.script(fauxAssistantMessage("Start recorded."), fauxAssistantMessage("Start recorded."));
 		releaseWorktree.resolve();
-		const pending = { error: false, text: "The agent start is recorded and will finish when the plan's agents are no longer paused." };
+		const pending = { error: false, text: "The agent start is recorded and will finish when work resumes." };
 		expect(await agent.until("result", event => event.call === "start-paused-reviewer")).toMatchObject(pending);
 		releaseRetry.resolve();
 		expect(await other.until("result", event => event.call === "retry-paused-reviewer")).toMatchObject(pending);
@@ -1051,7 +1107,7 @@ test("sharing holds the brief and delivers the pending message once after reopen
 			releaseSelection.resolve();
 			expect(await fixture.request({ op: "wait", submission })).toBe("done");
 			expect(await sender.until("result", event => event.call === "send-during-pause")).toMatchObject({
-				error: false, text: "The message is recorded and will be delivered when the plan's agents are no longer paused.",
+				error: false, text: "The message is recorded and will be delivered when work resumes.",
 			});
 			const target = await fixture.watch({ op: "watch", chat: reviewer, builds: true });
 			expect(target.of("message").map(event => event.system?.kind)).toEqual(["neuve:build:brief"]);
