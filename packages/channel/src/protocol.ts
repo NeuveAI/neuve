@@ -92,6 +92,35 @@ export type ChannelInfo = Metadata & {
  */
 export type ChatMode = "plan" | "ace";
 
+/**
+ * A plan a planning chat's agent wrote. Its file lies in the host's storage for the channel,
+ * outside the project, so clients never read it from disk: `plan` reads its text and
+ * `plan-approve` approves it. A draft keeps its `id` while the agent rewrites it; once approved its
+ * file never changes, and the agent's next write starts a new plan with a new `id`.
+ */
+export type Plan = {
+	/** Names one plan file for the channel's life. */
+	id: string;
+	/** The SHA-256 of the file's bytes as the host last wrote them, in lowercase hex: the plan's version. */
+	hash: string;
+	/** The plan-writing tool call that last wrote the file; the chat shows the plan's card at it. */
+	call: string;
+	/** The file's first heading, without its marks; empty when it has none. */
+	title: string;
+	/**
+	 * `replaced` once a later plan of the same chat is approved. A draft is never replaced: the
+	 * agent's next write rewrites it.
+	 */
+	state: "draft" | "approved" | "replaced";
+	/** When the host last wrote the file, in ms. */
+	written: number;
+	/** Who approved this version, and when, in ms; kept once the plan is replaced. */
+	approved?: { by: string; at: number };
+};
+
+/** The tool by which a planning chat's agent writes its plan; the only writer of plan files. */
+export const PLAN_TOOL = "plan_write";
+
 export type Chat = {
 	id: ChatId;
 	/** The chat whose agent created this one as a subagent. */
@@ -303,6 +332,14 @@ export type Request =
 	| { op: "answer"; chat?: ChatId; call?: string; author: string; text: string }
 	/** Decline a pending `question` tool call; the agent hears that no answer was given. */
 	| { op: "skip"; chat?: ChatId; call: string; author: string }
+	/** The current text of one of the chat's plans, with the hash of exactly those bytes. */
+	| { op: "plan"; chat?: ChatId; plan: string }
+	/**
+	 * Approve the version `hash` of plan `plan`, as the person read it. Answers with the approved
+	 * `Plan`. Refused for an agent author, a hash the file's bytes no longer have, an unknown plan,
+	 * and a replaced one; approving an approved version again changes nothing.
+	 */
+	| { op: "plan-approve"; chat?: ChatId; author: string; plan: string; hash: string }
 	/** Add, or `remove`, the author's reaction to a human message or agent reply. */
 	| { op: "react"; chat?: ChatId; author: string; entry: EntryId; emoji: string; remove?: boolean }
 	/** Replace the author's own human message with a tombstone, for people and later model context. */
@@ -342,12 +379,16 @@ export type Request =
 		agent?: boolean;
 		/** Include stopped events; older clients do not understand them. */
 		stops?: boolean;
+		/** Include plans events; older clients do not understand them. */
+		plans?: boolean;
 	};
 
 export type ReviewNewCommits = { review: string; branch: string; reviewedHead: string; head: string; label: string };
 
 export type Event =
 	| { kind: "review-cards"; chat: ChatId; cards: Record<string, ReviewCard> }
+	/** The chat's complete plans, oldest first, sent on attachment and on every change. */
+	| { kind: "plans"; chat: ChatId; plans: Plan[] }
 	| ({ kind: "neuve:review:new-commits"; chat: ChatId; entry: EntryId; at: number } & ReviewNewCommits)
 	/**
 	 * The complete current message queue, sent on attachment and every committed change.

@@ -1,9 +1,10 @@
-import { MENTION, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
+import { MENTION, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
 import type { Listing, People } from "@ace/host/protocol";
 import type { Event } from "@ace/ui";
 
 import { AGENT_ALIAS, withAgentMention } from "./agent-mention";
 import { placement } from "./placement";
+import { planTool } from "./plan-card";
 import { type ReviewCards, reviewNotice, reviewTool, wakeNote, wakePhase } from "./review-card";
 import type { Item, Tool } from "./transcript";
 
@@ -114,8 +115,8 @@ function tool(
 	recap?: string,
 ): Event.Message.Content.Tool {
 	const status = tool.result ? (tool.result.error ? "error" : "success") : busy ? "start" : "error";
-	// Neuve's review tools read as one plain line; their state lives in the review card.
-	const review = reviewTool(tool, reviews);
+	// Neuve's review tools and the plan's writing tool read as one plain line; their state lives in their card.
+	const review = reviewTool(tool, reviews) ?? planTool(tool);
 	return {
 		type: "tool",
 		id: tool.call,
@@ -256,7 +257,7 @@ export function toEvents(
 			content.push(tool(call, busy, reviews, captions[call.call], recaps[call.call]));
 		}
 		for (const call of item.tools) {
-			const name = reviewTool(call, reviews)?.name ?? call.name;
+			const name = (reviewTool(call, reviews) ?? planTool(call))?.name ?? call.name;
 			if (call.result?.interrupted) {
 				content.push(
 					text(`The channel restarted while ${name} ran, so it may have partially run.`),
@@ -281,8 +282,12 @@ export function toEvents(
 			...base,
 			sender: sender(item.model),
 			content,
-			// Each reply carries the mode its own run ran in, so earlier replies keep their label.
-			...(item.mode === "plan" ? { agent: { mode: "plan" } } : {}),
+			// Each reply carries the mode its own run ran in, so earlier replies keep their label. A turn
+			// that only wrote the plan sends no reply, but the plan tool succeeds only in plan mode.
+			...(item.mode === "plan"
+					|| item.tools.some((tool) => tool.name === PLAN_TOOL && tool.result && !tool.result.error)
+				? { agent: { mode: "plan" } }
+				: {}),
 		} as Event;
 	});
 	if (!draft.text) return events;

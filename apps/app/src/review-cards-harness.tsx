@@ -1,14 +1,15 @@
 // Dev-only page (review-cards.html, served by `vite` but not built): Ace's real timeline over
 // fixture transcripts, showing every Neuve review card state, the refusal card, the plain review
-// tool rows and the new-commit row. `?theme=dark` renders the dark theme.
+// tool rows and the new-commit row. `?scene=question` shows the question card, which shares the
+// review card's shell. `?theme=dark` renders the dark theme.
 import { createRoot } from "react-dom/client";
 import { useState } from "react";
 
-import { Button, ReviewActionsProvider, Timeline } from "@ace/ui";
+import { Button, QuestionInput, type QuestionItem, QuestionView, ReviewActionsProvider, Timeline } from "@ace/ui";
 
 import "./styles.css";
 
-import { reviewActions, reviewCommits, withReviews } from "./review-card";
+import { reviewActions, reviewCommits, withCards } from "./review-card";
 import type { ReviewCard } from "@ace/channel/review-cards";
 import { toEvents } from "./timeline";
 import type { Item, Tool } from "./transcript";
@@ -334,7 +335,7 @@ function Panel({ scene, onAction }: { scene: Scene; onAction: (text: string) => 
 		),
 	];
 	let busy = !!scene.busy;
-	let events = withReviews(
+	let events = withCards(
 		toEvents(
 			list,
 			"harness",
@@ -350,6 +351,7 @@ function Panel({ scene, onAction }: { scene: Scene; onAction: (text: string) => 
 		),
 		list,
 		feed,
+		new Map(),
 		"harness",
 		busy,
 		scene.connected !== false,
@@ -414,9 +416,93 @@ function Live({ onAction }: { onAction: (text: string) => void }) {
 	);
 }
 
+const QUESTIONS: QuestionItem[] = [
+	{
+		id: "q0",
+		header: "Scope",
+		question: "Should the plan cover the desktop app too?",
+		multiple: false,
+		options: [
+			{ id: "o0", label: "Web only", description: "The desktop app follows in a later plan." },
+			{ id: "o1", label: "Both", description: "" },
+		],
+	},
+	{
+		id: "q1",
+		header: "Checks",
+		question: "Which checks must pass before review?",
+		multiple: true,
+		options: [
+			{ id: "o0", label: "Typecheck", description: "" },
+			{ id: "o1", label: "Unit tests", description: "Only the packages the change touches." },
+		],
+	},
+	{ id: "q2", header: "Owner", question: "Who reviews the result?", multiple: false, options: [] },
+];
+
+const LONG: QuestionItem = {
+	id: "q3",
+	header: "Area",
+	question: "Which area should the plan start from?",
+	multiple: false,
+	options: Array.from({ length: 24 }, (_, index) => ({ id: `o${index}`, label: `Area ${index + 1}`, description: "" })),
+};
+
+function Questions() {
+	let form = (
+		questions: QuestionItem[],
+		extra: { error?: string; status?: string; disabled?: boolean; syncing?: boolean; presence?: boolean } = {},
+	) => ({
+		definition: { questions },
+		view: { q0: { mode: "choices" as const, choice: "o0", options: {}, custom: "" } },
+		disabled: !!extra.disabled,
+		submitting: false,
+		...extra,
+		presence: extra.presence
+			? (id: string) => id === "q0" ? { count: 2, content: <span className="text-xs text-muted-foreground">2 editing</span> } : undefined
+			: undefined,
+		actions: <Button size="sm" variant="secondary">Skip</Button>,
+		choose: () => {},
+		submit: () => {},
+		custom: (question: QuestionItem) => (
+			<QuestionInput
+				label={question.header}
+				name={`harness-${question.id}`}
+				active={false}
+				value=""
+				onActive={() => {}}
+				onChange={() => {}}
+			/>
+		),
+	});
+	let cases = [
+		{ label: "One question", count: 1, form: form(QUESTIONS.slice(0, 1)) },
+		{ label: "Three questions, two more pending", count: 3, form: form(QUESTIONS) },
+		{ label: "Failed to send", count: 1, form: form(QUESTIONS.slice(1, 2), { error: "The channel refused the answer." }) },
+		{ label: "Read only", count: 1, form: form(QUESTIONS.slice(0, 1), { disabled: true, status: "Only the channel owner can answer here" }) },
+		{ label: "Syncing, with people editing", count: 1, form: form(QUESTIONS, { syncing: true, presence: true }) },
+		{ label: "More answers than fit", count: 1, form: form([LONG]) },
+	];
+	return (
+		<main className="h-full overflow-auto bg-muted/40 p-6 text-foreground">
+			<div className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 640px), 1fr))" }}>
+				{cases.map((item) => (
+					<figure key={item.label} className="flex min-w-0 flex-col gap-2">
+						<figcaption className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+							{item.label}
+						</figcaption>
+						<QuestionView id={item.label} count={item.count} requester="the agent" form={item.form} />
+					</figure>
+				))}
+			</div>
+		</main>
+	);
+}
+
 function Harness() {
 	let [last, setLast] = useState("Nothing pressed yet.");
 	let only = new URLSearchParams(location.search).get("scene");
+	if (only === "question") return <Questions />;
 	if (only === "live") {
 		return (
 			<main className="h-full overflow-auto bg-muted/40 p-6 text-foreground">

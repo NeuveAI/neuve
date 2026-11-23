@@ -8,6 +8,8 @@ import { IconLoader } from "../../icons";
 import { Button } from "../../ui/button";
 import { FONT } from "../blocks/constants";
 
+import { CARD, CARD_HEAD, RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead } from "./card";
+
 type Review = Extract<ReviewCardView, { kind: "review" }>;
 
 /** What the card's links and buttons do; the app provides them around the timeline. */
@@ -33,13 +35,6 @@ export function useReviewActions() {
 // the timeline's own text measurer and given exactly that height.
 
 const MAX_WIDTH = 600;
-const BORDER = 1;
-const PAD_X = 12;
-const HEAD_PAD_Y = 10;
-const TITLE_LINE = 20;
-const META_GAP = 2;
-const META_LINE = 16;
-const BODY_PAD_Y = 12;
 const BODY_GAP = 12;
 const LINE = 16;
 const TEXT_LINE = 20;
@@ -48,7 +43,6 @@ const STAGE_GAP = 6;
 const LANE_BAR = 6;
 const LANE_GAP = 8;
 const LANE_ROW_GAP = 4;
-const FOOT_PAD_Y = 10;
 const FOOT_GAP = 8;
 const BUTTON = 24;
 const BUTTON_PAD_X = 8;
@@ -216,7 +210,7 @@ function footer(
 		rows,
 		inline,
 		statusHeight,
-		height: BORDER + FOOT_PAD_Y * 2 + body,
+		height: CARD.border + CARD.footPadY * 2 + body,
 	};
 }
 
@@ -232,7 +226,7 @@ function stagesItem(
 /** The card's content and exact height at a given content width. */
 export function reviewCardPlan(view: ReviewCardView, available: number): Plan {
 	let width = Math.min(available, MAX_WIDTH);
-	let inner = width - BORDER * 2 - PAD_X * 2;
+	let inner = width - CARD.border * 2 - CARD.padX * 2;
 	let text = (value: string, tone?: "strong" | "muted"): Item => ({
 		kind: "text",
 		text: value,
@@ -388,9 +382,9 @@ export function reviewCardPlan(view: ReviewCardView, available: number): Plan {
 		}
 	}
 
-	let height = BORDER * 2 + HEAD_PAD_Y * 2 + TITLE_LINE + META_GAP + META_LINE;
+	let height = CARD_HEAD;
 	if (plan.items.length) {
-		height += BORDER + BODY_PAD_Y * 2
+		height += CARD.border + CARD.bodyPadY * 2
 			+ plan.items.reduce((sum, item) => sum + itemHeight(item), 0)
 			+ (plan.items.length - 1) * BODY_GAP;
 	}
@@ -654,36 +648,28 @@ function FooterView({ footer }: { footer: Footer }) {
 		</div>
 	);
 	return (
-		<footer
-			className={cn(
-				"flex border-t border-border",
-				footer.inline ? "items-center justify-between" : "flex-col items-start",
-			)}
-			style={{
-				blockSize: footer.height,
-				paddingInline: PAD_X,
-				paddingBlock: FOOT_PAD_Y,
-				gap: FOOT_GAP,
-			}}
+		<RequestCardFooter
+			className={footer.inline ? "items-center justify-between" : "flex-col items-start"}
+			style={{ blockSize: footer.height, gap: FOOT_GAP }}
 		>
 			{status}
 			{buttons}
-		</footer>
+		</RequestCardFooter>
 	);
 }
 
 /**
- * A Neuve review's request card or refusal card, in the shell of Ace's question card. It draws at
+ * A Neuve review's request card or refusal card, in the shared request card shell. It draws at
  * exactly the height `reviewCardPlan` reports for the same width.
  */
 export function ReviewCard({ view, width }: { view: ReviewCardView; width: number }) {
 	let plan = reviewCardPlan(view, width);
 	return (
-		<section
+		<RequestCard
 			aria-label={view.kind === "refused" ? "Neuve review refusal" : "Neuve review"}
+			tone={plan.tone}
 			className={cn(
-				"overflow-hidden rounded-xl squircle border bg-background text-sm text-foreground shadow-composer",
-				plan.tone === "error" ? "border-destructive/40" : "border-border",
+				"overflow-hidden",
 				// Neuve's review lane colours, when its theme provides them.
 				"[--review-req:var(--nv-req,#c63d8e)] [--review-req-ink:var(--nv-req-fg,#ac2973)] [--review-sug:var(--nv-sug,#ad7c1c)] [--review-agt:var(--nv-agt,#148252)] [--review-sta:var(--nv-sta,#78736a)] [--review-live:var(--nv-gold,#b8860b)]",
 				"dark:[--review-req:var(--nv-req,#e680c5)] dark:[--review-req-ink:var(--nv-req-fg,#efb1dc)] dark:[--review-sug:var(--nv-sug,#e2ca5e)] dark:[--review-agt:var(--nv-agt,#44be82)] dark:[--review-sta:var(--nv-sta,#9a9488)] dark:[--review-live:var(--nv-gold,#e2ca5e)]",
@@ -691,41 +677,43 @@ export function ReviewCard({ view, width }: { view: ReviewCardView; width: numbe
 			style={{ inlineSize: plan.width, blockSize: plan.height }}
 		>
 			<p role="status" className="sr-only">{plan.announce}</p>
-			<header style={{ paddingInline: PAD_X, paddingBlock: HEAD_PAD_Y }}>
-				<p className="flex min-w-0 items-center gap-2 leading-5 font-medium" style={{ blockSize: TITLE_LINE }}>
-					<span className="min-w-0 truncate">{plan.title}</span>
-					{plan.badge && (
-						<span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] leading-4 font-normal text-muted-foreground">
-							{plan.badge}
-						</span>
-					)}
-				</p>
-				<p
-					className={cn(
-						"flex min-w-0 gap-[1ch] overflow-hidden text-xs leading-4",
-						plan.metaTone === "error" ? "text-destructive" : "text-muted-foreground",
+			<RequestCardHead
+				title={
+					<>
+						<span className="min-w-0 truncate">{plan.title}</span>
+						{plan.badge && (
+							<span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] leading-4 font-normal text-muted-foreground">
+								{plan.badge}
+							</span>
+						)}
+					</>
+				}
+				meta={
+					<>
+						{/* The branch gives way first; a tail too wide for the card truncates last. */}
+						<span className="min-w-[4ch] shrink-[1000] truncate">{plan.meta}</span>
+						{/* Not laid out between flex items, but read: the gap alone is silent. */}
+						{plan.metaTail && " "}
+						{plan.metaTail && <span className="min-w-0 truncate">{plan.metaTail}</span>}
+					</>
+				}
+				metaProps={{
+					className: cn(
+						"flex min-w-0 gap-[1ch] overflow-hidden",
+						plan.metaTone === "error" && "text-destructive",
 						plan.mono && "font-mono",
-					)}
-					style={{ marginBlockStart: META_GAP, blockSize: META_LINE }}
-					title={plan.metaTail ? `${plan.meta} ${plan.metaTail}` : undefined}
-				>
-					{/* The branch gives way first; a tail too wide for the card truncates last. */}
-					<span className="min-w-[4ch] shrink-[1000] truncate">{plan.meta}</span>
-					{/* Not laid out between flex items, but read: the gap alone is silent. */}
-					{plan.metaTail && " "}
-					{plan.metaTail && <span className="min-w-0 truncate">{plan.metaTail}</span>}
-				</p>
-			</header>
+					),
+					style: { blockSize: CARD.metaLine },
+					title: plan.metaTail ? `${plan.meta} ${plan.metaTail}` : undefined,
+				}}
+			/>
 			{plan.items.length > 0 && (
-				<div
-					className="flex flex-col border-t border-border"
-					style={{ paddingInline: PAD_X, paddingBlock: BODY_PAD_Y, gap: BODY_GAP }}
-				>
+				<RequestCardBody className="flex flex-col" style={{ gap: BODY_GAP }}>
 					{plan.items.map((item, index) => <Body key={index} item={item} />)}
-				</div>
+				</RequestCardBody>
 			)}
 			{plan.footer && <FooterView footer={plan.footer} />}
-		</section>
+		</RequestCard>
 	);
 }
 

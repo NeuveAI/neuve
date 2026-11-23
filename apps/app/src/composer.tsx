@@ -106,6 +106,8 @@ type Props = {
 	failure?: string;
 	onProviders?: () => void;
 	accessory?: ReactNode;
+	/** Whether the chat has a plan, so `plan.md` refers to it. */
+	plan?: boolean;
 	/** People to suggest after @, by GitHub login. */
 	members: { name: string; avatar?: string }[];
 };
@@ -143,6 +145,7 @@ export function Composer(
 		failure,
 		onProviders,
 		accessory,
+		plan,
 		members,
 	}: Props,
 ) {
@@ -424,6 +427,7 @@ export function Composer(
 				mode={mode}
 				onModeChange={changeMode}
 				mentions={mentions}
+				plan={plan}
 				models={choices}
 				model={model}
 				onModelChange={(value) => void pick(value)}

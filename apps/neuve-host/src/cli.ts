@@ -73,8 +73,9 @@ const USAGE = `ace — channels on this host
   ace ask <channel> [--chat <id>] [--model <provider/id>] [--effort <level>] [--detach] <text…>
                                                 exits 1 if the run fails or is stopped; --effort
                                                  is one the model lists, kept for the chat's later runs
-  ace watch <channel> [--chat <id>]
+  ace watch <channel> [--chat <id>] [--plans]
   ace answer <channel> [--chat <id>] <text…>     answer the chat's waiting question in writing
+  ace plan <channel> [--chat <id>] <plan> [--json]
   ace chat <channel> [--model <provider/id>]     open another chat
   ace stop <channel> [--chat <id>]               stop the chat's current run
   ace kill <channel>                             stop all work in the channel now
@@ -105,7 +106,7 @@ const USAGE = `ace — channels on this host
                                                 delete asks first while a run is in progress
   ace --version
 
-info, say, ask, answer, watch, chat and stop also take a teammate's channel, by name or ID, through this
+info, say, ask, answer, plan, watch, chat and stop also take a teammate's channel, by name or ID, through this
 host's running gateway (open Neuve or run ace serve). Their host decides who may invoke its agents.
 
 Models are provider/id, such as openai/gpt-6-astra or anthropic/claude-opus-5-5.
@@ -126,6 +127,7 @@ const OPTIONS = {
 	chat: { type: "string" },
 	port: { type: "string" },
 	all: { type: "boolean" },
+	plans: { type: "boolean" },
 	team: { type: "boolean" },
 	detach: { type: "boolean" },
 	yes: { type: "boolean" },
@@ -218,6 +220,9 @@ function render(event: Event, info: ChannelInfo) {
 		}
 		case "result":
 			return console.log(dim(`${tag}  ${event.error ? "✗" : "←"} ${clip(event.text, 100)}`));
+		case "plans":
+			for (const plan of event.plans) console.log(`${tag}${plan.state} plan ${plan.id}  ${plan.title}`);
+			return;
 		case "run":
 			if (event.state !== "end") return;
 			ended = true;
@@ -233,7 +238,7 @@ async function watch(session: Session, replay = true): Promise<{ ended: Promise<
 	const info = await session.request<ChannelInfo>({ op: "info" });
 	let live = false;
 	const ended = Promise.withResolvers<void>();
-	await session.request({ op: "watch", chat: chat(), stops: true }, {
+	await session.request({ op: "watch", chat: chat(), stops: true, ...(replay && flags.plans ? { plans: true } : {}) }, {
 		event(event) {
 			if (event.kind === "live") return void (live = true);
 			if (live || replay) render(event, info);
@@ -290,7 +295,7 @@ async function roster(): Promise<Member[]> {
 /** What a teammate can do in a channel from the app; everything else acts on this host's own. */
 const SWITCH = new Set(["on", "off"]);
 
-const participant = new Set(["info", "say", "ask", "answer", "watch", "chat", "stop"]);
+const participant = new Set(["info", "say", "ask", "answer", "plan", "watch", "chat", "stop"]);
 
 /** What only a channel's owner can do, phrased for refusing a teammate's channel. */
 /** A project by its folder on this host, by GitHub owner/name, or by the name it was opened as. */
@@ -721,6 +726,15 @@ async function main() {
 					if (!text) throw new Error("Nothing to answer");
 					await session.request({ op: "answer", chat: chat(), author: catalog.user, text });
 					return console.log(`Answered the question in ${name}.`);
+				case "plan": {
+					const [plan] = rest;
+					if (!plan || rest.length !== 1) throw new Error("Give the plan shown by ace watch --plans.");
+					const value = await session.request<{ hash: string; text: string }>({ op: "plan", chat: chat(), plan });
+					if (flags.json) return console.log(JSON.stringify(value));
+					console.error(`SHA-256 ${value.hash}`);
+					process.stdout.write(value.text);
+					return;
+				}
 				case "watch":
 					return await (await watch(session)).ended;
 				case "chat": {

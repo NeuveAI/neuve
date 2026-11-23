@@ -5,7 +5,7 @@ import type { ReviewCard } from "./review-cards";
 
 import { EffortSchema } from "./effort";
 import { ChatModeSchema, ModelRefSchema } from "./parse";
-import type { Event, Frame } from "./protocol";
+import type { Event, Frame, Plan } from "./protocol";
 
 const id = z.int().nonnegative();
 const text = z.string();
@@ -37,8 +37,19 @@ export const ReviewCardSchema = z.discriminatedUnion("kind", [
 	}),
 ]) satisfies z.ZodType<ReviewCard>;
 
+export const PlanSchema = z.object({
+	id: text,
+	hash: text,
+	call: text,
+	title: text,
+	state: z.enum(["draft", "approved", "replaced"]),
+	written: z.number(),
+	approved: z.object({ by: text, at: z.number() }).optional(),
+}) satisfies z.ZodType<Plan>;
+
 export const EventSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("review-cards"), ...base, cards: z.record(text, ReviewCardSchema) }),
+	z.object({ kind: z.literal("plans"), ...base, plans: z.array(PlanSchema) }),
 	z.object({ kind: z.literal("neuve:review:new-commits"), ...base, entry: id, at: z.number(), review: text, branch: text, reviewedHead: text, head: text, label: text }),
 	z.object({
 		kind: z.literal("queue"),

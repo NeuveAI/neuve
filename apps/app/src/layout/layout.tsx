@@ -46,6 +46,7 @@ import {
 	IconPlus,
 	IconRows,
 	IconSplitView,
+	IconTasks,
 	IconTerminal,
 	IconX,
 } from "@ace/ui/icons";
@@ -112,6 +113,10 @@ type Props = {
 	onTabClose?: (uid: string, data: Content) => void;
 	/** Receives the function that shows the chat's Diff tab, opening one beside the chat if needed. */
 	opener?: { current?: () => void };
+	/** The chat's newest plan, once known; a plan the layout hasn't opened a tab for opens one. */
+	plan?: string;
+	/** Receives the function that shows the chat's Plan tab at a plan, opening one if needed. */
+	planOpener?: { current?: (plan?: string) => void };
 	/** Running shells no client shows; each without a tab here opens as a background Terminal tab. */
 	shells?: { terminal: string; chat?: number }[];
 	/** Whether this host opens the channel's shells; only then is Terminal offered. */
@@ -120,12 +125,13 @@ type Props = {
 
 const MIN = 350;
 const CHAT_MIN = 450;
-// The old app also offered Plan, Browse, and Browser Preview; they return when their backends do.
-const CHOICES: Choice[] = ["chat", "diff", "terminal", "review"];
-const SHELLESS: Choice[] = ["chat", "diff", "review"];
+// The old app also offered Browse and Browser Preview; they return when their backends do.
+const CHOICES: Choice[] = ["chat", "plan", "diff", "terminal", "review"];
+const SHELLESS: Choice[] = ["chat", "plan", "diff", "review"];
 const ICONS: Record<Kind, Icon> = {
 	blank: IconSplitView,
 	chat: IconMessage,
+	plan: IconTasks,
 	diff: IconFileDiff,
 	terminal: IconTerminal,
 	live: IconMonitor,
@@ -134,6 +140,7 @@ const ICONS: Record<Kind, Icon> = {
 const TITLES: Record<Kind, string> = {
 	blank: "Blank",
 	chat: "Chat",
+	plan: "Plan",
 	diff: "Diff",
 	terminal: "Terminal",
 	live: "Live",
@@ -819,12 +826,13 @@ function Pane(props: PaneProps) {
 }
 
 function useLayout(
-	{ id, name, icon = ICONS.chat, chat, changed, onTabClose, opener, shells }: Props,
+	{ id, name, icon = ICONS.chat, chat, changed, onTabClose, opener, plan, planOpener, shells }: Props,
 ) {
 	const [data] = useState(() => read(id));
 	const [api] = useState(() => Split.create(data.state, { min: minimum }));
 	const [meta, setMeta] = useState<Meta>(data.meta);
 	const [diff, setDiff] = useState(data.diff);
+	const [planned, setPlanned] = useState(data.plans);
 	const state = useSyncExternalStore(api.subscribe, api.get, api.get);
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
 	const focused = useSyncExternalStore(onFocus, isFocused);
@@ -842,8 +850,8 @@ function useLayout(
 		: undefined;
 
 	useEffect(() => {
-		write(id, state, meta, diff);
-	}, [id, state, meta, diff]);
+		write(id, state, meta, diff, planned);
+	}, [id, state, meta, diff, planned]);
 
 	const snapshot = useEffectEvent((): WindowState => {
 		const active = new Set(view.panes.map((pane) => pane.active));
@@ -858,7 +866,7 @@ function useLayout(
 			focused,
 		};
 	});
-	const persist = useEffectEvent(() => write(id, api.get(), meta, diff));
+	const persist = useEffectEvent(() => write(id, api.get(), meta, diff, planned));
 	const command = useEffectEvent((request: TabRename) => {
 		if (request.expires <= Date.now()) throw new Error("Tab rename expired");
 		if (request.channel !== id) throw new Error("This window is showing another channel");
@@ -905,6 +913,47 @@ function useLayout(
 		if (!api.open({ tab: uid, to: { pane }, background: true })) return;
 		setMeta((meta) => ({ ...meta, [uid]: content("diff", chat) }));
 	}, [api, chat, changed, diff, meta]);
+
+	// A Plan tab opens beside the chat once for each new plan, or behind it when there is no room;
+	// a closed one stays closed until the agent writes another plan.
+	const beside = useEffectEvent((target?: string) => {
+		const at = (name?: string): Content => ({
+			type: "plan",
+			chat,
+			...(target ? { plan: target } : undefined),
+			...(name ? { name } : undefined),
+		});
+		const open = api.get().tabs.find((uid) => {
+			const value = meta[uid];
+			return value?.type === "plan" && value.chat === chat;
+		});
+		if (open) {
+			setMeta((meta) => ({ ...meta, [open]: at(meta[open]?.name) }));
+			return open;
+		}
+		const uid = `tab-${api.get().seq + 1}`;
+		const pane = Split.host(api.get(), CHAT)?.uid;
+		const side = !flat && Split.can(api.get(), { ...fit, open: { to: { pane, side: "right" } } });
+		const to: Split.Target | undefined = side ? { pane, side: "right" } : flat ? undefined : { pane };
+		if (!api.open({ tab: uid, to, ...(side ? { fit } : { background: true }) })) return;
+		setMeta((meta) => ({ ...meta, [uid]: at() }));
+		return uid;
+	});
+
+	useEffect(() => {
+		if (!plan || plan === planned[chat]) return;
+		setPlanned((planned) => ({ ...planned, [chat]: plan }));
+		beside();
+	}, [chat, plan, planned]);
+
+	useLayoutEffect(() => {
+		if (!planOpener) return;
+		planOpener.current = (target) => {
+			const uid = beside(target);
+			if (uid) activate(uid);
+		};
+		return () => void (planOpener.current = undefined);
+	}, [planOpener]);
 
 	// Tabs are kept per browser window, so a shell whose tab was lost would otherwise run unseen.
 	const adopt = useEffectEvent((shells: { terminal: string; chat?: number }[]) => {

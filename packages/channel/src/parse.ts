@@ -75,6 +75,14 @@ export const RequestSchema = z.discriminatedUnion("op", [
 	z.strictObject({ op: z.literal("chat"), author, model: ModelRefSchema.optional() }),
 	answerOp,
 	z.strictObject({ op: z.literal("skip"), chat, call: z.string(), author }),
+	z.strictObject({ op: z.literal("plan"), chat, plan: z.string().min(1) }),
+	z.strictObject({
+		op: z.literal("plan-approve"),
+		chat,
+		author,
+		plan: z.string().min(1),
+		hash: z.string().regex(/^[a-f0-9]{64}$/),
+	}),
 	z.strictObject({
 		op: z.literal("react"),
 		chat,
@@ -110,6 +118,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 		typing: z.boolean().optional(),
 		agent: z.boolean().optional(),
 		stops: z.boolean().optional(),
+		plans: z.boolean().optional(),
 	}),
 ]);
 

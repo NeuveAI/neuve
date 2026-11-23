@@ -19,6 +19,7 @@ import {
 	type Conversation,
 	type ConversationId,
 	type ConversationRecord,
+	type DocumentWatch,
 	createRegistry,
 	type Cursor,
 	defineDoc,
@@ -76,6 +77,7 @@ import {
 } from "./messages";
 import { metadata, MetadataDoc, validateName } from "./metadata";
 import { available, choose, usable } from "./models";
+import { Plans, PlansDoc, type PlanFiles, type PlansState } from "./plan";
 import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode } from "./plan-mode";
 import { progress } from "./progress";
 import { answer, Questions } from "./questions";
@@ -152,6 +154,8 @@ export type Options = {
 	env(cwd: string): ExecutionEnv;
 	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
 	planFileAccess?(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv;
+	/** The channel's Markdown files, in storage the host owns outside the project. */
+	planFiles?: PlanFiles;
 	desktop?: Desktop;
 	browser?: Browser;
 	images?: Images;
@@ -195,6 +199,7 @@ export class Channel {
 	#harness: Harness;
 	#log: Log;
 	#metadata: Metadata;
+	#plans: Plans;
 	/** Committed settings, maintained from pi's commit stream before native dispatch. */
 	#settings: Settings;
 	#active = 0;
@@ -219,12 +224,14 @@ export class Channel {
 		log: Log,
 		value: Metadata,
 		settings: Settings,
+		plans: Plans,
 	) {
 		this.#options = options;
 		this.#harness = harness;
 		this.#log = log;
 		this.#metadata = value;
 		this.#settings = settings;
+		this.#plans = plans;
 	}
 
 	static async open(options: Options): Promise<Channel> {
@@ -269,6 +276,9 @@ export class Channel {
 			defineExtension({ name: "ace-channel", sections: [room.section(options), instructions] }),
 		);
 		registry.install(planModeExtension(planning));
+		const plans = new Plans(options.planFiles);
+		const plan = plans.extension(planning, (chat, work) => channel.#admitted(chat, work), log);
+		if (plan) registry.install(plan);
 		install(registry, options.extension, planning, !!options.planFileAccess, log);
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models),
@@ -321,6 +331,7 @@ export class Channel {
 			log,
 			value,
 			settings || LEGACY,
+			plans,
 		);
 		ownedChannel = channel;
 		channel.#unbind = unbind;
@@ -490,6 +501,19 @@ export class Channel {
 				const { id } = await this.#conversation(request.chat);
 				return answer(this.#harness, id, request.call, request.author, null, context);
 			}
+			case "plan":
+				return this.#admitted(request.chat, async () => {
+					const { id } = await this.#conversation(request.chat);
+					return this.#plans.read(this.#harness, id, request.plan, context);
+				});
+			case "plan-approve":
+				return this.#admitted(request.chat, async () => {
+					this.#author(request.author);
+					if (room.isAgent(request.author)) throw new Error("Only a person can approve a plan.");
+					await this.#mayInvoke(request.author);
+					const { id } = await this.#conversation(request.chat);
+					return this.#plans.approve(this.#harness, id, request.plan, request.hash, request.author, context);
+				});
 			case "react": {
 				this.#author(request.author);
 				const { id } = await this.#conversation(request.chat);
@@ -1336,24 +1360,45 @@ export class Channel {
 		};
 		await loadNotices([conversation.id, ...sourceChats(stream.snapshot.entries)]).catch(async error => { await stopNotices(); await stream.stop(); throw error; });
 		const tools = request.progress ? progress(conversation.id, send) : undefined;
-		const reviews = await (async () => {
-			await this.#harness.commit(async tx => { await tx.doc(ReviewCardsDoc, conversation.id); }, context);
-			return this.#harness.watchDoc(ReviewCardsDoc, conversation.id, context);
-		})().catch(async error => {
+		const harness = this.#harness;
+		let reviews: DocumentWatch<{ cards: Record<string, ReviewCard> }> | undefined;
+		let plans: DocumentWatch<PlansState> | undefined;
+		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop()]);
+		try {
+			await harness.commit(async tx => {
+				await tx.doc(ReviewCardsDoc, conversation.id);
+				if (request.plans) await tx.doc(PlansDoc);
+			}, context);
+			reviews = await harness.watchDoc(ReviewCardsDoc, conversation.id, context);
+			if (request.plans) plans = await harness.watchDoc(PlansDoc, context);
+			const sendReviews = (value: Readonly<{ cards: Record<string, ReviewCard> }> | null | undefined) =>
+				send({ kind: "review-cards", chat: conversation.id, cards: value?.cards || {} });
+			sendReviews(reviews?.value);
+			reviews?.start(async value => { sendReviews(value); });
+			if (request.plans) {
+				let last: string | undefined;
+				const sendPlans = (value: Readonly<PlansState> | null | undefined) => {
+					const current = value?.chats[conversation.id]?.map(({ plan }) => plan) ?? [];
+					const key = JSON.stringify(current);
+					if (key === last) return;
+					last = key;
+					send({ kind: "plans", chat: conversation.id, plans: current });
+				};
+				sendPlans(plans?.value);
+				plans?.start(async value => { sendPlans(value); });
+			}
+		} catch (error) {
+			await stopDocs();
 			tools?.stop();
 			await stopNotices();
 			await stream.stop();
 			throw error;
-		});
-		const sendReviews = (value: Readonly<{ cards: Record<string, ReviewCard> }> | null | undefined) =>
-			send({ kind: "review-cards", chat: conversation.id, cards: value?.cards || {} });
-		sendReviews(reviews?.value);
-		reviews?.start(async value => { sendReviews(value); });
+		}
 		// Agent events expose only inbox IDs. The shared conversation mount carries their content,
 		// including an atomic initial snapshot and updates when the inbox is first created.
 		const view = request.queue
 			? await conversation.watch(context).catch(async (error) => {
-				await reviews?.stop();
+				await stopDocs();
 				tools?.stop();
 				await stopNotices();
 				await stream.stop();
@@ -1406,6 +1451,7 @@ export class Channel {
 			forward(edited ? { ...event, text: edited.text, edited: edited.at } : event);
 		};
 		void stream.closed.then(async () => {
+			await stopDocs();
 			await stopNotices();
 			this.#listeners.delete(listener);
 			tools?.stop();
@@ -1468,7 +1514,7 @@ export class Channel {
 				await stopNotices();
 				this.#listeners.delete(listener);
 				tools?.stop();
-				await reviews?.stop();
+				await stopDocs();
 				await view?.stop();
 				return stream.stop();
 			},

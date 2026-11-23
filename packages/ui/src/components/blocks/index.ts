@@ -40,6 +40,7 @@ export {
 	reviewNewCommits,
 	reviewTold,
 } from "./system";
+export { planCard } from "./plan";
 export { reviewCard } from "./review";
 export { ExecActionProvider } from "./system-context";
 export { text } from "./text";

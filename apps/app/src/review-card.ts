@@ -1,4 +1,4 @@
-import type { Event, ReviewActions, ReviewCardView } from "@ace/ui";
+import type { Event, PlanCardView, ReviewActions, ReviewCardView } from "@ace/ui";
 
 import { AGENT_ALIAS } from "./agent-mention";
 import type { Event as ChannelEvent, ReviewNotice } from "@ace/channel/protocol";
@@ -316,14 +316,16 @@ export function reviewTool(
 }
 
 /**
- * Places each start call's card right after the run that made it, so it reads under its call
- * without splitting the agent's turn and above anything that came later, such as a new-commit row.
- * `events` holds one event per item, then the streamed draft when there is one.
+ * Places each review start call's card, and each plan's card at the call that last wrote it, right
+ * after the run that made it, so it reads under its call without splitting the agent's turn and
+ * above anything that came later, such as a new-commit row. `events` holds one event per item,
+ * then the streamed draft when there is one. `plans` holds each plan's card by its writing call.
  */
-export function withReviews(
+export function withCards(
 	events: Event[],
 	items: Item[],
 	cards: ReviewCards,
+	plans: ReadonlyMap<string, PlanCardView>,
 	topic: string,
 	busy: boolean,
 	connected: boolean,
@@ -339,6 +341,17 @@ export function withReviews(
 		out.push(events[index]!);
 		if (item.kind !== "reply") return;
 		for (const tool of item.tools) {
+			const plan = plans.get(tool.call);
+			if (plan) {
+				pending.push({
+					id: `${topic}::plan:${plan.plan}`,
+					uid: `plan:${plan.plan}`,
+					type: "neuve:plan:card",
+					topic,
+					created_at: Math.floor(item.at / 1000),
+					card: plan,
+				});
+			}
 			const card = reviewCard(tool, cards, busy, connected);
 			if (!card) continue;
 			pending = pending.filter((value) => value.uid !== `review:${tool.call}`);

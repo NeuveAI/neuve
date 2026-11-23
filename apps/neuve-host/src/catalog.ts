@@ -104,6 +104,7 @@ export function paths(id: string) {
 		base,
 		record: join(base, "channel.json"),
 		storage: join(base, "channel.sqlite"),
+		plans: join(base, "plans"),
 		socket: join(base, "channel.sock"),
 		pid: join(base, "worker.pid"),
 		lock: join(base, "worker.lock"),

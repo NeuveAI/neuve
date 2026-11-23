@@ -2,7 +2,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineExtension, GenerationTask, type Harness, hook, InboxDoc, LiveDoc, MemoryStorage, ROOT_CONVERSATION_ID, StorageRejected, type StorageWrite } from "@earendil-works/pi-durable";
 import { Channel, type Options } from "../src/channel";
@@ -54,6 +54,26 @@ async function memoryChannel(options: Partial<Options> = {}) {
 	};
 	return { channel, fake, request, ask, wait };
 }
+
+// Listing the writer alone lets a planning agent deliver its plan as an ordinary reply.
+test("only planning requests tell the agent to deliver a plan or revision with one standalone call", async () => {
+	const run = await memoryChannel({ planFiles: { stage: async () => {}, read: async (_file, _hash, bytes) => bytes } });
+	const prompts: string[] = [];
+	try {
+		for (const mode of ["plan", "ace"] satisfies ChatMode[]) {
+			run.fake.appendResponses([request => {
+				prompts.push(getCurrentSystemPrompt(request.messages));
+				return fauxAssistantMessage("Ready");
+			}]);
+			expect(await run.wait(await run.ask({ mode }))).toBe("done");
+		}
+		const instruction = "When ready, deliver the full plan or revision in one `plan_write` call on its own. That ends the turn.";
+		expect(prompts[0]).toContain(instruction);
+		expect(prompts[1]).not.toContain(instruction);
+	} finally {
+		await run.channel.close();
+	}
+});
 
 // The Codex bridge reads this exact symbol on the model request. Hooks may copy the messages.
 test("the channel sends the Codex planning marker after request hooks", async () => {

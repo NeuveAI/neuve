@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type {
 	ChatMode,
 	Image,
+	Plan,
 	ReviewNotice,
 	QueuedMessage,
 	Reactions,
@@ -97,6 +98,8 @@ export type Transcript = {
 	reactions: Reactions;
 	/** The chat's Neuve review cards, keyed by the start call that made each, as the host last sent. */
 	reviews: Record<string, ReviewCard>;
+	/** The chat's plans, oldest first, as the host last sent them. */
+	plans: Plan[];
 	/** When each person last said they were typing, in ms; their message ends it. */
 	typing: Record<string, number>;
 	/** Text streamed for the reply being generated. */
@@ -117,6 +120,7 @@ const EMPTY: Transcript = {
 	recaps: {},
 	reactions: {},
 	reviews: {},
+	plans: [],
 	typing: {},
 	draft: "",
 	busy: false,
@@ -128,6 +132,8 @@ export function apply(state: Transcript, event: Event): Transcript {
 	switch (event.kind) {
 		case "review-cards":
 			return { ...state, reviews: event.cards };
+		case "plans":
+			return { ...state, plans: event.plans };
 		case "neuve:review:new-commits":
 			return { ...state, items: [...state.items, reviewCommits(event)] };
 		case "queue": {
@@ -443,6 +449,7 @@ export function useTranscript(
 				typing: true,
 				agent: true,
 				stops: true,
+				plans: true,
 				...(chat === undefined ? {} : { chat }),
 			}, {
 				event(event) {

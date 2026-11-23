@@ -5,7 +5,8 @@ import * as privateLog from "./private-log";
 import {lanes as externalLanes, isPlaced} from "@ace/channel/external-lanes";
 import {join as joinPath} from "node:path";
 const catalogLanes = (id: string) => joinPath(config.lanes, id);
-import { mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -131,7 +132,7 @@ export async function runWorker(setup: WorkerSetup): Promise<void> {
 
 export async function openChannel(options: Options, stateDirectory: string): Promise<Channel> {
 	const setup = runtimeHooks().worker;
-	const planOptions = { ...options, planFileAccess };
+	const planOptions = { ...options, planFileAccess, planFiles: planFiles(join(stateDirectory, "plans")) };
 	if (!setup) return Channel.open({
 		...planOptions,
 		extension: { ...options.extension, extensions: [...(options.extension?.extensions ?? []), planExplore] },
@@ -181,6 +182,44 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		try { await storage.close(BACKGROUND_CONTEXT); } catch (cleanup) { throw new AggregateError([error, cleanup], "Worker startup and cleanup failed"); }
 		throw error;
 	}
+}
+
+function planFiles(directory: string): NonNullable<Options["planFiles"]> {
+	const staged = (file: string, hash: string) => {
+		if (!/^[a-f0-9-]{36}\.md$/.test(file) || !/^[a-f0-9]{64}$/.test(hash)) {
+			throw new Error("Invalid stored plan file.");
+		}
+		return join(directory, `${file}.${hash}.pending`);
+	};
+	const missing = (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT";
+	const stage = async (file: string, hash: string, bytes: Uint8Array) => {
+		await mkdir(directory, { recursive: true, mode: 0o700 });
+		const temporary = join(directory, `${crypto.randomUUID()}.tmp`);
+		try {
+			await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+			await rename(temporary, staged(file, hash));
+		} finally {
+			await rm(temporary, { force: true });
+		}
+	};
+	return {
+		stage,
+		async read(file, hash, bytes) {
+			const pending = staged(file, hash);
+			const path = join(directory, file);
+			// Publish only a staged write whose hash the session committed.
+			try { await rename(pending, path); }
+			catch (error) { if (!missing(error)) throw error; }
+			try {
+				const copy = await readFile(path);
+				if (createHash("sha256").update(copy).digest("hex") === hash) return copy;
+			} catch (error) { if (!missing(error)) throw error; }
+			// Rebuild a missing or changed copy from the committed session bytes.
+			await stage(file, hash, bytes);
+			await rename(pending, path);
+			return bytes;
+		},
+	};
 }
 const workers = new WeakMap<Channel, WorkerContext>();
 const bound = new WeakMap<Channel, ReturnType<typeof channelOperations>["handle"]>();
