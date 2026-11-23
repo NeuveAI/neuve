@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type {
+	ApprovalRequest,
 	ChatMode,
 	Image,
 	Plan,
@@ -100,6 +101,8 @@ export type Transcript = {
 	reviews: Record<string, ReviewCard>;
 	/** The chat's plans, oldest first, as the host last sent them. */
 	plans: Plan[];
+	/** The chat's approval requests, open, answered and closed, oldest first, as the host last sent them. */
+	approvals: ApprovalRequest[];
 	/** When each person last said they were typing, in ms; their message ends it. */
 	typing: Record<string, number>;
 	/** Text streamed for the reply being generated. */
@@ -121,6 +124,7 @@ const EMPTY: Transcript = {
 	reactions: {},
 	reviews: {},
 	plans: [],
+	approvals: [],
 	typing: {},
 	draft: "",
 	busy: false,
@@ -134,6 +138,8 @@ export function apply(state: Transcript, event: Event): Transcript {
 			return { ...state, reviews: event.cards };
 		case "plans":
 			return { ...state, plans: event.plans };
+		case "approval-requests":
+			return { ...state, approvals: event.requests };
 		case "neuve:review:new-commits":
 			return { ...state, items: [...state.items, reviewCommits(event)] };
 		case "queue": {
@@ -450,6 +456,7 @@ export function useTranscript(
 				agent: true,
 				stops: true,
 				plans: true,
+				approvals: true,
 				...(chat === undefined ? {} : { chat }),
 			}, {
 				event(event) {

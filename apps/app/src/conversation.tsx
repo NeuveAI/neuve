@@ -5,6 +5,8 @@ import { Button, ChatStatus, PlanActionsProvider, ReviewActionsProvider, Timelin
 import { channelProject, type Listing } from "@ace/host/protocol";
 
 import { useAgentAvatar } from "./agent-avatar";
+import { Approval } from "./approval";
+import { approvalView, shownApprovals } from "./approval-card";
 import { isAgentAlias } from "./agent-mention";
 import { Checks } from "./checks";
 import { Composer } from "./composer";
@@ -108,6 +110,13 @@ export function Conversation(
 		[transcript.plans, user, people],
 	);
 	const planned = transcript.plans.length > 0;
+	const approvals = useMemo(
+		() =>
+			shownApprovals(transcript.approvals, transcript.items).map((request) =>
+				approvalView(request, (author) => author === user ? "you" : people[author] || author)
+			),
+		[transcript.approvals, transcript.items, user, people],
+	);
 	const events = useMemo(
 		() =>
 			withCards(
@@ -404,6 +413,21 @@ export function Conversation(
 						user={user}
 						mayAnswer={channel.owner === user || transcript.shared !== false}
 					/>
+				)}
+				{/* Cards show in full; past this height they scroll, and each card's buttons follow all of its content. */}
+				{transcript.live && approvals.length > 0 && (
+					<div className="max-h-[60vh] overflow-y-auto">
+						{approvals.map((view) => (
+							<Approval
+								key={view.request}
+								channel={channel.id}
+								chat={id}
+								user={user}
+								view={view}
+								mayAnswer={mayAsk}
+							/>
+						))}
+					</div>
 				)}
 				{transcript.live && <Checks channel={channel} chat={id} user={user} />}
 				{transcript.live && (
