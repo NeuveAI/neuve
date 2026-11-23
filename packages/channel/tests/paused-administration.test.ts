@@ -1,10 +1,11 @@
 import {expect, test} from "bun:test";
 import {join} from "node:path";
 import {fauxAssistantMessage} from "@earendil-works/pi-ai";
-import {NodeExecutionEnv} from "@earendil-works/pi-durable/env/node";
 import {openNodeSqliteStorage} from "@earendil-works/pi-durable/storage/sqlite/node";
 import {Channel} from "../src/channel";
-import {Fixture, MODEL, OWNER, closedDatabase, faux} from "./helpers";
+import {Fixture, MODEL, OWNER, closedDatabase, faux, isolateClaudeConfig, scratchEnv} from "./helpers";
+
+isolateClaudeConfig();
 
 test("paused administrative opens preserve pending native work until normal resume", async () => {
 	const fixture = await Fixture.create();
@@ -16,7 +17,7 @@ test("paused administrative opens preserve pending native work until normal resu
 		id: "one", name: "one", owner: OWNER, project: fixture.project, resume,
 		storage: await openNodeSqliteStorage(path), models: scripted.models,
 		defaultModel: async () => MODEL,
-		env: (cwd) => new NodeExecutionEnv({cwd}),
+		env: (cwd) => scratchEnv(cwd, fixture.root),
 		directory: {self: {id: "one", name: "one"}, list: async () => [], deliver: async () => {}}, log: () => {},
 	});
 	let channel = fixture.channel;
