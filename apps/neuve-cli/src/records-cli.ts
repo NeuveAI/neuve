@@ -152,7 +152,7 @@ export const describeFailure = (error: unknown, fallback?: string): string => {
       case "InvalidEvent":
         return fallback ?? String(tagged["message"]);
       case "UnknownSession":
-        return "The session override did not name a live session in this repository. Use <harness>:<session id> or a live session ID.";
+        return "The --session value names no live agent session in this repository.";
       case "RepositoryUnavailable":
         return `${String(tagged["repository"])} is not inside a git repository, so it has no Records store.`;
       case "BackupFailed":
