@@ -28,7 +28,7 @@ When a changed file follows a framework's or library's conventions, read [stack.
 
 ## After you approve
 
-You, not the implementer, request one Neuve review of the whole range you approved, as [SKILL.md](../SKILL.md) says: `neuve review <base>..<head> --detach`, once, never one per correction round. Read it with `neuve review show <base>..<head>` only after you have approved on your own findings, so it never sets your premise. Weigh its findings as [lanes-and-dispositions.md](lanes-and-dispositions.md) says. A request for changes that holds up starts a new cycle, and the fix comes back to you through the inner loop before the next final review.
+Request a review only when the person asks, or when the repository's instructions say to, because a review runs on the person's model account ([SKILL.md](../SKILL.md)). When they do, you, not the implementer, request one Neuve review of the whole range you approved: `neuve review <base>..<head> --detach`, once, never one per correction round. Read it with `neuve review show <base>..<head>` only after you have approved on your own findings, so it never sets your premise. Weigh its findings as [lanes-and-dispositions.md](lanes-and-dispositions.md) says. A request for changes that holds up starts a new cycle, and the fix comes back to you through the inner loop before the next final review.
 
 ## Report
 

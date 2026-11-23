@@ -21,7 +21,7 @@ Scope comes from whatever is available. Never refuse or stop because a source is
 | Scope you have | What it gives you |
 | --- | --- |
 | A plan or ticket that existed before the change | Intent, "Done when" items, validation requirements |
-| A plan written inside the range it scopes | The same, read with care: it may describe the change rather than constrain it |
+| A plan written inside the range it scopes | Probably the same, but that is a judgement call, not a fixed rule. Written in the range it scopes, it may describe the change rather than constrain it |
 | Commit or pull request text | Weak scope: intent, with no "Done when" and no validation |
 | Nothing | The behaviour the change implies; the rows are marked unlinked |
 

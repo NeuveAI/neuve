@@ -1,6 +1,6 @@
 # Review in final review
 
-Final review comes after the inner loop has approved. Each review unit of a batch gets a verdict, cited comments and, on human-required work, a suggested review. Neuve's own review agent writes the agent's review of every unit by these rules. Read this when you are a final reviewer yourself: an outer agentic reviewer of a finished range, or preparing a person's review of the units waiting on them.
+Final review comes after the inner loop has approved. Each review unit of a batch gets a verdict, cited comments and, on human-required work, a suggested review. Neuve's review writes its own agent's review of each unit. Read this when you are a final reviewer yourself: an outer agentic reviewer of a finished range, or preparing a person's review of the units waiting on them.
 
 Read [review-verification.md](review-verification.md), [review-independence.md](review-independence.md) and [review-against-scope.md](review-against-scope.md) first.
 

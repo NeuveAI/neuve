@@ -4,8 +4,8 @@ description: >
   Use Neuve, the code-review tool, from an agent session. Load it when the person asks you to set
   Neuve up, request or read a Neuve review, act on a Neuve review's findings or requests for
   changes, record proof for a change, or point them to the review desk; when you are the
-  independent reviewer of an implementer's work before a Neuve review, or a final reviewer of a
-  finished range; or when the repository's own instructions (AGENTS.md, CLAUDE.md) tell you to use
+  independent reviewer of an implementer's work before a Neuve review, or a final reviewer
+  alongside a Neuve review of a finished range; or when the repository's own instructions (AGENTS.md, CLAUDE.md) tell you to use
   Neuve. Not for general Git or coding work.
 metadata:
   version: "{{NEUVE_VERSION}}"
@@ -19,7 +19,7 @@ Neuve reviews a commit range: it splits the range into batches, each with one fo
 
 - A repository where Neuve isn't set up, unless the person asks you to set it up.
 - General Git or coding work, even in a repository where Neuve is set up, when neither the person nor the repository's instructions ask for a Neuve review.
-- Reviewing someone's code outside a Neuve review cycle, unless the person or the repository's instructions ask you to act as Neuve's inner-loop or final reviewer.
+- Reviewing code that no Neuve review will follow and no Neuve review has covered, unless the person or the repository's instructions ask you to act as Neuve's inner-loop or final reviewer.
 - Neuve's own maintenance commands (`neuve records`, `neuve review recompose`, `neuve hybrid`, `neuve semantic`, `neuve workspace`). They are for the people who build Neuve, not for using it.
 
 ## Rules

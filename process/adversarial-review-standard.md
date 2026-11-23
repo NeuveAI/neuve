@@ -13,7 +13,7 @@ Reviewers load the installed `neuve` skill and read its [inner-loop reviewer ref
 | [`review-against-scope`](../apps/neuve-cli/skills/neuve/references/review-against-scope.md) | Judging against the scope and definition of done, criteria rows, finding kinds, the hard rules (11.3, 11.5) |
 | [`final-reviewer`](../apps/neuve-cli/skills/neuve/references/final-reviewer.md) | Final review never blocks (11.11); lane-blind review (10.33); what the verdict becomes by lane (4.5, 4.13, 4.14); suggested reviews; later reviews (10.68) |
 
-Those references are the single authority for how to judge; they are written for anyone who installs the CLI, so they carry no decision numbers. This standard keeps only the process for Neuve's build lanes: setup, code quality, time box, what blocks, evidence to supply and the report. A change to the references reaches lanes with the next release, as the [lane loop](neuve-in-the-loop.md#which-neuve-runs) says.
+The installed release carries these references only from the next release on; until then, read any reference the installed skill lacks from this checkout at the links above. Those references are the single authority for how to judge; they are written for anyone who installs the CLI, so they carry no decision numbers. This standard keeps only the process for Neuve's build lanes: setup, code quality, time box, what blocks, evidence to supply and the report. A change to the references reaches lanes with the next release, as the [lane loop](neuve-in-the-loop.md#which-neuve-runs) says.
 
 ## Setup
 
