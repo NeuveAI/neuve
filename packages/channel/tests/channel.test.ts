@@ -158,7 +158,7 @@ test("review wakes carry a system marker live, in the queue and after restart wi
 		if (!notice) throw new Error("Missing fixture notice");
 		notice.submission = wake.id; notice.delivered = true;
 	}, BACKGROUND_CONTEXT);
-	const queue = await watch.until("queue", event => event.messages.some(message => message.system?.review === id));
+	const queue = await watch.until("queue", event => event.messages.some(message => message.system?.kind === "neuve:review:terminal" && message.system.review === id));
 	expect(EventSchema.parse(queue)).toMatchObject({ messages: [{ invoked: true, system }] });
 	await writeFile(join(fixture.lane.path, "notice-gate"), "ready");
 	await settled(fixture, submission);

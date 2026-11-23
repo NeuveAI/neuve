@@ -1,7 +1,7 @@
 import type { Event, PlanCardView, ReviewActions, ReviewCardView } from "@ace/ui";
 
 import { AGENT_ALIAS } from "./agent-mention";
-import type { Event as ChannelEvent, ReviewNotice } from "@ace/channel/protocol";
+import type { BuildNotice, Event as ChannelEvent, ReviewNotice } from "@ace/channel/protocol";
 import type { ReviewCard } from "@ace/channel/review-cards";
 
 import { openReview } from "./review-destination";
@@ -47,7 +47,7 @@ export function reviewEntry(path: string): boolean {
 }
 
 /** The host's mark on its notify wake, on a message or queued message; the mark, not the author, decides. */
-export function reviewNotice(value: { system?: ReviewNotice }): ReviewNotice | undefined {
+export function reviewNotice(value: { system?: ReviewNotice | BuildNotice }): ReviewNotice | undefined {
 	return value.system?.kind === "neuve:review:terminal" ? value.system : undefined;
 }
 

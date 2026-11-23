@@ -56,8 +56,22 @@ export type Said = { chat: ChatId; at: number; author: string; mentions?: string
 /** A host-originated input that wakes the agent and renders as a Neuve system row. */
 export type ReviewNotice = { kind: "neuve:review:terminal"; review: string };
 
+/**
+ * The host's brief to an agent it started for build `build`, which renders as the host's, not a
+ * person's. A revision delivered to a build's agents is the person's message and carries no mark.
+ */
+export type BuildNotice = { kind: "neuve:build:brief"; build: string };
+
 export function reservedReviewRequestId(requestId: string | undefined): boolean {
 	return requestId?.startsWith("neuve.review:") ?? false;
+}
+
+/**
+ * The host's own inputs to a build's chats use request IDs under `neuve.build:`: a brief, a
+ * delivered revision and a message between agents. Clients may not claim one.
+ */
+export function reservedBuildRequestId(requestId: string | undefined): boolean {
+	return requestId?.startsWith("neuve.build:") ?? false;
 }
 
 /** Host-only delivery state. Clients receive the system marker, never this document. */
@@ -257,6 +271,110 @@ export const PLAN_COMMENT_TOOL = "plan_comment_answer";
 
 // End of comments on a plan.
 
+// Builds: the agents the host starts for an approved plan, and what they say to each other.
+
+/** A role the host stores on a chat it started for an approved plan; never read from a message's author. */
+export type AgentRole = "implementer" | "reviewer";
+
+/**
+ * How an agent is named within its build: its role and, where a role has several agents, the short
+ * name of its part. A role and part name one agent of a build, because the host refuses to start a
+ * second with the same pair; the implementer the approval started has no part.
+ */
+export type AgentName = { role: AgentRole; part?: string };
+
+/**
+ * Where an agent's chat stands, in the details sidebar's words for a subagent, plus `waiting` while
+ * its question waits on a person's answer. The host keeps it current.
+ */
+export type AgentState = "running" | "waiting" | "done" | "failed" | "stopped";
+
+/** One agent of a build, as the host recorded its start; the host keeps `state` and `caption` current. */
+export type BuildAgent = AgentName & {
+	chat: ChatId;
+	/** The chat whose agent asked the host for this one; absent for the implementer the approval started. */
+	by?: ChatId;
+	/** When the host started it, in ms. */
+	started: number;
+	state: AgentState;
+	/** The caption Ace last wrote for the chat's work: what the agent says it is doing. Absent before the first. */
+	caption?: string;
+};
+
+/** Where a build stands. The host writes it, and the build card says it plainly. */
+export type BuildState =
+	/** The start is recorded and the host is starting the first agent. */
+	| { kind: "starting" }
+	/** Its agents were started; each agent's own state says whether it works now. */
+	| { kind: "started" }
+	/** The plan was approved while build `to`'s agents were alive, so it went to them and started no one. */
+	| { kind: "delivered"; to: string }
+	/**
+	 * No agent was started: `shared` when people other than the owner may ask the channel's agents,
+	 * `hosted` for a hosted or cloud channel.
+	 */
+	| { kind: "unavailable"; reason: "shared" | "hosted" }
+	/**
+	 * The owner let other people ask the channel's agents while it ran. Each agent finished its
+	 * current step; turning the switch off clears the pause.
+	 */
+	| { kind: "paused"; reason: "shared" }
+	/** `by`, a person, stopped all its agents at `at`, in ms. */
+	| { kind: "stopped"; by: string; at: number }
+	/** The host could not start its first agent; `detail` says why in a sentence for the person. */
+	| { kind: "failed"; detail: string };
+
+/**
+ * The agents the host starts for one approved plan. Every approved plan has one: the host writes it
+ * when the plan is approved and keeps it current, and its card sits right after the plan's card.
+ */
+export type Build = {
+	/** `buildId(chat, plan.hash)`, so the same planning chat and plan version always name the same build. */
+	id: string;
+	/** The planning chat. */
+	chat: ChatId;
+	/** The approved plan's version; the build's card follows the plan's card at `call`. */
+	plan: Pick<Plan, "id" | "hash" | "title" | "call">;
+	/** The person who approved the plan, and when, in ms. */
+	approved: { by: string; at: number };
+	state: BuildState;
+	/** Its agents, in the order the host started them. */
+	agents: BuildAgent[];
+};
+
+/** The one id of the build for version `hash` of a plan in planning chat `chat`. */
+export function buildId(chat: ChatId, hash: string): string {
+	return `${chat}:${hash}`;
+}
+
+/** What one agent of a build said to another with `AGENT_MESSAGE_TOOL`; the host records it when it delivers it. */
+export type WorkMessage = { build: string; from: ChatId; to: ChatId; at: number; text: string };
+
+/** The tool by which a build's agent asks the host to start a reviewer or another implementer. */
+export const AGENT_START_TOOL = "agent_start";
+
+/**
+ * What `AGENT_START_TOOL` takes. The host writes a reviewer's brief, so the tool takes none for a
+ * reviewer; for an implementer it takes the brief the asking agent writes. It takes no model: an
+ * implementer starts on the model and effort the planning chat had at approval, and a reviewer on
+ * the implementer's. The tool's schema is one flat object, so the tool refuses at run time what
+ * this type rules out.
+ */
+export type AgentStartArgs =
+	| { role: "implementer"; part: string; brief: string }
+	| { role: "reviewer"; part?: string; brief?: never };
+
+/** The tool by which a build's agent sends free text to another agent of the same build. */
+export const AGENT_MESSAGE_TOOL = "agent_message";
+
+/**
+ * What `AGENT_MESSAGE_TOOL` takes: the recipient by its role and part within the sender's build,
+ * and the text. The tool refuses a name no agent of that build has.
+ */
+export type AgentMessageArgs = { to: AgentRole; part?: string; text: string };
+
+// End of builds.
+
 export type Chat = {
 	id: ChatId;
 	/** The chat whose agent created this one as a subagent. */
@@ -264,6 +382,8 @@ export type Chat = {
 	busy: boolean;
 	/** The chat's stored mode; absent means `ace`. A change is announced by the `agent` event. */
 	mode?: ChatMode;
+	/** Set by the host on a chat it started for an approved plan: the build's `id`, and the agent's role and part in it. */
+	build?: AgentName & { id: string };
 	model?: ModelRef;
 	effort?: Effort;
 	lane?: string;
@@ -403,7 +523,7 @@ export type QueuedMessage = {
 	images?: Image[];
 	files?: TextFile[];
 	invoked: boolean;
-	system?: ReviewNotice;
+	system?: ReviewNotice | BuildNotice;
 };
 
 export type Answer = { choices: number[] } | { custom: string };
@@ -529,6 +649,12 @@ export type Request =
 	/** Stop and kill are admitted like `ask`. Older clients omit `author`; gateways stamp it anyway. */
 	| { op: "stop"; chat?: ChatId; author: string }
 	| { op: "kill"; author: string }
+	/**
+	 * Stop every agent of build `build` as `stop` stops one chat, their subagents too, and mark the
+	 * build stopped by the author. Refused for an agent author and an unknown build; stopping a
+	 * stopped build changes nothing.
+	 */
+	| { op: "build-stop"; author: string; build: string }
 	| { op: "share"; author: string; shared: boolean }
 	| { op: "desktop"; author: string; enabled: boolean }
 	| { op: "rename"; author: string; name: string }
@@ -567,6 +693,8 @@ export type Request =
 		plans?: boolean;
 		/** Include plan-comments events; older clients do not understand them. */
 		planComments?: boolean;
+		/** Include builds events; older clients do not understand them. */
+		builds?: boolean;
 	};
 
 export type ReviewNewCommits = { review: string; branch: string; reviewedHead: string; head: string; label: string };
@@ -577,6 +705,11 @@ export type Event =
 	| { kind: "plans"; chat: ChatId; plans: Plan[] }
 	/** The comments on all the chat's plans, oldest first, sent on attachment and on every change. */
 	| { kind: "plan-comments"; chat: ChatId; comments: PlanComment[] }
+	/**
+	 * The channel's builds, oldest approval first, and every message their agents sent each other, in
+	 * the order sent. Channel-wide whichever chat is watched; sent on attachment and on every change.
+	 */
+	| { kind: "builds"; chat: ChatId; builds: Build[]; messages: WorkMessage[] }
 	| ({ kind: "neuve:review:new-commits"; chat: ChatId; entry: EntryId; at: number } & ReviewNewCommits)
 	/**
 	 * The complete current message queue, sent on attachment and every committed change.
@@ -599,7 +732,7 @@ export type Event =
 		images?: Image[];
 		files?: TextFile[];
 		invoked: boolean;
-		system?: ReviewNotice;
+		system?: ReviewNotice | BuildNotice;
 		deleted?: boolean;
 		edited?: number;
 	}

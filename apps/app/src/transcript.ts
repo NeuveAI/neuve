@@ -156,6 +156,9 @@ export function apply(state: Transcript, event: Event): Transcript {
 			}
 			return { ...state, planComments: event.comments, commentSends: [...sends] };
 		}
+		// The work log lane folds builds; the app does not opt in to them yet.
+		case "builds":
+			return state;
 		case "neuve:review:new-commits":
 			return { ...state, items: [...state.items, reviewCommits(event)] };
 		case "queue": {
