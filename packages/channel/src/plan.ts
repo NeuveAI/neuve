@@ -21,11 +21,13 @@ const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 export type StoredPlan = { plan: Plan; file: string; text: string; versions?: Record<string, string> };
 export type StoredPlanComment = Omit<PlanComment, "placement"> & { latestSend?: SubmissionId };
-export type PlanCommentReceipt = { submission: SubmissionId; entry?: EntryId; comments: string[] };
+type KeptPlanReplies = { ids: string[]; reason: string };
+export type PlanCommentReceipt = { submission: SubmissionId; entry?: EntryId; comments: string[]; keptReplies?: KeptPlanReplies };
 export type PlanCommentBatch = {
 	requestId: string;
 	at: number;
 	items: { comment: string; reply?: string }[];
+	keptReplies?: KeptPlanReplies;
 	receipt?: PlanCommentReceipt;
 	settled?: true;
 };
