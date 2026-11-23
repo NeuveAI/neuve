@@ -12,6 +12,7 @@ import {
 	type Tx,
 } from "@earendil-works/pi-durable";
 import { PLAN_TOOL, type ChatMode } from "./protocol";
+import { ATTENDED_SECTION } from "./approvals";
 
 export const ChatModesDoc = defineDoc<{ chats: Record<string, ChatMode> }>({
 	kind: "neuve.chat-modes",
@@ -81,13 +82,16 @@ const planningRequest = Symbol.for("neuve.chat.plan-request");
 const requestMode = "neuve.chat.request-mode";
 
 /** Pi can commit a streamed partial instead of calling afterResponse when a run is interrupted. */
-export function planModeModels(models: Models): Models {
+export function planModeModels(models: Models, receivesAttendance: (provider: string) => boolean): Models {
 	const streamSimple: Models["streamSimple"] = (model, request, options) => {
 		const decision = request.messages.findLast(message =>
 			message.role === "system" && message.sections?.[requestMode] !== undefined);
 		const mode = decision?.role === "system" && decision.sections?.[requestMode];
 		if (mode !== "ace" && mode !== "plan") throw new Error("Pi's model request is missing the chat mode.");
-		const messages = request.messages.filter(message => message !== decision);
+		const keepAttendance = receivesAttendance(model.provider);
+		const messages = request.messages.filter(message => message !== decision && (
+			keepAttendance || message.role !== "system" || !Object.hasOwn(message.sections ?? {}, ATTENDED_SECTION)
+		));
 		if (mode === "plan") {
 			// Add the marker after all request hooks, which may copy the transcript.
 			const tools = getCurrentTools(messages);

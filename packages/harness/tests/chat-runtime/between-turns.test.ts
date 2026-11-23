@@ -62,6 +62,41 @@ const texts = (input: unknown) =>
     block.type === "text" ? block.text : "",
   );
 const HISTORY = "Previous conversation, newest first.";
+
+test.each([false, true])(
+  "handover only warns after a failed standalone plan write (%s)",
+  async (isError) => {
+    const fake = runtimeWith(false);
+    fake.capabilities.ownTools = true;
+    const run = await fixture({
+      fake,
+      toolName: "plan_write",
+      execute: async () => ({
+        content: [{ type: "text", text: "Plan result" }],
+        isError,
+        control: { terminate: true },
+      }),
+    });
+    try {
+      fake.frames.push({
+        calls: [{ callId: "plan", toolName: "plan_write", input: { n: 1 } }],
+      });
+      await run.submit("Write the plan");
+      await closed(run, 0);
+      fake.frames.push({ text: "Follow-up done." });
+      await run.submit("Continue");
+      const handedOver = texts(fake.requests.at(-1)?.input).find((text) =>
+        text.startsWith(HISTORY),
+      );
+      expect(handedOver).toContain("Plan result");
+      expect(handedOver?.includes(MAY_HAVE_RUN)).toBe(isError);
+      expect(fake.opened[1]?.start).toEqual({ kind: "new" });
+    } finally {
+      await run.close();
+    }
+  },
+);
+
 const usage0 = {
   input: 0,
   output: 0,

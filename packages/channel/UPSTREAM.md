@@ -35,7 +35,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/src/models.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/progress.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/protocol.ts` | Unknown pricing omits optional Usage.cost rather than representing an unknown price as zero. All native Request/Event fields and operations remain original, including optional metadata.shared and desktop/watch compatibility. | `@@ -15,7 +15,7 @@` |
-| `packages/channel/src/questions.ts` | Pinned upstream bytes retained. | Byte-identical |
+| `packages/channel/src/questions.ts` | Shares message dismissal and the waiting mark with runtime approvals. | Changed |
 | `packages/channel/src/queue.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/room.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/seed.ts` | Pinned upstream bytes retained. | Byte-identical |
@@ -79,7 +79,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/tests/transfer.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/tsconfig.json` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 
-21 of 27 original tracked files retain exact pinned bytes. The machine manifest records SHA-256 for every original and own file; changed originals also have full unified diffs in the review evidence. No normalization of scopes, whitespace or optional types is applied.
+20 of 27 original tracked files retain exact pinned bytes. The machine manifest records SHA-256 for every original and own file; changed originals also have full unified diffs in the review evidence. No normalization of scopes, whitespace or optional types is applied.
 
 ## Verification and limits
 
@@ -102,6 +102,11 @@ Plan mode extends the upstream `packages/channel/src/channel.ts` admission and w
 | `packages/channel/src/protocol.ts` | Requires a typed description of what Allow grants beside the runtime input used for details. |
 | `packages/channel/src/frame.ts` | Validates the shared approval descriptions and refuses a record with no description. |
 | `packages/channel/tests/approvals-protocol.test.ts` | Exercises each description through a watch frame and checks that a missing description or an empty patch is refused. |
+| `packages/channel/src/approvals.ts` | Stores attendance, publishes approval snapshots, and commits answers and message dismissal. |
+| `packages/channel/src/channel.ts` | Admits attendance with a message, checks approval answer authors, and lets the host runtime close approvals before Stop aborts the conversation. |
+| `packages/channel/src/plan-mode.ts` | Keeps the attendance section available to the runtime bridge without adding it to the model prompt. |
+| `packages/channel/tests/helpers.ts` | Attaches an injected runtime fixture beside the usual channel operations. |
+| `packages/channel/tests/approvals.test.ts` | Exercises approval authorization, document races, Stop, message delivery, attendance and opted-in watches across the channel boundary. |
 
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 

@@ -18,7 +18,10 @@ import {
   type SessionPolicy,
 } from "@neuve/runtime";
 import { Cause, Effect, Queue, Stream } from "effect";
-import { RUNTIME_WORK_TOOL } from "../../src/chat-runtime/transcript.ts";
+import {
+  ATTENDED_SECTION,
+  RUNTIME_WORK_TOOL,
+} from "../../src/chat-runtime/transcript.ts";
 import { FakeRuntime, caps, context, fixture, until } from "./fixture.ts";
 
 // Give the bridge the same request marker it receives when a chat is planning.
@@ -32,6 +35,7 @@ test.each([
     fake.capabilities = {
       ...caps,
       ownTools,
+      approvals: true,
       toolEndsTurn: !ownTools,
       resumeInTurn: !ownTools,
       perMessageUsage: !ownTools,
@@ -60,7 +64,13 @@ test.each([
           hooks: [
             hook(GenerationTask, {
               beforeRequest({ messages }) {
-                if (!planning) return;
+                const attended: SystemMessage = {
+                  role: "system",
+                  content: "",
+                  timestamp: 0,
+                  sections: { [ATTENDED_SECTION]: "true" },
+                };
+                if (!planning) return { messages: [...messages, attended] };
                 const offer: SystemMessage = {
                   role: "system",
                   content: "",
@@ -74,7 +84,7 @@ test.each([
                     value: true,
                   },
                 );
-                return { messages: [...messages, offer] };
+                return { messages: [...messages, attended, offer] };
               },
             }),
           ],
@@ -96,11 +106,77 @@ test.each([
       expect(
         fake.opened.map(({ policy }) => policy.tools.map(({ name }) => name)),
       ).toEqual([["question"], [], ["question"]]);
+      expect(fake.opened.map(({ policy }) => policy.approvalPolicy)).toEqual(
+        ownTools ? ["ask", "allow", "ask"] : ["allow", "allow", "allow"],
+      );
     } finally {
       await runtime.close();
     }
   },
 );
+
+test("attended and unattended requests reopen the same chat with the corresponding policy", async () => {
+  const fake = new FakeRuntime();
+  fake.capabilities = {
+    ...caps,
+    ownTools: true,
+    approvals: true,
+    toolEndsTurn: false,
+    resumeInTurn: false,
+    perMessageUsage: false,
+  };
+  const run = await fixture({ fake, toolName: "question" });
+  try {
+    let attended: boolean | undefined;
+    run.pi.install(
+      defineExtension({
+        name: "request-attendance-test",
+        hooks: [
+          hook(GenerationTask, {
+            beforeRequest({ messages }) {
+              if (attended === undefined) return;
+              const marker: SystemMessage = {
+                role: "system",
+                content: "",
+                sections: { [ATTENDED_SECTION]: String(attended) },
+                timestamp: 0,
+              };
+              return { messages: [...messages, marker] };
+            },
+          }),
+        ],
+      }),
+    );
+    for (const value of [undefined, true, false]) {
+      attended = value;
+      fake.frames.push({ text: "Turn complete." });
+      expect((await run.submit("Continue")).status).toBe("done");
+    }
+    expect(
+      fake.opened.map(({ policy }) => ({
+        policy: policy.approvalPolicy,
+        tools: policy.tools.map(({ name }) => name),
+      })),
+    ).toEqual([
+      { policy: "allow", tools: ["question"] },
+      { policy: "ask", tools: ["question"] },
+      { policy: "allow", tools: ["question"] },
+    ]);
+    expect(fake.opened[1]?.start).toMatchObject({
+      kind: "resume",
+      fork: false,
+    });
+    expect(fake.opened[2]?.start).toMatchObject({
+      kind: "resume",
+      fork: false,
+    });
+    expect(fake.opened[1]?.policy.systemPrompt).toBe(
+      fake.opened[0]?.policy.systemPrompt,
+    );
+  } finally {
+    await run.close();
+  }
+});
 
 test("Codex's own work shows as calls that already ran, in order, and nothing goes back to it", async () => {
   const fake = new FakeRuntime();

@@ -36,12 +36,14 @@ import {
   type Duration,
   Effect,
   Exit,
+  Fiber,
   Option,
   Queue,
   Scope,
   Stream,
 } from "effect";
 import { z } from "zod";
+import { describeApproval } from "./approval-asked.ts";
 import {
   connect,
   type Answer,
@@ -51,6 +53,7 @@ import {
 } from "./client.ts";
 import * as Decode from "./decode.ts";
 import type { CodexFailure, CodexTermination } from "./errors.ts";
+import type { FileUpdateChange } from "./generated/v2/FileUpdateChange";
 import type { UserInput } from "./generated/v2/UserInput";
 import {
   codexEnvironment,
@@ -125,8 +128,9 @@ export interface CodexSessionOptions {
 }
 
 interface Pending {
-  readonly codexId: unknown;
+  readonly codexId: ServerRequest["id"];
   readonly decision: Deferred.Deferred<"allow" | "deny">;
+  readonly cancelReply: Effect.Effect<void>;
 }
 interface Turn {
   readonly id: string;
@@ -151,7 +155,11 @@ interface Turn {
   /** Codex's own work that started and has not completed: an interrupt leaves it so. */
   readonly work: Map<
     string,
-    { readonly kind: WorkKind; readonly input: unknown }
+    {
+      readonly kind: WorkKind;
+      readonly input: unknown;
+      readonly changes?: FileUpdateChange[];
+    }
   >;
 }
 interface Current {
@@ -264,6 +272,16 @@ const asJson = (value: unknown) => {
   const parsed = z.json().safeParse(value);
   return parsed.success ? parsed.data : null;
 };
+const FileChanges = z.array(
+  z.object({
+    path: z.string(),
+    kind: z.discriminatedUnion("type", [
+      z.object({ type: z.enum(["add", "delete"]) }),
+      z.object({ type: z.literal("update"), move_path: z.string().nullable() }),
+    ]),
+    diff: z.string(),
+  }),
+) satisfies z.ZodType<FileUpdateChange[]>;
 
 /** Opens one session. Closing the caller's scope ends it, its processes and its tool server. */
 export const openCodexSession = Effect.fnUntraced(function* (
@@ -274,6 +292,10 @@ export const openCodexSession = Effect.fnUntraced(function* (
   const context = yield* Effect.context<never>();
   const runPromise = Effect.runPromiseWith(context);
   const { account, policy } = options;
+  const threadOptions = {
+    cwd: options.cwd,
+    developerInstructions: policy.systemPrompt,
+  };
   if (options.accessToken !== undefined && options.codexHome === undefined)
     return yield* new RuntimeUnavailable({ account, reason: "start-failed" });
   const events = yield* Queue.unbounded<RuntimeEvent, Cause.Done>();
@@ -553,11 +575,17 @@ export const openCodexSession = Effect.fnUntraced(function* (
           if (!matches(active, started.data.turnId)) return;
           const item = Decode.KnownItem.safeParse(started.data.item);
           const work = item.success ? workOf(item.data) : undefined;
-          if (item.success && work !== undefined)
+          if (item.success && work !== undefined) {
+            const changes =
+              item.data.type === "fileChange"
+                ? FileChanges.safeParse(item.data.changes).data
+                : undefined;
             active.work.set(item.data.id, {
               kind: work.kind,
               input: work.input,
+              ...(changes === undefined ? {} : { changes }),
             });
+          }
           return;
         }
         case "item/completed": {
@@ -677,7 +705,14 @@ export const openCodexSession = Effect.fnUntraced(function* (
           for (const [id, pending] of active.approvals)
             if (pending.codexId === resolved.data.requestId) {
               active.approvals.delete(id);
-              yield* Deferred.succeed(pending.decision, "deny");
+              yield* pending.cancelReply;
+              emit({
+                type: "approval.resolved",
+                turnId: active.id,
+                at: now(),
+                requestId: id,
+              });
+              return;
             }
           return;
         }
@@ -748,8 +783,9 @@ export const openCodexSession = Effect.fnUntraced(function* (
   const approve = (
     request: ServerRequest,
     kind: WorkKind,
-    asked: { readonly itemId: string; readonly input: unknown },
+    itemId: string,
     answer: (decision: "allow" | "deny") => unknown,
+    changes?: FileUpdateChange[],
   ) =>
     Effect.gen(function* () {
       const active = turn;
@@ -764,15 +800,26 @@ export const openCodexSession = Effect.fnUntraced(function* (
       }
       const requestId = `approval-${crypto.randomUUID()}`;
       const decision = yield* Deferred.make<"allow" | "deny">();
-      active.approvals.set(requestId, { codexId: request.id, decision });
+      // Codex can resolve the request itself. Interrupt this reply before it reaches the wire.
+      const cancelReply = yield* Effect.withFiberSucceed(Fiber.interrupt);
+      active.approvals.set(requestId, {
+        codexId: request.id,
+        decision,
+        cancelReply,
+      });
       emit({
         type: "approval.requested",
         turnId: active.id,
         at: now(),
         requestId,
-        callId: asked.itemId,
+        callId: itemId,
         work: kind,
-        input: asJson(asked.input),
+        input: asJson(
+          changes === undefined
+            ? request.params
+            : { ...request.params, changes },
+        ),
+        asked: describeApproval(request, changes),
       });
       return {
         result: answer(yield* Deferred.await(decision)),
@@ -784,22 +831,23 @@ export const openCodexSession = Effect.fnUntraced(function* (
         case "item/commandExecution/requestApproval":
         case "item/fileChange/requestApproval": {
           const asked = Decode.ApprovalAsk.parse(request.params);
-          return yield* approve(
-            request,
+          const kind =
             request.method === "item/fileChange/requestApproval"
               ? "file-change"
-              : "command",
-            {
-              itemId: asked.itemId,
-              input: {
-                command: asked.command ?? null,
-                cwd: asked.cwd ?? null,
-                reason: asked.reason ?? null,
-              },
-            },
+              : "command";
+          const active = turn;
+          const changes =
+            kind === "file-change" && active && matches(active, asked.turnId)
+              ? active.work.get(asked.itemId)?.changes
+              : undefined;
+          return yield* approve(
+            request,
+            kind,
+            asked.itemId,
             (decision) => ({
               decision: decision === "allow" ? "accept" : "decline",
             }),
+            changes,
           );
         }
         case "item/permissions/requestApproval": {
@@ -808,10 +856,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           return yield* approve(
             request,
             "command",
-            {
-              itemId: asked.itemId,
-              input: { permissions, reason: asked.reason ?? null },
-            },
+            asked.itemId,
             (decision) => ({
               permissions:
                 decision === "allow"
@@ -835,10 +880,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           return yield* approve(
             request,
             "tool",
-            {
-              itemId: `elicitation-${String(request.id)}`,
-              input: { server: asked.serverName, message: asked.message },
-            },
+            `elicitation-${String(request.id)}`,
             (decision) =>
               decision === "allow"
                 ? {
@@ -1284,7 +1326,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
       const resumed = yield* ask(next.connection, Decode.ThreadAnswer, (c) =>
         c.request("thread/resume", {
           threadId,
-          cwd: options.cwd,
+          ...threadOptions,
           excludeTurns: true,
         }),
       ).pipe(Effect.exit);
@@ -1301,9 +1343,8 @@ export const openCodexSession = Effect.fnUntraced(function* (
     Effect.gen(function* () {
       const started = yield* ask(connection, Decode.ThreadAnswer, (c) =>
         c.request("thread/start", {
-          cwd: options.cwd,
+          ...threadOptions,
           ...(model === undefined ? {} : { model: model.id }),
-          developerInstructions: policy.systemPrompt,
           sandbox: "read-only",
         }),
       );
@@ -1357,7 +1398,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
     const resumed = yield* request(Decode.ThreadAnswer, (c) =>
       c.request("thread/resume", {
         threadId: start.session,
-        cwd: options.cwd,
+        ...threadOptions,
         excludeTurns: start.at === undefined,
       }),
     );
@@ -1367,7 +1408,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
       const forked = yield* request(Decode.ThreadAnswer, (c) =>
         c.request("thread/fork", {
           threadId: start.session,
-          cwd: options.cwd,
+          ...threadOptions,
           excludeTurns: true,
           ...(start.at === undefined ? {} : { lastTurnId: start.at }),
         }),
@@ -1565,9 +1606,10 @@ export const openCodexSession = Effect.fnUntraced(function* (
       }),
     respondToApproval: (input) =>
       Effect.gen(function* () {
-        const pending = turn?.approvals.get(input.requestId);
-        if (pending === undefined) return yield* turnFailed("protocol-error");
-        turn?.approvals.delete(input.requestId);
+        const active = turn;
+        const pending = active?.approvals.get(input.requestId);
+        if (active === undefined || pending === undefined) return;
+        active.approvals.delete(input.requestId);
         yield* Deferred.succeed(pending.decision, input.decision);
       }),
     events: Stream.fromQueue(events),

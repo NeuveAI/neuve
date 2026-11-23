@@ -3,13 +3,25 @@ import {
   type Models,
   getSupportedThinkingLevels,
 } from "@earendil-works/pi-ai";
-import type { Extension, Harness } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+  defineDoc,
+  type Cursor,
+  type Extension,
+  type Harness,
+} from "@earendil-works/pi-durable";
+import {
+  ApprovalRequestsDefinition,
+  type ApprovalRequest,
+} from "@ace/channel/protocol";
+import type { WorkerAdmission } from "@ace/host/worker-runtime";
 import {
   accountModels,
   chatRuntimeExtension,
   ChatRuntimeBridge,
   NativeHeads,
   type AccountStatusSource,
+  type ApprovalStore,
 } from "@neuve/harness/chat-runtime";
 import type { RuntimeRegistryShape } from "@neuve/harness/chat-runtime";
 import {
@@ -191,9 +203,94 @@ export type WorkerChatRuntime = {
   models: Models;
   owns(provider: string): boolean;
   extensions: readonly Extension[];
-  attach(harness: Harness): void | Promise<void>;
+  attach(
+    harness: Harness,
+    admission?: Pick<WorkerAdmission, "onStop" | "requestAttendance">,
+  ): void | Promise<void>;
   close(): Promise<void>;
 };
+
+const ApprovalRequestsDoc = defineDoc(ApprovalRequestsDefinition);
+
+export function approvalRecords(harness: Harness): ApprovalStore {
+  const context = BACKGROUND_CONTEXT;
+  const close = (
+    chat: Parameters<ApprovalStore["close"]>[0],
+    requests: ReadonlySet<string>,
+    reason: Parameters<ApprovalStore["close"]>[2] | "restarted",
+  ) =>
+    harness.commit(async (tx) => {
+      const doc = await tx.doc(ApprovalRequestsDoc, chat);
+      for (const request of doc.requests) {
+        if (request.state.kind === "open" && requests.has(request.requestId))
+          request.state = { kind: "closed", reason };
+      }
+    }, context);
+  return {
+    async restart() {
+      let cursor: Cursor | undefined;
+      do {
+        const page = await harness.commit(
+          (tx) => tx.scanConversations({}, 256, cursor),
+          context,
+        );
+        for (const { id } of page.items) {
+          const doc = await harness.snapshot(ApprovalRequestsDoc, id, context);
+          const open = new Set(
+            doc?.requests
+              .filter((request) => request.state.kind === "open")
+              .map((request) => request.requestId),
+          );
+          if (open.size) await close(id, open, "restarted");
+        }
+        cursor = page.next;
+      } while (cursor);
+    },
+    async open(chat, event) {
+      const { requestId, callId, input, asked, at, toolName, work } = event;
+      const origin =
+        toolName !== undefined
+          ? { toolName }
+          : work !== undefined
+            ? { work }
+            : undefined;
+      if (!origin)
+        throw new Error("An approval request must name a tool or work.");
+      const record: ApprovalRequest = {
+        requestId,
+        callId,
+        input,
+        asked: asked ?? { kind: "unrecognised" },
+        openedAt: Date.parse(at),
+        state: { kind: "open" },
+        ...origin,
+      };
+      await harness.commit(async (tx) => {
+        const doc = await tx.doc(ApprovalRequestsDoc, chat);
+        if (!doc.requests.some((request) => request.requestId === requestId))
+          doc.requests.push(record);
+      }, context);
+    },
+    close,
+    async watch(chat, reply) {
+      const watch = await harness.watchDoc(ApprovalRequestsDoc, chat, context);
+      if (!watch) throw new Error("The approval request document is missing.");
+      const publish = async (doc: typeof watch.value) => {
+        for (const { requestId, state } of doc?.requests ?? []) {
+          if (state.kind === "answered")
+            await reply({ requestId, decision: state.decision });
+          if (state.kind === "closed" && state.reason === "message")
+            await reply({ requestId, decision: "deny" });
+        }
+      };
+      watch.start(publish);
+      void publish(watch.value);
+      return async () => {
+        await watch.stop();
+      };
+    },
+  };
+}
 export async function workspaceChatRuntime(
   native: Models,
   stateDirectory: string,
@@ -222,12 +319,15 @@ export async function workspaceChatRuntime(
   });
   try {
     const layer = await accountModels(native, { ...sources, bridge, log });
-    const extension = chatRuntimeExtension(bridge, layer.owns);
+    const extension = chatRuntimeExtension(bridge, layer.owns, approvalRecords);
     return {
       models: sourceModels(layer.models, native, sources),
       owns: layer.owns,
       extensions: extension.extensions,
-      attach: extension.attach,
+      attach(harness, admission) {
+        admission?.requestAttendance?.(layer.owns);
+        return extension.attach(harness, admission);
+      },
       close: async () => {
         await extension.close();
         await layer.close();

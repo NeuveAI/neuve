@@ -142,6 +142,7 @@ const kinds = new Map<string, readonly string[]>(
 			"watch",
 			"plan",
 			"plan-approve",
+			"approval-answer",
 			"changes",
 			"patch",
 			"stop",

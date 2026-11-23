@@ -13,7 +13,7 @@ import {
 	type ToolExecutionResult,
 } from "@earendil-works/pi-durable";
 
-import type { Answer } from "./protocol";
+import type { Answer, RunEnd } from "./protocol";
 import * as room from "./room";
 
 const MAX_CUSTOM = 4000;
@@ -73,11 +73,62 @@ function dismissed(author: string): ToolExecutionResult {
 	};
 }
 
-/** The author of a chat's first queued input, which a person sends instead of answering. */
+/** The first person who sent a message while the chat was waiting. */
 function queued(state: Readonly<InboxState> | null | undefined): string | undefined {
-	return (state?.items || []).flatMap((item) =>
-		item.mode === "write" ? [] : [room.input(item.content).author]
-	)[0];
+	for (const item of state?.items ?? []) {
+		if (item.mode === "write") {
+			const { kind, data } = item.entry;
+			if (kind === room.MessageEntry.kind && data && typeof data === "object" && !Array.isArray(data)
+				&& typeof data.author === "string" && !room.isAgent(data.author)) return data.author;
+			continue;
+		}
+		const author = room.input(item.content).author;
+		const first = typeof item.content === "string" ? item.content : item.content[0];
+		const text = typeof first === "string" ? first : first?.type === "text" ? first.text : undefined;
+		if (!room.isAgent(author) && text?.startsWith(`${author}: `)) return author;
+	}
+}
+
+type WaitPhase = Extract<RunEnd["outcome"], "question" | "answered">;
+type Wait = { dismiss: (author: string) => void; active: boolean };
+
+/** A chat can wait on a question and a runtime request at the same time. */
+export class PersonWaits {
+	#queued = new Map<ConversationId, string>();
+	#waiting = new Map<ConversationId, Set<Wait>>();
+	constructor(private readonly onWait: (chat: ConversationId, phase: WaitPhase) => void) {}
+
+	inbox(chat: ConversationId, state: Readonly<InboxState> | null | undefined) {
+		const author = queued(state);
+		if (!author) return void this.#queued.delete(chat);
+		this.#queued.set(chat, author);
+		for (const wait of this.#waiting.get(chat) ?? []) wait.dismiss(author);
+	}
+
+	queued(chat: ConversationId) {
+		return this.#queued.get(chat);
+	}
+
+	listen(chat: ConversationId, dismiss: Wait["dismiss"]) {
+		let waits = this.#waiting.get(chat);
+		if (!waits) this.#waiting.set(chat, waits = new Set());
+		const active = waits;
+		const wait = { dismiss, active: false };
+		active.add(wait);
+		const marked = () => [...active].some(source => source.active);
+		return {
+			start: (notify = true) => {
+				const first = !marked();
+				wait.active = true;
+				if (first && notify) this.onWait(chat, "question");
+			},
+			stop: (answered = false) => {
+				if (!active.delete(wait)) return;
+				if (!active.size) this.#waiting.delete(chat);
+				if (answered && wait.active && !marked()) this.onWait(chat, "answered");
+			},
+		};
+	}
 }
 
 /**
@@ -87,20 +138,15 @@ function queued(state: Readonly<InboxState> | null | undefined): string | undefi
  * instead of blocking it behind the question.
  */
 export class Questions {
-	#queued = new Map<ConversationId, string>();
-	#waiting = new Map<ConversationId, Set<(author: string) => void>>();
-	#onAsk: (chat: ConversationId, phase: "question" | "answered") => void;
+	#waits: PersonWaits;
 
 	/** `onAsk` hears when a chat starts waiting on a question and when an answer or message ends it. */
-	constructor(onAsk: (chat: ConversationId, phase: "question" | "answered") => void) {
-		this.#onAsk = onAsk;
+	constructor(waits: PersonWaits | ((chat: ConversationId, phase: WaitPhase) => void)) {
+		this.#waits = waits instanceof PersonWaits ? waits : new PersonWaits(waits);
 	}
 
 	inbox(chat: ConversationId, state: InboxState | null | undefined) {
-		const author = queued(state);
-		if (!author) return void this.#queued.delete(chat);
-		this.#queued.set(chat, author);
-		for (const dismiss of this.#waiting.get(chat) || []) dismiss(author);
+		this.#waits.inbox(chat, state);
 	}
 
 	readonly extension: Extension = defineExtension({
@@ -117,13 +163,10 @@ export class Questions {
 					const chat = api.conversationId;
 					const call = api.callId;
 					const { promise, resolve, reject } = Promise.withResolvers<ToolExecutionResult>();
-					const dismiss = (author: string) => resolve(dismissed(author));
 					// Listen before reading the inbox, so a message queued in between is not missed.
-					let waiting = this.#waiting.get(chat);
-					if (!waiting) this.#waiting.set(chat, waiting = new Set());
-					waiting.add(dismiss);
+					const waiting = this.#waits.listen(chat, author => resolve(dismissed(author)));
 					try {
-						const before = this.#queued.get(chat)
+						const before = this.#waits.queued(chat)
 							|| queued(await api.snapshot(InboxDoc, chat, context));
 						if (before) return dismissed(before);
 						const created = await api.commit(async (tx) => {
@@ -132,7 +175,7 @@ export class Questions {
 							doc.questions[call] = { items: args.questions };
 							return true;
 						}, context);
-						if (created) this.#onAsk(chat, "question");
+						waiting.start(created);
 						const watch = (await api.watchDoc(QuestionsDoc, chat, context))!;
 						const settle = (value: typeof watch.value) => {
 							const answer = value?.questions[call]?.answer;
@@ -145,15 +188,14 @@ export class Questions {
 							settle(watch.value);
 							watch.start(async (value) => settle(value));
 							const result = await promise;
-							this.#onAsk(chat, "answered");
+							waiting.stop(true);
 							return result;
 						} finally {
 							context.abortSignal?.removeEventListener("abort", abort);
 							await watch.stop();
 						}
 					} finally {
-						waiting.delete(dismiss);
-						if (!waiting.size) this.#waiting.delete(chat);
+						waiting.stop();
 					}
 				},
 			}),

@@ -1,3 +1,4 @@
+// The fake checks what crosses the Codex connection and what the session reports to its caller.
 import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -940,6 +941,7 @@ describe("the mode table", () => {
         expect(clean.io.exited()).toBe(true);
         expect(written(own, "thread/resume")[0]!.params).toMatchObject({
           threadId: "thread-1",
+          developerInstructions: "fixture",
         });
         expect(written(own, "turn/start")[0]!.params).toMatchObject({
           sandboxPolicy: {
@@ -1125,6 +1127,204 @@ describe("Codex's requests", () => {
     );
   });
 
+  test("Codex resolution closes one request and leaves the next request for the same item answerable", async () => {
+    const fake = codex();
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session);
+          const process = fake.current();
+          ask(
+            process,
+            "item/commandExecution/requestApproval",
+            { itemId: "c1" },
+            301,
+          );
+          const first = yield* read.next("approval.requested");
+          if (first.type !== "approval.requested") throw new Error("fixture");
+          const resolved = { threadId: "thread-1", requestId: 301 };
+          fake.send("serverRequest/resolved", resolved);
+          expect(yield* read.next("approval.resolved")).toEqual({
+            type: "approval.resolved",
+            turnId: "turn",
+            at: expect.any(String),
+            requestId: first.requestId,
+          });
+          fake.send("serverRequest/resolved", resolved);
+          ask(
+            process,
+            "item/permissions/requestApproval",
+            {
+              itemId: "c1",
+              permissions: { network: { enabled: true }, fileSystem: null },
+            },
+            302,
+          );
+          const second = yield* read.next("approval.requested");
+          if (second.type !== "approval.requested") throw new Error("fixture");
+          expect(second.callId).toBe("c1");
+          expect(second.requestId).not.toBe(first.requestId);
+          yield* session.respondToApproval({
+            requestId: first.requestId,
+            decision: "allow",
+          });
+          yield* session.respondToApproval({
+            requestId: "unknown",
+            decision: "allow",
+          });
+          yield* session.respondToApproval({
+            requestId: second.requestId,
+            decision: "deny",
+          });
+          yield* until(() => answer(process, 302) !== undefined);
+          expect(answer(process, 302)).toMatchObject({
+            result: { permissions: {}, scope: "turn" },
+          });
+          fake.send("serverRequest/resolved", {
+            threadId: "thread-1",
+            requestId: 302,
+          });
+          fake.send("turn/completed", completed("completed"));
+          expect(yield* read.next("turn.finished")).toMatchObject({
+            outcome: { status: "completed" },
+          });
+          expect(answer(process, 301)).toBeUndefined();
+          expect(
+            read.events.filter((event) => event.type === "approval.resolved"),
+          ).toHaveLength(1);
+          expect(read.ended()).toBe(false);
+        }),
+      { policy: { ...policy, approvalPolicy: "ask" } },
+    );
+  });
+
+  test("a file approval includes the earlier item's changes and omits them when the item is missing", async () => {
+    const fake = codex();
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session);
+          const process = fake.current();
+          const changes = [
+            { path: "/work/add", kind: { type: "add" }, diff: "+new" },
+            { path: "/work/delete", kind: { type: "delete" }, diff: "-old" },
+            {
+              path: "/work/update",
+              kind: { type: "update", move_path: "/work/moved" },
+              diff: "-old\n+new",
+            },
+          ];
+          fake.send("item/started", {
+            threadId: "thread-1",
+            turnId: "codex-turn",
+            startedAtMs: 1,
+            item: {
+              type: "fileChange",
+              id: "f1",
+              status: "inProgress",
+              changes,
+            },
+          });
+          ask(
+            process,
+            "item/fileChange/requestApproval",
+            { itemId: "f1", reason: "apply patch" },
+            401,
+          );
+          expect(yield* read.next("approval.requested")).toMatchObject({
+            work: "file-change",
+            callId: "f1",
+            input: { reason: "apply patch", changes },
+            asked: {
+              kind: "file-change",
+              reason: "apply patch",
+              changes: [
+                { path: "/work/add", kind: "add", diff: "+new" },
+                { path: "/work/delete", kind: "delete", diff: "-old" },
+                {
+                  path: "/work/update",
+                  kind: "update",
+                  newPath: "/work/moved",
+                  diff: "-old\n+new",
+                },
+              ],
+            },
+          });
+          ask(
+            process,
+            "item/fileChange/requestApproval",
+            { itemId: "f2" },
+            402,
+          );
+          const missing = yield* read.next("approval.requested");
+          expect(missing).toMatchObject({
+            work: "file-change",
+            callId: "f2",
+            asked: { kind: "file-change", changes: null },
+          });
+          if (missing.type !== "approval.requested") throw new Error("fixture");
+          expect(missing.input).toEqual({
+            threadId: "thread-1",
+            turnId: "codex-turn",
+            itemId: "f2",
+          });
+        }),
+      { policy: { ...policy, approvalPolicy: "ask" } },
+    );
+  });
+
+  test("the displayed root write grant matches the profile sent back with turn scope", async () => {
+    const fake = codex();
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session);
+          const process = fake.current();
+          const permissions = {
+            network: { enabled: true },
+            fileSystem: {
+              entries: [
+                {
+                  path: { type: "special", value: { kind: "root" } },
+                  access: "write",
+                },
+              ],
+            },
+          };
+          ask(
+            process,
+            "item/permissions/requestApproval",
+            { itemId: "p1", permissions, reason: "Need root", cwd: "/work" },
+            501,
+          );
+          const event = yield* read.next("approval.requested");
+          expect(event).toMatchObject({
+            input: { permissions },
+            asked: {
+              kind: "wider-access",
+              reason: "Need root",
+              folder: "/work",
+              network: true,
+              paths: [{ access: "write", target: { kind: "root" } }],
+            },
+          });
+          if (event.type !== "approval.requested") throw new Error("fixture");
+          yield* session.respondToApproval({
+            requestId: event.requestId,
+            decision: "allow",
+          });
+          yield* until(() => answer(process, 501) !== undefined);
+          expect(answer(process, 501)).toMatchObject({
+            result: { permissions, scope: "turn" },
+          });
+        }),
+      { policy: { ...policy, approvalPolicy: "ask" } },
+    );
+  });
+
   test("unattended and read-only: declined at once, another server's prompt too, and the turn goes on", async () => {
     for (const workspace of [write, readOnly]) {
       const fake = codex();
@@ -1188,15 +1388,25 @@ describe("opening", () => {
         (session) =>
           Effect.sync(() => {
             expect(session.nativeSessionId).toBe(id);
+            expect(
+              written(fake.current(), "thread/resume")[0]!.params,
+            ).toMatchObject({
+              threadId: "thread-0",
+              developerInstructions: "new instructions",
+            });
             if (id === "thread-fork")
               expect(
                 written(fake.current(), "thread/fork")[0]!.params,
               ).toMatchObject({
                 threadId: "thread-0",
                 lastTurnId: "turn-earlier",
+                developerInstructions: "new instructions",
               });
           }),
-        { start: { kind: "resume", session: "thread-0", at, fork: false } },
+        {
+          policy: { ...policy, systemPrompt: "new instructions" },
+          start: { kind: "resume", session: "thread-0", at, fork: false },
+        },
       );
     }
   });

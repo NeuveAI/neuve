@@ -33,6 +33,7 @@ import {
   type ToolOutcome,
   type AccountStatus,
   type RuntimeRegistryShape,
+  type RuntimeSession,
   type RuntimeModel,
 } from "@neuve/runtime";
 import {
@@ -181,6 +182,9 @@ export class FakeSession {
   id: string;
   closed = 0;
   interrupted = 0;
+  readonly approvalAnswers: Parameters<
+    RuntimeSession["respondToApproval"]
+  >[0][] = [];
   readonly models: NonNullable<SessionPolicy["model"]>[] = [];
   readonly jobs = new Set<Promise<void>>();
   readonly abort = new AbortController();
@@ -230,7 +234,10 @@ export class FakeSession {
     Effect.sync(() => {
       this.models.push(model);
     });
-  respondToApproval = () => Effect.void;
+  respondToApproval: RuntimeSession["respondToApproval"] = (answer) =>
+    Effect.sync(() => {
+      this.approvalAnswers.push(answer);
+    });
   private record(input: unknown) {
     if (this.fake.admitted === 0) this.fake.unrecordedRequests++;
     else this.fake.admitted--;
@@ -384,6 +391,7 @@ export async function fixture(
     native?: ReturnType<typeof createModels>;
     toolName?: string;
     executionMode?: "parallel" | "sequential";
+    approvals?: Parameters<typeof chatRuntimeExtension>[2];
     execute?: (
       n: number,
       conversation: () => Conversation,
@@ -449,7 +457,7 @@ export async function fixture(
       return layer.models.streamSimple(...args);
     },
   };
-  const extension = chatRuntimeExtension(bridge, layer.owns);
+  const extension = chatRuntimeExtension(bridge, layer.owns, options.approvals);
   const pi = createRegistry();
   const executed: number[] = [];
   let conversation: Conversation;
@@ -496,7 +504,12 @@ export async function fixture(
     },
     context,
   );
-  await extension.attach(harness);
+  let stopApprovals: ((chat: ConversationId) => Promise<void>) | undefined;
+  await extension.attach(harness, {
+    onStop: (listener) => {
+      stopApprovals = listener;
+    },
+  });
   conversation =
     (options.conversationId &&
       (await harness.conversation(options.conversationId, context))) ||
@@ -528,6 +541,7 @@ export async function fixture(
     executed,
     submit,
     messages,
+    stopApprovals: () => stopApprovals?.(conversation.id),
     close: async () => {
       await extension.close();
       await layer.close();

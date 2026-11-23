@@ -692,6 +692,7 @@ async function main() {
 						chat: chat(),
 						author: catalog.user,
 						text,
+						attended: false,
 						model: flags.model ? model(flags.model) : undefined,
 						// The channel refuses a level the model does not list, naming those it does.
 						effort: flags.effort === undefined ? undefined : effort(flags.effort),

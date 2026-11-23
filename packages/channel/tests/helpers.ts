@@ -174,7 +174,11 @@ export class Fixture {
 			extension: {
 				...this.options,
 				...operations.extension,
-				extensions: [...operations.extension.extensions, externalLanes({name: "one", project: this.project, lanes: this.lanes, env: (cwd) => scratchEnv(cwd, this.root)})],
+				extensions: [...operations.extension.extensions, externalLanes({name: "one", project: this.project, lanes: this.lanes, env: (cwd) => scratchEnv(cwd, this.root)}), ...(this.options.extension?.extensions ?? [])],
+				attach: async (harness, admission) => {
+					await operations.extension.attach?.(harness, admission);
+					await this.options.extension?.attach?.(harness, admission);
+				},
 				environment: (cwd) => isPlaced(cwd, this.project),
 			},
 		});

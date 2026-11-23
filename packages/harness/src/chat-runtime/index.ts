@@ -2,6 +2,7 @@ export {
   ChatRuntimeBridge,
   type BridgeOptions,
   type AccountRoute,
+  type ApprovalStore,
 } from "./bridge.ts";
 export { accountModels, type AccountStatusSource } from "./models.ts";
 export { definitions } from "./transcript.ts";
