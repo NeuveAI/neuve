@@ -196,7 +196,7 @@ export const discoverGraphBinary = async (
   if (!Bun.main.startsWith("/$bunfs/") && (await isExecutableFile(source)))
     return source;
   throw new Error(
-    `Neuve Graph binary is unavailable at ${installed} or ${sibling}; run bun run install:cli, build it, or set NEUVE_GRAPH_BINARY.`,
+    `Neuve Graph binary is unavailable at ${installed}, ${sibling}, or ${source} (when running from source). Run bun run install:cli, build it, or set NEUVE_GRAPH_BINARY.`,
   );
 };
 
@@ -664,7 +664,7 @@ const localScopeGap = "Retry neuve query to read local scope.";
 type RecordedQuery =
   | {
       eventId: string;
-      cycle?: { id: string; opened: boolean };
+      cycle?: { cycleId: string; opened: boolean };
       scope?: QueryScopeAnswer;
       scopeGap?: string;
       reason?: never;
@@ -725,20 +725,18 @@ const recordQuery = async (
             Effect.orElseSucceed(() => null),
           ));
         if (registration !== undefined) yield* Log.append([registration]);
-        let opening: string | undefined;
-        const selectScope = (cycleId: string) => {
-          opening = cycleId;
-          return local === undefined
-            ? Effect.succeed(undefined)
-            : keepLocalScope({ location, cycleId }, local, (path, cause) =>
-                scopeWriteFailures.push({
-                  type: "query.scope-write-failed",
-                  path,
-                  cause,
-                }),
-              );
-        };
-        const cycleId =
+        const selectScope =
+          local === undefined
+            ? undefined
+            : (cycleId: string) =>
+                keepLocalScope({ location, cycleId }, local, (path, cause) =>
+                  scopeWriteFailures.push({
+                    type: "query.scope-write-failed",
+                    path,
+                    cause,
+                  }),
+                );
+        const readCycle =
           revision !== null && cycle !== undefined
             ? yield* openQueryCycle(
                 request.repository,
@@ -754,6 +752,7 @@ const recordQuery = async (
                 selectScope,
               )
             : undefined;
+        const cycleId = readCycle?.cycleId;
         const sessionId =
           requester._tag === "Actor" || requester._tag === "Agent"
             ? requester.sessionId
@@ -768,16 +767,13 @@ const recordQuery = async (
           payload: { ...payload, revision },
         });
         diagnostics.eventId = eventId;
-        if (cycleId === undefined) return { eventId };
-        const recorded = {
-          eventId,
-          cycle: { id: cycleId, opened: cycleId === opening },
-        };
+        if (readCycle === undefined) return { eventId };
+        const recorded = { eventId, cycle: readCycle };
         if (local === undefined) return recorded;
         const scope = yield* Effect.exit(
           queryLocalScope(request.repository, local, {
             location,
-            cycleId,
+            cycleId: readCycle.cycleId,
           }).pipe(
             Effect.timeout(SCOPE_FETCH_BOUND_MS),
             Effect.provideService(Computations.FloorReporter, (notice) =>
@@ -889,6 +885,7 @@ export const runQueryGraph = async (
     emit: (event: PublicQueryEvent) => Promise<void>;
     signal?: AbortSignal;
     requester?: Requester;
+    checkedScope?: boolean;
   }>,
 ): Promise<QuerySourceContext> => {
   try {
@@ -910,7 +907,12 @@ export const runQueryGraph = async (
   let local: LocalScopeRead | undefined;
   const diagnostics: QueryDiagnostics = {};
   const localRead = Effect.runPromiseExit(
-    readLocalScope(request.repository, request.revision, request.scope ?? []),
+    readLocalScope(
+      request.repository,
+      request.revision,
+      request.scope ?? [],
+      input.checkedScope,
+    ),
     { signal: input.signal },
   );
   let cycleFailure: string | undefined;
@@ -1076,7 +1078,7 @@ export const runQueryGraph = async (
         scope_gaps: gaps,
         ...(recorded.cycle === undefined
           ? {}
-          : { cycle_id: recorded.cycle.id }),
+          : { cycle_id: recorded.cycle.cycleId }),
       });
     }
   }
@@ -1095,7 +1097,7 @@ export const runQueryGraph = async (
               }
             : {
                 kind: cycle.opened ? "cycle_opened" : "cycle_joined",
-                cycle_id: cycle.id,
+                cycle_id: cycle.cycleId,
               },
       };
 };

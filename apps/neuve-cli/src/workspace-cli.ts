@@ -232,6 +232,7 @@ export function codingWorkerSetup(
         },
         {
           requester,
+          checkedScope: true,
           emit: async (event) => {
             events.push(event);
           },

@@ -234,8 +234,7 @@ export function planScopeRead(
 		try {
 			await files.read(plan.file, plan.hash, new TextEncoder().encode(plan.text));
 			plansRoot = await realpath(plans);
-			const planPath = join(plansRoot, plan.file);
-			const paths = [planPath];
+			const paths = new Set([join(plansRoot, plan.file)]);
 			const gaps: string[] = [];
 			const listed = await git(project, ["worktree", "list", "--porcelain", "-z"]);
 			if (listed.status !== 0) throw new Error("Git could not list the repository's worktrees.");
@@ -245,26 +244,31 @@ export function planScopeRead(
 			})))).filter(root => root !== undefined);
 			const repository = await realpath(request.repository);
 			if (!roots.includes(repository)) {
-				return { isError: true, text: redact(`The assigned worktree ${JSON.stringify(request.repository)} is not registered with this repository, so start an agent in this repository to read scope.`) };
+				return { isError: true, text: redact(`The assigned worktree ${JSON.stringify(request.repository)} is not registered with this repository. Nothing in your call can fix that.`) };
 			}
 			roots.push(plansRoot);
+			const refused: string[] = [];
 			for (const [index, name] of scope.entries()) {
-				let target: string;
+				const field = `scope[${index}] received ${JSON.stringify(name)}`;
 				try {
-					target = await realpath(resolve(repository, name));
-				} catch (error) {
-					if (!missing(error) && !(error instanceof Error && "code" in error && error.code === "ENOTDIR")) {
-						return { isError: true, text: redact(`scope[${index}] received ${JSON.stringify(name)} and could not resolve it, so name a readable file inside the repository, its worktrees or this channel's plans folder.`) };
+					const target = await realpath(resolve(repository, name));
+					if (!roots.some(root => below(root, target) !== undefined)) {
+						refused.push(`${field} outside the allowed roots`);
+						continue;
 					}
-					gaps.push(`${name}: The file was not found.`);
-					continue;
+					paths.add(target);
+				} catch (error) {
+					if (missing(error) || (error instanceof Error && "code" in error && error.code === "ENOTDIR")) {
+						gaps.push(`${name}: The file was not found.`);
+					} else {
+						refused.push(`${field} but could not resolve it`);
+					}
 				}
-				if (!roots.some(root => below(root, target) !== undefined)) {
-					return { isError: true, text: redact(`scope[${index}] received ${JSON.stringify(name)} outside the repository, its worktrees and this channel's plans folder, so name a file inside those roots or omit it to read the approved plan.`) };
-				}
-				paths.push(target);
 			}
-			const result = await query({ ...request, scope: paths });
+			if (refused.length) {
+				return { isError: true, text: redact(`${refused.join(" and ")}, so name readable files inside the repository, its worktrees or this channel's plans folder or omit them to read the approved plan.`) };
+			}
+			const result = await query({ ...request, scope: [...paths] });
 			const receipt = gaps.length ? { ...result, scope_gaps: [...(result.scope_gaps ?? []), ...gaps] } : result;
 			return { text: JSON.stringify(receipt, (_key, value: unknown) => typeof value === "string" ? redact(value) : value) };
 		} catch (error) {

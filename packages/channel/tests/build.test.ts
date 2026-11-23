@@ -10,6 +10,7 @@ import { policy } from "../../harness/src/chat-runtime/transcript";
 import { ApprovalRequestsDoc } from "../src/approvals";
 import { BuildsDoc, type BuildHost } from "../src/build";
 import { buildWorktree } from "../src/external-lanes";
+import { PlansDoc } from "../src/plan";
 import type { Build, Plan, Request, RunEnd, Said } from "../src/protocol";
 import { Fixture, git, MODEL, OWNER, scratchEnv, until, type Watch } from "./helpers";
 
@@ -144,6 +145,8 @@ test("approval starts one ownerless implementer with the marked brief and write 
 		expect(brief.text).toContain("Ask for your scope with neuve_query");
 		expect(brief.text).not.toContain("neuve query");
 		expect(brief.text).not.toContain(run.plans);
+		const { file } = (await run.harness.snapshot(PlansDoc, context))!.chats[ROOT_CONVERSATION_ID]![0]!;
+		expect(brief.text).not.toContain(file);
 		expect(brief).not.toHaveProperty("mode");
 		expect(await agent.until("result", event => event.call === "implement-write")).toMatchObject({ error: false });
 		expect(await readFile(join(worktree!.path, "implemented.txt"), "utf8")).toBe("worktree only");
@@ -654,13 +657,11 @@ test("scope paths reject escapes and scope answers redact plan paths from citati
 	const broken = await askScope(run, chat, "Broken read");
 	expect(broken).toMatchObject({ error: true, text: `The host could not read scope for question "Broken read" (Could not read ${label}). Ask the channel owner to check the worker before retrying.` });
 	expect(broken.text).not.toContain(run.plans);
-	for (const name of [outside, "escape.md"]) {
-		const denied = await askScope(run, chat, `Read ${name}`, [name]);
-		expect(denied).toMatchObject({
-			error: true,
-			text: `scope[0] received ${JSON.stringify(name)} outside the repository, its worktrees and this channel's plans folder, so name a file inside those roots or omit it to read the approved plan.`,
-		});
-	}
+	const denied = await askScope(run, chat, "Read invalid paths", [outside, "escape.md", "bad\0path"]);
+	expect(denied).toMatchObject({
+		error: true,
+		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" outside the allowed roots and scope[2] received "bad\\u0000path" but could not resolve it, so name readable files inside the repository, its worktrees or this channel's plans folder or omit them to read the approved plan.`,
+	});
 	expect(calls).toEqual(["Read notes", "Broken read"]);
 });
 

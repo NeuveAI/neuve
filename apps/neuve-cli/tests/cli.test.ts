@@ -22,10 +22,12 @@ import {
 } from "@neuve/records-core";
 import {
   chmod,
+  link,
   mkdir,
   mkdtemp,
   readdir,
   realpath,
+  rename,
   rm,
   symlink,
 } from "node:fs/promises";
@@ -35,6 +37,10 @@ import { defaultConfig } from "../../../packages/harness/src/config.ts";
 import { mcpClientsLayer } from "../../../packages/harness/src/mcp-client.ts";
 import { requestReview } from "../../../packages/harness/src/request.ts";
 import { settingsPath } from "../../../packages/harness/src/settings.ts";
+import { SOL_ROUTE } from "../../../packages/harness/src/route.ts";
+import { localStorageProfile } from "../../../scripts/pi-storage.ts";
+import { HostConfigSchema } from "@ace/host/host-config";
+import { planScopeRead } from "@ace/host/worker";
 import {
   fetchCyclePart,
   readScopeOpening,
@@ -54,6 +60,7 @@ import type {
 } from "../src/domain.ts";
 import { collectPublicQueryResult, runQueryGraph } from "../src/graph-query.ts";
 import { execute as executeRecords, withStore } from "../src/records-cli.ts";
+import { codingWorkerSetup } from "../src/workspace-cli.ts";
 import { markSetUp } from "./fixtures/set-up.ts";
 
 // Built into a temporary directory, never dist/neuve, which an installed
@@ -544,6 +551,96 @@ describe("neuve CLI boundary", () => {
           }),
         ),
       );
+    } finally {
+      if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+      else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+    }
+  });
+
+  test("worker query rejects a linked scope parent before keeping the file in Records", async () => {
+    const { root, revision } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
+    roots.push(scratch);
+    await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+    const graph = await fakeGraph();
+    const worker = {
+      sessionId: "worker-scope",
+      stateDirectory: scratch,
+      config: HostConfigSchema.parse({
+        home: scratch,
+        lanes: root,
+        user: "owner",
+        port: 0,
+        environment: {},
+        worker: [process.execPath],
+      }),
+    };
+    const { query } = codingWorkerSetup(
+      await localStorageProfile(root, scratch),
+      SOL_ROUTE,
+    );
+    const notes = join(root, "notes");
+    const outside = join(scratch, "outside");
+    await mkdir(notes);
+    await mkdir(outside);
+    await Bun.write(join(notes, "watched.md"), "Original scope.");
+    await link(join(notes, "watched.md"), join(outside, "watched.md"));
+    const read = planScopeRead(
+      root,
+      join(scratch, "plans"),
+      async (request) => {
+        await rename(notes, join(root, "original-notes"));
+        await symlink(outside, notes, "dir");
+        return query!(worker, request);
+      },
+    );
+    const text = "# Approved plan\nKeep the scope boundary.\n";
+    const requester = {
+      _tag: "Agent" as const,
+      harness: "neuve-pi" as const,
+      sessionId: worker.sessionId,
+      subagentId: "8",
+    };
+    const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+    process.env.NEUVE_GRAPH_BINARY = graph.executable;
+    try {
+      const result = await read({
+        repository: root,
+        revision,
+        question: "Read the approved plan and notes.",
+        scope: ["notes/watched.md"],
+        requester,
+        previousPlans: [],
+        plan: {
+          file: `${crypto.randomUUID()}.md`,
+          title: "Approved plan",
+          text,
+          hash: createHash("sha256").update(text).digest("hex"),
+        },
+      });
+      expect(result.isError).toBeUndefined();
+      const answer = JSON.parse(result.text);
+      expect(answer.scope_gaps).toEqual([
+        "notes/watched.md: The checked scope path could not be opened safely.",
+      ]);
+      expect(result.text).not.toContain("Original scope.");
+      const [{ event: selection }] = await queryHistory(
+        root,
+        "cycle.local-scope-selected@1",
+      );
+      expect(
+        selection.payload.sources.map(({ kind }: { kind: string }) => kind),
+      ).toEqual(["working-file", "gap"]);
+      const held = scopeFolder(
+        storeLocationIn(join(root, ".git")),
+        answer.cycle_id,
+      );
+      expect(await readdir(held)).toEqual(["S1.txt"]);
+      const [{ event }] = await queryHistory(root);
+      expect(event).toMatchObject({
+        actor: Identity.agentFingerprint(requester),
+        attribution: { sessionId: worker.sessionId, cycleId: answer.cycle_id },
+      });
     } finally {
       if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
       else process.env.NEUVE_GRAPH_BINARY = previousBinary;

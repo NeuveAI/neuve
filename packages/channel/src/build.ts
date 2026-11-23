@@ -160,8 +160,7 @@ function buildRefusal(state: Build["state"]["kind"]): string | undefined {
 const refusedBySharing = (state: Build["state"]) => state.kind === "unavailable" && state.reason === "shared";
 
 async function approvedPlan(plans: readonly StoredPlan[] | undefined) {
-	const stored = plans?.findLast(({ plan }) => plan.state === "approved");
-	if (!stored) throw new Error("The planning chat has no approved plan.");
+	const stored = plans!.findLast(({ plan }) => plan.state === "approved")!;
 	const { file, plan: { title, hash }, text } = stored;
 	return { file, title, hash, text: await checkedPlanText(hash, text) };
 }
@@ -381,7 +380,7 @@ export class Builds {
 			if (memo) return memo;
 			const { build, starts } = (await api.snapshot(BuildsDoc, context))!.records[member.build]!;
 			if (build.state.kind === "stopped") {
-				return { text: `The plan's agents have been stopped, so start a new approved plan to read scope for question ${JSON.stringify(question)}.`, isError: true } satisfies ScopeReadAnswer;
+				return { text: "The plan's agents were stopped, so there is nothing for you to read or fix.", isError: true } satisfies ScopeReadAnswer;
 			}
 			const start = starts[agentKey(member.role, member.part)]!;
 			const { path, base } = start.worktree!;
@@ -632,7 +631,6 @@ export class Builds {
 			}
 			detail = `The ${role}'s chat could not be created.`;
 			const { path, base } = worktree;
-			const selection = host.query ? { extensions: { add: [scopeReadExtension] } } : undefined;
 			let brief = start.brief;
 			if (!brief) {
 				brief = await update(async (saved, build, tx) => {
@@ -640,7 +638,7 @@ export class Builds {
 					const { id: chat } = await tx.createConversation({ ownership: { kind: "ownerless" } });
 					await configure(tx, chat, {
 						model: start.model, thinkingLevel: start.effort, cwd: path,
-						...selection,
+						...(host.query ? { extensions: { add: [scopeReadExtension] } } : {}),
 					});
 					(await tx.doc(LanesDoc)).lanes[lane] = { chat, path, base };
 					build.agents.push({
@@ -653,9 +651,6 @@ export class Builds {
 				});
 				if (!brief) return;
 				log("build.chat", { chat: brief.chat });
-			} else if (selection) {
-				const { chat } = brief;
-				await update((_saved, _build, tx) => configure(tx, chat, selection));
 			}
 			detail = `The ${role}'s brief could not be sent.`;
 			const submission = await this.#send(id, brief.chat, {

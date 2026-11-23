@@ -10,7 +10,7 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { open, readlink, realpath } from "node:fs/promises";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { Clock, Context, Data, Duration, Effect, Option, Tracer } from "effect";
 import { z } from "zod";
@@ -500,12 +500,33 @@ const resolveWorkingPath = async (requested: string) => {
   }
 };
 
-const readWorkingFile = async (path: string): Promise<WorkingRead> => {
+const checkedScopeGap = {
+  kind: "gap",
+  reason: "The checked scope path could not be opened safely.",
+} as const;
+const darwinNoFollowAny = 0x20000000; // O_NOFOLLOW_ANY in macOS sys/fcntl.h.
+
+const readWorkingFile = async (
+  path: string,
+  checked: boolean,
+): Promise<WorkingRead> => {
+  if (checked && process.platform !== "darwin" && process.platform !== "linux")
+    return checkedScopeGap;
   try {
     await using file = await open(
       path,
-      constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
+      constants.O_RDONLY |
+        constants.O_NONBLOCK |
+        (checked && process.platform === "darwin"
+          ? darwinNoFollowAny
+          : constants.O_NOFOLLOW),
     );
+    if (
+      checked &&
+      process.platform === "linux" &&
+      (await readlink(`/proc/self/fd/${file.fd}`)) !== path
+    )
+      return checkedScopeGap;
     const stat = await file.stat();
     if (!stat.isFile())
       return { kind: "gap", reason: "The path is not a regular file." };
@@ -531,21 +552,30 @@ const readWorkingFile = async (path: string): Promise<WorkingRead> => {
           fetchedAt: new Date().toISOString(),
         };
   } catch (error) {
-    return workingFailure(error);
+    return checked ? checkedScopeGap : workingFailure(error);
   }
 };
 
-const readNamedFiles = (root: string, paths: readonly string[]) =>
+const readNamedFiles = (
+  root: string,
+  paths: readonly string[],
+  checked: boolean,
+) =>
   Effect.gen(function* () {
-    const resolved = yield* Effect.forEach(
-      paths,
-      (requested) =>
-        Effect.promise(async () => ({
-          requested,
-          target: await resolveWorkingPath(resolve(root, requested)),
-        })),
-      { concurrency: MAX_SCOPE_DOCUMENTS },
-    );
+    const resolved = !checked
+      ? yield* Effect.forEach(
+          paths,
+          (requested) =>
+            Effect.promise(async () => ({
+              requested,
+              target: await resolveWorkingPath(resolve(root, requested)),
+            })),
+          { concurrency: MAX_SCOPE_DOCUMENTS },
+        )
+      : paths.map((path) => ({
+          requested: scopePath(root, path),
+          target: { kind: "resolved" as const, path },
+        }));
     const unique = new Map<
       string,
       {
@@ -568,7 +598,7 @@ const readNamedFiles = (root: string, paths: readonly string[]) =>
           path,
           read:
             target.kind === "resolved"
-              ? await readWorkingFile(target.path)
+              ? await readWorkingFile(target.path, checked)
               : target,
           namedAs,
         })),
@@ -651,6 +681,7 @@ export const readLocalScope = (
   repository: string,
   revision: string,
   names: readonly string[],
+  checked = false,
 ) =>
   Effect.gen(function* () {
     const [base, top, directory] = yield* Effect.all(
@@ -662,16 +693,18 @@ export const readLocalScope = (
       { concurrency: "unbounded" },
     );
     const root = top.replace(/\n$/, "");
-    const paths = [
-      ...new Set(
-        names.map((name) => {
-          const fromRepo = scopePath(repository, resolve(repository, name));
-          return scopePath(root, resolve(directory, fromRepo));
-        }),
-      ),
-    ];
+    const paths = checked
+      ? names
+      : [
+          ...new Set(
+            names.map((name) => {
+              const fromRepo = scopePath(repository, resolve(repository, name));
+              return scopePath(root, resolve(directory, fromRepo));
+            }),
+          ),
+        ];
     const [entries, { files, omitted }] = yield* Effect.all(
-      [localTree(repository, base), readNamedFiles(root, paths)],
+      [localTree(repository, base), readNamedFiles(root, paths, checked)],
       { concurrency: 2 },
     );
     const resolved = files.map((file) => {
