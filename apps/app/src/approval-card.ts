@@ -1,4 +1,4 @@
-import type { ApprovalRequest } from "@ace/channel/protocol";
+import type { ApprovalAsked, ApprovalPath, ApprovalRequest } from "@ace/channel/protocol";
 
 import type { Item } from "./transcript";
 
@@ -7,8 +7,8 @@ const TIME = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 export type ApprovalState = "open" | "allowed" | "denied" | "closed";
 
 /**
- * What one request's card shows, read from the input the runtime sent and nothing else. Every
- * string in it has its hidden characters made visible.
+ * What one request's card shows, drawn from what the request asks and nothing else. Every string
+ * in it has its hidden characters made visible.
  */
 export type ApprovalCardView = {
 	request: string;
@@ -16,21 +16,23 @@ export type ApprovalCardView = {
 	state: ApprovalState;
 	/** Who answered and when, or why it closed, or when it was asked. */
 	meta: string;
-	/** The command, query or tool input, exactly as sent. */
+	/** The command, exactly as sent. */
 	code?: { text: string; language?: string };
-	/** Labelled values such as the folder or the server. */
+	/** Labelled values such as the folder, each path asked for, or the network. */
 	rows: { key: string; value: string }[];
-	/** Each file a file change names; `patch` is a unified diff with file headers, or empty. */
-	changes: { path: string; kind: string; patch: string }[];
-	/** The runtime's reason, or a server's message, verbatim. */
+	/** Each file a file change names; `patch` is a unified diff with file headers. */
+	changes: { kind: string; path: string; to?: string; patch: string }[];
+	/** A server's message, verbatim. */
 	text?: string;
+	/** The runtime's reason, verbatim. */
+	reason?: string;
 	/** Plain statements about the request, shown whatever its state. */
 	notes: string[];
-	/** Shown under the input while the request is open. */
+	/** Shown under the request while it is open. */
 	note?: string;
-	/** The whole input as JSON. */
+	/** The runtime's raw input as JSON. */
 	details: string;
-	/** The card's own parts do not show all of the input, so the whole input is shown open. */
+	/** The card cannot summarise the request, so the raw input is shown open. */
 	partial: boolean;
 };
 
@@ -40,32 +42,30 @@ export type ApprovalCardView = {
  * reads differ from the text that runs.
  */
 const HIDDEN = /(?![\n\t])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+/** In a path, which is one line, a newline or tab is hidden too. */
+const HIDDEN_IN_PATH = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+const escape = (char: string) => `\\u{${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}}`;
 
 /** The text with each hidden character written as `\u{XXXX}`, so a person sees it. */
 export function visible(text: string) {
-	return text.replace(HIDDEN, (char) => `\\u{${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}}`);
+	return text.replace(HIDDEN, escape);
+}
+
+/** A path with every control character escaped, newlines and tabs included. */
+export function visiblePath(text: string) {
+	return text.replace(HIDDEN_IN_PATH, escape);
 }
 
 /** Whether any string or key in a JSON value holds a hidden character. */
 function holdsHidden(value: unknown): boolean {
 	if (typeof value === "string") return visible(value) !== value;
 	if (Array.isArray(value)) return value.some(holdsHidden);
-	if (record(value)) return Object.entries(value).some(([key, item]) => holdsHidden(key) || holdsHidden(item));
+	if (typeof value === "object" && value !== null) {
+		return Object.entries(value).some(([key, item]) => holdsHidden(key) || holdsHidden(item));
+	}
 	return false;
 }
-
-type Json = Record<string, unknown>;
-const record = (value: unknown): value is Json =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-/** Whether `value` is an object whose every key is one of `keys`. */
-const only = (value: unknown, keys: string[]): value is Json =>
-	record(value) && Object.keys(value).every((key) => keys.includes(key));
-const text = (value: unknown) => typeof value === "string" ? value : undefined;
-const optional = (value: unknown) => value === undefined || value === null || typeof value === "string";
-const paths = (value: unknown) =>
-	value === null || value === undefined
-		|| Array.isArray(value) && value.every((item) => typeof item === "string");
-const empty = (value: unknown) => value === undefined || value === null || Array.isArray(value) && !value.length;
 
 const CLOSED: Record<Exclude<Extract<ApprovalRequest["state"], { kind: "closed" }>["reason"], "message">, string> = {
 	"turn-ended": "Closed when the turn ended",
@@ -87,151 +87,129 @@ function status(request: ApprovalRequest, name: (author: string) => string): [Ap
 }
 
 /** A file's diff with file headers, which the diff view needs, added when it has none. */
-function patch(path: string, kind: string | undefined, diff: string) {
+function patch(path: string, kind: string, diff: string) {
 	if (!diff || /^(?:diff --git |--- )/.test(diff)) return diff;
 	const before = kind === "add" ? "/dev/null" : `a/${path}`;
 	const after = kind === "delete" ? "/dev/null" : `b/${path}`;
 	return `--- ${before}\n+++ ${after}\n${diff}`;
 }
 
-type Parts = Omit<ApprovalCardView, "request" | "state" | "meta" | "details" | "partial" | "notes"> & {
-	notes?: string[];
-	/** Whether the parts above show every field of the input. */
-	whole: boolean;
-};
+const ACCESS = { read: "Read", write: "Write", deny: "Deny" } as const;
+const CHANGE = { add: "Added", delete: "Deleted", update: "Changed" } as const;
 
-function command(input: unknown): Parts {
-	const whole = only(input, ["command", "cwd", "reason"]) && typeof input.command === "string"
-		&& optional(input.cwd) && optional(input.reason);
-	const value = record(input) ? input : {};
-	const line = text(value.command);
-	const folder = text(value.cwd);
-	return {
-		title: "Command",
-		...(line ? { code: { text: line, language: "bash" } } : {}),
-		rows: folder ? [{ key: "Folder", value: folder }] : [],
-		changes: [],
-		text: text(value.reason),
-		whole,
-	};
-}
-
-function access(input: Json): Parts {
-	const { permissions } = input;
-	const network = record(permissions) ? permissions.network : undefined;
-	const files = record(permissions) ? permissions.fileSystem : undefined;
-	const whole = only(input, ["permissions", "reason"]) && optional(input.reason)
-		&& only(permissions, ["network", "fileSystem"])
-		&& (network === null || network === undefined || only(network, ["enabled"]))
-		&& (files === null || files === undefined
-			|| only(files, ["read", "write", "entries"]) && paths(files.read) && paths(files.write) && empty(files.entries));
-	const rows: Parts["rows"] = [];
-	if (record(network) && network.enabled === true) rows.push({ key: "Network", value: "On" });
-	if (record(files)) {
-		for (const [key, label] of [["read", "Read"], ["write", "Write"]] as const) {
-			const list = Array.isArray(files[key]) ? (files[key] as unknown[]).filter((item) => typeof item === "string") : [];
-			if (list.length) rows.push({ key: label, value: list.join("\n") });
-		}
+function target(value: ApprovalPath): string {
+	switch (value.kind) {
+		case "path":
+			return visiblePath(value.path);
+		case "glob":
+			return `${visiblePath(value.pattern)} (pattern)`;
+		case "project-roots":
+			return value.subpath === undefined ? "The project's folders" : `${visiblePath(value.subpath)} in the project's folders`;
+		case "root":
+			return "/ (the whole disk)";
+		case "minimal":
+			return "The system's minimal folders";
+		case "tmpdir":
+			return "The temporary folder ($TMPDIR)";
+		case "slash-tmp":
+			return "/tmp";
 	}
-	return {
-		title: "More access",
-		rows,
-		changes: [],
-		text: text(input.reason),
-		note: "Neuve asks for this access for this turn only.",
-		whole,
-	};
 }
 
-function fileChange(input: unknown): Parts {
-	const value = record(input) ? input : {};
-	const list = Array.isArray(value.changes) ? value.changes : [];
-	const known = list.every((change) =>
-		only(change, ["path", "kind", "diff"]) && typeof change.path === "string" && typeof change.diff === "string"
-		&& only(change.kind, ["type", "move_path"]) && ["add", "delete", "update"].includes(change.kind.type as string)
-		&& optional(change.kind.move_path)
-	);
-	const whole = only(input, ["command", "cwd", "reason", "changes"]) && value.command == null
-		&& optional(value.cwd) && optional(value.reason)
-		&& (value.changes === undefined || Array.isArray(value.changes)) && known;
-	const changes = known
-		? list.map((change) => {
-			const { path, kind, diff } = change as { path: string; kind: Json; diff: string };
-			const moved = text(kind.move_path);
-			const type = text(kind.type);
-			return {
-				path: moved ? `${path} → ${moved}` : path,
-				kind: type === "add" ? "Added" : type === "delete" ? "Deleted" : moved ? "Moved" : "Changed",
-				patch: patch(path, type, diff),
-			};
-		})
-		: [];
-	const folder = text(value.cwd);
-	return {
-		title: "File change",
-		rows: folder ? [{ key: "Folder", value: folder }] : [],
-		changes,
-		text: text(value.reason),
-		notes: changes.length ? [] : ["The change itself was not sent with this request."],
-		whole,
-	};
-}
+const NETWORK = (value: boolean | null) => value === null ? "Not asked" : value ? "On" : "Off";
 
-function parts(request: ApprovalRequest): Parts {
-	const { input } = request;
-	if (request.toolName !== undefined) {
-		return { title: request.toolName, code: { text: JSON.stringify(input, null, 2), language: "json" }, rows: [], changes: [], whole: true };
-	}
-	switch (request.work) {
+type Parts = Pick<ApprovalCardView, "title" | "code" | "rows" | "changes" | "text" | "note"> & { notes?: string[] };
+
+/** Every field of what is asked, each in its own place on the card. */
+function parts(asked: ApprovalAsked, toolName: string | undefined): Parts {
+	switch (asked.kind) {
 		case "command":
-			return record(input) && "permissions" in input ? access(input) : command(input);
+			return {
+				title: "Command",
+				code: { text: visible(asked.command), language: "bash" },
+				rows: [
+					{ key: "Folder", value: visiblePath(asked.folder) },
+					...(asked.network
+						? [{ key: "Network", value: `${visible(asked.network.host)} (${asked.network.protocol})` }]
+						: []),
+				],
+				changes: [],
+			};
 		case "file-change":
-			return fileChange(input);
-		case "tool": {
-			const value = record(input) ? input : {};
-			const server = text(value.server);
 			return {
-				title: server ? `Prompt from ${server}` : "Prompt",
+				title: "File change",
 				rows: [],
-				changes: [],
-				text: text(value.message),
-				whole: only(input, ["server", "message"]) && !!server && typeof input.message === "string",
+				changes: (asked.changes ?? []).map((change) => ({
+					kind: CHANGE[change.kind],
+					path: visiblePath(change.path),
+					...(change.kind === "update" && change.newPath !== undefined ? { to: visiblePath(change.newPath) } : {}),
+					patch: visible(patch(visiblePath(change.path), change.kind, change.diff)),
+				})),
+				notes: asked.changes === null ? ["The change itself was not sent with this request."] : [],
 			};
-		}
-		case "web-search": {
-			const query = record(input) ? text(input.query) : undefined;
+		case "wider-access":
 			return {
-				title: "Web search",
-				...(query ? { code: { text: query } } : {}),
-				rows: [],
+				title: "More access",
+				rows: [
+					...asked.paths.map((path) => ({ key: ACCESS[path.access], value: target(path.target) })),
+					...(asked.paths.length ? [] : [{ key: "Paths", value: "None" }]),
+					{ key: "Network", value: NETWORK(asked.network) },
+					...(asked.folder === undefined ? [] : [{ key: "Folder", value: visiblePath(asked.folder) }]),
+					...(asked.globDepthLimit === undefined ? [] : [{ key: "Pattern depth", value: `${asked.globDepthLimit}` }]),
+				],
 				changes: [],
-				whole: only(input, ["query"]) && !!query,
+				note: "Neuve asks for this access for this turn.",
 			};
-		}
+		case "server-prompt":
+			return {
+				title: `Prompt from ${visible(asked.server)}`,
+				rows: asked.url === undefined ? [] : [{ key: "Link", value: visiblePath(asked.url) }],
+				changes: [],
+				text: visible(asked.message),
+			};
+		case "unrecognised":
+			return { title: toolName === undefined ? "Request" : visible(toolName), rows: [], changes: [], notes: [UNRECOGNISED] };
 	}
 }
 
-export const PARTIAL = "This card cannot show all of this request. The whole request is below.";
+export const UNRECOGNISED = "This card cannot summarise this request. The whole request is below.";
 export const HIDDEN_NOTE = "This request holds hidden characters, shown here as \\u{…}.";
+
+/** The paths a request names, which show on one line each. */
+function paths(asked: ApprovalAsked): string[] {
+	switch (asked.kind) {
+		case "command":
+			return [asked.folder];
+		case "file-change":
+			return (asked.changes ?? []).flatMap((change) => [change.path, ...(change.kind === "update" && change.newPath !== undefined ? [change.newPath] : [])]);
+		case "wider-access":
+			return [
+				...asked.paths.flatMap(({ target }) =>
+					target.kind === "path" ? [target.path] : target.kind === "glob" ? [target.pattern] : target.kind === "project-roots" && target.subpath !== undefined ? [target.subpath] : []
+				),
+				...(asked.folder === undefined ? [] : [asked.folder]),
+			];
+		case "server-prompt":
+			return asked.url === undefined ? [] : [asked.url];
+		case "unrecognised":
+			return [];
+	}
+}
 
 export function approvalView(request: ApprovalRequest, name: (author: string) => string): ApprovalCardView {
 	const [state, meta] = status(request, name);
-	const { whole, notes = [], ...shown } = parts(request);
-	const raw = JSON.stringify(request.input, null, 2);
-	const hidden = holdsHidden(request.input);
+	const { notes = [], ...shown } = parts(request.asked, request.toolName);
+	const hidden = holdsHidden(request.asked) || holdsHidden(request.input)
+		|| paths(request.asked).some((path) => visiblePath(path) !== path);
 	return {
 		request: request.requestId,
 		state,
 		meta,
-		title: visible(shown.title),
-		...(shown.code ? { code: { ...shown.code, text: visible(shown.code.text) } } : {}),
-		rows: shown.rows.map((row) => ({ key: row.key, value: visible(row.value) })),
-		changes: shown.changes.map((change) => ({ ...change, path: visible(change.path), patch: visible(change.patch) })),
-		...(shown.text === undefined ? {} : { text: visible(shown.text) }),
-		...(shown.note ? { note: shown.note } : {}),
-		notes: [...(whole ? [] : [PARTIAL]), ...(hidden ? [HIDDEN_NOTE] : []), ...notes],
-		details: visible(raw),
-		partial: !whole,
+		...shown,
+		...(request.asked.reason === undefined ? {} : { reason: visible(request.asked.reason) }),
+		notes: [...(hidden ? [HIDDEN_NOTE] : []), ...notes],
+		details: visible(JSON.stringify(request.input, null, 2)),
+		partial: request.asked.kind === "unrecognised",
 	};
 }
 

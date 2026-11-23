@@ -88,20 +88,28 @@ export function ApprovalCard({ view, mayAnswer, sending, error, answer }: {
 						<p className="min-w-0 font-mono text-xs [overflow-wrap:anywhere]">
 							<span className="text-muted-foreground">{change.kind}</span> {change.path}
 						</p>
+						{change.to !== undefined && (
+							<p className="min-w-0 font-mono text-xs [overflow-wrap:anywhere]">
+								<span className="text-muted-foreground">Moved to</span> {change.to}
+							</p>
+						)}
 						{change.patch && <Change patch={change.patch} />}
 					</div>
 				))}
 				{view.rows.length > 0 && (
 					<dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-						{view.rows.map((row) => (
-							<div key={row.key} className="contents">
+						{view.rows.map((row, index) => (
+							<div key={index} className="contents">
 								<dt className="text-muted-foreground">{row.key}</dt>
 								<dd className="min-w-0 font-mono break-all whitespace-pre-wrap text-foreground/90">{row.value}</dd>
 							</div>
 						))}
 					</dl>
 				)}
-				{view.text && <p className="text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{view.text}</p>}
+				{view.text !== undefined && <p className="text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">{view.text}</p>}
+				{view.reason !== undefined && (
+					<p className="text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{view.reason}</p>
+				)}
 				{open && view.note && <p className="text-xs text-muted-foreground">{view.note}</p>}
 				<details className="text-xs" open={view.partial || undefined}>
 					<summary className="cursor-pointer text-muted-foreground select-none">Details</summary>
