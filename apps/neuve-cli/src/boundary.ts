@@ -264,7 +264,7 @@ export const parseQueryInvocation = (
       const hasValue =
         name.startsWith("--") && value !== undefined && !value.startsWith("--");
       if (hasValue) index += 1;
-      problems.push(unknownOptionRefusal(name.split("=", 1)[0], "neuve query"));
+      problems.push(unknownOptionRefusal(name, "neuve query"));
       continue;
     }
     const duplicate = seen.has(name) && name !== "--scope";
@@ -352,21 +352,8 @@ export const parseQueryInvocation = (
       parsed = JSON.parse(relationships);
     } catch {}
     if (!Array.isArray(parsed))
-      throw new Error(
-        argumentRefusal(
-          "--relationship-plan",
-          queryValues["--relationship-plan"],
-          relationships,
-        ),
-      );
-    try {
-      return relationshipPlan(parsed);
-    } catch (error) {
-      if (!(error instanceof Error)) throw error;
-      throw new Error(
-        `${error.message} Received ${JSON.stringify(relationships)}.`,
-      );
-    }
+      throw new Error("--relationship-plan takes a JSON array.");
+    return relationshipPlan(parsed);
   });
   if (
     problems.length > 0 ||

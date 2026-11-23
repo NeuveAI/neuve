@@ -34,6 +34,7 @@ import {
 } from "./agent-programs.ts";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
 import { CLI_VERSION } from "./cli-version.ts";
+import { unknownCommandRefusal } from "./records-cli.ts";
 import {
   isStyled,
   makeScreen,
@@ -1412,7 +1413,5 @@ const runCommand = async (
           : "install",
     );
   }
-  throw new Error(
-    `Unknown skills command: ${command}. Run neuve skills --help for usage.`,
-  );
+  throw new Error(unknownCommandRefusal(command, "neuve skills"));
 };

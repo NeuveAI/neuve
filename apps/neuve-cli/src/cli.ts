@@ -1,11 +1,16 @@
 #!/usr/bin/env bun
 
 import { publicCloseReason } from "../../../packages/harness/src/pi/capture/close-diagnostic.ts";
+import { maskText } from "../../../packages/harness/src/masking.ts";
 import { runAuthCli } from "./auth-cli.ts";
 import { parseQueryInvocation, QUERY_DEFAULTS } from "./boundary.ts";
 import { collectPublicQueryResult, runQueryGraph } from "./graph-query.ts";
 import type { PublicQueryEvent } from "./domain.ts";
-import { runRecordsCli, unknownOptionRefusal } from "./records-cli.ts";
+import {
+  runRecordsCli,
+  unknownCommandRefusal,
+  unknownOptionRefusal,
+} from "./records-cli.ts";
 import { runRelationsCli } from "./relations-cli.ts";
 import { runReviewCli, PublicReviewError } from "./review-cli.ts";
 import { runMcp } from "./mcp.ts";
@@ -259,7 +264,7 @@ const main = async (args: readonly string[]): Promise<number> => {
   if (command === "semantic") return runSemanticCli(args.slice(1));
   if (command === "hybrid") return runHybridCli(args.slice(1));
   if (command !== "query") {
-    throw new Error(`Unknown command: ${command}. Run neuve --help for usage.`);
+    throw new Error(unknownCommandRefusal(command, "neuve"));
   }
   return runQuery(args.slice(1));
 };
@@ -276,31 +281,30 @@ try {
       "dead-letter",
       "export-dump",
     ].includes(Bun.argv[3] ?? "");
-  const unknownOption =
-    error instanceof TypeError &&
-    "code" in error &&
-    error.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION";
-  const option = unknownOption
-    ? /^Unknown option '([^']*)'/.exec(error.message)?.[1]
-    : undefined;
+  const parseError =
+    error instanceof TypeError && "code" in error ? error : undefined;
   const command = Bun.argv[2];
   const helpCommand =
     (command === "setup" && ["hooks", "stack"].includes(Bun.argv[3] ?? "")) ||
     (command === "review" && Bun.argv[3] === REVIEW_DESK_COMMAND)
       ? `${command} ${Bun.argv[3]}`
       : command;
-  const message = unknownOption
-    ? unknownOptionRefusal(
-        option,
-        helpCommand === undefined ? "neuve" : `neuve ${helpCommand}`,
-      )
-    : captureCommand
-      ? error instanceof PublicReviewError
-        ? error.message
-        : publicCloseReason(error)
-      : error instanceof Error
-        ? error.message
-        : String(error);
-  await Bun.write(Bun.stderr, `neuve: ${message}\n`);
+  const help = helpCommand === undefined ? "neuve" : `neuve ${helpCommand}`;
+  const message =
+    parseError?.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION"
+      ? unknownOptionRefusal(
+          /^Unknown option '([^']*)'/.exec(parseError.message)?.[1],
+          help,
+        )
+      : parseError?.code === "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL"
+        ? `Unexpected positional argument. Run ${help} --help for usage.`
+        : captureCommand
+          ? error instanceof PublicReviewError
+            ? error.message
+            : publicCloseReason(error)
+          : error instanceof Error
+            ? error.message
+            : String(error);
+  await Bun.write(Bun.stderr, `neuve: ${maskText(message)}\n`);
   process.exitCode = 2;
 }

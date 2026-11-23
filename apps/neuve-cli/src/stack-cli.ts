@@ -10,7 +10,13 @@ import {
   resolveStoreLocation,
 } from "@neuve/records-core";
 import { Settings as HarnessSettings, Stack } from "@neuve/harness";
-import { describeFailure, execute, withStore, write } from "./records-cli.ts";
+import {
+  describeFailure,
+  execute,
+  unknownCommandRefusal,
+  withStore,
+  write,
+} from "./records-cli.ts";
 
 export const SETUP_STACK_HELP = `Usage:
   neuve setup stack [--repo <path>] [--off] [--dry-run]
@@ -232,9 +238,7 @@ export const runStackCli = async (args: readonly string[]): Promise<number> => {
     return 0;
   }
   if (subcommand !== "list")
-    throw new Error(
-      `Unknown stack command: ${subcommand}. Run neuve stack --help for usage.`,
-    );
+    throw new Error(unknownCommandRefusal(subcommand, "neuve stack"));
   if (rest.includes("--help") || rest.includes("-h")) {
     await write(STACK_HELP);
     return 0;

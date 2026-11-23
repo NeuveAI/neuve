@@ -21,7 +21,11 @@ import {
   harnessRuntimes,
   prepareCodexHome,
 } from "@neuve/harness/runtimes";
-import { argumentRefusal, write } from "./records-cli.ts";
+import {
+  argumentRefusal,
+  unknownCommandRefusal,
+  write,
+} from "./records-cli.ts";
 import { thisBuild } from "./review-worker.ts";
 
 export const AUTH_HELP = `Usage:
@@ -907,5 +911,5 @@ export const runAuthCli = async (
     );
     return 0;
   }
-  throw new Error(`Unknown auth command: ${command}. Run neuve auth --help.`);
+  throw new Error(unknownCommandRefusal(command, "neuve auth"));
 };

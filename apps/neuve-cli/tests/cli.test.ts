@@ -1960,6 +1960,17 @@ describe("neuve CLI boundary", () => {
     });
   });
 
+  // An unknown option can be a pasted credential. Its inline value has no place in the refusal.
+  test("omits inline values from unknown setup and auth options", async () => {
+    for (const command of ["setup", "auth"]) {
+      expect(await run([command, "--token=sk-ant-SECRET123"])).toEqual({
+        stdout: "",
+        stderr: `neuve: Unknown option '--token'. Run neuve ${command} --help for accepted options.\n`,
+        exitCode: 2,
+      });
+    }
+  });
+
   // A bad kind must not hide a malformed range, and neither error requires a session.
   test("refuses malformed or missing proof ranges as usage errors", async () => {
     const { root } = await fixtureRepository();
@@ -2091,7 +2102,7 @@ describe("neuve CLI boundary", () => {
     expect(vent.exitCode).toBe(1);
     expect(vent.stdout).toContain("Received blank text.");
     expect(vent.stdout).toContain(
-      '--reconciliation-id takes the harness\'s review cycle ID of 1 to 256 characters. Received "".',
+      "--reconciliation-id takes the harness's review cycle ID of 1 to 256 characters. Received 0 characters.",
     );
     for (const output of [proof.stdout, vent.stdout]) {
       const hint = "ask the person to run neuve setup hooks";
@@ -2214,7 +2225,7 @@ describe("neuve CLI boundary", () => {
         "neuve: --revision takes a hexadecimal Git object name. No value was supplied.",
         "--question takes non-empty text. No value was supplied.",
         '--max-results takes a positive integer, not "0".',
-        '--relationship-plan takes a JSON array, not "{}".',
+        "--relationship-plan takes a JSON array.",
         "",
       ].join("\n"),
       exitCode: 2,

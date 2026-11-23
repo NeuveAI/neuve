@@ -10,7 +10,12 @@ import {
   ReviewStats,
 } from "@neuve/records-core";
 import { ProofTools } from "@neuve/harness";
-import { execute, withStore, write } from "./records-cli.ts";
+import {
+  execute,
+  unknownCommandRefusal,
+  withStore,
+  write,
+} from "./records-cli.ts";
 
 export const PROOF_HELP = `Usage:
   neuve proof record <base>..<head> --kind <kind> --claim <text> --requirement <text>
@@ -271,7 +276,7 @@ export const runProofCli = async (args: readonly string[]): Promise<number> => {
       await write(PROOF_HELP);
       return command === undefined ? 2 : 0;
     default:
-      await write(`Unknown proof command: ${command}\n\n${PROOF_HELP}`);
+      await write(unknownCommandRefusal(command, "neuve proof"));
       return 2;
   }
 };

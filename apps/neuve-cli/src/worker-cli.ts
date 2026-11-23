@@ -65,7 +65,13 @@ import {
 } from "@neuve/harness";
 import * as HarnessRuntimes from "@neuve/harness/runtimes";
 import { heldForAccount, readHeldReviews } from "@neuve/harness/held-reviews";
-import { argumentRefusal, execute, withStore, write } from "./records-cli.ts";
+import {
+  argumentRefusal,
+  execute,
+  unknownCommandRefusal,
+  withStore,
+  write,
+} from "./records-cli.ts";
 import { thisBuild } from "./review-worker.ts";
 import { prepareWorkerStore, warnIfPaused } from "./installed-copy.ts";
 import { runStackFetchChild, runStackIndexChild } from "./stack-cli.ts";
@@ -224,9 +230,10 @@ const describeQueueError = (error: unknown) => {
   if (typeof error === "object" && error !== null && "_tag" in error) {
     const tagged = error as { _tag: string; message?: string; seq?: number };
     if (tagged._tag === "JobNotFound") return `No job ${tagged.seq}.`;
+    if (error instanceof JobQueue.InvalidJobPayload)
+      return `Job payload takes the JSON fields for ${error.kind}.`;
     if (
       tagged._tag === "JobStateConflict" ||
-      tagged._tag === "InvalidJobPayload" ||
       tagged._tag === "JobHeldByNewerBuild"
     )
       return tagged.message ?? tagged._tag;
@@ -494,7 +501,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
         try {
           payload = JSON.parse(payloadText);
         } catch {
-          problems.push(argumentRefusal("Job payload", "JSON", payloadText));
+          problems.push("Job payload takes JSON.");
         }
       }
       if (!parsedKind.success || problems.length > 0)
@@ -567,9 +574,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       return 0;
     }
     default:
-      throw new Error(
-        `Unknown jobs command: ${subcommand}. Run neuve jobs --help for usage.`,
-      );
+      throw new Error(unknownCommandRefusal(subcommand, "neuve jobs"));
   }
 };
 
@@ -1308,8 +1313,6 @@ export const runWorkerCli = async (
       return 0;
     }
     default:
-      throw new Error(
-        `Unknown worker command: ${subcommand}. Run neuve worker --help for usage.`,
-      );
+      throw new Error(unknownCommandRefusal(subcommand, "neuve worker"));
   }
 };

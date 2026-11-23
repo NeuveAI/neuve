@@ -59,7 +59,7 @@ import {
   type StepsOutcome,
 } from "./setup-steps.ts";
 import { gitAvailability, gitRefusal } from "./git-available.ts";
-import { argumentRefusal } from "./records-cli.ts";
+import { argumentRefusal, unknownOptionRefusal } from "./records-cli.ts";
 import { z } from "zod";
 import {
   checkGraphEngine,
@@ -170,7 +170,6 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   const args = given.filter((arg) => !SWITCHES.includes(arg));
   const raw: Record<string, string> = {};
   const problems: string[] = [];
-  const accepted = [...Object.keys(flagsSchema.shape), ...SWITCHES, "--help"];
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index]!;
     const next = args[index + 1];
@@ -178,7 +177,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
       next === undefined || next.startsWith("--") ? undefined : next;
     if (value !== undefined) index += 1;
     if (!Object.hasOwn(flagsSchema.shape, flag)) {
-      problems.push(argumentRefusal("setup", accepted.join(", "), flag));
+      problems.push(unknownOptionRefusal(flag, "neuve setup"));
       continue;
     }
     if (value === undefined) {
@@ -718,9 +717,7 @@ export const runSetupUpgrade = async (
   const noSkills = given.includes("--no-skills");
   const other = given.find((arg) => arg !== "--no-skills");
   if (other !== undefined)
-    throw new Error(
-      `neuve setup upgrade takes only --no-skills, not ${other}.`,
-    );
+    throw new Error(unknownOptionRefusal(other, "neuve setup upgrade"));
   const screen = commandScreen({});
   const programs = agentLooks(AGENT_IDS, "upgrade", false, { screen });
   return upgradeSetup({

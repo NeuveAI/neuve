@@ -69,7 +69,7 @@ const parseVent = (
     );
   if (fields.has("reconciliationId"))
     problems.push(
-      `--reconciliation-id takes the harness's review cycle ID of 1 to 256 characters. Received ${JSON.stringify(request.reconciliationId)}.`,
+      `--reconciliation-id takes the harness's review cycle ID of 1 to 256 characters. Received ${[...(request.reconciliationId ?? "")].length} characters.`,
     );
   return Effect.fail(new InvalidEvent({ message: problems.join("\n") }));
 };

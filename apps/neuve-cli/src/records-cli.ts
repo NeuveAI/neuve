@@ -151,6 +151,8 @@ export const describeFailure = (error: unknown, fallback?: string): string => {
       case "ProofRefused":
       case "InvalidEvent":
         return fallback ?? String(tagged["message"]);
+      case "UnknownSession":
+        return "The session override did not name a live session in this repository. Use <harness>:<session id> or a live session ID.";
       case "RepositoryUnavailable":
         return `${String(tagged["repository"])} is not inside a git repository, so it has no Records store.`;
       case "BackupFailed":
@@ -195,15 +197,21 @@ export const argumentRefusal = (
     : `${argument} takes ${accepted}, not ${JSON.stringify(received)}.`;
 
 export const unknownOptionRefusal = (
-  name: string | undefined,
+  token: string | undefined,
   command: string,
 ) => {
+  const name = token?.split("=", 1)[0];
   const option =
     name !== undefined && /^-{1,2}[a-zA-Z][a-zA-Z0-9-]{0,63}$/.test(name)
       ? ` '${name}'`
       : "";
   return `Unknown option${option}. Run ${command} --help for accepted options.`;
 };
+
+export const unknownCommandRefusal = (token: string, command: string) =>
+  token.startsWith("-")
+    ? unknownOptionRefusal(token, command)
+    : `Unknown command. Run ${command} --help for usage.`;
 
 const bytes = (count: number) => {
   if (count < 1024) return `${count} B`;
@@ -702,8 +710,6 @@ export const runRecordsCli = async (
       return 0;
     }
     default:
-      throw new Error(
-        `Unknown records command: ${subcommand}. Run neuve records --help for usage.`,
-      );
+      throw new Error(unknownCommandRefusal(subcommand, "neuve records"));
   }
 };
