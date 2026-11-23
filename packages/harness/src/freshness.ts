@@ -24,6 +24,7 @@ import {
   SCOPE_FETCH_BOUND_MS,
   ScopeSnapshot,
   SCOPE_RECIPE,
+  hasFixedScope,
   keepFetched,
   keepExternalFetched,
   readScopeText,
@@ -168,6 +169,7 @@ export const checkSources = (options: {
   readonly location: StoreLocation;
   readonly cycleId: string;
   readonly readSince: number;
+  readonly snapshotKey?: string;
 }) =>
   Effect.gen(function* () {
     const clients = yield* McpClients;
@@ -175,6 +177,8 @@ export const checkSources = (options: {
     const deadline = started + SCOPE_FETCH_BOUND_MS;
     const fetching = new Map(fetchingServers(options.integrations));
     const refreshes = readRefreshes(options.location, options.cycleId).values;
+    const fixed =
+      options.snapshotKey !== undefined && hasFixedScope(options.snapshotKey);
     const check = (source: ScopeSource) =>
       Effect.gen(function* () {
         const copy = readScopeText(
@@ -188,7 +192,7 @@ export const checkSources = (options: {
           null;
         if (
           source.complete !== false &&
-          Date.parse(source.fetchedAt) >= options.readSince
+          (fixed || Date.parse(source.fetchedAt) >= options.readSince)
         )
           return {
             source: source.id,
@@ -902,6 +906,7 @@ export const sourceFreshness = <R>(options: {
       location: options.location,
       cycleId: options.cycleId,
       readSince: options.readSince,
+      snapshotKey: options.snapshotKey,
     });
     return yield* settleFreshness({
       snapshot: options.snapshot,

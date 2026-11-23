@@ -1316,7 +1316,16 @@ const precomputed = (repository: string, runId: string, at?: StoreLocation) => {
           // is there: a run whose leads are not stored either still runs them or ended without.
           const ended = leadsRecord?.["status"];
           const leadsEnd = typeof ended === "string" ? ended : undefined;
-          const scope = yield* Scope.storedSnapshot(cycleId);
+          const scopeKey = log.findLast(
+            (record) => record.type === "precompute.scope",
+          )?.["key"];
+          const scope = yield* Scope.storedSnapshot(
+            cycleId,
+            range,
+            typeof scopeKey === "string" && Scope.hasFixedScope(scopeKey)
+              ? scopeKey
+              : undefined,
+          );
           // The masked raw captures of fetched items (10.8): what a capture keeps, never the
           // unmasked text agents read.
           const captures = new Map<string, string>();
