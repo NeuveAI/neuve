@@ -11,7 +11,7 @@ import {
   reviewNotice,
   reviewTool,
   wakeNote,
-  withReviews,
+  withCards,
 } from "../apps/app/src/review-card";
 import { toEvents } from "../apps/app/src/timeline";
 import type { Item, Tool } from "../apps/app/src/transcript";
@@ -263,7 +263,8 @@ function events(
   draft = "",
   by: (asker: string) => string | undefined = () => undefined,
 ) {
-  return withReviews(
+  // Plan cards share this placement; apps/app/tests/plan-card.test.ts covers them.
+  return withCards(
     toEvents(
       list,
       "t",
@@ -279,6 +280,7 @@ function events(
     ),
     list,
     feed,
+    new Map(),
     "t",
     !!draft,
     true,
