@@ -35,7 +35,7 @@ const nameDescription = "Lowercase kebab-case name, such as implement-auth.";
 const baseDescription = "Branch, tag, or commit, such as HEAD, release, or origin/release.";
 const laneChangeFields = {
 	name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).describe(nameDescription),
-	base: z.string().min(1).optional().describe(baseDescription),
+	base: z.string().optional().describe(baseDescription),
 };
 const LaneArguments = z.discriminatedUnion("action", [
 	z.strictObject({ action: z.literal("start"), ...laneChangeFields }),
@@ -44,7 +44,7 @@ const LaneArguments = z.discriminatedUnion("action", [
 		action: z.literal("list"),
 		name: z.string().optional().describe(nameDescription),
 		base: z.string().optional().describe(baseDescription),
-	}),
+	}).overwrite(({ action }) => ({ action })),
 ]);
 export const laneArguments = toolArguments("lane", LaneArguments, {
 	name: 'a lowercase kebab-case work lane name of 1 to 63 characters starting with a letter or digit, such as "implement-auth"',

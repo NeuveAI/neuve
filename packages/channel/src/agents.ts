@@ -26,7 +26,7 @@ async function answer(api: ToolExecutionApi, id: EntryId, context: Context): Pro
 	return message ? room.text(message) : "";
 }
 
-const SubagentModel = z.string().regex(/^[^/\s]+\/\S+$/)
+const SubagentModel = z.string().regex(/^(?:[^/\s]+\/\S+)?$/)
 	.describe("A model in provider/model-id form. Omit to inherit the parent chat's model.");
 const subagentArguments = toolArguments("subagent", z.strictObject({
 	task: z.string().describe("What the subagent should do"),

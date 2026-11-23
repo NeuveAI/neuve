@@ -36,7 +36,7 @@ export function toolArguments<Arguments>(
 	const properties: Record<string, z.ZodType> = {};
 	for (const option of actions?.values() ?? []) {
 		for (const [key, field] of Object.entries(option.shape)) {
-			if (key !== "action") properties[key] = z.optional(field);
+			if (key !== "action" && !Object.hasOwn(properties, key)) properties[key] = z.optional(field);
 		}
 	}
 	// Providers such as Anthropic read top-level properties when presenting a tool to the model.

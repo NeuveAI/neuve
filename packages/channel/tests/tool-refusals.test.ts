@@ -15,7 +15,7 @@ isolateClaudeConfig();
 test("chat tools show every bad field, the accepted choices, and the original arguments", async () => {
 	fixture = await Fixture.create();
 	const calls: [string, JsonObject, string[]][] = [
-		["lane", { action: "open", name: [], typo: true }, [
+		["lane", { action: "open", name: "Bad Name", typo: true }, [
 			'action: Expected one of "start", "switch", "list".',
 			"name: Expected a lowercase kebab-case work lane name of 1 to 63 characters",
 			"typo: Unknown argument, use only action, name, base.",
@@ -104,25 +104,35 @@ test("chat tools retain pi's argument coercion and declared required fields", as
 		["message", { channel: "two", text: "default chat", invoke: false, chat: null }, "null-chat", "Delivered to two"],
 		["message", { channel: "two", text: "passive by null", invoke: null }, "null-invoke", "Delivered to two"],
 		["lane", { action: "list", name: "", base: "" }, "list", "work"],
+		["lane", { action: "list", name: "Bad Name" }, "list-ignored-name", "work"],
 		["lane", { action: "list", name: null, base: null }, "null-list", "work"],
 		["lane", { action: "start", name: "null-base", base: null }, "null-base", "Started work lane null-base"],
+		["lane", { action: "start", name: "empty-base", base: "" }, "empty-base", "Started work lane empty-base"],
 		["channels", {}, "channels", "two"],
 	];
 	let required: Record<string, unknown> = {};
+	let laneNamePattern: unknown;
 	fixture.script(
 		({ messages }) => {
-			required = Object.fromEntries(getCurrentTools(messages)
+			const tools = getCurrentTools(messages);
+			required = Object.fromEntries(tools
 				.filter(tool => ["lane", "message", "subagent"].includes(tool.name))
 				.map(tool => [tool.name, tool.parameters.required]));
+			laneNamePattern = tools.find(tool => tool.name === "lane")?.parameters.properties?.name?.pattern;
 			return fauxAssistantMessage(fauxToolCall("subagent", { task: "inspect", model: null }, { id: "inherited" }), { stopReason: "toolUse" });
 		},
 		fauxAssistantMessage("Child used the inherited model"),
+		fauxAssistantMessage(fauxToolCall("subagent", { task: "inspect", model: "" }, { id: "empty-model" }), { stopReason: "toolUse" }),
+		(_context, _options, _state, model) => fauxAssistantMessage(`Child used ${model.provider}/${model.id}`),
 		fauxAssistantMessage(calls.map(([name, args, id]) => fauxToolCall(name, args, { id })), { stopReason: "toolUse" }),
 		fauxAssistantMessage("done"),
 	);
 	const watch = await fixture.watch();
 	try {
 		await fixture.request({ op: "ask", author: OWNER, text: "check accepted calls", model: MODEL });
+		expect(await watch.until("result", event => event.call === "empty-model")).toMatchObject({
+			error: false, text: "Child used faux/coder",
+		});
 		await watch.until("reply", event => event.text === "done");
 		expect(required).toEqual({
 			lane: ["action"],
@@ -136,6 +146,8 @@ test("chat tools retain pi's argument coercion and declared required fields", as
 			expect(result?.error, id).toBe(false);
 			expect(result?.text, id).toContain(expected);
 		}
+		expect(results.find(event => event.call === "empty-base")?.text).toContain("Its Diff compares against refs/heads/main");
+		expect(laneNamePattern).toBe("^[a-z0-9][a-z0-9-]{0,62}$");
 		expect(Object.fromEntries(delivered.map(({ text, chat, invoke }) => [text, [chat, invoke]]))).toEqual({
 			"invoke by string": [undefined, true],
 			"invoke by numeric string": [undefined, true],
