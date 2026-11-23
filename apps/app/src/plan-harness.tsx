@@ -162,7 +162,7 @@ const TABS: { label: string; props: PlanViewProps }[] = [
 		props: {
 			plan: view(plan()),
 			text: TEXT,
-			approve: { onApprove: () => {}, approving: false, error: "The plan changed since you read it." },
+			approve: { onApprove: () => {}, approving: false, error: "The plan has changed. Read the current version before approving it." },
 		},
 	},
 	{

@@ -860,8 +860,7 @@ function useLayout(
 			tabs: [...items.values()].map((item) => ({
 				id: item.uid,
 				name: item.name,
-				// The host's window state does not know the Plan tab yet.
-				type: item.kind === "plan" ? "blank" : item.kind,
+				type: item.kind,
 				active: active.has(item.uid),
 			})),
 			focused,

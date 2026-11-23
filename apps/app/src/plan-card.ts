@@ -22,7 +22,11 @@ export function planCards(plans: Plan[], name: (author: string) => string) {
 	return new Map(plans.map((plan) => [plan.call, planView(plan, name)]));
 }
 
-/** The writing tool's row: its arguments hold the whole plan, which the plan's card shows instead. */
+/**
+ * The writing tool's row: its arguments and its result hold the whole plan, which the plan's card
+ * shows instead, so the row keeps only the result's first line.
+ */
 export function planTool(tool: Tool): { name: string; summary?: string; result?: string } | undefined {
-	if (tool.name === PLAN_TOOL) return { name: "Write plan" };
+	if (tool.name !== PLAN_TOOL) return;
+	return { name: "Write plan", result: tool.result?.text.split("\n", 1)[0] };
 }
