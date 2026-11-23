@@ -1,3 +1,4 @@
+// Verify Claude Code's MCP replies, schemas, and tool-use IDs at the server boundary.
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -59,6 +60,15 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
       client.connect(clientTransport),
       server.instance.connect(serverTransport),
     ]);
+    expect(await client.callTool({ name: "missing" })).toMatchObject({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Neuve has no tool "missing". This chat's tools are: read.`,
+        },
+      ],
+    });
     expect((await client.listTools()).tools).toMatchObject([
       {
         inputSchema: definition.inputSchema,
@@ -93,7 +103,7 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
       await client.callTool({ name: "read", arguments: {} }),
     ).toMatchObject({ isError: true });
     expect(handled).toHaveLength(2);
-    expect(faults).toBe(1);
+    expect(faults).toBe(2);
   } finally {
     await client.close();
     await server.instance.close();

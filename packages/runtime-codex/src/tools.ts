@@ -13,7 +13,7 @@ import {
   ToolSchema,
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { mcpTool, type ToolDefinition } from "@neuve/runtime";
+import { mcpTool, unknownTool, type ToolDefinition } from "@neuve/runtime";
 import { Effect, type Scope } from "effect";
 
 /** A call that reached the server: what the session runs, and what Codex gets back. */
@@ -24,11 +24,6 @@ export type RunTool = (
   /** Codex's own id for the call, the id of its `mcpToolCall` item (`_meta.callId`, seen live). */
   callId: string | undefined,
 ) => Promise<CallToolResult>;
-
-const refusal = (text: string): CallToolResult => ({
-  content: [{ type: "text", text }],
-  isError: true,
-});
 
 /**
  * Answers one HTTP request: the token first, then one stateless MCP exchange. A fresh server and
@@ -58,7 +53,7 @@ export const toolHandler = (
         (tool) => tool.name === call.params.name,
       );
       return definition === undefined
-        ? refusal("Unknown Neuve tool.")
+        ? unknownTool(call.params.name, tools)
         : run(
             definition,
             call.params.arguments ?? {},

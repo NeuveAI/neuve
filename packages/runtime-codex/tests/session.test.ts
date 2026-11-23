@@ -433,23 +433,25 @@ describe("each way a turn ends gives exactly one terminal event", () => {
         expect(types).toEqual([
           "turn.started",
           "text",
+          "work.started",
           "work.finished",
+          "work.started",
           "work.finished",
           "usage",
           "message.finished",
           "turn.finished",
         ]);
-        expect(read.events[2]).toMatchObject({
+        expect(read.events[3]).toMatchObject({
           kind: "command",
           workId: "c1",
           errored: true,
           output: "denied",
         });
-        expect(read.events[3]).toMatchObject({
+        expect(read.events[5]).toMatchObject({
           kind: "file-change",
           errored: false,
         });
-        expect(read.events[4]).toMatchObject({
+        expect(read.events[6]).toMatchObject({
           scope: "turn",
           contextWindow: 400000,
           usage: { input: 40, cacheRead: 60, output: 20, thinking: 1 },
@@ -460,8 +462,7 @@ describe("each way a turn ends gives exactly one terminal event", () => {
     );
   });
 
-  // Seen live: Codex completes no item for a command an interrupt cut short.
-  test("work an interrupt cut short is reported once, as not finished", async () => {
+  test("an interrupted command reports a stopped result without an item completion", async () => {
     const fake = codex((message, process) => {
       if (message.method === "turn/interrupt")
         queueMicrotask(() =>
@@ -489,18 +490,24 @@ describe("each way a turn ends gives exactly one terminal event", () => {
             durationMs: null,
           },
         });
-        yield* Effect.sleep("5 millis");
+        expect(yield* read.next("work.started")).toMatchObject({
+          workId: "c1",
+          kind: "command",
+          input: { command: "sleep 120" },
+        });
         yield* session.interruptTurn({ turnId: "turn" });
         yield* read.next("turn.finished");
         expect(read.events.map((e) => e.type)).toEqual([
           "turn.started",
+          "work.started",
           "work.finished",
           "turn.finished",
         ]);
-        expect(read.events[1]).toMatchObject({
+        expect(read.events[2]).toMatchObject({
           workId: "c1",
           kind: "command",
           errored: true,
+          output: "Stopped.",
           input: { command: "sleep 120" },
         });
       }),
@@ -1878,38 +1885,54 @@ describe("what the first tests missed", () => {
     );
   });
 
-  test("work started and completed is reported once", async () => {
+  test("a long command reports its start while Codex still runs it", async () => {
     const fake = codex();
-    await run(fake, (session, read) =>
-      Effect.gen(function* () {
-        yield* startOn(fake, session);
-        const item = {
-          type: "commandExecution",
-          id: "c1",
-          command: "ls",
-          cwd: "/work",
-          status: "inProgress",
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: null,
-        };
-        fake.send("item/started", {
-          threadId: "thread-1",
-          turnId: "codex-turn",
-          item,
-        });
-        fake.send("item/completed", {
-          threadId: "thread-1",
-          turnId: "codex-turn",
-          completedAtMs: 0,
-          item: { ...item, status: "completed", exitCode: 0 },
-        });
-        fake.send("turn/completed", completed("completed"));
-        yield* read.next("turn.finished");
-        expect(read.events.filter((e) => e.type === "work.finished")).toEqual([
-          expect.objectContaining({ workId: "c1", errored: false }),
-        ]);
-      }),
+    const log: LogEntry[] = [];
+    const secret = "sk-012345678901234567890123";
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session);
+          const item = {
+            type: "commandExecution",
+            id: "c1",
+            command: `sleep 120 # ${secret}`,
+            cwd: "/work",
+            status: "inProgress",
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          };
+          fake.send("item/started", {
+            threadId: "thread-1",
+            turnId: "codex-turn",
+            item,
+          });
+          expect(yield* read.next("work.started")).toMatchObject({
+            workId: "c1",
+            kind: "command",
+            input: { command: `sleep 120 # ${secret}`, cwd: "/work" },
+          });
+          expect(read.events.map((event) => event.type)).toEqual([
+            "turn.started",
+            "work.started",
+          ]);
+          expect(JSON.stringify(log)).toContain("sleep 120 # <token>");
+          expect(JSON.stringify(log)).not.toContain(secret);
+          fake.send("item/completed", {
+            threadId: "thread-1",
+            turnId: "codex-turn",
+            completedAtMs: 0,
+            item: { ...item, status: "completed", exitCode: 0 },
+          });
+          fake.send("turn/completed", completed("completed"));
+          yield* read.next("turn.finished");
+          expect(read.events.filter((e) => e.type === "work.finished")).toEqual(
+            [expect.objectContaining({ workId: "c1", errored: false })],
+          );
+        }),
+      { log: (entry) => log.push(entry) },
     );
   });
 

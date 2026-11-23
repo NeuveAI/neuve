@@ -195,7 +195,7 @@ When a turn ends, Neuve tries to decline approvals still waiting for an answer. 
 
 `respondToApproval` reports delivery after Codex's input stream accepts the reply. A refused write ends the connection and reports `turn-ended`. A reply to an already-resolved request reports `runtime-resolved`. A request ID the runtime no longer knows reports non-delivery without a reason. A successful write confirms delivery to the process. The command or change has its own outcome later in the turn.
 
-A call to one of Neuve's tools still running is reported as `tool.finished`, errored, before `turn.finished`, and then aborted; it is taken out of the turn first, so a handler that resumes on the abort does not report it again. Codex's own work that started and never completed is reported once, as not finished. At session open, `account/read` checks a Codex home. Neuve checks its sign-in at session open and before each turn. Either can refuse the session with `SignInRequired` before a turn starts.
+At turn end Neuve removes each pending tool call, emits an errored `tool.finished`, and aborts the call before `turn.finished`. Neuve answers an interrupted call with "Stopped." The runtime reports its own work as `work.started` on `item/started` and `work.finished` on `item/completed`. If Codex sends only a completion, the runtime emits the start immediately before the finish. At session open, `account/read` checks a Codex home. Neuve checks its sign-in at session open and before each turn. Either can refuse the session with `SignInRequired` before a turn starts.
 
 ## Codex's requests, by mode
 

@@ -1,3 +1,4 @@
+// Verify restricted captures mask content and preserve readable runtime state.
 import { expect, test } from "bun:test";
 import { TurnOutcome } from "@neuve/runtime";
 import { z } from "zod";
@@ -92,6 +93,44 @@ const project = (data: ContractState, declared: string[] = []) =>
       rate: null,
     },
   );
+
+test("a saved command start masks the same input as its finish", async () => {
+  const secret = "sk-012345678901234567890123";
+  const command = {
+    turnId: "turn",
+    at: "2026-11-21T12:00:00Z",
+    workId: "command",
+    kind: "command",
+    input: { command: `echo ${secret}`, cwd: "/work" },
+  } as const;
+  const { run, sessions } = await project({
+    ...state(),
+    events: [
+      { ...command, type: "work.started" },
+      {
+        ...command,
+        type: "work.finished",
+        output: secret,
+        errored: false,
+      },
+    ],
+  });
+  expect(run.contractContexts?.[0]?.state.events).toEqual([
+    {
+      ...command,
+      type: "work.started",
+      input: { command: "echo sk-<masked>", cwd: "/work" },
+    },
+    {
+      ...command,
+      type: "work.finished",
+      input: { command: "echo sk-<masked>", cwd: "/work" },
+      output: "sk-<masked>",
+      errored: false,
+    },
+  ]);
+  expect(JSON.stringify({ run, sessions })).not.toContain(secret);
+});
 
 // Why: pi must continue to read stored state emitted by the pre-extraction validators.
 test("tool state stored at 60599135 still parses through docs", () => {

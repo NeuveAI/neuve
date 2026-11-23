@@ -1,7 +1,4 @@
-// Why: Neuve's tools reach Codex over a local HTTP server, so the token is the only thing that
-// keeps another process on the machine from calling them, and a call must appear on the contract
-// as Neuve's own tool, with its own events and its handler's checks, whatever Codex does.
-// The session tests bind a local port: run them outside a sandbox that forbids that.
+// Verify the HTTP replies and runtime events Codex gets for Neuve's tools.
 import { expect, test } from "bun:test";
 import {
   AccountName,
@@ -50,10 +47,14 @@ const call = (n: number) => ({
   params: { name: "probe", arguments: { n }, _meta: { callId: `exec-${n}` } },
 });
 
-test("without the session's token the server answers nothing", async () => {
-  const handler = toolHandler([probe], "secret", async () => ({ content: [] }));
+test("the server checks the session token and lists the tools an unknown call can use", async () => {
+  const handler = toolHandler(
+    [probe, { ...probe, name: "inspect" }],
+    "secret",
+    async () => ({ content: [] }),
+  );
   const list = { jsonrpc: "2.0", id: 1, method: "tools/list" };
-  const request = (token?: string) =>
+  const request = (token?: string, body: unknown = list) =>
     new Request("http://127.0.0.1/mcp", {
       method: "POST",
       headers: {
@@ -61,14 +62,36 @@ test("without the session's token the server answers nothing", async () => {
         accept: "application/json, text/event-stream",
         ...(token === undefined ? {} : { authorization: token }),
       },
-      body: JSON.stringify(list),
+      body: JSON.stringify(body),
     });
   expect((await handler(request())).status).toBe(401);
   expect((await handler(request("Bearer wrong!"))).status).toBe(401);
   const answered = await handler(request("Bearer secret"));
   expect(answered.status).toBe(200);
   expect(await answered.json()).toMatchObject({
-    result: { tools: [{ name: "probe", annotations: { readOnlyHint: true } }] },
+    result: {
+      tools: [
+        { name: "probe", annotations: { readOnlyHint: true } },
+        { name: "inspect" },
+      ],
+    },
+  });
+  const unknown = await handler(
+    request("Bearer secret", {
+      ...call(1),
+      params: { name: "missing" },
+    }),
+  );
+  expect(await unknown.json()).toMatchObject({
+    result: {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Neuve has no tool "missing". This chat's tools are: probe, inspect.`,
+        },
+      ],
+    },
   });
 });
 
@@ -84,7 +107,14 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
         environment: {},
         policy: {
           systemPrompt: "fixture",
-          tools: [probe],
+          tools: [
+            probe,
+            {
+              ...probe,
+              name: "fails",
+              handle: () => Effect.die("fixture failure"),
+            },
+          ],
           approvalPolicy: "allow",
           turnLimit: TurnLimit.parse(8),
         },
@@ -131,12 +161,31 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
       const refused = yield* Effect.promise(() =>
         rpc(url, token, call(0)).then((r) => r.json()),
       );
-      expect(refused).toMatchObject({ result: { isError: true } });
+      expect(refused).toMatchObject({
+        result: {
+          isError: true,
+          content: [{ type: "text", text: "refused by its own check" }],
+        },
+      });
+      const failed = yield* Effect.promise(() =>
+        rpc(url, token, { ...call(2), params: { name: "fails" } }).then((r) =>
+          r.json(),
+        ),
+      );
+      expect(failed).toMatchObject({
+        result: {
+          isError: true,
+          content: [{ type: "text", text: "The tool failed." }],
+        },
+      });
       expect(seen.map((s) => s.input)).toEqual([{ n: 1 }, { n: 0 }]);
       fake.send("turn/completed", completed("completed"));
       while ((yield* Queue.take(queue)).type !== "turn.finished");
       expect(events.map((e) => e.type)).toEqual([
         "turn.started",
+        "message.finished",
+        "tool.started",
+        "tool.finished",
         "message.finished",
         "tool.started",
         "tool.finished",
@@ -166,20 +215,33 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
   );
 });
 
-// A call still running when its turn ends is aborted, and reported finished, errored, before the
-// turn's ending, so no handler outlives the turn it was called in.
-test("a call still running at the turn's end is aborted and reported first", async () => {
-  const fake = codex();
+test('Codex gets "Stopped." when a Neuve tool call is interrupted', async () => {
+  const fake = codex((message, process) => {
+    if (message.method === "turn/interrupt")
+      queueMicrotask(() =>
+        process.io.send({
+          method: "turn/completed",
+          params: completed("interrupted"),
+        }),
+      );
+    return undefined;
+  });
+  const started = Promise.withResolvers<void>();
   let aborted = false;
   const waits: ToolDefinition = {
     ...probe,
     name: "waits",
     handle: (_input, call) =>
-      Effect.callback<{ text: string }>((resume) => {
-        call!.signal.addEventListener("abort", () => {
-          aborted = true;
-          resume(Effect.succeed({ text: "late" }));
-        });
+      Effect.callback<never>((resume) => {
+        call!.signal.addEventListener(
+          "abort",
+          () => {
+            aborted = true;
+            resume(Effect.interrupt);
+          },
+          { once: true },
+        );
+        started.resolve();
       }),
   };
   await Effect.runPromise(
@@ -214,15 +276,22 @@ test("a call still running at the turn's end is aborted and reported first", asy
       });
       const { args, env } = fake.current();
       const url = /mcp_servers\.neuve\.url="([^"]+)"/.exec(args.join(" "))![1]!;
-      void rpc(url, env.NEUVE_CODEX_TOOL_TOKEN!, {
+      const response = rpc(url, env.NEUVE_CODEX_TOOL_TOKEN!, {
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
         params: { name: "waits", arguments: {} },
-      }).catch(() => undefined);
+      }).then((r) => r.json());
       while ((yield* Queue.take(queue)).type !== "tool.started");
-      fake.send("turn/completed", completed("completed"));
+      yield* Effect.promise(() => started.promise);
+      yield* session.interruptTurn({ turnId: "turn" });
       while ((yield* Queue.take(queue)).type !== "turn.finished");
+      expect(yield* Effect.promise(() => response)).toMatchObject({
+        result: {
+          content: [{ type: "text", text: "Stopped." }],
+          isError: true,
+        },
+      });
       expect(aborted).toBe(true);
       expect(events.map((e) => e.type).slice(-2)).toEqual([
         "tool.finished",

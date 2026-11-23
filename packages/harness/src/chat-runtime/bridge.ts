@@ -98,6 +98,16 @@ type HeldCall = {
   waiter?: ((value: ToolOutcome) => void) | undefined;
   delivered: boolean;
 };
+const stoppedCall = {
+  text: "Stopped.",
+  error: "Stopped.",
+} satisfies ToolOutcome;
+type WorkOutcome = { output?: string | undefined; errored: boolean };
+type TranscriptEvent =
+  | Exclude<RuntimeEvent, { type: "work.started" | "work.finished" }>
+  | (Extract<RuntimeEvent, { type: "work.started" }> & {
+      outcome: Promise<WorkOutcome>;
+    });
 type ApprovalRequestEvent = Extract<
   RuntimeEvent,
   { type: "approval.requested" }
@@ -136,6 +146,7 @@ type Live = {
   route: AccountRoute;
   policy: SessionPolicy;
   calls: Map<string, HeldCall>;
+  pendingWork: Map<string, (outcome: WorkOutcome) => void>;
   /**
    * Set while a round recorded as a tool call waits for pi's next generation, on a runtime with
    * its own tools, whose turn goes on meanwhile. Its events are taken as they arrive and kept in
@@ -145,7 +156,7 @@ type Live = {
   holding?: boolean;
   /** Whether `pump` is recording events now; it alone handles them, in order. */
   pumping?: boolean;
-  backlog: RuntimeEvent[];
+  backlog: TranscriptEvent[];
   /** Set when the runtime's event stream has ended: cleanly, or with a failure. */
   streamEnded?: "ended" | "failed" | undefined;
   /** The person's message that arrived after the runtime's turn had ended: the next turn's input. */
@@ -188,15 +199,10 @@ export class ChatRuntimeBridge {
       folder?: string | undefined;
     }
   >();
-  /** What each piece of a runtime's own work returned, by the call id the transcript gives it. */
-  private readonly work = new Map<
-    string,
-    { output?: string | undefined; errored: boolean }
-  >();
-  /** The outcome of a recorded call to the pass-through, or nothing for one the bridge did not record. */
-  ran(callId: string) {
-    const outcome = this.work.get(callId);
-    this.work.delete(callId);
+  private readonly workResults = new Map<string, Promise<WorkOutcome>>();
+  takeWorkResult(callId: string) {
+    const outcome = this.workResults.get(callId);
+    this.workResults.delete(callId);
     return outcome;
   }
   private readonly limitListeners = new Set<
@@ -564,7 +570,7 @@ export class ChatRuntimeBridge {
     }
     const desired = policy(
       offeredMessages(gen),
-      () => Effect.succeed({ text: "Call stopped.", error: "Call stopped." }),
+      () => Effect.succeed(stoppedCall),
       selection,
       // Only a runtime with its own tools works in the chat's folder; for any other a change of
       // folder must not reopen its session.
@@ -839,6 +845,7 @@ export class ChatRuntimeBridge {
       route,
       policy: configured,
       calls: new Map(),
+      pendingWork: new Map(),
       backlog: [],
       generation: gen,
       last: this.now(),
@@ -893,7 +900,21 @@ export class ChatRuntimeBridge {
     live.reader = Effect.runPromise(
       Stream.runForEach(live.state.session.events, (event) => {
         const keep = Effect.sync(() => {
-          live.backlog.push(event);
+          // Pi waits for the result before starting the generation that drains the backlog.
+          if (event.type === "work.finished") {
+            live.pendingWork.get(event.workId)?.({
+              output: event.output,
+              errored: event.errored,
+            });
+            live.pendingWork.delete(event.workId);
+            return;
+          }
+          if (event.type === "work.started") {
+            if (live.closing) return;
+            const { promise, resolve } = Promise.withResolvers<WorkOutcome>();
+            live.pendingWork.set(event.workId, resolve);
+            live.backlog.push({ ...event, outcome: promise });
+          } else live.backlog.push(event);
           void this.pump(live);
         });
         if (
@@ -1029,6 +1050,7 @@ export class ChatRuntimeBridge {
     live: Live,
     status: NonNullable<Live["streamEnded"]>,
   ) {
+    this.settleWork(live, "The runtime ended before reporting a result.");
     const reason = live.approvalEnd ?? "turn-ended";
     try {
       await this.closeApprovals(live, reason, live.approvals.keys());
@@ -1186,7 +1208,6 @@ export class ChatRuntimeBridge {
   ): Effect.Effect<ToolOutcome> {
     return Effect.callback((resume) => {
       const live = read();
-      const stopped = { text: "Call stopped.", error: "Call stopped." };
       const cancel = () => {
         if (live) void this.closeLive(live, !live.command);
         resume(Effect.interrupt);
@@ -1202,7 +1223,7 @@ export class ChatRuntimeBridge {
           });
           void this.closeLive(live);
         }
-        resume(Effect.succeed(stopped));
+        resume(Effect.succeed(stoppedCall));
         return;
       }
       const entry = live.calls.get(call.callId) ?? { delivered: false };
@@ -1212,7 +1233,7 @@ export class ChatRuntimeBridge {
           reason: "duplicate-handler",
         });
         void this.closeLive(live);
-        resume(Effect.succeed(stopped));
+        resume(Effect.succeed(stoppedCall));
         return;
       }
       const done = (value: ToolOutcome) => {
@@ -1288,7 +1309,7 @@ export class ChatRuntimeBridge {
       );
     if (!live.closing) await this.closeLive(live);
   }
-  private async handle(live: Live, event: RuntimeEvent) {
+  private async handle(live: Live, event: TranscriptEvent) {
     // Scope closure may publish an interrupted turn before checkTurn returns its typed failure.
     if (event.type === "turn.finished") await live.command;
     if (live.closing || live.state.kind !== "open") return;
@@ -1298,7 +1319,7 @@ export class ChatRuntimeBridge {
       (event.type === "text" ||
         event.type === "message.finished" ||
         event.type === "tool.started" ||
-        event.type === "work.finished") &&
+        event.type === "work.started") &&
       !gen
     ) {
       this.log("chat-runtime.protocol.fault", {
@@ -1384,24 +1405,17 @@ export class ChatRuntimeBridge {
         await this.closeLive(live);
       }
     }
-    if (event.type === "work.finished" && gen) {
-      // Codex's own command, file change or search: recorded as a call that already ran, through
-      // the pass-through, whose result is never released to the runtime, which waits for none.
+    if (event.type === "work.started" && gen) {
       const id = `work-${event.workId}`;
-      this.work.set(id, {
-        ...(event.output === undefined ? {} : { output: event.output }),
-        errored: event.errored,
-      });
+      this.workResults.set(id, event.outcome);
       live.calls.set(id, { delivered: true });
       gen.message.content.push({
         type: "toolCall",
         id,
         name: RUNTIME_WORK_TOOL,
-        // What came back is the call's result, held once, not repeated here.
         arguments: {
           kind: event.kind,
           input: event.input,
-          errored: event.errored,
         },
       });
       gen.message.responseId = responseId(nativeId(session), "");
@@ -1681,6 +1695,11 @@ export class ChatRuntimeBridge {
       if (gen.account === account) this.finish(undefined, gen, "aborted");
     await closing;
   }
+  private settleWork(live: Live, output: string) {
+    for (const resolve of live.pendingWork.values())
+      resolve({ output, errored: true });
+    live.pendingWork.clear();
+  }
   private closeLive(
     live: Live,
     settle = true,
@@ -1696,6 +1715,7 @@ export class ChatRuntimeBridge {
     }
     const closed = Promise.withResolvers<void>();
     live.closing = closed.promise;
+    this.settleWork(live, stoppedCall.text);
     live.holding = false;
     live.backlog.length = 0;
     live.followUp = undefined;
@@ -1722,9 +1742,8 @@ export class ChatRuntimeBridge {
       if (command && live.generation)
         this.finish(live, live.generation, "aborted");
       for (const [id, call] of live.calls) {
-        call.waiter?.({ text: "Call stopped.", error: "Call stopped." });
-        // An outcome recorded for a round that will never run is let go with the session.
-        this.work.delete(id);
+        call.waiter?.(stoppedCall);
+        this.workResults.delete(id);
       }
       live.calls.clear();
       try {
