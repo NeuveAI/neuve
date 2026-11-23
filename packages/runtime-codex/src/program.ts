@@ -24,7 +24,6 @@ import { z } from "zod";
 import { connect, type CodexConnection } from "./client.ts";
 import * as Decode from "./decode.ts";
 import { codexEnvironment, launchArguments } from "./launch.ts";
-import { replaceKnown } from "./redact.ts";
 import program from "./program.json" with { type: "json" };
 import { CodexProcess } from "./services.ts";
 import { judge, versionOf } from "./version.ts";
@@ -219,15 +218,14 @@ export interface FindOptions {
   readonly candidates: ReadonlyArray<Candidate>;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly codexHome: string | undefined;
-  readonly accessToken?: string | undefined;
   readonly broken?: ReadonlyArray<string> | undefined;
   readonly handshakeTimeout?: Duration.Input | undefined;
 }
 
 /**
  * Asks each candidate in order, as its app server with the person's additions switched off and
- * no tool server, in a temporary working folder, until one answers as Codex.
- * runs `use` on that one before it is stopped. Every candidate's answer is returned.
+ * nothing of a session (no token, no tool server, a temporary folder), until one answers as Codex.
+ * Runs `use` on that one before it is stopped. Every candidate's answer is returned.
  */
 export const findCodex = <A, E>(
   options: FindOptions,
@@ -238,7 +236,6 @@ export const findCodex = <A, E>(
 ) =>
   Effect.gen(function* () {
     const tried: Asked[] = [];
-    const accessToken = options.accessToken;
     for (const candidate of options.candidates) {
       if (!executable(candidate.path)) {
         tried.push({ candidate, kind: "missing" });
@@ -258,15 +255,12 @@ export const findCodex = <A, E>(
                 exclude: [],
               },
               undefined,
-              accessToken !== undefined,
             ),
             env: codexEnvironment(
               options.environment,
               options.codexHome,
               undefined,
-              accessToken,
             ),
-            secrets: accessToken === undefined ? [] : [accessToken],
             cwd: tmpdir(),
             clientInfo: { name: "neuve", title: "Neuve", version: "0.1.0" },
             answer: () =>
@@ -282,15 +276,7 @@ export const findCodex = <A, E>(
             connected.value.initialize,
           );
           const verdict = judge(
-            answered.success
-              ? versionOf(
-                  accessToken === undefined
-                    ? answered.data.userAgent
-                    : replaceKnown(answered.data.userAgent, [
-                        [accessToken, "<token>"],
-                      ]),
-                )
-              : undefined,
+            answered.success ? versionOf(answered.data.userAgent) : undefined,
             options.broken,
           );
           // A program that names no Codex release did not answer as Codex.

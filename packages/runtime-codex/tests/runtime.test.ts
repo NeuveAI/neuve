@@ -159,18 +159,7 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
   expect(result.models?.map(({ id }) => id)).toEqual(["main", "other"]);
   expect(result.limits).toEqual([]);
   const child = fake.current();
-  expect(child.args).not.toContain("--listen");
-  expect(child.args).toEqual(
-    expect.arrayContaining([
-      'model_provider="openai_chatgpt_plan"',
-      'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
-      'model_providers.openai_chatgpt_plan.base_url="https://api.openai.com/v1"',
-      'model_providers.openai_chatgpt_plan.env_key="NEUVE_CODEX_ACCESS_TOKEN"',
-      'model_providers.openai_chatgpt_plan.wire_api="responses"',
-      "model_providers.openai_chatgpt_plan.requires_openai_auth=false",
-      "model_providers.openai_chatgpt_plan.supports_websockets=false",
-    ]),
-  );
+  expect(child.env.NEUVE_CODEX_ACCESS_TOKEN).toBeUndefined();
   const managedHome = child.env.CODEX_HOME;
   if (managedHome === undefined)
     throw new Error("expected a Neuve-owned Codex home");
@@ -187,8 +176,6 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
     ),
   );
   expect(keys).toEqual([managedHome, "default"]);
-  expect(child.env.NEUVE_CODEX_ACCESS_TOKEN).toBe("opaque.fixture.probe");
-  expect(child.commandEnvironment().NEUVE_CODEX_ACCESS_TOKEN).toBeUndefined();
   expect(child.io.written.map(({ method }) => method)).toEqual([
     "initialize",
     "initialized",
@@ -215,9 +202,24 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
       ),
     );
   expect(await open(options)).toBe("thread-1");
-  expect(fake.current().env.CODEX_HOME).toBe(child.env.CODEX_HOME);
+  const session = fake.current();
+  expect(session.env.CODEX_HOME).toBe(child.env.CODEX_HOME);
+  expect(session.env.NEUVE_CODEX_ACCESS_TOKEN).toBe("opaque.fixture.probe");
+  expect(session.commandEnvironment().NEUVE_CODEX_ACCESS_TOKEN).toBeUndefined();
+  expect(session.args).not.toContain("--listen");
+  expect(session.args).toEqual(
+    expect.arrayContaining([
+      'model_provider="openai_chatgpt_plan"',
+      'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
+      'model_providers.openai_chatgpt_plan.base_url="https://api.openai.com/v1"',
+      'model_providers.openai_chatgpt_plan.env_key="NEUVE_CODEX_ACCESS_TOKEN"',
+      'model_providers.openai_chatgpt_plan.wire_api="responses"',
+      "model_providers.openai_chatgpt_plan.requires_openai_auth=false",
+      "model_providers.openai_chatgpt_plan.supports_websockets=false",
+    ]),
+  );
   expect(
-    fake.current().io.written.some(({ method }) => method === "account/read"),
+    session.io.written.some(({ method }) => method === "account/read"),
   ).toBe(false);
 
   const hint = {

@@ -43,8 +43,9 @@ import { z } from "zod";
  * The credential file lives in `$XDG_CONFIG_HOME/neuve/` (or `~/.config/neuve/`), or the folder
  * `NEUVE_OPENAI_AUTH_DIR` names, written atomically with mode 0600 in a 0700 folder, and refused when
  * anyone else could read it. No token ever leaves this module except as the bearer value handed to
- * the provider's HTTP request, and as the lease below: errors name OAuth error codes and HTTP
- * statuses, never token text, and `status` reports the account and expiry only.
+ * the provider's HTTP request, as the lease below, or as the value `accessToken` supplies for the
+ * environment of a session whose program has answered as Codex. Errors name OAuth error codes
+ * and HTTP statuses, never token text, and `status` reports the account and expiry only.
  *
  * Cloud machines (10.129) share one sign-in through a single refresher. Refresh tokens rotate and
  * this module's lock serialises refreshes only within one filesystem, so machines that each held the

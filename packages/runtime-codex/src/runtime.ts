@@ -330,7 +330,7 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
     const find = <A, E>(
       account: CodexAccount,
       setting: string | undefined,
-      launch: Pick<FindOptions, "codexHome" | "accessToken">,
+      launch: Pick<FindOptions, "codexHome">,
       use: (c: CodexConnection, found: Candidate) => Effect.Effect<A, E>,
     ) =>
       // Run time never scans: the set path, or the PATH's one `codex`.
@@ -437,19 +437,18 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
         Effect.gen(function* () {
           const codex = yield* supported(account);
           const checkedAt = new Date().toISOString();
-          const settings = yield* Effect.gen(function* () {
+          const codexHome = yield* Effect.gen(function* () {
             const source = yield* accessTokenFor(codex);
-            const access = source === undefined ? undefined : yield* source();
-            const codexHome = yield* prepareCodexHome(home, codex);
-            return { accessToken: access?.token, codexHome };
+            if (source !== undefined) yield* source();
+            return yield* prepareCodexHome(home, codex);
           }).pipe(Effect.result);
-          if (settings._tag === "Failure")
+          if (codexHome._tag === "Failure")
             return {
-              signIn: signInFailure(settings.failure),
+              signIn: signInFailure(codexHome.failure),
               limits: [],
               checkedAt,
             } satisfies AccountProbe;
-          const { accessToken } = settings.success;
+          const onNeuveSignIn = usesNeuveSignIn(codex);
           const setting = yield* settingOf(codex).pipe(Effect.result);
           if (setting._tag === "Failure") {
             const unreadable: AccountProbe = {
@@ -467,14 +466,14 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
           const { found, tried } = yield* find(
             codex,
             setting.success,
-            settings.success,
+            { codexHome: codexHome.success },
             (connection, candidate) =>
               Effect.gen(function* () {
                 let signIn: SignInState = {
                   state: "signed-in",
                   credentialSource: "neuve-sign-in",
                 };
-                if (accessToken === undefined) {
+                if (!onNeuveSignIn) {
                   const signed = Decode.AccountAnswer.safeParse(
                     yield* connection.request("account/read", {
                       refreshToken: false,
@@ -492,20 +491,19 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
                       : { state: "signed-in" };
                 }
                 const models = yield* modelsOf(connection).pipe(Effect.option);
-                const limits =
-                  accessToken !== undefined
-                    ? []
-                    : yield* connection
-                        .request("account/rateLimits/read", {})
-                        .pipe(
-                          Effect.map((answer) => {
-                            const read = Decode.RateLimits.safeParse(answer);
-                            return read.success
-                              ? windows(read.data.rateLimits)
-                              : [];
-                          }),
-                          Effect.orElseSucceed(() => []),
-                        );
+                const limits = onNeuveSignIn
+                  ? []
+                  : yield* connection
+                      .request("account/rateLimits/read", {})
+                      .pipe(
+                        Effect.map((answer) => {
+                          const read = Decode.RateLimits.safeParse(answer);
+                          return read.success
+                            ? windows(read.data.rateLimits)
+                            : [];
+                        }),
+                        Effect.orElseSucceed(() => []),
+                      );
                 return {
                   signIn,
                   limits,
@@ -515,7 +513,7 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
                 Effect.timeout("25 seconds"),
                 Effect.orElseSucceed(() => ({
                   // A check that failed is not a sign-in to ask for.
-                  signIn: (accessToken === undefined
+                  signIn: (!onNeuveSignIn
                     ? { state: "unknown", reason: "check-failed" }
                     : {
                         state: "signed-in",
