@@ -980,7 +980,7 @@ export const signIn = async (options: SignInOptions): Promise<AuthStatus> => {
  * A usable access token: the stored one while it has more than five minutes left, otherwise a
  * refreshed one. Refreshes are serialised across processes; after taking the lock the file is read
  * again, so a token another process just refreshed is used rather than refreshed twice.
- * A rejected token is refreshed even when it has more than five minutes left.
+ * For a local sign-in, a rejected token is refreshed even when it has more than five minutes left.
  */
 export const accessToken = async (
   options: AuthOptions = {},

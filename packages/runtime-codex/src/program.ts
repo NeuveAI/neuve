@@ -23,7 +23,11 @@ import { Duration, Effect, Exit } from "effect";
 import { z } from "zod";
 import { connect, type CodexConnection } from "./client.ts";
 import * as Decode from "./decode.ts";
-import { codexEnvironment, launchArguments } from "./launch.ts";
+import {
+  codexEnvironment,
+  launchArguments,
+  type CodexTokenCommand,
+} from "./launch.ts";
 import program from "./program.json" with { type: "json" };
 import { CodexProcess } from "./services.ts";
 import { judge, versionOf } from "./version.ts";
@@ -218,6 +222,7 @@ export interface FindOptions {
   readonly candidates: ReadonlyArray<Candidate>;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly codexHome: string | undefined;
+  readonly tokenCommand?: CodexTokenCommand | undefined;
   readonly broken?: ReadonlyArray<string> | undefined;
   readonly handshakeTimeout?: Duration.Input | undefined;
 }
@@ -255,6 +260,7 @@ export const findCodex = <A, E>(
                 exclude: [],
               },
               undefined,
+              options.tokenCommand,
             ),
             env: codexEnvironment(
               options.environment,

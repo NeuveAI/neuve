@@ -27,6 +27,7 @@ import { authFilePath, readAuth, writeAuth } from "../src/openai-auth.ts";
 import { piStatusRuntime } from "../src/pi/status-runtime.ts";
 import { codexRuntimeOptions, harnessRuntimes } from "../src/runtimes.ts";
 import { harnessRuntimes as publicHarnessRuntimes } from "@neuve/harness/runtimes";
+import { fakeIssuer } from "./fixtures/openai-issuer.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "neuve-runtimes-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -122,13 +123,15 @@ const issuer = "https://fake-issuer.invalid";
 function fakeSignIn(
   directory: string,
   email: string | null = "fake@example.invalid",
+  identity?: { issuer: string; subject: string },
 ) {
   writeAuth(directory, {
     version: 1,
-    issuer,
+    issuer: identity?.issuer ?? issuer,
     hostId: "urn:uuid:00000000-0000-0000-0000-000000000000",
     registration: {
       clientId: "fake-client",
+      subject: identity?.subject,
       ...(email === null ? {} : { email }),
     },
     session: {
@@ -504,7 +507,10 @@ test("Codex uses the named Neuve sign-in and tells the person which account to s
   });
   const registry = harnessRuntimes({
     claude: false,
-    codex: { ...codexRuntimeOptions(scratch), environment: { PATH: "" } },
+    codex: {
+      ...codexRuntimeOptions(scratch, ["/neuve"]),
+      environment: { PATH: "" },
+    },
     accountDirectory: inMemoryAccountDirectoryLayer([account]),
   });
   const check = () =>
@@ -537,6 +543,36 @@ test("Codex uses the named Neuve sign-in and tells the person which account to s
     reason: "expired",
     hint,
   });
+});
+
+test("Codex sign-in renews an unexpired token named as refused", async () => {
+  const directory = folder();
+  const local = await fakeIssuer();
+  const account = {
+    name: name("work"),
+    kind: "chatgpt-subscription",
+    runtime: "codex",
+    credential: { kind: "neuve-sign-in", folder: directory },
+  } as const;
+  try {
+    fakeSignIn(directory, undefined, {
+      issuer: local.issuer,
+      subject: local.state.subject,
+    });
+    const signIn = codexRuntimeOptions(scratch, ["/neuve"]).neuveSignIn!;
+    const refused = await Effect.runPromise(signIn.checkSignIn(account));
+    expect(local.state.refreshes).toBe(0);
+    const renewed = await Effect.runPromise(
+      signIn.checkSignIn(account, refused),
+    );
+    expect(local.state.refreshes).toBe(1);
+    expect(
+      renewed !== refused &&
+        readAuth(directory)?.session?.accessToken === renewed,
+    ).toBe(true);
+  } finally {
+    await local.stop();
+  }
 });
 
 test("continuation identifies only credential references, so aliases share sessions without carrying credential values", async () => {

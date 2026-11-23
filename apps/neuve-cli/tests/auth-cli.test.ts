@@ -7,6 +7,7 @@ import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { RouteProvider } from "@neuve/harness";
+import { AccountStore } from "@neuve/runtime";
 
 const config = mkdtempSync(join(tmpdir(), "neuve-auth-cli-"));
 afterAll(() => rmSync(config, { recursive: true, force: true }));
@@ -135,6 +136,73 @@ test("auth lease prints only the access token and its expiry, and serves a token
   expect(empty.exitCode).toBe(1);
   expect(empty.stdout.toString()).toBe("");
   expect(empty.stderr.toString()).toContain("not signed in to OpenAI");
+}, 60_000);
+
+// Codex needs the named account's exact token bytes, and a terminal must never receive them.
+test("auth lease writes a named account's bare token and refuses a terminal", async () => {
+  const env = {
+    ...process.env,
+    HOME: config,
+    NEUVE_OPENAI_TOKEN_COMMAND: "/nonexistent",
+  };
+  const auth = [
+    process.execPath,
+    resolve(import.meta.dir, "../src/cli.ts"),
+    "auth",
+  ];
+  const added = Bun.spawnSync(
+    [...auth, "add", "chatgpt", "codex-work", "--runtime", "codex"],
+    { env },
+  );
+  expect(added.exitCode).toBe(0);
+  const account = AccountStore.readAccounts(config).find(
+    ({ account }) => account.name === "codex-work",
+  )?.account;
+  if (
+    account?.credential.kind !== "neuve-sign-in" ||
+    account.credential.folder === undefined
+  )
+    throw new Error("Expected a named ChatGPT sign-in folder.");
+  RouteProvider.OpenAiAuth.writeAuth(account.credential.folder, {
+    version: 1,
+    issuer: RouteProvider.OpenAiAuth.OPENAI_ISSUER,
+    hostId: "urn:uuid:00000000-0000-4000-8000-000000000003",
+    registration: { clientId: "oaiapp_test", subject: "user-1" },
+    session: {
+      accessToken: "named-access-value",
+      refreshToken: "named-refresh-value",
+      idToken: "eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl",
+      expiresAt: Date.now() + 60 * 60_000,
+      scopes: ["openid", "chatgpt.tokens.use.direct"],
+      refreshIssuedAt: new Date().toISOString(),
+    },
+  });
+  const command = [...auth, "lease", "codex-work"];
+  const piped = Bun.spawnSync(command, { env });
+  expect(piped.exitCode).toBe(0);
+  expect(piped.stdout.toString()).toBe("named-access-value");
+  expect(piped.stderr.toString()).toBe("");
+
+  let output = "";
+  const closed = Promise.withResolvers<void>();
+  const child = Bun.spawn(command, {
+    env,
+    terminal: {
+      data: (_, bytes) => {
+        output += Buffer.from(bytes).toString();
+      },
+      exit: () => closed.resolve(),
+    },
+  });
+  try {
+    expect(await child.exited).toBe(1);
+    await closed.promise;
+    expect(output.trim()).toBe(
+      "neuve auth lease: Refusing to print an access token to a terminal.",
+    );
+  } finally {
+    child.terminal?.close();
+  }
 }, 60_000);
 
 // Why: the cloud refresher stops `neuve auth lease openai` with SIGTERM. A refresh already sent has

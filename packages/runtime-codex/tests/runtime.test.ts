@@ -123,7 +123,7 @@ const probe = (
     ),
   );
 
-// Neuve's sign-in owns the status check and uses a separate home even when Codex reports signed out.
+// Both login paths must launch Codex with the right provider arguments.
 test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
   const home = scratchFolder();
   const program = file(home);
@@ -134,19 +134,20 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
     runtime: "codex",
     credential: { kind: "neuve-sign-in", folder: join(home, "sign-in") },
   });
-  const options: CodexRuntimeConfig = {
+  const options = {
     home,
     environment: {
       PATH: "",
+      HOME: join(home, "inherited-home"),
       CODEX_HOME: join(home, ".codex"),
-      NEUVE_CODEX_ACCESS_TOKEN: "ambient-value",
     },
     programPath: () => program,
     neuveSignIn: {
-      accessToken: () => Effect.succeed({ token: "opaque.fixture.probe" }),
+      command: ["/path to/bun", "/path to/cli.ts"],
+      checkSignIn: () => Effect.succeed("stored-token"),
       signOut: () => Effect.void,
     },
-  };
+  } satisfies CodexRuntimeConfig;
   const result = await probe(fake, options, named);
   expect(result.signIn).toEqual({
     state: "signed-in",
@@ -155,7 +156,45 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
   expect(result.models?.map(({ id }) => id)).toEqual(["main", "other"]);
   expect(result.limits).toEqual([]);
   const child = fake.current();
-  expect(child.env.NEUVE_CODEX_ACCESS_TOKEN).toBeUndefined();
+  const codexLogin = fakeWith();
+  await probe(codexLogin, options);
+  const loginArgs = codexLogin.current().args;
+  expect(codexLogin.current().env.HOME).toBe(join(home, "inherited-home"));
+  expect(loginArgs).toEqual(
+    [
+      "tools.experimental_request_user_input.enabled=false",
+      "features.hooks=false",
+      "features.apps=false",
+      "features.plugins=false",
+      "features.remote_plugin=false",
+      "features.plugin_sharing=false",
+      "features.memories=false",
+      "features.browser_use=false",
+      "features.browser_use_external=false",
+      "features.browser_use_full_cdp_access=false",
+      "features.computer_use=false",
+      "features.in_app_browser=false",
+      "features.in_app_local_automation=false",
+      "features.skill_mcp_dependency_install=false",
+      "features.tool_suggest=false",
+      'web_search="disabled"',
+      "apps._default.enabled=false",
+      "skills.bundled.enabled=false",
+      "memories.use_memories=false",
+      "memories.generate_memories=false",
+      "notify=[]",
+    ].flatMap((setting) => ["-c", setting]),
+  );
+  const providerArgs = [
+    "-c",
+    'model_provider="openai_chatgpt_plan"',
+    "-c",
+    'model_providers.openai_chatgpt_plan={name="ChatGPT plan",base_url="https://api.openai.com/v1",model_catalog_url="https://api.openai.com/v1/models",wire_api="responses",requires_openai_auth=false,supports_websockets=false,auth={command="/path to/bun",args=["/path to/cli.ts","auth","lease","work"],timeout_ms=90000,refresh_interval_ms=0}}',
+    "-c",
+    "features.api_key_model_discovery=true",
+  ];
+  expect(child.args).toEqual([...providerArgs, ...loginArgs]);
+  expect(child.env.HOME).toBe(home);
   const managedHome = child.env.CODEX_HOME;
   if (managedHome === undefined)
     throw new Error("expected a Neuve-owned Codex home");
@@ -200,20 +239,8 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
   expect(await open(options)).toBe("thread-1");
   const session = fake.current();
   expect(session.env.CODEX_HOME).toBe(child.env.CODEX_HOME);
-  expect(session.env.NEUVE_CODEX_ACCESS_TOKEN).toBe("opaque.fixture.probe");
-  expect(session.commandEnvironment().NEUVE_CODEX_ACCESS_TOKEN).toBeUndefined();
-  expect(session.args).not.toContain("--listen");
-  expect(session.args).toEqual(
-    expect.arrayContaining([
-      'model_provider="openai_chatgpt_plan"',
-      'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
-      'model_providers.openai_chatgpt_plan.base_url="https://api.openai.com/v1"',
-      'model_providers.openai_chatgpt_plan.env_key="NEUVE_CODEX_ACCESS_TOKEN"',
-      'model_providers.openai_chatgpt_plan.wire_api="responses"',
-      "model_providers.openai_chatgpt_plan.requires_openai_auth=false",
-      "model_providers.openai_chatgpt_plan.supports_websockets=false",
-    ]),
-  );
+  expect(session.env.HOME).toBe(home);
+  expect(session.args.slice(0, providerArgs.length)).toEqual(providerArgs);
   expect(
     session.io.written.some(({ method }) => method === "account/read"),
   ).toBe(false);
@@ -225,14 +252,14 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
   } as const;
   for (const error of [
     new SignInRequired({ account: named.name, hint }),
-    new AccountRejected({ account: named.name, hint, reason: "other" }),
+    new AccountRejected({ account: named.name, hint, reason: "expired" }),
   ]) {
     await expect(
       open({
         ...options,
         neuveSignIn: {
-          accessToken: () => Effect.fail(error),
-          signOut: () => Effect.void,
+          ...options.neuveSignIn,
+          checkSignIn: () => Effect.fail(error),
         },
       }),
     ).rejects.toMatchObject({ _tag: error._tag, hint });

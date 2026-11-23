@@ -301,6 +301,15 @@ test("the time limit, the output cap and the program's exit stop the children it
   expect(await floods.childGone()).toBe(true);
 }, 20_000);
 
+test("a cached lease named as refused runs the token command again", async () => {
+  const command = program(lease("refused-fixture", Date.now() + 60 * 60_000));
+  const options = { tokenCommand: command.path };
+  const { token } = await accessToken(options);
+  expect(command.runs()).toBe(1);
+  await accessToken(options, token);
+  expect(command.runs()).toBe(2);
+});
+
 test("a lease the provider refused is not reused", async () => {
   const command = program(lease("revoked-secret-8", Date.now() + 60 * 60_000));
   const options = { tokenCommand: command.path };
