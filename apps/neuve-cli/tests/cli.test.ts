@@ -18,6 +18,7 @@ import {
   mintUlid,
   Sessions,
   storeLocationIn,
+  WRITER_VERSION,
 } from "@neuve/records-core";
 import {
   chmod,
@@ -1024,6 +1025,27 @@ describe("neuve CLI boundary", () => {
     },
   );
 
+  // A successful Graph read can hide that this build is too old to record the query.
+  test("tells the person to update when Records refuses to record a query", async () => {
+    const { root, query } = await scopeQueryFixture();
+    const needs = WRITER_VERSION + 1;
+    using db = new Database(storeLocationIn(join(root, ".git")).database);
+    db.run(
+      "UPDATE records_meta SET value = ? WHERE key = 'min_writer_version'",
+      [needs],
+    );
+
+    const result = await query([]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stderr).toContain(
+      `The installed neuve (writer ${WRITER_VERSION}) is older than this store (needs ${needs})`,
+    );
+    expect(result.stderr).toContain(
+      `install a build with writer ${needs} or newer`,
+    );
+    expect(result.stderr).not.toContain("Run neuve query again.");
+  });
+
   // An invalid Git email must leave schema details in the run log.
   test("returns a one-sentence scope gap when recording fails", async () => {
     const { root, revision } = await fixtureRepository();
@@ -1049,7 +1071,6 @@ describe("neuve CLI boundary", () => {
       env,
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stderr.trim()).toMatch(/^neuve: [^\n]+$/);
     expect(JSON.parse(result.stdout)).toMatchObject({
       retrieval: { status: "ok" },
       scope_gaps: [
@@ -1058,7 +1079,11 @@ describe("neuve CLI boundary", () => {
     });
     const logs = join(root, ".git", "neuve", "run-logs");
     const [log] = await readdir(logs);
-    expect(JSON.parse(await Bun.file(join(logs, log!)).text())).toMatchObject({
+    const logPath = join(logs, log!);
+    expect(result.stderr).toBe(
+      `neuve: The query was not recorded. See the run log at ${JSON.stringify(logPath)}.\n`,
+    );
+    expect(JSON.parse(await Bun.file(logPath).text())).toMatchObject({
       type: "query.record-failed",
       cause: expect.stringContaining("Invalid email address"),
     });

@@ -673,6 +673,7 @@ const writeDiagnostic = (
       false,
     );
     diagnostics.log.write(record);
+    return diagnostics.log.path;
   } catch {}
 };
 
@@ -778,18 +779,25 @@ const recordQuery = async (
     delete diagnostics.location;
     return { reason: "no Records store was found" };
   }
-  writeDiagnostic(diagnostics, {
+  const logPath = writeDiagnostic(diagnostics, {
     type: "query.record-failed",
     cause: Cause.pretty(result.cause),
   });
-  const reason = storeLocked(error)
-    ? "the Records store is locked"
-    : "the query could not be recorded";
-  await Bun.write(
-    Bun.stderr,
-    `neuve: ${reason.charAt(0).toUpperCase()}${reason.slice(1)}. Run neuve query again.\n`,
-  ).catch(() => undefined);
-  return { reason };
+  const locked = storeLocked(error);
+  const message = locked
+    ? "The Records store is locked. Run neuve query again."
+    : describeFailure(
+        error,
+        logPath === undefined
+          ? "The query was not recorded."
+          : `The query was not recorded. See the run log at ${JSON.stringify(logPath)}.`,
+      );
+  await Bun.write(Bun.stderr, `neuve: ${message}\n`).catch(() => undefined);
+  return {
+    reason: locked
+      ? "the Records store is locked"
+      : "the query could not be recorded",
+  };
 };
 
 const inspectQuery = async (
