@@ -1,0 +1,117 @@
+import type { AgentName, Build, BuildAgent, Chat, ChatId, WorkMessage } from "@ace/channel/protocol";
+import type { AgentLineView, BuildCardView, Event } from "@ace/ui";
+
+const TIME = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+const ROLES = { implementer: "Implementer", reviewer: "Reviewer" } as const;
+
+/** The name an agent goes by in its build: its role, and its part where it has one. */
+export function agentName({ role, part }: AgentName): string {
+	return part ? `${ROLES[role]} · ${part}` : ROLES[role];
+}
+
+/** The author an agent's messages to another agent carry. */
+export function agentAuthor(chat: ChatId): string {
+	return `agent@${chat}`;
+}
+
+/** Every build's agents by the author their messages carry; any other author is not a build's agent. */
+export function agentAuthors(builds: Build[]): Map<string, BuildAgent> {
+	return new Map(builds.flatMap((build) => build.agents.map((agent) => [agentAuthor(agent.chat), agent])));
+}
+
+/**
+ * Whether chat `id` is one a build's agent works in, which people read and do not write in. The
+ * chat's own record says so once `info` is read; the pushed builds say so before it is.
+ */
+export function readOnly(id: ChatId, chat: Chat | undefined, builds: Build[]): boolean {
+	return !!chat?.build || builds.some((build) => build.agents.some((agent) => agent.chat === id));
+}
+
+export function lineView(agent: BuildAgent): AgentLineView {
+	return {
+		chat: agent.chat,
+		name: agentName(agent),
+		...(agent.caption ? { caption: agent.caption } : {}),
+		state: agent.state,
+	};
+}
+
+const alive = (agent: BuildAgent) => agent.state === "running" || agent.state === "waiting";
+
+/**
+ * A build's card: its agents, and a head only where the person must act or is blocked. A build
+ * still starting, or a plan delivered to agents already building, has no card: the plan's card
+ * turning Approved answers the press, and the card comes with the first agent.
+ */
+export function buildView(build: Build, name: (author: string) => string): BuildCardView | undefined {
+	const { state, agents } = build;
+	const card = (title?: string, meta?: string, tone?: "error"): BuildCardView => ({
+		build: build.id,
+		...(title === undefined ? {} : { title }),
+		...(meta === undefined ? {} : { meta }),
+		...(tone ? { tone } : {}),
+		agents: agents.map(lineView),
+		stoppable: state.kind !== "stopped" && agents.some(alive),
+	});
+	const waiting = agents.some((agent) => agent.state === "waiting");
+	switch (state.kind) {
+		case "starting":
+		case "delivered":
+			return;
+		case "started":
+			return card(waiting ? "Waiting for an answer" : undefined);
+		case "unavailable":
+			return card(
+				"Not started",
+				state.reason === "shared"
+					? "Other people can ask this channel's agents"
+					: "Agents don't start in a hosted or cloud channel",
+			);
+		case "paused":
+			return card(
+				waiting ? "Paused, waiting for an answer" : "Paused",
+				"Other people can now ask this channel's agents",
+			);
+		case "stopped":
+			return card("Stopped", `${name(state.by)} · ${TIME.format(state.at)}`);
+		case "failed":
+			return card("Could not start", state.detail, "error");
+	}
+}
+
+/** The cards of the builds whose plans were approved in chat `chat`, by the call that wrote each plan. */
+export function buildCards(builds: Build[], chat: ChatId, name: (author: string) => string) {
+	return new Map(
+		builds.flatMap((build) => {
+			const view = build.chat === chat && buildView(build, name);
+			return view ? [[build.plan.call, view] as const] : [];
+		}),
+	);
+}
+
+/**
+ * What the agents said to each other, drawn as chat messages under each sender's role. The
+ * recipient is named only where a build has more than two agents.
+ */
+export function workEvents(builds: Build[], messages: WorkMessage[], topic: string): Event[] {
+	const agents = new Map(builds.flatMap((build) => build.agents.map((agent) => [agent.chat, { agent, build }])));
+	return messages.flatMap((message, index) => {
+		const from = agents.get(message.from);
+		if (!from) return [];
+		const to = from.build.agents.length > 2 && agents.get(message.to)?.agent;
+		return [{
+			id: `${topic}::work:${index}`,
+			uid: `work:${index}`,
+			type: "message",
+			topic,
+			created_at: Math.floor(message.at / 1000),
+			sender: {
+				kind: "user",
+				value: agentAuthor(message.from),
+				display: agentName(from.agent),
+				...(to ? { credit: `to ${agentName(to)}` } : {}),
+			},
+			content: [{ type: "text", text: message.text }],
+		} as Event];
+	});
+}

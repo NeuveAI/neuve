@@ -63,6 +63,7 @@ export type Event =
 	| Event.Neuve.Review.Card
 	| Event.Neuve.Review.Told
 	| Event.Neuve.Plan.Card
+	| Event.Neuve.Build.Card
 	| Event.Document
 	| Event.Exec
 	| Event.Exec.Abort
@@ -106,6 +107,8 @@ export namespace Event {
 			kind: "user";
 			value: ID;
 			display: string;
+			/** Beside the name, such as whom a build's agent wrote to. */
+			credit?: string;
 		};
 
 		export type Agent = {
@@ -297,6 +300,11 @@ export namespace Event {
 		export type Card = KIND<"neuve:plan:card"> & { card: PlanCardView };
 	}
 
+	export namespace Neuve.Build {
+		/** The app's card for the agents one approved plan started, right after that plan's card. */
+		export type Card = KIND<"neuve:build:card"> & { card: BuildCardView };
+	}
+
 	export namespace Neuve.Review {
 		/** The app's card for one review start call, placed under the turn that made it. */
 		export type Card = KIND<"neuve:review:card"> & { call: string; card: ReviewCardView };
@@ -317,6 +325,31 @@ export type PlanCardView = {
 	title: string;
 	state: "draft" | "approved" | "replaced";
 	meta: string;
+};
+
+/** The role the host gave an agent it started for an approved plan. */
+export type AgentRole = "implementer" | "reviewer";
+
+/** One agent of a build as a line shows it: the name it goes by, its caption, and its state. */
+export type AgentLineView = {
+	chat: number;
+	/** Its role, and its part where it has one. */
+	name: string;
+	caption?: string;
+	state: "running" | "waiting" | "done" | "failed" | "stopped";
+};
+
+/** What a build's card shows; the app words its title and second line. */
+export type BuildCardView = {
+	build: string;
+	/** Only where the person must act or is blocked; the agents' rows say the rest. */
+	title?: string;
+	/** Who stopped it and when, or why it cannot go on; nothing the plan's card above already says. */
+	meta?: string;
+	tone?: "error";
+	agents: AgentLineView[];
+	/** Whether any of its agents can still be stopped. */
+	stoppable: boolean;
 };
 
 /** What a Neuve review card shows: a review card entry, or the start call still running. */

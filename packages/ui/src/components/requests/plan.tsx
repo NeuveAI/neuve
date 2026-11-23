@@ -97,7 +97,7 @@ export function PlanCard({ view, width }: { view: PlanCardView; width: number })
 							void actions.approve(view.plan, view.hash).finally(() => setApproving(false));
 						}}
 					>
-						{approving ? "Approving…" : "Approve"}
+						{approving ? "Approving…" : "Approve and build"}
 					</Button>
 				</RequestCardFooter>
 			)}

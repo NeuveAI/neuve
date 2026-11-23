@@ -1,4 +1,4 @@
-import type { Event, PlanCardView, ReviewActions, ReviewCardView } from "@ace/ui";
+import type { BuildCardView, Event, PlanCardView, ReviewActions, ReviewCardView } from "@ace/ui";
 
 import { AGENT_ALIAS } from "./agent-mention";
 import type { BuildNotice, Event as ChannelEvent, ReviewNotice } from "@ace/channel/protocol";
@@ -53,7 +53,7 @@ export function reviewNotice(value: { system?: ReviewNotice | BuildNotice }): Re
 
 /** The review a transcript message tells the agent about, when it is the host's marked wake. */
 export function wakeNote(item: Item): ReviewNotice | undefined {
-	return item.kind === "message" ? item.system : undefined;
+	return item.kind === "message" ? reviewNotice(item) : undefined;
 }
 
 /** How the wake reads: the reviewed card's end state, when this chat holds it. */
@@ -329,6 +329,7 @@ export function withCards(
 	topic: string,
 	busy: boolean,
 	connected: boolean,
+	builds: ReadonlyMap<string, BuildCardView> = new Map(),
 ): Event[] {
 	const out: Event[] = [];
 	let pending: Event[] = [];
@@ -350,6 +351,17 @@ export function withCards(
 					topic,
 					created_at: Math.floor(item.at / 1000),
 					card: plan,
+				});
+			}
+			const build = builds.get(tool.call);
+			if (build) {
+				pending.push({
+					id: `${topic}::build:${build.build}`,
+					uid: `build:${build.build}`,
+					type: "neuve:build:card",
+					topic,
+					created_at: Math.floor(item.at / 1000),
+					card: build,
 				});
 			}
 			const card = reviewCard(tool, cards, busy, connected);

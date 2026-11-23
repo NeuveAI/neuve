@@ -1,13 +1,22 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { MENTION } from "@ace/channel/protocol";
-import { Button, ChatStatus, PlanActionsProvider, ReviewActionsProvider, Timeline, toast } from "@ace/ui";
+import {
+	BuildActionsProvider,
+	Button,
+	ChatStatus,
+	PlanActionsProvider,
+	ReviewActionsProvider,
+	Timeline,
+	toast,
+} from "@ace/ui";
 import { channelProject, type Listing } from "@ace/host/protocol";
 
 import { useAgentAvatar } from "./agent-avatar";
 import { Approval } from "./approval";
 import { approvalView, shownApprovals } from "./approval-card";
 import { isAgentAlias } from "./agent-mention";
+import { agentAuthor, agentAuthors, buildCards, readOnly } from "./build-card";
 import { Checks } from "./checks";
 import { Composer } from "./composer";
 import { DeleteMessage } from "./delete-message";
@@ -21,7 +30,7 @@ import { present } from "./presence";
 import { approvePlan } from "./plan-approve";
 import { planCards } from "./plan-card";
 import { pendingQuestion, Question } from "./question";
-import { reviewActions, reviewTab, wakeNote, withCards } from "./review-card";
+import { reviewActions, reviewTab, withCards } from "./review-card";
 import { AGENT, credit, sources, toEvents } from "./timeline";
 import { useTranscript, useTyping } from "./transcript";
 import { Usage } from "./usage";
@@ -42,6 +51,8 @@ type Props = {
 	onOpen: (channel: Listing) => void;
 	/** Called once the chat loads and whenever its agent may have changed files since. */
 	onWork?: () => void;
+	/** Shown beside the channel's own chat, as an agent's on the work log, so it publishes nothing to the details sidebar. */
+	beside?: boolean;
 };
 
 /** One chat's timeline and composer over its transcript; the content of a Chat tab. */
@@ -57,6 +68,7 @@ export function Conversation(
 		onProviders,
 		onOpen,
 		onWork,
+		beside,
 	}: Props,
 ) {
 	const offline = channel.state === "offline";
@@ -76,7 +88,8 @@ export function Conversation(
 	// until then is not the user's to retry.
 	const failed = !offline && !transition && transcript.error;
 	const chat = transcript.info?.chats.find((value) => value.id === id);
-	const { diff, plan: openPlan } = useDetails(channel.id);
+	const { diff, plan: openPlan, work: openWork } = useDetails(channel.id);
+	const locked = readOnly(id, chat, transcript.builds);
 	const model = chat?.model || channel.model;
 	const people = useSyncExternalStore(host.subscribe, () => host.people);
 	// This app's own host, or the peer host relaying this channel to it, stopped answering.
@@ -110,6 +123,15 @@ export function Conversation(
 		[transcript.plans, user, people],
 	);
 	const planned = transcript.plans.length > 0;
+	const agents = useMemo(() => agentAuthors(transcript.builds), [transcript.builds]);
+	const own = useMemo(() => {
+		const agent = agents.get(agentAuthor(id)) ?? chat?.build;
+		return agent && { author: agentAuthor(id), agent };
+	}, [agents, chat?.build, id]);
+	const builds = useMemo(
+		() => buildCards(transcript.builds, id, (author) => author === user ? "you" : people[author] || author),
+		[transcript.builds, id, user, people],
+	);
 	const approvals = useMemo(
 		() =>
 			shownApprovals(transcript.approvals, transcript.items).map((request) =>
@@ -144,6 +166,8 @@ export function Conversation(
 					(asker) => credit(asker, channel, user, people, senders),
 					reviews,
 					quoting,
+					agents,
+					own,
 				),
 				transcript.items,
 				reviews,
@@ -151,6 +175,7 @@ export function Conversation(
 				channel.id,
 				transcript.busy,
 				connected,
+				builds,
 			),
 		[
 			transcript.items,
@@ -169,6 +194,9 @@ export function Conversation(
 			plans,
 			connected,
 			quoting,
+			agents,
+			own,
+			builds,
 		],
 	);
 	const planActions = useMemo(
@@ -182,11 +210,24 @@ export function Conversation(
 		}),
 		[mayAsk, openPlan, channel.id, id, user],
 	);
+	const buildActions = useMemo(
+		() => ({
+			mayStop: mayAsk,
+			open: () => openWork?.(),
+			stop: (build: string) =>
+				host.channel(channel.id, { op: "build-stop", author: user, build }).then(
+					() => {},
+					(error: Error) => void toast.error("Could not stop the agents", { description: error.message }),
+				),
+		}),
+		[mayAsk, openWork, channel.id, user],
+	);
 	const review = useMemo(
 		() =>
 			reviewActions(
 				reviews,
-				mayAsk,
+				// A new review is a person's message, which a build's agent's chat takes from no one.
+				mayAsk && !locked,
 				(text) =>
 					host.channel(channel.id, { op: "ask", chat: id, author: user, text }).then(
 						() => {},
@@ -196,7 +237,7 @@ export function Conversation(
 					),
 				reviewTab(channel.id),
 			),
-		[reviews, mayAsk, channel.id, id, user],
+		[reviews, mayAsk, locked, channel.id, id, user],
 	);
 	const byKey = useMemo(
 		() => new Map(transcript.items.map((item) => [item.key, item])),
@@ -207,7 +248,7 @@ export function Conversation(
 		? undefined
 		: transcript.items.find((item) =>
 			item.kind === "message" && item.author !== user && item.at > since && item.at <= until
-			&& !wakeNote(item)
+			&& !item.system
 		)?.key;
 	// Mentions name people by GitHub login, as the channel's host counts them.
 	const self = people[user]?.toLowerCase();
@@ -229,22 +270,22 @@ export function Conversation(
 	const actions = (uid: string) => {
 		const item = byKey.get(uid);
 		const stored = item?.entry !== undefined && !(item.kind === "message" && item.deleted);
-		// An archived channel refuses changes to its history.
+		// An archived channel refuses changes to its history, and a build's agent's chat any person's edit.
 		const open = stored && channel.state !== "archived";
-		return { react: open, copy: stored && !!item.text, delete: open, permalink: false };
+		return { react: open, copy: stored && !!item.text, delete: open && !locked, permalink: false };
 	};
 	const [deleting, setDeleting] = useState<string>();
 	// Only a person's own stored messages are edited, and an archived channel refuses edits.
 	const editable = useMemo(
 		() =>
 			new Set(
-				channel.state === "archived"
+				channel.state === "archived" || locked
 					? []
 					: transcript.items.flatMap((item) =>
 						item.kind === "message" && item.author === user && !item.deleted ? [item.key] : []
 					),
 			),
-		[transcript.items, user, channel.state],
+		[transcript.items, user, channel.state, locked],
 	);
 	const [editing, setEditing] = useState<string>();
 	const edited = editing === undefined || !editable.has(editing) ? undefined : byKey.get(editing);
@@ -277,6 +318,10 @@ export function Conversation(
 		() => ({ ...avatars, [AGENT]: agentAvatar }),
 		[avatars, agentAvatar],
 	);
+	const roles = useMemo(
+		() => Object.fromEntries([...agents].map(([author, agent]) => [author, agent.role])),
+		[agents],
+	);
 	const presence = useSyncExternalStore(host.subscribe, () => host.presence);
 	const roster = useRoster();
 	// Mentions name people by GitHub login. A name still holding @ is a Tailscale login with no
@@ -286,7 +331,7 @@ export function Conversation(
 		const names = new Set([
 			...present(presence[channelProject(channel)], self, channel.id).map((value) => value.name),
 			...transcript.items.flatMap((item) =>
-				item.kind === "message" && !wakeNote(item) ? [people[item.author] || item.author] : []
+				item.kind === "message" && !item.system ? [people[item.author] || item.author] : []
 			),
 			...(roster || []).map((member) => member.github || member.login),
 		]);
@@ -309,9 +354,11 @@ export function Conversation(
 	// Replay delivers one event at a time; the sidebar reads the transcript once it is complete.
 	const items = transcript.live ? transcript.items : undefined;
 	useEffect(() => {
+		if (beside) return;
 		const { info, shared, sharedLive, desktop, desktopLive } = transcript;
 		publish(channel.id, { info, items, shared, sharedLive, desktop, desktopLive });
 	}, [
+		beside,
 		channel.id,
 		transcript.info,
 		items,
@@ -322,17 +369,28 @@ export function Conversation(
 	]);
 
 	useEffect(() => {
-		if (transcript.live) {
+		if (transcript.live && !beside) {
 			publish(channel.id, {
 				plans: { chat: id, list: transcript.plans },
 				planComments: { chat: id, list: transcript.planComments, sends: transcript.commentSends },
+				builds: { list: transcript.builds, messages: transcript.messages },
 			});
 		}
-	}, [channel.id, id, transcript.live, transcript.plans, transcript.planComments, transcript.commentSends]);
+	}, [
+		beside,
+		channel.id,
+		id,
+		transcript.live,
+		transcript.plans,
+		transcript.planComments,
+		transcript.commentSends,
+		transcript.builds,
+		transcript.messages,
+	]);
 
 	useEffect(() => {
-		if (transcript.live) onWork?.();
-	}, [transcript.live, transcript.busy, results, onWork]);
+		if (transcript.live && !beside) onWork?.();
+	}, [transcript.live, transcript.busy, results, onWork, beside]);
 	return (
 		<>
 			<div className="relative min-h-0 flex-1">
@@ -340,43 +398,47 @@ export function Conversation(
 					? (
 						<ReviewActionsProvider value={review}>
 							<PlanActionsProvider value={planActions}>
-								<Timeline
-									className="h-full min-h-0 contain-paint scroll-fade [--fade:3rem]"
-									events={events}
-									working={transcript.busy || undefined}
-									currentUser={{ login: user, own: [user] }}
-									unread={first}
-									summary={channel.summary}
-									mentioned={mentioned}
-									actions={actions}
-									onReact={(uid, emoji) => {
-										const entry = byKey.get(uid)!.entry!;
-										const remove = !!transcript.reactions[entry]?.some((value) =>
-											value.from === user && value.emoji === emoji
-										);
-										act({ op: "react", emoji, remove }, uid);
-									}}
-									onCopy={(uid) =>
-										navigator.clipboard.writeText(byKey.get(uid)!.text).then(
-											() => toast("Copied message"),
-											(error) =>
-												toast.error("Could not copy the message", { description: error.message }),
-										)}
-									onDelete={setDeleting}
-									editable={editable}
-									editing={edited?.key}
-									onEdit={setEditing}
-									avatars={timelineAvatars}
-									openSender={(sender) => {
-										const source = senders.get(sender);
-										return source && (() => onOpen(source));
-									}}
-									intro={{ name: channel.name, createdAt: Math.floor(channel.created / 1000) }}
-									onFileOpen={diff}
-									onDiffFileOpen={diff}
-									onReviewChanges={diff && (() => diff())}
-									onPlanOpen={planned && openPlan ? () => openPlan() : undefined}
-								/>
+								<BuildActionsProvider value={buildActions}>
+									<Timeline
+										className="h-full min-h-0 contain-paint scroll-fade [--fade:3rem]"
+										events={events}
+										working={transcript.busy || undefined}
+										currentUser={{ login: user, own: [user] }}
+										unread={first}
+										summary={channel.summary}
+										mentioned={mentioned}
+										actions={actions}
+										onReact={(uid, emoji) => {
+											const entry = byKey.get(uid)!.entry!;
+											const remove = !!transcript.reactions[entry]?.some((value) =>
+												value.from === user && value.emoji === emoji
+											);
+											act({ op: "react", emoji, remove }, uid);
+										}}
+										onCopy={(uid) =>
+											navigator.clipboard.writeText(byKey.get(uid)!.text).then(
+												() => toast("Copied message"),
+												(error) =>
+													toast.error("Could not copy the message", { description: error.message }),
+											)}
+										onDelete={setDeleting}
+										editable={editable}
+										editing={edited?.key}
+										onEdit={setEditing}
+										avatars={timelineAvatars}
+										openSender={(sender) => {
+											const source = senders.get(sender);
+											return source && (() => onOpen(source));
+										}}
+										intro={{ name: channel.name, createdAt: Math.floor(channel.created / 1000) }}
+										// The Diff tab shows the channel's own chat, not an agent's beside it.
+										onFileOpen={beside ? undefined : diff}
+										onDiffFileOpen={beside ? undefined : diff}
+										onReviewChanges={!beside && diff ? () => diff() : undefined}
+										onPlanOpen={planned && openPlan ? () => openPlan() : undefined}
+										roles={roles}
+									/>
+								</BuildActionsProvider>
 							</PlanActionsProvider>
 						</ReviewActionsProvider>
 					)
@@ -446,7 +508,13 @@ export function Conversation(
 				)}
 				{transcript.live && <Checks channel={channel} chat={id} user={user} />}
 				{transcript.live && (
-					<MessageQueue messages={transcript.queue} people={people} channels={senders} />
+					<MessageQueue
+						messages={transcript.queue}
+						people={people}
+						channels={senders}
+						agents={agents}
+						locked={locked}
+					/>
 				)}
 				{edited && (
 					<EditMessage
@@ -459,30 +527,47 @@ export function Conversation(
 						onDone={() => setEditing(undefined)}
 					/>
 				)}
+				{locked && transcript.live && transcript.busy && (
+					<div className="flex justify-end">
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={!mayAsk}
+							onClick={() =>
+								void host.channel(channel.id, { op: "stop", chat: id, author: user }).catch(
+									(error: Error) => toast.error("Could not stop the agent", { description: error.message }),
+								)}
+						>
+							Stop
+						</Button>
+					</div>
+				)}
 				{/* Hidden rather than unmounted, so its draft and attachments wait out the edit. */}
-				<div className={edited ? "hidden" : "contents"}>
-					<Composer
-						channel={channel}
-						chat={id}
-						chatMode={chat && (chat.mode ?? "ace")}
-						user={user}
-						current={model}
-						currentEffort={chat?.effort}
-						automatic={transcript.info?.automatic}
-						busy={transcript.busy}
-						waiting={waiting}
-						shared={transcript.shared}
-						ready={transcript.live && !transition && channel.state !== "archived"}
-						draft={draft}
-						onDraftLoaded={onDraftLoaded}
-						returned={transcript.returned}
-						failure={failure}
-						onProviders={onProviders}
-						accessory={chat?.usage && <Usage value={chat.usage} context={chat.context} />}
-						members={members}
-						plan={planned}
-					/>
-				</div>
+				{!locked && (
+					<div className={edited ? "hidden" : "contents"}>
+						<Composer
+							channel={channel}
+							chat={id}
+							chatMode={chat && (chat.mode ?? "ace")}
+							user={user}
+							current={model}
+							currentEffort={chat?.effort}
+							automatic={transcript.info?.automatic}
+							busy={transcript.busy}
+							waiting={waiting}
+							shared={transcript.shared}
+							ready={transcript.live && !transition && channel.state !== "archived"}
+							draft={draft}
+							onDraftLoaded={onDraftLoaded}
+							returned={transcript.returned}
+							failure={failure}
+							onProviders={onProviders}
+							accessory={chat?.usage && <Usage value={chat.usage} context={chat.context} />}
+							members={members}
+							plan={planned}
+						/>
+					</div>
+				)}
 			</div>
 		</>
 	);
