@@ -324,7 +324,8 @@ export type PlanCardView = {
 	hash: string;
 	title: string;
 	state: "draft" | "approved" | "replaced";
-	meta: string;
+	/** Who approved it and when. */
+	meta?: string;
 };
 
 /** The role the host gave an agent it started for an approved plan. */

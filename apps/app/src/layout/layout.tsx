@@ -890,7 +890,7 @@ function useLayout(
 			tabs: [...items.values()].map((item) => ({
 				id: item.uid,
 				name: item.name,
-				type: item.kind === "work" ? "blank" : item.kind,
+				type: item.kind,
 				active: active.has(item.uid),
 			})),
 			focused,

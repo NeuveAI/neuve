@@ -1,9 +1,3 @@
-/**
- * The `codex` runtime behind the contract: an account on the person's own Codex login, its program
- * found by the probe's order, its state and models asked of Codex itself, and its sessions opened
- * on the program found. Accounts on Neuve's sign-in use Neuve's token source in a separate Codex
- * home. Modelled on the Claude runtime's `makeRuntime`.
- */
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
@@ -25,6 +19,7 @@ import { Effect } from "effect";
 import { z } from "zod";
 import type { CodexConnection } from "./client.ts";
 import * as Decode from "./decode.ts";
+import { CodexSignInFileError } from "./errors.ts";
 import { RELEASE } from "./generated/methods.ts";
 import type { LogEntry } from "./log.ts";
 import {
@@ -60,7 +55,6 @@ export interface CodexRuntimeConfig {
     Readonly<Record<string, string | undefined>> | undefined;
   /** The home the person's Applications folder is in, for discovery; the real one by default. */
   readonly home?: string | undefined;
-  /** The protocol log for a session, when the caller keeps one. */
   readonly log?:
     | ((account: AccountName) => ((entry: LogEntry) => void) | undefined)
     | undefined;
@@ -121,7 +115,11 @@ const signInFailure = (error: RuntimeError): SignInState => {
     case "RuntimeUnavailable":
       return { state: "runtime-unavailable", reason: error.reason };
     default:
-      return { state: "unknown", reason: "check-failed" };
+      return {
+        state: "unknown",
+        reason: "check-failed",
+        fix: error instanceof CodexSignInFileError ? error.fix : undefined,
+      };
   }
 };
 
@@ -146,13 +144,11 @@ const hintOf = (account: CodexAccount, program: string): SignInHint => ({
   program,
 });
 
-/** What the person reads when no candidate could be used, with its fix, from the answers given. */
 export const unavailable = (
   account: AccountName,
   tried: ReadonlyArray<Asked>,
 ): Extract<SignInState, { state: "runtime-unavailable" }> => {
   const set = `neuve auth program ${account} <path>`;
-  // Installed apps are looked for only where they exist: on macOS.
   const where = appsLookedFor()
     ? "on the PATH and in the installed apps"
     : "everywhere on the PATH";
@@ -197,7 +193,6 @@ const ModelPage = z.looseObject({
   nextCursor: z.string().nullish(),
 });
 
-/** Codex's models for the account, its default first; an effort level Neuve does not know is left out and logged. */
 const modelsOf = (connection: CodexConnection) =>
   Effect.gen(function* () {
     const rows: Array<RuntimeModel & { readonly isDefault: boolean }> = [];
@@ -210,7 +205,6 @@ const modelsOf = (connection: CodexConnection) =>
           ...(cursor ? { cursor } : {}),
         }),
       );
-      // An answer that does not decode is a failed check, never a defect.
       if (!answered.success)
         return yield* Effect.fail("models-undecodable" as const);
       const page = answered.data;
@@ -318,7 +312,6 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
       AccountName,
       { readonly candidate: Candidate; readonly setting: string | undefined }
     >();
-    /** The person's setting; a file of settings that cannot be read is a state of its own. */
     const settingOf = (account: CodexAccount) =>
       Effect.try({
         try: () => config.programPath?.(account.name),
@@ -333,7 +326,6 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
       launch: Pick<FindOptions, "codexHome">,
       use: (c: CodexConnection, found: Candidate) => Effect.Effect<A, E>,
     ) =>
-      // Run time never scans: the set path, or the PATH's one `codex`.
       findCodex(
         {
           candidates: runtimeCandidates(setting, environment.PATH),
@@ -424,7 +416,6 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
             broken: config.broken,
           }).pipe(
             Effect.provideService(CodexProcess, processes),
-            // A program that stopped answering is looked for again by the next session.
             Effect.tapError((error) =>
               Effect.sync(() => {
                 if (error._tag === "RuntimeUnavailable")
@@ -511,8 +502,8 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
                 };
               }).pipe(
                 Effect.timeout("25 seconds"),
+                // A failed check gives no basis for asking the person to sign in.
                 Effect.orElseSucceed(() => ({
-                  // A check that failed is not a sign-in to ask for.
                   signIn: (!onNeuveSignIn
                     ? { state: "unknown", reason: "check-failed" }
                     : {
@@ -551,7 +542,12 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
           Effect.flatMap((codex) =>
             usesNeuveSignIn(codex)
               ? (neuveSignIn?.signOut(codex) ??
-                Effect.fail(unavailableStart(codex)))
+                Effect.fail(
+                  new RuntimeUnavailable({
+                    account: codex.name,
+                    reason: "sign-out-failed",
+                  }),
+                ))
               : Effect.void,
           ),
         ),

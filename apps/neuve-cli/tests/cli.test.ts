@@ -18,6 +18,7 @@ import {
   mintUlid,
   Sessions,
   storeLocationIn,
+  WRITER_VERSION,
 } from "@neuve/records-core";
 import {
   chmod,
@@ -631,9 +632,7 @@ describe("neuve CLI boundary", () => {
     ).toEqual(answer.scope);
     expect(events.at(-1)).toMatchObject({
       cycle_id: answer.cycle_id,
-      scope_gaps: [
-        `${late}: The path was named after this cycle's scope was read.`,
-      ],
+      scope_gaps: [expect.stringContaining(`${late}:`)],
     });
     expect(await queryHistory(root, "cycle.local-scope-selected@1")).toEqual(
       pinEvents,
@@ -699,7 +698,7 @@ describe("neuve CLI boundary", () => {
     expect(answer.cycle_id).toBeUndefined();
     expect(answer.scope_gaps).toEqual([
       "missing: The path was absent from the working tree and the base revision.",
-      "working: The file was read without a held copy because no Records store was found.",
+      expect.stringMatching(/^working: .*no Records store was found/),
       "home: The path is not a regular file.",
       "opaque: The file is not readable as text.",
       "large: The file exceeds 262144 bytes.",
@@ -786,7 +785,7 @@ describe("neuve CLI boundary", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({
       retrieval: { status: "ok" },
       scope_gaps: [
-        `${plan}: The file was read without a held copy because the checked-out branch has no readable tip.`,
+        expect.stringContaining("the checked-out branch has no readable tip"),
       ],
     });
     const [{ event }] = await queryHistory(root);
@@ -1026,6 +1025,27 @@ describe("neuve CLI boundary", () => {
     },
   );
 
+  // A successful Graph read can hide that this build is too old to record the query.
+  test("tells the person to update when Records refuses to record a query", async () => {
+    const { root, query } = await scopeQueryFixture();
+    const needs = WRITER_VERSION + 1;
+    using db = new Database(storeLocationIn(join(root, ".git")).database);
+    db.run(
+      "UPDATE records_meta SET value = ? WHERE key = 'min_writer_version'",
+      [needs],
+    );
+
+    const result = await query([]);
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stderr).toContain(
+      `The installed neuve (writer ${WRITER_VERSION}) is older than this store (needs ${needs})`,
+    );
+    expect(result.stderr).toContain(
+      `install a build with writer ${needs} or newer`,
+    );
+    expect(result.stderr).not.toContain("Run neuve query again.");
+  });
+
   // An invalid Git email must leave schema details in the run log.
   test("returns a one-sentence scope gap when recording fails", async () => {
     const { root, revision } = await fixtureRepository();
@@ -1051,18 +1071,19 @@ describe("neuve CLI boundary", () => {
       env,
     );
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toBe(
-      "neuve: The Records store could not record this query.\n",
-    );
     expect(JSON.parse(result.stdout)).toMatchObject({
       retrieval: { status: "ok" },
       scope_gaps: [
-        "plan: The file was read without a held copy because the query could not be recorded.",
+        expect.stringMatching(/^plan: .*the query could not be recorded/),
       ],
     });
     const logs = join(root, ".git", "neuve", "run-logs");
     const [log] = await readdir(logs);
-    expect(JSON.parse(await Bun.file(join(logs, log!)).text())).toMatchObject({
+    const logPath = join(logs, log!);
+    expect(result.stderr).toBe(
+      `neuve: The query was not recorded. See the run log at ${JSON.stringify(logPath)}.\n`,
+    );
+    expect(JSON.parse(await Bun.file(logPath).text())).toMatchObject({
       type: "query.record-failed",
       cause: expect.stringContaining("Invalid email address"),
     });

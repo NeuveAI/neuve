@@ -1,10 +1,4 @@
-/**
- * The line-based client for `codex app-server` over standard input and output: one JSON message
- * per line each way, with no `jsonrpc` field ([app server](https://learn.chatgpt.com/docs/app-server),
- * "Protocol"). It matches responses to requests by id, delivers the notifications it reads in
- * order, answers Codex's requests through the caller, and does the handshake on the stable
- * surface. It maps nothing onto the runtime contract.
- */
+/** The [Codex app-server protocol](https://learn.chatgpt.com/docs/app-server) omits the JSON-RPC version field. */
 import {
   type Cause,
   Deferred,
@@ -56,7 +50,6 @@ export type ServerRequest = {
     readonly params: ServerRequests[K];
   };
 }[keyof ServerRequests];
-/** The client's answer to one of Codex's requests. */
 export type Answer =
   | { readonly result: unknown }
   | { readonly error: { readonly code: number; readonly message: string } };
@@ -77,7 +70,6 @@ export const MAX_LINE_BYTES = 64 * 1024 * 1024;
  */
 export const MAX_QUEUED_NOTIFICATIONS = 200_000;
 const STDERR_TAIL_CHARS = 4000;
-/** How long output that ended cleanly waits for the exit, which then ends the connection itself. */
 const EXIT_GRACE = "1 second";
 
 export interface Line {
@@ -87,7 +79,7 @@ export interface Line {
 
 export interface ConnectOptions {
   readonly program: string;
-  /** Arguments after `app-server`, such as `-c key=value` pairs. */
+  /** Arguments passed after `app-server`. */
   readonly args: ReadonlyArray<string>;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly cwd: string;
@@ -104,10 +96,9 @@ export interface ConnectOptions {
    * before anything else is done with it: the runtime's protocol log and the recorder use it.
    */
   readonly onLine?: (line: Line) => void;
-  /** Process secrets to remove from diagnostic text. */
   readonly secrets?: ReadonlyArray<string> | undefined;
   readonly handshakeTimeout?: Duration.Input;
-  /** How long a program asked to stop has before it is killed; five seconds by default. */
+  /** Defaults to five seconds. */
   readonly stopWait?: Duration.Input;
 }
 
@@ -119,18 +110,10 @@ export interface CodexConnection {
       ? []
       : [ClientMethods[M]["params"]]
   ) => Effect.Effect<ClientMethods[M]["response"], CodexFailure>;
-  /**
-   * The notifications the client reads, in the order they arrived; one reader. The reader is never
-   * held back, since the one pipe carries responses too and a caller may be waiting for one before
-   * it reads notifications. Past `maxQueued` unread, the connection ends with `CodexBacklog`.
-   */
+  /** One reader. An idle notification reader cannot hold up responses on the same pipe. */
   readonly notifications: Stream.Stream<Notification, CodexTermination>;
-  /**
-   * Ends input and asks the program to stop, then kills it if it is still running after the stop
-   * wait. Closing the scope does the same, whether the connection was open or had ended.
-   */
+  /** Closing the scope also stops the process. */
   readonly close: Effect.Effect<void>;
-  /** Whether the connection is still open: false once the program ended or was closed. */
   readonly open: () => boolean;
 }
 
@@ -141,7 +124,6 @@ const isId = (value: unknown): value is RequestId =>
   typeof value === "string" || typeof value === "number";
 const key = (id: RequestId) => `${typeof id}:${id}`;
 
-/** Starts `<program> app-server <args>` and completes the handshake. */
 export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
   const codex = yield* CodexProcess;
   const scope = yield* Effect.scope;
@@ -176,13 +158,15 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       } = { kind: "open" };
   let nextId = 0;
   let stderrTail = "";
-  const secrets = (options.secrets ?? [])
-    .filter((value) => value.length > 0)
-    .map((value) => [value, "<token>"] as const)
-    .sort(([a], [b]) => b.length - a.length);
-  const safeText = (text: string) => replaceKnown(text, secrets);
+  const secrets = options.secrets ?? [];
+  const safeText = replaceKnown(
+    secrets.map((value) => [value, "<token>"]),
+    1,
+  );
   const tail = () => safeText(stderrTail).slice(-STDERR_TAIL_CHARS);
-  const tailCapacity = STDERR_TAIL_CHARS + (secrets[0]?.[0].length ?? 0);
+  const tailCapacity =
+    STDERR_TAIL_CHARS +
+    secrets.reduce((longest, value) => Math.max(longest, value.length), 0);
   const logged = new Set<string>();
   const logOnce = (kind: CodexUnknownMessage["kind"], method: string) => {
     const label = `${kind}:${method}`;
@@ -226,7 +210,6 @@ export const connect = Effect.fnUntraced(function* (options: ConnectOptions) {
       pending.clear();
       yield* Queue.fail(notifications, failure());
     });
-  /** A write the program refuses ends the connection: what it did not take is lost. */
   const send = (message: Record<string, unknown>): Effect.Effect<boolean> =>
     Effect.sync(() => seeLine("out", message)).pipe(
       Effect.andThen(child.write(`${JSON.stringify(message)}\n`)),

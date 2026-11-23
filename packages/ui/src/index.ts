@@ -53,7 +53,7 @@ export { LayoutBackground } from "./components/layout/layout-background";
 export { LayoutCanvas } from "./components/layout/layout-canvas";
 export { Logo, type LogoProps } from "./components/logo/logo";
 export { MarqueeText } from "./components/marquee/marquee-text";
-export { RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead } from "./components/requests/card";
+export { RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead, StatePill } from "./components/requests/card";
 export {
 	type QuestionDraft,
 	type QuestionForm,

@@ -5,6 +5,7 @@ import {
 	AgentDoc, configure, defineDoc, defineExtension, defineTool, InboxDoc, LiveDoc,
 	type ConversationId, type Harness, type InputSubmissionDraft, type SubmissionId, type SubmissionRecord, type TaskId, type ToolExecutionApi, type ToolExecutionResult, type Tx,
 } from "@earendil-works/pi-durable";
+import type { Channel } from "./channel";
 import type { Admission } from "./extensions";
 import { quote } from "./git";
 import { LanesDoc } from "./lanes";
@@ -151,6 +152,7 @@ export class Builds {
 	constructor(private readonly harness: Harness, private readonly log: Log, private readonly options: {
 		shared(): boolean;
 		admit: Admission["serialize"];
+		submitInput: Channel["submitInput"];
 		stop(chat: ConversationId, by: string, at: number, requestId?: string): Promise<void>;
 		host?: BuildHost;
 	}) {}
@@ -447,15 +449,14 @@ export class Builds {
 		return !this.#closing && (state === "starting" || state === "started");
 	}
 
-	#send(build: string, chat: ConversationId, draft: InputSubmissionDraft & { requestId: string }) {
-		return this.options.admit(chat, async () => {
-			if (this.#canSend(build)) {
-				const conversation = await this.harness.conversation(chat, context);
-				if (!conversation) throw new Error("The agent’s chat could not be found.");
-				if (this.#canSend(build)) return (await conversation.submit(draft, context)).id;
-			}
-			return this.harness.commit(async tx => (await tx.submissionByRequest(chat, draft.requestId))?.id, context);
-		});
+	async #send(build: string, chat: ConversationId, draft: InputSubmissionDraft & { requestId: string }) {
+		const existing = await this.harness.commit(tx => tx.submissionByRequest(chat, draft.requestId), context);
+		if (existing) return existing.id;
+		if (!this.#canSend(build)) return;
+		const conversation = await this.harness.conversation(chat, context);
+		if (!conversation) throw new Error("The agent’s chat could not be found.");
+		const submission = await this.options.submitInput(conversation, draft, context, () => this.#canSend(build));
+		return submission?.id;
 	}
 
 	async #deliverMessage(requestId: string): Promise<void> {

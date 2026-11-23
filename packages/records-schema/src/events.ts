@@ -220,7 +220,6 @@ export const ReconciliationId = z.string().min(1).max(256);
 
 /** Media type of raw text captures, including vents and query questions. */
 export const TEXT_CAPTURE_MEDIA_TYPE = "text/plain; charset=utf-8";
-export const VENT_MEDIA_TYPE = TEXT_CAPTURE_MEDIA_TYPE;
 
 /**
  * What an agent found difficult in its session, in its own words (2.15, 8.8). Optional and at most

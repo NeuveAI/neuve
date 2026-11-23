@@ -1,4 +1,4 @@
-import { type CommentThreadState, deliveryLine } from "@neuve/review-rules/comment-thread";
+import type { CommentThreadState } from "@neuve/review-rules/comment-thread";
 import { type FileLine, fileLines, type FileLinesPlacement, matchesFileLines, plainLines } from "@neuve/review-rules/file-lines-anchor";
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -6,19 +6,6 @@ import { IconMessage } from "../../icons";
 import { cn } from "../../lib/utils";
 import { Button } from "../../ui/button";
 import { motion } from "../../ui/popup";
-
-/* ─────────────────────────────────────────────────────────
- * MOTION, all of it the app's own
- *
- *    0ms   a finished selection: the Comment chip, the popover's opening
- *    0ms   the chip pressed: the composer opens under the passage as a
- *          popover does (220ms, emphasized decelerate, a short drop)
- *    0ms   a comment kept or a reply arrives: its card rises as a
- *          message does (260ms)
- *          underline, tint of what a revision put in: drawn at once, the
- *          highlight API has no transition
- * Reduced motion: the app's own rules for popovers and arriving messages.
- * ───────────────────────────────────────────────────────── */
 
 /** One message under a comment, the comment itself first. */
 export type PlanCommentMessageView = {
@@ -52,8 +39,6 @@ export type PlanSelection = { lines: FileLine[]; quote: string };
 /** What the Plan tab's comments do; the app sends each to the channel and reports a refusal. */
 export type PlanCommentActions = {
 	list: PlanCommentView[];
-	/** The agent the plan's chat runs, as its replies name it. */
-	agent: string;
 	agentAvatar?: string;
 	/** Absent when this person may not comment. */
 	keep?: (selection: PlanSelection, text: string) => Promise<void>;
@@ -167,8 +152,8 @@ const words = (lines: FileLine[]) => plainLines(lines);
 const inWord = (text: string, index: number) => /\S/.test(text[index - 1] ?? " ") && /\S/.test(text[index] ?? " ");
 
 /**
- * What a revision did to a passage, word by word: the words both versions share before and after,
- * the words taken out, and the words put in their place.
+ * What a revision did to a passage, word by word: the words taken out, and where the words put in
+ * their place sit in the added lines' words.
  */
 export function changeOf(removed: FileLine[], added: FileLine[]) {
 	let before = words(removed);
@@ -180,26 +165,18 @@ export function changeOf(removed: FileLine[], added: FileLine[]) {
 	// The shared parts end and begin between words, so a changed word shows whole.
 	while (start > 0 && inWord(after, start)) start--;
 	while (end > 0 && inWord(after, after.length - end)) end--;
-	let out = before.slice(start, before.length - end).trim();
 	// Spaces at the edges of what was put in belong to the words around it.
 	let from = start;
 	let to = after.length - end;
 	while (from < to && after[from] === " ") from++;
 	while (to > from && after[to - 1] === " ") to--;
-	return {
-		lead: after.slice(0, from),
-		out,
-		in: after.slice(from, to),
-		tail: after.slice(to),
-		/** Where the words put in sit in the added lines' words. */
-		at: [from, to] as [number, number],
-	};
+	return { out: before.slice(start, before.length - end).trim(), at: [from, to] as [number, number] };
 }
 
 /**
  * What to tint of the lines a revision put in a passage's place: each run of consecutive lines on
  * its own, since lines between them that the revision kept would break a search for them all. A
- * single run is tinted word by word, as the card shows it.
+ * single run is tinted word by word.
  */
 export function addedMarks(removed: FileLine[], added: FileLine[]) {
 	let runs: FileLine[][] = [];
@@ -340,7 +317,6 @@ export function CommentComposer(
 				value={text}
 				rows={2}
 				aria-label={action}
-				placeholder={popover ? "Comment on this passage" : undefined}
 				className="min-h-10 w-full resize-none bg-transparent px-1 pt-0.5 pb-2 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground"
 				onChange={(event) => setText(event.target.value)}
 				onKeyDown={(event) => {
@@ -374,31 +350,10 @@ function Avatar({ message, agentAvatar }: { message: PlanCommentMessageView; age
 	);
 }
 
-/** The passage as the revision left it: shared words, then what it took out and put in. */
-function Change({ removed, added }: { removed: FileLine[]; added: FileLine[] }) {
-	let change = changeOf(removed, added);
-	return (
-		<p className="text-[13px] leading-5">
-			{change.lead}
-			{change.out && <s className="text-muted-foreground">{change.out}</s>}
-			{change.out && change.in && " "}
-			{change.in && <span className="rounded-[3px] bg-success/16">{change.in}</span>}
-			{change.tail}
-		</p>
-	);
-}
-
-/** What the card says under its messages: kept, on its way, or failed. */
-export function commentStatus(comment: PlanCommentView, agent: string) {
-	if (comment.state === "failed") return comment.failure ? `Not delivered: ${comment.failure}` : "Not delivered";
-	if (comment.messages.some((message) => message.kept)) return "Not sent yet";
-	return comment.state ? deliveryLine(comment.state, agent) : undefined;
-}
-
 /**
  * A comment on the plan and the replies under it: the core of the review desk's thread, drawn as
- * Ace draws a surface. A changed passage shows what was removed and what replaced it; an ambiguous
- * one, sitting at its section, shows its quote with a dashed rule.
+ * Ace draws a surface. A changed passage shows the words the revision took out; an ambiguous one,
+ * sitting at its section, shows its quote with a dashed rule.
  */
 export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView; actions: PlanCommentActions }) {
 	let [open, setOpen] = useState<{ kind: "reply" } | { kind: "edit"; message: string }>();
@@ -407,7 +362,8 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 	let removable = (id: string) =>
 		id !== comment.messages[0]!.id || comment.messages.slice(1).every((message) => !message.agent && message.kept);
 	let { placement } = comment;
-	let line = commentStatus(comment, actions.agent);
+	let failed = comment.state === "failed" ? comment.failure ? `Not delivered: ${comment.failure}` : "Not delivered" : undefined;
+	let out = placement.kind === "changed" ? changeOf(placement.removed, placement.added).out : "";
 	let first = comment.messages[0]!.id;
 	return (
 		<article
@@ -415,7 +371,7 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 			aria-label={`Comment on “${comment.quote}”`}
 			className="timeline-stream-in flex w-[440px] max-w-full flex-col gap-1.5 overflow-hidden rounded-lg bg-popover px-2.5 py-2 text-popover-foreground shadow-surface"
 		>
-			{placement.kind === "changed" && <Change removed={placement.removed} added={placement.added} />}
+			{out && <s className="text-[13px] leading-5 text-muted-foreground">{out}</s>}
 			{placement.kind === "ambiguous" && (
 				<p className="border-l-2 border-dashed border-border pl-2 text-[13px] leading-5 text-muted-foreground">{comment.quote}</p>
 			)}
@@ -474,13 +430,9 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 				/>
 			)}
 			{refused && <p role="alert" className="pl-7 text-xs leading-4 text-destructive">{refused}</p>}
-			{(line || (actions.reply && !open)) && (
+			{(failed || (actions.reply && !open)) && (
 				<div className="flex items-center gap-2 pl-7">
-					{line && (
-						<p role={comment.state === "failed" ? "alert" : undefined} className="min-w-0 flex-1 truncate text-xs leading-4 text-muted-foreground">
-							{line}
-						</p>
-					)}
+					{failed && <p role="alert" className="min-w-0 flex-1 truncate text-xs leading-4 text-muted-foreground">{failed}</p>}
 					{actions.reply && !open && (
 						<Button variant="ghost" size="xs" className="ml-auto text-muted-foreground" onClick={() => setOpen({ kind: "reply" })}>
 							Reply

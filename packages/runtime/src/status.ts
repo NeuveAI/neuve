@@ -34,6 +34,7 @@ export const RuntimeUnavailableReason = z.enum([
   "not-registered",
   "unsupported-version",
   "start-failed",
+  "sign-out-failed",
   /** A file was found under the program's name and did not answer as that program. */
   "unrecognized-program",
 ]);
@@ -83,6 +84,8 @@ export const SignInState = z.discriminatedUnion("state", [
     state: z.literal("unknown"),
     reason: z.enum(["not-checked", "check-failed", "needs-newer-build"]),
     hint: SignInHint.optional(),
+    /** Neuve's own words for what fixes it, written by the runtime; never the program's text. */
+    fix: z.string().min(1).optional(),
   }),
 ]);
 export type SignInState = z.infer<typeof SignInState>;

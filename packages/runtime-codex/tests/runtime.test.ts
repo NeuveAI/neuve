@@ -143,11 +143,7 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
     },
     programPath: () => program,
     neuveSignIn: {
-      accessToken: () =>
-        Effect.succeed({
-          token: "opaque.fixture.probe",
-          expiresAt: Date.now() + 3_600_000,
-        }),
+      accessToken: () => Effect.succeed({ token: "opaque.fixture.probe" }),
       signOut: () => Effect.void,
     },
   };

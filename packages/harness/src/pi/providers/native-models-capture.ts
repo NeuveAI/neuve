@@ -50,7 +50,6 @@ const injectableApis = new Set([
   "openai-responses",
   "openai-completions",
   "azure-openai-responses",
-  "openai-codex-responses",
   "anthropic-messages",
   "mistral-conversations",
   "pi-messages",

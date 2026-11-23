@@ -13,21 +13,18 @@ test("a changed word shows whole, between the words both versions share", () => 
 		line("A failed export is retried on its own, **up to five times**, and the person sees why."),
 	);
 	expect(change.out).toBe("three");
-	expect(change.in).toBe("five");
-	expect(change.lead + change.in + change.tail).toBe(
-		"A failed export is retried on its own, up to five times, and the person sees why.",
-	);
-	expect(change.lead.length).toBe(change.at[0]);
+	expect("A failed export is retried on its own, up to five times, and the person sees why.".slice(...change.at)).toBe("five");
 });
 
 test("a removed passage with nothing in its place shows only what was taken out", () => {
 	let change = changeOf(line("- Exports that failed before this change", 15), []);
-	expect(change).toMatchObject({ out: "Exports that failed before this change", in: "", lead: "", tail: "" });
+	expect(change).toEqual({ out: "Exports that failed before this change", at: [0, 0] });
 });
 
 test("words added at the end of a line show as added, the rest as shared", () => {
 	let change = changeOf(line("- The failure reason on the export row"), line("- The failure reason on the export row and in its log"));
-	expect(change).toMatchObject({ lead: "The failure reason on the export row ", out: "", in: "and in its log" });
+	expect(change.out).toBe("");
+	expect("The failure reason on the export row and in its log".slice(...change.at)).toBe("and in its log");
 });
 
 // Why: a revision can rewrite two lines with an unchanged line between them. Searched for together,

@@ -159,7 +159,6 @@ export const PlanCommentSchema = z.object({
 }) satisfies z.ZodType<PlanComment>;
 // End of comments on a plan.
 
-// Builds.
 export const BuildSchema = z.object({
 	id: text,
 	chat: id,
@@ -186,7 +185,6 @@ export const BuildSchema = z.object({
 }) satisfies z.ZodType<Build>;
 
 export const WorkMessageSchema = z.object({ build: text, from: id, to: id, at: z.number(), text }) satisfies z.ZodType<WorkMessage>;
-// End of builds.
 
 export const EventSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("review-cards"), ...base, cards: z.record(text, ReviewCardSchema) }),

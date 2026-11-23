@@ -1,5 +1,5 @@
 // The fake checks what crosses the Codex connection and what the session reports to its caller.
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -202,8 +202,7 @@ test("a new access token restarts Codex and resumes before the next turn", async
           yield* read.next("turn.finished");
         }),
       {
-        accessToken: () =>
-          Effect.sync(() => ({ token, expiresAt: Date.now() + 3_600_000 })),
+        accessToken: () => Effect.sync(() => ({ token })),
         log: appendTo(path),
       },
     );
@@ -241,72 +240,59 @@ test("a new access token restarts Codex and resumes before the next turn", async
   }
 });
 
-// The documented HTTP status field is synthetic here. A 401 after expiry must leave a reusable session.
-test("an expired access token fails the turn and the next turn renews and resumes", async () => {
+test("a provider 401 fails the turn and the next turn renews the token and resumes", async () => {
   const fake = codex();
-  const deadline = Date.now() + 3_600_000;
   const first = "expiring.opaque.fixture.value";
   const second = "renewed.opaque.fixture.value";
-  let now = Date.now();
-  const clock = spyOn(Date, "now").mockImplementation(() => now);
-  try {
-    await run(
-      fake,
-      (session, read) =>
-        Effect.gen(function* () {
-          yield* startOn(fake, session, readOnly);
-          const previous = fake.current();
-          now = deadline + 1;
-          fake.send(
-            "turn/completed",
-            completed("failed", {
-              message: "request unauthorized",
-              codexErrorInfo: {
-                responseStreamDisconnected: { httpStatusCode: 401 },
-              },
-            }),
-          );
-          expect(yield* read.next("turn.finished")).toMatchObject({
-            outcome: {
-              status: "failed",
-              disposition: "reusable",
-              failure: {
-                _tag: "TurnFailed",
-                reason: "provider-failed",
-                account,
-              },
+  await run(
+    fake,
+    (session, read) =>
+      Effect.gen(function* () {
+        yield* startOn(fake, session, readOnly);
+        const previous = fake.current();
+        fake.send(
+          "turn/completed",
+          completed("failed", {
+            message: "request unauthorized",
+            codexErrorInfo: {
+              responseStreamDisconnected: { httpStatusCode: 401 },
             },
-          });
-          yield* session.startTurn({
-            turnId: "next",
-            message: "continue",
-            workspace: readOnly,
-          });
-          expect(previous.io.exited()).toBe(true);
-          const current = fake.current();
-          expect(current.env.NEUVE_CODEX_ACCESS_TOKEN).toBe(second);
-          expect(written(current, "thread/resume")[0]?.params).toMatchObject({
-            threadId: "thread-1",
-          });
-          fake.send("turn/completed", completed("completed"));
-          expect(yield* read.next("turn.finished")).toMatchObject({
-            turnId: "next",
-            outcome: { status: "completed" },
-          });
-          expect(read.finished()).toHaveLength(2);
-        }),
-      {
-        accessToken: (rejected) =>
-          Effect.succeed(
-            rejected === first
-              ? { token: second, expiresAt: now + 3_600_000 }
-              : { token: first, expiresAt: deadline },
-          ),
-      },
-    );
-  } finally {
-    clock.mockRestore();
-  }
+          }),
+        );
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          outcome: {
+            status: "failed",
+            disposition: "reusable",
+            failure: {
+              _tag: "TurnFailed",
+              reason: "provider-failed",
+              account,
+            },
+          },
+        });
+        yield* session.startTurn({
+          turnId: "next",
+          message: "continue",
+          workspace: readOnly,
+        });
+        expect(previous.io.exited()).toBe(true);
+        const current = fake.current();
+        expect(current.env.NEUVE_CODEX_ACCESS_TOKEN).toBe(second);
+        expect(written(current, "thread/resume")[0]?.params).toMatchObject({
+          threadId: "thread-1",
+        });
+        fake.send("turn/completed", completed("completed"));
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          turnId: "next",
+          outcome: { status: "completed" },
+        });
+        expect(read.finished()).toHaveLength(2);
+      }),
+    {
+      accessToken: (rejected) =>
+        Effect.succeed({ token: rejected === first ? second : first }),
+    },
+  );
 });
 
 // A token that has worked must get the same expiry recovery as the initial token.
@@ -379,7 +365,7 @@ test("a replacement that completed a turn can expire and recover again", async (
       accessToken: (rejected) =>
         Effect.sync(() => {
           if (rejected !== undefined) token = renewals.get(rejected) ?? token;
-          return { token, expiresAt: Date.now() + 3_600_000 };
+          return { token };
         }),
     },
   );
@@ -448,7 +434,6 @@ test.each(["unchanged token", "refused replacement"] as const)(
               rejected === first && renewal === "refused replacement"
                 ? replacement
                 : first,
-            expiresAt: Date.now() + 3_600_000,
           }),
       },
     );

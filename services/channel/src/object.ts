@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 import { Channel, type Envelope, type Frame, type Log, type ModelRef } from "@ace/channel";
+import { createCatalogue } from "@ace/channel/models";
 import {
 	backupSnapshot,
 	exportSnapshot,
@@ -160,7 +160,7 @@ export class HostedChannel extends DurableObject<Env> {
 					this.#project({ busy });
 				},
 				storage: await SqliteStorage.open(this.#db),
-				models: builtinModels({
+				models: createCatalogue({
 					authContext: {
 						env: async (name) => typeof env[name] === "string" ? env[name] : undefined,
 						fileExists: async () => false,

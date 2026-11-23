@@ -1,3 +1,4 @@
+import MarkdownIt from "markdown-it";
 import { unescapeAll } from "markdown-it/lib/common/utils.mjs";
 
 /**
@@ -53,13 +54,7 @@ const LINK = /!?\[([^\]]*)\]\([^)]*\)/g;
 const EMPHASIS = /(?<![\p{L}\p{N}])[*_]+|[*_]+(?![\p{L}\p{N}])/gu;
 const CODE_OR_STRIKE = /`+|~~/g;
 
-/**
- * Text as the plan tab shows it, for comparing a quote with a file's lines. This lane's rule, not
- * the design's: the design says the quote must match, and a selection on screen is rendered text,
- * so both sides are compared after leaving out each line's Markdown prefix (heading, list, task and
- * quotation marks), link targets, code and strike marks, and emphasis marks at a word's edge, and
- * after taking each run of whitespace as one space. A mark inside a word, as in `snake_case`, stays.
- */
+/** Normalize Markdown prefixes, inline marks and spacing to match a rendered selection. Preserve marks inside words like `snake_case`. */
 export function plainText(text: string): string {
   return text
     .split(/\r?\n/)
@@ -127,15 +122,16 @@ export function matchesFileLines(
   );
 }
 
-/** The heading at or above `line`, as the plan tab shows it; empty when there is none. */
+const planMarkdown = new MarkdownIt({ html: false, linkify: false });
+
 export function fileLinesSection(text: string, line: number): string {
-  const file = fileLines(text).slice(0, line);
-  const heading = file
-    .reverse()
-    .find((candidate) => /^\s*#{1,6}\s/.test(candidate.text));
-  return heading
-    ? plainLines([{ ...heading, text: heading.text.replace(/\s#+\s*$/, "") }])
-    : "";
+  const tokens = planMarkdown.parse(text, {});
+  const heading = tokens.findLastIndex(
+    (token) => token.type === "heading_open" && token.map![0] < line,
+  );
+  return heading < 0
+    ? ""
+    : plainLines(fileLines(`# ${tokens[heading + 1]!.content}`));
 }
 
 /**

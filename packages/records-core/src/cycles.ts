@@ -12,41 +12,45 @@ type LocalScopeSelection = Extract<
   { kind: "cycle.local-scope-selected@1" }
 >;
 
-const readCycles = (baseOid: string, branch?: string) =>
+export const unboundReadCycles = (baseOid: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
-    return yield* sql<{
-      cycleId: string;
-      branch: string;
-      published: 0 | 1;
-    }>`WITH openings AS (
+    return yield* sql<{ cycleId: string; branch: string }>`WITH openings AS (
       SELECT seq,
         json_extract(envelope, '$.attribution.cycleId') AS cycle_id,
         json_extract(envelope, '$.payload.branch') AS branch
       FROM events WHERE kind = 'cycle.opened@2'
         AND json_extract(envelope, '$.payload.baseOid') = ${baseOid}
-    ), cycles AS (
-      SELECT *, EXISTS (
+    )
+    SELECT cycle_id, branch FROM openings
+    WHERE NOT EXISTS (
         SELECT 1 FROM event_cycles c JOIN events p ON p.seq = c.event_seq
         WHERE c.cycle_id = openings.cycle_id
           AND p.kind IN ('packet.published@1', 'packet.published@2')
-      ) AS published FROM openings
-    )
-    SELECT cycle_id, branch, published FROM cycles
-    WHERE ${
-      branch === undefined
-        ? sql`published = 0 AND NOT EXISTS (
-          SELECT 1 FROM projection_cycles p WHERE p.cycle_id = cycles.cycle_id
-        )`
-        : sql`branch = ${branch}`
-    }
-    ORDER BY seq DESC ${branch === undefined ? sql`` : sql`LIMIT 1`}`;
+      ) AND NOT EXISTS (
+        SELECT 1 FROM projection_cycles p WHERE p.cycle_id = openings.cycle_id
+      )
+    ORDER BY seq DESC`;
   });
 
-/** Open cycles that can still be bound to a review's head, newest first. */
-export const unboundReadCycles = (baseOid: string) => readCycles(baseOid);
+const latestReadCycle = (baseOid: string, branch: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const [latest] = yield* sql<{ cycleId: string; published: 0 | 1 }>`SELECT
+      json_extract(e.envelope, '$.attribution.cycleId') AS cycle_id,
+      EXISTS (
+        SELECT 1 FROM event_cycles c JOIN events p ON p.seq = c.event_seq
+        WHERE c.cycle_id = json_extract(e.envelope, '$.attribution.cycleId')
+          AND p.kind IN ('packet.published@1', 'packet.published@2')
+      ) AS published
+    FROM events e
+    WHERE e.kind = 'cycle.opened@2'
+      AND json_extract(e.envelope, '$.payload.baseOid') = ${baseOid}
+      AND json_extract(e.envelope, '$.payload.branch') = ${branch}
+    ORDER BY e.seq DESC LIMIT 1`;
+    return latest;
+  });
 
-/** A read joins the latest cycle for its base and branch until that cycle publishes. */
 export const openOrJoinCycle = <E = never, R = never>(
   payload: ReadOpening["payload"],
   actor: string,
@@ -55,7 +59,7 @@ export const openOrJoinCycle = <E = never, R = never>(
   ) => Effect.Effect<LocalScopeSelection["payload"] | undefined, E, R>,
 ) =>
   Effect.gen(function* () {
-    const [latest] = yield* readCycles(payload.baseOid, payload.branch);
+    const latest = yield* latestReadCycle(payload.baseOid, payload.branch);
     if (latest?.published === 0)
       return { cycleId: latest.cycleId, opened: false };
 

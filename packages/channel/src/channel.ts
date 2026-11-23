@@ -18,6 +18,7 @@ import {
 	type CommitChange,
 	configure,
 	type Conversation,
+	type ConversationHandle,
 	type ConversationId,
 	type ConversationRecord,
 	type DocumentWatch,
@@ -37,6 +38,7 @@ import {
 	type LiveState,
 	ROOT_CONVERSATION_ID,
 	type Storage,
+	type Submission,
 	type SubmissionId,
 	type SubmissionRecord,
 	type Tx,
@@ -193,7 +195,7 @@ export type Options = {
 		attach?(harness: Harness, admission: Admission & ApprovalAdmission): void | Promise<void>;
 	};
 	/** Host-owned document producers join before native storage closes. */
-	feed?(harness: Harness): Promise<{ close(): Promise<void>; pending(): boolean }>;
+	feed?(harness: Harness, submitInput: Channel["submitInput"]): Promise<{ close(): Promise<void>; pending(): boolean }>;
 };
 
 type Send = (event: Event) => void;
@@ -263,6 +265,7 @@ export class Channel {
 		this.#builds = new Builds(harness, log, {
 			shared: () => this.#settings.shared,
 			admit: (chat, action) => this.#admitted(chat, action),
+			submitInput: this.submitInput.bind(this),
 			stop: async (chat, by, at, requestId) =>
 				this.#stopChat(await this.#conversation(chat), requestId ? { by, at, requestId } : undefined, true),
 			host: options.build,
@@ -308,7 +311,7 @@ export class Channel {
 		if (options.images) registry.install(images(options.images));
 		if (options.tabs) registry.install(tabs(options.tabs));
 		registry.install(lanes({ ...options, name: options.prefix || options.name }));
-		registry.install(subagent(questions.extension));
+		registry.install(subagent((handle, input, scope) => channel.submitInput(handle, input, scope), questions.extension));
 		registry.install(metadata((value) => channel.#changed(value), options.claim));
 		registry.install(messaging(options.directory));
 		registry.install(
@@ -486,7 +489,7 @@ export class Channel {
 			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
-		channel.#feed = await options.feed?.(harness);
+		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
 		if (options.resume !== false) {
 			await channel.#builds.finishStops();
 			harness.resume();
@@ -1135,7 +1138,7 @@ export class Channel {
 		};
 		let submission: SubmissionId | undefined;
 		try {
-			({ submission } = await this.#select(conversation, {}, undefined, undefined, undefined, {
+			({ submission } = await this.#select(conversation, {}, {
 				bound, mode: "plan", attended: undefined, input, settled,
 			}));
 		} catch (error) {
@@ -1169,6 +1172,17 @@ export class Channel {
 		}
 	}
 
+	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context): Promise<Submission>;
+	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit: () => boolean): Promise<Submission | undefined>;
+	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
+		return this.#admitted(handle.id, async () => {
+			if (canSubmit?.() === false) return;
+			await this.#select(await this.#conversation(handle.id), {}, undefined, callContext);
+			if (canSubmit?.() === false) return;
+			return handle.submit(input, callContext);
+		});
+	}
+
 	async #admit(request: Extract<Request, { op: "ask" }>, settled: Promise<unknown>) {
 		this.#author(request.author);
 		room.checkAttachments(request);
@@ -1198,7 +1212,7 @@ export class Channel {
 			whenBusy: "steer",
 			...(request.requestId ? { requestId: request.requestId } : {}),
 		};
-		const { submission } = await this.#select(conversation, request, model, effort, automatic, { bound, mode, attended, input, settled });
+		const { submission } = await this.#select(conversation, request, { bound, mode, attended, input, settled });
 		return { submission };
 	}
 
@@ -1210,7 +1224,7 @@ export class Channel {
 		if (agent && !await this.#harness.commit(tx => tx.submissionByRequest(conversation.id, agent.requestId), context)) {
 			throw new Error("Wait for the host to send the agent’s brief.");
 		}
-		return this.#select(conversation, {}, request.model, request.effort, request.automatic);
+		return this.#select(conversation, request);
 	}
 
 	async #mayInvoke(author: string) {
@@ -1228,25 +1242,23 @@ export class Channel {
 	/** Model and effort apply to a whole run, never just its later turns. */
 	async #select(
 		conversation: Conversation,
-		attached: room.Attached,
-		requested: ModelRef | undefined,
-		effort?: Effort,
-		automatic?: boolean,
+		selection: room.Attached & { model?: ModelRef; effort?: Effort; automatic?: boolean },
 		invocation?: { bound: ((tx: Tx) => Promise<void>) | undefined; mode: ChatMode | undefined; attended: boolean | undefined; input: InputSubmissionDraft; settled: Promise<unknown> },
+		callContext = context,
 	): Promise<{ model: ModelRef; effort: Effort; submission?: SubmissionId }> {
-		const agent = await conversation.agent(context);
+		const { model: requested, effort, automatic } = selection;
+		const agent = await conversation.agent(callContext);
 		const current = agent.model;
-		// A chat's inherited model can lose its provider key; only an explicit request must keep it.
 		const kept = !requested && !automatic && current && await usable(this.#options.models, current)
 			? current
 			: undefined;
 		const model = requested || kept || await this.#automatic();
 		const selected = this.#options.models.getModel(model.provider, model.modelId);
 		if (!selected) {
-			throw new Error(`Unknown model ${model.provider}/${model.modelId}`);
+			throw new Error(`Model ${model.provider}/${model.modelId} is not offered. Choose another model.`);
 		}
 		// Before configuring, so a refused message leaves the chat's model as it was.
-		room.checkContext(selected, attached);
+		room.checkContext(selected, selection);
 		const levels = getSupportedThinkingLevels(selected);
 		if (effort !== undefined && effort !== "off" && !levels.includes(effort)) {
 			const listed = levels.filter((level) => level !== "off");
@@ -1285,7 +1297,7 @@ export class Channel {
 					await checkModelIdle(tx);
 					await invocation.bound?.(tx);
 					return setChatMode(tx, conversation.id, mode);
-				}, context);
+				}, callContext);
 			}
 			if (!same || (mode === undefined && invocation?.bound)) {
 				previousSelection = await this.#harness.commit(async tx => {
@@ -1296,12 +1308,12 @@ export class Channel {
 					const previous = { model: state.model ? { ...state.model } : null, thinkingLevel: state.thinkingLevel ?? null };
 					await configure(tx, conversation.id, { model, thinkingLevel });
 					return previous;
-				}, context);
+				}, callContext);
 			}
 			if (!same && !modeChange) this.#agentChanged(conversation.id, model, thinkingLevel);
 			if (invocation) {
 				submission = (await this.#approvals.admit(this.#harness, conversation.id, invocation.attended, invocation.settled,
-					() => conversation.submit(invocation.input, context))).id;
+					() => conversation.submit(invocation.input, callContext))).id;
 			}
 		} catch (error) {
 			if (modeChange) {

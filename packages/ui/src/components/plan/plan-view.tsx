@@ -249,14 +249,13 @@ export type PlanViewProps = {
 	approve?: {
 		onApprove: () => void;
 		approving: boolean;
-		/** Why approving is not possible now; the button then says so on hover. */
+		/** Why approving is off while the plan shows; the button says so on hover. */
 		blocked?: string;
 		error?: string;
 	};
 	/** The comments on this plan, and what the person may do with them. */
 	comments?: PlanCommentActions;
-	/** Sends every comment and reply the person keeps on the plan, together. */
-	/** `note` says why the last send held something back. */
+	/** Sends every comment and reply the person keeps on the plan, together; `note` says why the last send held something back. */
 	send?: { onSend: () => void; sending: boolean; error?: string; note?: string };
 	className?: string;
 };
@@ -292,14 +291,15 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 		};
 	}, []);
 	let footer = approve || (send && (kept > 0 || send.note || send.error));
+	let approveOff = !!approve?.blocked || approve?.approving || text === undefined;
 	return (
 		<section aria-label="Plan" className={cn("flex h-full min-h-0 flex-col bg-background text-foreground", className)}>
-			<header className="flex shrink-0 flex-col gap-1 border-b border-border px-5 pt-3.5 pb-2.5">
+			<header className={cn("flex shrink-0 flex-col gap-1 border-b border-border px-5 pt-3.5", plan.meta ? "pb-2.5" : "pb-3.5")}>
 				<div className="flex min-w-0 items-center gap-2">
 					<h1 className="min-w-0 truncate text-base leading-[22px] font-semibold">{plan.title || "Plan"}</h1>
 					<PlanBadge state={plan.state} />
 				</div>
-				<p className="truncate text-xs leading-4 text-muted-foreground">{plan.meta}</p>
+				{plan.meta && <p className="truncate text-xs leading-4 text-muted-foreground">{plan.meta}</p>}
 			</header>
 			{/* Ace makes every element unselectable; the plan's words are selectable, its list markers not. */}
 			<div className="min-h-0 flex-1 overflow-y-auto px-5 pb-3.5 select-text [&_*]:select-text [&_[aria-hidden]]:select-none">
@@ -350,10 +350,10 @@ export function PlanView({ plan, text, error, approve, comments, send, className
 						{approve && (
 							<Button
 								className="aria-disabled:opacity-50"
-								aria-disabled={!!approve.blocked || approve.approving || undefined}
+								aria-disabled={approveOff || undefined}
 								title={approve.blocked}
 								onClick={() => {
-									if (!approve.blocked && !approve.approving) approve.onApprove();
+									if (!approveOff) approve.onApprove();
 								}}
 							>
 								{approve.approving ? "Approving…" : "Approve and build"}

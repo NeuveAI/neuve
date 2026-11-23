@@ -19,7 +19,6 @@ import {
 	type FauxProviderHandle,
 	fauxProvider,
 	type FauxResponseStep,
-	type MutableModels,
 } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { ok } from "@earendil-works/pi-durable/env";
@@ -90,7 +89,7 @@ export async function project(
 }
 
 /** A pi-ai `Models` with only the no-network faux provider, scripted per test. */
-export function faux(): { faux: FauxProviderHandle; models: MutableModels } {
+export function faux() {
 	const handle = fauxProvider({
 		provider: "faux",
 		models: [{ id: "coder", contextWindow: 200_000, reasoning: true }],

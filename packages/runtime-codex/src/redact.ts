@@ -1,10 +1,5 @@
-/**
- * Redaction for anything the client lets out of the process: recordings, Codex's own error text,
- * and the program's standard-error tail on a failure. It holds no state and writes nothing.
- */
 import { homedir, hostname } from "node:os";
 
-/** Field names whose values are never kept: credentials, and who the person is. */
 const SECRET_KEY =
   /token|secret|password|authorization|cookie|api[_-]?key|bearer|email|(user|account|workspace|org(anization)?|installation|environment|machine|device)_?id$|workspaceName|serverName/i;
 /**
@@ -23,12 +18,11 @@ const counts = (item: unknown): boolean =>
 const SECRET_BLOCK = /^(env|args|http_headers|env_http_headers|headers)$/;
 const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/g;
 const JWT = /eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g;
-/** OpenAI's keys and refresh tokens, and the other common prefixed token shapes. */
+/** OpenAI keys and refresh tokens, plus common prefixed tokens from other providers. */
 const TOKEN =
   /\b(?:sk|rt|pk|sess|ghp|gho|ghs|ghu|github_pat|xox[abprs])[-_][\w-]{8,}/g;
-/** The value after an authorization scheme, whatever its shape. */
+/** Authorization values may have any shape. */
 const BEARER = /\b(Bearer|Basic|Token)(\s+)[^\s"',;]{4,}/gi;
-/** A path under the home folder written the short way. */
 const TILDE = /(?<![\w/])~\/[\w.@+/-]+/g;
 /** Any absolute path left after the known ones were named, never a URL's path. */
 /** Folder names may hold spaces; the last part may not, so a path never runs on into prose. */
@@ -36,12 +30,17 @@ const ABSOLUTE = /(?<![:\w/.])\/(?:[\w.@+-]+(?: [\w.@+-]+)*\/)+[\w.@+-]+/g;
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export const replaceKnown = (
-  input: string,
   known: ReadonlyArray<readonly [string, string]>,
+  minimumLength = 2,
 ) => {
-  let out = input;
-  for (const [found, label] of known) out = out.split(found).join(label);
-  return out;
+  const ordered = known
+    .filter(([found]) => found.length >= minimumLength)
+    .sort(([a], [b]) => b.length - a.length);
+  return (input: string) => {
+    let out = input;
+    for (const [found, label] of ordered) out = out.split(found).join(label);
+    return out;
+  };
 };
 /** The machine's name, whole and as its first label, only where it stands as a word of its own. */
 const host = (() => {
@@ -59,22 +58,13 @@ const host = (() => {
       );
 })();
 
-/**
- * Replaces each known value (the working folder, the Codex home, the person's home, the run's
- * bearer token) with its label, then every secret-named field, email, token, bearer value, the
- * machine's name and other absolute path. The person's home is always known. Field names are kept.
- * A secret-named field keeps `null` and booleans, which carry nothing; any other value, list or
- * object included, becomes `<redacted>`.
- */
 export const redact = (
   value: unknown,
-  known: ReadonlyArray<readonly [string, string]>,
+  known: Iterable<readonly [string, string]>,
 ): unknown => {
-  const ordered = [...known, [homedir(), "<home>"] as const]
-    .filter(([found]) => found.length > 1)
-    .sort(([a], [b]) => b.length - a.length);
+  const replace = replaceKnown([...known, [homedir(), "<home>"]]);
   const text = (input: string) => {
-    const out = replaceKnown(input, ordered)
+    const out = replace(input)
       .replace(JWT, "<token>")
       .replace(TOKEN, "<token>")
       .replace(BEARER, "$1$2<token>")

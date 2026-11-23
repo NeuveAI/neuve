@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-durable";
 
 import type { Delivery } from "./protocol";
+import type { Channel } from "./channel";
 import { MetadataExtension } from "./metadata";
 import * as room from "./room";
 
@@ -36,7 +37,7 @@ function model(value: string | undefined) {
  * reaches the child. The child stays in the channel afterwards for people to read or continue.
  * `without` lists extensions a child chat must not have, such as questions nobody would see.
  */
-export const subagent = (...without: Extension[]): Extension =>
+export const subagent = (submitInput: Channel["submitInput"], ...without: Extension[]): Extension =>
 	defineExtension({
 		name: "ace-subagent",
 		tools: [
@@ -61,7 +62,7 @@ export const subagent = (...without: Extension[]): Extension =>
 							ownership: { kind: "task", taskId: api.taskId },
 						});
 						await configure(tx, created.id, {
-							extensions: { remove: [subagent(), MetadataExtension, ...without] },
+							extensions: { remove: [subagent(submitInput), MetadataExtension, ...without] },
 							...(change ? { model: change } : {}),
 						});
 						return created.id;
@@ -74,7 +75,8 @@ export const subagent = (...without: Extension[]): Extension =>
 						content: room.content(author, args.task),
 						requestId: `subagent:${api.taskId}`,
 					} as const;
-					const settled = await (await handle.submit(request, context)).wait(context);
+					const submission = await (change ? handle.submit(request, context) : submitInput(handle, request, context));
+					const settled = await submission.wait(context);
 					if (settled.status !== "done" || settled.type !== "input") {
 						throw new Error(`Subagent chat ${child} ended ${settled.status}`);
 					}

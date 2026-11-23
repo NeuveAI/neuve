@@ -258,7 +258,9 @@ export function Composer(
 	const chosen = `${current ? key(current) : "auto"} ${currentEffort || "off"}`;
 	const [picking, setPicking] = useState<{ model: string; effort?: Effort; from: string }>();
 	if (picking && picking.from !== chosen) setPicking(undefined);
-	const model = picking?.model || (current ? key(current) : "auto");
+	const kept = picking?.model || (current ? key(current) : "auto");
+	// The channel runs Automatic for a stored model missing from the models it offers.
+	const model = models?.length && !models.some((value) => key(value) === kept) ? "auto" : kept;
 	const levels = models?.find((value) => key(value) === model)?.efforts;
 	const requestedEffort = picking?.effort || currentEffort || "off";
 	const effort = requestedEffort === "off" || levels?.includes(requestedEffort)

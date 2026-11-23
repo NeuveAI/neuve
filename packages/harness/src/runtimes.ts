@@ -19,6 +19,7 @@ import {
 } from "@neuve/runtime";
 import { claudeRuntime, type ClaudeRuntimeConfig } from "@neuve/runtime-claude";
 import {
+  CodexSignInFileError,
   codexRuntime,
   type CodexRuntimeConfig,
   type LogEntry,
@@ -33,6 +34,7 @@ import {
   accessToken,
   authOptionsFor,
   OpenAiAuthError,
+  signInFileFix,
   signOut,
 } from "./openai-auth.ts";
 import type { ReadinessStatuses } from "./route-provider.ts";
@@ -59,7 +61,6 @@ export interface HarnessRuntimesOptions<E, R> extends PiStatusRuntimeOptions {
   readonly codex?: CodexRuntimeConfig | false;
 }
 
-/** The Codex runtime as the worker, the workspace and `neuve auth` register it for a home. */
 export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
   home,
   programPath: (name) => AccountStore.programPath(home, name),
@@ -73,7 +74,9 @@ export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
       return Effect.tryPromise({
         try: (signal) =>
           accessToken({ ...authOptionsFor(credential), signal }, rejected),
-        catch: (error) => {
+        catch: (error) => error,
+      }).pipe(
+        Effect.mapError((error) => {
           if (error instanceof OpenAiAuthError) {
             switch (error.code) {
               case "signed-out":
@@ -92,15 +95,22 @@ export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
                 return new AccountRejected({ account, hint, reason: "other" });
             }
           }
-          return new TurnFailed({ account, reason: "provider-unavailable" });
-        },
-      });
+          const fix = signInFileFix(error);
+          return fix === undefined
+            ? new TurnFailed({ account, reason: "provider-unavailable" })
+            : new CodexSignInFileError(account, fix);
+        }),
+      );
     },
     signOut: ({ name: account, credential }) =>
       Effect.tryPromise({
         try: () => signOut(authOptionsFor(credential)),
-        catch: () =>
-          new RuntimeUnavailable({ account, reason: "start-failed" }),
+        catch: (error) =>
+          new RuntimeUnavailable({
+            account,
+            reason: "sign-out-failed",
+            fix: signInFileFix(error),
+          }),
       }).pipe(Effect.asVoid),
   },
 });

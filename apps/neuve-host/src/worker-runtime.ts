@@ -178,10 +178,10 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		};
 		const channel = await Channel.open({...planOptions, log: privateLog.log, storage, models, extension,
 			...(setup.review ? {
-				feed: async (harness: import("@earendil-works/pi-durable").Harness) => {
+				feed: async (harness, submitInput) => {
 					const adapter = nativeReview(options.id);
 					try {
-						const feed = await startReviewFeed(harness, adapter.source, {
+						const feed = await startReviewFeed(harness, adapter.source, submitInput, {
 							log: privateLog.log,
 							enabled: () => { const record = catalog.read(options.id); return !record.archived && !record.moving && !record.hosted; },
 						});

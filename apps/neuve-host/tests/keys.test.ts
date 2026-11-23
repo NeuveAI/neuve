@@ -28,6 +28,18 @@ ${body}
 	expect(result.exitCode, result.stderr.toString()).toBe(0);
 }
 
+// Chat and Settings both build catalogues, so either could expose the unsupported sign-in.
+test("both host catalogues offer every built-in provider except legacy Codex", () => {
+	isolated(`
+const { builtinProviders } = await import("@earendil-works/pi-ai/providers/all");
+const expected = builtinProviders().map(provider => provider.id).filter(id => id !== "openai-codex").sort();
+for (const catalogue of [models(), settled().models]) {
+  assert.deepEqual(catalogue.getProviders().map(provider => provider.id).sort(), expected);
+  assert.equal(catalogue.getModel("openai-codex", "gpt-6-sol"), undefined);
+}
+`);
+});
+
 test("OAuth names never resolve from environment, sealed state or Keychain and never admit coding models", () => {
 	isolated(`
 for (const name of ["ANTHROPIC_OAUTH_TOKEN", "ACE_ANTHROPIC_OAUTH_TOKEN"]) {

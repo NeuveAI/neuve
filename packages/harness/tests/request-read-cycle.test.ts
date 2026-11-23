@@ -172,10 +172,11 @@ test("opens the same range cycle as before when there was no read", async () => 
   ]);
 });
 
-// Git must leave the Records writer available while it checks which branches contain the head.
-test("joins a read cycle while Git can acquire the store's write lock", async () => {
-  const repo = fixture();
-  const read = await repo.run(repo.read());
+const withBranchRead = async <A>(
+  repo: ReturnType<typeof fixture>,
+  branchRead: string,
+  run: () => Promise<A>,
+) => {
   const git = Bun.which("git");
   if (git === null) throw new Error("Git is required for the fixture");
   const bin = join(repo.repository, "git-fixture");
@@ -186,8 +187,7 @@ test("joins a read cycle while Git can acquire the store's write lock", async ()
 import { Database } from "bun:sqlite";
 const args = process.argv.slice(2);
 if (args.includes("for-each-ref")) {
-  using db = new Database(${JSON.stringify(repo.location.database)});
-  db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK");
+  ${branchRead}
 }
 const result = Bun.spawnSync([${JSON.stringify(git)}, ...args], {
   stdout: "inherit", stderr: "inherit",
@@ -199,12 +199,49 @@ process.exit(result.exitCode);
   const path = process.env.PATH ?? "";
   try {
     process.env.PATH = `${bin}:${path}`;
-    const review = await repo.run(repo.request());
-    expect(review.cycleId).toBe(read.cycleId);
-    expect(review.openedCycle).toBe(false);
+    return await run();
   } finally {
     process.env.PATH = path;
   }
+};
+
+// A branch lookup must leave the Records writer free for another process.
+test("joins a read cycle while Git can acquire the store's write lock", async () => {
+  const repo = fixture();
+  const read = await repo.run(repo.read());
+  const review = await withBranchRead(
+    repo,
+    `using db = new Database(${JSON.stringify(repo.location.database)});
+     db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK");`,
+    () => repo.run(repo.request()),
+  );
+  expect(review.cycleId).toBe(read.cycleId);
+  expect(review.openedCycle).toBe(false);
+});
+
+// An unreadable branch list can silently open a duplicate review cycle.
+test("refuses to open a review cycle when Git cannot list local branches", async () => {
+  const repo = fixture();
+  await repo.run(repo.read());
+  const { request, openings } = await withBranchRead(
+    repo,
+    'console.error("fixture branch read failed"); process.exit(2);',
+    () =>
+      repo.run(
+        Effect.gen(function* () {
+          const request = yield* Effect.result(repo.request());
+          const openings = yield* Log.history({ kind: "cycle.opened@1" });
+          return { request, openings };
+        }),
+      ),
+  );
+  expect(request).toMatchObject({
+    _tag: "Failure",
+    failure: {
+      cause: { _tag: "GitFailed", exitCode: 2 },
+    },
+  });
+  expect(openings).toEqual([]);
 });
 
 // A second head must keep its own range even when both heads belong to the read's branch.
