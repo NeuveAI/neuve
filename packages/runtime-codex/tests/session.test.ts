@@ -1,9 +1,7 @@
 // The fake checks what crosses the Codex connection and what the session reports to its caller.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
+  AccountRejected,
   AccountName,
   RuntimeEvent,
   TurnLimit,
@@ -13,8 +11,8 @@ import {
 } from "@neuve/runtime";
 import { Effect, Exit, Fiber, Logger, Queue, Scope, Stream } from "effect";
 import { turnSettings } from "../src/launch.ts";
-import { appendTo, type LogEntry } from "../src/log.ts";
-import { openCodexSession, type CodexTokenSource } from "../src/session.ts";
+import type { LogEntry } from "../src/log.ts";
+import { openCodexSession, type CodexSignInCheck } from "../src/session.ts";
 import {
   codex,
   completed,
@@ -103,7 +101,7 @@ function run(
     stopWait?: `${number} millis`;
     broken?: ReadonlyArray<string>;
     log?: (entry: LogEntry) => void;
-    accessToken?: CodexTokenSource;
+    checkSignIn?: CodexSignInCheck;
   } = {},
 ) {
   return Effect.runPromise(
@@ -113,14 +111,13 @@ function run(
         account,
         program: "/test/codex",
         codexHome:
-          overrides.accessToken === undefined ? undefined : "/neuve/codex",
+          overrides.checkSignIn === undefined ? undefined : "/neuve/codex",
         cwd: "/work",
         // An inherited Codex home must not reach Codex: the account names its own, or none.
         environment: {
           HOME: "/home",
           OPENAI_API_KEY: "sk-should-go",
           CODEX_HOME: "/inherited-home",
-          NEUVE_CODEX_ACCESS_TOKEN: "ambient-value",
         },
         policy: overrides.policy ?? policy,
         start: overrides.start ?? { kind: "new" },
@@ -128,7 +125,13 @@ function run(
         stopWait: overrides.stopWait ?? "10 millis",
         broken: overrides.broken,
         log: overrides.log,
-        accessToken: overrides.accessToken,
+        neuveSignIn:
+          overrides.checkSignIn === undefined
+            ? undefined
+            : {
+                checkSignIn: overrides.checkSignIn,
+                tokenCommand: ["/neuve/bin/neuve", "auth", "lease", account],
+              },
       }).pipe(Scope.provide(scope));
       const read = yield* reader(session);
       yield* body(session, read, scope).pipe(
@@ -148,115 +151,76 @@ const startOn = (
     yield* until(() => written(fake.current(), "turn/start").length > 0);
   });
 
-// A token change must restart even when consecutive turns use the same configuration.
-test("a new access token restarts Codex and resumes before the next turn", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "codex-token-log-"));
-  const path = join(directory, "protocol.jsonl");
-  const first = "first.opaque.fixture.value";
-  const second = "second.opaque.fixture.value";
-  let token = first;
-  const fake = codex((message) =>
-    message.method === "account/read"
-      ? { account: null, requiresOpenaiAuth: true }
-      : undefined,
-  );
-  try {
-    await run(
-      fake,
-      (session, read) =>
-        Effect.gen(function* () {
-          yield* startOn(fake, session, readOnly);
-          const previous = fake.current();
-          fake.send("turn/completed", completed("completed"));
-          yield* read.next("turn.finished");
-          token = second;
-          yield* session.startTurn({
-            turnId: "next",
-            message: "continue",
-            workspace: readOnly,
-          });
-          const current = fake.current();
-          expect(previous.io.exited()).toBe(true);
-          expect(written(current, "thread/resume")[0]?.params).toMatchObject({
-            threadId: "thread-1",
-          });
-          expect(
-            current.io.written
-              .map((message) => message.method)
-              .filter(
-                (method) =>
-                  method === "thread/resume" || method === "turn/start",
-              ),
-          ).toEqual(["thread/resume", "turn/start"]);
-          expect(session.nativeSessionId).toBe("thread-1");
-          fake.send("error", {
-            threadId: "thread-1",
-            turnId: "codex-turn",
-            willRetry: false,
-            error: {
-              message: `provider echoed ${second}`,
-              codexErrorInfo: null,
+// A sign-in that expires after session open must be checked before Codex starts the next turn.
+test("an expired Neuve sign-in refuses a turn before it starts", async () => {
+  const fake = codex();
+  const hint = {
+    kind: "command",
+    command: "neuve auth login",
+    account,
+  } as const;
+  const expired = new AccountRejected({ account, hint, reason: "expired" });
+  let usable = true;
+  await run(
+    fake,
+    (session, read) =>
+      Effect.gen(function* () {
+        usable = false;
+        yield* session.startTurn({
+          turnId: "turn",
+          message: "go",
+          workspace: readOnly,
+        });
+        expect(yield* read.next("turn.finished")).toMatchObject({
+          outcome: {
+            status: "failed",
+            disposition: "reusable",
+            failure: {
+              _tag: "AccountRejected",
+              account,
+              hint,
+              reason: "expired",
             },
-          });
-          fake.send("turn/completed", completed("completed"));
-          yield* read.next("turn.finished");
-        }),
-      {
-        accessToken: () => Effect.sync(() => ({ token })),
-        log: appendTo(path),
-      },
-    );
-    const authenticated = fake.processes.filter(
-      (process) => process.env.NEUVE_CODEX_ACCESS_TOKEN !== undefined,
-    );
-    expect(
-      authenticated.map((process) => process.env.NEUVE_CODEX_ACCESS_TOKEN),
-    ).toEqual([first, second]);
-    for (const process of authenticated) {
-      expect(process.args).toContain(
-        'model_providers.openai_chatgpt_plan.env_key="NEUVE_CODEX_ACCESS_TOKEN"',
-      );
-      expect(process.args).toContain(
-        'shell_environment_policy.exclude=["OWN_SECRET_*","NEUVE_CODEX_ACCESS_TOKEN"]',
-      );
-      expect(
-        process.commandEnvironment().NEUVE_CODEX_ACCESS_TOKEN,
-      ).toBeUndefined();
-      expect(written(process, "account/read")).toHaveLength(0);
-    }
-    const log = readFileSync(path, "utf8");
-    expect(log).toContain("provider echoed <token>");
-    for (const secret of [first, second, "ambient-value"]) {
-      expect(log).not.toContain(secret);
-      for (const process of fake.processes) {
-        expect(JSON.stringify(process.io.started)).not.toContain(secret);
-        expect(JSON.stringify(process.commandEnvironment())).not.toContain(
-          secret,
-        );
-      }
-    }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+          },
+        });
+        expect(written(fake.current(), "turn/start")).toHaveLength(0);
+      }),
+    {
+      checkSignIn: Effect.suspend(() =>
+        usable ? Effect.void : Effect.fail(expired),
+      ),
+    },
+  );
 });
 
-test("a provider 401 fails the turn and the next turn renews the token and resumes", async () => {
+// Keep the turn open during a retry and ask for sign-in after a terminal 401.
+test("Codex's terminal 401 on Neuve's sign-in rejects the account", async () => {
   const fake = codex();
-  const first = "expiring.opaque.fixture.value";
-  const second = "renewed.opaque.fixture.value";
   await run(
     fake,
     (session, read) =>
       Effect.gen(function* () {
         yield* startOn(fake, session, readOnly);
-        const previous = fake.current();
-        fake.send(
-          "turn/completed",
-          completed("failed", {
-            message: "request unauthorized",
+        fake.send("error", {
+          threadId: "thread-1",
+          turnId: "codex-turn",
+          willRetry: true,
+          error: {
+            message: "Reconnecting",
             codexErrorInfo: {
               responseStreamDisconnected: { httpStatusCode: 401 },
             },
+          },
+        });
+        expect(yield* read.next("retry")).toMatchObject({
+          turnId: "turn",
+          attempt: 1,
+        });
+        fake.send(
+          "turn/completed",
+          completed("failed", {
+            message: "Unauthorized",
+            codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
           }),
         );
         expect(yield* read.next("turn.finished")).toMatchObject({
@@ -264,181 +228,18 @@ test("a provider 401 fails the turn and the next turn renews the token and resum
             status: "failed",
             disposition: "reusable",
             failure: {
-              _tag: "TurnFailed",
-              reason: "provider-failed",
+              _tag: "AccountRejected",
               account,
+              hint: { kind: "command", command: "neuve auth login", account },
+              reason: "other",
             },
           },
         });
-        yield* session.startTurn({
-          turnId: "next",
-          message: "continue",
-          workspace: readOnly,
-        });
-        expect(previous.io.exited()).toBe(true);
-        const current = fake.current();
-        expect(current.env.NEUVE_CODEX_ACCESS_TOKEN).toBe(second);
-        expect(written(current, "thread/resume")[0]?.params).toMatchObject({
-          threadId: "thread-1",
-        });
-        fake.send("turn/completed", completed("completed"));
-        expect(yield* read.next("turn.finished")).toMatchObject({
-          turnId: "next",
-          outcome: { status: "completed" },
-        });
-        expect(read.finished()).toHaveLength(2);
+        expect(read.finished()).toHaveLength(1);
       }),
-    {
-      accessToken: (rejected) =>
-        Effect.succeed({ token: rejected === first ? second : first }),
-    },
+    { checkSignIn: Effect.void },
   );
 });
-
-// A token that has worked must get the same expiry recovery as the initial token.
-test("a replacement that completed a turn can expire and recover again", async () => {
-  const fake = codex();
-  const first = "initial.opaque.fixture.value";
-  const second = "replacement.opaque.fixture.value";
-  const third = "renewed-again.opaque.fixture.value";
-  const renewals = new Map([
-    [first, second],
-    [second, third],
-  ]);
-  let token = first;
-  const refused = completed("failed", {
-    message: "request unauthorized",
-    codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 401 } },
-  });
-  const reusable = {
-    status: "failed",
-    disposition: "reusable",
-    failure: { _tag: "TurnFailed", account, reason: "provider-failed" },
-  };
-  await run(
-    fake,
-    (session, read) =>
-      Effect.gen(function* () {
-        const start = (turnId: string) =>
-          session.startTurn({
-            turnId,
-            message: "continue",
-            workspace: readOnly,
-          });
-        yield* start("initial");
-        fake.send("turn/completed", refused);
-        expect(yield* read.next("turn.finished")).toMatchObject({
-          outcome: reusable,
-        });
-
-        yield* start("recovered");
-        const replacement = fake.current();
-        expect(replacement.env.NEUVE_CODEX_ACCESS_TOKEN).toBe(second);
-        fake.send("turn/completed", completed("completed"));
-        expect(yield* read.next("turn.finished")).toMatchObject({
-          turnId: "recovered",
-          outcome: { status: "completed" },
-        });
-
-        yield* start("later");
-        expect(fake.current()).toBe(replacement);
-        fake.send("turn/completed", refused);
-        expect(yield* read.next("turn.finished")).toMatchObject({
-          turnId: "later",
-          outcome: reusable,
-        });
-
-        yield* start("recovered-again");
-        const current = fake.current();
-        expect(replacement.io.exited()).toBe(true);
-        expect(current.env.NEUVE_CODEX_ACCESS_TOKEN).toBe(third);
-        expect(written(current, "thread/resume")[0]?.params).toMatchObject({
-          threadId: "thread-1",
-        });
-        fake.send("turn/completed", completed("completed"));
-        expect(yield* read.next("turn.finished")).toMatchObject({
-          turnId: "recovered-again",
-          outcome: { status: "completed" },
-        });
-      }),
-    {
-      accessToken: (rejected) =>
-        Effect.sync(() => {
-          if (rejected !== undefined) token = renewals.get(rejected) ?? token;
-          return { token };
-        }),
-    },
-  );
-});
-
-// When renewal cannot replace a refused token with a working one, the person needs the sign-in command.
-test.each(["unchanged token", "refused replacement"] as const)(
-  "%s reports an account rejection",
-  async (renewal) => {
-    const fake = codex();
-    const first = "initial.opaque.fixture.value";
-    const replacement = "replacement.opaque.fixture.value";
-    const refused = completed("failed", {
-      message: "request unauthorized",
-      codexErrorInfo: "unauthorized",
-    });
-    await run(
-      fake,
-      (session, read) =>
-        Effect.gen(function* () {
-          yield* startOn(fake, session, readOnly);
-          const previous = fake.current();
-          fake.send("turn/completed", refused);
-          expect(yield* read.next("turn.finished")).toMatchObject({
-            outcome: {
-              status: "failed",
-              disposition: "reusable",
-              failure: { _tag: "TurnFailed" },
-            },
-          });
-          yield* session.startTurn({
-            turnId: "next",
-            message: "continue",
-            workspace: readOnly,
-          });
-          if (renewal === "refused replacement") {
-            expect(fake.current().env.NEUVE_CODEX_ACCESS_TOKEN).toBe(
-              replacement,
-            );
-            expect(
-              written(fake.current(), "thread/resume")[0]?.params,
-            ).toMatchObject({ threadId: "thread-1" });
-            fake.send("turn/completed", refused);
-          } else {
-            expect(fake.current()).toBe(previous);
-            expect(written(previous, "turn/start")).toHaveLength(1);
-          }
-          expect(yield* read.next("turn.finished")).toMatchObject({
-            turnId: "next",
-            outcome: {
-              status: "failed",
-              disposition: "reusable",
-              failure: {
-                _tag: "AccountRejected",
-                account,
-                reason: "other",
-                hint: { kind: "command", command: "neuve auth login", account },
-              },
-            },
-          });
-        }),
-      {
-        accessToken: (rejected) =>
-          Effect.succeed({
-            token:
-              rejected === first && renewal === "refused replacement"
-                ? replacement
-                : first,
-          }),
-      },
-    );
-  },
-);
 
 // Why: the contract's central promise is one terminal event per started turn. Each row is one way
 // a Codex turn ends, from the turn-endings table in PROTOCOL.md, with the outcome it must give and

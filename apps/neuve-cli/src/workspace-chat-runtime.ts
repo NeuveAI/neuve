@@ -72,7 +72,12 @@ export function productionChatSources(options: {
             cwd: defaultClaudeWorkingFolder(options.home),
           },
           codex: {
-            ...codexRuntimeOptions(options.home),
+            ...codexRuntimeOptions(
+              options.home,
+              (yield* Effect.promise(
+                () => import("./review-worker.ts"),
+              )).thisBuild(),
+            ),
             log: (account) => logs?.(account),
           },
         }).pipe(

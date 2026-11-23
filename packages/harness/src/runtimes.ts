@@ -61,21 +61,25 @@ export interface HarnessRuntimesOptions<E, R> extends PiStatusRuntimeOptions {
   readonly codex?: CodexRuntimeConfig | false;
 }
 
-export const codexRuntimeOptions = (home = homedir()): CodexRuntimeConfig => ({
+export const codexRuntimeOptions = (
+  home = homedir(),
+  command: ReadonlyArray<string> = [],
+): CodexRuntimeConfig => ({
   home,
   programPath: (name) => AccountStore.programPath(home, name),
   neuveSignIn: {
-    accessToken: ({ name: account, credential }, rejected) => {
+    command,
+    checkSignIn: ({ name: account, credential }) => {
       const hint = {
         kind: "command",
         command: "neuve auth login",
         account,
       } as const;
       return Effect.tryPromise({
-        try: (signal) =>
-          accessToken({ ...authOptionsFor(credential), signal }, rejected),
+        try: (signal) => accessToken({ ...authOptionsFor(credential), signal }),
         catch: (error) => error,
       }).pipe(
+        Effect.asVoid,
         Effect.mapError((error) => {
           if (error instanceof OpenAiAuthError) {
             switch (error.code) {
@@ -232,10 +236,13 @@ export type ProcessRuntimeOptions = HarnessRuntimesOptions<never, never> & {
 };
 
 /** The review worker keeps the accounts store and its directory in the registry's scope. */
-export function workerRuntimeOptions(home = homedir()) {
+export function workerRuntimeOptions(
+  home = homedir(),
+  command?: ReadonlyArray<string>,
+) {
   return {
     claude: { cwd: defaultClaudeWorkingFolder(home) },
-    codex: codexRuntimeOptions(home) as CodexRuntimeConfig | false,
+    codex: codexRuntimeOptions(home, command) as CodexRuntimeConfig | false,
     accountDirectory: Layer.effect(
       AccountDirectory,
       AccountStore.retryingDirectory(home),

@@ -39,7 +39,7 @@ import {
   capabilities,
   openCodexSession,
   windows,
-  type CodexTokenSource,
+  type CodexSignInCheck,
 } from "./session.ts";
 
 type CodexAccount = Extract<Account, { runtime: "codex" }>;
@@ -60,10 +60,8 @@ export interface CodexRuntimeConfig {
     | undefined;
   readonly neuveSignIn?:
     | {
-        readonly accessToken: (
-          account: NeuveAccount,
-          rejected?: string,
-        ) => ReturnType<CodexTokenSource>;
+        readonly command: ReadonlyArray<string>;
+        readonly checkSignIn: (account: NeuveAccount) => CodexSignInCheck;
         readonly signOut: (
           account: NeuveAccount,
         ) => Effect.Effect<void, RuntimeUnavailable>;
@@ -297,16 +295,24 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
     const environment = config.environment ?? process.env;
     const home = config.home ?? homedir();
     const { neuveSignIn } = config;
-    const accessTokenFor = (
-      account: CodexAccount,
-    ): Effect.Effect<CodexTokenSource | undefined, RuntimeUnavailable> => {
+    const [command, ...args] = neuveSignIn?.command ?? [];
+    const signInFor = (account: CodexAccount) => {
       if (!usesNeuveSignIn(account)) return Effect.succeed(undefined);
-      if (neuveSignIn === undefined)
+      if (neuveSignIn === undefined || command === undefined)
         return Effect.fail(unavailableStart(account));
-      return Effect.succeed((rejected) =>
-        neuveSignIn.accessToken(account, rejected),
-      );
+      return Effect.succeed({
+        checkSignIn: neuveSignIn.checkSignIn(account),
+        tokenCommand: [
+          command,
+          ...args,
+          "auth",
+          "lease",
+          account.name,
+        ] as const,
+      });
     };
+    const environmentFor = (account: CodexAccount) =>
+      usesNeuveSignIn(account) ? { ...environment, HOME: home } : environment;
     /** The program each account last used, per process; forgotten when it stops answering. */
     const known = new Map<
       AccountName,
@@ -323,13 +329,13 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
     const find = <A, E>(
       account: CodexAccount,
       setting: string | undefined,
-      launch: Pick<FindOptions, "codexHome">,
+      launch: Pick<FindOptions, "codexHome" | "tokenCommand">,
       use: (c: CodexConnection, found: Candidate) => Effect.Effect<A, E>,
     ) =>
       findCodex(
         {
           candidates: runtimeCandidates(setting, environment.PATH),
-          environment,
+          environment: environmentFor(account),
           broken: config.broken,
           ...launch,
         },
@@ -400,16 +406,16 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
               account: account.name,
               reason: "protocol-error",
             });
-          const accessToken = yield* accessTokenFor(codex);
+          const signIn = yield* signInFor(codex);
           const codexHome = yield* prepareCodexHome(home, codex);
           const found = yield* program(codex, codexHome);
           return yield* openCodexSession({
             account: account.name,
             program: found.path,
             codexHome,
-            accessToken,
+            neuveSignIn: signIn,
             cwd: policy.folder,
-            environment,
+            environment: environmentFor(codex),
             policy,
             start,
             log: config.log?.(account.name),
@@ -428,14 +434,17 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
         Effect.gen(function* () {
           const codex = yield* supported(account);
           const checkedAt = new Date().toISOString();
-          const codexHome = yield* Effect.gen(function* () {
-            const source = yield* accessTokenFor(codex);
-            if (source !== undefined) yield* source();
-            return yield* prepareCodexHome(home, codex);
-          }).pipe(Effect.result);
-          if (codexHome._tag === "Failure")
+          const launch = yield* Effect.gen(function* () {
+            const signIn = yield* signInFor(codex);
+            if (signIn !== undefined) yield* signIn.checkSignIn;
             return {
-              signIn: signInFailure(codexHome.failure),
+              codexHome: yield* prepareCodexHome(home, codex),
+              tokenCommand: signIn?.tokenCommand,
+            };
+          }).pipe(Effect.result);
+          if (launch._tag === "Failure")
+            return {
+              signIn: signInFailure(launch.failure),
               limits: [],
               checkedAt,
             } satisfies AccountProbe;
@@ -457,7 +466,7 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
           const { found, tried } = yield* find(
             codex,
             setting.success,
-            { codexHome: codexHome.success },
+            launch.success,
             (connection, candidate) =>
               Effect.gen(function* () {
                 let signIn: SignInState = {

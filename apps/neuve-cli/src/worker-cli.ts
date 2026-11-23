@@ -740,7 +740,10 @@ const runForeground = (
 ): Promise<number> => {
   const program = Effect.gen(function* () {
     HarnessRuntimes.configureProcessRuntimes(
-      HarnessRuntimes.workerRuntimeOptions(),
+      HarnessRuntimes.workerRuntimeOptions(
+        undefined,
+        (yield* Effect.promise(() => import("./review-worker.ts"))).thisBuild(),
+      ),
     );
     yield* Effect.logInfo(
       `worker starting for ${repository} (idle exit after ${idleSeconds}s)`,
@@ -1013,7 +1016,10 @@ export const runWorkerCli = async (
         .parse(values["idle-seconds"] ?? 60);
       if (values.store !== undefined) {
         HarnessRuntimes.configureProcessRuntimes(
-          HarnessRuntimes.workerRuntimeOptions(),
+          HarnessRuntimes.workerRuntimeOptions(
+            undefined,
+            (await import("./review-worker.ts")).thisBuild(),
+          ),
         );
         const location = storeLocationIn(dirname(resolve(values.store)));
         const program = Effect.andThen(

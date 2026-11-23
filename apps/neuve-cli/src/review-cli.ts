@@ -975,7 +975,10 @@ export const requestRangeReview = async (
       : { turnLimit: Number(values["stub-turn-limit"]) }),
     ...(values["stub-measure"] === true ? { measure: true } : {}),
   });
-  const runtimeOptions = workerRuntimeOptions();
+  const runtimeOptions = workerRuntimeOptions(
+    undefined,
+    (await import("./review-worker.ts")).thisBuild(),
+  );
   const runtime = ManagedRuntime.make(
     harnessRuntimes(runtimeOptions).pipe(
       Layer.provideMerge(runtimeOptions.accountDirectory),

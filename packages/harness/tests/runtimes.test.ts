@@ -504,7 +504,10 @@ test("Codex uses the named Neuve sign-in and tells the person which account to s
   });
   const registry = harnessRuntimes({
     claude: false,
-    codex: { ...codexRuntimeOptions(scratch), environment: { PATH: "" } },
+    codex: {
+      ...codexRuntimeOptions(scratch, ["/neuve"]),
+      environment: { PATH: "" },
+    },
     accountDirectory: inMemoryAccountDirectoryLayer([account]),
   });
   const check = () =>

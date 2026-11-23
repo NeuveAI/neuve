@@ -22,6 +22,7 @@ import {
   prepareCodexHome,
 } from "@neuve/harness/runtimes";
 import { write } from "./records-cli.ts";
+import { thisBuild } from "./review-worker.ts";
 
 export const AUTH_HELP = `Usage:
   neuve auth login openai [--no-browser]
@@ -56,6 +57,7 @@ export const AUTH_HELP = `Usage:
               Add --runtime codex to run the account on Codex.
   neuve auth login <account> [--print]
               Sign in using the account's own command. --print only shows the command.
+  neuve auth lease <account>  Write the account's ChatGPT access token to a pipe for Codex.
   neuve auth program <account> [<path> | --find | --unset]
               Set the program an account runs on, such as the Codex the codex account uses,
               then check it. Once set, only that program is used. --find looks once for Codex,
@@ -119,7 +121,7 @@ export const authRuntimes = ({
   harnessRuntimes({
     accountDirectory: Layer.succeed(AccountDirectory, directory),
     claude: { cwd: defaultClaudeWorkingFolder(home) },
-    codex: codexRuntimeOptions(home),
+    codex: codexRuntimeOptions(home, thisBuild()),
   });
 
 export interface AuthCliOptions {
@@ -788,11 +790,9 @@ export const runAuthCli = async (
     return checked?.ok === false ? 1 : 0;
   }
   if (command === "lease") {
-    expectOpenAi(provider, true);
-    if (process.stdout.isTTY === true)
-      throw new Error(
-        "neuve auth lease prints an access token, so it writes only to a pipe, never to a terminal.",
-      );
+    if (provider === undefined)
+      throw new Error("neuve auth lease needs an account name.");
+    const cloud = provider === "openai";
     // A SIGTERM (the refresher's stop) ends a lease that is waiting, but a refresh already sent has
     // spent its refresh token, so it runs on to write back the replacement before the command exits.
     const stop = new AbortController();
@@ -800,9 +800,34 @@ export const runAuthCli = async (
     process.on("SIGTERM", onStop);
     process.on("SIGINT", onStop);
     try {
-      // The sign-in folder itself, never another token command: this is the refresher.
-      const lease = await RouteProvider.OpenAiAuth.accessToken({
+      if (process.stdout.isTTY === true)
+        throw new Error("Refusing to print an access token to a terminal.");
+      let authOptions: RouteProvider.OpenAiAuth.AuthOptions = {
         tokenCommand: null,
+      };
+      if (!cloud) {
+        const { AccountName, AccountStore } = await import("@neuve/runtime");
+        const name = AccountName.safeParse(provider);
+        if (!name.success) throw new Error("Use neuve auth lease <account>.");
+        const account = await Effect.runPromise(
+          Effect.scoped(
+            Effect.flatMap(
+              AccountStore.make(options.home ?? homedir()),
+              (store) => store.directory.lookup(name.data, "use"),
+            ),
+          ).pipe(Effect.provide(personLogs)),
+        );
+        if (account === undefined) throw new Error("Account not found.");
+        if (account.credential.kind !== "neuve-sign-in")
+          throw new Error(
+            `The ${name.data} account does not use Neuve's ChatGPT sign-in.`,
+          );
+        authOptions = RouteProvider.OpenAiAuth.authOptionsFor(
+          account.credential,
+        );
+      }
+      const lease = await RouteProvider.OpenAiAuth.accessToken({
+        ...authOptions,
         signal: stop.signal,
       });
       if (stop.signal.aborted) {
@@ -811,6 +836,10 @@ export const runAuthCli = async (
           "neuve auth lease: stopped; the sign-in on file is current and nothing was printed\n",
         );
         return 143;
+      }
+      if (!cloud) {
+        await Bun.write(Bun.stdout, lease.token);
+        return 0;
       }
       await write(
         JSON.stringify(
@@ -822,12 +851,17 @@ export const runAuthCli = async (
       );
       return 0;
     } catch (error) {
-      if (!(error instanceof RouteProvider.OpenAiAuth.OpenAiAuthError))
-        throw error;
-      await Bun.write(Bun.stderr, `neuve auth lease: ${error.message}\n`);
+      const authError =
+        error instanceof RouteProvider.OpenAiAuth.OpenAiAuthError;
+      if (cloud && !authError) throw error;
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not read the account's sign-in.";
+      await Bun.write(Bun.stderr, `neuve auth lease: ${message}\n`);
       return stop.signal.aborted
         ? 143
-        : error.transient
+        : cloud && authError && error.transient
           ? RouteProvider.OpenAiAuth.LEASE_TEMPORARY_FAILURE
           : 1;
     } finally {
