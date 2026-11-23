@@ -585,10 +585,14 @@ describe("neuve CLI boundary", () => {
     await mkdir(outside);
     await Bun.write(join(notes, "watched.md"), "Original scope.");
     await link(join(notes, "watched.md"), join(outside, "watched.md"));
+    await Bun.write(join(root, "file.txt"), "Regular file.");
+    const unreadable = join(root, "unreadable.md");
+    await Bun.write(unreadable, "Unreadable scope.");
     const read = planScopeRead(
       root,
       join(scratch, "plans"),
       async (request) => {
+        await chmod(unreadable, 0o000);
         await rename(notes, join(root, "original-notes"));
         await symlink(outside, notes, "dir");
         return query!(worker, request);
@@ -608,7 +612,7 @@ describe("neuve CLI boundary", () => {
         repository: root,
         revision,
         question: "Read the approved plan and notes.",
-        scope: ["notes/watched.md"],
+        scope: ["file.txt/x.md", "unreadable.md", "notes/watched.md"],
         requester,
         previousPlans: [],
         plan: {
@@ -618,9 +622,11 @@ describe("neuve CLI boundary", () => {
           hash: createHash("sha256").update(text).digest("hex"),
         },
       });
-      expect(result.isError).toBeUndefined();
+      expect(result.isError, result.text).toBeUndefined();
       const answer = JSON.parse(result.text);
       expect(answer.scope_gaps).toEqual([
+        "file.txt/x.md: The path was absent from the working tree and the base revision.",
+        "unreadable.md: The file could not be read.",
         "notes/watched.md: The checked scope path could not be opened safely.",
       ]);
       expect(result.text).not.toContain("Original scope.");
@@ -630,7 +636,7 @@ describe("neuve CLI boundary", () => {
       );
       expect(
         selection.payload.sources.map(({ kind }: { kind: string }) => kind),
-      ).toEqual(["working-file", "gap"]);
+      ).toEqual(["working-file", "gap", "gap", "gap"]);
       const held = scopeFolder(
         storeLocationIn(join(root, ".git")),
         answer.cycle_id,

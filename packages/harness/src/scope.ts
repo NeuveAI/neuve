@@ -520,17 +520,7 @@ const readWorkingFile = async (
         (checked && process.platform === "darwin"
           ? darwinNoFollowAny
           : constants.O_NOFOLLOW),
-    ).catch((error: unknown) => {
-      if (
-        checked &&
-        error instanceof Error &&
-        "code" in error &&
-        error.code === "ENOENT"
-      )
-        return undefined;
-      throw error;
-    });
-    if (file === undefined) return { kind: "missing" };
+    );
     if (
       checked &&
       process.platform === "linux" &&
@@ -562,7 +552,12 @@ const readWorkingFile = async (
           fetchedAt: new Date().toISOString(),
         };
   } catch (error) {
-    return checked ? checkedScopeGap : workingFailure(error);
+    return checked &&
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ELOOP"
+      ? checkedScopeGap
+      : workingFailure(error);
   }
 };
 

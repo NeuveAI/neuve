@@ -660,7 +660,7 @@ export type QuerySourceContext = Readonly<
 >;
 
 type QueryScopeAnswer = Effect.Success<ReturnType<typeof queryLocalScope>>;
-const localScopeGap = "Retry neuve query to read local scope.";
+const localScopeGap = "Retry the query to read local scope.";
 type RecordedQuery =
   | {
       eventId: string;
