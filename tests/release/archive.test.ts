@@ -22,6 +22,7 @@ import { readSharedSkill } from "../../apps/neuve-cli/src/skill-bundle.ts";
 import { buildArchive } from "../../scripts/release/build.ts";
 import { writeChecksums } from "../../scripts/release/checksums.ts";
 import { relativeLinks } from "../../scripts/release/notices.ts";
+import { isOldParserFile } from "./old-parser.ts";
 import {
   fullLicences,
   licenceRowProblems,
@@ -109,11 +110,7 @@ describe.skipIf(!available)("the native release archive", () => {
     expect(members.every((member) => member.startsWith(`${NAME}/`))).toBe(true);
     expect(
       members.some(
-        (member) =>
-          /(^|\/)\._/.test(member) ||
-          // The old parser's files; oxc's licence text in the notices is expected.
-          (!member.includes("/share/neuve/notices/") &&
-            member.toLowerCase().includes("oxc")),
+        (member) => /(^|\/)\._/.test(member) || isOldParserFile(member),
       ),
     ).toBe(false);
     expect(members).toContain(`${NAME}/share/neuve/notices/LICENSE`);

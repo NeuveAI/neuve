@@ -36,6 +36,7 @@ import {
 } from "../../packages/records-core/src/systemd.ts";
 import { systemdFixture } from "./systemd-fixture.ts";
 import { linkHostGit, readLaunchdProgram } from "./release-fixture.ts";
+import { isOldParserFile } from "./old-parser.ts";
 import { writeChecksums } from "../../scripts/release/checksums.ts";
 
 const test = releaseTest(bunTest);
@@ -1099,16 +1100,7 @@ describe.skipIf(!available)(
     test("built archive has no oxc files or parser manifest key", async () => {
       const listing = await run(["tar", "-tzf", archive], process.env);
       success(listing);
-      // The old parser's files; oxc's licence text in the notices is expected.
-      expect(
-        listing.stdout
-          .split("\n")
-          .filter(
-            (member) =>
-              !member.includes("/share/neuve/notices/") &&
-              member.toLowerCase().includes("oxc"),
-          ),
-      ).toEqual([]);
+      expect(listing.stdout.split("\n").filter(isOldParserFile)).toEqual([]);
       const template = await run(
         [
           "tar",
