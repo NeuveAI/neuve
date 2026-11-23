@@ -154,6 +154,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
 		files,
 		invoked: z.boolean(),
 		system,
+		agents: z.array(id).optional(),
 		deleted: z.boolean().optional(),
 		edited: z.number().optional(),
 	}),

@@ -530,6 +530,11 @@ export type Request =
 		text: string;
 		images?: Image[];
 		files?: TextFile[];
+		/**
+		 * The agents of an inner development loop this message mentions, by chat, as the person chose
+		 * them in the composer. The text is never read for them.
+		 */
+		agents?: ChatId[];
 		requestId?: string;
 	}
 	/** Post to the chat and invoke its agent; a busy chat takes the message as steering. */
@@ -551,6 +556,8 @@ export type Request =
 		 * `requestId`, so a retry cannot carry another mode.
 		 */
 		mode?: ChatMode;
+		/** The agents it mentions, as on `say`. */
+		agents?: ChatId[];
 		requestId?: string;
 		/** Whether the person's client can show approval cards, stored on the chat. Omit to keep the stored value. */
 		attended?: boolean;
@@ -718,6 +725,8 @@ export type Event =
 		files?: TextFile[];
 		invoked: boolean;
 		system?: ReviewNotice | BuildNotice;
+		/** The agents the message mentions, by chat. The channel does not fill it yet. */
+		agents?: ChatId[];
 		deleted?: boolean;
 		edited?: number;
 	}
