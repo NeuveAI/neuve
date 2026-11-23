@@ -5,6 +5,7 @@ import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, use
 import { IconMessage } from "../../icons";
 import { cn } from "../../lib/utils";
 import { Button } from "../../ui/button";
+import { motion } from "../../ui/popup";
 
 /** One message under a comment, the comment itself first. */
 export type PlanCommentMessageView = {
@@ -254,13 +255,6 @@ export function usePlanHighlights(
 	}, [root, key]);
 }
 
-/**
- * The popover's enter and exit, timed by the `popover-content` slot's tokens, and none under reduced
- * motion. Written here rather than taken from `ui/popup`, whose classes the stylesheet never scans.
- */
-const MOTION =
-	"motion-safe:data-open:animate-in motion-safe:data-open:fade-in-0 motion-safe:data-closed:animate-out motion-safe:data-closed:fade-out-0 motion-safe:data-closed:fill-mode-forwards";
-
 /** Calls `gone` once `element`'s exit animation has played, at once when it has none. */
 function afterExit(element: Element | null, gone: () => void) {
 	let running = element?.getAnimations() ?? [];
@@ -291,7 +285,7 @@ export function CommentChip(
 			data-open={closing ? undefined : ""}
 			data-closed={closing ? "" : undefined}
 			data-side={side}
-			className={cn("absolute z-10 flex", MOTION)}
+			className={cn("absolute z-10 flex", motion)}
 			style={{ top, left }}
 		>
 			<Button
@@ -377,7 +371,7 @@ export function CommentComposer(
 			data-side={popover ? "bottom" : undefined}
 			className={cn(
 				"flex scroll-my-3.5 flex-col rounded-md has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/30",
-				popover && ["w-[420px] max-w-full rounded-(--r-popover) squircle bg-popover p-2 text-popover-foreground shadow-popover", MOTION],
+				popover && ["w-[420px] max-w-full rounded-(--r-popover) squircle bg-popover p-2 text-popover-foreground shadow-popover", motion],
 			)}
 		>
 			<textarea

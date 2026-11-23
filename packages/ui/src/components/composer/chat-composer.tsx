@@ -933,7 +933,7 @@ function useComposer({
 
 	function closeLink() {
 		selection.current = null;
-		setLinkState(EMPTY_LINK);
+		setLinkState((prev) => ({ ...prev, open: false }));
 	}
 
 	function closeEmoji() {
