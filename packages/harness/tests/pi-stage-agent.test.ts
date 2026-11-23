@@ -84,7 +84,9 @@ test("a null where a value is required is refused before the tool runs, and thre
     ["probe", true],
     ["submit_frame", true],
   ]);
-  expect(seen[0]!.text).toContain("Invalid input for probe");
+  expect(seen[0]!.text).toContain(
+    "probe n takes an integer and received null.",
+  );
   expect(
     run.ctx.log
       .read()

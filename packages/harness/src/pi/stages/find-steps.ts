@@ -217,6 +217,7 @@ export const findStep = (
         ? tool
         : {
             ...tool,
+            available: false as const,
             handle: () =>
               Effect.succeed({
                 text: "This lookup is not available for this finder lens.",

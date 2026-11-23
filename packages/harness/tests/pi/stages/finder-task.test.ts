@@ -11,6 +11,7 @@ import {
   type AssistantMessage,
   type Message,
 } from "@earendil-works/pi-ai";
+import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import {
   Harness,
   createRegistry,
@@ -686,13 +687,26 @@ test("finder task dedupes before Verify and returns the contract's kept and drop
   }
 });
 
-test("all four lenses share durable declarations while scope-fit enforces its condition verdicts", async () => {
+// Finder lenses share one durable registry, so exercise their actual provider requests.
+test("each finder lens offers only its tools while sharing durable declarations", async () => {
   const run = await testWorld("four-lenses", (messages) => {
     const system = JSON.stringify(messages.find((m) => m.role === "system"));
+    const scopeFit = system.includes("Return exactly one condition verdict");
+    const tests = system.includes("Check whether each done-when is proven");
+    const restricted = getCurrentTools(messages)
+      .map((tool) => tool.name)
+      .filter((name) => ["scope_section", "proofs", "proof"].includes(name));
+    expect(restricted).toEqual(
+      scopeFit
+        ? ["scope_section", "proofs", "proof"]
+        : tests
+          ? ["proofs", "proof"]
+          : [],
+    );
     return toolReply("submit_find", {
       findings: [],
       notes: [],
-      ...(system.includes("Return exactly one condition verdict")
+      ...(scopeFit
         ? {
             conditions: [
               {
@@ -2609,7 +2623,9 @@ test("opening lines are citable as read and stay so across a resume", async () =
       ],
       notes: [],
     }),
-  ).toEqual(["finding 1: secondary anchor must be owned or read head lines"]);
+  ).toEqual([
+    'finding 1: anchors[1] on the new side of "new.ts" received lines 1-9 and must fit within an owned range (2-2) or a head range already read (1-3).',
+  ]);
   // The opening is counted in the reading budget from the start.
   expect(resumed.spec.state!.save().reading?.used).toBe(step.spec.task.length);
 });

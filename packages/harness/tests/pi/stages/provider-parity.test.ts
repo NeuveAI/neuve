@@ -98,7 +98,7 @@ test("physical OpenAI wire and capture use Neuve's rejected result while native 
         type: "function_call_output",
         call_id: "call-bad",
         output:
-          "Invalid input for probe: ✖ Invalid input: expected number, received null\n  → at n\n\n[turn 1 / 2; results are capped at about 3,000 tokens; lookup allowance 0 / 4]",
+          "probe n takes an integer and received null.\n\n[turn 1 / 2; results are capped at about 3,000 tokens; lookup allowance 0 / 4]",
       };
       expect(endpoint.received[1]!.body["input"]).toContainEqual(expected);
       const requests = run.events.filter(
@@ -134,7 +134,9 @@ test("physical OpenAI wire and capture use Neuve's rejected result while native 
         name: "probe",
         arguments: { n: null },
       });
-      expect(JSON.stringify(original)).toContain("Invalid input");
+      expect(JSON.stringify(original)).toContain(
+        "[error] probe n takes an integer and received null.",
+      );
       expect(JSON.stringify(original)).toContain("<harness>");
       expect(
         (

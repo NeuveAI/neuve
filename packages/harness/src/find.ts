@@ -167,57 +167,83 @@ export interface FindChecks {
   }>;
 }
 const ordered = (a: Anchor) => a.startLine <= a.endLine;
-const owns = (h: ManifestHunk, a: Anchor, contained = false) =>
-  ordered(a) &&
-  (a.side === "new" ? (h.newPath ?? h.path) : (h.oldPath ?? h.path)) ===
-    a.path &&
-  h.ownedRanges.some(
-    (r) =>
-      r.side === a.side &&
-      r.lineCount > 0 &&
-      (contained
-        ? r.startLine <= a.startLine &&
-          r.startLine + r.lineCount - 1 >= a.endLine
-        : r.startLine <= a.endLine &&
-          r.startLine + r.lineCount - 1 >= a.startLine),
-  );
+const ownedRanges = (h: ManifestHunk, a: Anchor) =>
+  (a.side === "new" ? (h.newPath ?? h.path) : (h.oldPath ?? h.path)) !== a.path
+    ? []
+    : h.ownedRanges.flatMap((r) =>
+        r.side === a.side && r.lineCount > 0
+          ? [{ startLine: r.startLine, endLine: r.startLine + r.lineCount - 1 }]
+          : [],
+      );
+const contains = (range: Pick<Anchor, "startLine" | "endLine">, a: Anchor) =>
+  range.startLine <= a.startLine && range.endLine >= a.endLine;
+const headRanges = (a: Anchor, c: FindChecks) =>
+  a.side === "new" ? c.headReads().filter((r) => r.path === a.path) : [];
 export const primaryHunk = (
   finding: Finding,
   checks: Pick<FindChecks, "hunks">,
 ) => {
   const a = finding.anchors[0];
-  return a === undefined
+  return a === undefined || !ordered(a)
     ? undefined
-    : [...checks.hunks.values()].find((h) => owns(h, a));
+    : [...checks.hunks.values()].find((h) =>
+        ownedRanges(h, a).some(
+          (r) => r.startLine <= a.endLine && r.endLine >= a.startLine,
+        ),
+      );
 };
 const contextAnchor = (a: Anchor, c: FindChecks) =>
   ordered(a) &&
-  ([...c.hunks.values()].some((h) => owns(h, a, true)) ||
-    (a.side === "new" &&
-      c
-        .headReads()
-        .some(
-          (r) =>
-            r.path === a.path &&
-            r.startLine <= a.startLine &&
-            r.endLine >= a.endLine,
-        )));
+  ([...c.hunks.values()].some((h) =>
+    ownedRanges(h, a).some((r) => contains(r, a)),
+  ) ||
+    headRanges(a, c).some((r) => contains(r, a)));
+
 const findingProblems = (f: Finding, c: FindChecks) => {
   const problems: string[] = [];
+  const lines = (a: Pick<Anchor, "startLine" | "endLine">) =>
+    `${a.startLine}-${a.endLine}`;
+  const list = (ranges: ReadonlyArray<Pick<Anchor, "startLine" | "endLine">>) =>
+    ranges.map(lines).join(", ") || "none";
   const h = primaryHunk(f, c);
-  if (h === undefined)
-    problems.push("primary anchor must overlap owned changed lines");
+  for (const [index, anchor] of f.anchors.entries()) {
+    const primary = index === 0;
+    const field = `anchors[${index}] on the ${anchor.side} side of ${JSON.stringify(anchor.path)}`;
+    if (!ordered(anchor)) {
+      problems.push(
+        `${field} received endLine ${anchor.endLine} before startLine ${anchor.startLine} and accepts endLine ${anchor.startLine} or later.`,
+      );
+      continue;
+    }
+    if (primary ? h !== undefined : contextAnchor(anchor, c)) continue;
+    const owned = [...c.hunks.values()].flatMap((h) =>
+      primary && c.unreviewed.has(h.path) ? [] : ownedRanges(h, anchor),
+    );
+    const range = `${field} received lines ${lines(anchor)}`;
+    const head =
+      !primary && anchor.side === "new"
+        ? ` or a head range already read (${list(headRanges(anchor, c))})`
+        : "";
+    problems.push(
+      primary
+        ? `${range} and must overlap an owned changed range on that side (${owned.length === 0 ? "none, see hunks for changed paths and sides" : list(owned)}).`
+        : `${range} and must fit within an owned range (${list(owned)})${head}.`,
+    );
+  }
   const excluded = h === undefined ? undefined : c.unreviewed.get(h.path);
   if (h !== undefined && excluded !== undefined)
     problems.push(
       `primary anchor must be in a reviewed file: ${JSON.stringify(h.path)} is ${excluded === "lockfile" ? "a lockfile" : "declared generated"}, which no Map group holds`,
     );
   if (f.doneWhen !== null && !c.frame.doneWhen.some((d) => d.id === f.doneWhen))
-    problems.push("unknown done-when id");
-  if (f.anchors.slice(1).some((a) => !contextAnchor(a, c)))
-    problems.push("secondary anchor must be owned or read head lines");
-  if (f.evidence.some((id) => !c.evidence.has(id)))
-    problems.push("unknown evidence id");
+    problems.push(
+      `doneWhen received ${JSON.stringify(f.doneWhen)} and accepts ${[...c.frame.doneWhen.map((d) => JSON.stringify(d.id)), "null"].join(" or ")}.`,
+    );
+  const unknownEvidence = f.evidence.filter((id) => !c.evidence.has(id));
+  if (unknownEvidence.length > 0)
+    problems.push(
+      `evidence received unknown IDs ${unknownEvidence.map((id) => JSON.stringify(id)).join(", ")} and accepts only IDs in ${JSON.stringify([...c.evidence])}.`,
+    );
   const signal = signalProblem(f);
   if (signal !== undefined) problems.push(signal);
   return problems;

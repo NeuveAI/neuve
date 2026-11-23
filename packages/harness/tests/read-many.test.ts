@@ -274,7 +274,13 @@ test("several ranges of several files answer in the order asked, both revisions 
         lines: `${h.base.startLine}-${h.base.endLine}`,
         lookups: [...new Set(h.sightings.map((s) => s.lookup))],
       }));
-      return { outcome, reads };
+      const read = L.readTool(ctx);
+      const reversed = yield* read.handle({
+        path: "src/a.ts",
+        startLine: 5,
+        endLine: 3,
+      });
+      return { outcome, reads, reversed };
     }),
   );
   const text = result.outcome.text;
@@ -291,10 +297,14 @@ test("several ranges of several files answer in the order asked, both revisions 
     at("[5] img.bin at head is binary or unreadable as text."),
     at("[6] src/b.ts at head has 10 lines."),
     at("[7] No handle h000000000 in this context."),
-    at("[8] endLine 3 is before startLine 5; nothing read."),
+    at("[8] endLine 3 is before startLine 5 and must be at least 5."),
     at("[9] Give one of:"),
   ];
   expect([...order].sort((a, b) => a - b)).toEqual(order);
+  expect(result.reversed).toEqual({
+    text: "endLine 3 is before startLine 5 and must be at least 5.",
+    error: "InvalidInput",
+  });
   expect(text.startsWith("9 entries:\n")).toBe(true);
   expect(shownLines(text, "src/b.ts", "head")).toEqual([2, 3, 4]);
   // The old side holds the deleted lines; the new side's same numbers hold what follows them.
@@ -413,7 +423,9 @@ test("head lines read through read_many are recorded and citable as read's are; 
       }),
       checks,
     ),
-  ).toEqual(["finding 1: secondary anchor must be owned or read head lines"]);
+  ).toEqual([
+    'finding 1: anchors[1] on the old side of "src/a.ts" received lines 19-20 and must fit within an owned range (none).',
+  ]);
 }, 120_000);
 
 test("a result holds to its 20,000-token ceiling, names what it left and how to ask, and records only the head lines it showed", async () => {
@@ -1394,10 +1406,14 @@ test("through a finder's own tools, read_many records exactly the head lines it 
   ).toEqual([]);
   expect(
     result.cite({ path: "src/a.ts", side: "old", startLine: 19, endLine: 20 }),
-  ).toEqual(["finding 1: secondary anchor must be owned or read head lines"]);
+  ).toEqual([
+    'finding 1: anchors[1] on the old side of "src/a.ts" received lines 19-20 and must fit within an owned range (10-10, 20-22).',
+  ]);
   expect(
     result.cite({ path: "src/b.ts", side: "new", startLine: 5, endLine: 6 }),
-  ).toEqual(["finding 1: secondary anchor must be owned or read head lines"]);
+  ).toEqual([
+    'finding 1: anchors[1] on the new side of "src/b.ts" received lines 5-6 and must fit within an owned range (none) or a head range already read (2-4).',
+  ]);
 }, 120_000);
 
 // Why: a handle's ID hashes the blob, path and lines, not the revision, so a file unchanged between
