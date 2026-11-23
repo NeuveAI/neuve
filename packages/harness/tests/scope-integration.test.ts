@@ -6,7 +6,13 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Context, Effect, Exit, Option, Scope } from "effect";
-import { Computations, Cycles, Identity, mintUlid } from "@neuve/records-core";
+import {
+  Computations,
+  Cycles,
+  Identity,
+  Log,
+  mintUlid,
+} from "@neuve/records-core";
 import { IntegrationServer, type Integrations } from "../src/integrations.ts";
 import { sourceFreshness } from "../src/freshness.ts";
 import {
@@ -16,8 +22,8 @@ import {
 } from "../src/pipeline.ts";
 import { requestReview } from "../src/request.ts";
 import {
-  cycleSnapshot,
   describeSnapshot,
+  fetchCyclePart,
   keyCandidates,
   linkedPaths,
   NO_PR_TEXT,
@@ -221,11 +227,13 @@ const scopeFixture = async (name: string, branch: string, message: string) => {
         Effect.provide(mcpClientsLayer(integrations)),
       ),
     );
-  const request = () => {
+  const commitRange = () => {
     writeFileSync(join(w.root, "named.md"), "# Named range document\n");
     writeFileSync(join(w.root, "added.md"), "# Added range document\n");
-    const head = commit(message, "named.md", "added.md");
-    return run(
+    return commit(message, "named.md", "added.md");
+  };
+  const request = (head = commitRange()) =>
+    run(
       Effect.gen(function* () {
         const review = yield* requestReview({
           repository: w.root,
@@ -239,10 +247,22 @@ const scopeFixture = async (name: string, branch: string, message: string) => {
         return review;
       }),
     );
-  };
   const snapshotContext = () => ({ ...w.ctx, integrations });
   const fetchCycle = (cycleId: string) =>
-    run(cycleSnapshot({ ...snapshotContext(), cycleId }));
+    run(
+      Effect.gen(function* () {
+        const opening = yield* readScopeOpening(cycleId);
+        if (opening === undefined) throw new Error("No read opening");
+        const { status } = yield* fetchCyclePart(
+          { ...snapshotContext(), cycleId },
+          opening,
+        );
+        return {
+          status,
+          value: Option.getOrThrow(yield* storedSnapshot(cycleId)),
+        };
+      }),
+    );
   const precompute = () =>
     run(
       Effect.gen(function* () {
@@ -261,8 +281,10 @@ const scopeFixture = async (name: string, branch: string, message: string) => {
   return {
     ...w,
     base,
+    git,
     run,
     open,
+    commitRange,
     request,
     fetchCycle,
     precompute,
@@ -281,7 +303,35 @@ const sourcesOf = (snapshot: ScopeSnapshot) =>
     source.ref.item ?? source.ref.path ?? source.ref.commits,
   ]);
 
-// A joined review reads the Git range and the original pins through the review's stored scope reference.
+// Opening scope must fetch keys already in branch commits and record which tip supplied them.
+test("the first read fetches a ticket named by a branch commit", async () => {
+  process.env["FIXTURE_TOKEN"] = "fixture-token-value";
+  const f = await scopeFixture(
+    "branch-commit-scope",
+    "work",
+    "Implement NEU-13 with OTHER-7",
+  );
+  try {
+    const tip = f.commitRange();
+    const { cycleId } = await f.run(f.open());
+    f.git("switch", "--detach", f.base);
+    const { value } = await f.fetchCycle(cycleId);
+    expect(value.branchTipOid).toBe(tip);
+    expect(value.sources.filter(({ kind }) => kind === "ticket")).toMatchObject(
+      [
+        {
+          status: "fetched",
+          ref: { item: "NEU-13", found: "commit " + tip.slice(0, 12) },
+        },
+      ],
+    );
+    expect(f.calls()).toEqual(["start", "NEU-13"]);
+  } finally {
+    await Effect.runPromise(Scope.close(f.scope, Exit.void));
+  }
+}, 30_000);
+
+// A ticket committed after scope was read must be disclosed and cause no integration call.
 test("a joined review adds range sources without starting or calling the integration", async () => {
   process.env["FIXTURE_TOKEN"] = "fixture-token-value";
   const f = await scopeFixture(
@@ -305,12 +355,13 @@ test("a joined review adds range sources without starting or calling the integra
       ["S6", "commit-text", "commit-or-pr-text", [review.range.headOid]],
     ]);
     expect(snapshot.sources[0]).toEqual(first.value.sources[0]);
+    expect(snapshot.branchTipOid).toBe(f.base);
     expect(
       snapshot.sources[5]?.sections.map(({ id, title }) => [id, title]),
     ).toEqual([["S6.1", "Read named.md for NEU-14"]]);
     expect(facts.scopeGaps).toEqual([
       NO_PR_TEXT,
-      "Ticket NEU-14 was named in a commit after the first read. Its requirements can be fetched in the next cycle.",
+      "Ticket NEU-14 was named after this cycle's scope was read. The next cycle will read it.",
     ]);
     expect(
       describeSnapshot(snapshot).find((line) => line.includes("commit-text")),
@@ -355,6 +406,79 @@ test("a joined review adds range sources without starting or calling the integra
       ["S1", "current"],
     ]);
     expect(f.calls()).toEqual(["start", "NEU-13"]);
+  } finally {
+    await Effect.runPromise(Scope.close(f.scope, Exit.void));
+  }
+}, 30_000);
+
+// Publication must let the next cycle fetch a ticket that arrived after the first cycle read scope.
+test("the first read after publication fetches the deferred ticket", async () => {
+  process.env["FIXTURE_TOKEN"] = "fixture-token-value";
+  const f = await scopeFixture(
+    "next-cycle-scope",
+    "work",
+    "Read named.md for NEU-13",
+  );
+  try {
+    const first = await f.run(f.open());
+    await f.fetchCycle(first.cycleId);
+    expect(f.calls()).toEqual(["start"]);
+
+    const review = await f.request();
+    expect(review.cycleId).toBe(first.cycleId);
+    expect((await f.precompute()).facts.scopeGaps).toContain(
+      "Ticket NEU-13 was named after this cycle's scope was read. The next cycle will read it.",
+    );
+    expect(f.calls()).toEqual(["start"]);
+    const request = review.events.find(
+      (event) => event.kind === "review.requested@1",
+    );
+    if (request === undefined) throw new Error("No review request to publish");
+    const id = mintUlid();
+    await f.run(
+      Log.append([
+        {
+          id,
+          kind: "packet.published@1",
+          idempotencyKey: "packet:" + id,
+          actor: review.actor,
+          occurredAt: new Date().toISOString(),
+          attribution: {
+            cycleId: review.cycleId,
+            range: review.range,
+            runId: request.id,
+          },
+          refs: [{ ref: "blob:" + "a".repeat(64), role: "manifest" }],
+          payload: {
+            complete: true,
+            counts: {
+              batches: 0,
+              units: 0,
+              contextReferences: 0,
+              assessments: 0,
+              deliveries: 0,
+              dispositions: 0,
+              comments: 0,
+              gaps: 0,
+            },
+          },
+        },
+      ]),
+    );
+
+    const second = await f.run(f.open());
+    expect(second.opened).toBe(true);
+    expect(second.cycleId).not.toBe(first.cycleId);
+    const { value } = await f.fetchCycle(second.cycleId);
+    expect(value.branchTipOid).toBe(review.range.headOid);
+    expect(value.sources.find(({ kind }) => kind === "ticket")).toMatchObject({
+      status: "fetched",
+      ref: {
+        item: "NEU-13",
+        found: "commit " + review.range.headOid.slice(0, 12),
+      },
+    });
+    expect(f.calls()).toEqual(["start", "start", "NEU-13"]);
   } finally {
     await Effect.runPromise(Scope.close(f.scope, Exit.void));
   }
@@ -435,6 +559,7 @@ test("fetches queued cycle scope once and reuses it on the next review", async (
     expect(f.calls()).toEqual(["start", "NEU-13"]);
     expect((await f.fetchCycle(cycleId)).status).toBe("reused");
 
+    f.git("branch", "other");
     const other = await f.run(f.open("other"));
     expect(other.cycleId).not.toBe(cycleId);
     const shared = await f.run(

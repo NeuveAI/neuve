@@ -25,11 +25,12 @@ import {
 } from "@neuve/records-core";
 import {
   GitHubExternalRefSchema,
+  GitOid,
   safeRead,
   type Range,
 } from "@neuve/records-schema";
 import { dataBlock } from "./data-block.ts";
-import { git } from "./git.ts";
+import { git, resolveCommit } from "./git.ts";
 import {
   commitTexts,
   type CommitText,
@@ -136,6 +137,7 @@ export type ScopeSource = z.infer<typeof ScopeSource>;
 
 export const ScopeSnapshot = z.strictObject({
   cycleId: z.string(),
+  branchTipOid: GitOid.optional(),
   fetchedAt: z.string(),
   ms: z.int().min(0),
   range: z.strictObject({
@@ -655,10 +657,25 @@ const fetchSources = (ctx: Omit<SnapshotContext, "range">, input: ScopeInput) =>
       Clock.currentTimeMillis,
       (now) => deadline - now,
     );
-    const commits =
+    const branchTipOid =
       input.part === "cycle"
+        ? yield* resolveCommit(repository, `refs/heads/${input.branch}`).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() => {
+                gap(
+                  `The tip of branch ${input.branch} couldn't be read, so its commit messages weren't checked for tickets.`,
+                  describeError(error),
+                );
+                return undefined;
+              }),
+            ),
+          )
+        : undefined;
+    const commitHead = input.part === "cycle" ? branchTipOid : head;
+    const commits =
+      commitHead === undefined
         ? []
-        : yield* rangeCommits(repository, merge, head, gap);
+        : yield* rangeCommits(repository, merge, commitHead, gap);
     const branches =
       input.part === "cycle"
         ? [input.branch]
@@ -941,18 +958,24 @@ const fetchSources = (ctx: Omit<SnapshotContext, "range">, input: ScopeInput) =>
         );
       }
 
+    const reviewCommits = input.part === "review" ? commits : [];
     sources.push(
       ...(yield* documentSources({
         repository,
         base: merge,
         head,
-        commits,
+        commits: reviewCommits,
         part: input.part,
         sourceId,
         gap,
       })),
     );
-    const commitSource = yield* commitScope(commits, merge, head, sourceId);
+    const commitSource = yield* commitScope(
+      reviewCommits,
+      merge,
+      head,
+      sourceId,
+    );
     if (commitSource !== undefined) sources.push(commitSource);
     if (
       !external?.sources.some((source) => source.item.kind === "pull-request")
@@ -963,6 +986,7 @@ const fetchSources = (ctx: Omit<SnapshotContext, "range">, input: ScopeInput) =>
       merge,
       cycle: {
         cycleId,
+        ...(branchTipOid === undefined ? {} : { branchTipOid }),
         fetchedAt,
         ms: (yield* Clock.currentTimeMillis) - started,
         integrations: {
@@ -1070,7 +1094,7 @@ const storedCyclePart = (cycleId: string) =>
       };
   });
 
-const fetchCyclePart = (
+export const fetchCyclePart = (
   ctx: Omit<SnapshotContext, "range">,
   opening: { baseOid: string; branch: string },
 ) =>
@@ -1090,14 +1114,6 @@ const fetchCyclePart = (
 
 const cycleScopeView = (cycle: CycleScope, baseOid: string) =>
   asSnapshot(cycle, { baseOid, headOid: baseOid, mergeBase: baseOid });
-
-export const cycleSnapshot = (ctx: SnapshotContext) =>
-  Effect.gen(function* () {
-    const opening = yield* readScopeOpening(ctx.cycleId);
-    if (opening === undefined) return yield* fetchReviewSnapshot(ctx);
-    const result = yield* fetchCyclePart(ctx, opening);
-    return { ...result, value: cycleScopeView(result.value, opening.baseOid) };
-  });
 
 const fetchRangeScope = (repository: string, range: ScopeRange) =>
   Effect.gen(function* () {
@@ -1167,7 +1183,7 @@ const composeSnapshot = (
       ...cycle.named,
       ...named.map((item) => ({
         ...item,
-        status: "named after the first read",
+        status: "named after cycle scope was read",
       })),
     ],
     sources,
@@ -1177,7 +1193,7 @@ const composeSnapshot = (
       ...range.gaps,
       ...named.map(
         ({ key }) =>
-          `Ticket ${key} was named in a commit after the first read. Its requirements can be fetched in the next cycle.`,
+          `Ticket ${key} was named after this cycle's scope was read. The next cycle will read it.`,
       ),
     ],
     ...(causes.length === 0 ? {} : { causes }),
@@ -1606,6 +1622,9 @@ export const additionTools = (options: {
   );
 
 export const scopeLogFields = (snapshot: ScopeSnapshot) => ({
+  ...(snapshot.branchTipOid === undefined
+    ? {}
+    : { branchTipOid: snapshot.branchTipOid }),
   fetchedAt: snapshot.fetchedAt,
   ms: snapshot.ms,
   strongest: snapshot.strata.strongest,

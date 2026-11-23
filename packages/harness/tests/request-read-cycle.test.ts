@@ -17,10 +17,7 @@ import {
   storeLocationIn,
 } from "@neuve/records-core";
 import { defaultConfig } from "../src/config.ts";
-import { workerHandlers } from "../src/handler.ts";
 import { requestReview, type ReviewOptions } from "../src/request.ts";
-import { cycleSnapshot } from "../src/scope.ts";
-import { mcpClientsLayer } from "../src/mcp-client.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -257,44 +254,3 @@ test("keeps explicitly selected scope out of a read-opened cycle", async () => {
     "review.requested@1",
   ]);
 });
-
-// The review and the queued job must use the same base snapshot whichever reaches it first.
-test.each(["review", "scope job"])(
-  "reads the base snapshot with %s first",
-  async (first) => {
-    const repo = fixture();
-    const integrations = {
-      status: "absent",
-      path: join(repo.repository, "integrations.json"),
-    } as const;
-    const snapshot = await repo.run(
-      Effect.gen(function* () {
-        yield* repo.read();
-        const review = yield* repo.request();
-        if (first === "scope job") {
-          const [job] = yield* scopeJobs;
-          const handler = workerHandlers(repo)["scope.fetch@2"];
-          if (job === undefined || handler === undefined)
-            throw new Error("Missing scope job or handler");
-          expect(yield* handler(job)).toBe("computed");
-        }
-        return yield* cycleSnapshot({
-          repository: repo.repository,
-          location: repo.location,
-          cycleId: review.cycleId,
-          range: review.range,
-          integrations,
-        }).pipe(Effect.provide(mcpClientsLayer(integrations)));
-      }),
-    );
-    expect(snapshot.status).toBe(first === "scope job" ? "reused" : "computed");
-    expect(snapshot.value.range).toEqual({
-      baseOid: repo.base,
-      headOid: repo.base,
-      mergeBase: repo.base,
-    });
-    expect(
-      snapshot.value.sources.filter((source) => source.kind === "commit-text"),
-    ).toEqual([]);
-  },
-);

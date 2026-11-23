@@ -21,7 +21,7 @@ import { createPlanning } from "../../../apps/neuve-host/src/planning";
 import { linearMcpSession } from "../src/linear-planning";
 import { IntegrationServer } from "../src/integrations";
 import { requestReview } from "../src/request";
-import { cycleSnapshot, freezeSnapshot, isFrozen } from "../src/scope";
+import { reviewSnapshot, freezeSnapshot, isFrozen } from "../src/scope";
 import { mcpClientsLayer } from "../src/mcp-client";
 
 test("native reopened selection is admitted before opening, fetched into Records once, and cannot replace joined scope", async () => {
@@ -103,21 +103,27 @@ test("native reopened selection is admitted before opening, fetched into Records
           kind: "cycle.opened@1",
           cycleId: first.cycleId,
         });
-        const snapshot = yield* cycleSnapshot({
-          repository: fixture.lane.path,
-          location,
-          cycleId: first.cycleId,
-          range: first.range,
-          integrations,
-        });
+        const snapshot = yield* reviewSnapshot(
+          {
+            repository: fixture.lane.path,
+            location,
+            cycleId: first.cycleId,
+            range: first.range,
+            integrations,
+          },
+          undefined,
+        );
         yield* freezeSnapshot(first.cycleId, []);
-        const repeated = yield* cycleSnapshot({
-          repository: fixture.lane.path,
-          location,
-          cycleId: first.cycleId,
-          range: first.range,
-          integrations,
-        });
+        const repeated = yield* reviewSnapshot(
+          {
+            repository: fixture.lane.path,
+            location,
+            cycleId: first.cycleId,
+            range: first.range,
+            integrations,
+          },
+          undefined,
+        );
         const joined = yield* requestReview({ ...args, scopeSource });
         const mismatch = yield* Effect.exit(
           requestReview({

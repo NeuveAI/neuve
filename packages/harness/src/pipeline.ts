@@ -441,12 +441,6 @@ const precomputeSpec = (
   config: frontSettings(settings) as never,
 });
 
-/** The Precompute key for a review-opened cycle. */
-export const precomputeKey = (ctx: RunContext["Service"]) =>
-  Computations.computationKey(
-    precomputeSpec(ctx.range, ctx.cycleId, precomputeSettings(ctx.config)),
-  ).key;
-
 interface ScopeEnvironment {
   readonly integrations: Integrations;
   readonly clients: McpClients["Service"];
