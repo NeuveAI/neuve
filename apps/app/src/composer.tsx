@@ -361,6 +361,8 @@ export function Composer(
 					text: body,
 					...encoded,
 					...(change ? { mode: change } : {}),
+					// A person is certainly here, where approval cards show, so the chat is attended.
+					attended: true,
 				});
 			} else {
 				await host.channel(channel.id, {
@@ -401,6 +403,7 @@ export function Composer(
 				author: user,
 				text: RETRY,
 				...(reset ? { automatic: true } : {}),
+				attended: true,
 			});
 			if (reset) {
 				toast("Switched this chat to Automatic", {
