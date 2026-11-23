@@ -129,15 +129,72 @@ test("a quote that survives in lines that no longer match is ambiguous", () => {
   });
 });
 
-test("the same passage appearing twice in the new version is ambiguous", () => {
+test("a copy of the passage added elsewhere does not move the comment", () => {
   const twice = `${plan}\n\n## Done when\n${goal.lines.map((line) => line.text).join("\n")}`;
   expect(
     placeFileLinesAnchor(goal, plan, { hash: hash("b"), text: twice }),
   ).toEqual({
-    kind: "ambiguous",
+    kind: "stays",
     hash: hash("b"),
-    section: "Goal",
+    lines: goal.lines,
   });
+});
+
+const steps = [
+  "# Ship",
+  "",
+  "## Backend",
+  "- Run the tests.",
+  "",
+  "## Frontend",
+  "- Run the tests.",
+].join("\n");
+
+test("a comment on the deleted copy of a repeated line does not move to the other copy", () => {
+  const frontend = commentOn(steps, 7, 7, "Run the tests");
+  const without = [
+    "# Ship",
+    "",
+    "## Backend",
+    "- Run the tests.",
+    "",
+    "## Frontend",
+  ].join("\n");
+  expect(
+    placeFileLinesAnchor(frontend, steps, { hash: hash("b"), text: without }),
+  ).toEqual({
+    kind: "changed",
+    hash: hash("b"),
+    removed: frontend.lines,
+    added: [],
+  });
+});
+
+test("a comment on the kept copy of a repeated line stays when the other copy is deleted", () => {
+  const frontend = commentOn(steps, 7, 7, "Run the tests");
+  const without = [
+    "# Ship",
+    "",
+    "## Backend",
+    "",
+    "## Frontend",
+    "- Run the tests.",
+  ].join("\n");
+  expect(
+    placeFileLinesAnchor(frontend, steps, { hash: hash("b"), text: without }),
+  ).toEqual({
+    kind: "stays",
+    hash: hash("b"),
+    lines: [{ line: 6, text: "- Run the tests." }],
+  });
+});
+
+test("a deleted passage with a short quote found elsewhere in the plan is changed", () => {
+  const short = commentOn(plan, 8, 8, "e");
+  const cut = plan.replace("\n- Exports that failed before this change", "");
+  expect(
+    placeFileLinesAnchor(short, plan, { hash: hash("b"), text: cut }).kind,
+  ).toBe("changed");
 });
 
 test("the version a comment was made on keeps it in place", () => {
