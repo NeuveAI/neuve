@@ -12,6 +12,7 @@ const SKILL_DESCRIPTION_LIMIT = 1_536;
 // Codex uses this budget when the context window is unknown.
 const SKILL_LIST_LIMIT = 8_000;
 const SKILL_HEADING = "Skills in this repository and the user's skill folders. Read a skill's file before doing work it describes:";
+const SKILL_NOTICE = "Some descriptions were shortened or left out to fit; read a skill's file for its full description.";
 
 /**
  * Only a missing file means "none". Any other failure, such as an unreachable workspace, throws, so
@@ -55,6 +56,10 @@ function front(text: string): Record<string, string> {
 	return fields;
 }
 
+function byName(a: { name: string }, b: { name: string }): number {
+	return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
+
 async function skills(env: ExecutionEnv, context: Context): Promise<string | undefined> {
 	const home = getOrThrow(await env.absolutePath("~", context));
 	// Keep these skill roots in step with apps/neuve-host/src/plan-git.ts.
@@ -66,45 +71,43 @@ async function skills(env: ExecutionEnv, context: Context): Promise<string | und
 	];
 	// User skills win because the user-scope Neuve skill matches the installed command.
 	const seen = new Set<string>();
-	type SkillEntry = { line: string; folder: string };
+	type SkillEntry = { name: string; label: string; description: string };
 	const user: SkillEntry[] = [];
 	const repository: SkillEntry[] = [];
+	let descriptionCapped = false;
 	for (const dir of roots) {
 		const entries = isAbsolute(dir) ? user : repository;
-		for (const entry of await list(env, dir, context)) {
+		for (const entry of (await list(env, dir, context)).toSorted(byName)) {
 			if (entry.kind !== "directory" && entry.kind !== "symlink") continue;
 			// Opening this child also skips symlinks whose targets are missing or are files.
 			const path = `${dir}/${entry.name}/SKILL.md`;
 			const text = await read(env, path, context);
 			if (!text) continue;
-			const { name: declaredName, description } = front(text);
+			const { name: declaredName, description = "" } = front(text);
 			const name = declaredName || entry.name;
 			if (seen.has(name)) continue;
 			seen.add(name);
-			const detail = description ? `: ${description.slice(0, SKILL_DESCRIPTION_LIMIT)}` : "";
-			entries.push({ line: `- ${name} (${path})${detail}`, folder: resolve(env.cwd, dir) });
+			const detail = description.slice(0, SKILL_DESCRIPTION_LIMIT);
+			descriptionCapped ||= detail.length < description.length;
+			entries.push({ name, label: `- ${name} (${path})`, description: detail });
 		}
 	}
-	const entries = [...repository, ...user];
-	const total = entries.length;
-	if (!total) return;
-	let length = entries.reduce((sum, { line }) => sum + line.length + 1, SKILL_HEADING.length);
-	const omitted = new Set<string>();
-	const formatFolders = new Intl.ListFormat("en");
-	let notice = "";
-	while (length + (notice ? notice.length + 1 : 0) > SKILL_LIST_LIMIT) {
-		const removed = entries.pop();
-		if (!removed) {
-			notice = `${total} skills were left out.`;
-			break;
-		}
-		length -= removed.line.length + 1;
-		omitted.add(removed.folder);
-		const count = total - entries.length;
-		const folders = formatFolders.format([...omitted].sort());
-		notice = `${count} more ${count === 1 ? "skill is" : "skills are"} in ${folders}; list those folders to see them.`;
-	}
-	return [SKILL_HEADING, ...entries.map(({ line }) => line), ...(notice ? [notice] : [])].join("\n");
+	const entries = [...repository.sort(byName), ...user.sort(byName)];
+	if (!entries.length) return;
+	const separator = ": ";
+	const baseLength = entries.reduce((sum, { label }) => sum + label.length + 1, SKILL_HEADING.length);
+	const descriptionLength = entries.reduce((sum, { description }) =>
+		sum + (description ? separator.length + description.length : 0), 0);
+	const shortened = descriptionCapped || baseLength + descriptionLength > SKILL_LIST_LIMIT;
+	// Like Claude Code, keep every name and path even when the bare list exceeds the budget.
+	let remaining = SKILL_LIST_LIMIT - baseLength - (shortened ? SKILL_NOTICE.length + 1 : 0);
+	const lines = entries.map(({ label, description }) => {
+		const detail = description.slice(0, Math.max(0, remaining - separator.length));
+		if (!detail) return label;
+		remaining -= separator.length + detail.length;
+		return `${label}${separator}${detail}`;
+	});
+	return [SKILL_HEADING, ...lines, ...(shortened ? [SKILL_NOTICE] : [])].join("\n");
 }
 
 /** Rule files, nested one directory deep, with the paths each applies to. */

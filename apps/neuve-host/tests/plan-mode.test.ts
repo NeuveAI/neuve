@@ -35,10 +35,14 @@ function faux() {
 	return { fake, models };
 }
 
-function open(root: string, models: Models, home: string) {
+function open(root: string, models: Models, home: string, reverseEntries = false) {
 	const env = new class extends NodeExecutionEnv {
 		override async absolutePath(...args: Parameters<NodeExecutionEnv["absolutePath"]>): ReturnType<NodeExecutionEnv["absolutePath"]> {
 			return args[0] === "~" ? ok(home) : super.absolutePath(...args);
+		}
+		override async listDir(...args: Parameters<NodeExecutionEnv["listDir"]>): ReturnType<NodeExecutionEnv["listDir"]> {
+			const result = await super.listDir(...args);
+			return reverseEntries && result.ok ? ok(result.value.toReversed()) : result;
 		}
 	}({ cwd: root });
 	return openChannel({
@@ -159,40 +163,78 @@ test.each([
 	}
 });
 
-// The repository entry and the omission notice must fit even with a large user skill set.
-test("Ace bounds the skill list and keeps repository skills first", async () => {
+async function skillListing(repo: string, home: string, reverseEntries = false) {
+	const { fake, models } = faux();
+	const channel = await open(repo, models, home, reverseEntries);
+	try {
+		let listing = "";
+		fake.appendResponses([received => {
+			listing = getCurrentSystemPrompt(received.messages).match(/Skills in this repository[^\n]*\n[\s\S]*?(?=\n<\/project-instructions>)/)?.[0] ?? "";
+			return fauxAssistantMessage("Read complete");
+		}]);
+		await ask(channel, { mode: "ace" });
+		return listing;
+	} finally {
+		await channel.close();
+	}
+}
+
+const descriptionNotice = "Some descriptions were shortened or left out to fit; read a skill's file for its full description.";
+
+// A large user skill set must keep every name and the winning Neuve path in either directory order.
+test("Ace bounds descriptions and keeps all skill names in a deterministic order", async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve skill budget ")));
 	try {
 		const repo = join(root, "checkout");
 		const home = join(root, "home");
-		const userCodex = join(home, ".agents", "skills");
-		const userClaude = join(home, ".claude", "skills");
+		const userSkills = join(home, ".agents", "skills");
+		const repoSkills = join(repo, ".agents", "skills");
 		const description = "d".repeat(1_536);
-		await writeSkill(join(repo, ".agents", "skills", "neuve"), `${description} clipped`);
-		await writeSkill(join(userCodex, "codex-skill"), "Codex skill", "codex-skill");
-		for (let i = 0; i < 8; i++) {
-			const name = `user-${i}`;
-			await writeSkill(join(userClaude, name), "u".repeat(1_200), name);
-		}
-		const { fake, models } = faux();
-		const channel = await open(repo, models, home);
-		try {
-			let listing = "";
-			fake.appendResponses([received => {
-				listing = getCurrentSystemPrompt(received.messages).match(/Skills in this repository[^\n]*\n[\s\S]*?(?=\n<\/project-instructions>)/)?.[0] ?? "";
-				return fauxAssistantMessage("Read complete");
-			}]);
-			await ask(channel, { mode: "ace" });
-			const [, first, second, ...remaining] = listing.split("\n");
-			expect(first).toBe(`- neuve (.agents/skills/neuve/SKILL.md): ${description}`);
-			expect(second).toBe(`- codex-skill (${userCodex}/codex-skill/SKILL.md): Codex skill`);
-			expect(listing.length).toBeLessThanOrEqual(8_000);
-			const notice = remaining.pop();
-			expect(remaining.every(line => line.startsWith("- user-"))).toBe(true);
-			expect(notice).toBe(`${8 - remaining.length} more skills are in ${userClaude}; list those folders to see them.`);
-		} finally {
-			await channel.close();
-		}
+		await writeSkill(join(repoSkills, "neuve"), "Repository copy");
+		await writeSkill(join(repoSkills, "a-folder"), `${description} clipped`, "z-guide");
+		await writeSkill(join(repoSkills, "z-folder"), "Read first", "a-guide");
+		await writeSkill(join(userSkills, "z-copy"), "Other user copy");
+		await writeSkill(join(userSkills, "neuve"), "User copy");
+		const names = Array.from({ length: 30 }, (_, i) => `user-${String(i).padStart(2, "0")}`);
+		for (const name of names) await writeSkill(join(userSkills, name), "u".repeat(1_000), name);
+		const listing = await skillListing(repo, home);
+		expect(listing.match(/^- .+?\/SKILL\.md\)/gm)).toEqual([
+			"- a-guide (.agents/skills/z-folder/SKILL.md)",
+			"- z-guide (.agents/skills/a-folder/SKILL.md)",
+			`- neuve (${userSkills}/neuve/SKILL.md)`,
+			...names.map(name => `- ${name} (${userSkills}/${name}/SKILL.md)`),
+		]);
+		const lines = listing.split("\n");
+		expect(lines[2]).toBe(`- z-guide (.agents/skills/a-folder/SKILL.md): ${description}`);
+		const lengths = lines.slice(4, -1).map(line => line.split("): ")[1]?.length ?? 0);
+		expect(lengths).toEqual(lengths.toSorted((a, b) => b - a));
+		expect(listing.length).toBeGreaterThanOrEqual(7_998);
+		expect(listing.length).toBeLessThanOrEqual(8_000);
+		expect(listing.endsWith(`\n${descriptionNotice}`)).toBe(true);
+		expect(await skillListing(repo, home, true)).toBe(listing);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+// Names must still be discoverable when the paths alone exhaust the prompt budget.
+test("Ace lists every skill without descriptions when names and paths exceed the budget", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve skill budget ")));
+	try {
+		const repo = join(root, "checkout");
+		const home = join(root, "home");
+		const userSkills = join(home, ".agents", "skills");
+		await writeSkill(join(repo, ".agents", "skills", "neuve"), "Repository copy");
+		const names = Array.from({ length: 40 }, (_, i) => `user-${String(i).padStart(2, "0")}-${"x".repeat(110)}`);
+		for (const name of names) await writeSkill(join(userSkills, name), "User description", name);
+		const listing = await skillListing(repo, home);
+		const [, ...lines] = listing.split("\n");
+		expect(lines.slice(0, -1).join("\n").length).toBeGreaterThan(8_000);
+		expect(lines).toEqual([
+			"- neuve (.agents/skills/neuve/SKILL.md)",
+			...names.map(name => `- ${name} (${userSkills}/${name}/SKILL.md)`),
+			descriptionNotice,
+		]);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
