@@ -992,11 +992,13 @@ const fetchSources = (ctx: Omit<SnapshotContext, "range">, input: ScopeInput) =>
     }),
   );
 
+const SCOPE_SNAPSHOT_OP = "harness.scope-snapshot";
+
 export const snapshotSpec = (
   cycleId: string,
   externalIdentity?: string,
 ): Computations.ComputationSpec => ({
-  op: "harness.scope-snapshot",
+  op: SCOPE_SNAPSHOT_OP,
   // 2: this build's snapshot reads the cycle's explicit scope selection and has new fields. Builds
   // before 12.24 still fetch version 1 for every cycle they see, the transition's included (their
   // `scope.fetch` job is a kind they take), so the two never share a stored snapshot (12.24).
@@ -1184,11 +1186,13 @@ const splitKey = (cycleId: string, cycleKey: string, rangeKey: string) =>
 
 export const hasFixedScope = (key: string) => key.startsWith("scope:");
 
-const snapshotOutput = <T>(key: string, schema: z.ZodType<T>) =>
+const snapshotOutput = <T>(
+  record: Computations.Computation | undefined,
+  schema: z.ZodType<T>,
+) =>
   Effect.gen(function* () {
-    const record = yield* (yield* Computations.ComputationStore).lookup(key);
-    if (Option.isNone(record)) return undefined;
-    const blob = yield* (yield* Blobs.BlobStore).get(record.value.outputHash);
+    if (record === undefined) return undefined;
+    const blob = yield* (yield* Blobs.BlobStore).get(record.outputHash);
     if (blob._tag === "Pruned") return undefined;
     const parsed = safeRead(
       schema,
@@ -1199,7 +1203,12 @@ const snapshotOutput = <T>(key: string, schema: z.ZodType<T>) =>
 
 export const snapshotByKey = (key: string) =>
   Effect.gen(function* () {
-    if (!hasFixedScope(key)) return yield* snapshotOutput(key, ScopeSnapshot);
+    const store = yield* Computations.ComputationStore;
+    if (!hasFixedScope(key))
+      return yield* snapshotOutput(
+        Option.getOrUndefined(yield* store.lookup(key)),
+        ScopeSnapshot,
+      );
     const [, cycleId, cycleKey, rangeKey] = key.split(":");
     if (
       cycleId === undefined ||
@@ -1207,12 +1216,17 @@ export const snapshotByKey = (key: string) =>
       rangeKey === undefined
     )
       return undefined;
-    const range = yield* snapshotOutput(rangeKey, RangeScope);
+    const parts = yield* store.lookupMany([cycleKey, rangeKey]);
+    const range = yield* snapshotOutput(parts.get(rangeKey), RangeScope);
     if (range === undefined) return undefined;
-    const cycle = yield* snapshotOutput(
-      cycleKey,
-      z.union([CycleScope, ScopeSnapshot]),
-    );
+    const record = parts.get(cycleKey);
+    if (record?.op !== SCOPE_SNAPSHOT_OP) return undefined;
+    const cycle =
+      record.opVersion === 3
+        ? yield* snapshotOutput(record, CycleScope)
+        : record.opVersion === 2
+          ? yield* snapshotOutput(record, ScopeSnapshot)
+          : undefined;
     return cycle === undefined || cycle.cycleId !== cycleId
       ? undefined
       : composeSnapshot(cycle, range);

@@ -56,6 +56,7 @@ import { AgentContextDoc } from "../src/pi/stages/docs.ts";
 import type { AgentStep } from "../src/pi/stages/agent.ts";
 import type { StageRequirements } from "../src/pi/stages/services.ts";
 import { ensureRunFolder, runFolder } from "../src/run-folder.ts";
+import { snapshotByKey, type ScopeSnapshot } from "../src/scope.ts";
 import {
   emptyRepoStack,
   readRepoStack,
@@ -93,6 +94,73 @@ const run = <A, E>(effect: Effect.Effect<A, E, StageRequirements>) =>
   );
 const encode = (value: unknown) =>
   new TextEncoder().encode(JSON.stringify(value));
+
+// A split scope key can still point to a full snapshot written before the split.
+test("a stored version 2 scope snapshot reads on its own and in split scope", async () => {
+  const cycleId = "before-scope-split";
+  const baseOid = "a".repeat(40);
+  const headOid = "b".repeat(40);
+  const legacy = {
+    cycleId,
+    fetchedAt: "2026-11-01T00:00:00.000Z",
+    ms: 7,
+    range: { baseOid, headOid: baseOid, mergeBase: baseOid },
+    integrations: { file: "absent", detail: null, servers: [] },
+    named: [],
+    sources: [],
+    strata: { strongest: "nothing", present: [] },
+    gaps: ["A gap from the stored cycle."],
+  } satisfies ScopeSnapshot;
+  const range = { baseOid, headOid, mergeBase: baseOid };
+  const result = await run(
+    Effect.gen(function* () {
+      const store = yield* Computations.ComputationStore;
+      const cycle = yield* store.run(
+        {
+          op: "harness.scope-snapshot",
+          opVersion: 2,
+          inputs: { cycle: `cycle:${cycleId}` },
+          config: { recipe: "neuve-scope-v1" },
+        },
+        Effect.succeed({
+          bytes: encode(legacy),
+          mediaType: "application/json",
+        }),
+      );
+      const commitRange = yield* store.run(
+        {
+          op: "harness.range-scope",
+          opVersion: 1,
+          inputs: {
+            base: `git-commit:${baseOid}`,
+            head: `git-commit:${headOid}`,
+          },
+          config: { recipe: "neuve-scope-v1" },
+        },
+        Effect.succeed({
+          bytes: encode({
+            fetchedAt: legacy.fetchedAt,
+            ms: 3,
+            range,
+            named: [],
+            sources: [],
+            gaps: [],
+          }),
+          mediaType: "application/json",
+        }),
+      );
+      const cycleKey = cycle.computation.key;
+      return {
+        full: yield* snapshotByKey(cycleKey),
+        split: yield* snapshotByKey(
+          `scope:${cycleId}:${cycleKey}:${commitRange.computation.key}`,
+        ),
+      };
+    }),
+  );
+  expect(result.full).toEqual(legacy);
+  expect(result.split).toEqual({ ...legacy, range, ms: 10 });
+});
 
 const evictionFixture = async (name: string) => {
   const directory = join(root, name);
