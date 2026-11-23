@@ -45,7 +45,7 @@ export function WorkLog({ channel, channels, user, chat, onChat, onOpen }: Props
 								<button
 									type="button"
 									aria-pressed={on}
-									className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md squircle px-2 text-left text-xs outline-none transition-colors duration-120 hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring/50 aria-pressed:bg-muted motion-reduce:transition-none"
+									className="flex h-7 w-full min-w-0 items-center gap-2 rounded-lg squircle border border-transparent bg-clip-padding px-2 text-left text-xs outline-none transition-colors duration-120 not-aria-pressed:hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring/50 aria-pressed:bg-popover/35 aria-pressed:selected-surface dark:aria-pressed:bg-black/32 motion-reduce:transition-none"
 									onClick={() => onChat(on ? undefined : agent.chat)}
 								>
 									<RoleAvatar role={agent.role} size={20} />

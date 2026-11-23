@@ -890,7 +890,6 @@ function useLayout(
 			tabs: [...items.values()].map((item) => ({
 				id: item.uid,
 				name: item.name,
-				// TODO(work tab): drop once the host's Tab type lists "work".
 				type: item.kind === "work" ? "blank" : item.kind,
 				active: active.has(item.uid),
 			})),

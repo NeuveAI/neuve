@@ -51,7 +51,7 @@ type Props = {
 	onOpen: (channel: Listing) => void;
 	/** Called once the chat loads and whenever its agent may have changed files since. */
 	onWork?: () => void;
-	/** Shown beside the channel's own chat, as an agent's on the work log, so it publishes nothing to the details sidebar. */
+	/** A build's agent's chat on the work log, beside the channel's own: read-only, and it publishes nothing. */
 	beside?: boolean;
 };
 
@@ -88,8 +88,10 @@ export function Conversation(
 	// until then is not the user's to retry.
 	const failed = !offline && !transition && transcript.error;
 	const chat = transcript.info?.chats.find((value) => value.id === id);
-	const { diff, plan: openPlan, work: openWork } = useDetails(channel.id);
-	const locked = readOnly(id, chat, transcript.builds);
+	const { diff, plan: openPlan, work: openWork, builds: known } = useDetails(channel.id);
+	// The work log shows only agents' chats; elsewhere the channel's last known builds say so while
+	// this chat's own watch loads.
+	const locked = beside || readOnly(id, chat, transcript.live ? transcript.builds : known?.list ?? []);
 	const model = chat?.model || channel.model;
 	const people = useSyncExternalStore(host.subscribe, () => host.people);
 	// This app's own host, or the peer host relaying this channel to it, stopped answering.

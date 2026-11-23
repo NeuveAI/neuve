@@ -23,11 +23,11 @@ export const AGENT_STATE_ICONS: Record<AgentLineView["state"], [Icon, string]> =
 	stopped: [IconCircleDashed, "text-muted-foreground"],
 };
 
-export function AgentStateIcon({ state, className }: { state: AgentLineView["state"]; className?: string }) {
+export function AgentStateIcon({ state }: { state: AgentLineView["state"] }) {
 	const [Icon, color] = AGENT_STATE_ICONS[state];
 	return (
 		<span className="inline-flex shrink-0" role="img" aria-label={state}>
-			<Icon className={cn("size-3.5", color, className)} aria-hidden />
+			<Icon className={cn("size-3.5", color)} aria-hidden />
 		</span>
 	);
 }
