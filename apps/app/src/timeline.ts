@@ -3,7 +3,7 @@ import type { Listing, People } from "@ace/host/protocol";
 import type { Event } from "@ace/ui";
 
 import { AGENT_ALIAS, withAgentMention } from "./agent-mention";
-import { agentName } from "./build-card";
+import { agentAuthor, agentName, isAgentToken, mentionName } from "./build-card";
 import { placement } from "./placement";
 import { planTool } from "./plan-card";
 import { commentWords, type Said } from "./plan-comments";
@@ -185,6 +185,18 @@ export function withMention(item: { entry?: number; invoked: boolean; text: stri
 	return item.invoked ? withAgentMention(item.text) : item.text;
 }
 
+/**
+ * A message's text with every agent's name its list of agents does not hold kept as words: the
+ * channel delivers only to the list, so only the list draws an agent as mentioned.
+ */
+export function withAgents(value: string, listed: ReadonlySet<string>): string {
+	return value.replace(
+		/(^|[\s([{])@([\w-]+)/gm,
+		(whole, lead: string, name: string) =>
+			isAgentToken(name) && !listed.has(name.toLowerCase()) ? `${lead}@\u2060${name}` : whole,
+	);
+}
+
 export function toEvents(
 	items: Item[],
 	topic: string,
@@ -248,6 +260,12 @@ export function toEvents(
 			const brief = item.system?.kind === "neuve:build:brief";
 			if (brief) asker = undefined;
 			else if (item.invoked) asker = item.author;
+			const listed = new Set(
+				(item.agents ?? []).flatMap((chat) => {
+					const agent = agents.get(agentAuthor(chat));
+					return agent ? [mentionName(agent)] : [];
+				}),
+			);
 			return {
 				...base,
 				sender: brief
@@ -256,7 +274,7 @@ export function toEvents(
 				...(item.edited && !item.deleted ? { last_updated: Math.floor(item.edited / 1000) } : {}),
 				content: item.deleted ? [text("Message deleted")] : [
 					// Every input to a build's agent asks that agent, so no @neuve is drawn there.
-					text(brief || self ? item.text : withMention(item, sends)),
+					text(withAgents(brief || self ? item.text : withMention(item, sends), listed)),
 					...(item.images || []).map((image) => ({
 						type: "image" as const,
 						image: `data:${image.mimeType};base64,${image.data}`,

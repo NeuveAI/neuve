@@ -268,7 +268,11 @@ function enrich(
 	documents?: readonly DocumentCandidate[],
 	plan = false,
 ): PMNode {
-	let map = mentions?.length ? new Map(mentions.map(item => [item.name, item])) : undefined;
+	// A name two entries share, such as two plans' implementers, stays text rather than reach one of them.
+	let names = mentions?.map(item => item.name) ?? [];
+	let map = mentions?.length
+		? new Map(mentions.flatMap(item => names.indexOf(item.name) === names.lastIndexOf(item.name) ? [[item.name, item]] : []))
+		: undefined;
 	return expand(doc, map, documents, plan)[0]!;
 }
 
@@ -283,4 +287,13 @@ function parse(
 	return enrich(parser.parse(text), mentions, documents, plan);
 }
 
-export { parse, serialize, serializer };
+/** The chats of the agents the doc mentions, in the order first mentioned. */
+function mentionedAgents(doc: PMNode): number[] {
+	let chats = new Set<number>();
+	doc.descendants(node => {
+		if (node.type === schema.nodes.mention && node.attrs.id) chats.add(Number(node.attrs.id));
+	});
+	return [...chats];
+}
+
+export { mentionedAgents, parse, serialize, serializer };

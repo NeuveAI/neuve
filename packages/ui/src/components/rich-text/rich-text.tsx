@@ -21,7 +21,9 @@ import { SearchIndex } from "emoji-mart";
 import { initEmoji } from "../../lib/emoji";
 import { getHighlighter } from "../../lib/highlighter";
 import { cn, isUrl } from "../../lib/utils";
+import type { AgentLineView } from "../../types";
 import { Popover, PopoverPopup, PopoverPortal, PopoverPositioner } from "../../ui/popover";
+import { AgentLine } from "../agents/agents";
 
 import { schema } from "./schema";
 import {
@@ -75,6 +77,7 @@ type SlashCommand = {
 type PopupItem = {
 	key: string;
 	label: string;
+	agent?: AgentLineView;
 	avatar?: string;
 	icon?: string;
 	description?: string;
@@ -212,6 +215,12 @@ function fragment(
 			return;
 		}
 
+		if (node.type === schema.nodes.mention && node.attrs.id) {
+			out.push(schema.text(`@${node.attrs.name}`, node.marks));
+			changed = true;
+			return;
+		}
+
 		if (node.isLeaf) {
 			out.push(node);
 			return;
@@ -232,7 +241,7 @@ function pasted(
 	plan = false,
 ) {
 	if (!list?.length && !documents?.length && !plan) return slice;
-	let mentions = new Map(list?.map(item => [item.name.toLowerCase(), item]) || []);
+	let mentions = new Map(list?.flatMap(item => item.agent ? [] : [[item.name.toLowerCase(), item]]) || []);
 	let content = fragment(slice.content, mentions, documents, plan);
 	return content === slice.content ? slice : new Slice(content, slice.openStart, slice.openEnd);
 }
@@ -347,8 +356,9 @@ function useEditor(
 		for (let m of mentions) {
 			if (!m.name.toLowerCase().includes(q)) continue;
 			items.push({
-				key: m.name,
+				key: m.id ?? m.name,
 				label: m.name,
+				agent: m.agent,
 				avatar: m.avatar,
 				action: (v) => {
 					insertMention(v, m.name, m.id, m.avatar);
@@ -661,7 +671,9 @@ function RichText({ className, ...props }: Props) {
 				<PopoverPortal>
 					<PopoverPositioner anchor={shown?.anchor} side="bottom" align="start" sideOffset={4}>
 						<PopoverPopup
-							className={shown?.source === "slash" ? "w-80 max-w-(--available-width)" : undefined}
+							className={shown?.source === "slash" || shown?.items.some(item => item.agent)
+								? "w-80 max-w-(--available-width)"
+								: undefined}
 							initialFocus={false}
 							finalFocus={false}
 						>
@@ -680,26 +692,30 @@ function RichText({ className, ...props }: Props) {
 										view.current && item.action(view.current);
 									}}
 								>
-									{item.avatar && (
-										<img
-											className="size-5 shrink-0 rounded-full object-cover"
-											src={item.avatar}
-											alt=""
-										/>
-									)}
-									{item.icon && (
-										<span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[0.6875rem] font-semibold">
-											{item.icon}
-										</span>
-									)}
-									<span className="flex min-w-0 flex-1 flex-col gap-px text-left">
-										<span className="truncate font-medium">{item.label}</span>
-										{item.description && (
-											<span className="break-words text-[0.6875rem] text-muted-foreground">
-												{item.description}
+									{item.agent ? <AgentLine agent={item.agent} /> : (
+										<>
+											{item.avatar && (
+												<img
+													className="size-5 shrink-0 rounded-full object-cover"
+													src={item.avatar}
+													alt=""
+												/>
+											)}
+											{item.icon && (
+												<span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[0.6875rem] font-semibold">
+													{item.icon}
+												</span>
+											)}
+											<span className="flex min-w-0 flex-1 flex-col gap-px text-left">
+												<span className="truncate font-medium">{item.label}</span>
+												{item.description && (
+													<span className="break-words text-[0.6875rem] text-muted-foreground">
+														{item.description}
+													</span>
+												)}
 											</span>
-										)}
-									</span>
+										</>
+									)}
 								</button>
 							))}
 						</PopoverPopup>

@@ -5,12 +5,14 @@ import {
 	Button,
 	ChatComposer,
 	type ChatComposerHandle,
+	mentionedAgents,
 	serialize,
 	toast,
 	useLocalStorage,
 	useMedia,
 } from "@ace/ui";
 import {
+	type Build,
 	type ChatMode,
 	type Effort,
 	MAX_IMAGES,
@@ -29,6 +31,7 @@ import {
 	withoutLeadingAgentMention,
 } from "./agent-mention";
 import { useAgentAvatar } from "./agent-avatar";
+import { isAgentToken, mentionable } from "./build-card";
 import { agentMode, askMode, useChatMode } from "./composer-mode";
 import { host } from "./host";
 import { attachments } from "./attachments";
@@ -110,6 +113,8 @@ type Props = {
 	plan?: boolean;
 	/** People to suggest after @, by GitHub login. */
 	members: { name: string; avatar?: string }[];
+	/** The channel's builds, whose agents are suggested after @ wherever @neuve is. */
+	builds: Build[];
 };
 
 /** Below the composer: its attachment tray rises over the space above it and takes clicks there. */
@@ -147,6 +152,7 @@ export function Composer(
 		accessory,
 		plan,
 		members,
+		builds,
 	}: Props,
 ) {
 	const composer = useRef<ChatComposerHandle>(null);
@@ -165,10 +171,12 @@ export function Composer(
 	const mode = agents ? stored : "chat";
 	const agentic = !!agentMode(mode);
 	const avatar = useAgentAvatar();
-	const mentions = useMemo(
-		() => agents ? [{ name: AGENT_ALIAS.name, avatar }, ...members] : members,
-		[agents, members, avatar],
-	);
+	const working = useMemo(() => agents ? mentionable(builds) : [], [agents, builds]);
+	// A login spelled like an agent's name is left out, so that name always means the agent.
+	const mentions = useMemo(() => {
+		const people = members.filter((member) => !isAgentToken(member.name));
+		return agents ? [{ name: AGENT_ALIAS.name, avatar }, ...working, ...people] : people;
+	}, [agents, working, members, avatar]);
 	const [models, setModels] = useState<ModelOption[]>();
 	const [modelError, setModelError] = useState<string>();
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
@@ -329,7 +337,7 @@ export function Composer(
 		}
 	}
 
-	async function send(text: string, mode: string, attached: Attachment[]) {
+	async function send(text: string, chats: number[], mode: string, attached: Attachment[]) {
 		if (sending.current) return;
 		// Posted, a blocked teammate's "@neuve" would read as an ask nobody answers.
 		if (blocked && hasAgentMention(text)) {
@@ -349,6 +357,7 @@ export function Composer(
 			return onProviders();
 		}
 		const doc = composer.current?.get();
+		const mentioned = chats.length ? { agents: chats } : {};
 		sending.current = true;
 		setPending(true);
 		try {
@@ -362,6 +371,7 @@ export function Composer(
 					author: user,
 					text: body,
 					...encoded,
+					...mentioned,
 					...(change ? { mode: change } : {}),
 					// A person is certainly here, where approval cards show, so the chat is attended.
 					attended: true,
@@ -373,6 +383,7 @@ export function Composer(
 					author: user,
 					text: body,
 					...encoded,
+					...mentioned,
 				});
 			}
 			if (composer.current?.get() === doc) composer.current?.clear();
@@ -454,7 +465,7 @@ export function Composer(
 				onStop={() => void host.channel(channel.id, { op: "stop", chat: id, author: user })}
 				canSend={ready && status === "open" && !pending}
 				clearOnSend={false}
-				onSend={({ doc, mode, attachments }) => void send(serialize(doc), mode, attachments)}
+				onSend={({ doc, mode, attachments }) => void send(serialize(doc), mentionedAgents(doc), mode, attachments)}
 			/>
 			{failure && !blocked && !busy && (
 				<Notice

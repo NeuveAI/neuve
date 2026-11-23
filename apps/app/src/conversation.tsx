@@ -568,6 +568,7 @@ export function Conversation(
 							onProviders={onProviders}
 							accessory={chat?.usage && <Usage value={chat.usage} context={chat.context} />}
 							members={members}
+							builds={transcript.builds}
 							plan={planned}
 						/>
 					</div>

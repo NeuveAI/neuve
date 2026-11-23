@@ -2,6 +2,8 @@ import { type EditorState, Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
 import { SearchIndex } from "emoji-mart";
 
+import type { AgentLineView } from "../../types";
+
 import { type DocumentCandidate, isPlan, resolveDocument } from "./references";
 import { schema } from "./schema";
 
@@ -182,11 +184,12 @@ function insertPlan(view: EditorView) {
 	view.focus();
 }
 
+/** An `agent` entry's `id` is its chat; it becomes a mention only when picked from the list. */
+type Mention = { name: string; avatar?: string; id?: string; agent?: AgentLineView };
+
 /**
  * Tracks `@query` text behind the cursor and auto-converts on space.
  */
-type Mention = { name: string; avatar?: string; id?: string };
-
 function suggestPlugin(
 	onUpdate: (state: SuggestState) => void,
 	source: { current: Mention[] | undefined },
@@ -200,7 +203,7 @@ function suggestPlugin(
 
 			let mentions = source.current;
 			let match = mentions?.find(m => m.name.toLowerCase() === state.query.toLowerCase());
-			if (mentions && !match) return false;
+			if (mentions && !match || match?.agent) return false;
 
 			let node = schema.nodes.mention.create({
 				name: state.query,

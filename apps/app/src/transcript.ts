@@ -4,6 +4,7 @@ import type {
 	ApprovalRequest,
 	Build,
 	BuildNotice,
+	ChatId,
 	ChatMode,
 	Image,
 	Plan,
@@ -49,6 +50,8 @@ export type Item =
 		images?: Image[];
 		files?: TextFile[];
 		invoked: boolean;
+		/** The agents the channel delivered it to, by chat. */
+		agents?: ChatId[];
 		/** The host's mark on its review wake or on its brief to a build's agent; such a message is no person's. */
 		system?: ReviewNotice | BuildNotice;
 		deleted?: boolean;
@@ -370,7 +373,7 @@ function withdraw(items: Item[], messages: QueuedMessage[]): Item[] {
 }
 
 function pick(event: Extract<Event, { kind: "message" }>) {
-	const { entry, at, author, text, images, files, invoked, deleted, edited } = event;
+	const { entry, at, author, text, images, files, invoked, agents, deleted, edited } = event;
 	const { system } = event;
 	return {
 		entry,
@@ -380,6 +383,7 @@ function pick(event: Extract<Event, { kind: "message" }>) {
 		...(images ? { images } : {}),
 		...(files ? { files } : {}),
 		invoked,
+		...(agents ? { agents } : {}),
 		...(system ? { system } : {}),
 		...(deleted ? { deleted } : {}),
 		...(edited ? { edited } : {}),
