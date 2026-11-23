@@ -97,6 +97,11 @@ test("the builds event keeps every build state, agent and message in order acros
 	expect(() => EventSchema.parse({ ...event, builds: [{ ...event.builds[0], agents: [{ role: "helper", chat: 4, started: 1, state: "running" }] }] })).toThrow();
 });
 
+test("a posted message keeps the agents it mentions across JSON", () => {
+	const message: Extract<Event, { kind: "message" }> = { kind: "message", chat: 2, entry: 1, at: 110, author: "owner", text: "@reviewer hold", invoked: false, agents: [5, 4] };
+	expect(EventSchema.parse(JSON.parse(JSON.stringify(message)))).toEqual(message);
+});
+
 test("the host's brief mark survives JSON on a message and a queued message", () => {
 	const system = { kind: "neuve:build:brief", build } as const;
 	const message: Extract<Event, { kind: "message" }> = { kind: "message", chat: 4, entry: 1, at: 110, author: "unknown", text: "Brief", invoked: true, system };
