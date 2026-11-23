@@ -191,6 +191,61 @@ async function skillListing(repo: string, home: string, reverseEntries = false) 
 	}
 }
 
+// The hidden user copy must shadow the repository copy and still open by path in both chat modes.
+test("Ace leaves manual-only skills out of the prompt and still reads them", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve manual skill ")));
+	try {
+		const repo = join(root, "checkout");
+		const home = join(root, "home");
+		await writeSkill(join(repo, ".agents", "skills", "neuve"), "Repository copy");
+		git(repo, "init", "-q");
+		const folder = join(home, ".agents", "skills", "neuve");
+		const skill = "---\nname: neuve\ndescription: Personal copy\ndisable-model-invocation: YeS\n---\n\n# Neuve\n";
+		await mkdir(folder, { recursive: true });
+		await writeFile(join(folder, "SKILL.md"), skill);
+		for (const mode of ["ace", "plan"] as const) {
+			const { fake, models } = faux();
+			const channel = await open(repo, models, home);
+			try {
+				let listing: string | undefined;
+				fake.appendResponses([
+					received => {
+						listing = skillSection(getCurrentSystemPrompt(received.messages));
+						return fauxAssistantMessage(fauxToolCall("read", { path: "~/.agents/skills/neuve/SKILL.md" }, { id: "skill" }), { stopReason: "toolUse" });
+					},
+					fauxAssistantMessage("Read complete"),
+				]);
+				await ask(channel, { mode });
+				expect(listing).toBe("");
+				expect((await results(channel)).get("skill")).toMatchObject({ error: false, text: skill });
+			} finally {
+				await channel.close();
+			}
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test.each([
+	// Nested metadata must not replace the skill's declared name.
+	{ format: "nested metadata", content: "---\nname: real\ndescription: Project skill\nmetadata:\n  name: nested\n---\n", expected: "- fixture (real): Project skill" },
+	// Windows line endings must preserve the name and the folded description.
+	{ format: "CRLF", content: "---\r\nname: windows\r\ndescription: >-\r\n  First line\r\n  second line\r\n---\r\n", expected: "- fixture (windows): First line second line" },
+])("Ace lists a skill with $format front matter", async ({ content, expected }) => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve front matter ")));
+	try {
+		const repo = join(root, "checkout");
+		const folder = join(repo, ".agents", "skills", "fixture");
+		await mkdir(folder, { recursive: true });
+		await writeFile(join(folder, "SKILL.md"), content);
+		const listing = await skillListing(repo, join(root, "home"));
+		expect(listing.split("\n").slice(1)).toEqual([folderHeader(".agents/skills"), expected]);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 // The shipped skill uses folded front matter for the description Ace shows.
 test("Ace lists the shipped Neuve skill's description", async () => {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve shipped skill ")));

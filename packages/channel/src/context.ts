@@ -43,28 +43,27 @@ async function list(env: ExecutionEnv, path: string, context: Context) {
 	return [];
 }
 
-/** Read front matter fields and fold block values into a single line. */
+/** Read top-level front matter fields and fold block values into a single line. */
 function front(text: string): Record<string, string> {
-	const match = /^---\n([\s\S]*?)\n---/.exec(text);
+	const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
 	if (!match) return {};
 	const fields: Record<string, string> = {};
-	const lines = match[1]!.split("\n");
+	const lines = match[1]!.split(/\r?\n/);
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i]!;
 		const split = line.indexOf(":");
-		if (split <= 0) continue;
+		if (split <= 0 || /^\s/.test(line)) continue;
 		const key = line.slice(0, split).trim();
 		const value = line.slice(split + 1).trim();
 		if (!/^[>|][+-]?$/.test(value)) {
 			fields[key] = value.replace(/^"|"$/g, "");
 			continue;
 		}
-		const indent = line.search(/\S/);
 		const block: string[] = [];
 		while (i + 1 < lines.length) {
 			const next = lines[i + 1]!;
 			const start = next.search(/\S/);
-			if (start >= 0 && start <= indent) break;
+			if (start === 0) break;
 			i++;
 			if (start >= 0) block.push(next.trim());
 		}
@@ -95,7 +94,7 @@ function shareDescriptions(descriptions: string[], remaining: number): string[] 
 			detail = `${excerpt}…`;
 		}
 		suffixes[index] = `${SKILL_SEPARATOR}${detail}`;
-		remaining -= SKILL_SEPARATOR.length + length;
+		remaining -= SKILL_SEPARATOR.length + detail.length;
 	}
 	return suffixes;
 }
@@ -121,10 +120,11 @@ async function skills(env: ExecutionEnv, context: Context): Promise<string | und
 			const path = `${dir}/${entry.name}/SKILL.md`;
 			const text = await read(env, path, context);
 			if (!text) continue;
-			const { name: declaredName, description = "" } = front(text);
+			const { name: declaredName, description = "", "disable-model-invocation": disabled = "" } = front(text);
 			const name = declaredName || entry.name;
 			if (seen.has(name)) continue;
 			seen.add(name);
+			if (/^(?:true|yes|on|1)$/i.test(disabled)) continue;
 			const detail = description.slice(0, SKILL_DESCRIPTION_LIMIT);
 			descriptionCapped ||= detail.length < description.length;
 			const label = name === entry.name ? entry.name : `${entry.name} (${name})`;
