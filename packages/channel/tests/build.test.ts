@@ -943,6 +943,68 @@ async function startPair(run: Awaited<ReturnType<typeof setup>>) {
 	return { ...first, reviewer: await startReviewer(run, first.chat) };
 }
 
+// Sharing could leave an approved revision waiting until the channel reopens.
+test("unsharing delivers an owed revision once to each agent before reopening", async () => {
+	const run = await setup();
+	const { fixture, watch, draft, approve } = run;
+	const { build, chat, reviewer, agent } = await startPair(run);
+	const target = await fixture.watch({ op: "watch", chat: reviewer });
+	const revision = await draft(revisedText);
+	const finishRuns = Promise.withResolvers<void>();
+	const lookingUp = Promise.withResolvers<void>();
+	const releaseLookup = Promise.withResolvers<void>();
+	const continueWork = async () => {
+		await finishRuns.promise;
+		return fauxAssistantMessage("Ready for the revision.");
+	};
+	try {
+		fixture.script(continueWork, continueWork);
+		await wake(run, "Continue implementing.", chat);
+		await wake(run, "Continue reviewing.", reviewer);
+		const conversation = run.harness.conversation.bind(run.harness);
+		const lookup = spyOn(run.harness, "conversation").mockImplementation(async (id, scope) => {
+			const found = await conversation(id, scope);
+			if (id !== chat) return found;
+			lookup.mockRestore();
+			lookingUp.resolve();
+			await releaseLookup.promise;
+			return found;
+		});
+		try {
+			await approve(revision);
+			expect(await buildAt(watch, 1, "delivered")).toMatchObject({ state: { to: build.id } });
+			await lookingUp.promise;
+			await fixture.request({ op: "share", author: OWNER, shared: true });
+			releaseLookup.resolve();
+			finishRuns.resolve();
+			await until(() => fixture.channel.isIdle());
+			for (const transcript of [agent, target]) {
+				expect(transcript.of("message").filter(event => event.text === revisedText)).toHaveLength(0);
+			}
+
+			fixture.script(fauxAssistantMessage("Revision read."), fauxAssistantMessage("Revision read."));
+			await fixture.request({ op: "share", author: OWNER, shared: false });
+			await until(() => fixture.channel.isIdle());
+			for (const transcript of [agent, target]) {
+				expect(transcript.of("message").filter(event => event.text === revisedText)).toHaveLength(1);
+			}
+			const calls = fixture.faux.state.callCount;
+			await fixture.restart();
+			await until(() => fixture.channel.isIdle());
+			for (const id of [chat, reviewer]) {
+				const reopened = await fixture.watch({ op: "watch", chat: id });
+				expect(reopened.of("message").filter(event => event.text === revisedText)).toHaveLength(1);
+			}
+			expect(fixture.faux.state.callCount).toBe(calls);
+		} finally {
+			lookup.mockRestore();
+		}
+	} finally {
+		releaseLookup.resolve();
+		finishRuns.resolve();
+	}
+});
+
 const messageTool = (text: string, call: string) => tool("agent_message", { to: "reviewer", part: "exports", text }, call);
 
 // A retry could be refused while the start for that role and part is still waiting to resume.
@@ -1187,7 +1249,8 @@ test("agent messages refuse unknown recipients, outsiders, self, empty text, and
 		expect(await transcript.until("result", event => event.call === call)).toMatchObject({ error: true, text });
 	};
 	const valid = { to: "reviewer", part: "exports", text: "Ready." };
-	await refuse(chat, agent, "missing-agent", { ...valid, part: "another part" }, "This plan has no started agent with that role and part.");
+	await refuse(chat, agent, "missing-agent", { ...valid, part: "another part" },
+		'This plan has no started agent with that role and part. The plan has started an implementer and a reviewer for "exports".');
 	await refuse(other.chat, outside, "outside-build", valid, "Only an agent of a plan can message another agent of that plan.");
 	await refuse(chat, agent, "same-chat", { to: "implementer", text: "Ready." }, "Send the message to another agent of this plan.");
 	await refuse(chat, agent, "empty-text", { ...valid, text: "  " }, "Write a message to send.");

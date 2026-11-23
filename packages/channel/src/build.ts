@@ -408,7 +408,11 @@ export class Builds {
 			if (blocked) return { refusal: blocked };
 			const recipient = record.starts[agentKey(to, part)];
 			if (recipient?.state.kind !== "started" || !recipient.brief) {
-				return { refusal: "This plan has no started agent with that role and part." };
+				const agents = record.build.agents
+					.filter(({ role, part }) => record.starts[agentKey(role, part)]?.state.kind === "started")
+					.map(({ role, part }) => `${role === "implementer" ? "an" : "a"} ${role}${part === undefined ? "" : ` for ${JSON.stringify(part)}`}`);
+				const listing = agents.length ? `The plan has started ${new Intl.ListFormat("en").format(agents)}.` : "The plan has no started agents yet.";
+				return { refusal: `This plan has no started agent with that role and part. ${listing}` };
 			}
 			const chat = recipient.brief.chat;
 			if (chat === from) return { refusal: "Send the message to another agent of this plan." };
@@ -464,7 +468,7 @@ export class Builds {
 					}
 					await Promise.all(Object.entries(starts).filter(([, start]) => start.state.kind === "starting")
 						.map(([key]) => this.#runStart(build.id, host, key)));
-					if (build.state.kind === "starting") await this.#deliver(build.id, host);
+					await this.#deliver(build.id, host);
 				} catch (error) {
 					this.log("error", "build.resume.failed", { build: build.id, ...failure(error) });
 				}
@@ -594,7 +598,8 @@ export class Builds {
 			if (this.#closing) return;
 			if (!revision || build.state.kind !== "delivered" || build.state.to !== to) continue;
 			try {
-				await host.share(build.id, () => this.#deliverRevision(build, target));
+				await this.#resumePending(host, to, build.id, () => this.#deliverRevision(build, target),
+					() => this.#document?.records[build.id]?.revision !== undefined);
 			} catch (error) {
 				this.log("error", "build.revision.failed", { build: build.id, ...failure(error) });
 				return;
