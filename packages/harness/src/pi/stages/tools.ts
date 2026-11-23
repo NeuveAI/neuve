@@ -47,7 +47,6 @@ import type { RunLog } from "../../run-log.ts";
 import { TOOL_CALL_SPAN } from "../../telemetry.ts";
 import {
   capResult,
-  describeZodError,
   nearCap,
   toolInputRefusal,
   wireSchema,
@@ -243,7 +242,12 @@ export const parseOutput =
       return {
         success: false as const,
         data: undefined,
-        message: describeZodError(parsed.error),
+        message: toolInputRefusal(
+          submitNameOf(spec),
+          spec.submit.schema,
+          parsed.error,
+          value,
+        ),
       };
     const problems = spec.check?.(parsed.data) ?? [];
     return problems.length === 0

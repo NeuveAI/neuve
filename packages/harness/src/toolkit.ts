@@ -221,8 +221,6 @@ export const wireSchema = (
   io: "input" | "output" = "output",
 ) => stripForProvider(z.toJSONSchema(schema, { target: "draft-2020-12", io }));
 
-export const describeZodError = (error: z.ZodError) => z.prettifyError(error);
-
 export const toolInputRefusal = (
   name: string,
   schema: z.ZodType,
@@ -231,6 +229,16 @@ export const toolInputRefusal = (
 ) => {
   const input = z.toJSONSchema(schema, { io: "input", unrepresentable: "any" });
   const show = (value: unknown) => JSON.stringify(value) ?? "no value";
+  const schemaBranch = (node: unknown, type: "object" | "array") => {
+    if (!isObject(node)) return;
+    const alternatives = node["anyOf"];
+    return Array.isArray(alternatives)
+      ? alternatives.find(
+          (option): option is Json =>
+            isObject(option) && option["type"] === type,
+        )
+      : node;
+  };
   const sentences = error.issues.map((issue) => {
     let path = "";
     let received = raw;
@@ -239,22 +247,21 @@ export const toolInputRefusal = (
       if (typeof key === "number") {
         path += `[${key}]`;
         received = Array.isArray(received) ? received[key] : undefined;
-        node = isObject(node)
-          ? ((Array.isArray(node["prefixItems"])
-              ? node["prefixItems"][key]
-              : undefined) ?? node["items"])
-          : undefined;
+        const array = schemaBranch(node, "array");
+        const tuple = array?.["prefixItems"];
+        node =
+          (Array.isArray(tuple) ? tuple[key] : undefined) ?? array?.["items"];
       } else {
         const field = String(key);
         path += path === "" ? field : `.${field}`;
         received = isObject(received) ? received[field] : undefined;
-        const properties = isObject(node) ? node["properties"] : undefined;
+        const properties = schemaBranch(node, "object")?.["properties"];
         node = isObject(properties) ? properties[field] : undefined;
       }
     }
     const field = path === "" ? `${name} arguments` : `${name} ${path}`;
     if (issue.code === "unrecognized_keys") {
-      const properties = isObject(node) ? node["properties"] : undefined;
+      const properties = schemaBranch(node, "object")?.["properties"];
       const keys = Object.keys(isObject(properties) ? properties : {});
       const accepted =
         keys.length === 0
@@ -268,8 +275,6 @@ export const toolInputRefusal = (
       node["anyOf"].some(
         (option: unknown) => isObject(option) && option["type"] === "null",
       );
-    if (received === undefined && acceptsNull)
-      return `${field} received no value and accepts explicit null.`;
     const value = show(received);
     if (issue.code === "invalid_value") {
       const choices = [

@@ -68,6 +68,11 @@ test("contract find tools apply defaults, teach refusals and log starts with tel
         expect(names).toContain("record_finding");
         expect(names).not.toContain("scope_section");
         expect(names).not.toContain("proofs");
+        expect(
+          turn.policy.tools.find((tool) => tool.name === "log")!.inputSchema[
+            "required"
+          ] ?? [],
+        ).not.toContain("format");
         const log = call("log-default", "log", {});
         const tree = call("tree-default", "tree", {});
         const invalid = call("log-invalid", "log", { format: "full" });
@@ -80,7 +85,7 @@ test("contract find tools apply defaults, teach refusals and log starts with tel
           'log format accepts "oneline" or "message" and received "full".',
         );
         expect((await turn.invoke(record)).text).toStartWith(
-          "record_finding signal received no value and accepts explicit null.",
+          'record_finding signal accepts "forged" or "test-bloat" or "untested" or "stale-proof" or null and received no value.',
         );
         await turn.invoke(end);
         await turn.charge(usage);

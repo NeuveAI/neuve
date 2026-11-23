@@ -14,6 +14,7 @@ import {
 import type { AgentSpec } from "../src/pi/stages/agent.ts";
 import {
   declarationOf,
+  parseOutput,
   parseToolInput,
   submitShape,
 } from "../src/pi/stages/tools.ts";
@@ -300,6 +301,21 @@ test("a value in the strict form, nulls where a field is absent, reads back and 
       classes: [noPerson],
     }).success,
   ).toBe(false);
+  expect(
+    parseOutput(assess!)({
+      ...(values[0]![1] as object),
+      classes: [
+        {
+          ...noPerson,
+          person: { need: "no", why: "A check covers it.", reason: "extra" },
+        },
+      ],
+    }),
+  ).toMatchObject({
+    success: false,
+    message:
+      'submit_assess classes[0].person accepts only the keys "need", "why" and received unknown key "reason".',
+  });
 });
 
 // Why (round 2f): the answers became classes (Assess) and lists by verdict (Lane review), and the
