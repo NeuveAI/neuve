@@ -49,6 +49,19 @@ test("clients cannot claim a build request ID", () => {
 	}
 });
 
+test("a malformed list of mentioned agents is refused", () => {
+	for (const op of ["say", "ask"]) {
+		for (const agents of [[], [-1], [1.5], ["4"], 4]) {
+			expect(() => parseRequest({ op, author: "claimed", text: "@reviewer hold", agents }, "owner")).toThrow("at agents");
+		}
+	}
+});
+
+test("only say and ask carry mentioned agents", () => {
+	expect(() => parseRequest({ op: "plan-comments-send", author: "claimed", plan: "plan-1", agents: [4] }, "owner"))
+		.toThrow('Unrecognized key: "agents"');
+});
+
 test("the builds event keeps every build state, agent and message in order across JSON", () => {
 	const plan = { id: "plan-1", hash, title: "Retry exports", call: "call-1" };
 	const approved = { by: "owner", at: 100 };
