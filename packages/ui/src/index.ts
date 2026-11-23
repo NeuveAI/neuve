@@ -63,6 +63,12 @@ export { QuestionInput } from "./components/requests/question-input";
 export { NOT_ALLOWED_TO_APPROVE, PlanActionsProvider, type PlanActions, PlanCard } from "./components/requests/plan";
 export { PlanView, type PlanViewProps } from "./components/plan/plan-view";
 export {
+	type PlanCommentActions,
+	type PlanCommentMessageView,
+	type PlanCommentView,
+	type PlanSelection,
+} from "./components/plan/plan-comments";
+export {
 	ReviewActionsProvider,
 	type ReviewActions,
 	ReviewCard,

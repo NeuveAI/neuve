@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import type { Changes, GithubPull, Plan } from "@ace/channel/protocol";
+import type { Changes, GithubPull, Plan, PlanComment } from "@ace/channel/protocol";
 import type { ChannelInfo } from "@ace/host/protocol";
 
 import type { Item } from "./transcript";
@@ -36,6 +36,11 @@ export type Details = {
 	diff?: (file?: string) => void;
 	/** The shown chat's plans, oldest first, once its transcript has loaded. */
 	plans?: { chat: number; list: Plan[] };
+	/**
+	 * The comments on the shown chat's plans, oldest first, once its transcript has loaded, and every
+	 * submission that sent some of them, as the channel's events showed it.
+	 */
+	planComments?: { chat: number; list: PlanComment[]; sends?: number[] };
 	/** Shows the chat's Plan tab, opening one beside the chat when none is open, at plan `id`. */
 	plan?: (id?: string) => void;
 	/** A file the chat's Diff should show once its changes list it; `null` once shown. */

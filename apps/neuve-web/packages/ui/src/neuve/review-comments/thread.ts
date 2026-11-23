@@ -20,14 +20,10 @@
  * review cycle.
  */
 
-export type ThreadState =
-  | "queued"
-  | "sent"
-  | "picked-up"
-  | "working"
-  | "replied"
-  | "needs-input"
-  | "failed"
+import type { CommentThreadState } from "@neuve/review-rules/comment-thread"
+
+/** The shared states, and the desk's own: an agent waiting on a permission answer. */
+export type ThreadState = CommentThreadState | "needs-input"
 
 export type ThreadAuthor =
   | { kind: "human"; id: string; name: string; initials: string }
@@ -237,15 +233,3 @@ export type ThreadEventSource = ThreadSubscription &
         send?: (command: ThreadCommand) => void | Promise<ReviewThread>
       }
   )
-
-/** "now", "4 min", "2 h", "Oct 2". */
-export function relativeTime(iso: string, now: Date = new Date()): string {
-  const at = new Date(iso)
-  const minutes = Math.round((now.getTime() - at.getTime()) / 60000)
-  if (Number.isNaN(minutes)) return iso
-  if (minutes < 1) return "now"
-  if (minutes < 60) return `${minutes} min`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours} h`
-  return at.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-}

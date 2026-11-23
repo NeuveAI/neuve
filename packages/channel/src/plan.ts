@@ -1,10 +1,10 @@
 import type { Context } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
-import { defineDoc, defineExtension, defineTool, LiveDoc, type ConversationId, type Harness } from "@earendil-works/pi-durable";
+import { defineDoc, defineExtension, defineTool, LiveDoc, type ConversationId, type EntryId, type Harness, type SubmissionId } from "@earendil-works/pi-durable";
 import type { Admission } from "./extensions";
 import type { Log } from "./log";
 import type { IsPlanning } from "./plan-mode";
-import { PLAN_TOOL, type Plan } from "./protocol";
+import { PLAN_TOOL, type Plan, type PlanComment } from "./protocol";
 
 declare const crypto: {
 	randomUUID(): string;
@@ -19,8 +19,23 @@ declare const TextDecoder: new (encoding: string, options: { ignoreBOM: boolean 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
-type StoredPlan = { plan: Plan; file: string; text: string };
-export type PlansState = { chats: Record<string, StoredPlan[]> };
+export type StoredPlan = { plan: Plan; file: string; text: string; versions?: Record<string, string> };
+export type StoredPlanComment = Omit<PlanComment, "placement"> & { latestSend?: SubmissionId };
+type KeptPlanReplies = { ids: string[]; reason: string };
+export type PlanCommentReceipt = { submission: SubmissionId; entry?: EntryId; comments: string[]; keptReplies?: KeptPlanReplies };
+export type PlanCommentBatch = {
+	requestId: string;
+	at: number;
+	items: { comment: string; reply?: string }[];
+	keptReplies?: KeptPlanReplies;
+	receipt?: PlanCommentReceipt;
+	settled?: true;
+};
+export type PlansState = {
+	chats: Record<string, StoredPlan[]>;
+	comments?: Record<string, StoredPlanComment[]>;
+	sends?: Record<string, Record<string, PlanCommentBatch>>;
+};
 
 export const PlansDoc = defineDoc<PlansState>({
 	kind: "neuve.plans",
@@ -39,10 +54,23 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 	return Array.from(hash, byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function find(plans: readonly StoredPlan[] | undefined, id: string): StoredPlan {
+export function findPlan(plans: readonly StoredPlan[] | undefined, id: string): StoredPlan {
 	const found = plans?.find(({ plan }) => plan.id === id);
 	if (!found) throw new Error("Unknown plan in this chat.");
 	return found;
+}
+
+export function unreplacedPlan(plans: readonly StoredPlan[] | undefined, id: string): StoredPlan {
+	const record = findPlan(plans, id);
+	if (record.plan.state === "replaced") throw new Error("A later plan has already replaced this plan.");
+	return record;
+}
+
+export async function checkedPlanText(hash: string, text: string | undefined): Promise<string> {
+	if (text === undefined || await sha256(encoder.encode(text)) !== hash) {
+		throw new Error("The saved plan does not match its committed hash.");
+	}
+	return text;
 }
 
 export class Plans {
@@ -57,15 +85,21 @@ export class Plans {
 
 	async read(harness: Harness, chat: ConversationId, id: string, context: Context) {
 		const doc = await harness.snapshot(PlansDoc, context);
-		const record = find(doc?.chats[chat], id);
+		const record = findPlan(doc?.chats[chat], id);
 		return { hash: record.plan.hash, text: decoder.decode(await this.bytes(record)) };
+	}
+
+	async readForComment(harness: Harness, chat: ConversationId, id: string, hash: string, context: Context) {
+		const doc = await harness.snapshot(PlansDoc, context);
+		const record = unreplacedPlan(doc?.chats[chat], id);
+		if (record.plan.hash !== hash) throw new Error("The plan has changed. Read the current version before commenting.");
+		return decoder.decode(await this.bytes(record));
 	}
 
 	async approve(harness: Harness, chat: ConversationId, id: string, hash: string, author: string, context: Context) {
 		// The chat's admission queue covers the file read and the approval commit.
 		const doc = await harness.snapshot(PlansDoc, context);
-		const record = find(doc?.chats[chat], id);
-		if (record.plan.state === "replaced") throw new Error("A later plan has already replaced this plan.");
+		const record = unreplacedPlan(doc?.chats[chat], id);
 		await this.bytes(record);
 		if (record.plan.hash !== hash) {
 			throw new Error("The plan has changed. Read the current version before approving it.");
@@ -114,10 +148,19 @@ export class Plans {
 						};
 						const record = { plan, file, text: markdown };
 						await api.commit(async tx => {
-							const { chats } = await tx.doc(PlansDoc);
+							const { chats, comments } = await tx.doc(PlansDoc);
 							const plans = chats[chat];
 							if (!plans) chats[chat] = [record];
-							else if (draft) plans[plans.length - 1] = record;
+							else if (draft) {
+								const versions = { ...draft.versions };
+								const priorHash = draft.plan.hash;
+								if (priorHash !== hash && comments?.[chat]?.some(comment =>
+									comment.plan === plan.id && comment.anchor.hash === priorHash)) {
+									versions[priorHash] = draft.text;
+								}
+								delete versions[hash];
+								plans[plans.length - 1] = Object.keys(versions).length ? { ...record, versions } : record;
+							}
 							else plans.push(record);
 						}, context);
 						await files.read(file, hash, bytes);

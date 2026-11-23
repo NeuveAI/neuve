@@ -1,17 +1,22 @@
 // Dev-only page (plan.html, served by `vite` but not built): the plan's card in Ace's real timeline
 // and the Plan tab's view, from fixtures, in every state. `?scene=cards`, `?scene=tab`, `?scene=live`
-// (approving moves the card and the tab to Approved) or `?scene=layout` (the channel's real tab
-// layout, where writing a plan opens its tab); `?theme=dark` for the dark theme.
+// (approving moves the card and the tab to Approved), `?scene=layout` (the channel's real tab
+// layout, where writing a plan opens its tab), `?scene=comments` (each state of a comment on the
+// plan) or `?scene=commenting` (select, comment, reply, send and a revision, against a stand-in for
+// the channel; a comment with "stale" in it is refused; `&text=rich` comments on every kind of
+// block); `?theme=dark` for the dark theme.
 import { createRoot } from "react-dom/client";
 import { useRef, useState } from "react";
 
-import type { Plan } from "@ace/channel/protocol";
+import type { Plan, PlanComment } from "@ace/channel/protocol";
+import { fileLines, fileLinesSection, placeFileLinesAnchor } from "@neuve/review-rules/file-lines-anchor";
 import { Main, PlanActionsProvider, PlanView, type PlanViewProps, Layout as Shell, Timeline, TooltipProvider } from "@ace/ui";
 
 import "./styles.css";
 
 import { CHAT, Layout } from "./layout/layout";
 import { planCards, planView } from "./plan-card";
+import { planCommentViews } from "./plan-comments";
 import { withCards } from "./review-card";
 import { toEvents } from "./timeline";
 import type { Item } from "./transcript";
@@ -242,6 +247,209 @@ function Live() {
 	);
 }
 
+
+// Comments on the plan. A stand-in for the channel keeps them as the contract says: anchored to the
+// version they were made on and placed on the current one by the shared rule.
+
+const REVISED = TEXT
+	.replace("up to three times", "up to five times")
+	.replace("- The failure reason on the export row", "- The failure reason on the export row and in its log")
+	.replace("retries three times", "retries five times")
+	.replace("- Each attempt is logged with its reason", "- Each attempt is logged with its reason and time");
+const VERSIONS: Record<string, string> = { [plan().hash]: TEXT, ["5d".repeat(32)]: REVISED };
+const VIVIENNE = "vivienne@example.com";
+const PEOPLE: Record<string, string> = { [USER]: "Vinicius", [VIVIENNE]: "Vivienne" };
+
+let ids = 0;
+function comment(
+	text: string,
+	first: number,
+	last: number,
+	quote: string,
+	patch: Partial<PlanComment> = {},
+): PlanComment {
+	let hash = plan().hash;
+	let anchor = { hash, lines: fileLines(TEXT).slice(first - 1, last), quote, section: fileLinesSection(TEXT, first) };
+	return {
+		id: `c${++ids}`,
+		plan: "p1",
+		author: USER,
+		at: T,
+		text,
+		anchor,
+		placement: { kind: "stays", hash, lines: anchor.lines },
+		replies: [],
+		...patch,
+	};
+}
+
+/** Places each comment on the version `hash`, as the channel does when the plan changes. */
+function revise(comments: PlanComment[], hash: string): PlanComment[] {
+	return comments.map((value) => ({
+		...value,
+		placement: placeFileLinesAnchor(value.anchor, VERSIONS[value.anchor.hash]!, { hash, text: VERSIONS[hash]! }),
+	}));
+}
+
+const SENT = { at: T + 60_000, submission: 3, entry: 7 };
+const ADMITTED = { at: T + 60_000, submission: 3 };
+const ANSWER = (text: string) => ({ kind: "agent" as const, id: `a${++ids}`, model: "claude", at: T + 120_000, text });
+const GOAL = (patch: Partial<PlanComment> = {}) =>
+	comment("Five. Three is too few for the nightly batch.", 5, 5, "up to three times", patch);
+const SCOPE = (patch: Partial<PlanComment> = {}) =>
+	comment("Why not? Last week's are still failing.", 15, 15, "Exports that failed before this change", patch);
+const DONE = (patch: Partial<PlanComment> = {}) =>
+	comment("Both of these change if the count changes.", 19, 20, "retries three times, then stops", patch);
+const ROW = (patch: Partial<PlanComment> = {}) =>
+	comment("Should the reason show on the export row only?", 10, 10, "export row", patch);
+
+const COMMENT_STATES: { label: string; comments: PlanComment[]; state?: Plan["state"]; hash?: string }[] = [
+	{ label: "Kept, not sent", comments: [GOAL(), SCOPE()] },
+	{ label: "Queued", comments: [GOAL({ sent: ADMITTED, state: "queued" })] },
+	{ label: "Sent", comments: [GOAL({ sent: SENT, state: "sent" })] },
+	{ label: "Picked up", comments: [GOAL({ sent: SENT, state: "picked-up" })] },
+	{
+		label: "Answered, with a reply kept",
+		comments: [
+			SCOPE({
+				sent: SENT,
+				state: "replied",
+				replies: [
+					ANSWER("They failed on a schema that no longer exists; a retry would fail the same way. I left this out and noted why."),
+					{ kind: "person", id: "r1", author: USER, at: T + 180_000, text: "Then say so in the plan." },
+				],
+			}),
+		],
+	},
+	{ label: "Not delivered", comments: [GOAL({ state: "failed", failure: "Stopped before the agent read it" })] },
+	{ label: "Someone else's comment", comments: [SCOPE({ author: VIVIENNE })] },
+	{
+		label: "Changed, stays and ambiguous after a revision",
+		hash: "5d".repeat(32),
+		comments: revise([GOAL({ sent: SENT, state: "replied", replies: [ANSWER("Five it is; the plan says so now.")] }), SCOPE({ sent: SENT, state: "picked-up" }), ROW({ sent: SENT, state: "picked-up" }), DONE({ sent: SENT, state: "picked-up" })], "5d".repeat(32)),
+	},
+	{ label: "On an approved plan", state: "approved", comments: [SCOPE({ sent: SENT, state: "sent" })] },
+];
+
+const commentViews = (comments: PlanComment[]) =>
+	planCommentViews(comments, "p1", USER, (author) => PEOPLE[author] ?? author);
+
+const noop = async () => {};
+
+function commentActions(comments: PlanComment[]) {
+	return { list: commentViews(comments), agent: "Neuve", keep: noop, reply: noop, edit: noop, remove: noop };
+}
+
+function CommentStates() {
+	return (
+		<div className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(600px, 1fr))" }}>
+			{COMMENT_STATES.map((item) => {
+				let state = item.state ?? "draft";
+				return (
+					<Frame key={item.label} label={item.label} height={620}>
+						<PlanView
+							plan={view(plan({ state, ...(state === "approved" ? { approved: APPROVED } : {}) }))}
+							text={item.hash ? VERSIONS[item.hash] : TEXT}
+							approve={state === "draft" ? { onApprove: () => {}, approving: false } : undefined}
+							comments={commentActions(item.comments)}
+							send={{ onSend: () => {}, sending: false }}
+						/>
+					</Frame>
+				);
+			})}
+		</div>
+	);
+}
+
+/** Comments against a stand-in channel: keep, reply, edit, remove, send, then a revision. */
+function Commenting() {
+	let rich = new URLSearchParams(location.search).get("text") === "rich";
+	let [hash, setHash] = useState(plan().hash);
+	let [comments, setComments] = useState<PlanComment[]>([]);
+	let [sending, setSending] = useState(false);
+	let change = (id: string, patch: (value: PlanComment) => PlanComment) =>
+		setComments((list) => list.map((value) => value.id === id ? patch(value) : value));
+	let send = () => {
+		setSending(true);
+		let carried = comments.filter((value) => !value.sent || value.replies.some((reply) => reply.kind === "person" && !reply.sent)).map((value) => value.id);
+		setTimeout(() => {
+			setSending(false);
+			setComments((list) =>
+				list.map((value) =>
+					carried.includes(value.id)
+						? {
+							...value,
+							sent: value.sent ?? ADMITTED,
+							state: "queued",
+							replies: value.replies.map((reply) => reply.kind === "person" ? { ...reply, sent: reply.sent ?? ADMITTED } : reply),
+						}
+						: value
+				)
+			);
+		}, 400);
+		// The chat was busy: the message waits as a submission, then is placed and taken up.
+		setTimeout(() => setComments((list) => list.map((value) => carried.includes(value.id) ? { ...value, sent: SENT, state: "sent" } : value)), 1000);
+		setTimeout(() => setComments((list) => list.map((value) => carried.includes(value.id) ? { ...value, state: "picked-up" } : value)), 1800);
+		setTimeout(() =>
+			setComments((list) =>
+				list.map((value, index) =>
+					carried.includes(value.id) && index === 0
+						? { ...value, state: "replied", replies: [...value.replies, ANSWER("Noted. I'll change the plan to say so.")] }
+						: value
+				)
+			), 3000);
+	};
+	return (
+		<div className="flex flex-col gap-3">
+			<div className="flex gap-2">
+				<button
+					type="button"
+					data-testid="revise"
+					className="rounded-md border border-border px-2 py-1 text-xs"
+					onClick={() => {
+						let next = "5d".repeat(32);
+						setHash(next);
+						setComments((list) => revise(list, next));
+					}}
+				>
+					Agent revises the plan
+				</button>
+			</div>
+			<Frame label="Plan tab" height={640}>
+				<PlanView
+					plan={view(plan({ hash }))}
+					text={rich ? RICH : VERSIONS[hash]}
+					approve={{ onApprove: () => {}, approving: false }}
+					comments={{
+						list: commentViews(comments),
+						agent: "Neuve",
+						keep: hash === plan().hash
+							? async (selection, text) => {
+								await new Promise((resolve) => setTimeout(resolve, 150));
+								// Stands in for a refusal from the channel.
+								if (text.includes("stale")) throw new Error("The plan has changed. Read the current version before commenting.");
+								let { lines, quote } = selection;
+								setComments((list) => [...list, comment(text, lines[0]!.line, lines.at(-1)!.line, quote)]);
+							}
+							: undefined,
+						reply: async (id, text) =>
+							change(id, (value) => ({ ...value, replies: [...value.replies, { kind: "person", id: `r${++ids}`, author: USER, at: Date.now(), text }] })),
+						edit: async (id, reply, text) =>
+							change(id, (value) => reply
+								? { ...value, replies: value.replies.map((item) => item.id === reply ? { ...item, text } : item) }
+								: { ...value, text }),
+						remove: async (id, reply) =>
+							reply
+								? change(id, (value) => ({ ...value, replies: value.replies.filter((item) => item.id !== reply) }))
+								: setComments((list) => list.filter((value) => value.id !== id)),
+					}}
+					send={{ onSend: send, sending }}
+				/>
+			</Frame>
+		</div>
+	);
+}
+
 const LAYOUT = "plan-harness";
 
 /** The real tab layout: writing a plan opens the Plan tab beside the chat, once per plan. */
@@ -304,6 +512,10 @@ function Harness() {
 		<main className="h-full overflow-auto bg-muted/40 p-6 text-foreground">
 			{scene === "live"
 				? <Live />
+				: scene === "comments"
+				? <CommentStates />
+				: scene === "commenting"
+				? <Commenting />
 				: scene === "tab"
 				? (
 					<div className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(600px, 1fr))" }}>

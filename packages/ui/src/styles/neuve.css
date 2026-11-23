@@ -535,3 +535,33 @@
 		}
 	}
 }
+
+/* Comments on the plan, marked with the CSS highlight API so the plan's own markup stays as it is:
+   a comment's passage underlined in gold, what a revision put in its place tinted, the passage
+   being commented tinted as the review desk tints a landed line. */
+::highlight(plan-comment) {
+	text-decoration: underline 2px var(--nv-accent);
+	text-underline-offset: 4px;
+}
+
+::highlight(plan-added) {
+	background-color: color-mix(in oklab, var(--success) 16%, transparent);
+}
+
+::highlight(plan-selected) {
+	background-color: var(--nv-land);
+}
+
+/* Where the highlight API is missing, the whole block of a comment's passage is marked. */
+[data-plan-mark~="plan-comment"] {
+	text-decoration: underline 2px var(--nv-accent);
+	text-underline-offset: 4px;
+}
+
+[data-plan-mark~="plan-added"] {
+	background-color: color-mix(in oklab, var(--success) 16%, transparent);
+}
+
+[data-plan-mark~="plan-selected"] {
+	background-color: var(--nv-land);
+}

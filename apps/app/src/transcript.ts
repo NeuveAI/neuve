@@ -4,6 +4,7 @@ import type {
 	ChatMode,
 	Image,
 	Plan,
+	PlanComment,
 	ReviewNotice,
 	QueuedMessage,
 	Reactions,
@@ -100,6 +101,10 @@ export type Transcript = {
 	reviews: Record<string, ReviewCard>;
 	/** The chat's plans, oldest first, as the host last sent them. */
 	plans: Plan[];
+	/** The comments on the chat's plans, oldest first, as the host last sent them. */
+	planComments: PlanComment[];
+	/** Every submission that sent plan comments, seen while watched. */
+	commentSends: number[];
 	/** When each person last said they were typing, in ms; their message ends it. */
 	typing: Record<string, number>;
 	/** Text streamed for the reply being generated. */
@@ -121,6 +126,8 @@ const EMPTY: Transcript = {
 	reactions: {},
 	reviews: {},
 	plans: [],
+	planComments: [],
+	commentSends: [],
 	typing: {},
 	draft: "",
 	busy: false,
@@ -134,16 +141,27 @@ export function apply(state: Transcript, event: Event): Transcript {
 			return { ...state, reviews: event.cards };
 		case "plans":
 			return { ...state, plans: event.plans };
+		case "plan-comments": {
+			const sends = new Set(state.commentSends);
+			for (const comment of event.comments) {
+				for (const { sent } of [comment, ...comment.replies.filter((reply) => reply.kind === "person")]) {
+					if (sent) sends.add(sent.submission);
+				}
+			}
+			return { ...state, planComments: event.comments, commentSends: [...sends] };
+		}
 		case "neuve:review:new-commits":
 			return { ...state, items: [...state.items, reviewCommits(event)] };
 		case "queue": {
-			if (!event.withdrawn) return { ...state, queue: event.messages };
-			const returned = [...state.returned, ...event.withdrawn];
+			// A withdrawn send of plan comments leaves its words kept in the Plan tab, not in the composer.
+			const taken = event.withdrawn?.filter((message) => !state.commentSends.includes(message.submission));
+			if (!taken?.length) return { ...state, queue: event.messages };
+			const returned = [...state.returned, ...taken];
 			if (state.busy) {
-				const withdrawn = [...state.withdrawn, ...event.withdrawn];
+				const withdrawn = [...state.withdrawn, ...taken];
 				return { ...state, queue: event.messages, returned, withdrawn };
 			}
-			const items = withdraw(state.items, event.withdrawn);
+			const items = withdraw(state.items, taken);
 			return { ...state, queue: event.messages, returned, items };
 		}
 		case "message": {
@@ -450,6 +468,7 @@ export function useTranscript(
 				agent: true,
 				stops: true,
 				plans: true,
+				planComments: true,
 				...(chat === undefined ? {} : { chat }),
 			}, {
 				event(event) {

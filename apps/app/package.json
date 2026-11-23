@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsgo --noEmit",
-    "test": "bun ../../scripts/test-budget.ts ./tests"
+    "test": "bun ../../scripts/test-budget.ts --isolate ./tests"
   },
   "dependencies": {
     "@ace/split-tabs": "workspace:*",
@@ -22,6 +22,7 @@
     "@ace/channel": "workspace:*",
     "@ace/host": "workspace:*",
     "@ace/desktop": "workspace:*",
+    "@neuve/review-rules": "workspace:*",
     "@neuve/runtime": "workspace:*"
   },
   "devDependencies": {
@@ -30,6 +31,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.1.4",
     "@webgpu/types": "0.1.69",
+    "jsdom": "26.1.0",
     "tailwindcss": "4.3.0",
     "vite": "7.3.7",
     "@typescript/native-preview": "7.0.0-dev.20260304.1"

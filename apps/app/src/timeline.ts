@@ -160,6 +160,18 @@ function tool(
  * Channel transcript items in the shape the original timeline renders. The streamed draft joins
  * the timeline as the newest agent message so it is laid out and scrolled like the rest.
  */
+/**
+ * A message's text as the timeline draws it. A send of plan comments quotes the plan, and the
+ * channel names no one in it, so no `@name` in it is drawn as a mention.
+ */
+export function withMention(item: { entry?: number; invoked: boolean; text: string }, quoting: ReadonlySet<number>) {
+	let text = item.entry !== undefined && quoting.has(item.entry)
+		// A word joiner after the @ keeps the words as written and makes them no mention token.
+		? item.text.replace(/(^|[\s([{])@(?=[\w-])/gm, "$1@\u2060")
+		: item.text;
+	return item.invoked ? withAgentMention(text) : text;
+}
+
 export function toEvents(
 	items: Item[],
 	topic: string,
@@ -172,6 +184,7 @@ export function toEvents(
 	reactions: Reactions,
 	by: (asker: string) => string | undefined,
 	reviews: ReviewCards,
+	quoting: ReadonlySet<number> = new Set(),
 ): Event[] {
 	// A run answers the newest message that invoked it, as the channel's run end reports.
 	let asker: string | undefined;
@@ -224,7 +237,7 @@ export function toEvents(
 				},
 				...(item.edited && !item.deleted ? { last_updated: Math.floor(item.edited / 1000) } : {}),
 				content: item.deleted ? [text("Message deleted")] : [
-					text(item.invoked ? withAgentMention(item.text) : item.text),
+					text(withMention(item, quoting)),
 					...(item.images || []).map((image) => ({
 						type: "image" as const,
 						image: `data:${image.mimeType};base64,${image.data}`,
