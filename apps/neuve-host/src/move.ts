@@ -309,7 +309,7 @@ async function toCompute(
 async function toLocal(auth: Auth, record: catalog.Listing): Promise<void> {
 	const { id } = record;
 	const url = record.hosted!;
-	const { storage, plans } = catalog.paths(id);
+	const { storage } = catalog.paths(id);
 	const incoming = `${storage}.incoming`;
 	catalog.write({ ...record, moving: { to: "local" } });
 	// A refused or unanswered freeze may still have frozen the service; thawing an active one is refused.
@@ -329,8 +329,6 @@ async function toLocal(auth: Auth, record: catalog.Listing): Promise<void> {
 		}
 		// The parked copy's journal belongs to older history; it must not replay over the new store.
 		for (const path of [`${storage}-wal`, `${storage}-shm`]) rmSync(path, { force: true });
-		// The imported session contains the Markdown for the incoming plan versions.
-		rmSync(plans, { recursive: true, force: true });
 		renameSync(incoming, storage);
 	} catch (error) {
 		if (freezing) await thaw(auth, url, id);

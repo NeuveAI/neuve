@@ -50,13 +50,15 @@ export class Plans {
 
 	private async bytes({ plan, file, text }: StoredPlan): Promise<Uint8Array> {
 		const saved = encoder.encode(text);
-		return this.files ? this.files.read(file, plan.hash, saved) : saved;
+		const bytes = this.files ? await this.files.read(file, plan.hash, saved) : saved;
+		if (await sha256(bytes) !== plan.hash) throw new Error("The saved plan does not match its committed hash.");
+		return bytes;
 	}
 
 	async read(harness: Harness, chat: ConversationId, id: string, context: Context) {
 		const doc = await harness.snapshot(PlansDoc, context);
-		const bytes = await this.bytes(find(doc?.chats[chat], id));
-		return { hash: await sha256(bytes), text: decoder.decode(bytes) };
+		const record = find(doc?.chats[chat], id);
+		return { hash: record.plan.hash, text: decoder.decode(await this.bytes(record)) };
 	}
 
 	async approve(harness: Harness, chat: ConversationId, id: string, hash: string, author: string, context: Context) {
@@ -64,15 +66,12 @@ export class Plans {
 		const doc = await harness.snapshot(PlansDoc, context);
 		const record = find(doc?.chats[chat], id);
 		if (record.plan.state === "replaced") throw new Error("A later plan has already replaced this plan.");
-		const current = await sha256(await this.bytes(record));
-		if (current !== hash) {
+		await this.bytes(record);
+		if (record.plan.hash !== hash) {
 			throw new Error("The plan has changed. Read the current version before approving it.");
 		}
-		if (current !== record.plan.hash) {
-			throw new Error("The plan file differs from the saved version. Ask the agent to write a draft.");
-		}
 		if (record.plan.state === "approved") return record.plan;
-		const approved: Plan = { ...record.plan, hash: current, state: "approved", approved: { by: author, at: Date.now() } };
+		const approved: Plan = { ...record.plan, state: "approved", approved: { by: author, at: Date.now() } };
 		await harness.commit(async tx => {
 			for (const stored of (await tx.doc(PlansDoc)).chats[chat] ?? []) {
 				if (stored.plan.id === id) stored.plan = approved;

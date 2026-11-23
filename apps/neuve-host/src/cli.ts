@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 import { EffortSchema } from "@ace/channel/parse";
-import type { ChannelInfo, ChatId, Event, ModelRef, Plan, Request } from "@ace/channel/protocol";
+import type { ChannelInfo, ChatId, Event, ModelRef, Request } from "@ace/channel/protocol";
 
 import { appUrl, token } from "./auth";
 import { backup, restore } from "./backup";
@@ -76,7 +76,6 @@ const USAGE = `ace — channels on this host
   ace watch <channel> [--chat <id>] [--plans]
   ace answer <channel> [--chat <id>] <text…>     answer the chat's waiting question in writing
   ace plan <channel> [--chat <id>] <plan> [--json]
-  ace plan-approve <channel> [--chat <id>] <plan> <hash>
   ace chat <channel> [--model <provider/id>]     open another chat
   ace stop <channel> [--chat <id>]               stop the chat's current run
   ace kill <channel>                             stop all work in the channel now
@@ -107,7 +106,7 @@ const USAGE = `ace — channels on this host
                                                 delete asks first while a run is in progress
   ace --version
 
-info, say, ask, answer, plan, plan-approve, watch, chat and stop also take a teammate's channel, by name or ID, through this
+info, say, ask, answer, plan, watch, chat and stop also take a teammate's channel, by name or ID, through this
 host's running gateway (open Neuve or run ace serve). Their host decides who may invoke its agents.
 
 Models are provider/id, such as openai/gpt-6-astra or anthropic/claude-opus-5-5.
@@ -296,7 +295,7 @@ async function roster(): Promise<Member[]> {
 /** What a teammate can do in a channel from the app; everything else acts on this host's own. */
 const SWITCH = new Set(["on", "off"]);
 
-const participant = new Set(["info", "say", "ask", "answer", "plan", "plan-approve", "watch", "chat", "stop"]);
+const participant = new Set(["info", "say", "ask", "answer", "plan", "watch", "chat", "stop"]);
 
 /** What only a channel's owner can do, phrased for refusing a teammate's channel. */
 /** A project by its folder on this host, by GitHub owner/name, or by the name it was opened as. */
@@ -735,12 +734,6 @@ async function main() {
 					console.error(`SHA-256 ${value.hash}`);
 					process.stdout.write(value.text);
 					return;
-				}
-				case "plan-approve": {
-					const [plan, hash] = rest;
-					if (!plan || !hash || rest.length !== 2) throw new Error("Give the plan and the hash shown by ace plan.");
-					const value = await session.request<Plan>({ op: "plan-approve", chat: chat(), author: catalog.user, plan, hash });
-					return console.log(value.title ? `Approved ${value.title}.` : "Approved the plan.");
 				}
 				case "watch":
 					return await (await watch(session)).ended;
