@@ -71,8 +71,8 @@ async function results(channel: Channel, chat?: number) {
 	return collected;
 }
 
-async function writeSkill(folder: string, description: string) {
-	const skill = `---\nname: neuve\ndescription: ${description}\n---\n\n# Neuve\n`;
+async function writeSkill(folder: string, description: string, name = "neuve") {
+	const skill = `---\nname: ${name}\ndescription: ${description}\n---\n\n# Neuve\n`;
 	const reference = "# Reading a Neuve review\n";
 	await mkdir(join(folder, "references"), { recursive: true });
 	await writeFile(join(folder, "SKILL.md"), skill);
@@ -153,6 +153,88 @@ test.each([
 			} finally {
 				await channel.close();
 			}
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+// The repository entry and the omission notice must fit even with a large user skill set.
+test("Ace bounds the skill list and keeps repository skills first", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve skill budget ")));
+	try {
+		const repo = join(root, "checkout");
+		const home = join(root, "home");
+		const userCodex = join(home, ".agents", "skills");
+		const userClaude = join(home, ".claude", "skills");
+		const description = "d".repeat(1_536);
+		await writeSkill(join(repo, ".agents", "skills", "neuve"), `${description} clipped`);
+		await writeSkill(join(userCodex, "codex-skill"), "Codex skill", "codex-skill");
+		for (let i = 0; i < 8; i++) {
+			const name = `user-${i}`;
+			await writeSkill(join(userClaude, name), "u".repeat(1_200), name);
+		}
+		const { fake, models } = faux();
+		const channel = await open(repo, models, home);
+		try {
+			let listing = "";
+			fake.appendResponses([received => {
+				listing = getCurrentSystemPrompt(received.messages).match(/Skills in this repository[^\n]*\n[\s\S]*?(?=\n<\/project-instructions>)/)?.[0] ?? "";
+				return fauxAssistantMessage("Read complete");
+			}]);
+			await ask(channel, { mode: "ace" });
+			const [, first, second, ...remaining] = listing.split("\n");
+			expect(first).toBe(`- neuve (.agents/skills/neuve/SKILL.md): ${description}`);
+			expect(second).toBe(`- codex-skill (${userCodex}/codex-skill/SKILL.md): Codex skill`);
+			expect(listing.length).toBeLessThanOrEqual(8_000);
+			const notice = remaining.pop();
+			expect(remaining.every(line => line.startsWith("- user-"))).toBe(true);
+			expect(notice).toBe(`${8 - remaining.length} more skills are in ${userClaude}; list those folders to see them.`);
+		} finally {
+			await channel.close();
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test.each([
+	// A tracked file at the skill root must still use the working-tree read rule.
+	{ layout: "a tracked skill-root README", path: ".agents/skills/README.md", linked: false },
+	// A linked repository skill root must preserve reads and list each skill once.
+	{ layout: "through a linked repository skill root", path: ".claude/skills/neuve/SKILL.md", linked: true },
+])("plan mode reads $layout", async ({ path, linked }) => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve repository skills ")));
+	try {
+		const repo = join(root, "checkout");
+		const home = join(root, "home");
+		await mkdir(repo);
+		git(repo, "init", "-q");
+		const { skill } = await writeSkill(join(repo, ".agents", "skills", "neuve"), "Repository skill");
+		const readme = "# Repository skills\n";
+		if (linked) {
+			await mkdir(join(repo, ".claude"));
+			await symlink("../.agents/skills", join(repo, ".claude", "skills"));
+		} else {
+			await writeFile(join(repo, path), readme);
+		}
+		git(repo, "add", "-f", "--", ".agents", ...(linked ? [".claude"] : []));
+		const { fake, models } = faux();
+		const channel = await open(repo, models, home);
+		try {
+			let listing: string[] = [];
+			fake.appendResponses([
+				received => {
+					listing = getCurrentSystemPrompt(received.messages).match(/^- neuve .*$/gm) ?? [];
+					return fauxAssistantMessage(fauxToolCall("read", { path }, { id: "read" }), { stopReason: "toolUse" });
+				},
+				fauxAssistantMessage("Read complete"),
+			]);
+			await ask(channel, { mode: "plan" });
+			expect((await results(channel)).get("read")).toMatchObject({ error: false, text: linked ? skill : readme });
+			if (linked) expect(listing).toEqual(["- neuve (.agents/skills/neuve/SKILL.md): Repository skill"]);
+		} finally {
+			await channel.close();
 		}
 	} finally {
 		await rm(root, { recursive: true, force: true });

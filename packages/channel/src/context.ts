@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import type { PromptSection } from "@earendil-works/pi-durable";
 import { getOrThrow, type ExecutionEnv, type FileError } from "@earendil-works/pi-durable/env";
@@ -7,6 +7,11 @@ import { getOrThrow, type ExecutionEnv, type FileError } from "@earendil-works/p
 const INSTRUCTIONS = ["AGENTS.md", "CLAUDE.md"];
 const RULES = ".claude/rules";
 const LIMIT = 32_000;
+// Claude Code caps each skill description.
+const SKILL_DESCRIPTION_LIMIT = 1_536;
+// Codex uses this budget when the context window is unknown.
+const SKILL_LIST_LIMIT = 8_000;
+const SKILL_HEADING = "Skills in this repository and the user's skill folders. Read a skill's file before doing work it describes:";
 
 /**
  * Only a missing file means "none". Any other failure, such as an unreachable workspace, throws, so
@@ -50,7 +55,7 @@ function front(text: string): Record<string, string> {
 	return fields;
 }
 
-async function skills(env: ExecutionEnv, context: Context): Promise<string[]> {
+async function skills(env: ExecutionEnv, context: Context): Promise<string | undefined> {
 	const home = getOrThrow(await env.absolutePath("~", context));
 	// Keep these skill roots in step with apps/neuve-host/src/plan-git.ts.
 	const roots = [
@@ -61,8 +66,11 @@ async function skills(env: ExecutionEnv, context: Context): Promise<string[]> {
 	];
 	// User skills win because the user-scope Neuve skill matches the installed command.
 	const seen = new Set<string>();
-	const out: string[] = [];
+	type SkillEntry = { line: string; folder: string };
+	const user: SkillEntry[] = [];
+	const repository: SkillEntry[] = [];
 	for (const dir of roots) {
+		const entries = isAbsolute(dir) ? user : repository;
 		for (const entry of await list(env, dir, context)) {
 			if (entry.kind !== "directory" && entry.kind !== "symlink") continue;
 			// Opening this child also skips symlinks whose targets are missing or are files.
@@ -73,10 +81,30 @@ async function skills(env: ExecutionEnv, context: Context): Promise<string[]> {
 			const name = declaredName || entry.name;
 			if (seen.has(name)) continue;
 			seen.add(name);
-			out.push(`- ${name} (${path})${description ? `: ${description}` : ""}`);
+			const detail = description ? `: ${description.slice(0, SKILL_DESCRIPTION_LIMIT)}` : "";
+			entries.push({ line: `- ${name} (${path})${detail}`, folder: resolve(env.cwd, dir) });
 		}
 	}
-	return out;
+	const entries = [...repository, ...user];
+	const total = entries.length;
+	if (!total) return;
+	let length = entries.reduce((sum, { line }) => sum + line.length + 1, SKILL_HEADING.length);
+	const omitted = new Set<string>();
+	const formatFolders = new Intl.ListFormat("en");
+	let notice = "";
+	while (length + (notice ? notice.length + 1 : 0) > SKILL_LIST_LIMIT) {
+		const removed = entries.pop();
+		if (!removed) {
+			notice = `${total} skills were left out.`;
+			break;
+		}
+		length -= removed.line.length + 1;
+		omitted.add(removed.folder);
+		const count = total - entries.length;
+		const folders = formatFolders.format([...omitted].sort());
+		notice = `${count} more ${count === 1 ? "skill is" : "skills are"} in ${folders}; list those folders to see them.`;
+	}
+	return [SKILL_HEADING, ...entries.map(({ line }) => line), ...(notice ? [notice] : [])].join("\n");
 }
 
 /** Rule files, nested one directory deep, with the paths each applies to. */
@@ -113,13 +141,7 @@ export const instructions: PromptSection = {
 			parts.push(`<file path="${file}">\n${text}\n</file>`);
 		}
 		const found = await skills(env, context);
-		if (found.length) {
-			parts.push(
-				`Skills in this repository and the user's skill folders. Read a skill's file before doing work it describes:\n${
-					found.join("\n")
-				}`,
-			);
-		}
+		if (found) parts.push(found);
 		const applicable = await rules(env, context);
 		if (applicable.length) {
 			parts.push(

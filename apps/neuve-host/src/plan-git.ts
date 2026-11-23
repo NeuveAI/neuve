@@ -145,18 +145,15 @@ async function skillPath(tree: Tree, env: ExecutionEnv, path: string, kind: "fil
 		return { alias, actual: fixed === undefined || fixed === actual ? actual : undefined };
 	}));
 	const requested = resolve(env.cwd, path);
-	const matching = roots.filter(({ alias, actual }) => below(alias, requested) !== undefined
-		|| (actual !== undefined && below(actual, requested) !== undefined));
-	if (!matching.length) return;
-	const refuse = () => error("permission_denied", "Plan mode cannot read outside the allowed skill folders.");
-	if (!matching.some(root => root.actual !== undefined)) return refuse();
-	checkGitMetadata(tree, requested);
+	if (!roots.some(({ alias, actual }) => actual !== undefined
+		&& (below(alias, requested) !== undefined || below(actual, requested) !== undefined))) return;
 	const actual = await realpath(requested);
-	checkGitMetadata(tree, actual);
 	if (!roots.some(root => {
 		const name = root.actual === undefined ? undefined : below(root.actual, actual);
 		return name !== undefined && (kind === "directory" || name.includes(sep));
-	})) return refuse();
+	})) return;
+	checkGitMetadata(tree, requested, below(tree.root, requested) ?? requested);
+	checkGitMetadata(tree, actual, below(tree.root, actual) ?? actual);
 	return actual;
 }
 
