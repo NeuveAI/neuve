@@ -14,14 +14,20 @@ import type { AgentLineView, AgentRole } from "../../types";
 
 type Icon = ComponentType<{ className?: string }>;
 
-/** An agent's state as the details sidebar draws a subagent's, with `waiting` for an open question. */
+/**
+ * A build's agent's state, with `waiting` for an open question. Its run ends `done` after every
+ * exchange, which says nothing of the work, so it is muted.
+ */
 export const AGENT_STATE_ICONS: Record<AgentLineView["state"], [Icon, string]> = {
 	running: [IconLoader, "animate-spin text-muted-foreground motion-reduce:animate-none"],
 	waiting: [IconHand, "text-warning"],
-	done: [IconCircleCheck, "text-success"],
+	done: [IconCircleCheck, "text-muted-foreground"],
 	failed: [IconCircleX, "text-destructive"],
 	stopped: [IconCircleDashed, "text-muted-foreground"],
 };
+
+/** A subagent's `done` is the answer its call returned, so it keeps the success tone. */
+export const SUBAGENT_STATE_ICONS = { ...AGENT_STATE_ICONS, done: [IconCircleCheck, "text-success"] } satisfies typeof AGENT_STATE_ICONS;
 
 export function AgentStateIcon({ state }: { state: AgentLineView["state"] }) {
 	const [Icon, color] = AGENT_STATE_ICONS[state];

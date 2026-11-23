@@ -11,8 +11,8 @@ import { planCardWidth } from "./plan";
 
 /** What the build card's controls do; the app provides them around the timeline. */
 type BuildActions = {
-	/** Shows the channel's work log. */
-	open: () => void;
+	/** Shows the channel's work log, at agent chat `chat` when one is given. */
+	open: (chat?: number) => void;
 	/** Stops every agent of the build as the person; the app reports a failure. */
 	stop: (build: string) => Promise<void>;
 	/** Whether this person may stop the channel's agents. */
@@ -111,7 +111,11 @@ export function BuildCard({ view, width }: { view: BuildCardView; width: number 
 								Stop all
 							</Button>
 						)}
-						<Button size="sm" variant="outline" onClick={() => actions?.open()}>
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => actions?.open(view.agents.find((agent) => agent.state === "waiting")?.chat)}
+						>
 							Open work log
 						</Button>
 					</RequestCardFooter>

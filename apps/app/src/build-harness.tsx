@@ -75,8 +75,8 @@ const build = (patch: Partial<Build> = {}): Build => ({
 const CARDS: { label: string; build: Build }[] = [
 	{ label: "One agent", build: build() },
 	{
-		label: "Two agents, one waiting on the person",
-		build: build({ agents: [{ ...IMPLEMENTER, state: "waiting", caption: "Asking which id to keep" }, REVIEWER] }),
+		label: "Waiting on the person, running and ended",
+		build: build({ agents: [{ ...IMPLEMENTER, state: "waiting", caption: "Asking which id to keep" }, REVIEWER, SECOND] }),
 	},
 	{ label: "Four agents", build: build({ agents: [IMPLEMENTER, SCHEDULER, REVIEWER, SECOND] }) },
 	{
@@ -136,7 +136,7 @@ function items(): Item[] {
 	];
 }
 
-function Chat({ builds, onOpen = () => {} }: { builds: Build[]; onOpen?: () => void }) {
+function Chat({ builds, onOpen = () => {} }: { builds: Build[]; onOpen?: (chat?: number) => void }) {
 	let list = items();
 	let events = withCards(
 		toEvents(list, "harness", false, { text: "" }, {}, new Map(), {}, {}, {}, () => undefined, {}),
@@ -303,7 +303,8 @@ function Tabs() {
 					type="button"
 					data-testid="start"
 					className="rounded-md border border-border px-2 py-1 text-xs"
-					onClick={() => setBuilds([build({ agents: builds.length ? [IMPLEMENTER, REVIEWER] : [IMPLEMENTER] })])}
+					onClick={() =>
+						setBuilds([build({ agents: builds.length ? [IMPLEMENTER, { ...REVIEWER, state: "waiting" }] : [IMPLEMENTER] })])}
 				>
 					Start an agent
 				</button>
@@ -326,7 +327,7 @@ function Tabs() {
 					workOpener={opener}
 					render={(data, uid, _, update) => {
 						if (uid === CHAT) {
-							return <Chat builds={builds} onOpen={() => opener.current?.()} />;
+							return <Chat builds={builds} onOpen={(chat) => opener.current?.(chat)} />;
 						}
 						if (data.type !== "work") return null;
 						return (
@@ -380,7 +381,7 @@ function Harness() {
 								<div className="w-72 p-3">
 									<SessionDetailsView
 										subagents={[{ id: "s1", task: "Read the export worker", model: "haiku", state: "done" }]}
-										workers={[IMPLEMENTER, { ...REVIEWER, state: "waiting" as const }, SCHEDULER].map((agent) => ({
+										workers={[IMPLEMENTER, { ...REVIEWER, state: "waiting" as const }, SECOND].map((agent) => ({
 											id: `build:${agent.chat}`,
 											task: agentName(agent),
 											state: agent.state,

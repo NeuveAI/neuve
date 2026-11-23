@@ -215,7 +215,7 @@ export function Conversation(
 	const buildActions = useMemo(
 		() => ({
 			mayStop: mayAsk,
-			open: () => openWork?.(),
+			open: (chat?: number) => openWork?.(chat),
 			stop: (build: string) =>
 				host.channel(channel.id, { op: "build-stop", author: user, build }).then(
 					() => {},

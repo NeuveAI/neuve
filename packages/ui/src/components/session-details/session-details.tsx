@@ -27,7 +27,7 @@ import { type Check, CHECK_ICONS, checkSummary, sortChecks } from "../checks/che
 import { CreatePrMenu } from "../create-pr-menu";
 import { type GitAction, GitActionButton } from "../git-action";
 import { LoadingSpinner } from "../session-item/session-item-loading";
-import { AGENT_STATE_ICONS } from "../agents/agents";
+import { AGENT_STATE_ICONS, SUBAGENT_STATE_ICONS } from "../agents/agents";
 
 export type DetailsPullState = "open" | "draft" | "closed" | "merged";
 export type DetailsCheck = Check;
@@ -113,12 +113,14 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /** Agents with their state, each opening where its work is read when it can. */
-function Agents({ title, agents }: { title: string; agents?: DetailsSubagent[] }) {
+function Agents(
+	{ title, agents, icons }: { title: string; agents?: DetailsSubagent[]; icons: typeof AGENT_STATE_ICONS },
+) {
 	if (!agents?.length) return null;
 	return (
 		<Section title={title}>
 			{agents.map((agent) => {
-				const [Icon, color] = AGENT_STATE_ICONS[agent.state];
+				const [Icon, color] = icons[agent.state];
 				const Row = agent.open ? "button" : "div";
 				return (
 					<Row
@@ -438,8 +440,8 @@ export function SessionDetailsView(
 				</section>
 			)}
 
-			<Agents title="Subagents" agents={subagents} />
-			<Agents title="Work log" agents={workers} />
+			<Agents title="Subagents" agents={subagents} icons={SUBAGENT_STATE_ICONS} />
+			<Agents title="Agents" agents={workers} icons={AGENT_STATE_ICONS} />
 
 			{shown && shown.length > 0 && (
 				<Section title="Links">
