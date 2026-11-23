@@ -13,7 +13,11 @@ import {
 } from "@neuve/records-core";
 import { budgetDirectory } from "@neuve/records-core/budget-directory";
 import type { QueryRecorded } from "@neuve/records-schema";
-import { requesterAttribution, resolveRequester } from "@neuve/harness/request";
+import {
+  requesterAttribution,
+  resolveRequester,
+  type Requester,
+} from "@neuve/harness/request";
 import { resolveCommit } from "../../../packages/harness/src/git.ts";
 import {
   AGENT_GUIDE,
@@ -187,12 +191,13 @@ export const discoverGraphBinary = async (
     executableDirectory,
     "../../neuve-graph/entire-graph",
   );
-  if (!(await isExecutableFile(sibling))) {
-    throw new Error(
-      `Neuve Graph binary is unavailable at ${installed} or ${sibling}; run bun run install:cli, build it, or set NEUVE_GRAPH_BINARY.`,
-    );
-  }
-  return sibling;
+  if (await isExecutableFile(sibling)) return sibling;
+  const source = resolve(import.meta.dir, "../../neuve-graph/entire-graph");
+  if (!Bun.main.startsWith("/$bunfs/") && (await isExecutableFile(source)))
+    return source;
+  throw new Error(
+    `Neuve Graph binary is unavailable at ${installed} or ${sibling}; run bun run install:cli, build it, or set NEUVE_GRAPH_BINARY.`,
+  );
 };
 
 const diagnostic = (value: GraphDiagnostic): PublicDiagnostic =>
@@ -642,18 +647,35 @@ export const collectPublicQueryResult = (
 export type QuerySourceContext = Readonly<
   {
     request: QueryRequest;
-  } & ({ kind: "unrecorded" } | { kind: "recorded"; eventId: string })
+  } & (
+    | { kind: "unrecorded"; state: { kind: "not_recorded"; reason: string } }
+    | {
+        kind: "recorded";
+        eventId: string;
+        state:
+          | { kind: "cycle_opened" | "cycle_joined"; cycle_id: string }
+          | { kind: "not_joined"; reason: string };
+      }
+  )
 >;
 
 type QueryScopeAnswer = Effect.Success<ReturnType<typeof queryLocalScope>>;
 const localScopeGap = "Retry neuve query to read local scope.";
-type RecordedQuery = {
-  eventId?: string;
-  cycleId?: string;
-  scope?: QueryScopeAnswer;
-  scopeGap?: string;
-  reason?: string;
-};
+type RecordedQuery =
+  | {
+      eventId: string;
+      cycle?: { id: string; opened: boolean };
+      scope?: QueryScopeAnswer;
+      scopeGap?: string;
+      reason?: never;
+    }
+  | {
+      eventId?: never;
+      cycle?: never;
+      scope?: never;
+      scopeGap?: never;
+      reason: string;
+    };
 
 type QueryDiagnostics = {
   location?: StoreLocation;
@@ -686,13 +708,16 @@ const recordQuery = async (
   diagnostics: QueryDiagnostics,
   cycle?: QueryBranch & { onFailure: (error: unknown) => void },
   local?: LocalScopeRead,
+  explicitRequester?: Requester,
 ): Promise<RecordedQuery> => {
   const scopeWriteFailures: RunLogRecord[] = [];
   const result = await Effect.runPromiseExit(
     withStore(request.repository, "write", (location) => {
       diagnostics.location = location;
       return Effect.gen(function* () {
-        const requester = yield* resolveRequester(location, request.repository);
+        const requester =
+          explicitRequester ??
+          (yield* resolveRequester(location, request.repository));
         const { actor, registration } = requesterAttribution(requester);
         const revision =
           payload.revision ??
@@ -700,17 +725,19 @@ const recordQuery = async (
             Effect.orElseSucceed(() => null),
           ));
         if (registration !== undefined) yield* Log.append([registration]);
-        const selectScope =
-          local === undefined
-            ? undefined
-            : (cycleId: string) =>
-                keepLocalScope({ location, cycleId }, local, (path, cause) =>
-                  scopeWriteFailures.push({
-                    type: "query.scope-write-failed",
-                    path,
-                    cause,
-                  }),
-                );
+        let opening: string | undefined;
+        const selectScope = (cycleId: string) => {
+          opening = cycleId;
+          return local === undefined
+            ? Effect.succeed(undefined)
+            : keepLocalScope({ location, cycleId }, local, (path, cause) =>
+                scopeWriteFailures.push({
+                  type: "query.scope-write-failed",
+                  path,
+                  cause,
+                }),
+              );
+        };
         const cycleId =
           revision !== null && cycle !== undefined
             ? yield* openQueryCycle(
@@ -728,7 +755,9 @@ const recordQuery = async (
               )
             : undefined;
         const sessionId =
-          requester._tag === "Actor" ? requester.sessionId : undefined;
+          requester._tag === "Actor" || requester._tag === "Agent"
+            ? requester.sessionId
+            : undefined;
         const eventId = yield* Queries.record({
           actor,
           attribution:
@@ -740,7 +769,11 @@ const recordQuery = async (
         });
         diagnostics.eventId = eventId;
         if (cycleId === undefined) return { eventId };
-        if (local === undefined) return { eventId, cycleId };
+        const recorded = {
+          eventId,
+          cycle: { id: cycleId, opened: cycleId === opening },
+        };
+        if (local === undefined) return recorded;
         const scope = yield* Effect.exit(
           queryLocalScope(request.repository, local, {
             location,
@@ -758,10 +791,9 @@ const recordQuery = async (
             cause: Cause.pretty(scope.cause),
           });
         return scope._tag === "Success"
-          ? { eventId, cycleId, scope: scope.value }
+          ? { ...recorded, scope: scope.value }
           : {
-              eventId,
-              cycleId,
+              ...recorded,
               scopeGap: localScopeGap,
             };
       }).pipe(
@@ -784,19 +816,23 @@ const recordQuery = async (
     cause: Cause.pretty(result.cause),
   });
   const locked = storeLocked(error);
-  const message = locked
-    ? "The Records store is locked. Run neuve query again."
-    : describeFailure(
-        error,
-        logPath === undefined
-          ? "The query was not recorded."
-          : `The query was not recorded. See the run log at ${JSON.stringify(logPath)}.`,
-      );
-  await Bun.write(Bun.stderr, `neuve: ${message}\n`).catch(() => undefined);
+  if (explicitRequester === undefined) {
+    const message = locked
+      ? "The Records store is locked. Run neuve query again."
+      : describeFailure(
+          error,
+          logPath === undefined
+            ? "The query was not recorded."
+            : `The query was not recorded. See the run log at ${JSON.stringify(logPath)}.`,
+        );
+    await Bun.write(Bun.stderr, `neuve: ${message}\n`).catch(() => undefined);
+  }
   return {
     reason: locked
       ? "the Records store is locked"
-      : "the query could not be recorded",
+      : explicitRequester === undefined
+        ? "the query could not be recorded"
+        : describeFailure(error, "the Records write failed"),
   };
 };
 
@@ -852,6 +888,7 @@ export const runQueryGraph = async (
   input: Readonly<{
     emit: (event: PublicQueryEvent) => Promise<void>;
     signal?: AbortSignal;
+    requester?: Requester;
   }>,
 ): Promise<QuerySourceContext> => {
   try {
@@ -942,6 +979,7 @@ export const runQueryGraph = async (
           }
         : undefined,
       local,
+      input.requester,
     );
     if (
       cycleFailure !== undefined &&
@@ -963,7 +1001,11 @@ export const runQueryGraph = async (
           type: "query.local-read-failed",
           ...failure,
         });
-    if (recorded.eventId !== undefined && cycleFailure !== undefined)
+    if (
+      input.requester === undefined &&
+      recorded.eventId !== undefined &&
+      cycleFailure !== undefined
+    )
       await warnQueryCycle(cycleFailure);
   }
   if (complete !== undefined) {
@@ -971,11 +1013,7 @@ export const runQueryGraph = async (
     const mightHaveScope = namedScope || local?.entries.has(AGENT_GUIDE.path);
     let scope = recorded.scope;
     let gap = recorded.scopeGap;
-    if (
-      local !== undefined &&
-      recorded.cycleId === undefined &&
-      mightHaveScope
-    ) {
+    if (local !== undefined && recorded.cycle === undefined && mightHaveScope) {
       const fallback = await Effect.runPromise(
         Effect.exit(
           queryUnheldLocalScope(
@@ -1036,16 +1074,30 @@ export const runQueryGraph = async (
         ...complete,
         sequence,
         scope_gaps: gaps,
-        ...(recorded.cycleId === undefined
+        ...(recorded.cycle === undefined
           ? {}
-          : { cycle_id: recorded.cycleId }),
+          : { cycle_id: recorded.cycle.id }),
       });
     }
   }
-  const { eventId } = recorded;
+  const { eventId, cycle, reason } = recorded;
   return eventId === undefined
-    ? { kind: "unrecorded", request }
-    : { kind: "recorded", request, eventId };
+    ? { kind: "unrecorded", request, state: { kind: "not_recorded", reason } }
+    : {
+        kind: "recorded",
+        request,
+        eventId,
+        state:
+          cycle === undefined
+            ? {
+                kind: "not_joined",
+                reason: cycleFailure ?? "the Graph read did not complete",
+              }
+            : {
+                kind: cycle.opened ? "cycle_opened" : "cycle_joined",
+                cycle_id: cycle.id,
+              },
+      };
 };
 
 /**

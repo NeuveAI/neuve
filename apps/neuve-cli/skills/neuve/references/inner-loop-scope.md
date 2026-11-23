@@ -1,5 +1,7 @@
 # Read code and scope
 
+When your harness provides a scope read, use it in place of the command below.
+
 Before reading the code, run the query with the full base hash. Use the ticket's goal and Done when items as the question. Name the approved plan or other scope file with `neuve query --scope <path>`. Repeat the flag for each file.
 
 ## Worked example

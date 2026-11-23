@@ -49,7 +49,10 @@ import { parseQueryInvocation } from "../src/boundary.ts";
 import type {
   PublicQueryEvent,
   PublicQueryScopeSource,
+  RepositoryPath,
+  Revision,
 } from "../src/domain.ts";
+import { collectPublicQueryResult, runQueryGraph } from "../src/graph-query.ts";
 import { execute as executeRecords, withStore } from "../src/records-cli.ts";
 import { markSetUp } from "./fixtures/set-up.ts";
 
@@ -426,6 +429,125 @@ describe("neuve CLI boundary", () => {
       retention: "raw-capture",
       content: new TextEncoder().encode(question),
     });
+  });
+
+  // A read attributed to an agent must hold the approved plan only on the branch whose cycle it opens.
+  test("records the explicit agent and returns opened, joined and detached read states", async () => {
+    const { root, revision } = await fixtureRepository();
+    const planText = "# Approved plan\nKeep the original export scope.\n";
+    const plan = join(root, "approved-plan.md");
+    await Bun.write(plan, planText);
+    const graph = await fakeGraph();
+    const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+    process.env.NEUVE_GRAPH_BINARY = graph.executable;
+    const requester = {
+      _tag: "Agent" as const,
+      harness: "neuve-pi",
+      sessionId: "channel-scope",
+      subagentId: "19",
+    };
+    const read = async (question: string, branch?: string) => {
+      const events: PublicQueryEvent[] = [];
+      const { state } = await runQueryGraph(
+        {
+          repository: root as RepositoryPath,
+          revision: revision as Revision,
+          ...(branch === undefined ? {} : { branch }),
+          question,
+          scope: [plan],
+          maxResults: 8,
+          maxContextBytes: 16_000,
+          relationships: [],
+        },
+        {
+          requester,
+          emit: async (event) => {
+            events.push(event);
+          },
+        },
+      );
+      return { state, answer: collectPublicQueryResult(events) };
+    };
+    try {
+      const unrecorded = await read("Read before Records setup.");
+      expect(unrecorded.state).toEqual({
+        kind: "not_recorded",
+        reason: "no Records store was found",
+      });
+      await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+      const first = await read("Read the approved export plan.");
+      const cycleId = first.answer.cycle_id!;
+      expect(first.state).toEqual({
+        kind: "cycle_opened",
+        cycle_id: expect.any(String),
+      });
+      expect(first.state).toMatchObject({ cycle_id: cycleId });
+      expect(first.answer.scope?.[0]).toMatchObject({
+        title: "approved-plan.md",
+        text: planText,
+        sha256: createHash("sha256").update(planText).digest("hex"),
+      });
+      await Bun.write(plan, "Edited outside the cycle.");
+      const next = await read("Read the held export plan.");
+      expect(next.state).toEqual({ kind: "cycle_joined", cycle_id: cycleId });
+      expect(next.answer.scope?.[0]?.text).toBe(planText);
+      expect(
+        execute(["git", "branch", "second-implementer"], root).exitCode,
+      ).toBe(0);
+      const second = await read(
+        "Read on the second branch.",
+        "second-implementer",
+      );
+      expect(second.state).toEqual({
+        kind: "cycle_opened",
+        cycle_id: expect.any(String),
+      });
+      expect(second.answer.cycle_id).not.toBe(cycleId);
+      expect(second.answer.scope?.[0]?.text).toBe("Edited outside the cycle.");
+      expect(
+        execute(["git", "checkout", "--detach", revision], root).exitCode,
+      ).toBe(0);
+      const detached = await read("Read from detached HEAD.");
+      expect(detached.state).toEqual({
+        kind: "not_joined",
+        reason: "HEAD is detached",
+      });
+      expect(await queryHistory(root, "actor.registered@1")).toEqual([
+        expect.objectContaining({
+          event: expect.objectContaining({
+            actor: Identity.agentFingerprint(requester),
+            payload: {
+              actorKind: "agent",
+              harness: "neuve-pi",
+              sessionId: "channel-scope",
+              subagentId: "19",
+            },
+          }),
+        }),
+      ]);
+      const history = await queryHistory(root);
+      expect(
+        history.map(
+          ({ event }: { event: { actor: string; attribution: unknown } }) => ({
+            actor: event.actor,
+            attribution: event.attribution,
+          }),
+        ),
+      ).toEqual(
+        [cycleId, cycleId, second.answer.cycle_id, undefined].map(
+          (cycleId) => ({
+            actor: Identity.agentFingerprint(requester),
+            attribution: {
+              sessionId: "channel-scope",
+              ...(cycleId ? { cycleId } : {}),
+            },
+          }),
+        ),
+      );
+    } finally {
+      if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+      else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+    }
   });
 
   // A later tree can hide a pinned document or its linked context.
