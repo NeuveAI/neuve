@@ -62,7 +62,7 @@ The [workspace launcher](../../apps/neuve-cli/src/workspace-cli.ts) builds the o
 
 Project review web apps start lazily on separate loopback origins. Coding startup never waits for Records or the review root. A receipt selects the exact immutable Records cycle, and its validated return link identifies the runtime coding origin and original channel or external item. An unavailable review app leaves the coding home available. The retained `/workspace` route in Neuve redirects to its launcher-owned coding URL; it no longer renders a replacement coding shell.
 
-Plan, Browse, and Browser Preview panels remain absent during the port. Linear-backed planning is implemented only after the integrated port passes regression validation. Linear remains the sole workstream scope source; existing scope-reading behavior continues during migration.
+Plan, Browse, and Browser Preview panels remain absent during the port. Linear-backed planning waited on the integrated port passing regression validation, which the owner counted as passed on 23 November 2026 ([decisions record](../../process/decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026)): "Counts as passed". It waits only on the owner's Linear sign-in. Linear remains the sole workstream scope source; existing scope-reading behavior continues during migration.
 
 ## Optional Linear scope
 
@@ -90,7 +90,7 @@ The [Linear integration status](../../docs/development.md#linear-planning-integr
 
 ## Implementation entrypoints
 
-These links locate the implementation. They do not declare the source port accepted or a scored regression completed.
+These links locate the implementation. The owner counted the port's regression validation as passed on 23 November 2026 ([decisions record](../../process/decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026)).
 
 | Entry                                                                                                                                                                                                                            | Responsibility                                                                                                                                                                                                                                                                    |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

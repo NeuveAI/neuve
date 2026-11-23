@@ -86,7 +86,7 @@ The [review settings](../packages/harness/src/settings.ts) supply the coding pro
 
 The installed `neuve` remains separate. `bun run dev` continues to start only the web app.
 
-The [pi implementation map](../architecture/decisions/0014-ace-style-pi-harness.md#implementation-entrypoints) links the runtime, capture contract, and fresh candidate comparison. The transition scope in the maintainers' Linear (NEU-50) holds acceptance and current status. Launching the workspace or exporting a dump does not establish regression success or replace the owner's full integrated run before main.
+The [pi implementation map](../architecture/decisions/0014-ace-style-pi-harness.md#implementation-entrypoints) links the runtime, capture contract, and fresh candidate comparison. The transition scope in the maintainers' Linear (NEU-50) holds acceptance and current status. The owner counted the port's regression validation as passed on 23 November 2026 ([decisions record](../process/decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026)).
 
 ## Linear planning integration
 
