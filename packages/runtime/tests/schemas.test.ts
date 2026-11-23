@@ -1,3 +1,4 @@
+// These tests check which values cross the runtime contract boundary.
 import { expect, test } from "bun:test";
 import {
   Account,
@@ -257,6 +258,22 @@ test("turn.finished parses with or without a resume point", () => {
   expect(RuntimeEvent.parse(event)).toEqual(event);
   const checkpoint = { ...event, resumePoint: "tool-result-chain-uuid" };
   expect(RuntimeEvent.parse(checkpoint)).toEqual(checkpoint);
+});
+
+test("approval.resolved identifies one runtime request", () => {
+  const event = {
+    type: "approval.resolved",
+    turnId: "turn-1",
+    at: "2026-11-23T12:00:00Z",
+    requestId: "request-1",
+  } satisfies RuntimeEvent;
+  expect(RuntimeEvent.parse(event)).toEqual(event);
+  expect(RuntimeEvent.safeParse({ ...event, requestId: "" }).success).toBe(
+    false,
+  );
+  expect(RuntimeEvent.safeParse({ ...event, callId: "call-1" }).success).toBe(
+    false,
+  );
 });
 
 test("message.finished parses completed responses and refuses unknown stop reasons so consumers can map endings exhaustively", () => {

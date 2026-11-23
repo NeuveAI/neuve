@@ -843,7 +843,7 @@ export function App() {
 			}
 			if (text) {
 				try {
-					await host.channel(value.id, { op: "ask", author: hello.user, text });
+					await host.channel(value.id, { op: "ask", author: hello.user, text, attended: true });
 				} catch (error) {
 					setDraft({ channel: value.id, text });
 					toast.error("Could not invoke agent", {
@@ -885,7 +885,7 @@ export function App() {
 		}
 		if (!text) return;
 		try {
-			await host.channel(channel.id, { op: "ask", author: hello.user, text });
+			await host.channel(channel.id, { op: "ask", author: hello.user, text, attended: true });
 		} catch (error) {
 			setDraft({ channel: channel.id, text });
 			toast.error("Could not invoke agent", { description: (error as Error).message });

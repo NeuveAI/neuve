@@ -14,6 +14,11 @@ The plan, the Plan tab and approval (NEU-458) change these upstream files furthe
 - `packages/ui/src/components/requests/question.tsx` and `review.tsx` draw on one shared card shell, `card.tsx` beside them, with no visible change. The plan's card (`plan.tsx` there) uses the same shell, and `components/plan/plan-view.tsx` is the Plan tab's view. `types.ts`, `lib/timeline.ts`, `components/blocks` and `components/timeline/layout.ts` and `timeline.tsx` place the plan's card in the timeline as they place the review card.
 - `apps/app/src/layout/storage.ts` and `layout.tsx` add the Plan tab, which opens beside the chat once for each new plan, and offer it in the new-tab menu. `channel.tsx` renders it from `panels/plan.tsx`. `transcript.ts` keeps the chat's plans, `conversation.tsx` places their cards, turns on the `plan.md` reference and passes it to `composer.tsx`, `details.ts` shares the plans and the Plan tab's opener, `review-card.ts` places plan cards with review cards, and `timeline.ts` gives the plan's writing tool a plain row.
 
+Approval requests in the chat change these upstream files further:
+
+- `packages/ui/src/components/requests/approval.tsx`, Ace's unused approval view, is deleted. `packages/ui/src/index.ts` exports the shared card shell, the `Code` block, `Diff` and `patchFile` instead, which the app's approval card uses. `components/diff/diff.tsx` and `lib/highlighter.ts` let a diff wrap its long lines instead of scrolling them.
+- `transcript.ts` keeps the chat's approval requests, `conversation.tsx` shows their cards above the composer where the question shows, and `composer.tsx` and the new channel's first message in `app.tsx` mark the chat attended. `package.json` gains `jsdom` for the card's tests.
+
 The app is called Neuve, with Ace credited (decision 12.18 of the [design decisions](../../process/decisions.md)). Settings › General credits Ace, and [UPSTREAM-LICENSE](UPSTREAM-LICENSE) is kept as it is. The naming changes these places:
 
 - Shown strings that named Ace say Neuve, in this app, `packages/ui` and `apps/desktop/src`. Ace stays where it names upstream code, commands, Ace's download and install steps, or what macOS shows for the desktop bundle.

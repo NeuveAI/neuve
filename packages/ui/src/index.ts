@@ -6,6 +6,9 @@ export { NavListLink } from "./components/app-layout/nav-list-link";
 export { Panel } from "./components/app-layout/panel";
 export { AppearanceProvider, useAppearance } from "./components/appearance";
 export { ChatStatus, type ChatStatusProps } from "./components/chat-status/chat-status";
+export { Code, type CodeProps } from "./components/code/code";
+export { Diff } from "./components/diff/diff";
+export { patchFile } from "./lib/highlighter";
 export { ChecksNotice, type ChecksNoticeProps } from "./components/checks/checks";
 export {
 	CommandPalette,
@@ -50,7 +53,7 @@ export { LayoutBackground } from "./components/layout/layout-background";
 export { LayoutCanvas } from "./components/layout/layout-canvas";
 export { Logo, type LogoProps } from "./components/logo/logo";
 export { MarqueeText } from "./components/marquee/marquee-text";
-export { ApprovalView, type ApprovalViewProps } from "./components/requests/approval";
+export { RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead } from "./components/requests/card";
 export {
 	type QuestionDraft,
 	type QuestionForm,

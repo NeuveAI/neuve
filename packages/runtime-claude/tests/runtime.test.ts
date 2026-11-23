@@ -782,17 +782,20 @@ for (const abort of [false, true])
               toolName: "read",
               callId: "call-permission",
             });
-            yield* session.respondToApproval({
-              requestId: event.requestId,
-              decision: "allow",
-            });
+            expect(
+              yield* session.respondToApproval({
+                requestId: event.requestId,
+                decision: "allow",
+              }),
+            ).toEqual({ delivered: true });
           }
           yield* reader.until("turn.finished");
           expect(
-            yield* session
-              .respondToApproval({ requestId: "unknown", decision: "allow" })
-              .pipe(Effect.flip),
-          ).toMatchObject({ reason: "previous-turn-active" });
+            yield* session.respondToApproval({
+              requestId: "unknown",
+              decision: "allow",
+            }),
+          ).toEqual({ delivered: false });
         }),
       { ...policy, approvalPolicy: "ask", tools },
     );
@@ -1708,13 +1711,11 @@ test("approval denial: the caller's denial reaches the SDK and cannot be answere
           message: "test denial",
         });
         expect(
-          yield* session
-            .respondToApproval({
-              requestId: event.requestId,
-              decision: "allow",
-            })
-            .pipe(Effect.flip),
-        ).toMatchObject({ reason: "previous-turn-active" });
+          yield* session.respondToApproval({
+            requestId: event.requestId,
+            decision: "allow",
+          }),
+        ).toEqual({ delivered: false });
         yield* reader.until("turn.finished");
       }),
     { ...policy, approvalPolicy: "ask", tools },

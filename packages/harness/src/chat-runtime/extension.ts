@@ -13,7 +13,7 @@ import {
   type ConversationId,
 } from "@earendil-works/pi-durable";
 import { Type } from "@earendil-works/pi-ai";
-import type { ChatRuntimeBridge } from "./bridge.ts";
+import type { ApprovalStore, ChatRuntimeBridge } from "./bridge.ts";
 import { RUNTIME_WORK_TOOL } from "./transcript.ts";
 import { newest, pointer } from "./transcript.ts";
 
@@ -30,6 +30,7 @@ export const EDIT_ENTRY_KIND = "ace.edit";
 export function chatRuntimeExtension(
   bridge: ChatRuntimeBridge,
   owns: (provider: string) => boolean,
+  approvals?: (harness: Harness) => ApprovalStore,
 ) {
   let attached: Harness | undefined;
   let redispatched = Promise.resolve({
@@ -205,7 +206,16 @@ export function chatRuntimeExtension(
   });
   const pending = new Set<Promise<void>>();
   const subscriptions = new Set<() => void>();
-  async function attach(harness: Harness) {
+  async function attach(
+    harness: Harness,
+    access?: {
+      onStop?: (listener: (chat: ConversationId) => Promise<void>) => void;
+      onApprovalAnswer?: (send: ChatRuntimeBridge["replyToApproval"]) => void;
+    },
+  ) {
+    if (approvals) await bridge.attachApprovals(approvals(harness));
+    access?.onStop?.((chat) => bridge.stopApprovals(chat));
+    access?.onApprovalAnswer?.((...args) => bridge.replyToApproval(...args));
     attached = harness;
     // inspect is queued before resume or new submissions. Successors retain the conversation gate.
     const captured = harness.inspect(BACKGROUND_CONTEXT).then(async (view) => {
@@ -378,9 +388,12 @@ export function chatRuntimeExtension(
       });
       const conversations = new Set<ConversationId>();
       const resets = new Set<ConversationId>();
+      const stopped = new Set<ConversationId>();
       for (const change of changes) {
         if (change.type === "entry" && change.value.kind === "pi.reset")
           resets.add(change.value.conversationId);
+        if (change.type === "entry" && change.value.kind === STOP_ENTRY_KIND)
+          stopped.add(change.value.conversationId);
         if (
           change.type === "entry" &&
           (change.value.kind === STOP_ENTRY_KIND ||
@@ -412,7 +425,11 @@ export function chatRuntimeExtension(
         }
       }
       for (const id of conversations) {
-        const closing = bridge.closeConversation(String(id), resets.has(id));
+        const closing = bridge.closeConversation(
+          String(id),
+          resets.has(id),
+          stopped.has(id),
+        );
         pending.add(closing);
         void closing.catch(() => {}).finally(() => pending.delete(closing));
       }

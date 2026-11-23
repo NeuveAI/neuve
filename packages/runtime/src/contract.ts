@@ -154,6 +154,76 @@ export const WorkKind = z.enum([
 ]);
 export type WorkKind = z.infer<typeof WorkKind>;
 
+const approvalReason = { reason: z.exactOptional(z.string()) };
+const approvalChange = { path: z.string(), diff: z.string() };
+const approvalTarget = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("path"), path: z.string() }),
+  z.strictObject({ kind: z.literal("glob"), pattern: z.string() }),
+  z.strictObject({ kind: z.enum(["root", "minimal", "tmpdir", "slash-tmp"]) }),
+  z.strictObject({
+    kind: z.literal("project-roots"),
+    subpath: z.exactOptional(z.string()),
+  }),
+]);
+
+/** What a person is being asked to allow, in terms the chat can show. */
+export const ApprovalAsked = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("command"),
+    command: z.string(),
+    folder: z.string(),
+    network: z.exactOptional(
+      z.strictObject({
+        host: z.string(),
+        protocol: z.enum(["http", "https", "socks5-tcp", "socks5-udp"]),
+      }),
+    ),
+    ...approvalReason,
+  }),
+  z.strictObject({
+    kind: z.literal("file-change"),
+    changes: z
+      .array(
+        z.discriminatedUnion("kind", [
+          z.strictObject({
+            ...approvalChange,
+            kind: z.enum(["add", "delete"]),
+          }),
+          z.strictObject({
+            ...approvalChange,
+            kind: z.literal("update"),
+            newPath: z.exactOptional(z.string()),
+          }),
+        ]),
+      )
+      .min(1)
+      .nullable(),
+    ...approvalReason,
+  }),
+  z.strictObject({
+    kind: z.literal("wider-access"),
+    paths: z.array(
+      z.strictObject({
+        target: approvalTarget,
+        access: z.enum(["read", "write", "deny"]),
+      }),
+    ),
+    network: z.boolean().nullable(),
+    folder: z.exactOptional(z.string()),
+    globDepthLimit: z.exactOptional(z.int().nonnegative()),
+    ...approvalReason,
+  }),
+  z.strictObject({
+    kind: z.literal("server-prompt"),
+    server: z.string(),
+    message: z.string(),
+    url: z.exactOptional(z.string()),
+    ...approvalReason,
+  }),
+  z.strictObject({ kind: z.literal("unrecognised"), ...approvalReason }),
+]);
+export type ApprovalAsked = z.infer<typeof ApprovalAsked>;
+
 export const CallUsage = z.strictObject({
   input: z.number().int().nonnegative(),
   cacheWrite5m: z.number().int().nonnegative(),
@@ -308,11 +378,18 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
       toolName: z.string().min(1).optional(),
       work: WorkKind.optional(),
       input: z.json(),
+      asked: ApprovalAsked.optional(),
     })
     .refine(
       (event) => (event.toolName === undefined) !== (event.work === undefined),
       "an approval request names either a tool or work",
     ),
+  /** The runtime resolved an open approval request itself. The request can no longer be answered. */
+  z.strictObject({
+    ...eventFields,
+    type: z.literal("approval.resolved"),
+    requestId: z.string().min(1),
+  }),
   /**
    * One piece of work a runtime that declares ownTools did itself, once, when it ended: what kind,
    * what it was asked, what came back, and whether it failed. Neuve ran none of it.
@@ -347,6 +424,13 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   }),
 ]);
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>;
+
+export type ApprovalDelivery =
+  | { readonly delivered: true }
+  | {
+      readonly delivered: false;
+      readonly reason?: "runtime-resolved" | "turn-ended";
+    };
 
 export interface RuntimeSession {
   /**
@@ -385,12 +469,12 @@ export interface RuntimeSession {
   readonly setModel: (
     model: NonNullable<SessionPolicy["model"]>,
   ) => Effect.Effect<void, RuntimeError>;
-  /** Fails with CapabilityUnsupported for approvals when approvals is false. */
+  /** Reports delivery to the live request, or why it closed when known. Fails with CapabilityUnsupported when approvals is false. */
   readonly respondToApproval: (input: {
     readonly requestId: string;
     readonly decision: "allow" | "deny";
     readonly message?: string | undefined;
-  }) => Effect.Effect<void, RuntimeError>;
+  }) => Effect.Effect<ApprovalDelivery, RuntimeError>;
   /**
    * Single consumer, no error channel. Session death finishes each open turn as failed
    * with disposition broken, then ends. Scope closure finishes open turns as interrupted,

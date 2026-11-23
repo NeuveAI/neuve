@@ -46,6 +46,15 @@ const answerOp = z.strictObject({
 	return z.NEVER;
 });
 
+// Approval requests.
+export const ApprovalAnswerSchema = z.strictObject({
+	op: z.literal("approval-answer"),
+	chat,
+	author: z.string().min(1),
+	requestId: z.string().min(1),
+	decision: z.enum(["allow", "deny"]),
+});
+
 /** A client's channel request, as Ace's `Request` defines each operation; unknown fields are refused. */
 export const RequestSchema = z.discriminatedUnion("op", [
 	z.strictObject({ op: z.literal("info") }),
@@ -63,6 +72,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 		effort: EffortSchema.optional(),
 		mode: ChatModeSchema.optional(),
 		requestId,
+		attended: z.boolean().optional(),
 	}),
 	z.strictObject({
 		op: z.literal("select"),
@@ -140,6 +150,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 	z.strictObject({
 		op: z.literal("watch"),
 		chat,
+		approvals: z.boolean().optional(),
 		queue: z.boolean().optional(),
 		captions: z.boolean().optional(),
 		progress: z.boolean().optional(),
@@ -150,6 +161,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 		plans: z.boolean().optional(),
 		planComments: z.boolean().optional(),
 	}),
+	ApprovalAnswerSchema,
 ]);
 
 // Every operation of the protocol has a schema; a new one fails here until it gets one.

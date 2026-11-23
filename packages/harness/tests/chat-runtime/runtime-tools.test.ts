@@ -62,12 +62,29 @@ test("an unattended runtime with its own sandbox is served only the tools that c
     "plan_write",
     "plan_comment_answer",
   ]);
+  const attended = policy(offered, handle, undefined, {
+    ownTools: true,
+    approvals: true,
+    attended: true,
+  });
+  expect(attended.approvalPolicy).toBe("ask");
+  expect(attended.tools.map((t) => t.name)).toEqual(
+    own.tools.map((t) => t.name),
+  );
+  expect(attended.systemPrompt).toBe(own.systemPrompt);
+  expect(
+    policy(offered, handle, undefined, { ownTools: true, attended: true })
+      .approvalPolicy,
+  ).toBe("allow");
   expect(own.systemPrompt).toStartWith("prompt\n\n");
   for (const name of ace) expect(own.systemPrompt).toContain(name);
   expect(own.systemPrompt).not.toContain("bash");
   const other = policy(offered, handle, undefined, {
     ownTools: false,
+    approvals: true,
+    attended: true,
   });
+  expect(other.approvalPolicy).toBe("allow");
   expect(other.tools.map((t) => t.name)).toEqual([
     ...coding,
     "question",
@@ -93,13 +110,16 @@ test("a read-only planning session is served the plan writer and told how to sav
     [...conversation(["plan_write", "explore"]), planning],
     handle,
     undefined,
-    { folder: "/work", ownTools: true },
+    { folder: "/work", ownTools: true, approvals: true, attended: true },
   );
+  expect(session.approvalPolicy).toBe("allow");
   expect(session.tools.map((tool) => tool.name)).toEqual([
     "question",
     "plan_write",
   ]);
-  expect(session.systemPrompt).toContain("while no one is attending: explore.");
+  expect(session.systemPrompt).toContain(
+    "outside your sandbox, so Neuve withholds them: explore.",
+  );
   expect(session.systemPrompt).toContain(
     "Save the plan with Neuve's MCP tool `plan_write`. It works in a read-only workspace.",
   );
