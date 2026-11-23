@@ -22,7 +22,7 @@ import {
 } from "@neuve/records-schema";
 import { requestReview } from "../src/request.ts";
 import {
-  cycleSnapshot,
+  reviewSnapshot,
   selectedExternalContext,
   snapshotSpec,
 } from "../src/scope.ts";
@@ -109,13 +109,16 @@ const program = () =>
       externalSources: [source],
     });
     const context = yield* selectedExternalContext(first.cycleId);
-    const snapshot = yield* cycleSnapshot({
-      repository: root,
-      location,
-      cycleId: first.cycleId,
-      range: first.range,
-      integrations,
-    });
+    const snapshot = yield* reviewSnapshot(
+      {
+        repository: root,
+        location,
+        cycleId: first.cycleId,
+        range: first.range,
+        integrations,
+      },
+      undefined,
+    );
     const associations = yield* ReviewOrigins.list({ item });
     const selected = yield* Log.history({
       kind: "cycle.external-context-selected@1",

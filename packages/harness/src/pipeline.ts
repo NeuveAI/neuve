@@ -66,8 +66,11 @@ import { McpClients } from "./mcp-client.ts";
 import {
   ScopeSnapshot,
   Stratum,
-  cycleSnapshot,
+  readScopeOpening,
+  reviewSnapshot,
   scopeGapForReader,
+  scopeLogFields,
+  snapshotByKey,
 } from "./scope.ts";
 import { cutOffDisclosure } from "./reader-text.ts";
 import {
@@ -420,14 +423,16 @@ const filesOf = (manifest: RangeManifest): ReadonlyArray<ChangedFile> => {
 /**
  * Precompute's computation: the range, the cycle and the manifest's settings. Version 3 holds no
  * leads retriever: the leads are their own computation, off the review's path (NEU-148).
+ * Version 4 references the two scope computations for a read-opened cycle.
  */
 const precomputeSpec = (
   range: { readonly baseOid: string; readonly headOid: string },
   cycleId: string,
   settings: ManifestSettings | FrontSettings,
+  splitScope = false,
 ): Computations.ComputationSpec => ({
   op: "harness.precompute",
-  opVersion: 3,
+  opVersion: splitScope ? 4 : 3,
   inputs: {
     base: `git-commit:${range.baseOid}`,
     head: `git-commit:${range.headOid}`,
@@ -436,22 +441,23 @@ const precomputeSpec = (
   config: frontSettings(settings) as never,
 });
 
-/** The run's Precompute key: what Frame is keyed by, as it reads only Precompute's output. */
-export const precomputeKey = (ctx: RunContext["Service"]) =>
-  Computations.computationKey(
-    precomputeSpec(ctx.range, ctx.cycleId, precomputeSettings(ctx.config)),
-  ).key;
+interface ScopeEnvironment {
+  readonly integrations: Integrations;
+  readonly clients: McpClients["Service"];
+}
 
-export const precomputeStage = (
+const precomputeWithScope = (
   ctx: RunContext["Service"],
-  env: {
-    readonly integrations: Integrations;
-    readonly clients: McpClients["Service"];
-  },
-  deadline = cutoffAt(ctx),
+  env: ScopeEnvironment,
+  opening: Effect.Success<ReturnType<typeof readScopeOpening>>,
 ) => {
   const settings = precomputeSettings(ctx.config);
-  const spec = precomputeSpec(ctx.range, ctx.cycleId, settings);
+  const spec = precomputeSpec(
+    ctx.range,
+    ctx.cycleId,
+    settings,
+    opening !== undefined,
+  );
   return guard(
     ctx,
     "precompute",
@@ -478,13 +484,16 @@ export const precomputeStage = (
                 step(
                   "harness.precompute.scope",
                   Effect.result(
-                    cycleSnapshot({
-                      repository: ctx.repository,
-                      location: ctx.location,
-                      cycleId: ctx.cycleId,
-                      range: ctx.range,
-                      integrations: env.integrations,
-                    }).pipe(Effect.provideService(McpClients, env.clients)),
+                    reviewSnapshot(
+                      {
+                        repository: ctx.repository,
+                        location: ctx.location,
+                        cycleId: ctx.cycleId,
+                        range: ctx.range,
+                        integrations: env.integrations,
+                      },
+                      opening,
+                    ).pipe(Effect.provideService(McpClients, env.clients)),
                   ),
                   (value) => ({
                     "harness.scope.status":
@@ -522,17 +531,7 @@ export const precomputeStage = (
                     type: "precompute.scope",
                     key: scope.key,
                     status: scope.status,
-                    fetchedAt: scope.value.fetchedAt,
-                    ms: scope.value.ms,
-                    strongest: scope.value.strata.strongest,
-                    sources: scope.value.sources.map((source) => ({
-                      id: source.id,
-                      kind: source.kind,
-                      stratum: source.stratum,
-                      status: source.status,
-                      fetchedAt: source.fetchedAt,
-                      ms: source.ms,
-                    })),
+                    ...scopeLogFields(scope.value),
                   },
             );
             const files = filesOf(manifest.value);
@@ -570,12 +569,27 @@ export const precomputeStage = (
         PrecomputeOutput,
         JSON.parse(new TextDecoder().decode(result.output)),
       );
-      // A replayed attempt finds its gaps already in the run log; they are written once per run.
-      const written = ctx.log
-        .read()
-        .some(
-          (entry) => entry.type === "gap" && entry["stage"] === "precompute",
-        );
+      const records = ctx.log.read();
+      if (
+        output.scope !== null &&
+        result.status !== "computed" &&
+        !records.some(
+          (entry) =>
+            entry.type === "precompute.scope" && entry["key"] === output.scope,
+        )
+      ) {
+        const scope = yield* snapshotByKey(output.scope);
+        if (scope !== undefined)
+          ctx.log.write({
+            type: "precompute.scope",
+            status: result.status,
+            key: output.scope,
+            ...scopeLogFields(scope),
+          });
+      }
+      const written = records.some(
+        (entry) => entry.type === "gap" && entry["stage"] === "precompute",
+      );
       if (!written)
         for (const gap of output.scopeGaps) {
           const detail = scopeGapForReader(gap);
@@ -599,13 +613,22 @@ export const precomputeStage = (
       };
       return record;
     }).pipe((effect) => withRecords(ctx, effect)),
-  ).pipe((effect) =>
-    cpuJob(
-      { class: "interactive", position: "understand", stage: 0 },
-      withCodeWork(ctx.location, false, effect, deadline),
-    ),
   );
 };
+
+export const precomputeStage = (
+  ctx: RunContext["Service"],
+  env: ScopeEnvironment,
+  deadline = cutoffAt(ctx),
+) =>
+  withRecords(ctx, readScopeOpening(ctx.cycleId)).pipe(
+    Effect.flatMap((opening) => precomputeWithScope(ctx, env, opening)),
+    (effect) =>
+      cpuJob(
+        { class: "interactive", position: "understand", stage: 0 },
+        withCodeWork(ctx.location, false, effect, deadline),
+      ),
+  );
 
 /** Runs `effect` unless the cut-off has passed; holds the stage first when a stub setting asks. */
 /** Attributes for the stage spans opened under it, such as a finder's lens. */

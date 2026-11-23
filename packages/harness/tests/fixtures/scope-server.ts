@@ -7,6 +7,13 @@ import { Effect, Layer, Schema } from "effect";
 import { McpProtocol, McpServer, Tool, Toolkit } from "effect/ai";
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunStdio from "@effect/platform-bun/BunStdio";
+import { appendFileSync } from "node:fs";
+
+const trace = (line: string) => {
+  const path = process.env["FIXTURE_SCOPE_TRACE"];
+  if (path !== undefined) appendFileSync(path, `${line}\n`);
+};
+trace("start");
 
 const ISSUES: Record<string, unknown> = {
   "NEU-13": {
@@ -82,6 +89,7 @@ const handlers = Tools.toLayer({
       if (!authorised())
         return yield* Effect.fail("unauthorised: FIXTURE_TOKEN did not arrive");
       const id = (input as { id: string }).id;
+      trace(id);
       const issue = ISSUES[id];
       if (issue === undefined) return yield* Effect.fail(`no issue ${id}`);
       return JSON.stringify(issue);

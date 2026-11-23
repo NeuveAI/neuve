@@ -17,10 +17,11 @@ import { RangeManifest } from "../../manifest.ts";
 import {
   PrecomputeOutput,
   storedOutput,
+  withRecords,
   ventTool,
   type RangeView,
 } from "../../pipeline.ts";
-import { ScopeSnapshot } from "../../scope.ts";
+import { snapshotByKey } from "../../scope.ts";
 import { readSettings } from "../../settings.ts";
 import { freezeStackRun, runStackSettings } from "../../stack/frozen-state.ts";
 import type { ChildRequest, ToolSpec } from "../../toolkit.ts";
@@ -363,7 +364,7 @@ export const stageRun = (
           const snapshot =
             scopeKey === null
               ? undefined
-              : yield* storedOutput(ctx, scopeKey, ScopeSnapshot);
+              : yield* withRecords(ctx, snapshotByKey(scopeKey));
           const { head, base } = yield* revisionViews(ctx.repository, manifest);
           return {
             manifest,
@@ -449,7 +450,12 @@ export const stageRun = (
           signal,
         );
         const step = await run(
-          frameStep(ctx, view, await candidatesOf(view, signal)),
+          frameStep(
+            ctx,
+            setup.precompute,
+            view,
+            await candidatesOf(view, signal),
+          ),
           signal,
         );
         return {

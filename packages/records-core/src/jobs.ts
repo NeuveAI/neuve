@@ -74,10 +74,11 @@ export const jobsFor = (event: RecordEvent): ReadonlyArray<JobRequest> => {
         },
       ];
     case "cycle.opened@1":
-      // One scope snapshot per cycle (3.12, 10.53): a second opening event of the cycle joins it.
+    case "cycle.opened@2":
       return [
         {
-          kind: "scope.fetch",
+          kind:
+            event.kind === "cycle.opened@2" ? "scope.fetch@2" : "scope.fetch",
           dedupeKey: `scope.fetch:${event.attribution.cycleId}`,
         },
       ];
@@ -157,6 +158,17 @@ const REVIEW_RUN_POLICY: JobPolicy = {
 const { wholeCycle: _reviewWholeCycle, ...BACKGROUND_JUDGEMENT_POLICY } =
   REVIEW_RUN_POLICY;
 
+// A review can share the attempt in flight. The two job kinds use the same policy and cycle key.
+const SCOPE_FETCH_POLICY: JobPolicy = {
+  slot: "background",
+  priority: 1,
+  order: "oldest",
+  maxAttempts: 3,
+  backoff: exponentialWithJitter("10 seconds"),
+  deadline: Duration.minutes(5),
+  stallLimit: 2,
+};
+
 export const JOB_POLICIES: Readonly<Record<JobKind, JobPolicy>> = {
   "judgement.prepare@1": {
     ...BACKGROUND_JUDGEMENT_POLICY,
@@ -231,15 +243,8 @@ export const JOB_POLICIES: Readonly<Record<JobKind, JobPolicy>> = {
   // reason commit preparation is. At the same priority, a commit burst's newest-first order sorts
   // ahead of it; a review that arrives first fetches the snapshot itself. A failure is a store or
   // spawn hiccup, retried a few times; a missing source is a disclosed gap, never a failure.
-  "scope.fetch": {
-    slot: "background",
-    priority: 1,
-    order: "oldest",
-    maxAttempts: 3,
-    backoff: exponentialWithJitter("10 seconds"),
-    deadline: Duration.minutes(5),
-    stallLimit: 2,
-  },
+  "scope.fetch": SCOPE_FETCH_POLICY,
+  "scope.fetch@2": SCOPE_FETCH_POLICY,
   // Stack sources (11.15): downloads, git fetches and extraction in a child process at nice 10,
   // behind the heavy-work gate, and behind commit preparation and capture, which reviews read first.
   // The background slot runs one job at a time, so a job starts no new fetch after 3 minutes and
