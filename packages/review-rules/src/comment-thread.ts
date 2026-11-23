@@ -10,33 +10,6 @@
 export type CommentThreadState =
   "queued" | "sent" | "picked-up" | "working" | "replied" | "failed";
 
-/** The line under a thread's latest message while it is on its way; none once it arrived. */
-export function deliveryLine(
-  state: CommentThreadState,
-  agent: string,
-): string | undefined {
-  switch (state) {
-    case "queued":
-      return `Queued · reaches ${agent} when it’s free`;
-    case "sent":
-      return `Sent to ${agent}`;
-    case "picked-up":
-      return `Picked up by ${agent}`;
-    default:
-      return undefined;
-  }
-}
-
-/** Each state in a word or two, as a thread's preview names it. */
-export const THREAD_STATUS: Record<CommentThreadState, string> = {
-  queued: "queued",
-  sent: "sent",
-  "picked-up": "picked up",
-  working: "working",
-  replied: "replied",
-  failed: "failed",
-};
-
 export function relativeTime(at: string, now: Date = new Date()): string {
   const date = new Date(at);
   const minutes = Math.round((now.getTime() - date.getTime()) / 60000);
