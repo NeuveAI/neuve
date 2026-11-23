@@ -8,12 +8,16 @@ export const key = (model: ModelRef) => `${model.provider}/${model.modelId}`;
  * the channel runs instead; until then the stored model stands in as a choice.
  */
 export function modelChoices(models: ModelOption[] | undefined, stored: string, automatic?: ModelRef) {
-	const choices = (models || []).map((value) => ({ id: key(value), name: value.modelId, vendor: value.provider }));
-	const listed = stored === "auto" || choices.some((value) => value.id === stored);
-	const unoffered = listed || !models?.length ? undefined : stored;
-	if (!listed && !unoffered) {
-		choices.unshift({ id: stored, name: stored.split("/").slice(1).join("/"), vendor: "" });
-	}
-	choices.unshift({ id: "auto", name: automatic ? `Automatic (${automatic.modelId})` : "Automatic", vendor: "" });
-	return { model: unoffered ? "auto" : stored, choices, unoffered };
+	const offered = (models || []).map((value) => ({ id: key(value), name: value.modelId, vendor: value.provider }));
+	const known = !!models?.length;
+	const listed = stored === "auto" || offered.some((value) => value.id === stored);
+	const standIn = listed || known ? [] : [{ id: stored, name: stored.split("/").slice(1).join("/"), vendor: "" }];
+	return {
+		model: listed || !known ? stored : "auto",
+		choices: [
+			{ id: "auto", name: automatic ? `Automatic (${automatic.modelId})` : "Automatic", vendor: "" },
+			...standIn,
+			...offered,
+		],
+	};
 }

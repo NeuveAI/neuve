@@ -17,7 +17,6 @@ import {
 	type ModelOption,
 	type ModelRef,
 	type QueuedMessage,
-	type Request,
 } from "@ace/channel/protocol";
 import type { Listing } from "@ace/host/protocol";
 
@@ -259,11 +258,7 @@ export function Composer(
 	const chosen = `${current ? key(current) : "auto"} ${currentEffort || "off"}`;
 	const [picking, setPicking] = useState<{ model: string; effort?: Effort; from: string }>();
 	if (picking && picking.from !== chosen) setPicking(undefined);
-	const { model, choices, unoffered } = modelChoices(
-		models,
-		picking?.model || (current ? key(current) : "auto"),
-		automatic,
-	);
+	const { model, choices } = modelChoices(models, picking?.model || (current ? key(current) : "auto"), automatic);
 	const levels = models?.find((value) => key(value) === model)?.efforts;
 	const requestedEffort = picking?.effort || currentEffort || "off";
 	const effort = requestedEffort === "off" || levels?.includes(requestedEffort)
@@ -318,17 +313,6 @@ export function Composer(
 		}
 	}
 
-	// Asks for what the control shows: a stored model that isn't offered hands the choice to Automatic.
-	function ask(request: Omit<Extract<Request, { op: "ask" }>, "op" | "chat" | "author">) {
-		return host.channel(channel.id, {
-			op: "ask",
-			chat: id,
-			author: user,
-			...request,
-			...(unoffered ? { automatic: true } : {}),
-		});
-	}
-
 	async function send(text: string, mode: string, attached: Attachment[]) {
 		if (sending.current) return;
 		// Posted, a blocked teammate's "@neuve" would read as an ask nobody answers.
@@ -354,7 +338,16 @@ export function Composer(
 		try {
 			const encoded = await attachments(attached);
 			if (invoke) {
-				await ask({ text: body, ...encoded, ...(change ? { mode: change } : {}) });
+				// The chat holds the pick; asking without a model lets the channel replace one whose
+				// provider lost its key.
+				await host.channel(channel.id, {
+					op: "ask",
+					chat: id,
+					author: user,
+					text: body,
+					...encoded,
+					...(change ? { mode: change } : {}),
+				});
 			} else {
 				await host.channel(channel.id, {
 					op: "say",
@@ -388,7 +381,13 @@ export function Composer(
 		sending.current = true;
 		setPending(true);
 		try {
-			await ask({ text: RETRY, ...(reset ? { automatic: true } : {}) });
+			await host.channel(channel.id, {
+				op: "ask",
+				chat: id,
+				author: user,
+				text: RETRY,
+				...(reset ? { automatic: true } : {}),
+			});
 			if (reset) {
 				toast("Switched this chat to Automatic", {
 					description: `${model} failed, so Retry let Neuve choose the model.`,
@@ -455,9 +454,6 @@ export function Composer(
 						? `The last run failed on ${model}. Retry switches this chat to Automatic.`
 						: "The last run failed."}
 				</Notice>
-			)}
-			{agentic && unoffered && (
-				<Notice>{unoffered} is no longer offered, so this chat uses Automatic.</Notice>
 			)}
 			{agentic && !offline && models?.length === 0 && (
 				<Notice
