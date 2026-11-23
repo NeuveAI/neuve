@@ -86,12 +86,25 @@ function status(request: ApprovalRequest, name: (author: string) => string): [Ap
 	return ["closed", CLOSED[state.reason]];
 }
 
-/** A file's diff with file headers, which the diff view needs, added when it has none. */
+/**
+ * A file's diff with file headers, which the diff view needs, added when it has none. A runtime
+ * may send an added or deleted file's whole content instead of a diff (Codex does for an add);
+ * that content becomes the hunk that adds or removes every line.
+ */
 function patch(path: string, kind: string, diff: string) {
 	if (!diff || /^(?:diff --git |--- )/.test(diff)) return diff;
-	const before = kind === "add" ? "/dev/null" : `a/${path}`;
-	const after = kind === "delete" ? "/dev/null" : `b/${path}`;
-	return `--- ${before}\n+++ ${after}\n${diff}`;
+	const name = (side: "a" | "b") => path.startsWith("/") ? path : `${side}/${path}`;
+	const before = kind === "add" ? "/dev/null" : name("a");
+	const after = kind === "delete" ? "/dev/null" : name("b");
+	return `--- ${before}\n+++ ${after}\n${kind === "update" || /^@@ /m.test(diff) ? diff : whole(kind, diff)}`;
+}
+
+/** A whole file's content as the one hunk that adds it, or removes it. */
+function whole(kind: string, content: string) {
+	const lines = content.replace(/\n$/, "").split("\n");
+	const sign = kind === "add" ? "+" : "-";
+	const range = kind === "add" ? `-0,0 +1,${lines.length}` : `-1,${lines.length} +0,0`;
+	return `@@ ${range} @@\n${lines.map((line) => sign + line).join("\n")}`;
 }
 
 // "No access", not "Deny", so a path row is never read as the answer beside the Deny button.

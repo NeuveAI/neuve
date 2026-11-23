@@ -105,6 +105,11 @@ export const PROBES: Fixture[] = [
 			network: false,
 		},
 	},
+	{
+		// As Codex sent it in the live run: an added file's diff is its whole content.
+		label: "Added file sent as its content",
+		asked: { kind: "file-change", changes: [{ kind: "add", path: "/Volumes/LaCie Blu/code/neuve-lanes/approvals/outside/notes.md", diff: "hello\n" }] },
+	},
 	{ label: "Not summarised", asked: { kind: "unrecognised" }, input: { argv: ["rm", "-rf", "/"], cwd: "/repo" } },
 	{ label: "A plain string", asked: { kind: "unrecognised" }, input: "rm -rf /" },
 ];

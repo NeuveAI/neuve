@@ -35,6 +35,7 @@ const { apply } = await import("../src/transcript");
 const { approvalView, HIDDEN_NOTE, UNRECOGNISED, shownApprovals, visiblePath } = await import("../src/approval-card");
 const { fixture, KINDS, PROBES } = await import("../src/approval.fixtures");
 const { ApprovalAskedSchema } = await import("@ace/channel/frame");
+const { patchFile } = await import("@ace/ui");
 const { Approval, ApprovalCard, NOT_ALLOWED_TO_ANSWER } = await import("../src/approval");
 type Transcript = Parameters<typeof apply>[0];
 type Item = Transcript["items"][number];
@@ -232,7 +233,7 @@ test("every field of every kind of request is on the card", () => {
 		// A diff goes whole to the diff view, which draws it after mounting.
 		const patches = view(fixture(value)).changes.map((change) => change.patch).join("\n");
 		for (const change of value.asked.kind === "file-change" ? value.asked.changes ?? [] : []) {
-			expect(patches).toContain(visibleOf(change.diff));
+			for (const line of change.diff.split("\n").filter(Boolean)) expect(patches).toContain(visibleOf(line));
 		}
 	}
 });
@@ -261,6 +262,15 @@ test("a file change shows each change it carries, and says when it carries none"
 	const full = view(request({ kind: "open" }, "f", { kind: "file-change", changes: [{ kind: "update", path: "a.ts", newPath: "b.ts", diff: "@@ -1 +1 @@\n-a\n+b" }] }));
 	expect(full.changes).toEqual([{ kind: "Changed", path: "a.ts", to: "b.ts", patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b" }]);
 	expect(full.notes).toEqual([]);
+});
+
+// Why: Codex sends an added file's whole content where a diff would be. Shown under made-up
+// headers it read as a broken patch; it must reach the diff view as the hunk that adds each line.
+test("an added file sent as its content shows as added lines in the diff view", () => {
+	const shown = view(probe("Added file sent as its content"));
+	const patch = shown.changes[0]!.patch;
+	expect(patch).toBe("--- /dev/null\n+++ /Volumes/LaCie Blu/code/neuve-lanes/approvals/outside/notes.md\n@@ -0,0 +1,1 @@\n+hello");
+	expect(patchFile(patch)).not.toBeNull();
 });
 
 // Why: a right-to-left override can make a command read as another one, escape or backspace
