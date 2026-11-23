@@ -182,7 +182,7 @@ export async function preparePlanCommentSend(
 		const replies = comment.replies.filter((reply): reply is PersonReply =>
 			reply.kind === "person" && reply.author === request.author && !reply.sent);
 		if (!kept && !replies.length) continue;
-		if (!kept && comment.sent?.entry === undefined) {
+		if (!kept && comment.state !== "queued" && comment.sent?.entry === undefined) {
 			keptReplyIds.push(...replies.map(reply => reply.id));
 			continue;
 		}

@@ -16,7 +16,7 @@ The native extension binding installs before harness open/recovery and attaches 
 
 | File | Correspondence and reason | Seam ranges against pinned source |
 | --- | --- | --- |
-| `packages/channel/package.json` | Keep original @ace package identity, native dependencies and exports. Materialize exact root catalog pins, add own adapter exports/dependencies, and pair actual source with generated declaration type exports for strict Neuve callers. | `@@ -4,23 +4,101 @@` |
+| `packages/channel/package.json` | Keep original @ace package identity, native dependencies and exports. Materialize exact root catalog pins, add own adapter exports/dependencies, and pair actual source with generated declaration type exports for strict Neuve callers. The runtime dependency supplies the Zod-only approval contract. | Changed |
 | `packages/channel/src/agents.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/browser.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/captions.ts` | Pinned upstream bytes retained. | Byte-identical |
@@ -48,22 +48,22 @@ The native extension binding installs before harness open/recovery and attaches 
 
 | File | Why it lives beside Ace |
 | --- | --- |
-| `packages/channel/NOTICE` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
-| `packages/channel/src/effort.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
+| `packages/channel/NOTICE` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral. |
+| `packages/channel/src/effort.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral. |
 | `packages/channel/src/extensions.ts` | Runtime-neutral native Extension install/binding, conversation observation, tool wrapping and optional model/pricing callbacks. No Neuve imports or alternate plugin/scheduler system. |
 | `packages/channel/src/external-lanes.ts` | Own runtime-neutral native pi lane extension for configured external worktrees. Replaces the same native extension by name through pi Registry.install; native lanes.ts and unconfigured behavior remain original. |
 | `packages/channel/src/external-ref.ts` | Channel owns opaque neutral references and legacy JSON receipts. Host alone validates/maps precise GitHub references, with an explicit versioned new encoding; existing durable values are not reinterpreted. |
 | `packages/channel/src/frame.ts` | Complete generic native event/frame validation with upstream optional compatibility fields left optional. |
-| `packages/channel/src/github.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
+| `packages/channel/src/github.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral. |
 | `packages/channel/src/operations-protocol.ts` | Single data-only authority for the existing extension request schema/type, importing only zod and neutral external-ref/planning-protocol schemas. Runtime operations reexport the identical object; public DTO declarations do not traverse ChannelExtension, Models or pi-durable. |
 | `packages/channel/src/operations.ts` | Reexport the unchanged request schema/type from the data-only operations-protocol leaf. The channelOperations body remains byte-identical. Separate typed extension operations and native pi harness binding. Review/planning docs retain their original kinds/versions. Mutating extension operations obey worker lifecycle gates; host-only association writes never enter from browser clients. |
 | `packages/channel/src/parse.ts` | Strict complete native ingress schema and verified-author stamping live beside original protocol declarations; extension schema is separate. |
-| `packages/channel/src/planning-protocol.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
+| `packages/channel/src/planning-protocol.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral. |
 | `packages/channel/src/plan.ts` | Stores Markdown, the plan lifecycle, and comments in session state. A rewrite retains the previous Markdown by hash while a comment anchors to it. Reads check each version against its committed hash. |
-| `packages/channel/src/plan-comments.ts` | Keeps and edits threads in the plans document. Each chat shares verified comparisons and placements by anchor and current hashes across watches and sends. The shared file-lines rule owns placement decisions. Builds the quoted batch and registers the Plan-mode answer tool. |
-| `packages/channel/src/planning.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
+| `packages/channel/src/plan-comments.ts` | Keeps and edits threads in the plans document. Each chat shares verified comparisons and placements by anchor and current hashes across watches and sends. The shared file-lines rule owns placement decisions. Builds the quoted batch and registers the Plan-mode answer tool. A reply can queue behind its comment before the agent reads it. |
+| `packages/channel/src/planning.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral. |
 | `packages/channel/src/requests.ts` | Generic durable pi-document digest claims prevent same-ID/different-payload retries without new SQL tables. Existing document kind/version are retained. |
-| `packages/channel/src/review-context.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
+| `packages/channel/src/review-context.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral. |
 | `packages/channel/src/review-protocol.ts` | Channel stores preparation receipts as neutral JSON and bounded identifiers. Host adapter separately validates precise Records/GitHub preparation and attribution before admission. |
 | `packages/channel/src/review.ts` | Own precise Git/Records preparation, immutable range selection, external source validation and admission policy. |
 | `packages/channel/tests/changes.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
@@ -73,7 +73,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/tests/operations-protocol.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/paused-administration.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/plan.test.ts` | Holds a draft rewrite in flight and verifies that approval waits in that chat while another chat can read its plan. |
-| `packages/channel/tests/plan-comments.test.ts` | Exercises comment admission, durable anchor versions, placement, thread answers, and send preparation with the native channel and a faux model. |
+| `packages/channel/tests/plan-comments.test.ts` | Exercises comment admission, durable anchor versions, placement, thread answers, and send preparation with the native channel and a faux model, including queued reply delivery and withdrawal. |
 | `packages/channel/tests/planning.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/review.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/startup-lifecycle.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
@@ -103,8 +103,8 @@ The channel dispatches comment requests through the same chat admission queue as
 | `packages/channel/src/parse.ts` | Parses the attended and watch flags. Requires an author and a runtime request ID for an approval answer. |
 | `packages/channel/src/frame.ts` | Validates each approval request state and preserves the complete list in watch frames. |
 | `packages/channel/tests/approvals-protocol.test.ts` | Checks that malformed answers are refused, the verified author replaces the claimed one, and every request state survives the event boundary. |
-| `packages/channel/src/protocol.ts` | Requires a typed description of what Allow grants beside the runtime input used for details. |
-| `packages/channel/src/frame.ts` | Validates the shared approval descriptions and refuses a record with no description. |
+| `packages/channel/src/protocol.ts` | Requires a typed description of what Allow grants beside the runtime input used for details. Derives the description and work kind types from the [runtime approval schema](../runtime/src/approval.ts). |
+| `packages/channel/src/frame.ts` | Validates the shared approval descriptions and refuses a record with no description. Uses the runtime schemas for the descriptions and work kinds and re-exports the description schema as `ApprovalAskedSchema`. |
 | `packages/channel/tests/approvals-protocol.test.ts` | Exercises each description through a watch frame and checks that a missing description or an empty patch is refused. |
 | `packages/channel/src/approvals.ts` | Stores attendance, publishes approval snapshots, and commits answers and message dismissal. |
 | `packages/channel/src/channel.ts` | Admits attendance with a message, checks approval answer authors, and lets the host runtime close approvals before Stop aborts the conversation. |
