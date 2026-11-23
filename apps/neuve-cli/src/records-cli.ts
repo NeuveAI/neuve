@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { CommitNotFound } from "../../../packages/harness/src/git.ts";
 import { Cause, Effect, Exit, Option } from "effect";
 import type { FileSystem } from "effect/FileSystem";
 import type { SqlClient } from "effect/sql/SqlClient";
@@ -139,6 +140,7 @@ export const describeFailure = (error: unknown, fallback?: string): string => {
   // initialization cut short) reaches the switch below.
   const refusal = refusalFrom(error);
   if (refusal !== undefined) return refusalSentence(refusal);
+  if (error instanceof CommitNotFound) return fallback ?? error.message;
   if (typeof error === "object" && error !== null && "_tag" in error) {
     const tagged = error as { _tag: string } & Record<string, unknown>;
     switch (tagged._tag) {
@@ -146,6 +148,9 @@ export const describeFailure = (error: unknown, fallback?: string): string => {
         return `No Records store at ${String(tagged["path"])}.`;
       case "WorkerSpawnFailed":
         return String(tagged["message"]);
+      case "ProofRefused":
+      case "InvalidEvent":
+        return fallback ?? String(tagged["message"]);
       case "RepositoryUnavailable":
         return `${String(tagged["repository"])} is not inside a git repository, so it has no Records store.`;
       case "BackupFailed":
@@ -179,6 +184,15 @@ export const execute = async <A>(
 
 export const write = (text: string) =>
   Bun.write(Bun.stdout, text.endsWith("\n") ? text : `${text}\n`);
+
+export const argumentRefusal = (
+  argument: string,
+  accepted: string,
+  received: unknown,
+): string =>
+  received === undefined
+    ? `${argument} takes ${accepted}. No value was supplied.`
+    : `${argument} takes ${accepted}, not ${JSON.stringify(received)}.`;
 
 const bytes = (count: number) => {
   if (count < 1024) return `${count} B`;

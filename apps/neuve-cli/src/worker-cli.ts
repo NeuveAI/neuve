@@ -30,11 +30,7 @@ import type { SqlClient } from "effect/sql/SqlClient";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import { z } from "zod";
-import {
-  JobKind,
-  JobState,
-  type JobKind as JobKindType,
-} from "@neuve/records-schema";
+import { JobKind, JobState } from "@neuve/records-schema";
 import {
   Blobs,
   Computations,
@@ -69,7 +65,7 @@ import {
 } from "@neuve/harness";
 import * as HarnessRuntimes from "@neuve/harness/runtimes";
 import { heldForAccount, readHeldReviews } from "@neuve/harness/held-reviews";
-import { execute, withStore, write } from "./records-cli.ts";
+import { argumentRefusal, execute, withStore, write } from "./records-cli.ts";
 import { thisBuild } from "./review-worker.ts";
 import { prepareWorkerStore, warnIfPaused } from "./installed-copy.ts";
 import { runStackFetchChild, runStackIndexChild } from "./stack-cli.ts";
@@ -114,6 +110,12 @@ export const JOBS_HELP = `Usage:
 States: ${JobState.options.join(", ")}.`;
 
 const JobId = z.coerce.number().int().min(1);
+const jobId = (value: string | undefined) => {
+  const parsed = JobId.safeParse(value);
+  if (!parsed.success)
+    throw new Error(argumentRefusal("Job ID", "a positive integer", value));
+  return parsed.data;
+};
 
 /** Runs a queue program against the repository's store; `create` makes a missing store. */
 const withQueue = <A, E>(
@@ -365,7 +367,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       return 0;
     }
     case "inspect": {
-      const seq = JobId.parse(positionals[0]);
+      const seq = jobId(positionals[0]);
       const job = await execute(
         withQueue(
           repository,
@@ -399,7 +401,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       return 0;
     }
     case "drop": {
-      const seq = JobId.parse(positionals[0]);
+      const seq = jobId(positionals[0]);
       const dropped = await executeQueue(
         withQueue(
           repository,
@@ -476,16 +478,28 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       return 0;
     }
     case "enqueue": {
-      const kind: JobKindType = JobKind.parse(positionals[0]);
+      const parsedKind = JobKind.safeParse(positionals[0]);
+      const problems = parsedKind.success
+        ? []
+        : [
+            argumentRefusal(
+              "Job kind",
+              JobKind.options.join(", "),
+              positionals[0],
+            ),
+          ];
       const payloadText = positionals[1];
       let payload: unknown;
       if (payloadText !== undefined) {
         try {
-          payload = JSON.parse(payloadText) as unknown;
+          payload = JSON.parse(payloadText);
         } catch {
-          return refuse({ refused: "The payload is not JSON." });
+          problems.push(argumentRefusal("Job payload", "JSON", payloadText));
         }
       }
+      if (!parsedKind.success || problems.length > 0)
+        return refuse({ refused: problems.join("\n") });
+      const kind = parsedKind.data;
       const dedupeKey = values.key ?? `${kind}:manual:${mintUlid()}`;
       const result = await executeQueue(
         withQueue(

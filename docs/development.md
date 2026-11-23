@@ -62,7 +62,7 @@ Desktop and Electrobun keep their original Bun 1.3.14 declarations; root, host a
 
 Run graph-native checks from `apps/neuve-graph` with its Go or mise tasks. The installed CLI uses the Graph engine copied beside it, and a workspace build at `apps/neuve-cli/dist/neuve` uses the sibling `apps/neuve-graph/entire-graph`; set `NEUVE_GRAPH_BINARY` only to test another executable deliberately.
 
-`neuve query` sends a natural-language question unchanged through `packages/graph-client` to Neuve Graph, with an explicit relationship plan (`--relationship-plan '[]'` for retrieval only). The [command boundary](../apps/neuve-cli/src/boundary.ts) defines its options.
+`neuve query` sends a natural-language question unchanged through `packages/graph-client` to Neuve Graph for retrieval, with an optional relationship plan. The [command boundary](../apps/neuve-cli/src/boundary.ts) defines its options.
 
 ## Open the workspace
 

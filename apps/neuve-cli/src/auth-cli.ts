@@ -21,7 +21,7 @@ import {
   harnessRuntimes,
   prepareCodexHome,
 } from "@neuve/harness/runtimes";
-import { write } from "./records-cli.ts";
+import { argumentRefusal, write } from "./records-cli.ts";
 import { thisBuild } from "./review-worker.ts";
 
 export const AUTH_HELP = `Usage:
@@ -409,6 +409,11 @@ const removalMessages: Record<AccountStore.RemovalStep, string> = {
   "record-dropped": "Removed the account.",
 };
 
+const unknownAccount = (name: string, accounts: readonly { name: string }[]) =>
+  accounts.length === 0
+    ? `Account ${JSON.stringify(name)} was not found. No accounts are available. Add one with neuve auth add chatgpt <name>.`
+    : `Account ${JSON.stringify(name)} was not found. Use one of ${accounts.map(({ name }) => JSON.stringify(name)).join(", ")}.`;
+
 const runAccountCommand = async (
   command: string,
   positionals: string[],
@@ -478,7 +483,11 @@ const runAccountCommand = async (
       const name = AccountName.safeParse(positionals[0]);
       if (!name.success)
         return yield* new AccountStore.StoreError({
-          message: "Use a valid account name.",
+          message: argumentRefusal(
+            "Account name",
+            "1 to 63 lowercase letters, digits or hyphens, starting with a letter or digit",
+            positionals[0],
+          ),
         });
       if (command === "program") {
         const account = yield* store.directory.lookup(name.data, "use");
@@ -562,18 +571,19 @@ const runAccountCommand = async (
         return 0;
       }
       const account = yield* store.directory.lookup(name.data, "use");
-      if (account === undefined)
-        return yield* new AccountStore.StoreError({
-          message: "Account not found.",
-        });
+      const missing = Effect.flatMap(store.list, (accounts) =>
+        Effect.fail(
+          new AccountStore.StoreError({
+            message: unknownAccount(name.data, accounts),
+          }),
+        ),
+      );
+      if (account === undefined) return yield* missing;
       const status =
         values.check === true || command === "login"
           ? yield* statuses.check(name.data)
           : (yield* statuses.read).find((status) => status.name === name.data);
-      if (status === undefined)
-        return yield* new AccountStore.StoreError({
-          message: "Account not found.",
-        });
+      if (status === undefined) return yield* missing;
       if (command === "status") {
         yield* output(
           values.json === true
@@ -813,11 +823,29 @@ export const runAuthCli = async (
           Effect.scoped(
             Effect.flatMap(
               AccountStore.make(options.home ?? homedir()),
-              (store) => store.directory.lookup(name.data, "use"),
+              (store) =>
+                Effect.gen(function* () {
+                  const account = yield* store.directory.lookup(
+                    name.data,
+                    "use",
+                  );
+                  if (account !== undefined) return account;
+                  const accounts = yield* store.list;
+                  return yield* Effect.fail(
+                    new Error(
+                      unknownAccount(
+                        name.data,
+                        accounts.filter(
+                          ({ credential }) =>
+                            credential.kind === "neuve-sign-in",
+                        ),
+                      ),
+                    ),
+                  );
+                }),
             ),
           ).pipe(Effect.provide(personLogs)),
         );
-        if (account === undefined) throw new Error("Account not found.");
         if (account.credential.kind !== "neuve-sign-in")
           throw new Error(
             `The ${name.data} account does not use Neuve's ChatGPT sign-in.`,

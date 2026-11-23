@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Effect } from "effect";
+import { z } from "zod";
 import type { SqlClient } from "effect/sql/SqlClient";
 import { ProofInput } from "@neuve/records-schema";
 import {
@@ -51,6 +52,11 @@ const readStdin = async () => {
   return new TextDecoder().decode(Buffer.concat(chunks));
 };
 
+const proofOptions = ProofInput.safeExtend({
+  range: z.string(),
+  revision: z.string().optional(),
+});
+
 const recordCommand = async (args: ReadonlyArray<string>) => {
   const { values, positionals } = parseArgs({
     args: [...args],
@@ -74,9 +80,9 @@ const recordCommand = async (args: ReadonlyArray<string>) => {
   });
   const repository = resolve(values.repo ?? process.cwd());
   const text = values.stdin === true ? await readStdin() : values.text;
-  const parsed = ProofInput.safeParse({
+  const parsed = proofOptions.safeParse({
     kind: values.kind,
-    range: positionals[0],
+    range: positionals[0] ?? "",
     ...(values.revision === undefined ? {} : { revision: values.revision }),
     claim: values.claim,
     requirement: values.requirement,
@@ -110,12 +116,7 @@ const recordCommand = async (args: ReadonlyArray<string>) => {
   const message = Proofs.describeRecord(result);
   if (values.json === true)
     await write(JSON.stringify({ ...result, message }, null, 2));
-  else
-    await write(
-      result.status === "unlinked"
-        ? `${message} Pass --session <harness>:<session id>, or set NEUVE_SESSION.`
-        : message,
-    );
+  else await write(message);
   return result.status === "unlinked" ? 1 : 0;
 };
 

@@ -2,7 +2,7 @@
 
 import { publicCloseReason } from "../../../packages/harness/src/pi/capture/close-diagnostic.ts";
 import { runAuthCli } from "./auth-cli.ts";
-import { parseQueryInvocation } from "./boundary.ts";
+import { parseQueryInvocation, QUERY_DEFAULTS } from "./boundary.ts";
 import { collectPublicQueryResult, runQueryGraph } from "./graph-query.ts";
 import type { PublicQueryEvent } from "./domain.ts";
 import { runRecordsCli } from "./records-cli.ts";
@@ -38,9 +38,11 @@ const WORKSPACE_HELP = RELEASE_BUILD
               Start Neuve with its configured team connections and a loopback coding web app.`;
 
 const HELP = `Usage:
-  neuve query --repo <absolute-path> --revision <commit> --question <text> \\
-    --max-results <count> --max-context-bytes <bytes> \\
-    --relationship-plan <json-array> [--scope <path>]... [--branch <name>] [--stream] [--refresh-cache | --prepared-only] [--profile full|syntax-only]
+  neuve query --revision <commit> --question <text> \\
+    [--repo <absolute-path, default repository of the current folder>] \\
+    [--max-results <count, default ${QUERY_DEFAULTS["--max-results"]}>] [--max-context-bytes <bytes, default ${QUERY_DEFAULTS["--max-context-bytes"]}>] \\
+    [--relationship-plan <json-array, default ${JSON.stringify(QUERY_DEFAULTS["--relationship-plan"])}>] \\
+    [--scope <path>]... [--branch <name>] [--stream] [--refresh-cache | --prepared-only] [--profile full|syntax-only]
 
 Commands:
   upgrade [--version vX.Y.Z]
@@ -133,6 +135,10 @@ Options:
 
 const runQuery = async (args: readonly string[]): Promise<number> => {
   const invocation = parseQueryInvocation(args);
+  const assumptions =
+    invocation.assumedOptions === undefined
+      ? {}
+      : { assumed_options: invocation.assumedOptions };
   const events: PublicQueryEvent[] = [];
   const controller = new AbortController();
   let interrupted: Readonly<{ name: string; exitCode: number }> | undefined;
@@ -149,7 +155,9 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
       signal: controller.signal,
       emit: async (event) => {
         if (invocation.output === "ndjson") {
-          await Bun.write(Bun.stdout, `${JSON.stringify(event)}\n`);
+          const answer =
+            event.kind === "retrieval" ? { ...event, ...assumptions } : event;
+          await Bun.write(Bun.stdout, `${JSON.stringify(answer)}\n`);
         } else {
           events.push(event);
         }
@@ -175,7 +183,7 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
   if (invocation.output === "json") {
     await Bun.write(
       Bun.stdout,
-      `${JSON.stringify(collectPublicQueryResult(events), null, 2)}\n`,
+      `${JSON.stringify({ ...collectPublicQueryResult(events), ...assumptions }, null, 2)}\n`,
     );
   }
   return 0;
@@ -183,12 +191,26 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
 
 const main = async (args: readonly string[]): Promise<number> => {
   const command = args[0];
+  if (
+    command === "--help" ||
+    command === "help" ||
+    command === undefined ||
+    (args.length === 2 &&
+      args[1] === "--help" &&
+      (command === "query" || command === "semantic" || command === "version"))
+  ) {
+    await Bun.write(Bun.stdout, `${HELP}\n`);
+    return 0;
+  }
   if (command === "--version" || command === "version") {
     await Bun.write(Bun.stdout, `${VERSION}\n`);
     return 0;
   }
-  if (command === "--help" || command === "help" || command === undefined) {
-    await Bun.write(Bun.stdout, `${HELP}\n`);
+  if (command === "hook" && args[1] === "--help") {
+    await Bun.write(
+      Bun.stdout,
+      "Usage: neuve hook <harness> <event> [git arguments]\n  Receives events from the hooks installed by neuve setup hooks.\n",
+    );
     return 0;
   }
   if (command === "hook") return runHook(args.slice(1));
@@ -248,13 +270,30 @@ try {
       "dead-letter",
       "export-dump",
     ].includes(Bun.argv[3] ?? "");
-  const message = captureCommand
-    ? error instanceof PublicReviewError
-      ? error.message
-      : publicCloseReason(error)
-    : error instanceof Error
-      ? error.message
-      : String(error);
+  const unknownOption =
+    error instanceof TypeError &&
+    "code" in error &&
+    error.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION";
+  const option = unknownOption
+    ? /^Unknown option '(-{1,2}[a-zA-Z][a-zA-Z0-9-]{0,63})'/.exec(
+        error.message,
+      )?.[1]
+    : undefined;
+  const command = Bun.argv[2];
+  const helpCommand =
+    (command === "setup" && ["hooks", "stack"].includes(Bun.argv[3] ?? "")) ||
+    (command === "review" && Bun.argv[3] === REVIEW_DESK_COMMAND)
+      ? `${command} ${Bun.argv[3]}`
+      : command;
+  const message = unknownOption
+    ? `Unknown option${option === undefined ? "" : ` '${option}'`}. Run neuve ${helpCommand} --help for accepted options.`
+    : captureCommand
+      ? error instanceof PublicReviewError
+        ? error.message
+        : publicCloseReason(error)
+      : error instanceof Error
+        ? error.message
+        : String(error);
   await Bun.write(Bun.stderr, `neuve: ${message}\n`);
   process.exitCode = 2;
 }

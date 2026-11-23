@@ -6,10 +6,10 @@ import { SqlClient } from "effect/sql/SqlClient";
 import {
   PROOF_ARTEFACT_MAX_BYTES,
   PROOF_MEDIA_TYPES,
+  ProofInput,
   ProofPayload,
   mediaTypeFits,
   type BlobRetention,
-  type ProofInput,
   type ProofKind,
   type ProofWorktree,
   type Range,
@@ -137,13 +137,21 @@ export const resolveRange = (repository: string, text: string) =>
     const head = at > 0 ? text.slice(at + 2) : "";
     if (base === "" || head === "" || head.startsWith("."))
       return yield* new ProofRefused({
-        message: `Expected a range as <base>..<head>, not ${text}.`,
+        message: `Proof range takes <base>..<head>, not ${JSON.stringify(text)}.`,
       });
     const baseOid = yield* commitOf(repository, base);
     const headOid = yield* commitOf(repository, head);
     if (Option.isNone(baseOid) || Option.isNone(headOid))
       return yield* new ProofRefused({
-        message: `${Option.isNone(baseOid) ? base : head} names no commit in this repository.`,
+        message: [
+          ...(Option.isNone(baseOid) ? [base] : []),
+          ...(Option.isNone(headOid) ? [head] : []),
+        ]
+          .map(
+            (name) =>
+              `${JSON.stringify(name)} names no commit in this repository (range ${JSON.stringify(text)}).`,
+          )
+          .join("\n"),
       });
     return {
       baseRef: base,
@@ -474,7 +482,9 @@ const admitArtefactPath = (repository: string, path: string) =>
     const fs = yield* FileSystem;
     const resolved = yield* Effect.result(fs.realPath(path));
     if (resolved._tag === "Failure")
-      return yield* refuse(`${path} is not a readable file.`);
+      return yield* refuse(
+        `--file ${JSON.stringify(path)} is not a readable file. Use a readable file in the working tree or a temporary folder.`,
+      );
     const real = resolved.success;
     const shown =
       real === resolve(path) ? path : `${path} (resolves to ${real})`;
@@ -523,7 +533,9 @@ const readAdmitted = (real: string, shown: string) =>
       const handle = yield* fs.open(real, { flag: "r" });
       const opened = yield* handle.stat;
       if (opened.type !== "File")
-        return yield* refuse(`${shown} is not a regular file.`);
+        return yield* refuse(
+          `--file ${JSON.stringify(shown)} is not a regular file. Use a regular file containing the artefact.`,
+        );
       if (Number(opened.size) > PROOF_ARTEFACT_MAX_BYTES)
         return yield* refuse(
           `${shown} has ${String(opened.size)} bytes; a proof artefact holds at most ${PROOF_ARTEFACT_MAX_BYTES}.`,
@@ -614,39 +626,117 @@ export const worktreeState = (
     } satisfies ProofWorktree;
   });
 
+const prepareProof = ({
+  repository,
+  input,
+  mask,
+}: Pick<RecordRequest, "repository" | "input" | "mask">) =>
+  Effect.gen(function* () {
+    const media = mediaTypeOf(input);
+    const checks = yield* Effect.all(
+      {
+        range: ProofInput.shape.range.safeParse(input.range).success
+          ? resolveRange(repository, input.range)
+          : Effect.fail(
+              refuse(
+                `Proof range takes <base>..<head> without spaces, not ${JSON.stringify(input.range)}.`,
+              ),
+            ),
+        revision:
+          input.revision === undefined
+            ? Effect.succeed(undefined)
+            : !ProofInput.shape.revision.safeParse(input.revision).success
+              ? Effect.fail(
+                  refuse(
+                    `--revision takes a commit at the range's head or in its history without spaces or a leading dash, not ${JSON.stringify(input.revision)}.`,
+                  ),
+                )
+              : commitOf(repository, input.revision).pipe(
+                  Effect.flatMap((commit) =>
+                    Option.isSome(commit)
+                      ? Effect.succeed(commit.value)
+                      : Effect.fail(
+                          refuse(
+                            `--revision takes a commit at the range's head or in its history. ${JSON.stringify(input.revision)} names no commit in this repository.`,
+                          ),
+                        ),
+                  ),
+                ),
+        bytes: artefactBytes(repository, input, mask).pipe(
+          Effect.flatMap((bytes) =>
+            bytes.byteLength === 0
+              ? Effect.fail(
+                  refuse(
+                    input.file === undefined
+                      ? "--text or --stdin takes a non-empty artefact. The artefact is empty."
+                      : `--file ${JSON.stringify(input.file)} is empty. Use a file with a non-empty artefact.`,
+                  ),
+                )
+              : Effect.succeed(bytes),
+          ),
+        ),
+        mediaType:
+          media !== undefined && mediaTypeFits(input.kind, media)
+            ? Effect.succeed(media)
+            : Effect.fail(
+                refuse(
+                  `--media-type for ${input.kind} takes ${PROOF_MEDIA_TYPES[input.kind].join(", ")}. ${media === undefined ? `No type was supplied or inferred from --file ${JSON.stringify(input.file)}.` : `Received ${JSON.stringify(media)}.`}`,
+                ),
+              ),
+      },
+      { mode: "result" },
+    );
+    const problems: string[] = [];
+    for (const result of Object.values(checks)) {
+      if (result._tag === "Success") continue;
+      if (!(result.failure instanceof ProofRefused))
+        return yield* result.failure;
+      problems.push(result.failure.message);
+    }
+    if (
+      checks.range._tag === "Success" &&
+      checks.revision._tag === "Success" &&
+      checks.revision.success !== undefined &&
+      !(yield* isAncestor(
+        repository,
+        checks.revision.success,
+        checks.range.success.headOid,
+      ))
+    ) {
+      problems.push(
+        `--revision ${JSON.stringify(input.revision)} is outside the history of range ${JSON.stringify(input.range)}. Use the range's head or a commit in its history.`,
+      );
+    }
+    if (problems.length > 0) return yield* refuse(problems.join("\n"));
+    const range = yield* Effect.fromResult(checks.range);
+    return {
+      range,
+      revision: (yield* Effect.fromResult(checks.revision)) ?? range.headOid,
+      mediaType: yield* Effect.fromResult(checks.mediaType),
+      bytes: yield* Effect.fromResult(checks.bytes),
+    };
+  });
+
 /**
  * Records one proof. The range and revision are resolved to commits, and the revision must be the
  * head or in its history, so a record always names a commit its range can reach. The artefact is
- * stored first as a raw capture (8.10), then the event is appended; a second identical record from
- * the same recorder is answered `existing`. An append that fails after the store leaves an artefact
+ * stored first as a raw capture, then the event is appended. A second identical record from the
+ * same recorder is answered `existing`. An append that fails after the store leaves an artefact
  * no record names, which retention prunes after 30 days.
  */
 export const record = (request: RecordRequest) =>
+  prepareProof(request).pipe(
+    Effect.flatMap((prepared) => storeProof(request, prepared)),
+  );
+
+const storeProof = (
+  request: RecordRequest,
+  prepared: Effect.Success<ReturnType<typeof prepareProof>>,
+) =>
   Effect.gen(function* () {
     const { input } = request;
-    const range = yield* resolveRange(request.repository, input.range);
-    let revision = range.headOid;
-    if (input.revision !== undefined) {
-      const named = yield* commitOf(request.repository, input.revision);
-      if (Option.isNone(named))
-        return yield* new ProofRefused({
-          message: `${input.revision} names no commit in this repository.`,
-        });
-      revision = named.value;
-    }
-    if (!(yield* isAncestor(request.repository, revision, range.headOid)))
-      return yield* new ProofRefused({
-        message: `${revision.slice(0, 12)} is not the range's head or in its history, so this range cannot use it.`,
-      });
-    const mediaType = mediaTypeOf(input);
-    if (mediaType === undefined || !mediaTypeFits(input.kind, mediaType))
-      return yield* new ProofRefused({
-        message: `A ${input.kind} artefact is one of ${PROOF_MEDIA_TYPES[input.kind].join(", ")}${mediaType === undefined ? "; give mediaType, since the file's extension does not say it" : `, not ${mediaType}`}.`,
-      });
-    const bytes = yield* artefactBytes(request.repository, input, request.mask);
+    const { range, revision, mediaType, bytes } = prepared;
     const worktree = yield* worktreeState(request.repository, input.ownedPaths);
-    if (bytes.byteLength === 0)
-      return yield* new ProofRefused({ message: "The artefact is empty." });
     const payload = ProofPayload.safeParse({
       kind: input.kind,
       revision,
@@ -731,6 +821,7 @@ export type CallerRecordResult =
   | {
       readonly status: "unlinked";
       readonly caller: Exclude<CallerResolution, { _tag: "Linked" }>;
+      readonly problems?: string;
     };
 
 export const recordAsCaller = (
@@ -751,8 +842,22 @@ export const recordAsCaller = (
       override: options.override,
       environment: options.environment,
     });
-    if (caller._tag !== "Linked")
-      return { status: "unlinked", caller } satisfies CallerRecordResult;
+    const prepared = yield* Effect.result(prepareProof(options));
+    if (caller._tag !== "Linked") {
+      if (
+        prepared._tag === "Failure" &&
+        !(prepared.failure instanceof ProofRefused)
+      )
+        return yield* prepared.failure;
+      return {
+        status: "unlinked",
+        caller,
+        ...(prepared._tag === "Failure"
+          ? { problems: prepared.failure.message }
+          : {}),
+      } satisfies CallerRecordResult;
+    }
+    const ready = yield* Effect.fromResult(prepared);
     const open =
       caller.subagentId === undefined
         ? yield* readSession(location, caller.harness, caller.sessionId)
@@ -762,29 +867,34 @@ export const recordAsCaller = (
             caller.sessionId,
             caller.subagentId,
           );
-    const result = yield* record({
-      repository: options.repository,
-      actorId: caller.actorId,
-      sessionId: caller.sessionId,
-      turnKey: open?.turnKey,
-      cycleId: options.cycleId,
-      input: options.input,
-      mask: options.mask,
-    });
+    const result = yield* storeProof(
+      {
+        repository: options.repository,
+        actorId: caller.actorId,
+        sessionId: caller.sessionId,
+        turnKey: open?.turnKey,
+        cycleId: options.cycleId,
+        input: options.input,
+        mask: options.mask,
+      },
+      ready,
+    );
     return { ...result, caller } satisfies CallerRecordResult;
   });
 
-/** The reply both surfaces give, as one sentence. */
 export const describeRecord = (result: CallerRecordResult) => {
-  if (result.status === "unlinked")
+  if (result.status === "unlinked") {
+    const problems =
+      result.problems === undefined ? "" : `\n${result.problems}`;
     switch (result.caller._tag) {
       case "Ambiguous":
-        return `Not recorded: this call belongs to more than one live agent session (${result.caller.sessionIds.join(", ")}), and none is chosen.`;
+        return `Not recorded: this call belongs to more than one live agent session (${result.caller.sessionIds.join(", ")}), and none is chosen.${problems}`;
       case "Unavailable":
-        return "Not recorded: the process table cannot be read here, and no session ID set by a supported harness names a live session here, so this call is not linked to an agent session.";
+        return `Not recorded: the process table cannot be read here, and no session ID set by a supported harness names a live session here, so this call is not linked to an agent session.${problems}`;
       case "None":
-        return "Not recorded: no live agent session recorded in this repository owns this process.";
+        return `Not recorded: no live agent session recorded in this repository owns this process.\nThe agent hooks are not capturing this session. Ask the person to run neuve setup hooks.${problems}`;
     }
+  }
   const what = `${result.kind} proof at ${result.revision.slice(0, 12)} (${result.artefact.mediaType}, ${result.artefact.bytes} bytes; ${describeWorktree(result.worktree, result.revision)})`;
   return result.status === "recorded"
     ? `Proof recorded (${result.id}): ${what} for ${result.caller.harness} session ${result.caller.sessionId}. Its artefact is kept 30 days unless a published review cites it.`

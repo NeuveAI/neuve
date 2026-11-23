@@ -43,7 +43,9 @@ import {
   JobQueue,
   Log,
   PublishedPackets,
+  REVIEW_RUN_KINDS,
   ReviewStats,
+  StoreMissing,
   Starter,
   Worker,
   resolveStoreLocation,
@@ -78,7 +80,7 @@ import {
 } from "@neuve/harness/session-dump";
 import { AccountDirectory, RuntimeRegistry } from "@neuve/runtime";
 import { harnessRuntimes, workerRuntimeOptions } from "@neuve/harness/runtimes";
-import { execute, withStore, write } from "./records-cli.ts";
+import { argumentRefusal, execute, withStore, write } from "./records-cli.ts";
 import { thisBuild } from "./review-worker.ts";
 import { startCaptureWorker } from "./worker-cli.ts";
 import { deskLinkLine } from "./review-desk-claim.ts";
@@ -1003,7 +1005,7 @@ export const requestRangeReview = async (
     const leadsChoice = z.enum(["bm25", "hybrid"]).safeParse(values.leads);
     if (values.leads !== undefined && !leadsChoice.success)
       throw new Error(
-        `--leads takes bm25 or hybrid, not ${JSON.stringify(values.leads)}`,
+        argumentRefusal("--leads", "bm25 or hybrid", values.leads),
       );
     const leads = leadsChoice.success ? leadsChoice.data : undefined;
     const location = await execute(resolveStoreLocation(repository));
@@ -1032,7 +1034,15 @@ export const requestRangeReview = async (
             stub,
             route,
             ...(leads === undefined ? {} : { leads }),
-          });
+          }).pipe(
+            Effect.catchIf(
+              (error) => error instanceof Git.CommitNotFound,
+              (error) =>
+                reviewRange(repository, rangeText).pipe(
+                  Effect.andThen(Effect.fail(error)),
+                ),
+            ),
+          );
           const queue = yield* JobQueue.JobQueue;
           const jobs = yield* queue.list({
             states: ["waiting", "delayed", "active", "completed", "failed"],
@@ -1456,37 +1466,87 @@ const manifestLines = (
 export const terminalGuard = (lines: ReadonlyArray<string>) =>
   lines.join("\n").split("\n").map(PacketView.terminalSafe).join("\n");
 
+const reviewRange = (repository: string, range: string) =>
+  Effect.gen(function* () {
+    const { base, head } = Request.parseRange(range);
+    const { baseOid, headOid } = yield* Effect.all(
+      {
+        baseOid: Git.resolveCommit(repository, base),
+        headOid: Git.resolveCommit(repository, head),
+      },
+      { mode: "result" },
+    );
+    const failures = [baseOid, headOid].flatMap((result) =>
+      result._tag === "Failure" ? [result.failure] : [],
+    );
+    const [first] = failures;
+    if (first !== undefined) {
+      const gitFailure = failures.find(
+        (error) => !(error instanceof Git.CommitNotFound),
+      );
+      if (gitFailure !== undefined) return yield* gitFailure;
+      return yield* new Git.CommitNotFound({
+        ...first,
+        message: failures
+          .map((error) => `${error.message} (range ${JSON.stringify(range)}).`)
+          .join("\n"),
+      });
+    }
+    return {
+      baseOid: yield* Effect.fromResult(baseOid),
+      headOid: yield* Effect.fromResult(headOid),
+    };
+  });
+
 const show = async (
   repository: string,
   rangeText: string | undefined,
   runFlag: string | undefined,
   json: boolean,
 ) => {
-  // First, as always: a folder outside git is refused with the store's own sentence.
-  const location = await execute(resolveStoreLocation(repository));
-  let runId = runFlag;
-  if (runId === undefined) {
-    const wanted =
-      rangeText === undefined
-        ? undefined
-        : await execute(
-            Effect.gen(function* () {
-              const { base, head } = Request.parseRange(rangeText);
-              return {
-                baseOid: yield* Git.resolveCommit(repository, base),
-                headOid: yield* Git.resolveCommit(repository, head),
-              };
-            }),
-          );
-    // A run's ID is its review request's event ID.
-    runId = Option.getOrUndefined(
-      await execute(
-        withStore(repository, "read", ReviewStats.latestRun(wanted)),
-      ),
+  const parsedRun = Ulid.safeParse(runFlag);
+  if (runFlag !== undefined && !parsedRun.success)
+    throw new Error(
+      argumentRefusal("--run", "a run ID as neuve review printed it", runFlag),
     );
-  }
+  const location = await execute(resolveStoreLocation(repository));
+  const wanted =
+    !parsedRun.success && rangeText !== undefined
+      ? await execute(reviewRange(repository, rangeText))
+      : undefined;
+  const runId = await execute(
+    withStore(
+      repository,
+      "read",
+      Effect.gen(function* () {
+        if (!parsedRun.success)
+          return Option.getOrUndefined(yield* ReviewStats.latestRun(wanted));
+        const id = parsedRun.data;
+        const sql = yield* SqlClient;
+        const jobs = yield* sql`SELECT 1 FROM jobs
+        WHERE event_id = ${id} AND ${sql.in("kind", REVIEW_RUN_KINDS)} LIMIT 1`;
+        return jobs.length > 0 ||
+          Option.isSome(yield* ReviewStats.runReceipt(id))
+          ? id
+          : undefined;
+      }),
+      location,
+    ).pipe(
+      Effect.catchIf(
+        (error) => error instanceof StoreMissing,
+        () => Effect.succeed(undefined),
+      ),
+    ),
+  );
   if (runId === undefined) {
-    await write("No run found.");
+    const search = parsedRun.success
+      ? `with --run ${JSON.stringify(runFlag)}`
+      : rangeText === undefined
+        ? "when looking for the latest run"
+        : `for range ${JSON.stringify(rangeText)}`;
+    await write(
+      `No review run found in this repository ${search}. When the person asks for a review, request it with neuve review <base>..<head> --detach.`,
+    );
     return 1;
   }
   const output = await showOutput(repository, runId, json, location);
@@ -1856,9 +1916,9 @@ export const runReviewCli = async (
   args: readonly string[],
 ): Promise<number> => {
   const [first, ...rest] = args;
-  if (first === undefined || first === "--help" || first === "help") {
+  if (first === "--help" || first === "help") {
     await write(REVIEW_HELP);
-    return first === undefined ? 2 : 0;
+    return 0;
   }
   // `review show --help` prints the review help, which describes show, instead of refusing the flag.
   if (first === "show" && (rest.includes("--help") || rest.includes("-h"))) {
@@ -1872,60 +1932,42 @@ export const runReviewCli = async (
     await Bun.write(Bun.stderr, gitRefusal(available));
     return 1;
   }
-  const { values, positionals } = (() => {
-    try {
-      return parseArgs({
-        args:
-          first === "show" ||
-          first === "stats" ||
-          first === "recompose" ||
-          first === "export-dump" ||
-          first === "capture-ceiling" ||
-          first === "capture-status" ||
-          first === "dead-letter" ||
-          first === "audit"
-            ? [...rest]
-            : [...args],
-        allowPositionals: true,
-        strict: true,
-        options: {
-          repo: { type: "string" },
-          branch: { type: "string" },
-          json: { type: "boolean" },
-          detach: { type: "boolean" },
-          route: { type: "string" },
-          leads: { type: "string" },
-          run: { type: "string" },
-          cycle: { type: "string" },
-          store: { type: "string" },
-          root: { type: "string" },
-          redaction: { type: "string" },
-          capture: { type: "string" },
-          job: { type: "string" },
-          all: { type: "boolean" },
-          repair: { type: "boolean" },
-          "allow-model": { type: "string" },
-          "stub-hold": { type: "string" },
-          "stub-turn-limit": { type: "string" },
-          "stub-measure": { type: "boolean" },
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof TypeError &&
-        "code" in error &&
-        error.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION"
-      ) {
-        const option =
-          /^Unknown option '(-{1,2}[a-zA-Z][a-zA-Z0-9-]{0,63})'/.exec(
-            error.message,
-          )?.[1];
-        if (option !== undefined)
-          throw new PublicReviewError(`Unknown option '${option}'`);
-      }
-      throw error;
-    }
-  })();
+  const { values, positionals } = parseArgs({
+    args:
+      first === "show" ||
+      first === "stats" ||
+      first === "recompose" ||
+      first === "export-dump" ||
+      first === "capture-ceiling" ||
+      first === "capture-status" ||
+      first === "dead-letter" ||
+      first === "audit"
+        ? [...rest]
+        : [...args],
+    allowPositionals: true,
+    strict: true,
+    options: {
+      repo: { type: "string" },
+      branch: { type: "string" },
+      json: { type: "boolean" },
+      detach: { type: "boolean" },
+      route: { type: "string" },
+      leads: { type: "string" },
+      run: { type: "string" },
+      cycle: { type: "string" },
+      store: { type: "string" },
+      root: { type: "string" },
+      redaction: { type: "string" },
+      capture: { type: "string" },
+      job: { type: "string" },
+      all: { type: "boolean" },
+      repair: { type: "boolean" },
+      "allow-model": { type: "string" },
+      "stub-hold": { type: "string" },
+      "stub-turn-limit": { type: "string" },
+      "stub-measure": { type: "boolean" },
+    },
+  });
   const repository = resolve(values.repo ?? process.cwd());
   if (first === "show")
     return show(repository, positionals[0], values.run, values.json === true);

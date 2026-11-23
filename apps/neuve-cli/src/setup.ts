@@ -59,6 +59,7 @@ import {
   type StepsOutcome,
 } from "./setup-steps.ts";
 import { gitAvailability, gitRefusal } from "./git-available.ts";
+import { argumentRefusal } from "./records-cli.ts";
 import { z } from "zod";
 import {
   checkGraphEngine,
@@ -168,15 +169,42 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   const { askAgain, json } = switches(given);
   const args = given.filter((arg) => !SWITCHES.includes(arg));
   const raw: Record<string, string> = {};
-  for (let index = 0; index < args.length; index += 2) {
-    const flag = args[index],
-      value = args[index + 1];
-    if (!flag || value === undefined || value.startsWith("--"))
-      throw new Error(`Missing value for ${flag}`);
-    if (flag in raw) throw new Error(`Duplicate option ${flag}`);
+  const problems: string[] = [];
+  const accepted = [...Object.keys(flagsSchema.shape), ...SWITCHES, "--help"];
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index]!;
+    const next = args[index + 1];
+    const value =
+      next === undefined || next.startsWith("--") ? undefined : next;
+    if (value !== undefined) index += 1;
+    if (!Object.hasOwn(flagsSchema.shape, flag)) {
+      problems.push(argumentRefusal("setup", accepted.join(", "), flag));
+      continue;
+    }
+    if (value === undefined) {
+      problems.push(
+        argumentRefusal(flag, "a value shown in neuve setup --help", value),
+      );
+      continue;
+    }
+    if (Object.hasOwn(raw, flag))
+      problems.push(
+        `${flag} takes one occurrence, but was supplied more than once.`,
+      );
     raw[flag] = value;
   }
-  const options = flagsSchema.parse(raw);
+  const parsed = flagsSchema.safeParse(raw);
+  if (!parsed.success)
+    problems.push(
+      argumentRefusal(
+        "--initial-query",
+        "non-empty text",
+        raw["--initial-query"],
+      ),
+    );
+  if (problems.length > 0 || !parsed.success)
+    throw new Error(problems.join("\n"));
+  const options = parsed.data;
   const wanted = agentsFlag(options["--agents"]) ?? AGENT_IDS;
   // On a Mac without the command-line tools, git only opens Apple's installer.
   const available = gitAvailability();

@@ -187,11 +187,13 @@ else if (command === "query") {
 const run = async (
   args: readonly string[],
   environment: Readonly<Record<string, string | undefined>> = {},
+  cwd?: string,
 ) => {
   const child = Bun.spawn([binary, ...args], {
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, ...environment },
+    ...(cwd === undefined ? {} : { cwd }),
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
@@ -1722,10 +1724,16 @@ describe("neuve CLI boundary", () => {
   test.each([
     [
       ["--refresh-cache", "--refresh-cache"],
-      "--refresh-cache may be supplied only once.",
+      "--refresh-cache takes one occurrence, but was supplied more than once.",
     ],
-    [["--refresh-cache", "true"], "Unknown query option: true."],
-    [["--refresh-cache=false"], "Unknown query option: --refresh-cache=false."],
+    [
+      ["--refresh-cache", "true"],
+      'Unknown query option "true". Run neuve query --help for accepted options.',
+    ],
+    [
+      ["--refresh-cache=false"],
+      'Unknown query option "--refresh-cache=false". Run neuve query --help for accepted options.',
+    ],
   ] as const)("rejects invalid refresh flags %j", async (extra, message) => {
     const result = await run(
       [...queryArgs("/tmp/repo", "abcdef0"), ...extra],
@@ -1937,10 +1945,176 @@ describe("neuve CLI boundary", () => {
     });
   });
 
-  test("rejects an incomplete query before provider discovery", async () => {
-    expect(await run(["query", "--repo", "/tmp/example"])).toEqual({
+  // An arbitrary option name must not inject terminal control sequences into a refusal.
+  test("only echoes unknown options with safe names", async () => {
+    const help = "Run neuve auth --help for accepted options.";
+    expect(await run(["auth", "list", "--not-an-option"])).toEqual({
       stdout: "",
-      stderr: "neuve: Missing required option --revision.\n",
+      stderr: `neuve: Unknown option '--not-an-option'. ${help}\n`,
+      exitCode: 2,
+    });
+    expect(await run(["auth", "list", "--bad\x1b[31m"])).toEqual({
+      stdout: "",
+      stderr: `neuve: Unknown option. ${help}\n`,
+      exitCode: 2,
+    });
+  });
+
+  // Proof and vent must show independent input problems alongside the missing session.
+  test("refuses invalid proof and vent inputs without a captured session", async () => {
+    const { root } = await fixtureRepository();
+    await createRecords(root);
+    const proof = await run(
+      [
+        "proof",
+        "record",
+        "nosuch..HEAD",
+        "--kind",
+        "test-run",
+        "--claim",
+        "test output",
+        "--requirement",
+        "tests pass",
+        "--revision",
+        "no-revision",
+        "--file",
+        "nope.txt",
+        "--repo",
+        root,
+      ],
+      { NEUVE_SESSION: "" },
+      root,
+    );
+    expect(proof.exitCode).toBe(1);
+    expect(proof.stdout).toContain(
+      '"nosuch" names no commit in this repository (range "nosuch..HEAD").',
+    );
+    expect(proof.stdout).toContain(
+      '"no-revision" names no commit in this repository.',
+    );
+    expect(proof.stdout).toContain('nope.txt" is not a readable file.');
+
+    const vent = await run(
+      ["vent", " ", "--reconciliation-id", "", "--repo", root],
+      { NEUVE_SESSION: "" },
+    );
+    expect(vent.exitCode).toBe(1);
+    expect(vent.stdout).toContain("Received blank text.");
+    expect(vent.stdout).toContain(
+      '--reconciliation-id takes the harness\'s review cycle ID of 1 to 256 characters. Received "".',
+    );
+    for (const output of [proof.stdout, vent.stdout]) {
+      const hint = "Ask the person to run neuve setup hooks.";
+      if (output.includes("the process table cannot be read here"))
+        expect(output).not.toContain(hint);
+      else {
+        expect(output).toContain("no live agent session recorded");
+        expect(output).toContain(hint);
+      }
+      expect(output).not.toContain("--session");
+    }
+  });
+
+  // A queued review is a successful lookup. A fabricated ID must never look queued.
+  test("review show distinguishes malformed, missing and queued runs", async () => {
+    const { root, revision } = await fixtureRepository();
+    await createRecords(root);
+    const repo = ["--repo", root];
+    const runId = "01M84WJ65YBV4WBF5Q2FM4S5JY";
+    const command = ["review", "show", ...repo];
+    expect(await run([...command, "--run", "nope"])).toEqual({
+      exitCode: 2,
+      stdout: "",
+      stderr:
+        'neuve: --run takes a run ID as neuve review printed it, not "nope".\n',
+    });
+    const missing = await run([...command, "--run", runId]);
+    expect(missing.exitCode).toBe(1);
+    expect(missing.stdout).toContain(
+      `No review run found in this repository with --run "${runId}".`,
+    );
+    expect(missing.stdout).toContain(
+      "When the person asks for a review, request it with neuve review <base>..<head> --detach.",
+    );
+    expect((await run(command)).stdout).toContain(
+      "when looking for the latest run.",
+    );
+    const byRange = await run([...command, "HEAD..HEAD"]);
+    expect(byRange.exitCode).toBe(1);
+    expect(byRange.stdout).toContain('for range "HEAD..HEAD".');
+
+    await markSetUp(root);
+    const badRange = await run([
+      "review",
+      "nosuch..absent",
+      "--detach",
+      ...repo,
+    ]);
+    expect(badRange).toEqual({
+      exitCode: 2,
+      stdout: "",
+      stderr:
+        'neuve: "nosuch" names no commit in this repository (range "nosuch..absent").\n"absent" names no commit in this repository (range "nosuch..absent").\n',
+    });
+    expect(await run(["review"])).toEqual({
+      exitCode: 2,
+      stdout: "",
+      stderr: "neuve: neuve review needs a range: <base>..<head>\n",
+    });
+
+    expect(
+      execute(["git", "commit", "--allow-empty", "-qm", "Reviewed head"], root)
+        .exitCode,
+    ).toBe(0);
+    await executeRecords(
+      withStore(root, "write", (location) =>
+        requestReview({
+          repository: root,
+          location,
+          range: `${revision}..HEAD`,
+          requestId: runId,
+          requester: { _tag: "Unresolved" },
+          frozenConfig: defaultConfig(),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              JobQueue.layer,
+              Computations.layer.pipe(
+                Layer.provideMerge(Blobs.layer(location)),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    const queued = await run([...command, "--run", runId]);
+    expect(queued.exitCode, queued.stderr).toBe(0);
+    expect(queued.stdout).toContain(
+      `Run ${runId} has no receipt in Records yet. Its run log so far:`,
+    );
+  });
+
+  // A caller should be able to correct every invalid or missing option in one retry.
+  test("rejects incomplete and malformed query options before provider discovery", async () => {
+    expect(
+      await run([
+        "query",
+        "--repo",
+        "/tmp/example",
+        "--max-results",
+        "0",
+        "--relationship-plan",
+        "{}",
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: --revision takes a hexadecimal Git object name. No value was supplied.",
+        "--question takes non-empty text. No value was supplied.",
+        '--max-results takes a positive integer, not "0".',
+        '--relationship-plan takes a JSON array, not "{}".',
+        "",
+      ].join("\n"),
       exitCode: 2,
     });
   });
@@ -2009,7 +2183,11 @@ describe("neuve CLI boundary", () => {
     ]);
     expect(result).toEqual({
       stdout: "",
-      stderr: "neuve: Unknown query option: --target-file.\n",
+      stderr: [
+        'neuve: Unknown query option "--target-file" with value "source.custom". Run neuve query --help for accepted options.',
+        'Unknown query option "--target-symbol" with value "target". Run neuve query --help for accepted options.',
+        "",
+      ].join("\n"),
       exitCode: 2,
     });
   });
@@ -2038,11 +2216,64 @@ describe("neuve CLI boundary", () => {
       },
       structural_observations: [],
     });
+    expect(JSON.parse(result.stdout)).not.toHaveProperty("assumed_options");
     const commands = (await Bun.file(graph.log).text())
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line).command);
     expect(commands).toEqual(["version", "capabilities", "query"]);
+  });
+
+  // Defaults must be visible in both output formats without changing the stream's event order.
+  test("queries the repository root from a subfolder with only revision and question", async () => {
+    const { root, revision } = await fixtureRepository();
+    const subfolder = join(root, "sub");
+    await mkdir(subfolder);
+    const graph = await fakeGraph();
+    const env = {
+      NEUVE_GRAPH_BINARY: graph.executable,
+      FAKE_GRAPH_LOG: graph.log,
+    };
+    const args = [
+      "query",
+      "--revision",
+      revision,
+      "--question",
+      "Where is target?",
+    ];
+    const assumed = {
+      "--repo": root,
+      "--relationship-plan": [],
+      "--max-results": 8,
+      "--max-context-bytes": 16000,
+    };
+    const json = await run(args, env, subfolder);
+    expect(json.exitCode, json.stderr).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      source: { repository: root, revision },
+      retrieval: { status: "ok" },
+      structural_observations: [],
+      assumed_options: assumed,
+    });
+    const stream = await run(
+      [...args, "--stream", "--max-results", "5"],
+      env,
+      subfolder,
+    );
+    expect(stream.exitCode, stream.stderr).toBe(0);
+    const events = stream.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.map((event) => event.kind)).toEqual([
+      "retrieval",
+      "complete",
+    ]);
+    expect(events[0].assumed_options).toEqual({
+      "--repo": root,
+      "--relationship-plan": [],
+      "--max-context-bytes": 16000,
+    });
   });
 
   test.each([

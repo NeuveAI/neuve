@@ -5,9 +5,7 @@ Before reading the code, run the query with the full base hash. Use the ticket's
 ## Worked example
 
 ```sh
-neuve query --repo "$repo" --revision "$base" --question "$question" \
-  --max-results 8 --max-context-bytes 16000 --relationship-plan '[]' \
-  --scope "$plan"
+neuve query --revision "$base" --question "$question" --scope "$plan"
 ```
 
 Run the first query on the implementer's branch with `neuve query --scope <path>`. Only the query that opens the cycle adds files. If you create the branch after querying, run the query again on that branch with the same paths. The query cites committed scope documents at the first read's revision. Neuve copies named uncommitted files into the cycle and sends the saved text to the model during review.

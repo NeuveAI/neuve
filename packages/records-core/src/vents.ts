@@ -53,6 +53,27 @@ export type VentResult =
   | { readonly status: "recorded"; readonly vent: StoredVent }
   | { readonly status: "kept-earlier"; readonly earlier: StoredVent };
 
+const parseVent = (
+  request: Pick<VentRequest, "text" | "reconciliationId">,
+): Effect.Effect<VentInput, InvalidEvent> => {
+  const parsed = VentInput.safeParse({
+    text: request.text,
+    reconciliationId: request.reconciliationId,
+  });
+  if (parsed.success) return Effect.succeed(parsed.data);
+  const fields = new Set(parsed.error.issues.map((issue) => issue.path[0]));
+  const problems: string[] = [];
+  if (fields.has("text"))
+    problems.push(
+      `Vent text takes 1 to ${VENT_TEXT_MAX.toLocaleString("en")} characters with at least one non-whitespace character. Received ${request.text.trim() === "" ? "blank text" : `${[...request.text].length} characters`}.`,
+    );
+  if (fields.has("reconciliationId"))
+    problems.push(
+      `--reconciliation-id takes the harness's review cycle ID of 1 to 256 characters. Received ${JSON.stringify(request.reconciliationId)}.`,
+    );
+  return Effect.fail(new InvalidEvent({ message: problems.join("\n") }));
+};
+
 /**
  * Records a vent, or keeps the earlier one: at most one per actor and reconciliation ID, falling
  * back to the session (8.8, 8.16). `Log.append` applies the limit for every producer, in its write
@@ -61,20 +82,13 @@ export type VentResult =
  * answered before its text is stored, so nothing of it is kept.
  */
 export const record = (request: VentRequest) =>
+  parseVent(request).pipe(Effect.flatMap((input) => storeVent(request, input)));
+
+const storeVent = (request: VentRequest, input: VentInput) =>
   Effect.gen(function* () {
-    const parsed = VentInput.safeParse({
-      text: request.text,
-      ...(request.reconciliationId === undefined
-        ? {}
-        : { reconciliationId: request.reconciliationId }),
-    });
-    if (!parsed.success)
-      return yield* new InvalidEvent({
-        message: `a vent needs 1 to ${VENT_TEXT_MAX.toLocaleString("en")} characters of text, not blank, and a reconciliation ID of at most 256 characters; this text has ${[...request.text].length}`,
-      });
-    const text = parsed.data.text.trim();
+    const text = input.text.trim();
     const key = ventKeyOf({
-      reconciliationId: parsed.data.reconciliationId,
+      reconciliationId: input.reconciliationId,
       sessionId: request.sessionId,
     });
     const sql = yield* SqlClient;
@@ -138,6 +152,7 @@ export type CallerVentResult =
   | {
       readonly status: "unlinked";
       readonly caller: Exclude<CallerResolution, { _tag: "Linked" }>;
+      readonly problems?: string;
     };
 
 export const ventAsCaller = (
@@ -159,8 +174,16 @@ export const ventAsCaller = (
       pid: options.pid,
       environment: options.environment,
     });
+    const input = yield* Effect.result(parseVent(options));
     if (caller._tag !== "Linked")
-      return { status: "unlinked", caller } satisfies CallerVentResult;
+      return {
+        status: "unlinked",
+        caller,
+        ...(input._tag === "Failure"
+          ? { problems: input.failure.message }
+          : {}),
+      } satisfies CallerVentResult;
+    const ready = yield* Effect.fromResult(input);
     const open =
       caller.subagentId === undefined
         ? yield* readSession(location, caller.harness, caller.sessionId)
@@ -170,13 +193,16 @@ export const ventAsCaller = (
             caller.sessionId,
             caller.subagentId,
           );
-    const result = yield* record({
-      actorId: caller.actorId,
-      sessionId: caller.sessionId,
-      text: options.text,
-      reconciliationId: options.reconciliationId,
-      turnKey: open?.turnKey,
-    });
+    const result = yield* storeVent(
+      {
+        actorId: caller.actorId,
+        sessionId: caller.sessionId,
+        text: options.text,
+        reconciliationId: options.reconciliationId,
+        turnKey: open?.turnKey,
+      },
+      ready,
+    );
     return {
       ...result,
       caller,
@@ -186,25 +212,24 @@ export const ventAsCaller = (
     } satisfies CallerVentResult;
   });
 
-/**
- * The reply both surfaces give. Every outcome reads as a plain sentence, never as a failure; an
- * unlinked call says why no session was named, and each surface adds how to name one.
- */
 export const describe = (result: CallerVentResult) => {
   switch (result.status) {
     case "recorded":
       return `Vent recorded (${result.vent.id}) for ${result.caller.harness} session ${result.caller.sessionId}${result.reconciliationId === undefined ? "" : ` in review cycle ${result.reconciliationId}`}. Thank you; it does not change your task.`;
     case "kept-earlier":
       return `You already vented in this ${result.reconciliationId === undefined ? "session" : "review cycle"} (${result.earlier.id}, ${result.earlier.recordedAt}); one vent per ${result.reconciliationId === undefined ? "session" : "review cycle"}, and the earlier one is kept. Nothing else is needed.`;
-    case "unlinked":
+    case "unlinked": {
+      const problems =
+        result.problems === undefined ? "" : `\n${result.problems}`;
       switch (result.caller._tag) {
         case "Ambiguous":
-          return `Not recorded: this call belongs to more than one live agent session (${result.caller.sessionIds.join(", ")}), and none is chosen.`;
+          return `Not recorded: this call belongs to more than one live agent session (${result.caller.sessionIds.join(", ")}), and none is chosen.${problems}`;
         case "Unavailable":
-          return "Not recorded: the process table cannot be read here (agent sandboxes may forbid it), and no session ID set by a supported harness names a live session here, so this call is not linked to an agent session.";
+          return `Not recorded: the process table cannot be read here (agent sandboxes may forbid it), and no session ID set by a supported harness names a live session here, so this call is not linked to an agent session.${problems}`;
         case "None":
-          return "Not recorded: no live agent session recorded in this repository owns this process. Vents come from agent sessions that `neuve setup hooks` captures.";
+          return `Not recorded: no live agent session recorded in this repository owns this process.\nThe agent hooks are not capturing this session. Ask the person to run neuve setup hooks.${problems}`;
       }
+    }
   }
 };
 

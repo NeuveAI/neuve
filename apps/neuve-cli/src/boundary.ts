@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type {
   QueryRequest,
   RelationshipRequest,
@@ -5,28 +6,39 @@ import type {
   Revision,
   SourcePath,
 } from "./domain.ts";
+import { argumentRefusal } from "./records-cli.ts";
 
 const positiveInteger = (raw: string, name: string): number => {
-  if (!/^\d+$/.test(raw)) {
-    throw new Error(`${name} must be a positive integer.`);
-  }
   const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`${name} must be a positive integer.`);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(argumentRefusal(name, "a positive integer", raw));
   }
   return value;
 };
 
 const repositoryPath = (raw: string): RepositoryPath => {
   if (!raw.startsWith("/") || raw.includes("\0")) {
-    throw new Error("--repo must be an absolute path without null bytes.");
+    throw new Error(
+      argumentRefusal("--repo", "an absolute path without null bytes", raw),
+    );
   }
-  return raw as RepositoryPath;
+  return resolve(raw) as RepositoryPath;
 };
 
-const revision = (raw: string): Revision => {
-  if (!/^[0-9a-fA-F]{7,64}$/.test(raw)) {
-    throw new Error("--revision must be a hexadecimal Git object name.");
+const revision = (raw: string | undefined, preparedOnly: boolean): Revision => {
+  const pattern = preparedOnly
+    ? /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/
+    : /^[0-9a-fA-F]{7,64}$/;
+  if (raw === undefined || !pattern.test(raw)) {
+    throw new Error(
+      argumentRefusal(
+        "--revision",
+        preparedOnly
+          ? "an exact full commit OID with --prepared-only"
+          : "a hexadecimal Git object name",
+        raw,
+      ),
+    );
   }
   return raw as Revision;
 };
@@ -46,19 +58,23 @@ const sourcePath = (raw: string, label: string): SourcePath => {
   return raw as SourcePath;
 };
 
-const optionNames = [
-  "--repo",
-  "--revision",
-  "--question",
-  "--max-results",
-  "--max-context-bytes",
-  "--relationship-plan",
-] as const;
+const queryValues = {
+  "--repo": "an absolute path",
+  "--revision": "a hexadecimal Git object name",
+  "--question": "non-empty text",
+  "--max-results": "a positive integer",
+  "--max-context-bytes": "a positive integer",
+  "--relationship-plan": "a JSON array",
+  "--branch": "a local branch name",
+  "--profile": "full or syntax-only",
+  "--scope": "a non-empty path without null bytes",
+} as const;
+const querySwitches = ["--refresh-cache", "--prepared-only", "--stream"];
 
-type OptionName = (typeof optionNames)[number] | "--branch";
+type OptionName = keyof typeof queryValues;
 
 const isOptionName = (value: string): value is OptionName =>
-  value === "--branch" || optionNames.some((name) => name === value);
+  Object.hasOwn(queryValues, value);
 
 const record = (value: unknown, label: string): Record<string, unknown> => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -91,16 +107,9 @@ const text = (value: unknown, label: string): string => {
   return value;
 };
 
-const relationshipPlan = (raw: string): readonly RelationshipRequest[] => {
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    throw new Error("--relationship-plan must be a JSON array.");
-  }
-  if (!Array.isArray(value)) {
-    throw new Error("--relationship-plan must be a JSON array.");
-  }
+const relationshipPlan = (
+  value: readonly unknown[],
+): readonly RelationshipRequest[] => {
   const ids = new Set<string>();
   return value.map((item, index) => {
     const label = `--relationship-plan[${index}]`;
@@ -206,125 +215,197 @@ const relationshipPlan = (raw: string): readonly RelationshipRequest[] => {
   });
 };
 
+export const QUERY_DEFAULTS = {
+  "--repo": () => {
+    const cwd = process.cwd();
+    const git = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], {
+      cwd,
+      stderr: "ignore",
+    });
+    if (!git.success)
+      throw new Error(
+        `The current folder ${JSON.stringify(cwd)} is outside a Git repository. --repo takes an absolute path to a repository.`,
+      );
+    return git.stdout.toString().replace(/\r?\n$/, "");
+  },
+  "--relationship-plan": [],
+  "--max-results": 8,
+  "--max-context-bytes": 16_000,
+} as const;
+
+type AssumedQueryOptions = Readonly<
+  Partial<{
+    "--repo": string;
+    "--relationship-plan": (typeof QUERY_DEFAULTS)["--relationship-plan"];
+    "--max-results": number;
+    "--max-context-bytes": number;
+  }>
+>;
+
 export type QueryInvocation = Readonly<{
   request: QueryRequest & Readonly<{ branch?: string }>;
   output: "json" | "ndjson";
+  assumedOptions?: AssumedQueryOptions;
 }>;
 
 export const parseQueryInvocation = (
   args: readonly string[],
 ): QueryInvocation => {
   const values = new Map<OptionName, string>();
+  const seen = new Set<string>();
   const scope: string[] = [];
-  let output: QueryInvocation["output"] = "json";
-  let refreshCache = false;
-  let preparedOnly = false;
-  let profile: QueryRequest["profile"];
-  for (let index = 0; index < args.length;) {
-    const name = args[index];
-    if (name === "--profile") {
-      if (profile !== undefined)
-        throw new Error("--profile may be supplied only once.");
-      const selected = args[index + 1];
-      if (selected !== "full" && selected !== "syntax-only")
-        throw new Error("--profile must be full or syntax-only.");
-      profile = selected;
-      index += 2;
+  const problems: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const name = args[index]!;
+
+    const takesValue = isOptionName(name);
+    if (!takesValue && !querySwitches.includes(name)) {
+      const value = args[index + 1];
+      const hasValue =
+        name.startsWith("--") && value !== undefined && !value.startsWith("--");
+      if (hasValue) index += 1;
+      problems.push(
+        `Unknown query option ${JSON.stringify(name)}${hasValue ? ` with value ${JSON.stringify(value)}` : ""}. Run neuve query --help for accepted options.`,
+      );
       continue;
     }
-    if (name === "--refresh-cache") {
-      if (refreshCache)
-        throw new Error("--refresh-cache may be supplied only once.");
-      refreshCache = true;
-      index += 1;
-      continue;
-    }
-    if (name === "--prepared-only") {
-      if (preparedOnly)
-        throw new Error("--prepared-only may be supplied only once.");
-      preparedOnly = true;
-      index += 1;
-      continue;
-    }
-    if (name === "--stream") {
-      if (output === "ndjson") {
-        throw new Error("--stream may be supplied only once.");
-      }
-      output = "ndjson";
-      index += 1;
-      continue;
-    }
+    const duplicate = seen.has(name) && name !== "--scope";
+    if (duplicate)
+      problems.push(
+        `${name} takes one occurrence, but was supplied more than once.`,
+      );
+    seen.add(name);
+    if (!takesValue) continue;
+
     const value = args[index + 1];
-    if (name === undefined || (name !== "--scope" && !isOptionName(name))) {
-      throw new Error(`Unknown query option: ${name ?? "<missing>"}.`);
-    }
     if (value === undefined || value.startsWith("--")) {
-      throw new Error(`${name} requires a value.`);
+      if (name === "--scope") problems.push("--scope requires a value.");
+      else if (name !== "--revision" && name !== "--question")
+        problems.push(argumentRefusal(name, queryValues[name], undefined));
+      continue;
     }
+    index += 1;
     if (name === "--scope") {
       if (value.length === 0 || value.includes("\0"))
-        throw new Error("--scope must be a non-empty path without null bytes.");
-      scope.push(value);
-    } else if (values.has(name)) {
-      throw new Error(`${name} may be supplied only once.`);
-    } else {
+        problems.push("--scope must be a non-empty path without null bytes.");
+      else scope.push(value);
+    } else if (!values.has(name)) {
       values.set(name, value);
     }
-    index += 2;
   }
 
-  if (refreshCache && preparedOnly)
-    throw new Error("--prepared-only cannot be combined with --refresh-cache.");
-  if (profile === "syntax-only" && !preparedOnly)
-    throw new Error("syntax-only requires --prepared-only.");
-  for (const name of optionNames) {
-    if (!values.has(name)) {
-      throw new Error(`Missing required option ${name}.`);
+  const check = <A>(parse: () => A): A | undefined => {
+    try {
+      return parse();
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      problems.push(error.message);
+      return undefined;
     }
-  }
+  };
+  const preparedOnly = seen.has("--prepared-only");
+  const refreshCache = seen.has("--refresh-cache");
+  if (refreshCache && preparedOnly)
+    problems.push(
+      "--prepared-only and --refresh-cache were both supplied. Use only one.",
+    );
+
+  const profile = values.get("--profile");
+  if (profile !== undefined && profile !== "full" && profile !== "syntax-only")
+    problems.push(
+      argumentRefusal("--profile", queryValues["--profile"], profile),
+    );
+  if (profile === "syntax-only" && !preparedOnly)
+    problems.push(
+      '--profile "syntax-only" requires --prepared-only, which was omitted.',
+    );
 
   const repo = values.get("--repo");
-  const revisionValue = values.get("--revision");
-  const question = values.get("--question");
   const maxResults = values.get("--max-results");
   const maxContextBytes = values.get("--max-context-bytes");
   const relationships = values.get("--relationship-plan");
   const branch = values.get("--branch");
+  const question = values.get("--question");
+  const repository = check(() =>
+    repositoryPath(repo ?? QUERY_DEFAULTS["--repo"]()),
+  );
+  const commit = check(() => revision(values.get("--revision"), preparedOnly));
+  if (question === undefined || question.trim().length === 0)
+    problems.push(
+      argumentRefusal("--question", queryValues["--question"], question),
+    );
+  if (branch !== undefined && branch.trim().length === 0)
+    problems.push(argumentRefusal("--branch", queryValues["--branch"], branch));
+  const count = check(() =>
+    maxResults === undefined
+      ? QUERY_DEFAULTS["--max-results"]
+      : positiveInteger(maxResults, "--max-results"),
+  );
+  const bytes = check(() =>
+    maxContextBytes === undefined
+      ? QUERY_DEFAULTS["--max-context-bytes"]
+      : positiveInteger(maxContextBytes, "--max-context-bytes"),
+  );
+  const plan = check(() => {
+    if (relationships === undefined)
+      return QUERY_DEFAULTS["--relationship-plan"];
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(relationships);
+    } catch {}
+    if (!Array.isArray(parsed))
+      throw new Error(
+        argumentRefusal(
+          "--relationship-plan",
+          queryValues["--relationship-plan"],
+          relationships,
+        ),
+      );
+    try {
+      return relationshipPlan(parsed);
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      throw new Error(
+        `${error.message} Received ${JSON.stringify(relationships)}.`,
+      );
+    }
+  });
   if (
-    repo === undefined ||
-    revisionValue === undefined ||
+    problems.length > 0 ||
+    repository === undefined ||
+    commit === undefined ||
     question === undefined ||
-    maxResults === undefined ||
-    maxContextBytes === undefined ||
-    relationships === undefined
-  ) {
-    throw new Error("Internal option parsing error.");
-  }
-  if (question.trim().length === 0) {
-    throw new Error("--question must not be empty.");
-  }
-  if (
-    preparedOnly &&
-    !/^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(revisionValue)
+    count === undefined ||
+    bytes === undefined ||
+    plan === undefined
   )
-    throw new Error("--prepared-only requires an exact full commit OID.");
+    throw new Error(problems.join("\n"));
 
+  const assumedOptions: AssumedQueryOptions = {
+    ...(repo === undefined ? { "--repo": repository } : {}),
+    ...(relationships === undefined
+      ? { "--relationship-plan": QUERY_DEFAULTS["--relationship-plan"] }
+      : {}),
+    ...(maxResults === undefined ? { "--max-results": count } : {}),
+    ...(maxContextBytes === undefined ? { "--max-context-bytes": bytes } : {}),
+  };
   return {
-    output,
+    output: seen.has("--stream") ? "ndjson" : "json",
+    ...(Object.keys(assumedOptions).length === 0 ? {} : { assumedOptions }),
     request: {
-      repository: repositoryPath(repo),
-      revision: revision(revisionValue),
+      repository,
+      revision: commit,
       question,
-      maxResults: positiveInteger(maxResults, "--max-results"),
-      maxContextBytes: positiveInteger(maxContextBytes, "--max-context-bytes"),
-      relationships: relationshipPlan(relationships),
+      maxResults: count,
+      maxContextBytes: bytes,
+      relationships: plan,
       ...(scope.length === 0 ? {} : { scope }),
-      ...(branch === undefined ? {} : { branch: text(branch, "--branch") }),
-      ...(profile === undefined ? {} : { profile }),
+      ...(branch === undefined ? {} : { branch }),
+      ...(profile === "full" || profile === "syntax-only" ? { profile } : {}),
       ...(preparedOnly
-        ? { cache: "prepared" as const }
+        ? { cache: "prepared" }
         : refreshCache
-          ? { cache: "refresh" as const }
+          ? { cache: "refresh" }
           : {}),
     },
   };
