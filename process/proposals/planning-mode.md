@@ -277,7 +277,7 @@ Approval starts one implementer in the planning channel, with the approved plan 
 
 Nothing here is a sequence. Two agents exchanging "ready at this commit" and "two corrections" is the common case and the one the mock draws, not a protocol.
 
-**What code still guarantees.** The whole list. The owner's confirmed reading named two of these (a planning chat cannot write, and only a person approves); one more is the owner's later ruling (only the owner changes models); the other four are this proposal's design, each with the reason it cannot rest on judgment, and are [listed for the owner to confirm](#still-open-for-the-owner):
+**What code still guarantees.** The whole list. The owner's confirmed reading named two of these (a planning chat cannot write, and only a person approves); one more is the owner's later ruling (only the owner changes models); the other four are this proposal's design, each with the reason it cannot rest on judgment, and the owner confirmed them on 23 November 2026 ([decisions record](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026)):
 
 | Guarantee | Why it cannot be left to judgment |
 | --- | --- |
