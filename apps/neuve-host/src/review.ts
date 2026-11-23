@@ -200,13 +200,12 @@ export async function nativeHandoff(
 			"uncommitted_changes",
 			`The review source has ${status.paths} uncommitted or untracked ${status.paths === 1 ? "path" : "paths"}; commit or remove ${status.paths === 1 ? "it" : "them"} before review`,
 		);
-	const branchRead = await git(cwd, [
-		"symbolic-ref",
-		"--quiet",
-		"--short",
-		"HEAD",
-	]);
-	const branch = branchRead.status === 0 ? branchRead.stdout.trim() : undefined;
+	const { sourceBranch } = snapshot;
+	const branchRead = sourceBranch === undefined
+		? await git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+		: undefined;
+	const branch = sourceBranch ?? (branchRead?.status === 0 ? branchRead.stdout.trim() : undefined);
+	const head = sourceBranch === undefined ? status.head : await commit(cwd, `refs/heads/${sourceBranch}`);
 	let against =
 		lane?.base ??
 		(target.kind === "project-branch" ? target.against : undefined);
@@ -238,14 +237,14 @@ export async function nativeHandoff(
 			"No local default comparison base is available. Supply target.against explicitly",
 		);
 	const baseCommit = await commit(cwd, against);
-	const baseRead = await git(cwd, ["merge-base", baseCommit, status.head]);
+	const baseRead = await git(cwd, ["merge-base", baseCommit, head]);
 	if (baseRead.status !== 0)
 		throw new ReviewRefusalError(
 			"no_comparison_base",
-			"The comparison base and HEAD have no available merge base",
+			"The comparison base and review head have no available merge base",
 		);
 	const base = baseRead.stdout.trim();
-	if (base === status.head)
+	if (base === head)
 		throw new ReviewRefusalError("nothing_to_review", "The selected range has no commits to review");
 	if (
 		lane &&
@@ -267,9 +266,10 @@ export async function nativeHandoff(
 		chat: snapshot.chat,
 		...(lane ? { lane: lane.name } : {}),
 		...(branch ? { branch } : {}),
+		...(sourceBranch === undefined ? {} : { sourceBranch }),
 		against,
 		base,
-		head: status.head,
+		head,
 		origin: { ...origin, ...(lane ? { lane: lane.name } : {}), display: { project: projectName, ...(branch ? { branch } : {}), base: against } },
 		externalSources,
 		...(lane && snapshot.planning.selection
@@ -343,7 +343,8 @@ export async function validateNative(
 		throw new Error("The pinned review range is unavailable or empty");
 	if (current && prepared.target.kind !== "pull-request") {
 		const status = await loose(cwd);
-		if (status.head !== h.head)
+		const head = h.sourceBranch === undefined ? status.head : await commit(cwd, `refs/heads/${h.sourceBranch}`);
+		if (head !== h.head)
 			throw new ReviewRefusalError(
 				"source_moved",
 				"The review source moved after preparation; request a fresh review",
