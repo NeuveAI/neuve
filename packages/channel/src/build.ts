@@ -281,7 +281,10 @@ export class Builds {
 			builds.set(build, record);
 			const name = `The ${role}${part === undefined ? "" : ` for ${JSON.stringify(part)}`}`;
 			if (!await tx.submissionByRequest(chat, requestId)) problems.push(`${name}: ${waitForBrief}`);
-			if (record.build.state.kind === "paused") problems.push(`${name}: ${buildRefusal("paused")}`);
+			// A stopped plan stays stopped when sharing turns on, so a mention must not wake it then either.
+			const kind = record.build.state.kind;
+			if (kind === "paused" || (kind === "stopped" && this.options.shared()))
+				problems.push(`${name}: ${buildRefusal("paused")}`);
 		}
 		if (problems.length) throw new Error(problems.join(" "));
 		return [...builds.values()];

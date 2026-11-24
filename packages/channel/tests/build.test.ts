@@ -1286,6 +1286,21 @@ test("a mention wakes a stopped plan and a second Stop writes its own note", asy
 	]);
 });
 
+// Sharing pauses only a running plan, so a mention must not wake a stopped plan in a shared channel.
+test("a mention does not wake a stopped plan while the channel is shared", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { build, chat } = await startBuild(run);
+	await fixture.request({ op: "build-stop", author: OWNER, build: build.id });
+	await buildAt(watch, 0, "stopped");
+	await fixture.request({ op: "share", author: OWNER, shared: true });
+	await expect(fixture.request({ op: "say", author: OWNER, text: "Wake up.", agents: [chat] })).rejects.toThrow(
+		"The plan's agents are paused while other people may ask them.",
+	);
+	expect(watch.of("message").some(event => event.text === "Wake up.")).toBe(false);
+	expect(watch.of("builds").at(-1)?.builds[0]?.state.kind).toBe("stopped");
+});
+
 // Passive writes, invoked inputs, and replay use different transcript paths.
 test("say and ask publish their distinct mentions live and after reopening", async () => {
 	const run = await setup();
