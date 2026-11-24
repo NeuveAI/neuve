@@ -857,7 +857,8 @@ export interface CapturePart {
 /**
  * The files an agent hook entry needs, read back from the command `setup hooks` wrote: the program
  * it starts and, when that program is `bun` (a hook written from a source checkout), the script it
- * runs. A command with a bare or relative first word is reported as one Neuve can't judge.
+ * runs. Neuve can't judge a bare or relative program, or a word with an embedded apostrophe
+ * outside a Bun script command.
  */
 const filesCalledBy = (command: string): ReadonlyArray<Needed> | undefined => {
   const words: string[] = [];
@@ -872,7 +873,13 @@ const filesCalledBy = (command: string): ReadonlyArray<Needed> | undefined => {
   }
   const program = words[0];
   if (program === undefined || !isAbsolute(program)) return undefined;
-  return neededBy(words);
+  const files = neededBy(words);
+  if (
+    words.some((word) => word.includes("'")) &&
+    !files.some((file) => file.use === "read")
+  )
+    return undefined;
+  return files;
 };
 
 /** A file a hook needs, and what for: the program it runs, or the script `bun` reads. */

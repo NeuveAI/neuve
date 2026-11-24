@@ -339,6 +339,44 @@ describe("neuve CLI boundary", () => {
     });
   });
 
+  // A flag refusal must include independent path problems without echoing the paths.
+  test("setup reports missing repository and binary paths with other problems", async () => {
+    const { root } = await fixtureRepository();
+    const missingRepo = join(root, "private-repository");
+    const missingGraph = join(root, "private-graph");
+    const missingCli = join(root, "private-cli");
+    expect(
+      await run(["setup", "--route", "private-route", "--repo", missingRepo]),
+    ).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code).",
+        "--repo takes a folder inside a Git working tree.",
+        "",
+      ].join("\n"),
+      exitCode: 2,
+    });
+    expect(
+      await run([
+        "setup",
+        "--repo",
+        root,
+        "--graph-binary",
+        missingGraph,
+        "--cli-binary",
+        missingCli,
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: --graph-binary takes the path to an executable Neuve Graph binary.",
+        "--cli-binary takes the path to an executable Neuve binary.",
+        "",
+      ].join("\n"),
+      exitCode: 2,
+    });
+  });
+
   // A missing scope value should tell the caller what a replacement must be.
   test("query explains what a missing scope value takes", async () => {
     expect(

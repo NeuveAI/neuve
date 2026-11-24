@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { publicCloseReason } from "../../../packages/harness/src/pi/capture/close-diagnostic.ts";
+import { resolveCommit } from "../../../packages/harness/src/git.ts";
 import { resolveStoreLocation } from "@neuve/records-core";
 import { runAuthCli } from "./auth-cli.ts";
 import {
@@ -164,6 +165,9 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
         : { assumed_options: invocation.assumedOptions };
     if (assumedRepository === undefined)
       await execute(resolveStoreLocation(invocation.request.repository));
+    await execute(
+      resolveCommit(invocation.request.repository, invocation.request.revision),
+    );
     await runQueryGraph(invocation.request, {
       signal: controller.signal,
       emit: async (event) => {

@@ -99,7 +99,7 @@ const git = async (repository: string, args: string[]) => {
 };
 const flagsSchema = z
   .object({
-    "--repo": z.string().default(() => process.cwd()),
+    "--repo": z.string().optional(),
     "--graph-binary": z.string().optional(),
     "--cli-binary": z.string().optional(),
     // Named an index's question while setup indexed; still accepted so scripts keep working.
@@ -208,23 +208,62 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     if (!(error instanceof Error)) throw error;
     problems.push(error.message);
   }
-  const otherProblems = problems.length > 0 || !parsed.success;
   const namedRoute = ReviewRouteName.optional().safeParse(raw["--route"]);
   if (!namedRoute.success) problems.push(SETUP_ROUTE_REFUSAL);
-  if (otherProblems || !namedRoute.success) {
+
+  const checkBinary = async (
+    flag: string,
+    path: string,
+    accepted: string,
+  ): Promise<string | undefined> => {
+    const binary = (await executableFile(path))
+      ? await realpath(path).catch(() => undefined)
+      : undefined;
+    if (binary === undefined) problems.push(argumentRefusal(flag, accepted));
+    return binary;
+  };
+
+  // On a Mac without the command-line tools, git only opens Apple's installer.
+  const available = gitAvailability();
+  let repository: string | undefined;
+  if (available.usable) {
+    try {
+      repository = await realpath(
+        repositoryRoot(resolve(raw["--repo"] ?? process.cwd())),
+      );
+    } catch {
+      problems.push(
+        argumentRefusal("--repo", "a folder inside a Git working tree"),
+      );
+    }
+  }
+  const graphPath = raw["--graph-binary"];
+  const namedGraph =
+    graphPath === undefined
+      ? undefined
+      : await checkBinary(
+          "--graph-binary",
+          graphPath,
+          "the path to an executable Neuve Graph binary",
+        );
+  const cli = await checkBinary(
+    "--cli-binary",
+    raw["--cli-binary"] ?? process.execPath,
+    "the path to an executable Neuve binary",
+  );
+  if (!available.usable) problems.push(gitRefusal(available).trimEnd());
+  if (
+    !namedRoute.success ||
+    repository === undefined ||
+    cli === undefined ||
+    problems.length > 0
+  ) {
     const message = problems.join("\n");
-    if (otherProblems) throw new Error(message);
+    if (problems.length !== 1 || (namedRoute.success && available.usable))
+      throw new Error(message);
     await Bun.write(Bun.stderr, `${message}\n`);
     return 1;
   }
-  const options = parsed.data;
-  // On a Mac without the command-line tools, git only opens Apple's installer.
-  const available = gitAvailability();
-  if (!available.usable) {
-    await Bun.write(Bun.stderr, gitRefusal(available));
-    return 1;
-  }
-  const repository = await realpath(repositoryRoot(resolve(options["--repo"])));
   const screen = commandScreen({ json });
   await screen.header(`neuve setup ${CLI_VERSION}`);
   // The route before anything else is written: a settings file setup can't read stops it here.
@@ -247,27 +286,14 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     previous !== undefined && (await executableFile(previous.graphBinary))
       ? previous.graphBinary
       : undefined;
-  const graph = await realpath(
-    await discoverGraphBinary({
-      override:
-        options["--graph-binary"] ?? process.env.NEUVE_GRAPH_BINARY ?? earlier,
-      executable: process.execPath,
-    }).catch((error) => {
-      if (options["--graph-binary"] === undefined) throw error;
-      throw new Error(
-        argumentRefusal(
-          "--graph-binary",
-          "the path to an executable Neuve Graph binary",
-        ),
-      );
-    }),
-  );
-  const cliPath = options["--cli-binary"] ?? process.execPath;
-  if (!(await executableFile(cliPath)))
-    throw new Error(
-      argumentRefusal("--cli-binary", "the path to an executable Neuve binary"),
-    );
-  const cli = await realpath(cliPath);
+  const graph =
+    namedGraph ??
+    (await realpath(
+      await discoverGraphBinary({
+        override: process.env.NEUVE_GRAPH_BINARY ?? earlier,
+        executable: process.execPath,
+      }),
+    ));
   const versionProcess = Bun.spawn([cli, "--version"], {
     stdout: "pipe",
     stderr: "ignore",
