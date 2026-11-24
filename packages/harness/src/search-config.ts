@@ -128,7 +128,7 @@ const executable = (path: string) => {
   }
 };
 
-// Keep discovery aligned with the CLI's discoverGraphBinary; the release tests check parity.
+// The one rule for finding the Graph engine; the command line uses it too.
 export const discoverSearchGraphBinary = (
   input: Readonly<{ override: string | undefined; executable: string }> = {
     override: process.env.NEUVE_GRAPH_BINARY,
@@ -146,11 +146,15 @@ export const discoverSearchGraphBinary = (
   const installed = resolve(directory, "../lib/neuve/entire-graph");
   if (executable(installed)) return installed;
   const sibling = resolve(directory, "../../neuve-graph/entire-graph");
-  if (!executable(sibling))
-    throw new Error(
-      `Neuve Graph binary is unavailable at ${installed} or ${sibling}; run bun run install:cli, build it, or set NEUVE_GRAPH_BINARY.`,
-    );
-  return sibling;
+  if (executable(sibling)) return sibling;
+  const source = resolve(
+    import.meta.dir,
+    "../../../apps/neuve-graph/entire-graph",
+  );
+  if (!Bun.main.startsWith("/$bunfs/") && executable(source)) return source;
+  throw new Error(
+    `Neuve Graph binary is unavailable at ${installed}, ${sibling}, or ${source} (when running from source). Run bun run install:cli, build it, or set NEUVE_GRAPH_BINARY.`,
+  );
 };
 
 /**

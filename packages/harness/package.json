@@ -20,7 +20,8 @@
     "./coding": "./src/coding.ts",
     "./native-models-capture": "./src/pi/providers/native-models-capture.ts",
     "./native-source-authority": "./src/pi/capture/native-source-authority.ts",
-    "./linear-planning": "./src/linear-planning.ts"
+    "./linear-planning": "./src/linear-planning.ts",
+    "./search-config": "./src/search-config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.124.0",
