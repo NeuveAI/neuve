@@ -1071,7 +1071,8 @@ function buildTurn(group: Group, working: boolean): AgentTurn {
 				type: "text",
 				id: row.uid + ":intent:" + intents,
 				uid: row.uid,
-				chunks: [{ kind: "text", raw }],
+				// A tool's intent is the agent's own words; no `@name` in it is drawn as a mention.
+				chunks: [{ kind: "text", raw, mentions: [] }],
 			});
 			intents++;
 		};
