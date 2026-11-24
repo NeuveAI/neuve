@@ -60,7 +60,7 @@ const AGENTS = agentAuthors(BUILDS);
 const ROLES = Object.fromEntries([...AGENTS].map(([author, value]) => [author, value.role]));
 
 const THREAD: Item[] = [
-	{ kind: "message", key: "e1", entry: 1, at: T + 2 * 60_000, author: USER, text: "@reviewer is on it already", invoked: false },
+	{ kind: "message", key: "e1", entry: 1, at: T + 2 * 60_000, author: USER, text: "@reviewer is on it already, @reviewer-bob", invoked: false },
 	{
 		kind: "message",
 		key: "e2",
@@ -127,7 +127,7 @@ function Thread() {
 					ready
 					onDraftLoaded={() => {}}
 					returned={[]}
-					members={[{ name: "vivienne" }]}
+					members={[{ name: "vivienne" }, { name: "reviewer-bob" }]}
 					builds={BUILDS}
 				/>
 			</div>

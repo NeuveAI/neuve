@@ -43,6 +43,13 @@ const serializer = new MarkdownSerializer(
 	{
 		...defaultMarkdownSerializer.nodes,
 		mention(state, node, parent, index) {
+			// A mention reads as one only after a space or a line's start: "ask" +
+			// "@reviewer" serialized as "ask@reviewer" is plain text to the channel
+			// and to the timeline, so the posted message shows no mention.
+			let prev = index > 0 ? parent.child(index - 1) : null;
+			if (prev && prev.type !== schema.nodes.hard_break && !(prev.isText && /\s$/.test(prev.text ?? ""))) {
+				state.write(" ");
+			}
 			state.write(`@${node.attrs.name}`);
 			// Guard against the mention gluing onto following text: "@ace" + "can"
 			// serializes to "@acecan", which re-parses as a single mention named

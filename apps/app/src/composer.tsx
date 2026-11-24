@@ -31,7 +31,7 @@ import {
 	withoutLeadingAgentMention,
 } from "./agent-mention";
 import { useAgentAvatar } from "./agent-avatar";
-import { isAgentToken, mentionable } from "./build-card";
+import { mentionable } from "./build-card";
 import { agentMode, askMode, useChatMode } from "./composer-mode";
 import { host } from "./host";
 import { attachments } from "./attachments";
@@ -174,7 +174,7 @@ export function Composer(
 	const working = useMemo(() => agents ? mentionable(builds) : [], [agents, builds]);
 	// A login spelled like an agent's name is left out, so that name always means the agent.
 	const mentions = useMemo(() => {
-		const people = members.filter((member) => !isAgentToken(member.name));
+		const people = members.filter((member) => !working.some((agent) => agent.name === member.name.toLowerCase()));
 		return agents ? [{ name: AGENT_ALIAS.name, avatar }, ...working, ...people] : people;
 	}, [agents, working, members, avatar]);
 	const [models, setModels] = useState<ModelOption[]>();

@@ -3,7 +3,7 @@ import type { Listing, People } from "@ace/host/protocol";
 import type { Event } from "@ace/ui";
 
 import { AGENT_ALIAS, withAgentMention } from "./agent-mention";
-import { agentAuthor, agentName, isAgentToken, mentionName } from "./build-card";
+import { agentAuthor, agentName, mentionName } from "./build-card";
 import { placement } from "./placement";
 import { planTool } from "./plan-card";
 import { commentWords, type Said } from "./plan-comments";
@@ -103,16 +103,6 @@ export function credit(
 	return `asked by ${name(asker)} · ${where}`;
 }
 
-function text(value: string, listed: ReadonlySet<string> = new Set()): Event.Message.Content.Text {
-	const words = withAgents(value, listed);
-	const parts = [...words.matchAll(MENTION)].map((match) => ({
-		type: "mention" as const,
-		value: match[1]!,
-		index: match.index,
-	}));
-	return parts.length ? { type: "text", text: words, parts } : { type: "text", text: words };
-}
-
 const NOT_RUN = "Not run";
 
 /** The agent's answer to a plan comment, which is its words to the person, not a tool's output. */
@@ -186,15 +176,6 @@ export function withMention(item: { entry?: number; invoked: boolean; text: stri
 	return item.invoked ? withAgentMention(item.text) : item.text;
 }
 
-/** Text with every agent's name `listed` does not hold kept as words: the channel delivers only to the list. */
-function withAgents(value: string, listed: ReadonlySet<string>): string {
-	return value.replace(
-		/(^|[\s([{])@([\w-]+)/gm,
-		(whole, lead: string, name: string) =>
-			isAgentToken(name) && !listed.has(name.toLowerCase()) ? `${lead}@\u2060${name}` : whole,
-	);
-}
-
 export function toEvents(
 	items: Item[],
 	topic: string,
@@ -215,6 +196,21 @@ export function toEvents(
 	// A run answers the newest message that invoked it, as the channel's run end reports.
 	let asker: string | undefined;
 	const name = (author: string) => authorName(author, people, channels, agents);
+	// An agent's name stays words unless `listed`, the agents the message reached, holds it.
+	const names = new Set([...agents.values()].map(mentionName));
+	const text = (value: string, listed: ReadonlySet<string> = new Set()): Event.Message.Content.Text => {
+		const words = value.replace(
+			/(^|[\s([{])@([\w-]+)/gm,
+			(whole, lead: string, token: string) =>
+				names.has(token.toLowerCase()) && !listed.has(token.toLowerCase()) ? `${lead}@\u2060${token}` : whole,
+		);
+		const parts = [...words.matchAll(MENTION)].map((match) => ({
+			type: "mention" as const,
+			value: match[1]!,
+			index: match.index,
+		}));
+		return parts.length ? { type: "text", text: words, parts } : { type: "text", text: words };
+	};
 	const sender = (model: string | undefined): Event.Sender.Agent => {
 		const value = [model, asker && by(asker)].filter(Boolean).join(" · ");
 		return {

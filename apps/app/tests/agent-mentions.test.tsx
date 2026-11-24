@@ -76,7 +76,7 @@ async function open() {
 				ready
 				onDraftLoaded={() => {}}
 				returned={[]}
-				members={[{ name: "vivienne" }, { name: "reviewer" }]}
+				members={[{ name: "vivienne" }, { name: "reviewer" }, { name: "reviewer-bob" }]}
 				builds={[build]}
 			/>,
 		)
@@ -110,7 +110,7 @@ afterEach(() => {
 test("an agent chosen from the mention list goes on the request as its chat", async () => {
 	const editor = await open();
 	await type(editor, "@rev");
-	expect(rows()).toEqual(["Reviewer"]);
+	expect(rows()).toEqual(["Reviewer", "reviewer-bob"]);
 	await key(editor, "Enter");
 	await key(editor, "Enter");
 	expect(sent).toEqual([{ op: "say", chat: 1, author: "me", text: "@reviewer", agents: [3] }]);
@@ -152,7 +152,7 @@ const posted = (agents?: number[]) => {
 			entry: 1,
 			at: 0,
 			author: "me",
-			text: "@reviewer hold it, @vivienne",
+			text: "@reviewer hold it, @vivienne, @reviewer-bob",
 			invoked: false,
 			...(agents ? { agents } : {}),
 		}],
@@ -174,9 +174,9 @@ const posted = (agents?: number[]) => {
 };
 
 test("a posted message draws an agent as mentioned only from its list of agents", () => {
-	expect(posted()).toEqual(["vivienne"]);
-	expect(posted([2])).toEqual(["vivienne"]);
-	expect(posted([3])).toEqual(["reviewer", "vivienne"]);
+	expect(posted()).toEqual(["vivienne", "reviewer-bob"]);
+	expect(posted([2])).toEqual(["vivienne", "reviewer-bob"]);
+	expect(posted([3])).toEqual(["reviewer", "vivienne", "reviewer-bob"]);
 });
 
 test("an agent's reply that names another agent draws no mention", () => {
@@ -192,6 +192,8 @@ test("an agent's reply that names another agent draws no mention", () => {
 		{},
 		() => undefined,
 		new Map(),
+		new Map(),
+		agentAuthors([build]),
 	);
 	const [content] = (event as { content: { text: string }[] }).content;
 	expect([...content!.text.matchAll(/(?<=^|\s)@([\w-]+)/g)].map((match) => match[1])).toEqual(["vivienne"]);

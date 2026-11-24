@@ -14,11 +14,6 @@ export function mentionName({ role, part }: AgentName): string {
 	return part ? `${role}-${part.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}` : role;
 }
 
-/** Whether a mention token names an agent, which only a message's list of agents draws as a mention. */
-export function isAgentToken(name: string): boolean {
-	return /^(?:implementer|reviewer)(?:-[\w-]*)?$/i.test(name);
-}
-
 /**
  * The agents a person can mention: those of each planning chat's newest build that has agents,
  * whatever their state, since a mention restarts a stopped one. Where two share a name, the plan's
