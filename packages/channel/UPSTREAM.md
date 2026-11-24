@@ -123,8 +123,8 @@ The channel dispatches comment requests through the same chat admission queue as
 
 | Integration file | Approval and build behavior |
 | --- | --- |
-| `packages/channel/src/build.ts` | Stores agent starts, revision deliveries, and work log messages. Approval and `agent_start` share the same start steps. Keeps a stop pending until Pi has stopped all the build’s chats. Pauses active builds in the sharing commit. |
-| `packages/channel/src/channel.ts` | Registers build tools before wrapping them. Marks briefs, keeps build messages out of teammate notifications, and updates the work log from chat events. Keeps build chats read-only on write routes and reuses the chat stop path for stop-all. |
+| `packages/channel/src/build.ts` | Stores agent starts, revision deliveries, and work log messages. Approval and `agent_start` share the same start steps. Keeps a stop pending until Pi has stopped all the build’s chats. Pauses active builds in the sharing commit. Records thread mentions and steers each named agent after the message posts. |
+| `packages/channel/src/channel.ts` | Registers build tools before wrapping them. Marks briefs, keeps build messages out of teammate notifications, and updates the work log from chat events. Keeps build chats read-only on write routes and reuses the chat stop path for stop-all. Publishes mentions on posted thread messages and returns the agents’ final replies to those threads. |
 | `packages/channel/src/extensions.ts` | The tool wrapper refuses new tool calls while the agent’s build is paused. |
 | `packages/channel/src/external-lanes.ts` | Shares Git worktree creation between the lane tool and the host. A reviewer’s branch starts at the implementer’s head and keeps its base. |
 | `packages/channel/src/handoffs.ts` | Leaves the recipient’s shell running when another agent of the build sends a message. |

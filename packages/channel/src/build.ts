@@ -3,7 +3,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { Type, type Static } from "@earendil-works/pi-ai";
 import {
 	AgentDoc, configure, defineDoc, defineExtension, defineTool, InboxDoc, LiveDoc,
-	type ConversationId, type Harness, type InputSubmissionDraft, type SubmissionId, type SubmissionRecord, type TaskId, type ToolExecutionApi, type ToolExecutionResult, type Tx,
+	type ConversationId, type EntryId, type Harness, type InputSubmissionDraft, type SubmissionId, type SubmissionRecord, type TaskId, type ToolExecutionApi, type ToolExecutionResult, type Tx,
 } from "@earendil-works/pi-durable";
 import type { Channel } from "./channel";
 import type { Admission } from "./extensions";
@@ -64,7 +64,9 @@ type StoredBuild = {
 };
 
 type StoredMessage = { requestId: string; message: WorkMessage & { to: ConversationId }; submission?: SubmissionId };
-export type BuildsState = { records: Record<string, StoredBuild>; messages: StoredMessage[] };
+export type Mention = { thread: ConversationId; requestId: string; author: string; text: string; agents: ConversationId[] };
+type StoredMention = Mention & { entry?: EntryId; deliveries?: Record<string, SubmissionId> };
+export type BuildsState = { records: Record<string, StoredBuild>; messages: StoredMessage[]; mentions?: StoredMention[] };
 export const BuildsDoc = defineDoc<BuildsState>({
 	kind: "neuve.builds",
 	version: 1,
@@ -87,12 +89,24 @@ const scopeReadExtension = { name: "neuve-query" };
 const agentKey = (role: AgentRole, part?: string) => JSON.stringify([role, part ?? null]);
 const firstImplementer = agentKey("implementer");
 const messagePrefix = "neuve.build:message:";
+const mentionPrefix = "neuve.build:mention:";
 const stopped = "The plan's agents have been stopped.";
 const pendingStart = "The agent start is recorded and will finish when work resumes.";
+export const waitForBrief = "Wait for the host to send the agent’s brief.";
+
+export class MentionStopping extends Error {
+	constructor(readonly builds: string[]) { super(stopped); }
+}
 
 export function isWorkMessageSubmission(submission: SubmissionRecord): boolean {
 	return submission.type === "input" && (submission.requestId?.startsWith(messagePrefix) ?? false);
 }
+
+export function isMentionSubmission(submission: SubmissionRecord): submission is SubmissionRecord & { type: "input"; requestId: string } {
+	return submission.type === "input" && (submission.requestId?.startsWith(mentionPrefix) ?? false);
+}
+
+const mentionKey = (thread: ConversationId, requestId: string) => `${thread}:${requestId}`;
 
 export function workLog(value: Readonly<BuildsState> | null): WorkMessage[] {
 	return (value?.messages ?? [])
@@ -200,6 +214,8 @@ async function alive(tx: Tx, build: Build): Promise<boolean> {
 
 export class Builds {
 	#agents = new Map<number, { build: string; index: number; requestId: string; role: AgentRole; part?: string }>();
+	#mentions = new Map<string, StoredMention>();
+	#mentionEntries = new Map<number, StoredMention>();
 	#document?: Readonly<BuildsState> | null;
 	#pending = new Set<Promise<void>>();
 	#closing = false;
@@ -213,7 +229,8 @@ export class Builds {
 		host?: BuildHost;
 	}) {}
 
-	observe(value: Readonly<BuildsState> | null | undefined): void {
+	observe(value: Readonly<BuildsState> | null | undefined): string[] {
+		const previous = this.#document;
 		this.#document = value;
 		this.#agents.clear();
 		for (const { build, starts } of Object.values(value?.records ?? {})) {
@@ -222,6 +239,23 @@ export class Builds {
 				this.#agents.set(chat, { build: build.id, index, requestId, role, part });
 			}
 		}
+		const previousMentions = this.#mentions;
+		this.#mentions = new Map();
+		if (!value?.mentions) this.#mentionEntries.clear();
+		for (const mention of value?.mentions ?? []) {
+			const key = mentionKey(mention.thread, mention.requestId);
+			this.#mentions.set(key, mention);
+			if (mention.entry !== undefined) this.#mentionEntries.set(mention.entry, mention);
+			if (!previous || previousMentions.has(key)) continue;
+			for (const build of new Set(mention.agents.map(chat => this.agent(chat)!.build))) {
+				this.log("info", "build.mention.recorded", { build, thread: mention.thread, agents: mention.agents });
+			}
+		}
+		const woken = Object.values(value?.records ?? {})
+			.filter(({ build }) => build.state.kind === "started" && previous?.records[build.id]?.build.state.kind === "stopped")
+			.map(({ build }) => build.id);
+		for (const build of woken) this.log("info", "build.woken", { build });
+		return woken;
 	}
 
 	agent(chat: number) { return this.#agents.get(chat); }
@@ -229,6 +263,67 @@ export class Builds {
 	isBrief(submission: SubmissionRecord): boolean {
 		return submission.type === "input" && submission.requestId !== undefined
 			&& submission.requestId === this.agent(submission.conversationId)?.requestId;
+	}
+
+	async checkMention(tx: Tx, agents: ConversationId[], problems: string[]): Promise<StoredBuild[]> {
+		const { records } = await tx.doc(BuildsDoc);
+		const builds = new Map<string, StoredBuild>();
+		let foreign = false;
+		for (const chat of agents) {
+			const agent = this.agent(chat);
+			if (!agent) {
+				if (!foreign) problems.push("Mention only agents of this channel's plans.");
+				foreign = true;
+				continue;
+			}
+			const { build, role, part, requestId } = agent;
+			const record = records[build]!;
+			builds.set(build, record);
+			const name = `The ${role}${part === undefined ? "" : ` for ${JSON.stringify(part)}`}`;
+			if (!await tx.submissionByRequest(chat, requestId)) problems.push(`${name}: ${waitForBrief}`);
+			if (record.build.state.kind === "paused") problems.push(`${name}: ${buildRefusal("paused")}`);
+		}
+		if (problems.length) throw new Error(problems.join(" "));
+		return [...builds.values()];
+	}
+
+	async recordMention(tx: Tx, mention: Mention, problems: string[]) {
+		const builds = await this.checkMention(tx, mention.agents, problems);
+		const stopping = builds.filter(record => record.stopping).map(({ build }) => build.id);
+		if (stopping.length) throw new MentionStopping(stopping);
+		const document = await tx.doc(BuildsDoc);
+		document.mentions ??= [];
+		const { mentions } = document;
+		const index = mentions.findIndex(old => old.thread === mention.thread && old.requestId === mention.requestId);
+		if (index === -1) mentions.push(mention);
+		else mentions[index] = mention;
+		for (const { build } of builds) {
+			if (build.state.kind === "stopped") build.state = { kind: "started" };
+		}
+	}
+
+	mentionAgents(entry: number) { return this.#mentionEntries.get(entry)?.agents; }
+
+	mentionFor(submission: SubmissionRecord) {
+		if (!isMentionSubmission(submission)) return;
+		const { requestId } = submission;
+		const key = requestId.slice(mentionPrefix.length, requestId.lastIndexOf(":"));
+		const mention = this.#mentions.get(key);
+		if (mention) return { thread: mention.thread, requestId };
+	}
+
+	postedMention({ conversationId: thread, entry, requestId }: SubmissionRecord) {
+		if (this.#closing || entry === undefined || requestId === undefined || this.#mentionEntries.has(entry)) return;
+		const mention = this.#mentions.get(mentionKey(thread, requestId));
+		if (!mention) return;
+		this.#mentionEntries.set(entry, mention);
+		void this.#track(Promise.resolve().then(async () => {
+			await this.harness.commit(async tx => {
+				const stored = (await tx.doc(BuildsDoc)).mentions!.find(old => old.thread === thread && old.requestId === requestId)!;
+				stored.entry = entry;
+			}, context);
+			await this.#deliverMention(mention);
+		}).catch(error => this.log("error", "build.mention.failed", { thread, ...failure(error) })));
 	}
 
 	async paused(chat: ConversationId, scope: Context): Promise<string | undefined> {
@@ -287,15 +382,22 @@ export class Builds {
 		const records = this.#document?.records ?? {};
 		for (const record of id === undefined ? Object.values(records) : [records[id]]) {
 			if (!record?.stopping || record.build.state.kind !== "stopped") continue;
-			const { build, stopping } = record;
+			const { build } = record;
 			const { by, at } = record.build.state;
-			await Promise.all(stopping.map(async ({ chat, running }) => {
-				// Drain admission before aborting, without holding it while tools finish.
-				await this.options.admit(chat, async () => {});
-				await this.options.stop(chat, by, at, running ? `neuve.build:${build.id}:stop:${chat}` : undefined);
-			}));
-			await this.harness.commit(async tx => { delete (await tx.doc(BuildsDoc)).records[build.id]!.stopping; }, context);
-			this.log("info", "build.stopped", { build: build.id });
+			const key = `neuve.build:${build.id}:stop:${at}`;
+			const finish = async () => {
+				const current = this.#document?.records[build.id];
+				if (current?.build.state.kind !== "stopped" || current.build.state.at !== at || !current.stopping) return;
+				await Promise.all(current.stopping.map(async ({ chat, running }) => {
+					// Drain admission before aborting, without holding it while tools finish.
+					await this.options.admit(chat, async () => {});
+					await this.options.stop(chat, by, at, running ? `neuve.build:${build.id}:stop:${chat}:${at}` : undefined);
+				}));
+				await this.harness.commit(async tx => { delete (await tx.doc(BuildsDoc)).records[build.id]!.stopping; }, context);
+				this.log("info", "build.stopped", { build: build.id });
+			};
+			if (this.options.host) await this.options.host.share(key, finish);
+			else await finish();
 		}
 	}
 
@@ -529,7 +631,21 @@ export class Builds {
 		const host = this.options.host;
 		if (!host || this.#closing) return;
 		const task = (async () => {
-			const { records, messages } = (await this.harness.snapshot(BuildsDoc, context)) ?? { records: {}, messages: [] };
+			const snapshot = await this.harness.snapshot(BuildsDoc, context);
+			const { records, messages } = snapshot ?? { records: {}, messages: [] };
+			let mentions = snapshot?.mentions;
+			if (mentions?.some(mention => mention.entry === undefined)) {
+				await this.harness.commit(async tx => {
+					for (const mention of (await tx.doc(BuildsDoc)).mentions ?? []) {
+						if (mention.entry !== undefined) continue;
+						const entry = (await tx.submissionByRequest(mention.thread, mention.requestId))?.entry;
+						if (entry !== undefined) mention.entry = entry;
+					}
+				}, context);
+				mentions = (await this.harness.snapshot(BuildsDoc, context))?.mentions;
+			}
+			await Promise.all((mentions ?? []).filter(mention => mention.entry !== undefined)
+				.map(mention => this.#deliverMention(mention, ids)));
 			for (const { requestId, message, submission } of messages) {
 				if (this.#closing) return;
 				if (submission !== undefined || (ids && !ids.includes(message.build))) continue;
@@ -604,6 +720,35 @@ export class Builds {
 			(await tx.doc(BuildsDoc)).messages.find(message => message.requestId === requestId)!.submission = submission;
 		}, context);
 		this.log("info", "build.message.delivered", { build, chat: to, submission });
+	}
+
+	async #deliverMention(mention: StoredMention, ids?: readonly string[]): Promise<void> {
+		const { thread, author, text } = mention;
+		const key = mentionKey(thread, mention.requestId);
+		const host = this.options.host!;
+		await Promise.all(mention.agents.map(async chat => {
+			const { build } = this.agent(chat)!;
+			if (mention.deliveries?.[chat] !== undefined || (ids && !ids.includes(build))) return;
+			const requestId = `${mentionPrefix}${key}:${chat}`;
+			const pending = () => this.#mentions.get(key)!.deliveries?.[chat] === undefined;
+			try {
+				await this.#resumePending(host, build, requestId, async () => {
+					if (!pending()) return;
+					const submission = await this.#send(build, chat, {
+						type: "input", whenBusy: "steer", requestId, content: content(author, text),
+					});
+					if (submission === undefined) return;
+					await this.harness.commit(async tx => {
+						const saved = (await tx.doc(BuildsDoc)).mentions!.find(old => old.thread === thread && old.requestId === mention.requestId)!;
+						saved.deliveries ??= {};
+						saved.deliveries[chat] = submission;
+					}, context);
+					this.log("info", "build.mention.delivered", { build, chat, submission });
+				}, pending);
+			} catch (error) {
+				this.log("error", "build.mention.failed", { build, chat, thread, ...failure(error) });
+			}
+		}));
 	}
 
 	async #start(id: string, host: BuildHost, key: string): Promise<void> {

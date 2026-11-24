@@ -725,7 +725,7 @@ export type Event =
 		files?: TextFile[];
 		invoked: boolean;
 		system?: ReviewNotice | BuildNotice;
-		/** The agents the message mentions, by chat. The channel does not fill it yet. */
+		/** The channel fills this with the chats of the agents the message was delivered to. */
 		agents?: ChatId[];
 		deleted?: boolean;
 		edited?: number;

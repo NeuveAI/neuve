@@ -52,7 +52,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 
 import { type Directory, messaging, subagent } from "./agents";
 import { type Browser, browser } from "./browser";
-import { Builds, BuildsDoc, buildTools, isWorkMessageSubmission, workLog, type BuildHost, type BuildsState } from "./build";
+import { Builds, BuildsDoc, buildTools, isMentionSubmission, isWorkMessageSubmission, MentionStopping, waitForBrief, workLog, type BuildHost, type BuildsState, type Mention } from "./build";
 import {
 	caption,
 	CaptionsDoc,
@@ -397,14 +397,18 @@ export class Channel {
 		channel.#unsubscribe = harness.subscribeCommits(({ changes }) => {
 			const commentMessages = channel.#observePlanCommentSends(changes);
 			const unannouncedEntries = new Set<EntryId>();
+			const answeredMentions = new Set<ConversationId>();
 			for (const change of changes) {
 				if (change.type !== "submission") continue;
 				const submission = change.value;
 				const workMessage = isWorkMessageSubmission(submission);
+				const mention = isMentionSubmission(submission);
 				if (workMessage) handoffs.buildSteer(submission);
-				if (submission.entry !== undefined && (workMessage || channel.#builds.isBrief(submission))) {
+				if (submission.entry !== undefined && (workMessage || mention || channel.#builds.isBrief(submission))) {
 					unannouncedEntries.add(submission.entry);
 				}
+				if (mention && submission.status === "done") answeredMentions.add(submission.conversationId);
+				channel.#builds.postedMention(submission);
 			}
 			const ended: [ConversationId, readonly SubmissionId[]][] = [];
 			for (const change of changes) {
@@ -416,7 +420,8 @@ export class Channel {
 				}
 				if (change.type !== "document") continue;
 				if (change.record.kind === BuildsDoc.definition.kind) {
-					channel.#builds.observe(change.value as BuildsState | null);
+					const woken = channel.#builds.observe(change.value as BuildsState | null);
+					if (options.resume !== false && woken.length) void Promise.resolve().then(() => channel.#builds.resume(woken));
 					continue;
 				}
 				// Commit order, not request completion order, decides the state clients see.
@@ -455,6 +460,7 @@ export class Channel {
 				if (run) {
 					channel.#runs.set(scope.conversationId, run.inputs);
 					if (inputs?.[0] !== run.inputs[0]) {
+						if (inputs && answeredMentions.has(scope.conversationId)) ended.push([scope.conversationId, inputs]);
 						void channel.#builds.state(scope.conversationId, "running", run.inputs[0]);
 					}
 				} else if (inputs) {
@@ -847,13 +853,52 @@ export class Channel {
 		}
 		const last = settled.get(inputs.at(-1)!);
 		if (!last) return;
-		const outcome = last.status === "done"
-			? "done"
-			: last.reason === "aborted"
-			? "stopped"
-			: "failed";
-		await this.#builds.state(chat, outcome, undefined);
-		await this.#publishRun(chat, inputs.map((id) => settled.get(id)), outcome);
+		const submissions = inputs.map(id => settled.get(id));
+		if (!this.#runs.has(chat)) {
+			const outcome = last.status === "done"
+				? "done"
+				: last.reason === "aborted"
+				? "stopped"
+				: "failed";
+			await this.#builds.state(chat, outcome, undefined);
+			await this.#publishRun(chat, submissions, outcome);
+		}
+		if (last.type === "input" && last.status === "done") {
+			await this.#replyToMentions(chat, submissions, last.answer);
+		}
+	}
+
+	async #replyToMentions(chat: ConversationId, submissions: (SubmissionRecord | undefined)[], answer: EntryId) {
+		const agent = this.#builds.agent(chat);
+		if (!agent) return;
+		const threads = new Map<ConversationId, string>();
+		for (const submission of submissions) {
+			if (!submission) continue;
+			const mention = this.#builds.mentionFor(submission);
+			if (mention && !threads.has(mention.thread)) threads.set(mention.thread, mention.requestId);
+		}
+		if (!threads.size) return;
+		try {
+			const message = (await this.#harness.commit(tx => tx.entry(answer), context))?.model?.[0];
+			if (message?.role !== "assistant") return;
+			const text = room.text(message);
+			if (!text) return;
+			await Promise.all([...threads].map(async ([thread, requestId]) => {
+				try {
+					const conversation = await this.#conversation(thread);
+					await conversation.submit({
+						type: "write",
+						entry: room.draft(`agent@${chat}`, text, message.timestamp),
+						requestId: `neuve.build:reply:${requestId}`,
+					}, context);
+					this.#log("info", "build.mention.replied", { build: agent.build, chat, thread });
+				} catch (error) {
+					this.#log("error", "build.mention.reply.failed", { build: agent.build, chat, thread, ...failure(error) });
+				}
+			}));
+		} catch (error) {
+			this.#log("error", "build.mention.reply.failed", { build: agent.build, chat, ...failure(error) });
+		}
 	}
 
 	#planPlacementCache(chat: ConversationId): PlanCommentPlacements {
@@ -944,7 +989,7 @@ export class Channel {
 			const input = await this.#harness.commit(async (tx) => {
 				for (const submission of submissions.toReversed()) {
 					if (submission?.type !== "input" || submission.conversationId !== chat || submission.entry === undefined) continue;
-					if (this.#builds.isBrief(submission)) continue;
+					if (this.#builds.isBrief(submission) || isMentionSubmission(submission)) continue;
 					const human = room.human((await tx.entry(submission.entry))!);
 					if (human && !room.isAgent(human.author)) return { author: human.author, submission: submission.id };
 				}
@@ -1093,27 +1138,71 @@ export class Channel {
 		this.#author(request.author);
 		const conversation = await this.#writableChat(request.chat);
 		room.checkAttachments(request);
+		const mention = this.#mention(request, conversation.id);
+		const requestId = mention?.requestId ?? request.requestId;
+		const { author, text, images, files, agents } = request;
+		const value = requestId && await digest({ op: "say", author, text, images, files, agents });
+		if (mention) {
+			const existing = await this.#checkMessage(conversation.id, mention.requestId, value!, mention);
+			if (existing !== undefined) return { submission: existing };
+		}
 		// The chat's next run reads this message, so it must fit the model the chat has now.
 		const { model } = await conversation.agent(context);
 		const selected = model && this.#options.models.getModel(model.provider, model.modelId);
 		if (selected) room.checkContext(selected, request);
 		const entry = room.draft(request.author, request.text, Date.now(), request);
-		const { requestId } = request;
-		if (requestId) {
-			const { author, text, images, files } = request;
-			const value = await digest({ op: "say", author, text, images, files });
-			const existing = await this.#harness.commit(
-				(tx) => claim(tx, conversation.id, requestId, value),
+		if (requestId && value) {
+			const existing = await this.#afterMentionStops(() => this.#harness.commit(
+				tx => this.#claimMessage(tx, conversation.id, requestId, value, mention),
 				context,
-			);
+			));
 			if (existing !== undefined) return { submission: existing };
 		}
 		const submission = await conversation.submit({
 			type: "write",
 			entry,
-			...(request.requestId ? { requestId: request.requestId } : {}),
+			...(requestId ? { requestId } : {}),
 		}, context);
 		return { submission: submission.id };
+	}
+
+	#mention({ agents, author, text, requestId }: Extract<Request, { op: "say" | "ask" }>, thread: ConversationId): Mention | undefined {
+		if (!agents) return;
+		return { thread, author, text, requestId: requestId ?? crypto.randomUUID(), agents: [...new Set(agents)] as ConversationId[] };
+	}
+
+	#mentionProblems(author: string) {
+		const problems: string[] = [];
+		if (room.isAgent(author)) problems.push("Only a person can mention a plan's agents.");
+		const refusal = this.#invokeRefusal(author, this.#settings.shared);
+		if (refusal) problems.push(refusal);
+		return problems;
+	}
+
+	#checkMessage(chat: ConversationId, requestId: string, value: string, mention: Mention | undefined) {
+		return this.#harness.commit(async tx => {
+			const existing = await admitted(tx, chat, requestId, value);
+			if (existing !== undefined) return existing;
+			if (mention) {
+				await this.#builds.checkMention(tx, mention.agents, this.#mentionProblems(mention.author));
+			}
+		}, context);
+	}
+
+	async #claimMessage(tx: Tx, chat: ConversationId, requestId: string, value: string, mention: Mention | undefined) {
+		const existing = await claim(tx, chat, requestId, value);
+		if (existing === undefined && mention) await this.#builds.recordMention(tx, mention, this.#mentionProblems(mention.author));
+		return existing;
+	}
+
+	async #afterMentionStops<T>(admit: () => Promise<T>): Promise<T> {
+		for (;;) {
+			try { return await admit(); }
+			catch (error) {
+				if (!(error instanceof MentionStopping)) throw error;
+				await Promise.all(error.builds.map(build => this.#builds.finishStops(build)));
+			}
+		}
 	}
 
 	#ask(request: Extract<Request, { op: "ask" }>) {
@@ -1211,33 +1300,32 @@ export class Channel {
 	async #admit(request: Extract<Request, { op: "ask" }>, settled: Promise<unknown>) {
 		this.#author(request.author);
 		room.checkAttachments(request);
-		await this.#mayInvoke(request.author);
+		if (!request.agents) await this.#mayInvoke(request.author);
 		const conversation = await this.#writableChat(request.chat);
-		const { requestId, author, text, images, files, model, automatic, effort, mode, attended } = request;
-		if (mode !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's mode.");
-		if (attended !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's attendance.");
+		const mention = this.#mention(request, conversation.id);
+		const requestId = mention?.requestId ?? request.requestId;
+		const { author, text, images, files, model, automatic, effort, mode, attended, agents } = request;
 		let bound: ((tx: Tx) => Promise<void>) | undefined;
 		if (requestId) {
-			const value = await digest({ op: "ask", author, text, images, files, model, automatic, effort, mode, attended });
+			const value = await digest({ op: "ask", author, text, images, files, model, automatic, effort, mode, attended, agents });
 			// A retry gets its submission back without selecting again, so it never undoes a later choice.
-			const existing = await this.#harness.commit(
-				(tx) => admitted(tx, conversation.id, requestId, value),
-				context,
-			);
+			const existing = await this.#checkMessage(conversation.id, requestId, value, mention);
 			if (existing !== undefined) return { submission: existing };
 			bound = async (tx) => {
-				if (await claim(tx, conversation.id, requestId, value) !== undefined) {
+				if (await this.#claimMessage(tx, conversation.id, requestId, value, mention) !== undefined) {
 					throw new Error(`Request ${requestId} was admitted by a concurrent request`);
 				}
 			};
 		}
+		if (mode !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's mode.");
+		if (attended !== undefined && room.isAgent(author)) throw new Error("Only a person can set the chat's attendance.");
 		const input: InputSubmissionDraft = {
 			type: "input",
 			content: room.content(request.author, request.text, request),
 			whenBusy: "steer",
-			...(request.requestId ? { requestId: request.requestId } : {}),
+			...(requestId ? { requestId } : {}),
 		};
-		const { submission } = await this.#select(conversation, request, { bound, mode, attended, input, settled });
+		const { submission } = await this.#afterMentionStops(() => this.#select(conversation, request, { bound, mode, attended, input, settled }));
 		return { submission };
 	}
 
@@ -1247,7 +1335,7 @@ export class Channel {
 		const conversation = await this.#conversation(request.chat);
 		const agent = this.#builds.agent(conversation.id);
 		if (agent && !await this.#harness.commit(tx => tx.submissionByRequest(conversation.id, agent.requestId), context)) {
-			throw new Error("Wait for the host to send the agent’s brief.");
+			throw new Error(waitForBrief);
 		}
 		return this.#select(conversation, request);
 	}
@@ -1258,12 +1346,15 @@ export class Channel {
 		return author === this.#options.owner || room.isAgent(author) || shared;
 	}
 
+	#invokeRefusal(author: string, shared: boolean) {
+		if (this.#canInvoke(author, shared)) return;
+		return `Agent access is off in this channel, so only its owner, ${this.#options.owner}, can ask its agents.`;
+	}
+
 	async #mayInvoke(author: string) {
 		const settings = await this.#harness.snapshot(SettingsDoc, context);
-		if (this.#canInvoke(author, settings?.shared !== false)) return;
-		throw new Error(
-			`Agent access is off in this channel, so only its owner, ${this.#options.owner}, can ask its agents.`,
-		);
+		const refusal = this.#invokeRefusal(author, settings?.shared !== false);
+		if (refusal) throw new Error(refusal);
 	}
 
 	/** Model and effort apply to a whole run, never just its later turns. */
@@ -1764,6 +1855,8 @@ export class Channel {
 				if (index?.pendingEntries.has(event.entry)) { held.set(event.entry, event); return; }
 				const system = index?.entries.get(event.entry);
 				if (system) event = { ...event, system };
+				const agents = this.#builds.mentionAgents(event.entry);
+				if (agents) event = { ...event, agents };
 			}
 			if ((event.kind === "deleted" || event.kind === "edited") && !actions) return;
 			if (event.kind === "stopped" && !request.stops) return;

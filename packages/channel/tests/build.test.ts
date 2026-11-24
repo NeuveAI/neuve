@@ -4,7 +4,7 @@ import { readFile, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, type FauxResponseStep } from "@earendil-works/pi-ai";
-import { defineDoc, ROOT_CONVERSATION_ID, type ConversationId, type Harness, type ToolRegistration } from "@earendil-works/pi-durable";
+import { defineDoc, ROOT_CONVERSATION_ID, type ConversationId, type Harness, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { SharedWork } from "../../records-core/src/shared-work";
 import { planScopeRead } from "../../../apps/neuve-host/src/worker-runtime";
 import { policy } from "../../harness/src/chat-runtime/transcript";
@@ -1195,6 +1195,375 @@ async function startPair(run: Awaited<ReturnType<typeof setup>>) {
 	const first = await startBuild(run);
 	return { ...first, reviewer: await startReviewer(run, first.chat) };
 }
+
+// Only the agent chat's queue and transcript show whether duplicate targets turn into extra steers.
+test("a say mention steers each distinct plan agent as the person without announcing it again", async () => {
+	const run = await setup();
+	const { fixture } = run;
+	const { chat, agent, reviewer } = await startPair(run);
+	const target = await fixture.watch({ op: "watch", chat: reviewer });
+	const folder = run.worktrees[1]!.path;
+	fixture.script(tool("bash", { command: "until test -f release-mention; do sleep .02; done" }, "mention-shell"));
+	const working = await wake(run, "Check the exports.", reviewer);
+	await target.until("tool", event => event.call === "mention-shell");
+	const text = "Hold the final review for @teammate.";
+	const request = {
+		op: "say" as const, author: OWNER, text, agents: [reviewer, chat, reviewer], requestId: "mention:hold",
+		files: [{ name: "thread-only.txt", text: "The attachment belongs in the thread." }],
+	};
+	const before = run.runs.filter(value => value.chat === chat).length;
+	fixture.script(fauxAssistantMessage("I will hold."), fauxAssistantMessage("I will hold."));
+	const receipt = await fixture.request(request);
+	expect(await fixture.request(request)).toEqual(receipt);
+	const queued = await target.until("queue", event => event.messages.some(message => message.text === text));
+	expect(queued.messages).toEqual([{ submission: expect.any(Number), author: OWNER, text, invoked: true }]);
+	await agent.until("reply", event => event.text === "I will hold.");
+	expect(target.of("result").some(event => event.call === "mention-shell")).toBe(false);
+	await writeFile(join(folder, "release-mention"), "");
+	await target.until("reply", event => event.text === "I will hold.");
+	for (const [recipient, transcript] of [[reviewer, target], [chat, agent]] as const) {
+		const delivered = await run.harness.commit(
+			tx => tx.submissionByRequest(recipient as ConversationId, `neuve.build:mention:1:mention:hold:${recipient}`), context,
+		);
+		const messages = transcript.of("message").filter(message => message.text === text);
+		expect(messages).toEqual([{
+			kind: "message", chat: recipient, entry: delivered?.entry, author: OWNER, text, invoked: true, at: expect.any(Number),
+		}]);
+	}
+	const original = await (await run.harness.submission(working, context))?.status(context);
+	const steer = await (await run.harness.submission(queued.messages[0]!.submission as SubmissionId, context))?.status(context);
+	expect(steer).toMatchObject({ status: "done", answer: original?.answer });
+	await fixture.channel.close();
+	expect(run.said.filter(value => value.chat === reviewer).map(value => value.author)).toEqual([OWNER]);
+	expect(run.said.filter(value => value.chat === chat).some(value => value.mentions?.includes("teammate"))).toBe(false);
+	expect(run.runs.filter(value => value.chat === chat)).toHaveLength(before);
+});
+
+// A stopped build can look active while its agent stays asleep or a later Stop reuses the old note.
+test("a mention wakes a stopped plan and a second Stop writes its own note", async () => {
+	const joined = Promise.withResolvers<void>();
+	const run = await setup({ onSharedWait: joined.resolve });
+	const { fixture, watch } = run;
+	const { build, chat, agent } = await startBuild(run);
+	const stop = { op: "build-stop", author: OWNER, build: build.id } as const;
+	const command = "until test -f release-stop; do sleep .02; done";
+	fixture.script(tool("bash", { command }, "before-stop"));
+	await wake(run, "Keep checking.", chat);
+	await agent.until("tool", event => event.call === "before-stop");
+	const stopLookup = Promise.withResolvers<void>();
+	const releaseStop = Promise.withResolvers<void>();
+	const conversation = run.harness.conversation.bind(run.harness);
+	const lookup = spyOn(run.harness, "conversation").mockImplementation(async (id, scope) => {
+		if (id === chat) {
+			stopLookup.resolve();
+			await releaseStop.promise;
+		}
+		return conversation(id, scope);
+	});
+	const stopping = fixture.request(stop);
+	try {
+		await stopLookup.promise;
+		fixture.script(tool("bash", { command }, "after-mention"));
+		const sending = fixture.request({ op: "say", author: OWNER, text: "Check again.", agents: [chat] });
+		await Promise.race([joined.promise, sending.then(() => { throw new Error("The mention posted before Stop finished."); })]);
+		expect(watch.of("message").some(event => event.text === "Check again.")).toBe(false);
+		releaseStop.resolve();
+		await Promise.all([stopping, sending]);
+	} finally {
+		releaseStop.resolve();
+		lookup.mockRestore();
+		await stopping.catch(() => {});
+	}
+	await agent.until("stopped");
+	const stopped = await buildAt(watch, 0, "stopped");
+	await agent.until("tool", event => event.call === "after-mention");
+	expect(watch.of("builds").at(-1)?.builds[0]?.state).toEqual({ kind: "started" });
+	await fixture.request(stop);
+	const second = await agent.until("stopped", event => event.at !== (stopped.state.kind === "stopped" && stopped.state.at));
+	expect(agent.of("stopped")).toEqual([
+		expect.objectContaining({ at: stopped.state.kind === "stopped" && stopped.state.at }),
+		second,
+	]);
+});
+
+// Passive writes, invoked inputs, and replay use different transcript paths.
+test("say and ask publish their distinct mentions live and after reopening", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { chat, reviewer } = await startPair(run);
+	fixture.script(fauxAssistantMessage("Read."), fauxAssistantMessage("Read."));
+	await fixture.request({ op: "say", author: OWNER, text: "Please check.", agents: [reviewer, chat, reviewer] });
+	const said = await watch.until("message", event => event.text === "Please check.");
+	expect(said).toMatchObject({ invoked: false, agents: [reviewer, chat] });
+	await until(() => fixture.channel.isIdle());
+	fixture.script(fauxAssistantMessage("Read."), fauxAssistantMessage("Read."));
+	const asked = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Please verify.", agents: [chat] });
+	const message = await watch.until("message", event => event.text === "Please verify.");
+	expect(message).toMatchObject({ invoked: true, agents: [chat] });
+	expect(await fixture.request({ op: "wait", submission: asked.submission })).toBe("done");
+	await until(() => fixture.channel.isIdle());
+	await fixture.request({ op: "edit", author: OWNER, entry: said.entry, text: "Checked." });
+	await fixture.request({ op: "delete", author: OWNER, entry: message.entry });
+	await fixture.restart();
+	const replay = await fixture.watch();
+	expect(replay.of("message").find(event => event.entry === said.entry)).toMatchObject({ text: "Checked.", agents: [reviewer, chat] });
+	expect(replay.of("message").find(event => event.entry === message.entry)).toMatchObject({ deleted: true, agents: [chat] });
+});
+
+// A queued ask has no transcript entry until the thread's current run reaches a boundary.
+test("a queued ask publishes its agent list and delivers the mention only when it posts", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { chat, agent } = await startBuild(run);
+	const running = Promise.withResolvers<void>();
+	const finish = Promise.withResolvers<void>();
+	fixture.script(async () => {
+		running.resolve();
+		await finish.promise;
+		return fauxAssistantMessage("Finished the first check.");
+	});
+	const text = "Please verify the retry too.";
+	const requestId = "queued-mention";
+	const delivery = () => run.harness.commit(tx => tx.submissionByRequest(
+		chat as ConversationId, `neuve.build:mention:${ROOT_CONVERSATION_ID}:${requestId}:${chat}`,
+	), context);
+	try {
+		await invoke(fixture, "Check the export.");
+		await running.promise;
+		const { submission } = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, text, agents: [chat], requestId });
+		await watch.until("queue", event => event.messages.some(message => message.submission === submission));
+		expect(watch.of("message").some(event => event.text === text)).toBe(false);
+		expect(await delivery()).toBeUndefined();
+
+		fixture.script(fauxAssistantMessage("Verified."), fauxAssistantMessage("Verified."));
+		finish.resolve();
+		const posted = await watch.until("message", event => event.text === text);
+		expect(posted).toMatchObject({ invoked: true, agents: [chat] });
+		const received = await agent.until("message", event => event.text === text);
+		expect(received).toMatchObject({ author: OWNER, invoked: true });
+		expect(received.entry).toBeGreaterThan(posted.entry);
+		expect((await delivery())?.entry).toBe(received.entry);
+		expect(await fixture.request({ op: "wait", submission })).toBe("done");
+	} finally {
+		finish.resolve();
+	}
+});
+
+// The thread can post while the worker is closing, before the mention is linked or delivered.
+test("reopening finds a posted mention that the closing worker did not deliver", async () => {
+	const closing = Promise.withResolvers<Promise<void>>();
+	const run = await setup({ onStep(step) {
+		if (step === "build.mention.recorded") closing.resolve(run.fixture.channel.close());
+	} });
+	const { fixture } = run;
+	const { chat } = await startBuild(run);
+	const text = "Pick up after reopening.";
+	await fixture.request({ op: "say", author: OWNER, text, agents: [chat] });
+	await closing.promise;
+	fixture.script(fauxAssistantMessage("Picked up."));
+	await fixture.restart();
+	const replay = await fixture.watch();
+	expect(replay.of("message").find(event => event.text === text)).toMatchObject({ agents: [chat] });
+	await replay.until("message", event => event.text === "Picked up." && event.author === `agent@${chat}`);
+	const agent = await fixture.watch({ op: "watch", chat });
+	expect(agent.of("message").filter(event => event.text === text)).toHaveLength(1);
+});
+
+// Pi can settle a run with mentions from several threads and start its follow-up in the same commit.
+test("a mentioned agent replies once to each thread while its queued follow-up runs", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { chat, agent } = await startBuild(run);
+	const { chat: other } = await fixture.request<{ chat: number }>({ op: "chat", author: OWNER });
+	const otherThread = await fixture.watch({ op: "watch", chat: other });
+	fixture.script(tool("bash", { command: "until test -f release-reply; do sleep .02; done" }, "reply-shell"));
+	const working = await wake(run, "Check the export.", chat);
+	await agent.until("tool", event => event.call === "reply-shell");
+	const mentions = [
+		{ requestId: "first", text: "Check the retry too." },
+		{ requestId: "second", text: "Check errors too." },
+		{ requestId: "from-other", text: "Check the response.", chat: other },
+	];
+	for (const mention of mentions) {
+		await fixture.request({ op: "say", author: OWNER, agents: [chat], ...mention });
+		await agent.until("queue", event => event.messages.some(message => message.text === mention.text));
+	}
+	const followUp = await wake(run, "Check the next export.", chat);
+	const finishFollowUp = Promise.withResolvers<void>();
+	fixture.script(tool("bash", { command: "true" }, "retry-check"),
+		tool("bash", { command: "true" }, "error-check"), fauxAssistantMessage("All checks passed."), async () => {
+			await finishFollowUp.promise;
+			return fauxAssistantMessage("Next export checked.");
+		});
+	try {
+		await writeFile(join(run.worktrees[0]!.path, "release-reply"), "");
+		expect(await fixture.request({ op: "wait", submission: working })).toBe("done");
+		for (const thread of [watch, otherThread]) {
+			await thread.until("message", event => event.text === "All checks passed.");
+		}
+		expect((await (await run.harness.submission(followUp, context))?.status(context))?.status).toBe("placed");
+	} finally {
+		finishFollowUp.resolve();
+	}
+	expect(await fixture.request({ op: "wait", submission: followUp })).toBe("done");
+	await fixture.restart();
+	for (const thread of [ROOT_CONVERSATION_ID, other]) {
+		const replay = await fixture.watch({ op: "watch", chat: thread });
+		expect(replay.of("message").filter(event => event.author === `agent@${chat}`)).toEqual([
+			expect.objectContaining({ text: "All checks passed.", invoked: false }),
+		]);
+	}
+});
+
+// Stop ends queued asks without an entry, even when their mention record is already durable.
+test("a mention withdrawn into the draft does not reach the plan agent on reopen", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { chat, agent } = await startBuild(run);
+	fixture.script(tool("bash", { command: "until test -f release-thread; do sleep .02; done" }, "thread-shell"));
+	await fixture.request({ op: "ask", author: OWNER, mode: "ace", text: "Check the export." });
+	await watch.until("tool", event => event.call === "thread-shell");
+	const request = { op: "ask", author: OWNER, text: "Check the retry.", agents: [chat], requestId: "withdraw" } as const;
+	const receipt = await fixture.request<{ submission: number }>(request);
+	await watch.until("queue", event => event.messages.some(message => message.submission === receipt.submission));
+	await fixture.request({ op: "stop", author: OWNER });
+	await watch.until("queue", event => !!event.withdrawn?.some(message => message.submission === receipt.submission));
+	expect(agent.of("message").some(event => event.text === request.text)).toBe(false);
+	await fixture.restart();
+	await until(() => fixture.channel.isIdle());
+	const replay = await fixture.watch({ op: "watch", chat });
+	fixture.script(fauxAssistantMessage("Checked."));
+	await fixture.request({ ...request, op: "say", requestId: "resend" });
+	await replay.until("reply", event => event.text === "Checked.");
+	expect(replay.of("message").filter(event => event.text === request.text)).toHaveLength(1);
+	const ids = await run.harness.commit(async tx => Promise.all(["withdraw", "resend"].map(id => tx.submissionByRequest(
+		chat as ConversationId, `neuve.build:mention:${ROOT_CONVERSATION_ID}:${id}:${chat}`,
+	))), context);
+	expect(ids).toEqual([undefined, expect.objectContaining({ status: "done" })]);
+});
+
+// A refused batch could wake an earlier valid target before reaching its invalid targets.
+test("a mention names every bad target without posting or waking a valid stopped plan", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const first = await startBuild(run);
+	await fixture.request({ op: "build-stop", author: OWNER, build: first.build.id });
+	const plan = await run.draft(revisedText);
+	fixture.script(fauxAssistantMessage("Second plan ready."));
+	await run.approve(plan);
+	const build = await buildAt(watch, 1, "started");
+	const chat = build.agents[0]!.chat;
+	await until(() => fixture.channel.isIdle());
+
+	const briefLookup = Promise.withResolvers<ConversationId>();
+	const releaseBrief = Promise.withResolvers<void>();
+	const conversation = run.harness.conversation.bind(run.harness);
+	const lookup = spyOn(run.harness, "conversation").mockImplementation(async (id, scope) => {
+		const target = await conversation(id, scope);
+		if (id <= chat || !target) return target;
+		briefLookup.resolve(id);
+		await releaseBrief.promise;
+		return target;
+	});
+	try {
+		fixture.script(tool("agent_start", { role: "reviewer", part: "src/x" }, "unbriefed-reviewer"), fauxAssistantMessage("Paused."));
+		await wake(run, "Start the reviewer.", chat);
+		const reviewer = await briefLookup.promise;
+		await fixture.request({ op: "share", author: OWNER, shared: true });
+		await buildAt(watch, 1, "paused");
+		const text = "Do not post this.";
+		await expect(fixture.request({ op: "say", author: OWNER, text, agents: [first.chat, 900, reviewer, chat, 901] }))
+			.rejects.toThrow("Mention only agents of this channel's plans. The reviewer for \"src/x\": Wait for the host to send the agent’s brief. The reviewer for \"src/x\": The plan's agents are paused while other people may ask them. The implementer: The plan's agents are paused while other people may ask them.");
+		expect(watch.of("message").some(event => event.text === text)).toBe(false);
+		expect(watch.of("builds").at(-1)?.builds[0]?.state.kind).toBe("stopped");
+		expect((await run.harness.snapshot(BuildsDoc, context))?.mentions).toBeUndefined();
+	} finally {
+		lookup.mockRestore();
+		releaseBrief.resolve();
+	}
+});
+
+// Model selection yields between the first check and the commit that admits an ask.
+test("an ask mention rechecks a plan paused during model selection", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { chat } = await startBuild(run);
+	const { models } = fixture.scripted;
+	const selecting = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const available = models.getAvailable.bind(models);
+	const lookup = spyOn(models, "getAvailable").mockImplementation(async (provider, options) => {
+		selecting.resolve();
+		await release.promise;
+		return available(provider, options);
+	});
+	const text = "Check this before switching modes.";
+	try {
+		const attempt = fixture.request({ op: "ask", author: OWNER, mode: "ace", text, agents: [chat] });
+		await selecting.promise;
+		await fixture.request({ op: "share", author: OWNER, shared: true });
+		release.resolve();
+		await expect(attempt).rejects.toThrow("The implementer: The plan's agents are paused while other people may ask them.");
+		expect(watch.of("message").some(event => event.text === text)).toBe(false);
+		expect((await fixture.channel.info()).chats.find(item => item.id === ROOT_CONVERSATION_ID)?.mode).toBe("plan");
+	} finally {
+		release.resolve();
+		lookup.mockRestore();
+	}
+});
+
+// Ordinary say is open to teammates and agent authors can ordinarily invoke.
+test("say and ask refuse mention lists from agent authors and teammates without access", async () => {
+	const run = await setup();
+	const { chat } = await startBuild(run);
+	for (const op of ["say", "ask"] as const) {
+		const request = { op, text: "Check the retry.", agents: [chat] };
+		await expect(run.fixture.request({ ...request, author: "agent@other" }))
+			.rejects.toThrow("Only a person can mention a plan's agents.");
+		await expect(run.fixture.request({ ...request, author: "teammate" }))
+			.rejects.toThrow(`Agent access is off in this channel, so only its owner, ${OWNER}, can ask its agents.`);
+	}
+	expect(run.watch.of("message").some(event => event.text === "Check the retry.")).toBe(false);
+});
+
+// Pi accepts the same request id again, so both channel entry points must bind it to the agent list.
+test("say and ask reject a retry that changes the list of mentioned agents", async () => {
+	const run = await setup();
+	const { fixture } = run;
+	const { chat, reviewer } = await startPair(run);
+	for (const op of ["say", "ask"] as const) {
+		fixture.script(fauxAssistantMessage("Read."), ...(op === "ask" ? [fauxAssistantMessage("Read.")] : []));
+		const request = { op, author: OWNER, text: "Check the retry.", agents: [chat], requestId: `${op}-mention` };
+		const first = await fixture.request<{ submission: number }>(request);
+		expect(await fixture.request(request)).toEqual(first);
+		await expect(fixture.request({ ...request, agents: [reviewer] })).rejects.toThrow("was already used for a different message");
+		await fixture.request({ op: "wait", submission: first.submission });
+		await until(() => fixture.channel.isIdle());
+	}
+});
+
+// Sharing changes who can receive a new mention while the original submission is still valid.
+test("say and ask return the original submission when a retried mention's plan has paused", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { chat } = await startBuild(run);
+	const posted = [];
+	for (const op of ["say", "ask"] as const) {
+		fixture.script(fauxAssistantMessage("Read."), ...(op === "ask" ? [fauxAssistantMessage("Read.")] : []));
+		const request = { op, author: OWNER, text: `Check the ${op} retry.`, agents: [chat], requestId: `${op}-mention` };
+		const first = await fixture.request<{ submission: number }>(request);
+		await watch.until("message", event => event.text === request.text);
+		expect(await fixture.request({ op: "wait", submission: first.submission })).toBe("done");
+		await until(() => fixture.channel.isIdle());
+		posted.push({ request, first });
+	}
+	await fixture.request({ op: "share", author: OWNER, shared: true });
+	await buildAt(watch, 0, "paused");
+	for (const { request, first } of posted) {
+		expect(await fixture.request(request)).toEqual(first);
+		expect(watch.of("message").filter(event => event.text === request.text)).toHaveLength(1);
+	}
+});
 
 // Sharing could leave an approved revision waiting until the channel reopens.
 test("unsharing delivers an owed revision once to each agent before reopening", async () => {
