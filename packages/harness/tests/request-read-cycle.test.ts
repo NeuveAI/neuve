@@ -149,7 +149,7 @@ test("names all tips when a detached review needs a branch, then accepts the nam
   const wrongBranch = () =>
     repo.run(repo.request(repo.head, { branch: "other" }));
   const refusal =
-    '"other" does not end at this review\'s head, so pass --branch with "feature" or "followup".';
+    '--branch names no branch that ends at this review\'s head, so pass --branch with "feature" or "followup".';
   await expect(wrongBranch()).rejects.toThrow(refusal);
   const read = await repo.run(repo.read());
   const review = await repo.run(repo.request(repo.head, { branch: "feature" }));
@@ -166,7 +166,7 @@ test("refuses a named branch that contains the head when another branch ends the
   const wrongBranch = () =>
     repo.run(repo.request(repo.head, { branch: "other" }));
   const refusal =
-    '"other" does not end at this review\'s head, so pass --branch with "feature" or leave it out.';
+    '--branch names no branch that ends at this review\'s head, so pass --branch with "feature" or leave it out.';
   await expect(wrongBranch()).rejects.toThrow(refusal);
   const review = await repo.run(repo.request());
   expect(review.cycleId).toBe(read.cycleId);
@@ -182,7 +182,7 @@ test.each([undefined, "feature", "missing"])(
       await expect(
         repo.run(repo.request(repo.head, { branch })),
       ).rejects.toThrow(
-        '"missing" does not hold this review\'s head. Pass --branch <name> with a local branch that does.',
+        "--branch names no local branch that holds this review's head. Pass --branch <name> with a local branch that does.",
       );
       return;
     }
