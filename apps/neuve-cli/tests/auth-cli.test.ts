@@ -60,7 +60,7 @@ test("auth status names the account and expiry, never a token", () => {
 test("auth refuses providers it has no sign-in for", () => {
   const { code, out } = run("auth", "login", "anthropic");
   expect(code).toBe(2);
-  expect(out).toContain("only openai has a sign-in");
+  expect(out).toContain("Use openai for sign-in.");
 }, 60_000);
 
 // Why: 10.129's cloud machines hold no sign-in; one refresher runs `neuve auth lease openai` and

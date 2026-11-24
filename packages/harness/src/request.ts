@@ -136,7 +136,7 @@ export const resolveNamedRoute = (
     if (account?.kind !== "claude-subscription")
       return yield* Effect.fail(
         new Error(
-          `Unknown review route ${JSON.stringify(name)}. Choose anthropic, openai or a Claude subscription account name.`,
+          "--route must name anthropic, openai or a Claude subscription account.",
         ),
       );
     return claudeRoute(account, settings);
@@ -692,7 +692,7 @@ export const requestReview = (options: ReviewOptions) =>
           if (options.branch !== undefined && !holdsHead)
             return yield* Effect.fail(
               new Error(
-                `${JSON.stringify(options.branch)} does not hold this review's head. Pass --branch <name> with a local branch that does.`,
+                "--branch must name a local branch that holds this review's head.",
               ),
             );
           if (findReadCycle) {

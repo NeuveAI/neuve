@@ -1,4 +1,4 @@
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, relative, sep } from "node:path";
 import { setPriority, tmpdir } from "node:os";
 import { Clock, Data, Effect, Option } from "effect";
 import { FileSystem } from "effect/FileSystem";
@@ -137,19 +137,21 @@ export const resolveRange = (repository: string, text: string) =>
     const head = at > 0 ? text.slice(at + 2) : "";
     if (base === "" || head === "" || head.startsWith("."))
       return yield* new ProofRefused({
-        message: `Proof range takes <base>..<head>, not ${JSON.stringify(text)}.`,
+        message: "Proof range takes <base>..<head>.",
       });
     const baseOid = yield* commitOf(repository, base);
     const headOid = yield* commitOf(repository, head);
     if (Option.isNone(baseOid) || Option.isNone(headOid))
       return yield* new ProofRefused({
-        message: [
-          ...(Option.isNone(baseOid) ? [base] : []),
-          ...(Option.isNone(headOid) ? [head] : []),
-        ]
+        message: (
+          [
+            ["base", baseOid],
+            ["head", headOid],
+          ] as const
+        )
+          .filter(([, oid]) => Option.isNone(oid))
           .map(
-            (name) =>
-              `${JSON.stringify(name)} names no commit in this repository (range ${JSON.stringify(text)}).`,
+            ([end]) => `The range's ${end} names no commit in this repository.`,
           )
           .join("\n"),
       });
@@ -478,23 +480,21 @@ const worktreeRoot = (repository: string) =>
 const admitArtefactPath = (repository: string, path: string) =>
   Effect.gen(function* () {
     if (!isAbsolute(path))
-      return yield* refuse(`The artefact path must be absolute: ${path}.`);
+      return yield* refuse("--file takes an absolute path to the artefact.");
     const fs = yield* FileSystem;
     const resolved = yield* Effect.result(fs.realPath(path));
     if (resolved._tag === "Failure")
       return yield* refuse(
-        `--file ${JSON.stringify(path)} is not a readable file. Use a readable file in the working tree or a temporary folder.`,
+        "--file is not a readable file. Use a readable file in the working tree or a temporary folder.",
       );
     const real = resolved.success;
-    const shown =
-      real === resolve(path) ? path : `${path} (resolves to ${real})`;
     if (real.split(sep).includes(".git"))
       return yield* refuse(
-        `${shown} is inside a .git folder; artefacts never come from git's own files.`,
+        "--file points inside a .git folder. Save the artefact in the working tree or a temporary folder outside .git.",
       );
     if (/^\.env(?:\..*)?$/.test(basename(real)))
       return yield* refuse(
-        `${shown} is an environment file, which may hold credentials; it is never recorded.`,
+        "--file points to an environment file. Save the artefact in a file that is not an environment file.",
       );
     const tree = yield* worktreeRoot(repository);
     if (Option.isSome(tree) && inside(tree.value, real)) {
@@ -506,19 +506,20 @@ const admitArtefactPath = (repository: string, path: string) =>
       ]);
       if (ignored.exitCode === 0)
         return yield* refuse(
-          `${shown} is git-ignored; artefacts inside the working tree must not be ignored files, which can hold local secrets. Save it elsewhere in the tree or in a temp folder.`,
+          "--file is git-ignored. Save the artefact in a file Git does not ignore or in a temporary folder.",
         );
       if (ignored.exitCode !== 1)
         return yield* new ProofGitFailed({
           args: ["check-ignore"],
           exitCode: ignored.exitCode,
-          message: ignored.stderr.trim().slice(0, 500),
+          message:
+            "Git could not check whether --file is ignored. Use a readable file in the working tree or a temporary folder.",
         });
       return real;
     }
     if ((yield* tempRoots).some((root) => inside(root, real))) return real;
     return yield* refuse(
-      `${shown} is outside the repository's working tree and the temp folders; save the artefact in one of them.`,
+      "--file is outside the working tree and temporary folders. Save the artefact in one of them.",
     );
   });
 
@@ -526,7 +527,7 @@ const admitArtefactPath = (repository: string, path: string) =>
  * Reads an admitted file through one open handle, checking that the opened file is still the one
  * the path names, so a link swapped in after the check is refused rather than followed.
  */
-const readAdmitted = (real: string, shown: string) =>
+const readAdmitted = (real: string) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem;
@@ -534,11 +535,11 @@ const readAdmitted = (real: string, shown: string) =>
       const opened = yield* handle.stat;
       if (opened.type !== "File")
         return yield* refuse(
-          `--file ${JSON.stringify(shown)} is not a regular file. Use a regular file containing the artefact.`,
+          "--file is not a regular file. Use a regular file containing the artefact.",
         );
       if (Number(opened.size) > PROOF_ARTEFACT_MAX_BYTES)
         return yield* refuse(
-          `${shown} has ${String(opened.size)} bytes; a proof artefact holds at most ${PROOF_ARTEFACT_MAX_BYTES}.`,
+          `--file exceeds the proof artefact limit of ${PROOF_ARTEFACT_MAX_BYTES} bytes.`,
         );
       const again = yield* fs.stat(real);
       if (
@@ -547,7 +548,9 @@ const readAdmitted = (real: string, shown: string) =>
           Option.getOrUndefined(opened.ino) ||
         again.dev !== opened.dev
       )
-        return yield* refuse(`${shown} changed while it was being read.`);
+        return yield* refuse(
+          "--file changed while it was being read. Use a file that is no longer changing.",
+        );
       const chunks: Array<Uint8Array> = [];
       let total = 0;
       for (;;) {
@@ -556,15 +559,19 @@ const readAdmitted = (real: string, shown: string) =>
         total += chunk.value.byteLength;
         if (total > PROOF_ARTEFACT_MAX_BYTES)
           return yield* refuse(
-            `${shown} grew past ${PROOF_ARTEFACT_MAX_BYTES} bytes while it was being read.`,
+            `--file grew past the proof artefact limit of ${PROOF_ARTEFACT_MAX_BYTES} bytes while it was being read.`,
           );
         chunks.push(chunk.value);
       }
       return Buffer.concat(chunks) as Uint8Array;
     }),
   ).pipe(
-    Effect.catchTag("PlatformError", (cause) =>
-      Effect.fail(refuse(`${shown} could not be read: ${cause.message}.`)),
+    Effect.catchTag("PlatformError", () =>
+      Effect.fail(
+        refuse(
+          "--file could not be read. Use a readable file in the working tree or a temporary folder.",
+        ),
+      ),
     ),
   );
 
@@ -578,7 +585,7 @@ const artefactBytes = (
     if (input.text !== undefined)
       return new TextEncoder().encode(mask(input.text));
     const real = yield* admitArtefactPath(repository, input.file!);
-    return yield* readAdmitted(real, input.file!);
+    return yield* readAdmitted(real);
   });
 
 /**
@@ -645,7 +652,7 @@ const prepareProof = ({
                     ? Effect.succeed(commit.value)
                     : Effect.fail(
                         refuse(
-                          `--revision takes a commit at the range's head or in its history. ${JSON.stringify(input.revision)} names no commit in this repository.`,
+                          "--revision takes a commit at the range's head or in its history. It names no commit in this repository.",
                         ),
                       ),
                 ),
@@ -657,7 +664,7 @@ const prepareProof = ({
                   refuse(
                     input.file === undefined
                       ? "--text or --stdin takes a non-empty artefact. The artefact is empty."
-                      : `--file ${JSON.stringify(input.file)} is empty. Use a file with a non-empty artefact.`,
+                      : "--file is empty. Use a file with a non-empty artefact.",
                   ),
                 )
               : Effect.succeed(bytes),
@@ -668,7 +675,7 @@ const prepareProof = ({
             ? Effect.succeed(media)
             : Effect.fail(
                 refuse(
-                  `--media-type for ${input.kind} takes ${PROOF_MEDIA_TYPES[input.kind].join(", ")}. ${media === undefined ? `No type was supplied or inferred from --file ${JSON.stringify(input.file)}.` : `Received ${JSON.stringify(media)}.`}`,
+                  `--media-type takes ${PROOF_MEDIA_TYPES[input.kind].join(", ")} for the selected proof kind. ${media === undefined ? "No type was supplied or inferred from --file." : "The media type is incompatible with the proof kind."}`,
                 ),
               ),
       },
@@ -692,7 +699,7 @@ const prepareProof = ({
       ))
     ) {
       problems.push(
-        `--revision ${JSON.stringify(input.revision)} is outside the history of range ${JSON.stringify(input.range)}. Use the range's head or a commit in its history.`,
+        "--revision is outside the range's history. Use the range's head or a commit in its history.",
       );
     }
     if (problems.length > 0) return yield* refuse(problems.join("\n"));

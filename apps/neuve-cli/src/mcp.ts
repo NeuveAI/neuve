@@ -147,7 +147,13 @@ const recordProofHandler = (repository: string) => (input: unknown) =>
     if (!parsed.success)
       return {
         status: "invalid",
-        message: `Not recorded: ${z.prettifyError(parsed.error)}`,
+        message: `Not recorded: ${parsed.error.issues
+          .map((issue) =>
+            issue.code === "unrecognized_keys"
+              ? `Proof input takes only these fields: ${Object.keys(ProofInput.shape).join(", ")}.`
+              : `${issue.message}${issue.path.length === 0 ? "" : ` (${issue.path.join(".")})`}`,
+          )
+          .join("\n")}`,
       } satisfies ProofReply;
     const outcome = yield* Effect.result(
       withStore(repository, "write", (location) =>

@@ -110,7 +110,7 @@ const expectOpenAi = (provider: string | undefined, required: boolean) => {
   if (provider === undefined && !required) return;
   if (provider !== "openai")
     throw new Error(
-      `neuve auth ${provider === undefined ? "needs a provider" : `does not know ${provider}`}: only openai has a sign-in (the Anthropic route uses ANTHROPIC_API_KEY).`,
+      `neuve auth ${provider === undefined ? "needs a provider" : "does not recognize the provider"}. Use openai for sign-in. The Anthropic route uses ANTHROPIC_API_KEY.`,
     );
 };
 
@@ -318,7 +318,7 @@ const findAndStore = (
     const account = yield* store.directory.lookup(name, "use");
     if (account?.runtime !== "codex")
       return yield* new AccountStore.StoreError({
-        message: `The ${name} account doesn't run Codex.`,
+        message: "The account must run Codex to take a program path.",
       });
     const found = yield* find({
       home,
@@ -413,8 +413,8 @@ const removalMessages: Record<AccountStore.RemovalStep, string> = {
   "record-dropped": "Removed the account.",
 };
 
-const unknownAccount = (name: string, accounts: readonly { name: string }[]) =>
-  `Account ${JSON.stringify(name)} was not found. Use one of ${accounts.map(({ name }) => JSON.stringify(name)).join(", ")}.`;
+const unknownAccount = (accounts: readonly { name: string }[]) =>
+  `No account has that name. Use one of ${accounts.map(({ name }) => JSON.stringify(name)).join(", ")}.`;
 
 const runAccountCommand = async (
   command: string,
@@ -488,7 +488,6 @@ const runAccountCommand = async (
           message: argumentRefusal(
             "Account name",
             "1 to 63 lowercase letters, digits or hyphens, starting with a letter or digit",
-            positionals[0],
           ),
         });
       if (command === "program") {
@@ -507,7 +506,8 @@ const runAccountCommand = async (
           ].filter(Boolean).length !== 1
         )
           return yield* new AccountStore.StoreError({
-            message: `Use neuve auth program ${name.data} <path>, --find, or --unset.`,
+            message:
+              "Use neuve auth program <account> with a path, --find, or --unset.",
           });
         // An empty path would resolve to the current folder: refused, never stored.
         if (given !== undefined && given.trim() === "")
@@ -565,7 +565,7 @@ const runAccountCommand = async (
               error instanceof RuntimeUnavailable &&
               error.reason === "sign-out-failed"
                 ? new Error(
-                    `Could not sign out of ${name.data}. ${error.fix === undefined ? "" : `${error.fix} `}Run neuve auth remove ${name.data} again.`,
+                    `Could not sign out of the account. ${error.fix === undefined ? "" : `${error.fix} `}Run neuve auth remove <account> again.`,
                   )
                 : error,
             ),
@@ -576,7 +576,7 @@ const runAccountCommand = async (
       const missing = Effect.flatMap(store.list, (accounts) =>
         Effect.fail(
           new AccountStore.StoreError({
-            message: unknownAccount(name.data, accounts),
+            message: unknownAccount(accounts),
           }),
         ),
       );
@@ -836,7 +836,6 @@ export const runAuthCli = async (
                   return yield* Effect.fail(
                     new Error(
                       unknownAccount(
-                        name.data,
                         accounts.filter(
                           ({ credential }) =>
                             credential.kind === "neuve-sign-in",
@@ -850,7 +849,7 @@ export const runAuthCli = async (
         );
         if (account.credential.kind !== "neuve-sign-in")
           throw new Error(
-            `The ${name.data} account does not use Neuve's ChatGPT sign-in.`,
+            "Use an account that signs in to ChatGPT through Neuve.",
           );
         authOptions = RouteProvider.OpenAiAuth.authOptionsFor(
           account.credential,

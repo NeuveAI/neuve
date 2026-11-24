@@ -63,15 +63,10 @@ export const runReviewDesk = async (
   }
   const port = portNumber.safeParse(values.port ?? DEFAULT_DESK_PORT);
   if (!port.success) {
-    await Bun.write(
-      Bun.stderr,
-      `--port takes a number from 0 to 65535, not ${JSON.stringify(values.port)}.\n`,
-    );
+    await Bun.write(Bun.stderr, "--port takes a number from 0 to 65535.\n");
     return 2;
   }
-  const repository = await requireRepositorySetup(
-    await realpath(values.repo ?? process.cwd()),
-  );
+  const repository = await requireRepositorySetup(values.repo ?? process.cwd());
   if (repository === undefined) return 1;
   const again = `neuve review ${REVIEW_DESK_COMMAND}${values.repo === undefined ? "" : ` --repo ${quote(repository)}`}`;
   const desk = await diagnoseDesk(version);
@@ -161,7 +156,11 @@ export const runReviewDesk = async (
       server = serve(port.data);
     } catch (error) {
       // Only the default port gives way; a port the person named is theirs to free.
-      if (values.port !== undefined || !addressInUse(error)) throw error;
+      if (!addressInUse(error)) throw error;
+      if (values.port !== undefined)
+        throw new Error(
+          "--port is in use. Use an available port from 0 to 65535.",
+        );
       server = serve(0);
       await Bun.write(
         Bun.stderr,

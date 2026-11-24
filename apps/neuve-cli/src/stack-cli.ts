@@ -13,6 +13,7 @@ import { Settings as HarnessSettings, Stack } from "@neuve/harness";
 import {
   describeFailure,
   execute,
+  repositoryRoot,
   unknownCommandRefusal,
   withStore,
   write,
@@ -195,10 +196,7 @@ export const runSetupStack = async (
     await write(SETUP_STACK_HELP);
     return 0;
   }
-  const root = await git(values.repo ?? process.cwd(), [
-    "rev-parse",
-    "--show-toplevel",
-  ]);
+  const root = repositoryRoot(values.repo ?? process.cwd());
   const lines = await setupStack({
     root,
     dryRun: values["dry-run"] === true,
@@ -252,17 +250,16 @@ export const runStackCli = async (args: readonly string[]): Promise<number> => {
       json: { type: "boolean" },
     },
   });
-  const root = await git(values.repo ?? process.cwd(), [
-    "rev-parse",
-    "--show-toplevel",
-  ]);
+  const root = repositoryRoot(values.repo ?? process.cwd());
   const location = await execute(resolveStoreLocation(root));
   const commit = await git(root, [
     "rev-parse",
     "--verify",
     "--end-of-options",
     `${values.revision ?? "HEAD"}^{commit}`,
-  ]);
+  ]).catch(() => {
+    throw new Error("--revision must name an existing commit in --repo.");
+  });
   const settings = stackSettings();
   const state = await Stack.stackStateAt({
     source: captureOutlineSource(),

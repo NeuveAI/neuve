@@ -36,9 +36,7 @@ export const readQueryBranch = (
   );
   if (!result.success) {
     if (branch !== undefined)
-      throw new Error(
-        `--branch names no local branch ${JSON.stringify(branch)} in --repo.`,
-      );
+      throw new Error("--branch must name an existing local branch in --repo.");
     return {
       reason: "the checked-out branch has no readable tip",
       cause:

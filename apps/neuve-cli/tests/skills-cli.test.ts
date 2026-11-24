@@ -894,6 +894,7 @@ test("a refusal thrown out of the command carries no terminal escapes", async ()
   const parent = await scratch("skills-thrown");
   const folder = join(parent, "not-a-repo\u001b]0;pwned\u0007\u202e");
   await mkdir(folder);
+  await writeFile(join(folder, ".git"), "gitdir: missing\n");
   const h = await harness(realSkill);
   const thrown = await h
     .run(["install", "--scope", "repo", "--repo", folder])
@@ -901,8 +902,9 @@ test("a refusal thrown out of the command carries no terminal escapes", async ()
       () => "",
       (error: Error) => error.message,
     );
-  expect(thrown).toContain("The repo scope needs a Git repository");
-  expect(thrown).toContain(join(parent, "not-a-repo"));
+  expect(thrown).toBe(
+    "The repo scope needs a Git repository. Use --repo with a folder inside one.",
+  );
   expect(thrown).not.toMatch(UNSAFE_TEXT);
 });
 

@@ -59,7 +59,11 @@ import {
   type StepsOutcome,
 } from "./setup-steps.ts";
 import { gitAvailability, gitRefusal } from "./git-available.ts";
-import { argumentRefusal, unknownOptionRefusal } from "./records-cli.ts";
+import {
+  argumentRefusal,
+  repositoryRoot,
+  unknownOptionRefusal,
+} from "./records-cli.ts";
 import { z } from "zod";
 import {
   checkGraphEngine,
@@ -182,7 +186,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     }
     if (value === undefined) {
       problems.push(
-        argumentRefusal(flag, "a value shown in neuve setup --help", value),
+        `${argumentRefusal(flag, "a value shown in neuve setup --help")} No value was supplied.`,
       );
       continue;
     }
@@ -194,13 +198,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   }
   const parsed = flagsSchema.safeParse(raw);
   if (!parsed.success)
-    problems.push(
-      argumentRefusal(
-        "--initial-query",
-        "non-empty text",
-        raw["--initial-query"],
-      ),
-    );
+    problems.push(argumentRefusal("--initial-query", "non-empty text"));
   if (problems.length > 0 || !parsed.success)
     throw new Error(problems.join("\n"));
   const options = parsed.data;
@@ -211,9 +209,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     await Bun.write(Bun.stderr, gitRefusal(available));
     return 1;
   }
-  const repository = await realpath(
-    await git(resolve(options["--repo"]), ["rev-parse", "--show-toplevel"]),
-  );
+  const repository = await realpath(repositoryRoot(resolve(options["--repo"])));
   const screen = commandScreen({ json });
   await screen.header(`neuve setup ${CLI_VERSION}`);
   // The route before anything else is written: a settings file setup can't read stops it here.
@@ -241,9 +237,22 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
       override:
         options["--graph-binary"] ?? process.env.NEUVE_GRAPH_BINARY ?? earlier,
       executable: process.execPath,
+    }).catch((error) => {
+      if (options["--graph-binary"] === undefined) throw error;
+      throw new Error(
+        argumentRefusal(
+          "--graph-binary",
+          "the path to an executable Neuve Graph binary",
+        ),
+      );
     }),
   );
-  const cli = await realpath(options["--cli-binary"] ?? process.execPath);
+  const cliPath = options["--cli-binary"] ?? process.execPath;
+  if (!(await executableFile(cliPath)))
+    throw new Error(
+      argumentRefusal("--cli-binary", "the path to an executable Neuve binary"),
+    );
+  const cli = await realpath(cliPath);
   const versionProcess = Bun.spawn([cli, "--version"], {
     stdout: "pipe",
     stderr: "ignore",

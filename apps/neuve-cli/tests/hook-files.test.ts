@@ -20,6 +20,7 @@ import {
   runSetupHooks,
   type CapturePart,
 } from "../src/capture/setup-hooks.ts";
+import { quote } from "../src/shell-quote.ts";
 
 const scratches: string[] = [];
 afterEach(async () => {
@@ -92,9 +93,17 @@ test("a command that isn't text is unreadable in both places, and the file is le
   const bad = '{"hooks":{"Stop":[{"hooks":[{"command":42}]}]}}';
   await mkdir(join(settings, ".."), { recursive: true });
   await writeFile(settings, bad);
-  const found = await part(settings);
-  expect(found).toMatchObject({ state: "unreadable" });
-  await expect(setUp()).rejects.toThrow(found!.why!);
+  const reason =
+    "hooks.Stop.0.hooks.0.command: Invalid input: expected string, received number";
+  const message = `can't be read as claude-code's hook file (${reason}), so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`;
+  expect(await part(settings)).toMatchObject({
+    state: "unreadable",
+    why: `${settings} ${message}`,
+  });
+  await expect(setUp()).rejects.toHaveProperty(
+    "message",
+    `--claude-settings ${message}`,
+  );
   expect(await readFile(settings, "utf8")).toBe(bad);
 });
 
@@ -292,7 +301,7 @@ test("an unreadable bundled script needs an update", async () => {
   await mkdir(join(root, "hook"), { recursive: true });
   await writeFile(script, "");
   const entry = (verb: string) =>
-    `sh -c '${process.execPath} --no-env-file ${script} claude-code ${verb} >/dev/null 2>&1; exit 0 # neuve-capture-hook'`;
+    `sh -c ${quote(`${quote(process.execPath)} --no-env-file ${quote(script)} claude-code ${verb} >/dev/null 2>&1; exit 0 # neuve-capture-hook`)}`;
   await mkdir(join(settings, ".."), { recursive: true });
   await writeFile(
     settings,
@@ -405,10 +414,14 @@ test("a FIFO in place of a hook file is unreadable, read without waiting on it",
   const { settings, setUp, part } = await scene();
   await mkdir(join(settings, ".."), { recursive: true });
   expect(Bun.spawnSync(["mkfifo", settings]).exitCode).toBe(0);
-  const found = await part(settings);
-  // Kept before matching: a matcher can stand in for the value it matched.
-  const why = String(found?.why);
-  expect(found?.state).toBe("unreadable");
-  expect(why).toContain("it isn't a plain file");
-  await expect(setUp()).rejects.toThrow(why);
+  const message =
+    "can't be read as claude-code's hook file (it isn't a plain file), so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.";
+  expect(await part(settings)).toMatchObject({
+    state: "unreadable",
+    why: `${settings} ${message}`,
+  });
+  await expect(setUp()).rejects.toHaveProperty(
+    "message",
+    `--claude-settings ${message}`,
+  );
 }, 10_000);

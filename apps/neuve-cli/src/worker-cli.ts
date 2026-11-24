@@ -119,7 +119,7 @@ const JobId = z.coerce.number().int().min(1);
 const jobId = (value: string | undefined) => {
   const parsed = JobId.safeParse(value);
   if (!parsed.success)
-    throw new Error(argumentRefusal("Job ID", "a positive integer", value));
+    throw new Error(argumentRefusal("Job ID", "a positive integer"));
   return parsed.data;
 };
 
@@ -227,17 +227,14 @@ const formatJob = (job: JobQueue.Job) => {
 };
 
 const describeQueueError = (error: unknown) => {
-  if (typeof error === "object" && error !== null && "_tag" in error) {
-    const tagged = error as { _tag: string; message?: string; seq?: number };
-    if (tagged._tag === "JobNotFound") return `No job ${tagged.seq}.`;
-    if (error instanceof JobQueue.InvalidJobPayload)
-      return `Job payload takes the JSON fields for ${error.kind}.`;
-    if (
-      tagged._tag === "JobStateConflict" ||
-      tagged._tag === "JobHeldByNewerBuild"
-    )
-      return tagged.message ?? tagged._tag;
-  }
+  if (error instanceof JobQueue.JobNotFound)
+    return "That job ID has no job in this store.";
+  if (error instanceof JobQueue.InvalidJobPayload)
+    return `Job payload takes the JSON fields for ${error.kind}.`;
+  if (error instanceof JobQueue.JobStateConflict)
+    return `The job is ${error.state}. Use a waiting or delayed job ID to drop a job.`;
+  if (error instanceof JobQueue.JobHeldByNewerBuild)
+    return "Use a newer Neuve build to change this job.";
   return undefined;
 };
 
@@ -388,8 +385,8 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
         );
         return refuse({
           refused: Option.isSome(newer)
-            ? `Job ${seq} is ${newer.value.kind} (${newer.value.state}), a kind this build does not know; the newer build that queued it runs and shows it.`
-            : `No job ${seq}.`,
+            ? `The job is ${newer.value.kind} (${newer.value.state}), a kind this build does not know. Use the newer build that queued it.`
+            : "That job ID has no job in this store.",
         });
       }
       await write(
@@ -450,7 +447,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
             return 0;
           }
           return refuse({
-            refused: `job ${seq} is active and could not be dropped: ${result.reason}`,
+            refused: `The job is active and could not be dropped: ${result.reason}`,
           });
         }
         await write(
@@ -488,13 +485,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       const parsedKind = JobKind.safeParse(positionals[0]);
       const problems = parsedKind.success
         ? []
-        : [
-            argumentRefusal(
-              "Job kind",
-              JobKind.options.join(", "),
-              positionals[0],
-            ),
-          ];
+        : [argumentRefusal("Job kind", JobKind.options.join(", "))];
       const payloadText = positionals[1];
       let payload: unknown;
       if (payloadText !== undefined) {
@@ -556,7 +547,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       }
       if (ended) {
         await write(
-          `Not requeued: job ${job.seq} ${job.kind} with key ${job.dedupeKey} already ended ${job.state}${job.lastError === null ? "" : ` (${job.lastError.tag}: ${job.lastError.message})`}. Enqueue with another --key to run it again.`,
+          `Not requeued: the job for this --key already ended as ${job.state}. Enqueue with another --key to run it again.`,
         );
         return 0;
       }
@@ -984,7 +975,13 @@ export const runWorkerCli = async (
       return runWorkerMain(
         Effect.gen(function* () {
           const location = yield* selectedLocation();
-          const payload: unknown = JSON.parse(z.string().parse(values.input));
+          const input = z.string().parse(values.input);
+          let payload: unknown;
+          try {
+            payload = JSON.parse(input);
+          } catch {
+            return yield* Effect.fail(new Error("--input takes valid JSON."));
+          }
           return yield* Effect.andThen(
             Store.prepareForWrite,
             HarnessCommitPrepare.prepareCode(repository, location, payload),

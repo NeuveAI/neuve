@@ -148,12 +148,11 @@ export const agentsFlag = (
     ),
   ];
   const expected = `${AGENT_IDS.join(", ")} or ${none ? "none" : "both"}`;
-  if (names.length === 0) throw new Error(`--agents takes ${expected}.`);
-  for (const name of names)
-    if (!(AGENT_IDS as ReadonlyArray<string>).includes(name))
-      throw new Error(
-        `--agents takes ${expected}, not ${JSON.stringify(name)}.`,
-      );
+  if (
+    names.length === 0 ||
+    names.some((name) => !(AGENT_IDS as ReadonlyArray<string>).includes(name))
+  )
+    throw new Error(`--agents takes ${expected}.`);
   return names as AgentHarness[];
 };
 

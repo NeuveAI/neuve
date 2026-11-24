@@ -208,7 +208,7 @@ export const writeRoute = async (route: string, home = homedir()) => {
   const checked = Settings.safeParse(JSON.parse(candidate));
   if (!checked.success || checked.data.review?.route !== route)
     throw new RouteRefused(
-      `neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code), not ${JSON.stringify(route)}.`,
+      "neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code).",
     );
   const file = existing?.file ?? path;
   await mkdir(dirname(file), { recursive: true, mode: 0o700 });

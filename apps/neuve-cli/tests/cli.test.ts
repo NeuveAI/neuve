@@ -1467,7 +1467,7 @@ describe("neuve CLI boundary", () => {
       }),
     ).toEqual({
       stdout: "",
-      stderr: 'neuve: --branch names no local branch "missing" in --repo.\n',
+      stderr: "neuve: --branch must name an existing local branch in --repo.\n",
       exitCode: 2,
     });
     expect(await Bun.file(graph.log).exists()).toBe(false);
@@ -1903,11 +1903,7 @@ describe("neuve CLI boundary", () => {
         ]),
       );
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain(
-        selection === undefined
-          ? "missing selection"
-          : "selection must be exact or family",
-      );
+      expect(result.stderr).toContain("selection must be exact or family");
     },
   );
 
@@ -2061,7 +2057,7 @@ describe("neuve CLI boundary", () => {
     }
   });
 
-  // Proof and vent must show independent input problems alongside the missing session.
+  // Proof and vent must report independent problems without repeating pasted credentials.
   test("refuses invalid proof and vent inputs without a captured session", async () => {
     const { root } = await fixtureRepository();
     await createRecords(root);
@@ -2077,9 +2073,9 @@ describe("neuve CLI boundary", () => {
         "--requirement",
         "tests pass",
         "--revision",
-        "no-revision",
+        "sk-ant-SECRETREV",
         "--file",
-        "nope.txt",
+        "sk-ant-SECRETPATH",
         "--repo",
         root,
       ],
@@ -2088,12 +2084,17 @@ describe("neuve CLI boundary", () => {
     );
     expect(proof.exitCode).toBe(1);
     expect(proof.stdout).toContain(
-      '"nosuch" names no commit in this repository (range "nosuch..HEAD").',
+      "The range's base names no commit in this repository.",
     );
     expect(proof.stdout).toContain(
-      '"no-revision" names no commit in this repository.',
+      "--revision takes a commit at the range's head or in its history. It names no commit in this repository.",
     );
-    expect(proof.stdout).toContain('nope.txt" is not a readable file.');
+    expect(proof.stdout).toContain(
+      "--file is not a readable file. Use a readable file in the working tree or a temporary folder.",
+    );
+    expect(proof.stdout + proof.stderr).not.toMatch(
+      /SECRETREV|SECRETPATH|nosuch/,
+    );
 
     const vent = await run(
       ["vent", " ", "--reconciliation-id", "", "--repo", root],
@@ -2138,23 +2139,11 @@ describe("neuve CLI boundary", () => {
     expect(await run([...command, "--run", "nope"])).toEqual({
       exitCode: 2,
       stdout: "",
-      stderr:
-        'neuve: --run takes a run ID as neuve review printed it, not "nope".\n',
+      stderr: "neuve: --run takes a run ID as neuve review printed it.\n",
     });
-    const missing = await run([...command, "--run", runId]);
-    expect(missing.exitCode).toBe(1);
-    expect(missing.stdout).toContain(
-      `No review run found in this repository with --run "${runId}".`,
-    );
-    expect(missing.stdout).toContain(
-      "When the person asks for a review, request it with neuve review <base>..<head> --detach.",
-    );
     expect((await run(command)).stdout).toContain(
       "when looking for the latest run.",
     );
-    const byRange = await run([...command, "HEAD..HEAD"]);
-    expect(byRange.exitCode).toBe(1);
-    expect(byRange.stdout).toContain('for range "HEAD..HEAD".');
 
     await markSetUp(root);
     const badRange = await run([
@@ -2167,7 +2156,7 @@ describe("neuve CLI boundary", () => {
       exitCode: 2,
       stdout: "",
       stderr:
-        'neuve: "nosuch" names no commit in this repository (range "nosuch..absent").\n"absent" names no commit in this repository (range "nosuch..absent").\n',
+        "neuve: The range's base names no commit in this repository.\nThe range's head names no commit in this repository.\n",
     });
     expect(await run(["review"])).toEqual({
       exitCode: 2,
@@ -2207,6 +2196,24 @@ describe("neuve CLI boundary", () => {
     );
   });
 
+  // A missing run can be requested by ID or range. Neither selector belongs in the refusal.
+  test("review show names the lookup without printing its value", async () => {
+    const { root } = await fixtureRepository();
+    await createRecords(root);
+    for (const [selector, lookup] of [
+      [["--run", "01M83DRQ4J0004059GPYKHNS1P"], "with that --run ID"],
+      [["HEAD..HEAD"], "for that range"],
+    ] as const) {
+      expect(
+        await run(["review", "show", "--repo", root, ...selector]),
+      ).toEqual({
+        stdout: `No review run found in this repository ${lookup}. When the person asks for a review, request it with neuve review <base>..<head> --detach.\n`,
+        stderr: "",
+        exitCode: 1,
+      });
+    }
+  });
+
   // A caller should be able to correct every invalid or missing option in one retry.
   test("rejects incomplete and malformed query options before provider discovery", async () => {
     expect(
@@ -2224,8 +2231,100 @@ describe("neuve CLI boundary", () => {
       stderr: [
         "neuve: --revision takes a hexadecimal Git object name. No value was supplied.",
         "--question takes non-empty text. No value was supplied.",
-        '--max-results takes a positive integer, not "0".',
+        "--max-results takes a positive integer.",
         "--relationship-plan takes a JSON array.",
+        "",
+      ].join("\n"),
+      exitCode: 2,
+    });
+  });
+
+  // An option that expects a number can still receive an arbitrary secret.
+  test("query refuses a malformed limit without printing its value", async () => {
+    expect(
+      await run([
+        "query",
+        "--repo",
+        "/tmp/example",
+        "--revision",
+        "abcdef0",
+        "--question",
+        "q",
+        "--max-results",
+        "my-private-password",
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr: "neuve: --max-results takes a positive integer.\n",
+      exitCode: 2,
+    });
+  });
+
+  // Both argument validation and execution must name the repository inferred from a subfolder.
+  test("query names the inferred repository on either refusal path", async () => {
+    const { root, revision } = await fixtureRepository();
+    const subfolder = join(root, "sub");
+    await mkdir(subfolder);
+    const assumed = await realpath(root);
+    for (const [args, message] of [
+      [
+        ["--revision", "private-revision"],
+        "--revision takes a hexadecimal Git object name.",
+      ],
+      [
+        ["--revision", revision, "--branch", "private-branch"],
+        "--branch must name an existing local branch in --repo.",
+      ],
+    ] as const) {
+      expect(
+        await run(["query", "--question", "q", ...args], {}, subfolder),
+      ).toEqual({
+        stdout: "",
+        stderr: `neuve: ${message}\n--repo was assumed to be ${JSON.stringify(assumed)}. Pass --repo to choose another repository.\n`,
+        exitCode: 2,
+      });
+    }
+  });
+
+  // Validation must keep checking later fields and entries after a field fails.
+  test("query reports all relationship plan problems without printing their values", async () => {
+    const good = {
+      request_id: "private-id",
+      focus: { symbol: "target" },
+      relation: "CALLS",
+      selection: "family",
+      direction: "out",
+      depth: 1,
+      limit: 5,
+    };
+    const result = await run(
+      queryArgs("/tmp/example", "abcdef0", "q", [
+        {
+          ...good,
+          selection: "private-selection",
+          direction: "private-direction",
+          limit: 0,
+        },
+        {
+          ...good,
+          focus: { symbol: "", line: -1 },
+          selection: "other-private-selection",
+          "private-key": "private-value",
+        },
+      ]),
+    );
+    expect(result).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: --relationship-plan[0].selection must be exact or family.",
+        "--relationship-plan[0].direction must be in or out.",
+        "--relationship-plan[0].limit must be a positive integer.",
+        "--relationship-plan[1] takes only these keys: request_id, focus, relation, selection, direction, depth, limit, summary.",
+        "--relationship-plan[1].request_id must be unique.",
+        "--relationship-plan[1].focus.symbol must be a non-empty string.",
+        "--relationship-plan[1].focus.line must be a positive integer.",
+        "--relationship-plan[1].focus.line requires focus.path.",
+        "--relationship-plan[1].selection must be exact or family.",
         "",
       ].join("\n"),
       exitCode: 2,
@@ -2779,7 +2878,8 @@ describe("neuve CLI boundary", () => {
     );
     expect(result).toEqual({
       stdout: "",
-      stderr: `neuve: NEUVE_GRAPH_BINARY does not name an executable file: ${missing}\n`,
+      stderr:
+        "neuve: NEUVE_GRAPH_BINARY must name an executable Neuve Graph file.\n",
       exitCode: 2,
     });
     expect(await queryHistory(repository.root)).toEqual([

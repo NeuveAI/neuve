@@ -543,10 +543,13 @@ export function codingWorkerSetup(
   };
 }
 
-const portOf = (value: string | undefined): number => {
+const portOf = (
+  name: "--port" | "--web-port",
+  value: string | undefined,
+): number => {
   if (value === undefined) return 0;
   if (!/^\d+$/.test(value) || Number(value) > 65_535)
-    throw new Error(`Invalid port ${JSON.stringify(value)}`);
+    throw new Error(`${name} takes an integer from 0 to 65535.`);
   return Number(value);
 };
 
@@ -612,8 +615,8 @@ async function workspace(args: readonly string[]): Promise<number> {
     writeSync(1, `${WORKSPACE_HELP}\n`);
     return 0;
   }
-  const hostPort = portOf(values.port);
-  const webPort = portOf(values["web-port"] ?? "4141");
+  const hostPort = portOf("--port", values.port);
+  const webPort = portOf("--web-port", values["web-port"] ?? "4141");
   const compiledDefault =
     Bun.main.startsWith("/$bunfs/") && requestedSource === undefined;
   if (compiledDefault && values.profile === "local")
@@ -638,13 +641,26 @@ async function workspace(args: readonly string[]): Promise<number> {
         : await validateStorageProfile(selectedProfile, {
             checkout: candidate,
           });
-    source = await realpath(candidate);
+    source = await realpath(candidate).catch((error) => {
+      if (requestedSource === undefined) throw error;
+      throw new Error("--source must name an existing Neuve checkout.");
+    });
     profile =
       selectedProfile ?? (await readStorageProfile(source, values.profile));
     validated =
       selectedStorage ??
       (await validateStorageProfile(profile, { checkout: source }));
   } catch (error) {
+    if (
+      values.profile !== undefined &&
+      error instanceof StorageRefused &&
+      error.reason === "profile-malformed"
+    )
+      throw new StorageRefused(
+        error.reason,
+        "--profile",
+        "Use local, pi-transition, or a readable storage profile JSON file.",
+      );
     if (
       compiledDefault &&
       values.profile === undefined &&
@@ -662,7 +678,15 @@ async function workspace(args: readonly string[]): Promise<number> {
   const repository = await validateWorkspaceProject(
     values.repo ?? process.cwd(),
     validated,
-  );
+  ).catch((error) => {
+    if (values.repo === undefined || !(error instanceof StorageRefused))
+      throw error;
+    throw new StorageRefused(
+      error.reason,
+      "--repo",
+      "Use a Git checkout allowed by the workspace profile.",
+    );
+  });
   const route = settingsRoute();
   const user = values.user ?? process.env.USER ?? process.env.LOGNAME;
   if (

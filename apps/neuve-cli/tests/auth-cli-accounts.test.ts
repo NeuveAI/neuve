@@ -133,11 +133,11 @@ test("auth remove reports a failed Codex account sign-out and names the file to 
     ).catch((error: unknown) => error);
     expect(error).toHaveProperty(
       "message",
-      expect.stringContaining(`Could not sign out of work. ${file}`),
+      expect.stringContaining(`Could not sign out of the account. ${file}`),
     );
     expect(error).toHaveProperty(
       "message",
-      expect.stringContaining("Run neuve auth remove work again."),
+      expect.stringContaining("Run neuve auth remove <account> again."),
     );
     expect(existsSync(file)).toBe(true);
   });

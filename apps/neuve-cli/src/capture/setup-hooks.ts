@@ -13,7 +13,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { parseArgs } from "node:util";
+import { getSystemErrorMessage, parseArgs } from "node:util";
 import { Effect, Exit } from "effect";
 import { constants } from "node:fs";
 import { z } from "zod";
@@ -39,6 +39,7 @@ import {
 import { GIT_HOOKS, TRAILER_HOOK } from "./git-hooks.ts";
 import { Identity } from "@neuve/records-core/capture";
 import { setupStack } from "../stack-cli.ts";
+import { repositoryRoot } from "../records-cli.ts";
 import { CLI_VERSION } from "../cli-version.ts";
 import { commandScreen, shown, type Mark } from "../terminal.ts";
 
@@ -208,6 +209,18 @@ const replaceFile = async (path: string, content: string) => {
   return backup;
 };
 
+class MissingHookLinkTarget extends Error {}
+
+const hookFileReason = (error: unknown) =>
+  error instanceof MissingHookLinkTarget
+    ? error.message
+    : error instanceof Error &&
+        "errno" in error &&
+        typeof error.errno === "number" &&
+        error.errno < 0
+      ? getSystemErrorMessage(error.errno)
+      : "the file could not be accessed";
+
 /**
  * The file a configuration path names: a symbolic link (common for dotfile managers) is written
  * through to its target, never replaced by a regular file. A dangling link is refused.
@@ -218,9 +231,7 @@ const linkTarget = async (path: string) => {
   try {
     return await realpath(path);
   } catch {
-    throw new Error(
-      `${path} is a symbolic link to a missing file; fix the link first`,
-    );
+    throw new MissingHookLinkTarget("it is a symbolic link to a missing file");
   }
 };
 
@@ -407,7 +418,10 @@ type HookFileRead =
   | { readonly kind: "unreadable"; readonly reason: string };
 
 /** An agent's hook file through `HookFile`: absent, read, or unreadable with the reason. */
-const readHookFile = async (path: string): Promise<HookFileRead> => {
+const readHookFile = async (
+  path: string,
+  hidePath = false,
+): Promise<HookFileRead> => {
   let text: string;
   try {
     // Only a plain file is read: a FIFO or a device would block the read for ever.
@@ -421,7 +435,11 @@ const readHookFile = async (path: string): Promise<HookFileRead> => {
       ? { kind: "absent" }
       : {
           kind: "unreadable",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: hidePath
+            ? hookFileReason(error)
+            : error instanceof Error
+              ? error.message
+              : String(error),
         };
   }
   // An empty file is a file with nothing in it yet.
@@ -567,13 +585,18 @@ const installAgentHooks = async (
   harness: AgentHarness,
   command: string,
   dryRun: boolean,
+  option: "--claude-settings" | "--codex-hooks" | undefined,
 ): Promise<Change> => {
   // A file of a shape this can't change safely stops here, in the words doctor uses. The file is
   // read once; what is written is built from that read, so a file changed since can't make it throw.
-  const read = await readHookFile(path);
+  const read = await readHookFile(path, option !== undefined);
+  const label = option ?? path;
   if (read.kind === "unreadable")
-    throw new Error(unreadableHookFile(path, harness, read.reason));
-  path = await linkTarget(path);
+    throw new Error(unreadableHookFile(label, harness, read.reason));
+  path = await linkTarget(path).catch((error: unknown) => {
+    if (option === undefined) throw error;
+    throw new Error(unreadableHookFile(label, harness, hookFileReason(error)));
+  });
   const present = read.kind === "read";
   // Built from the file as written, so the person's keys, groups and entries keep their order;
   // the schema has already said every value here is of the shape it relies on.
@@ -621,7 +644,12 @@ const installAgentHooks = async (
           ? "would update"
           : "would create",
     };
-  const backup = await replaceFile(path, next);
+  const backup = await replaceFile(path, next).catch((error: unknown) => {
+    if (option === undefined) throw error;
+    throw new Error(
+      `${option} couldn't be written (${hookFileReason(error)}). Fix the file or choose another path, then run neuve setup hooks again.`,
+    );
+  });
   return {
     path,
     action:
@@ -662,10 +690,7 @@ export const runSetupHooks = async (
     return 0;
   }
   const dryRun = values["dry-run"] === true;
-  const root = await git(resolve(values.repo ?? process.cwd()), [
-    "rev-parse",
-    "--show-toplevel",
-  ]);
+  const root = repositoryRoot(resolve(values.repo ?? process.cwd()));
   const sessionTrailer = values["session-trailer"] === true;
   if (sessionTrailer) {
     const superproject = await git(root, [
@@ -714,12 +739,6 @@ export const runSetupHooks = async (
     await buildHookBundle();
   const command = hookArgv.map(quote).join(" ");
 
-  const hookFile = (harness: AgentHarness) =>
-    resolve(
-      (harness === "claude-code"
-        ? values["claude-settings"]
-        : values["codex-hooks"]) ?? defaultHookFile(harness),
-    );
   // Named, the person's choice. Otherwise the agent programs found here, and every one this
   // repository's capture.json already lists: a program not found adds nothing new and never takes
   // away what is there; only --agents removes one. Agent hooks are written only for those named or
@@ -794,10 +813,20 @@ export const runSetupHooks = async (
     action: dryRun ? "would write" : "written",
   });
 
-  for (const harness of hooked)
+  for (const harness of hooked) {
+    const option =
+      harness === "claude-code" ? "claude-settings" : "codex-hooks";
+    const namedPath = values[option];
     changes.push(
-      await installAgentHooks(hookFile(harness), harness, command, dryRun),
+      await installAgentHooks(
+        resolve(namedPath ?? defaultHookFile(harness)),
+        harness,
+        command,
+        dryRun,
+        namedPath === undefined ? undefined : `--${option}`,
+      ),
     );
+  }
 
   const screen = commandScreen({});
   await screen.header(`neuve setup hooks ${CLI_VERSION}`);

@@ -100,7 +100,9 @@ export const runSemanticCli = async (
   const handle = await open(
     inputPath,
     constants.O_RDONLY | constants.O_NONBLOCK,
-  );
+  ).catch(() => {
+    throw new Error("--input takes a readable semantic input file.");
+  });
   let input: z.infer<typeof inputSchema>;
   try {
     const metadata = await handle.stat();
@@ -118,13 +120,17 @@ export const runSemanticCli = async (
     }
     if (used > maximumBytes || used !== metadata.size)
       throw new Error("Semantic input changed or exceeds its byte limit.");
-    input = inputSchema.parse(
-      JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(
-          bytes.subarray(0, used),
+    try {
+      input = inputSchema.parse(
+        JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(
+            bytes.subarray(0, used),
+          ),
         ),
-      ),
-    );
+      );
+    } catch {
+      throw new Error("--input must contain semantic requests as UTF-8 JSON.");
+    }
   } finally {
     await handle.close();
   }

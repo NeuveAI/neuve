@@ -10,7 +10,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { isCompiled } from "@neuve/harness/compiled";
 import { RELEASE_TARGETS, releaseVersionSchema } from "./release-metadata.ts";
@@ -55,14 +54,23 @@ export const verifyChecksum = (
 };
 
 const download = async (url: string): Promise<Uint8Array> => {
-  if (url.startsWith("file://")) return readFile(fileURLToPath(url));
-  const parsed = new URL(url);
-  if (parsed.protocol !== "https:")
+  const parsed = URL.parse(url);
+  if (parsed?.protocol === "file:")
+    return readFile(parsed).catch(() => {
+      throw new Error(
+        "Could not read the release files. Check --version and NEUVE_DOWNLOAD_BASE.",
+      );
+    });
+  if (parsed?.protocol !== "https:")
     throw new Error("NEUVE_DOWNLOAD_BASE must start with https:// or file://.");
-  const response = await fetch(url);
+  const response = await fetch(parsed).catch(() => {
+    throw new Error(
+      "Could not reach the release server. Check NEUVE_DOWNLOAD_BASE.",
+    );
+  });
   if (!response.ok)
     throw new Error(
-      `Couldn't download ${url} (HTTP ${response.status}). Check that the release exists.`,
+      `Could not download the release files (HTTP ${response.status}). Check that --version names an available release.`,
     );
   return new Uint8Array(await response.arrayBuffer());
 };

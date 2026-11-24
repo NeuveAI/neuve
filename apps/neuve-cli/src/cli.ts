@@ -1,12 +1,17 @@
 #!/usr/bin/env bun
 
 import { publicCloseReason } from "../../../packages/harness/src/pi/capture/close-diagnostic.ts";
-import { maskText } from "../../../packages/harness/src/masking.ts";
+import { resolveStoreLocation } from "@neuve/records-core";
 import { runAuthCli } from "./auth-cli.ts";
-import { parseQueryInvocation, QUERY_DEFAULTS } from "./boundary.ts";
+import {
+  parseQueryInvocation,
+  QUERY_DEFAULTS,
+  QueryRefusal,
+} from "./boundary.ts";
 import { collectPublicQueryResult, runQueryGraph } from "./graph-query.ts";
 import type { PublicQueryEvent } from "./domain.ts";
 import {
+  execute,
   runRecordsCli,
   unknownCommandRefusal,
   unknownOptionRefusal,
@@ -139,11 +144,7 @@ Options:
   --help      Print this help text.`;
 
 const runQuery = async (args: readonly string[]): Promise<number> => {
-  const invocation = parseQueryInvocation(args);
-  const assumptions =
-    invocation.assumedOptions === undefined
-      ? {}
-      : { assumed_options: invocation.assumedOptions };
+  let assumedRepository: string | undefined;
   const events: PublicQueryEvent[] = [];
   const controller = new AbortController();
   let interrupted: Readonly<{ name: string; exitCode: number }> | undefined;
@@ -156,6 +157,14 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
   process.on("SIGINT", onInterrupt);
   process.on("SIGTERM", onTerminate);
   try {
+    const invocation = parseQueryInvocation(args);
+    const assumptions =
+      invocation.assumedOptions === undefined
+        ? {}
+        : { assumed_options: invocation.assumedOptions };
+    assumedRepository = invocation.assumedOptions?.["--repo"];
+    if (assumedRepository === undefined)
+      await execute(resolveStoreLocation(invocation.request.repository));
     await runQueryGraph(invocation.request, {
       signal: controller.signal,
       emit: async (event) => {
@@ -187,7 +196,10 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
       );
       return interrupted.exitCode;
     }
-    const repository = invocation.assumedOptions?.["--repo"];
+    const repository =
+      error instanceof QueryRefusal
+        ? error.assumedRepository
+        : assumedRepository;
     if (repository === undefined) throw error;
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -305,6 +317,6 @@ try {
           : error instanceof Error
             ? error.message
             : String(error);
-  await Bun.write(Bun.stderr, `neuve: ${maskText(message)}\n`);
+  await Bun.write(Bun.stderr, `neuve: ${message}\n`);
   process.exitCode = 2;
 }

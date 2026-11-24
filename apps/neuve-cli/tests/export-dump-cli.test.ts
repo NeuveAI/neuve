@@ -294,7 +294,7 @@ test("a run log naming another run's capture, or none Records holds, is refused"
   const stale = exportDump(RUN_B, root);
   expect(stale.code).toBe(2);
   expect(stale.stderr).toContain(
-    `its run log names capture ${captureA}, which is run ${RUN_A}'s`,
+    "capture belongs to a different run; export refused",
   );
   runLog(RUN_C, [admitted, snapshot("e".repeat(64)), completed]);
   const unknown = exportDump(RUN_C, root);

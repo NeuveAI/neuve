@@ -8,7 +8,7 @@ import {
   Store,
   resolveStoreLocation,
 } from "@neuve/records-core";
-import { refusalFrom, refusalSentence } from "../version-skew.ts";
+import { describeFailure } from "../records-cli.ts";
 
 export const AGENTS_HELP = `Usage:
   neuve agents [--json] [--repo <path>]
@@ -20,13 +20,8 @@ export const AGENTS_HELP = `Usage:
 
 const fail = (cause: Cause.Cause<unknown>) => {
   const error = Cause.findErrorOption(cause);
-  const value = Option.isSome(error) ? error.value : undefined;
-  const refusal = refusalFrom(value);
-  if (refusal !== undefined) return new Error(refusalSentence(refusal));
   return new Error(
-    typeof value === "object" && value !== null && "_tag" in value
-      ? `${String((value as { _tag: unknown })._tag)}: ${String((value as { message?: unknown }).message ?? "")}`
-      : Cause.pretty(cause),
+    Option.isSome(error) ? describeFailure(error.value) : Cause.pretty(cause),
   );
 };
 

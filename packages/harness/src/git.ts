@@ -543,7 +543,7 @@ export const resolveCommit = (repository: string, revision: string) =>
       error.exitCode === 1
         ? new CommitNotFound({
             ...error,
-            message: `${JSON.stringify(revision)} names no commit in this repository`,
+            message: "The revision names no commit in this repository.",
           })
         : error,
     ),

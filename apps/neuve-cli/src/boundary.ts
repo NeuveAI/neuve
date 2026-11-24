@@ -11,7 +11,7 @@ import { argumentRefusal, unknownOptionRefusal } from "./records-cli.ts";
 const positiveInteger = (raw: string, name: string): number => {
   const value = Number(raw);
   if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(argumentRefusal(name, "a positive integer", raw));
+    throw new Error(argumentRefusal(name, "a positive integer"));
   }
   return value;
 };
@@ -19,7 +19,7 @@ const positiveInteger = (raw: string, name: string): number => {
 const repositoryPath = (raw: string): RepositoryPath => {
   if (!raw.startsWith("/") || raw.includes("\0")) {
     throw new Error(
-      argumentRefusal("--repo", "an absolute path without null bytes", raw),
+      argumentRefusal("--repo", "an absolute path without null bytes"),
     );
   }
   return resolve(raw) as RepositoryPath;
@@ -30,14 +30,12 @@ const revision = (raw: string | undefined, preparedOnly: boolean): Revision => {
     ? /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/
     : /^[0-9a-fA-F]{7,64}$/;
   if (raw === undefined || !pattern.test(raw)) {
+    const accepted = preparedOnly
+      ? "an exact full commit OID with --prepared-only"
+      : "a hexadecimal Git object name";
     throw new Error(
-      argumentRefusal(
-        "--revision",
-        preparedOnly
-          ? "an exact full commit OID with --prepared-only"
-          : "a hexadecimal Git object name",
-        raw,
-      ),
+      argumentRefusal("--revision", accepted) +
+        (raw === undefined ? " No value was supplied." : ""),
     );
   }
   return raw as Revision;
@@ -83,21 +81,14 @@ const record = (value: unknown, label: string): Record<string, unknown> => {
   return value as Record<string, unknown>;
 };
 
-const exactKeys = (
+const acceptedKeys = (
   value: Record<string, unknown>,
-  required: readonly string[],
-  optional: readonly string[],
+  keys: readonly string[],
   label: string,
+  problems: string[],
 ): void => {
-  const actual = Object.keys(value);
-  const allowed = new Set([...required, ...optional]);
-  const missing = required.filter((key) => !(key in value));
-  const extra = actual.filter((key) => !allowed.has(key));
-  if (missing.length > 0 || extra.length > 0) {
-    throw new Error(
-      `${label} has invalid keys; missing ${missing.join(", ") || "none"}, extra ${extra.join(", ") || "none"}.`,
-    );
-  }
+  if (Object.keys(value).some((key) => !keys.includes(key)))
+    problems.push(`${label} takes only these keys: ${keys.join(", ")}.`);
 };
 
 const text = (value: unknown, label: string): string => {
@@ -107,14 +98,20 @@ const text = (value: unknown, label: string): string => {
   return value;
 };
 
+type Check = <A>(parse: () => A) => A | undefined;
+
 const relationshipPlan = (
   value: readonly unknown[],
+  check: Check,
+  problems: string[],
 ): readonly RelationshipRequest[] => {
   const ids = new Set<string>();
-  return value.map((item, index) => {
+  const plan: RelationshipRequest[] = [];
+  for (const [index, item] of value.entries()) {
     const label = `--relationship-plan[${index}]`;
-    const relationship = record(item, label);
-    exactKeys(
+    const relationship = check(() => record(item, label));
+    if (relationship === undefined) continue;
+    acceptedKeys(
       relationship,
       [
         "request_id",
@@ -124,95 +121,112 @@ const relationshipPlan = (
         "direction",
         "depth",
         "limit",
+        "summary",
       ],
-      ["summary"],
       label,
+      problems,
     );
-    const id = text(relationship.request_id, `${label}.request_id`);
-    if (ids.has(id)) {
-      throw new Error(`${label}.request_id must be unique.`);
-    }
-    ids.add(id);
-    const focus = record(relationship.focus, `${label}.focus`);
-    exactKeys(
-      focus,
-      ["symbol"],
-      ["path", "line", "symbol_kind", "qualified_name"],
-      `${label}.focus`,
+
+    const id = check(() =>
+      text(relationship.request_id, `${label}.request_id`),
     );
-    const symbol = text(focus.symbol, `${label}.focus.symbol`);
-    const path =
-      focus.path === undefined
-        ? undefined
-        : sourcePath(
-            text(focus.path, `${label}.focus.path`),
-            `${label}.focus.path`,
-          );
-    const line =
-      focus.line === undefined
-        ? undefined
-        : typeof focus.line === "number" && Number.isSafeInteger(focus.line)
-          ? positiveInteger(String(focus.line), `${label}.focus.line`)
-          : (() => {
-              throw new Error(
-                `${label}.focus.line must be a positive integer.`,
-              );
-            })();
-    const symbolKind =
-      focus.symbol_kind === undefined
-        ? undefined
-        : text(focus.symbol_kind, `${label}.focus.symbol_kind`);
-    const qualifiedName =
-      focus.qualified_name === undefined
-        ? undefined
-        : text(focus.qualified_name, `${label}.focus.qualified_name`);
-    if (line !== undefined && path === undefined) {
-      throw new Error(`${label}.focus.line requires focus.path.`);
+    if (id !== undefined) {
+      if (ids.has(id)) problems.push(`${label}.request_id must be unique.`);
+      ids.add(id);
     }
-    if ((symbolKind === undefined) !== (qualifiedName === undefined)) {
-      throw new Error(
-        `${label}.focus.symbol_kind and focus.qualified_name must appear together.`,
+
+    const focusLabel = `${label}.focus`;
+    const focus = check(() => record(relationship.focus, focusLabel));
+    let selector: RelationshipRequest["focus"] | undefined;
+    if (focus !== undefined) {
+      acceptedKeys(
+        focus,
+        ["symbol", "path", "line", "symbol_kind", "qualified_name"],
+        focusLabel,
+        problems,
       );
+      const symbol = check(() => text(focus.symbol, `${focusLabel}.symbol`));
+      const pathLabel = `${focusLabel}.path`;
+      const path =
+        focus.path === undefined
+          ? undefined
+          : check(() => sourcePath(text(focus.path, pathLabel), pathLabel));
+      const line = focus.line;
+      const lineValid =
+        line === undefined ||
+        (typeof line === "number" && Number.isSafeInteger(line) && line > 0);
+      if (!lineValid)
+        problems.push(`${focusLabel}.line must be a positive integer.`);
+      if (line !== undefined && focus.path === undefined)
+        problems.push(`${focusLabel}.line requires focus.path.`);
+      const symbolKind =
+        focus.symbol_kind === undefined
+          ? undefined
+          : check(() => text(focus.symbol_kind, `${focusLabel}.symbol_kind`));
+      const qualifiedName =
+        focus.qualified_name === undefined
+          ? undefined
+          : check(() =>
+              text(focus.qualified_name, `${focusLabel}.qualified_name`),
+            );
+      if (
+        (focus.symbol_kind === undefined) !==
+        (focus.qualified_name === undefined)
+      )
+        problems.push(
+          `${focusLabel}.symbol_kind and focus.qualified_name must appear together.`,
+        );
+      if (symbol !== undefined && lineValid)
+        selector = {
+          symbol,
+          ...(path === undefined
+            ? {}
+            : { path, ...(line === undefined ? {} : { line }) }),
+          ...(symbolKind === undefined || qualifiedName === undefined
+            ? {}
+            : { symbolKind, qualifiedName }),
+        };
     }
-    const direction = relationship.direction;
-    const selection = relationship.selection;
-    const summary = relationship.summary;
-    if (selection !== "exact" && selection !== "family")
-      throw new Error(`${label}.selection must be exact or family.`);
-    if (direction !== "in" && direction !== "out") {
-      throw new Error(`${label}.direction must be in or out.`);
-    }
-    if (summary !== undefined && summary !== "frontier") {
-      throw new Error(`${label}.summary must be frontier when present.`);
-    }
-    if (relationship.depth !== 1) {
-      throw new Error(`${label}.depth must be 1.`);
-    }
+
+    const relation = check(() =>
+      text(relationship.relation, `${label}.relation`),
+    );
+    const { selection, direction, depth, limit, summary } = relationship;
+    const selectionValid = selection === "exact" || selection === "family";
+    const directionValid = direction === "in" || direction === "out";
+    const summaryValid = summary === undefined || summary === "frontier";
+    const limitValid =
+      typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0;
+    if (!selectionValid)
+      problems.push(`${label}.selection must be exact or family.`);
+    if (!directionValid) problems.push(`${label}.direction must be in or out.`);
+    if (!summaryValid)
+      problems.push(`${label}.summary must be frontier when present.`);
+    if (depth !== 1) problems.push(`${label}.depth must be 1.`);
+    if (!limitValid)
+      problems.push(`${label}.limit must be a positive integer.`);
     if (
-      typeof relationship.limit !== "number" ||
-      !Number.isSafeInteger(relationship.limit)
-    ) {
-      throw new Error(`${label}.limit must be a positive integer.`);
-    }
-    const selectorLocation =
-      path === undefined
-        ? {}
-        : { path, ...(line === undefined ? {} : { line }) };
-    const selectorIdentity =
-      symbolKind === undefined || qualifiedName === undefined
-        ? {}
-        : { symbolKind, qualifiedName };
-    return {
-      id,
-      focus: { symbol, ...selectorLocation, ...selectorIdentity },
-      relation: text(relationship.relation, `${label}.relation`),
-      selection,
-      direction,
-      depth: 1,
-      limit: positiveInteger(String(relationship.limit), `${label}.limit`),
-      ...(summary === undefined ? {} : { summary }),
-    };
-  });
+      id !== undefined &&
+      selector !== undefined &&
+      relation !== undefined &&
+      selectionValid &&
+      directionValid &&
+      summaryValid &&
+      depth === 1 &&
+      limitValid
+    )
+      plan.push({
+        id,
+        focus: selector,
+        relation,
+        selection,
+        direction,
+        depth,
+        limit,
+        ...(summary === undefined ? {} : { summary }),
+      });
+  }
+  return plan;
 };
 
 export const QUERY_DEFAULTS = {
@@ -248,6 +262,15 @@ export type QueryInvocation = Readonly<{
   assumedOptions?: AssumedQueryOptions;
 }>;
 
+export class QueryRefusal extends Error {
+  constructor(
+    message: string,
+    readonly assumedRepository: string | undefined,
+  ) {
+    super(message);
+  }
+}
+
 export const parseQueryInvocation = (
   args: readonly string[],
 ): QueryInvocation => {
@@ -279,7 +302,9 @@ export const parseQueryInvocation = (
     if (value === undefined || value.startsWith("--")) {
       if (name === "--scope") problems.push("--scope requires a value.");
       else if (name !== "--revision" && name !== "--question")
-        problems.push(argumentRefusal(name, queryValues[name], undefined));
+        problems.push(
+          `${argumentRefusal(name, queryValues[name])} No value was supplied.`,
+        );
       continue;
     }
     index += 1;
@@ -292,7 +317,7 @@ export const parseQueryInvocation = (
     }
   }
 
-  const check = <A>(parse: () => A): A | undefined => {
+  const check: Check = (parse) => {
     try {
       return parse();
     } catch (error) {
@@ -310,12 +335,10 @@ export const parseQueryInvocation = (
 
   const profile = values.get("--profile");
   if (profile !== undefined && profile !== "full" && profile !== "syntax-only")
-    problems.push(
-      argumentRefusal("--profile", queryValues["--profile"], profile),
-    );
+    problems.push(argumentRefusal("--profile", queryValues["--profile"]));
   if (profile === "syntax-only" && !preparedOnly)
     problems.push(
-      '--profile "syntax-only" requires --prepared-only, which was omitted.',
+      "--profile requires --prepared-only for syntax-only. Use full without it.",
     );
 
   const repo = values.get("--repo");
@@ -330,10 +353,11 @@ export const parseQueryInvocation = (
   const commit = check(() => revision(values.get("--revision"), preparedOnly));
   if (question === undefined || question.trim().length === 0)
     problems.push(
-      argumentRefusal("--question", queryValues["--question"], question),
+      argumentRefusal("--question", queryValues["--question"]) +
+        (question === undefined ? " No value was supplied." : ""),
     );
   if (branch !== undefined && branch.trim().length === 0)
-    problems.push(argumentRefusal("--branch", queryValues["--branch"], branch));
+    problems.push(argumentRefusal("--branch", queryValues["--branch"]));
   const count = check(() =>
     maxResults === undefined
       ? QUERY_DEFAULTS["--max-results"]
@@ -353,7 +377,7 @@ export const parseQueryInvocation = (
     } catch {}
     if (!Array.isArray(parsed))
       throw new Error("--relationship-plan takes a JSON array.");
-    return relationshipPlan(parsed);
+    return relationshipPlan(parsed, check, problems);
   });
   if (
     problems.length > 0 ||
@@ -364,7 +388,10 @@ export const parseQueryInvocation = (
     bytes === undefined ||
     plan === undefined
   )
-    throw new Error(problems.join("\n"));
+    throw new QueryRefusal(
+      problems.join("\n"),
+      repo === undefined ? repository : undefined,
+    );
 
   const assumedOptions: AssumedQueryOptions = {
     ...(repo === undefined ? { "--repo": repository } : {}),

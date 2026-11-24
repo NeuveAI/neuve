@@ -494,14 +494,14 @@ export const inspectDoctor = async (input: {
     checks.push({
       check: "repository",
       status: "missing",
-      detail: `Doctor can't look at ${resolve(input.repository)} until Git works`,
+      detail: "Doctor can't check the repository until Git works",
       fix: "Fix Git first (above), then run neuve doctor again",
     });
   else if (repository === undefined)
     checks.push({
       check: "repository",
       status: "missing",
-      detail: `${resolve(input.repository)} isn't inside a Git repository`,
+      detail: "--repo must name a folder inside a Git repository",
       fix: "Run neuve doctor in the repository you want to review, or pass --repo <path>",
     });
   else {

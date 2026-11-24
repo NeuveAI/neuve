@@ -154,7 +154,7 @@ export const describeFailure = (error: unknown, fallback?: string): string => {
       case "UnknownSession":
         return "The --session value names no live agent session in this repository.";
       case "RepositoryUnavailable":
-        return `${String(tagged["repository"])} is not inside a git repository, so it has no Records store.`;
+        return "--repo must name a folder inside a Git repository.";
       case "BackupFailed":
         return `The store was not migrated: its backup copy ${String(tagged["path"])} could not be written (${String(tagged["message"])}).`;
       case "StoreNotInitialized":
@@ -164,7 +164,9 @@ export const describeFailure = (error: unknown, fallback?: string): string => {
       default:
         return (
           fallback ??
-          `${tagged._tag}: ${String(tagged["message"] ?? JSON.stringify(tagged))}`
+          (typeof tagged["message"] === "string"
+            ? `${tagged._tag}: ${tagged["message"]}`
+            : tagged._tag)
         );
     }
   }
@@ -187,14 +189,20 @@ export const execute = async <A>(
 export const write = (text: string) =>
   Bun.write(Bun.stdout, text.endsWith("\n") ? text : `${text}\n`);
 
-export const argumentRefusal = (
-  argument: string,
-  accepted: string,
-  received: unknown,
-): string =>
-  received === undefined
-    ? `${argument} takes ${accepted}. No value was supplied.`
-    : `${argument} takes ${accepted}, not ${JSON.stringify(received)}.`;
+export const argumentRefusal = (argument: string, accepted: string): string =>
+  `${argument} takes ${accepted}.`;
+
+export const repositoryRoot = (repository: string): string => {
+  const git = Bun.spawnSync(
+    ["git", "-C", repository, "rev-parse", "--show-toplevel"],
+    { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+  );
+  if (!git.success)
+    throw new Error(
+      argumentRefusal("--repo", "a folder inside a Git working tree"),
+    );
+  return git.stdout.toString().trimEnd();
+};
 
 export const unknownOptionRefusal = (
   token: string | undefined,
@@ -491,8 +499,8 @@ export const runRecordsCli = async (
         await Bun.write(
           Bun.stderr,
           Option.isSome(newer)
-            ? `neuve: event ${id} is ${newer.value}, a kind this build does not know; the newer build that wrote it shows it\n`
-            : `neuve: no event ${id}\n`,
+            ? `neuve: That event is ${newer.value}, a kind this build does not know. Use the newer build that wrote it.\n`
+            : "neuve: That event ID has no event in this store.\n",
         );
         return 1;
       }
