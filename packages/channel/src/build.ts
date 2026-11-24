@@ -714,7 +714,8 @@ export class Builds {
 		const checked = await checkedPlanText(build.plan.hash, text);
 		for (const { chat, requestId } of recipients) {
 			const submission = await this.#send(target.build.id, chat, {
-				type: "input", whenBusy: "steer", requestId,
+				// A revision never changes the turn in flight: it is the agent's next work, and a new review cycle.
+				type: "input", whenBusy: "followUp", requestId,
 				content: content(build.approved.by, checked),
 			});
 			if (submission === undefined) return;

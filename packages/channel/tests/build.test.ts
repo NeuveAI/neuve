@@ -420,7 +420,7 @@ test("approval during worktree creation delivers the revision once the implement
 });
 
 // Treating a busy chat as ended would silently start another implementer on a competing branch.
-test("approval steers a live implementer and a later plan starts a new one after it ends", async () => {
+test("approval reaches a live implementer only after its run ends, and a later plan starts a new one after it ends", async () => {
 	const run = await setup();
 	const first = await run.draft(planText);
 	run.fixture.script(tool("bash", { command: "while [ ! -e continue-build ]; do sleep .02; done" }, "wait-for-revision"));
@@ -433,11 +433,13 @@ test("approval steers a live implementer and a later plan starts a new one after
 	expect(await buildAt(run.watch, 1, "delivered")).toMatchObject({ state: { kind: "delivered", to: build.id } });
 	await agent.until("queue", event => event.messages.some(message => message.text === revisedText));
 	expect(agent.of("result").some(event => event.call === "wait-for-revision")).toBe(false);
-	run.fixture.script(fauxAssistantMessage("Revision read."));
+	run.fixture.script(fauxAssistantMessage("First plan done."), fauxAssistantMessage("Revision read."));
 	await writeFile(join(run.worktrees[0]!.path, "continue-build"), "");
 	expect(await agent.until("result", event => event.call === "wait-for-revision")).toMatchObject({ error: false });
+	// The turn in flight ends on the first plan before the revision is read, which starts the next turn.
 	expect(await agent.until("message", event => event.text === revisedText)).toMatchObject({ author: OWNER, invoked: true });
-	await agent.until("run", event => event.state === "end");
+	expect(agent.of("run").map(event => event.state).slice(0, 2)).toEqual(["start", "end"]);
+	await agent.until("run", () => agent.of("run").filter(event => event.state === "end").length === 2);
 	expect(run.worktrees).toHaveLength(1);
 	const later = await run.draft("# Export monitoring\n\nTrack completed exports.");
 	run.fixture.script(fauxAssistantMessage("New plan read."));
