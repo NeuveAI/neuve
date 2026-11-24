@@ -563,6 +563,21 @@ const judgeAgentHooks = async (
   };
 };
 
+/** Whether the folder, or the nearest one above it that exists, can be written. */
+const writableFolder = async (folder: string): Promise<boolean> => {
+  for (let current = folder; ; current = dirname(current)) {
+    const found = await stat(current).catch(() => undefined);
+    if (found !== undefined)
+      return found.isDirectory()
+        ? await access(current, constants.W_OK).then(
+            () => true,
+            () => false,
+          )
+        : false;
+    if (dirname(current) === current) return false;
+  }
+};
+
 const installAgentHooks = async (
   path: string,
   harness: AgentHarness,
@@ -772,14 +787,21 @@ export const runSetupHooks = async (
   // changed is named together, and nothing is written when one is refused.
   const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
   const failures: unknown[] = [];
+  if (!(await writableFolder(hooksDirectory)))
+    failures.push(new Error("Git's hooks folder can't be written."));
   for (const name of gitHooks)
     await installGitHook(hooksDirectory, name, command, true).catch(
       (error: unknown) => failures.push(error),
     );
-  for (const file of files)
+  for (const file of files) {
+    if (!(await writableFolder(dirname(file.path))))
+      failures.push(
+        described(file, new Error(`'${dirname(file.path)}' can't be written.`)),
+      );
     await installAgentHooks(file.path, file.harness, command, true).catch(
       (error: unknown) => failures.push(described(file, error)),
     );
+  }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1)
     throw new Error(

@@ -434,8 +434,8 @@ describe("neuve CLI boundary", () => {
     expect(refused.stderr).not.toContain("hunter2");
   });
 
-  // A write refusal must identify the failed filesystem operation without displaying the hook path.
-  test("setup hooks keeps the native hook-file write reason", async () => {
+  // A hook file that cannot be written is refused before anything is written, without displaying its path.
+  test("setup hooks refuses a hook file whose folder can't be written, before writing", async () => {
     const { root } = await fixtureRepository();
     const directory = join(root, "private hook directory");
     await mkdir(directory);
@@ -457,7 +457,9 @@ describe("neuve CLI boundary", () => {
         file,
       ]);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toMatch(/permission denied, copyfile/i);
+      expect(result.stderr).toContain(
+        "a folder of --claude-settings can't be written.",
+      );
       expect(result.stderr).toContain("--claude-settings");
       expect(result.stderr).not.toContain(directory);
     } finally {
