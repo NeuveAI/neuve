@@ -641,7 +641,7 @@ test("scope paths reject escapes and scope answers redact plan paths from citati
 	const run = await setup({ query: async ({ question, scope: [path] }) => {
 		calls.push(question);
 		if (question === "Broken read") throw new Error(`Could not read ${path}`);
-		return { query: question, scope: [{ title: path, ref: { path } }], scope_gaps: [`${path}: The held copy could not be read.`] };
+		return { query: question, scope: [{ title: path, ref: { path } }], scope_gaps: [`${path}: The held copy could not be read.`], retrieval: { status: "error", error: `Could not read ${path}` } };
 	} });
 	const { chat, plan } = await startBuild(run);
 	const outside = join(run.fixture.root, "outside.md");
@@ -653,6 +653,7 @@ test("scope paths reject escapes and scope answers redact plan paths from citati
 	expect(JSON.parse(valid.text)).toMatchObject({
 		scope: [{ title: label, ref: { path: label } }],
 		scope_gaps: [`${label}: The held copy could not be read.`],
+		retrieval: { status: "error", error: `Could not read ${label}` },
 	});
 	expect(valid.text).not.toContain(run.plans);
 	const broken = await askScope(run, chat, "Broken read");
@@ -661,9 +662,23 @@ test("scope paths reject escapes and scope answers redact plan paths from citati
 	const denied = await askScope(run, chat, "Read invalid paths", [outside, "escape.md", "bad\0path", "escape-dir/missing.md"]);
 	expect(denied).toMatchObject({
 		error: true,
-		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" outside the allowed roots and scope[2] received "bad\\u0000path" but could not resolve it and scope[3] received "escape-dir/missing.md" outside the allowed roots, so name readable files inside the repository, its worktrees or this channel's plans folder or omit them to read the approved plan.`,
+		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" through a link and scope[2] received "bad\\u0000path" but could not resolve it and scope[3] received "escape-dir/missing.md" through a link, so name readable files inside the repository, its worktrees or this channel's plans folder or omit them to read the approved plan.`,
 	});
 	expect(calls).toEqual(["Read notes", "Broken read"]);
+});
+
+test.each(["file", "folder"] as const)("scope refuses an in-root linked %s", async (kind) => {
+	const run = await setup();
+	const { chat } = await startBuild(run);
+	const { path } = run.worktrees[0]!;
+	await Bun.write(join(path, "target", "notes.md"), "Scope fixture.");
+	const name = kind === "file" ? "alias.md" : "alias/notes.md";
+	await symlink(
+		join(path, kind === "file" ? "target/notes.md" : "target"),
+		join(path, kind === "file" ? name : "alias"),
+	);
+	const result = await askScope(run, chat, "Read linked scope", [name]);
+	expect(result).toMatchObject({ error: true, text: expect.stringContaining(`scope[0] received ${JSON.stringify(name)} through a link`) });
 });
 
 // A reviewer can appear to start while reading another chat's context or getting a revision as its first input.

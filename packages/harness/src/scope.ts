@@ -10,7 +10,7 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { open, readlink, realpath } from "node:fs/promises";
+import { open, realpath, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { Clock, Context, Data, Duration, Effect, Option, Tracer } from "effect";
 import { z } from "zod";
@@ -505,6 +505,34 @@ const checkedScopeGap = {
   reason: "The checked scope path could not be opened safely.",
 } as const;
 const darwinNoFollowAny = 0x20000000; // O_NOFOLLOW_ANY in macOS sys/fcntl.h.
+const readFlags = constants.O_RDONLY | constants.O_NONBLOCK;
+const noFollowFlags = readFlags | constants.O_NOFOLLOW;
+
+async function openLinuxScopeParent(
+  path: string,
+): Promise<FileHandle | undefined> {
+  let directory: FileHandle | undefined = await open(
+    "/",
+    constants.O_RDONLY | constants.O_DIRECTORY,
+  );
+  try {
+    for (const name of posix.dirname(path).split("/").filter(Boolean)) {
+      const parent = directory;
+      // Linux can return ENOTDIR for O_DIRECTORY | O_NOFOLLOW on a link.
+      directory = await open(
+        `/proc/self/fd/${parent.fd}/${name}`,
+        noFollowFlags,
+      );
+      await parent.close();
+      if (!(await directory.stat()).isDirectory()) return undefined;
+    }
+    const parent = directory;
+    directory = undefined;
+    return parent;
+  } finally {
+    await directory?.close();
+  }
+}
 
 const readWorkingFile = async (
   path: string,
@@ -513,20 +541,17 @@ const readWorkingFile = async (
   if (checked && process.platform !== "darwin" && process.platform !== "linux")
     return checkedScopeGap;
   try {
+    const linux = checked && process.platform === "linux";
+    await using parent = linux ? await openLinuxScopeParent(path) : undefined;
+    if (linux && parent === undefined) return { kind: "missing" };
     await using file = await open(
-      path,
-      constants.O_RDONLY |
-        constants.O_NONBLOCK |
-        (checked && process.platform === "darwin"
-          ? darwinNoFollowAny
-          : constants.O_NOFOLLOW),
+      parent
+        ? `/proc/self/fd/${parent.fd}/${posix.basename(path) || "."}`
+        : path,
+      checked && process.platform === "darwin"
+        ? readFlags | darwinNoFollowAny
+        : noFollowFlags,
     );
-    if (
-      checked &&
-      process.platform === "linux" &&
-      (await readlink(`/proc/self/fd/${file.fd}`)) !== path
-    )
-      return checkedScopeGap;
     const stat = await file.stat();
     if (!stat.isFile())
       return { kind: "gap", reason: "The path is not a regular file." };

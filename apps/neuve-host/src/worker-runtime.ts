@@ -35,6 +35,11 @@ export type WorkerContext = {
 export type WorkerAdmission = Parameters<NonNullable<NonNullable<Options["extension"]>["attach"]>>[1];
 type ReadScope = NonNullable<NonNullable<Options["build"]>["query"]>["read"];
 type ScopeQuery = Omit<Parameters<ReadScope>[0], "plan" | "previousPlans">;
+type ScopeResult = {
+	scope?: readonly { title: string; ref: { path?: string | undefined } }[];
+	scope_gaps?: readonly string[];
+	[key: string]: unknown;
+};
 
 /** What root's worker entry provides: the provider lane's models, built in the worker's process. */
 export type WorkerSetup = {
@@ -43,7 +48,7 @@ export type WorkerSetup = {
 	/** Acquire the source before any mutable native storage opens. Cleanup follows a confirmed native close. */
 	openSource?(context: WorkerContext): (() => void) | Promise<() => void>;
 	review?(context: WorkerContext): Review | Promise<Review>;
-	query?(context: WorkerContext, request: ScopeQuery): Promise<object>;
+	query?(context: WorkerContext, request: ScopeQuery): Promise<ScopeResult>;
 	models(context: WorkerContext, defaults: Models): Models | Promise<Models>;
 	planning?(context: WorkerContext): Planning | undefined | Promise<Planning | undefined>;
 	/** What a chat without a model runs when the host configures none. */
@@ -214,24 +219,10 @@ function below(root: string, path: string): string | undefined {
 	return name === ".." || name.startsWith(`..${sep}`) || isAbsolute(name) ? undefined : name;
 }
 
-async function boundedScopePath(path: string, roots: readonly string[]): Promise<string | undefined> {
-	for (let ancestor = path; ; ancestor = dirname(ancestor)) {
-		try {
-			const target = await realpath(ancestor === path ? path : ancestor + sep);
-			return roots.some(root => below(root, target) !== undefined)
-				? join(target, relative(ancestor, path))
-				: undefined;
-		} catch (error) {
-			const notDirectory = error instanceof Error && "code" in error && error.code === "ENOTDIR";
-			if ((!missing(error) && !notDirectory) || dirname(ancestor) === ancestor) throw error;
-		}
-	}
-}
-
 export function planScopeRead(
 	project: string,
 	plans: string,
-	query: (request: ScopeQuery) => Promise<object>,
+	query: (request: ScopeQuery) => Promise<ScopeResult>,
 	files: NonNullable<Options["planFiles"]> = planFiles(plans),
 ): ReadScope {
 	return async ({ plan, previousPlans, scope, ...request }) => {
@@ -251,24 +242,50 @@ export function planScopeRead(
 			const listed = await git(project, ["worktree", "list", "--porcelain", "-z"]);
 			if (listed.status !== 0) throw new Error("Git could not list the repository's worktrees.");
 			const worktrees = listed.stdout.split("\0").filter(field => field.startsWith("worktree ")).map(field => field.slice(9));
-			const roots = (await Promise.all([project, ...worktrees].map(root => realpath(root).catch(error => {
-				if (!missing(error)) throw error;
-			})))).filter(root => root !== undefined);
-			const repository = await realpath(request.repository);
-			if (!roots.includes(repository)) {
+			const roots = new Map<string, string>();
+			for (const root of new Set([project, ...worktrees].map(path => resolve(path)))) {
+				const actual = await realpath(root).catch(error => {
+					if (!missing(error)) throw error;
+				});
+				if (actual !== undefined) {
+					roots.set(root, actual);
+					roots.set(actual, actual);
+				}
+			}
+			const repository = resolve(request.repository);
+			if (!roots.has(repository)) {
 				return { isError: true, text: redact(`The assigned worktree ${JSON.stringify(request.repository)} is not registered with this repository. Nothing in your call can fix that.`) };
 			}
-			roots.push(plansRoot);
+			roots.set(resolve(plans), plansRoot);
+			roots.set(plansRoot, plansRoot);
+			const aliases = [...roots.keys()].sort((a, b) => b.length - a.length);
 			const refused: string[] = [];
 			for (const [index, name] of scope.entries()) {
 				const field = `scope[${index}] received ${JSON.stringify(name)}`;
+				const path = resolve(repository, name);
+				const alias = aliases.find(root => below(root, path) !== undefined);
+				if (alias === undefined) {
+					refused.push(`${field} outside the allowed roots`);
+					continue;
+				}
+				const root = roots.get(alias)!;
+				const suffix = relative(alias, path);
 				try {
-					const target = await boundedScopePath(resolve(repository, name), roots);
-					if (target === undefined) {
-						refused.push(`${field} outside the allowed roots`);
-						continue;
+					let ancestor = root;
+					let linked = false;
+					for (const part of suffix.split(sep).filter(Boolean)) {
+						ancestor = join(ancestor, part);
+						const entry = await lstat(ancestor).catch(error => {
+							if (!missing(error) && !(error instanceof Error && "code" in error && error.code === "ENOTDIR")) throw error;
+						});
+						if (entry === undefined) break;
+						if (entry.isSymbolicLink()) {
+							linked = true;
+							break;
+						}
 					}
-					paths.add(target);
+					if (linked) refused.push(`${field} through a link`);
+					else paths.add(join(root, suffix));
 				} catch {
 					refused.push(`${field} but could not resolve it`);
 				}
@@ -276,8 +293,16 @@ export function planScopeRead(
 			if (refused.length) {
 				return { isError: true, text: redact(`${refused.join(" and ")}, so name readable files inside the repository, its worktrees or this channel's plans folder or omit them to read the approved plan.`) };
 			}
-			const result = await query({ ...request, scope: [...paths] });
-			return { text: JSON.stringify(result, (_key, value: unknown) => typeof value === "string" ? redact(value) : value) };
+			const { scope: sources, scope_gaps: gaps, ...result } = await query({ ...request, scope: [...paths] });
+			return { text: JSON.stringify({
+				...result,
+				...(sources && { scope: sources.map(source => ({
+					...source,
+					title: redact(source.title),
+					ref: source.ref.path === undefined ? source.ref : { ...source.ref, path: redact(source.ref.path) },
+				})) }),
+				...(gaps && { scope_gaps: gaps.map(redact) }),
+			}, (key, value: unknown) => key === "error" && typeof value === "string" ? redact(value) : value) };
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			return { isError: true, text: redact(`The host could not read scope for question ${JSON.stringify(request.question)} (${reason}). Ask the channel owner to check the worker before retrying.`) };

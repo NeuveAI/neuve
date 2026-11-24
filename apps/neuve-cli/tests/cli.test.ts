@@ -4,6 +4,7 @@ import {
   beforeAll,
   describe,
   expect,
+  spyOn,
   test,
 } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -31,8 +32,9 @@ import {
   rm,
   symlink,
 } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { defaultConfig } from "../../../packages/harness/src/config.ts";
 import { mcpClientsLayer } from "../../../packages/harness/src/mcp-client.ts";
 import { requestReview } from "../../../packages/harness/src/request.ts";
@@ -43,6 +45,7 @@ import { HostConfigSchema } from "@ace/host/host-config";
 import { planScopeRead } from "@ace/host/worker";
 import {
   fetchCyclePart,
+  readLocalScope,
   readScopeOpening,
   scopeFolder,
 } from "../../../packages/harness/src/scope.ts";
@@ -653,6 +656,108 @@ describe("neuve CLI boundary", () => {
     }
   });
 
+  // Linux walks directory descriptors through /proc. macOS rejects links in a single open.
+  test.skipIf(process.platform !== "linux")(
+    "Linux checked scope gets ELOOP at every linked depth and closes its handles",
+    async () => {
+      const { root, revision } = await fixtureRepository();
+      const repository = await realpath(root);
+      await mkdir(join(repository, "empty"));
+      await mkdir(join(repository, "nested"));
+      await symlink("empty", join(repository, "first-link"));
+      await symlink("../empty", join(repository, "nested", "inner-link"));
+      await symlink("source.custom", join(repository, "leaf-link"));
+      const names = [
+        "first-link/missing.md",
+        "nested/inner-link/missing.md",
+        "leaf-link",
+      ];
+      const opened: fs.FileHandle[] = [];
+      const rejected: string[] = [];
+      const open = fs.open;
+      const spy = spyOn(fs, "open").mockImplementation(
+        async (path, flags, mode) => {
+          try {
+            const file = await open(path, flags, mode);
+            if (path === "/" || String(path).startsWith("/proc/self/fd/"))
+              opened.push(file);
+            return file;
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "ELOOP"
+            )
+              rejected.push(basename(String(path)));
+            throw error;
+          }
+        },
+      );
+      try {
+        const answer = await Effect.runPromise(
+          readLocalScope(
+            repository,
+            revision,
+            names.map((name) => join(repository, name)),
+            true,
+          ),
+        );
+        expect(answer.sources.map(({ kind, path }) => [kind, path])).toEqual(
+          names.map((name) => ["gap", name]),
+        );
+        expect(rejected.sort()).toEqual([
+          "first-link",
+          "inner-link",
+          "leaf-link",
+        ]);
+        expect(opened.length).toBeGreaterThan(0);
+        expect(opened.every((file) => file.fd === -1)).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  // Linux formerly compared the /proc descriptor pathname after open. macOS has no such check.
+  test.skipIf(process.platform !== "linux")(
+    "Linux checked scope reads the opened file after a rename",
+    async () => {
+      const { root, revision } = await fixtureRepository();
+      const repository = await realpath(root);
+      const name = "rename-after-open.md";
+      const path = join(repository, name);
+      const renamed = join(repository, "renamed.md");
+      const text = "Scope held by an open descriptor.";
+      await Bun.write(path, text);
+      const open = fs.open;
+      const spy = spyOn(fs, "open").mockImplementation(
+        async (openedPath, flags, mode) => {
+          const file = await open(openedPath, flags, mode);
+          if (basename(String(openedPath)) === name) {
+            try {
+              await rename(path, renamed);
+            } catch (error) {
+              await file.close();
+              throw error;
+            }
+          }
+          return file;
+        },
+      );
+      try {
+        const answer = await Effect.runPromise(
+          readLocalScope(repository, revision, [path], true),
+        );
+        expect(await Bun.file(renamed).text()).toBe(text);
+        expect(answer.sources).toMatchObject([
+          { kind: "working-file", path: name, bytes: Buffer.from(text) },
+        ]);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
   test.each(["was deleted from the worktree", "never existed"] as const)(
     "worker query keeps named scope that %s",
     async (scenario) => {
@@ -697,6 +802,8 @@ describe("neuve CLI boundary", () => {
         join(stateDirectory, "plans"),
         (request) => query!(worker, request),
       );
+      const note = `Keep this path verbatim: ${join(stateDirectory, "plans")}\n`;
+      await Bun.write(join(root, "notes.md"), note);
       const plan = "# Approved plan\nRead the export scope.\n";
       const previousBinary = process.env.NEUVE_GRAPH_BINARY;
       process.env.NEUVE_GRAPH_BINARY = graph.executable;
@@ -705,7 +812,7 @@ describe("neuve CLI boundary", () => {
           repository: root,
           revision,
           question: "What is the export scope?",
-          scope: [path],
+          scope: [path, "notes.md"],
           previousPlans: [],
           requester: {
             _tag: "Agent",
@@ -722,6 +829,13 @@ describe("neuve CLI boundary", () => {
         });
         expect(result.isError).toBeUndefined();
         const answer = JSON.parse(result.text);
+        expect(answer.scope).toContainEqual(
+          expect.objectContaining({
+            ref: expect.objectContaining({ path: "notes.md" }),
+            text: note,
+            sha256: createHash("sha256").update(note).digest("hex"),
+          }),
+        );
         const reason =
           "The path was absent from the working tree and the base revision.";
         expect(answer.scope_gaps).toEqual(
