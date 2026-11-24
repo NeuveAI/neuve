@@ -1,4 +1,4 @@
-import { type AgentName, MENTION, PLAN_COMMENT_TOOL, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
+import { type AgentName, PLAN_COMMENT_TOOL, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
 import type { Listing, People } from "@ace/host/protocol";
 import type { Event } from "@ace/ui";
 
@@ -196,20 +196,17 @@ export function toEvents(
 	// A run answers the newest message that invoked it, as the channel's run end reports.
 	let asker: string | undefined;
 	const name = (author: string) => authorName(author, people, channels, agents);
-	// An agent's name stays words unless `listed`, the agents the message reached, holds it.
+	// The parts are the only names drawn as mentions: an agent's name only where `listed`, the
+	// agents the message reached, holds it.
 	const names = new Set([...agents.values()].map(mentionName));
 	const text = (value: string, listed: ReadonlySet<string> = new Set()): Event.Message.Content.Text => {
-		const words = value.replace(
-			/(^|[\s([{])@([\w-]+)/gm,
-			(whole, lead: string, token: string) =>
-				names.has(token.toLowerCase()) && !listed.has(token.toLowerCase()) ? `${lead}@\u2060${token}` : whole,
-		);
-		const parts = [...words.matchAll(MENTION)].map((match) => ({
-			type: "mention" as const,
-			value: match[1]!,
-			index: match.index,
-		}));
-		return parts.length ? { type: "text", text: words, parts } : { type: "text", text: words };
+		const parts = [...value.matchAll(/(?<=^|[\s([{])@([\w-]+)/gm)].flatMap((match) => {
+			const name = match[1]!.toLowerCase();
+			return names.has(name) && !listed.has(name)
+				? []
+				: [{ type: "mention" as const, value: match[1]!, index: match.index }];
+		});
+		return { type: "text", text: value, parts };
 	};
 	const sender = (model: string | undefined): Event.Sender.Agent => {
 		const value = [model, asker && by(asker)].filter(Boolean).join(" · ");

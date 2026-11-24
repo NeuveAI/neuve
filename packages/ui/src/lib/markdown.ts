@@ -275,11 +275,9 @@ function enrich(
 	documents?: readonly DocumentCandidate[],
 	plan = false,
 ): PMNode {
-	// A name two entries share, such as two plans' implementers, stays text rather than reach one of them.
-	let names = mentions?.map(item => item.name) ?? [];
-	let map = mentions?.length
-		? new Map(mentions.flatMap(item => names.indexOf(item.name) === names.lastIndexOf(item.name) ? [[item.name, item]] : []))
-		: undefined;
+	// Text never mentions an agent, so a draft rebuilt from text keeps agent names as words.
+	let people = mentions?.filter(item => !item.agent) ?? [];
+	let map = people.length ? new Map(people.map(item => [item.name, item])) : undefined;
 	return expand(doc, map, documents, plan)[0]!;
 }
 

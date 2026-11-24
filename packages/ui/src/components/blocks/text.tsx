@@ -903,9 +903,10 @@ function text(
 	streaming = false,
 	parsed?: BlockNode[],
 	plan = false,
+	named?: string[],
 ): Block {
 	let fonts = blockFonts(compact);
-	let blocks = parsed || fallback(raw, mentions, fonts, plan);
+	let blocks = parsed || fallback(raw, mentions, fonts, plan, named);
 	let sizes = new Map<number, { height: number; fit: number }>();
 	let size = (width: number) => {
 		let hit = sizes.get(width);

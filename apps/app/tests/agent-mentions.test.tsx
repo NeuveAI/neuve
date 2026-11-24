@@ -5,6 +5,9 @@ import { afterEach, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 
 import type { Build, Request } from "@ace/channel/protocol";
+import type { Event } from "@ace/ui";
+
+type Text = Event.Message.Content.Text;
 
 const dom = new JSDOM("<!doctype html><body></body>", { url: "http://localhost/" });
 const { window } = dom;
@@ -169,11 +172,14 @@ const posted = (agents?: number[]) => {
 		new Map(),
 		agentAuthors([build]),
 	);
-	const [content] = (event as { content: { text: string }[] }).content;
-	return [...content!.text.matchAll(/(?<=^|\s)@([\w-]+)/g)].map((match) => match[1]);
+	const [content] = (event as { content: Text[] }).content;
+	expect(content!.text).toBe("@reviewer hold it, @vivienne, @reviewer-bob");
+	return content!.parts!.map((part) => part.value);
 };
 
-test("a posted message draws an agent as mentioned only from its list of agents", () => {
+// Why: a name drawn as words must still read as written, so copying the message or finding
+// "@reviewer" on the page works.
+test("a posted message draws an agent as mentioned only from its list of agents, and keeps its text as written", () => {
 	expect(posted()).toEqual(["vivienne", "reviewer-bob"]);
 	expect(posted([2])).toEqual(["vivienne", "reviewer-bob"]);
 	expect(posted([3])).toEqual(["reviewer", "vivienne", "reviewer-bob"]);
@@ -195,8 +201,9 @@ test("an agent's reply that names another agent draws no mention", () => {
 		new Map(),
 		agentAuthors([build]),
 	);
-	const [content] = (event as { content: { text: string }[] }).content;
-	expect([...content!.text.matchAll(/(?<=^|\s)@([\w-]+)/g)].map((match) => match[1])).toEqual(["vivienne"]);
+	const [content] = (event as { content: Text[] }).content;
+	expect(content!.text).toBe("Ask @reviewer, not @vivienne");
+	expect(content!.parts!.map((part) => part.value)).toEqual(["vivienne"]);
 });
 
 // Why: a revision approved while agents work goes to them and starts no one, so its loop has no
