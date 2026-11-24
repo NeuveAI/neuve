@@ -631,3 +631,19 @@ test("read-only capture settings stop setup before anything is written", async (
     await chmod(join(repo, ".git/neuve/capture.json"), 0o600);
   }
 });
+
+// Reason: capture settings that are a link to nothing can't be written through, so setup refuses first.
+test("capture settings that link to nothing stop setup before anything is written", async () => {
+  const { root, repo, setUp } = await scene();
+  await mkdir(join(repo, ".git/neuve"), { recursive: true });
+  await symlink(
+    join(root, "nowhere/capture.json"),
+    join(repo, ".git/neuve/capture.json"),
+  );
+  await expect(setUp()).rejects.toThrow(
+    "Neuve's capture settings in this repository can't be written.",
+  );
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
+});

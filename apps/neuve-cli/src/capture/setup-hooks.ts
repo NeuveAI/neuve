@@ -566,7 +566,9 @@ const judgeAgentHooks = async (
 /** Whether a file that is written in place, if it exists, is a regular file that can be written. */
 const writableFile = async (path: string): Promise<boolean> => {
   const found = await stat(path).catch(() => undefined);
-  if (found === undefined) return true;
+  // A link to nothing can't be written through; nothing at all can be created.
+  if (found === undefined)
+    return !(await lstat(path).catch(() => undefined))?.isSymbolicLink();
   return (
     found.isFile() &&
     (await access(path, constants.W_OK).then(
