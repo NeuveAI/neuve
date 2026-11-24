@@ -1,4 +1,4 @@
-import { isAbsolute, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { Effect } from "effect";
 import { RepositoryUnavailable } from "./errors.ts";
 
@@ -28,21 +28,20 @@ export const storeLocationIn = (gitCommonDirectory: string): StoreLocation => {
   };
 };
 
-/** `git rev-parse` ran but did not succeed. */
 export interface GitCommandFailed {
   readonly exitCode: number;
   readonly stderr: string;
 }
 
-/** Resolves the store location for a repository or any of its worktrees. */
-export const resolveStoreLocation = (repository: string) =>
+const gitOutput = (repository: string, args: readonly string[]) =>
   Effect.gen(function* () {
     const result = yield* Effect.tryPromise({
       try: async () => {
-        const child = Bun.spawn(
-          ["git", "-C", repository, "rev-parse", "--git-common-dir"],
-          { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-        );
+        const child = Bun.spawn(["git", "-C", repository, ...args], {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
         const [stdout, stderr, exitCode] = await Promise.all([
           new Response(child.stdout).text(),
           new Response(child.stderr).text(),
@@ -59,10 +58,21 @@ export const resolveStoreLocation = (repository: string) =>
       };
       return yield* new RepositoryUnavailable({ repository, cause });
     }
-    const commonDirectory = result.stdout.trim();
-    return storeLocationIn(
-      isAbsolute(commonDirectory)
-        ? commonDirectory
-        : resolve(repository, commonDirectory),
-    );
+    return result.stdout;
   });
+
+/** Resolves the store location for a repository or any of its worktrees. */
+export const resolveStoreLocation = (repository: string) =>
+  gitOutput(repository, ["rev-parse", "--git-common-dir"]).pipe(
+    Effect.map((output) =>
+      storeLocationIn(resolve(repository, output.replace(/\n$/, ""))),
+    ),
+  );
+
+/** Git lists the main worktree first, or the common directory first for a bare repository. */
+export const resolveWorkerRoot = (repository: string) =>
+  gitOutput(repository, ["worktree", "list", "--porcelain", "-z"]).pipe(
+    Effect.map((output) =>
+      output.slice("worktree ".length, output.indexOf("\0")),
+    ),
+  );

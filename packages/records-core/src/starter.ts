@@ -10,6 +10,7 @@ import {
   resolveStoreLocation,
   type StoreLocation,
 } from "./location.ts";
+import type { WorkerBuild } from "./worker.ts";
 import {
   acceptedCurrentWorker,
   isLive,
@@ -22,6 +23,8 @@ import {
 export const workerLogPath = (location: StoreLocation) =>
   join(location.directory, "worker.log");
 
+const sourceConfigPath = resolve(import.meta.dir, "../../../bunfig.toml");
+
 /**
  * What bun is told when it runs this checkout from source in another folder, such as a reviewed
  * project: load no `.env` and read only the checkout's own `bunfig.toml`. Without them bun reads
@@ -30,18 +33,22 @@ export const workerLogPath = (location: StoreLocation) =>
  */
 export const sourceRunFlags = (): ReadonlyArray<string> => [
   "--no-env-file",
-  `--config=${resolve(import.meta.dir, "../../../bunfig.toml")}`,
+  `--config=${sourceConfigPath}`,
 ];
 
-/**
- * The command that runs this CLI: the compiled binary itself, or bun with `sourceRunFlags` and the
- * entry in a checkout. Only meaningful when called from the `neuve` CLI process; other processes
- * pass their own command.
- */
-export const currentCliCommand = (): ReadonlyArray<string> =>
+export const currentWorkerBuild = (): WorkerBuild =>
   Bun.main.startsWith("/$bunfs/")
-    ? [process.execPath]
-    : [process.execPath, ...sourceRunFlags(), Bun.main];
+    ? { kind: "compiled", path: process.execPath }
+    : { kind: "source", path: sourceConfigPath };
+
+export const currentCliCommand = (
+  sourceEntry = Bun.main,
+): ReadonlyArray<string> => {
+  const build = currentWorkerBuild();
+  return build.kind === "compiled"
+    ? [build.path]
+    : [process.execPath, ...sourceRunFlags(), sourceEntry];
+};
 
 export class WorkerSpawnFailed extends Data.TaggedError("WorkerSpawnFailed")<{
   readonly command: ReadonlyArray<string>;

@@ -167,11 +167,13 @@ export class JobQueue extends Context.Service<
      * the lowest `JOB_POLICIES` priority first, then oldest or newest first as the kind's order says.
      * The worker asks once per slot, with that slot's kinds (10.31). Jobs in `except` are passed
      * over: the worker holds them while what they need is missing (10.17).
+     * A failed `beforeClaim` leaves the selected job untouched.
      */
-    readonly take: (
+    readonly take: <E = never>(
       kinds: ReadonlyArray<JobKind>,
       except?: ReadonlyArray<number>,
-    ) => Effect.Effect<Option.Option<Job>, QueueError>;
+      beforeClaim?: Effect.Effect<void, E>,
+    ) => Effect.Effect<Option.Option<Job>, QueueError | E>;
     /**
      * Records the outcome of attempt `attempt`, the `attempts` value `take` returned. Each outcome
      * applies only while the job is active in that same attempt, so the outcome of an earlier attempt
@@ -627,9 +629,10 @@ export const layer = Layer.effect(
         );
       });
 
-    const take = (
+    const take = <E = never>(
       kinds: ReadonlyArray<JobKind>,
       except: ReadonlyArray<number> = [],
+      beforeClaim: Effect.Effect<void, E> = Effect.void,
     ) =>
       Effect.gen(function* () {
         if (kinds.length === 0) return Option.none<Job>();
@@ -649,6 +652,7 @@ export const layer = Layer.effect(
               ],
             )) as ReadonlyArray<{ jobSeq: number }>;
             if (next === undefined) return Option.none<Job>();
+            yield* beforeClaim;
             yield* sql`UPDATE jobs SET state = 'active', attempts = attempts + 1,
               started_at = ${at}, finished_at = NULL WHERE job_seq = ${next.jobSeq}`;
             return yield* read(next.jobSeq);
