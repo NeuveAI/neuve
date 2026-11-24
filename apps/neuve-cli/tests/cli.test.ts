@@ -878,7 +878,7 @@ describe("neuve CLI boundary", () => {
     }
   });
 
-  test("worker query reports an unknown base revision as a Git failure", async () => {
+  test("worker query refuses an unknown base revision as the command line does", async () => {
     const { root } = await fixtureRepository();
     const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
     roots.push(scratch);
@@ -930,7 +930,7 @@ describe("neuve CLI boundary", () => {
       });
       expect(result).toEqual({
         isError: true,
-        text: "fatal: Needed a single revision",
+        text: "The revision names no commit in this repository.",
       });
       expect(await queryHistory(root)).toEqual([]);
       const cli = await run(queryArgs(root, revision, question, []), {
