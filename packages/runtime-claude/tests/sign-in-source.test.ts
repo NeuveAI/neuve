@@ -20,6 +20,16 @@ for (const apiKeySource of ["/login managed key", "oauth"] as const)
     ).toMatchObject({ state: "signed-in", sourceMatchesAccount: true });
   });
 
+test("a setup token is the default account's own Claude Code login", () => {
+  expect(
+    probeSignIn(account, { tokenSource: "CLAUDE_CODE_OAUTH_TOKEN" }),
+  ).toMatchObject({
+    state: "signed-in",
+    sourceMatchesAccount: true,
+    credentialSource: "environment",
+  });
+});
+
 test("an API key from the environment is not the account's own login", () => {
   expect(
     probeSignIn(account, {
