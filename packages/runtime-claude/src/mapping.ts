@@ -103,11 +103,16 @@ export function probeSignIn(
 ): SignInState {
   const provider =
     info.apiProvider !== undefined && info.apiProvider !== "firstParty";
-  const key = info.apiKeySource !== undefined && info.apiKeySource !== "none";
+  // A key Claude Code's own /login made, or its OAuth sign-in, is the account's own login.
+  const ownKey =
+    info.apiKeySource === "/login managed key" || info.apiKeySource === "oauth";
+  const key =
+    info.apiKeySource !== undefined && info.apiKeySource !== "none" && !ownKey;
   if (
     !provider &&
     info.tokenSource === "none" &&
     !key &&
+    !ownKey &&
     !info.email &&
     !info.subscriptionType
   )
@@ -116,7 +121,8 @@ export function probeSignIn(
   const folder =
     !provider &&
     !key &&
-    (info.tokenSource === "claude.ai" ||
+    (ownKey ||
+      info.tokenSource === "claude.ai" ||
       info.tokenSource === "oauth" ||
       info.tokenSource === "config" ||
       info.tokenSource === "credentials" ||
