@@ -13,19 +13,21 @@ const plan = (name: string, email?: string, kind: AccountStatus["kind"] = "chatg
 	});
 const names = (rows: { provider: string; name: string }[]) => rows.map(({ provider, name }) => `${provider} ${name}`);
 
-// Why: one ChatGPT sign-in reached through two runtimes listed every model twice in the picker,
+// Why: one ChatGPT sign-in reached through two runtimes and the review route listed models twice,
 // and a chat or new-channel pick stored on the hidden account must still show as picked.
 test("one sign-in's accounts list each model once, and a pick on a folded account shows on its row", () => {
 	const models = [
+		{ provider: "openai", modelId: "gpt-6.1-sol", account: "chatgpt" },
 		{ provider: "codex", modelId: "gpt-6.2-sol" },
 		{ provider: "codex", modelId: "gpt-6.1-sol" },
 		{ provider: "main", modelId: "gpt-6.2-sol" },
 	];
-	const accounts = [plan("codex", "alex@example.com"), plan("main")];
+	const accounts = [plan("chatgpt", "alex@example.com"), plan("codex", "alex@example.com"), plan("main")];
 	const { rows, picked } = listed(models, "main/gpt-6.2-sol", accounts);
-	expect(names(rows)).toEqual(["codex gpt-6.2-sol", "codex gpt-6.1-sol"]);
+	expect(names(rows)).toEqual(["openai gpt-6.1-sol", "codex gpt-6.2-sol"]);
 	expect(picked).toBe("codex/gpt-6.2-sol");
-	expect(listed(models, "main/gpt-6.1-sol", accounts).picked).toBe("codex/gpt-6.1-sol");
+	expect(listed(models, "codex/gpt-6.1-sol", accounts).picked).toBe("openai/gpt-6.1-sol");
+	expect(listed(models, "main/gpt-6.1-sol", accounts).picked).toBe("openai/gpt-6.1-sol");
 	expect(listed(models, "gone/gpt-6.1-sol", accounts).picked).toBe("gone/gpt-6.1-sol");
 	expect(listed(models, "gone/gpt-1", accounts).picked).toBe("gone/gpt-1");
 	expect(listed(models, "auto", accounts).picked).toBe("auto");

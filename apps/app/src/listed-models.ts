@@ -3,24 +3,27 @@ import type { AccountStatus } from "@neuve/runtime/status";
 
 export const key = (model: ModelRef) => `${model.provider}/${model.modelId}`;
 
+type Listed = ModelRef & { account?: string };
+
 /**
- * Each model once per sign-in. Subscriptions of one kind that reach one sign-in through different
- * runtimes fold into the first that lists the model, since which serves it is the host's choice;
- * anything else, such as an API key, stays its own row. A model listed more than once is named with
- * its provider. A stored pick shows on its row, or on its model's row from a subscription of the
- * same kind when its own account no longer lists it, as the channel then runs it.
+ * Each model once per sign-in. A row's account is the one it names, else its provider's.
+ * Subscriptions of one kind that reach one sign-in through different runtimes or routes fold into
+ * the first that lists the model, since which serves it is the host's choice; anything else, such
+ * as an API key, stays its own row. A model listed more than once is named with its provider. A
+ * stored pick shows on its row, or on its model's row from a subscription of the same kind when its
+ * own account no longer lists it, as the channel then runs it.
  */
-export function listed<T extends ModelRef>(
+export function listed<T extends Listed>(
 	models: readonly T[],
 	picked: string,
 	accounts: readonly AccountStatus[] = [],
 ) {
-	const account = ({ provider }: ModelRef) => accounts.find(({ name }) => name === provider);
-	const plan = (model: ModelRef) => {
+	const account = (model: Listed) => accounts.find(({ name }) => name === (model.account ?? model.provider));
+	const plan = (model: Listed) => {
 		const kind = account(model)?.kind;
 		return kind === "chatgpt-subscription" || kind === "claude-subscription" ? kind : undefined;
 	};
-	const email = (model: ModelRef) => {
+	const email = (model: Listed) => {
 		const signIn = account(model)?.signIn;
 		return signIn?.state === "signed-in" ? signIn.email : undefined;
 	};

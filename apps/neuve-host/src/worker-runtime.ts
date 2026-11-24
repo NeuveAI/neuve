@@ -57,6 +57,7 @@ export type WorkerSetup = {
 	planning?(context: WorkerContext): Planning | undefined | Promise<Planning | undefined>;
 	/** What a chat without a model runs when the host configures none. */
 	defaultModel?(context: WorkerContext): Promise<ModelRef>;
+	routeModel?: Options["routeModel"];
 	tool?(context: WorkerContext, tool: ToolRegistration): ToolRegistration;
 	onConversation?(context: WorkerContext, id: ConversationId): void;
 	priced?(model: ModelRef): boolean;
@@ -193,7 +194,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			...(config.thinkingLevel ? {thinkingLevel: config.thinkingLevel} : {}),
 			...(setup.nonTurnModels ? {nonTurnModels: (kind: "caption" | "recap", chat: ConversationId) => setup.nonTurnModels!(worker, kind, chat, options.models)} : {}),
 		};
-		const channel = await Channel.open({...planOptions, log: privateLog.log, storage, models, extension,
+		const channel = await Channel.open({...planOptions, log: privateLog.log, storage, models, extension, routeModel: setup.routeModel,
 			...(setup.review ? {
 				feed: async (harness, submitInput) => {
 					const adapter = nativeReview(options.id);

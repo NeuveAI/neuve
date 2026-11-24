@@ -15,7 +15,7 @@ export function createCatalogue(options: CreateModelsOptions): MutableModels {
 }
 
 /** One inaccessible provider must not hide another provider's usable models. */
-export async function available(models: Models): Promise<ModelOption[]> {
+export async function available(models: Models, routeModel?: Omit<ModelOption, "efforts">): Promise<ModelOption[]> {
 	const results = await Promise.allSettled(
 		models.getProviders().map((provider) => models.getAvailable(provider.id)),
 	);
@@ -26,6 +26,9 @@ export async function available(models: Models): Promise<ModelOption[]> {
 		provider: model.provider,
 		modelId: model.id,
 		efforts: getSupportedThinkingLevels(model),
+		...(routeModel?.account !== undefined && routeModel.provider === model.provider && routeModel.modelId === model.id
+			? { account: routeModel.account }
+			: {}),
 	}));
 }
 
