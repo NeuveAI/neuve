@@ -1,7 +1,10 @@
 // Why: settings, environment, and both binary layouts must select the same engine for Graph and hybrid.
 import { afterAll, expect, test } from "bun:test";
 import {
+  accessSync,
   chmodSync,
+  constants,
+  statSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -80,13 +83,24 @@ for (const scenario of [
     expect(runtime.problems).toEqual({});
   });
 
+/** As the rule decides it: a file the current user can run. */
+const runnable = (path: string) => {
+  try {
+    if (!statSync(path).isFile()) return false;
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 for (const scenario of [
   "explicit",
   "environment",
   "missing",
   "non-executable",
 ] as const)
-  test(`Graph discovery discloses ${scenario} engine failure without falling back`, () => {
+  test(`Graph discovery discloses ${scenario} engine failure, falling back only to a runnable source engine`, () => {
     const directory = join(root, `bad-${scenario}`);
     const cli = file(join(directory, "bin/neuve"));
     const installed = join(directory, "lib/neuve/entire-graph");
@@ -101,6 +115,18 @@ for (const scenario of [
         executable: cli,
       },
     );
+    // A checkout with the Graph engine built falls back to that engine when running from source.
+    const source = fileURLToPath(
+      new URL("../../../apps/neuve-graph/entire-graph", import.meta.url),
+    );
+    if (
+      (scenario === "missing" || scenario === "non-executable") &&
+      runnable(source)
+    ) {
+      expect(runtime.graph?.executable).toBe(source);
+      expect(runtime.problems.graph_search).toBeUndefined();
+      return;
+    }
     expect(runtime.graph).toBeUndefined();
     expect(runtime.hybrid).toBeUndefined();
     for (const problem of [
@@ -111,13 +137,14 @@ for (const scenario of [
         scenario === "explicit"
           ? "no Graph engine at"
           : scenario === "environment"
-            ? "NEUVE_GRAPH_BINARY does not name an executable file"
+            ? "NEUVE_GRAPH_BINARY must name an executable Neuve Graph file."
             : "Neuve Graph binary is unavailable",
       );
-      expect(problem).toContain(
-        scenario === "explicit" || scenario === "environment"
-          ? missing
-          : installed,
-      );
+      // The value of NEUVE_GRAPH_BINARY is the person's, so it is never shown.
+      if (scenario === "environment") expect(problem).not.toContain(missing);
+      else
+        expect(problem).toContain(
+          scenario === "explicit" ? missing : installed,
+        );
     }
   });

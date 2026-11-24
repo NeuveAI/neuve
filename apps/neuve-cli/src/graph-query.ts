@@ -34,6 +34,7 @@ import {
   type RunLog,
   type RunLogRecord,
 } from "@neuve/harness/run-log";
+import { discoverSearchGraphBinary } from "@neuve/harness/search-config";
 import { describeFailure, withStore } from "./records-cli.ts";
 import type { QueryInvocation } from "./boundary.ts";
 import {
@@ -44,7 +45,7 @@ import {
 } from "./query-cycle.ts";
 
 import { constants } from "node:fs";
-import { access, realpath, stat } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import {
@@ -170,35 +171,7 @@ export const discoverGraphBinary = async (
     override: process.env.NEUVE_GRAPH_BINARY,
     executable: process.execPath,
   },
-): Promise<string> => {
-  const override = input.override;
-  if (override !== undefined) {
-    if (!(await isExecutableFile(override))) {
-      throw new Error(
-        "NEUVE_GRAPH_BINARY must name an executable Neuve Graph file.",
-      );
-    }
-    return resolve(override);
-  }
-
-  const executableDirectory = dirname(await realpath(input.executable));
-  // `bun run install:cli` copies the engine beside the installed command
-  // (<prefix>/bin/neuve with <prefix>/lib/neuve/entire-graph).
-  const installed = resolve(executableDirectory, "../lib/neuve/entire-graph");
-  if (await isExecutableFile(installed)) return installed;
-  // A workspace build (apps/neuve-cli/dist/neuve) uses the sibling Graph checkout.
-  const sibling = resolve(
-    executableDirectory,
-    "../../neuve-graph/entire-graph",
-  );
-  if (await isExecutableFile(sibling)) return sibling;
-  const source = resolve(import.meta.dir, "../../neuve-graph/entire-graph");
-  if (!Bun.main.startsWith("/$bunfs/") && (await isExecutableFile(source)))
-    return source;
-  throw new Error(
-    `Neuve Graph binary is unavailable at ${installed}, ${sibling}, or ${source} (when running from source). Run bun run install:cli, build it, or set NEUVE_GRAPH_BINARY.`,
-  );
-};
+): Promise<string> => discoverSearchGraphBinary(input);
 
 const diagnostic = (value: GraphDiagnostic): PublicDiagnostic =>
   value.kind === "message"
