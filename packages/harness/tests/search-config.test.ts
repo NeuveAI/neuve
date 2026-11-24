@@ -1,14 +1,16 @@
 // Why: settings, environment, and both binary layouts must select the same engine for Graph and hybrid.
 import { afterAll, expect, test } from "bun:test";
 import {
+  accessSync,
   chmodSync,
-  existsSync,
+  statSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,13 +83,24 @@ for (const scenario of [
     expect(runtime.problems).toEqual({});
   });
 
+/** As the rule decides it: a file the current user can run. */
+const runnable = (path: string) => {
+  try {
+    if (!statSync(path).isFile()) return false;
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 for (const scenario of [
   "explicit",
   "environment",
   "missing",
   "non-executable",
 ] as const)
-  test(`Graph discovery discloses ${scenario} engine failure without falling back`, () => {
+  test(`Graph discovery discloses ${scenario} engine failure, falling back only to a runnable source engine`, () => {
     const directory = join(root, `bad-${scenario}`);
     const cli = file(join(directory, "bin/neuve"));
     const installed = join(directory, "lib/neuve/entire-graph");
@@ -108,8 +121,9 @@ for (const scenario of [
     );
     if (
       (scenario === "missing" || scenario === "non-executable") &&
-      existsSync(source)
+      runnable(source)
     ) {
+      expect(runtime.graph?.executable).toBe(source);
       expect(runtime.problems.graph_search).toBeUndefined();
       return;
     }
