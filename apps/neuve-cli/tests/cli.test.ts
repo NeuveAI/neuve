@@ -429,6 +429,7 @@ describe("neuve CLI boundary", () => {
       "Job payload takes the JSON fields for stack.fetch.",
     );
     expect(refused.stderr).toContain("revisions: Invalid input");
+    expect(refused.stderr).toMatch(/doesn't take; it takes [a-z]/);
     expect(refused.stderr).not.toContain("pRiVaTe");
     expect(refused.stderr).not.toContain("hunter2");
   });

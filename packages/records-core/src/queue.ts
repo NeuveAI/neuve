@@ -242,6 +242,13 @@ export class JobQueue extends Context.Service<
  * Payload schemas for jobs enqueued through this service (by hand); a kind without one takes any JSON
  * value. Jobs an event enqueues in its append transaction carry no payload: they read their event.
  */
+/** The fields a payload schema takes, as a refusal's ending; empty when the schema isn't an object. */
+const acceptedFields = (schema: z.ZodType): string => {
+  const shape = (schema as { shape?: Record<string, unknown> }).shape;
+  const names = shape === undefined ? [] : Object.keys(shape);
+  return names.length === 0 ? "" : `; it takes ${names.join(", ")}`;
+};
+
 const PAYLOAD_SCHEMAS: Partial<Record<JobKind, z.ZodType>> = {
   "transcript.capture": TranscriptCapturePayload,
   "retention.prune": RetentionPrunePayload,
@@ -540,7 +547,7 @@ export const layer = Layer.effect(
               message: parsed.error.issues
                 .map((issue) =>
                   issue.code === "unrecognized_keys"
-                    ? `${issue.path.join(".") || "The payload"} has fields ${request.kind} doesn't take.`
+                    ? `${issue.path.join(".") || "The payload"} has fields ${request.kind} doesn't take${acceptedFields(schema)}.`
                     : `${issue.path.join(".") || "The payload"}: ${issue.message}`,
                 )
                 .join("\n"),
