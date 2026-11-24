@@ -51,3 +51,16 @@ test("a limit whose reset has passed is not drawn, and a live one is", async () 
 	expect(text).not.toContain("Weekly limit");
 	expect(text).toContain("5-hour limit: 20% used · resets");
 });
+
+// Why: an account with no folder of its own was described as signed in through "not this account".
+// The card names where the sign-in comes from instead.
+test("a sign-in from outside Claude Code's login names its source", async () => {
+	const { accountDescription } = await import("../src/accounts-copy");
+	const signedIn = { state: "signed-in", sourceMatchesAccount: false } as const;
+	expect(
+		accountDescription("claude-subscription", { ...signedIn, credentialSource: "environment" }),
+	).toBe("Signed in through a credential from the environment, not a Claude Code login");
+	expect(
+		accountDescription("claude-subscription", { ...signedIn, credentialSource: "credential-helper" }),
+	).toBe("Signed in through a credential helper, not a Claude Code login");
+});

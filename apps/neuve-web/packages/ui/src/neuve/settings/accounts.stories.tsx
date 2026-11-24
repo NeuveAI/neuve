@@ -103,7 +103,7 @@ export const UnsupportedVersion = state("unsupportedVersion", [
 ])
 export const StartFailed = state("startFailed", ["Claude Code couldn't start"])
 export const EnvironmentMismatch = state("environmentMismatch", [
-  "Signed in through a credential from the environment, not this account",
+  "Signed in through a credential from the environment, not a Claude Code login",
 ])
 export const Chatgpt = state(
   "chatgpt",

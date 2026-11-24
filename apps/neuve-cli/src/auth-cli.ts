@@ -363,7 +363,9 @@ const accountDescription = (status: AccountStatus) => {
   const signIn = status.signIn;
   const state =
     signIn.state === "signed-in" && signIn.sourceMatchesAccount === false
-      ? "signed in through another source, not this account's folder"
+      ? signIn.credentialSource === "credential-helper"
+        ? "signed in through a credential helper, not a Claude Code login"
+        : "signed in through a credential from the environment, not a Claude Code login"
       : signIn.state === "runtime-unavailable" || signIn.state === "unknown"
         ? `${signIn.state}: ${signIn.reason}${signIn.fix === undefined ? "" : `\n  ${signIn.fix}`}`
         : signIn.state === "credential-rejected" &&
