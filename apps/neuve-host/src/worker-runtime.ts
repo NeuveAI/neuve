@@ -5,8 +5,9 @@ import * as privateLog from "./private-log";
 import {buildWorktree, lanes as externalLanes, isPlaced} from "@ace/channel/external-lanes";
 import { SharedWork } from "@neuve/records-core/shared-work";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
@@ -19,6 +20,7 @@ import type { Review } from "@ace/channel/review";
 import { config, configure, CONFIG_VARIABLE, GIT_LOCAL, type HostConfig } from "./host-config";
 import { configureRuntime, runtimeHooks } from "./runtime-hooks";
 import { planExplore, planFileAccess } from "./plan-git";
+import { git } from "./projects";
 /**
  * The channel a worker serves, given to root's factories before anything is created, so they can
  * bind provider capture and telemetry to it. The host keeps no capture store of its own.
@@ -32,6 +34,16 @@ export type WorkerContext = {
 };
 
 export type WorkerAdmission = Parameters<NonNullable<NonNullable<Options["extension"]>["attach"]>>[1];
+type ReadScope = NonNullable<NonNullable<Options["build"]>["query"]>["read"];
+type ScopeQuery = Omit<Parameters<ReadScope>[0], "plan" | "previousPlans"> & {
+	plan: { path: string; sha256: string };
+};
+type ScopeResult = {
+	scope?: readonly { title: string; ref: { path?: string | undefined } }[];
+	scope_gaps?: readonly string[];
+	refusal?: string;
+	[key: string]: unknown;
+};
 
 /** What root's worker entry provides: the provider lane's models, built in the worker's process. */
 export type WorkerSetup = {
@@ -40,6 +52,7 @@ export type WorkerSetup = {
 	/** Acquire the source before any mutable native storage opens. Cleanup follows a confirmed native close. */
 	openSource?(context: WorkerContext): (() => void) | Promise<() => void>;
 	review?(context: WorkerContext): Review | Promise<Review>;
+	query?(context: WorkerContext, request: ScopeQuery): Promise<ScopeResult>;
 	models(context: WorkerContext, defaults: Models): Models | Promise<Models>;
 	planning?(context: WorkerContext): Planning | undefined | Promise<Planning | undefined>;
 	/** What a chat without a model runs when the host configures none. */
@@ -137,23 +150,27 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 	const place = config.lanes && {
 		name: options.prefix || options.name, project: options.project, lanes: join(config.lanes, options.id), env: options.env,
 	};
-	const starts = new SharedWork<void>();
+	const files = planFiles(plans);
+	const worker: WorkerContext = {sessionId: options.id, config, stateDirectory};
+	const query = setup?.query;
+	const work = new SharedWork<unknown>();
 	const build: Options["build"] = place ? {
-		async share(key, run) {
-			const { outcome } = await starts.run({
+		async share<T>(key: string, run: () => Promise<T>) {
+			const { outcome } = await work.run({
 				scope: "build", key, run: async () => ({ kind: "succeeded", value: await run() }),
 			});
 			if (outcome.kind === "failed") throw outcome.error;
+			// A key identifies one operation and therefore one result type.
+			return outcome.value as T;
 		},
 		worktree: (name, source) => buildWorktree(place, name, BACKGROUND_CONTEXT, source),
-		planPath: file => join(plans, file),
+		...(query ? { query: { sessionId: options.id, read: planScopeRead(place.project, plans, request => query(worker, request), files) } } : {}),
 	} : undefined;
-	const planOptions = { ...options, ...(build ? { build } : {}), planFileAccess, planFiles: planFiles(plans) };
+	const planOptions = { ...options, ...(build ? { build } : {}), planFileAccess, planFiles: files };
 	if (!setup) return Channel.open({
 		...planOptions,
 		extension: { ...options.extension, extensions: [...(options.extension?.extensions ?? []), planExplore] },
 	});
-	const worker: WorkerContext = {sessionId: options.id, config, stateDirectory};
 	const storage = options.storage;
 	try {
 		const models = await setup.models(worker, options.models);
@@ -200,6 +217,120 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 	}
 }
 
+const missing = (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT";
+function below(root: string, path: string): string | undefined {
+	const name = relative(root, path);
+	return name === ".." || name.startsWith(`..${sep}`) || isAbsolute(name) ? undefined : name;
+}
+
+export function planScopeRead(
+	project: string,
+	plans: string,
+	query: (request: ScopeQuery) => Promise<ScopeResult>,
+	files: NonNullable<Options["planFiles"]> = planFiles(plans),
+): ReadScope {
+	return async ({ plan, previousPlans, scope, ...request }) => {
+		const citations = [plan, ...previousPlans].map(({ file, title, hash }) => ({ file, label: `${title} (${hash})` }));
+		let plansRoot = plans;
+		const redact = (value: string) => {
+			for (const { file, label } of citations) {
+				const path = join(plansRoot, file);
+				value = value.replaceAll(path, () => label).replaceAll(join(plans, file), () => label);
+			}
+			return value.replaceAll(plansRoot, "<channel plans>").replaceAll(plans, "<channel plans>");
+		};
+		try {
+			await files.read(plan.file, plan.hash, new TextEncoder().encode(plan.text));
+			plansRoot = await realpath(plans);
+			const planPath = join(plansRoot, plan.file);
+			const paths = new Set([planPath]);
+			const listed = await git(project, ["worktree", "list", "--porcelain", "-z"]);
+			if (listed.status !== 0) throw new Error("Git could not list the repository's worktrees.");
+			const worktrees = listed.stdout.split("\0").filter(field => field.startsWith("worktree ")).map(field => field.slice(9));
+			const roots = new Map<string, string>();
+			for (const root of new Set([project, ...worktrees].map(path => resolve(path)))) {
+				const actual = await realpath(root).catch(error => {
+					if (!missing(error)) throw error;
+				});
+				if (actual !== undefined) {
+					roots.set(root, actual);
+					roots.set(actual, actual);
+				}
+			}
+			const repository = resolve(request.repository);
+			if (!roots.has(repository)) {
+				return { isError: true, text: redact(`The assigned worktree ${JSON.stringify(request.repository)} is not registered with this repository. Nothing in your call can fix that.`) };
+			}
+			roots.set(resolve(plans), plansRoot);
+			roots.set(plansRoot, plansRoot);
+			const aliases = [...roots.keys()].sort((a, b) => b.length - a.length);
+			const refused: string[] = [];
+			const advice = new Set<string>();
+			for (const [index, name] of scope.entries()) {
+				const field = `scope[${index}] received ${JSON.stringify(name)}`;
+				if (name.includes("\0")) {
+					refused.push(`${field} but paths cannot contain NUL bytes`);
+					continue;
+				}
+				const path = resolve(repository, name);
+				const alias = aliases.find(root => below(root, path) !== undefined);
+				if (alias === undefined) {
+					refused.push(`${field} outside the allowed roots`);
+					advice.add("name files inside the repository, its worktrees or this channel's plans folder");
+					continue;
+				}
+				const root = roots.get(alias)!;
+				const suffix = relative(alias, path);
+				try {
+					let ancestor = root;
+					let linked = false;
+					for (const part of suffix.split(sep).filter(Boolean)) {
+						ancestor = join(ancestor, part);
+						const entry = await lstat(ancestor).catch(error => {
+							if (!missing(error) && !(error instanceof Error && "code" in error && error.code === "ENOTDIR")) throw error;
+						});
+						if (entry === undefined) break;
+						if (entry.isSymbolicLink()) {
+							linked = true;
+							break;
+						}
+					}
+					if (linked) {
+						refused.push(`${field} through a link`);
+						advice.add("name each linked file by a path with no link in it");
+					} else paths.add(join(root, suffix));
+				} catch (error) {
+					const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
+					let reason = "the host could not check its path";
+					if (code === "EACCES" || code === "EPERM") reason = "access to its path was denied";
+					else if (code === "ENAMETOOLONG") reason = "its path is too long";
+					refused.push(`${field} but ${reason}${code ? ` (${code})` : ""}`);
+				}
+			}
+			if (refused.length) {
+				const ending = advice.size ? `, so ${[...advice].join(" and ")}` : "";
+				return { isError: true, text: redact(`${refused.join(" and ")}${ending}.`) };
+			}
+			const { scope: sources, scope_gaps: gaps, refusal, ...result } = await query({
+				...request, scope: [...paths], plan: { path: planPath, sha256: plan.hash },
+			});
+			if (refusal !== undefined) return { isError: true, text: redact(refusal) };
+			return { text: JSON.stringify({
+				...result,
+				...(sources && { scope: sources.map(source => ({
+					...source,
+					title: redact(source.title),
+					ref: source.ref.path === undefined ? source.ref : { ...source.ref, path: redact(source.ref.path) },
+				})) }),
+				...(gaps && { scope_gaps: gaps.map(redact) }),
+			}, (key, value: unknown) => key === "error" && typeof value === "string" ? redact(value) : value) };
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			return { isError: true, text: redact(`The host could not read scope for question ${JSON.stringify(request.question)} (${reason}). Ask the channel owner to check the worker before retrying.`) };
+		}
+	};
+}
+
 function planFiles(directory: string): NonNullable<Options["planFiles"]> {
 	const staged = (file: string, hash: string) => {
 		if (!/^[a-f0-9-]{36}\.md$/.test(file) || !/^[a-f0-9]{64}$/.test(hash)) {
@@ -207,19 +338,18 @@ function planFiles(directory: string): NonNullable<Options["planFiles"]> {
 		}
 		return join(directory, `${file}.${hash}.pending`);
 	};
-	const missing = (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT";
-	const stage = async (file: string, hash: string, bytes: Uint8Array) => {
+	const publish = async (path: string, bytes: Uint8Array) => {
 		await mkdir(directory, { recursive: true, mode: 0o700 });
 		const temporary = join(directory, `${crypto.randomUUID()}.tmp`);
 		try {
 			await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
-			await rename(temporary, staged(file, hash));
+			await rename(temporary, path);
 		} finally {
 			await rm(temporary, { force: true });
 		}
 	};
 	return {
-		stage,
+		stage: (file, hash, bytes) => publish(staged(file, hash), bytes),
 		async read(file, hash, bytes) {
 			const pending = staged(file, hash);
 			const path = join(directory, file);
@@ -227,12 +357,16 @@ function planFiles(directory: string): NonNullable<Options["planFiles"]> {
 			try { await rename(pending, path); }
 			catch (error) { if (!missing(error)) throw error; }
 			try {
-				const copy = await readFile(path);
-				if (createHash("sha256").update(copy).digest("hex") === hash) return copy;
-			} catch (error) { if (!missing(error)) throw error; }
+				await using handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+				if ((await handle.stat()).isFile()) {
+					const copy = await handle.readFile();
+					if (createHash("sha256").update(copy).digest("hex") === hash) return copy;
+				}
+			} catch (error) {
+				if (!missing(error) && !(error instanceof Error && "code" in error && error.code === "ELOOP")) throw error;
+			}
 			// Rebuild a missing or changed copy from the committed session bytes.
-			await stage(file, hash, bytes);
-			await rename(pending, path);
+			await publish(path, bytes);
 			return bytes;
 		},
 	};

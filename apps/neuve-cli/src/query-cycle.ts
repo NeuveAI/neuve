@@ -74,13 +74,12 @@ export const openQueryCycle = (
       onFailure(result.failure);
       return undefined;
     }
-    const { cycleId, opened } = result.success;
-    if (opened && process.env.NEUVE_TEST_PROCESS !== "1")
+    if (result.success.opened && process.env.NEUVE_TEST_PROCESS !== "1")
       yield* Effect.ignore(
         Starter.ensureWorkerAt(location, {
           repository,
           command: Starter.currentCliCommand(),
         }),
       );
-    return cycleId;
+    return result.success;
   });

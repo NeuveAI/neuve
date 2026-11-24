@@ -1,20 +1,24 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import * as fs from "node:fs/promises";
+import { readFile, symlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { defineDoc, ROOT_CONVERSATION_ID, type ConversationId, type Harness, type ToolRegistration } from "@earendil-works/pi-durable";
 import { SharedWork } from "../../records-core/src/shared-work";
+import { planScopeRead } from "../../../apps/neuve-host/src/worker-runtime";
+import { policy } from "../../harness/src/chat-runtime/transcript";
 import { ApprovalRequestsDoc } from "../src/approvals";
 import { BuildsDoc, type BuildHost } from "../src/build";
 import { buildWorktree } from "../src/external-lanes";
+import { PlansDoc } from "../src/plan";
 import type { Build, Plan, Request, RunEnd, Said } from "../src/protocol";
 import { Fixture, git, MODEL, OWNER, scratchEnv, until, type Watch } from "./helpers";
 
 const context = BACKGROUND_CONTEXT;
 const planText = "# Export retries\n\nKeep the retry in the export queue.";
 const revisedText = "# Export retries, revised\n\nKeep the retry in the export queue until delivery.";
-const tool = (name: string, args: Record<string, string>, id: string) =>
+const tool = (name: string, args: Parameters<typeof fauxToolCall>[1], id: string) =>
 	fauxAssistantMessage(fauxToolCall(name, args, { id }), { stopReason: "toolUse" });
 const question = (id: string) => fauxAssistantMessage(fauxToolCall("question", {
 	questions: [{
@@ -28,6 +32,8 @@ afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.
 
 async function setup(options: {
 	hosted?: boolean;
+	withoutQuery?: boolean;
+	query?: Parameters<typeof planScopeRead>[2];
 	beforeWorktree?(): Promise<void>;
 	beforeSharedResult?(): Promise<void>;
 	onSharedWait?(): void;
@@ -35,23 +41,25 @@ async function setup(options: {
 	wrapTool?(tool: ToolRegistration): ToolRegistration;
 } = {}) {
 	const files = new Map<string, Uint8Array>();
-	const work = new SharedWork<void>();
+	const work = new SharedWork<unknown>();
 	const worktrees: Awaited<ReturnType<typeof buildWorktree>>[] = [];
 	const said: Said[] = [];
 	const runs: RunEnd[] = [];
 	let harness!: Harness;
+	let read: ReturnType<typeof planScopeRead>;
 	const host: BuildHost = {
-		async share(key: string, run: () => Promise<void>) {
+		async share<T>(key: string, run: () => Promise<T>) {
 			const { outcome } = await work.run({
 				scope: "build", key,
 				onEvent: ({ role }) => { if (role === "waiter") options.onSharedWait?.(); },
 				async run() {
-					await run();
+					const value = await run();
 					if (options.beforeSharedResult) await options.beforeSharedResult();
-					return { kind: "succeeded", value: undefined };
+					return { kind: "succeeded", value };
 				},
 			});
 			if (outcome.kind === "failed") throw outcome.error;
+			return outcome.value as T;
 		},
 		async worktree(name, source) {
 			await options.beforeWorktree?.();
@@ -61,7 +69,7 @@ async function setup(options: {
 			worktrees.push(result);
 			return result;
 		},
-		planPath: (file: string) => join(fixture.root, "plans", file),
+		...(options.withoutQuery ? {} : { query: { sessionId: "one", read: request => read(request) } }),
 	};
 	const fixture = await Fixture.create({
 		planFiles: {
@@ -79,6 +87,8 @@ async function setup(options: {
 		onRun: value => runs.push(value),
 	});
 	fixtures.push(fixture);
+	const plans = join(fixture.root, "plans");
+	read = planScopeRead(fixture.project, plans, options.query ?? (async ({ question }) => ({ query: question })));
 	const watch = await fixture.watch({ op: "watch", plans: true, builds: true, approvals: true });
 	const draft = async (text: string) => {
 		const call = crypto.randomUUID();
@@ -96,7 +106,7 @@ async function setup(options: {
 		fixture, watch, draft, approve, worktrees, said, runs,
 		get harness() { return harness; },
 		useHost() { fixture.options.build = host; },
-		planPath: () => host.planPath([...files.keys()][0]!),
+		plans,
 	};
 }
 
@@ -132,8 +142,12 @@ test("approval starts one ownerless implementer with the marked brief and write 
 		for (const text of [plan.title, plan.hash, worktree!.path, worktree!.branch, "agent_start", "agent_message"]) {
 			expect(brief.text).toContain(text);
 		}
-		expect(brief.text.split("\n").find(line => line.startsWith("neuve query "))).toEndWith(`--scope '${run.planPath()}'`);
-		expect(brief.text).not.toContain("Keep the retry in the export queue.");
+		expect(brief.text).toContain(planText);
+		expect(brief.text).toContain("Ask for your scope with neuve_query");
+		expect(brief.text).not.toContain("neuve query");
+		expect(brief.text).not.toContain(run.plans);
+		const { file } = (await run.harness.snapshot(PlansDoc, context))!.chats[ROOT_CONVERSATION_ID]![0]!;
+		expect(brief.text).not.toContain(file);
 		expect(brief).not.toHaveProperty("mode");
 		expect(await agent.until("result", event => event.call === "implement-write")).toMatchObject({ error: false });
 		expect(await readFile(join(worktree!.path, "implemented.txt"), "utf8")).toBe("worktree only");
@@ -469,6 +483,243 @@ async function wake(run: Awaited<ReturnType<typeof setup>>, text: string, chat: 
 	return (await conversation.submit({ type: "input", content: `${OWNER}: ${text}` }, context)).id;
 }
 
+async function askScope(run: Awaited<ReturnType<typeof setup>>, chat: number, call: string, scope?: string[]) {
+	const watch = await run.fixture.watch({ op: "watch", chat });
+	run.fixture.script(tool("neuve_query", { question: call, ...(scope ? { scope } : {}) }, call), fauxAssistantMessage("Read finished."));
+	await run.fixture.request({ op: "wait", submission: await wake(run, "Read scope.", chat) });
+	return watch.until("result", event => event.call === call);
+}
+
+// A channel default or inherited selection would expose the host tool in chats with no approved-plan assignment.
+test("the sandbox bridge serves scope reads only to plan agents, including after a restart", async () => {
+	const run = await setup();
+	const seen: boolean[][] = [];
+	const probe: FauxResponseStep = ({ messages }) => {
+		seen.push([false, true].map(ownTools =>
+			policy(messages, async () => ({ content: [] }), undefined, { ownTools }).tools.some(tool => tool.name === "neuve_query")));
+		return fauxAssistantMessage("Ready.");
+	};
+	run.fixture.script(probe);
+	await run.fixture.request({ op: "wait", submission: await invoke(run.fixture, "Check which tools I can use.") });
+	const { chat } = await startBuild(run, probe);
+	await run.fixture.restart();
+	run.fixture.script(probe);
+	await run.fixture.request({ op: "wait", submission: await wake(run, "Check tools after reopening.", chat) });
+	const source = (await run.harness.conversation(chat as ConversationId, context))!;
+	const entry = (await source.context(context)).entries.at(-1)!;
+	const fork = await source.fork(entry.id, { ownership: { kind: "ownerless" } }, context);
+	run.fixture.script(probe);
+	await (await fork.submit({ type: "input", content: "Check tools in this fork." }, context)).wait(context);
+	expect(seen).toEqual([[false, false], [true, true], [true, true], [false, false]]);
+});
+
+// Plain Ace can start a plan's agent even when the worker has no Neuve query hook.
+test("the brief and the sandbox bridge omit scope reads when the host cannot run them", async () => {
+	const run = await setup({ withoutQuery: true });
+	const { agent } = await startBuild(run, ({ messages }) => {
+		expect(policy(messages, async () => ({ content: [] }), undefined, { ownTools: true }).tools.map(tool => tool.name)).toContain("agent_start");
+		expect(policy(messages, async () => ({ content: [] }), undefined, { ownTools: true }).tools.map(tool => tool.name)).not.toContain("neuve_query");
+		return fauxAssistantMessage("Ready.");
+	});
+	const { text } = await agent.until("message");
+	expect(text).toContain(planText);
+	expect(text).not.toMatch(/neuve_query|neuve query/);
+	expect(text).not.toContain(run.plans);
+});
+
+// All three roles call the same tool but only the reviewer reads its implementer's branch.
+test("scope reads reach the host with the worktree, base, plan first and calling agent", async () => {
+	const requests: Parameters<Parameters<typeof planScopeRead>[2]>[0][] = [];
+	const run = await setup({ query: async request => {
+		requests.push(request);
+		return { query: request.question };
+	} });
+	const { chat, plan } = await startBuild(run);
+	for (const [role, args] of [
+		["reviewer", { role: "reviewer" }],
+		["implementer", { role: "implementer", part: "parser", brief: "Implement the parser." }],
+	] as const) {
+		run.fixture.script(tool("agent_start", args, `start-${role}`), fauxAssistantMessage("Ready."), fauxAssistantMessage("Ready."));
+		await run.fixture.request({ op: "wait", submission: await wake(run, "Start another agent.", chat) });
+		await until(() => run.fixture.channel.isIdle());
+	}
+	const { builds } = await run.watch.until("builds", event => event.builds[0]?.agents.length === 3);
+	const [primary, reviewer, second] = builds[0]!.agents;
+	for (const [index, { chat: caller }] of [primary!, reviewer!, second!].entries()) {
+		const question = `Read ${index}.`;
+		const result = await askScope(run, caller, question, ["README.md"]);
+		expect(result).toMatchObject({ error: false, text: JSON.stringify({ query: question }) });
+		const worktree = run.worktrees[index]!;
+		const planPath = requests[index]!.scope[0]!;
+		expect(dirname(planPath)).toBe(run.plans);
+		expect(await readFile(planPath, "utf8")).toBe(planText);
+		expect(requests[index]).toEqual({
+			repository: worktree.path, revision: worktree.base, question,
+			...(index === 1 ? { branch: run.worktrees[0]!.branch } : {}),
+			scope: [planPath, join(worktree.path, "README.md")],
+			plan: { path: planPath, sha256: plan.hash },
+			requester: { _tag: "Agent", harness: "neuve-pi", sessionId: "one", subagentId: String(caller) },
+		});
+	}
+});
+
+// An agent can read again in the same round or during fixes after a plan revision.
+test("later and fix-round reads name the approved plan again", async () => {
+	const named: string[] = [];
+	let originalPath: string;
+	const run = await setup({ query: async ({ question, scope }) => {
+		named.push(await readFile(scope[0]!, "utf8"));
+		originalPath ??= scope[0]!;
+		return { query: question, scope: [{ title: originalPath, ref: { path: originalPath } }] };
+	} });
+	const { chat, plan } = await startBuild(run);
+	expect((await askScope(run, chat, "First read")).error).toBe(false);
+	await writeFile(originalPath!, "Changed outside the channel.");
+	expect((await askScope(run, chat, "Later read")).error).toBe(false);
+	const live = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	try {
+		run.fixture.script(async () => {
+			live.resolve();
+			await release.promise;
+			return fauxAssistantMessage("Ready for fixes.");
+		});
+		const submission = await wake(run, "Review requested changes.", chat);
+		await live.promise;
+		const revision = await run.draft(revisedText);
+		await run.approve(revision);
+		release.resolve();
+		await run.fixture.request({ op: "wait", submission });
+		await until(() => run.fixture.channel.isIdle());
+		const result = await askScope(run, chat, "Fix-round read");
+		expect(result.error).toBe(false);
+		const label = `${plan.title} (${plan.hash})`;
+		expect(JSON.parse(result.text).scope).toEqual([{ title: label, ref: { path: label } }]);
+		expect(result.text).not.toContain(run.plans);
+		expect(named).toEqual([planText, planText, revisedText]);
+	} finally {
+		release.resolve();
+	}
+});
+
+// Closing after the memo commit but before the tool result forces pi to re-enter the original call.
+test("a replayed scope call returns the saved answer and reads once", async () => {
+	const asked: string[] = [];
+	const saved = Promise.withResolvers<void>();
+	let replay = false;
+	const run = await setup({
+		query: async ({ question }) => {
+			asked.push(question);
+			return { query: question };
+		},
+		wrapTool(tool) {
+			if (tool.name !== "neuve_query") return tool;
+			return { ...tool, async execute(args, api, context) {
+				const result = await tool.execute(args, api, context);
+				if (!replay) {
+					replay = true;
+					const interrupted = new Promise<void>(resolve => context.abortSignal?.addEventListener("abort", () => resolve(), { once: true }));
+					saved.resolve();
+					await interrupted;
+					context.abortSignal?.throwIfAborted();
+				}
+				return result;
+			} };
+		},
+	});
+	const { chat } = await startBuild(run);
+	run.fixture.script(tool("neuve_query", { question: "Find exports." }, "resume-scope"), fauxAssistantMessage("Read finished."));
+	await wake(run, "Read scope.", chat);
+	await saved.promise;
+	await run.fixture.restart();
+	const watch = await run.fixture.watch({ op: "watch", chat });
+	expect(await watch.until("result", event => event.call === "resume-scope")).toMatchObject({ error: false, text: '{"query":"Find exports."}' });
+	expect(asked).toEqual(["Find exports."]);
+});
+
+// A link swapped in at the plan read can point to bytes that match the approved hash.
+test("scope restores the approved plan when a link is swapped in at open", async () => {
+	const run = await setup();
+	const { chat } = await startBuild(run);
+	await askScope(run, chat, "Materialize the plan");
+	const [file] = await fs.readdir(run.plans);
+	const path = join(run.plans, file!);
+	const outside = join(run.fixture.root, "outside.md");
+	await writeFile(outside, planText);
+	let swapped = false;
+	const swap = async () => {
+		swapped = true;
+		await fs.unlink(path);
+		await symlink(outside, path);
+	};
+	const lstat = fs.lstat;
+	const open = fs.open;
+	const beforeRead = spyOn(fs, "lstat").mockImplementation(async (...args) => {
+		const entry = await lstat(...args);
+		if (args[0] === path && !swapped) await swap();
+		return entry;
+	});
+	const atOpen = spyOn(fs, "open").mockImplementation(async (...args) => {
+		if (args[0] === path && !swapped) await swap();
+		return open(...args);
+	});
+	try {
+		expect(await askScope(run, chat, "Read the approved plan")).toMatchObject({ error: false });
+	} finally {
+		atOpen.mockRestore();
+		beforeRead.mockRestore();
+	}
+	expect(swapped).toBe(true);
+	expect((await lstat(path)).isFile()).toBe(true);
+	expect(await readFile(path, "utf8")).toBe(planText);
+});
+
+// The query receives only bounded real paths and its public answer can cite the plan without exposing its folder.
+test("scope paths reject escapes and scope answers redact plan paths from citations, gaps and errors", async () => {
+	const calls: string[] = [];
+	const run = await setup({ query: async ({ question, scope: [path] }) => {
+		calls.push(question);
+		if (question === "Broken read") throw new Error(`Could not read ${path}`);
+		return { query: question, scope: [{ title: path, ref: { path } }], scope_gaps: [`${path}: The held copy could not be read.`], retrieval: { status: "error", error: `Could not read ${path}` } };
+	} });
+	const { chat, plan } = await startBuild(run);
+	const outside = join(run.fixture.root, "outside.md");
+	await writeFile(outside, "Private");
+	await symlink(outside, join(run.worktrees[0]!.path, "escape.md"));
+	await symlink(run.fixture.root, join(run.worktrees[0]!.path, "escape-dir"), "dir");
+	const valid = await askScope(run, chat, "Read notes");
+	const label = `${plan.title} (${plan.hash})`;
+	expect(JSON.parse(valid.text)).toMatchObject({
+		scope: [{ title: label, ref: { path: label } }],
+		scope_gaps: [`${label}: The held copy could not be read.`],
+		retrieval: { status: "error", error: `Could not read ${label}` },
+	});
+	expect(valid.text).not.toContain(run.plans);
+	const broken = await askScope(run, chat, "Broken read");
+	expect(broken).toMatchObject({ error: true, text: `The host could not read scope for question "Broken read" (Could not read ${label}). Ask the channel owner to check the worker before retrying.` });
+	expect(broken.text).not.toContain(run.plans);
+	const denied = await askScope(run, chat, "Read invalid paths", [outside, "escape.md", "bad\0path", "escape-dir/missing.md"]);
+	expect(denied).toMatchObject({
+		error: true,
+		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" through a link and scope[2] received "bad\\u0000path" but paths cannot contain NUL bytes and scope[3] received "escape-dir/missing.md" through a link, so name files inside the repository, its worktrees or this channel's plans folder and name each linked file by a path with no link in it.`,
+	});
+	expect(calls).toEqual(["Read notes", "Broken read"]);
+});
+
+test.each(["file", "folder"] as const)("scope refuses an in-root linked %s", async (kind) => {
+	const run = await setup();
+	const { chat } = await startBuild(run);
+	const { path } = run.worktrees[0]!;
+	await Bun.write(join(path, "target", "notes.md"), "Scope fixture.");
+	const name = kind === "file" ? "alias.md" : "alias/notes.md";
+	await symlink(
+		join(path, kind === "file" ? "target/notes.md" : "target"),
+		join(path, kind === "file" ? name : "alias"),
+	);
+	const result = await askScope(run, chat, "Read linked scope", [name]);
+	expect(result).toMatchObject({ error: true, text: expect.stringContaining(`scope[0] received ${JSON.stringify(name)} through a link`) });
+});
+
 // A reviewer can appear to start while reading another chat's context or getting a revision as its first input.
 test("a reviewer starts fresh on the asking implementer's branch head", async () => {
 		const held = Promise.withResolvers<void>();
@@ -505,7 +756,7 @@ test("a reviewer starts fresh on the asking implementer's branch head", async ()
 	try {
 		fixture.script(tool("channel", { summary }, "write-summary"), fauxAssistantMessage("Summary saved."));
 		await fixture.request({ op: "wait", submission: await invoke(fixture, "Save the summary.") });
-		const { plan, build, chat, agent } = await startBuild(run, request => {
+		const { build, chat, agent } = await startBuild(run, request => {
 			implementerPrompt = getCurrentSystemPrompt(request.messages);
 			return fauxAssistantMessage("Ready.");
 		});
@@ -531,9 +782,10 @@ test("a reviewer starts fresh on the asking implementer's branch head", async ()
 		const message = await watch.until("message");
 		expect(watch.of("message")).toEqual([message]);
 		expect(message).toMatchObject({ system: { kind: "neuve:build:brief", build: build.id } });
-		for (const text of [plan.title, plan.hash, run.planPath(), `--branch '${implementer.branch}'`, "neuve query", "--scope", "--question \"<", "agent_message"]) {
+		for (const text of [revision.title, revision.hash, revisedText, `Review the implementer's work on branch ${implementer.branch}.`, "neuve_query", "agent_message"]) {
 			expect(message.text).toContain(text);
 		}
+		expect(message.text).not.toContain(run.plans);
 		expect(message.text).not.toContain(privateText);
 		expect(reviewerRoles).toEqual(["user"]);
 		expect(implementerPrompt).toContain(summary);
@@ -573,7 +825,8 @@ test("a second implementer gets its own branch, the approved model settings, and
 	const watch = await fixture.watch({ op: "watch", chat: started.chat });
 	const message = await watch.until("message");
 	expect(message).toMatchObject({ system: { kind: "neuve:build:brief", build: build.id } });
-	for (const text of [plan.title, plan.hash, run.planPath(), worktree.branch]) expect(message.text).toContain(text);
+	for (const text of [plan.title, plan.hash, planText, worktree.branch, "neuve_query"]) expect(message.text).toContain(text);
+	expect(message.text).not.toContain(run.plans);
 	expect(message.text.split("\n\n").at(-1)).toBe(brief);
 	const info = (await fixture.channel.info()).chats.find(chat => chat.id === started.chat);
 	expect(info).toMatchObject({ effort: "high", model: MODEL, cwd: worktree.path, build: { id: build.id, role: "implementer", part: "parser" } });
@@ -587,7 +840,7 @@ test("a second implementer gets its own branch, the approved model settings, and
 		const event = await run.watch.until("builds", event => event.builds[0]?.agents.some(agent => agent.role === "reviewer" && agent.part === part) ?? false);
 		const reviewer = event.builds[0]!.agents.find(agent => agent.role === "reviewer" && agent.part === part)!;
 		const watch = await fixture.watch({ op: "watch", chat: reviewer.chat });
-		expect((await watch.until("message")).text).toContain(`--branch '${branch}'`);
+		expect((await watch.until("message")).text).toContain(`Review the implementer's work on branch ${branch}.`);
 		await until(() => fixture.channel.isIdle());
 		return reviewer.chat;
 	};
@@ -608,14 +861,14 @@ test("agent start refuses invalid arguments, duplicate roles, and callers outsid
 		expect(result.text).toContain(reason);
 	};
 	await refuse(agent, chat, "reviewer-brief", { role: "reviewer", brief: "My account." }, "The host writes the reviewer's brief.");
-	await refuse(agent, chat, "missing-part", { role: "implementer", brief: "Write tests." }, "Give the implementer a part.");
+	await refuse(agent, chat, "missing-part", { role: "implementer", brief: "Write tests." }, "Give the implementer a path scope.");
 	await refuse(agent, chat, "missing-brief", { role: "implementer", part: "parser" }, "Give the implementer a brief.");
 	await refuse(agent, chat, "unknown-model", { role: "reviewer", model: "other" }, "must not have additional properties");
 	fixture.script(tool("agent_start", { role: "reviewer" }, "first-reviewer"),
 		fauxAssistantMessage("Ready to review."), fauxAssistantMessage("Ready to review."));
 	await fixture.request({ op: "wait", submission: await wake(run, "Ask for a reviewer.", chat) });
 	await until(() => fixture.channel.isIdle());
-	await refuse(agent, chat, "duplicate-role", { role: "reviewer" }, "This plan already has an agent with that role and part.");
+	await refuse(agent, chat, "duplicate-role", { role: "reviewer" }, "This plan already has an agent with that role and path scope.");
 	const other = await fixture.request<{ chat: number }>({ op: "chat", author: OWNER });
 	await refuse(await fixture.watch({ op: "watch", chat: other.chat }), other.chat, "not-agent", { role: "reviewer" },
 		"Only an agent of a plan can ask the host to start another agent.");
@@ -1250,7 +1503,7 @@ test("agent messages refuse unknown recipients, outsiders, self, empty text, and
 	};
 	const valid = { to: "reviewer", part: "exports", text: "Ready." };
 	await refuse(chat, agent, "missing-agent", { ...valid, part: "another part" },
-		'This plan has no started agent with that role and part. The plan has started an implementer and a reviewer for "exports".');
+		'This plan has no started agent with that role and path scope. The plan has started an implementer and a reviewer for "exports".');
 	await refuse(other.chat, outside, "outside-build", valid, "Only an agent of a plan can message another agent of that plan.");
 	await refuse(chat, agent, "same-chat", { to: "implementer", text: "Ready." }, "Send the message to another agent of this plan.");
 	await refuse(chat, agent, "empty-text", { ...valid, text: "  " }, "Write a message to send.");

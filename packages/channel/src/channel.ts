@@ -326,11 +326,15 @@ export class Channel {
 		const plan = plans.extension(planning, (chat, work) => channel.#admitted(chat, work), log);
 		if (plan) registry.install(plan);
 		registry.install(planCommentAnswers(planning));
-		registry.install(buildTools(() => channel.#builds));
+		const { agents, query, clearInheritedQuery } = buildTools(() => channel.#builds);
+		registry.install(agents);
+		if (options.build?.query) registry.install(query);
 		install(registry, options.extension, planning, !!options.planFileAccess, log, (chat, scope) => channel.#builds.paused(chat, scope));
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider)),
 			registry,
+			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },
+			conversationCreated: clearInheritedQuery,
 			env: async ({ cwd, conversationId }, context) => {
 				const folder = cwd || options.project;
 				const { planFileAccess } = options;

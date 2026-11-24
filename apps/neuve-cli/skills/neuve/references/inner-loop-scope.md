@@ -1,5 +1,7 @@
 # Read code and scope
 
+If your harness gives you `neuve_query`, use it instead of the commands on this page. Ask your question, and list in `scope` only files beyond the approved plan; the harness supplies the plan, base revision and branch.
+
 Before reading the code, run the query with the full base hash. Use the ticket's goal and Done when items as the question. Name the approved plan or other scope file with `neuve query --scope <path>`. Repeat the flag for each file.
 
 ## Worked example

@@ -4,6 +4,7 @@ import {
   beforeAll,
   describe,
   expect,
+  spyOn,
   test,
 } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -22,21 +23,29 @@ import {
 } from "@neuve/records-core";
 import {
   chmod,
+  link,
   mkdir,
   mkdtemp,
   readdir,
   realpath,
+  rename,
   rm,
   symlink,
 } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { defaultConfig } from "../../../packages/harness/src/config.ts";
 import { mcpClientsLayer } from "../../../packages/harness/src/mcp-client.ts";
 import { requestReview } from "../../../packages/harness/src/request.ts";
 import { settingsPath } from "../../../packages/harness/src/settings.ts";
+import { SOL_ROUTE } from "../../../packages/harness/src/route.ts";
+import { localStorageProfile } from "../../../scripts/pi-storage.ts";
+import { HostConfigSchema } from "@ace/host/host-config";
+import { planScopeRead } from "@ace/host/worker";
 import {
   fetchCyclePart,
+  readLocalScope,
   readScopeOpening,
   scopeFolder,
 } from "../../../packages/harness/src/scope.ts";
@@ -49,8 +58,12 @@ import { parseQueryInvocation } from "../src/boundary.ts";
 import type {
   PublicQueryEvent,
   PublicQueryScopeSource,
+  RepositoryPath,
+  Revision,
 } from "../src/domain.ts";
+import { collectPublicQueryResult, runQueryGraph } from "../src/graph-query.ts";
 import { execute as executeRecords, withStore } from "../src/records-cli.ts";
+import { codingWorkerSetup } from "../src/workspace-cli.ts";
 import { markSetUp } from "./fixtures/set-up.ts";
 
 // Built into a temporary directory, never dist/neuve, which an installed
@@ -427,6 +440,668 @@ describe("neuve CLI boundary", () => {
       content: new TextEncoder().encode(question),
     });
   });
+
+  // A read attributed to an agent must hold the approved plan only on the branch whose cycle it opens.
+  test("records the explicit agent and returns opened, joined and detached read states", async () => {
+    const { root, revision } = await fixtureRepository();
+    const planText = "# Approved plan\nKeep the original export scope.\n";
+    const plan = join(root, "approved-plan.md");
+    await Bun.write(plan, planText);
+    const graph = await fakeGraph();
+    const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+    process.env.NEUVE_GRAPH_BINARY = graph.executable;
+    const requester = {
+      _tag: "Agent" as const,
+      harness: "neuve-pi",
+      sessionId: "channel-scope",
+      subagentId: "19",
+    };
+    const read = async (question: string, branch?: string) => {
+      const events: PublicQueryEvent[] = [];
+      const { state } = await runQueryGraph(
+        {
+          repository: root as RepositoryPath,
+          revision: revision as Revision,
+          ...(branch === undefined ? {} : { branch }),
+          question,
+          scope: [plan],
+          maxResults: 8,
+          maxContextBytes: 16_000,
+          relationships: [],
+        },
+        {
+          requester,
+          emit: async (event) => {
+            events.push(event);
+          },
+        },
+      );
+      return { state, answer: collectPublicQueryResult(events) };
+    };
+    try {
+      const unrecorded = await read("Read before Records setup.");
+      expect(unrecorded.state).toEqual({
+        kind: "not_recorded",
+        reason: "no Records store was found",
+      });
+      await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+      const first = await read("Read the approved export plan.");
+      const cycleId = first.answer.cycle_id!;
+      expect(first.state).toEqual({
+        kind: "cycle_opened",
+        cycle_id: expect.any(String),
+      });
+      expect(first.state).toMatchObject({ cycle_id: cycleId });
+      expect(first.answer.scope?.[0]).toMatchObject({
+        title: "approved-plan.md",
+        text: planText,
+        sha256: createHash("sha256").update(planText).digest("hex"),
+      });
+      await Bun.write(plan, "Edited outside the cycle.");
+      const next = await read("Read the held export plan.");
+      expect(next.state).toEqual({ kind: "cycle_joined", cycle_id: cycleId });
+      expect(next.answer.scope?.[0]?.text).toBe(planText);
+      expect(
+        execute(["git", "branch", "second-implementer"], root).exitCode,
+      ).toBe(0);
+      const second = await read(
+        "Read on the second branch.",
+        "second-implementer",
+      );
+      expect(second.state).toEqual({
+        kind: "cycle_opened",
+        cycle_id: expect.any(String),
+      });
+      expect(second.answer.cycle_id).not.toBe(cycleId);
+      expect(second.answer.scope?.[0]?.text).toBe("Edited outside the cycle.");
+      expect(
+        execute(["git", "checkout", "--detach", revision], root).exitCode,
+      ).toBe(0);
+      const detached = await read("Read from detached HEAD.");
+      expect(detached.state).toEqual({
+        kind: "not_joined",
+        reason: "HEAD is detached",
+      });
+      expect(await queryHistory(root, "actor.registered@1")).toEqual([
+        expect.objectContaining({
+          event: expect.objectContaining({
+            actor: Identity.agentFingerprint(requester),
+            payload: {
+              actorKind: "agent",
+              harness: "neuve-pi",
+              sessionId: "channel-scope",
+              subagentId: "19",
+            },
+          }),
+        }),
+      ]);
+      const history = await queryHistory(root);
+      expect(
+        history.map(
+          ({ event }: { event: { actor: string; attribution: unknown } }) => ({
+            actor: event.actor,
+            attribution: event.attribution,
+          }),
+        ),
+      ).toEqual(
+        [cycleId, cycleId, second.answer.cycle_id, undefined].map(
+          (cycleId) => ({
+            actor: Identity.agentFingerprint(requester),
+            attribution: {
+              sessionId: "channel-scope",
+              ...(cycleId ? { cycleId } : {}),
+            },
+          }),
+        ),
+      );
+    } finally {
+      if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+      else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+    }
+  });
+
+  test("worker query refuses a replaced plan before recording and pins the approved plan on retry", async () => {
+    const { root, revision } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
+    roots.push(scratch);
+    await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+    const graph = await fakeGraph();
+    const worker = {
+      sessionId: "worker-scope",
+      stateDirectory: scratch,
+      config: HostConfigSchema.parse({
+        home: scratch,
+        lanes: root,
+        user: "owner",
+        port: 0,
+        environment: {},
+        worker: [process.execPath],
+      }),
+    };
+    const { query } = codingWorkerSetup(
+      await localStorageProfile(root, scratch),
+      SOL_ROUTE,
+    );
+    const plans = join(scratch, "plans");
+    const text = "# Approved plan\nKeep the approved scope.\n";
+    const plan = {
+      file: `${crypto.randomUUID()}.md`,
+      title: "Approved plan",
+      text,
+      hash: createHash("sha256").update(text).digest("hex"),
+    };
+    const read = planScopeRead(root, plans, async (request) => {
+      if (request.question === "Read a linked plan") {
+        const replacement = join(plans, "replacement.md");
+        await symlink(join(root, "source.custom"), replacement);
+        await rename(replacement, join(plans, plan.file));
+      }
+      if (request.question === "Read after replacement") {
+        const replacement = join(plans, "replacement.md");
+        await Bun.write(replacement, "Unapproved plan text.");
+        await rename(replacement, join(plans, plan.file));
+      }
+      return query!(worker, request);
+    });
+    const request = {
+      repository: root,
+      revision,
+      plan,
+      scope: [],
+      previousPlans: [],
+      requester: {
+        _tag: "Agent" as const,
+        harness: "neuve-pi" as const,
+        sessionId: worker.sessionId,
+        subagentId: "8",
+      },
+    };
+    const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+    process.env.NEUVE_GRAPH_BINARY = graph.executable;
+    try {
+      expect(
+        await read({ ...request, question: "Read a linked plan" }),
+      ).toEqual({
+        isError: true,
+        text: "The checked scope path could not be opened safely.",
+      });
+      expect(
+        await read({ ...request, question: "Read after replacement" }),
+      ).toEqual({
+        isError: true,
+        text: "The approved plan changed while the host read it. Retry the call.",
+      });
+      expect(await queryHistory(root)).toEqual([]);
+      expect(await queryHistory(root, "cycle.opened@2")).toEqual([]);
+      expect(await queryHistory(root, "cycle.local-scope-selected@1")).toEqual(
+        [],
+      );
+
+      const retry = await read({
+        ...request,
+        question: "Retry approved plan read",
+      });
+      expect(retry.isError, retry.text).toBeUndefined();
+      const [{ event: opening }] = await queryHistory(root, "cycle.opened@2");
+      const cycleId = opening.attribution.cycleId;
+      expect(JSON.parse(retry.text)).toMatchObject({
+        state: { kind: "cycle_opened", cycle_id: cycleId },
+        scope: [{ kind: "working-file", text, sha256: plan.hash }],
+      });
+      const [{ event: selection }] = await queryHistory(
+        root,
+        "cycle.local-scope-selected@1",
+      );
+      expect(selection).toMatchObject({
+        attribution: { cycleId },
+        payload: { sources: [{ kind: "working-file", sha256: plan.hash }] },
+      });
+    } finally {
+      if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+      else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+    }
+  });
+
+  test("worker query reports an unknown base revision as a Git failure", async () => {
+    const { root } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
+    roots.push(scratch);
+    await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+    const graph = await fakeGraph();
+    const worker = {
+      sessionId: "worker-scope",
+      stateDirectory: scratch,
+      config: HostConfigSchema.parse({
+        home: scratch,
+        lanes: root,
+        user: "owner",
+        port: 0,
+        environment: {},
+        worker: [process.execPath],
+      }),
+    };
+    const { query } = codingWorkerSetup(
+      await localStorageProfile(root, scratch),
+      SOL_ROUTE,
+    );
+    const read = planScopeRead(root, join(scratch, "plans"), (request) =>
+      query!(worker, request),
+    );
+    const revision = "f".repeat(40);
+    const question = "Read from a missing base";
+    const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+    process.env.NEUVE_GRAPH_BINARY = graph.executable;
+    try {
+      const text = "# Approved plan\n";
+      const result = await read({
+        repository: root,
+        revision,
+        question,
+        scope: [],
+        previousPlans: [],
+        requester: {
+          _tag: "Agent",
+          harness: "neuve-pi",
+          sessionId: worker.sessionId,
+          subagentId: "8",
+        },
+        plan: {
+          file: `${crypto.randomUUID()}.md`,
+          title: "Approved plan",
+          text,
+          hash: createHash("sha256").update(text).digest("hex"),
+        },
+      });
+      expect(result).toEqual({
+        isError: true,
+        text: "fatal: Needed a single revision",
+      });
+      expect(await queryHistory(root)).toEqual([]);
+      const cli = await run(queryArgs(root, revision, question, []), {
+        NEUVE_TEST_PROCESS: "1",
+      });
+      expect(cli.exitCode, cli.stderr).toBe(2);
+      expect(cli.stderr.trim()).toEndWith(result.text);
+    } finally {
+      if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+      else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+    }
+  });
+
+  test("worker query gives cause-specific refusals for inaccessible and linked scope paths", async () => {
+    const { root, revision } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
+    roots.push(scratch);
+    const worker = {
+      sessionId: "worker-scope",
+      stateDirectory: scratch,
+      config: HostConfigSchema.parse({
+        home: scratch,
+        lanes: root,
+        user: "owner",
+        port: 0,
+        environment: {},
+        worker: [process.execPath],
+      }),
+    };
+    const { query } = codingWorkerSetup(
+      await localStorageProfile(root, scratch),
+      SOL_ROUTE,
+    );
+    const read = planScopeRead(root, join(scratch, "plans"), (request) =>
+      query!(worker, request),
+    );
+    const text = "# Approved plan\n";
+    const request = {
+      repository: root,
+      revision,
+      question: "Read scope",
+      previousPlans: [],
+      plan: {
+        file: `${crypto.randomUUID()}.md`,
+        title: "Approved plan",
+        text,
+        hash: createHash("sha256").update(text).digest("hex"),
+      },
+      requester: {
+        _tag: "Agent" as const,
+        harness: "neuve-pi" as const,
+        sessionId: worker.sessionId,
+        subagentId: "8",
+      },
+    };
+    const locked = join(root, "locked");
+    await mkdir(locked);
+    await Bun.write(join(locked, "x.md"), "Scope text.");
+    await symlink(join(root, "source.custom"), join(root, "link.md"));
+    try {
+      await chmod(locked, 0o000);
+      expect(await read({ ...request, scope: ["locked/x.md"] })).toEqual({
+        isError: true,
+        text: 'scope[0] received "locked/x.md" but access to its path was denied (EACCES).',
+      });
+    } finally {
+      await chmod(locked, 0o700);
+    }
+    expect(await read({ ...request, scope: ["link.md"] })).toEqual({
+      isError: true,
+      text: 'scope[0] received "link.md" through a link, so name each linked file by a path with no link in it.',
+    });
+  });
+
+  test("worker query rejects a linked scope parent before keeping the file in Records", async () => {
+    const { root, revision } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
+    roots.push(scratch);
+    await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+    const graph = await fakeGraph();
+    const worker = {
+      sessionId: "worker-scope",
+      stateDirectory: scratch,
+      config: HostConfigSchema.parse({
+        home: scratch,
+        lanes: root,
+        user: "owner",
+        port: 0,
+        environment: {},
+        worker: [process.execPath],
+      }),
+    };
+    const { query } = codingWorkerSetup(
+      await localStorageProfile(root, scratch),
+      SOL_ROUTE,
+    );
+    const notes = join(root, "notes");
+    const outside = join(scratch, "outside");
+    await mkdir(notes);
+    await mkdir(outside);
+    await Bun.write(join(notes, "watched.md"), "Original scope.");
+    await link(join(notes, "watched.md"), join(outside, "watched.md"));
+    await Bun.write(join(root, "file.txt"), "Regular file.");
+    const unreadable = join(root, "unreadable.md");
+    await Bun.write(unreadable, "Unreadable scope.");
+    const read = planScopeRead(
+      root,
+      join(scratch, "plans"),
+      async (request) => {
+        await chmod(unreadable, 0o000);
+        await rename(notes, join(root, "original-notes"));
+        await symlink(outside, notes, "dir");
+        return query!(worker, request);
+      },
+    );
+    const text = "# Approved plan\nKeep the scope boundary.\n";
+    const requester = {
+      _tag: "Agent" as const,
+      harness: "neuve-pi" as const,
+      sessionId: worker.sessionId,
+      subagentId: "8",
+    };
+    const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+    process.env.NEUVE_GRAPH_BINARY = graph.executable;
+    try {
+      const result = await read({
+        repository: root,
+        revision,
+        question: "Read the approved plan and notes.",
+        scope: ["file.txt/x.md", "unreadable.md", "notes/watched.md"],
+        requester,
+        previousPlans: [],
+        plan: {
+          file: `${crypto.randomUUID()}.md`,
+          title: "Approved plan",
+          text,
+          hash: createHash("sha256").update(text).digest("hex"),
+        },
+      });
+      expect(result.isError, result.text).toBeUndefined();
+      const answer = JSON.parse(result.text);
+      expect(answer.scope_gaps).toEqual([
+        "file.txt/x.md: The path was absent from the working tree and the base revision.",
+        "unreadable.md: The file could not be read.",
+        "notes/watched.md: The checked scope path could not be opened safely.",
+      ]);
+      expect(result.text).not.toContain("Original scope.");
+      const [{ event: selection }] = await queryHistory(
+        root,
+        "cycle.local-scope-selected@1",
+      );
+      expect(
+        selection.payload.sources.map(({ kind }: { kind: string }) => kind),
+      ).toEqual(["working-file", "gap", "gap", "gap"]);
+      const held = scopeFolder(
+        storeLocationIn(join(root, ".git")),
+        answer.cycle_id,
+      );
+      expect(await readdir(held)).toEqual(["S1.txt"]);
+      const [{ event }] = await queryHistory(root);
+      expect(event).toMatchObject({
+        actor: Identity.agentFingerprint(requester),
+        attribution: { sessionId: worker.sessionId, cycleId: answer.cycle_id },
+      });
+    } finally {
+      if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+      else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+    }
+  });
+
+  // Linux walks directory descriptors through /proc. macOS rejects links in a single open.
+  test.skipIf(process.platform !== "linux")(
+    "Linux checked scope gets ELOOP at every linked depth and closes its handles",
+    async () => {
+      const { root, revision } = await fixtureRepository();
+      const repository = await realpath(root);
+      await mkdir(join(repository, "empty"));
+      await mkdir(join(repository, "nested"));
+      await symlink("empty", join(repository, "first-link"));
+      await symlink("../empty", join(repository, "nested", "inner-link"));
+      await symlink("source.custom", join(repository, "leaf-link"));
+      const names = [
+        "first-link/missing.md",
+        "nested/inner-link/missing.md",
+        "leaf-link",
+      ];
+      const opened: fs.FileHandle[] = [];
+      const rejected: string[] = [];
+      const open = fs.open;
+      const spy = spyOn(fs, "open").mockImplementation(
+        async (path, flags, mode) => {
+          try {
+            const file = await open(path, flags, mode);
+            if (path === "/" || String(path).startsWith("/proc/self/fd/"))
+              opened.push(file);
+            return file;
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              error.code === "ELOOP"
+            )
+              rejected.push(basename(String(path)));
+            throw error;
+          }
+        },
+      );
+      try {
+        const answer = await Effect.runPromise(
+          readLocalScope(
+            repository,
+            revision,
+            names.map((name) => join(repository, name)),
+            true,
+          ),
+        );
+        expect(answer.sources.map(({ kind, path }) => [kind, path])).toEqual(
+          names.map((name) => ["gap", name]),
+        );
+        expect(rejected.sort()).toEqual([
+          "first-link",
+          "inner-link",
+          "leaf-link",
+        ]);
+        expect(opened.length).toBeGreaterThan(0);
+        expect(opened.every((file) => file.fd === -1)).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  // Linux formerly compared the /proc descriptor pathname after open. macOS has no such check.
+  test.skipIf(process.platform !== "linux")(
+    "Linux checked scope reads the opened file after a rename",
+    async () => {
+      const { root, revision } = await fixtureRepository();
+      const repository = await realpath(root);
+      const name = "rename-after-open.md";
+      const path = join(repository, name);
+      const renamed = join(repository, "renamed.md");
+      const text = "Scope held by an open descriptor.";
+      await Bun.write(path, text);
+      const open = fs.open;
+      const spy = spyOn(fs, "open").mockImplementation(
+        async (openedPath, flags, mode) => {
+          const file = await open(openedPath, flags, mode);
+          if (basename(String(openedPath)) === name) {
+            try {
+              await rename(path, renamed);
+            } catch (error) {
+              await file.close();
+              throw error;
+            }
+          }
+          return file;
+        },
+      );
+      try {
+        const answer = await Effect.runPromise(
+          readLocalScope(repository, revision, [path], true),
+        );
+        expect(await Bun.file(renamed).text()).toBe(text);
+        expect(answer.sources).toMatchObject([
+          { kind: "working-file", path: name, bytes: Buffer.from(text) },
+        ]);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  test.each(["was deleted from the worktree", "never existed"] as const)(
+    "worker query keeps named scope that %s",
+    async (scenario) => {
+      const { root, revision: initial } = await fixtureRepository();
+      const stateDirectory = await mkdtemp(
+        join(tmpdir(), "neuve-worker-missing-"),
+      );
+      roots.push(stateDirectory);
+      const path = "docs/exports/scope.md";
+      const text = "# Export scope\nKeep the retry order.\n";
+      const tracked = scenario === "was deleted from the worktree";
+      let revision = initial;
+      if (tracked) {
+        await Bun.write(join(root, path), text);
+        expect(execute(["git", "add", path], root).exitCode).toBe(0);
+        expect(
+          execute(["git", "commit", "-qm", "Export scope"], root).exitCode,
+        ).toBe(0);
+        revision = execute(["git", "rev-parse", "HEAD"], root).stdout.trim();
+        await rm(join(root, "docs"), { recursive: true });
+      }
+      await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+      const graph = await fakeGraph();
+      const worker = {
+        sessionId: "worker-missing-scope",
+        stateDirectory,
+        config: HostConfigSchema.parse({
+          home: stateDirectory,
+          lanes: root,
+          user: "owner",
+          port: 0,
+          environment: {},
+          worker: [process.execPath],
+        }),
+      };
+      const { query } = codingWorkerSetup(
+        await localStorageProfile(root, stateDirectory),
+        SOL_ROUTE,
+      );
+      const read = planScopeRead(
+        root,
+        join(stateDirectory, "plans"),
+        (request) => query!(worker, request),
+      );
+      const note = `Keep this path verbatim: ${join(stateDirectory, "plans")}\n`;
+      await Bun.write(join(root, "notes.md"), note);
+      const plan = "# Approved plan\nRead the export scope.\n";
+      const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+      process.env.NEUVE_GRAPH_BINARY = graph.executable;
+      try {
+        const result = await read({
+          repository: root,
+          revision,
+          question: "What is the export scope?",
+          scope: [path, "notes.md"],
+          previousPlans: [],
+          requester: {
+            _tag: "Agent",
+            harness: "neuve-pi",
+            sessionId: worker.sessionId,
+            subagentId: "8",
+          },
+          plan: {
+            file: `${crypto.randomUUID()}.md`,
+            title: "Approved plan",
+            text: plan,
+            hash: createHash("sha256").update(plan).digest("hex"),
+          },
+        });
+        expect(result.isError).toBeUndefined();
+        const answer = JSON.parse(result.text);
+        expect(answer.scope).toContainEqual(
+          expect.objectContaining({
+            ref: expect.objectContaining({ path: "notes.md" }),
+            text: note,
+            sha256: createHash("sha256").update(note).digest("hex"),
+          }),
+        );
+        const reason =
+          "The path was absent from the working tree and the base revision.";
+        expect(answer.scope_gaps).toEqual(
+          tracked ? [] : [`${path}: ${reason}`],
+        );
+        if (tracked) {
+          expect(answer.scope).toContainEqual(
+            expect.objectContaining({
+              kind: "repository-document",
+              ref: expect.objectContaining({ path, revision }),
+              text,
+            }),
+          );
+        }
+        const [{ event }] = await queryHistory(
+          root,
+          "cycle.local-scope-selected@1",
+        );
+        expect(event.attribution.cycleId).toBe(answer.cycle_id);
+        expect(event.payload.sources[1]).toMatchObject(
+          tracked
+            ? {
+                kind: "repository-document",
+                path,
+                blob: execute(
+                  ["git", "rev-parse", `${revision}:${path}`],
+                  root,
+                ).stdout.trim(),
+              }
+            : { kind: "gap", path, reason },
+        );
+      } finally {
+        if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+        else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+      }
+    },
+  );
 
   // A later tree can hide a pinned document or its linked context.
   test("holds named scope at the opening read and returns it on a join", async () => {

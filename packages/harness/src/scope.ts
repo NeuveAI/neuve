@@ -10,7 +10,7 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { open, realpath, type FileHandle } from "node:fs/promises";
 import { isAbsolute, join, posix, relative, resolve } from "node:path";
 import { Clock, Context, Data, Duration, Effect, Option, Tracer } from "effect";
 import { z } from "zod";
@@ -500,11 +500,57 @@ const resolveWorkingPath = async (requested: string) => {
   }
 };
 
-const readWorkingFile = async (path: string): Promise<WorkingRead> => {
+const checkedScopeGap = {
+  kind: "gap",
+  reason: "The checked scope path could not be opened safely.",
+} as const;
+const darwinNoFollowAny = 0x20000000; // O_NOFOLLOW_ANY in macOS sys/fcntl.h.
+const readFlags = constants.O_RDONLY | constants.O_NONBLOCK;
+const noFollowFlags = readFlags | constants.O_NOFOLLOW;
+
+async function openLinuxScopeParent(
+  path: string,
+): Promise<FileHandle | undefined> {
+  let directory: FileHandle | undefined = await open(
+    "/",
+    constants.O_RDONLY | constants.O_DIRECTORY,
+  );
   try {
+    for (const name of posix.dirname(path).split("/").filter(Boolean)) {
+      const parent = directory;
+      // Linux can return ENOTDIR for O_DIRECTORY | O_NOFOLLOW on a link.
+      directory = await open(
+        `/proc/self/fd/${parent.fd}/${name}`,
+        noFollowFlags,
+      );
+      await parent.close();
+      if (!(await directory.stat()).isDirectory()) return undefined;
+    }
+    const parent = directory;
+    directory = undefined;
+    return parent;
+  } finally {
+    await directory?.close();
+  }
+}
+
+const readWorkingFile = async (
+  path: string,
+  checked: boolean,
+): Promise<WorkingRead> => {
+  if (checked && process.platform !== "darwin" && process.platform !== "linux")
+    return checkedScopeGap;
+  try {
+    const linux = checked && process.platform === "linux";
+    await using parent = linux ? await openLinuxScopeParent(path) : undefined;
+    if (linux && parent === undefined) return { kind: "missing" };
     await using file = await open(
-      path,
-      constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
+      parent
+        ? `/proc/self/fd/${parent.fd}/${posix.basename(path) || "."}`
+        : path,
+      checked && process.platform === "darwin"
+        ? readFlags | darwinNoFollowAny
+        : noFollowFlags,
     );
     const stat = await file.stat();
     if (!stat.isFile())
@@ -531,21 +577,35 @@ const readWorkingFile = async (path: string): Promise<WorkingRead> => {
           fetchedAt: new Date().toISOString(),
         };
   } catch (error) {
-    return workingFailure(error);
+    return checked &&
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ELOOP"
+      ? checkedScopeGap
+      : workingFailure(error);
   }
 };
 
-const readNamedFiles = (root: string, paths: readonly string[]) =>
+const readNamedFiles = (
+  root: string,
+  paths: readonly string[],
+  checked: boolean,
+) =>
   Effect.gen(function* () {
-    const resolved = yield* Effect.forEach(
-      paths,
-      (requested) =>
-        Effect.promise(async () => ({
-          requested,
-          target: await resolveWorkingPath(resolve(root, requested)),
-        })),
-      { concurrency: MAX_SCOPE_DOCUMENTS },
-    );
+    const resolved = !checked
+      ? yield* Effect.forEach(
+          paths,
+          (requested) =>
+            Effect.promise(async () => ({
+              requested,
+              target: await resolveWorkingPath(resolve(root, requested)),
+            })),
+          { concurrency: MAX_SCOPE_DOCUMENTS },
+        )
+      : paths.map((path) => ({
+          requested: scopePath(root, path),
+          target: { kind: "resolved" as const, path },
+        }));
     const unique = new Map<
       string,
       {
@@ -568,7 +628,7 @@ const readNamedFiles = (root: string, paths: readonly string[]) =>
           path,
           read:
             target.kind === "resolved"
-              ? await readWorkingFile(target.path)
+              ? await readWorkingFile(target.path, checked)
               : target,
           namedAs,
         })),
@@ -651,6 +711,7 @@ export const readLocalScope = (
   repository: string,
   revision: string,
   names: readonly string[],
+  checked = false,
 ) =>
   Effect.gen(function* () {
     const [base, top, directory] = yield* Effect.all(
@@ -662,16 +723,18 @@ export const readLocalScope = (
       { concurrency: "unbounded" },
     );
     const root = top.replace(/\n$/, "");
-    const paths = [
-      ...new Set(
-        names.map((name) => {
-          const fromRepo = scopePath(repository, resolve(repository, name));
-          return scopePath(root, resolve(directory, fromRepo));
-        }),
-      ),
-    ];
+    const paths = checked
+      ? names
+      : [
+          ...new Set(
+            names.map((name) => {
+              const fromRepo = scopePath(repository, resolve(repository, name));
+              return scopePath(root, resolve(directory, fromRepo));
+            }),
+          ),
+        ];
     const [entries, { files, omitted }] = yield* Effect.all(
-      [localTree(repository, base), readNamedFiles(root, paths)],
+      [localTree(repository, base), readNamedFiles(root, paths, checked)],
       { concurrency: 2 },
     );
     const resolved = files.map((file) => {
