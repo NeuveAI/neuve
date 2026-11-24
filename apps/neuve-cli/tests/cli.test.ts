@@ -560,6 +560,174 @@ describe("neuve CLI boundary", () => {
     }
   });
 
+  test("worker query refuses a replaced plan before recording and pins the approved plan on retry", async () => {
+    const { root, revision } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
+    roots.push(scratch);
+    await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+    const graph = await fakeGraph();
+    const worker = {
+      sessionId: "worker-scope",
+      stateDirectory: scratch,
+      config: HostConfigSchema.parse({
+        home: scratch,
+        lanes: root,
+        user: "owner",
+        port: 0,
+        environment: {},
+        worker: [process.execPath],
+      }),
+    };
+    const { query } = codingWorkerSetup(
+      await localStorageProfile(root, scratch),
+      SOL_ROUTE,
+    );
+    const plans = join(scratch, "plans");
+    const text = "# Approved plan\nKeep the approved scope.\n";
+    const plan = {
+      file: `${crypto.randomUUID()}.md`,
+      title: "Approved plan",
+      text,
+      hash: createHash("sha256").update(text).digest("hex"),
+    };
+    const read = planScopeRead(root, plans, async (request) => {
+      if (request.question === "Read a linked plan") {
+        const replacement = join(plans, "replacement.md");
+        await symlink(join(root, "source.custom"), replacement);
+        await rename(replacement, join(plans, plan.file));
+      }
+      if (request.question === "Read after replacement") {
+        const replacement = join(plans, "replacement.md");
+        await Bun.write(replacement, "Unapproved plan text.");
+        await rename(replacement, join(plans, plan.file));
+      }
+      return query!(worker, request);
+    });
+    const request = {
+      repository: root,
+      revision,
+      plan,
+      scope: [],
+      previousPlans: [],
+      requester: {
+        _tag: "Agent" as const,
+        harness: "neuve-pi" as const,
+        sessionId: worker.sessionId,
+        subagentId: "8",
+      },
+    };
+    const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+    process.env.NEUVE_GRAPH_BINARY = graph.executable;
+    try {
+      expect(
+        await read({ ...request, question: "Read a linked plan" }),
+      ).toEqual({
+        isError: true,
+        text: "The checked scope path could not be opened safely.",
+      });
+      expect(
+        await read({ ...request, question: "Read after replacement" }),
+      ).toEqual({
+        isError: true,
+        text: "The approved plan changed while the host read it. Retry the call.",
+      });
+      expect(await queryHistory(root)).toEqual([]);
+      expect(await queryHistory(root, "cycle.opened@2")).toEqual([]);
+      expect(await queryHistory(root, "cycle.local-scope-selected@1")).toEqual(
+        [],
+      );
+
+      const retry = await read({
+        ...request,
+        question: "Retry approved plan read",
+      });
+      expect(retry.isError, retry.text).toBeUndefined();
+      const [{ event: opening }] = await queryHistory(root, "cycle.opened@2");
+      const cycleId = opening.attribution.cycleId;
+      expect(JSON.parse(retry.text)).toMatchObject({
+        state: { kind: "cycle_opened", cycle_id: cycleId },
+        scope: [{ kind: "working-file", text, sha256: plan.hash }],
+      });
+      const [{ event: selection }] = await queryHistory(
+        root,
+        "cycle.local-scope-selected@1",
+      );
+      expect(selection).toMatchObject({
+        attribution: { cycleId },
+        payload: { sources: [{ kind: "working-file", sha256: plan.hash }] },
+      });
+    } finally {
+      if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+      else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+    }
+  });
+
+  test("worker query reports an unknown base revision as a Git failure", async () => {
+    const { root } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
+    roots.push(scratch);
+    await createRecords(root, { NEUVE_TEST_PROCESS: "1" });
+    const graph = await fakeGraph();
+    const worker = {
+      sessionId: "worker-scope",
+      stateDirectory: scratch,
+      config: HostConfigSchema.parse({
+        home: scratch,
+        lanes: root,
+        user: "owner",
+        port: 0,
+        environment: {},
+        worker: [process.execPath],
+      }),
+    };
+    const { query } = codingWorkerSetup(
+      await localStorageProfile(root, scratch),
+      SOL_ROUTE,
+    );
+    const read = planScopeRead(root, join(scratch, "plans"), (request) =>
+      query!(worker, request),
+    );
+    const revision = "f".repeat(40);
+    const question = "Read from a missing base";
+    const previousBinary = process.env.NEUVE_GRAPH_BINARY;
+    process.env.NEUVE_GRAPH_BINARY = graph.executable;
+    try {
+      const text = "# Approved plan\n";
+      const result = await read({
+        repository: root,
+        revision,
+        question,
+        scope: [],
+        previousPlans: [],
+        requester: {
+          _tag: "Agent",
+          harness: "neuve-pi",
+          sessionId: worker.sessionId,
+          subagentId: "8",
+        },
+        plan: {
+          file: `${crypto.randomUUID()}.md`,
+          title: "Approved plan",
+          text,
+          hash: createHash("sha256").update(text).digest("hex"),
+        },
+      });
+      expect(result).toEqual({
+        isError: true,
+        text: "fatal: Needed a single revision",
+      });
+      expect(await queryHistory(root)).toEqual([]);
+      const cli = await run(queryArgs(root, revision, question, []), {
+        NEUVE_TEST_PROCESS: "1",
+      });
+      expect(cli.exitCode, cli.stderr).toBe(2);
+      expect(cli.stderr.trim()).toEndWith(result.text);
+    } finally {
+      if (previousBinary === undefined) delete process.env.NEUVE_GRAPH_BINARY;
+      else process.env.NEUVE_GRAPH_BINARY = previousBinary;
+    }
+  });
+
   test("worker query rejects a linked scope parent before keeping the file in Records", async () => {
     const { root, revision } = await fixtureRepository();
     const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));

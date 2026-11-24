@@ -648,7 +648,12 @@ export type QuerySourceContext = Readonly<
   {
     request: QueryRequest;
   } & (
-    | { kind: "unrecorded"; state: { kind: "not_recorded"; reason: string } }
+    | {
+        kind: "unrecorded";
+        state:
+          | { kind: "not_recorded" | "scope_refused"; reason: string }
+          | { kind: "plan_changed" };
+      }
     | {
         kind: "recorded";
         eventId: string;
@@ -886,6 +891,7 @@ export const runQueryGraph = async (
     signal?: AbortSignal;
     requester?: Requester;
     checkedScope?: boolean;
+    plan?: Readonly<{ path: string; sha256: string }>;
   }>,
 ): Promise<QuerySourceContext> => {
   try {
@@ -915,6 +921,35 @@ export const runQueryGraph = async (
     ),
     { signal: input.signal },
   );
+  if (input.plan !== undefined) {
+    const { path, sha256 } = input.plan;
+    const read = await localRead;
+    if (read._tag === "Failure") {
+      const error = Cause.squash(read.cause);
+      const reason = error instanceof Error ? error.message : String(error);
+      return {
+        kind: "unrecorded",
+        request,
+        state: { kind: "scope_refused", reason },
+      };
+    }
+    const source = read.value.sources.find(
+      ({ path: name }) => resolve(read.value.root, name) === path,
+    );
+    if (source?.kind !== "working-file") {
+      const reason =
+        source?.kind === "gap"
+          ? source.reason
+          : "The approved plan was not read as a working file.";
+      return {
+        kind: "unrecorded",
+        request,
+        state: { kind: "scope_refused", reason },
+      };
+    }
+    if (source.sha256 !== sha256)
+      return { kind: "unrecorded", request, state: { kind: "plan_changed" } };
+  }
   let cycleFailure: string | undefined;
   try {
     await inspectQuery(

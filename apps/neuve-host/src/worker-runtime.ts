@@ -35,10 +35,13 @@ export type WorkerContext = {
 
 export type WorkerAdmission = Parameters<NonNullable<NonNullable<Options["extension"]>["attach"]>>[1];
 type ReadScope = NonNullable<NonNullable<Options["build"]>["query"]>["read"];
-type ScopeQuery = Omit<Parameters<ReadScope>[0], "plan" | "previousPlans">;
+type ScopeQuery = Omit<Parameters<ReadScope>[0], "plan" | "previousPlans"> & {
+	plan: { path: string; sha256: string };
+};
 type ScopeResult = {
 	scope?: readonly { title: string; ref: { path?: string | undefined } }[];
 	scope_gaps?: readonly string[];
+	refusal?: string;
 	[key: string]: unknown;
 };
 
@@ -239,7 +242,8 @@ export function planScopeRead(
 		try {
 			await files.read(plan.file, plan.hash, new TextEncoder().encode(plan.text));
 			plansRoot = await realpath(plans);
-			const paths = new Set([join(plansRoot, plan.file)]);
+			const planPath = join(plansRoot, plan.file);
+			const paths = new Set([planPath]);
 			const listed = await git(project, ["worktree", "list", "--porcelain", "-z"]);
 			if (listed.status !== 0) throw new Error("Git could not list the repository's worktrees.");
 			const worktrees = listed.stdout.split("\0").filter(field => field.startsWith("worktree ")).map(field => field.slice(9));
@@ -294,7 +298,10 @@ export function planScopeRead(
 			if (refused.length) {
 				return { isError: true, text: redact(`${refused.join(" and ")}, so name each file by a path with no link in it, inside the repository, its worktrees or this channel's plans folder, or omit them to read the approved plan.`) };
 			}
-			const { scope: sources, scope_gaps: gaps, ...result } = await query({ ...request, scope: [...paths] });
+			const { scope: sources, scope_gaps: gaps, refusal, ...result } = await query({
+				...request, scope: [...paths], plan: { path: planPath, sha256: plan.hash },
+			});
+			if (refusal !== undefined) return { isError: true, text: redact(refusal) };
 			return { text: JSON.stringify({
 				...result,
 				...(sources && { scope: sources.map(source => ({

@@ -534,7 +534,7 @@ test("scope reads reach the host with the worktree, base, plan first and calling
 		requests.push(request);
 		return { query: request.question };
 	} });
-	const { chat } = await startBuild(run);
+	const { chat, plan } = await startBuild(run);
 	for (const [role, args] of [
 		["reviewer", { role: "reviewer" }],
 		["implementer", { role: "implementer", part: "parser", brief: "Implement the parser." }],
@@ -557,6 +557,7 @@ test("scope reads reach the host with the worktree, base, plan first and calling
 			repository: worktree.path, revision: worktree.base, question,
 			...(index === 1 ? { branch: run.worktrees[0]!.branch } : {}),
 			scope: [planPath, join(worktree.path, "README.md")],
+			plan: { path: planPath, sha256: plan.hash },
 			requester: { _tag: "Agent", harness: "neuve-pi", sessionId: "one", subagentId: String(caller) },
 		});
 	}

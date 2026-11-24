@@ -216,7 +216,7 @@ export function codingWorkerSetup(
   return {
     async query(
       _worker,
-      { repository, revision, branch, question, scope, requester },
+      { repository, revision, branch, question, scope, requester, plan },
     ) {
       const events: PublicQueryEvent[] = [];
       const { state } = await runQueryGraph(
@@ -232,12 +232,20 @@ export function codingWorkerSetup(
         },
         {
           requester,
+          plan,
           checkedScope: true,
           emit: async (event) => {
             events.push(event);
           },
         },
       );
+      if (state.kind === "plan_changed") {
+        return {
+          refusal:
+            "The approved plan changed while the host read it. Retry the call.",
+        };
+      }
+      if (state.kind === "scope_refused") return { refusal: state.reason };
       return { ...collectPublicQueryResult(events), state };
     },
     checkpoint(worker, request) {
