@@ -153,13 +153,13 @@ function quotePlanText(text: string): string {
 
 export function buildPlanCommentMessage(title: string, items: readonly Carried[]) {
 	const sections = items.map(({ comment, reply }) => {
-		if (reply) return `Reply to comment ${comment.id}:\n\n${reply.text}`;
+		if (reply) return `Reply by ${reply.author} to comment ${comment.id}:\n\n${quotePlanText(reply.text)}`;
 		const stays = comment.placement.kind === "stays";
 		const lines = comment.placement.kind === "stays" ? comment.placement.lines : comment.anchor.lines;
 		const range = `${lines[0]!.line}-${lines.at(-1)!.line}${stays ? "" : " of an earlier version"}`;
 		const section = quotePlanText(comment.anchor.section);
 		const quote = quotePlanText(comment.anchor.quote);
-		return `Comment ${comment.id}, lines ${range}:\nSection heading:\n${section}\nQuoted passage:\n${quote}\n\n${comment.text}`;
+		return `Comment ${comment.id}, lines ${range}:\nSection heading:\n${section}\nQuoted passage:\n${quote}\n\n${quotePlanText(comment.text)}`;
 	});
 	return {
 		text: [
@@ -169,6 +169,8 @@ export function buildPlanCommentMessage(title: string, items: readonly Carried[]
 		].join("\n\n"),
 	};
 }
+
+export const KEPT_PLAN_REPLIES_REASON = "Your replies were kept because their parent comments have not reached the chat.";
 
 export async function preparePlanCommentSend(
 	state: Readonly<PlansState> | undefined, chat: ConversationId, request: Send, placements: PlanCommentPlacements,
@@ -180,9 +182,9 @@ export async function preparePlanCommentSend(
 		if (comment.plan !== request.plan) continue;
 		const kept = comment.author === request.author && !comment.sent;
 		const replies = comment.replies.filter((reply): reply is PersonReply =>
-			reply.kind === "person" && reply.author === request.author && !reply.sent);
+			reply.kind === "person" && !reply.sent && (kept || reply.author === request.author));
 		if (!kept && !replies.length) continue;
-		if (!kept && comment.sent?.entry === undefined) {
+		if (!kept && comment.state !== "queued" && comment.sent?.entry === undefined) {
 			keptReplyIds.push(...replies.map(reply => reply.id));
 			continue;
 		}
@@ -191,15 +193,13 @@ export async function preparePlanCommentSend(
 		for (const reply of replies) items.push({ comment: projected, reply });
 	}
 	const keptReplies = keptReplyIds.length
-		? { ids: keptReplyIds, reason: "Your replies were kept because their parent comments have not reached the chat." }
+		? { ids: keptReplyIds, reason: KEPT_PLAN_REPLIES_REASON }
 		: undefined;
 	if (!items.length) {
 		throw new Error(keptReplies ? `Nothing was sent. ${keptReplies.reason}` : "You have no kept comments or replies on this plan.");
 	}
-	items.sort((a, b) => {
-		const byTime = (a.reply ?? a.comment).at - (b.reply ?? b.comment).at;
-		return byTime || Number(a.reply !== undefined) - Number(b.reply !== undefined);
-	});
+	const sectionTime = ({ comment, reply }: Carried) => comment.sent && reply ? reply.at : comment.at;
+	items.sort((a, b) => sectionTime(a) - sectionTime(b));
 	return { message: buildPlanCommentMessage(plan.plan.title, items), items, keptReplies };
 }
 

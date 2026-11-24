@@ -17,6 +17,7 @@ const requestId = z.string().min(1).max(200).refine(value => !reservedReviewRequ
 }).refine(value => !reservedBuildRequestId(value), {
 	message: "The neuve.build: request-ID namespace is reserved for the host",
 }).optional();
+const agents = z.array(id).min(1).optional();
 /**
  * The author a client claims, which the host replaces with the participant it verified. Defaulted,
  * so every request that carries an author has the field to replace.
@@ -61,7 +62,7 @@ export const ApprovalAnswerSchema = z.strictObject({
 export const RequestSchema = z.discriminatedUnion("op", [
 	z.strictObject({ op: z.literal("info") }),
 	z.strictObject({ op: z.literal("models") }),
-	z.strictObject({ op: z.literal("say"), chat, author, text: z.string(), images, files, requestId }),
+	z.strictObject({ op: z.literal("say"), chat, author, text: z.string(), images, files, agents, requestId }),
 	z.strictObject({
 		op: z.literal("ask"),
 		chat,
@@ -73,6 +74,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 		automatic: z.boolean().optional(),
 		effort: EffortSchema.optional(),
 		mode: ChatModeSchema.optional(),
+		agents,
 		requestId,
 		attended: z.boolean().optional(),
 	}),

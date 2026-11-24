@@ -12,6 +12,7 @@ import {
 import {
   mcpTool,
   TurnFailed,
+  unknownTool,
   type Account,
   type ToolDefinition,
 } from "@neuve/runtime";
@@ -111,10 +112,7 @@ export function toolServer(
       );
       if (definition === undefined) {
         await onProtocolFault();
-        return {
-          content: [{ type: "text", text: "Unknown Neuve tool." }],
-          isError: true,
-        };
+        return unknownTool(request.params.name, tools);
       }
       // Live evidence: research/live-experiments.md (a), Claude Code 2.1.312, both parallel calls.
       const input = request.params.arguments ?? {};

@@ -54,6 +54,9 @@ export function keptCount(list: PlanCommentView[]) {
 
 const LINES = /^(\d+)-(\d+)$/;
 
+/** The composer's `scroll-my-3.5`, kept clear above and below it in the pane. */
+const SCROLL_MARGIN = 14;
+
 /** The plan file's lines a rendered block came from, as the plan view marks them. */
 export function blockLines(element: Element): [number, number] | undefined {
 	let match = LINES.exec(element.getAttribute("data-lines") ?? "");
@@ -72,7 +75,7 @@ function quoteOf(range: Range) {
 }
 
 /** The selection inside `root` as whole plan lines and a quote that matches them, or nothing. */
-export function selectionIn(root: HTMLElement, text: string): (PlanSelection & { rect: DOMRect }) | undefined {
+export function selectionIn(root: HTMLElement, text: string): (PlanSelection & { first: DOMRect; last: DOMRect }) | undefined {
 	let selection = getSelection();
 	if (!selection || selection.isCollapsed || !selection.rangeCount) return;
 	let range = selection.getRangeAt(0);
@@ -88,8 +91,8 @@ export function selectionIn(root: HTMLElement, text: string): (PlanSelection & {
 	let lines = fileLines(text).slice(first - 1, last);
 	if (!matchesFileLines(text, lines, quote)) return;
 	let rects = range.getClientRects();
-	let rect = rects[rects.length - 1] ?? range.getBoundingClientRect();
-	return { lines, quote, rect };
+	let whole = range.getBoundingClientRect();
+	return { lines, quote, first: rects[0] ?? whole, last: rects[rects.length - 1] ?? whole };
 }
 
 /** The outermost rendered blocks in `root` that hold any of lines `first` to `last`, or the innermost. */
@@ -252,25 +255,58 @@ export function usePlanHighlights(
 	}, [root, key]);
 }
 
-/** The chip at a selection that opens the composer under its passage. */
-export function CommentChip({ top, left, onComment }: { top: number; left: number; onComment: () => void }) {
+/** Calls `gone` once `element`'s exit animation has played, at once when it has none. */
+function afterExit(element: Element | null, gone: () => void) {
+	let running = element?.getAnimations() ?? [];
+	if (!running.length) return gone();
+	void Promise.allSettled(running.map((animation) => animation.finished)).then(gone);
+}
+
+/** The chip at a selection that opens the composer under its passage; `closing` plays its exit, then `onGone`. */
+export function CommentChip(
+	{ top, left, side, closing, onComment, onGone }: {
+		top: number;
+		left: number;
+		side: "top" | "bottom";
+		closing?: boolean;
+		onComment: () => void;
+		onGone: () => void;
+	},
+) {
+	let root = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		if (closing) afterExit(root.current, onGone);
+	}, [closing]);
 	return (
-		<Button
-			variant="ghost"
-			size="sm"
+		<div
+			ref={root}
 			data-plan-comment=""
-			className={cn("absolute z-10 bg-popover shadow-popover hover:bg-popover", motion)}
-			data-open=""
-			data-side="bottom"
+			data-slot="popover-content"
+			data-open={closing ? undefined : ""}
+			data-closed={closing ? "" : undefined}
+			data-side={side}
+			className={cn("absolute z-10 flex", motion)}
 			style={{ top, left }}
-			// Keeps the selection: a press would otherwise collapse it before the click.
-			onPointerDown={(event) => event.preventDefault()}
-			onClick={onComment}
 		>
-			<IconMessage className="size-3.5" />
-			Comment
-		</Button>
+			<Button
+				variant="ghost"
+				size="sm"
+				className="bg-popover shadow-popover hover:bg-popover"
+				// Keeps the selection: a press would otherwise collapse it before the click.
+				onPointerDown={(event) => event.preventDefault()}
+				onClick={onComment}
+			>
+				<IconMessage className="size-3.5" />
+				Comment
+			</Button>
+		</div>
 	);
+}
+
+function scrollerOf(element: HTMLElement) {
+	let parent = element.parentElement;
+	while (parent && !/auto|scroll/.test(getComputedStyle(parent).overflowY)) parent = parent.parentElement;
+	return parent;
 }
 
 /** A text box with its two actions, as the comment composer and a reply or edit in a card. */
@@ -287,8 +323,32 @@ export function CommentComposer(
 	let [text, setText] = useState(initial);
 	let [busy, setBusy] = useState(false);
 	let [error, setError] = useState<string>();
+	let [closing, setClosing] = useState(false);
+	let root = useRef<HTMLDivElement>(null);
 	let field = useRef<HTMLTextAreaElement>(null);
-	useEffect(() => field.current?.focus(), []);
+	useEffect(() => field.current?.focus({ preventScroll: true }), []);
+	useLayoutEffect(() => {
+		if (closing) afterExit(root.current, onCancel);
+	}, [closing]);
+	// The box grows with the words up to what leaves its actions in the pane, scrolls past that,
+	// and the whole composer stays in view as the words or the pane change.
+	let fit = () => {
+		let box = field.current!;
+		let element = root.current!;
+		let pane = scrollerOf(element);
+		box.style.height = "auto";
+		let room = pane ? pane.clientHeight - (element.offsetHeight - box.offsetHeight) - 2 * SCROLL_MARGIN : Infinity;
+		box.style.height = `${Math.min(box.scrollHeight, room)}px`;
+		element.scrollIntoView({ block: "nearest" });
+	};
+	useLayoutEffect(fit, [text]);
+	useEffect(() => {
+		let pane = scrollerOf(root.current!);
+		if (!pane) return;
+		let observer = new ResizeObserver(() => fit());
+		observer.observe(pane);
+		return () => observer.disconnect();
+	}, []);
 	let empty = !text.trim();
 	async function submit() {
 		if (empty || busy) return;
@@ -303,12 +363,14 @@ export function CommentComposer(
 	}
 	return (
 		<div
+			ref={root}
 			data-plan-comment=""
 			data-slot={popover ? "popover-content" : undefined}
-			data-open={popover ? "" : undefined}
+			data-open={popover && !closing ? "" : undefined}
+			data-closed={popover && closing ? "" : undefined}
 			data-side={popover ? "bottom" : undefined}
 			className={cn(
-				"flex flex-col",
+				"flex scroll-my-3.5 flex-col rounded-md has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-ring/30",
 				popover && ["w-[420px] max-w-full rounded-(--r-popover) squircle bg-popover p-2 text-popover-foreground shadow-popover", motion],
 			)}
 		>
@@ -320,13 +382,13 @@ export function CommentComposer(
 				className="min-h-10 w-full resize-none bg-transparent px-1 pt-0.5 pb-2 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground"
 				onChange={(event) => setText(event.target.value)}
 				onKeyDown={(event) => {
-					if (event.key === "Escape") onCancel();
+					if (event.key === "Escape") setClosing(true);
 					if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submit();
 				}}
 			/>
 			{error && <p role="alert" className="px-1 pb-1.5 text-xs leading-4 text-destructive">{error}</p>}
 			<div className="flex items-center justify-end gap-1.5">
-				<Button variant="ghost" size="sm" className="text-muted-foreground" onClick={onCancel}>Cancel</Button>
+				<Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setClosing(true)}>Cancel</Button>
 				<Button size="sm" aria-disabled={empty || busy || undefined} className="aria-disabled:opacity-50" onClick={() => void submit()}>
 					{action}
 				</Button>
@@ -365,11 +427,38 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 	let failed = comment.state === "failed" ? comment.failure ? `Not delivered: ${comment.failure}` : "Not delivered" : undefined;
 	let out = placement.kind === "changed" ? changeOf(placement.removed, placement.added).out : "";
 	let first = comment.messages[0]!.id;
+	let last = comment.messages.at(-1)!;
+	// The last message's Edit and Remove share the row with Reply.
+	let changes = (message: PlanCommentMessageView, className?: string) =>
+		message.kept && message.mine && !open && (actions.edit || actions.remove) && (
+			<div className={cn("flex gap-1", className)}>
+				{actions.edit && (
+					<Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => setOpen({ kind: "edit", message: message.id })}>
+						Edit
+					</Button>
+				)}
+				{actions.remove && removable(message.id) && (
+					<Button
+						variant="ghost"
+						size="xs"
+						className="text-muted-foreground"
+						onClick={() => {
+							setRefused(undefined);
+							actions.remove?.(comment.id, message.id === first ? undefined : message.id)
+								.catch((cause: Error) => setRefused(cause.message));
+						}}
+					>
+						Remove
+					</Button>
+				)}
+			</div>
+		);
+	let lastChanges = changes(last);
 	return (
 		<article
-			data-plan-comment=""
+			data-plan-comment={comment.id}
 			aria-label={`Comment on “${comment.quote}”`}
-			className="timeline-stream-in flex w-[440px] max-w-full flex-col gap-1.5 overflow-hidden rounded-lg bg-popover px-2.5 py-2 text-popover-foreground shadow-surface"
+			className="timeline-stream-in flex w-[440px] max-w-full scroll-my-3.5 flex-col gap-1.5 overflow-hidden rounded-lg bg-popover px-2.5 py-2 text-popover-foreground shadow-surface"
 		>
 			{out && <s className="text-[13px] leading-5 text-muted-foreground">{out}</s>}
 			{placement.kind === "ambiguous" && (
@@ -390,32 +479,12 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 						/>
 					)
 					: (
-						<div key={message.id} className="group/message flex items-start gap-2">
-							<Avatar message={message} agentAvatar={actions.agentAvatar} />
-							<p className="min-w-0 flex-1 text-[13px] leading-5 whitespace-pre-wrap">{message.text}</p>
-							{message.kept && message.mine && (actions.edit || actions.remove) && (
-								<span className="flex shrink-0 gap-1 opacity-0 transition-opacity duration-120 group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none">
-									{actions.edit && (
-										<Button variant="ghost" size="xs" className="text-muted-foreground" onClick={() => setOpen({ kind: "edit", message: message.id })}>
-											Edit
-										</Button>
-									)}
-									{actions.remove && removable(message.id) && (
-										<Button
-											variant="ghost"
-											size="xs"
-											className="text-muted-foreground"
-											onClick={() => {
-												setRefused(undefined);
-												actions.remove?.(comment.id, message.id === first ? undefined : message.id)
-													.catch((cause: Error) => setRefused(cause.message));
-											}}
-										>
-											Remove
-										</Button>
-									)}
-								</span>
-							)}
+						<div key={message.id} data-plan-message={message.id} className="flex scroll-my-3.5 flex-col gap-0.5">
+							<div className="flex items-start gap-2">
+								<Avatar message={message} agentAvatar={actions.agentAvatar} />
+								<p className="min-w-0 flex-1 text-[13px] leading-5 whitespace-pre-wrap">{message.text}</p>
+							</div>
+							{message !== last && changes(message, "pl-5")}
 						</div>
 					)
 			)}
@@ -430,9 +499,10 @@ export function PlanCommentCard({ comment, actions }: { comment: PlanCommentView
 				/>
 			)}
 			{refused && <p role="alert" className="pl-7 text-xs leading-4 text-destructive">{refused}</p>}
-			{(failed || (actions.reply && !open)) && (
-				<div className="flex items-center gap-2 pl-7">
-					{failed && <p role="alert" className="min-w-0 flex-1 truncate text-xs leading-4 text-muted-foreground">{failed}</p>}
+			{(failed || lastChanges || (actions.reply && !open)) && (
+				<div className="flex items-center gap-1 pl-5">
+					{lastChanges}
+					{failed && <p role="alert" className="min-w-0 flex-1 truncate pl-2 text-xs leading-4 text-muted-foreground">{failed}</p>}
 					{actions.reply && !open && (
 						<Button variant="ghost" size="xs" className="ml-auto text-muted-foreground" onClick={() => setOpen({ kind: "reply" })}>
 							Reply

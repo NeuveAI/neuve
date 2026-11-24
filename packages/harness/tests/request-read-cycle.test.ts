@@ -17,9 +17,10 @@ import {
   mintUlid,
   Queries,
   Store,
+  isReviewRun,
   storeLocationIn,
 } from "@neuve/records-core";
-import { defaultConfig } from "../src/config.ts";
+import { defaultConfig, PIPELINE_VERSION, runKeyFor } from "../src/config.ts";
 import { requestReview, type ReviewOptions } from "../src/request.ts";
 import { keepLocalScope, readLocalScope, readScopeText } from "../src/scope.ts";
 
@@ -54,8 +55,6 @@ const fixture = () => {
   };
   const base = commit("base");
   const head = commit("review head");
-  const tip = commit("later tip");
-  git("branch", "followup", head);
   const location = storeLocationIn(join(repository, ".git"));
   const request = (target = head, overrides: Partial<ReviewOptions> = {}) =>
     requestReview({
@@ -105,7 +104,7 @@ const fixture = () => {
         Effect.provide(BunFileSystem.layer),
       ),
     );
-  return { repository, location, base, head, tip, git, read, request, run };
+  return { repository, location, base, head, commit, git, read, request, run };
 };
 
 const scopeJobs = Effect.gen(function* () {
@@ -116,50 +115,262 @@ const scopeJobs = Effect.gen(function* () {
   );
 });
 
-// Read order must not let a stacked branch supply another task's plan.
-test.each(["feature", "followup"])(
-  "takes the checked-out branch's scope with %s reading first",
-  async (first) => {
+const reviewJobs = Effect.gen(function* () {
+  const queue = yield* JobQueue.JobQueue;
+  const jobs = yield* queue.list({ states: ["waiting"], limit: 20 });
+  return jobs.filter((job) => isReviewRun(job.kind));
+});
+
+test.each(["feature", "other", "detached", "worktree"])(
+  "joins the only branch ending at the head from the %s checkout",
+  async (checkout) => {
     const repo = fixture();
-    const plans = { feature: "Plan A", followup: "Plan B" };
-    const readPlan = (branch: keyof typeof plans) =>
-      Effect.gen(function* () {
-        const path = branch + ".md";
-        const revision = branch === "feature" ? repo.head : repo.base;
-        writeFileSync(join(repo.repository, path), plans[branch]);
-        const read = yield* readLocalScope(repo.repository, revision, [path]);
-        return yield* repo.read(branch, revision, (cycleId) =>
-          keepLocalScope({ location: repo.location, cycleId }, read, () => {}),
-        );
-      });
-    const result = await repo.run(
-      Effect.gen(function* () {
-        const firstRead =
-          first === "followup" ? yield* readPlan("followup") : undefined;
-        const feature = yield* readPlan("feature");
-        const followup = firstRead ?? (yield* readPlan("followup"));
-        const review = yield* repo.request();
-        const jobs = yield* scopeJobs;
-        const later = yield* repo.read("followup");
-        return { feature, followup, review, jobs, later };
-      }),
-    );
-    const cycleId = result.feature.cycleId;
-    expect(result.review.cycleId).toBe(cycleId);
-    expect(readScopeText(repo.location, result.review.cycleId, "S1").text).toBe(
-      "Plan A",
-    );
-    expect(result.later).toEqual({
-      cycleId: result.followup.cycleId,
-      opened: false,
-    });
-    expect(
-      result.jobs.filter((job) => job.dedupeKey === `scope.fetch:${cycleId}`),
-    ).toMatchObject([{ kind: "scope.fetch@2" }]);
+    const read = await repo.run(repo.read());
+    if (checkout === "other") repo.git("switch", "-c", "other", repo.base);
+    if (checkout === "detached") repo.git("switch", "--detach", repo.head);
+    let branchCheckout = repo.repository;
+    if (checkout === "worktree") {
+      branchCheckout = join(repo.repository, "review-worktree");
+      repo.git("worktree", "add", "-b", "other", branchCheckout, repo.base);
+    }
+    const review = await repo.run(repo.request(repo.head, { branchCheckout }));
+    expect(review.cycleId).toBe(read.cycleId);
+    expect(review.openedCycle).toBe(false);
   },
 );
 
-// A detached checkout can still review a range when no branch has open scope for it.
+test("names all tips when a detached review needs a branch, then accepts the named tip", async () => {
+  const repo = fixture();
+  repo.git("branch", "followup", repo.head);
+  repo.git("switch", "--detach", repo.head);
+  await expect(repo.run(repo.request())).rejects.toThrow(
+    '"feature" and "followup" end at this review\'s head, so pass --branch <name> with the branch to review.',
+  );
+  const wrongBranch = () =>
+    repo.run(repo.request(repo.head, { branch: "other" }));
+  const refusal =
+    '"other" does not end at this review\'s head, so pass --branch with "feature" or "followup".';
+  await expect(wrongBranch()).rejects.toThrow(refusal);
+  const read = await repo.run(repo.read());
+  const review = await repo.run(repo.request(repo.head, { branch: "feature" }));
+  expect(review.cycleId).toBe(read.cycleId);
+  expect(review.openedCycle).toBe(false);
+  await expect(wrongBranch()).rejects.toThrow(refusal);
+});
+
+test("refuses a named branch that contains the head when another branch ends there", async () => {
+  const repo = fixture();
+  repo.git("switch", "-c", "other");
+  repo.commit("later tip");
+  const read = await repo.run(repo.read());
+  const wrongBranch = () =>
+    repo.run(repo.request(repo.head, { branch: "other" }));
+  const refusal =
+    '"other" does not end at this review\'s head, so pass --branch with "feature" or leave it out.';
+  await expect(wrongBranch()).rejects.toThrow(refusal);
+  const review = await repo.run(repo.request());
+  expect(review.cycleId).toBe(read.cycleId);
+  await expect(wrongBranch()).rejects.toThrow(refusal);
+});
+
+test.each([undefined, "feature", "missing"])(
+  "reviews a head inside a branch's history with branch %s",
+  async (branch) => {
+    const repo = fixture();
+    repo.commit("later tip");
+    if (branch === "missing") {
+      await expect(
+        repo.run(repo.request(repo.head, { branch })),
+      ).rejects.toThrow(
+        '"missing" does not hold this review\'s head. Pass --branch <name> with a local branch that does.',
+      );
+      return;
+    }
+    const read = await repo.run(repo.read());
+    const review = await repo.run(repo.request(repo.head, { branch }));
+    if (branch === "feature") {
+      expect(review.cycleId).toBe(read.cycleId);
+      expect(review.openedCycle).toBe(false);
+    } else {
+      expect(review.cycleId).not.toBe(read.cycleId);
+      expect(review.openedCycle).toBe(true);
+    }
+  },
+);
+
+test("takes the plan for each branch in a stack from the upper checkout", async () => {
+  const repo = fixture();
+  repo.git("switch", "-c", "followup");
+  const tip = repo.commit("upper tip");
+  writeFileSync(join(repo.repository, "lower.md"), "Plan A");
+  writeFileSync(join(repo.repository, "upper.md"), "Plan B");
+  const { lower, upper, feature, followup } = await repo.run(
+    Effect.gen(function* () {
+      const planB = yield* readLocalScope(repo.repository, repo.head, [
+        "upper.md",
+      ]);
+      const followup = yield* repo.read("followup", repo.head, (cycleId) =>
+        keepLocalScope({ location: repo.location, cycleId }, planB, () => {}),
+      );
+      const planA = yield* readLocalScope(repo.repository, repo.base, [
+        "lower.md",
+      ]);
+      const feature = yield* repo.read("feature", repo.base, (cycleId) =>
+        keepLocalScope({ location: repo.location, cycleId }, planA, () => {}),
+      );
+      const lower = yield* repo.request();
+      const upper = yield* repo.request(tip, {
+        range: `${repo.head}..${tip}`,
+      });
+      return { lower, upper, feature, followup };
+    }),
+  );
+  expect(lower.cycleId).toBe(feature.cycleId);
+  expect(upper.cycleId).toBe(followup.cycleId);
+  expect(readScopeText(repo.location, lower.cycleId, "S1").text).toBe("Plan A");
+  expect(readScopeText(repo.location, upper.cycleId, "S1").text).toBe("Plan B");
+});
+
+test.each(["same", "reordered", "different"] as const)(
+  "requests the same range from two worktrees with the %s pinned plan",
+  async (plans) => {
+    const repo = fixture();
+    const other = join(repo.repository, "other-checkout");
+    repo.git("worktree", "add", "-b", "followup", other, repo.head);
+    const otherPlan = plans === "reordered" ? "plan.md" : "other-plan.md";
+    writeFileSync(join(repo.repository, "plan.md"), "Plan A");
+    writeFileSync(join(repo.repository, "details.md"), "Details");
+    writeFileSync(join(other, "details.md"), "Details");
+    writeFileSync(
+      join(other, otherPlan),
+      plans === "different" ? "Plan B" : "Plan A",
+    );
+    const requestId = mintUlid();
+    const { feature, followup, first, second, retry, jobs } = await repo.run(
+      Effect.gen(function* () {
+        const firstPlan = yield* readLocalScope(repo.repository, repo.base, [
+          "plan.md",
+          "details.md",
+        ]);
+        const feature = yield* repo.read("feature", repo.base, (cycleId) =>
+          keepLocalScope(
+            { location: repo.location, cycleId },
+            firstPlan,
+            () => {},
+          ),
+        );
+        const secondPlan = yield* readLocalScope(
+          other,
+          repo.base,
+          plans === "reordered"
+            ? ["details.md", otherPlan]
+            : [otherPlan, "details.md"],
+        );
+        const followup = yield* repo.read("followup", repo.base, (cycleId) =>
+          keepLocalScope(
+            { location: repo.location, cycleId },
+            secondPlan,
+            () => {},
+          ),
+        );
+        writeFileSync(join(repo.repository, "plan.md"), "Live edit");
+        const first = yield* repo.request(repo.head, { requestId });
+        const second = yield* repo.request(repo.head, {
+          repository: other,
+        });
+        const retry = yield* repo.request(repo.head, {
+          branch: "feature",
+          repository: other,
+          requestId,
+        });
+        return {
+          feature,
+          followup,
+          first,
+          second,
+          retry,
+          jobs: yield* reviewJobs,
+        };
+      }),
+    );
+    expect(first.cycleId).toBe(feature.cycleId);
+    expect(first.runKey).not.toBe(runKeyFor(first.range, defaultConfig()));
+    expect(readScopeText(repo.location, first.cycleId, "S1").text).toBe(
+      "Plan A",
+    );
+    expect(retry.cycleId).toBe(first.cycleId);
+    expect(retry.dedupeKey).toBe(first.dedupeKey);
+    expect(retry.events.map(({ id }) => id)).toEqual([requestId]);
+    if (plans !== "different") {
+      expect(second.cycleId).toBe(first.cycleId);
+      expect(second.runKey).toBe(first.runKey);
+      expect(second.dedupeKey).toBe(first.dedupeKey);
+      expect(jobs.map((job) => job.dedupeKey)).toEqual([first.dedupeKey]);
+    } else {
+      expect(second.cycleId).toBe(followup.cycleId);
+      expect(second.runKey).not.toBe(first.runKey);
+      expect(readScopeText(repo.location, second.cycleId, "S1").text).toBe(
+        "Plan B",
+      );
+      expect(jobs.map((job) => job.dedupeKey).sort()).toEqual(
+        [first.dedupeKey, second.dedupeKey].sort(),
+      );
+    }
+  },
+);
+
+test("reuses the key and queued job of a review written before plans joined the key", async () => {
+  const repo = fixture();
+  writeFileSync(join(repo.repository, "plan.md"), "Plan A");
+  const range = { baseRef: repo.base, baseOid: repo.base, headOid: repo.head };
+  const config = defaultConfig();
+  const runKey = runKeyFor(range, config);
+  const { read, oldJobs, review, jobs } = await repo.run(
+    Effect.gen(function* () {
+      const plan = yield* readLocalScope(repo.repository, repo.base, [
+        "plan.md",
+      ]);
+      const read = yield* repo.read("feature", repo.base, (cycleId) =>
+        keepLocalScope({ location: repo.location, cycleId }, plan, () => {}),
+      );
+      const attribution = { cycleId: read.cycleId, range };
+      const occurredAt = new Date().toISOString();
+      const requestId = mintUlid();
+      yield* Log.append([
+        {
+          id: mintUlid(),
+          kind: "cycle.opened@1",
+          idempotencyKey: `cycle:${read.cycleId}`,
+          actor: Identity.UNRESOLVED_ACTOR,
+          occurredAt,
+          attribution,
+          payload: {},
+        },
+        {
+          id: requestId,
+          kind: "review.requested@1",
+          idempotencyKey: `review.requested:${requestId}`,
+          actor: Identity.UNRESOLVED_ACTOR,
+          occurredAt,
+          attribution,
+          payload: {
+            runKey,
+            generation: 0,
+            pipeline: { version: PIPELINE_VERSION, config },
+          },
+        },
+      ]);
+      const oldJobs = yield* reviewJobs;
+      const review = yield* repo.request();
+      return { read, oldJobs, review, jobs: yield* reviewJobs };
+    }),
+  );
+  expect(review.cycleId).toBe(read.cycleId);
+  expect(review.runKey).toBe(runKey);
+  expect(jobs).toMatchObject([{ dedupeKey: review.dedupeKey }]);
+  expect(jobs.map((job) => job.seq)).toEqual(oldJobs.map((job) => job.seq));
+});
+
 test("opens and reuses a range cycle from a detached checkout without an earlier read", async () => {
   const repo = fixture();
   repo.git("switch", "--detach", repo.head);
@@ -185,36 +396,27 @@ test("opens and reuses a range cycle from a detached checkout without an earlier
   ]);
 });
 
-// A reviewer on another branch could start a cycle without the implementer's plan.
-test("requires the implementer's branch when the checked-out branch has no open cycle", async () => {
-  const repo = fixture();
-  writeFileSync(join(repo.repository, "plan.md"), "Feature plan");
-  const { read, unnamed, named } = await repo.run(
-    Effect.gen(function* () {
-      const plan = yield* readLocalScope(repo.repository, repo.base, [
-        "plan.md",
-      ]);
-      const read = yield* repo.read("feature", repo.base, (cycleId) =>
-        keepLocalScope({ location: repo.location, cycleId }, plan, () => {}),
+test.each([false, true])(
+  "reviews from a branch cut at the implementer's tip with reviewer read %s",
+  async (reviewerRead) => {
+    const repo = fixture();
+    const implementer = await repo.run(repo.read());
+    repo.git("switch", "-c", "reviewer");
+    if (reviewerRead) {
+      const reviewer = await repo.run(repo.read("reviewer"));
+      const review = await repo.run(repo.request());
+      expect(review.cycleId).toBe(reviewer.cycleId);
+    } else {
+      await expect(repo.run(repo.request())).rejects.toThrow(
+        '"feature" and "reviewer" end at this review\'s head, so pass --branch <name> with the branch to review.',
       );
-      repo.git("switch", "followup");
-      const unnamed = yield* Effect.result(repo.request());
-      const named = yield* repo.request(repo.head, { branch: "feature" });
-      return { read, unnamed, named };
-    }),
-  );
-  expect(unnamed).toMatchObject({
-    _tag: "Failure",
-    failure: {
-      message:
-        '"feature" has an open review cycle, and Neuve cannot tell which branch this review is for. Pass --branch <name> with the branch to review.',
-    },
-  });
-  expect(named.cycleId).toBe(read.cycleId);
-  expect(readScopeText(repo.location, named.cycleId, "S1").text).toBe(
-    "Feature plan",
-  );
-});
+      const review = await repo.run(
+        repo.request(repo.head, { branch: "feature" }),
+      );
+      expect(review.cycleId).toBe(implementer.cycleId);
+    }
+  },
+);
 
 const withBranchRead = async <A>(
   repo: ReturnType<typeof fixture>,
@@ -282,6 +484,8 @@ test("refuses to open a review cycle when Git cannot list local branches", async
   expect(request).toMatchObject({
     _tag: "Failure",
     failure: {
+      message:
+        "Git could not list the local branches: fixture branch read failed",
       cause: { _tag: "GitFailed", exitCode: 2 },
     },
   });
@@ -307,12 +511,12 @@ test("never takes an older read cycle after the newest one is taken", async () =
             baseRef: repo.head,
             baseOid: repo.head,
             branch: "feature",
-            branchTipOid: repo.tip,
+            branchTipOid: repo.head,
           },
         },
       ]);
       const first = yield* repo.request();
-      const second = yield* repo.request(repo.tip);
+      const second = yield* repo.request(repo.commit("later tip"));
       return { older, newest, first, second };
     }),
   );
@@ -324,13 +528,14 @@ test("never takes an older read cycle after the newest one is taken", async () =
 // A request that has yet to publish can silently absorb the next round's scope.
 test("the next read starts a cycle that a review of the newer head joins", async () => {
   const repo = fixture();
-  const { read, first, nextRead, second } = await repo.run(
+  const { read, first, nextRead, second, tip } = await repo.run(
     Effect.gen(function* () {
       const read = yield* repo.read();
       const first = yield* repo.request();
+      const tip = repo.commit("later tip");
       const nextRead = yield* repo.read();
-      const second = yield* repo.request(repo.tip);
-      return { read, first, nextRead, second };
+      const second = yield* repo.request(tip);
+      return { read, first, nextRead, second, tip };
     }),
   );
   expect(first.cycleId).toBe(read.cycleId);
@@ -340,7 +545,7 @@ test("the next read starts a cycle that a review of the newer head joins", async
   expect(second.openedCycle).toBe(false);
   expect(second.events[0]).toMatchObject({
     kind: "cycle.opened@1",
-    attribution: { range: { headOid: repo.tip } },
+    attribution: { range: { headOid: tip } },
   });
 });
 
@@ -430,35 +635,42 @@ test("racing first reads at different revisions share one cycle", async () => {
   ]);
 });
 
-// A detached ticket review needs its own cycle even when read scope is open.
-test("opens a separate cycle for explicitly selected scope from a detached checkout", async () => {
+test("opens a ticket review's own cycle even when branches share the head", async () => {
   const repo = fixture();
+  repo.git("branch", "followup", repo.head);
+  const scope: Partial<ReviewOptions> = {
+    scopeSource: { server: "linear", item: "WORK-7", workspace: null },
+    scopeIntegrations: {
+      status: "configured",
+      path: join(repo.repository, "fixture-integrations.json"),
+      file: {
+        version: 1,
+        servers: {
+          linear: {
+            transport: { type: "stdio", command: "/usr/bin/false" },
+            variables: [],
+            tools: ["issue"],
+            fetch: { tool: "issue", argument: "id" },
+            identifiers: {},
+          },
+        },
+      },
+    },
+  };
+  await expect(
+    repo.run(repo.request(repo.head, { ...scope, branch: "missing" })),
+  ).rejects.toThrow(
+    "A review with its own ticket or sources opens its own cycle, so omit --branch.",
+  );
   const { read, review } = await repo.run(
     Effect.gen(function* () {
       const read = yield* repo.read();
       repo.git("switch", "--detach", repo.head);
-      const review = yield* repo.request(repo.head, {
-        scopeSource: { server: "linear", item: "WORK-7", workspace: null },
-        scopeIntegrations: {
-          status: "configured",
-          path: join(repo.repository, "fixture-integrations.json"),
-          file: {
-            version: 1,
-            servers: {
-              linear: {
-                transport: { type: "stdio", command: "/usr/bin/false" },
-                variables: [],
-                tools: ["issue"],
-                fetch: { tool: "issue", argument: "id" },
-                identifiers: {},
-              },
-            },
-          },
-        },
-      });
+      const review = yield* repo.request(repo.head, scope);
       return { read, review };
     }),
   );
+  expect(review.openedCycle).toBe(true);
   expect(review.cycleId).not.toBe(read.cycleId);
   expect(review.events.map((event) => event.kind)).toEqual([
     "cycle.scope-selected@1",

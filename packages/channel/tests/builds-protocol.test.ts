@@ -49,6 +49,20 @@ test("clients cannot claim a build request ID", () => {
 	}
 });
 
+test("say and ask carry the mentioned agents, and a malformed list is refused", () => {
+	for (const op of ["say", "ask"]) {
+		expect(parseRequest({ op, author: "claimed", text: "@reviewer hold", agents: [4] }, "owner")).toMatchObject({ agents: [4] });
+		for (const agents of [[], [-1], [1.5], ["4"], 4]) {
+			expect(() => parseRequest({ op, author: "claimed", text: "@reviewer hold", agents }, "owner")).toThrow("at agents");
+		}
+	}
+});
+
+test("only say and ask carry mentioned agents", () => {
+	expect(() => parseRequest({ op: "plan-comments-send", author: "claimed", plan: "plan-1", agents: [4] }, "owner"))
+		.toThrow('Unrecognized key: "agents"');
+});
+
 test("the builds event keeps every build state, agent and message in order across JSON", () => {
 	const plan = { id: "plan-1", hash, title: "Retry exports", call: "call-1" };
 	const approved = { by: "owner", at: 100 };
@@ -81,6 +95,11 @@ test("the builds event keeps every build state, agent and message in order acros
 	expect(EventSchema.parse(JSON.parse(JSON.stringify(event)))).toEqual(event);
 	expect(() => EventSchema.parse({ ...event, builds: [{ ...event.builds[0], state: { kind: "stopped", at: 200 } }] })).toThrow();
 	expect(() => EventSchema.parse({ ...event, builds: [{ ...event.builds[0], agents: [{ role: "helper", chat: 4, started: 1, state: "running" }] }] })).toThrow();
+});
+
+test("a posted message keeps the agents it mentions across JSON", () => {
+	const message: Extract<Event, { kind: "message" }> = { kind: "message", chat: 2, entry: 1, at: 110, author: "owner", text: "@reviewer hold", invoked: false, agents: [5, 4] };
+	expect(EventSchema.parse(JSON.parse(JSON.stringify(message)))).toEqual(message);
 });
 
 test("the host's brief mark survives JSON on a message and a queued message", () => {

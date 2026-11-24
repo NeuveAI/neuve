@@ -10,9 +10,15 @@
 
 ## Request it
 
-`neuve review <base>..<head>` takes the checked-out branch's open cycle or opens a cycle for the range, then queues one review job. From another worktree, name the implementer's branch with `--branch <name>` on both `neuve query` and `neuve review`. The branch must hold the review head. The repository's background worker runs it, so closing the terminal doesn't stop it. Without `--detach` the command follows the run and prints its progress, then the receipt; that can take minutes. With `--detach` it returns once the job is queued. Prefer `--detach` in an agent session, then read the result later.
+Run `neuve review <base>..<head>` from any checkout. To join a branch's open cycle automatically, end the range at its unique local tip. If branches share the tip, run from one of those branches with an open cycle to join it. In a stack, use the branch below as the base and the branch you mean to review as the head.
 
-A second request for the same range and configuration joins the same cycle and follows the same job; it never starts a second run. Requesting again is how you wait for a review someone else asked for.
+Use `neuve review <base>..<head> --branch <name>` to choose a local branch that ends at the head, or one that contains it if no local branch ends there. Neuve refuses any other name. If you omit the flag and the checkout has no matching open cycle at a shared tip, Neuve asks you to choose.
+
+The review opens its own cycle if its branch has no open cycle, if the head has no local tip and you omit the flag, or if you supply a ticket or external sources. Omit `--branch` when supplying a ticket or external sources to `neuve review <base>..<head>`.
+
+Prefer `neuve review <base>..<head> --detach` in an agent session to return when the job is queued. Omit the flag to follow the worker's progress and read the receipt. Once the job is queued, close the terminal whenever you need to and let the worker finish in the background.
+
+A second request for the same range, plan, and configuration joins the same cycle and follows the same job. If another branch pins a different plan, the same range gets its own review under that plan. Request again to wait for a review someone else asked for.
 
 If the worker lacks the route's credential, the job waits and the command says which sign-in or variable is missing. That is not an error: tell the person ([setup.md](setup.md)).
 

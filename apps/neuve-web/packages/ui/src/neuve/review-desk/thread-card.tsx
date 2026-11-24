@@ -7,8 +7,6 @@
  *          its back chevron (or Escape) swaps the list back in
  *    0ms   a message arrives (yours or the agent's reply): opacity 0 → 1,
  *          y 6 → 0 (message 260ms, emphasized decelerate)
- *    0ms   delivery line swaps text (queued → sent → picked up): crossfade
- *          (reduced 150ms)
  *  loop    working: three dots pulse 0.3 → 1 → 0.3, 180ms apart
  *          (working 1100ms, ease-in-out); steps collapse under "working"
  *    0ms   needs your input / failed: the row rises (message 260ms)
@@ -18,7 +16,7 @@
  * ───────────────────────────────────────────────────────── */
 
 import { useAtomValue, useSetAtom } from "jotai"
-import { AnimatePresence, motion, useReducedMotion } from "motion/react"
+import { motion, useReducedMotion } from "motion/react"
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -49,16 +47,11 @@ import { AgentAvatar } from "@workspace/ui/neuve/agents/agent-avatar"
 import { agentByIdAtom } from "@workspace/ui/neuve/agents/atoms"
 import { commentThreadAuthor } from "@workspace/ui/neuve/review-comments/record"
 import type { ReviewCommentRecord } from "@workspace/ui/neuve/review-comments/record"
-import {
-  deliveryLine,
-  relativeTime,
-  THREAD_STATUS,
-} from "@neuve/review-rules/comment-thread"
+import { relativeTime } from "@neuve/review-rules/comment-thread"
 import type {
   ReviewThread,
   ThreadAuthor,
   ThreadMessage,
-  ThreadState,
 } from "@workspace/ui/neuve/review-comments/thread"
 import {
   answerPermissionAtom,
@@ -116,13 +109,7 @@ export function MessageAvatar({ author }: { author: ThreadAuthor }) {
   )
 }
 
-function MessageRow({
-  message,
-  delivery,
-}: {
-  message: ThreadMessage
-  delivery?: React.ReactNode
-}) {
+function MessageRow({ message }: { message: ThreadMessage }) {
   const reduce = useReducedMotion()
   const name = message.author.name
   return (
@@ -163,12 +150,6 @@ function MessageRow({
           </span>
         )}
       </span>
-      {delivery && (
-        <>
-          <span />
-          {delivery}
-        </>
-      )}
     </motion.div>
   )
 }
@@ -390,8 +371,9 @@ function StateRow({
 
 /**
  * A comment shown in place while "Show comments" is on: author, lines, two
- * lines of the comment and where its thread stands. It does not isolate the
- * margin; clicking it opens the thread (which does).
+ * lines of the comment, and its state only when delivery failed or the agent
+ * needs your input. It does not isolate the margin; clicking it opens the
+ * thread (which does).
  */
 export function CommentPreviewCard({
   record,
@@ -408,12 +390,12 @@ export function CommentPreviewCard({
 }) {
   const reduce = useReducedMotion()
   const replies = thread?.messages.length ?? 0
-  const status: Record<ThreadState, string> = {
-    ...THREAD_STATUS,
-    replied: replies > 0 ? THREAD_STATUS.replied : "",
-    "needs-input": "needs your input",
-  }
-  const state = thread ? status[thread.state] : ""
+  const state =
+    thread?.state === "failed"
+      ? "failed"
+      : thread?.state === "needs-input"
+        ? "needs your input"
+        : ""
   return (
     <motion.button
       type="button"
@@ -453,9 +435,8 @@ export function CommentPreviewCard({
 
 /**
  * An open review comment as a thread with the agent that owns the unit:
- * the comment, the replies (people's chat bubbles, agents' antenna squares), where the latest
- * message is (queued → sent → picked up), the agent working (narration and
- * tool calls collapsed into steps), a permission request (Allow once /
+ * the comment, the replies (people's chat bubbles, agents' antenna squares),
+ * the agent working (narration and tool calls collapsed into steps), a permission request (Allow once /
  * Deny), a failure (Retry), and the reply box once the agent has replied.
  */
 export type ThreadCommentMetadata = Pick<
@@ -510,11 +491,6 @@ export function ThreadCard({
   }
   const messages = [first, ...(thread?.messages ?? [])]
   const state = thread?.state ?? "replied"
-  const lastHuman = [...messages]
-    .reverse()
-    .find((message) => message.author.kind === "human")
-  const deliveryText =
-    state === "needs-input" ? undefined : deliveryLine(state, agent.name)
   const draft = drafts[record.id] ?? ""
   const canReply = agentId !== undefined && (state === "replied" || !thread)
   const resolved = record.status === "resolved"
@@ -614,27 +590,7 @@ export function ThreadCard({
           </span>
         )}
         {messages.map((message) => (
-          <MessageRow
-            key={message.id}
-            message={message}
-            delivery={
-              message === lastHuman && deliveryText ? (
-                <AnimatePresence mode="wait" initial={false}>
-                  <motion.span
-                    key={state}
-                    role="status"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={REDUCED_TRANSITION}
-                    className="font-mono text-[10.5px] text-ink-muted"
-                  >
-                    {deliveryText}
-                  </motion.span>
-                </AnimatePresence>
-              ) : undefined
-            }
-          />
+          <MessageRow key={message.id} message={message} />
         ))}
         {thread && <StateRow thread={thread} agent={agent} />}
       </div>

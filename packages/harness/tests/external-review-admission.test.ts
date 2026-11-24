@@ -9,6 +9,8 @@ import type { SqlClient } from "effect/sql/SqlClient";
 import {
   Blobs,
   Computations,
+  Cycles,
+  Identity,
   JobQueue,
   Log,
   ReviewOrigins,
@@ -36,7 +38,7 @@ const git = (...args: string[]) => {
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
   return result.stdout.toString().trim();
 };
-git("init", "-q");
+git("init", "-q", "-b", "feature");
 git("config", "user.email", "fixture@example.com");
 git("config", "user.name", "Fixture");
 writeFileSync(join(root, "work.txt"), "before\n");
@@ -46,6 +48,7 @@ const base = git("rev-parse", "HEAD");
 writeFileSync(join(root, "work.txt"), "after\n");
 git("commit", "-qam", "After");
 const head = git("rev-parse", "HEAD");
+git("branch", "followup", head);
 const location = storeLocationIn(join(root, ".git"));
 const item = GitHubExternalRefSchema.parse({
   provider: "github",
@@ -87,6 +90,10 @@ const args = {
 const program = () =>
   Effect.gen(function* () {
     yield* Store.prepareForWrite;
+    const read = yield* Cycles.openOrJoinCycle(
+      { baseOid: base, baseRef: base, branch: "feature", branchTipOid: head },
+      Identity.UNRESOLVED_ACTOR,
+    );
     const first = yield* requestReview({
       ...args,
       origin,
@@ -135,6 +142,7 @@ const program = () =>
     const queue = yield* JobQueue.JobQueue;
     const jobs = yield* queue.list({ states: ["waiting"], limit: 100 });
     return {
+      read,
       first,
       retry,
       other,
@@ -172,7 +180,25 @@ const run = <A, E>(
   );
 
 test("real provider body pins once; repeated admission and channel recovery reuse Records work", async () => {
+  await expect(
+    run(
+      Store.prepareForWrite.pipe(
+        Effect.andThen(
+          requestReview({
+            ...args,
+            branch: "missing",
+            origin,
+            externalSources: [source],
+          }),
+        ),
+      ),
+    ),
+  ).rejects.toThrow(
+    "A review with its own ticket or sources opens its own cycle, so omit --branch.",
+  );
   const result = await run(program());
+  expect(result.first.openedCycle).toBe(true);
+  expect(result.first.cycleId).not.toBe(result.read.cycleId);
   expect(result.retry.cycleId).toBe(result.first.cycleId);
   expect(result.retry.runKey).toBe(result.first.runKey);
   expect(result.retry.association).toBe(result.first.association);

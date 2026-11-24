@@ -706,7 +706,9 @@ const maskContractState = (
         ? { ...event, outcome: maskContractOutcome(event.outcome, declared) }
         : event.type === "text"
           ? { ...event, text: maskString(event.text, declared) }
-          : event.type === "tool.started" || event.type === "approval.requested"
+          : event.type === "tool.started" ||
+              event.type === "approval.requested" ||
+              event.type === "work.started"
             ? {
                 ...event,
                 input: z.json().parse(maskJson(event.input, declared)),

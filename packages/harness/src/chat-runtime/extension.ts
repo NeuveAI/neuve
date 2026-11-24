@@ -1,4 +1,7 @@
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+  awaitWithContext,
+  BACKGROUND_CONTEXT,
+} from "@earendil-works/chord/context";
 import {
   AgentDoc,
   CompactionTask,
@@ -44,9 +47,9 @@ export function chatRuntimeExtension(
     name: "neuve-chat-runtime",
     tools: [
       /**
-       * Work a runtime with tools of its own already did, recorded in the transcript as a call
-       * that already ran so Ace shows it as any other: it runs nothing, and returns the outcome
-       * the runtime reported. A call the bridge did not record (a model calling it) is refused.
+       * The bridge records a runtime's own work as a tool call while it runs. This tool runs
+       * nothing and returns the outcome the runtime reports when the work ends.
+       * Calls the bridge did not record, including model calls, are refused.
        */
       defineTool({
         name: RUNTIME_WORK_TOOL,
@@ -55,11 +58,13 @@ export function chatRuntimeExtension(
         parameters: Type.Object({
           kind: Type.String(),
           input: Type.Unknown(),
-          errored: Type.Boolean(),
         }),
         replay: "safe",
-        execute: async (_args, api) => {
-          const ran = bridge.ran(api.callId);
+        execute: async (_args, api, context) => {
+          const ran = await awaitWithContext(
+            Promise.resolve(bridge.takeWorkResult(api.callId)),
+            context,
+          );
           return ran === undefined
             ? {
                 content: [

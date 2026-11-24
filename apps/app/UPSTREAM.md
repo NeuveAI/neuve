@@ -19,6 +19,8 @@ Approval requests in the chat change these upstream files further:
 - `packages/ui/src/components/requests/approval.tsx`, Ace's unused approval view, is deleted. `packages/ui/src/index.ts` exports the shared card shell, the `Code` block, `Diff` and `patchFile` instead, which the app's approval card uses. `components/diff/diff.tsx` and `lib/highlighter.ts` let a diff wrap its long lines instead of scrolling them.
 - `transcript.ts` keeps the chat's approval requests, `conversation.tsx` shows their cards above the composer where the question shows, and `composer.tsx` and the new channel's first message in `app.tsx` mark the chat attended. `package.json` gains `jsdom` for the card's tests.
 
+Menus and popovers open and close with motion: `packages/ui/src/shadcn.css` scans `ui/popup.ts`, whose classes it never saw, and `popup.ts` keeps only the enter and exit animations, which play only when motion is allowed. Their timing comes from Neuve's popover tokens in `styles/neuve.css`.
+
 The app is called Neuve, with Ace credited (decision 12.18 of the [design decisions](../../process/decisions.md)). Settings › General credits Ace, and [UPSTREAM-LICENSE](UPSTREAM-LICENSE) is kept as it is. The naming changes these places:
 
 - Shown strings that named Ace say Neuve, in this app, `packages/ui` and `apps/desktop/src`. Ace stays where it names upstream code, commands, Ace's download and install steps, or what macOS shows for the desktop bundle.

@@ -1,5 +1,4 @@
 import type { Context } from "@earendil-works/chord";
-import { Type } from "@earendil-works/pi-ai";
 import {
 	configure,
 	type ConversationId,
@@ -10,8 +9,10 @@ import {
 	LiveDoc,
 } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
+import { z } from "zod";
 
 import { git, quote, run } from "./git";
+import { toolArguments, toolRefusal } from "./tool-arguments";
 
 /**
  * Which chat last took each lane, which only that chat may write to while it is busy, and the
@@ -30,16 +31,37 @@ export const LanesDoc = defineDoc<
 	}),
 });
 
-const NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const nameDescription = "Lowercase kebab-case name, such as implement-auth.";
+const baseDescription = "Branch, tag, or commit, such as HEAD, release, or origin/release.";
+const laneChangeFields = {
+	name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).describe(nameDescription),
+	base: z.string().optional().describe(baseDescription),
+};
+const LaneArguments = z.discriminatedUnion("action", [
+	z.strictObject({ action: z.literal("start"), ...laneChangeFields }),
+	z.strictObject({ action: z.literal("switch"), ...laneChangeFields }),
+	z.strictObject({
+		action: z.literal("list"),
+		name: z.string().optional().describe(nameDescription),
+		base: z.string().optional().describe(baseDescription),
+	}).overwrite(({ action }) => ({ action })),
+]);
+export const laneArguments = toolArguments("lane", LaneArguments, {
+	name: 'a lowercase kebab-case work lane name of 1 to 63 characters starting with a letter or digit, such as "implement-auth"',
+	base: 'a branch, tag, or commit, such as "HEAD", or omit base to use the default',
+}, { coerce: true });
+type LaneChange = Exclude<z.infer<typeof LaneArguments>, { action: "list" }>;
+
+export function checkWorkLaneName(args: LaneChange) {
+	// Pi recovery can execute an intent recorded before the schema required this name.
+	if (!laneChangeFields.name.safeParse(args.name).success) laneArguments.prepareArguments(args);
+}
 
 /** The initial channel name remains the lane prefix after a rename. */
 export type Place = { name: string; project: string };
 
 /** A lane's base and the commit a new worktree starts from. */
-type Selection = { base: string; commit: string };
-
-const HINT =
-	'Pass base to use a local branch, tag, or commit instead, such as "HEAD" for the project\'s current commit.';
+export type Selection = { base: string; commit: string };
 
 /** Fetches one remote branch to its remote-tracking ref, which then becomes the base. */
 async function fetched(
@@ -49,7 +71,7 @@ async function fetched(
 ): Promise<Selection> {
 	const base = `refs/remotes/${remote}/${branch}`;
 	await run(`fetch ${quote(remote)} ${quote(`+refs/heads/${branch}:${base}`)}`).catch((error) => {
-		throw new Error(`Could not fetch ${remote}/${branch}: ${error.message}\n${HINT}`);
+		throw new Error(`Could not fetch ${remote}/${branch} (${error.message})`);
 	});
 	const commit = (await run(`rev-parse --verify --end-of-options ${quote(`${base}^{commit}`)}`))
 		.trim();
@@ -59,10 +81,10 @@ async function fetched(
 /** A remote's HEAD names its default branch as the remote advertises it now. */
 async function advertised(run: (args: string) => Promise<string>, remote: string) {
 	const output = await run(`ls-remote --symref ${quote(remote)} HEAD`).catch((error) => {
-		throw new Error(`Could not read ${remote}'s default branch: ${error.message}\n${HINT}`);
+		throw new Error(`Could not read ${remote}'s default branch (${error.message})`);
 	});
 	const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(output)?.[1];
-	if (!branch) throw new Error(`${remote} advertises no default branch.\n${HINT}`);
+	if (!branch) throw new Error(`${remote} advertises no default branch`);
 	return fetched(run, remote, branch);
 }
 
@@ -71,7 +93,7 @@ async function advertised(run: (args: string) => Promise<string>, remote: string
  * default branch, which a stale or missing local origin/HEAD can't be trusted to name, or from
  * the project's HEAD in a repository without origin, such as a folder Ace initialized.
  */
-async function select(
+export async function select(
 	env: ExecutionEnv,
 	project: string,
 	requested: string | undefined,
@@ -96,7 +118,7 @@ async function select(
 		run(`rev-parse --verify ${option} --end-of-options ${quote(revision)} 2>/dev/null`).then(
 			(output) => output.trim(),
 			() => {
-				throw new Error(`No branch, tag, or commit named ${requested}`);
+				throw new Error(`No branch, tag, or commit named ${JSON.stringify(requested)}`);
 			},
 		);
 	const full = await resolve("--symbolic-full-name", requested);
@@ -105,14 +127,34 @@ async function select(
 }
 
 /** Only the chat that last took a lane may write to it while that chat is busy. */
-async function guard(
+export async function guard(
 	owner: ConversationId | undefined,
 	chat: ConversationId,
 	live: (owner: ConversationId) => Promise<{ run?: unknown } | undefined>,
-	name: string,
+	args: LaneChange,
 ) {
 	if (!owner || owner === chat) return;
-	if ((await live(owner))?.run) throw new Error(`Lane ${name} is in use by another busy chat`);
+	if ((await live(owner))?.run) throw toolRefusal("lane", args, [
+		`name: Work lane ${JSON.stringify(args.name)} is in use, so wait for that chat to finish or choose another work lane.`,
+	]);
+}
+
+export function missingWorkLane(args: LaneChange): Error {
+	return toolRefusal("lane", args, [
+		`name: No work lane is named ${JSON.stringify(args.name)}, so use {"action":"list"} with lane to find existing names.`,
+	]);
+}
+
+export async function selectWorkLaneBase(env: ExecutionEnv, project: string, args: LaneChange, context: Context) {
+	try {
+		return await select(env, project, args.base, context);
+	} catch (cause) {
+		if (context.abortSignal?.aborted) throw cause;
+		const reason = cause instanceof Error ? cause.message : String(cause);
+		throw toolRefusal("lane", args, [
+			`base: ${reason.trim()}, so specify a local branch, tag, or commit such as "HEAD".`,
+		]);
+	}
 }
 
 export function lanes(place: Place): Extension {
@@ -120,36 +162,21 @@ export function lanes(place: Place): Extension {
 		name: "ace-lanes",
 		tools: [
 			defineTool({
-				name: "lane",
+				...laneArguments,
 				description:
-					"Start a lane (an isolated Git worktree and branch, created with the lane CLI) for a new unit of work, switch to an existing lane, or list lanes. A new lane starts from origin's default branch, fetched first, or from the project's HEAD without origin, unless base names a branch, tag, or commit; a remote branch such as origin/release is fetched first. The lane's Diff compares against that base. Passing base for an existing lane only changes what its Diff compares against; it never moves the worktree or changes the base lane push rebases onto. Starting or switching makes the lane your working directory.",
-				parameters: Type.Object({
-					action: Type.Union([Type.Literal("start"), Type.Literal("switch"), Type.Literal("list")]),
-					name: Type.Optional(
-						Type.String({
-							description: "Lowercase kebab-case name for the work, such as implement-auth",
-						}),
-					),
-					base: Type.Optional(
-						Type.String({
-							description:
-								"Branch, tag, or commit to start from or compare against, such as HEAD, release, or origin/release",
-						}),
-					),
-				}),
+					"Start a work lane (an isolated Git worktree and branch, created with the lane CLI) for a new unit of work, switch to an existing work lane, or list work lanes. A new work lane starts from origin's default branch, fetched first, or from the project's HEAD without origin, unless base names a branch, tag, or commit; a remote branch such as origin/release is fetched first. The work lane's Diff compares against that base. Passing base for an existing work lane only changes what its Diff compares against; it never moves the worktree or changes the base lane push rebases onto. Starting or switching makes the work lane your working directory.",
 				// A rerun reuses its memoized base and finds the worktree lane created.
 				replay: "safe",
 				executionMode: "sequential",
-				execute: async ({ action, name, base }, api, context) => {
+				execute: async (args, api, context) => {
 					const env = api.env!;
-					if (action === "list") {
+					if (args.action === "list") {
 						const state = await api.snapshot(LanesDoc, context);
 						const names = Object.keys(state?.lanes || {});
-						return { content: [{ type: "text", text: names.join("\n") || "No lanes yet." }] };
+						return { content: [{ type: "text", text: names.join("\n") || "No work lanes yet." }] };
 					}
-					if (!name || !NAME.test(name)) {
-						throw new Error("A lane name must be lowercase kebab-case");
-					}
+					checkWorkLaneName(args);
+					const { action, name, base } = args;
 					const branch = `${place.name}/${name}`;
 					const recorded = (await api.snapshot(LanesDoc, context))?.lanes[name];
 					// `lane new` puts a lane at .lane/trees/<name>. Lanes started before Ace used it keep
@@ -158,12 +185,12 @@ export function lanes(place: Place): Extension {
 					let path = recorded?.path || created;
 					const exists = await env.exists(path, context);
 					if (!exists.ok) throw exists.error;
-					if (action === "switch" && !exists.value) throw new Error(`No lane named ${name}`);
+					if (action === "switch" && !exists.value) throw missingWorkLane(args);
 					await guard(
 						recorded?.chat,
 						api.conversationId,
 						(chat) => api.snapshot(LiveDoc, chat, context),
-						name,
+						args,
 					);
 					// The selection is durable before the worktree exists, so a rerun after a crash doesn't
 					// fetch again.
@@ -171,7 +198,7 @@ export function lanes(place: Place): Extension {
 					if (!selection && (base || !exists.value)) {
 						selection = await api.memo(
 							"selection",
-							await select(env, place.project, base, context),
+							await selectWorkLaneBase(env, place.project, args, context),
 							context,
 						);
 					}
@@ -191,7 +218,7 @@ export function lanes(place: Place): Extension {
 					const target = await api.commit(async (tx) => {
 						const doc = await tx.doc(LanesDoc);
 						const current = doc.lanes[name];
-						await guard(current?.chat, api.conversationId, (chat) => tx.doc(LiveDoc, chat), name);
+						await guard(current?.chat, api.conversationId, (chat) => tx.doc(LiveDoc, chat), args);
 						const target = selection?.base || current?.base;
 						doc.lanes[name] = {
 							chat: api.conversationId,
@@ -203,11 +230,11 @@ export function lanes(place: Place): Extension {
 					}, context);
 					const verb = exists.value ? "Switched to" : "Started";
 					const from = exists.value ? "" : ` from ${selection!.commit.slice(0, 12)}`;
-					const against = target ? `; its Diff compares against ${target}` : "";
+					const against = target ? `. Its Diff compares against ${target}` : "";
 					return {
 						content: [{
 							type: "text",
-							text: `${verb} lane ${name} on branch ${branch}${from} at ${path}${against}`,
+							text: `${verb} work lane ${name} on branch ${branch}${from} at ${path}${against}`,
 						}],
 					};
 				},

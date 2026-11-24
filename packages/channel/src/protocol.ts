@@ -1,3 +1,4 @@
+import type { ApprovalAsked as RuntimeApprovalAsked, WorkKind } from "@neuve/runtime/approval";
 import type { JSONType } from "zod";
 import type { ReviewCard } from "./review-cards";
 export type { ReviewCard } from "./review-cards";
@@ -89,26 +90,10 @@ export const ReviewFeedDefinition = {
 } as const;
 
 // Approval requests.
+export type ApprovalAsked = RuntimeApprovalAsked;
 type ApprovalDecision = "allow" | "deny";
-export type ApprovalPath =
-	| { kind: "path"; path: string }
-	| { kind: "glob"; pattern: string }
-	| { kind: "root" | "minimal" | "tmpdir" | "slash-tmp" }
-	| { kind: "project-roots"; subpath?: string };
-
-export type ApprovalFileChange = { path: string; diff: string } & (
-	| { kind: "add" | "delete" }
-	| { kind: "update"; newPath?: string }
-);
-
-/** What a person is being asked to allow. The runtime owns the mapping. */
-export type ApprovalAsked = { reason?: string } & (
-	| { kind: "command"; command: string; folder: string; network?: { host: string; protocol: "http" | "https" | "socks5-tcp" | "socks5-udp" } }
-	| { kind: "file-change"; changes: ApprovalFileChange[] | null }
-	| { kind: "wider-access"; paths: { access: "read" | "write" | "deny"; target: ApprovalPath }[]; network: boolean | null; folder?: string; globDepthLimit?: number }
-	| { kind: "server-prompt"; server: string; message: string; url?: string }
-	| { kind: "unrecognised" }
-);
+export type ApprovalPath = Extract<ApprovalAsked, { kind: "wider-access" }>["paths"][number]["target"];
+export type ApprovalFileChange = NonNullable<Extract<ApprovalAsked, { kind: "file-change" }>["changes"]>[number];
 
 /**
  * One runtime request. A single call can raise several requests, each with its own `requestId`.
@@ -139,7 +124,7 @@ export type ApprovalRequest = Record<string, JSONType> & {
 	);
 } & (
 	| { toolName: string; work?: never }
-	| { toolName?: never; work: "command" | "file-change" | "web-search" | "tool" }
+	| { toolName?: never; work: WorkKind }
 );
 
 export type ApprovalRequestsState = { requests: ApprovalRequest[] };
@@ -545,6 +530,11 @@ export type Request =
 		text: string;
 		images?: Image[];
 		files?: TextFile[];
+		/**
+		 * The agents of an inner development loop this message mentions, by chat, as the person chose
+		 * them in the composer. The text is never read for them.
+		 */
+		agents?: ChatId[];
 		requestId?: string;
 	}
 	/** Post to the chat and invoke its agent; a busy chat takes the message as steering. */
@@ -566,6 +556,8 @@ export type Request =
 		 * `requestId`, so a retry cannot carry another mode.
 		 */
 		mode?: ChatMode;
+		/** The agents it mentions, as on `say`. */
+		agents?: ChatId[];
 		requestId?: string;
 		/** Whether the person's client can show approval cards, stored on the chat. Omit to keep the stored value. */
 		attended?: boolean;
@@ -733,6 +725,8 @@ export type Event =
 		files?: TextFile[];
 		invoked: boolean;
 		system?: ReviewNotice | BuildNotice;
+		/** The agents the message mentions, by chat. The channel does not fill it yet. */
+		agents?: ChatId[];
 		deleted?: boolean;
 		edited?: number;
 	}

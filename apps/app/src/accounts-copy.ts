@@ -75,6 +75,23 @@ export function limitDescription(window: LimitWindow) {
     : `${label}: ${Math.round(window.utilization * 100)}% ${accountsCopy.used}`;
 }
 
+export function currentLimits(
+  limits: readonly LimitWindow[],
+  now = Date.now(),
+) {
+  return limits.filter(
+    (window) =>
+      window.resetsAt === undefined || Date.parse(window.resetsAt) > now,
+  );
+}
+
+export function showsCheckTime(signIn: SignInState) {
+  return (
+    signIn.state === "credential-rejected" ||
+    (signIn.state === "unknown" && signIn.reason === "check-failed")
+  );
+}
+
 export function accountHint(signIn: SignInState) {
   return "hint" in signIn ? signIn.hint : undefined;
 }

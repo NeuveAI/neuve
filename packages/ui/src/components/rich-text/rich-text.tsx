@@ -629,6 +629,9 @@ function useEditor(
 
 function RichText({ className, ...props }: Props) {
 	let { mount, view, popup, setPopup } = useEditor(props);
+	// The list keeps what it last showed while its exit plays.
+	let [shown, setShown] = useState(popup);
+	if (popup && popup !== shown) setShown(popup);
 	let {
 		ref,
 		onChange,
@@ -656,18 +659,18 @@ function RichText({ className, ...props }: Props) {
 		>
 			<Popover open={!!popup}>
 				<PopoverPortal>
-					<PopoverPositioner anchor={popup?.anchor} side="bottom" align="start" sideOffset={4}>
+					<PopoverPositioner anchor={shown?.anchor} side="bottom" align="start" sideOffset={4}>
 						<PopoverPopup
-							className={popup?.source === "slash" ? "w-80 max-w-(--available-width)" : undefined}
+							className={shown?.source === "slash" ? "w-80 max-w-(--available-width)" : undefined}
 							initialFocus={false}
 							finalFocus={false}
 						>
-							{popup?.items.map((item, i) => (
+							{shown?.items.map((item, i) => (
 								<button
 									key={item.key}
 									className={cn(
 										"flex min-h-7 w-full items-center gap-2 rounded-md squircle px-2 py-1 text-xs/relaxed outline-hidden select-none",
-										i === popup.index
+										i === shown.index
 											? "bg-accent text-accent-foreground"
 											: "text-popover-foreground",
 									)}

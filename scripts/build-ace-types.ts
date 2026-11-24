@@ -74,7 +74,11 @@ try {
         configObject: {
           projectFolder: join(source, path),
           mainEntryPointFilePath: join(target, "src/protocol.d.ts"),
-          bundledPackages: ["@earendil-works/pi-ai", "@neuve/review-rules"],
+          bundledPackages: [
+            "@earendil-works/pi-ai",
+            "@neuve/review-rules",
+            "@neuve/runtime",
+          ],
           compiler: { tsconfigFilePath: join(source, path, "tsconfig.json") },
           apiReport: { enabled: false },
           docModel: { enabled: false },
