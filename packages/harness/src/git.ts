@@ -20,11 +20,11 @@ export const withGitReadSession = <A>(
     return yield* Effect.gen(function* () {
       const local = yield* Effect.tryPromise({
         try: async () => (await realpath(repository)) === session.repository,
-        catch: () =>
+        catch: (cause) =>
           new GitFailed({
             args: [],
             exitCode: -1,
-            message: "Git repository unavailable",
+            message: `Git repository unavailable at ${repository}: ${String(cause).slice(0, 500)}`,
           }),
       });
       if (!local) {

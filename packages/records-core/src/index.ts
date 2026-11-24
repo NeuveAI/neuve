@@ -51,6 +51,7 @@ export {
   STORE_DIRECTORY_MODE,
   STORE_FILE_MODE,
   resolveStoreLocation,
+  resolveWorkerRoot,
   storeLocationIn,
   type StoreLocation,
 } from "./location.ts";

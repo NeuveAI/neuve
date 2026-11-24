@@ -52,6 +52,7 @@ import {
   isReviewRun,
   mintUlid,
   resolveStoreLocation,
+  resolveWorkerRoot,
   storeLocationIn,
   type StoreLocation,
 } from "@neuve/records-core";
@@ -1060,7 +1061,9 @@ export const runWorkerCli = async (
         return runWorkerMain(program);
       }
       const location = await execute(selectedLocation());
-      return runForeground(repository, location, idleSeconds);
+      const root = await execute(resolveWorkerRoot(repository));
+      process.chdir(root);
+      return runForeground(root, location, idleSeconds);
     }
     case "start": {
       if (values.store !== undefined) {

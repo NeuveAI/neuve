@@ -45,11 +45,11 @@ export const withGitReadSnapshot =
               count: (kind, value) =>
                 counters.get(kind)?.updateUnsafe(value, context),
             }),
-          catch: () =>
+          catch: (cause) =>
             new GitFailed({
               args: [],
               exitCode: -1,
-              message: "Git repository unavailable",
+              message: `Git repository unavailable at ${repository}: ${String(cause).slice(0, 500)}`,
             }),
         }),
         (snapshot) =>
