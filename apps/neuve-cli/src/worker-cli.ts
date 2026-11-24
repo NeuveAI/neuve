@@ -791,13 +791,14 @@ const runForeground = (
         command: Starter.currentCliCommand(),
       }),
     };
-    const exit = yield* Effect.andThen(
+    return yield* Effect.andThen(
       prepareWorkerStore(location),
       // Once this worker holds the socket and has recovered stalled jobs, it records whether it can
       // run review jobs and sweeps the run folders of review jobs that ended without it. The daily
       // prune also sweeps run folders (8.10).
       Worker.run({
         location,
+        build: Starter.currentWorkerBuild(),
         version: CLI_VERSION,
         idleTimeout: `${idleSeconds} seconds`,
         beforeIdleExit: Effect.promise(() => closeWorkerBudget()),
@@ -849,8 +850,6 @@ const runForeground = (
       Effect.provide(Store.layer(location, { create: true })),
       (program) => Worker.withStartup(location, program),
     );
-    yield* Effect.logInfo(Worker.describeExit(exit));
-    return exit;
   }).pipe(
     Effect.provide(
       Layer.merge(BunFileSystem.layer, Logger.layer([workerLogger])),
@@ -1022,6 +1021,7 @@ export const runWorkerCli = async (
           prepareWorkerStore(location),
           Worker.run({
             location,
+            build: Starter.currentWorkerBuild(),
             version: CLI_VERSION,
             idleTimeout: `${idleSeconds} seconds`,
             beforeIdleExit: Effect.promise(() => closeWorkerBudget()),

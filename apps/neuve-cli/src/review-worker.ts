@@ -51,19 +51,9 @@ const jobState = (project: string, seq: number) =>
     () => undefined,
   );
 
-/**
- * This build's own command: the compiled binary itself, or, run from source, bun with this
- * checkout's `cli.ts` (never `Bun.main`, which under a test runner is the test file), told to load
- * nothing from the project folder it starts in (`Starter.sourceRunFlags`).
- */
+/** Use the CLI entry explicitly because a test runner can own `Bun.main`. */
 export const thisBuild = (): ReadonlyArray<string> =>
-  Bun.main.startsWith("/$bunfs/")
-    ? [process.execPath]
-    : [
-        process.execPath,
-        ...Starter.sourceRunFlags(),
-        resolve(import.meta.dir, "cli.ts"),
-      ];
+  Starter.currentCliCommand(resolve(import.meta.dir, "cli.ts"));
 
 export interface KeptWorker {
   /** Settles when the job left waiting (or the watch ended): the state it was last seen in. */

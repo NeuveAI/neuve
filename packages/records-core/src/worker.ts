@@ -1,6 +1,6 @@
 import { readData } from "./compatible-read.ts";
 import { StoreChangedDuringRead } from "./read-only.ts";
-import { writeSync, closeSync } from "node:fs";
+import { writeSync, closeSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   Cause,
@@ -244,8 +244,14 @@ export const handlersFor = (
     }),
 });
 
+export interface WorkerBuild {
+  readonly kind: "source" | "compiled";
+  readonly path: string;
+}
+
 export interface WorkerOptions {
   readonly location: StoreLocation;
+  readonly build?: WorkerBuild;
   /** The version of the program this worker runs, said in its status reply. */
   readonly version?: string;
   readonly handlers?: Partial<Record<JobKind, JobHandler>>;
@@ -343,7 +349,14 @@ export const readClaim = Effect.gen(function* () {
 export type WorkerExit =
   | { readonly reason: "another-worker"; readonly pid: number | null }
   | { readonly reason: "idle" }
+  | { readonly reason: "build-unavailable"; readonly build: WorkerBuild }
   | { readonly reason: "stopped" };
+
+class WorkerBuildUnavailable extends Data.TaggedError(
+  "WorkerBuildUnavailable",
+)<{
+  readonly build: WorkerBuild;
+}> {}
 
 /** The job one slot runs. */
 export interface SlotJob {
@@ -411,7 +424,8 @@ const contended = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 /** The queue as the worker uses it: every operation waits out write-lock contention. */
 const lockPatientQueue = (queue: JobQueue["Service"]): JobQueue["Service"] => ({
   ...queue,
-  take: (kinds, except) => contended(queue.take(kinds, except)),
+  take: (kinds, except, beforeClaim) =>
+    contended(queue.take(kinds, except, beforeClaim)),
   complete: (seq, attempt) => contended(queue.complete(seq, attempt)),
   fail: (seq, attempt, failure) => contended(queue.fail(seq, attempt, failure)),
   release: (seq, attempt) => contended(queue.release(seq, attempt)),
@@ -544,7 +558,12 @@ export const withStartup = <E, R>(
       const refused = Effect.gen(function* () {
         if (yield* startupMayAcknowledge(location, path, false))
           yield* acknowledgeStartup;
-        return { reason: "another-worker", pid: null } satisfies WorkerExit;
+        const exit = {
+          reason: "another-worker",
+          pid: null,
+        } satisfies WorkerExit;
+        yield* Effect.logInfo(describeExit(exit));
+        return exit;
       });
       const lock = yield* Effect.acquireRelease(
         claimWorkerLock(paths.lock),
@@ -632,6 +651,15 @@ export const run = (options: WorkerOptions) =>
     const fs = yield* FileSystem;
     let startup = yield* Startup;
     const queue = lockPatientQueue(yield* JobQueue);
+    const { build } = options;
+    const checkBuild =
+      build === undefined
+        ? undefined
+        : Effect.suspend(() =>
+            existsSync(build.path)
+              ? Effect.void
+              : Effect.fail(new WorkerBuildUnavailable({ build })),
+          );
     const computations = yield* ComputationStore;
     const handlers = options.handlers ?? handlersFor(options.location);
     const handling = yield* FiberSet.make<unknown, unknown>();
@@ -1291,11 +1319,18 @@ export const run = (options: WorkerOptions) =>
           yield* ingest;
           for (const slot of JobSlot.options) {
             if (busy[slot]) continue;
-            const job = yield* queue.take(slotKinds(slot), yield* heldSeqs);
-            if (Option.isSome(job)) {
-              if (yield* admitted(job.value))
-                yield* startInSlot(running, slot, job.value);
-              else yield* hold(job.value);
+            const taken = yield* queue
+              .take(slotKinds(slot), yield* heldSeqs, checkBuild)
+              .pipe(Effect.catchTag("WorkerBuildUnavailable", Effect.succeed));
+            if (taken instanceof WorkerBuildUnavailable)
+              return {
+                reason: "build-unavailable",
+                build: taken.build,
+              } satisfies WorkerExit;
+            if (Option.isSome(taken)) {
+              if (yield* admitted(taken.value))
+                yield* startInSlot(running, slot, taken.value);
+              else yield* hold(taken.value);
             } else if (slot === "background") yield* checkRetention;
           }
           if (options.eachTurn !== undefined)
@@ -1464,15 +1499,22 @@ export const run = (options: WorkerOptions) =>
         }),
       ),
     );
-  }).pipe(Effect.scoped, Effect.provideService(Running, true));
+  }).pipe(
+    Effect.scoped,
+    Effect.tap((exit) => Effect.logInfo(describeExit(exit))),
+    Effect.provideService(Running, true),
+  );
 
-/** Writes the worker's exit for logs. */
 export const describeExit = (exit: WorkerExit) => {
   switch (exit.reason) {
     case "another-worker":
       return `exiting: worker ${exit.pid ?? "(unknown pid)"} holds the socket`;
     case "idle":
       return "exiting after idling with no work";
+    case "build-unavailable":
+      return exit.build.kind === "source"
+        ? `exiting: worker source checkout was removed (${exit.build.path})`
+        : `exiting: worker executable was removed (${exit.build.path})`;
     case "stopped":
       return "exiting: stopped on request";
   }
