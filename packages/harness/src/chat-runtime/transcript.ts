@@ -41,6 +41,8 @@ const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
   PLAN_COMMENT_TOOL,
   "agent_start",
   "agent_message",
+  // The host chooses the repository, revision, branch and plan and bounds every scope path.
+  "neuve_query",
 ]);
 
 export type Log = (

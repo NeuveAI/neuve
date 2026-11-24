@@ -60,7 +60,7 @@ Bun stays pinned to 1.4.4, the version the checks run on; older versions can han
 
 Desktop and Electrobun keep their original Bun 1.3.14 declarations; root, host and Neuve retain Bun 1.4.4 declarations. Desktop's compiler resolves the `bun` platform import through its actual installed declarations, keeping its authored FFI types consistent under Bun's isolated dependency layout. TypeScript's [module resolution paths](https://www.typescriptlang.org/tsconfig/paths.html) document this compiler setting and its unchanged emitted imports. The [desktop source record](../apps/desktop/UPSTREAM.md) identifies the exact seam.
 
-Run graph-native checks from `apps/neuve-graph` with its Go or mise tasks. The installed CLI uses the Graph engine copied beside it, and a workspace build at `apps/neuve-cli/dist/neuve` uses the sibling `apps/neuve-graph/entire-graph`; set `NEUVE_GRAPH_BINARY` only to test another executable deliberately.
+Run graph-native checks from `apps/neuve-graph` with its Go or mise tasks. The installed CLI uses the Graph engine copied beside it. A workspace build at `apps/neuve-cli/dist/neuve` and a run from source both use the sibling `apps/neuve-graph/entire-graph`. Set `NEUVE_GRAPH_BINARY` only to test another executable deliberately.
 
 `neuve query` sends a natural-language question unchanged through `packages/graph-client` to Neuve Graph for retrieval, with an optional relationship plan. The [command boundary](../apps/neuve-cli/src/boundary.ts) defines its options.
 
