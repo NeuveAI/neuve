@@ -238,10 +238,6 @@ export class JobQueue extends Context.Service<
   }
 >()("@neuve/records-core/JobQueue") {}
 
-/**
- * Payload schemas for jobs enqueued through this service (by hand); a kind without one takes any JSON
- * value. Jobs an event enqueues in its append transaction carry no payload: they read their event.
- */
 /** The fields a payload schema takes, as a refusal's ending; empty when the schema isn't an object. */
 const acceptedFields = (schema: z.ZodType): string => {
   const shape = (schema as { shape?: Record<string, unknown> }).shape;
@@ -249,6 +245,10 @@ const acceptedFields = (schema: z.ZodType): string => {
   return names.length === 0 ? "" : `; it takes ${names.join(", ")}`;
 };
 
+/**
+ * Payload schemas for jobs enqueued through this service (by hand); a kind without one takes any JSON
+ * value. Jobs an event enqueues in its append transaction carry no payload: they read their event.
+ */
 const PAYLOAD_SCHEMAS: Partial<Record<JobKind, z.ZodType>> = {
   "transcript.capture": TranscriptCapturePayload,
   "retention.prune": RetentionPrunePayload,
