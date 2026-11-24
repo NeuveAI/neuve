@@ -3,6 +3,7 @@ import { afterAll, expect, test } from "bun:test";
 import {
   accessSync,
   chmodSync,
+  constants,
   statSync,
   mkdirSync,
   mkdtempSync,
@@ -10,7 +11,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
