@@ -563,6 +563,19 @@ const judgeAgentHooks = async (
   };
 };
 
+/** Whether a file that is written in place, if it exists, is a regular file that can be written. */
+const writableFile = async (path: string): Promise<boolean> => {
+  const found = await stat(path).catch(() => undefined);
+  if (found === undefined) return true;
+  return (
+    found.isFile() &&
+    (await access(path, constants.W_OK).then(
+      () => true,
+      () => false,
+    ))
+  );
+};
+
 /** Whether the folder, or the nearest one above it that exists, can be written into: write and search. */
 const writableFolder = async (folder: string): Promise<boolean> => {
   for (let current = folder; ; current = dirname(current)) {
@@ -798,9 +811,7 @@ export const runSetupHooks = async (
   if (
     !dryRun &&
     (!(await writableFolder(location.directory)) ||
-      (
-        await stat(captureConfigPath(location)).catch(() => undefined)
-      )?.isDirectory())
+      !(await writableFile(captureConfigPath(location))))
   )
     failures.push(
       new Error(
@@ -812,7 +823,8 @@ export const runSetupHooks = async (
     !compiled() &&
     values.command === undefined &&
     !dryRun &&
-    !(await writableFolder(dirname(hookBundlePath())))
+    (!(await writableFolder(dirname(hookBundlePath()))) ||
+      !(await writableFile(hookBundlePath())))
   )
     failures.push(new Error("Neuve's shared hook program can't be written."));
   if (hooksFolderIsLink) failures.push(new Error(refusal.hooksFolderLink()));

@@ -613,3 +613,21 @@ test("a hook file under a link to nothing stops setup before anything is written
     false,
   );
 });
+
+// Reason: the capture settings are rewritten in place, so a read-only file is refused before anything is written.
+test("read-only capture settings stop setup before anything is written", async () => {
+  const { repo, setUp } = await scene();
+  await mkdir(join(repo, ".git/neuve"), { recursive: true });
+  await writeFile(join(repo, ".git/neuve/capture.json"), "{}");
+  await chmod(join(repo, ".git/neuve/capture.json"), 0o400);
+  try {
+    await expect(setUp()).rejects.toThrow(
+      "Neuve's capture settings in this repository can't be written.",
+    );
+    expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+      false,
+    );
+  } finally {
+    await chmod(join(repo, ".git/neuve/capture.json"), 0o600);
+  }
+});
