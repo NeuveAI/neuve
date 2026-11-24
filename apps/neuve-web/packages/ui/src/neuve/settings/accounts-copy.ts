@@ -43,7 +43,9 @@ export function accountDescription(
   switch (signIn.state) {
     case "signed-in":
       if (signIn.sourceMatchesAccount === false)
-        return "Signed in through a credential from the environment, not this account"
+        return signIn.credentialSource === "credential-helper"
+          ? "Signed in through a credential helper, not a Claude Code login"
+          : "Signed in through a credential from the environment, not a Claude Code login"
       return [
         signIn.email ? `Signed in as ${signIn.email}` : "Signed in",
         signIn.plan,
