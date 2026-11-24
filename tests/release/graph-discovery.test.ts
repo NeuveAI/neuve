@@ -1,11 +1,14 @@
-// Why: a release finds its Graph engine beside the CLI, through two resolvers: the CLI's (setup and
-// queries) and the harness's (Graph and hybrid search). They must agree in every layout and failure.
+// Why: a release finds its Graph engine beside the CLI through one rule, which the CLI (setup and
+// queries) and the harness (Graph and hybrid search) both call. Each layout and failure gets its answer.
 import { afterAll, expect, test } from "bun:test";
+import { constants } from "node:fs";
 import {
+  access,
   chmod,
   mkdir,
   mkdtemp,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -18,6 +21,14 @@ import { discoverSearchGraphBinary } from "../../packages/harness/src/search-con
 
 const root = await mkdtemp(join(tmpdir(), "graph-discovery-"));
 afterAll(() => rm(root, { recursive: true, force: true }));
+const source = join(import.meta.dir, "../../apps/neuve-graph/entire-graph");
+const sourceExecutable = await Promise.all([
+  stat(source),
+  access(source, constants.X_OK),
+]).then(
+  ([file]) => file.isFile(),
+  () => false,
+);
 for (const scenario of [
   "environment",
   "installed",
@@ -26,7 +37,7 @@ for (const scenario of [
   "bad-environment",
   "not-executable",
 ])
-  test(`CLI and harness Graph discovery agree: ${scenario}`, async () => {
+  test(`CLI and harness Graph discovery: ${scenario}`, async () => {
     const directory = join(root, scenario);
     const executable = join(directory, "apps/neuve-cli/dist/neuve");
     const installed = join(dirname(executable), "../lib/neuve/entire-graph");
@@ -72,6 +83,11 @@ for (const scenario of [
       expect(cli).toEqual({ path: override });
     else if (scenario === "installed") expect(cli).toEqual({ path: installed });
     else if (scenario === "workspace") expect(cli).toEqual({ path: sibling });
+    else if (
+      (scenario === "missing" || scenario === "not-executable") &&
+      sourceExecutable
+    )
+      expect(cli).toEqual({ path: source });
     else expect(cli).toHaveProperty("error");
   });
 
