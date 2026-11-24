@@ -1,5 +1,9 @@
 import { EventEmitter } from "node:events";
-import { createConnection } from "node:net";
+import {
+  createConnection,
+  createServer,
+  type Socket as NetSocket,
+} from "node:net";
 import { Buffer } from "node:buffer";
 import {
   chmodSync,
@@ -13,10 +17,22 @@ import {
 import { Database } from "bun:sqlite";
 import { basename, dirname, join } from "node:path";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
-import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import { Data, Duration, Effect, Option, Queue } from "effect";
+import {
+  Data,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Queue,
+  Scope,
+} from "effect";
 import { z } from "zod";
 import * as Socket from "effect/socket/Socket";
+import {
+  SocketServerError,
+  SocketServerOpenError,
+} from "effect/socket/SocketServer";
 import { sha256Hex } from "./canonical.ts";
 import type { StoreLocation } from "./location.ts";
 import {
@@ -160,9 +176,8 @@ export type SocketCommand =
   "wake" | "status" | "stop" | `drop ${number}` | `publish ${number}`;
 
 /**
- * What one connection to the worker's socket showed. Only `Absent` (no socket file) and `Answered`
- * are certain. `Unanswered` means the connection was accepted, or was still being set up, with no
- * reply in time: the kernel accepts for a stopped or busy worker too, so it counts as live.
+ * What one connection to the worker's socket showed. `Absent` means no socket file or a retirement
+ * reply. `Unanswered` means no reply in time: the kernel accepts for a stopped or busy worker too.
  * `Refused` retains the connect error. ECONNREFUSED can also mean a full live accept queue.
  * Neither an absent path nor a refusal proves that the worker released its lifetime lock.
  */
@@ -170,11 +185,13 @@ export type Reach =
   | { readonly _tag: "Answered"; readonly reply: string }
   | { readonly _tag: "Unanswered" }
   | { readonly _tag: "Refused"; readonly code: string }
-  | { readonly _tag: "Absent" };
+  | { readonly _tag: "Absent"; readonly afterReply?: true };
 
 /** A worker answered or accepted the connection. */
 export const isLive = (reach: Reach) =>
   reach._tag === "Answered" || reach._tag === "Unanswered";
+
+const notRunning = "not running";
 
 const connectErrorCode = (error: unknown): string | undefined => {
   if (!Socket.isSocketError(error)) return undefined;
@@ -186,8 +203,8 @@ const connectErrorCode = (error: unknown): string | undefined => {
 };
 
 /**
- * Opens one connection to the socket, sends `command` (if any) and reads one reply line, all within
- * `timeout`. Without a command it only checks whether the connection is accepted.
+ * Opens one connection and waits up to `timeout` for a first reply. A wake acknowledged with
+ * `stopping` waits on that connection for release. Without a command it only checks acceptance.
  */
 export const reachWorker = (
   path: string,
@@ -197,25 +214,40 @@ export const reachWorker = (
   Effect.gen(function* () {
     let connected = false;
     const exchange = Effect.gen(function* () {
-      const socket = yield* BunSocket.makeNet({ path, openTimeout: timeout });
-      const pull = yield* Socket.readerString(socket);
-      connected = true;
-      if (command === undefined) return Option.none<string>();
-      const writer = yield* socket.writer;
-      yield* writer.write(`${command}\n`);
-      let buffer = "";
-      while (true) {
-        buffer += (yield* pull).join("");
-        const end = buffer.indexOf("\n");
-        if (end >= 0) return Option.some(buffer.slice(0, end));
-      }
-    }).pipe(Effect.scoped, Effect.timeout(timeout));
+      const first = yield* Effect.gen(function* () {
+        const socket = yield* BunSocket.makeNet({ path, openTimeout: timeout });
+        const pull = yield* Socket.readerString(socket);
+        connected = true;
+        if (command === undefined) return Option.none();
+        const writer = yield* socket.writer;
+        yield* writer.write(`${command}\n`);
+        let buffer = "";
+        const readLine = Effect.gen(function* () {
+          while (true) {
+            const end = buffer.indexOf("\n");
+            if (end >= 0) {
+              const line = buffer.slice(0, end);
+              buffer = buffer.slice(end + 1);
+              return line;
+            }
+            buffer += (yield* pull).join("");
+          }
+        });
+        return Option.some({ reply: yield* readLine, readLine });
+      }).pipe(Effect.timeout(timeout));
+      if (Option.isNone(first)) return { _tag: "Unanswered" } satisfies Reach;
+      const { reply, readLine } = first.value;
+      const final =
+        command === "wake" && reply === "stopping"
+          ? yield* Effect.option(readLine)
+          : Option.some(reply);
+      return Option.isNone(final) ||
+        (final.value === notRunning && !command?.startsWith("drop "))
+        ? ({ _tag: "Absent", afterReply: true } satisfies Reach)
+        : ({ _tag: "Answered", reply: final.value } satisfies Reach);
+    }).pipe(Effect.scoped);
     const result = yield* Effect.result(exchange);
-    if (result._tag === "Success")
-      return Option.match(result.success, {
-        onNone: (): Reach => ({ _tag: "Unanswered" }),
-        onSome: (reply): Reach => ({ _tag: "Answered", reply }),
-      });
+    if (result._tag === "Success") return result.success;
     const code = connected ? undefined : connectErrorCode(result.failure);
     if (code === undefined) return { _tag: "Unanswered" } as Reach;
     if (code === "ENOENT") return { _tag: "Absent" } as Reach;
@@ -228,11 +260,12 @@ export interface WorkerReach {
   readonly reach: Reach;
 }
 
+const contactedWorker = (reach: Reach) =>
+  isLive(reach) || (reach._tag === "Absent" && reach.afterReply === true);
+
 /**
- * The one way every reader reaches a store's worker: the socket outside the repository first, then,
- * when nothing is live there, the store's legacy socket, where a worker of an older build listens.
- * The command goes only to the first socket that is not shown absent or refused, so it is never
- * delivered twice. When neither is live, the answer is the one that leaves the most doubt: a refusal
+ * Reaches the current socket first. A retirement reply ends discovery without resending the command.
+ * When neither is live, the answer is the one that leaves the most doubt: a refusal
  * that does not show its listener gone (`canReplaceListener`) wins, else the current socket's.
  */
 export const reachStoreWorker = (
@@ -243,11 +276,11 @@ export const reachStoreWorker = (
   Effect.gen(function* () {
     const paths = yield* workerPathsFor(location);
     const current = yield* reachWorker(paths.socket, command, timeout);
-    if (isLive(current) || paths.legacy === undefined)
+    if (contactedWorker(current) || paths.legacy === undefined)
       return { socket: paths.socket, reach: current };
     const legacy = yield* reachWorker(paths.legacy, command, timeout);
     if (
-      isLive(legacy) ||
+      contactedWorker(legacy) ||
       (canReplaceListener(current) && !canReplaceListener(legacy))
     )
       return { socket: paths.legacy, reach: legacy };
@@ -283,10 +316,12 @@ export const jobChanged = (path: string, seq: number, held = false) => {
   jobEvents.emit(`${path}:${seq}`, held ? "held" : "changed");
 };
 
+export type OnWorkerCommand = (command: string) => string | (() => void);
+
 const serveConnection =
   (
     path: string,
-    onCommand: (command: string) => string,
+    onCommand: OnWorkerCommand,
     isHeld: (seq: number) => boolean,
     onConnection: Effect.Effect<void>,
   ) =>
@@ -330,28 +365,90 @@ const serveConnection =
           }
           const publish = /^publish (\d+)$/.exec(command);
           if (publish) yield* onConnection;
-          yield* writer.write(`${publish ? "ok" : onCommand(command)}\n`);
+          const reply = publish ? "ok" : onCommand(command);
+          if (typeof reply === "function") {
+            yield* writer
+              .write("stopping\n")
+              .pipe(Effect.ensuring(Effect.sync(reply)));
+            return yield* Effect.never;
+          }
+          yield* writer.write(`${reply}\n`);
           end = buffer.indexOf("\n");
         }
       }
     }).pipe(Effect.scoped, Effect.ignore);
 
-/**
- * Binds the worker's socket for the enclosing scope and answers each received line with
- * `onCommand`'s reply. Closing the scope stops the server, and Bun's `close` unlinks the socket
- * path at once, so the caller closes it only while it still owns the path.
- */
+// Closing the listener unlinks it. Accepted connections live until the release transaction commits.
 export const serve = (
   path: string,
-  onCommand: (command: string) => string,
+  onCommand: OnWorkerCommand,
   isHeld: (seq: number) => boolean = () => false,
   onConnection: Effect.Effect<void> = Effect.void,
+  listenerScope?: Scope.Scope,
 ) =>
   Effect.gen(function* () {
-    const server = yield* BunSocketServer.make({ path });
-    yield* Effect.forkScoped(
-      server.run(serveConnection(path, onCommand, isHeld, onConnection)),
+    const scope = yield* Effect.scope;
+    const clients = yield* Scope.fork(scope);
+    const sockets = new Set<NetSocket>();
+    const handle = serveConnection(path, onCommand, isHeld, onConnection);
+    const run = Effect.runForkWith(yield* Effect.context<never>());
+    const server = createServer({ pauseOnConnect: true }, (socket) => {
+      sockets.add(socket);
+      socket.on("error", () => socket.destroy());
+      const fiber = run(
+        BunSocket.fromDuplex(Effect.succeed(socket)).pipe(
+          Effect.flatMap(handle),
+          Effect.ensuring(Effect.sync(() => socket.destroySoon())),
+        ),
+      );
+      socket.once("close", () => {
+        sockets.delete(socket);
+        run(Fiber.interrupt(fiber));
+      });
+    });
+    yield* Scope.addFinalizer(
+      clients,
+      Effect.sync(() => {
+        for (const socket of sockets) socket.destroy();
+      }),
     );
+    yield* Scope.addFinalizer(
+      listenerScope ?? scope,
+      Effect.sync(() => {
+        server.close();
+      }),
+    );
+    yield* Effect.callback<void, SocketServerError>((resume) => {
+      server.on("error", (cause) =>
+        resume(
+          Effect.fail(
+            new SocketServerError({
+              reason: new SocketServerOpenError({ cause }),
+            }),
+          ),
+        ),
+      );
+      server.listen(path, () => resume(Effect.void));
+    });
+    return (handoff: boolean) =>
+      Effect.gen(function* () {
+        if (handoff)
+          yield* Effect.forEach(
+            sockets,
+            (socket) =>
+              Effect.callback<void>((resume) => {
+                if (socket.destroyed) return resume(Effect.void);
+                const done = () => {
+                  socket.off("close", done);
+                  resume(Effect.void);
+                };
+                socket.once("close", done);
+                socket.end(`${notRunning}\n`, done);
+              }),
+            { concurrency: "unbounded", discard: true },
+          );
+        yield* Scope.close(clients, Exit.void);
+      });
   });
 
 /** Socket evidence permits checking ownership, but cannot establish it on its own. */

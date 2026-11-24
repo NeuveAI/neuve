@@ -56,6 +56,7 @@ import {
   serve,
   watchRecordsDatabase,
   workerPathsFor,
+  type OnWorkerCommand,
 } from "./worker-socket.ts";
 
 /** What a job handler may use: the store, the file system, and the blob and computation stores. */
@@ -346,16 +347,21 @@ export const readClaim = Effect.gen(function* () {
   return Option.fromNullishOr(row);
 });
 
+type BuildUnavailableExit = {
+  readonly reason: "build-unavailable";
+  readonly build: WorkerBuild;
+};
+
 export type WorkerExit =
   | { readonly reason: "another-worker"; readonly pid: number | null }
   | { readonly reason: "idle" }
-  | { readonly reason: "build-unavailable"; readonly build: WorkerBuild }
+  | BuildUnavailableExit
   | { readonly reason: "stopped" };
 
 class WorkerBuildUnavailable extends Data.TaggedError(
   "WorkerBuildUnavailable",
 )<{
-  readonly build: WorkerBuild;
+  readonly exit: BuildUnavailableExit;
 }> {}
 
 /** The job one slot runs. */
@@ -498,11 +504,15 @@ export const describeFailure = (
   return { tag: "Failure", message: String(value) };
 };
 
-interface StartupClaim {
+interface WorkerBinding {
   readonly scope: Scope.Closeable;
   readonly inode: number;
+  readonly disconnect: (handoff: boolean) => Effect.Effect<void>;
+}
+
+interface StartupClaim extends WorkerBinding {
   readonly accept: (
-    command: (line: string) => string,
+    command: OnWorkerCommand,
     held: (seq: number) => boolean,
     connection: Effect.Effect<void>,
   ) => Effect.Effect<void>;
@@ -597,10 +607,10 @@ export const withStartup = <E, R>(
       if (!canReplaceListener(reach)) return yield* refused;
       if (reach._tag === "Refused") yield* fs.remove(path);
       const accepted = yield* Deferred.make<void>();
-      let command = (_line: string) => "unknown command";
+      let command: OnWorkerCommand = () => "unknown command";
       let held = (_seq: number) => false;
       let connection = Effect.void;
-      yield* serve(
+      const disconnect = yield* serve(
         path,
         (line) => command(line),
         (seq) => held(seq),
@@ -608,11 +618,13 @@ export const withStartup = <E, R>(
           Deferred.await(accepted),
           Effect.suspend(() => connection),
         ),
-      ).pipe(Scope.provide(scope));
+        scope,
+      );
       inode = Option.getOrElse((yield* fs.stat(path)).ino, () => -1);
       const startup: StartupClaim = {
         scope,
         inode,
+        disconnect,
         accept: (onCommand, isHeld, onConnection) =>
           Effect.gen(function* () {
             command = onCommand;
@@ -652,14 +664,18 @@ export const run = (options: WorkerOptions) =>
     let startup = yield* Startup;
     const queue = lockPatientQueue(yield* JobQueue);
     const { build } = options;
-    const checkBuild =
-      build === undefined
-        ? undefined
-        : Effect.suspend(() =>
-            existsSync(build.path)
-              ? Effect.void
-              : Effect.fail(new WorkerBuildUnavailable({ build })),
-          );
+    let retirement: BuildUnavailableExit | undefined;
+    const missingBuild = () =>
+      (retirement ??=
+        build !== undefined && !existsSync(build.path)
+          ? { reason: "build-unavailable", build }
+          : undefined);
+    const checkBuild = Effect.suspend(() => {
+      const exit = missingBuild();
+      return exit === undefined
+        ? Effect.void
+        : Effect.fail(new WorkerBuildUnavailable({ exit }));
+    });
     const computations = yield* ComputationStore;
     const handlers = options.handlers ?? handlersFor(options.location);
     const handling = yield* FiberSet.make<unknown, unknown>();
@@ -680,7 +696,7 @@ export const run = (options: WorkerOptions) =>
     const requestNotices = Effect.asVoid(Queue.offer(notices, undefined));
     const pid = process.pid;
     const wake = yield* Queue.unbounded<void>();
-    const stop = yield* Deferred.make<void>();
+    const stop = yield* Deferred.make<WorkerExit>();
 
     // Claim time and PID are diagnostic, never liveness evidence.
     const now = yield* Clock.currentTimeMillis;
@@ -708,6 +724,10 @@ export const run = (options: WorkerOptions) =>
         if (running !== null)
           Deferred.doneUnsafe(running.signal, Effect.succeed(reason));
       }
+    };
+    const requestStop = (exit: WorkerExit) => {
+      abortAll("stop");
+      Deferred.doneUnsafe(stop, Effect.succeed(exit));
     };
     /** Open while the interactive slot is free: the background slot's heavy starts wait on it. */
     const interactiveFree = yield* Latch.make(true);
@@ -760,19 +780,18 @@ export const run = (options: WorkerOptions) =>
     };
     let lastProgressAt = iso(now);
     let lastProgress = "started";
-    /** The bound server's scope and the inode of the socket file it created. */
-    let held:
-      { readonly scope: Scope.Closeable; readonly inode: number } | undefined;
+    let held: WorkerBinding | undefined;
 
-    const onCommand = (command: string): string => {
+    const onCommand: OnWorkerCommand = (command) => {
       switch (command) {
-        case "wake":
+        case "wake": {
+          const exit = missingBuild();
+          if (exit !== undefined) return () => requestStop(exit);
           Queue.offerUnsafe(wake, undefined);
           return "ok";
+        }
         case "stop":
-          // Release active attempts; required handler finalization drains before worker exit.
-          abortAll("stop");
-          Deferred.doneUnsafe(stop, Effect.void);
+          requestStop({ reason: "stopped" });
           return "stopping";
         case "status": {
           const reply: WorkerStatusReply = {
@@ -829,7 +848,7 @@ export const run = (options: WorkerOptions) =>
     );
 
     type Claim =
-      | { readonly claimed: true; readonly holder: number }
+      | { readonly claimed: true; readonly binding: WorkerBinding }
       | {
           readonly claimed: false;
           readonly holder: number | null;
@@ -841,7 +860,6 @@ export const run = (options: WorkerOptions) =>
         const initial = startup;
         startup = undefined;
         const scope = initial?.scope ?? (yield* Scope.make());
-        let inode = initial?.inode ?? -1;
         const result = yield* Effect.exit(
           Effect.gen(function* () {
             const lock =
@@ -946,39 +964,42 @@ export const run = (options: WorkerOptions) =>
                     if (reach._tag === "Refused") yield* removeSocketFile;
                     if (legacy?.reach._tag === "Refused")
                       yield* removeStaleLegacySocket(legacy.path);
-                    const bound = Effect.gen(function* () {
-                      if (initial === undefined)
-                        yield* serve(
-                          path,
-                          onCommand,
-                          (seq) => heldJobs.has(seq),
-                          requestNotices,
-                        ).pipe(Scope.provide(scope));
-                      const inode = yield* socketInode;
-                      if (
-                        initial !== undefined &&
-                        (Option.isNone(inode) || inode.value !== initial.inode)
-                      )
-                        return yield* Effect.fail(
-                          new Error("Worker socket changed before acceptance"),
-                        );
-                      yield* sql`INSERT INTO worker_state ${sql.insert({
-                        id: 1,
-                        pid,
-                        socket: path,
-                        started_at: startedAt,
-                        last_progress_at: iso(yield* Clock.currentTimeMillis),
-                        last_progress: "claimed",
-                      })} ON CONFLICT (id) DO UPDATE SET pid = excluded.pid, socket = excluded.socket,
+                    const disconnect =
+                      initial?.disconnect ??
+                      (yield* serve(
+                        path,
+                        onCommand,
+                        (seq) => heldJobs.has(seq),
+                        requestNotices,
+                        scope,
+                      ));
+                    const inode = yield* socketInode;
+                    if (
+                      initial !== undefined &&
+                      (Option.isNone(inode) || inode.value !== initial.inode)
+                    )
+                      return yield* Effect.fail(
+                        new Error("Worker socket changed before acceptance"),
+                      );
+                    yield* sql`INSERT INTO worker_state ${sql.insert({
+                      id: 1,
+                      pid,
+                      socket: path,
+                      started_at: startedAt,
+                      last_progress_at: iso(yield* Clock.currentTimeMillis),
+                      last_progress: "claimed",
+                    })} ON CONFLICT (id) DO UPDATE SET pid = excluded.pid, socket = excluded.socket,
               started_at = excluded.started_at, last_progress_at = excluded.last_progress_at,
               last_progress = excluded.last_progress`;
-                      yield* sql`INSERT INTO worker_lock_claim(id) VALUES (1)`;
-                      return Option.getOrElse(inode, () => -1);
-                    });
-                    // Closing unlinks the path; on a failed bind the path is not ours and Bun leaves it alone.
-                    inode = yield* bound;
-                    const claimed: Claim = { claimed: true, holder: pid };
-                    return claimed;
+                    yield* sql`INSERT INTO worker_lock_claim(id) VALUES (1)`;
+                    return {
+                      claimed: true,
+                      binding: {
+                        scope,
+                        disconnect,
+                        inode: Option.getOrElse(inode, () => -1),
+                      },
+                    } satisfies Claim;
                   }),
                 ),
               ),
@@ -986,7 +1007,7 @@ export const run = (options: WorkerOptions) =>
           }),
         );
         if (Exit.isSuccess(result) && result.value.claimed) {
-          held = { scope, inode };
+          held = result.value.binding;
           if (initial !== undefined)
             yield* initial.accept(
               onCommand,
@@ -999,30 +1020,34 @@ export const run = (options: WorkerOptions) =>
     );
 
     /**
-     * Unbinds under the write lock, so no starter sees a half-released claim. The server is closed,
-     * which unlinks the socket path, only while the claim row still names this process and the path
-     * is still this server's own socket file; otherwise the path belongs to someone else.
+     * Unbind only while the claim names this process and the socket inode still belongs to it.
+     * A retirement reply follows the commit that clears the claim.
      */
     const release = contended(
-      sql.withTransaction(
-        Effect.gen(function* () {
-          const bound = held;
-          if (bound === undefined) return;
-          const [recorded] = yield* sql<{
-            pid: number;
-          }>`SELECT pid FROM worker_state WHERE id = 1`;
-          const named = recorded?.pid === pid;
-          const inode = yield* socketInode;
-          const ownsPath = Option.isNone(inode) || inode.value === bound.inode;
-          if (named && ownsPath) yield* Scope.close(bound.scope, Exit.void);
-          else
-            yield* Effect.logWarning(
-              `not closing the server: ${named ? `${path} is another socket file now` : `the claim names worker ${recorded?.pid ?? "(none)"}`}; it stays unreachable until this process exits`,
-            );
-          if (named) yield* sql`DELETE FROM worker_state WHERE id = 1`;
-          held = undefined;
-        }),
-      ),
+      Effect.gen(function* () {
+        const bound = held;
+        if (bound === undefined) return;
+        const released = yield* sql.withTransaction(
+          Effect.gen(function* () {
+            const [recorded] = yield* sql<{
+              pid: number;
+            }>`SELECT pid FROM worker_state WHERE id = 1`;
+            const named = recorded?.pid === pid;
+            const inode = yield* socketInode;
+            const ownsPath =
+              Option.isNone(inode) || inode.value === bound.inode;
+            if (named && ownsPath) yield* Scope.close(bound.scope, Exit.void);
+            else
+              yield* Effect.logWarning(
+                `not closing the server: ${named ? `${path} is another socket file now` : `the claim names worker ${recorded?.pid ?? "(none)"}`}; it stays unreachable until this process exits`,
+              );
+            if (named) yield* sql`DELETE FROM worker_state WHERE id = 1`;
+            return named && ownsPath;
+          }),
+        );
+        held = undefined;
+        yield* bound.disconnect(released && retirement !== undefined);
+      }).pipe(Effect.uninterruptible),
     );
 
     /** Jobs this worker holds (10.17), by sequence, with when to ask about each again. */
@@ -1322,11 +1347,7 @@ export const run = (options: WorkerOptions) =>
             const taken = yield* queue
               .take(slotKinds(slot), yield* heldSeqs, checkBuild)
               .pipe(Effect.catchTag("WorkerBuildUnavailable", Effect.succeed));
-            if (taken instanceof WorkerBuildUnavailable)
-              return {
-                reason: "build-unavailable",
-                build: taken.build,
-              } satisfies WorkerExit;
+            if (taken instanceof WorkerBuildUnavailable) return taken.exit;
             if (Option.isSome(taken)) {
               if (yield* admitted(taken.value))
                 yield* startInSlot(running, slot, taken.value);
@@ -1368,6 +1389,7 @@ export const run = (options: WorkerOptions) =>
               continue;
             }
             yield* release;
+            if (retirement !== undefined) return retirement;
             yield* Effect.logInfo(
               `idle for ${Duration.format(Duration.millis(idleTimeout))}: socket released under the write lock; rescanning spool and jobs`,
             );
@@ -1463,7 +1485,7 @@ export const run = (options: WorkerOptions) =>
             ),
           ),
         );
-      // Closing this scope interrupts both slots, which put their jobs back to waiting, before the
+      // Closing this scope interrupts active slots, which put their jobs back to waiting, before the
       // socket is released. A slot's job that fails the worker (a store error) ends the race.
       return yield* Effect.scoped(
         Effect.gen(function* () {
@@ -1474,9 +1496,7 @@ export const run = (options: WorkerOptions) =>
                 loop(running),
                 Effect.andThen(FiberSet.join(running), Effect.never),
               ),
-              Effect.as(Deferred.await(stop), {
-                reason: "stopped",
-              } as WorkerExit),
+              Deferred.await(stop),
             ),
             Effect.raceFirst(
               Effect.andThen(Fiber.join(draining), Effect.never),
@@ -1498,6 +1518,7 @@ export const run = (options: WorkerOptions) =>
           yield* Effect.logInfo(`worker ${pid} released ${path}`);
         }),
       ),
+      Effect.map((exit) => retirement ?? exit),
     );
   }).pipe(
     Effect.scoped,

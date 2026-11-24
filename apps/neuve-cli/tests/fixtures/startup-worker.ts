@@ -50,13 +50,14 @@ spyOn(Socket, "claimWorkerLock").mockImplementation((path) =>
 );
 const serve = Socket.serve;
 spyOn(Socket, "serve").mockImplementation(
-  (path, command, held, connection = Effect.void) =>
-    Effect.andThen(
+  (path, command, held, connection = Effect.void, listenerScope) =>
+    Effect.tap(
       serve(
         path,
         command,
         held,
         Effect.andThen(checkpoint("connection", true), connection),
+        listenerScope,
       ),
       Effect.andThen(checkpoint("bound", true), checkpoint("reserved")),
     ),

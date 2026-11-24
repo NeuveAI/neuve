@@ -40,7 +40,7 @@ const checkpoint = (event: string) =>
   });
 const serve = Socket.serve;
 spyOn(Socket, "serve").mockImplementation(
-  (path, command, held, connection = Effect.void) =>
+  (path, command, held, connection = Effect.void, listenerScope) =>
     serve(
       path,
       command,
@@ -49,6 +49,7 @@ spyOn(Socket, "serve").mockImplementation(
         Effect.promise(() => checkpoint("connected")),
         connection,
       ),
+      listenerScope,
     ),
 );
 const repository = z.string().parse(Bun.argv[Bun.argv.indexOf("--repo") + 1]);
