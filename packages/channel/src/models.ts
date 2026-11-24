@@ -36,7 +36,11 @@ export async function usable(models: Models, model: ModelRef): Promise<boolean> 
 
 export async function resolveStoredModel(models: Models, model: ModelRef): Promise<ModelRef | undefined> {
 	if (await usable(models, model).catch(() => false)) return model;
-	const fallback = (await available(models)).find((option) => option.modelId === model.modelId);
+	const api = models.getModel(model.provider, model.modelId)?.api;
+	if (api === undefined) return undefined;
+	const fallback = (await available(models)).find((option) =>
+		option.modelId === model.modelId && models.getModel(option.provider, option.modelId)?.api === api
+	);
 	return fallback && { provider: fallback.provider, modelId: fallback.modelId };
 }
 

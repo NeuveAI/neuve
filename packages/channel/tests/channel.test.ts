@@ -283,21 +283,28 @@ describe("runs and committed history", () => {
 		await watch.stop();
 	});
 
-	// Why: Automatic can pick a different model even when another account offers the stored model.
+	// Why: Same-model fallback must not switch a plan sign-in to API-key billing.
 	test("select keeps the stored model on another provider after sign-out", async () => {
 		fixture = await Fixture.create();
 		const { models } = fixture.scripted;
 		const selected = { provider: "first", modelId: "shared-model" };
-		const first = fauxProvider({ provider: selected.provider, models: [{ id: selected.modelId }] });
-		const second = fauxProvider({ provider: "second", models: [{ id: selected.modelId }] });
+		const sharedModels = [{ id: selected.modelId }];
+		const first = fauxProvider({ provider: selected.provider, api: "neuve-runtime", models: sharedModels });
+		const second = fauxProvider({ provider: "second", api: first.api, models: sharedModels });
+		const apiKey = fauxProvider({ provider: "api-key", api: "openai-responses", models: sharedModels });
 		let signedIn = true;
 		models.setProvider({ ...first.provider, filterModels: (offered) => signedIn ? offered : [] });
 		models.setProvider(second.provider);
+		models.setProvider(apiKey.provider);
 		await fixture.request({ op: "select", author: OWNER, model: selected });
 		signedIn = false;
 
 		const { model } = await fixture.request<{ model: unknown }>({ op: "select", author: OWNER });
 		expect(model).toEqual({ provider: "second", modelId: "shared-model" });
+
+		models.setProvider({ ...second.provider, filterModels: () => [] });
+		const automatic = await fixture.request<{ model: unknown }>({ op: "select", author: OWNER });
+		expect(automatic.model).toEqual({ provider: "faux", modelId: "coder" });
 	});
 
 	test("an unknown model and an unsupported effort are refused before anything is committed", async () => {
