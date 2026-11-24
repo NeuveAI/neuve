@@ -13,7 +13,7 @@ export type { FileLine, FileLinesAnchor, FileLinesPlacement } from "@neuve/revie
 export type ModelRef = { provider: string; modelId: string };
 /** "off" leaves always-thinking providers at their default; otherwise disables reasoning. */
 export type Effort = ModelThinkingLevel;
-export type ModelOption = ModelRef & { efforts: Effort[] };
+export type ModelOption = ModelRef & { efforts: Effort[]; account?: string };
 
 /** Cumulative usage for one chat, including compaction and usage reported by tools. */
 export type Usage = {

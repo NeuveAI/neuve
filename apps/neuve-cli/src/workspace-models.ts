@@ -144,14 +144,24 @@ export const routeCodingDefaults = (route: {
         thinkingLevel: route.effort,
       };
 
-/**
- * The route's own entry in the host's model list. A Claude route has none: its account's models
- * are listed by the account chat runtime under the ids Claude Code gives them.
- */
+export const routeModelRef = (route: {
+  provider: string;
+  model: string;
+  account?: { name: string } | undefined;
+}) => {
+  if (route.provider === "claude") return undefined;
+  const account = route.account?.name;
+  return {
+    provider: route.provider,
+    modelId: route.model,
+    ...(account === undefined ? {} : { account }),
+  };
+};
+
 export const routeHostModels = <E>(
-  route: { provider: string; model: string },
+  route: Parameters<typeof routeModelRef>[0],
   efforts: () => E[],
-) =>
-  route.provider === "claude"
-    ? []
-    : [{ provider: route.provider, modelId: route.model, efforts: efforts() }];
+) => {
+  const model = routeModelRef(route);
+  return model ? [{ ...model, efforts: efforts() }] : [];
+};

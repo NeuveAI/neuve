@@ -33,6 +33,7 @@ import { useAgentAvatar } from "./agent-avatar";
 import { AGENT_ALIAS } from "./agent-mention";
 import type { Attention } from "./attention";
 import { LAST_MODEL, Notice } from "./composer";
+import { listed } from "./listed-models";
 import { desktop, here } from "./desktop";
 import { itemRef, prompt, StateIcon } from "./github";
 import { useGithub } from "./github-cache";
@@ -415,11 +416,13 @@ export function Dashboard(
 	// A cloud channel runs on the service's credentials, not this host's.
 	const unprovided = models?.length === 0 && place === "local";
 	// `create` starts a local channel on this pick, which a pick in any chat's composer also sets.
-	const [model, setModel] = useLocalStorage(LAST_MODEL, "auto");
-	const choices = models?.length && place === "local"
-		? models.map(({ provider, modelId }) => ({
+	const [stored, setModel] = useLocalStorage(LAST_MODEL, "auto");
+	const accounts = useSyncExternalStore(host.subscribe, () => host.accounts);
+	const { rows, picked: model } = listed(place === "local" && models || [], stored, accounts);
+	const choices = rows.length
+		? rows.map(({ provider, modelId, name }) => ({
 			id: `${provider}/${modelId}`,
-			name: modelId,
+			name,
 			vendor: provider,
 		}))
 		: undefined;

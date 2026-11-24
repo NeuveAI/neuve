@@ -7,7 +7,7 @@ import { defineDoc, type Harness, type JsonObject, ROOT_CONVERSATION_ID } from "
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { EventSchema } from "../src/frame";
 import { RequestSchema } from "../src/parse";
-import { ReviewFeedDefinition } from "../src/protocol";
+import { type ModelOption, ReviewFeedDefinition } from "../src/protocol";
 
 import type { ChannelInfo, Event, RunEnd } from "../src/index";
 import { Fixture, isolateClaudeConfig, MODEL, OWNER, until } from "./helpers";
@@ -262,6 +262,22 @@ describe("runs and committed history", () => {
 		const reply = await watch.until("reply");
 		expect(reply.error).toBe("429 Rate limited Slow down");
 		await watch.stop();
+	});
+
+	// Why: Tagging another model row can group it under the wrong account in the composer.
+	test("models names the configured account on only the route's row", async () => {
+		fixture = await Fixture.create({ routeModel: { provider: "openai", modelId: "gpt-6.1-sol", account: "chatgpt" } });
+		const { models } = fixture.scripted;
+		models.setProvider(fauxProvider({ provider: "openai", models: [{ id: "gpt-6.1-sol" }, { id: "other" }] }).provider);
+		models.setProvider(fauxProvider({ provider: "codex", models: [{ id: "gpt-6.1-sol" }] }).provider);
+
+		const listed = await fixture.request<ModelOption[]>({ op: "models" });
+		expect(listed.map(({ efforts, ...model }) => model)).toEqual([
+			{ provider: "faux", modelId: "coder" },
+			{ provider: "openai", modelId: "gpt-6.1-sol", account: "chatgpt" },
+			{ provider: "openai", modelId: "other" },
+			{ provider: "codex", modelId: "gpt-6.1-sol" },
+		]);
 	});
 
 	// Chats can outlive the providers they were configured to use.

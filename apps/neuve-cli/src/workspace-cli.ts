@@ -17,7 +17,7 @@ import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { nativeReviewCallbacks } from "./workspace-native-review";
 import { rearmWaitingReviews, keepWorkerFor } from "./review-worker";
 import { workspaceNativeSources } from "./workspace-native-sources.ts";
-import { routeHostModels } from "./workspace-models.ts";
+import { routeHostModels, routeModelRef } from "./workspace-models.ts";
 import {
   claudeDefaultModel,
   workspaceChatRuntime,
@@ -412,6 +412,7 @@ export function codingWorkerSetup(
       chatRuntimes.set(worker.sessionId, runtime);
       return runtime.models;
     },
+    routeModel: routeModelRef(route),
     ...(route.provider === "claude"
       ? {
           // The host has no default on a Claude route (`routeCodingDefaults`): the account's row

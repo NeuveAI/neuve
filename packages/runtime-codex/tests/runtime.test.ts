@@ -21,6 +21,7 @@ import {
   type SignInHint,
 } from "@neuve/runtime";
 import { Effect, Exit } from "effect";
+import type { Account as CodexLogin } from "../src/generated/v2/Account.ts";
 import { applicationFolders, inApps } from "../src/program.ts";
 import {
   discoverCodex,
@@ -89,7 +90,10 @@ const models = (cursor?: string) =>
         nextCursor: null,
       };
 /** Each program answers as Codex unless it is in `strangers`; a signed-in account with two pages of models. */
-const fakeWith = (strangers: ReadonlyArray<string> = [], signedOut = false) => {
+const fakeWith = (
+  strangers: ReadonlyArray<string> = [],
+  login?: CodexLogin | null,
+) => {
   const fake = codex((message, process) => {
     if (strangers.includes(process.program)) {
       if (message.method === "initialize")
@@ -105,8 +109,8 @@ const fakeWith = (strangers: ReadonlyArray<string> = [], signedOut = false) => {
           secondary: null,
         },
       };
-    if (message.method === "account/read" && signedOut)
-      return { account: null, requiresOpenaiAuth: true };
+    if (message.method === "account/read" && login !== undefined)
+      return { account: login, userId: null, requiresOpenaiAuth: true };
     return undefined;
   });
   return fake;
@@ -127,7 +131,7 @@ const probe = (
 test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
   const home = scratchFolder();
   const program = file(home);
-  const fake = fakeWith([], true);
+  const fake = fakeWith([], null);
   const named = Account.parse({
     name: "work",
     kind: "chatgpt-subscription",
@@ -269,6 +273,23 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
 // Why: the account's states table (the hand-over's first table). Each state is detected from what
 // the candidates answer, in the probe's order, and carries its fix; none is an error.
 describe("the account's states", () => {
+  // Why: Settings uses the signed-in identity to group integrations for one account.
+  test("the Codex-home probe reports the ChatGPT email", async () => {
+    const root = scratchFolder();
+    const program = file(root);
+    const fake = fakeWith([], {
+      type: "chatgpt",
+      email: "person@example.test",
+      planType: "plus",
+      workspaceName: null,
+    });
+    const status = await probe(fake, { programPath: () => program });
+    expect(status.signIn).toEqual({
+      state: "signed-in",
+      email: "person@example.test",
+    });
+  });
+
   test("not installed: nothing to ask, no program started, and the fix names the install and the setting", async () => {
     const fake = fakeWith();
     const status = await probe(fake, {});
@@ -401,7 +422,7 @@ describe("the account's states", () => {
     const program = file(root);
     const named = AccountName.parse("second");
     const status = await probe(
-      fakeWith([], true),
+      fakeWith([], null),
       { programPath: () => program },
       {
         name: named,

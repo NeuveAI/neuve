@@ -100,6 +100,7 @@ import type {
 	Effort,
 	Event,
 	Metadata,
+	ModelOption,
 	ModelRef,
 	Request,
 	RunEnd,
@@ -160,6 +161,7 @@ export type Options = {
 	relocate?: boolean;
 	/** The host's current preference, consulted only for a chat's first agent invocation. */
 	defaultModel?(): Promise<ModelRef>;
+	routeModel?: Omit<ModelOption, "efforts"> | undefined;
 	/** Administrative opens leave durable work for the configured worker. Defaults to true. */
 	resume?: boolean;
 	storage: Storage;
@@ -574,7 +576,7 @@ export class Channel {
 			case "info":
 				return this.info();
 			case "models":
-				return available(this.#options.models);
+				return available(this.#options.models, this.#options.routeModel);
 			case "say":
 				return this.#admitted(request.chat, () => this.#say(request));
 			case "ask":
