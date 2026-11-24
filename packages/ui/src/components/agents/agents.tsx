@@ -65,3 +65,16 @@ export function AgentLabel({ agent }: { agent: Pick<AgentLineView, "name" | "cap
 		</>
 	);
 }
+
+/** An agent's line where it is listed to pick from: the work log's rows and the mention list. */
+export function AgentLine({ agent }: { agent: AgentLineView }) {
+	return (
+		<>
+			<RoleAvatar role={agent.role} size={20} />
+			<AgentLabel agent={agent} />
+			<span className="ml-auto flex shrink-0">
+				<AgentStateIcon state={agent.state} />
+			</span>
+		</>
+	);
+}

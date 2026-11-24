@@ -1,9 +1,9 @@
-import { type AgentName, MENTION, PLAN_COMMENT_TOOL, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
+import { type AgentName, PLAN_COMMENT_TOOL, PLAN_TOOL, type QueuedMessage, type Reactions } from "@ace/channel/protocol";
 import type { Listing, People } from "@ace/host/protocol";
 import type { Event } from "@ace/ui";
 
 import { AGENT_ALIAS, withAgentMention } from "./agent-mention";
-import { agentName } from "./build-card";
+import { agentAuthor, agentName, mentionName } from "./build-card";
 import { placement } from "./placement";
 import { planTool } from "./plan-card";
 import { commentWords, type Said } from "./plan-comments";
@@ -103,15 +103,6 @@ export function credit(
 	return `asked by ${name(asker)} · ${where}`;
 }
 
-function text(value: string): Event.Message.Content.Text {
-	const parts = [...value.matchAll(MENTION)].map((match) => ({
-		type: "mention" as const,
-		value: match[1]!,
-		index: match.index,
-	}));
-	return parts.length ? { type: "text", text: value, parts } : { type: "text", text: value };
-}
-
 const NOT_RUN = "Not run";
 
 /** The agent's answer to a plan comment, which is its words to the person, not a tool's output. */
@@ -180,8 +171,7 @@ function tool(
  */
 export function withMention(item: { entry?: number; invoked: boolean; text: string }, sends: ReadonlyMap<number, Said[]>) {
 	let said = item.entry === undefined ? undefined : sends.get(item.entry);
-	// A word joiner after the @ keeps the words as written and makes them no mention token.
-	if (said) return commentWords(said, true).replace(/(^|[\s([{])@(?=[\w-])/gm, "$1@\u2060");
+	if (said) return commentWords(said, true);
 	return item.invoked ? withAgentMention(item.text) : item.text;
 }
 
@@ -205,6 +195,19 @@ export function toEvents(
 	// A run answers the newest message that invoked it, as the channel's run end reports.
 	let asker: string | undefined;
 	const name = (author: string) => authorName(author, people, channels, agents);
+	// The parts are the only names drawn as mentions: an agent's name only where `listed`, the
+	// agents the message reached, holds it. The parser decides where a mention sits, so any `@name`,
+	// bold included, is offered here.
+	const names = new Set([...agents.values()].map(mentionName));
+	const text = (value: string, listed: ReadonlySet<string> = new Set()): Event.Message.Content.Text => {
+		const parts = [...value.matchAll(/@([\w-]+)/g)].flatMap((match) => {
+			const name = match[1]!.toLowerCase();
+			return names.has(name) && !listed.has(name)
+				? []
+				: [{ type: "mention" as const, value: match[1]!, index: match.index }];
+		});
+		return { type: "text", text: value, parts };
+	};
 	const sender = (model: string | undefined): Event.Sender.Agent => {
 		const value = [model, asker && by(asker)].filter(Boolean).join(" · ");
 		return {
@@ -248,6 +251,12 @@ export function toEvents(
 			const brief = item.system?.kind === "neuve:build:brief";
 			if (brief) asker = undefined;
 			else if (item.invoked) asker = item.author;
+			const listed = new Set(
+				(item.agents ?? []).flatMap((chat) => {
+					const agent = agents.get(agentAuthor(chat));
+					return agent ? [mentionName(agent)] : [];
+				}),
+			);
 			return {
 				...base,
 				sender: brief
@@ -256,7 +265,9 @@ export function toEvents(
 				...(item.edited && !item.deleted ? { last_updated: Math.floor(item.edited / 1000) } : {}),
 				content: item.deleted ? [text("Message deleted")] : [
 					// Every input to a build's agent asks that agent, so no @neuve is drawn there.
-					text(brief || self ? item.text : withMention(item, sends)),
+					item.entry !== undefined && sends.has(item.entry)
+						? { type: "text" as const, text: withMention(item, sends), parts: [] }
+						: text(brief || self ? item.text : withMention(item, sends), listed),
 					...(item.images || []).map((image) => ({
 						type: "image" as const,
 						image: `data:${image.mimeType};base64,${image.data}`,

@@ -1,5 +1,5 @@
 import type { AgentName, Build, BuildAgent, Chat, ChatId, WorkMessage } from "@ace/channel/protocol";
-import type { AgentLineView, BuildCardView, Event } from "@ace/ui";
+import type { AgentLineView, BuildCardView, Event, Mention } from "@ace/ui";
 
 const TIME = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 const ROLES = { implementer: "Implementer", reviewer: "Reviewer" } as const;
@@ -7,6 +7,35 @@ const ROLES = { implementer: "Implementer", reviewer: "Reviewer" } as const;
 /** The name an agent goes by in its build: its role, and its part where it has one. */
 export function agentName({ role, part }: AgentName): string {
 	return part ? `${ROLES[role]} · ${part}` : ROLES[role];
+}
+
+/** An agent's name as a mention token: its role, and its part where it has one. */
+export function mentionName({ role, part }: AgentName): string {
+	return part ? `${role}-${part.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}` : role;
+}
+
+/**
+ * The agents a person can mention: those of each planning chat's newest build that has agents,
+ * whatever their state, since a mention restarts a stopped one. Where two share a name, the plan's
+ * title tells them apart.
+ */
+export function mentionable(builds: Build[]): Mention[] {
+	const newest = new Map<ChatId, Build>();
+	for (const build of builds) {
+		const kept = newest.get(build.chat);
+		if (build.agents.length && (!kept || kept.approved.at < build.approved.at)) newest.set(build.chat, build);
+	}
+	const agents = [...newest.values()].flatMap((build) =>
+		build.agents.map((agent) => ({ build, agent, name: mentionName(agent) }))
+	);
+	return agents.map(({ build, agent, name }) => {
+		const shared = agents.filter((other) => other.name === name).length > 1;
+		return {
+			name,
+			id: String(agent.chat),
+			agent: { ...lineView(agent), ...(shared ? { caption: build.plan.title } : {}) },
+		};
+	});
 }
 
 /** The author an agent's messages to another agent carry. */
@@ -30,6 +59,7 @@ export function readOnly(id: ChatId, chat: Chat | undefined, builds: Build[]): b
 export function lineView(agent: BuildAgent): AgentLineView {
 	return {
 		chat: agent.chat,
+		role: agent.role,
 		name: agentName(agent),
 		...(agent.caption ? { caption: agent.caption } : {}),
 		state: agent.state,
@@ -111,7 +141,8 @@ export function workEvents(builds: Build[], messages: WorkMessage[], topic: stri
 				display: agentName(from.agent),
 				...(to ? { credit: `to ${agentName(to)}` } : {}),
 			},
-			content: [{ type: "text", text: message.text }],
+			// Agents' talk names no one by text: no `@name` in it is drawn as a mention.
+			content: [{ type: "text", text: message.text, parts: [] }],
 		} as Event];
 	});
 }

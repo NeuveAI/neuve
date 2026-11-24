@@ -39,7 +39,8 @@ type Artifact = {
 
 /** Discriminated union of structured content chunks. */
 type Chunk =
-	| { kind: "text"; raw: string }
+	/** `mentions`, where given, are the only names after @ that it draws as mentions. */
+	| { kind: "text"; raw: string; mentions?: string[] }
 	| { kind: "code"; source: string; language?: string }
 	| { kind: "diff"; patch: string }
 	| { kind: "image"; src: string; width: number; height: number; alt?: string }
@@ -267,7 +268,11 @@ function structure(
 	for (let c of content) {
 		switch (c.type) {
 			case "text":
-				chunks.push({ kind: "text", raw: c.text });
+				chunks.push({
+					kind: "text",
+					raw: c.text,
+					...(c.parts ? { mentions: c.parts.flatMap(part => part.type === "mention" ? [part.value] : []) } : {}),
+				});
 				break;
 			case "image":
 				chunks.push({ kind: "image", src: src(c.image), width: 0, height: 0 });
@@ -299,6 +304,7 @@ function merge(chunks: Chunk[]): Chunk[] {
 		// Adjacent text chunks join into one paragraph.
 		if (prev && prev.kind === "text" && chunk.kind === "text") {
 			prev.raw += "\n\n" + chunk.raw;
+			prev.mentions = prev.mentions && chunk.mentions && [...prev.mentions, ...chunk.mentions];
 		} // Adjacent tool chunks merge into one group.
 		else if (prev && prev.kind === "tool-group" && chunk.kind === "tool-group") {
 			prev.tools.push(...chunk.tools);
@@ -1065,7 +1071,8 @@ function buildTurn(group: Group, working: boolean): AgentTurn {
 				type: "text",
 				id: row.uid + ":intent:" + intents,
 				uid: row.uid,
-				chunks: [{ kind: "text", raw }],
+				// A tool's intent is the agent's own words; no `@name` in it is drawn as a mention.
+				chunks: [{ kind: "text", raw, mentions: [] }],
 			});
 			intents++;
 		};

@@ -166,6 +166,8 @@ type References = {
 	avatars: Map<string, string> | null;
 	documents: readonly DocumentCandidate[] | undefined;
 	plan: boolean;
+	/** Where given, the only names after @ drawn as mentions; any other is words. */
+	named?: Set<string>;
 };
 
 type Line = {
@@ -248,6 +250,7 @@ function references(
 	mentions?: Mention[],
 	documents?: readonly DocumentCandidate[],
 	plan = false,
+	named?: readonly string[],
 ): References {
 	let map = new Map<string, string>();
 	for (let m of mentions || []) {
@@ -258,6 +261,7 @@ function references(
 		documents: documents
 			?? (mentions as Carrier[] | undefined)?.find(mention => mention.documents)?.documents,
 		plan,
+		...(named ? { named: new Set(named.map(name => name.toLowerCase())) } : {}),
 	};
 }
 
@@ -363,8 +367,9 @@ function inline(
 		if (!mark.href && tok.includes("@")) {
 			let at = tok.lastIndexOf("@");
 			let start = match.index + at;
-			if (start > last) push(text.slice(last, start));
 			let name = tok.slice(at + 1);
+			if (refs.named && !refs.named.has(name.toLowerCase())) continue;
+			if (start > last) push(text.slice(last, start));
 			let avatar = refs.avatars?.get(name.toLowerCase());
 			let extra = MENTION_PAD_START + MENTION_PAD_END + MENTION_WRAP_GUARD
 				+ (avatar ? MENTION_AVATAR + MENTION_GAP : 0);
@@ -689,9 +694,10 @@ function fallback(
 	mentions?: Mention[],
 	cfg: FontConfig = DEFAULT_FONTS,
 	plan = false,
+	named?: readonly string[],
 ): BlockNode[] {
 	let value = protectPlanLinks(protectCode(protectDocumentReferences(raw)));
-	return blocks([value], references(mentions, undefined, plan), cfg);
+	return blocks([value], references(mentions, undefined, plan, named), cfg);
 }
 
 async function parseSegments(
@@ -701,11 +707,12 @@ async function parseSegments(
 	streaming = false,
 	documents?: readonly DocumentCandidate[],
 	plan = false,
+	named?: readonly string[],
 ): Promise<Segment[]> {
 	let value = protectLinks(protectDocumentReferences(raw), plan);
 	let tree = await parser(value, { streaming });
 	let out: Segment[] = [];
-	let refs = references(mentions, documents, plan);
+	let refs = references(mentions, documents, plan, named);
 	let run: ComarkNode[] = [];
 
 	function flush() {

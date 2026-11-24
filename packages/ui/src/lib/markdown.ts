@@ -5,7 +5,7 @@ import {
 	MarkdownParser,
 	MarkdownSerializer,
 } from "prosemirror-markdown";
-import type { Node as PMNode } from "prosemirror-model";
+import { Fragment, type Node as PMNode } from "prosemirror-model";
 import type Token from "markdown-it/lib/token.mjs";
 
 import { customEmojiSrc } from "./emoji";
@@ -106,9 +106,30 @@ const CODE_OR_REFERENCE = new RegExp(
 	"gi",
 );
 
+/**
+ * A mention reads as one only after a space or a line's start, so "ask" + "@reviewer" must not go
+ * out as "ask@reviewer". The space is a node of its own, outside any formatting the mention alone
+ * has, so a bold mention goes out as "ask **@reviewer**", not "ask** @reviewer**".
+ */
+function spaced(node: PMNode): PMNode {
+	if (node.isLeaf) return node;
+	let children: PMNode[] = [];
+	node.forEach(child => {
+		let prev = children.at(-1);
+		if (
+			child.type === schema.nodes.mention && prev && prev.type !== schema.nodes.hard_break
+			&& !(prev.isText && /\s$/.test(prev.text ?? ""))
+		) {
+			children.push(schema.text(" ", child.marks.filter(mark => mark.isInSet(prev.marks))));
+		}
+		children.push(spaced(child));
+	});
+	return node.copy(Fragment.fromArray(children));
+}
+
 /** Serialize a ProseMirror doc to markdown, trimmed. */
 function serialize(doc: PMNode): string {
-	return serializer.serialize(doc).trim();
+	return serializer.serialize(spaced(doc)).trim();
 }
 
 function normalize(tokens: Token[]) {
@@ -268,7 +289,9 @@ function enrich(
 	documents?: readonly DocumentCandidate[],
 	plan = false,
 ): PMNode {
-	let map = mentions?.length ? new Map(mentions.map(item => [item.name, item])) : undefined;
+	// Text never mentions an agent, so a draft rebuilt from text keeps agent names as words.
+	let people = mentions?.filter(item => !item.agent) ?? [];
+	let map = people.length ? new Map(people.map(item => [item.name, item])) : undefined;
 	return expand(doc, map, documents, plan)[0]!;
 }
 
@@ -283,4 +306,13 @@ function parse(
 	return enrich(parser.parse(text), mentions, documents, plan);
 }
 
-export { parse, serialize, serializer };
+/** The chats of the agents the doc mentions, in the order first mentioned. */
+function mentionedAgents(doc: PMNode): number[] {
+	let chats = new Set<number>();
+	doc.descendants(node => {
+		if (node.type === schema.nodes.mention && node.attrs.id) chats.add(Number(node.attrs.id));
+	});
+	return [...chats];
+}
+
+export { mentionedAgents, parse, serialize, serializer };

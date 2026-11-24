@@ -348,6 +348,7 @@ type Request = {
 	raw: string;
 	sig: string;
 	mentions?: Mention[];
+	named?: string[];
 	plan: boolean;
 	compact: boolean;
 	streaming: boolean;
@@ -380,12 +381,13 @@ async function parse(req: Request): Promise<Block[]> {
 		req.streaming,
 		undefined,
 		req.plan,
+		req.named,
 	);
 	let blocks: Block[] = [];
 	for (let part of parts) {
 		if (part.kind === "text") {
 			blocks.push(
-				textBlock(part.raw, req.mentions, req.compact, req.streaming, part.blocks, req.plan),
+				textBlock(part.raw, req.mentions, req.compact, req.streaming, part.blocks, req.plan, req.named),
 			);
 		} else if (part.kind === "diff") {
 			blocks.push(diffBlock(part.patch, req.streaming));
@@ -431,6 +433,7 @@ function start(req: Request): Promise<Block[]> {
 				req.sig,
 				req.compact,
 				req.streaming,
+				req.named,
 			);
 			entry.blocks = fallback;
 			entry.promise = undefined;
@@ -462,6 +465,7 @@ function placeholder(
 	sig: string,
 	compact: boolean,
 	streaming: boolean,
+	named?: string[],
 ): Block[] {
 	let k = "placeholder\0" + parseKey(raw, sig, compact, streaming);
 	let hit = cache.get(k);
@@ -470,7 +474,7 @@ function placeholder(
 		bump(cache, k, hit, CACHE_MAX);
 		return hit;
 	}
-	let blocks = [textBlock(raw, mentions, compact, streaming, undefined, plan)];
+	let blocks = [textBlock(raw, mentions, compact, streaming, undefined, plan, named)];
 	bump(cache, k, blocks, CACHE_MAX);
 	return blocks;
 }
@@ -488,6 +492,8 @@ function textBlocks(
 	seen: Set<string>,
 	plan = false,
 ): Block[] {
+	let named = chunk.mentions;
+	if (named) sig = `${sig}\0@${named.join(" ")}`;
 	let k = parseKey(chunk.raw, sig, compact, streaming);
 	let old = prev.get(slot);
 	if (!streaming && old?.parsed && old.raw === chunk.raw && old.sig === sig) {
@@ -506,12 +512,12 @@ function textBlocks(
 	// Queue in-flight parses too: start() reuses their promise, and this render's tick must not
 	// depend on an earlier render whose effect may already have been cancelled.
 	if (!seen.has(k)) {
-		jobs.push({ key: k, raw: chunk.raw, sig, mentions, plan, compact, streaming, slot });
+		jobs.push({ key: k, raw: chunk.raw, sig, mentions, named, plan, compact, streaming, slot });
 		seen.add(k);
 	}
 
 	let keep = old;
-	let blocks = keep?.blocks || placeholder(chunk.raw, mentions, plan, sig, compact, streaming);
+	let blocks = keep?.blocks || placeholder(chunk.raw, mentions, plan, sig, compact, streaming, named);
 	sync(blocks, streaming);
 	next.set(slot, {
 		raw: chunk.raw,

@@ -65,7 +65,7 @@ export {
 export { QuestionInput } from "./components/requests/question-input";
 export { NOT_ALLOWED_TO_APPROVE, PlanActionsProvider, type PlanActions, PlanCard } from "./components/requests/plan";
 export { BuildActionsProvider } from "./components/requests/build";
-export { AgentLabel, AgentStateIcon, RoleAvatar } from "./components/agents/agents";
+export { AgentLabel, AgentLine, AgentStateIcon, RoleAvatar } from "./components/agents/agents";
 export { PlanView, type PlanViewProps } from "./components/plan/plan-view";
 export {
 	type PlanCommentActions,
@@ -225,7 +225,7 @@ export { useSuppressMotion } from "./hooks/use-suppress-motion";
 export { agentColor, agentLabel } from "./lib/agent";
 export { aceAvatar, aceLogo } from "./lib/emoji";
 export { glow, type GlowPreset, type GlowScheme, type GlowTone } from "./lib/glow";
-export { serialize } from "./lib/markdown";
+export { mentionedAgents, serialize } from "./lib/markdown";
 export { media, screen } from "./lib/screens";
 export {
 	type ReviewOpen,
