@@ -147,7 +147,7 @@ test("pasted text that names an agent goes as words to no agent", async () => {
 	expect(sent).toEqual([{ op: "say", chat: 1, author: "me", text: "@reviewer hold the final review" }]);
 });
 
-const posted = (agents?: number[]) => {
+const posted = (agents?: number[], text = "@reviewer hold it, @vivienne, @reviewer-bob") => {
 	const [event] = toEvents(
 		[{
 			kind: "message",
@@ -155,7 +155,7 @@ const posted = (agents?: number[]) => {
 			entry: 1,
 			at: 0,
 			author: "me",
-			text: "@reviewer hold it, @vivienne, @reviewer-bob",
+			text,
 			invoked: false,
 			...(agents ? { agents } : {}),
 		}],
@@ -173,7 +173,7 @@ const posted = (agents?: number[]) => {
 		agentAuthors([build]),
 	);
 	const [content] = (event as { content: Text[] }).content;
-	expect(content!.text).toBe("@reviewer hold it, @vivienne, @reviewer-bob");
+	expect(content!.text).toBe(text);
 	return content!.parts!.map((part) => part.value);
 };
 
@@ -183,6 +183,12 @@ test("a posted message draws an agent as mentioned only from its list of agents,
 	expect(posted()).toEqual(["vivienne", "reviewer-bob"]);
 	expect(posted([2])).toEqual(["vivienne", "reviewer-bob"]);
 	expect(posted([3])).toEqual(["reviewer", "vivienne", "reviewer-bob"]);
+});
+
+// Why: a bold mention is written `**@name**`, so the name follows no space and must still be offered.
+test("a bold mention keeps its chip, for a person and for a listed agent", () => {
+	expect(posted([3], "**@vivienne** and **@reviewer**, please")).toEqual(["vivienne", "reviewer"]);
+	expect(posted(undefined, "**@vivienne** and **@reviewer**, please")).toEqual(["vivienne"]);
 });
 
 test("an agent's reply that names another agent draws no mention", () => {
