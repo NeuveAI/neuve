@@ -86,17 +86,21 @@ test("coding listener rejects foreign browser authority before connecting privat
 test("coding listener requires a credential and reuses its cookie after restart", async () => {
 	const { app } = await place();
 	let upstreams = 0;
-	const privateHost = Bun.serve({
-		hostname: "127.0.0.1", port: 0,
-		fetch(request, server) {
-			upstreams++;
-			if (server.upgrade(request, { headers: { "sec-websocket-protocol": "ace" } })) return;
-			return new Response("Upgrade failed", { status: 400 });
-		},
-		websocket: { open(socket) { socket.send("Private host connected"); }, message() {} },
-	});
-	stops.push(async () => { await privateHost.stop(true); });
-	const host = { url: `ws://127.0.0.1:${privateHost.port}/ws`, token: credential };
+	const startPrivateHost = (message: string) => {
+		const server = Bun.serve({
+			hostname: "127.0.0.1", port: 0,
+			fetch(request, server) {
+				upstreams++;
+				if (server.upgrade(request, { headers: { "sec-websocket-protocol": "ace" } })) return;
+				return new Response("Upgrade failed", { status: 400 });
+			},
+			websocket: { open(socket) { socket.send(message); }, message() {} },
+		});
+		const close = async () => { await server.stop(true); };
+		stops.push(close);
+		return { url: `ws://127.0.0.1:${server.port}/ws`, token: credential, close };
+	};
+	const host = startPrivateHost("Original private host");
 	const coding = await serveCodingUi({ host, directory: app, port: 0 });
 	stops.push(coding.close);
 	const { origin, port } = new URL(coding.url);
@@ -109,12 +113,10 @@ test("coding listener requires a credential and reuses its cookie after restart"
 		const socket = new Socket(ws, protocols, { headers });
 		socket.once("error", reject);
 		socket.once("close", code => reject(new Error(`The socket closed before the host replied (${code})`)));
-		socket.once("upgrade", response => {
-			socket.once("message", message => {
-				socket.close();
-				resolve({ protocol: socket.protocol, cookie: response.headers["set-cookie"]?.[0] ?? "", message: message.toString() });
-			});
-		});
+		socket.once("upgrade", response => socket.once("message", message => {
+			socket.close();
+			resolve({ protocol: socket.protocol, cookie: response.headers["set-cookie"]?.[0] ?? "", message: message.toString() });
+		}));
 	});
 
 	expect(await refused(ws, headers)).toBe(401);
@@ -124,16 +126,19 @@ test("coding listener requires a credential and reuses its cookie after restart"
 	expect(upstreams).toBe(0);
 
 	const signedIn = await connect(headers, ["ace", `ace-token.${credential}`]);
-	const cookie = `ace-${port}=${credential}; HttpOnly; SameSite=Strict; Path=/; Max-Age=34560000`;
-	expect(signedIn).toEqual({ protocol: "ace", cookie, message: "Private host connected" });
+	const cookie = `ace-${port}=${credential}; HttpOnly; SameSite=Strict; Path=/`;
+	expect(signedIn).toEqual({ protocol: "ace", cookie, message: "Original private host" });
+	const nextHost = startPrivateHost("Restarted private host");
+	expect(nextHost.url).not.toBe(host.url);
 	await coding.close();
+	await host.close();
 
-	const restarted = await serveCodingUi({ host, directory: app, port: Number(port) });
+	const restarted = await serveCodingUi({ host: nextHost, directory: app, port: Number(port) });
 	stops.push(restarted.close);
 	expect(restarted.url).toBe(coding.url);
 	const browserCookie = signedIn.cookie.slice(0, signedIn.cookie.indexOf(";"));
 	expect(await connect({ ...headers, Cookie: browserCookie })).toEqual({
-		protocol: "", cookie, message: "Private host connected",
+		protocol: "", cookie, message: "Restarted private host",
 	});
 	expect(upstreams).toBe(2);
 });

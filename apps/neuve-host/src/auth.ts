@@ -51,7 +51,7 @@ export function ownerCredential(port: number, secret: string) {
 			if (!supplied || !/^[a-f0-9]{64}$/.test(supplied)) return false;
 			return timingSafeEqual(Buffer.from(supplied), Buffer.from(secret));
 		},
-		cookie: `${name}=${secret}; HttpOnly; SameSite=Strict; Path=/; Max-Age=34560000`,
+		cookie: `${name}=${secret}; HttpOnly; SameSite=Strict; Path=/`,
 	};
 }
 
