@@ -10,8 +10,7 @@ type Listed = ModelRef & { account?: string };
  * Subscriptions of one kind that reach one sign-in through different runtimes or routes fold into
  * the first that lists the model, since which serves it is the host's choice; anything else, such
  * as an API key, stays its own row. A model listed more than once is named with its provider. A
- * stored pick shows on its row, or on its model's row from a subscription of the same kind when its
- * own account no longer lists it, as the channel then runs it.
+ * stored pick on a folded account shows on its row.
  */
 export function listed<T extends Listed>(
 	models: readonly T[],
@@ -45,11 +44,6 @@ export function listed<T extends Listed>(
 			? `${model.modelId} · ${model.provider}`
 			: model.modelId,
 	}));
-	const split = picked.indexOf("/");
-	const stored = { provider: picked.slice(0, split), modelId: picked.slice(split + 1) };
-	const group = groups.find((members) => members.some((member) => key(member) === picked));
-	const row = group
-		? group[0]
-		: plan(stored) && kept.find((model) => model.modelId === stored.modelId && plan(model) === plan(stored));
+	const row = groups.find((members) => members.some((member) => key(member) === picked))?.[0];
 	return { rows, picked: row ? key(row) : picked };
 }

@@ -81,7 +81,7 @@ import {
 	remove,
 } from "./messages";
 import { metadata, MetadataDoc, validateName } from "./metadata";
-import { available, choose, resolveStoredModel, usable } from "./models";
+import { available, choose, usable } from "./models";
 import { Plans, PlansDoc, type PlanCommentReceipt, type PlanFiles, type PlansState } from "./plan";
 import {
 	changePlanComment, discardPlanCommentBatch, keepPlanComment, KEPT_PLAN_REPLIES_REASON, planCommentAnswers, planCommentBatch,
@@ -1331,8 +1331,8 @@ export class Channel {
 		const { model: requested, effort, automatic } = selection;
 		const agent = await conversation.agent(callContext);
 		const current = agent.model;
-		const kept = !requested && !automatic && current
-			? await resolveStoredModel(this.#options.models, current)
+		const kept = !requested && !automatic && current && await usable(this.#options.models, current)
+			? current
 			: undefined;
 		const model = requested || kept || await this.#automatic();
 		const selected = this.#options.models.getModel(model.provider, model.modelId);

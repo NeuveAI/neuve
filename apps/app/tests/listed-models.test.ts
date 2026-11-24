@@ -27,9 +27,8 @@ test("one sign-in's accounts list each model once, and a pick on a folded accoun
 	expect(names(rows)).toEqual(["openai gpt-6.1-sol", "codex gpt-6.2-sol"]);
 	expect(picked).toBe("codex/gpt-6.2-sol");
 	expect(listed(models, "codex/gpt-6.1-sol", accounts).picked).toBe("openai/gpt-6.1-sol");
-	expect(listed(models, "main/gpt-6.1-sol", accounts).picked).toBe("openai/gpt-6.1-sol");
+	expect(listed(models, "main/gpt-6.1-sol", accounts).picked).toBe("main/gpt-6.1-sol");
 	expect(listed(models, "gone/gpt-6.1-sol", accounts).picked).toBe("gone/gpt-6.1-sol");
-	expect(listed(models, "gone/gpt-1", accounts).picked).toBe("gone/gpt-1");
 	expect(listed(models, "auto", accounts).picked).toBe("auto");
 });
 
