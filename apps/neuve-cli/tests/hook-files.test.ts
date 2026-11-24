@@ -377,6 +377,23 @@ test("a hooks folder that is a link is refused in the same words in both places"
   await expect(setUp()).rejects.toThrow(found!.why!);
 });
 
+// Reason: a linked hooks folder is named together with a bad hook file, not on its own run.
+test("a linked hooks folder and a bad hook file are refused together", async () => {
+  const { root, repo, settings, setUp } = await scene();
+  const hooks = join(repo, ".git/hooks");
+  const elsewhere = join(root, "elsewhere-hooks");
+  await mkdir(elsewhere);
+  await rm(hooks, { recursive: true, force: true });
+  await symlink(elsewhere, hooks);
+  await mkdir(join(settings, ".."), { recursive: true });
+  await writeFile(settings, "not json");
+  const refused = setUp();
+  await expect(refused).rejects.toThrow(
+    "Git's hooks folder is a symbolic link",
+  );
+  await expect(refused).rejects.toThrow("--claude-settings");
+});
+
 test("a Neuve hook under an event Neuve doesn't write needs an update, and setup hooks removes it", async () => {
   const { settings, setUp, said, part } = await scene();
   expect(await setUp()).toBe(0);

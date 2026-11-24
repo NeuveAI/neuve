@@ -707,11 +707,9 @@ export const runSetupHooks = async (
   const hooksDirectory = isAbsolute(hooksPath)
     ? hooksPath
     : resolve(root, hooksPath);
-  if (
+  const hooksFolderIsLink =
     (await exists(hooksDirectory)) &&
-    (await lstat(hooksDirectory)).isSymbolicLink()
-  )
-    throw new Error(refusal.hooksFolderLink());
+    (await lstat(hooksDirectory)).isSymbolicLink();
 
   const hookArgv =
     values.command !== undefined || compiled()
@@ -787,12 +785,15 @@ export const runSetupHooks = async (
   // changed is named together, and nothing is written when one is refused.
   const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
   const failures: unknown[] = [];
-  if (!(await writableFolder(hooksDirectory)))
-    failures.push(new Error("Git's hooks folder can't be written."));
-  for (const name of gitHooks)
-    await installGitHook(hooksDirectory, name, command, true).catch(
-      (error: unknown) => failures.push(error),
-    );
+  if (hooksFolderIsLink) failures.push(new Error(refusal.hooksFolderLink()));
+  else {
+    if (!(await writableFolder(hooksDirectory)))
+      failures.push(new Error("Git's hooks folder can't be written."));
+    for (const name of gitHooks)
+      await installGitHook(hooksDirectory, name, command, true).catch(
+        (error: unknown) => failures.push(error),
+      );
+  }
   for (const file of files) {
     if (!(await writableFolder(dirname(file.path))))
       failures.push(
