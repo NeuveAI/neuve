@@ -4,27 +4,33 @@ import type { AccountStatus } from "@neuve/runtime/status";
 export const key = (model: ModelRef) => `${model.provider}/${model.modelId}`;
 
 /**
- * Each model once per sign-in. Accounts that reach one sign-in through different runtimes fold
- * into the first that lists the model, since which serves it is the host's choice; a model offered
- * on two sign-ins is named with its account. A stored pick on a folded account shows on its row.
+ * Each model once per sign-in. Accounts of one kind that reach one sign-in through different
+ * runtimes fold into the first that lists the model, since which serves it is the host's choice;
+ * a provider that is no account, such as an API key, is never folded. A model listed more than
+ * once is named with its provider. A stored pick on a folded account shows on its row.
  */
 export function listed<T extends ModelRef>(
 	models: readonly T[],
 	picked: string,
 	accounts: readonly AccountStatus[] = [],
 ) {
-	const email = ({ provider }: ModelRef) => {
-		const signIn = accounts.find((account) => account.name === provider)?.signIn;
+	const account = ({ provider }: ModelRef) => accounts.find(({ name }) => name === provider);
+	const email = (model: ModelRef) => {
+		const signIn = account(model)?.signIn;
 		return signIn?.state === "signed-in" ? signIn.email : undefined;
 	};
-	const kept: T[] = [];
-	const folded = new Map<string, string>();
+	const groups: T[][] = [];
 	for (const model of models) {
-		const row = kept.find((value) =>
-			value.modelId === model.modelId && (!email(value) || !email(model) || email(value) === email(model)));
-		if (row) folded.set(key(model), key(row));
-		else kept.push(model);
+		const kind = account(model)?.kind;
+		const group = kind && groups.find((members) =>
+			members.every((member) =>
+				member.modelId === model.modelId
+				&& account(member)?.kind === kind
+				&& (!email(member) || !email(model) || email(member) === email(model))));
+		if (group) group.push(model);
+		else groups.push([model]);
 	}
+	const kept = groups.map(([first]) => first!);
 	const rows = kept.map((model) => ({
 		...model,
 		name: kept.filter((value) => value.modelId === model.modelId).length > 1
@@ -32,8 +38,7 @@ export function listed<T extends ModelRef>(
 			: model.modelId,
 	}));
 	const id = picked.slice(picked.indexOf("/") + 1);
-	const row = rows.find((model) => key(model) === picked)
-		?? rows.find((model) => key(model) === folded.get(picked))
-		?? rows.find((model) => model.modelId === id);
+	const group = groups.find((members) => members.some((member) => key(member) === picked));
+	const row = group ? group[0] : kept.find((model) => model.modelId === id);
 	return { rows, picked: row ? key(row) : picked };
 }
