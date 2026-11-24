@@ -861,9 +861,7 @@ async function workspace(args: readonly string[]): Promise<number> {
       }
     });
   };
-  let codingDirectory: string | undefined;
   const buildCodingUi = async () => {
-    if (codingDirectory) return codingDirectory;
     if (stopping) throw new Error("The workspace is shutting down");
     const directory = join(
       storage.paths.builds,
@@ -919,8 +917,7 @@ async function workspace(args: readonly string[]): Promise<number> {
       if (stopping) throw new Error("The workspace is shutting down");
       if (code !== 0)
         throw new Error(`Neuve app build exited ${code}. See ${log}`);
-      codingDirectory = outputDirectory;
-      return codingDirectory;
+      return outputDirectory;
     } finally {
       abort.signal.removeEventListener("abort", cancel);
       clearTimeout(killTimer);
@@ -955,17 +952,6 @@ async function workspace(args: readonly string[]): Promise<number> {
     } finally {
       client.close();
     }
-  };
-  const ensureCodingUi = async () => {
-    if (coding) return coding;
-    if (stopping || !host) throw new Error("The workspace is shutting down");
-    coding = await serveCodingUi({
-      host,
-      directory: await buildCodingUi(),
-      port: webPort,
-      review: resolveReview,
-    });
-    return coding;
   };
   const returnTo = (
     project: string,
@@ -1140,16 +1126,21 @@ async function workspace(args: readonly string[]): Promise<number> {
       },
     });
     const { config } = await import("@ace/host/host-config");
-    await writeWorkspaceRuntime(profile, source, config);
     if (stopping)
       throw (
         failure ?? new DOMException("Workspace startup cancelled", "AbortError")
       );
+    coding = await serveCodingUi({
+      host,
+      directory: app,
+      port: webPort,
+      review: resolveReview,
+    });
+    await writeWorkspaceRuntime(profile, source, config, coding.url);
     // Reviews this build queued before the host last stopped get a worker of this build again.
     void rearmWaitingReviews({
       within: storage.volume?.mountPoint ?? "/",
     }).catch(() => undefined);
-    const web = await ensureCodingUi();
     const client = new GatewayClient(host.url, host.token);
     let project: Project;
     try {
@@ -1187,7 +1178,7 @@ async function workspace(args: readonly string[]): Promise<number> {
     }
     writeSync(
       1,
-      `${JSON.stringify(workspaceReady({ url: host.url, tokenFile: join(home, "host.token"), web: web.url, repository, pid: process.pid, project, repo: values.repo }))}\n`,
+      `${JSON.stringify(workspaceReady({ url: host.url, tokenFile: join(home, "host.token"), web: coding.url, repository, pid: process.pid, project, repo: values.repo }))}\n`,
     );
     await done;
   } catch (error) {

@@ -67,7 +67,7 @@ test("coding listener rejects foreign browser authority before connecting privat
 		{ Origin: origin, "Sec-Fetch-Site": "same-site" },
 	];
 	for (const headers of refusals) expect(await refused(ws, headers)).toBe(403);
-	expect(await refused(ws, { Origin: origin }, ["ace", `ace-token.${credential}`])).toBe(400);
+	expect(await refused(ws, { Origin: origin }, ["ace", `ace-token.${credential}`, "unsupported"])).toBe(400);
 	expect(upstreams).toBe(0);
 	const home = await fetch(coding.url);
 	expect(await home.text()).toContain("Ace fixture");
@@ -82,6 +82,62 @@ test("coding listener rejects foreign browser authority before connecting privat
 	expect(upstreams).toBe(0);
 });
 
+// The private host picks a new port on restart, so the cookie must belong to the coding listener.
+test("coding listener requires a credential and reuses its cookie after restart", async () => {
+	const { app } = await place();
+	let upstreams = 0;
+	const privateHost = Bun.serve({
+		hostname: "127.0.0.1", port: 0,
+		fetch(request, server) {
+			upstreams++;
+			if (server.upgrade(request, { headers: { "sec-websocket-protocol": "ace" } })) return;
+			return new Response("Upgrade failed", { status: 400 });
+		},
+		websocket: { open(socket) { socket.send("Private host connected"); }, message() {} },
+	});
+	stops.push(async () => { await privateHost.stop(true); });
+	const host = { url: `ws://127.0.0.1:${privateHost.port}/ws`, token: credential };
+	const coding = await serveCodingUi({ host, directory: app, port: 0 });
+	stops.push(coding.close);
+	const { origin, port } = new URL(coding.url);
+	const probe = new URL("/ws", coding.url);
+	const ws = probe.href.replace("http:", "ws:");
+	const headers = { Origin: origin, "Sec-Fetch-Site": "same-origin" };
+	const connect = (headers: Record<string, string>, protocols?: string[]) => new Promise<{
+		protocol: string; cookie: string; message: string;
+	}>((resolve, reject) => {
+		const socket = new Socket(ws, protocols, { headers });
+		socket.once("error", reject);
+		socket.once("close", code => reject(new Error(`The socket closed before the host replied (${code})`)));
+		socket.once("upgrade", response => {
+			socket.once("message", message => {
+				socket.close();
+				resolve({ protocol: socket.protocol, cookie: response.headers["set-cookie"]?.[0] ?? "", message: message.toString() });
+			});
+		});
+	});
+
+	expect(await refused(ws, headers)).toBe(401);
+	const response = await fetch(probe);
+	expect(response.status).toBe(401);
+	expect(await response.text()).toBe("ace");
+	expect(upstreams).toBe(0);
+
+	const signedIn = await connect(headers, ["ace", `ace-token.${credential}`]);
+	const cookie = `ace-${port}=${credential}; HttpOnly; SameSite=Strict; Path=/; Max-Age=34560000`;
+	expect(signedIn).toEqual({ protocol: "ace", cookie, message: "Private host connected" });
+	await coding.close();
+
+	const restarted = await serveCodingUi({ host, directory: app, port: Number(port) });
+	stops.push(restarted.close);
+	expect(restarted.url).toBe(coding.url);
+	const browserCookie = signedIn.cookie.slice(0, signedIn.cookie.indexOf(";"));
+	expect(await connect({ ...headers, Cookie: browserCookie })).toEqual({
+		protocol: "", cookie, message: "Private host connected",
+	});
+	expect(upstreams).toBe(2);
+});
+
 test("upstream handshake failure is a visible socket close and listener shutdown is idempotent", async () => {
 	const { app } = await place();
 	let connections = 0;
@@ -90,7 +146,7 @@ test("upstream handshake failure is a visible socket close and listener shutdown
 	const coding = await serveCodingUi({ host: { url: `ws://127.0.0.1:${privateHost.port}/ws`, token: credential }, directory: app, port: 0 });
 	stops.push(coding.close);
 	const closed = await new Promise<number>((resolve, reject) => {
-		const socket = new Socket(new URL("/ws", coding.url).href.replace("http", "ws"), { headers: { Origin: new URL(coding.url).origin, "Sec-Fetch-Site": "same-origin" } });
+		const socket = new Socket(new URL("/ws", coding.url).href.replace("http", "ws"), ["ace", `ace-token.${credential}`], { headers: { Origin: new URL(coding.url).origin, "Sec-Fetch-Site": "same-origin" } });
 		socket.on("close", code => resolve(code));
 		socket.on("error", reject);
 	});
@@ -129,8 +185,8 @@ test("actual Ace client crosses the real private host with watches, verified aut
 		constructor(url: string, protocols?: string | string[]) { super(url, protocols, { headers: { Origin: origin } }); this.on("error", () => {}); }
 	}
 	Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: BrowserSocket });
-	const first = new GatewayClient(`${origin.replace("http", "ws")}/ws`);
-	const second = new GatewayClient(`${origin.replace("http", "ws")}/ws`);
+	const first = new GatewayClient(`${origin.replace("http", "ws")}/ws`, host.token);
+	const second = new GatewayClient(`${origin.replace("http", "ws")}/ws`, host.token);
 	const initialPeople = first.people;
 	try {
 		await until(() => first.status === "open" && second.status === "open", "both browser connections");

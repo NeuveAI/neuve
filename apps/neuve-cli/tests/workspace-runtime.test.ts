@@ -10,6 +10,7 @@ import {
 import {
   requireWorkspaceBun,
   workspaceConfiguration,
+  writeWorkspaceRuntime,
 } from "../src/workspace-runtime.ts";
 import { configure } from "@ace/host/host-config";
 import { config as native } from "@ace/host/config";
@@ -116,6 +117,11 @@ test("dynamic workspace host chooses explicit free HTTPS while respecting config
       environment: {},
     });
     expect(dynamic.webPort).toBe(0);
+    const appUrl = "http://127.0.0.1:54321/";
+    await writeWorkspaceRuntime(profile, root, dynamic, appUrl);
+    expect(
+      await Bun.file(join(dynamic.home, "workspace-runtime.json")).json(),
+    ).toMatchObject({ appUrl });
     // Why: a local profile must reach project admission without an inherited volume pin.
     const local = workspaceConfiguration({
       ...input,

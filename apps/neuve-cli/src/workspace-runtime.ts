@@ -51,6 +51,7 @@ const RuntimeReceipt = z.strictObject({
   profile: StorageProfile,
   settings: z.string().min(1),
   keychain: z.string().min(1),
+  appUrl: z.url().optional(),
   configuration: z
     .record(z.string(), z.unknown())
     .refine(
@@ -63,6 +64,7 @@ export async function writeWorkspaceRuntime(
   profile: StorageProfile,
   source: string,
   configuration: HostConfig,
+  appUrl?: string,
 ): Promise<void> {
   const { environment: _environment, ...publicConfiguration } =
     HostConfigSchema.parse(configuration);
@@ -78,6 +80,7 @@ export async function writeWorkspaceRuntime(
           source,
           settings: native.settings,
           keychain: native.keychain,
+          appUrl,
           configuration: publicConfiguration,
         }),
       ),
@@ -235,6 +238,8 @@ export async function configureWorkspaceCli(
       await stat(argument);
   if (configuration.home !== (await realpath(home)))
     throw new Error("The workspace runtime receipt belongs to another home.");
+  if (args[0] !== "serve" && receipt.appUrl !== undefined)
+    native.appUrl = receipt.appUrl;
   await activateWorkspaceCli(
     receipt.profile,
     source,
