@@ -397,7 +397,6 @@ export class Channel {
 		channel.#unsubscribe = harness.subscribeCommits(({ changes }) => {
 			const commentMessages = channel.#observePlanCommentSends(changes);
 			const unannouncedEntries = new Set<EntryId>();
-			const answeredMentions = new Set<ConversationId>();
 			for (const change of changes) {
 				if (change.type !== "submission") continue;
 				const submission = change.value;
@@ -407,10 +406,10 @@ export class Channel {
 				if (submission.entry !== undefined && (workMessage || mention || channel.#builds.isBrief(submission))) {
 					unannouncedEntries.add(submission.entry);
 				}
-				if (mention && submission.status === "done") answeredMentions.add(submission.conversationId);
 				channel.#builds.postedMention(submission);
 			}
 			const ended: [ConversationId, readonly SubmissionId[]][] = [];
+			let runEnded = false;
 			for (const change of changes) {
 				if (change.type === "entry" && change.value.model?.[0]?.role === "assistant") {
 					channel.#caption(change.value.conversationId);
@@ -457,10 +456,10 @@ export class Channel {
 				if (scope.kind !== "conversation") continue;
 				const { run } = (change.value || {}) as LiveState;
 				const inputs = channel.#runs.get(scope.conversationId);
+				if (inputs && inputs[0] !== run?.inputs[0]) runEnded = true;
 				if (run) {
 					channel.#runs.set(scope.conversationId, run.inputs);
 					if (inputs?.[0] !== run.inputs[0]) {
-						if (inputs && answeredMentions.has(scope.conversationId)) ended.push([scope.conversationId, inputs]);
 						void channel.#builds.state(scope.conversationId, "running", run.inputs[0]);
 					}
 				} else if (inputs) {
@@ -469,6 +468,7 @@ export class Channel {
 					ended.push([scope.conversationId, inputs]);
 				}
 			}
+			if (runEnded) void channel.#builds.replyToMentions();
 			// Ending a run settles its inputs in the same commit, in no particular change order.
 			for (const [chat, inputs] of ended) {
 				const task = channel.#ended(chat, inputs, changes);
@@ -503,6 +503,7 @@ export class Channel {
 		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
 		if (options.resume !== false) {
 			await channel.#builds.finishStops();
+			await channel.#builds.recoverMentionEntries();
 			harness.resume();
 			void channel.#builds.resume();
 		}
@@ -853,52 +854,13 @@ export class Channel {
 		}
 		const last = settled.get(inputs.at(-1)!);
 		if (!last) return;
-		const submissions = inputs.map(id => settled.get(id));
-		if (!this.#runs.has(chat)) {
-			const outcome = last.status === "done"
-				? "done"
-				: last.reason === "aborted"
-				? "stopped"
-				: "failed";
-			await this.#builds.state(chat, outcome, undefined);
-			await this.#publishRun(chat, submissions, outcome);
-		}
-		if (last.type === "input" && last.status === "done") {
-			await this.#replyToMentions(chat, submissions, last.answer);
-		}
-	}
-
-	async #replyToMentions(chat: ConversationId, submissions: (SubmissionRecord | undefined)[], answer: EntryId) {
-		const agent = this.#builds.agent(chat);
-		if (!agent) return;
-		const threads = new Map<ConversationId, string>();
-		for (const submission of submissions) {
-			if (!submission) continue;
-			const mention = this.#builds.mentionFor(submission);
-			if (mention && !threads.has(mention.thread)) threads.set(mention.thread, mention.requestId);
-		}
-		if (!threads.size) return;
-		try {
-			const message = (await this.#harness.commit(tx => tx.entry(answer), context))?.model?.[0];
-			if (message?.role !== "assistant") return;
-			const text = room.text(message);
-			if (!text) return;
-			await Promise.all([...threads].map(async ([thread, requestId]) => {
-				try {
-					const conversation = await this.#conversation(thread);
-					await conversation.submit({
-						type: "write",
-						entry: room.draft(`agent@${chat}`, text, message.timestamp),
-						requestId: `neuve.build:reply:${requestId}`,
-					}, context);
-					this.#log("info", "build.mention.replied", { build: agent.build, chat, thread });
-				} catch (error) {
-					this.#log("error", "build.mention.reply.failed", { build: agent.build, chat, thread, ...failure(error) });
-				}
-			}));
-		} catch (error) {
-			this.#log("error", "build.mention.reply.failed", { build: agent.build, chat, ...failure(error) });
-		}
+		const outcome = last.status === "done"
+			? "done"
+			: last.reason === "aborted"
+			? "stopped"
+			: "failed";
+		await this.#builds.state(chat, outcome, undefined);
+		await this.#publishRun(chat, inputs.map(id => settled.get(id)), outcome);
 	}
 
 	#planPlacementCache(chat: ConversationId): PlanCommentPlacements {

@@ -12,7 +12,7 @@ import { failure, type Log } from "./log";
 import { checkedPlanText, findPlan, PlansDoc, type StoredPlan } from "./plan";
 import { AGENT_MESSAGE_TOOL, AGENT_START_TOOL, buildId, type AgentMessageArgs, type AgentRole, type AgentStartArgs, type Build, type BuildAgent, type Effort, type ModelRef, type WorkMessage } from "./protocol";
 import { ReviewCardsDoc } from "./review-cards";
-import { content } from "./room";
+import { content, draft, text as messageText } from "./room";
 
 declare const crypto: { randomUUID(): string };
 
@@ -65,7 +65,19 @@ type StoredBuild = {
 
 type StoredMessage = { requestId: string; message: WorkMessage & { to: ConversationId }; submission?: SubmissionId };
 export type Mention = { thread: ConversationId; requestId: string; author: string; text: string; agents: ConversationId[] };
-type StoredMention = Mention & { entry?: EntryId; deliveries?: Record<string, SubmissionId> };
+type PendingMention = Omit<Mention, "author" | "text"> & {
+	entry?: EntryId;
+	author?: string;
+	text?: string;
+	deliveries?: Record<string, SubmissionId | "settled">;
+};
+type StoredMention = PendingMention | { entry: EntryId; agents: ConversationId[] };
+type MentionReply = {
+	thread: ConversationId;
+	chat: ConversationId;
+	answer: EntryId;
+	inputs: { id: SubmissionId; requestId: string; mention: string }[];
+};
 export type BuildsState = { records: Record<string, StoredBuild>; messages: StoredMessage[]; mentions?: StoredMention[] };
 export const BuildsDoc = defineDoc<BuildsState>({
 	kind: "neuve.builds",
@@ -107,6 +119,19 @@ export function isMentionSubmission(submission: SubmissionRecord): submission is
 }
 
 const mentionKey = (thread: ConversationId, requestId: string) => `${thread}:${requestId}`;
+const mentionDeliveryId = ({ thread, requestId }: PendingMention, chat: ConversationId) =>
+	`${mentionPrefix}${mentionKey(thread, requestId)}:${chat}`;
+
+function compactMention(mentions: StoredMention[], index: number, mention: PendingMention) {
+	const { deliveries } = mention;
+	if (!deliveries || !mention.agents.every(chat => deliveries[chat] !== undefined)) return;
+	if (mention.agents.every(chat => deliveries[chat] === "settled")) {
+		mentions[index] = { entry: mention.entry!, agents: [...mention.agents] };
+	} else {
+		delete mention.author;
+		delete mention.text;
+	}
+}
 
 export function workLog(value: Readonly<BuildsState> | null): WorkMessage[] {
 	return (value?.messages ?? [])
@@ -214,8 +239,8 @@ async function alive(tx: Tx, build: Build): Promise<boolean> {
 
 export class Builds {
 	#agents = new Map<number, { build: string; index: number; requestId: string; role: AgentRole; part?: string }>();
-	#mentions = new Map<string, StoredMention>();
-	#mentionEntries = new Map<number, StoredMention>();
+	#mentions = new Map<string, PendingMention>();
+	#mentionEntries = new Map<number, ConversationId[]>();
 	#document?: Readonly<BuildsState> | null;
 	#pending = new Set<Promise<void>>();
 	#closing = false;
@@ -243,9 +268,10 @@ export class Builds {
 		this.#mentions = new Map();
 		if (!value?.mentions) this.#mentionEntries.clear();
 		for (const mention of value?.mentions ?? []) {
+			if (mention.entry !== undefined) this.#mentionEntries.set(mention.entry, mention.agents);
+			if (!("thread" in mention)) continue;
 			const key = mentionKey(mention.thread, mention.requestId);
 			this.#mentions.set(key, mention);
-			if (mention.entry !== undefined) this.#mentionEntries.set(mention.entry, mention);
 			if (!previous || previousMentions.has(key)) continue;
 			for (const build of new Set(mention.agents.map(chat => this.agent(chat)!.build))) {
 				this.log("info", "build.mention.recorded", { build, thread: mention.thread, agents: mention.agents });
@@ -297,7 +323,7 @@ export class Builds {
 		const document = await tx.doc(BuildsDoc);
 		document.mentions ??= [];
 		const { mentions } = document;
-		const index = mentions.findIndex(old => old.thread === mention.thread && old.requestId === mention.requestId);
+		const index = mentions.findIndex(old => "thread" in old && old.thread === mention.thread && old.requestId === mention.requestId);
 		if (index === -1) mentions.push(mention);
 		else mentions[index] = mention;
 		for (const { build } of builds) {
@@ -305,24 +331,17 @@ export class Builds {
 		}
 	}
 
-	mentionAgents(entry: number) { return this.#mentionEntries.get(entry)?.agents; }
-
-	mentionFor(submission: SubmissionRecord) {
-		if (!isMentionSubmission(submission)) return;
-		const { requestId } = submission;
-		const key = requestId.slice(mentionPrefix.length, requestId.lastIndexOf(":"));
-		const mention = this.#mentions.get(key);
-		if (mention) return { thread: mention.thread, requestId };
-	}
+	mentionAgents(entry: number) { return this.#mentionEntries.get(entry); }
 
 	postedMention({ conversationId: thread, entry, requestId }: SubmissionRecord) {
 		if (this.#closing || entry === undefined || requestId === undefined || this.#mentionEntries.has(entry)) return;
 		const mention = this.#mentions.get(mentionKey(thread, requestId));
 		if (!mention) return;
-		this.#mentionEntries.set(entry, mention);
+		this.#mentionEntries.set(entry, mention.agents);
 		void this.#track(Promise.resolve().then(async () => {
 			await this.harness.commit(async tx => {
-				const stored = (await tx.doc(BuildsDoc)).mentions!.find(old => old.thread === thread && old.requestId === requestId)!;
+				const stored = (await tx.doc(BuildsDoc)).mentions!.find(old =>
+					"thread" in old && old.thread === thread && old.requestId === requestId)!;
 				stored.entry = entry;
 			}, context);
 			await this.#deliverMention(mention);
@@ -630,25 +649,34 @@ export class Builds {
 		finally { this.#pending.delete(task); }
 	}
 
+	async recoverMentionEntries(): Promise<void> {
+		if (!this.#mentions.size) return;
+		await this.harness.commit(async tx => {
+			const { mentions = [] } = await tx.doc(BuildsDoc);
+			for (let index = mentions.length - 1; index >= 0; index--) {
+				const mention = mentions[index]!;
+				if (!("thread" in mention)) continue;
+				if (mention.entry === undefined) {
+					const submission = await tx.submissionByRequest(mention.thread, mention.requestId);
+					if (submission?.entry !== undefined) mention.entry = submission.entry;
+					else if (submission?.status !== "queued") {
+						mentions.splice(index, 1);
+						continue;
+					}
+				}
+				compactMention(mentions, index, mention);
+			}
+		}, context);
+	}
+
 	async resume(ids?: readonly string[]): Promise<void> {
 		const host = this.options.host;
 		if (!host || this.#closing) return;
 		const task = (async () => {
-			const snapshot = await this.harness.snapshot(BuildsDoc, context);
-			const { records, messages } = snapshot ?? { records: {}, messages: [] };
-			let mentions = snapshot?.mentions;
-			if (mentions?.some(mention => mention.entry === undefined)) {
-				await this.harness.commit(async tx => {
-					for (const mention of (await tx.doc(BuildsDoc)).mentions ?? []) {
-						if (mention.entry !== undefined) continue;
-						const entry = (await tx.submissionByRequest(mention.thread, mention.requestId))?.entry;
-						if (entry !== undefined) mention.entry = entry;
-					}
-				}, context);
-				mentions = (await this.harness.snapshot(BuildsDoc, context))?.mentions;
-			}
-			await Promise.all((mentions ?? []).filter(mention => mention.entry !== undefined)
-				.map(mention => this.#deliverMention(mention, ids)));
+			const { records, messages, mentions } = (await this.harness.snapshot(BuildsDoc, context)) ?? { records: {}, messages: [] };
+			await Promise.all((mentions ?? []).map(mention =>
+				"thread" in mention && mention.entry !== undefined && this.#deliverMention(mention, ids)));
+			if (!ids) await this.replyToMentions();
 			for (const { requestId, message, submission } of messages) {
 				if (this.#closing) return;
 				if (submission !== undefined || (ids && !ids.includes(message.build))) continue;
@@ -725,15 +753,19 @@ export class Builds {
 		this.log("info", "build.message.delivered", { build, chat: to, submission });
 	}
 
-	async #deliverMention(mention: StoredMention, ids?: readonly string[]): Promise<void> {
+	async #deliverMention(mention: PendingMention, ids?: readonly string[]): Promise<void> {
 		const { thread, author, text } = mention;
+		if (author === undefined || text === undefined) return;
 		const key = mentionKey(thread, mention.requestId);
 		const host = this.options.host!;
 		await Promise.all(mention.agents.map(async chat => {
 			const { build } = this.agent(chat)!;
 			if (mention.deliveries?.[chat] !== undefined || (ids && !ids.includes(build))) return;
-			const requestId = `${mentionPrefix}${key}:${chat}`;
-			const pending = () => this.#mentions.get(key)!.deliveries?.[chat] === undefined;
+			const requestId = mentionDeliveryId(mention, chat);
+			const pending = () => {
+				const saved = this.#mentions.get(key);
+				return saved !== undefined && saved.deliveries?.[chat] === undefined;
+			};
 			try {
 				await this.#resumePending(host, build, requestId, async () => {
 					if (!pending()) return;
@@ -742,9 +774,14 @@ export class Builds {
 					});
 					if (submission === undefined) return;
 					await this.harness.commit(async tx => {
-						const saved = (await tx.doc(BuildsDoc)).mentions!.find(old => old.thread === thread && old.requestId === mention.requestId)!;
+						const { mentions = [] } = await tx.doc(BuildsDoc);
+						const index = mentions.findIndex(old =>
+							"thread" in old && old.thread === thread && old.requestId === mention.requestId);
+						const saved = mentions[index];
+						if (!saved || !("thread" in saved)) return;
 						saved.deliveries ??= {};
-						saved.deliveries[chat] = submission;
+						saved.deliveries[chat] ??= submission;
+						compactMention(mentions, index, saved);
 					}, context);
 					this.log("info", "build.mention.delivered", { build, chat, submission });
 				}, pending);
@@ -752,6 +789,76 @@ export class Builds {
 				this.log("error", "build.mention.failed", { build, chat, thread, ...failure(error) });
 			}
 		}));
+	}
+
+	async replyToMentions(): Promise<void> {
+		const host = this.options.host;
+		if (!host || this.#closing || !this.#mentions.size) return;
+		await this.#track(Promise.resolve().then(async () => {
+			const replies = await this.harness.commit(async tx => {
+				const { mentions = [] } = await tx.doc(BuildsDoc);
+				const replies = new Map<string, MentionReply>();
+				for (const [index, mention] of mentions.entries()) {
+					if (!("thread" in mention) || mention.entry === undefined) continue;
+					const { thread } = mention;
+					for (const chat of mention.agents) {
+						if (mention.deliveries?.[chat] === "settled") continue;
+						const requestId = mentionDeliveryId(mention, chat);
+						const submission = await tx.submissionByRequest(chat, requestId);
+						if (submission?.status === "unanswered") {
+							mention.deliveries ??= {};
+							mention.deliveries[chat] = "settled";
+						}
+						if (submission?.type !== "input" || submission.status !== "done") continue;
+						const { answer, id } = submission;
+						const key = `${thread}:${answer}`;
+						const reply = replies.get(key) ?? { thread, chat, answer, inputs: [] };
+						reply.inputs.push({ id, requestId, mention: mention.requestId });
+						replies.set(key, reply);
+					}
+					compactMention(mentions, index, mention);
+				}
+				return [...replies.values()];
+			}, context);
+			await Promise.all(replies.map(reply => this.#postMentionReply(host, reply)));
+		}).catch(error => this.log("error", "build.mention.reply.failed", failure(error))));
+	}
+
+	async #postMentionReply(host: BuildHost, { thread, chat, answer, inputs }: MentionReply) {
+		const first = inputs.reduce((first, input) => input.id < first.id ? input : first);
+		const requestId = `neuve.build:reply:${first.requestId}`;
+		const build = this.agent(chat)!.build;
+		try {
+			await host.share(requestId, async () => {
+				if (!inputs.some(input => {
+					const mention = this.#mentions.get(mentionKey(thread, input.mention));
+					return mention && mention.deliveries?.[chat] !== "settled";
+				})) return;
+				const message = (await this.harness.commit(tx => tx.entry(answer), context))?.model?.[0];
+				const text = message?.role === "assistant" && messageText(message);
+				if (message && text) {
+					const conversation = await this.harness.conversation(thread, context);
+					if (!conversation) throw new Error("The mentioning thread could not be found.");
+					const reply = await conversation.submit({
+						type: "write", entry: draft(`agent@${chat}`, text, message.timestamp), requestId,
+					}, context);
+					if ((await reply.status(context)).status !== "done") return;
+				}
+				const sent = new Set(inputs.map(input => input.mention));
+				await this.harness.commit(async tx => {
+					const { mentions = [] } = await tx.doc(BuildsDoc);
+					for (const [index, mention] of mentions.entries()) {
+						if (!("thread" in mention) || mention.thread !== thread || !sent.has(mention.requestId)) continue;
+						mention.deliveries ??= {};
+						mention.deliveries[chat] = "settled";
+						compactMention(mentions, index, mention);
+					}
+				}, context);
+				if (text) this.log("info", "build.mention.replied", { build, chat, thread });
+			});
+		} catch (error) {
+			this.log("error", "build.mention.reply.failed", { build, chat, thread, ...failure(error) });
+		}
 	}
 
 	async #start(id: string, host: BuildHost, key: string): Promise<void> {

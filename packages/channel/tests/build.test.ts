@@ -1384,6 +1384,50 @@ test("reopening finds a posted mention that the closing worker did not deliver",
 	expect(agent.of("message").filter(event => event.text === text)).toHaveLength(1);
 });
 
+// A run can settle durably even when its reply write fails.
+test("reopening posts a settled mention's missed reply exactly once", async () => {
+	const failed = Promise.withResolvers<void>();
+	const run = await setup({ onStep(step) {
+		if (step === "build.mention.reply.failed") failed.resolve();
+	} });
+	const { fixture, watch } = run;
+	const { chat } = await startBuild(run);
+	const conversation = run.harness.conversation.bind(run.harness);
+	const thread = (await conversation(ROOT_CONVERSATION_ID, context))!;
+	const submit = thread.submit.bind(thread);
+	const lookup = spyOn(run.harness, "conversation").mockImplementation((id, scope) =>
+		id === ROOT_CONVERSATION_ID ? Promise.resolve(thread) : conversation(id, scope));
+	const write = spyOn(thread, "submit").mockImplementation(async (draft, scope) => {
+		if (draft.requestId?.startsWith("neuve.build:reply:")) throw new Error("Thread write failed.");
+		return submit(draft, scope);
+	});
+	const text = "Check the retry.";
+	try {
+		fixture.script(fauxAssistantMessage("Retry verified."));
+		await fixture.request({ op: "say", author: OWNER, text, agents: [chat] });
+		await failed.promise;
+		expect(watch.of("message").some(event => event.author === `agent@${chat}`)).toBe(false);
+		await fixture.channel.close();
+	} finally {
+		write.mockRestore();
+		lookup.mockRestore();
+	}
+	for (let restart = 0; restart < 2; restart++) {
+		await fixture.restart();
+		const replay = await fixture.watch();
+		const original = await replay.until("message", event => event.text === text);
+		await replay.until("message", event => event.author === `agent@${chat}`);
+		await until(() => fixture.channel.isIdle());
+		expect(replay.of("message").filter(event => event.author === `agent@${chat}`)).toEqual([
+			expect.objectContaining({ text: "Retry verified.", invoked: false }),
+		]);
+		expect(original.agents).toEqual([chat]);
+		expect((await run.harness.snapshot(BuildsDoc, context))?.mentions).toEqual([
+			{ entry: original.entry, agents: [chat] },
+		]);
+	}
+});
+
 // Pi can settle a run with mentions from several threads and start its follow-up in the same commit.
 test("a mentioned agent replies once to each thread while its queued follow-up runs", async () => {
 	const run = await setup();
@@ -1446,6 +1490,7 @@ test("a mention withdrawn into the draft does not reach the plan agent on reopen
 	expect(agent.of("message").some(event => event.text === request.text)).toBe(false);
 	await fixture.restart();
 	await until(() => fixture.channel.isIdle());
+	expect((await run.harness.snapshot(BuildsDoc, context))?.mentions).toEqual([]);
 	const replay = await fixture.watch({ op: "watch", chat });
 	fixture.script(fauxAssistantMessage("Checked."));
 	await fixture.request({ ...request, op: "say", requestId: "resend" });
