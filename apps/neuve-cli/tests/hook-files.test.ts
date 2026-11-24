@@ -425,3 +425,21 @@ test("a FIFO in place of a hook file is unreadable, read without waiting on it",
     `--claude-settings ${message}`,
   );
 }, 10_000);
+
+// Reason: a system error on a folder above a named hook file must not print that folder, which the person supplied.
+test("a system error on a folder above a named hook file names the option, not the folder", async () => {
+  const { root } = await scene();
+  const { nameDiagnosticPath } = await import("../src/records-cli.ts");
+  const supplied = join(root, "pRiVaTe-hunter2-value", "settings.json");
+  const error = Object.assign(
+    new Error(
+      `EROFS: read-only file system, mkdir '${join(root, "pRiVaTe-hunter2-value")}'`,
+    ),
+    { code: "EROFS", syscall: "mkdir" },
+  );
+  const said = nameDiagnosticPath(error, "--claude-settings", supplied);
+  expect(said).toBe(
+    "EROFS: read-only file system, mkdir a folder of --claude-settings",
+  );
+  expect(said).not.toContain("pRiVaTe-hunter2-value");
+});

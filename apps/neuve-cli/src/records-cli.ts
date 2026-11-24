@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { CommitNotFound } from "../../../packages/harness/src/git.ts";
 import { Cause, Effect, Exit, Option } from "effect";
@@ -206,6 +206,15 @@ export const nameDiagnosticPath = (
       .replaceAll(`at ${path}:`, `at ${name}:`);
     if (path.startsWith("/") && path !== "/")
       message = message.replaceAll(path, name);
+    // A system error can name a folder above the supplied path, which is part of what the person typed.
+    for (
+      let folder = dirname(path);
+      folder !== dirname(folder);
+      folder = dirname(folder)
+    )
+      message = message
+        .replaceAll(`'${folder}'`, `a folder of ${name}`)
+        .replaceAll(JSON.stringify(folder), `a folder of ${name}`);
   }
   return message;
 };
