@@ -191,7 +191,7 @@ The tenth answer accepted what was recommended: which micro-VM, and what counts 
 - **Whose name authors an unattended agent's commit.** The member who started the work, the one who approved the plan, or the bot account the owner plans ([23 November](../decisions.md#area-15-an-overnight-round-with-the-owner-away-23-november-2026)). No recommendation was made.
 - **Which branches the broker may push.** Only the channel's own, or any. Claude Code's proxy leaves this to branch protection. No recommendation was made.
 - **What the final review's "own isolate" means**, now that the ruling places reviews outside with the store. This proposal reads it as a fresh context, the pushed branch read only and no shell over it. Whether the review's model reads also run in a process apart from the worker that writes records is the owner's call. Not put in the tenth question.
-- **The reviewer's safeguards, guidelines and guardrails.** Their content was never put to the owner and is theirs to approve. Where they live is decided: in the skill.
+- **The reviewer's safeguards, guidelines and guardrails.** The point was put without a recommendation, so their content is still theirs to approve. Where they live is decided: in the skill.
 - **Vocabulary.** Isolate, micro-VM, teardown, dismissing an agent, host, member, channel, proof and final review have no rows, and need the owner's explicit approval. The sandbox row places a shared channel's sandbox "in the cloud", where the 9 November ruling and the owner's third answer place it on the tailnet, and says it "holds the chat's worktree", where a shared one now holds a micro-VM per agent.
 
 ## Not verified
