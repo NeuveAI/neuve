@@ -288,12 +288,12 @@ const executableByOwner = async (path: string) =>
  * in the way, and Neuve changes nothing there until the person moves or fixes it.
  */
 const refusal = {
-  hooksFolderLink: (directory: string) =>
-    `${directory} is a symbolic link; point core.hooksPath at a real directory`,
-  notAPlainFile: (path: string) =>
-    `${path} isn't a plain file or a link, so Neuve leaves it as it is; move it away first`,
-  foreignBeside: (path: string, previous: string) =>
-    `${path} is not Neuve's and ${previous} already exists; move one aside first`,
+  hooksFolderLink: () =>
+    "Git's hooks folder is a symbolic link; point core.hooksPath at a real directory",
+  notAPlainFile: (name: string) =>
+    `Git's ${name} hook isn't a plain file or a link, so Neuve leaves it as it is; move it away first`,
+  foreignBeside: (name: string) =>
+    `Git's ${name} hook is not Neuve's and its ${name}.pre-neuve hook already exists; move one aside first`,
 };
 
 type GitHookState =
@@ -327,12 +327,12 @@ const judgeGitHook = async (
       (await stat(path).catch(() => undefined))?.isFile()
     )
   )
-    return { state: "unreadable", why: refusal.notAPlainFile(path) };
+    return { state: "unreadable", why: refusal.notAPlainFile(name) };
   const current = await readFile(path, "utf8").catch(() => "");
   const chained = await exists(previous);
   if (!current.includes(MARKER))
     return chained
-      ? { state: "unreadable", why: refusal.foreignBeside(path, previous) }
+      ? { state: "unreadable", why: refusal.foreignBeside(name) }
       : {
           state: "missing",
           why: "the hook there isn't Neuve's",
@@ -696,7 +696,7 @@ export const runSetupHooks = async (
     (await exists(hooksDirectory)) &&
     (await lstat(hooksDirectory)).isSymbolicLink()
   )
-    throw new Error(refusal.hooksFolderLink(hooksDirectory));
+    throw new Error(refusal.hooksFolderLink());
 
   const hookArgv =
     values.command !== undefined || compiled()
@@ -775,9 +775,14 @@ export const runSetupHooks = async (
     file.named
       ? new Error(nameDiagnosticPath(error, `--${file.option}`, file.path))
       : error;
-  // Every hook file is checked before anything is written, so each one that can't be changed is
-  // named together, and no Git hook, capture setting or other hook file is written when one is refused.
+  // Every Git hook and hook file is checked before anything is written, so each one that can't be
+  // changed is named together, and nothing is written when one is refused.
+  const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
   const failures: unknown[] = [];
+  for (const name of gitHooks)
+    await installGitHook(hooksDirectory, name, command, true).catch(
+      (error: unknown) => failures.push(error),
+    );
   for (const file of files)
     await installAgentHooks(file.path, file.harness, command, true).catch(
       (error: unknown) => failures.push(described(file, error)),
@@ -791,7 +796,6 @@ export const runSetupHooks = async (
         )
         .join("\n"),
     );
-  const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
   const changes: Array<Change> = [];
   for (const name of gitHooks)
     changes.push(await installGitHook(hooksDirectory, name, command, dryRun));
@@ -1014,7 +1018,7 @@ export const inspectCapture = async (
       parts.push({
         path: hooksDirectory,
         state: "unreadable",
-        why: refusal.hooksFolderLink(hooksDirectory),
+        why: refusal.hooksFolderLink(),
       });
     else
       for (const name of hooksDirectory === undefined ? [] : config.gitHooks) {

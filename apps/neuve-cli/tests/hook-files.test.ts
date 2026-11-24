@@ -500,3 +500,15 @@ test("one refused hook file stops setup before the other is written", async () =
     false,
   );
 });
+
+// Reason: a Git hook in the way stops setup before any hook is written, and is named without the repository path.
+test("a Git hook that can't be changed stops setup before anything is written", async () => {
+  const { repo, setUp } = await scene();
+  await mkdir(join(repo, ".git/hooks/post-rewrite"), { recursive: true });
+  const refused = setUp();
+  await expect(refused).rejects.toThrow("Git's post-rewrite hook");
+  await expect(refused).rejects.not.toThrow(repo);
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
+});
