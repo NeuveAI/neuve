@@ -6,6 +6,8 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ServerWebSocket } from "bun";
 import type WebSocket from "ws";
 
+import { ownerCredential } from "./auth";
+import { config } from "./config";
 import type { Host } from "./host";
 import { Ulid } from "@neuve/records-schema";
 
@@ -168,16 +170,20 @@ export async function serveCodingUi(options: CodingUiOptions): Promise<CodingUi>
 					return new Response("Forbidden", { status: 403 });
 				}
 				if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
-				if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-					// The original browser client probes a refused handshake with a same-origin GET.
+				const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+				if (upgrade && (suppliedOrigin !== origin || url.search)) return new Response("Forbidden", { status: 403 });
+				if (!access.authorizes(request)) return new Response(config.command, { status: 401 });
+				if (!upgrade) {
 					return new Response("Connect to the coding host using a WebSocket", { headers: { ...HEADERS, "Cache-Control": "no-store" } });
 				}
-				if (suppliedOrigin !== origin || url.search) return new Response("Forbidden", { status: 403 });
 				const protocols = request.headers.get("sec-websocket-protocol")?.split(",").map(value => value.trim()) ?? [];
-				if (protocols.some(protocol => protocol !== "ace")) return new Response("Unsupported WebSocket protocol", { status: 400 });
+				const ace = protocols.includes("ace");
+				if (protocols.length && (!ace || protocols.some(protocol => protocol !== "ace" && !protocol.startsWith("ace-token.")))) {
+					return new Response("Unsupported WebSocket protocol", { status: 400 });
+				}
 				return server.upgrade(request, {
 					data: { upstream: { state: "closed" } },
-					...(protocols.includes("ace") ? { headers: { "sec-websocket-protocol": "ace" } } : {}),
+					headers: { "set-cookie": access.cookie, ...(ace ? { "sec-websocket-protocol": "ace" } : {}) },
 				}) ? undefined : new Response("Upgrade failed", { status: 400 });
 			}
 			if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
@@ -248,6 +254,7 @@ export async function serveCodingUi(options: CodingUiOptions): Promise<CodingUi>
 			},
 		},
 	});
+	const access = ownerCredential(server.port!, options.host.token);
 	let stopped: Promise<void> | undefined;
 	return {
 		url: `http://127.0.0.1:${server.port}/`,

@@ -40,15 +40,30 @@ export function proof(info: HostInfo, challenge: string, port: number, secret: s
 		.digest("hex");
 }
 
+export function ownerCredential(port: number, secret: string) {
+	const name = `ace-${port}`;
+	return {
+		authorizes(request: Request): boolean {
+			const supplied = request.headers.get("authorization")?.replace(/^Bearer /, "")
+				|| request.headers.get("sec-websocket-protocol")?.split(",")
+					.map((part) => part.trim()).find((part) => part.startsWith("ace-token."))?.slice(10)
+				|| new Bun.CookieMap(request.headers.get("cookie") || "").get(name);
+			if (!supplied || !/^[a-f0-9]{64}$/.test(supplied)) return false;
+			return timingSafeEqual(Buffer.from(supplied), Buffer.from(secret));
+		},
+		cookie: `${name}=${secret}; HttpOnly; SameSite=Strict; Path=/`,
+	};
+}
+
 export function owner(port: number) {
 	const secret = token();
-	const cookie = `ace-${port}`;
 	const origins = new Set([
 		`http://127.0.0.1:${port}`,
 		`http://localhost:${port}`,
 		appUrl(port).origin,
 	]);
 	return {
+		...ownerCredential(port, secret),
 		proof: (info: HostInfo, challenge: string) => proof(info, challenge, port, secret),
 		accepts(request: Request): boolean {
 			const host = request.headers.get("host");
@@ -56,14 +71,5 @@ export function owner(port: number) {
 			const origin = request.headers.get("origin");
 			return origin === null || origins.has(origin);
 		},
-		authorizes(request: Request): boolean {
-			const supplied = request.headers.get("authorization")?.replace(/^Bearer /, "")
-				|| request.headers.get("sec-websocket-protocol")?.split(",")
-					.map((part) => part.trim()).find((part) => part.startsWith("ace-token."))?.slice(10)
-				|| new Bun.CookieMap(request.headers.get("cookie") || "").get(cookie);
-			if (!supplied || !/^[a-f0-9]{64}$/.test(supplied)) return false;
-			return timingSafeEqual(Buffer.from(supplied), Buffer.from(secret));
-		},
-		cookie: `${cookie}=${secret}; HttpOnly; SameSite=Strict; Path=/`,
 	};
 }
