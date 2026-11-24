@@ -1,5 +1,5 @@
-// Why: a release finds its Graph engine beside the CLI, through two resolvers: the CLI's (setup and
-// queries) and the harness's (Graph and hybrid search). They must agree in every layout and failure.
+// Why: a release finds its Graph engine beside the CLI through one rule, which the CLI (setup and
+// queries) and the harness (Graph and hybrid search) both call. Each layout and failure gets its answer.
 import { afterAll, expect, test } from "bun:test";
 import { constants } from "node:fs";
 import {
@@ -37,7 +37,7 @@ for (const scenario of [
   "bad-environment",
   "not-executable",
 ])
-  test(`CLI and harness Graph discovery agree: ${scenario}`, async () => {
+  test(`CLI and harness Graph discovery: ${scenario}`, async () => {
     const directory = join(root, scenario);
     const executable = join(directory, "apps/neuve-cli/dist/neuve");
     const installed = join(dirname(executable), "../lib/neuve/entire-graph");

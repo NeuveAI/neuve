@@ -7,10 +7,9 @@ import {
 } from "@earendil-works/pi-durable";
 import type { Channel } from "./channel";
 import type { Admission } from "./extensions";
-import { quote } from "./git";
 import { LanesDoc } from "./lanes";
 import { failure, type Log } from "./log";
-import { findPlan, PlansDoc, type StoredPlan } from "./plan";
+import { checkedPlanText, findPlan, PlansDoc, type StoredPlan } from "./plan";
 import { AGENT_MESSAGE_TOOL, AGENT_START_TOOL, buildId, type AgentMessageArgs, type AgentRole, type AgentStartArgs, type Build, type BuildAgent, type Effort, type ModelRef, type WorkMessage } from "./protocol";
 import { ReviewCardsDoc } from "./review-cards";
 import { content } from "./room";
@@ -20,10 +19,27 @@ declare const crypto: { randomUUID(): string };
 type Worktree = { path: string; branch: string; base: string };
 type ReviewSource = Pick<Worktree, "branch" | "base">;
 export type BuildHost = {
-	share(key: string, run: () => Promise<void>): Promise<void>;
+	share<T>(key: string, run: () => Promise<T>): Promise<T>;
 	worktree(name: string, source?: ReviewSource): Promise<Worktree>;
-	planPath(file: string): string;
+	query?: {
+		sessionId: string;
+		read(input: ScopeRead): Promise<ScopeReadAnswer>;
+	};
 };
+
+type ScopeRead = {
+	repository: string;
+	revision: string;
+	branch?: string;
+	question: string;
+	scope: readonly string[];
+	plan: PlanCitation & { text: string };
+	previousPlans: readonly PlanCitation[];
+	requester: { _tag: "Agent"; harness: "neuve-pi"; sessionId: string; subagentId: string };
+};
+
+type PlanCitation = Pick<StoredPlan, "file"> & Pick<StoredPlan["plan"], "title" | "hash">;
+type ScopeReadAnswer = { text: string; isError?: true };
 
 type Start = {
 	part?: string;
@@ -42,7 +58,6 @@ type Start = {
 );
 type StoredBuild = {
 	build: Build;
-	file: string;
 	starts: Record<string, Start>;
 	revision?: { requests: Record<string, string> };
 	stopping?: { chat: ConversationId; running: boolean }[];
@@ -63,6 +78,11 @@ const StartParameters = Type.Object({
 	part: Type.Optional(Type.String()),
 	brief: Type.Optional(Type.String()),
 }, { additionalProperties: false });
+const ScopeParameters = Type.Object({
+	question: Type.String({ pattern: "\\S" }),
+	scope: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+}, { additionalProperties: false });
+const scopeReadExtension = { name: "neuve-query" };
 
 const agentKey = (role: AgentRole, part?: string) => JSON.stringify([role, part ?? null]);
 const firstImplementer = agentKey("implementer");
@@ -90,17 +110,17 @@ function refuse(text: string): ToolExecutionResult {
 }
 
 export function buildTools(builds: () => Builds) {
-	return defineExtension({
+	const agents = defineExtension({
 		name: "neuve-build",
 		tools: [defineTool({
 			name: AGENT_START_TOOL,
-			description: "Ask the host to start another agent of this plan. Give an implementer a part and a brief. For a reviewer, the host writes the brief. A reviewer follows the implementer who asked for it, or the implementer with no part if a reviewer asked.",
+			description: "Ask the host to start another agent of this plan. Give an implementer a path scope in the part field and a brief. For a reviewer, the host writes the brief. A reviewer follows the implementer who asked for it, or the first implementer if a reviewer asked.",
 			parameters: StartParameters,
 			replay: "safe",
 			execute: (args, api, context) => builds().startAgent(args, api, context),
 		}), defineTool({
 			name: AGENT_MESSAGE_TOOL,
-			description: "Send a message to an agent of this plan. Name its role and part. Leave out the part to reach the agent with no part.",
+			description: "Send a message to an agent of this plan. Name its role and give its path scope in the part field. Omit that field to reach the agent assigned to the whole plan.",
 			parameters: Type.Object({
 				to: Role,
 				part: Type.Optional(Type.String()),
@@ -110,6 +130,26 @@ export function buildTools(builds: () => Builds) {
 			execute: (args, api, context) => builds().messageAgent(args, api, context),
 		})],
 	});
+	const query = defineExtension({
+		...scopeReadExtension,
+		tools: [defineTool({
+			name: "neuve_query",
+			description: "Read code and scope for the approved plan. Ask a question and optionally name extra files in scope.",
+			parameters: ScopeParameters,
+			replay: "safe",
+			execute: (args, api, context) => builds().readScope(args, api, context),
+		})],
+	});
+	return {
+		agents,
+		query,
+		async clearInheritedQuery(tx: Tx, { id }: { id: ConversationId }) {
+			const agent = await tx.doc(AgentDoc, id);
+			if (!Array.isArray(agent.extensions) && agent.extensions?.add?.includes(query.name)) {
+				agent.extensions.add = agent.extensions.add.filter(name => name !== query.name);
+			}
+		},
+	};
 }
 
 function buildRefusal(state: Build["state"]["kind"]): string | undefined {
@@ -119,20 +159,27 @@ function buildRefusal(state: Build["state"]["kind"]): string | undefined {
 
 const refusedBySharing = (state: Build["state"]) => state.kind === "unavailable" && state.reason === "shared";
 
-function briefText(record: StoredBuild, worktree: Worktree, planPath: string, start: Start): string {
-	const { path, branch, base } = worktree;
-	const plan = record.build.plan;
+async function approvedPlan(plans: readonly StoredPlan[] | undefined) {
+	const stored = plans!.findLast(({ plan }) => plan.state === "approved")!;
+	const { file, plan: { title, hash }, text } = stored;
+	return { file, title, hash, text: await checkedPlanText(hash, text) };
+}
+
+function briefText(plan: ScopeRead["plan"], { path, branch }: Worktree, start: Start, query: boolean): string {
 	const reference = [
-		`The approved plan “${plan.title}” is at ${planPath}. Its hash is ${plan.hash}.`,
+		`Approved plan "${plan.title}" (${plan.hash}).`,
 		`Work on branch ${branch} in the worktree at ${path}.`,
+		...(query ? ["Ask for your scope with neuve_query using the plan's goal and done-when items as your question."] : []),
+		"",
+		plan.text,
+		"",
 	];
-	if ("text" in start) return [...reference, "", start.text].join("\n");
+	if ("text" in start) return [...reference, start.text].join("\n");
 	const source = start.role === "reviewer" ? start.source.branch : undefined;
 	return [
 		...reference,
 		source ? `Review the implementer's work on branch ${source}.` : "Implement this plan.",
-		"Load the Neuve skill. Fill in the question and run this command.",
-		`neuve query --repo ${quote(path)} --revision ${base}${source ? ` --branch ${quote(source)}` : ""} --question "<the plan's goal and its done-when items in one sentence>" --scope ${quote(planPath)}`,
+		"Load the Neuve skill.",
 		...(source ? [] : ["Use agent_start to ask the host for a reviewer or another implementer."]),
 		"Use agent_message to message another agent of this plan.",
 	].join("\n");
@@ -284,8 +331,8 @@ export class Builds {
 			if (refusal || (state.kind !== "failed" && !refusedBySharing(state))) return;
 		} else {
 			if (!fresh) return;
-			const { stored: { plan, file }, approved } = fresh;
-			record = { file, starts: {}, build: {
+			const { stored: { plan }, approved } = fresh;
+			record = { starts: {}, build: {
 				id, chat, approved, agents: [],
 				state: refusal ? { kind: "unavailable", reason: refusal } : { kind: "starting" },
 				plan: { id: plan.id, hash, title: plan.title, call: plan.call },
@@ -319,6 +366,38 @@ export class Builds {
 
 	get pending(): boolean { return this.#pending.size > 0; }
 
+	async readScope(
+		{ question, scope = [] }: Static<typeof ScopeParameters>,
+		api: ToolExecutionApi,
+		context: Context,
+	): Promise<ToolExecutionResult> {
+		const host = this.options.host!;
+		const query = host.query!;
+		const chat = api.conversationId;
+		const member = this.agent(chat)!;
+		const result = await host.share(`neuve.query:${chat}:${api.callId}`, async () => {
+			const memo = await api.memo<ScopeReadAnswer>("neuve-query-result", context);
+			if (memo) return memo;
+			const { build, starts } = (await api.snapshot(BuildsDoc, context))!.records[member.build]!;
+			if (build.state.kind === "stopped") {
+				return { text: "The plan's agents were stopped, so there is nothing for you to read or fix.", isError: true } satisfies ScopeReadAnswer;
+			}
+			const start = starts[agentKey(member.role, member.part)]!;
+			const { path, base } = start.worktree!;
+			const plans = (await api.snapshot(PlansDoc, context))?.chats[build.chat];
+			const plan = await approvedPlan(plans);
+			const value = await query.read({
+				repository: path, revision: base, question, scope, plan,
+				previousPlans: plans!.flatMap(({ file, plan }) =>
+					plan.state === "replaced" ? [{ file, title: plan.title, hash: plan.hash }] : []),
+				...(start.role === "reviewer" ? { branch: start.source.branch } : {}),
+				requester: { _tag: "Agent", harness: "neuve-pi", sessionId: query.sessionId, subagentId: String(chat) },
+			});
+			return api.memo("neuve-query-result", value, context);
+		});
+		return result.isError ? refuse(result.text) : answer(result.text);
+	}
+
 	async startAgent(
 		{ role, part, brief }: Static<typeof StartParameters>,
 		api: ToolExecutionApi,
@@ -327,10 +406,10 @@ export class Builds {
 		let request: AgentStartArgs;
 		if (role === "reviewer") {
 			if (brief !== undefined) return refuse("The host writes the reviewer's brief.");
-			if (part !== undefined && !part.trim()) return refuse("Give the reviewer a part or leave it out.");
+			if (part !== undefined && !part.trim()) return refuse("Give the reviewer a path scope or leave it out.");
 			request = { role, part };
 		} else {
-			if (!part?.trim()) return refuse("Give the implementer a part.");
+			if (!part?.trim()) return refuse("Give the implementer a path scope.");
 			if (!brief?.trim()) return refuse("Give the implementer a brief.");
 			request = { role, part, brief };
 		}
@@ -349,7 +428,7 @@ export class Builds {
 			if (existing) {
 				if ("task" in existing && existing.task === api.taskId) return { id: build.id };
 				if (existing.state.kind === "started") {
-					return { refusal: "This plan already has an agent with that role and part." };
+					return { refusal: "This plan already has an agent with that role and path scope." };
 				}
 				if (existing.state.kind === "failed") {
 					existing.state = { kind: "starting" };
@@ -412,7 +491,7 @@ export class Builds {
 					.filter(({ role, part }) => record.starts[agentKey(role, part)]?.state.kind === "started")
 					.map(({ role, part }) => `${role === "implementer" ? "an" : "a"} ${role}${part === undefined ? "" : ` for ${JSON.stringify(part)}`}`);
 				const listing = agents.length ? `The plan has started ${new Intl.ListFormat("en").format(agents)}.` : "The plan has no started agents yet.";
-				return { refusal: `This plan has no started agent with that role and part. ${listing}` };
+				return { refusal: `This plan has no started agent with that role and path scope. ${listing}` };
 			}
 			const chat = recipient.brief.chat;
 			if (chat === from) return { refusal: "Send the message to another agent of this plan." };
@@ -498,13 +577,17 @@ export class Builds {
 		return !this.#closing && (state === "starting" || state === "started");
 	}
 
-	async #send(build: string, chat: ConversationId, draft: InputSubmissionDraft & { requestId: string }) {
+	async #send(build: string, chat: ConversationId, draft: Omit<InputSubmissionDraft, "content"> & {
+		requestId: string;
+		content: InputSubmissionDraft["content"] | (() => Promise<string>);
+	}) {
 		const existing = await this.harness.commit(tx => tx.submissionByRequest(chat, draft.requestId), context);
 		if (existing) return existing.id;
 		if (!this.#canSend(build)) return;
 		const conversation = await this.harness.conversation(chat, context);
 		if (!conversation) throw new Error("The agent's chat could not be found.");
-		const submission = await this.options.submitInput(conversation, draft, context, () => this.#canSend(build));
+		const input = typeof draft.content === "function" ? await draft.content() : draft.content;
+		const submission = await this.options.submitInput(conversation, { ...draft, content: input }, context, () => this.#canSend(build));
 		return submission?.id;
 	}
 
@@ -547,13 +630,16 @@ export class Builds {
 				log("build.worktree", { path: worktree.path, branch: worktree.branch });
 			}
 			detail = `The ${role}'s chat could not be created.`;
-			const { path, branch, base } = worktree;
+			const { path, base } = worktree;
 			let brief = start.brief;
 			if (!brief) {
 				brief = await update(async (saved, build, tx) => {
 					if (!this.#canSend(id)) return;
 					const { id: chat } = await tx.createConversation({ ownership: { kind: "ownerless" } });
-					await configure(tx, chat, { model: start.model, thinkingLevel: start.effort, cwd: path });
+					await configure(tx, chat, {
+						model: start.model, thinkingLevel: start.effort, cwd: path,
+						...(host.query ? { extensions: { add: [scopeReadExtension] } } : {}),
+					});
 					(await tx.doc(LanesDoc)).lanes[lane] = { chat, path, base };
 					build.agents.push({
 						chat, role, state: "running", started: Date.now(),
@@ -567,10 +653,12 @@ export class Builds {
 				log("build.chat", { chat: brief.chat });
 			}
 			detail = `The ${role}'s brief could not be sent.`;
-			const planPath = host.planPath(record.file);
 			const submission = await this.#send(id, brief.chat, {
 				type: "input", whenBusy: "followUp", requestId: brief.requestId,
-				content: briefText(record, worktree, planPath, start),
+				content: async () => briefText(
+					await approvedPlan((await this.harness.snapshot(PlansDoc, context))?.chats[record.build.chat]),
+					worktree, start, host.query !== undefined,
+				),
 			});
 			if (submission === undefined) return;
 			log("build.brief", { chat: brief.chat, submission });
@@ -623,10 +711,11 @@ export class Builds {
 		if (!recipients) return;
 		const plans = await this.harness.snapshot(PlansDoc, context);
 		const { text } = findPlan(plans?.chats[build.chat], build.plan.id);
+		const checked = await checkedPlanText(build.plan.hash, text);
 		for (const { chat, requestId } of recipients) {
 			const submission = await this.#send(target.build.id, chat, {
 				type: "input", whenBusy: "steer", requestId,
-				content: content(build.approved.by, text),
+				content: content(build.approved.by, checked),
 			});
 			if (submission === undefined) return;
 			this.log("info", "build.revision.submitted", { build: build.id, chat, submission });

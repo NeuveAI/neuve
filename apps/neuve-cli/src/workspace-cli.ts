@@ -108,6 +108,8 @@ import {
 } from "@neuve/records-schema";
 import { Effect } from "effect";
 import { Git } from "@neuve/harness";
+import { collectPublicQueryResult, runQueryGraph } from "./graph-query.ts";
+import type { PublicQueryEvent, RepositoryPath, Revision } from "./domain.ts";
 
 export const WORKSPACE_HELP = `Usage: neuve workspace [--profile <pi-transition|local|profile.json>] [--source <checkout>] [--repo <path>] [--port <n>] [--web-port <n>] [--user <name>] [--loopback]
 Starts Neuve's coding home. Neuve reviews open under its /review/ paths.
@@ -212,6 +214,40 @@ export function codingWorkerSetup(
     return opened;
   };
   return {
+    async query(
+      _worker,
+      { repository, revision, branch, question, scope, requester, plan },
+    ) {
+      const events: PublicQueryEvent[] = [];
+      const { state } = await runQueryGraph(
+        {
+          repository: repository as RepositoryPath,
+          revision: revision as Revision,
+          ...(branch === undefined ? {} : { branch }),
+          question,
+          scope,
+          maxResults: 8,
+          maxContextBytes: 16_000,
+          relationships: [],
+        },
+        {
+          requester,
+          plan,
+          checkedScope: true,
+          emit: async (event) => {
+            events.push(event);
+          },
+        },
+      );
+      if (state.kind === "plan_changed") {
+        return {
+          refusal:
+            "The approved plan changed while the host read it. Retry the call.",
+        };
+      }
+      if (state.kind === "scope_refused") return { refusal: state.reason };
+      return { ...collectPublicQueryResult(events), state };
+    },
     checkpoint(worker, request) {
       return checkpointNativeAuthority(inspection(worker), {
         nativeDatabase: request.nativeDatabase,
