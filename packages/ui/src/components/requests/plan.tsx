@@ -28,21 +28,20 @@ export function PlanBadge({ state }: { state: PlanCardView["state"] }) {
 	return <StatePill tone={state === "approved" ? "success" : "muted"}>{state === "approved" ? "Approved" : "Replaced"}</StatePill>;
 }
 
-/** The card's height: its head, less the line under the title when it has none, and a footer while it is a draft. */
+/** The card's height: its head, less the line under the title when it has none, and its footer. */
 export function planCardHeight(view: PlanCardView) {
-	return CARD_HEAD - (view.meta === undefined ? CARD.metaGap + CARD.metaLine : 0) + (view.state === "draft" ? CARD_FOOTER : 0);
+	return CARD_HEAD - (view.meta === undefined ? CARD.metaGap + CARD.metaLine : 0) + CARD_FOOTER;
 }
 
 export function planCardWidth(available: number) {
 	return Math.min(available, MAX_WIDTH);
 }
 
-/** A plan the chat's agent wrote, with the person's approval while it is a draft. */
+/** A plan the chat's agent wrote, opened from its footer, with the person's approval while it is a draft. */
 export function PlanCard({ view, width }: { view: PlanCardView; width: number }) {
 	let actions = use(PlanActionsContext);
 	let [approving, setApproving] = useState(false);
 	let allowed = !!actions?.mayApprove;
-	let draft = view.state === "draft";
 	return (
 		<RequestCard
 			aria-label="Plan"
@@ -52,28 +51,18 @@ export function PlanCard({ view, width }: { view: PlanCardView; width: number })
 			<RequestCardHead
 				title={
 					<>
-						{draft
-							? <span className="min-w-0 truncate">{view.title || "Plan"}</span>
-							: (
-								<button
-									type="button"
-									className="min-w-0 truncate text-left outline-none hover:underline focus-visible:underline"
-									onClick={() => actions?.open(view.plan)}
-								>
-									{view.title || "Plan"}
-								</button>
-							)}
+						<span className="min-w-0 truncate">{view.title || "Plan"}</span>
 						<PlanBadge state={view.state} />
 					</>
 				}
 				meta={view.meta}
 				metaProps={{ className: "truncate" }}
 			/>
-			{draft && (
-				<RequestCardFooter className="items-center justify-end gap-1.5">
-					<Button size="sm" variant="outline" onClick={() => actions?.open(view.plan)}>
-						Open plan
-					</Button>
+			<RequestCardFooter className="items-center justify-end gap-1.5">
+				<Button size="sm" variant="outline" onClick={() => actions?.open(view.plan)}>
+					Open plan
+				</Button>
+				{view.state === "draft" && (
 					<Button
 						size="sm"
 						className="aria-disabled:opacity-50"
@@ -85,10 +74,10 @@ export function PlanCard({ view, width }: { view: PlanCardView; width: number })
 							void actions.approve(view.plan, view.hash).finally(() => setApproving(false));
 						}}
 					>
-						{approving ? "Approving…" : "Approve and build"}
+						{approving ? "Approving…" : "Approve and implement"}
 					</Button>
-				</RequestCardFooter>
-			)}
+				)}
+			</RequestCardFooter>
 		</RequestCard>
 	);
 }

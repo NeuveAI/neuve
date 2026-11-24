@@ -16,8 +16,8 @@ The native extension binding installs before harness open/recovery and attaches 
 
 | File | Correspondence and reason | Seam ranges against pinned source |
 | --- | --- | --- |
-| `packages/channel/package.json` | Keep original @ace package identity, native dependencies and exports. Materialize exact root catalog pins, add own adapter exports/dependencies, and pair actual source with generated declaration type exports for strict Neuve callers. The runtime dependency supplies the Zod-only approval contract. | `@@ -4,23 +4,101 @@` |
-| `packages/channel/src/agents.ts` | Pinned upstream bytes retained. | Byte-identical |
+| `packages/channel/package.json` | Keep original @ace package identity, native dependencies and exports. Materialize exact root catalog pins, add own adapter exports/dependencies, and pair actual source with generated declaration type exports for strict Neuve callers. The runtime dependency supplies the Zod-only approval contract. The host imports the argument helpers through `./tool-arguments`. | `@@ -4,23 +4,101 @@` |
+| `packages/channel/src/agents.ts` | Validates chat tool arguments before pi so agents see accepted fields and values. Explains how to find a destination channel and reports a child chat's failure with its model. | Changed |
 | `packages/channel/src/browser.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/captions.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/changes.ts` | Retain two existing correctness fixes. Parse numstat using only its first two tabs so tab-containing filenames survive; parse name-status records sequentially so status-shaped filenames cannot include unrelated diffs. Actual Git regression evidence is core-lifecycle-tests.log and core-channel-tests.log. | `@@ -60,7 +60,12 @@`<br>`@@ -223,8 +228,14 @@` |
@@ -28,7 +28,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/src/handoffs.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/images.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/index.ts` | Pinned upstream bytes retained. | Byte-identical |
-| `packages/channel/src/lanes.ts` | Pinned upstream bytes retained. | Byte-identical |
+| `packages/channel/src/lanes.ts` | Defines the shared work lane arguments and refusals. Shares Git base selection and the busy chat check with the external worktree tool. | Changed |
 | `packages/channel/src/log.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/messages.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/metadata.ts` | Pinned upstream bytes retained. | Byte-identical |
@@ -51,7 +51,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/NOTICE` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
 | `packages/channel/src/effort.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
 | `packages/channel/src/extensions.ts` | Runtime-neutral native Extension install/binding, conversation observation, tool wrapping and optional model/pricing callbacks. No Neuve imports or alternate plugin/scheduler system. |
-| `packages/channel/src/external-lanes.ts` | Own runtime-neutral native pi lane extension for configured external worktrees. Replaces the same native extension by name through pi Registry.install; native lanes.ts and unconfigured behavior remain original. |
+| `packages/channel/src/external-lanes.ts` | Installs the work lane tool for worktrees outside the checkout. Uses the native tool's argument schema, refusals, base selection, and ownership check. |
 | `packages/channel/src/external-ref.ts` | Channel owns opaque neutral references and legacy JSON receipts. Host alone validates/maps precise GitHub references, with an explicit versioned new encoding; existing durable values are not reinterpreted. |
 | `packages/channel/src/frame.ts` | Complete generic native event/frame validation with upstream optional compatibility fields left optional. |
 | `packages/channel/src/github.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
@@ -60,12 +60,13 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/src/parse.ts` | Strict complete native ingress schema and verified-author stamping live beside original protocol declarations; extension schema is separate. |
 | `packages/channel/src/planning-protocol.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
 | `packages/channel/src/plan.ts` | Stores Markdown, the plan lifecycle, and comments in session state. A rewrite retains the previous Markdown by hash while a comment anchors to it. Reads check each version against its committed hash. |
-| `packages/channel/src/plan-comments.ts` | Keeps and edits threads in the plans document. Each chat shares verified comparisons and placements by anchor and current hashes across watches and sends. The shared file-lines rule owns placement decisions. Builds the quoted batch and registers the Plan-mode answer tool. A reply can queue behind its comment before the agent reads it. |
+| `packages/channel/src/plan-comments.ts` | Keeps and edits threads in the plans document. Each chat shares verified comparisons and placements by anchor and current hashes across watches and sends. The shared file-lines rule owns placement decisions. Builds the quoted batch and registers the Plan-mode answer tool. Sending a comment includes its kept replies in order and names each reply's author. A later reply can queue behind its comment. |
 | `packages/channel/src/planning.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
 | `packages/channel/src/requests.ts` | Generic durable pi-document digest claims prevent same-ID/different-payload retries without new SQL tables. Existing document kind/version are retained. |
 | `packages/channel/src/review-context.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
 | `packages/channel/src/review-protocol.ts` | Channel stores preparation receipts as neutral JSON and bounded identifiers. Host adapter separately validates precise Records/GitHub preparation and attribution before admission. |
-| `packages/channel/src/review.ts` | Own precise Git/Records preparation, immutable range selection, external source validation and admission policy. |
+| `packages/channel/src/review.ts` | Owns Git and Records preparation, immutable range selection, external source validation, and admission policy. Derives the review tools' parameters and argument refusals from their input schemas. |
+| `packages/channel/src/tool-arguments.ts` | Derives pi parameters and repair advice from Zod, with the received call included in each refusal. |
 | `packages/channel/tests/changes.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/channel.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/effort.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
@@ -73,7 +74,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/tests/operations-protocol.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/paused-administration.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/plan.test.ts` | Holds a draft rewrite in flight and verifies that approval waits in that chat while another chat can read its plan. |
-| `packages/channel/tests/plan-comments.test.ts` | Exercises comment admission, durable anchor versions, placement, thread answers, and send preparation with the native channel and a faux model, including queued reply delivery and withdrawal. |
+| `packages/channel/tests/plan-comments.test.ts` | Exercises comment admission, durable anchor versions, placement, thread answers, and send preparation with the native channel and a faux model, including mixed sends, reply attribution, edits before delivery, and Stop followed by resend. |
 | `packages/channel/tests/planning.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/review.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |
 | `packages/channel/tests/startup-lifecycle.test.ts` | Owned behavioral fixture or regression test. Exercise actual native pi/Git/SQLite/HTTP boundaries; host fixtures force loopback, replace only OS secrets with memory, and refuse external fetches. They do not claim real keychain/team/cloud/provider success. |

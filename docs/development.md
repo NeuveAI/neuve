@@ -86,11 +86,11 @@ The [review settings](../packages/harness/src/settings.ts) supply the coding pro
 
 The installed `neuve` remains separate. `bun run dev` continues to start only the web app.
 
-The [pi implementation map](../architecture/decisions/0014-ace-style-pi-harness.md#implementation-entrypoints) links the runtime, capture contract, and fresh candidate comparison. The transition scope in the maintainers' Linear (NEU-50) holds acceptance and current status. Launching the workspace or exporting a dump does not establish regression success or replace the owner's full integrated run before main.
+The [pi implementation map](../architecture/decisions/0014-ace-style-pi-harness.md#implementation-entrypoints) links the runtime, capture contract, and fresh candidate comparison. The transition scope in the maintainers' Linear (NEU-50) holds acceptance and current status. The owner counted the port's regression validation as passed on 23 November 2026 ([decisions record](../process/decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026)).
 
 ## Linear planning integration
 
-The planning scope in the maintainers' Linear (NEU-59) holds acceptance and current status. The [optional integration boundary](../architecture/decisions/0014-ace-style-pi-harness.md#optional-linear-scope) defines trusted local configuration, credential ownership and cycle attribution. Real-account setup and the planning entry in the adopted Ace app remain deferred until the owner completes the current questions and validations. The former reduced workspace's Linear dialog is not the Ace interface.
+The planning scope in the maintainers' Linear (NEU-59) holds acceptance and current status. The [optional integration boundary](../architecture/decisions/0014-ace-style-pi-harness.md#optional-linear-scope) defines trusted local configuration, credential ownership and cycle attribution. Real-account setup and the planning entry in the adopted Ace app wait only on the owner's Linear sign-in. The former reduced workspace's Linear dialog is not the Ace interface.
 
 Selection identifies the source for review admission. Records keeps the cycle's dated excerpt and existing freshness behavior. Reading or selecting a changed issue cannot silently replace a running cycle's scope. A cleared selection does not rewrite an admitted cycle. Issue completion never supplies a review disposition.
 

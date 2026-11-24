@@ -1,7 +1,9 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { nativeReview } from "../src/native-review";
 import { Effect, Option } from "effect";
-import { Blobs, Log, mintUlid } from "../../../packages/records-core/src/index";
+import { Blobs, Cycles, Identity, Log, mintUlid } from "../../../packages/records-core/src/index";
+import { keepLocalScope, readLocalScope, readScopeText } from "../../../packages/harness/src/scope";
+import { quote } from "../../../packages/channel/src/git";
 import { RecordEvent } from "@neuve/records-schema";
 import { defaultConfig } from "../../../packages/harness/src/config";
 import { nativeReviewCallbacks } from "../../neuve-cli/src/workspace-native-review";
@@ -18,7 +20,7 @@ import type { PlanningConnections } from "@ace/channel/planning";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 
@@ -1037,6 +1039,110 @@ test("a linked-worktree channel admits its pinned review even when display looku
 	}
 	const evidence = process.env.NEUVE_REVIEW_FEED_EVIDENCE;
 	if (evidence) { await mkdir(evidence, { recursive: true }); await writeFile(join(evidence, "linked-worktree-admissions.json"), JSON.stringify(admissions, null, 2)); }
+}, 30000);
+
+async function submitAdvancedBranchReview() {
+	const plan = "# Update exports\n";
+	const at = await setup([
+		{ tool: "plan_write", args: { text: plan }, id: "review-plan" },
+		{ text: "Plan ready." },
+	]);
+	const releases = join(at.root, "release");
+	await mkdir(releases);
+	const pause = (id: string): Step => ({
+		tool: "bash", id, args: {
+			command: `for attempt in $(seq 300); do test -f ${quote(releases)}/"$(basename "$PWD")" && exit 0; sleep 0.05; done; exit 1`,
+		},
+	});
+	const frozen = defaultConfig();
+	if (frozen.route.provider !== "anthropic") throw new Error("Unexpected fixture route");
+	frozen.route = { ...frozen.route, credentialVariable: "NEUVE_FIXTURE_MISSING_REVIEW_KEY" };
+	const callbacks = nativeReviewCallbacks(async (_project, cycle) => `http://127.0.0.1:4040/?cycle=${cycle}`, async project => project, async () => {}, () => Effect.succeed(frozen));
+	let submission: {
+		prepared: Parameters<typeof callbacks.reviewSubmit>[0];
+		result: Awaited<ReturnType<typeof callbacks.reviewSubmit>>;
+	} | undefined;
+	const client = await connect(await host(at, undefined, {}, {
+		...callbacks,
+		async reviewSubmit(...args) {
+			const result = await callbacks.reviewSubmit(...args);
+			submission = { prepared: args[0], result };
+			return result;
+		},
+	}));
+	const record = await client.request<ChannelRecord>({ op: "create", project: at.project });
+	const events: Event[] = [];
+	await client.channel(record.id, { op: "watch", plans: true, builds: true }, { event: event => events.push(event) });
+	const draftRequest = await client.channel<{ submission: number }>(record.id, { op: "ask", author: OWNER, mode: "plan", text: "Draft the plan." });
+	await client.channel(record.id, { op: "wait", submission: draftRequest.submission });
+	const draft = await until(() => events.findLast(event => event.kind === "plans")?.plans[0], "the draft");
+	await writeFile(at.script, JSON.stringify([
+		{ tool: "agent_start", args: { role: "reviewer" }, id: "start-reviewer" },
+		pause("wait-for-release-1"),
+		pause("wait-for-release-2"),
+		{ tool: "neuve_review_lane", args: {}, id: "review-plan-range" },
+		{ text: "Review requested." },
+	] satisfies Step[]));
+	await writeFile(`${at.script}.cursor`, "0");
+	await client.channel(record.id, { op: "plan-approve", author: OWNER, plan: draft.id, hash: draft.hash });
+	const agents = () => events.findLast(event => event.kind === "builds")?.builds.find(build => build.state.kind === "started")?.agents;
+	const implementer = await until(() => agents()?.find(agent => agent.role === "implementer"), "the implementer");
+	const reviewer = await until(() => agents()?.find(agent => agent.role === "reviewer"), "the reviewer");
+	const [implementationEvents, reviewerEvents, info] = await Promise.all([
+		watch(client, record.id, implementer.chat),
+		watch(client, record.id, reviewer.chat),
+		client.channel<ChannelInfo>(record.id, { op: "info" }),
+	]);
+	const cwd = info.chats.find(chat => chat.id === implementer.chat)?.cwd;
+	const reviewerCwd = info.chats.find(chat => chat.id === reviewer.chat)?.cwd;
+	if (!cwd || !reviewerCwd) throw new Error("The plan's agents have no worktrees");
+	const release = (path: string) => writeFile(join(releases, basename(path)), "");
+	try {
+		const paused = (events: Event[]) => events.some(event => event.kind === "tool" && event.call.startsWith("wait-for-release-"));
+		await until(() => paused(implementationEvents) && paused(reviewerEvents), "both agents at their scripted tool calls");
+		const branch = await git(cwd, "branch", "--show-current");
+		const base = await git(reviewerCwd, "rev-parse", "HEAD");
+		await writeFile(join(cwd, "README.md"), "finished implementation\n");
+		await git(cwd, "commit", "-qam", "finish implementation");
+		const head = await git(cwd, "rev-parse", "HEAD");
+		await git(cwd, "branch", "review-mirror", head);
+		await writeFile(join(cwd, "plan.md"), plan);
+		const { cycle, location } = await execute(withStore(at.project, "create", location => Effect.gen(function* () {
+			const scope = yield* readLocalScope(cwd, base, ["plan.md"]);
+			const cycle = yield* Cycles.openOrJoinCycle({ branch, baseOid: base, baseRef: base, branchTipOid: head }, Identity.UNRESOLVED_ACTOR, cycleId =>
+				keepLocalScope({ location, cycleId }, scope, () => {}));
+			return { cycle, location };
+		})));
+		await rm(join(cwd, "plan.md"));
+		await release(reviewerCwd);
+		const receipt = await until(() => reviewerEvents.find(event => event.kind === "result" && event.call === "review-plan-range"), "the review result");
+		expect(receipt).toMatchObject({ error: false });
+		const { prepared, result } = await until(() => submission, "the review admission");
+		if (result.kind !== "review") throw new Error(result.message);
+		return { client, channel: record.id, cwd, prepared, result, cycle, location, base, head, plan };
+	} finally {
+		await Promise.all([release(cwd), release(reviewerCwd)]);
+	}
+}
+
+test("an approved plan's reviewer reviews the implementer's advanced branch and joins its plan cycle", async () => {
+	const { result, cycle, location, base, head, plan } = await submitAdvancedBranchReview();
+	expect(result).toMatchObject({ reference: cycle.cycleId, base, head });
+	expect(readScopeText(location, cycle.cycleId, "S1").text).toBe(plan);
+}, 30000);
+
+// Rechecking the branch tip after admission would reject a valid retry at the pinned head.
+test("a reviewer recovers the same submitted review after the implementer branch advances", async () => {
+	const { client, channel, cwd, prepared, result } = await submitAdvancedBranchReview();
+	await git(cwd, "commit", "--allow-empty", "-qm", "advance after review");
+	const recovered = await client.request<import("../src/review-protocol").NativeReviewResult>({
+		op: "review-submit", channel, prepared,
+	});
+	const { request, reference, run, job, base, head } = result;
+	expect(recovered).toMatchObject({
+		kind: "review", request, reference, run, job, base, head,
+		admission: { recovered: true },
+	});
 }, 30000);
 
 test("expected lane and pull acquisition refusals remain info outcomes through the gateway", async () => {

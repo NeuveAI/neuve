@@ -1,6 +1,6 @@
 // Why: a runtime with tools of its own (Codex) reports its commands and file changes as work it
-// already did, and goes on with its turn while pi records each one. The chat must show each as a
-// tool call that already ran, with the outcome the runtime reported, keep the turn's later output
+// starts, and goes on with its turn while pi records each one. The chat must show each as a
+// tool call that is running, with the outcome the runtime reported, keep the turn's later output
 // in order, release nothing back to the runtime, and send the turn the chat's own folder. pi's
 // shell and file tools and the pass-through itself are never served to such a runtime.
 import { expect, test } from "bun:test";
@@ -9,6 +9,7 @@ import {
   defineExtension,
   GenerationTask,
   hook,
+  LiveDoc,
 } from "@earendil-works/pi-durable";
 import {
   RuntimeEvent,
@@ -18,6 +19,7 @@ import {
   type SessionPolicy,
 } from "@neuve/runtime";
 import { Cause, Effect, Queue, Stream } from "effect";
+import { STOP_ENTRY_KIND } from "../../src/chat-runtime/extension.ts";
 import {
   ATTENDED_SECTION,
   RUNTIME_WORK_TOOL,
@@ -178,7 +180,7 @@ test("attended and unattended requests reopen the same chat with the correspondi
   }
 });
 
-test("Codex's own work shows as calls that already ran, in order, and nothing goes back to it", async () => {
+test("a running command appears before its result and overlapping work stays in transcript order", async () => {
   const fake = new FakeRuntime();
   fake.capabilities = {
     ...caps,
@@ -190,6 +192,7 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
   const opened: SessionPolicy[] = [];
   const turns: unknown[] = [];
   let released = 0;
+  let finishWork: (() => void) | undefined;
   (fake as { shape: FakeRuntime["shape"] }).shape = {
     ...fake.shape,
     openSession: (_account, policy) =>
@@ -215,8 +218,6 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
           get nativeSessionId() {
             return thread;
           },
-          // The whole turn arrives at once: later output reaches the bridge while pi records the
-          // first piece of work, as Codex's does.
           startTurn: (input) =>
             Effect.sync(() => {
               turns.push(input);
@@ -224,35 +225,32 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
               thread = "thread-1";
               emit({ type: "turn.started" });
               emit({ type: "text", text: "Reading. " });
-              emit({
-                type: "work.finished",
-                workId: "c1",
-                kind: "command",
-                input: { command: "cat notes.txt", cwd: "/work/lane" },
-                output: "hello",
-                errored: false,
+              const read = work("c1", "command", {
+                command: "cat notes.txt",
+                cwd: "/work/lane",
               });
+              emit(read.start);
               emit({ type: "text", text: "Editing. " });
-              emit({
-                type: "work.finished",
-                workId: "f1",
-                kind: "file-change",
-                input: { changes: [{ path: "notes.txt", kind: "update" }] },
-                output: "-hello\n+hello, world",
-                errored: true,
+              const edit = work("f1", "file-change", {
+                changes: [{ path: "notes.txt", kind: "update" }],
               });
-              emit({ type: "text", text: "Done." });
-              emit({
-                type: "message.finished",
-                messageId: "m1",
-                stopReason: "end-turn",
-                toolCalls: [],
-              });
-              emit({
-                type: "turn.finished",
-                outcome: { status: "completed" },
-                resumePoint: "codex-turn-1",
-              });
+              emit(edit.start);
+              emit(edit.finish("-hello\n+hello, world", true));
+              finishWork = () => {
+                emit(read.finish("hello"));
+                emit({ type: "text", text: "Done." });
+                emit({
+                  type: "message.finished",
+                  messageId: "m1",
+                  stopReason: "end-turn",
+                  toolCalls: [],
+                });
+                emit({
+                  type: "turn.finished",
+                  outcome: { status: "completed" },
+                  resumePoint: "codex-turn-1",
+                });
+              };
             }),
           steerTurn: () => Effect.void,
           interruptTurn: () => Effect.void,
@@ -269,12 +267,39 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
   const run = await fixture({ fake, toolName: "question" });
   try {
     await run.conversation.configure({ cwd: "/work/lane" }, context);
-    await run.submit("change the notes");
+    const submitted = run.submit("change the notes");
     await until(async () =>
       (await run.messages()).some(
-        (m) => m.role === "assistant" && m.stopReason === "stop",
+        (m) => m.role === "assistant" && m.stopReason === "toolUse",
       ),
     );
+    const running = (await run.conversation.context(context)).entries.flatMap(
+      (entry) => entry.model ?? [],
+    );
+    expect(
+      running.filter(
+        (message) =>
+          message.role === "assistant" || message.role === "toolResult",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [
+          { type: "text", text: "Reading. " },
+          expect.objectContaining({
+            type: "toolCall",
+            name: "runtime_work",
+            arguments: {
+              kind: "command",
+              input: { command: "cat notes.txt", cwd: "/work/lane" },
+            },
+          }),
+        ],
+      }),
+    ]);
+    if (!finishWork) throw new Error("Work did not start");
+    finishWork();
+    expect((await submitted).status).toBe("done");
     const messages = await run.messages();
     const calls = messages.flatMap((m) =>
       m.role === "assistant"
@@ -287,18 +312,19 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
         arguments: {
           kind: "command",
           input: { command: "cat notes.txt", cwd: "/work/lane" },
-          errored: false,
         },
       }),
       expect.objectContaining({
         name: RUNTIME_WORK_TOOL,
         arguments: expect.objectContaining({
           kind: "file-change",
-          errored: true,
         }),
       }),
     ]);
     const results = messages.filter((m) => m.role === "toolResult");
+    expect(results.map((result) => result.toolCallId)).toEqual(
+      calls.map((call) => call.id),
+    );
     expect(
       results.map((r) => [
         r.toolName,
@@ -309,14 +335,23 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
       [RUNTIME_WORK_TOOL, false, "hello"],
       [RUNTIME_WORK_TOOL, true, "-hello\n+hello, world"],
     ]);
-    const text = messages
-      .flatMap((m) =>
+    expect(
+      messages.flatMap((m) =>
         m.role === "assistant"
-          ? m.content.flatMap((b) => (b.type === "text" ? [b.text] : []))
-          : [],
-      )
-      .join("");
-    expect(text).toBe("Reading. Editing. Done.");
+          ? m.content.map((b) => (b.type === "text" ? b.text : b.type))
+          : m.role === "toolResult"
+            ? [m.role]
+            : [],
+      ),
+    ).toEqual([
+      "Reading. ",
+      "toolCall",
+      "toolResult",
+      "Editing. ",
+      "toolCall",
+      "toolResult",
+      "Done.",
+    ]);
     // One turn, with the chat's folder; no result released; the pass-through never served.
     expect(turns).toEqual([
       expect.objectContaining({
@@ -331,7 +366,7 @@ test("Codex's own work shows as calls that already ran, in order, and nothing go
     expect(opened[0]?.folder).toBe("/work/lane");
     expect(opened[0]?.tools.map((tool) => tool.name)).toEqual(["question"]);
     // A call the bridge did not record, as a model calling the tool would make, gets nothing.
-    expect(run.bridge.ran("work-forged")).toBeUndefined();
+    expect(run.bridge.takeWorkResult("work-forged")).toBeUndefined();
   } finally {
     await run.close();
   }
@@ -406,15 +441,6 @@ test("a call to one of Neuve's tools between two pieces of Codex's own work is r
             Queue.endUnsafe(queue);
           }),
         );
-        const work = (workId: string, output: string) =>
-          emit({
-            type: "work.finished",
-            workId,
-            kind: "command",
-            input: { command: workId },
-            output,
-            errored: false,
-          });
         return {
           nativeSessionId: "thread-1",
           startTurn: (input) =>
@@ -422,7 +448,8 @@ test("a call to one of Neuve's tools between two pieces of Codex's own work is r
               turnId = input.turnId;
               void (async () => {
                 emit({ type: "turn.started" });
-                work("before", "one");
+                emit(work("before").start);
+                emit(work("before").finish("one"));
                 emit({
                   type: "message.finished",
                   messageId: "t1",
@@ -448,7 +475,8 @@ test("a call to one of Neuve's tools between two pieces of Codex's own work is r
                   toolName: "question",
                   errored: false,
                 });
-                work("after", "two");
+                emit(work("after").start);
+                emit(work("after").finish("two"));
                 emit({ type: "text", text: "Done." });
                 emit({
                   type: "message.finished",
@@ -485,14 +513,14 @@ test("a call to one of Neuve's tools between two pieces of Codex's own work is r
       messages.flatMap((m) =>
         m.role === "assistant"
           ? m.content.flatMap((b) =>
-              b.type === "toolCall" ? [`${b.name}:${b.id}`] : [],
+              b.type === "toolCall" ? [[b.name, b.arguments]] : [],
             )
           : [],
       ),
     ).toEqual([
-      `${RUNTIME_WORK_TOOL}:work-before`,
-      "question:t1",
-      `${RUNTIME_WORK_TOOL}:work-after`,
+      ["runtime_work", { kind: "command", input: { command: "before" } }],
+      ["question", { n: 7 }],
+      ["runtime_work", { kind: "command", input: { command: "after" } }],
     ]);
     expect(run.executed).toEqual([7]);
     expect(answered).toEqual([expect.objectContaining({ text: "result-7" })]);
@@ -553,14 +581,8 @@ test("a message sent after Codex's turn ended, while its work is recorded, start
                   context,
                 );
                 emit({ type: "turn.started" });
-                emit({
-                  type: "work.finished",
-                  workId: "c1",
-                  kind: "command",
-                  input: { command: "ls" },
-                  output: "notes.txt",
-                  errored: false,
-                });
+                emit(work("ls").start);
+                emit(work("ls").finish("notes.txt"));
                 emit({ type: "text", text: "Done." });
                 emit({
                   type: "message.finished",
@@ -695,22 +717,148 @@ const scripted = (
   };
   return fake;
 };
-const work = (workId: string) => ({
-  type: "work.finished",
-  workId,
-  kind: "command",
-  input: { command: workId },
-  output: workId,
-  errored: false,
-});
+const work = (
+  workId: string,
+  kind = "command",
+  input: Record<string, unknown> = { command: workId },
+) => {
+  const fields = { workId, kind, input };
+  return {
+    start: { ...fields, type: "work.started" },
+    finish: (output = workId, errored = false) => ({
+      ...fields,
+      type: "work.finished",
+      output,
+      errored,
+    }),
+  };
+};
+
+test.each([
+  ["person stops the chat", "Tool runtime_work was aborted"],
+  ["Codex interrupts the turn", "Stopped."],
+  ["the turn finishes the work", "first result"],
+  ["the session dies", "The runtime ended before reporting a result."],
+] as const)(
+  "work settles when %s and a reopened chat records new work once",
+  async (event, result) => {
+    const running = work("c1", "command", { command: "sleep 120" });
+    const reopened = work("c2", "command", { command: "pwd" });
+    let finishTurn: (() => void) | undefined;
+    let turns = 0;
+    const fake = scripted((emit, end) => {
+      emit({ type: "turn.started" });
+      if (++turns === 1) {
+        emit({ type: "text", text: "Starting. " });
+        emit(running.start);
+        if (event === "person stops the chat") {
+          emit({ type: "text", text: "Buffered text." });
+          emit(work("queued").start);
+        }
+        finishTurn = () => {
+          if (event === "the session dies") {
+            end();
+          } else {
+            const interrupted = event === "Codex interrupts the turn";
+            emit(running.finish(result, interrupted));
+            emit(
+              interrupted
+                ? { type: "turn.finished", outcome: { status: "interrupted" } }
+                : {
+                    type: "turn.finished",
+                    outcome: { status: "completed" },
+                    resumePoint: "finished",
+                  },
+            );
+          }
+        };
+        return;
+      }
+      emit(reopened.start);
+      emit(reopened.finish("/work/lane"));
+      emit({ type: "text", text: "Back." });
+      emit({
+        type: "turn.finished",
+        outcome: { status: "completed" },
+        resumePoint: "reopened",
+      });
+    });
+    const run = await fixture({ fake });
+    try {
+      await run.conversation.configure({ cwd: "/work/lane" }, context);
+      const submitted = run.submit("go");
+      await until(
+        async () =>
+          (
+            await run.harness.snapshot(LiveDoc, run.conversation.id, context)
+          )?.tools?.some(
+            (slot) => slot.name === "runtime_work" && slot.status === "running",
+          ) ?? false,
+      );
+      expect(
+        (await run.conversation.context(context)).entries.some((entry) =>
+          entry.model?.some((message) => message.role === "toolResult"),
+        ),
+      ).toBe(false);
+      if (event === "person stops the chat") {
+        await run.stopApprovals();
+        await run.conversation.abort(context);
+        await run.conversation.submit(
+          {
+            type: "write",
+            entry: { kind: STOP_ENTRY_KIND, data: { author: "test" } },
+          },
+          context,
+        );
+      } else {
+        if (!finishTurn) throw new Error("Work did not start");
+        finishTurn();
+      }
+      await submitted;
+      expect((await run.submit("again")).status).toBe("done");
+      const entries = (await run.conversation.context(context)).entries;
+      const messages = entries.flatMap((entry) => entry.model ?? []);
+      const calls = messages.flatMap((m) =>
+        m.role === "assistant"
+          ? m.content.filter((b) => b.type === "toolCall")
+          : [],
+      );
+      const outcomes = messages.filter((m) => m.role === "toolResult");
+      expect(calls.map((call) => call.arguments)).toEqual([
+        { kind: "command", input: { command: "sleep 120" } },
+        { kind: "command", input: { command: "pwd" } },
+      ]);
+      expect(outcomes.map((outcome) => outcome.toolCallId)).toEqual([
+        "work-c1",
+        "work-c2",
+      ]);
+      expect(outcomes.map((outcome) => outcome.isError)).toEqual([
+        event !== "the turn finishes the work",
+        false,
+      ]);
+      if (event === "person stops the chat")
+        expect(JSON.stringify(entries)).toContain(result);
+      else
+        expect(outcomes[0]?.content).toEqual([{ type: "text", text: result }]);
+      expect(outcomes[1]?.content).toEqual([
+        { type: "text", text: "/work/lane" },
+      ]);
+      expect(JSON.stringify(entries)).not.toContain("Buffered text.");
+    } finally {
+      await run.close();
+    }
+  },
+);
 
 // Why: Codex's process can die while pi still records its work. Everything Codex reported before
 // its stream ended (each command it really ran, and the turn's failure) must still be recorded.
 test("the stream ending with work still kept records every piece and the turn's failure", async () => {
   const fake = scripted((emit, end) => {
     emit({ type: "turn.started" });
-    emit(work("first"));
-    emit(work("second"));
+    emit(work("first").start);
+    emit(work("first").finish());
+    emit(work("second").start);
+    emit(work("second").finish());
     emit({ type: "text", text: "partial" });
     emit({
       type: "turn.finished",
@@ -739,10 +887,15 @@ test("the stream ending with work still kept records every piece and the turn's 
     expect(
       messages.flatMap((m) =>
         m.role === "assistant"
-          ? m.content.flatMap((b) => (b.type === "toolCall" ? [b.id] : []))
+          ? m.content.flatMap((b) =>
+              b.type === "toolCall" ? [b.arguments] : [],
+            )
           : [],
       ),
-    ).toEqual(["work-first", "work-second"]);
+    ).toEqual([
+      { kind: "command", input: { command: "first" } },
+      { kind: "command", input: { command: "second" } },
+    ]);
     const entries = (await run.conversation.context(context)).entries.flatMap(
       (entry) => entry.model ?? [],
     );
@@ -765,7 +918,8 @@ test("the stream ending with work still kept records every piece and the turn's 
 test("a failure while recording kept events ends the generation with the failure message", async () => {
   const fake = scripted((emit) => {
     emit({ type: "turn.started" });
-    emit(work("only"));
+    emit(work("only").start);
+    emit(work("only").finish());
     emit({ type: "text", text: "Done." });
     emit({
       type: "message.finished",

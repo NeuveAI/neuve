@@ -720,10 +720,8 @@ test("replaying front scheduling writes one schedule and creates one set of find
   await coverage(result);
 }, 60_000);
 
-// Why (NEU-148): a kind's tools are frozen by its first agent and every later one must declare the
-// same (RunToolsDoc); the four finders share one kind, so read_many must be offered to all four
-// alike, beside read, and no finder may fail for declaring other tools.
-test("all four finders are offered the same tools, read_many beside read", async () => {
+// The finders share a registry, so check tool availability in each model request.
+test("each finder is offered its lens's tools, with read_many beside read", async () => {
   const result = await run("finder-tools");
   expect(result.outcome.status).toBe("completed");
   const offered = new Map<string, Array<string>>();
@@ -740,9 +738,21 @@ test("all four finders are offered the same tools, read_many beside read", async
   expect([...offered.keys()].sort()).toEqual(
     FINDERS.map((lens) => `find.${lens}`).sort(),
   );
-  const lists = [...offered.values()];
-  for (const list of lists) expect(list).toEqual(lists[0]!);
-  expect(lists[0]!.slice(0, 2)).toEqual(["read", "read_many"]);
+  for (const lens of FINDERS) {
+    const list = offered.get(`find.${lens}`)!;
+    expect(list.slice(0, 2)).toEqual(["read", "read_many"]);
+    expect(
+      list.filter((name) =>
+        ["scope_section", "proofs", "proof"].includes(name),
+      ),
+    ).toEqual(
+      lens === "scope-fit"
+        ? ["scope_section", "proofs", "proof"]
+        : lens === "tests"
+          ? ["proofs", "proof"]
+          : [],
+    );
+  }
   expect(
     result.outcome.status === "completed"
       ? result.outcome.result.stages

@@ -1366,14 +1366,8 @@ export const AgentCommentThread: PinStory = {
 
 /** Replied: the comment and Implementer 1's reply; the reply box is open. */
 export const ThreadReplied: PinStory = threadStory(reviewThreadFixtures[0])
-/** Your follow-up is queued: it reaches I1 when it's free. */
-export const ThreadQueued: PinStory = threadStory(threadStateFixtures.queued)
-/** Sent to I1 (no read receipts exist in ACP). */
-export const ThreadSent: PinStory = threadStory(threadStateFixtures.sent)
-/** Picked up: I1's turn started. */
-export const ThreadPickedUp: PinStory = threadStory(
-  threadStateFixtures["picked-up"]
-)
+/** Your follow-up on its way (queued, sent or picked up): no line, no reply box. */
+export const ThreadOnItsWay: PinStory = threadStory(threadStateFixtures.sent)
 /** Working: narration and tool calls collapse into "3 steps". */
 export const ThreadWorking: PinStory = threadStory(threadStateFixtures.working)
 /** Needs your input: Allow once / Deny. */

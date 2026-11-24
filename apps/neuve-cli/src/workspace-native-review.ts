@@ -273,6 +273,8 @@ export function nativeReviewCallbacks(
           await validate(Option.isNone(exists));
           const values = {
             requestId: prepared.requestId,
+            branch:
+              h.source || h.externalSources.length ? undefined : h.sourceBranch,
             branchCheckout: h.cwd,
             frozenConfig: PipelineConfig.parse(prepared.config),
             origin: h.origin,

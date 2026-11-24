@@ -14,3 +14,19 @@ export const mcpTool = (definition: ToolDefinition) => ({
     openWorldHint: definition.hints.openWorld,
   },
 });
+
+export function unknownTool(
+  name: string,
+  tools: ReadonlyArray<{ name: string }>,
+) {
+  const served = tools.map((tool) => tool.name).join(", ");
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Neuve has no tool ${JSON.stringify(name)}. This chat's tools are: ${served}.`,
+      },
+    ],
+    isError: true,
+  };
+}

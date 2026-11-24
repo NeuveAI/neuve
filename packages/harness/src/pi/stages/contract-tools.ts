@@ -11,7 +11,7 @@ import {
 import { Effect } from "effect";
 import { physicalTurnId } from "./contract-recovery.ts";
 import { REMINDER_SHARE } from "../../budget.ts";
-import { capResult, describeZodError, RECORDS } from "../../toolkit.ts";
+import { capResult, RECORDS } from "../../toolkit.ts";
 import { reminderText, submitNameOf } from "./agent.ts";
 import { ToolState, type ToolDeclaration } from "./docs.ts";
 import {
@@ -22,7 +22,7 @@ import {
 import {
   budgetLine,
   roundEnds,
-  strictArguments,
+  parseToolInput,
   submitted,
   type ResolvedAgent,
 } from "./tools.ts";
@@ -42,6 +42,9 @@ export function contractTools(input: {
 }) {
   const { agent, frozen, store, services, ceiling } = input;
   const spec = agent.step.spec;
+  const ownTools = new Map(
+    [...spec.tools, agent.vent].map((tool) => [tool.name, tool]),
+  );
   let committed: ContractState | undefined;
   let stopped: { error: unknown } | undefined;
   const waiters = new Set<() => void>();
@@ -170,21 +173,22 @@ export function contractTools(input: {
           [call.callId]: { status: "started", eligible: true },
         },
       });
+      const fields = {
+        stage: spec.stage,
+        agent: spec.agent,
+        tool: declaration.name,
+        turn: facts.turns,
+        callId: call.callId,
+      };
+      services.ctx.log.write({ type: "tool.started", ...fields });
       spec.state?.load(nextState ?? undefined, facts.turns);
-      const own = [...spec.tools, agent.vent].find(
-        (tool) => tool.name === declaration.name,
-      );
+      const own = ownTools.get(declaration.name);
       const isSubmit = declaration.name === submitNameOf(spec);
-      const raw = rawCall.input;
-      const prepared = strictArguments(declaration)?.(raw) ?? raw;
       const schema = isSubmit ? spec.submit.schema : own?.input;
-      const parsed =
-        schema === undefined
-          ? { success: true as const, data: undefined }
-          : schema.safeParse(prepared);
+      const parsed = parseToolInput(declaration, schema, rawCall.input);
       outcome = !parsed.success
         ? {
-            text: `Invalid input for ${declaration.name}: ${describeZodError(parsed.error)}`,
+            text: parsed.message,
             error: "InvalidInput",
           }
         : isSubmit
@@ -223,10 +227,7 @@ export function contractTools(input: {
       nextState = spec.state?.save() ?? null;
       services.ctx.log.write({
         type: "tool.call",
-        stage: spec.stage,
-        agent: spec.agent,
-        tool: declaration.name,
-        turn: facts.turns,
+        ...fields,
         resultBytes: Buffer.byteLength(outcome.text),
         ...(outcome.error === undefined ? {} : { error: outcome.error }),
       });
@@ -256,11 +257,11 @@ export function contractTools(input: {
     return outcome;
   };
 
-  const definitions: ToolDefinition[] = frozen.map((declaration) => {
-    const own = [...spec.tools, agent.vent].find(
-      (tool) => tool.name === declaration.name,
-    );
-    return {
+  const definitions: ToolDefinition[] = [];
+  for (const declaration of frozen) {
+    const own = ownTools.get(declaration.name);
+    if (own?.available === false) continue;
+    definitions.push({
       name: declaration.name,
       description: declaration.description,
       inputSchema: JsonSchema.parse(declaration.parameters),
@@ -279,8 +280,8 @@ export function contractTools(input: {
           }
           return work;
         }),
-    };
-  });
+    });
+  }
   return {
     definitions,
     close,

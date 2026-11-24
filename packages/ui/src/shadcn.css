@@ -257,6 +257,7 @@
 }
 
 @source "../**/*.tsx";
+@source "./ui/popup.ts";
 
 :root {
 	--r-sm: 0.25rem;
