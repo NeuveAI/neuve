@@ -129,11 +129,7 @@ export const runSemanticCli = async (
       payload = JSON.parse(text);
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
-      const reason = error.message.replace(
-        /(Unexpected (?:identifier|token)|Unrecognized token|Invalid escape character) .+$/s,
-        "$1",
-      );
-      throw new Error(`--input. ${reason}`);
+      throw new Error("--input is not valid JSON.");
     }
     const parsed = inputSchema.safeParse(payload, {
       error: (issue) =>

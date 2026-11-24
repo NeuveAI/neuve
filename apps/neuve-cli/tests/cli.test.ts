@@ -483,11 +483,11 @@ describe("neuve CLI boundary", () => {
     await Bun.write(file, "{");
     const incomplete = await run(command);
     expect(incomplete.exitCode).toBe(2);
-    expect(incomplete.stderr).toContain("Expected '}'");
+    expect(incomplete.stderr).toContain("--input is not valid JSON.");
     await Bun.write(file, "privateIdentifier");
     const badToken = await run(command);
     expect(badToken.exitCode).toBe(2);
-    expect(badToken.stderr).toContain("Unexpected identifier");
+    expect(badToken.stderr).toContain("--input is not valid JSON.");
     expect(badToken.stderr).not.toContain("privateIdentifier");
   });
 
