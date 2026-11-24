@@ -570,3 +570,20 @@ test("a linked hook file into a folder that can't be written stops setup before 
     await chmod(locked, 0o700);
   }
 });
+
+// Reason: writing a file needs search permission on its folder as well as write permission.
+test("a named hook file in a folder without search permission stops setup before anything is written", async () => {
+  const { repo, settings, setUp } = await scene();
+  await mkdir(join(settings, ".."), { recursive: true });
+  await chmod(join(settings, ".."), 0o600);
+  try {
+    await expect(setUp()).rejects.toThrow(
+      "a folder of --claude-settings can't be written.",
+    );
+    expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+      false,
+    );
+  } finally {
+    await chmod(join(settings, ".."), 0o700);
+  }
+});

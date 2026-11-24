@@ -563,13 +563,13 @@ const judgeAgentHooks = async (
   };
 };
 
-/** Whether the folder, or the nearest one above it that exists, can be written. */
+/** Whether the folder, or the nearest one above it that exists, can be written into: write and search. */
 const writableFolder = async (folder: string): Promise<boolean> => {
   for (let current = folder; ; current = dirname(current)) {
     const found = await stat(current).catch(() => undefined);
     if (found !== undefined)
       return found.isDirectory()
-        ? await access(current, constants.W_OK).then(
+        ? await access(current, constants.W_OK | constants.X_OK).then(
             () => true,
             () => false,
           )
