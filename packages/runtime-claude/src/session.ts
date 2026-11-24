@@ -1290,6 +1290,28 @@ export const openClaudeSession = (
                         }
                         return;
                       }
+                      if (
+                        frame.type === "assistant" &&
+                        frame.parent_tool_use_id === null &&
+                        frame.error !== undefined
+                      ) {
+                        turn.observations = {
+                          ...turn.observations,
+                          assistant: {
+                            code: frame.error,
+                            text: assistantText(frame),
+                          },
+                        };
+                        if (frame.error === "rate_limit") {
+                          const info = assistantRateInfo(frame);
+                          if (info !== undefined && usageBlocked(info))
+                            turn.rejected.set(
+                              info.rateLimitType ?? "other",
+                              limitWindow(info, now()),
+                            );
+                        }
+                        return;
+                      }
                       if (turn.messages.isPublishedFrame(frame)) {
                         yield* dieProtocolLocked(
                           "published-frame-open-turn",
@@ -1400,23 +1422,6 @@ export const openClaudeSession = (
                           );
                           return;
                         }
-                        if (frame.error !== undefined)
-                          turn.observations = {
-                            ...turn.observations,
-                            assistant: {
-                              code: frame.error,
-                              text: assistantText(frame),
-                            },
-                          };
-                        const info =
-                          frame.error === "rate_limit"
-                            ? assistantRateInfo(frame)
-                            : undefined;
-                        if (info !== undefined && usageBlocked(info))
-                          turn.rejected.set(
-                            info.rateLimitType ?? "other",
-                            limitWindow(info, now()),
-                          );
                       } else if (frame.type === "rate_limit_event") {
                         const window = limitWindow(
                           frame.rate_limit_info,

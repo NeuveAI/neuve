@@ -442,7 +442,7 @@ test("production sources deliver a worker chat through a fake Claude executable 
         () => {},
       ),
     ).rejects.toThrow(
-      "Sign in for worker-test. Run neuve auth login worker-test.",
+      "Sign in for worker-test: run neuve auth login worker-test on this machine, then send your message again.",
     );
     expect(
       markerEvents(fake.marker).filter((event) => event.type === "prompt"),

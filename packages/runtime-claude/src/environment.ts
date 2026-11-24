@@ -60,8 +60,10 @@ export function childEnvironment(
   const env: Record<string, string | undefined> = {};
   for (const name of Object.keys(parent)) {
     if (
-      !removed.has(name) &&
-      !REMOVED_PREFIXES.some((prefix) => name.startsWith(prefix))
+      (name === "CLAUDE_CODE_OAUTH_TOKEN" &&
+        account.credential.folder === undefined) ||
+      (!removed.has(name) &&
+        !REMOVED_PREFIXES.some((prefix) => name.startsWith(prefix)))
     )
       env[name] = parent[name];
   }

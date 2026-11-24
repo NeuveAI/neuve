@@ -65,7 +65,7 @@ function signInText(
 ): string {
   const command = signInCommand(hint);
   return command
-    ? `Sign in for ${account}. Run ${command}.`
+    ? `Sign in for ${account}: run ${command} on this machine, then send your message again.`
     : `Sign in for ${account} in Settings.`;
 }
 /** Account names and commands can themselves match pi's text heuristics. Preserve them verbatim without retrying. */

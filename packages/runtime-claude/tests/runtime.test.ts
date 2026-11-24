@@ -362,7 +362,9 @@ test("environment: stray keys and parent sessions cannot replace the folder subs
   const parent: Record<string, string> = {
     HOME: "/test/home",
     PATH: "/test/bin",
-    CLAUDE_CODE_USE_FUTURE_PROVIDER: "test",
+    CLAUDE_CODE_OAUTH_TOKEN: "test-token",
+    CLAUDE_CODE_OAUTH_TOKEN_EXTRA: "test",
+    ANTHROPIC_API_KEY: "test",
   };
   for (const key of REMOVED_ENVIRONMENT)
     Object.defineProperty(parent, key, {
@@ -373,16 +375,19 @@ test("environment: stray keys and parent sessions cannot replace the folder subs
     });
   const env = childEnvironment(parent, account);
   expect(env.CLAUDE_CONFIG_DIR).toBe("/test/config");
+  expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   expect(env.HOME).toBe(parent.HOME);
-  expect(env.CLAUDE_CODE_USE_FUTURE_PROVIDER).toBeUndefined();
+  expect(env.CLAUDE_CODE_OAUTH_TOKEN_EXTRA).toBeUndefined();
   for (const key of REMOVED_ENVIRONMENT) expect(key in env).toBe(false);
   const defaultAccount = {
     ...account,
     credential: { kind: "claude-config-folder" as const },
   };
-  expect(
-    childEnvironment(parent, defaultAccount).CLAUDE_CONFIG_DIR,
-  ).toBeUndefined();
+  const defaultEnv = childEnvironment(parent, defaultAccount);
+  expect(defaultEnv.CLAUDE_CONFIG_DIR).toBeUndefined();
+  expect(defaultEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("test-token");
+  expect(defaultEnv.CLAUDE_CODE_OAUTH_TOKEN_EXTRA).toBeUndefined();
+  expect(defaultEnv.ANTHROPIC_API_KEY).toBeUndefined();
   expect(env).toMatchObject({
     ENABLE_CLAUDEAI_MCP_SERVERS: "false",
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
@@ -435,6 +440,13 @@ test("usage: cumulative ledgers become per-model turn totals and absorb a steeri
   );
 });
 
+const aceSignedOut = {
+  ...assistant(
+    "invalid_request",
+    "Login expired · Run /login to sign in again, or re-authenticate your Anthropic profile",
+  ),
+  isApiErrorMessage: true,
+};
 const failureCases: Array<{
   name: string;
   frames: SDKMessage[];
@@ -499,14 +511,33 @@ const failureCases: Array<{
     expected: { _tag: "AccountRejected", reason: "other" },
   },
   {
-    name: "sign-in required",
-    frames: [assistant("authentication_failed"), result({ is_error: true })],
-    expected: { _tag: "SignInRequired" },
-  },
-  {
     name: "not signed in text",
     frames: [result({ is_error: true, result: "Not logged in" })],
     expected: { _tag: "SignInRequired" },
+  },
+  {
+    name: "expired login reported by Ace's Claude session",
+    frames: [
+      {
+        ...aceSignedOut,
+        message: {
+          ...aceSignedOut.message,
+          model: "<synthetic>",
+          stop_reason: "stop_sequence" as const,
+        },
+      },
+      result({
+        subtype: "success",
+        is_error: true,
+        api_error_status: null,
+        terminal_reason: "api_error",
+        stop_reason: "stop_sequence",
+      }),
+    ],
+    expected: {
+      _tag: "SignInRequired",
+      hint: { kind: "command", command: "claude auth login" },
+    },
   },
   {
     name: "usage prefix",
@@ -593,6 +624,57 @@ for (const scenario of failureCases)
         }),
     );
   });
+
+// A finished message for this notice would close the chat before the sign-in failure arrived.
+test("failure boundary: captured ended Claude login", async () => {
+  const text =
+    "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs";
+  const notice = assistant("authentication_failed", text);
+  await sessionTest(
+    [
+      open,
+      offer,
+      inbound({
+        ...notice,
+        message: {
+          ...notice.message,
+          model: "<synthetic>",
+          stop_reason: "stop_sequence" as const,
+          stop_sequence: "",
+        },
+      }),
+      inbound(
+        result({
+          is_error: true,
+          result: text,
+          stop_reason: "stop_sequence",
+          terminal_reason: "api_error",
+          api_error_status: null,
+          total_cost_usd: 0,
+        }),
+      ),
+      close,
+    ],
+    (session, reader) =>
+      Effect.gen(function* () {
+        yield* session.startTurn(normal);
+        expect(yield* reader.until("turn.finished")).toMatchObject({
+          outcome: {
+            status: "failed",
+            failure: {
+              _tag: "SignInRequired",
+              account: "test",
+              hint: { kind: "command", command: "claude auth login" },
+            },
+          },
+        });
+        expect(reader.seen.map((event) => event.type)).toEqual([
+          "turn.started",
+          "turn.finished",
+        ]);
+      }),
+  );
+});
 
 test("probe: initialization signed-in state closes without ever offering a prompt", async () => {
   for (const [info, state] of [
