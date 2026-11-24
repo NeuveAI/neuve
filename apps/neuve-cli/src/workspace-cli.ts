@@ -94,6 +94,7 @@ import { announcedChild, closeChild } from "./workspace-child.ts";
 import { buildReviewWeb, ReviewWebs } from "./workspace-review-build.ts";
 import { requestRangeReview } from "./review-cli.ts";
 import { parseWorkspaceOptions, workspaceReady } from "./workspace-launch.ts";
+import { nameDiagnosticPath } from "./records-cli.ts";
 import {
   aceReviewDestination,
   codingReturnUrl,
@@ -579,10 +580,13 @@ export function codingWorkerSetup(
   };
 }
 
-const portOf = (value: string | undefined): number => {
+const portOf = (
+  name: "--port" | "--web-port",
+  value: string | undefined,
+): number => {
   if (value === undefined) return 0;
   if (!/^\d+$/.test(value) || Number(value) > 65_535)
-    throw new Error(`Invalid port ${JSON.stringify(value)}`);
+    throw new Error(`${name} takes an integer from 0 to 65535.`);
   return Number(value);
 };
 
@@ -648,15 +652,15 @@ async function workspace(args: readonly string[]): Promise<number> {
     writeSync(1, `${WORKSPACE_HELP}\n`);
     return 0;
   }
-  const hostPort = portOf(values.port);
-  const webPort = portOf(values["web-port"] ?? "4141");
+  const hostPort = portOf("--port", values.port);
+  const webPort = portOf("--web-port", values["web-port"] ?? "4141");
   const compiledDefault =
     Bun.main.startsWith("/$bunfs/") && requestedSource === undefined;
   if (compiledDefault && values.profile === "local")
     throw new Error(
       "With --profile local, the installed CLI needs --source <checkout>. Or run bun workspace from your Neuve checkout.",
     );
-  let source: string;
+  let source: string | undefined;
   let profile: StorageProfile;
   let validated: ValidatedStorage;
   try {
@@ -674,13 +678,36 @@ async function workspace(args: readonly string[]): Promise<number> {
         : await validateStorageProfile(selectedProfile, {
             checkout: candidate,
           });
-    source = await realpath(candidate);
+    source = await realpath(candidate).catch((error) => {
+      if (requestedSource === undefined) throw error;
+      throw new Error(
+        nameDiagnosticPath(error, "--source", candidate, resolve(candidate)),
+      );
+    });
     profile =
       selectedProfile ?? (await readStorageProfile(source, values.profile));
     validated =
       selectedStorage ??
       (await validateStorageProfile(profile, { checkout: source }));
   } catch (error) {
+    if (
+      values.profile !== undefined &&
+      error instanceof StorageRefused &&
+      error.reason === "profile-malformed" &&
+      error.path === values.profile
+    )
+      error.message = nameDiagnosticPath(
+        error,
+        "--profile",
+        values.profile,
+        resolve(values.profile),
+      );
+    if (
+      requestedSource !== undefined &&
+      error instanceof StorageRefused &&
+      error.path === source
+    )
+      error.message = nameDiagnosticPath(error, "--source", source);
     if (
       compiledDefault &&
       values.profile === undefined &&
@@ -698,7 +725,17 @@ async function workspace(args: readonly string[]): Promise<number> {
   const repository = await validateWorkspaceProject(
     values.repo ?? process.cwd(),
     validated,
-  );
+  ).catch((error: unknown) => {
+    if (values.repo !== undefined && error instanceof Error)
+      error.message = nameDiagnosticPath(
+        error,
+        "--repo",
+        values.repo,
+        resolve(values.repo),
+        ...(error instanceof StorageRefused ? [error.path] : []),
+      );
+    throw error;
+  });
   const route = settingsRoute();
   const user = values.user ?? process.env.USER ?? process.env.LOGNAME;
   if (

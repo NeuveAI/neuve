@@ -278,7 +278,6 @@ test("doctor reports an agent hook file it can't read in a repository with captu
   expect(await setUp()).toBe(0);
   await writeFile(settings, '{"hooks":{"Stop":{}}}');
   const { check } = await doctor(isolated);
-  // The same sentence in both places. Read before matching: a matcher can stand in for the value.
   const sentence = `${settings} can't be read as claude-code's hook file (hooks.Stop: Invalid input: expected array, received object), so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`;
   const detail = String(check("capture")?.detail);
   expect(detail.includes(sentence)).toBe(true);
@@ -287,7 +286,9 @@ test("doctor reports an agent hook file it can't read in a repository with captu
     detail: expect.stringContaining(`${settings} can't be read`),
     fix: `Fix or move ${settings}, then run neuve setup hooks --repo '${repository}'`,
   });
-  await expect(setUp()).rejects.toThrow(sentence);
+  await expect(setUp()).rejects.toThrow(
+    "--claude-settings can't be read as claude-code's hook file (hooks.Stop: Invalid input: expected array, received object), so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.",
+  );
   expect(await Bun.file(settings).text()).toBe('{"hooks":{"Stop":{}}}');
 });
 
@@ -324,7 +325,10 @@ test("doctor shows a note beside an ok capture when it can't tell what a hook ru
   ).toBe(0);
   // The same entries, each running a bare word Neuve can't look up surely.
   const text = await Bun.file(settings).text();
-  await writeFile(settings, text.replaceAll(`${program} hook`, "neuve hook"));
+  await writeFile(
+    settings,
+    text.replaceAll(/sh -c '.*? hook (?=claude-code )/g, "sh -c 'neuve hook "),
+  );
   const capture = (await doctor(isolated)).check("capture");
   const detail = String(capture?.detail);
   expect(capture?.status).toBe("ok");
@@ -447,7 +451,7 @@ test("with no usable Git, doctor, review and setup say so and leave the reposito
   expect(check("repository")).toEqual({
     check: "repository",
     status: "missing",
-    detail: `Doctor can't look at ${repository} until Git works`,
+    detail: "Doctor can't check the repository until Git works",
     fix: "Fix Git first (above), then run neuve doctor again",
   });
   expect(report.checks.map((entry) => entry.check)).not.toContain("setup");

@@ -113,7 +113,9 @@ test("recompose refuses an unknown run, a run that did not complete, and a store
       Effect.provide(BunFileSystem.layer),
     ),
   );
-  expect(refusals.unknown).toContain("is no review request");
+  expect(refusals.unknown).toContain(
+    "--run must name a review request in this store.",
+  );
   expect(refusals.incomplete).toContain("did not complete");
   expect(refusals.waiting).toContain("review job(s) waiting or running");
 });

@@ -137,13 +137,14 @@ for (const scenario of [
         scenario === "explicit"
           ? "no Graph engine at"
           : scenario === "environment"
-            ? "NEUVE_GRAPH_BINARY does not name an executable file"
+            ? "NEUVE_GRAPH_BINARY must name an executable Neuve Graph file."
             : "Neuve Graph binary is unavailable",
       );
-      expect(problem).toContain(
-        scenario === "explicit" || scenario === "environment"
-          ? missing
-          : installed,
-      );
+      // The value of NEUVE_GRAPH_BINARY is the person's, so it is never shown.
+      if (scenario === "environment") expect(problem).not.toContain(missing);
+      else
+        expect(problem).toContain(
+          scenario === "explicit" ? missing : installed,
+        );
     }
   });

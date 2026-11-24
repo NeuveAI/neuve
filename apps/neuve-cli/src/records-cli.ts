@@ -1,5 +1,6 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { CommitNotFound } from "../../../packages/harness/src/git.ts";
 import { Cause, Effect, Exit, Option } from "effect";
 import type { FileSystem } from "effect/FileSystem";
 import type { SqlClient } from "effect/sql/SqlClient";
@@ -139,15 +140,21 @@ export const describeFailure = (error: unknown, fallback?: string): string => {
   // initialization cut short) reaches the switch below.
   const refusal = refusalFrom(error);
   if (refusal !== undefined) return refusalSentence(refusal);
+  if (error instanceof CommitNotFound) return fallback ?? error.message;
   if (typeof error === "object" && error !== null && "_tag" in error) {
     const tagged = error as { _tag: string } & Record<string, unknown>;
     switch (tagged._tag) {
       case "StoreMissing":
-        return `No Records store at ${String(tagged["path"])}.`;
+        return "Neuve isn't set up in this repository. Run neuve setup there first.";
       case "WorkerSpawnFailed":
         return String(tagged["message"]);
+      case "ProofRefused":
+      case "InvalidEvent":
+        return fallback ?? String(tagged["message"]);
+      case "UnknownSession":
+        return "The --session value names no live agent session in this repository.";
       case "RepositoryUnavailable":
-        return `${String(tagged["repository"])} is not inside a git repository, so it has no Records store.`;
+        return "--repo must name a folder inside a Git repository.";
       case "BackupFailed":
         return `The store was not migrated: its backup copy ${String(tagged["path"])} could not be written (${String(tagged["message"])}).`;
       case "StoreNotInitialized":
@@ -157,7 +164,9 @@ export const describeFailure = (error: unknown, fallback?: string): string => {
       default:
         return (
           fallback ??
-          `${tagged._tag}: ${String(tagged["message"] ?? JSON.stringify(tagged))}`
+          (typeof tagged["message"] === "string"
+            ? `${tagged._tag}: ${tagged["message"]}`
+            : tagged._tag)
         );
     }
   }
@@ -179,6 +188,65 @@ export const execute = async <A>(
 
 export const write = (text: string) =>
   Bun.write(Bun.stdout, text.endsWith("\n") ? text : `${text}\n`);
+
+export const argumentRefusal = (argument: string, accepted: string): string =>
+  `${argument} takes ${accepted}.`;
+
+export const nameDiagnosticPath = (
+  error: unknown,
+  name: string,
+  ...paths: string[]
+): string => {
+  let message = error instanceof Error ? error.message : String(error);
+  for (const path of paths.sort((a, b) => b.length - a.length)) {
+    if (path === "") continue;
+    message = message
+      .replaceAll(JSON.stringify(path), name)
+      .replaceAll(`'${path}'`, name)
+      .replaceAll(`at ${path}:`, `at ${name}:`);
+    if (path.startsWith("/") && path !== "/")
+      message = message.replaceAll(path, name);
+    // A system error can name a folder above the supplied path, which is part of what the person typed.
+    for (
+      let folder = dirname(path);
+      folder !== dirname(folder);
+      folder = dirname(folder)
+    )
+      message = message
+        .replaceAll(`'${folder}'`, `a folder of ${name}`)
+        .replaceAll(JSON.stringify(folder), `a folder of ${name}`);
+  }
+  return message;
+};
+
+export const repositoryRoot = (repository: string): string => {
+  const git = Bun.spawnSync(
+    ["git", "-C", repository, "rev-parse", "--show-toplevel"],
+    { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+  );
+  if (!git.success)
+    throw new Error(
+      argumentRefusal("--repo", "a folder inside a Git working tree"),
+    );
+  return git.stdout.toString().trimEnd();
+};
+
+export const unknownOptionRefusal = (
+  token: string | undefined,
+  command: string,
+) => {
+  const name = token?.split("=", 1)[0];
+  const option =
+    name !== undefined && /^-{1,2}[a-zA-Z][a-zA-Z0-9-]{0,63}$/.test(name)
+      ? ` '${name}'`
+      : "";
+  return `Unknown option${option}. Run ${command} --help for accepted options.`;
+};
+
+export const unknownCommandRefusal = (token: string, command: string) =>
+  token.startsWith("-")
+    ? unknownOptionRefusal(token, command)
+    : `Unknown command. Run ${command} --help for usage.`;
 
 const bytes = (count: number) => {
   if (count < 1024) return `${count} B`;
@@ -458,8 +526,8 @@ export const runRecordsCli = async (
         await Bun.write(
           Bun.stderr,
           Option.isSome(newer)
-            ? `neuve: event ${id} is ${newer.value}, a kind this build does not know; the newer build that wrote it shows it\n`
-            : `neuve: no event ${id}\n`,
+            ? `neuve: That event is ${newer.value}, a kind this build does not know. Use the newer build that wrote it.\n`
+            : "neuve: That event ID has no event in this store.\n",
         );
         return 1;
       }
@@ -677,8 +745,6 @@ export const runRecordsCli = async (
       return 0;
     }
     default:
-      throw new Error(
-        `Unknown records command: ${subcommand}. Run neuve records --help for usage.`,
-      );
+      throw new Error(unknownCommandRefusal(subcommand, "neuve records"));
   }
 };

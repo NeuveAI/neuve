@@ -7,7 +7,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { Effect } from "effect";
 import { Scope } from "@neuve/harness";
@@ -998,10 +998,18 @@ test("review show outside a git repository says so and exits 2", async () => {
       "--repo",
       folder,
     ],
-    { env: { ...process.env, HOME: folder }, stdout: "pipe", stderr: "pipe" },
+    {
+      env: {
+        ...process.env,
+        HOME: folder,
+        GIT_CEILING_DIRECTORIES: dirname(folder),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
   );
   expect(result.exitCode).toBe(2);
   expect(result.stderr.toString()).toBe(
-    `neuve: ${folder} is not inside a git repository, so it has no Records store.\n`,
+    "neuve: --repo must name a folder inside a Git repository.\n",
   );
 }, 60_000);

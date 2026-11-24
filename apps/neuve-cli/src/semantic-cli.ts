@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { z } from "zod";
+import { nameDiagnosticPath } from "./records-cli.ts";
 import {
   SemanticClient,
   scorePool,
@@ -100,7 +101,9 @@ export const runSemanticCli = async (
   const handle = await open(
     inputPath,
     constants.O_RDONLY | constants.O_NONBLOCK,
-  );
+  ).catch((error: unknown) => {
+    throw new Error(nameDiagnosticPath(error, "--input", inputPath));
+  });
   let input: z.infer<typeof inputSchema>;
   try {
     const metadata = await handle.stat();
@@ -118,13 +121,27 @@ export const runSemanticCli = async (
     }
     if (used > maximumBytes || used !== metadata.size)
       throw new Error("Semantic input changed or exceeds its byte limit.");
-    input = inputSchema.parse(
-      JSON.parse(
+    let payload: unknown;
+    try {
+      payload = JSON.parse(
         new TextDecoder("utf-8", { fatal: true }).decode(
           bytes.subarray(0, used),
         ),
-      ),
-    );
+      );
+    } catch (error) {
+      if (!(error instanceof SyntaxError) && !(error instanceof TypeError))
+        throw error;
+      throw new Error("--input is not valid JSON.");
+    }
+    const parsed = inputSchema.safeParse(payload, {
+      error: (issue) =>
+        issue.code === "unrecognized_keys" ? "Unrecognized fields" : undefined,
+    });
+    if (!parsed.success)
+      throw new Error(
+        `--input has invalid fields.\n${z.prettifyError(parsed.error)}`,
+      );
+    input = parsed.data;
   } finally {
     await handle.close();
   }

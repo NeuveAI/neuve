@@ -73,12 +73,7 @@ export const runVentCli = async (args: readonly string[]): Promise<number> => {
   const message = Vents.describe(result);
   if (values.json === true)
     await write(JSON.stringify({ ...result, message }, null, 2));
-  else
-    await write(
-      result.status === "unlinked"
-        ? `${message} Pass --session <harness>:<session id>, or set NEUVE_SESSION.`
-        : message,
-    );
+  else await write(message);
   return result.status === "unlinked" ? 1 : 0;
 };
 

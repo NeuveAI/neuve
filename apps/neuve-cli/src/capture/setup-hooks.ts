@@ -39,6 +39,7 @@ import {
 import { GIT_HOOKS, TRAILER_HOOK } from "./git-hooks.ts";
 import { Identity } from "@neuve/records-core/capture";
 import { setupStack } from "../stack-cli.ts";
+import { nameDiagnosticPath, repositoryRoot } from "../records-cli.ts";
 import { CLI_VERSION } from "../cli-version.ts";
 import { commandScreen, shown, type Mark } from "../terminal.ts";
 
@@ -219,7 +220,7 @@ const linkTarget = async (path: string) => {
     return await realpath(path);
   } catch {
     throw new Error(
-      `${path} is a symbolic link to a missing file; fix the link first`,
+      `${path} is a symbolic link to a missing file. Fix the link first.`,
     );
   }
 };
@@ -287,12 +288,12 @@ const executableByOwner = async (path: string) =>
  * in the way, and Neuve changes nothing there until the person moves or fixes it.
  */
 const refusal = {
-  hooksFolderLink: (directory: string) =>
-    `${directory} is a symbolic link; point core.hooksPath at a real directory`,
-  notAPlainFile: (path: string) =>
-    `${path} isn't a plain file or a link, so Neuve leaves it as it is; move it away first`,
-  foreignBeside: (path: string, previous: string) =>
-    `${path} is not Neuve's and ${previous} already exists; move one aside first`,
+  hooksFolderLink: () =>
+    "Git's hooks folder is a symbolic link; point core.hooksPath at a real directory",
+  notAPlainFile: (name: string) =>
+    `Git's ${name} hook isn't a plain file or a link, so Neuve leaves it as it is; move it away first`,
+  foreignBeside: (name: string) =>
+    `Git's ${name} hook is not Neuve's and its ${name}.pre-neuve hook already exists; move one aside first`,
 };
 
 type GitHookState =
@@ -326,12 +327,12 @@ const judgeGitHook = async (
       (await stat(path).catch(() => undefined))?.isFile()
     )
   )
-    return { state: "unreadable", why: refusal.notAPlainFile(path) };
+    return { state: "unreadable", why: refusal.notAPlainFile(name) };
   const current = await readFile(path, "utf8").catch(() => "");
   const chained = await exists(previous);
   if (!current.includes(MARKER))
     return chained
-      ? { state: "unreadable", why: refusal.foreignBeside(path, previous) }
+      ? { state: "unreadable", why: refusal.foreignBeside(name) }
       : {
           state: "missing",
           why: "the hook there isn't Neuve's",
@@ -562,6 +563,42 @@ const judgeAgentHooks = async (
   };
 };
 
+/** Whether a file that is written in place, if it exists, is a regular file that can be written. */
+const writableFile = async (path: string): Promise<boolean> => {
+  const found = await stat(path).catch(() => undefined);
+  // A link to nothing can't be written through; nothing at all can be created.
+  if (found === undefined)
+    return !(await lstat(path).catch(() => undefined))?.isSymbolicLink();
+  return (
+    found.isFile() &&
+    (await access(path, constants.W_OK).then(
+      () => true,
+      () => false,
+    ))
+  );
+};
+
+/** Whether the folder, or the nearest one above it that exists, can be written into: write and search. */
+const writableFolder = async (folder: string): Promise<boolean> => {
+  for (let current = folder; ; current = dirname(current)) {
+    const found = await stat(current).catch(() => undefined);
+    // A link to nothing on the way can't be written through.
+    if (
+      found === undefined &&
+      (await lstat(current).catch(() => undefined))?.isSymbolicLink()
+    )
+      return false;
+    if (found !== undefined)
+      return found.isDirectory()
+        ? await access(current, constants.W_OK | constants.X_OK).then(
+            () => true,
+            () => false,
+          )
+        : false;
+    if (dirname(current) === current) return false;
+  }
+};
+
 const installAgentHooks = async (
   path: string,
   harness: AgentHarness,
@@ -662,10 +699,7 @@ export const runSetupHooks = async (
     return 0;
   }
   const dryRun = values["dry-run"] === true;
-  const root = await git(resolve(values.repo ?? process.cwd()), [
-    "rev-parse",
-    "--show-toplevel",
-  ]);
+  const root = repositoryRoot(resolve(values.repo ?? process.cwd()));
   const sessionTrailer = values["session-trailer"] === true;
   if (sessionTrailer) {
     const superproject = await git(root, [
@@ -694,32 +728,17 @@ export const runSetupHooks = async (
   const hooksDirectory = isAbsolute(hooksPath)
     ? hooksPath
     : resolve(root, hooksPath);
-  if (
+  const hooksFolderIsLink =
     (await exists(hooksDirectory)) &&
-    (await lstat(hooksDirectory)).isSymbolicLink()
-  )
-    throw new Error(refusal.hooksFolderLink(hooksDirectory));
+    (await lstat(hooksDirectory)).isSymbolicLink();
 
   const hookArgv =
     values.command !== undefined || compiled()
       ? [...argv, "hook"]
       : // Hooks run in the project: bun loads nothing from it (`sourceRunFlags`).
         [process.execPath, ...Starter.sourceRunFlags(), hookBundlePath()];
-  if (
-    hookArgv.at(-1) === hookBundlePath() &&
-    !compiled() &&
-    values.command === undefined &&
-    !dryRun
-  )
-    await buildHookBundle();
   const command = hookArgv.map(quote).join(" ");
 
-  const hookFile = (harness: AgentHarness) =>
-    resolve(
-      (harness === "claude-code"
-        ? values["claude-settings"]
-        : values["codex-hooks"]) ?? defaultHookFile(harness),
-    );
   // Named, the person's choice. Otherwise the agent programs found here, and every one this
   // repository's capture.json already lists: a program not found adds nothing new and never takes
   // away what is there; only --agents removes one. Agent hooks are written only for those named or
@@ -767,8 +786,98 @@ export const runSetupHooks = async (
           }
           return { agents: kept, hooked: present };
         })();
+  // A hook file named for an agent setup isn't setting up is left alone, and the summary says so.
+  for (const [option, harness, name] of [
+    ["claude-settings", "claude-code", "Claude Code"],
+    ["codex-hooks", "codex", "Codex"],
+  ] as const)
+    if (values[option] !== undefined && !hooked.includes(harness))
+      notFound.push({
+        mark: "skipped",
+        label: name,
+        text: `--${option} names its hook file, but ${name} isn't being set up here, so that file was left alone`,
+      });
 
+  const files = await Promise.all(
+    hooked.map(async (harness) => {
+      const option =
+        harness === "claude-code" ? "claude-settings" : "codex-hooks";
+      const namedPath = values[option];
+      const path = resolve(namedPath ?? defaultHookFile(harness));
+      // A linked hook file is written at its target, so the target's folder is the one checked.
+      const target = await linkTarget(path).catch(() => path);
+      return { harness, option, named: namedPath !== undefined, path, target };
+    }),
+  );
+  const described = (file: (typeof files)[number], error: unknown): unknown =>
+    file.named
+      ? new Error(
+          nameDiagnosticPath(error, `--${file.option}`, file.path, file.target),
+        )
+      : error;
+  // Every Git hook and hook file is checked before anything is written, so each one that can't be
+  // changed is named together, and nothing is written when one is refused.
   const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
+  const failures: unknown[] = [];
+  // Every other place setup writes is checked the same way: the capture settings, and the shared hook
+  // program when this run builds it.
+  if (
+    !dryRun &&
+    (!(await writableFolder(location.directory)) ||
+      !(await writableFile(captureConfigPath(location))))
+  )
+    failures.push(
+      new Error(
+        "Neuve's capture settings in this repository can't be written.",
+      ),
+    );
+  if (
+    hookArgv.at(-1) === hookBundlePath() &&
+    !compiled() &&
+    values.command === undefined &&
+    !dryRun &&
+    (!(await writableFolder(dirname(hookBundlePath()))) ||
+      !(await writableFile(hookBundlePath())))
+  )
+    failures.push(new Error("Neuve's shared hook program can't be written."));
+  if (hooksFolderIsLink) failures.push(new Error(refusal.hooksFolderLink()));
+  else {
+    if (!(await writableFolder(hooksDirectory)))
+      failures.push(new Error("Git's hooks folder can't be written."));
+    for (const name of gitHooks)
+      await installGitHook(hooksDirectory, name, command, true).catch(
+        (error: unknown) => failures.push(error),
+      );
+  }
+  for (const file of files) {
+    if (!(await writableFolder(dirname(file.target))))
+      failures.push(
+        described(
+          file,
+          new Error(`'${dirname(file.target)}' can't be written.`),
+        ),
+      );
+    await installAgentHooks(file.path, file.harness, command, true).catch(
+      (error: unknown) => failures.push(described(file, error)),
+    );
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new Error(
+      failures
+        .map((error) =>
+          error instanceof Error ? error.message : String(error),
+        )
+        .join("\n"),
+    );
+  // Built only once nothing is refused: every repository on this machine runs this program.
+  if (
+    hookArgv.at(-1) === hookBundlePath() &&
+    !compiled() &&
+    values.command === undefined &&
+    !dryRun
+  )
+    await buildHookBundle();
   const changes: Array<Change> = [];
   for (const name of gitHooks)
     changes.push(await installGitHook(hooksDirectory, name, command, dryRun));
@@ -794,9 +903,13 @@ export const runSetupHooks = async (
     action: dryRun ? "would write" : "written",
   });
 
-  for (const harness of hooked)
+  for (const file of files)
     changes.push(
-      await installAgentHooks(hookFile(harness), harness, command, dryRun),
+      await installAgentHooks(file.path, file.harness, command, dryRun).catch(
+        (error: unknown) => {
+          throw described(file, error);
+        },
+      ),
     );
 
   const screen = commandScreen({});
@@ -855,26 +968,29 @@ export interface CapturePart {
 /**
  * The files an agent hook entry needs, read back from the command `setup hooks` wrote: the program
  * it starts and, when that program is `bun` (a hook written from a source checkout), the script it
- * runs. Undefined when the command can't be read that surely: a bare or relative first word, or a
- * quoted one with an apostrophe in it. Such an entry is reported as one Neuve can't judge, never as
- * gone.
+ * runs. Neuve can't judge a bare or relative program, or a word with an embedded apostrophe
+ * outside a Bun script command.
  */
 const filesCalledBy = (command: string): ReadonlyArray<Needed> | undefined => {
-  const inner =
-    /^sh -c '(.*)'$/s.exec(command)?.[1]?.replaceAll(`'\\''`, "'") ?? command;
   const words: string[] = [];
-  let rest = inner.trim();
+  let rest = (unwrapped(command) ?? command).trim();
   while (rest !== "" && !rest.startsWith(">")) {
-    const quoted = /^'([^']*)'(?=\s|$)/.exec(rest);
+    const quoted = /^'((?:[^']|'\\'')*)'(?=\s|$)/.exec(rest);
     const bare = /^([^\s']+)(?=\s|$)/.exec(rest);
     const word = quoted ?? bare;
     if (word === null) return undefined;
-    words.push(word[1]!);
+    words.push(word[1]!.replaceAll(`'\\''`, "'"));
     rest = rest.slice(word[0].length).trimStart();
   }
   const program = words[0];
   if (program === undefined || !isAbsolute(program)) return undefined;
-  return neededBy(words);
+  const files = neededBy(words);
+  if (
+    words.some((word) => word.includes("'")) &&
+    !files.some((file) => file.use === "read")
+  )
+    return undefined;
+  return files;
 };
 
 /** A file a hook needs, and what for: the program it runs, or the script `bun` reads. */
@@ -984,7 +1100,7 @@ export const inspectCapture = async (
       parts.push({
         path: hooksDirectory,
         state: "unreadable",
-        why: refusal.hooksFolderLink(hooksDirectory),
+        why: refusal.hooksFolderLink(),
       });
     else
       for (const name of hooksDirectory === undefined ? [] : config.gitHooks) {

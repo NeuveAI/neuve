@@ -38,8 +38,10 @@ export const requireRepositorySetup = async (repository: string) => {
   if (code !== 0) {
     // Throws the same "not inside a git repository" refusal review gives today.
     await execute(resolveStoreLocation(repository));
-    // A Git folder with no working tree (a bare repository) has nowhere to set up.
-    await Bun.write(Bun.stderr, notSetUpMessage(repository));
+    await Bun.write(
+      Bun.stderr,
+      "--repo must name a folder inside a Git working tree.\n",
+    );
     return undefined;
   }
   const root = await realpath(stdout.trim());

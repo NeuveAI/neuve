@@ -330,7 +330,7 @@ test.skipIf(prerequisite.skip)(
     const refused = await setup("chatgpt");
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain(
-      'neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code), not "chatgpt".',
+      "neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code).",
     );
     expect(existsSync(settings)).toBe(false);
     expect(existsSync(join(repository, ".git/neuve/setup"))).toBe(false);

@@ -241,6 +241,39 @@ export class JobQueue extends Context.Service<
 >()("@neuve/records-core/JobQueue") {}
 
 /**
+ * The fields the object at `path` takes, as a refusal's ending. A union takes the option the payload's
+ * literal fields name, so each kind of payload lists its own fields; empty where there is no object.
+ */
+const acceptedFields = (
+  schema: z.ZodType,
+  payload: unknown,
+  path: ReadonlyArray<PropertyKey>,
+): string => {
+  type Node = { shape?: Record<string, z.ZodType>; options?: z.ZodType[] };
+  let current = schema as Node;
+  let value = payload as Record<PropertyKey, unknown> | undefined;
+  const choose = () => {
+    if (!Array.isArray(current.options)) return;
+    current = (current.options.find((option) =>
+      Object.entries((option as Node).shape ?? {}).every(
+        ([key, field]) =>
+          !(field instanceof z.ZodLiteral) || value?.[key] === field.value,
+      ),
+    ) ?? current.options[0]) as Node;
+  };
+  choose();
+  for (const key of path) {
+    const field = current.shape?.[String(key)];
+    if (field === undefined) return "";
+    current = field as Node;
+    value = value?.[key] as Record<PropertyKey, unknown> | undefined;
+    choose();
+  }
+  const names = Object.keys(current.shape ?? {});
+  return names.length === 0 ? "" : `; it takes ${names.join(", ")}`;
+};
+
+/**
  * Payload schemas for jobs enqueued through this service (by hand); a kind without one takes any JSON
  * value. Jobs an event enqueues in its append transaction carry no payload: they read their event.
  */
@@ -538,7 +571,14 @@ export const layer = Layer.effect(
           if (!parsed.success)
             return yield* new InvalidJobPayload({
               kind: request.kind,
-              message: z.prettifyError(parsed.error),
+              // Each problem names the expected field, never a key or value the payload supplied.
+              message: parsed.error.issues
+                .map((issue) =>
+                  issue.code === "unrecognized_keys"
+                    ? `${issue.path.join(".") || "The payload"} has fields ${request.kind} doesn't take${acceptedFields(schema, payload, issue.path)}.`
+                    : `${issue.path.join(".") || "The payload"}: ${issue.message}`,
+                )
+                .join("\n"),
             });
           payload = parsed.data;
         }

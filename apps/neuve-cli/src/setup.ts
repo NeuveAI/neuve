@@ -17,8 +17,10 @@ import {
   type OfferContext,
 } from "./agent-programs.ts";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
+import { ReviewRouteName } from "../../../packages/harness/src/settings.ts";
 import {
   RouteRefused,
+  SETUP_ROUTE_REFUSAL,
   settingsRoute,
   SettingsUnreadable,
   writeRoute,
@@ -59,6 +61,11 @@ import {
   type StepsOutcome,
 } from "./setup-steps.ts";
 import { gitAvailability, gitRefusal } from "./git-available.ts";
+import {
+  argumentRefusal,
+  repositoryRoot,
+  unknownOptionRefusal,
+} from "./records-cli.ts";
 import { z } from "zod";
 import {
   checkGraphEngine,
@@ -92,7 +99,7 @@ const git = async (repository: string, args: string[]) => {
 };
 const flagsSchema = z
   .object({
-    "--repo": z.string().default(() => process.cwd()),
+    "--repo": z.string().optional(),
     "--graph-binary": z.string().optional(),
     "--cli-binary": z.string().optional(),
     // Named an index's question while setup indexed; still accepted so scripts keep working.
@@ -168,29 +175,99 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   const { askAgain, json } = switches(given);
   const args = given.filter((arg) => !SWITCHES.includes(arg));
   const raw: Record<string, string> = {};
-  for (let index = 0; index < args.length; index += 2) {
-    const flag = args[index],
-      value = args[index + 1];
-    if (!flag || value === undefined || value.startsWith("--"))
-      throw new Error(`Missing value for ${flag}`);
-    if (flag in raw) throw new Error(`Duplicate option ${flag}`);
+  const problems: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index]!;
+    const next = args[index + 1];
+    const value =
+      next === undefined || next.startsWith("--") ? undefined : next;
+    if (value !== undefined) index += 1;
+    if (!Object.hasOwn(flagsSchema.shape, flag)) {
+      problems.push(unknownOptionRefusal(flag, "neuve setup"));
+      continue;
+    }
+    if (value === undefined) {
+      problems.push(
+        `${argumentRefusal(flag, "a value shown in neuve setup --help")} No value was supplied.`,
+      );
+      continue;
+    }
+    if (Object.hasOwn(raw, flag))
+      problems.push(
+        `${flag} takes one occurrence, but was supplied more than once.`,
+      );
     raw[flag] = value;
   }
-  const options = flagsSchema.parse(raw);
-  const wanted = agentsFlag(options["--agents"]) ?? AGENT_IDS;
+  const parsed = flagsSchema.safeParse(raw);
+  if (!parsed.success)
+    problems.push(argumentRefusal("--initial-query", "non-empty text"));
+  let wanted = AGENT_IDS;
+  try {
+    wanted = agentsFlag(raw["--agents"]) ?? AGENT_IDS;
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    problems.push(error.message);
+  }
+  const namedRoute = ReviewRouteName.optional().safeParse(raw["--route"]);
+  if (!namedRoute.success) problems.push(SETUP_ROUTE_REFUSAL);
+
+  const checkBinary = async (
+    flag: string,
+    path: string,
+    accepted: string,
+  ): Promise<string | undefined> => {
+    const binary = (await executableFile(path))
+      ? await realpath(path).catch(() => undefined)
+      : undefined;
+    if (binary === undefined) problems.push(argumentRefusal(flag, accepted));
+    return binary;
+  };
+
   // On a Mac without the command-line tools, git only opens Apple's installer.
   const available = gitAvailability();
-  if (!available.usable) {
-    await Bun.write(Bun.stderr, gitRefusal(available));
+  let repository: string | undefined;
+  if (available.usable) {
+    try {
+      repository = await realpath(
+        repositoryRoot(resolve(raw["--repo"] ?? process.cwd())),
+      );
+    } catch {
+      problems.push(
+        argumentRefusal("--repo", "a folder inside a Git working tree"),
+      );
+    }
+  }
+  const graphPath = raw["--graph-binary"];
+  const namedGraph =
+    graphPath === undefined
+      ? undefined
+      : await checkBinary(
+          "--graph-binary",
+          graphPath,
+          "the path to an executable Neuve Graph binary",
+        );
+  const cli = await checkBinary(
+    "--cli-binary",
+    raw["--cli-binary"] ?? process.execPath,
+    "the path to an executable Neuve binary",
+  );
+  if (!available.usable) problems.push(gitRefusal(available).trimEnd());
+  if (
+    !namedRoute.success ||
+    repository === undefined ||
+    cli === undefined ||
+    problems.length > 0
+  ) {
+    const message = problems.join("\n");
+    if (problems.length !== 1 || (namedRoute.success && available.usable))
+      throw new Error(message);
+    await Bun.write(Bun.stderr, `${message}\n`);
     return 1;
   }
-  const repository = await realpath(
-    await git(resolve(options["--repo"]), ["rev-parse", "--show-toplevel"]),
-  );
   const screen = commandScreen({ json });
   await screen.header(`neuve setup ${CLI_VERSION}`);
   // The route before anything else is written: a settings file setup can't read stops it here.
-  const route = await chooseRoute(options["--route"], screen);
+  const route = await chooseRoute(namedRoute.data, screen);
   if ("refused" in route) {
     await Bun.write(Bun.stderr, `${route.refused}\n`);
     return 1;
@@ -209,14 +286,14 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     previous !== undefined && (await executableFile(previous.graphBinary))
       ? previous.graphBinary
       : undefined;
-  const graph = await realpath(
-    await discoverGraphBinary({
-      override:
-        options["--graph-binary"] ?? process.env.NEUVE_GRAPH_BINARY ?? earlier,
-      executable: process.execPath,
-    }),
-  );
-  const cli = await realpath(options["--cli-binary"] ?? process.execPath);
+  const graph =
+    namedGraph ??
+    (await realpath(
+      await discoverGraphBinary({
+        override: process.env.NEUVE_GRAPH_BINARY ?? earlier,
+        executable: process.execPath,
+      }),
+    ));
   const versionProcess = Bun.spawn([cli, "--version"], {
     stdout: "pipe",
     stderr: "ignore",
@@ -690,9 +767,7 @@ export const runSetupUpgrade = async (
   const noSkills = given.includes("--no-skills");
   const other = given.find((arg) => arg !== "--no-skills");
   if (other !== undefined)
-    throw new Error(
-      `neuve setup upgrade takes only --no-skills, not ${other}.`,
-    );
+    throw new Error(unknownOptionRefusal(other, "neuve setup upgrade"));
   const screen = commandScreen({});
   const programs = agentLooks(AGENT_IDS, "upgrade", false, { screen });
   return upgradeSetup({
@@ -928,15 +1003,15 @@ export const ROUTE_CHOICES = [
 export const ROUTE_QUESTION = "How should reviews sign in?";
 
 const chooseRoute = async (
-  flag: string | undefined,
+  flag: RouteName | undefined,
   screen: Screen,
 ): Promise<
   { refused: string } | { route: RouteName | undefined; unreadable?: true }
 > => {
-  const write = async (route: string) => {
+  const write = async (route: RouteName) => {
     try {
       await writeRoute(route);
-      return { route: route as RouteName };
+      return { route };
     } catch (error) {
       if (error instanceof SettingsUnreadable || error instanceof RouteRefused)
         return { refused: error.message };

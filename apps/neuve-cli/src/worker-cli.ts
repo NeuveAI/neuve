@@ -30,11 +30,7 @@ import type { SqlClient } from "effect/sql/SqlClient";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import { z } from "zod";
-import {
-  JobKind,
-  JobState,
-  type JobKind as JobKindType,
-} from "@neuve/records-schema";
+import { JobKind, JobState } from "@neuve/records-schema";
 import {
   Blobs,
   Computations,
@@ -70,7 +66,13 @@ import {
 } from "@neuve/harness";
 import * as HarnessRuntimes from "@neuve/harness/runtimes";
 import { heldForAccount, readHeldReviews } from "@neuve/harness/held-reviews";
-import { execute, withStore, write } from "./records-cli.ts";
+import {
+  argumentRefusal,
+  execute,
+  unknownCommandRefusal,
+  withStore,
+  write,
+} from "./records-cli.ts";
 import { thisBuild } from "./review-worker.ts";
 import { prepareWorkerStore, warnIfPaused } from "./installed-copy.ts";
 import { runStackFetchChild, runStackIndexChild } from "./stack-cli.ts";
@@ -115,6 +117,12 @@ export const JOBS_HELP = `Usage:
 States: ${JobState.options.join(", ")}.`;
 
 const JobId = z.coerce.number().int().min(1);
+const jobId = (value: string | undefined) => {
+  const parsed = JobId.safeParse(value);
+  if (!parsed.success)
+    throw new Error(argumentRefusal("Job ID", "a positive integer"));
+  return parsed.data;
+};
 
 /** Runs a queue program against the repository's store; `create` makes a missing store. */
 const withQueue = <A, E>(
@@ -220,16 +228,14 @@ const formatJob = (job: JobQueue.Job) => {
 };
 
 const describeQueueError = (error: unknown) => {
-  if (typeof error === "object" && error !== null && "_tag" in error) {
-    const tagged = error as { _tag: string; message?: string; seq?: number };
-    if (tagged._tag === "JobNotFound") return `No job ${tagged.seq}.`;
-    if (
-      tagged._tag === "JobStateConflict" ||
-      tagged._tag === "InvalidJobPayload" ||
-      tagged._tag === "JobHeldByNewerBuild"
-    )
-      return tagged.message ?? tagged._tag;
-  }
+  if (error instanceof JobQueue.JobNotFound)
+    return "That job ID has no job in this store.";
+  if (error instanceof JobQueue.InvalidJobPayload)
+    return `Job payload takes the JSON fields for ${error.kind}.\n${error.message}`;
+  if (error instanceof JobQueue.JobStateConflict)
+    return `The job is ${error.state}. Use a waiting or delayed job ID to drop a job.`;
+  if (error instanceof JobQueue.JobHeldByNewerBuild)
+    return "Use a newer Neuve build to change this job.";
   return undefined;
 };
 
@@ -366,7 +372,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       return 0;
     }
     case "inspect": {
-      const seq = JobId.parse(positionals[0]);
+      const seq = jobId(positionals[0]);
       const job = await execute(
         withQueue(
           repository,
@@ -380,8 +386,8 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
         );
         return refuse({
           refused: Option.isSome(newer)
-            ? `Job ${seq} is ${newer.value.kind} (${newer.value.state}), a kind this build does not know; the newer build that queued it runs and shows it.`
-            : `No job ${seq}.`,
+            ? `The job is ${newer.value.kind} (${newer.value.state}), a kind this build does not know. Use the newer build that queued it.`
+            : "That job ID has no job in this store.",
         });
       }
       await write(
@@ -400,7 +406,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       return 0;
     }
     case "drop": {
-      const seq = JobId.parse(positionals[0]);
+      const seq = jobId(positionals[0]);
       const dropped = await executeQueue(
         withQueue(
           repository,
@@ -442,7 +448,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
             return 0;
           }
           return refuse({
-            refused: `job ${seq} is active and could not be dropped: ${result.reason}`,
+            refused: `The job is active and could not be dropped: ${result.reason}`,
           });
         }
         await write(
@@ -477,16 +483,22 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       return 0;
     }
     case "enqueue": {
-      const kind: JobKindType = JobKind.parse(positionals[0]);
+      const parsedKind = JobKind.safeParse(positionals[0]);
+      const problems = parsedKind.success
+        ? []
+        : [argumentRefusal("Job kind", JobKind.options.join(", "))];
       const payloadText = positionals[1];
       let payload: unknown;
       if (payloadText !== undefined) {
         try {
-          payload = JSON.parse(payloadText) as unknown;
+          payload = JSON.parse(payloadText);
         } catch {
-          return refuse({ refused: "The payload is not JSON." });
+          problems.push("Job payload takes JSON.");
         }
       }
+      if (!parsedKind.success || problems.length > 0)
+        return refuse({ refused: problems.join("\n") });
+      const kind = parsedKind.data;
       const dedupeKey = values.key ?? `${kind}:manual:${mintUlid()}`;
       const result = await executeQueue(
         withQueue(
@@ -536,7 +548,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       }
       if (ended) {
         await write(
-          `Not requeued: job ${job.seq} ${job.kind} with key ${job.dedupeKey} already ended ${job.state}${job.lastError === null ? "" : ` (${job.lastError.tag}: ${job.lastError.message})`}. Enqueue with another --key to run it again.`,
+          `Not requeued: the job for this --key already ended as ${job.state}${job.lastError === null ? "" : ` (${job.lastError.tag}: ${job.lastError.message})`}. Enqueue with another --key to run it again.`,
         );
         return 0;
       }
@@ -554,9 +566,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       return 0;
     }
     default:
-      throw new Error(
-        `Unknown jobs command: ${subcommand}. Run neuve jobs --help for usage.`,
-      );
+      throw new Error(unknownCommandRefusal(subcommand, "neuve jobs"));
   }
 };
 
@@ -965,7 +975,15 @@ export const runWorkerCli = async (
       return runWorkerMain(
         Effect.gen(function* () {
           const location = yield* selectedLocation();
-          const payload: unknown = JSON.parse(z.string().parse(values.input));
+          const input = values.input;
+          if (typeof input !== "string")
+            return yield* Effect.fail(new Error("--input takes valid JSON."));
+          let payload: unknown;
+          try {
+            payload = JSON.parse(input);
+          } catch {
+            return yield* Effect.fail(new Error("--input takes valid JSON."));
+          }
           return yield* Effect.andThen(
             Store.prepareForWrite,
             HarnessCommitPrepare.prepareCode(repository, location, payload),
@@ -1297,8 +1315,6 @@ export const runWorkerCli = async (
       return 0;
     }
     default:
-      throw new Error(
-        `Unknown worker command: ${subcommand}. Run neuve worker --help for usage.`,
-      );
+      throw new Error(unknownCommandRefusal(subcommand, "neuve worker"));
   }
 };

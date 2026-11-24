@@ -89,9 +89,7 @@ export const recompose = (options: {
     const stored = Option.getOrUndefined(yield* Log.get(options.runId))?.event;
     if (stored === undefined || stored.kind !== "review.requested@1")
       return yield* Effect.fail(
-        new RecomposeRefused(
-          `${options.runId} is no review request in this store`,
-        ),
+        new RecomposeRefused("--run must name a review request in this store."),
       );
     // Only a completed run's stages are all stored: anything less would call the model.
     const store = yield* Computations.ComputationStore;
@@ -113,7 +111,7 @@ export const recompose = (options: {
     if (completedBy !== options.runId)
       return yield* Effect.fail(
         new RecomposeRefused(
-          `run ${options.runId} did not complete in this store, so its stages are not all stored`,
+          "The run selected by --run did not complete in this store. Use the ID of a completed run.",
         ),
       );
     const queue = yield* JobQueue.JobQueue;

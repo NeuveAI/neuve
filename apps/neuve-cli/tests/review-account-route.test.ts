@@ -133,12 +133,16 @@ for (const choice of [
         route: selected,
       });
       await expect(rejected).rejects.toThrow(
-        choice === "mismatch" ? "disagrees" : "Unknown review route",
+        choice === "mismatch" ? "disagrees" : "--route must name",
       );
-      if (choice !== "mismatch")
+      if (choice !== "mismatch") {
         await expect(rejected).rejects.toMatchObject({
-          message: `Unknown review route ${JSON.stringify(selected)}. Choose anthropic, openai or a Claude subscription account name.`,
+          message:
+            "--route must name anthropic, openai or a Claude subscription account.",
         });
+        // Reason: a refusal never prints the value the person supplied.
+        await expect(rejected).rejects.not.toThrow(selected);
+      }
       expect(checked).toEqual(choice === "mismatch" ? ["fake-claude"] : []);
       expect(starter).not.toHaveBeenCalled();
       const database = join(repository, ".git", "neuve", "records.sqlite");

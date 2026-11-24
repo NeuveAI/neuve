@@ -21,7 +21,11 @@ import {
   harnessRuntimes,
   prepareCodexHome,
 } from "@neuve/harness/runtimes";
-import { write } from "./records-cli.ts";
+import {
+  argumentRefusal,
+  unknownCommandRefusal,
+  write,
+} from "./records-cli.ts";
 import { thisBuild } from "./review-worker.ts";
 
 export const AUTH_HELP = `Usage:
@@ -106,7 +110,7 @@ const expectOpenAi = (provider: string | undefined, required: boolean) => {
   if (provider === undefined && !required) return;
   if (provider !== "openai")
     throw new Error(
-      `neuve auth ${provider === undefined ? "needs a provider" : `does not know ${provider}`}: only openai has a sign-in (the Anthropic route uses ANTHROPIC_API_KEY).`,
+      `neuve auth ${provider === undefined ? "needs a provider" : "does not recognize the provider"}. Use openai for sign-in. The Anthropic route uses ANTHROPIC_API_KEY.`,
     );
 };
 
@@ -314,7 +318,7 @@ const findAndStore = (
     const account = yield* store.directory.lookup(name, "use");
     if (account?.runtime !== "codex")
       return yield* new AccountStore.StoreError({
-        message: `The ${name} account doesn't run Codex.`,
+        message: "The account must run Codex to take a program path.",
       });
     const found = yield* find({
       home,
@@ -409,6 +413,9 @@ const removalMessages: Record<AccountStore.RemovalStep, string> = {
   "record-dropped": "Removed the account.",
 };
 
+const unknownAccount = (accounts: readonly { name: string }[]) =>
+  `No account has that name. Use one of ${accounts.map(({ name }) => JSON.stringify(name)).join(", ")}.`;
+
 const runAccountCommand = async (
   command: string,
   positionals: string[],
@@ -478,7 +485,10 @@ const runAccountCommand = async (
       const name = AccountName.safeParse(positionals[0]);
       if (!name.success)
         return yield* new AccountStore.StoreError({
-          message: "Use a valid account name.",
+          message: argumentRefusal(
+            "Account name",
+            "1 to 63 lowercase letters, digits or hyphens, starting with a letter or digit",
+          ),
         });
       if (command === "program") {
         const account = yield* store.directory.lookup(name.data, "use");
@@ -496,7 +506,8 @@ const runAccountCommand = async (
           ].filter(Boolean).length !== 1
         )
           return yield* new AccountStore.StoreError({
-            message: `Use neuve auth program ${name.data} <path>, --find, or --unset.`,
+            message:
+              "Use neuve auth program <account> with a path, --find, or --unset.",
           });
         // An empty path would resolve to the current folder: refused, never stored.
         if (given !== undefined && given.trim() === "")
@@ -554,7 +565,7 @@ const runAccountCommand = async (
               error instanceof RuntimeUnavailable &&
               error.reason === "sign-out-failed"
                 ? new Error(
-                    `Could not sign out of ${name.data}. ${error.fix === undefined ? "" : `${error.fix} `}Run neuve auth remove ${name.data} again.`,
+                    `Could not sign out of the account. ${error.fix === undefined ? "" : `${error.fix} `}Run neuve auth remove <account> again.`,
                   )
                 : error,
             ),
@@ -562,18 +573,19 @@ const runAccountCommand = async (
         return 0;
       }
       const account = yield* store.directory.lookup(name.data, "use");
-      if (account === undefined)
-        return yield* new AccountStore.StoreError({
-          message: "Account not found.",
-        });
+      const missing = Effect.flatMap(store.list, (accounts) =>
+        Effect.fail(
+          new AccountStore.StoreError({
+            message: unknownAccount(accounts),
+          }),
+        ),
+      );
+      if (account === undefined) return yield* missing;
       const status =
         values.check === true || command === "login"
           ? yield* statuses.check(name.data)
           : (yield* statuses.read).find((status) => status.name === name.data);
-      if (status === undefined)
-        return yield* new AccountStore.StoreError({
-          message: "Account not found.",
-        });
+      if (status === undefined) return yield* missing;
       if (command === "status") {
         yield* output(
           values.json === true
@@ -813,14 +825,31 @@ export const runAuthCli = async (
           Effect.scoped(
             Effect.flatMap(
               AccountStore.make(options.home ?? homedir()),
-              (store) => store.directory.lookup(name.data, "use"),
+              (store) =>
+                Effect.gen(function* () {
+                  const account = yield* store.directory.lookup(
+                    name.data,
+                    "use",
+                  );
+                  if (account !== undefined) return account;
+                  const accounts = yield* store.list;
+                  return yield* Effect.fail(
+                    new Error(
+                      unknownAccount(
+                        accounts.filter(
+                          ({ credential }) =>
+                            credential.kind === "neuve-sign-in",
+                        ),
+                      ),
+                    ),
+                  );
+                }),
             ),
           ).pipe(Effect.provide(personLogs)),
         );
-        if (account === undefined) throw new Error("Account not found.");
         if (account.credential.kind !== "neuve-sign-in")
           throw new Error(
-            `The ${name.data} account does not use Neuve's ChatGPT sign-in.`,
+            "Use an account that signs in to ChatGPT through Neuve.",
           );
         authOptions = RouteProvider.OpenAiAuth.authOptionsFor(
           account.credential,
@@ -881,5 +910,5 @@ export const runAuthCli = async (
     );
     return 0;
   }
-  throw new Error(`Unknown auth command: ${command}. Run neuve auth --help.`);
+  throw new Error(unknownCommandRefusal(command, "neuve auth"));
 };

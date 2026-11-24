@@ -34,6 +34,7 @@ import {
 } from "./agent-programs.ts";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
 import { CLI_VERSION } from "./cli-version.ts";
+import { unknownCommandRefusal } from "./records-cli.ts";
 import {
   isStyled,
   makeScreen,
@@ -787,7 +788,7 @@ const repositoryFor = async (cwd: string, flag: string | undefined) => {
   const repository = await gitTopLevel(path).catch(() => undefined);
   if (repository === undefined)
     throw new Error(
-      `The repo scope needs a Git repository; ${path} is not in one.`,
+      "The repo scope needs a Git repository. Use --repo with a folder inside one.",
     );
   return repository;
 };
@@ -800,9 +801,7 @@ const targetsOf = async (
 ): Promise<ReadonlyArray<Target>> => {
   const scope = values.scope ?? "user";
   if (scope !== "user" && scope !== "repo")
-    throw new Error(
-      `--scope takes user or repo, not ${JSON.stringify(scope)}.`,
-    );
+    throw new Error("--scope takes user or repo.");
   if (scope === "user" && values.repo !== undefined)
     throw new Error("--repo goes with --scope repo.");
   const repository =
@@ -1412,7 +1411,5 @@ const runCommand = async (
           : "install",
     );
   }
-  throw new Error(
-    `Unknown skills command: ${command}. Run neuve skills --help for usage.`,
-  );
+  throw new Error(unknownCommandRefusal(command, "neuve skills"));
 };

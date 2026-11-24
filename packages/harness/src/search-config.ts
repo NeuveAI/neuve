@@ -138,7 +138,7 @@ export const discoverSearchGraphBinary = (
   if (input.override !== undefined) {
     if (!executable(input.override))
       throw new Error(
-        `NEUVE_GRAPH_BINARY does not name an executable file: ${input.override}`,
+        "NEUVE_GRAPH_BINARY must name an executable Neuve Graph file.",
       );
     return resolve(input.override);
   }

@@ -17,6 +17,7 @@ import {
   Cycles,
   Identity,
   JobQueue,
+  Registry,
   Sessions,
   storeLocationIn,
   WRITER_VERSION,
@@ -34,7 +35,7 @@ import {
 } from "node:fs/promises";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { defaultConfig } from "../../../packages/harness/src/config.ts";
 import { mcpClientsLayer } from "../../../packages/harness/src/mcp-client.ts";
 import { requestReview } from "../../../packages/harness/src/request.ts";
@@ -200,11 +201,13 @@ else if (command === "query") {
 const run = async (
   args: readonly string[],
   environment: Readonly<Record<string, string | undefined>> = {},
+  cwd?: string,
 ) => {
   const child = Bun.spawn([binary, ...args], {
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, ...environment },
+    ...(cwd === undefined ? {} : { cwd }),
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
@@ -312,6 +315,303 @@ const queryArgs = (
 ];
 
 describe("neuve CLI boundary", () => {
+  // Setup reports independent flag errors together before writing any settings.
+  test("setup reports invalid initial query, agents, and route together", async () => {
+    expect(
+      await run([
+        "setup",
+        "--initial-query",
+        "",
+        "--agents",
+        "bogus",
+        "--route",
+        "bogus",
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: --initial-query takes non-empty text.",
+        "--agents takes claude-code, codex or none.",
+        "neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code).",
+        "",
+      ].join("\n"),
+      exitCode: 2,
+    });
+  });
+
+  // A flag refusal must include independent path problems without echoing the paths.
+  test("setup reports missing repository and binary paths with other problems", async () => {
+    const { root } = await fixtureRepository();
+    const missingRepo = join(root, "private-repository");
+    const missingGraph = join(root, "private-graph");
+    const missingCli = join(root, "private-cli");
+    expect(
+      await run(["setup", "--route", "private-route", "--repo", missingRepo]),
+    ).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code).",
+        "--repo takes a folder inside a Git working tree.",
+        "",
+      ].join("\n"),
+      exitCode: 2,
+    });
+    expect(
+      await run([
+        "setup",
+        "--repo",
+        root,
+        "--graph-binary",
+        missingGraph,
+        "--cli-binary",
+        missingCli,
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: --graph-binary takes the path to an executable Neuve Graph binary.",
+        "--cli-binary takes the path to an executable Neuve binary.",
+        "",
+      ].join("\n"),
+      exitCode: 2,
+    });
+  });
+
+  // A missing scope value should tell the caller what a replacement must be.
+  test("query explains what a missing scope value takes", async () => {
+    expect(
+      await run([...queryArgs("/tmp/example", "abcdef0"), "--scope"]),
+    ).toEqual({
+      stdout: "",
+      stderr:
+        "neuve: --scope takes a non-empty path without null bytes. No value was supplied.\n",
+      exitCode: 2,
+    });
+  });
+
+  // The stored failure tells the caller why the existing job ended. The dedupe key is input.
+  test("a requeue refusal shows the recorded job error", async () => {
+    const { root } = await fixtureRepository();
+    const command = [
+      "jobs",
+      "enqueue",
+      "capture.scan",
+      "--repo",
+      root,
+      "--no-start",
+      "--key",
+      "private job key",
+    ];
+    expect((await run(command)).exitCode).toBe(0);
+    expect((await run(["jobs", "drop", "1", "--repo", root])).exitCode).toBe(0);
+    expect(await run(command)).toEqual({
+      stdout:
+        "Not requeued: the job for this --key already ended as failed (Dropped: dropped while waiting). Enqueue with another --key to run it again.\n",
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  // A bad payload names the fields the kind expects, never a key or value the payload supplied.
+  test("a job payload refusal names the expected fields without the supplied ones", async () => {
+    const { root } = await fixtureRepository();
+    const refused = await run([
+      "jobs",
+      "enqueue",
+      "stack.fetch",
+      '{"pRiVaTe":"hunter2"}',
+      "--repo",
+      root,
+      "--no-start",
+    ]);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain(
+      "Job payload takes the JSON fields for stack.fetch.",
+    );
+    expect(refused.stderr).toContain("revisions: Invalid input");
+    expect(refused.stderr).toMatch(/doesn't take; it takes [a-z]/);
+    // A payload whose schema is a union lists the fields of the option its kind names.
+    const oid = "a".repeat(40);
+    const nested = await run([
+      "jobs",
+      "enqueue",
+      "commit.prepare@2",
+      JSON.stringify({
+        kind: "commit",
+        commit: { oid, tree: oid, parents: [], pRiVaTe: 1 },
+      }),
+      "--repo",
+      root,
+      "--no-start",
+    ]);
+    expect(nested.stderr).toContain(
+      "commit has fields commit.prepare@2 doesn't take; it takes oid, tree, parents.",
+    );
+    expect(nested.stderr).not.toContain("pRiVaTe");
+    expect(refused.stderr).not.toContain("pRiVaTe");
+    expect(refused.stderr).not.toContain("hunter2");
+  });
+
+  // A hook file that cannot be written is refused before anything is written, without displaying its path.
+  test("setup hooks refuses a hook file whose folder can't be written, before writing", async () => {
+    const { root } = await fixtureRepository();
+    const directory = join(root, "private hook directory");
+    await mkdir(directory);
+    const file = join(directory, "settings.json");
+    await Bun.write(file, "{}");
+    await chmod(directory, 0o500);
+    try {
+      const result = await run([
+        "setup",
+        "hooks",
+        "--repo",
+        root,
+        "--agents",
+        "claude-code",
+        "--command",
+        process.execPath,
+        "--no-stack",
+        "--claude-settings",
+        file,
+      ]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain(
+        "a folder of --claude-settings can't be written.",
+      );
+      expect(result.stderr).toContain("--claude-settings");
+      expect(result.stderr).not.toContain(directory);
+    } finally {
+      await chmod(directory, 0o700);
+    }
+  });
+
+  // Doctor must recognize an unreadable bundle even when setup quotes an apostrophe in its path.
+  test("doctor names the unreadable script in a quoted hook command", async () => {
+    const { root } = await fixtureRepository();
+    await markSetUp(root);
+    const home = join(root, "author's home");
+    const tools = join(home, "bin");
+    const settings = join(home, ".claude", "settings.json");
+    await mkdir(tools, { recursive: true });
+    const claude = join(tools, "claude");
+    await Bun.write(claude, "#!/bin/sh\necho '2.1.0 (Claude Code)'\n");
+    await chmod(claude, 0o700);
+    const env = {
+      ...process.env,
+      HOME: home,
+      CLAUDE_CONFIG_DIR: dirname(settings),
+      CODEX_HOME: join(home, ".codex"),
+      XDG_CONFIG_HOME: join(home, ".config"),
+      PATH: `${tools}:${process.env.PATH ?? ""}`,
+    };
+    const setup = Bun.spawnSync(
+      [
+        process.execPath,
+        "--no-env-file",
+        resolve(import.meta.dir, "../src/cli.ts"),
+        "setup",
+        "hooks",
+        "--repo",
+        root,
+        "--agents",
+        "claude-code",
+        "--no-stack",
+      ],
+      { cwd: root, env },
+    );
+    expect(setup.exitCode, setup.stderr.toString()).toBe(0);
+    const script = join(
+      dirname(Registry.registryPath(home)),
+      "hook",
+      "neuve-hook.js",
+    );
+    await chmod(script, 0o000);
+    const result = await run(["doctor", "--repo", root, "--json"], env);
+    expect(result.exitCode).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        check: "capture",
+        status: "warning",
+        detail: expect.stringContaining(
+          `${settings} needs an update: Neuve's claude-code hooks run ${script}`,
+        ),
+      }),
+    );
+  });
+
+  // Semantic inputs must report filesystem causes and which validated field needs correction.
+  test("semantic keeps input diagnostics without printing the input path", async () => {
+    const { root } = await fixtureRepository();
+    const file = join(root, "private semantic input");
+    const command = [
+      "semantic",
+      "--input",
+      file,
+      "--python",
+      process.execPath,
+      "--snapshot",
+      root,
+      "--worker",
+      process.execPath,
+      "--variant",
+      "BASE",
+    ];
+    const missing = await run(command);
+    expect(missing.exitCode).toBe(2);
+    expect(missing.stderr).toMatch(
+      /ENOENT: no such file or directory, open --input/i,
+    );
+    expect(missing.stderr).not.toContain(file);
+    await Bun.write(
+      file,
+      JSON.stringify({ version: 1, inputs: [{ id: "one", role: "document" }] }),
+    );
+    const invalid = await run(command);
+    expect(invalid.exitCode).toBe(2);
+    expect(invalid.stderr).toContain(
+      "Invalid input: expected string, received undefined",
+    );
+    expect(invalid.stderr).toContain("inputs[0].text");
+    await Bun.write(file, "{");
+    const incomplete = await run(command);
+    expect(incomplete.exitCode).toBe(2);
+    expect(incomplete.stderr).toContain("--input is not valid JSON.");
+    await Bun.write(file, "privateIdentifier");
+    const badToken = await run(command);
+    expect(badToken.exitCode).toBe(2);
+    expect(badToken.stderr).toContain("--input is not valid JSON.");
+    expect(badToken.stderr).not.toContain("privateIdentifier");
+    await Bun.write(file, new Uint8Array([0x7b, 0xff, 0xfe, 0x7d]));
+    const notText = await run(command);
+    expect(notText.exitCode).toBe(2);
+    expect(notText.stderr).toContain("--input is not valid JSON.");
+  });
+
+  // Workspace refusals must keep Git's reason for a bad project and the filesystem reason for a missing source.
+  test("workspace keeps storage diagnostics without printing supplied paths", async () => {
+    const { root } = await fixtureRepository();
+    const home = await mkdtemp(join(tmpdir(), "neuve-workspace-home-"));
+    roots.push(home);
+    const missing = join(root, "private checkout");
+    const source = await run(
+      ["workspace", "--source", missing, "--profile", "local"],
+      { HOME: home },
+    );
+    expect(source.exitCode).toBe(2);
+    expect(source.stderr).toMatch(
+      /ENOENT: no such file or directory, realpath --source/i,
+    );
+    expect(source.stderr).not.toContain(missing);
+    const project = await run(
+      ["workspace", "--source", root, "--profile", "local", "--repo", missing],
+      { HOME: home },
+    );
+    expect(project.exitCode).toBe(1);
+    expect(project.stderr).toContain("fatal: cannot change to --repo");
+    expect(project.stderr).not.toContain(missing);
+  });
+
   // The first read opens a cycle and the next joins it. Neither may change JSON or NDJSON output.
   test("opens and joins a cycle in JSON and NDJSON with telemetry off", async () => {
     const { root, revision } = await fixtureRepository();
@@ -662,7 +962,7 @@ describe("neuve CLI boundary", () => {
     }
   });
 
-  test("worker query reports an unknown base revision as a Git failure", async () => {
+  test("worker query refuses an unknown base revision as the command line does", async () => {
     const { root } = await fixtureRepository();
     const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
     roots.push(scratch);
@@ -714,7 +1014,7 @@ describe("neuve CLI boundary", () => {
       });
       expect(result).toEqual({
         isError: true,
-        text: "fatal: Needed a single revision",
+        text: "The revision names no commit in this repository.",
       });
       expect(await queryHistory(root)).toEqual([]);
       const cli = await run(queryArgs(root, revision, question, []), {
@@ -2140,7 +2440,7 @@ describe("neuve CLI boundary", () => {
       }),
     ).toEqual({
       stdout: "",
-      stderr: 'neuve: --branch names no local branch "missing" in --repo.\n',
+      stderr: "neuve: --branch must name an existing local branch in --repo.\n",
       exitCode: 2,
     });
     expect(await Bun.file(graph.log).exists()).toBe(false);
@@ -2397,10 +2697,16 @@ describe("neuve CLI boundary", () => {
   test.each([
     [
       ["--refresh-cache", "--refresh-cache"],
-      "--refresh-cache may be supplied only once.",
+      "--refresh-cache takes one occurrence, but was supplied more than once.",
     ],
-    [["--refresh-cache", "true"], "Unknown query option: true."],
-    [["--refresh-cache=false"], "Unknown query option: --refresh-cache=false."],
+    [
+      ["--refresh-cache", "true"],
+      "Unknown option. Run neuve query --help for accepted options.",
+    ],
+    [
+      ["--refresh-cache=false"],
+      "Unknown option '--refresh-cache'. Run neuve query --help for accepted options.",
+    ],
   ] as const)("rejects invalid refresh flags %j", async (extra, message) => {
     const result = await run(
       [...queryArgs("/tmp/repo", "abcdef0"), ...extra],
@@ -2570,11 +2876,7 @@ describe("neuve CLI boundary", () => {
         ]),
       );
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain(
-        selection === undefined
-          ? "missing selection"
-          : "selection must be exact or family",
-      );
+      expect(result.stderr).toContain("selection must be exact or family");
     },
   );
 
@@ -2612,10 +2914,393 @@ describe("neuve CLI boundary", () => {
     });
   });
 
-  test("rejects an incomplete query before provider discovery", async () => {
-    expect(await run(["query", "--repo", "/tmp/example"])).toEqual({
+  // An arbitrary option name must not inject terminal control sequences into a refusal.
+  test("only echoes unknown options with safe names", async () => {
+    const help = "Run neuve auth --help for accepted options.";
+    expect(await run(["auth", "list", "--not-an-option"])).toEqual({
       stdout: "",
-      stderr: "neuve: Missing required option --revision.\n",
+      stderr: `neuve: Unknown option '--not-an-option'. ${help}\n`,
+      exitCode: 2,
+    });
+    expect(await run(["auth", "list", "--bad\x1b[31m"])).toEqual({
+      stdout: "",
+      stderr: `neuve: Unknown option. ${help}\n`,
+      exitCode: 2,
+    });
+  });
+
+  // An unknown option can be a pasted credential. Its inline value has no place in the refusal.
+  test("omits inline values from unknown setup and auth options", async () => {
+    for (const command of ["setup", "auth"]) {
+      expect(await run([command, "--token=sk-ant-SECRET123"])).toEqual({
+        stdout: "",
+        stderr: `neuve: Unknown option '--token'. Run neuve ${command} --help for accepted options.\n`,
+        exitCode: 2,
+      });
+    }
+  });
+
+  // A bad kind must not hide a malformed range, and neither error requires a session.
+  test("refuses malformed or missing proof ranges as usage errors", async () => {
+    const { root } = await fixtureRepository();
+    await createRecords(root);
+    const flags = [
+      "--claim",
+      "claim",
+      "--requirement",
+      "requirement",
+      "--text",
+      "output",
+      "--repo",
+      root,
+    ];
+    const malformed = await run(
+      ["proof", "record", "a b", "--kind", "bogus", ...flags],
+      { NEUVE_SESSION: "" },
+    );
+    expect(malformed.exitCode).toBe(2);
+    expect(malformed.stdout).toContain("kind: Invalid option");
+    expect(malformed.stdout).toContain("range: Expected <base>..<head>");
+    const missing = await run(
+      ["proof", "record", "--kind", "test-run", ...flags],
+      { NEUVE_SESSION: "" },
+    );
+    expect(missing.exitCode).toBe(2);
+    expect(missing.stdout).toContain(
+      "range: Invalid input: expected string, received undefined",
+    );
+  });
+
+  // A plain shell can be outside capture even when the repository already has hooks installed.
+  test("makes the hooks advice conditional for a plain shell", async () => {
+    const { root } = await fixtureRepository();
+    await createRecords(root);
+    const home = join(root, "home");
+    await mkdir(home);
+    const hooks = join(root, "codex-hooks.json");
+    const setup = await run(
+      [
+        "setup",
+        "hooks",
+        "--repo",
+        root,
+        "--agents",
+        "codex",
+        "--codex-hooks",
+        hooks,
+        "--no-stack",
+      ],
+      { HOME: home },
+    );
+    expect(setup.exitCode, setup.stderr).toBe(0);
+    expect(await Bun.file(hooks).exists()).toBe(true);
+    const ps = join(root, "ps");
+    await Bun.write(
+      ps,
+      '#!/bin/sh\nprintf "%s 0 Mon Nov 23 18:00:00 2026 neuve\\n" "$PPID"\n',
+    );
+    await chmod(ps, 0o755);
+    const env = {
+      PATH: `${root}:${process.env.PATH ?? ""}`,
+      NEUVE_SESSION: "",
+    };
+    const commands = [
+      ["vent", "from a plain shell"],
+      [
+        "proof",
+        "record",
+        "HEAD..HEAD",
+        "--kind",
+        "test-run",
+        "--claim",
+        "claim",
+        "--requirement",
+        "requirement",
+        "--text",
+        "output",
+      ],
+    ];
+    for (const args of commands) {
+      expect(await run([...args, "--repo", root], env)).toEqual({
+        stdout:
+          "Not recorded: this call ran outside a captured agent session. If the agent hooks are not set up for this agent, ask the person to run neuve setup hooks.\n",
+        stderr: "",
+        exitCode: 1,
+      });
+    }
+  });
+
+  // Proof and vent must report independent problems without repeating pasted credentials.
+  test("refuses invalid proof and vent inputs without a captured session", async () => {
+    const { root } = await fixtureRepository();
+    await createRecords(root);
+    const proof = await run(
+      [
+        "proof",
+        "record",
+        "nosuch..HEAD",
+        "--kind",
+        "test-run",
+        "--claim",
+        "test output",
+        "--requirement",
+        "tests pass",
+        "--revision",
+        "sk-ant-SECRETREV",
+        "--file",
+        "sk-ant-SECRETPATH",
+        "--repo",
+        root,
+      ],
+      { NEUVE_SESSION: "" },
+      root,
+    );
+    expect(proof.exitCode).toBe(1);
+    expect(proof.stdout).toContain(
+      "The range's base names no commit in this repository.",
+    );
+    expect(proof.stdout).toContain(
+      "--revision takes a commit at the range's head or in its history. It names no commit in this repository.",
+    );
+    expect(proof.stdout).toContain(
+      "--file is not a readable file. Use a readable file in the working tree or a temporary folder.",
+    );
+    expect(proof.stdout + proof.stderr).not.toMatch(
+      /SECRETREV|SECRETPATH|nosuch/,
+    );
+
+    const vent = await run(
+      ["vent", " ", "--reconciliation-id", "", "--repo", root],
+      { NEUVE_SESSION: "" },
+    );
+    expect(vent.exitCode).toBe(1);
+    expect(vent.stdout).toContain("Received blank text.");
+    expect(vent.stdout).toContain(
+      "--reconciliation-id takes the harness's review cycle ID of 1 to 256 characters. Received 0 characters.",
+    );
+    for (const output of [proof.stdout, vent.stdout]) {
+      const hint = "ask the person to run neuve setup hooks";
+      if (output.includes("the process table cannot be read here"))
+        expect(output).not.toContain(hint);
+      else {
+        expect(output).toContain(
+          "this call ran outside a captured agent session",
+        );
+        expect(output).toContain(hint);
+      }
+      expect(output).not.toContain("--session");
+    }
+  });
+
+  // An absent store needs setup guidance without echoing the supplied repository path.
+  test("review show reports a missing Records store", async () => {
+    const { root } = await fixtureRepository();
+    expect(await run(["review", "show", "--repo", root])).toEqual({
+      stdout: "",
+      stderr:
+        "neuve: Neuve isn't set up in this repository. Run neuve setup there first.\n",
+      exitCode: 2,
+    });
+  });
+
+  // A queued review is a successful lookup. A fabricated ID must never look queued.
+  test("review show distinguishes malformed, missing and queued runs", async () => {
+    const { root, revision } = await fixtureRepository();
+    await createRecords(root);
+    const repo = ["--repo", root];
+    const runId = "01M84WJ65YBV4WBF5Q2FM4S5JY";
+    const command = ["review", "show", ...repo];
+    expect(await run([...command, "--run", "nope"])).toEqual({
+      exitCode: 2,
+      stdout: "",
+      stderr: "neuve: --run takes a run ID as neuve review printed it.\n",
+    });
+    expect((await run(command)).stdout).toContain(
+      "when looking for the latest run.",
+    );
+
+    await markSetUp(root);
+    const badRange = await run([
+      "review",
+      "nosuch..absent",
+      "--detach",
+      ...repo,
+    ]);
+    expect(badRange).toEqual({
+      exitCode: 2,
+      stdout: "",
+      stderr:
+        "neuve: The range's base names no commit in this repository.\nThe range's head names no commit in this repository.\n",
+    });
+    expect(await run(["review"])).toEqual({
+      exitCode: 2,
+      stdout: "",
+      stderr: "neuve: neuve review needs a range: <base>..<head>\n",
+    });
+
+    expect(
+      execute(["git", "commit", "--allow-empty", "-qm", "Reviewed head"], root)
+        .exitCode,
+    ).toBe(0);
+    await executeRecords(
+      withStore(root, "write", (location) =>
+        requestReview({
+          repository: root,
+          location,
+          range: `${revision}..HEAD`,
+          requestId: runId,
+          requester: { _tag: "Unresolved" },
+          frozenConfig: defaultConfig(),
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              JobQueue.layer,
+              Computations.layer.pipe(
+                Layer.provideMerge(Blobs.layer(location)),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    const queued = await run([...command, "--run", runId]);
+    expect(queued.exitCode, queued.stderr).toBe(0);
+    expect(queued.stdout).toContain(
+      `Run ${runId} has no receipt in Records yet. Its run log so far:`,
+    );
+  });
+
+  // A missing run can be requested by ID or range. Neither selector belongs in the refusal.
+  test("review show names the lookup without printing its value", async () => {
+    const { root } = await fixtureRepository();
+    await createRecords(root);
+    for (const [selector, lookup] of [
+      [["--run", "01M83DRQ4J0004059GPYKHNS1P"], "with that --run ID"],
+      [["HEAD..HEAD"], "for that range"],
+    ] as const) {
+      expect(
+        await run(["review", "show", "--repo", root, ...selector]),
+      ).toEqual({
+        stdout: `No review run found in this repository ${lookup}. When the person asks for a review, request it with neuve review <base>..<head> --detach.\n`,
+        stderr: "",
+        exitCode: 1,
+      });
+    }
+  });
+
+  // A caller should be able to correct every invalid or missing option in one retry.
+  test("rejects incomplete and malformed query options before provider discovery", async () => {
+    expect(
+      await run([
+        "query",
+        "--repo",
+        "/tmp/example",
+        "--max-results",
+        "0",
+        "--relationship-plan",
+        "{}",
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: --revision takes a hexadecimal Git object name. No value was supplied.",
+        "--question takes non-empty text. No value was supplied.",
+        "--max-results takes a positive integer.",
+        "--relationship-plan takes a JSON array.",
+        "",
+      ].join("\n"),
+      exitCode: 2,
+    });
+  });
+
+  // An option that expects a number can still receive an arbitrary secret.
+  test("query refuses a malformed limit without printing its value", async () => {
+    expect(
+      await run([
+        "query",
+        "--repo",
+        "/tmp/example",
+        "--revision",
+        "abcdef0",
+        "--question",
+        "q",
+        "--max-results",
+        "my-private-password",
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr: "neuve: --max-results takes a positive integer.\n",
+      exitCode: 2,
+    });
+  });
+
+  // Both argument validation and execution must name the repository inferred from a subfolder.
+  test("query names the inferred repository on either refusal path", async () => {
+    const { root, revision } = await fixtureRepository();
+    const subfolder = join(root, "sub");
+    await mkdir(subfolder);
+    const assumed = await realpath(root);
+    for (const [args, message] of [
+      [
+        ["--revision", "private-revision"],
+        "--revision takes a hexadecimal Git object name.",
+      ],
+      [
+        ["--revision", revision, "--branch", "private-branch"],
+        "--branch must name an existing local branch in --repo.",
+      ],
+    ] as const) {
+      expect(
+        await run(["query", "--question", "q", ...args], {}, subfolder),
+      ).toEqual({
+        stdout: "",
+        stderr: `neuve: ${message}\n--repo was assumed to be ${JSON.stringify(assumed)}. Pass --repo to choose another repository.\n`,
+        exitCode: 2,
+      });
+    }
+  });
+
+  // Validation must keep checking later fields and entries after a field fails.
+  test("query reports all relationship plan problems without printing their values", async () => {
+    const good = {
+      request_id: "private-id",
+      focus: { symbol: "target" },
+      relation: "CALLS",
+      selection: "family",
+      direction: "out",
+      depth: 1,
+      limit: 5,
+    };
+    const result = await run(
+      queryArgs("/tmp/example", "abcdef0", "q", [
+        {
+          ...good,
+          selection: "private-selection",
+          direction: "private-direction",
+          limit: 0,
+        },
+        {
+          ...good,
+          focus: { symbol: "", line: -1 },
+          selection: "other-private-selection",
+          "private-key": "private-value",
+        },
+      ]),
+    );
+    expect(result).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: --relationship-plan[0].selection must be exact or family.",
+        "--relationship-plan[0].direction must be in or out.",
+        "--relationship-plan[0].limit must be a positive integer.",
+        "--relationship-plan[1] takes only these keys: request_id, focus, relation, selection, direction, depth, limit, summary.",
+        "--relationship-plan[1].request_id must be unique.",
+        "--relationship-plan[1].focus.symbol must be a non-empty string.",
+        "--relationship-plan[1].focus.line must be a positive integer.",
+        "--relationship-plan[1].focus.line requires focus.path.",
+        "--relationship-plan[1].selection must be exact or family.",
+        "",
+      ].join("\n"),
       exitCode: 2,
     });
   });
@@ -2684,7 +3369,30 @@ describe("neuve CLI boundary", () => {
     ]);
     expect(result).toEqual({
       stdout: "",
-      stderr: "neuve: Unknown query option: --target-file.\n",
+      stderr: [
+        "neuve: Unknown option '--target-file'. Run neuve query --help for accepted options.",
+        "Unknown option '--target-symbol'. Run neuve query --help for accepted options.",
+        "",
+      ].join("\n"),
+      exitCode: 2,
+    });
+  });
+
+  // Unknown query options can contain credentials or unsafe characters in their names or values.
+  test("does not echo values or unsafe names for unknown query options", async () => {
+    expect(
+      await run([
+        ...queryArgs("/tmp/example", "abcdef0", "q", []),
+        "--token",
+        "sample-secret",
+        "--header=inline-secret",
+        "--bad\x1b[31m",
+        "another-secret",
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr:
+        "neuve: Unknown option '--token'. Run neuve query --help for accepted options.\nUnknown option '--header'. Run neuve query --help for accepted options.\nUnknown option. Run neuve query --help for accepted options.\n",
       exitCode: 2,
     });
   });
@@ -2713,11 +3421,64 @@ describe("neuve CLI boundary", () => {
       },
       structural_observations: [],
     });
+    expect(JSON.parse(result.stdout)).not.toHaveProperty("assumed_options");
     const commands = (await Bun.file(graph.log).text())
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line).command);
     expect(commands).toEqual(["version", "capabilities", "query"]);
+  });
+
+  // Defaults must be visible in both output formats without changing the stream's event order.
+  test("queries the repository root from a subfolder with only revision and question", async () => {
+    const { root, revision } = await fixtureRepository();
+    const subfolder = join(root, "sub");
+    await mkdir(subfolder);
+    const graph = await fakeGraph();
+    const env = {
+      NEUVE_GRAPH_BINARY: graph.executable,
+      FAKE_GRAPH_LOG: graph.log,
+    };
+    const args = [
+      "query",
+      "--revision",
+      revision,
+      "--question",
+      "Where is target?",
+    ];
+    const assumed = {
+      "--repo": root,
+      "--relationship-plan": [],
+      "--max-results": 8,
+      "--max-context-bytes": 16000,
+    };
+    const json = await run(args, env, subfolder);
+    expect(json.exitCode, json.stderr).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      source: { repository: root, revision },
+      retrieval: { status: "ok" },
+      structural_observations: [],
+      assumed_options: assumed,
+    });
+    const stream = await run(
+      [...args, "--stream", "--max-results", "5"],
+      env,
+      subfolder,
+    );
+    expect(stream.exitCode, stream.stderr).toBe(0);
+    const events = stream.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.map((event) => event.kind)).toEqual([
+      "retrieval",
+      "complete",
+    ]);
+    expect(events[0].assumed_options).toEqual({
+      "--repo": root,
+      "--relationship-plan": [],
+      "--max-context-bytes": 16000,
+    });
   });
 
   test.each([
@@ -3091,7 +3852,8 @@ describe("neuve CLI boundary", () => {
     );
     expect(result).toEqual({
       stdout: "",
-      stderr: `neuve: NEUVE_GRAPH_BINARY does not name an executable file: ${missing}\n`,
+      stderr:
+        "neuve: NEUVE_GRAPH_BINARY must name an executable Neuve Graph file.\n",
       exitCode: 2,
     });
     expect(await queryHistory(repository.root)).toEqual([

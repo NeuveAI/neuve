@@ -173,6 +173,8 @@ export class GitFailed extends Data.TaggedError("GitFailed")<{
   readonly cpu?: GitCpu | null;
 }> {}
 
+export class CommitNotFound extends GitFailed {}
+
 /** A git process's CPU, its own and its waited-on children's, in milliseconds. */
 export interface GitCpu {
   readonly userMs: number;
@@ -529,14 +531,22 @@ const memoizedGitRead = (
 
 /** Resolves a revision to its commit OID. */
 export const resolveCommit = (repository: string, revision: string) =>
-  Effect.map(
-    git(repository, [
-      "rev-parse",
-      "--verify",
-      "--end-of-options",
-      `${revision}^{commit}`,
-    ]),
-    (out) => out.trim(),
+  git(repository, [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    "--end-of-options",
+    `${revision}^{commit}`,
+  ]).pipe(
+    Effect.map((out) => out.trim()),
+    Effect.mapError((error) =>
+      error.exitCode === 1
+        ? new CommitNotFound({
+            ...error,
+            message: "The revision names no commit in this repository.",
+          })
+        : error,
+    ),
   );
 
 export interface ChangedFile {

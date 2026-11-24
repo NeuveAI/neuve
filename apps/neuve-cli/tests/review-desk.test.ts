@@ -51,6 +51,7 @@ test("an installed desk serves any set-up repository without Bun, one desk per r
     TMPDIR: root,
     NEUVE_TEST_PROCESS: "1",
     NEUVE_BUDGET_DIRECTORY: join(root, "budget"),
+    GIT_CEILING_DIRECTORIES: root,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
   };
@@ -231,7 +232,9 @@ test("an installed desk serves any set-up repository without Bun, one desk per r
       home,
     ]);
     expect(outside.code).toBe(2);
-    expect(outside.stderr).toContain("is not inside a git repository");
+    expect(outside.stderr).toContain(
+      "--repo must name a folder inside a Git repository",
+    );
     await markSetUp(repository, {
       cliBinary: cli,
       graphBinary: join(prefix, "lib/neuve/entire-graph"),

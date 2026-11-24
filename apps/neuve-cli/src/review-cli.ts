@@ -43,6 +43,7 @@ import {
   JobQueue,
   Log,
   PublishedPackets,
+  REVIEW_RUN_KINDS,
   ReviewStats,
   Starter,
   Worker,
@@ -78,7 +79,7 @@ import {
 } from "@neuve/harness/session-dump";
 import { AccountDirectory, RuntimeRegistry } from "@neuve/runtime";
 import { harnessRuntimes, workerRuntimeOptions } from "@neuve/harness/runtimes";
-import { execute, withStore, write } from "./records-cli.ts";
+import { argumentRefusal, execute, withStore, write } from "./records-cli.ts";
 import { thisBuild } from "./review-worker.ts";
 import { startCaptureWorker } from "./worker-cli.ts";
 import { deskLinkLine } from "./review-desk-claim.ts";
@@ -358,19 +359,14 @@ export const latestSnapshot = (
   return { snapshot: parsed.data };
 };
 
-/** The capture lane's refusals (DumpRejected, DumpRefused) carry their reason, not a message: said whole. */
 const captureFailure = (error: unknown) => {
   if (typeof error !== "object" || error === null || !("reason" in error))
     return error;
   const tagged = error as {
     _tag?: unknown;
     reason: unknown;
-    source?: unknown;
-    capture?: unknown;
   };
-  return new Error(
-    `${String(tagged._tag)}: ${String(tagged.reason)} (${String(tagged.source ?? tagged.capture)})`,
-  );
+  return new Error(`${String(tagged._tag)}: ${String(tagged.reason)}`);
 };
 
 /** A dataset's retention as this command files it: the caller's root keeps it; Records' 30 days are untouched. */
@@ -668,7 +664,10 @@ const exportStoredCapture = async (
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .parse(options.capture);
-  const root = realpathSync(z.string().parse(options.root));
+  const requestedRoot = z.string().parse(options.root);
+  if (!existsSync(requestedRoot) || !statSync(requestedRoot).isDirectory())
+    throw new PublicReviewError("--root must be an existing folder");
+  const root = realpathSync(requestedRoot);
   const location =
     options.store === undefined
       ? await execute(resolveStoreLocation(repository))
@@ -735,10 +734,10 @@ const exportDump = async (
   if ("refused" in found) {
     writeSync(
       2,
-      `neuve: run ${runId.data} has no snapshot to file: ${found.refused}\n`,
+      `neuve: The run selected by --run has no snapshot to file: ${found.refused}\n`,
     );
     if (found.pending) return 3;
-    throw new Error(`run ${runId.data}: ${found.refused}`);
+    throw new Error(found.refused);
   }
   const { capture } = found.snapshot;
   const status = await execute(
@@ -767,9 +766,7 @@ const exportDump = async (
         )
           return yield* Effect.fail(
             new PublicReviewError(
-              Ulid.safeParse(restored.run.runId).success
-                ? `run ${runId.data}: its run log names capture ${capture}, which is run ${restored.run.runId}'s`
-                : "capture belongs to a different run; export refused",
+              "capture belongs to a different run; export refused",
             ),
           );
         return yield* exportCapturedDump({
@@ -783,7 +780,7 @@ const exportDump = async (
   );
   if (filed.runId !== runId.data || filed.snapshotId !== status.capture)
     throw new Error(
-      `run ${runId.data}: filed ${filed.runId}/${filed.snapshotId}, not ${capture}`,
+      "The filed capture does not match the run selected by --run.",
     );
   // The SnapshotExport as filed, and the close that recorded it: a held or interrupted snapshot's
   // execution is open, and a complete capture is not an ended run.
@@ -1002,9 +999,7 @@ export const requestRangeReview = async (
     // --leads: keyword leads (the default while the lanes climb runs) or hybrid leads (10.119).
     const leadsChoice = z.enum(["bm25", "hybrid"]).safeParse(values.leads);
     if (values.leads !== undefined && !leadsChoice.success)
-      throw new Error(
-        `--leads takes bm25 or hybrid, not ${JSON.stringify(values.leads)}`,
-      );
+      throw new Error(argumentRefusal("--leads", "bm25 or hybrid"));
     const leads = leadsChoice.success ? leadsChoice.data : undefined;
     const location = await execute(resolveStoreLocation(repository));
     const admitted = await execute(
@@ -1032,7 +1027,15 @@ export const requestRangeReview = async (
             stub,
             route,
             ...(leads === undefined ? {} : { leads }),
-          });
+          }).pipe(
+            Effect.catchIf(
+              (error) => error instanceof Git.CommitNotFound,
+              (error) =>
+                reviewRange(repository, rangeText).pipe(
+                  Effect.andThen(Effect.fail(error)),
+                ),
+            ),
+          );
           const queue = yield* JobQueue.JobQueue;
           const jobs = yield* queue.list({
             states: ["waiting", "delayed", "active", "completed", "failed"],
@@ -1140,7 +1143,7 @@ const runRequest = async (
     if (state === "failed") {
       // Only when it failed after this request joined it.
       await write(
-        `${opening} and failed after this request joined it; request the review again to start the next generation.`,
+        "The review job failed after this request joined it. Request the review again to start the next generation.",
       );
       await deskLink();
       return 1;
@@ -1456,37 +1459,90 @@ const manifestLines = (
 export const terminalGuard = (lines: ReadonlyArray<string>) =>
   lines.join("\n").split("\n").map(PacketView.terminalSafe).join("\n");
 
+const reviewRange = (repository: string, range: string) =>
+  Effect.gen(function* () {
+    const { base, head } = Request.parseRange(range);
+    const { baseOid, headOid } = yield* Effect.all(
+      {
+        baseOid: Git.resolveCommit(repository, base),
+        headOid: Git.resolveCommit(repository, head),
+      },
+      { mode: "result" },
+    );
+    const failures = (
+      [
+        ["base", baseOid],
+        ["head", headOid],
+      ] as const
+    ).flatMap(([end, result]) =>
+      result._tag === "Failure" ? [{ end, error: result.failure }] : [],
+    );
+    const [first] = failures;
+    if (first !== undefined) {
+      const gitFailure = failures.find(
+        ({ error }) => !(error instanceof Git.CommitNotFound),
+      );
+      if (gitFailure !== undefined) return yield* gitFailure.error;
+      return yield* new Git.CommitNotFound({
+        ...first.error,
+        message: failures
+          .map(
+            ({ end }) =>
+              `The range's ${end} names no commit in this repository.`,
+          )
+          .join("\n"),
+      });
+    }
+    return {
+      baseOid: yield* Effect.fromResult(baseOid),
+      headOid: yield* Effect.fromResult(headOid),
+    };
+  });
+
 const show = async (
   repository: string,
   rangeText: string | undefined,
   runFlag: string | undefined,
   json: boolean,
 ) => {
-  // First, as always: a folder outside git is refused with the store's own sentence.
-  const location = await execute(resolveStoreLocation(repository));
-  let runId = runFlag;
-  if (runId === undefined) {
-    const wanted =
-      rangeText === undefined
-        ? undefined
-        : await execute(
-            Effect.gen(function* () {
-              const { base, head } = Request.parseRange(rangeText);
-              return {
-                baseOid: yield* Git.resolveCommit(repository, base),
-                headOid: yield* Git.resolveCommit(repository, head),
-              };
-            }),
-          );
-    // A run's ID is its review request's event ID.
-    runId = Option.getOrUndefined(
-      await execute(
-        withStore(repository, "read", ReviewStats.latestRun(wanted)),
-      ),
+  const parsedRun = Ulid.safeParse(runFlag);
+  if (runFlag !== undefined && !parsedRun.success)
+    throw new Error(
+      argumentRefusal("--run", "a run ID as neuve review printed it"),
     );
-  }
+  const location = await execute(resolveStoreLocation(repository));
+  const wanted =
+    !parsedRun.success && rangeText !== undefined
+      ? await execute(reviewRange(repository, rangeText))
+      : undefined;
+  const runId = await execute(
+    withStore(
+      repository,
+      "read",
+      Effect.gen(function* () {
+        if (!parsedRun.success)
+          return Option.getOrUndefined(yield* ReviewStats.latestRun(wanted));
+        const id = parsedRun.data;
+        const sql = yield* SqlClient;
+        const jobs = yield* sql`SELECT 1 FROM jobs
+        WHERE event_id = ${id} AND ${sql.in("kind", REVIEW_RUN_KINDS)} LIMIT 1`;
+        return jobs.length > 0 ||
+          Option.isSome(yield* ReviewStats.runReceipt(id))
+          ? id
+          : undefined;
+      }),
+      location,
+    ),
+  );
   if (runId === undefined) {
-    await write("No run found.");
+    const search = parsedRun.success
+      ? "with that --run ID"
+      : rangeText === undefined
+        ? "when looking for the latest run"
+        : "for that range";
+    await write(
+      `No review run found in this repository ${search}. When the person asks for a review, request it with neuve review <base>..<head> --detach.`,
+    );
     return 1;
   }
   const output = await showOutput(repository, runId, json, location);
@@ -1734,10 +1790,12 @@ const recomposeRun = async (
   if (options.run === undefined)
     throw new Error("neuve review recompose needs --run <run-id>");
   const steps = (options.allowModel ?? "").split(",").filter(Boolean);
-  const unknown = steps.filter((step) => !(step in Recompose.RECOMPOSE_STEPS));
-  if (unknown.length > 0)
+  if (steps.some((step) => !Object.hasOwn(Recompose.RECOMPOSE_STEPS, step)))
     throw new Error(
-      `--allow-model takes ${Object.keys(Recompose.RECOMPOSE_STEPS).join(" and ")}, not ${unknown.join(", ")}`,
+      argumentRefusal(
+        "--allow-model",
+        Object.keys(Recompose.RECOMPOSE_STEPS).join(" and "),
+      ),
     );
   // Always a named scratch copy: a recompose never falls back to the repository's own store.
   if (options.store === undefined)
@@ -1856,9 +1914,9 @@ export const runReviewCli = async (
   args: readonly string[],
 ): Promise<number> => {
   const [first, ...rest] = args;
-  if (first === undefined || first === "--help" || first === "help") {
+  if (first === "--help" || first === "help") {
     await write(REVIEW_HELP);
-    return first === undefined ? 2 : 0;
+    return 0;
   }
   // `review show --help` prints the review help, which describes show, instead of refusing the flag.
   if (first === "show" && (rest.includes("--help") || rest.includes("-h"))) {
@@ -1872,60 +1930,42 @@ export const runReviewCli = async (
     await Bun.write(Bun.stderr, gitRefusal(available));
     return 1;
   }
-  const { values, positionals } = (() => {
-    try {
-      return parseArgs({
-        args:
-          first === "show" ||
-          first === "stats" ||
-          first === "recompose" ||
-          first === "export-dump" ||
-          first === "capture-ceiling" ||
-          first === "capture-status" ||
-          first === "dead-letter" ||
-          first === "audit"
-            ? [...rest]
-            : [...args],
-        allowPositionals: true,
-        strict: true,
-        options: {
-          repo: { type: "string" },
-          branch: { type: "string" },
-          json: { type: "boolean" },
-          detach: { type: "boolean" },
-          route: { type: "string" },
-          leads: { type: "string" },
-          run: { type: "string" },
-          cycle: { type: "string" },
-          store: { type: "string" },
-          root: { type: "string" },
-          redaction: { type: "string" },
-          capture: { type: "string" },
-          job: { type: "string" },
-          all: { type: "boolean" },
-          repair: { type: "boolean" },
-          "allow-model": { type: "string" },
-          "stub-hold": { type: "string" },
-          "stub-turn-limit": { type: "string" },
-          "stub-measure": { type: "boolean" },
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof TypeError &&
-        "code" in error &&
-        error.code === "ERR_PARSE_ARGS_UNKNOWN_OPTION"
-      ) {
-        const option =
-          /^Unknown option '(-{1,2}[a-zA-Z][a-zA-Z0-9-]{0,63})'/.exec(
-            error.message,
-          )?.[1];
-        if (option !== undefined)
-          throw new PublicReviewError(`Unknown option '${option}'`);
-      }
-      throw error;
-    }
-  })();
+  const { values, positionals } = parseArgs({
+    args:
+      first === "show" ||
+      first === "stats" ||
+      first === "recompose" ||
+      first === "export-dump" ||
+      first === "capture-ceiling" ||
+      first === "capture-status" ||
+      first === "dead-letter" ||
+      first === "audit"
+        ? [...rest]
+        : [...args],
+    allowPositionals: true,
+    strict: true,
+    options: {
+      repo: { type: "string" },
+      branch: { type: "string" },
+      json: { type: "boolean" },
+      detach: { type: "boolean" },
+      route: { type: "string" },
+      leads: { type: "string" },
+      run: { type: "string" },
+      cycle: { type: "string" },
+      store: { type: "string" },
+      root: { type: "string" },
+      redaction: { type: "string" },
+      capture: { type: "string" },
+      job: { type: "string" },
+      all: { type: "boolean" },
+      repair: { type: "boolean" },
+      "allow-model": { type: "string" },
+      "stub-hold": { type: "string" },
+      "stub-turn-limit": { type: "string" },
+      "stub-measure": { type: "boolean" },
+    },
+  });
   const repository = resolve(values.repo ?? process.cwd());
   if (first === "show")
     return show(repository, positionals[0], values.run, values.json === true);

@@ -20,6 +20,7 @@ import {
   runSetupHooks,
   type CapturePart,
 } from "../src/capture/setup-hooks.ts";
+import { quote } from "../src/shell-quote.ts";
 
 const scratches: string[] = [];
 afterEach(async () => {
@@ -92,9 +93,17 @@ test("a command that isn't text is unreadable in both places, and the file is le
   const bad = '{"hooks":{"Stop":[{"hooks":[{"command":42}]}]}}';
   await mkdir(join(settings, ".."), { recursive: true });
   await writeFile(settings, bad);
-  const found = await part(settings);
-  expect(found).toMatchObject({ state: "unreadable" });
-  await expect(setUp()).rejects.toThrow(found!.why!);
+  const reason =
+    "hooks.Stop.0.hooks.0.command: Invalid input: expected string, received number";
+  const message = `can't be read as claude-code's hook file (${reason}), so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.`;
+  expect(await part(settings)).toMatchObject({
+    state: "unreadable",
+    why: `${settings} ${message}`,
+  });
+  await expect(setUp()).rejects.toHaveProperty(
+    "message",
+    `--claude-settings ${message}`,
+  );
   expect(await readFile(settings, "utf8")).toBe(bad);
 });
 
@@ -292,7 +301,7 @@ test("an unreadable bundled script needs an update", async () => {
   await mkdir(join(root, "hook"), { recursive: true });
   await writeFile(script, "");
   const entry = (verb: string) =>
-    `sh -c '${process.execPath} --no-env-file ${script} claude-code ${verb} >/dev/null 2>&1; exit 0 # neuve-capture-hook'`;
+    `sh -c ${quote(`${quote(process.execPath)} --no-env-file ${quote(script)} claude-code ${verb} >/dev/null 2>&1; exit 0 # neuve-capture-hook`)}`;
   await mkdir(join(settings, ".."), { recursive: true });
   await writeFile(
     settings,
@@ -368,6 +377,23 @@ test("a hooks folder that is a link is refused in the same words in both places"
   await expect(setUp()).rejects.toThrow(found!.why!);
 });
 
+// Reason: a linked hooks folder is named together with a bad hook file, not on its own run.
+test("a linked hooks folder and a bad hook file are refused together", async () => {
+  const { root, repo, settings, setUp } = await scene();
+  const hooks = join(repo, ".git/hooks");
+  const elsewhere = join(root, "elsewhere-hooks");
+  await mkdir(elsewhere);
+  await rm(hooks, { recursive: true, force: true });
+  await symlink(elsewhere, hooks);
+  await mkdir(join(settings, ".."), { recursive: true });
+  await writeFile(settings, "not json");
+  const refused = setUp();
+  await expect(refused).rejects.toThrow(
+    "Git's hooks folder is a symbolic link",
+  );
+  await expect(refused).rejects.toThrow("--claude-settings");
+});
+
 test("a Neuve hook under an event Neuve doesn't write needs an update, and setup hooks removes it", async () => {
   const { settings, setUp, said, part } = await scene();
   expect(await setUp()).toBe(0);
@@ -405,10 +431,231 @@ test("a FIFO in place of a hook file is unreadable, read without waiting on it",
   const { settings, setUp, part } = await scene();
   await mkdir(join(settings, ".."), { recursive: true });
   expect(Bun.spawnSync(["mkfifo", settings]).exitCode).toBe(0);
-  const found = await part(settings);
-  // Kept before matching: a matcher can stand in for the value it matched.
-  const why = String(found?.why);
-  expect(found?.state).toBe("unreadable");
-  expect(why).toContain("it isn't a plain file");
-  await expect(setUp()).rejects.toThrow(why);
+  const message =
+    "can't be read as claude-code's hook file (it isn't a plain file), so Neuve leaves it as it is. Fix it or move it away, then run neuve setup hooks again.";
+  expect(await part(settings)).toMatchObject({
+    state: "unreadable",
+    why: `${settings} ${message}`,
+  });
+  await expect(setUp()).rejects.toHaveProperty(
+    "message",
+    `--claude-settings ${message}`,
+  );
 }, 10_000);
+
+// Reason: a system error on a folder above a named hook file must not print that folder, which the person supplied.
+test("a system error on a folder above a named hook file names the option, not the folder", async () => {
+  const { root } = await scene();
+  const { nameDiagnosticPath } = await import("../src/records-cli.ts");
+  const supplied = join(root, "pRiVaTe-hunter2-value", "settings.json");
+  const error = Object.assign(
+    new Error(
+      `EROFS: read-only file system, mkdir '${join(root, "pRiVaTe-hunter2-value")}'`,
+    ),
+    { code: "EROFS", syscall: "mkdir" },
+  );
+  const said = nameDiagnosticPath(error, "--claude-settings", supplied);
+  expect(said).toBe(
+    "EROFS: read-only file system, mkdir a folder of --claude-settings",
+  );
+  expect(said).not.toContain("pRiVaTe-hunter2-value");
+});
+
+// Reason: each named hook file is its own problem, so both are named in one refusal.
+test("two named hook files that can't be read are both named in one refusal", async () => {
+  const { root, repo, settings, program } = await scene();
+  const codex = join(root, "home/.codex/hooks.json");
+  await mkdir(join(settings, ".."), { recursive: true });
+  await mkdir(join(codex, ".."), { recursive: true });
+  await writeFile(settings, "not json");
+  await writeFile(codex, "not json");
+  const refused = runSetupHooks(
+    [
+      "--repo",
+      repo,
+      "--agents",
+      "claude-code,codex",
+      "--claude-settings",
+      settings,
+      "--codex-hooks",
+      codex,
+      "--command",
+      program,
+      "--no-stack",
+    ],
+    { stackStore: join(root, "stack") },
+  );
+  await expect(refused).rejects.toThrow("--claude-settings");
+  await expect(refused).rejects.toThrow("--codex-hooks");
+});
+
+// Reason: a refused hook file must not let setup write another one it then doesn't report.
+test("one refused hook file stops setup before the other is written", async () => {
+  const { root, repo, settings, program } = await scene();
+  const codex = join(root, "home/.codex/hooks.json");
+  await mkdir(join(settings, ".."), { recursive: true });
+  await writeFile(settings, "not json");
+  const refused = runSetupHooks(
+    [
+      "--repo",
+      repo,
+      "--agents",
+      "claude-code,codex",
+      "--claude-settings",
+      settings,
+      "--codex-hooks",
+      codex,
+      "--command",
+      program,
+      "--no-stack",
+    ],
+    { stackStore: join(root, "stack") },
+  );
+  await expect(refused).rejects.toThrow("--claude-settings");
+  expect(await Bun.file(codex).exists()).toBe(false);
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
+});
+
+// Reason: a Git hook in the way stops setup before any hook is written, and is named without the repository path.
+test("a Git hook that can't be changed stops setup before anything is written", async () => {
+  const { repo, setUp } = await scene();
+  await mkdir(join(repo, ".git/hooks/post-rewrite"), { recursive: true });
+  const refused = setUp();
+  await expect(refused).rejects.toThrow("Git's post-rewrite hook");
+  await expect(refused).rejects.not.toThrow(repo);
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
+});
+
+// Reason: a hook file whose folder can't be written is refused before anything is written.
+test("a named hook file in a folder that can't be written stops setup before anything is written", async () => {
+  const { repo, settings, setUp } = await scene();
+  await mkdir(join(settings, ".."), { recursive: true });
+  await chmod(join(settings, ".."), 0o500);
+  try {
+    const refused = setUp();
+    await expect(refused).rejects.toThrow(
+      "a folder of --claude-settings can't be written.",
+    );
+    expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+      false,
+    );
+  } finally {
+    await chmod(join(settings, ".."), 0o700);
+  }
+});
+
+// Reason: a hook file given as a link is written at its target, so the target's folder is checked and its path never shown.
+test("a linked hook file into a folder that can't be written stops setup before anything is written", async () => {
+  const { root, repo, settings, setUp } = await scene();
+  const locked = join(root, "pRiVaTe-locked");
+  await mkdir(locked);
+  await writeFile(join(locked, "settings.json"), "{}");
+  await mkdir(join(settings, ".."), { recursive: true });
+  await symlink(join(locked, "settings.json"), settings);
+  await chmod(locked, 0o500);
+  try {
+    const refused = setUp();
+    await expect(refused).rejects.toThrow(
+      "a folder of --claude-settings can't be written.",
+    );
+    await expect(refused).rejects.not.toThrow("pRiVaTe-locked");
+    expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+      false,
+    );
+  } finally {
+    await chmod(locked, 0o700);
+  }
+});
+
+// Reason: writing a file needs search permission on its folder as well as write permission.
+test("a named hook file in a folder without search permission stops setup before anything is written", async () => {
+  const { repo, settings, setUp } = await scene();
+  await mkdir(join(settings, ".."), { recursive: true });
+  await chmod(join(settings, ".."), 0o600);
+  try {
+    await expect(setUp()).rejects.toThrow(
+      "a folder of --claude-settings can't be written.",
+    );
+    expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+      false,
+    );
+  } finally {
+    await chmod(join(settings, ".."), 0o700);
+  }
+});
+
+// Reason: every place setup writes is checked before any is written, the capture settings included.
+test("a folder where the capture settings go stops setup before anything is written", async () => {
+  const { repo, setUp } = await scene();
+  await mkdir(join(repo, ".git/neuve/capture.json"), { recursive: true });
+  await expect(setUp()).rejects.toThrow(
+    "Neuve's capture settings in this repository can't be written.",
+  );
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
+});
+
+// Reason: a link to nothing on a hook file's path can't be written through, so setup refuses first.
+test("a hook file under a link to nothing stops setup before anything is written", async () => {
+  const { root, repo, settings, setUp } = await scene();
+  await mkdir(join(settings, "../.."), { recursive: true });
+  await rm(join(settings, ".."), { recursive: true, force: true });
+  await symlink(join(root, "nowhere"), join(settings, ".."));
+  await expect(setUp()).rejects.toThrow(
+    "a folder of --claude-settings can't be written.",
+  );
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
+});
+
+// Reason: the capture settings are rewritten in place, so a read-only file is refused before anything is written.
+test("read-only capture settings stop setup before anything is written", async () => {
+  const { repo, setUp } = await scene();
+  await mkdir(join(repo, ".git/neuve"), { recursive: true });
+  await writeFile(join(repo, ".git/neuve/capture.json"), "{}");
+  await chmod(join(repo, ".git/neuve/capture.json"), 0o400);
+  try {
+    await expect(setUp()).rejects.toThrow(
+      "Neuve's capture settings in this repository can't be written.",
+    );
+    expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+      false,
+    );
+  } finally {
+    await chmod(join(repo, ".git/neuve/capture.json"), 0o600);
+  }
+});
+
+// Reason: capture settings that are a link to nothing can't be written through, so setup refuses first.
+test("capture settings that link to nothing stop setup before anything is written", async () => {
+  const { root, repo, setUp } = await scene();
+  await mkdir(join(repo, ".git/neuve"), { recursive: true });
+  await symlink(
+    join(root, "nowhere/capture.json"),
+    join(repo, ".git/neuve/capture.json"),
+  );
+  await expect(setUp()).rejects.toThrow(
+    "Neuve's capture settings in this repository can't be written.",
+  );
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
+});
+
+// Reason: a hook file named for an agent setup isn't setting up is left alone, and the person is told (owner, 24 November 2026).
+test("a hook file named for an agent setup isn't setting up is left alone and said so", async () => {
+  const { setUp, said, root } = await scene();
+  expect(await setUp()).toBe(0);
+  expect(said()).toContain(
+    "--codex-hooks names its hook file, but Codex isn't being set up here, so that file was left alone",
+  );
+  expect(await Bun.file(join(root, "home/.codex/hooks.json")).exists()).toBe(
+    false,
+  );
+});
