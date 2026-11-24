@@ -362,7 +362,7 @@ test("environment: stray keys and parent sessions cannot replace the folder subs
   const parent: Record<string, string> = {
     HOME: "/test/home",
     PATH: "/test/bin",
-    CLAUDE_CODE_OAUTH_TOKEN: "test-token",
+    CLAUDE_CODE_OAUTH_TOKEN: "untrusted-parent-token",
     CLAUDE_CODE_OAUTH_TOKEN_EXTRA: "test",
     ANTHROPIC_API_KEY: "test",
   };
@@ -373,7 +373,7 @@ test("environment: stray keys and parent sessions cannot replace the folder subs
         throw new Error("Credential or parent-session value accessed");
       },
     });
-  const env = childEnvironment(parent, account);
+  const env = childEnvironment(parent, account, "test-token");
   expect(env.CLAUDE_CONFIG_DIR).toBe("/test/config");
   expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   expect(env.HOME).toBe(parent.HOME);
@@ -383,7 +383,10 @@ test("environment: stray keys and parent sessions cannot replace the folder subs
     ...account,
     credential: { kind: "claude-config-folder" as const },
   };
-  const defaultEnv = childEnvironment(parent, defaultAccount);
+  expect(
+    childEnvironment(parent, defaultAccount).CLAUDE_CODE_OAUTH_TOKEN,
+  ).toBeUndefined();
+  const defaultEnv = childEnvironment(parent, defaultAccount, "test-token");
   expect(defaultEnv.CLAUDE_CONFIG_DIR).toBeUndefined();
   expect(defaultEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("test-token");
   expect(defaultEnv.CLAUDE_CODE_OAUTH_TOKEN_EXTRA).toBeUndefined();

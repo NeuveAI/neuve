@@ -25,6 +25,7 @@ export interface ClaudeRuntimeConfig {
   /** Stable directory owned by Neuve. The caller creates it before opening sessions. */
   readonly cwd: string;
   readonly executable?: string;
+  readonly oauthToken?: string | undefined;
   /** Maximum wait for query disposal on a turn path. Defaults to 10 seconds. */
   readonly interruptTimeoutMs?: number;
 }
@@ -64,12 +65,15 @@ export const capabilities: RuntimeCapabilities = {
   ownTools: false,
   byteExactCapture: false,
 };
-export const makeRuntime = (config: InternalConfig) =>
-  Effect.gen(function* () {
+export const makeRuntime = (config: InternalConfig) => {
+  const environment = config.environment ?? process.env;
+  const oauthToken = Object.hasOwn(config, "oauthToken")
+    ? config.oauthToken
+    : environment.CLAUDE_CODE_OAUTH_TOKEN;
+  return Effect.gen(function* () {
     const sdk = yield* ClaudeSdk;
     const executable = yield* ClaudeExecutable;
     const processes = yield* ClaudeProcess;
-    const environment = config.environment ?? process.env;
     const resolve = (account: ClaudeAccount) =>
       executable.resolve(config.executable).pipe(
         Effect.flatMap((path) =>
@@ -106,6 +110,7 @@ export const makeRuntime = (config: InternalConfig) =>
             cwd: config.cwd,
             executable: path,
             environment,
+            oauthToken,
             ...(config.interruptTimeoutMs === undefined
               ? {}
               : { interruptTimeoutMs: config.interruptTimeoutMs }),
@@ -145,7 +150,7 @@ export const makeRuntime = (config: InternalConfig) =>
             Effect.gen(function* () {
               const query = yield* sdk.open({
                 pathToClaudeCodeExecutable: path,
-                env: childEnvironment(environment, supported),
+                env: childEnvironment(environment, supported, oauthToken),
                 cwd: config.cwd,
                 settingSources: [],
                 settings: { disableAllHooks: true },
@@ -191,7 +196,7 @@ export const makeRuntime = (config: InternalConfig) =>
               yield* processes
                 .run(
                   [path, "auth", "logout"],
-                  childEnvironment(environment, supported),
+                  childEnvironment(environment, supported, oauthToken),
                 )
                 .pipe(
                   Effect.mapError(
@@ -205,3 +210,4 @@ export const makeRuntime = (config: InternalConfig) =>
             }),
     } satisfies RuntimeShape;
   });
+};

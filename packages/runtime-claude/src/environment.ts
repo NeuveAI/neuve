@@ -56,19 +56,19 @@ const removed = new Set<string>(REMOVED_ENVIRONMENT);
 export function childEnvironment(
   parent: Readonly<Record<string, string | undefined>>,
   account: ClaudeAccount,
+  oauthToken?: string,
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {};
   for (const name of Object.keys(parent)) {
     if (
-      (name === "CLAUDE_CODE_OAUTH_TOKEN" &&
-        account.credential.folder === undefined) ||
-      (!removed.has(name) &&
-        !REMOVED_PREFIXES.some((prefix) => name.startsWith(prefix)))
+      !removed.has(name) &&
+      !REMOVED_PREFIXES.some((prefix) => name.startsWith(prefix))
     )
       env[name] = parent[name];
   }
   if (account.credential.folder !== undefined)
     env.CLAUDE_CONFIG_DIR = account.credential.folder;
+  else if (oauthToken !== undefined) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
   return {
     ...env,
     ENABLE_CLAUDEAI_MCP_SERVERS: "false",

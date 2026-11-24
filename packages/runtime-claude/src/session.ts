@@ -88,6 +88,7 @@ export interface InternalSessionOptions {
   readonly cwd: string;
   readonly executable: string;
   readonly environment: Readonly<Record<string, string | undefined>>;
+  readonly oauthToken?: string | undefined;
   readonly interruptTimeoutMs?: number;
   /** Optional internal snapshot; public resumes establish their baseline from the first result. */
   readonly usageBaseline?: ReadonlyMap<string, Readonly<CallUsage>>;
@@ -1058,7 +1059,7 @@ export const openClaudeSession = (
         const effort = selectionEffort(selectedModel, models).effort;
         const options: Options = {
           pathToClaudeCodeExecutable: config.executable,
-          env: childEnvironment(config.environment, account),
+          env: childEnvironment(config.environment, account, config.oauthToken),
           cwd: config.cwd,
           tools: [],
           settingSources: [],

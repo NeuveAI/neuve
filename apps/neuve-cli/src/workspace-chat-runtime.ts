@@ -60,6 +60,11 @@ export function productionChatSources(options: {
   home: string;
   claude?: ClaudeRuntimeConfig;
 }): ChatRuntimeSources & { close(): Promise<void> } {
+  const claude: ClaudeRuntimeConfig = {
+    cwd: defaultClaudeWorkingFolder(options.home),
+    oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+    ...options.claude,
+  };
   let ensureStatuses: Effect.Effect<void> = Effect.void;
   // A worker learns its channel's folder after its sources exist; sessions open only after that.
   let logs: ReturnType<typeof protocolLogs> | undefined;
@@ -69,9 +74,7 @@ export function productionChatSources(options: {
         const directory = yield* AccountStore.retryingDirectory(options.home);
         return harnessRuntimes({
           accountDirectory: Layer.succeed(AccountDirectory, directory),
-          claude: options.claude ?? {
-            cwd: defaultClaudeWorkingFolder(options.home),
-          },
+          claude,
           codex: {
             ...codexRuntimeOptions(options.home, thisBuild()),
             log: (account) => logs?.(account),
