@@ -567,6 +567,12 @@ const judgeAgentHooks = async (
 const writableFolder = async (folder: string): Promise<boolean> => {
   for (let current = folder; ; current = dirname(current)) {
     const found = await stat(current).catch(() => undefined);
+    // A link to nothing on the way can't be written through.
+    if (
+      found === undefined &&
+      (await lstat(current).catch(() => undefined))?.isSymbolicLink()
+    )
+      return false;
     if (found !== undefined)
       return found.isDirectory()
         ? await access(current, constants.W_OK | constants.X_OK).then(
@@ -787,6 +793,28 @@ export const runSetupHooks = async (
   // changed is named together, and nothing is written when one is refused.
   const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
   const failures: unknown[] = [];
+  // Every other place setup writes is checked the same way: the capture settings, and the shared hook
+  // program when this run builds it.
+  if (
+    !dryRun &&
+    (!(await writableFolder(location.directory)) ||
+      (
+        await stat(captureConfigPath(location)).catch(() => undefined)
+      )?.isDirectory())
+  )
+    failures.push(
+      new Error(
+        "Neuve's capture settings in this repository can't be written.",
+      ),
+    );
+  if (
+    hookArgv.at(-1) === hookBundlePath() &&
+    !compiled() &&
+    values.command === undefined &&
+    !dryRun &&
+    !(await writableFolder(dirname(hookBundlePath())))
+  )
+    failures.push(new Error("Neuve's shared hook program can't be written."));
   if (hooksFolderIsLink) failures.push(new Error(refusal.hooksFolderLink()));
   else {
     if (!(await writableFolder(hooksDirectory)))

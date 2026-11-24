@@ -587,3 +587,29 @@ test("a named hook file in a folder without search permission stops setup before
     await chmod(join(settings, ".."), 0o700);
   }
 });
+
+// Reason: every place setup writes is checked before any is written, the capture settings included.
+test("a folder where the capture settings go stops setup before anything is written", async () => {
+  const { repo, setUp } = await scene();
+  await mkdir(join(repo, ".git/neuve/capture.json"), { recursive: true });
+  await expect(setUp()).rejects.toThrow(
+    "Neuve's capture settings in this repository can't be written.",
+  );
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
+});
+
+// Reason: a link to nothing on a hook file's path can't be written through, so setup refuses first.
+test("a hook file under a link to nothing stops setup before anything is written", async () => {
+  const { root, repo, settings, setUp } = await scene();
+  await mkdir(join(settings, "../.."), { recursive: true });
+  await rm(join(settings, ".."), { recursive: true, force: true });
+  await symlink(join(root, "nowhere"), join(settings, ".."));
+  await expect(setUp()).rejects.toThrow(
+    "a folder of --claude-settings can't be written.",
+  );
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
+});
