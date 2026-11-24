@@ -230,7 +230,7 @@ const describeQueueError = (error: unknown) => {
   if (error instanceof JobQueue.JobNotFound)
     return "That job ID has no job in this store.";
   if (error instanceof JobQueue.InvalidJobPayload)
-    return `Job payload takes the JSON fields for ${error.kind}.`;
+    return `Job payload takes the JSON fields for ${error.kind}.\n${error.message}`;
   if (error instanceof JobQueue.JobStateConflict)
     return `The job is ${error.state}. Use a waiting or delayed job ID to drop a job.`;
   if (error instanceof JobQueue.JobHeldByNewerBuild)
@@ -975,7 +975,9 @@ export const runWorkerCli = async (
       return runWorkerMain(
         Effect.gen(function* () {
           const location = yield* selectedLocation();
-          const input = z.string().parse(values.input);
+          const input = values.input;
+          if (typeof input !== "string")
+            return yield* Effect.fail(new Error("--input takes valid JSON."));
           let payload: unknown;
           try {
             payload = JSON.parse(input);

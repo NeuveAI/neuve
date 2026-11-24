@@ -496,4 +496,7 @@ test("one refused hook file stops setup before the other is written", async () =
   );
   await expect(refused).rejects.toThrow("--claude-settings");
   expect(await Bun.file(codex).exists()).toBe(false);
+  expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+    false,
+  );
 });

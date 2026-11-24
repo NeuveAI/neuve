@@ -536,7 +536,14 @@ export const layer = Layer.effect(
           if (!parsed.success)
             return yield* new InvalidJobPayload({
               kind: request.kind,
-              message: z.prettifyError(parsed.error),
+              // Each problem names the expected field, never a key or value the payload supplied.
+              message: parsed.error.issues
+                .map((issue) =>
+                  issue.code === "unrecognized_keys"
+                    ? `${issue.path.join(".") || "The payload"} has fields ${request.kind} doesn't take.`
+                    : `${issue.path.join(".") || "The payload"}: ${issue.message}`,
+                )
+                .join("\n"),
             });
           payload = parsed.data;
         }

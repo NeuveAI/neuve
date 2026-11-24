@@ -412,6 +412,27 @@ describe("neuve CLI boundary", () => {
     });
   });
 
+  // A bad payload names the fields the kind expects, never a key or value the payload supplied.
+  test("a job payload refusal names the expected fields without the supplied ones", async () => {
+    const { root } = await fixtureRepository();
+    const refused = await run([
+      "jobs",
+      "enqueue",
+      "stack.fetch",
+      '{"pRiVaTe":"hunter2"}',
+      "--repo",
+      root,
+      "--no-start",
+    ]);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain(
+      "Job payload takes the JSON fields for stack.fetch.",
+    );
+    expect(refused.stderr).toContain("revisions: Invalid input");
+    expect(refused.stderr).not.toContain("pRiVaTe");
+    expect(refused.stderr).not.toContain("hunter2");
+  });
+
   // A write refusal must identify the failed filesystem operation without displaying the hook path.
   test("setup hooks keeps the native hook-file write reason", async () => {
     const { root } = await fixtureRepository();

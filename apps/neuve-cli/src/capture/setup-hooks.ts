@@ -760,6 +760,37 @@ export const runSetupHooks = async (
           return { agents: kept, hooked: present };
         })();
 
+  const files = hooked.map((harness) => {
+    const option =
+      harness === "claude-code" ? "claude-settings" : "codex-hooks";
+    const namedPath = values[option];
+    return {
+      harness,
+      option,
+      named: namedPath !== undefined,
+      path: resolve(namedPath ?? defaultHookFile(harness)),
+    };
+  });
+  const described = (file: (typeof files)[number], error: unknown): unknown =>
+    file.named
+      ? new Error(nameDiagnosticPath(error, `--${file.option}`, file.path))
+      : error;
+  // Every hook file is checked before anything is written, so each one that can't be changed is
+  // named together, and no Git hook, capture setting or other hook file is written when one is refused.
+  const failures: unknown[] = [];
+  for (const file of files)
+    await installAgentHooks(file.path, file.harness, command, true).catch(
+      (error: unknown) => failures.push(described(file, error)),
+    );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new Error(
+      failures
+        .map((error) =>
+          error instanceof Error ? error.message : String(error),
+        )
+        .join("\n"),
+    );
   const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
   const changes: Array<Change> = [];
   for (const name of gitHooks)
@@ -786,37 +817,6 @@ export const runSetupHooks = async (
     action: dryRun ? "would write" : "written",
   });
 
-  const files = hooked.map((harness) => {
-    const option =
-      harness === "claude-code" ? "claude-settings" : "codex-hooks";
-    const namedPath = values[option];
-    return {
-      harness,
-      option,
-      named: namedPath !== undefined,
-      path: resolve(namedPath ?? defaultHookFile(harness)),
-    };
-  });
-  const described = (file: (typeof files)[number], error: unknown): unknown =>
-    file.named
-      ? new Error(nameDiagnosticPath(error, `--${file.option}`, file.path))
-      : error;
-  // Every hook file is checked before any is written, so each one that can't be changed is named
-  // together and no file is written when another is refused.
-  const failures: unknown[] = [];
-  for (const file of files)
-    await installAgentHooks(file.path, file.harness, command, true).catch(
-      (error: unknown) => failures.push(described(file, error)),
-    );
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1)
-    throw new Error(
-      failures
-        .map((error) =>
-          error instanceof Error ? error.message : String(error),
-        )
-        .join("\n"),
-    );
   for (const file of files)
     changes.push(
       await installAgentHooks(file.path, file.harness, command, dryRun).catch(
