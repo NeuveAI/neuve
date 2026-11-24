@@ -703,13 +703,6 @@ export const runSetupHooks = async (
       ? [...argv, "hook"]
       : // Hooks run in the project: bun loads nothing from it (`sourceRunFlags`).
         [process.execPath, ...Starter.sourceRunFlags(), hookBundlePath()];
-  if (
-    hookArgv.at(-1) === hookBundlePath() &&
-    !compiled() &&
-    values.command === undefined &&
-    !dryRun
-  )
-    await buildHookBundle();
   const command = hookArgv.map(quote).join(" ");
 
   // Named, the person's choice. Otherwise the agent programs found here, and every one this
@@ -796,6 +789,14 @@ export const runSetupHooks = async (
         )
         .join("\n"),
     );
+  // Built only once nothing is refused: every repository on this machine runs this program.
+  if (
+    hookArgv.at(-1) === hookBundlePath() &&
+    !compiled() &&
+    values.command === undefined &&
+    !dryRun
+  )
+    await buildHookBundle();
   const changes: Array<Change> = [];
   for (const name of gitHooks)
     changes.push(await installGitHook(hooksDirectory, name, command, dryRun));
