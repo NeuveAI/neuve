@@ -128,7 +128,7 @@ const executable = (path: string) => {
   }
 };
 
-// Keep discovery aligned with the CLI's discoverGraphBinary; the release tests check parity.
+// The one rule for finding the Graph engine; the command line uses it too.
 export const discoverSearchGraphBinary = (
   input: Readonly<{ override: string | undefined; executable: string }> = {
     override: process.env.NEUVE_GRAPH_BINARY,

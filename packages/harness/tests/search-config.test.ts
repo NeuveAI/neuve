@@ -2,6 +2,7 @@
 import { afterAll, expect, test } from "bun:test";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -101,6 +102,17 @@ for (const scenario of [
         executable: cli,
       },
     );
+    // A checkout with the Graph engine built falls back to that engine when running from source.
+    const source = fileURLToPath(
+      new URL("../../../apps/neuve-graph/entire-graph", import.meta.url),
+    );
+    if (
+      (scenario === "missing" || scenario === "non-executable") &&
+      existsSync(source)
+    ) {
+      expect(runtime.problems.graph_search).toBeUndefined();
+      return;
+    }
     expect(runtime.graph).toBeUndefined();
     expect(runtime.hybrid).toBeUndefined();
     for (const problem of [
