@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 
 import type { Changes, ChannelInfo, ModelRef } from "@ace/channel/protocol";
-import { available, choose, resolveStoredModel } from "@ace/channel/models";
+import { available, choose, usable } from "@ace/channel/models";
 
 import * as catalog from "./catalog";
 import { Connection, hostedAuth, request } from "./client";
@@ -33,8 +33,9 @@ export async function models(): Promise<ModelRef[]> {
 export async function defaultModel(models = providers()): Promise<ModelRef> {
 	if (config.model) return parseModel(config.model);
 	const saved = preference();
-	const kept = saved && await resolveStoredModel(models, saved);
-	return kept ?? choose(models);
+	// A saved default whose key expired or was removed must not block agents another key can run.
+	if (saved && await usable(models, saved)) return saved;
+	return choose(models);
 }
 
 /** The Git top level containing `dir`, which needs a commit for lanes to start from. */
