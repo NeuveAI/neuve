@@ -95,7 +95,7 @@ The owner's direction for this design is to keep it simple and functional. An is
 
 - **The clone** borrows its objects from one mirror per repository on the sandbox machine, shared read only into every micro-VM, so a clone costs only its own commits and checkout. Git warns that a borrowing clone breaks if its source later drops objects, so the mirror never prunes while a clone borrows from it. Run on the owner's Mac, outside any VM: a borrowing clone of this repository took 0.44 s and 588 KB, against 0.81 s and 20 MB for a full copy, and a commit in it wrote only to its own folder.
 - **The branch and proof leave** through the broker, which holds the keys and pushes the branch, as it already answers Git only for the chat's own repository. Proof leaves as files the host collects from the micro-VM before teardown.
-- **An isolate lives until it is torn down, the coordinator's reading of the direction to keep the design simple, in place of the idle stop the tenth answer accepted.** A stopped agent keeps its isolate, so a mention finds its clone where it left it.
+- **An idle agent stops.** Its micro-VM is saved and stopped, which frees its memory and keeps its disk, and a mention restores it; on a Mac, memory comes back only when the micro-VM stops.
 
 ## Teardown
 
