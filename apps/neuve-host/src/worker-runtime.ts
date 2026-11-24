@@ -265,12 +265,18 @@ export function planScopeRead(
 			roots.set(plansRoot, plansRoot);
 			const aliases = [...roots.keys()].sort((a, b) => b.length - a.length);
 			const refused: string[] = [];
+			const advice = new Set<string>();
 			for (const [index, name] of scope.entries()) {
 				const field = `scope[${index}] received ${JSON.stringify(name)}`;
+				if (name.includes("\0")) {
+					refused.push(`${field} but paths cannot contain NUL bytes`);
+					continue;
+				}
 				const path = resolve(repository, name);
 				const alias = aliases.find(root => below(root, path) !== undefined);
 				if (alias === undefined) {
 					refused.push(`${field} outside the allowed roots`);
+					advice.add("name files inside the repository, its worktrees or this channel's plans folder");
 					continue;
 				}
 				const root = roots.get(alias)!;
@@ -289,14 +295,21 @@ export function planScopeRead(
 							break;
 						}
 					}
-					if (linked) refused.push(`${field} through a link`);
-					else paths.add(join(root, suffix));
-				} catch {
-					refused.push(`${field} but could not resolve it`);
+					if (linked) {
+						refused.push(`${field} through a link`);
+						advice.add("name each linked file by a path with no link in it");
+					} else paths.add(join(root, suffix));
+				} catch (error) {
+					const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
+					let reason = "the host could not check its path";
+					if (code === "EACCES" || code === "EPERM") reason = "access to its path was denied";
+					else if (code === "ENAMETOOLONG") reason = "its path is too long";
+					refused.push(`${field} but ${reason}${code ? ` (${code})` : ""}`);
 				}
 			}
 			if (refused.length) {
-				return { isError: true, text: redact(`${refused.join(" and ")}, so name each file by a path with no link in it, inside the repository, its worktrees or this channel's plans folder, or omit them to read the approved plan.`) };
+				const ending = advice.size ? `, so ${[...advice].join(" and ")}` : "";
+				return { isError: true, text: redact(`${refused.join(" and ")}${ending}.`) };
 			}
 			const { scope: sources, scope_gaps: gaps, refusal, ...result } = await query({
 				...request, scope: [...paths], plan: { path: planPath, sha256: plan.hash },

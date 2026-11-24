@@ -728,6 +728,67 @@ describe("neuve CLI boundary", () => {
     }
   });
 
+  test("worker query gives cause-specific refusals for inaccessible and linked scope paths", async () => {
+    const { root, revision } = await fixtureRepository();
+    const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));
+    roots.push(scratch);
+    const worker = {
+      sessionId: "worker-scope",
+      stateDirectory: scratch,
+      config: HostConfigSchema.parse({
+        home: scratch,
+        lanes: root,
+        user: "owner",
+        port: 0,
+        environment: {},
+        worker: [process.execPath],
+      }),
+    };
+    const { query } = codingWorkerSetup(
+      await localStorageProfile(root, scratch),
+      SOL_ROUTE,
+    );
+    const read = planScopeRead(root, join(scratch, "plans"), (request) =>
+      query!(worker, request),
+    );
+    const text = "# Approved plan\n";
+    const request = {
+      repository: root,
+      revision,
+      question: "Read scope",
+      previousPlans: [],
+      plan: {
+        file: `${crypto.randomUUID()}.md`,
+        title: "Approved plan",
+        text,
+        hash: createHash("sha256").update(text).digest("hex"),
+      },
+      requester: {
+        _tag: "Agent" as const,
+        harness: "neuve-pi" as const,
+        sessionId: worker.sessionId,
+        subagentId: "8",
+      },
+    };
+    const locked = join(root, "locked");
+    await mkdir(locked);
+    await Bun.write(join(locked, "x.md"), "Scope text.");
+    await symlink(join(root, "source.custom"), join(root, "link.md"));
+    try {
+      await chmod(locked, 0o000);
+      expect(await read({ ...request, scope: ["locked/x.md"] })).toEqual({
+        isError: true,
+        text: 'scope[0] received "locked/x.md" but access to its path was denied (EACCES).',
+      });
+    } finally {
+      await chmod(locked, 0o700);
+    }
+    expect(await read({ ...request, scope: ["link.md"] })).toEqual({
+      isError: true,
+      text: 'scope[0] received "link.md" through a link, so name each linked file by a path with no link in it.',
+    });
+  });
+
   test("worker query rejects a linked scope parent before keeping the file in Records", async () => {
     const { root, revision } = await fixtureRepository();
     const scratch = await mkdtemp(join(tmpdir(), "neuve-worker-scope-"));

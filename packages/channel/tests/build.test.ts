@@ -701,7 +701,7 @@ test("scope paths reject escapes and scope answers redact plan paths from citati
 	const denied = await askScope(run, chat, "Read invalid paths", [outside, "escape.md", "bad\0path", "escape-dir/missing.md"]);
 	expect(denied).toMatchObject({
 		error: true,
-		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" through a link and scope[2] received "bad\\u0000path" but could not resolve it and scope[3] received "escape-dir/missing.md" through a link, so name each file by a path with no link in it, inside the repository, its worktrees or this channel's plans folder, or omit them to read the approved plan.`,
+		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" through a link and scope[2] received "bad\\u0000path" but paths cannot contain NUL bytes and scope[3] received "escape-dir/missing.md" through a link, so name files inside the repository, its worktrees or this channel's plans folder and name each linked file by a path with no link in it.`,
 	});
 	expect(calls).toEqual(["Read notes", "Broken read"]);
 });
