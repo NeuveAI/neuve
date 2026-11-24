@@ -65,6 +65,7 @@ const MarkerEvent = z.discriminatedUnion("type", [
     pid: z.number().int(),
     cwd: z.string(),
     folder: z.string().optional(),
+    hasOAuthToken: z.boolean(),
   }),
   z.object({ type: z.literal("exited"), pid: z.number().int() }),
   z.object({ type: z.literal("control"), subtype: z.string() }),
@@ -138,7 +139,7 @@ import { createInterface } from 'node:readline';
 const marker = ${JSON.stringify(marker)};
 const record = (event) => appendFileSync(marker, JSON.stringify(event) + '\\n');
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
-record({type:'started', pid:process.pid, cwd:process.cwd(), folder:process.env.CLAUDE_CONFIG_DIR});
+record({type:'started', pid:process.pid, cwd:process.cwd(), folder:process.env.CLAUDE_CONFIG_DIR, hasOAuthToken:process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined});
 process.on('SIGTERM', () => process.exit(0));
 process.on('exit', () => record({type:'exited', pid:process.pid}));
 const session = process.argv[process.argv.indexOf('--session-id') + 1];
@@ -442,7 +443,7 @@ test("production sources deliver a worker chat through a fake Claude executable 
         () => {},
       ),
     ).rejects.toThrow(
-      "Sign in for worker-test. Run neuve auth login worker-test.",
+      "Sign in for worker-test: run neuve auth login worker-test on this machine, then send your message again.",
     );
     expect(
       markerEvents(fake.marker).filter((event) => event.type === "prompt"),
@@ -535,6 +536,8 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
     opus,
   ]);
   const fake = fakeClaude(at.root);
+  const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = "test-token";
   const sources = productionChatSources({
     home: at.home,
     claude: {
@@ -542,6 +545,7 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
       executable: fake.executable,
     },
   });
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   const paths = {
     ...PI_TRANSITION_STORAGE_PROFILE.paths,
     state: join(at.root, "state"),
@@ -642,9 +646,11 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
     if (!harness) throw new Error("Worker did not attach its Harness");
     await harness.waitForIdle(BACKGROUND_CONTEXT);
     await until(() => !channel!.busy);
-    expect(
-      markerEvents(fake.marker).filter((event) => event.type === "prompt"),
-    ).toEqual([
+    const events = markerEvents(fake.marker);
+    expect(events.find((event) => event.type === "started")).toMatchObject({
+      hasOAuthToken: true,
+    });
+    expect(events.filter((event) => event.type === "prompt")).toEqual([
       {
         type: "prompt",
         content: [
@@ -722,6 +728,8 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
       false,
     );
   } finally {
+    if (previousToken !== undefined)
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken;
     const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
       throw new Error("Capture scanner is outside this test");
     });

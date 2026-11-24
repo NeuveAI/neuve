@@ -56,6 +56,7 @@ const removed = new Set<string>(REMOVED_ENVIRONMENT);
 export function childEnvironment(
   parent: Readonly<Record<string, string | undefined>>,
   account: ClaudeAccount,
+  oauthToken?: string,
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {};
   for (const name of Object.keys(parent)) {
@@ -67,6 +68,7 @@ export function childEnvironment(
   }
   if (account.credential.folder !== undefined)
     env.CLAUDE_CONFIG_DIR = account.credential.folder;
+  else if (oauthToken !== undefined) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
   return {
     ...env,
     ENABLE_CLAUDEAI_MCP_SERVERS: "false",

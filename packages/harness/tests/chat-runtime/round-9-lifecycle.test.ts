@@ -96,7 +96,7 @@ const accountFailures = [
       account: account().name,
       hint: { kind: "command", command: "claude auth login" },
     }),
-    text: "Sign in for subscription. Run claude auth login.",
+    text: "Sign in for subscription: run claude auth login on this machine, then send your message again.",
   },
   {
     error: new AccountRejected({ account: account().name }),

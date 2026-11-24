@@ -143,7 +143,8 @@ export function probeSignIn(
       : helper
         ? "credential-helper"
         : "environment",
-    sourceMatchesAccount: folder,
+    sourceMatchesAccount:
+      folder || info.tokenSource === "CLAUDE_CODE_OAUTH_TOKEN",
   };
 }
 export function limitWindow(info: RateInfo, at: string): LimitWindow {
@@ -297,7 +298,9 @@ export function outcomeFromResult(
     });
   if (
     accountEvidence &&
-    (code === "authentication_failed" || /not (?:logged|signed) in/i.test(text))
+    (code === "authentication_failed" ||
+      /not (?:logged|signed) in/i.test(text) ||
+      /^Login (?:expired|reached its time limit)/.test(text))
   )
     return fail({ _tag: "SignInRequired", account: account.name, hint });
   if (status != null && status >= 500)
