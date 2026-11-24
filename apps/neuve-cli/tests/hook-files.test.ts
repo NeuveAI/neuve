@@ -547,3 +547,26 @@ test("a named hook file in a folder that can't be written stops setup before any
     await chmod(join(settings, ".."), 0o700);
   }
 });
+
+// Reason: a hook file given as a link is written at its target, so the target's folder is checked and its path never shown.
+test("a linked hook file into a folder that can't be written stops setup before anything is written", async () => {
+  const { root, repo, settings, setUp } = await scene();
+  const locked = join(root, "pRiVaTe-locked");
+  await mkdir(locked);
+  await writeFile(join(locked, "settings.json"), "{}");
+  await mkdir(join(settings, ".."), { recursive: true });
+  await symlink(join(locked, "settings.json"), settings);
+  await chmod(locked, 0o500);
+  try {
+    const refused = setUp();
+    await expect(refused).rejects.toThrow(
+      "a folder of --claude-settings can't be written.",
+    );
+    await expect(refused).rejects.not.toThrow("pRiVaTe-locked");
+    expect(await Bun.file(join(repo, ".git/hooks/post-commit")).exists()).toBe(
+      false,
+    );
+  } finally {
+    await chmod(locked, 0o700);
+  }
+});

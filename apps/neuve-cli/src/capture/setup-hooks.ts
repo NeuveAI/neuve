@@ -766,20 +766,22 @@ export const runSetupHooks = async (
           return { agents: kept, hooked: present };
         })();
 
-  const files = hooked.map((harness) => {
-    const option =
-      harness === "claude-code" ? "claude-settings" : "codex-hooks";
-    const namedPath = values[option];
-    return {
-      harness,
-      option,
-      named: namedPath !== undefined,
-      path: resolve(namedPath ?? defaultHookFile(harness)),
-    };
-  });
+  const files = await Promise.all(
+    hooked.map(async (harness) => {
+      const option =
+        harness === "claude-code" ? "claude-settings" : "codex-hooks";
+      const namedPath = values[option];
+      const path = resolve(namedPath ?? defaultHookFile(harness));
+      // A linked hook file is written at its target, so the target's folder is the one checked.
+      const target = await linkTarget(path).catch(() => path);
+      return { harness, option, named: namedPath !== undefined, path, target };
+    }),
+  );
   const described = (file: (typeof files)[number], error: unknown): unknown =>
     file.named
-      ? new Error(nameDiagnosticPath(error, `--${file.option}`, file.path))
+      ? new Error(
+          nameDiagnosticPath(error, `--${file.option}`, file.path, file.target),
+        )
       : error;
   // Every Git hook and hook file is checked before anything is written, so each one that can't be
   // changed is named together, and nothing is written when one is refused.
@@ -795,9 +797,12 @@ export const runSetupHooks = async (
       );
   }
   for (const file of files) {
-    if (!(await writableFolder(dirname(file.path))))
+    if (!(await writableFolder(dirname(file.target))))
       failures.push(
-        described(file, new Error(`'${dirname(file.path)}' can't be written.`)),
+        described(
+          file,
+          new Error(`'${dirname(file.target)}' can't be written.`),
+        ),
       );
     await installAgentHooks(file.path, file.harness, command, true).catch(
       (error: unknown) => failures.push(described(file, error)),
