@@ -5,7 +5,7 @@ import {
 	MarkdownParser,
 	MarkdownSerializer,
 } from "prosemirror-markdown";
-import type { Node as PMNode } from "prosemirror-model";
+import { Fragment, type Node as PMNode } from "prosemirror-model";
 import type Token from "markdown-it/lib/token.mjs";
 
 import { customEmojiSrc } from "./emoji";
@@ -43,13 +43,6 @@ const serializer = new MarkdownSerializer(
 	{
 		...defaultMarkdownSerializer.nodes,
 		mention(state, node, parent, index) {
-			// A mention reads as one only after a space or a line's start: "ask" +
-			// "@reviewer" serialized as "ask@reviewer" is plain text to the channel
-			// and to the timeline, so the posted message shows no mention.
-			let prev = index > 0 ? parent.child(index - 1) : null;
-			if (prev && prev.type !== schema.nodes.hard_break && !(prev.isText && /\s$/.test(prev.text ?? ""))) {
-				state.write(" ");
-			}
 			state.write(`@${node.attrs.name}`);
 			// Guard against the mention gluing onto following text: "@ace" + "can"
 			// serializes to "@acecan", which re-parses as a single mention named
@@ -113,9 +106,30 @@ const CODE_OR_REFERENCE = new RegExp(
 	"gi",
 );
 
+/**
+ * A mention reads as one only after a space or a line's start, so "ask" + "@reviewer" must not go
+ * out as "ask@reviewer". The space is a node of its own, outside any formatting the mention alone
+ * has, so a bold mention goes out as "ask **@reviewer**", not "ask** @reviewer**".
+ */
+function spaced(node: PMNode): PMNode {
+	if (node.isLeaf) return node;
+	let children: PMNode[] = [];
+	node.forEach(child => {
+		let prev = children.at(-1);
+		if (
+			child.type === schema.nodes.mention && prev && prev.type !== schema.nodes.hard_break
+			&& !(prev.isText && /\s$/.test(prev.text ?? ""))
+		) {
+			children.push(schema.text(" ", child.marks.filter(mark => mark.isInSet(prev.marks))));
+		}
+		children.push(spaced(child));
+	});
+	return node.copy(Fragment.fromArray(children));
+}
+
 /** Serialize a ProseMirror doc to markdown, trimmed. */
 function serialize(doc: PMNode): string {
-	return serializer.serialize(doc).trim();
+	return serializer.serialize(spaced(doc)).trim();
 }
 
 function normalize(tokens: Token[]) {

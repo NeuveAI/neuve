@@ -171,8 +171,7 @@ function tool(
  */
 export function withMention(item: { entry?: number; invoked: boolean; text: string }, sends: ReadonlyMap<number, Said[]>) {
 	let said = item.entry === undefined ? undefined : sends.get(item.entry);
-	// A word joiner after the @ keeps the words as written and makes them no mention token.
-	if (said) return commentWords(said, true).replace(/(^|[\s([{])@(?=[\w-])/gm, "$1@\u2060");
+	if (said) return commentWords(said, true);
 	return item.invoked ? withAgentMention(item.text) : item.text;
 }
 
@@ -266,7 +265,9 @@ export function toEvents(
 				...(item.edited && !item.deleted ? { last_updated: Math.floor(item.edited / 1000) } : {}),
 				content: item.deleted ? [text("Message deleted")] : [
 					// Every input to a build's agent asks that agent, so no @neuve is drawn there.
-					text(brief || self ? item.text : withMention(item, sends), listed),
+					item.entry !== undefined && sends.has(item.entry)
+						? { type: "text" as const, text: withMention(item, sends), parts: [] }
+						: text(brief || self ? item.text : withMention(item, sends), listed),
 					...(item.images || []).map((image) => ({
 						type: "image" as const,
 						image: `data:${image.mimeType};base64,${image.data}`,

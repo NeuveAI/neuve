@@ -26,13 +26,14 @@ const comment: PlanComment = {
 
 // Why: the channel's message for a send of plan comments is written for the agent, with the
 // comment's id, its lines and instructions. The chat shows the person what they said: each
-// passage quoted as written and their words under it, with no `@name` drawn as a mention.
+// passage quoted as written and their words under it, with no `@name` drawn as a mention. The words
+// stay exactly as written, so copying them or finding "@vivienne" on the page works.
 test("a send of plan comments reads as the person's words under each passage", () => {
-	let drawn = withMention({ entry: 7, invoked: true, text: "Comments on the plan. Comment 8c070ef5, lines 34-34" }, said([comment]));
-	expect(drawn.replaceAll("⁠", "")).toBe(
-		"> Ask @vivienne \\*first\\*\n\nShould @vivienne review this first?\n\n> Ask @vivienne \\*first\\*\n\nAnd keep it short.",
-	);
-	expect(drawn.match(/(^|[\s([{])@[\w-]+/gm)).toBeNull();
+	const item = { entry: 7, invoked: true, text: "Comments on the plan. Comment 8c070ef5, lines 34-34" };
+	const words = "> Ask @vivienne \\*first\\*\n\nShould @vivienne review this first?\n\n> Ask @vivienne \\*first\\*\n\nAnd keep it short.";
+	expect(withMention(item, said([comment]))).toBe(words);
+	const [event] = toEvents([{ kind: "message", key: "e7", at: 1, author: "me", ...item }], "c", false, { text: "" }, {}, new Map(), {}, {}, {}, () => undefined, {}, said([comment]));
+	expect((event as { content: unknown[] }).content).toEqual([{ type: "text", text: words, parts: [] }]);
 	expect(withMention({ entry: 8, invoked: false, text: "Ask @vivienne" }, said([comment]))).toBe("Ask @vivienne");
 });
 

@@ -18,6 +18,14 @@ test("a mention after text is sent apart from it, an agent's and a person's alik
 	expect(line(agent, person)).toBe("@reviewer @vivienne");
 });
 
+// Why: the space goes before a bold mention's markers. Inside them, "ask** @vivienne**" is no
+// bold text in markdown, so the person saw the asterisks.
+test("a space before a formatted mention goes outside its formatting", () => {
+	const bold = [schema.marks.strong.create()];
+	expect(line(words("ask"), person.mark(bold), words(" now"))).toBe("ask **@vivienne** now");
+	expect(line(schema.text("ask", bold), person.mark(bold))).toBe("**ask @vivienne**");
+});
+
 test("a mention already apart from the text before it is sent as written", () => {
 	expect(line(agent, words(" hold it"))).toBe("@reviewer hold it");
 	expect(line(words("ask "), agent)).toBe("ask @reviewer");
