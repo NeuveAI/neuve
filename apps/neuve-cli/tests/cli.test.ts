@@ -430,6 +430,24 @@ describe("neuve CLI boundary", () => {
     );
     expect(refused.stderr).toContain("revisions: Invalid input");
     expect(refused.stderr).toMatch(/doesn't take; it takes [a-z]/);
+    // A payload whose schema is a union lists the fields of the option its kind names.
+    const oid = "a".repeat(40);
+    const nested = await run([
+      "jobs",
+      "enqueue",
+      "commit.prepare@2",
+      JSON.stringify({
+        kind: "commit",
+        commit: { oid, tree: oid, parents: [], pRiVaTe: 1 },
+      }),
+      "--repo",
+      root,
+      "--no-start",
+    ]);
+    expect(nested.stderr).toContain(
+      "commit has fields commit.prepare@2 doesn't take; it takes oid, tree, parents.",
+    );
+    expect(nested.stderr).not.toContain("pRiVaTe");
     expect(refused.stderr).not.toContain("pRiVaTe");
     expect(refused.stderr).not.toContain("hunter2");
   });
