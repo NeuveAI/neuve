@@ -786,21 +786,45 @@ export const runSetupHooks = async (
     action: dryRun ? "would write" : "written",
   });
 
-  // Each hook file is its own problem, so every one that fails is named together.
-  const failures: string[] = [];
-  for (const harness of hooked) {
+  const files = hooked.map((harness) => {
     const option =
       harness === "claude-code" ? "claude-settings" : "codex-hooks";
     const namedPath = values[option];
-    const path = resolve(namedPath ?? defaultHookFile(harness));
-    try {
-      changes.push(await installAgentHooks(path, harness, command, dryRun));
-    } catch (error) {
-      if (namedPath === undefined) throw error;
-      failures.push(nameDiagnosticPath(error, `--${option}`, path));
-    }
-  }
-  if (failures.length > 0) throw new Error(failures.join("\n"));
+    return {
+      harness,
+      option,
+      named: namedPath !== undefined,
+      path: resolve(namedPath ?? defaultHookFile(harness)),
+    };
+  });
+  const described = (file: (typeof files)[number], error: unknown): unknown =>
+    file.named
+      ? new Error(nameDiagnosticPath(error, `--${file.option}`, file.path))
+      : error;
+  // Every hook file is checked before any is written, so each one that can't be changed is named
+  // together and no file is written when another is refused.
+  const failures: unknown[] = [];
+  for (const file of files)
+    await installAgentHooks(file.path, file.harness, command, true).catch(
+      (error: unknown) => failures.push(described(file, error)),
+    );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new Error(
+      failures
+        .map((error) =>
+          error instanceof Error ? error.message : String(error),
+        )
+        .join("\n"),
+    );
+  for (const file of files)
+    changes.push(
+      await installAgentHooks(file.path, file.harness, command, dryRun).catch(
+        (error: unknown) => {
+          throw described(file, error);
+        },
+      ),
+    );
 
   const screen = commandScreen({});
   await screen.header(`neuve setup hooks ${CLI_VERSION}`);

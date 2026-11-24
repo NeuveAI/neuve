@@ -471,3 +471,29 @@ test("two named hook files that can't be read are both named in one refusal", as
   await expect(refused).rejects.toThrow("--claude-settings");
   await expect(refused).rejects.toThrow("--codex-hooks");
 });
+
+// Reason: a refused hook file must not let setup write another one it then doesn't report.
+test("one refused hook file stops setup before the other is written", async () => {
+  const { root, repo, settings, program } = await scene();
+  const codex = join(root, "home/.codex/hooks.json");
+  await mkdir(join(settings, ".."), { recursive: true });
+  await writeFile(settings, "not json");
+  const refused = runSetupHooks(
+    [
+      "--repo",
+      repo,
+      "--agents",
+      "claude-code,codex",
+      "--claude-settings",
+      settings,
+      "--codex-hooks",
+      codex,
+      "--command",
+      program,
+      "--no-stack",
+    ],
+    { stackStore: join(root, "stack") },
+  );
+  await expect(refused).rejects.toThrow("--claude-settings");
+  expect(await Bun.file(codex).exists()).toBe(false);
+});
