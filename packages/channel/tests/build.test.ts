@@ -1295,7 +1295,7 @@ test("a mention does not wake a stopped plan while the channel is shared", async
 	await buildAt(watch, 0, "stopped");
 	await fixture.request({ op: "share", author: OWNER, shared: true });
 	await expect(fixture.request({ op: "say", author: OWNER, text: "Wake up.", agents: [chat] })).rejects.toThrow(
-		"The plan's agents are paused while other people may ask them.",
+		"The plan's agents are stopped, and a mention can't restart them while other people may ask them.",
 	);
 	expect(watch.of("message").some(event => event.text === "Wake up.")).toBe(false);
 	expect(watch.of("builds").at(-1)?.builds[0]?.state.kind).toBe("stopped");

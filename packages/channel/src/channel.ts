@@ -860,7 +860,7 @@ export class Channel {
 			? "stopped"
 			: "failed";
 		await this.#builds.state(chat, outcome, undefined);
-		await this.#publishRun(chat, inputs.map(id => settled.get(id)), outcome);
+		await this.#publishRun(chat, inputs.map((id) => settled.get(id)), outcome);
 	}
 
 	#planPlacementCache(chat: ConversationId): PlanCommentPlacements {

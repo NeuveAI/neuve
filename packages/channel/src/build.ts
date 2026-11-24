@@ -309,8 +309,9 @@ export class Builds {
 			if (!await tx.submissionByRequest(chat, requestId)) problems.push(`${name}: ${waitForBrief}`);
 			// A stopped plan stays stopped when sharing turns on, so a mention must not wake it then either.
 			const kind = record.build.state.kind;
-			if (kind === "paused" || (kind === "stopped" && this.options.shared()))
-				problems.push(`${name}: ${buildRefusal("paused")}`);
+			if (kind === "paused") problems.push(`${name}: ${buildRefusal("paused")}`);
+			else if (kind === "stopped" && this.options.shared())
+				problems.push(`${name}: The plan's agents are stopped, and a mention can't restart them while other people may ask them.`);
 		}
 		if (problems.length) throw new Error(problems.join(" "));
 		return [...builds.values()];
