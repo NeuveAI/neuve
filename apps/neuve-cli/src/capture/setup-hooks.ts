@@ -786,6 +786,17 @@ export const runSetupHooks = async (
           }
           return { agents: kept, hooked: present };
         })();
+  // A hook file named for an agent setup isn't setting up is left alone, and the summary says so.
+  for (const [option, harness, name] of [
+    ["claude-settings", "claude-code", "Claude Code"],
+    ["codex-hooks", "codex", "Codex"],
+  ] as const)
+    if (values[option] !== undefined && !hooked.includes(harness))
+      notFound.push({
+        mark: "skipped",
+        label: name,
+        text: `--${option} names its hook file, but ${name} isn't being set up here, so that file was left alone`,
+      });
 
   const files = await Promise.all(
     hooked.map(async (harness) => {

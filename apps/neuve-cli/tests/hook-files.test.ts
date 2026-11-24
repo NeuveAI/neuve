@@ -647,3 +647,15 @@ test("capture settings that link to nothing stop setup before anything is writte
     false,
   );
 });
+
+// Reason: a hook file named for an agent setup isn't setting up is left alone, and the person is told (owner, 24 November 2026).
+test("a hook file named for an agent setup isn't setting up is left alone and said so", async () => {
+  const { setUp, said, root } = await scene();
+  expect(await setUp()).toBe(0);
+  expect(said()).toContain(
+    "--codex-hooks names its hook file, but Codex isn't being set up here, so that file was left alone",
+  );
+  expect(await Bun.file(join(root, "home/.codex/hooks.json")).exists()).toBe(
+    false,
+  );
+});
