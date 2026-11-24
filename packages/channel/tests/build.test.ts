@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import { readFile, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -635,6 +636,43 @@ test("a replayed scope call returns the saved answer and reads once", async () =
 	expect(asked).toEqual(["Find exports."]);
 });
 
+// A link swapped in at the plan read can point to bytes that match the approved hash.
+test("scope restores the approved plan when a link is swapped in at open", async () => {
+	const run = await setup();
+	const { chat } = await startBuild(run);
+	await askScope(run, chat, "Materialize the plan");
+	const [file] = await fs.readdir(run.plans);
+	const path = join(run.plans, file!);
+	const outside = join(run.fixture.root, "outside.md");
+	await writeFile(outside, planText);
+	let swapped = false;
+	const swap = async () => {
+		swapped = true;
+		await fs.unlink(path);
+		await symlink(outside, path);
+	};
+	const lstat = fs.lstat;
+	const open = fs.open;
+	const beforeRead = spyOn(fs, "lstat").mockImplementation(async (...args) => {
+		const entry = await lstat(...args);
+		if (args[0] === path && !swapped) await swap();
+		return entry;
+	});
+	const atOpen = spyOn(fs, "open").mockImplementation(async (...args) => {
+		if (args[0] === path && !swapped) await swap();
+		return open(...args);
+	});
+	try {
+		expect(await askScope(run, chat, "Read the approved plan")).toMatchObject({ error: false });
+	} finally {
+		atOpen.mockRestore();
+		beforeRead.mockRestore();
+	}
+	expect(swapped).toBe(true);
+	expect((await lstat(path)).isFile()).toBe(true);
+	expect(await readFile(path, "utf8")).toBe(planText);
+});
+
 // The query receives only bounded real paths and its public answer can cite the plan without exposing its folder.
 test("scope paths reject escapes and scope answers redact plan paths from citations, gaps and errors", async () => {
 	const calls: string[] = [];
@@ -662,7 +700,7 @@ test("scope paths reject escapes and scope answers redact plan paths from citati
 	const denied = await askScope(run, chat, "Read invalid paths", [outside, "escape.md", "bad\0path", "escape-dir/missing.md"]);
 	expect(denied).toMatchObject({
 		error: true,
-		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" through a link and scope[2] received "bad\\u0000path" but could not resolve it and scope[3] received "escape-dir/missing.md" through a link, so name readable files inside the repository, its worktrees or this channel's plans folder or omit them to read the approved plan.`,
+		text: `scope[0] received ${JSON.stringify(outside)} outside the allowed roots and scope[1] received "escape.md" through a link and scope[2] received "bad\\u0000path" but could not resolve it and scope[3] received "escape-dir/missing.md" through a link, so name each file by a path with no link in it, inside the repository, its worktrees or this channel's plans folder, or omit them to read the approved plan.`,
 	});
 	expect(calls).toEqual(["Read notes", "Broken read"]);
 });

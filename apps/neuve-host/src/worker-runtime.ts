@@ -5,7 +5,8 @@ import * as privateLog from "./private-log";
 import {buildWorktree, lanes as externalLanes, isPlaced} from "@ace/channel/external-lanes";
 import { SharedWork } from "@neuve/records-core/shared-work";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -291,7 +292,7 @@ export function planScopeRead(
 				}
 			}
 			if (refused.length) {
-				return { isError: true, text: redact(`${refused.join(" and ")}, so name readable files inside the repository, its worktrees or this channel's plans folder or omit them to read the approved plan.`) };
+				return { isError: true, text: redact(`${refused.join(" and ")}, so name each file by a path with no link in it, inside the repository, its worktrees or this channel's plans folder, or omit them to read the approved plan.`) };
 			}
 			const { scope: sources, scope_gaps: gaps, ...result } = await query({ ...request, scope: [...paths] });
 			return { text: JSON.stringify({
@@ -336,11 +337,14 @@ function planFiles(directory: string): NonNullable<Options["planFiles"]> {
 			try { await rename(pending, path); }
 			catch (error) { if (!missing(error)) throw error; }
 			try {
-				if ((await lstat(path)).isFile()) {
-					const copy = await readFile(path);
+				await using handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+				if ((await handle.stat()).isFile()) {
+					const copy = await handle.readFile();
 					if (createHash("sha256").update(copy).digest("hex") === hash) return copy;
 				}
-			} catch (error) { if (!missing(error)) throw error; }
+			} catch (error) {
+				if (!missing(error) && !(error instanceof Error && "code" in error && error.code === "ELOOP")) throw error;
+			}
 			// Rebuild a missing or changed copy from the committed session bytes.
 			await publish(path, bytes);
 			return bytes;
