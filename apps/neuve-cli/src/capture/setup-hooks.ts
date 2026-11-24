@@ -13,7 +13,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { getSystemErrorMessage, parseArgs } from "node:util";
+import { parseArgs } from "node:util";
 import { Effect, Exit } from "effect";
 import { constants } from "node:fs";
 import { z } from "zod";
@@ -39,7 +39,7 @@ import {
 import { GIT_HOOKS, TRAILER_HOOK } from "./git-hooks.ts";
 import { Identity } from "@neuve/records-core/capture";
 import { setupStack } from "../stack-cli.ts";
-import { repositoryRoot } from "../records-cli.ts";
+import { nameDiagnosticPath, repositoryRoot } from "../records-cli.ts";
 import { CLI_VERSION } from "../cli-version.ts";
 import { commandScreen, shown, type Mark } from "../terminal.ts";
 
@@ -209,18 +209,6 @@ const replaceFile = async (path: string, content: string) => {
   return backup;
 };
 
-class MissingHookLinkTarget extends Error {}
-
-const hookFileReason = (error: unknown) =>
-  error instanceof MissingHookLinkTarget
-    ? error.message
-    : error instanceof Error &&
-        "errno" in error &&
-        typeof error.errno === "number" &&
-        error.errno < 0
-      ? getSystemErrorMessage(error.errno)
-      : "the file could not be accessed";
-
 /**
  * The file a configuration path names: a symbolic link (common for dotfile managers) is written
  * through to its target, never replaced by a regular file. A dangling link is refused.
@@ -231,7 +219,9 @@ const linkTarget = async (path: string) => {
   try {
     return await realpath(path);
   } catch {
-    throw new MissingHookLinkTarget("it is a symbolic link to a missing file");
+    throw new Error(
+      `${path} is a symbolic link to a missing file. Fix the link first.`,
+    );
   }
 };
 
@@ -418,10 +408,7 @@ type HookFileRead =
   | { readonly kind: "unreadable"; readonly reason: string };
 
 /** An agent's hook file through `HookFile`: absent, read, or unreadable with the reason. */
-const readHookFile = async (
-  path: string,
-  hidePath = false,
-): Promise<HookFileRead> => {
+const readHookFile = async (path: string): Promise<HookFileRead> => {
   let text: string;
   try {
     // Only a plain file is read: a FIFO or a device would block the read for ever.
@@ -435,11 +422,7 @@ const readHookFile = async (
       ? { kind: "absent" }
       : {
           kind: "unreadable",
-          reason: hidePath
-            ? hookFileReason(error)
-            : error instanceof Error
-              ? error.message
-              : String(error),
+          reason: error instanceof Error ? error.message : String(error),
         };
   }
   // An empty file is a file with nothing in it yet.
@@ -585,18 +568,13 @@ const installAgentHooks = async (
   harness: AgentHarness,
   command: string,
   dryRun: boolean,
-  option: "--claude-settings" | "--codex-hooks" | undefined,
 ): Promise<Change> => {
   // A file of a shape this can't change safely stops here, in the words doctor uses. The file is
   // read once; what is written is built from that read, so a file changed since can't make it throw.
-  const read = await readHookFile(path, option !== undefined);
-  const label = option ?? path;
+  const read = await readHookFile(path);
   if (read.kind === "unreadable")
-    throw new Error(unreadableHookFile(label, harness, read.reason));
-  path = await linkTarget(path).catch((error: unknown) => {
-    if (option === undefined) throw error;
-    throw new Error(unreadableHookFile(label, harness, hookFileReason(error)));
-  });
+    throw new Error(unreadableHookFile(path, harness, read.reason));
+  path = await linkTarget(path);
   const present = read.kind === "read";
   // Built from the file as written, so the person's keys, groups and entries keep their order;
   // the schema has already said every value here is of the shape it relies on.
@@ -644,12 +622,7 @@ const installAgentHooks = async (
           ? "would update"
           : "would create",
     };
-  const backup = await replaceFile(path, next).catch((error: unknown) => {
-    if (option === undefined) throw error;
-    throw new Error(
-      `${option} couldn't be written (${hookFileReason(error)}). Fix the file or choose another path, then run neuve setup hooks again.`,
-    );
-  });
+  const backup = await replaceFile(path, next);
   return {
     path,
     action:
@@ -817,13 +790,13 @@ export const runSetupHooks = async (
     const option =
       harness === "claude-code" ? "claude-settings" : "codex-hooks";
     const namedPath = values[option];
+    const path = resolve(namedPath ?? defaultHookFile(harness));
     changes.push(
-      await installAgentHooks(
-        resolve(namedPath ?? defaultHookFile(harness)),
-        harness,
-        command,
-        dryRun,
-        namedPath === undefined ? undefined : `--${option}`,
+      await installAgentHooks(path, harness, command, dryRun).catch(
+        (error: unknown) => {
+          if (namedPath === undefined) throw error;
+          throw new Error(nameDiagnosticPath(error, `--${option}`, path));
+        },
       ),
     );
   }
@@ -884,21 +857,17 @@ export interface CapturePart {
 /**
  * The files an agent hook entry needs, read back from the command `setup hooks` wrote: the program
  * it starts and, when that program is `bun` (a hook written from a source checkout), the script it
- * runs. Undefined when the command can't be read that surely: a bare or relative first word, or a
- * quoted one with an apostrophe in it. Such an entry is reported as one Neuve can't judge, never as
- * gone.
+ * runs. A command with a bare or relative first word is reported as one Neuve can't judge.
  */
 const filesCalledBy = (command: string): ReadonlyArray<Needed> | undefined => {
-  const inner =
-    /^sh -c '(.*)'$/s.exec(command)?.[1]?.replaceAll(`'\\''`, "'") ?? command;
   const words: string[] = [];
-  let rest = inner.trim();
+  let rest = (unwrapped(command) ?? command).trim();
   while (rest !== "" && !rest.startsWith(">")) {
-    const quoted = /^'([^']*)'(?=\s|$)/.exec(rest);
+    const quoted = /^'((?:[^']|'\\'')*)'(?=\s|$)/.exec(rest);
     const bare = /^([^\s']+)(?=\s|$)/.exec(rest);
     const word = quoted ?? bare;
     if (word === null) return undefined;
-    words.push(word[1]!);
+    words.push(word[1]!.replaceAll(`'\\''`, "'"));
     rest = rest.slice(word[0].length).trimStart();
   }
   const program = words[0];

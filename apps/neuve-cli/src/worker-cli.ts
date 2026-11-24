@@ -547,7 +547,7 @@ export const runJobsCli = async (args: readonly string[]): Promise<number> => {
       }
       if (ended) {
         await write(
-          `Not requeued: the job for this --key already ended as ${job.state}. Enqueue with another --key to run it again.`,
+          `Not requeued: the job for this --key already ended as ${job.state}${job.lastError === null ? "" : ` (${job.lastError.tag}: ${job.lastError.message})`}. Enqueue with another --key to run it again.`,
         );
         return 0;
       }

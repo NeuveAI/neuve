@@ -17,8 +17,10 @@ import {
   type OfferContext,
 } from "./agent-programs.ts";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
+import { ReviewRouteName } from "../../../packages/harness/src/settings.ts";
 import {
   RouteRefused,
+  SETUP_ROUTE_REFUSAL,
   settingsRoute,
   SettingsUnreadable,
   writeRoute,
@@ -199,10 +201,23 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   const parsed = flagsSchema.safeParse(raw);
   if (!parsed.success)
     problems.push(argumentRefusal("--initial-query", "non-empty text"));
-  if (problems.length > 0 || !parsed.success)
-    throw new Error(problems.join("\n"));
+  let wanted = AGENT_IDS;
+  try {
+    wanted = agentsFlag(raw["--agents"]) ?? AGENT_IDS;
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    problems.push(error.message);
+  }
+  const otherProblems = problems.length > 0 || !parsed.success;
+  const namedRoute = ReviewRouteName.optional().safeParse(raw["--route"]);
+  if (!namedRoute.success) problems.push(SETUP_ROUTE_REFUSAL);
+  if (otherProblems || !namedRoute.success) {
+    const message = problems.join("\n");
+    if (otherProblems) throw new Error(message);
+    await Bun.write(Bun.stderr, `${message}\n`);
+    return 1;
+  }
   const options = parsed.data;
-  const wanted = agentsFlag(options["--agents"]) ?? AGENT_IDS;
   // On a Mac without the command-line tools, git only opens Apple's installer.
   const available = gitAvailability();
   if (!available.usable) {
@@ -213,7 +228,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
   const screen = commandScreen({ json });
   await screen.header(`neuve setup ${CLI_VERSION}`);
   // The route before anything else is written: a settings file setup can't read stops it here.
-  const route = await chooseRoute(options["--route"], screen);
+  const route = await chooseRoute(namedRoute.data, screen);
   if ("refused" in route) {
     await Bun.write(Bun.stderr, `${route.refused}\n`);
     return 1;
@@ -962,15 +977,15 @@ export const ROUTE_CHOICES = [
 export const ROUTE_QUESTION = "How should reviews sign in?";
 
 const chooseRoute = async (
-  flag: string | undefined,
+  flag: RouteName | undefined,
   screen: Screen,
 ): Promise<
   { refused: string } | { route: RouteName | undefined; unreadable?: true }
 > => {
-  const write = async (route: string) => {
+  const write = async (route: RouteName) => {
     try {
       await writeRoute(route);
-      return { route: route as RouteName };
+      return { route };
     } catch (error) {
       if (error instanceof SettingsUnreadable || error instanceof RouteRefused)
         return { refused: error.message };

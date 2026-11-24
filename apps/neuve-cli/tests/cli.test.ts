@@ -16,6 +16,7 @@ import {
   Cycles,
   Identity,
   JobQueue,
+  Registry,
   Sessions,
   storeLocationIn,
   WRITER_VERSION,
@@ -30,7 +31,7 @@ import {
   symlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { defaultConfig } from "../../../packages/harness/src/config.ts";
 import { mcpClientsLayer } from "../../../packages/harness/src/mcp-client.ts";
 import { requestReview } from "../../../packages/harness/src/request.ts";
@@ -301,6 +302,219 @@ const queryArgs = (
 ];
 
 describe("neuve CLI boundary", () => {
+  // Setup reports independent flag errors together before writing any settings.
+  test("setup reports invalid initial query, agents, and route together", async () => {
+    expect(
+      await run([
+        "setup",
+        "--initial-query",
+        "",
+        "--agents",
+        "bogus",
+        "--route",
+        "bogus",
+      ]),
+    ).toEqual({
+      stdout: "",
+      stderr: [
+        "neuve: --initial-query takes non-empty text.",
+        "--agents takes claude-code, codex or none.",
+        "neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code).",
+        "",
+      ].join("\n"),
+      exitCode: 2,
+    });
+  });
+
+  // A missing scope value should tell the caller what a replacement must be.
+  test("query explains what a missing scope value takes", async () => {
+    expect(
+      await run([...queryArgs("/tmp/example", "abcdef0"), "--scope"]),
+    ).toEqual({
+      stdout: "",
+      stderr:
+        "neuve: --scope takes a non-empty path without null bytes. No value was supplied.\n",
+      exitCode: 2,
+    });
+  });
+
+  // The stored failure tells the caller why the existing job ended. The dedupe key is input.
+  test("a requeue refusal shows the recorded job error", async () => {
+    const { root } = await fixtureRepository();
+    const command = [
+      "jobs",
+      "enqueue",
+      "capture.scan",
+      "--repo",
+      root,
+      "--no-start",
+      "--key",
+      "private job key",
+    ];
+    expect((await run(command)).exitCode).toBe(0);
+    expect((await run(["jobs", "drop", "1", "--repo", root])).exitCode).toBe(0);
+    expect(await run(command)).toEqual({
+      stdout:
+        "Not requeued: the job for this --key already ended as failed (Dropped: dropped while waiting). Enqueue with another --key to run it again.\n",
+      stderr: "",
+      exitCode: 0,
+    });
+  });
+
+  // A write refusal must identify the failed filesystem operation without displaying the hook path.
+  test("setup hooks keeps the native hook-file write reason", async () => {
+    const { root } = await fixtureRepository();
+    const directory = join(root, "private hook directory");
+    await mkdir(directory);
+    const file = join(directory, "settings.json");
+    await Bun.write(file, "{}");
+    await chmod(directory, 0o500);
+    try {
+      const result = await run([
+        "setup",
+        "hooks",
+        "--repo",
+        root,
+        "--agents",
+        "claude-code",
+        "--command",
+        process.execPath,
+        "--no-stack",
+        "--claude-settings",
+        file,
+      ]);
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toMatch(/permission denied, copyfile/i);
+      expect(result.stderr).toContain("--claude-settings");
+      expect(result.stderr).not.toContain(directory);
+    } finally {
+      await chmod(directory, 0o700);
+    }
+  });
+
+  // Doctor must recognize an unreadable bundle even when setup quotes an apostrophe in its path.
+  test("doctor names the unreadable script in a quoted hook command", async () => {
+    const { root } = await fixtureRepository();
+    await markSetUp(root);
+    const home = join(root, "author's home");
+    const tools = join(home, "bin");
+    const settings = join(home, ".claude", "settings.json");
+    await mkdir(tools, { recursive: true });
+    const claude = join(tools, "claude");
+    await Bun.write(claude, "#!/bin/sh\necho '2.1.0 (Claude Code)'\n");
+    await chmod(claude, 0o700);
+    const env = {
+      ...process.env,
+      HOME: home,
+      CLAUDE_CONFIG_DIR: dirname(settings),
+      CODEX_HOME: join(home, ".codex"),
+      XDG_CONFIG_HOME: join(home, ".config"),
+      PATH: `${tools}:${process.env.PATH ?? ""}`,
+    };
+    const setup = Bun.spawnSync(
+      [
+        process.execPath,
+        "--no-env-file",
+        resolve(import.meta.dir, "../src/cli.ts"),
+        "setup",
+        "hooks",
+        "--repo",
+        root,
+        "--agents",
+        "claude-code",
+        "--no-stack",
+      ],
+      { cwd: root, env },
+    );
+    expect(setup.exitCode, setup.stderr.toString()).toBe(0);
+    const script = join(
+      dirname(Registry.registryPath(home)),
+      "hook",
+      "neuve-hook.js",
+    );
+    await chmod(script, 0o000);
+    const result = await run(["doctor", "--repo", root, "--json"], env);
+    expect(result.exitCode).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        check: "capture",
+        status: "warning",
+        detail: expect.stringContaining(
+          `${settings} needs an update: Neuve's claude-code hooks run ${script}`,
+        ),
+      }),
+    );
+  });
+
+  // Semantic inputs must report filesystem causes and which validated field needs correction.
+  test("semantic keeps input diagnostics without printing the input path", async () => {
+    const { root } = await fixtureRepository();
+    const file = join(root, "private semantic input");
+    const command = [
+      "semantic",
+      "--input",
+      file,
+      "--python",
+      process.execPath,
+      "--snapshot",
+      root,
+      "--worker",
+      process.execPath,
+      "--variant",
+      "BASE",
+    ];
+    const missing = await run(command);
+    expect(missing.exitCode).toBe(2);
+    expect(missing.stderr).toMatch(
+      /ENOENT: no such file or directory, open --input/i,
+    );
+    expect(missing.stderr).not.toContain(file);
+    await Bun.write(
+      file,
+      JSON.stringify({ version: 1, inputs: [{ id: "one", role: "document" }] }),
+    );
+    const invalid = await run(command);
+    expect(invalid.exitCode).toBe(2);
+    expect(invalid.stderr).toContain(
+      "Invalid input: expected string, received undefined",
+    );
+    expect(invalid.stderr).toContain("inputs[0].text");
+    await Bun.write(file, "{");
+    const incomplete = await run(command);
+    expect(incomplete.exitCode).toBe(2);
+    expect(incomplete.stderr).toContain("Expected '}'");
+    await Bun.write(file, "privateIdentifier");
+    const badToken = await run(command);
+    expect(badToken.exitCode).toBe(2);
+    expect(badToken.stderr).toContain("Unexpected identifier");
+    expect(badToken.stderr).not.toContain("privateIdentifier");
+  });
+
+  // Workspace refusals must keep Git's reason for a bad project and the filesystem reason for a missing source.
+  test("workspace keeps storage diagnostics without printing supplied paths", async () => {
+    const { root } = await fixtureRepository();
+    const home = await mkdtemp(join(tmpdir(), "neuve-workspace-home-"));
+    roots.push(home);
+    const missing = join(root, "private checkout");
+    const source = await run(
+      ["workspace", "--source", missing, "--profile", "local"],
+      { HOME: home },
+    );
+    expect(source.exitCode).toBe(2);
+    expect(source.stderr).toMatch(
+      /ENOENT: no such file or directory, realpath --source/i,
+    );
+    expect(source.stderr).not.toContain(missing);
+    const project = await run(
+      ["workspace", "--source", root, "--profile", "local", "--repo", missing],
+      { HOME: home },
+    );
+    expect(project.exitCode).toBe(1);
+    expect(project.stderr).toContain("fatal: cannot change to --repo");
+    expect(project.stderr).not.toContain(missing);
+  });
+
   // The first read opens a cycle and the next joins it. Neither may change JSON or NDJSON output.
   test("opens and joins a cycle in JSON and NDJSON with telemetry off", async () => {
     const { root, revision } = await fixtureRepository();
@@ -2119,12 +2333,13 @@ describe("neuve CLI boundary", () => {
     }
   });
 
-  // A repository without Records cannot start a review using the advice for an empty store.
+  // An absent store needs setup guidance without echoing the supplied repository path.
   test("review show reports a missing Records store", async () => {
     const { root } = await fixtureRepository();
     expect(await run(["review", "show", "--repo", root])).toEqual({
       stdout: "",
-      stderr: `neuve: No Records store at ${join(root, ".git", "neuve", "records.sqlite")}.\n`,
+      stderr:
+        "neuve: Neuve isn't set up in this repository. Run neuve setup there first.\n",
       exitCode: 2,
     });
   });

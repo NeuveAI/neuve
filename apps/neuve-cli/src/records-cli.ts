@@ -145,7 +145,7 @@ export const describeFailure = (error: unknown, fallback?: string): string => {
     const tagged = error as { _tag: string } & Record<string, unknown>;
     switch (tagged._tag) {
       case "StoreMissing":
-        return `No Records store at ${String(tagged["path"])}.`;
+        return "Neuve isn't set up in this repository. Run neuve setup there first.";
       case "WorkerSpawnFailed":
         return String(tagged["message"]);
       case "ProofRefused":
@@ -191,6 +191,24 @@ export const write = (text: string) =>
 
 export const argumentRefusal = (argument: string, accepted: string): string =>
   `${argument} takes ${accepted}.`;
+
+export const nameDiagnosticPath = (
+  error: unknown,
+  name: string,
+  ...paths: string[]
+): string => {
+  let message = error instanceof Error ? error.message : String(error);
+  for (const path of paths.sort((a, b) => b.length - a.length)) {
+    if (path === "") continue;
+    message = message
+      .replaceAll(JSON.stringify(path), name)
+      .replaceAll(`'${path}'`, name)
+      .replaceAll(`at ${path}:`, `at ${name}:`);
+    if (path.startsWith("/") && path !== "/")
+      message = message.replaceAll(path, name);
+  }
+  return message;
+};
 
 export const repositoryRoot = (repository: string): string => {
   const git = Bun.spawnSync(

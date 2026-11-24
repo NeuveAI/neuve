@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { z } from "zod";
+import { nameDiagnosticPath } from "./records-cli.ts";
 import {
   SemanticClient,
   scorePool,
@@ -100,8 +101,8 @@ export const runSemanticCli = async (
   const handle = await open(
     inputPath,
     constants.O_RDONLY | constants.O_NONBLOCK,
-  ).catch(() => {
-    throw new Error("--input takes a readable semantic input file.");
+  ).catch((error: unknown) => {
+    throw new Error(nameDiagnosticPath(error, "--input", inputPath));
   });
   let input: z.infer<typeof inputSchema>;
   try {
@@ -120,17 +121,29 @@ export const runSemanticCli = async (
     }
     if (used > maximumBytes || used !== metadata.size)
       throw new Error("Semantic input changed or exceeds its byte limit.");
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(0, used),
+    );
+    let payload: unknown;
     try {
-      input = inputSchema.parse(
-        JSON.parse(
-          new TextDecoder("utf-8", { fatal: true }).decode(
-            bytes.subarray(0, used),
-          ),
-        ),
+      payload = JSON.parse(text);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      const reason = error.message.replace(
+        /(Unexpected (?:identifier|token)|Unrecognized token|Invalid escape character) .+$/s,
+        "$1",
       );
-    } catch {
-      throw new Error("--input must contain semantic requests as UTF-8 JSON.");
+      throw new Error(`--input. ${reason}`);
     }
+    const parsed = inputSchema.safeParse(payload, {
+      error: (issue) =>
+        issue.code === "unrecognized_keys" ? "Unrecognized fields" : undefined,
+    });
+    if (!parsed.success)
+      throw new Error(
+        `--input has invalid fields.\n${z.prettifyError(parsed.error)}`,
+      );
+    input = parsed.data;
   } finally {
     await handle.close();
   }

@@ -27,6 +27,9 @@ export type RouteName = ReviewRouteName;
 export class SettingsUnreadable extends Error {}
 export class RouteRefused extends Error {}
 
+export const SETUP_ROUTE_REFUSAL =
+  "neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code).";
+
 /** One JSON value's span in `text`, from `start` to `end` (exclusive). */
 type Span = { start: number; end: number };
 
@@ -207,9 +210,7 @@ export const writeRoute = async (route: string, home = homedir()) => {
   // The harness's schema decides what a review accepts; nothing it would refuse is written.
   const checked = Settings.safeParse(JSON.parse(candidate));
   if (!checked.success || checked.data.review?.route !== route)
-    throw new RouteRefused(
-      "neuve setup --route takes openai (ChatGPT), anthropic (an Anthropic API key) or claude (your Claude subscription, through Claude Code).",
-    );
+    throw new RouteRefused(SETUP_ROUTE_REFUSAL);
   const file = existing?.file ?? path;
   await mkdir(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${crypto.randomUUID()}.tmp`;

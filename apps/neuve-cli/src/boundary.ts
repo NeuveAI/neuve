@@ -262,14 +262,8 @@ export type QueryInvocation = Readonly<{
   assumedOptions?: AssumedQueryOptions;
 }>;
 
-export class QueryRefusal extends Error {
-  constructor(
-    message: string,
-    readonly assumedRepository: string | undefined,
-  ) {
-    super(message);
-  }
-}
+export const assumedRepositoryLine = (repository: string) =>
+  `--repo was assumed to be ${JSON.stringify(repository)}. Pass --repo to choose another repository.`;
 
 export const parseQueryInvocation = (
   args: readonly string[],
@@ -300,8 +294,7 @@ export const parseQueryInvocation = (
 
     const value = args[index + 1];
     if (value === undefined || value.startsWith("--")) {
-      if (name === "--scope") problems.push("--scope requires a value.");
-      else if (name !== "--revision" && name !== "--question")
+      if (name !== "--revision" && name !== "--question")
         problems.push(
           `${argumentRefusal(name, queryValues[name])} No value was supplied.`,
         );
@@ -387,11 +380,11 @@ export const parseQueryInvocation = (
     count === undefined ||
     bytes === undefined ||
     plan === undefined
-  )
-    throw new QueryRefusal(
-      problems.join("\n"),
-      repo === undefined ? repository : undefined,
-    );
+  ) {
+    if (repo === undefined && repository !== undefined)
+      problems.push(assumedRepositoryLine(repository));
+    throw new Error(problems.join("\n"));
+  }
 
   const assumedOptions: AssumedQueryOptions = {
     ...(repo === undefined ? { "--repo": repository } : {}),

@@ -8,11 +8,13 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { isCompiled } from "@neuve/harness/compiled";
 import { RELEASE_TARGETS, releaseVersionSchema } from "./release-metadata.ts";
+import { nameDiagnosticPath } from "./records-cli.ts";
 
 export { releaseVersionSchema };
 
@@ -55,19 +57,17 @@ export const verifyChecksum = (
 
 const download = async (url: string): Promise<Uint8Array> => {
   const parsed = URL.parse(url);
-  if (parsed?.protocol === "file:")
-    return readFile(parsed).catch(() => {
+  if (parsed?.protocol === "file:") {
+    const path = fileURLToPath(parsed);
+    return readFile(path).catch((error: unknown) => {
       throw new Error(
-        "Could not read the release files. Check --version and NEUVE_DOWNLOAD_BASE.",
+        nameDiagnosticPath(error, `${basename(path)} for --version`, path),
       );
     });
+  }
   if (parsed?.protocol !== "https:")
     throw new Error("NEUVE_DOWNLOAD_BASE must start with https:// or file://.");
-  const response = await fetch(parsed).catch(() => {
-    throw new Error(
-      "Could not reach the release server. Check NEUVE_DOWNLOAD_BASE.",
-    );
-  });
+  const response = await fetch(parsed);
   if (!response.ok)
     throw new Error(
       `Could not download the release files (HTTP ${response.status}). Check that --version names an available release.`,

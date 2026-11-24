@@ -94,6 +94,7 @@ import { announcedChild, closeChild } from "./workspace-child.ts";
 import { buildReviewWeb, ReviewWebs } from "./workspace-review-build.ts";
 import { requestRangeReview } from "./review-cli.ts";
 import { parseWorkspaceOptions, workspaceReady } from "./workspace-launch.ts";
+import { nameDiagnosticPath } from "./records-cli.ts";
 import {
   aceReviewDestination,
   codingReturnUrl,
@@ -623,7 +624,7 @@ async function workspace(args: readonly string[]): Promise<number> {
     throw new Error(
       "With --profile local, the installed CLI needs --source <checkout>. Or run bun workspace from your Neuve checkout.",
     );
-  let source: string;
+  let source: string | undefined;
   let profile: StorageProfile;
   let validated: ValidatedStorage;
   try {
@@ -643,7 +644,9 @@ async function workspace(args: readonly string[]): Promise<number> {
           });
     source = await realpath(candidate).catch((error) => {
       if (requestedSource === undefined) throw error;
-      throw new Error("--source must name an existing Neuve checkout.");
+      throw new Error(
+        nameDiagnosticPath(error, "--source", candidate, resolve(candidate)),
+      );
     });
     profile =
       selectedProfile ?? (await readStorageProfile(source, values.profile));
@@ -654,13 +657,21 @@ async function workspace(args: readonly string[]): Promise<number> {
     if (
       values.profile !== undefined &&
       error instanceof StorageRefused &&
-      error.reason === "profile-malformed"
+      error.reason === "profile-malformed" &&
+      error.path === values.profile
     )
-      throw new StorageRefused(
-        error.reason,
+      error.message = nameDiagnosticPath(
+        error,
         "--profile",
-        "Use local, pi-transition, or a readable storage profile JSON file.",
+        values.profile,
+        resolve(values.profile),
       );
+    if (
+      requestedSource !== undefined &&
+      error instanceof StorageRefused &&
+      error.path === source
+    )
+      error.message = nameDiagnosticPath(error, "--source", source);
     if (
       compiledDefault &&
       values.profile === undefined &&
@@ -678,14 +689,16 @@ async function workspace(args: readonly string[]): Promise<number> {
   const repository = await validateWorkspaceProject(
     values.repo ?? process.cwd(),
     validated,
-  ).catch((error) => {
-    if (values.repo === undefined || !(error instanceof StorageRefused))
-      throw error;
-    throw new StorageRefused(
-      error.reason,
-      "--repo",
-      "Use a Git checkout allowed by the workspace profile.",
-    );
+  ).catch((error: unknown) => {
+    if (values.repo !== undefined && error instanceof Error)
+      error.message = nameDiagnosticPath(
+        error,
+        "--repo",
+        values.repo,
+        resolve(values.repo),
+        ...(error instanceof StorageRefused ? [error.path] : []),
+      );
+    throw error;
   });
   const route = settingsRoute();
   const user = values.user ?? process.env.USER ?? process.env.LOGNAME;

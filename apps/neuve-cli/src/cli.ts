@@ -6,7 +6,7 @@ import { runAuthCli } from "./auth-cli.ts";
 import {
   parseQueryInvocation,
   QUERY_DEFAULTS,
-  QueryRefusal,
+  assumedRepositoryLine,
 } from "./boundary.ts";
 import { collectPublicQueryResult, runQueryGraph } from "./graph-query.ts";
 import type { PublicQueryEvent } from "./domain.ts";
@@ -144,7 +144,8 @@ Options:
   --help      Print this help text.`;
 
 const runQuery = async (args: readonly string[]): Promise<number> => {
-  let assumedRepository: string | undefined;
+  const invocation = parseQueryInvocation(args);
+  const assumedRepository = invocation.assumedOptions?.["--repo"];
   const events: PublicQueryEvent[] = [];
   const controller = new AbortController();
   let interrupted: Readonly<{ name: string; exitCode: number }> | undefined;
@@ -157,12 +158,10 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
   process.on("SIGINT", onInterrupt);
   process.on("SIGTERM", onTerminate);
   try {
-    const invocation = parseQueryInvocation(args);
     const assumptions =
       invocation.assumedOptions === undefined
         ? {}
         : { assumed_options: invocation.assumedOptions };
-    assumedRepository = invocation.assumedOptions?.["--repo"];
     if (assumedRepository === undefined)
       await execute(resolveStoreLocation(invocation.request.repository));
     await runQueryGraph(invocation.request, {
@@ -196,16 +195,11 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
       );
       return interrupted.exitCode;
     }
-    const repository =
-      error instanceof QueryRefusal
-        ? error.assumedRepository
-        : assumedRepository;
-    if (repository === undefined) throw error;
+    if (assumedRepository === undefined) throw error;
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `${message}\n--repo was assumed to be ${JSON.stringify(repository)}. Pass --repo to choose another repository.`,
-      { cause: error },
-    );
+    throw new Error(`${message}\n${assumedRepositoryLine(assumedRepository)}`, {
+      cause: error,
+    });
   } finally {
     process.off("SIGINT", onInterrupt);
     process.off("SIGTERM", onTerminate);
