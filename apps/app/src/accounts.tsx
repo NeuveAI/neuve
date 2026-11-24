@@ -43,6 +43,35 @@ async function copy(command: string) {
   }, 2_000);
 }
 
+const email = ({ signIn }: AccountStatus) =>
+  signIn.state === "signed-in" ? signIn.email : undefined;
+
+/**
+ * One row per sign-in. Accounts of one kind are the same sign-in reached through different
+ * runtimes unless they are signed in as different people; a row shows its signed-in account, with
+ * the limits whichever signed-in account reports.
+ */
+function signIns(accounts: readonly AccountStatus[]) {
+  const groups: AccountStatus[][] = [];
+  for (const account of accounts) {
+    const group = groups.find(
+      (members) =>
+        members[0]!.kind === account.kind &&
+        members.every(
+          (member) =>
+            !email(member) || !email(account) || email(member) === email(account),
+        ),
+    );
+    if (group) group.push(account);
+    else groups.push([account]);
+  }
+  return groups.map((members) => {
+    const signedIn = members.filter((member) => member.signIn.state === "signed-in");
+    const shown = signedIn[0] ?? members[0]!;
+    return { ...shown, limits: (signedIn.find((member) => member.limits.length) ?? shown).limits };
+  });
+}
+
 /** The real Settings group also used by the dev-only fixture page. */
 export function Accounts({
   accounts,
@@ -52,11 +81,15 @@ export function Accounts({
   loading?: boolean;
 }) {
   const copied = useSyncExternalStore(subscribeCopy, copySnapshot);
-  const subscriptions = accounts?.filter(
-    (account) =>
-      account.kind === "claude-subscription" ||
-      account.kind === "chatgpt-subscription",
-  );
+  const subscriptions =
+    accounts &&
+    signIns(
+      accounts.filter(
+        (account) =>
+          account.kind === "claude-subscription" ||
+          account.kind === "chatgpt-subscription",
+      ),
+    );
   if (!loading && !subscriptions?.length) return null;
   return (
     <Group title={accountsCopy.title}>
@@ -68,10 +101,15 @@ export function Accounts({
         subscriptions?.map((account) => {
           const hint = accountHint(account.signIn);
           const command = hint && signInCommand(hint);
+          // An account's name is shown only to tell two sign-ins of one provider apart.
+          const label =
+            subscriptions.filter(({ kind }) => kind === account.kind).length > 1
+              ? accountLabel(account)
+              : accountsCopy.providers[account.kind];
           return (
             <Row
               key={`${account.kind}:${account.name}`}
-              label={accountLabel(account)}
+              label={label}
               description={accountDescription(account.kind, account.signIn)}
               footer={
                 <div className="flex min-w-0 flex-col gap-2">
@@ -121,7 +159,7 @@ export function Accounts({
                       </code>
                       <Button
                         variant="outline"
-                        aria-label={`${accountsCopy.copy} ${accountLabel(account)}`}
+                        aria-label={`${accountsCopy.copy} ${label}`}
                         onClick={() => void copy(command)}
                       >
                         {accountsCopy.copy}

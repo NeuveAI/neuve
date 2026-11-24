@@ -36,6 +36,8 @@ import {
   OpenAiAuthError,
   signInFileFix,
   signOut,
+  status,
+  TOKEN_COMMAND_VARIABLE,
 } from "./openai-auth.ts";
 import type { ReadinessStatuses } from "./route-provider.ts";
 import {
@@ -110,6 +112,15 @@ export const codexRuntimeOptions = (
             : new CodexSignInFileError(account, fix);
         }),
       );
+    },
+    readEmail: ({ credential }) => {
+      if (
+        credential.folder === undefined &&
+        process.env[TOKEN_COMMAND_VARIABLE]
+      )
+        return undefined;
+      const current = status(authOptionsFor(credential));
+      return current.signedIn ? current.email : undefined;
     },
     signOut: ({ name: account, credential }) =>
       Effect.tryPromise({

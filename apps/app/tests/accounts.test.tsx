@@ -18,7 +18,7 @@ const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { Accounts } = await import("../src/accounts");
 const { accountFixtures } = await import("../src/accounts.fixtures");
-import type { AccountStatus } from "@neuve/runtime/status";
+import { AccountStatus } from "@neuve/runtime/status";
 
 async function card(accounts: AccountStatus[]) {
 	const element = document.body.appendChild(document.createElement("div"));
@@ -63,4 +63,25 @@ test("a sign-in from outside Claude Code's login names its source", async () => 
 	expect(
 		accountDescription("claude-subscription", { ...signedIn, credentialSource: "credential-helper" }),
 	).toBe("Signed in through a credential helper, not a Claude Code login");
+});
+
+// Why: the owner saw one ChatGPT plan listed three times, once per runtime that reaches it.
+test("accounts of one sign-in show as one row, and a different sign-in keeps its own", async () => {
+	const chatgpt = (name: string, signIn: AccountStatus["signIn"], limits: AccountStatus["limits"] = []) =>
+		AccountStatus.parse({ name, kind: "chatgpt-subscription", signIn, limits, checkedAt: "2026-11-24T10:00:00Z" });
+	const resetsAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+	const one = [
+		chatgpt("chatgpt", { state: "signed-in", email: "alex@example.com" }),
+		chatgpt("codex", { state: "signed-in" }, [{ window: "weekly", status: "allowed", utilization: 0.35, resetsAt }]),
+		chatgpt("main", { state: "not-signed-in", hint: { kind: "command", command: "neuve auth login", account: "main" } }),
+	];
+	const text = await card(one);
+	expect(text.match(/ChatGPT/g)).toHaveLength(1);
+	expect(text).toContain("Signed in as alex@example.com");
+	expect(text).toContain("Weekly limit: 35% used");
+	expect(text).not.toContain("neuve auth login");
+
+	const two = await card([...one, chatgpt("work", { state: "signed-in", email: "sam@example.com" })]);
+	expect(two).toContain("ChatGPT · chatgpt");
+	expect(two).toContain("ChatGPT · work");
 });

@@ -34,6 +34,12 @@ export async function usable(models: Models, model: ModelRef): Promise<boolean> 
 	return found.some((value) => value.id === model.modelId);
 }
 
+export async function resolveStoredModel(models: Models, model: ModelRef): Promise<ModelRef | undefined> {
+	if (await usable(models, model).catch(() => false)) return model;
+	const fallback = (await available(models)).find((option) => option.modelId === model.modelId);
+	return fallback && { provider: fallback.provider, modelId: fallback.modelId };
+}
+
 /** Resolve an automatic choice only when admitting an agent invocation. */
 export async function choose(models: Models): Promise<ModelRef> {
 	const found = await available(models);

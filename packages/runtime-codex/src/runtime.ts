@@ -65,6 +65,7 @@ export interface CodexRuntimeConfig {
           account: NeuveAccount,
           rejected?: string,
         ) => ReturnType<CodexSignInCheck>;
+        readonly readEmail?: (account: NeuveAccount) => string | undefined;
         readonly signOut: (
           account: NeuveAccount,
         ) => Effect.Effect<void, RuntimeUnavailable>;
@@ -467,16 +468,23 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
             };
             return unreadable;
           }
+          const storedEmail = onNeuveSignIn
+            ? yield* Effect.try(() => neuveSignIn?.readEmail?.(codex)).pipe(
+                Effect.orElseSucceed(() => undefined),
+              )
+            : undefined;
+          const neuveState = {
+            state: "signed-in",
+            credentialSource: "neuve-sign-in",
+            ...(storedEmail === undefined ? {} : { email: storedEmail }),
+          } satisfies SignInState;
           const { found, tried } = yield* find(
             codex,
             setting.success,
             launch.success,
             (connection, candidate) =>
               Effect.gen(function* () {
-                let signIn: SignInState = {
-                  state: "signed-in",
-                  credentialSource: "neuve-sign-in",
-                };
+                let signIn: SignInState = neuveState;
                 if (!onNeuveSignIn) {
                   const signed = Decode.AccountAnswer.safeParse(
                     yield* connection.request("account/read", {
@@ -485,14 +493,21 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
                   );
                   if (!signed.success)
                     return yield* Effect.fail("account-undecodable" as const);
+                  const { account: login, requiresOpenaiAuth } = signed.data;
+                  const email =
+                    login?.type === "chatgpt"
+                      ? (login.email ?? undefined)
+                      : undefined;
                   signIn =
-                    signed.data.account == null &&
-                    signed.data.requiresOpenaiAuth
+                    login == null && requiresOpenaiAuth
                       ? {
                           state: "not-signed-in",
                           hint: hintOf(codex, candidate.path),
                         }
-                      : { state: "signed-in" };
+                      : {
+                          state: "signed-in",
+                          ...(email === undefined ? {} : { email }),
+                        };
                 }
                 const models = yield* modelsOf(connection).pipe(Effect.option);
                 const limits = onNeuveSignIn
@@ -519,10 +534,7 @@ export const makeRuntime = (config: CodexRuntimeConfig = {}) =>
                 Effect.orElseSucceed(() => ({
                   signIn: (!onNeuveSignIn
                     ? { state: "unknown", reason: "check-failed" }
-                    : {
-                        state: "signed-in",
-                        credentialSource: "neuve-sign-in",
-                      }) satisfies SignInState,
+                    : neuveState) satisfies SignInState,
                   limits: [],
                   models: undefined,
                 })),

@@ -23,7 +23,7 @@ export const ThreadAnswer = loose({
 export const TurnAnswer = loose({ turn: loose({ id: text.min(1) }) });
 
 export const AccountAnswer = loose({
-  account: nullable(loose({ type: text })),
+  account: nullable(loose({ type: text, email: nullable(text) })),
   requiresOpenaiAuth: z.boolean(),
 });
 

@@ -35,6 +35,7 @@ import { mentionable } from "./build-card";
 import { agentMode, askMode, useChatMode } from "./composer-mode";
 import { host } from "./host";
 import { attachments } from "./attachments";
+import { key, listed } from "./listed-models";
 
 const AGENT_MODE = {
 	id: "ace",
@@ -66,7 +67,6 @@ export const EFFORTS: Record<Effort, string> = {
 	max: "Max",
 };
 
-const key = (model: ModelRef) => `${model.provider}/${model.modelId}`;
 /** The latest pick in this client, as `provider/id` or `auto`; new channels start on it. */
 export const LAST_MODEL = `ace:last-model:${host.url}`;
 
@@ -181,6 +181,7 @@ export function Composer(
 	const [modelError, setModelError] = useState<string>();
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
 	const settingsVersion = useSyncExternalStore(host.subscribe, () => host.settingsVersion);
+	const accounts = useSyncExternalStore(host.subscribe, () => host.accounts);
 	// An agent draft leads with the agent's mention, except in Plan, which has no marker.
 	const agentDraft = (text: string) =>
 		mode === "plan"
@@ -266,10 +267,10 @@ export function Composer(
 	const chosen = `${current ? key(current) : "auto"} ${currentEffort || "off"}`;
 	const [picking, setPicking] = useState<{ model: string; effort?: Effort; from: string }>();
 	if (picking && picking.from !== chosen) setPicking(undefined);
-	const kept = picking?.model || (current ? key(current) : "auto");
-	// The channel runs Automatic for a stored model missing from the models it offers.
-	const model = models?.length && !models.some((value) => key(value) === kept) ? "auto" : kept;
-	const levels = models?.find((value) => key(value) === model)?.efforts;
+	const { rows, picked: kept } = listed(models || [], picking?.model || (current ? key(current) : "auto"), accounts);
+	// The channel runs Automatic for a stored model no account offers.
+	const model = rows.length && !rows.some((value) => key(value) === kept) ? "auto" : kept;
+	const levels = rows.find((value) => key(value) === model)?.efforts;
 	const requestedEffort = picking?.effort || currentEffort || "off";
 	const effort = requestedEffort === "off" || levels?.includes(requestedEffort)
 		? requestedEffort
@@ -280,9 +281,9 @@ export function Composer(
 			name: id === "off" && !levels.includes("off") ? "Default" : EFFORTS[id],
 		}))
 		: undefined;
-	const choices = (models || []).map((value) => ({
+	const choices = rows.map((value) => ({
 		id: key(value),
-		name: value.modelId,
+		name: value.name,
 		vendor: value.provider,
 	}));
 	if (model !== "auto" && !choices.some((value) => value.id === model)) {
