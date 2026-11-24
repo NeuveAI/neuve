@@ -786,20 +786,21 @@ export const runSetupHooks = async (
     action: dryRun ? "would write" : "written",
   });
 
+  // Each hook file is its own problem, so every one that fails is named together.
+  const failures: string[] = [];
   for (const harness of hooked) {
     const option =
       harness === "claude-code" ? "claude-settings" : "codex-hooks";
     const namedPath = values[option];
     const path = resolve(namedPath ?? defaultHookFile(harness));
-    changes.push(
-      await installAgentHooks(path, harness, command, dryRun).catch(
-        (error: unknown) => {
-          if (namedPath === undefined) throw error;
-          throw new Error(nameDiagnosticPath(error, `--${option}`, path));
-        },
-      ),
-    );
+    try {
+      changes.push(await installAgentHooks(path, harness, command, dryRun));
+    } catch (error) {
+      if (namedPath === undefined) throw error;
+      failures.push(nameDiagnosticPath(error, `--${option}`, path));
+    }
   }
+  if (failures.length > 0) throw new Error(failures.join("\n"));
 
   const screen = commandScreen({});
   await screen.header(`neuve setup hooks ${CLI_VERSION}`);

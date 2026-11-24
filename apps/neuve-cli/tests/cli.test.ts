@@ -540,6 +540,10 @@ describe("neuve CLI boundary", () => {
     expect(badToken.exitCode).toBe(2);
     expect(badToken.stderr).toContain("--input is not valid JSON.");
     expect(badToken.stderr).not.toContain("privateIdentifier");
+    await Bun.write(file, new Uint8Array([0x7b, 0xff, 0xfe, 0x7d]));
+    const notText = await run(command);
+    expect(notText.exitCode).toBe(2);
+    expect(notText.stderr).toContain("--input is not valid JSON.");
   });
 
   // Workspace refusals must keep Git's reason for a bad project and the filesystem reason for a missing source.

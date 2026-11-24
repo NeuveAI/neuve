@@ -121,14 +121,16 @@ export const runSemanticCli = async (
     }
     if (used > maximumBytes || used !== metadata.size)
       throw new Error("Semantic input changed or exceeds its byte limit.");
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(
-      bytes.subarray(0, used),
-    );
     let payload: unknown;
     try {
-      payload = JSON.parse(text);
+      payload = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          bytes.subarray(0, used),
+        ),
+      );
     } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error;
+      if (!(error instanceof SyntaxError) && !(error instanceof TypeError))
+        throw error;
       throw new Error("--input is not valid JSON.");
     }
     const parsed = inputSchema.safeParse(payload, {

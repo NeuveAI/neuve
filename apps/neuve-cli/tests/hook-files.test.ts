@@ -443,3 +443,31 @@ test("a system error on a folder above a named hook file names the option, not t
   );
   expect(said).not.toContain("pRiVaTe-hunter2-value");
 });
+
+// Reason: each named hook file is its own problem, so both are named in one refusal.
+test("two named hook files that can't be read are both named in one refusal", async () => {
+  const { root, repo, settings, program } = await scene();
+  const codex = join(root, "home/.codex/hooks.json");
+  await mkdir(join(settings, ".."), { recursive: true });
+  await mkdir(join(codex, ".."), { recursive: true });
+  await writeFile(settings, "not json");
+  await writeFile(codex, "not json");
+  const refused = runSetupHooks(
+    [
+      "--repo",
+      repo,
+      "--agents",
+      "claude-code,codex",
+      "--claude-settings",
+      settings,
+      "--codex-hooks",
+      codex,
+      "--command",
+      program,
+      "--no-stack",
+    ],
+    { stackStore: join(root, "stack") },
+  );
+  await expect(refused).rejects.toThrow("--claude-settings");
+  await expect(refused).rejects.toThrow("--codex-hooks");
+});
