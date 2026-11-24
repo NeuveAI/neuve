@@ -433,6 +433,7 @@ function start(req: Request): Promise<Block[]> {
 				req.sig,
 				req.compact,
 				req.streaming,
+				req.named,
 			);
 			entry.blocks = fallback;
 			entry.promise = undefined;

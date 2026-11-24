@@ -132,3 +132,9 @@ test("the work log names a recipient only past two agents and skips unknown send
 	const many = workEvents([four], [said(4, 2, "moved")], "t") as Extract<Event, { type: "message" }>[];
 	expect((many[0]!.sender as { credit?: string }).credit).toBe("to Implementer");
 });
+
+// Why: agents' talk names no one by text, so an agent's `@reviewer` there must stay words.
+test("the work log draws no name in agents' talk as a mention", () => {
+	const [event] = workEvents([build()], [said(2, 3, "ask @reviewer to look")], "t") as Extract<Event, { type: "message" }>[];
+	expect(event!.content).toEqual([{ type: "text", text: "ask @reviewer to look", parts: [] }]);
+});

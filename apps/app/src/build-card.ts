@@ -141,7 +141,8 @@ export function workEvents(builds: Build[], messages: WorkMessage[], topic: stri
 				display: agentName(from.agent),
 				...(to ? { credit: `to ${agentName(to)}` } : {}),
 			},
-			content: [{ type: "text", text: message.text }],
+			// Agents' talk names no one by text: no `@name` in it is drawn as a mention.
+			content: [{ type: "text", text: message.text, parts: [] }],
 		} as Event];
 	});
 }
