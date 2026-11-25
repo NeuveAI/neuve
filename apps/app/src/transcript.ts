@@ -19,6 +19,8 @@ import type { ReviewCard } from "@ace/channel/review-cards";
 import { DISCONNECTED } from "@ace/host/gateway-client";
 import { CHANNEL_CLOSED, type ChannelInfo, type Event } from "@ace/host/protocol";
 
+export type TurnRetry = NonNullable<Extract<Event, { kind: "turn-retry-status" }>["status"]>;
+
 import { host, onOpen } from "./host";
 import { reviewCommits } from "./review-card";
 
@@ -120,6 +122,8 @@ export type Transcript = {
 	commentSends: number[];
 	/** When each person last said they were typing, in ms; their message ends it. */
 	typing: Record<string, number>;
+	/** The chat's turn retry, as the host last sent it. */
+	turnRetry?: TurnRetry;
 	/** Text streamed for the reply being generated. */
 	draft: string;
 	busy: boolean;
@@ -192,6 +196,8 @@ export function apply(state: Transcript, event: Event): Transcript {
 				items: [...state.items, { kind: "message", key: `e${event.entry}`, ...pick(event) }],
 			};
 		}
+		case "turn-retry-status":
+			return { ...state, turnRetry: event.status };
 		case "typing":
 			return { ...state, typing: { ...state.typing, [event.author]: Date.now() } };
 		case "deleted":
