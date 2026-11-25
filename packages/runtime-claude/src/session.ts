@@ -1051,6 +1051,7 @@ export const openClaudeSession = (
       Effect.gen(function* () {
         if (collected.skippedClosingFrame)
           yield* Effect.logInfo("claude-runtime skipped-frame", {
+            turn: turn.id,
             reason: "closed-response",
             frame: "stream_event/content_block_stop",
           });

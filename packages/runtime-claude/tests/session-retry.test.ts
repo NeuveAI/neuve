@@ -6,7 +6,8 @@ import {
   TurnLimit,
   type SessionPolicy,
 } from "@neuve/runtime";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Layer, Logger, Stream } from "effect";
+import type { SDKPartialAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 import { makeRuntime } from "../src/runtime.ts";
 import { ClaudeExecutable, ClaudeProcess } from "../src/services.ts";
 import { assistant, result, SESSION_ID } from "./frames.ts";
@@ -20,6 +21,7 @@ const account = Account.parse({
 });
 async function run(entries: Entry[]) {
   let effects = 0;
+  const diagnostics: unknown[] = [];
   const policy: SessionPolicy = {
     systemPrompt: "fixture",
     approvalPolicy: "allow",
@@ -79,6 +81,11 @@ async function run(entries: Entry[]) {
       Effect.provide(
         Layer.mergeAll(
           fake.layer,
+          Logger.layer([
+            Logger.make(({ message }) => {
+              diagnostics.push(message);
+            }),
+          ]),
           Layer.succeed(ClaudeExecutable, {
             resolve: () => Effect.succeed("/test/claude"),
           }),
@@ -92,7 +99,7 @@ async function run(entries: Entry[]) {
   );
   const ended = events.findLast((event) => event.type === "turn.finished");
   if (ended?.type !== "turn.finished") throw new Error("No terminal event");
-  return { ended, effects };
+  return { ended, effects, diagnostics };
 }
 const transient = () => result({ is_error: true, api_error_status: 503 });
 const toolReply = () => {
@@ -176,4 +183,51 @@ test("displayed transient-looking text and terminal account or refusal outcomes 
     const { ended } = await run(entries);
     expect(ended.outcome).not.toHaveProperty("retry");
   }
+});
+
+// Reason: the exceptional skip must be observable without leaking the provider body.
+// Constructed regression order, not the retained November incident.
+test("skipped closing-frame diagnostic contains only shape, reason and logical turn", async () => {
+  const partial = (
+    event: SDKPartialAssistantMessage["event"],
+  ): SDKPartialAssistantMessage => ({
+    type: "stream_event",
+    event,
+    parent_tool_use_id: null,
+    uuid: crypto.randomUUID(),
+    session_id: SESSION_ID,
+  });
+  const reply = assistant(undefined, "private-provider-body");
+  const { ended, diagnostics } = await run([
+    inbound(
+      partial({
+        type: "message_start",
+        message: { ...reply.message, stop_reason: null, content: [] },
+      }),
+    ),
+    inbound(
+      partial({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "", citations: [] },
+      }),
+    ),
+    inbound(reply),
+    inbound(partial({ type: "content_block_stop", index: 0 })),
+    inbound(partial({ type: "message_stop" })),
+    inbound(partial({ type: "content_block_stop", index: 0 })),
+    inbound(result()),
+  ]);
+  expect(ended.outcome).toEqual({ status: "completed" });
+  expect(diagnostics).toEqual([
+    [
+      "claude-runtime skipped-frame",
+      {
+        turn: "one",
+        reason: "closed-response",
+        frame: "stream_event/content_block_stop",
+      },
+    ],
+  ]);
+  expect(JSON.stringify(diagnostics)).not.toContain("private-provider-body");
 });
