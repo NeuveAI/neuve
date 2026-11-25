@@ -164,12 +164,12 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			// A key identifies one operation and therefore one result type.
 			return outcome.value as T;
 		},
-		async worktree(name, source, placement) {
-			if (!placement) return buildWorktree(place, name, BACKGROUND_CONTEXT, source);
-			if (name !== `chat-${placement.chat}` || source) throw new Error("Invalid chat lane placement");
-			const record = catalog.read(options.id);
-			const known = record.chatLanes?.[name];
-			const lane = await buildWorktree(place, name, BACKGROUND_CONTEXT, undefined, placement.recorded ?? known);
+		async worktree(...[target, source]) {
+			if (typeof target === "string") return buildWorktree(place, target, BACKGROUND_CONTEXT, source);
+			const name = `chat-${target.chat}`;
+			const known = catalog.read(options.id).chatLanes?.[name];
+			// The chat can change its Diff base after the host records ownership.
+			const lane = await buildWorktree(place, name, BACKGROUND_CONTEXT, undefined, target.recorded ?? known);
 			// Publish host ownership before returning; a crash before pi's commit can recover it.
 			const current = catalog.read(options.id);
 			catalog.write({ ...current, chatLanes: { ...current.chatLanes, [name]: lane } });

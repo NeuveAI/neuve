@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
-import type { ChannelInfo, Event } from "@ace/channel/protocol";
+import type { Changes, ChannelInfo, Event } from "@ace/channel/protocol";
 import * as catalog from "../src/catalog";
 import { assign } from "../src/channel-create";
 import { configure, bindConfiguredCatalog } from "../src/host-config";
@@ -73,7 +73,8 @@ for (const reason of ["dirty", "locked", "changed registration"] as const) test(
 	expect((await archive(record.id, true)).archived).toBe(true);
 	expect(existsSync(lane.path)).toBe(true);
 	const logs = (await readFile(join(home, "logs/host.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
-	expect(logs).toContainEqual(expect.objectContaining({ event: "chat.lane.retained", channel: record.id, path: lane.path, error: expect.any(String) }));
+	const error = reason === "changed registration" ? "The work lane's Git registration changed, so it was kept" : expect.any(String);
+	expect(logs).toContainEqual(expect.objectContaining({ event: "chat.lane.retained", channel: record.id, path: lane.path, error }));
 	if (reason === "dirty") expect(await readFile(join(lane.path, "untracked.txt"), "utf8")).toBe("do not discard");
 	expect(git(record.project, "show-ref", "--verify", `refs/heads/${lane.branch}`)).toContain(lane.base);
 });
@@ -88,12 +89,13 @@ test("a caller-supplied explicit chat-* worktree is not host disposal authority"
 	expect(catalog.read(record.id).chatLanes).toBeUndefined();
 });
 
-test("native catalog creation reaches shell/files on first worker turn; archive/unarchive restores committed work and history", async () => {
+test("native catalog creation reaches shell/files on first worker turn; archive/unarchive restores work, history and the Diff base", async () => {
 	const place = await setup();
 	const script = join(place.root, "s.json");
 	await writeFile(script, JSON.stringify([
 		{ tool: "bash", args: { command: "pwd; git branch --show-current; git rev-parse --git-common-dir" }, id: "first-shell" },
 		{ tool: "write", args: { path: "committed.txt", content: "keep me" }, id: "first-file" },
+		{ tool: "lane", args: { action: "switch", name: `chat-${ROOT_CONVERSATION_ID}`, base: "main" }, id: "set-diff-base" },
 		{ text: "First command done" },
 		{ tool: "bash", args: { command: "pwd; cat committed.txt" }, id: "reopened-shell" },
 		{ text: "Reopened successfully" },
@@ -120,6 +122,8 @@ test("native catalog creation reaches shell/files on first worker turn; archive/
 		const { submission } = await client.channel<{ submission: number }>(record.id, { op: "ask", author: "owner", text: "First write-capable turn" });
 		expect(await client.channel(record.id, { op: "wait", submission })).toBe("done");
 		const lane = catalog.read(record.id).chatLanes![`chat-${ROOT_CONVERSATION_ID}`]!;
+		expect(lane.base).toBe(before.head);
+		expect((await client.channel<Changes>(record.id, { op: "changes" })).against).toBe("refs/heads/main");
 		expect(JSON.stringify(events.filter(event => event.kind === "result"))).toContain(lane.path);
 		expect(await readFile(join(lane.path, "committed.txt"), "utf8")).toBe("keep me");
 		expect(git(place.project, "rev-parse", "HEAD")).toBe(before.head);
@@ -136,6 +140,7 @@ test("native catalog creation reaches shell/files on first worker turn; archive/
 		const again = await client.channel<{ submission: number }>(record.id, { op: "ask", author: "owner", text: "Read the retained work" });
 		expect(await client.channel(record.id, { op: "wait", submission: again.submission })).toBe("done");
 		expect(git(lane.path, "rev-parse", "HEAD")).toBe(retained);
+		expect((await client.channel<Changes>(record.id, { op: "changes" })).against).toBe("refs/heads/main");
 		const info = await client.channel<ChannelInfo>(record.id, { op: "info" });
 		expect(info.chats[0]?.id).toBe(ROOT_CONVERSATION_ID);
 		const replay: Event[] = [];

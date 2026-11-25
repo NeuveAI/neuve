@@ -61,11 +61,13 @@ async function setup(options: {
 			if (outcome.kind === "failed") throw outcome.error;
 			return outcome.value as T;
 		},
-		async worktree(name, source) {
+		async worktree(...[target, source]) {
 			await options.beforeWorktree?.();
+			const name = typeof target === "string" ? target : `chat-${target.chat}`;
+			const recorded = typeof target === "string" ? undefined : target.recorded;
 			const result = await buildWorktree({
 				name: "one", project: fixture.project, lanes: fixture.lanes, env: cwd => scratchEnv(cwd, fixture.root),
-			}, name, context, source);
+			}, name, context, source, recorded);
 			worktrees.push(result);
 			return result;
 		},

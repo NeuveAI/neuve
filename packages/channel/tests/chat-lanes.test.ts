@@ -7,6 +7,7 @@ import { AgentDoc, configure, ROOT_CONVERSATION_ID, type ConversationId, type Ha
 import type { BuildHost } from "../src/build";
 import { buildWorktree } from "../src/external-lanes";
 import { LanesDoc } from "../src/lanes";
+import type { Changes } from "../src/protocol";
 import { planFileAccess } from "../../../apps/neuve-host/src/plan-git";
 import { Fixture, git, MODEL, OWNER, scratchEnv } from "./helpers";
 
@@ -20,10 +21,12 @@ async function setup() {
 	const calls: string[] = [];
 	const host: BuildHost = {
 		share: (_key, run) => run(),
-		async worktree(name, source, placement) {
+		async worktree(...[target, source]) {
+			const name = typeof target === "string" ? target : `chat-${target.chat}`;
 			calls.push(name);
-			if (fail) throw new Error("Git refused the chat lane");
-			return buildWorktree({ name: "one", project: fixture.project, lanes: fixture.lanes, env: cwd => scratchEnv(cwd, fixture.root) }, name, context, source, placement?.recorded);
+			if (fail) throw new Error("Git refused the work lane");
+			const recorded = typeof target === "string" ? undefined : target.recorded;
+			return buildWorktree({ name: "one", project: fixture.project, lanes: fixture.lanes, env: cwd => scratchEnv(cwd, fixture.root) }, name, context, source, recorded);
 		},
 	};
 	fixture = await Fixture.create({ lane: undefined, build: host, planFileAccess, extension: { extensions: [], attach(value) { harness = value; } } });
@@ -111,10 +114,12 @@ test("Plan mode remains on checkout; switching to a writing turn provisions once
 	expect(run.calls).toHaveLength(1);
 });
 
-test("Plan can read its existing snapshot after archive without creating a new branch", async () => {
+test("Plan can read its existing snapshot and keep its Diff base after archive", async () => {
 	const run = await setup();
-	run.fixture.script(fauxAssistantMessage("Placed"));
+	const name = `chat-${ROOT_CONVERSATION_ID}`;
+	run.fixture.script(fauxAssistantMessage(fauxToolCall("lane", { action: "switch", name, base: "main" }, { id: "set-diff-base" }), { stopReason: "toolUse" }), fauxAssistantMessage("Placed"));
 	await ask(run.fixture);
+	expect((await run.fixture.request<Changes>({ op: "changes" })).against).toBe("refs/heads/main");
 	const path = (await cwd(run))!;
 	const head = git(path, "rev-parse", "HEAD");
 	git(run.fixture.project, "worktree", "remove", path);
@@ -123,8 +128,9 @@ test("Plan can read its existing snapshot after archive without creating a new b
 	await ask(run.fixture, "plan");
 	expect(watch.of("result").find(event => event.call === "plan-restored-read")).toMatchObject({ error: false, text: "hello\n" });
 	expect(git(path, "rev-parse", "HEAD")).toBe(head);
-	expect(git(path, "branch", "--show-current").trim()).toBe(`one/chat-${ROOT_CONVERSATION_ID}`);
+	expect(git(path, "branch", "--show-current").trim()).toBe(`one/${name}`);
 	expect(await cwd(run)).toBe(path);
+	expect((await run.fixture.request<Changes>({ op: "changes" })).against).toBe("refs/heads/main");
 	await watch.stop();
 });
 
@@ -192,7 +198,7 @@ test("another chat's assignment is not overwritten and ordinary later chats get 
 test("provisioning failure refuses submission, retains checkout denial and permits a later safe retry", async () => {
 	const run = await setup();
 	run.fail(true);
-	await expect(ask(run.fixture)).rejects.toThrow("Git refused the chat lane");
+	await expect(ask(run.fixture)).rejects.toThrow("Git refused the work lane");
 	expect(run.fixture.faux.state.callCount).toBe(0);
 	expect(await cwd(run)).toBe(run.fixture.project);
 	expect(git(run.fixture.project, "status", "--porcelain")).toBe("");
@@ -240,7 +246,7 @@ for (const failure of [false, true]) test(`pending legacy work is placed before 
 	run.fail(failure);
 	fixture.script(shell("pwd"), fauxAssistantMessage("Resumed"));
 	if (failure) {
-		await expect(fixture.open()).rejects.toThrow("Git refused the chat lane");
+		await expect(fixture.open()).rejects.toThrow("Git refused the work lane");
 		expect(fixture.faux.state.callCount).toBe(0);
 		run.fail(false);
 	}

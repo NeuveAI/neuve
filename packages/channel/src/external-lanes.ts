@@ -47,7 +47,7 @@ export async function buildWorktree(place: Place, name: string, context: Context
 	const env = place.env(place.project);
 	const path = `${place.lanes}/${name}`;
 	const branch = `${place.name}/${name}`;
-	if (recorded && recorded.path !== path) throw new Error("The recorded chat lane is outside its host-owned location.");
+	if (recorded && recorded.path !== path) throw new Error("The recorded work lane is outside its host-owned location.");
 	const exists = await env.exists(path, context);
 	if (!exists.ok) throw exists.error;
 	if (exists.value || recorded) {

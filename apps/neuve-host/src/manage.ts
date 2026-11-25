@@ -217,17 +217,17 @@ async function disposeChatLanes(record: catalog.Listing): Promise<void> {
 		try {
 			const path = join(catalog.paths(record.id).lanes, name);
 			if (!/^chat-\d+$/.test(name) || lane.path !== path || lane.branch !== `${record.prefix}/${name}`) {
-				throw new Error("The chat lane does not match its host-owned location and branch");
+				throw new Error("The work lane does not match its host-owned location and branch");
 			}
 			if (record.lane?.path === path || !existsSync(path)) continue;
 			const listed = await git(record.project, ["worktree", "list", "--porcelain", "-z"]);
 			if (listed.status !== 0) throw new Error(listed.stderr || "Could not read Git worktrees");
 			const found = listed.stdout.split("\0\0").map(item => item.split("\0")).find(fields => fields[0] === `worktree ${path}`);
-			if (!found?.includes(`branch refs/heads/${lane.branch}`)) throw new Error("The chat lane's Git registration changed; it was kept");
+			if (!found?.includes(`branch refs/heads/${lane.branch}`)) throw new Error("The work lane's Git registration changed, so it was kept");
 			// Do not let status.showUntrackedFiles=no hide work from Git's removal check.
 			const removed = await git(record.project, ["-c", "status.showUntrackedFiles=normal", "worktree", "remove", "--", path]);
-			if (removed.status !== 0) throw new Error((removed.stderr || removed.stdout).trim() || "Git could not remove the chat lane");
-			if (existsSync(path)) throw new Error("Git reported removal but the chat lane folder remains");
+			if (removed.status !== 0) throw new Error((removed.stderr || removed.stdout).trim() || "Git could not remove the work lane");
+			if (existsSync(path)) throw new Error("Git reported removal but the work lane folder remains");
 			log("info", "chat.lane.removed", { channel: record.id, path, branch: lane.branch });
 		} catch (error) {
 			// The channel is archived even when disposal is refused. History and dirty work survive.

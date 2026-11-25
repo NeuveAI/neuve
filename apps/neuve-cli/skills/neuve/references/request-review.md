@@ -10,9 +10,9 @@
 
 ## Request it
 
-Run `neuve review <base>..<head>` from any checkout. To join a branch's open cycle automatically, end the range at its unique local tip. If branches share the tip, run from the one you mean to review. In a stack, use the branch below as the base and the branch you mean to review as the head.
+Run `neuve review <base>..<head>` from any checkout. To join a branch's open cycle automatically, end the range at its unique local tip. If branches share the tip, use `--branch` to choose the one you mean to review. In a stack, use the branch below as the base and the branch you mean to review as the head.
 
-Use `neuve review <base>..<head> --branch <name>` to choose a local branch that ends at the head, or one that contains it if no local branch ends there. Neuve refuses any other name. If you omit the flag at a shared tip, Neuve reviews the branch the checkout is on, and asks you to choose when the checkout is on none of them.
+Use `neuve review <base>..<head> --branch <name>` to choose a local branch that ends at the head, or one that contains it if no local branch ends there. Neuve refuses any other name. If you omit the flag at a shared tip, Neuve reviews the checkout's branch when it ends there and none of the other branches at the tip has an open cycle. Otherwise Neuve asks you to choose.
 
 The review opens its own cycle if its branch has no open cycle, if the head has no local tip and you omit the flag, or if you supply a ticket or external sources. Omit `--branch` when supplying a ticket or external sources to `neuve review <base>..<head>`.
 

@@ -1341,7 +1341,7 @@ export class Channel {
 			if (exists.value) return;
 		}
 		if (recorded && (!recorded.hostCreated || recorded.chat !== chat)) throw new Error(`Work lane ${name} is already assigned; it was not adopted.`);
-		const lane = await host.worktree(name, undefined, { chat, ...(recorded ? { recorded } : {}) });
+		const lane = await host.worktree({ chat, ...(recorded ? { recorded } : {}) });
 		await this.#harness.commit(async tx => {
 			(await tx.doc(LanesDoc)).lanes[name] = { chat, path: lane.path, base: lane.base, hostCreated: true };
 			await configure(tx, chat, { cwd: lane.path });

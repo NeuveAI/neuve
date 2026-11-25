@@ -524,9 +524,10 @@ const localPlanIdentity = (cycleId: string) =>
     );
   });
 
-type ReviewBranch =
-  | { readonly branch: string | undefined; readonly ambiguous?: never }
-  | { readonly ambiguous: readonly string[]; readonly branch?: never };
+type ReviewBranch = {
+  readonly branch: string | undefined;
+  readonly sharedTips?: readonly string[];
+};
 
 const selectReviewCycle = (range: Range, target: ReviewBranch | undefined) =>
   Effect.gen(function* () {
@@ -551,12 +552,24 @@ const selectReviewCycle = (range: Range, target: ReviewBranch | undefined) =>
       return { cycleId: bound, bound: true };
     }
     if (read?.open) return { cycleId: read.cycleId, bound: false };
-    if (target?.ambiguous !== undefined)
+    if (target?.sharedTips !== undefined) {
+      if (target.branch !== undefined) {
+        const other = yield* Effect.findFirst(
+          target.sharedTips.filter((tip) => tip !== target.branch),
+          (tip) =>
+            Effect.map(
+              Cycles.branchReadCycle(tip),
+              (cycle) => cycle?.open ?? false,
+            ),
+        );
+        if (Option.isNone(other)) return undefined;
+      }
       return yield* Effect.fail(
         new Error(
-          `${formatBranchNames(target.ambiguous, "conjunction")} end at this review's head, so pass --branch <name> with the branch to review.`,
+          `${formatBranchNames(target.sharedTips, "conjunction")} end at this review's head, so pass --branch <name> with the branch to review.`,
         ),
       );
+    }
     return undefined;
   });
 
@@ -682,7 +695,7 @@ export const requestReview = (options: ReviewOptions) =>
             const branch = tips.find(
               (name) => `refs/heads/${name}` === checkout,
             );
-            return branch === undefined ? { ambiguous: tips } : { branch };
+            return { branch, sharedTips: tips };
           })
         : undefined;
     // The cycle, the generation and the append are one write transaction (`BEGIN IMMEDIATE`), so
