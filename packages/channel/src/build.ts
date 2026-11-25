@@ -610,13 +610,12 @@ export class Builds {
 			let record = sender ? records[sender.build] : latest && records[buildId(from, latest.hash)];
 			// Approved revisions reuse the preceding build's agents, as recorded at approval.
 			if (!sender && record?.build.state.kind === "delivered") record = records[record.build.state.to];
-			if (!record && (sender || !latest)) return { refusal: "Only an agent of a plan can message another agent of that plan." };
-			if (!record) return { refusal: "This plan has no started agent with that role and path scope. The plan has no started agents yet." };
-			const blocked = buildRefusal(record.build.state.kind);
+			if (!record && (sender || !latest)) return { refusal: "Only the chat that drafted a plan, or one of its agents, can message that plan's agents." };
+			const blocked = record && buildRefusal(record.build.state.kind);
 			if (blocked) return { refusal: blocked };
-			const recipient = record.starts[agentKey(to, part)];
-			if (recipient?.state.kind !== "started" || !recipient.brief) {
-				const agents = record.build.agents
+			const recipient = record?.starts[agentKey(to, part)];
+			if (!record || recipient?.state.kind !== "started" || !recipient.brief) {
+				const agents = !record ? [] : record.build.agents
 					.filter(({ role, part }) => record.starts[agentKey(role, part)]?.state.kind === "started")
 					.map(({ role, part }) => `${role === "implementer" ? "an" : "a"} ${role}${part === undefined ? "" : ` for ${JSON.stringify(part)}`}`);
 				const listing = agents.length ? `The plan has started ${new Intl.ListFormat("en").format(agents)}.` : "The plan has no started agents yet.";

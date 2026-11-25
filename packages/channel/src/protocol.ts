@@ -332,7 +332,10 @@ export function buildId(chat: ChatId, hash: string): string {
 	return `${chat}:${hash}`;
 }
 
-/** What one agent of a build said to another with `AGENT_MESSAGE_TOOL`; the host records it when it delivers it. */
+/**
+ * What an agent of a build, or the chat that drafted its plan, said to one of the build's agents
+ * with `AGENT_MESSAGE_TOOL`; the host records it when it delivers it.
+ */
 export type WorkMessage = { build: string; from: ChatId; to: ChatId; at: number; text: string };
 
 /** The tool by which a build's agent asks the host to start a reviewer or another implementer. */

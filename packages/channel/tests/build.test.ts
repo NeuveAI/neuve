@@ -1988,7 +1988,7 @@ test("agent messages refuse unknown recipients, outsiders, self, empty text, and
 	const valid = { to: "reviewer", part: "exports", text: "Ready." };
 	await refuse(chat, agent, "missing-agent", { ...valid, part: "another part" },
 		'This plan has no started agent with that role and path scope. The plan has started an implementer and a reviewer for "exports".');
-	await refuse(other.chat, outside, "outside-build", valid, "Only an agent of a plan can message another agent of that plan.");
+	await refuse(other.chat, outside, "outside-build", valid, "Only the chat that drafted a plan, or one of its agents, can message that plan's agents.");
 	await refuse(chat, agent, "same-chat", { to: "implementer", text: "Ready." }, "Send the message to another agent of this plan.");
 	await refuse(chat, agent, "empty-text", { ...valid, text: "  " }, "Write a message to send.");
 	await run.harness.commit(tx => setChatMode(tx, ROOT_CONVERSATION_ID, "plan"), context);
