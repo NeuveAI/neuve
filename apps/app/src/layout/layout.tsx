@@ -1093,7 +1093,18 @@ function useLayout(
 				const name = value.name;
 				return { ...meta, [open]: { type: "review", path, ...(name ? { name } : undefined) } };
 			});
-			if (quiet) return;
+			if (quiet) {
+				// A hidden tab comes into view without taking focus: beside the chat when it sits behind
+				// the chat and there is room, else at the front of its own pane.
+				if (flat || shown.has(open)) return;
+				const home = Split.host(current, open)?.uid;
+				const chat = Split.host(current, CHAT)?.uid;
+				const to: Split.Target = { pane: chat, side: "right" };
+				if (home !== chat) api.select({ tab: open, pane: home });
+				else if (Split.can(current, { ...fit, move: { tab: open, to } })) api.move({ tab: open, to, fit });
+				api.focus({ pane: current.focus });
+				return;
+			}
 			const pane = Split.host(current, open);
 			api.select({ tab: open, pane: flat ? undefined : pane?.uid });
 			requestAnimationFrame(() => enter(open));
