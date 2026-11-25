@@ -59,13 +59,18 @@ type ClaudeRuntimeConfig = Exclude<
 export function productionChatSources(options: {
   home: string;
   claude?: ClaudeRuntimeConfig;
-}): ChatRuntimeSources & { close(): Promise<void> } {
+  environment?: Readonly<Record<string, string | undefined>>;
+}): ChatRuntimeSources & {
+  checkAccounts(): Promise<void>;
+  close(): Promise<void>;
+} {
   const claude: ClaudeRuntimeConfig = {
     cwd: defaultClaudeWorkingFolder(options.home),
     oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
     ...options.claude,
   };
-  let ensureStatuses: Effect.Effect<void> = Effect.void;
+  let ensureStatuses: Effect.Effect<AccountStore.AccountStatusesShape | void> =
+    Effect.void;
   // A worker learns its channel's folder after its sources exist; sessions open only after that.
   let logs: ReturnType<typeof protocolLogs> | undefined;
   const runtime = ManagedRuntime.make(
@@ -75,6 +80,7 @@ export function productionChatSources(options: {
         return harnessRuntimes({
           accountDirectory: Layer.succeed(AccountDirectory, directory),
           claude,
+          environment: options.environment ?? process.env,
           codex: {
             ...codexRuntimeOptions(options.home, thisBuild()),
             log: (account) => logs?.(account),
@@ -102,7 +108,6 @@ export function productionChatSources(options: {
                 (exit) => (exit._tag === "Success" ? Infinity : 0),
               );
               ensureStatuses = start.pipe(
-                Effect.asVoid,
                 Effect.catch((error) => Effect.logWarning(error.message)),
               );
               yield* ensureStatuses;
@@ -175,6 +180,13 @@ export function productionChatSources(options: {
         }
       },
     },
+    checkAccounts: () =>
+      runtime.runPromise(
+        Effect.gen(function* () {
+          const statuses = yield* ensureStatuses;
+          if (statuses !== undefined) yield* statuses.checkAll;
+        }),
+      ),
     unavailable: () => unavailable,
     logIn: (folder, report) => {
       logs = protocolLogs(folder, report);

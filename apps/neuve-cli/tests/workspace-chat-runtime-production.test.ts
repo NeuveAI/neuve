@@ -117,7 +117,7 @@ function saveStatus(
               ? basename(account.credential.folder)
               : account.name,
           signIn,
-          checkedAt: new Date().toISOString(),
+          checkedAt: "2025-01-01T00:00:00.000Z",
           limits: [],
           models,
         },
@@ -148,7 +148,7 @@ for await (const line of createInterface({input:process.stdin})) {
   if (message.type === 'control_request') {
     record({type:'control', subtype:message.request.subtype});
     send({type:'control_response', response:{subtype:'success', request_id:message.request_id, response:message.request.subtype === 'initialize' ? {
-      commands:[], agents:[], account:{tokenSource:'none'},
+      commands:[], agents:[], account:{tokenSource:process.env.CLAUDE_CODE_OAUTH_TOKEN === undefined ? 'none' : 'CLAUDE_CODE_OAUTH_TOKEN'},
       models:[{value:'default', displayName:'Test default', description:'Fake model'}]
     } : {}}});
   } else if (message.type === 'user') {
@@ -814,6 +814,53 @@ test("unused production sources stay lazy", async () => {
     await sources.close();
     await sources.close();
     expect(existsSync(AccountStore.neuveFolder(at.home))).toBe(false);
+  } finally {
+    await sources.close();
+    at.close();
+  }
+});
+
+test("the workspace account check replaces a stale Claude sign-in", async () => {
+  const at = temporary();
+  const fake = fakeClaude(at.root);
+  const builtIn = DEFAULT_ACCOUNTS.find(
+    (account) => account.name === "claude",
+  )!;
+  AccountStore.setProgramPath(
+    at.home,
+    AccountName.parse("codex"),
+    join(at.root, "no-codex"),
+  );
+  saveStatus(at.home, builtIn, {
+    state: "signed-in",
+    credentialSource: "environment",
+    sourceMatchesAccount: false,
+  });
+  const sources = productionChatSources({
+    home: at.home,
+    claude: {
+      cwd: join(at.root, "work"),
+      executable: fake.executable,
+      oauthToken: "test-token",
+    },
+    environment: { ANTHROPIC_API_KEY: "test-key" },
+  });
+  try {
+    await sources.checkAccounts();
+    const statuses = sources.statuses.current();
+    expect(statuses.find((status) => status.name === "claude")?.signIn).toEqual(
+      {
+        state: "signed-in",
+        credentialSource: "environment",
+        sourceMatchesAccount: true,
+      },
+    );
+    expect(
+      statuses.find((status) => status.name === "anthropic")?.signIn,
+    ).toEqual({
+      state: "signed-in",
+      credentialSource: "environment",
+    });
   } finally {
     await sources.close();
     at.close();
