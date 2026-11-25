@@ -817,7 +817,7 @@ The owner came back to the desk on 23 November and ruled, through a checklist se
 
 | # | Decision | Consequence for the code and the work |
 | --- | --- | --- |
-| 17.58 | A plan's agents may message the person's other channels to check a design or ask a question, without asking the person first (owner, 25 November 2026). Shown that the NEU-499 channel's implementer, an agent of Ace's own runtime, had used Ace's channel tools to ask the review-tab-auto-open channel for a recorded incident and the NEU-497 channel for its merge status, with no card asking the owner: "nah, it's ok then...if it is intentional it's a good thing that the agent wanted to check with others on design or questions" | Ace's own agents keep the channel tools as served today. The rule that a message to another channel's agent is offered with the person's OK on each call (17.4) still covers a runtime with tools of its own, such as Codex. **The coordinator's reading, beyond the words:** the person sees these messages where they land, in the other channel's thread. Not changed |
+| 17.58 | A plan's agents may message the person's other channels to check a design or ask a question, without asking the person first (owner, 25 November 2026). Shown that the implementer in neu-499-turn-retries, an agent of Ace's own runtime, had used Ace's channel tools to ask review-tab-auto-open for a recorded incident and neu-497-plan-agent-messages for its merge status, with no card asking the owner: "nah, it's ok then...if it is intentional it's a good thing that the agent wanted to check with others on design or questions" | Agents on a runtime without tools of its own, Ace's own and Claude Code as Ace runs it, keep `channels` and `message` (`packages/channel/src/agents.ts`) as served today. **The coordinator's reading, beyond the words:** a plan's agent on a runtime with tools of its own, such as Codex, keeps both tools withheld, since the agent names the recipient (17.2); a chat a person drives on such a runtime is to get them with each send asked (17.4), not built. The person sees these messages in the chat they were sent to. Whether the tools stay served once Ace's own agents run inside isolates (17.55) is open. Not changed |
 
 ### Still open for the owner
 
@@ -825,6 +825,7 @@ The owner came back to the desk on 23 November and ruled, through a checklist se
 - Whose account a shared channel's turns run on.
 - Which branches the broker may push.
 - Which machine is a shared channel's sandbox.
+- Whether a plan's agents keep messaging other channels once they run inside isolates, where a message lets work leave the isolate (17.58).
 - Who else may move a plan's branch, such as a person's push to its pull request or GitHub's Update branch, which would move it on GitHub and not in the mirror (17.57).
 - The rest of the [shared-channel proposal](https://github.com/NeuveAI/neuve/pull/58), including what the final review's own isolated place means and the words it lacks.
 - The attribution setting's default, whose setting it is, what it covers and its wording, as the [sessions design](proposals/sessions-in-ace.md#still-open-for-the-owner) lists them.
