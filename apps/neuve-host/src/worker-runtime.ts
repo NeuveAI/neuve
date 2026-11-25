@@ -20,7 +20,8 @@ import type { Planning } from "@ace/channel/planning";
 import type { Review } from "@ace/channel/review";
 import { config, configure, CONFIG_VARIABLE, GIT_LOCAL, type HostConfig } from "./host-config";
 import { configureRuntime, runtimeHooks } from "./runtime-hooks";
-import { planExplore, planFileAccess } from "./plan-git";
+import { planExplore, planFileAccess, readBranch } from "./plan-git";
+import { installedNeuve } from "./environment";
 import { git } from "./projects";
 /**
  * The channel a worker serves, given to root's factories before anything is created, so they can
@@ -174,7 +175,12 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 	} : undefined;
 	const planOptions = {
 		...options,
-		hostEnvironment: { host: `${hostname()} (${platform()}/${arch()})`, ...config.build },
+		hostEnvironment: {
+			host: `${hostname()} (${platform()}/${arch()})`,
+			...config.build,
+			neuve: await installedNeuve(),
+			readBranch,
+		},
 		...(build ? { build } : {}),
 		planFileAccess,
 		planFiles: files,

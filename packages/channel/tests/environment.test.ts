@@ -13,6 +13,17 @@ async function ask(mode?: ChatMode) {
 	expect(await fixture!.request({ op: "wait", submission })).toBe("done");
 }
 
+const hostEnvironment = {
+	host: "fixture-host",
+	version: "captured-version",
+	release: false,
+	commit: "captured-build",
+	neuve: { path: "/host/bin/neuve", version: "neuve 0.3.10" },
+	async readBranch(folder: string) {
+		return git(folder, "branch", "--show-current").trim() || "detached HEAD";
+	},
+};
+
 // Observe the actual provider-facing offer and prompt, not only extension installation.
 test("desktop selection follows host availability and channel settings on existing channels", async () => {
 	let available = false;
@@ -71,15 +82,16 @@ test("desktop dispatch still checks settings after the model's offer", async () 
 	expect(dispatched).toBe(0);
 });
 
-test("context reports captured build separately from lane Git and refreshes detached state", async () => {
+test("main chat reports host facts on its lane and on the project checkout without a shell", async () => {
 	let chat: Conversation | undefined;
 	fixture = await Fixture.create({
-		hostEnvironment: { host: "fixture-host", version: "captured-version", commit: "captured-build" },
+		hostEnvironment,
 		extension: { extensions: [], async attach(harness) { chat = await harness.root(BACKGROUND_CONTEXT); } },
 	});
 	fixture.script(request => {
 		const prompt = getCurrentSystemPrompt(request.messages);
-		expect(prompt).toContain("version captured-version, commit captured-build");
+		expect(prompt).toContain("version captured-version (source run), commit captured-build");
+		expect(prompt).toContain("Installed neuve and its version: /host/bin/neuve (neuve 0.3.10)");
 		expect(prompt).toContain("Role: main chat");
 		expect(prompt).toContain("Git branch: one/work");
 		expect(prompt).toContain("Work lane: work");
@@ -98,11 +110,23 @@ test("context reports captured build separately from lane Git and refreshes deta
 		return fauxAssistantMessage("observed");
 	});
 	await ask();
+	await chat.configure({ cwd: fixture.project }, BACKGROUND_CONTEXT);
+	fixture.script(request => {
+		const prompt = getCurrentSystemPrompt(request.messages);
+		expect(prompt).toContain("Role: main chat");
+		expect(prompt).toContain(`Working folder: ${fixture!.project}. Git branch: main.`);
+		expect(prompt).toContain("Runtime shell: unavailable");
+		expect(prompt).toContain("version captured-version (source run), commit captured-build");
+		expect(prompt).toContain("Installed neuve and its version: /host/bin/neuve (neuve 0.3.10)");
+		return fauxAssistantMessage("observed");
+	});
+	await ask();
+	expect(fixture.envs.has(fixture.project)).toBe(false);
 });
 
 test("a runtime's own shell uses its working folder even without Ace's environment", async () => {
 	let chat: Conversation | undefined;
-	fixture = await Fixture.create({ ownTools: provider => provider === MODEL.provider, extension: {
+	fixture = await Fixture.create({ hostEnvironment: { ...hostEnvironment, release: true }, ownTools: provider => provider === MODEL.provider, extension: {
 		extensions: [],
 		async attach(harness) { chat = await harness.root(BACKGROUND_CONTEXT); },
 	} });
@@ -118,32 +142,36 @@ test("a runtime's own shell uses its working folder even without Ace's environme
 	await chat.configure({ cwd: fixture.project }, BACKGROUND_CONTEXT);
 	fixture.script(request => {
 		const prompt = getCurrentSystemPrompt(request.messages);
-		expect(prompt).toContain(`Working folder: ${fixture!.project}`);
+		expect(prompt).toContain(`Working folder: ${fixture!.project}. Git branch: main.`);
 		expect(prompt).toContain("Runtime shell: available (runtime's own shell)");
-		expect(prompt).toContain("Git branch: not probed (Ace has no execution environment)");
-		expect(prompt).toContain("Installed neuve and its version: not probed (Ace has no execution environment)");
+		expect(prompt).toContain("version captured-version (release build), commit captured-build");
+		expect(prompt).toContain("Installed neuve and its version: /host/bin/neuve (neuve 0.3.10)");
 		return fauxAssistantMessage("observed");
 	});
 	await ask();
 	fixture.script(request => {
 		const prompt = getCurrentSystemPrompt(request.messages);
 		expect(prompt).toContain("Runtime shell: available (runtime's own shell, read-only in Plan mode)");
-		expect(prompt).toContain("Git branch: not probed (Ace has no execution environment)");
+		expect(prompt).toContain("Git branch: main");
 		return fauxAssistantMessage("observed");
 	});
 	await ask("plan");
 });
 
-test("environment context discloses absent shell and no lane for each role without probing", async () => {
+test("environment context reports a missing host neuve for each role", async () => {
 	const { environment } = await import("../src/environment");
 	for (const role of ["main chat", "implementer", "reviewer"]) {
-		const section = environment(undefined, () => role, async () => false);
+		const section = environment({
+			...hostEnvironment,
+			neuve: undefined,
+			readBranch: async () => "role-branch",
+		}, () => role, async () => false);
 		const text = await section.render({ conversationId: 1, agent: { cwd: "/no-lane", tools: [] },
 			env: undefined, read: { snapshot: async () => undefined } } as never, {} as never);
 		expect(text).toContain(`Role: ${role}`);
-		expect(text).toContain("Working folder: /no-lane");
+		expect(text).toContain("Working folder: /no-lane. Git branch: role-branch.");
 		expect(text).toContain("Work lane: none recorded");
 		expect(text).toContain("Runtime shell: unavailable");
-		expect(text).toContain("not probed (Ace has no execution environment)");
+		expect(text).toContain("Installed neuve and its version: not found on the host's PATH");
 	}
 });

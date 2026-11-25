@@ -3,6 +3,32 @@ import type { Diagnostics } from "./protocol";
 /** A command-line host inherits its terminal's environment; only the helper loads a login shell. */
 export const shell: Diagnostics["shell"] = { state: "adopted" };
 
+let neuve: ReturnType<typeof readInstalledNeuve> | undefined;
+
+/** Workers keep the result for their lifetime, including a missing executable. */
+export function installedNeuve() {
+	return neuve ??= readInstalledNeuve();
+}
+
+async function readInstalledNeuve() {
+	const PATH = process.env.PATH ?? "";
+	const path = Bun.which("neuve", { PATH });
+	if (!path) return;
+	try {
+		const child = Bun.spawn([path, "--version"], {
+			env: { PATH },
+			stdin: "ignore", stdout: "pipe", stderr: "ignore",
+			timeout: 2000, killSignal: "SIGKILL", maxBuffer: 2048,
+		});
+		const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+		const version = out.trim();
+		if (code === 0 && version) return { path, version };
+	} catch {
+		// The executable can disappear after PATH lookup.
+	}
+	return { path };
+}
+
 const mark = "__ace_env__";
 const command = () => [process.env.SHELL || "/bin/zsh", "-lc", `printf ${mark}; env -0`];
 let helpers = "";

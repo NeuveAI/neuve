@@ -1,4 +1,4 @@
-import { CLI_VERSION } from "./cli-version";
+import { CLI_VERSION, RELEASE_BUILD } from "./cli-version";
 import {
   readFile,
   rename,
@@ -133,7 +133,11 @@ export function workspaceConfiguration(input: {
     ? provenance.stdout.toString().trim()
     : undefined;
   return HostConfigSchema.parse({
-    build: { version: CLI_VERSION, ...(commit ? { commit } : {}) },
+    build: {
+      version: CLI_VERSION,
+      release: RELEASE_BUILD,
+      ...(commit ? { commit } : {}),
+    },
     ...(input.app === undefined ? {} : { app: input.app }),
     home,
     lanes,

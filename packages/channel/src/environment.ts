@@ -1,25 +1,16 @@
 import type { Context } from "@earendil-works/chord";
 import type { PromptSection } from "@earendil-works/pi-durable";
-import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { LanesDoc } from "./lanes";
 import type { IsPlanning } from "./plan-mode";
 
-/** Immutable provenance supplied by the host, never inferred from a mutable chat checkout. */
-export type HostEnvironment = { host: string; version?: string; commit?: string };
-
-async function probe(env: ExecutionEnv, command: string, context: Context): Promise<string> {
-	let output = "";
-	try {
-		const result = await env.exec(command, {
-			timeout: 2,
-			onOutput: chunk => { output = (output + chunk).slice(0, 2048); },
-		}, context);
-		return result.ok && result.value.exitCode === 0 && output.trim()
-			? output.trim() : "unknown (probe unavailable or failed)";
-	} catch {
-		return "unknown (probe unavailable or failed)";
-	}
-}
+export type HostEnvironment = {
+	host: string;
+	version?: string;
+	release?: boolean;
+	commit?: string;
+	neuve: { path: string; version?: string } | undefined;
+	readBranch(folder: string, context: Context): Promise<string | undefined>;
+};
 
 export function environment(
 	host: HostEnvironment | undefined,
@@ -41,16 +32,16 @@ export function environment(
 			const folder = env?.cwd ?? agent.cwd;
 			const lanes = (await read.snapshot(LanesDoc, context))?.lanes ?? {};
 			const lane = Object.entries(lanes).find(([, lane]) => lane.path === folder);
-			const notProbed = "not probed (Ace has no execution environment)";
-			const [branch, neuve] = env ? await Promise.all([
-				probe(env, "git symbolic-ref --quiet --short HEAD || { git rev-parse --verify HEAD >/dev/null 2>&1 && printf 'detached HEAD'; }", context),
-				probe(env, 'p=$(command -v neuve) || exit 1; printf "%s\\n" "$p"; "$p" --version', context),
-			]) : [notProbed, notProbed];
+			const branch = folder === undefined ? undefined : await host?.readBranch(folder, context);
+			const buildKind = host?.release === undefined ? "" : host.release ? " (release build)" : " (source run)";
+			const neuve = host?.neuve
+				? `${host.neuve.path} (${host.neuve.version ?? "version unavailable"})`
+				: host ? "not found on the host's PATH" : "unknown (host metadata unavailable)";
 			return [
 				`Execution host: ${host?.host ?? "unknown (host metadata unavailable)"}.`,
-				`Running Ace build: version ${host?.version ?? "unknown"}, commit ${host?.commit ?? "unknown"}.`,
+				`Running Ace build: version ${host?.version ?? "unknown"}${buildKind}, commit ${host?.commit ?? "unknown"}.`,
 				`Installed neuve and its version: ${neuve}.`,
-				`Role: ${role(conversationId)}. Working folder: ${folder ?? "unknown"}. Git branch: ${branch}.`,
+				`Role: ${role(conversationId)}. Working folder: ${folder ?? "unknown"}. Git branch: ${branch ?? "unknown"}.`,
 				`Work lane: ${lane?.[0] ?? "none recorded for this folder"}. Runtime shell: ${hasShell ? `available (${shell})` : "unavailable"}.`,
 				"Ace serves the channel, threads, work log, plan and tools. Neuve is the neuve command, its skill, reviews and the desk.",
 			].join("\n");
