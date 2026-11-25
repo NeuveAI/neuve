@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -126,6 +126,20 @@ test("Plan can read its existing snapshot after archive without creating a new b
 	expect(git(path, "branch", "--show-current").trim()).toBe(`one/chat-${ROOT_CONVERSATION_ID}`);
 	expect(await cwd(run)).toBe(path);
 	await watch.stop();
+});
+
+test("a later turn restores a chat lane deleted outside Git", async () => {
+	const run = await setup(), { fixture } = run;
+	fixture.script(fauxAssistantMessage("Placed"));
+	await ask(fixture);
+	const path = join(fixture.lanes, `chat-${ROOT_CONVERSATION_ID}`);
+	const head = git(path, "rev-parse", "HEAD");
+	await rm(path, { recursive: true, force: true });
+	fixture.script(shell("pwd > restored.txt"), fauxAssistantMessage("Restored"));
+	await ask(fixture);
+	expect(await readFile(join(path, "restored.txt"), "utf8")).toBe(`${path}\n`);
+	expect(git(path, "branch", "--show-current").trim()).toBe(`one/chat-${ROOT_CONVERSATION_ID}`);
+	expect(git(path, "rev-parse", "HEAD")).toBe(head);
 });
 
 test("a legacy checkout root migrates, but a valid explicit external cwd is untouched", async () => {

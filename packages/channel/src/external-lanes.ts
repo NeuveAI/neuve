@@ -50,20 +50,21 @@ export async function buildWorktree(place: Place, name: string, context: Context
 	if (recorded && recorded.path !== path) throw new Error("The recorded chat lane is outside its host-owned location.");
 	const exists = await env.exists(path, context);
 	if (!exists.ok) throw exists.error;
-	if (exists.value) {
-		// Git may have created the worktree before the channel could record it.
+	if (exists.value || recorded) {
 		const worktrees = await git(env, `-C ${quote(place.project)} worktree list --porcelain -z`, context);
 		const found = worktrees.split("\0\0").map(record => record.split("\0")).find(fields =>
 			fields[0] === `worktree ${path}` && fields.includes(`branch refs/heads/${branch}`));
-		const base = found?.find(field => field.startsWith("HEAD "))?.slice(5);
-		if (!base) throw new Error("The worktree path is already in use.");
-		return { path, branch, base: recorded?.base ?? source?.base ?? base };
-	}
-	if (recorded) {
+		if (exists.value) {
+			// Git may have created the worktree before the channel could record it.
+			const base = found?.find(field => field.startsWith("HEAD "))?.slice(5);
+			if (!base) throw new Error("The worktree path is already in use.");
+			return { path, branch, base: recorded?.base ?? source?.base ?? base };
+		}
 		// Archive removes the folder, not its branch or the chat's durable lane assignment.
 		const base = (await git(env, `-C ${quote(place.project)} rev-parse --verify ${quote(`refs/heads/${branch}^{commit}`)}`, context)).trim();
-		await git(env, `-C ${quote(place.project)} worktree add ${quote(path)} ${quote(branch)}`, context);
-		return { path, branch, base: recorded.base ?? base };
+		const prunable = found?.some(field => field === "prunable" || field.startsWith("prunable "));
+		await git(env, `-C ${quote(place.project)} worktree add${prunable ? " -f" : ""} ${quote(path)} ${quote(branch)}`, context);
+		return { path, branch, base: recorded?.base ?? base };
 	}
 	// An unrecorded branch with no matching worktree is not an interrupted creation we can prove.
 	const collision = await git(env, `-C ${quote(place.project)} for-each-ref --format='%(refname)' ${quote(`refs/heads/${branch}`)}`, context);
