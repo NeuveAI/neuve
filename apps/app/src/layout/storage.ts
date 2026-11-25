@@ -35,11 +35,19 @@ export type Meta = Record<string, Content>;
 
 /**
  * `diff` records that a Diff tab already opened for the chat's current changes, `plans` the
- * newest plan a Plan tab opened for, by chat, and `work` how much of the work log was seen, once a
- * Work log tab opened.
+ * newest plan a Plan tab opened for, by chat, `work` how much of the work log was seen, once a
+ * Work log tab opened, and `reviews` the newest review a Review tab opened for, by chat; an empty
+ * id marks a chat seen with no review.
  */
 export type Planned = Record<string, string>;
-type Layout = { state: Split.State; meta: Meta; diff: boolean; plans: Planned; work?: number };
+type Layout = {
+	state: Split.State;
+	meta: Meta;
+	diff: boolean;
+	plans: Planned;
+	work?: number;
+	reviews: Planned;
+};
 
 type Saved = {
 	version: typeof VERSION;
@@ -48,6 +56,7 @@ type Saved = {
 	diff?: boolean;
 	plans?: Planned;
 	work?: number;
+	reviews?: Planned;
 };
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -125,23 +134,33 @@ function clean(state: Split.State, meta?: unknown): Meta {
 	return next;
 }
 
+function planned(value: unknown): Planned {
+	return Object.fromEntries(
+		Object.entries(object(value) ? value : {}).filter(([, id]) => typeof id === "string"),
+	) as Planned;
+}
+
 export function read(id: string): Layout {
 	const raw = load(`${STORAGE}:${id}`);
 	if (raw) {
 		try {
 			const data = JSON.parse(raw) as Saved;
 			const state = Split.restore(data.state);
-			const plans = Object.fromEntries(
-				Object.entries(object(data.plans) ? data.plans : {}).filter(([, id]) => typeof id === "string"),
-			) as Planned;
 			const work = Number.isInteger(data.work) && data.work! >= 0 ? data.work : undefined;
-			return { state, meta: clean(state, data.tabs), diff: data.diff === true, plans, work };
+			return {
+				state,
+				meta: clean(state, data.tabs),
+				diff: data.diff === true,
+				plans: planned(data.plans),
+				work,
+				reviews: planned(data.reviews),
+			};
 		} catch {
 			remove(`${STORAGE}:${id}`);
 		}
 	}
 	const state = Split.initial(CHAT);
-	return { state, meta: clean(state), diff: false, plans: {} };
+	return { state, meta: clean(state), diff: false, plans: {}, reviews: {} };
 }
 
 export function write(
@@ -151,6 +170,7 @@ export function write(
 	diff: boolean,
 	plans: Planned = {},
 	work?: number,
+	reviews: Planned = {},
 ) {
 	const data = {
 		version: VERSION,
@@ -159,6 +179,7 @@ export function write(
 		diff,
 		plans,
 		...(work === undefined ? {} : { work }),
+		reviews,
 	} satisfies Saved;
 	save(`${STORAGE}:${id}`, JSON.stringify(data));
 }

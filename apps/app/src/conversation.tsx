@@ -30,7 +30,7 @@ import { present } from "./presence";
 import { planCards } from "./plan-card";
 import { commentSends, commentWords } from "./plan-comments";
 import { pendingQuestion, Question } from "./question";
-import { reviewActions, reviewTab, withCards } from "./review-card";
+import { newestReview, reviewActions, reviewTab, withCards } from "./review-card";
 import { AGENT, credit, sources, toEvents } from "./timeline";
 import { useTranscript, useTyping } from "./transcript";
 import { Usage } from "./usage";
@@ -118,6 +118,7 @@ export function Conversation(
 	const senders = useMemo(() => sources(channels, channel.host), [channels, channel.host]);
 	// Neuve review cards sit in the timeline under the turn whose start call made them.
 	const reviews = transcript.reviews;
+	const newest = useMemo(() => newestReview(reviews), [reviews]);
 	const connected = !offline && !stalled && !channel.stalled;
 	const mayAsk = channel.owner === user || transcript.shared !== false;
 	const plans = useMemo(
@@ -373,6 +374,7 @@ export function Conversation(
 		if (transcript.live && !beside) {
 			publish(channel.id, {
 				plans: { chat: id, list: transcript.plans },
+				reviews: { chat: id, newest },
 				planComments: { chat: id, list: transcript.planComments, sends: transcript.commentSends },
 				builds: { list: transcript.builds, messages: transcript.messages },
 			});
@@ -383,6 +385,7 @@ export function Conversation(
 		id,
 		transcript.live,
 		transcript.plans,
+		newest,
 		transcript.planComments,
 		transcript.commentSends,
 		transcript.builds,
