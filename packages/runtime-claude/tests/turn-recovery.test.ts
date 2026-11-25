@@ -75,6 +75,7 @@ test("late known block closure preserves published response without reopening cl
 
 test("content-bearing, foreign-session, unknown-index and payload-bearing strays still fail closed", () => {
   const bad: SDKMessage[] = [
+    { ...close(), text: "stray" } as unknown as SDKMessage,
     partial({
       type: "content_block_delta",
       index: 0,

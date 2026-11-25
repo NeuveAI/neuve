@@ -1,6 +1,6 @@
 // Reason: eligibility crosses a persisted runtime boundary; terminal and malformed assertions must not retry.
 import { expect, test } from "bun:test";
-import { RetryEligibility, TurnOutcome } from "../src/index.ts";
+import { RetryEligibility, RuntimeEvent, TurnOutcome } from "../src/index.ts";
 
 const failed = {
   status: "failed",
@@ -72,4 +72,19 @@ test("retry delay metadata rejects nonfinite, negative, fractional and unbounded
     expect(
       RetryEligibility.safeParse({ ...failed.retry, retryAfterMs }).success,
     ).toBe(true);
+});
+
+// Reason: an earlier message checkpoint cannot substitute for the failed turn's saved tool-result history.
+test("saved-history retry event must name the failed turn's exact continuation point", () => {
+  const event = {
+    type: "turn.finished",
+    turnId: "turn",
+    at: new Date(0).toISOString(),
+    outcome: failed,
+  };
+  expect(RuntimeEvent.safeParse(event).success).toBe(false);
+  expect(
+    RuntimeEvent.safeParse({ ...event, resumePoint: "saved-tool-results" })
+      .success,
+  ).toBe(true);
 });

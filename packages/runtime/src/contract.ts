@@ -369,24 +369,33 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     errored: z.boolean(),
     durationMs: z.number().nonnegative().optional(),
   }),
-  z.strictObject({
-    ...eventFields,
-    type: z.literal("turn.finished"),
-    outcome: TurnOutcome,
-    /**
-     * Set when a turn ends on a tool-result carrier with no trailing assistant message; names the point to
-     * resume or fork from. When set, it takes precedence over the turn's last message.finished resumePoint,
-     * so a resume keeps the round's tool results.
-     *
-     * On a runtime without resumeInTurn, whose messages carry no resume point, a completed turn sets this
-     * to the turn's end: the only point it can resume or fork from.
-     *
-     * The receipt a resume point gives: a resume point (message.finished's, or this one when set) names a
-     * point whose whole chain is in the native session. A completed turn.finished means every input given
-     * to the turn (its message, steers and tool results) precedes its final resume point.
-     */
-    resumePoint: z.string().min(1).optional(),
-  }),
+  z
+    .strictObject({
+      ...eventFields,
+      type: z.literal("turn.finished"),
+      outcome: TurnOutcome,
+      /**
+       * Set when a turn ends on a tool-result carrier with no trailing assistant message; names the point to
+       * resume or fork from. When set, it takes precedence over the turn's last message.finished resumePoint,
+       * so a resume keeps the round's tool results. Also required when a failed turn explicitly
+       * authorizes retry by saved-history resume; the point includes every completed tool result.
+       *
+       * On a runtime without resumeInTurn, whose messages carry no resume point, a completed turn sets this
+       * to the turn's end: the only point it can resume or fork from.
+       *
+       * The receipt a resume point gives: a resume point (message.finished's, or this one when set) names a
+       * point whose whole chain is in the native session. A completed turn.finished means every input given
+       * to the turn (its message, steers and tool results) precedes its final resume point.
+       */
+      resumePoint: z.string().min(1).optional(),
+    })
+    .refine(
+      ({ outcome, resumePoint }) =>
+        outcome.status !== "failed" ||
+        outcome.retry?.continuation !== "resume" ||
+        resumePoint !== undefined,
+      "Retrying saved history requires the failed turn's exact resume point",
+    ),
 ]);
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>;
 

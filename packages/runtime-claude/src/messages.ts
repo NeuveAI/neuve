@@ -27,6 +27,18 @@ const closingBlock = z.strictObject({
   type: z.literal("content_block_stop"),
   index: z.number().int().nonnegative(),
 });
+// The exceptional skip accepts only SDK closing-frame metadata, never additional payload fields.
+const closingBlockFrame = z.strictObject({
+  type: z.literal("stream_event"),
+  event: closingBlock,
+  parent_tool_use_id: z.null(),
+  uuid: z.string().optional(),
+  session_id: z.string().min(1),
+  ttft_ms: z.number().nonnegative().optional(),
+  user_message_uuid: z.string().optional(),
+  user_message_uuids: z.array(z.string()).optional(),
+  resume_reason: z.string().optional(),
+});
 const closingMessage = z.strictObject({ type: z.literal("message_stop") });
 const stopReason = (reason: string | null): Finished["stopReason"] => {
   switch (reason) {
@@ -176,7 +188,7 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
     if (
       frame.event.type === "content_block_stop" &&
       message.blockIndices.has(frame.event.index) &&
-      closingBlock.safeParse(frame.event).success
+      closingBlockFrame.safeParse(frame).success
     )
       return message;
     if (
