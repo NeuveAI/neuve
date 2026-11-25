@@ -114,6 +114,15 @@ const { AccountStore } = await import("./packages/runtime/src/index");
 const listeners = new Set();
 const fixtureSource = {current: () => {if (broken) throw new AccountStore.StoreError({message: "Fixture malformed status."}); return current}, subscribe: (listener) => { if (broken) throw new AccountStore.StoreError({message: "Fixture malformed status."}); listeners.add(listener); listener(current); return () => listeners.delete(listener) }};
 setAccountStatusSource(fixtureSource);
+const { configureRuntime } = await import("./apps/neuve-host/src/runtime-hooks");
+const finishCheck = Promise.withResolvers();
+let checks = 0;
+configureRuntime({ checkAccounts: async () => {
+  checks++;
+  await finishCheck.promise;
+  current = [];
+  for (const listener of listeners) listener(current);
+} });
 const { startHost } = await import("./apps/neuve-host/src/host");
 const host = await startHost({config: {home: process.env.ACE_HOME, lanes: process.env.ACCOUNTS_LANES, user: "owner", port: 0, worker: [process.execPath, "apps/neuve-host/tests/worker.ts"], environment: {PATH: process.env.PATH, TMPDIR: process.env.TMPDIR}}, models: () => []});
 console.log("ACCOUNTS_READY " + JSON.stringify({port: host.port, token: host.token}));
@@ -123,6 +132,11 @@ try {
     if (line === "change" || line === "set-current") current = [];
     if (line === "repair") {broken = false; (await import("./apps/neuve-host/src/accounts")).frame()}
     if (line === "restore") current = initial;
+    if (line === "expect-no-check" && checks !== 0) throw new Error("Plain settings checked accounts");
+    if (line === "finish-check") {
+      if (checks !== 1) throw new Error("Fresh settings must start one account check");
+      finishCheck.resolve();
+    }
     if (["change", "notify", "restore"].includes(line)) for (const listener of listeners) {listener(current); listener([...current])}
     console.log("ACCOUNTS_DONE " + line);
   }
@@ -141,7 +155,7 @@ for (const scenario of [
     scenario === "store"
       ? "new local sockets read the current private store and peers receive none"
       : scenario === "push"
-        ? "email and plan reach local sockets on open and change, and never reach a peer"
+        ? "Settings Refresh checks accounts in the background and only local sockets receive the update"
         : `local account sockets handle ${scenario}, suppress identical sets and keep identities from peers`,
     async () => {
       const store = scenario === "store" || scenario === "initialMalformed";
@@ -435,7 +449,22 @@ for (const scenario of [
             ).toEqual([{ accounts: socketSignedIn }, { accounts: [] }]);
           }
         } else {
-          await command("change");
+          const reply = (id: number) =>
+            frames.find(
+              (frame) =>
+                typeof frame === "object" &&
+                frame !== null &&
+                "id" in frame &&
+                frame.id === id,
+            );
+          local.send(JSON.stringify({ id: 1, op: "settings" }));
+          await until(() => reply(1) !== undefined);
+          expect(reply(1)).toMatchObject({ ok: true });
+          await command("expect-no-check");
+          local.send(JSON.stringify({ id: 2, op: "settings", fresh: true }));
+          await until(() => reply(2) !== undefined);
+          expect(reply(2)).toMatchObject({ ok: true });
+          await command("finish-check");
           await until(() =>
             frames.some((frame) => JSON.stringify(frame) === '{"accounts":[]}'),
           );

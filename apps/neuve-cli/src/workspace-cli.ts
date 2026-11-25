@@ -972,13 +972,14 @@ async function workspace(args: readonly string[]): Promise<number> {
   try {
     const app = await buildCodingUi();
     configureReviewRoutes(resolveReview);
-    configureRuntime({
-      nativeSources: workspaceNativeSources(storage),
-      channelProvenance: true,
-    });
     const chatSources = productionChatSources({
       home: (await import("node:os")).homedir(),
       environment,
+    });
+    configureRuntime({
+      nativeSources: workspaceNativeSources(storage),
+      channelProvenance: true,
+      checkAccounts: chatSources.checkAccounts,
     });
     const chatModels = await workspaceChatModels(undefined, chatSources);
     abort.signal.addEventListener(

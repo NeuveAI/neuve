@@ -710,6 +710,10 @@ async function handle(
 		case "github-pull":
 			return github.pull(request.repo, request.branch);
 		case "settings":
+			if (request.fresh) {
+				void Promise.resolve().then(() => runtimeHooks().checkAccounts?.())
+					.catch((error) => log("warn", "settings.accounts.check.failed", failure(error)));
+			}
 			return settings(request.fresh);
 		case "diagnostics":
 			return diagnostics(request.sync);
