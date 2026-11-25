@@ -35,6 +35,7 @@ const CLIENT_METHODS = [
   "account/rateLimits/read",
   "hooks/list",
   "skills/list",
+  "skills/extraRoots/set",
   "app/list",
   "mcpServerStatus/list",
   "thread/start",

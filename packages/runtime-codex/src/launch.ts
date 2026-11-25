@@ -39,7 +39,10 @@ export interface OwnSettings {
   readonly mcpServers: ReadonlyArray<string>;
   readonly plugins: ReadonlyArray<string>;
   readonly apps: ReadonlyArray<string>;
-  readonly skills: ReadonlyArray<string>;
+  readonly skills: ReadonlyArray<{
+    readonly path: string;
+    readonly enabled: boolean;
+  }>;
   /**
    * The person's own `shell_environment_policy.exclude`. A `-c` value replaces the setting, so
    * the token's variable is added to this list, never put in its place.
@@ -104,6 +107,17 @@ export const launchArguments = (
           `shell_environment_policy.exclude=${JSON.stringify([...own.exclude, TOKEN_VARIABLE])}`,
         ]),
     "tools.experimental_request_user_input.enabled=false",
+    "skills.bundled.enabled=false",
+    ...(own.skills.length === 0
+      ? []
+      : [
+          `skills.config=[${own.skills
+            .map(
+              ({ path, enabled }) =>
+                `{path=${JSON.stringify(path)},enabled=${enabled}}`,
+            )
+            .join(",")}]`,
+        ]),
     ...(configuration === "own"
       ? []
       : [
@@ -113,14 +127,6 @@ export const launchArguments = (
           ...own.plugins.map((name) => `plugins.${name}.enabled=false`),
           ...own.apps.map((name) => `apps.${name}.enabled=false`),
           "apps._default.enabled=false",
-          "skills.bundled.enabled=false",
-          ...(own.skills.length === 0
-            ? []
-            : [
-                `skills.config=[${own.skills
-                  .map((name) => `{name=${JSON.stringify(name)},enabled=false}`)
-                  .join(",")}]`,
-              ]),
           "memories.use_memories=false",
           "memories.generate_memories=false",
           "notify=[]",

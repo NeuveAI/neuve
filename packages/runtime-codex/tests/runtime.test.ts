@@ -167,6 +167,7 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
   expect(loginArgs).toEqual(
     [
       "tools.experimental_request_user_input.enabled=false",
+      "skills.bundled.enabled=false",
       "features.hooks=false",
       "features.apps=false",
       "features.plugins=false",
@@ -183,7 +184,6 @@ test("Neuve's sign-in probes the catalogue without a Codex login", async () => {
       "features.tool_suggest=false",
       'web_search="disabled"',
       "apps._default.enabled=false",
-      "skills.bundled.enabled=false",
       "memories.use_memories=false",
       "memories.generate_memories=false",
       "notify=[]",

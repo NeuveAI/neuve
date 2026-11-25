@@ -258,7 +258,7 @@ test("acceptance: a review session runs a raw-input tool then resumes for struct
         cwd: config.cwd,
         tools: [],
         settingSources: [],
-        settings: { disableAllHooks: false },
+        settings: { disableAllHooks: true },
         strictMcpConfig: true,
         skills: [],
         systemPrompt: policy.systemPrompt,
@@ -269,6 +269,9 @@ test("acceptance: a review session runs a raw-input tool then resumes for struct
         model: "test-model",
         effort: "high",
       });
+      const [hook] = options.hooks?.PreToolUse ?? [];
+      expect(hook?.matcher).toBe("mcp__neuve__.*");
+      expect(typeof hook?.hooks[0]).toBe("function");
       expect(options.mcpServers?.neuve).toMatchObject({
         type: "sdk",
         name: "neuve",

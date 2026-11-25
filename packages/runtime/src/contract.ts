@@ -128,6 +128,12 @@ export interface SessionPolicy {
    * turn's workspace.
    */
   readonly folder?: string | undefined;
+  readonly skillRoots?:
+    ReturnType<typeof import("./skills.ts").skillRoots> | undefined;
+  readonly claudeSkillPlugin?: {
+    readonly path: string;
+    readonly names: readonly string[];
+  };
   /**
    * Absent selects the runtime's default for the account. An absent effort sends none. A runtime
    * refuses an effort its model doesn't support with TurnFailed, reason protocol-error: effort support is per model,

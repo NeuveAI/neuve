@@ -1,6 +1,7 @@
 import { appendFileSync, chmodSync, mkdirSync, statSync } from "node:fs";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AccountRejected,
@@ -17,6 +18,7 @@ import {
   type RuntimeRegistryShape,
   type RuntimeShape,
 } from "@neuve/runtime";
+import { findSkills } from "@neuve/runtime/skills";
 import { claudeRuntime, type ClaudeRuntimeConfig } from "@neuve/runtime-claude";
 import {
   CodexSignInFileError,
@@ -225,9 +227,65 @@ export function harnessRuntimes<E = never, R = never>(
         {
           ...runtime,
           openSession: (account, policy, start) =>
-            Effect.flatMap(ready, (runtime) =>
-              runtime.openSession(account, policy, start),
-            ),
+            Effect.gen(function* () {
+              const available = yield* ready;
+              const roots = policy.skillRoots;
+              if (available !== runtime || roots === undefined)
+                return yield* available.openSession(account, policy, start);
+
+              const failed = () =>
+                new RuntimeUnavailable({
+                  account: account.name,
+                  reason: "start-failed",
+                });
+              const skills = yield* Effect.tryPromise({
+                try: () => findSkills(roots),
+                catch: failed,
+              });
+              if (skills.length === 0)
+                return yield* runtime.openSession(account, policy, start);
+
+              const remove = (path: string) =>
+                rm(path, { recursive: true, force: true });
+              const path = yield* Effect.acquireRelease(
+                Effect.tryPromise({
+                  try: async () => {
+                    const folder = await mkdtemp(
+                      join(tmpdir(), "ace-claude-skills-"),
+                    );
+                    try {
+                      const manifest = join(folder, ".claude-plugin");
+                      const links = join(folder, "skills");
+                      await mkdir(manifest);
+                      await mkdir(links);
+                      await writeFile(
+                        join(manifest, "plugin.json"),
+                        '{"name":"ace"}',
+                      );
+                      for (const { folder: source, name } of skills)
+                        await symlink(source, join(links, name), "dir");
+                      return folder;
+                    } catch (error) {
+                      await remove(folder);
+                      throw error;
+                    }
+                  },
+                  catch: failed,
+                }),
+                (path) => Effect.promise(() => remove(path)),
+              );
+              return yield* runtime.openSession(
+                account,
+                {
+                  ...policy,
+                  claudeSkillPlugin: {
+                    path,
+                    names: skills.map(({ name }) => `ace:${name}`),
+                  },
+                },
+                start,
+              );
+            }),
           probe: (account) =>
             Effect.flatMap(ready, (runtime) => runtime.probe(account)),
         } satisfies RuntimeShape,

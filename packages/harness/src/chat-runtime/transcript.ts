@@ -19,6 +19,7 @@ import {
   type RuntimeEvent,
   type CallUsage,
 } from "@neuve/runtime";
+import { skillRoots } from "@neuve/runtime/skills";
 import type { Effect } from "effect";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
@@ -189,6 +190,7 @@ export function policy(
   model?: SessionPolicy["model"],
   where: {
     folder?: string | undefined;
+    skills?: { home: string; carried?: string | undefined } | undefined;
     ownTools?: boolean;
     approvals?: boolean;
     attended?: boolean;
@@ -239,13 +241,19 @@ export function policy(
     approvalPolicy,
     turnLimit: TurnLimit.parse(Number.MAX_SAFE_INTEGER),
     ...(model ? { model } : {}),
-    ...(where.folder === undefined ? {} : { folder: where.folder }),
+    ...(sandboxed && where.folder !== undefined
+      ? { folder: where.folder }
+      : {}),
+    ...(where.skills !== undefined && where.folder !== undefined
+      ? { skillRoots: skillRoots({ ...where.skills, cwd: where.folder }) }
+      : {}),
   };
 }
 export function policyKey(value: SessionPolicy): string {
   return JSON.stringify({
     systemPrompt: value.systemPrompt,
     folder: value.folder,
+    skillRoots: value.skillRoots,
     approvalPolicy: value.approvalPolicy,
     tools: value.tools.map(({ name, description, inputSchema }) => ({
       name,

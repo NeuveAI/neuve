@@ -180,6 +180,7 @@ type Live = {
 export interface BridgeOptions {
   registry: RuntimeRegistryShape;
   heads: NativeHeads;
+  skills?: { home: string; carried?: string | undefined };
   log?: Log;
   idleMs?: number;
   now?: () => number;
@@ -572,10 +573,9 @@ export class ChatRuntimeBridge {
       offeredMessages(gen),
       () => Effect.succeed(stoppedCall),
       selection,
-      // Only a runtime with its own tools works in the chat's folder; for any other a change of
-      // folder must not reopen its session.
       {
-        folder: route.capabilities.ownTools ? gen.folder : undefined,
+        folder: gen.folder,
+        skills: this.options.skills,
         ownTools: route.capabilities.ownTools,
         approvals: route.capabilities.approvals,
         attended: gen.attended,
@@ -826,10 +826,9 @@ export class ChatRuntimeBridge {
       offeredMessages(gen),
       (_name, call) => this.wait(() => live, call),
       selection,
-      // Only a runtime with its own tools works in the chat's folder; for any other a change of
-      // folder must not reopen its session.
       {
-        folder: route.capabilities.ownTools ? gen.folder : undefined,
+        folder: gen.folder,
+        skills: this.options.skills,
         ownTools: route.capabilities.ownTools,
         approvals: route.capabilities.approvals,
         attended: gen.attended,

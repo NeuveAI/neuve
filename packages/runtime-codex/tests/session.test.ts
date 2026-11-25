@@ -1,5 +1,7 @@
 // The fake checks what crosses the Codex connection and what the session reports to its caller.
 import { describe, expect, test } from "bun:test";
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
   AccountRejected,
   AccountName,
@@ -11,7 +13,7 @@ import {
   type SessionStart,
 } from "@neuve/runtime";
 import { Effect, Exit, Fiber, Logger, Queue, Scope, Stream } from "effect";
-import { turnSettings } from "../src/launch.ts";
+import { launchArguments, turnSettings } from "../src/launch.ts";
 import type { LogEntry } from "../src/log.ts";
 import { openCodexSession, type CodexSignInCheck } from "../src/session.ts";
 import {
@@ -828,9 +830,8 @@ describe("the mode table", () => {
         expect(clean.args).toContain("plugins.own-plugin.enabled=false");
         expect(clean.args).toContain("apps.own-app.enabled=false");
         expect(clean.args.join(" ")).toContain(
-          '{name="own-skill",enabled=false}',
+          '{path="/home/.codex/skills/own-skill/SKILL.md",enabled=false}',
         );
-        expect(clean.args.join(" ")).not.toContain("repo-skill");
         yield* startOn(fake, session, readOnly);
         expect(fake.processes).toHaveLength(2);
         expect(written(clean, "turn/start")[0]!.params).toMatchObject({
@@ -1772,7 +1773,13 @@ describe("what the first tests missed", () => {
               data: [
                 {
                   cwd: "/work",
-                  skills: [{ name: "own-skill", scope: "user", enabled: true }],
+                  skills: [
+                    {
+                      name: "own-skill",
+                      path: "/home/.codex/skills/own-skill/SKILL.md",
+                      enabled: true,
+                    },
+                  ],
                   errors: [],
                 },
               ],
@@ -1781,7 +1788,7 @@ describe("what the first tests missed", () => {
     ],
   ] as const) {
     test(`a clean session is refused when Codex reports ${what}`, async () => {
-      fake0 = codex(reply as never);
+      fake0 = codex(reply);
       const exit = await Effect.runPromiseExit(
         Effect.scoped(
           openCodexSession({
@@ -1804,6 +1811,92 @@ describe("what the first tests missed", () => {
     expect(turnSettings(write, "allow").approvalPolicy).toBe("never");
     expect(turnSettings(write, "ask").approvalPolicy).toBe("on-request");
     expect(turnSettings(readOnly, "ask").approvalPolicy).toBe("never");
+  });
+
+  test.each(["own", "clean"] as const)(
+    "%s Codex allows the selected skill path and disables its same-name copy",
+    (configuration) => {
+      const args = launchArguments(
+        configuration,
+        {
+          mcpServers: [],
+          plugins: [],
+          apps: [],
+          exclude: [],
+          skills: [
+            { path: "/home/.agents/skills/neuve/SKILL.md", enabled: true },
+            { path: "/carried skills/neuve/SKILL.md", enabled: false },
+          ],
+        },
+        undefined,
+      );
+      expect(args).toContain(
+        'skills.config=[{path="/home/.agents/skills/neuve/SKILL.md",enabled=true},{path="/carried skills/neuve/SKILL.md",enabled=false}]',
+      );
+      expect(args).toContain("skills.bundled.enabled=false");
+      expect(args.includes("features.hooks=false")).toBe(
+        configuration === "clean",
+      );
+    },
+  );
+
+  test.each([
+    { label: "a different spelling of an allowed skill", enabled: true },
+    { label: "an allowed skill that Codex leaves disabled", enabled: false },
+  ])("Codex starts with $label", async ({ enabled }) => {
+    const project = resolve(import.meta.dir, "../../../apps/neuve-cli/skills");
+    const lowerCase = `${project}/neuve/skill.md`;
+    const path = enabled
+      ? await realpath(lowerCase).then(
+          () => lowerCase,
+          () => `${project}/neuve/./SKILL.md`,
+        )
+      : `${project}/neuve/SKILL.md`;
+    const flag = `skills.config=[{path=${JSON.stringify(path)},enabled=true}]`;
+    const fake = codex((message, process) =>
+      message.method === "skills/list"
+        ? {
+            data: [
+              {
+                skills: [
+                  {
+                    name: "neuve",
+                    path,
+                    enabled: enabled && process.args.includes(flag),
+                  },
+                ],
+              },
+            ],
+          }
+        : undefined,
+    );
+    const logs: unknown[] = [];
+    const session = await Effect.runPromise(
+      Effect.scoped(
+        openCodexSession({
+          account,
+          program: "/test/codex",
+          cwd: "/work",
+          environment: {},
+          policy: {
+            ...policy,
+            skillRoots: { user: project, project, carried: undefined },
+          },
+          start: { kind: "new" },
+          stopWait: "10 millis",
+        }),
+      ).pipe(
+        Effect.provide(fake.layer),
+        Effect.provide(
+          Logger.layer([Logger.make(({ message }) => logs.push(message))]),
+        ),
+      ),
+    );
+    expect(session.nativeSessionId).toBe("thread-1");
+    expect(fake.current().args).toContain(flag);
+    expect(logs).toEqual(
+      enabled ? [] : [["codex: skills were not enabled", ["neuve"]]],
+    );
   });
 
   test("under ask, a request during a clean turn is declined, and one from Neuve's own server too", async () => {

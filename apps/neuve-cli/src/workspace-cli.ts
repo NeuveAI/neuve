@@ -630,6 +630,7 @@ async function workspace(args: readonly string[]): Promise<number> {
           home:
             configuration.environment.HOME ??
             (await import("node:os")).homedir(),
+          carriedSkills: configuration.skills,
         }),
       ),
     );

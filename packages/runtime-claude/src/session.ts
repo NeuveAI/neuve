@@ -243,6 +243,11 @@ export const openClaudeSession = (
           "reserved-input-key",
         );
     }
+    const plugin = policy.claudeSkillPlugin;
+    const skillNames = plugin?.names ?? [];
+    const skillInput = z.object({ skill: z.string() });
+    const skillTool = (wireName: string) =>
+      wireName === "Skill" && skillNames.length > 0;
     const context = yield* Effect.context<never>();
     const runPromise = Effect.runPromiseWith(context);
     const queue = yield* Queue.unbounded<RuntimeEvent, Cause.Done>();
@@ -674,6 +679,20 @@ export const openClaudeSession = (
                   behavior: "allow",
                   updatedInput: input,
                 } satisfies PermissionResult;
+              if (skillTool(wireName)) {
+                const target = skillInput.safeParse(input);
+                return turn !== undefined &&
+                  turn.ending === undefined &&
+                  !stopped &&
+                  !options.signal.aborted &&
+                  target.success &&
+                  skillNames.includes(target.data.skill)
+                  ? ({
+                      behavior: "allow",
+                      updatedInput: input,
+                    } satisfies PermissionResult)
+                  : deny();
+              }
               if (definition === undefined) {
                 yield* dieProtocolLocked("permission-unknown-tool");
                 return deny();
@@ -1061,24 +1080,28 @@ export const openClaudeSession = (
           pathToClaudeCodeExecutable: config.executable,
           env: childEnvironment(config.environment, account, config.oauthToken),
           cwd: config.cwd,
-          tools: [],
+          tools: plugin === undefined ? [] : ["Skill"],
           settingSources: [],
-          // The live PreToolUse experiment used false; true suppresses the fallback hook.
-          // settingSources remains empty: only this query's SDK hook is registered.
-          settings: { disableAllHooks: false },
+          // Disable skill and plugin hooks. SDK callbacks still run.
+          settings: { disableAllHooks: true },
           hooks: {
             PreToolUse: [
               { matcher: "mcp__neuve__.*", hooks: [server.stampToolUseId] },
             ],
           },
           strictMcpConfig: true,
-          skills: [],
+          skills: [...skillNames],
+          ...(plugin === undefined
+            ? {}
+            : { plugins: [{ type: "local", path: plugin.path }] }),
           systemPrompt: policy.systemPrompt,
           mcpServers: { neuve: server },
-          allowedTools:
-            policy.approvalPolicy === "allow"
+          allowedTools: [
+            ...skillNames.map((name) => `Skill(${name})`),
+            ...(policy.approvalPolicy === "allow"
               ? policy.tools.map((tool) => `mcp__neuve__${tool.name}`)
-              : [],
+              : []),
+          ],
           permissionMode: "default",
           canUseTool,
           ...(selectedModel === undefined
@@ -1377,6 +1400,7 @@ export const openClaudeSession = (
                           const name = frame.event.content_block.name;
                           if (
                             !(name === "StructuredOutput" && turn.final) &&
+                            !skillTool(name) &&
                             !policy.tools.some(
                               (tool) => `mcp__neuve__${tool.name}` === name,
                             )
@@ -1411,6 +1435,7 @@ export const openClaudeSession = (
                             !(
                               block.name === "StructuredOutput" && turn.final
                             ) &&
+                            !skillTool(block.name) &&
                             !policy.tools.some(
                               (tool) =>
                                 `mcp__neuve__${tool.name}` === block.name,
