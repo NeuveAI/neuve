@@ -20,6 +20,10 @@
     "./sign-in-command": {
       "types": "./.types/src/sign-in-command.d.ts",
       "default": "./src/sign-in-command.ts"
+    },
+    "./skills": {
+      "types": "./.types/src/skills.d.ts",
+      "default": "./src/skills.ts"
     }
   },
   "dependencies": {

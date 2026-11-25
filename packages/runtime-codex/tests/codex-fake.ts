@@ -115,17 +115,30 @@ const answers: Record<string, (params: any, process: Process) => unknown> = {
         skills: [
           {
             name: "own-skill",
+            path: "/home/.codex/skills/own-skill/SKILL.md",
             scope: "user",
             enabled: !process.args
               .join(" ")
-              .includes('{name="own-skill",enabled=false}'),
+              .includes(
+                '{path="/home/.codex/skills/own-skill/SKILL.md",enabled=false}',
+              ),
           },
           {
             name: "bundled-skill",
+            path: "/home/.codex/.system/bundled-skill/SKILL.md",
             scope: "system",
             enabled: !process.args.includes("skills.bundled.enabled=false"),
           },
-          { name: "repo-skill", scope: "repo", enabled: true },
+          {
+            name: "repo-skill",
+            path: "/work/.agents/skills/repo-skill/SKILL.md",
+            scope: "repo",
+            enabled: !process.args
+              .join(" ")
+              .includes(
+                '{path="/work/.agents/skills/repo-skill/SKILL.md",enabled=false}',
+              ),
+          },
         ],
         errors: [],
       },

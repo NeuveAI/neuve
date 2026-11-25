@@ -321,7 +321,7 @@ export class Channel {
 		registry.install(messaging(options.directory));
 		registry.install(
 			defineExtension({ name: "ace-channel", sections: [
-				room.section(options, chat => channel.#builds.agent(chat)?.role), instructions(options.skills),
+				room.section(options, chat => channel.#builds.agent(chat)?.role), instructions(options.models, options.skills),
 			] }),
 		);
 		registry.install(approvals.extension);

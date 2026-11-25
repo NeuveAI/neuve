@@ -19,6 +19,8 @@ import type { HooksListParams } from "./v2/HooksListParams";
 import type { HooksListResponse } from "./v2/HooksListResponse";
 import type { SkillsListParams } from "./v2/SkillsListParams";
 import type { SkillsListResponse } from "./v2/SkillsListResponse";
+import type { SkillsExtraRootsSetParams } from "./v2/SkillsExtraRootsSetParams";
+import type { SkillsExtraRootsSetResponse } from "./v2/SkillsExtraRootsSetResponse";
 import type { AppsListParams } from "./v2/AppsListParams";
 import type { AppsListResponse } from "./v2/AppsListResponse";
 import type { ListMcpServerStatusParams } from "./v2/ListMcpServerStatusParams";
@@ -98,6 +100,7 @@ export type ClientMethods = {
   "account/rateLimits/read": { params: GetAccountRateLimitsParams; response: GetAccountRateLimitsResponse };
   "hooks/list": { params: HooksListParams; response: HooksListResponse };
   "skills/list": { params: SkillsListParams; response: SkillsListResponse };
+  "skills/extraRoots/set": { params: SkillsExtraRootsSetParams; response: SkillsExtraRootsSetResponse };
   "app/list": { params: AppsListParams; response: AppsListResponse };
   "mcpServerStatus/list": { params: ListMcpServerStatusParams; response: ListMcpServerStatusResponse };
   "thread/start": { params: ThreadStartParams; response: ThreadStartResponse };

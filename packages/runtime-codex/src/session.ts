@@ -1,5 +1,6 @@
 /** Every turn ends through `finish`, which emits one terminal event and ignores later endings. See `PROTOCOL.md`. */
 import { randomBytes } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -26,6 +27,7 @@ import {
   type TurnWorkspace,
   type WorkKind,
 } from "@neuve/runtime";
+import { findSkills } from "@neuve/runtime/skills";
 import {
   Cause,
   Deferred,
@@ -321,7 +323,9 @@ export const openCodexSession = Effect.fnUntraced(function* (
   let model = policy.model;
   let threadModel: string | undefined;
   let threadId = "";
-  let own: OwnSettings | undefined;
+  let own:
+    | { settings: OwnSettings; allowedSkills: ReadonlyMap<string, string> }
+    | undefined;
   let current: Current | undefined;
   let lastCheckedToken: string | undefined;
   let generation = 0;
@@ -1088,47 +1092,60 @@ export const openCodexSession = Effect.fnUntraced(function* (
       ? Effect.fail(turnFailed("session-stopped"))
       : ask(current.connection, decoder, run);
 
-  /** The names of the person's own settings, read once through a process that runs none of them. */
-  const readOwn = Effect.gen(function* () {
-    // The probe serves no Neuve server, so every name it returns belongs to the person.
-    const probe = yield* startProcess("clean", EMPTY, undefined, options.cwd);
-    const names = yield* Effect.gen(function* () {
-      const config = Decode.ConfigAnswer.parse(
-        yield* probe.connection.request("config/read", { cwd: options.cwd }),
-      ).config;
-      const skills = Decode.SkillsAnswer.parse(
-        yield* probe.connection.request("skills/list", { cwds: [options.cwd] }),
+  const listSkills = (connection: CodexConnection) =>
+    Effect.gen(function* () {
+      const data = Decode.SkillsAnswer.parse(
+        yield* connection.request("skills/list", { cwds: [options.cwd] }),
+      ).data;
+      return data.flatMap((entry) => entry.skills);
+    });
+  const roots = policy.skillRoots;
+  const carried = roots?.carried;
+  const addCarried = (connection: CodexConnection) =>
+    carried === undefined
+      ? Effect.void
+      : connection
+          .request("skills/extraRoots/set", { extraRoots: [carried] })
+          .pipe(Effect.asVoid);
+  const readOwn = (skills: ReadonlyMap<string, string>) =>
+    Effect.gen(function* () {
+      const probe = yield* startProcess(
+        roots === undefined ? "clean" : "own",
+        EMPTY,
+        undefined,
+        options.cwd,
       );
-      return {
-        mcpServers: Object.keys(config.mcp_servers ?? {}),
-        plugins: Object.keys(config.plugins ?? {}),
-        apps: Object.keys(config.apps ?? {}).filter(
-          (name) => name !== "_default",
-        ),
-        skills: [
-          ...new Set(
-            skills.data.flatMap((entry) =>
-              entry.skills
-                .filter((skill) => skill.scope !== "repo")
-                .map((skill) => skill.name),
-            ),
+      const names = yield* Effect.gen(function* () {
+        yield* addCarried(probe.connection);
+        const config = Decode.ConfigAnswer.parse(
+          yield* probe.connection.request("config/read", { cwd: options.cwd }),
+        ).config;
+        const discovered = yield* listSkills(probe.connection);
+        return {
+          mcpServers: Object.keys(config.mcp_servers ?? {}),
+          plugins: Object.keys(config.plugins ?? {}),
+          apps: Object.keys(config.apps ?? {}).filter(
+            (name) => name !== "_default",
           ),
-        ],
-        exclude: config.shell_environment_policy?.exclude ?? [],
-      } satisfies OwnSettings;
-    }).pipe(
-      Effect.ensuring(closeScope(probe.scope)),
-      Effect.catchCause(() => Effect.fail(unavailable("start-failed"))),
-    );
-    for (const [list, label] of [
-      [names.mcpServers, "server"],
-      [names.plugins, "plugin"],
-      [names.apps, "app"],
-      [names.skills, "skill"],
-    ] as const)
-      list.forEach((name, i) => log?.know(name, `<${label}-${i + 1}>`));
-    return names;
-  });
+          skills: discovered.map(({ path, name }) => ({
+            path,
+            enabled: skills.get(path) === name,
+          })),
+          exclude: config.shell_environment_policy?.exclude ?? [],
+        } satisfies OwnSettings;
+      }).pipe(
+        Effect.ensuring(closeScope(probe.scope)),
+        Effect.catchCause(() => Effect.fail(unavailable("start-failed"))),
+      );
+      for (const [list, label] of [
+        [names.mcpServers, "server"],
+        [names.plugins, "plugin"],
+        [names.apps, "app"],
+        [names.skills.map(({ path }) => path), "skill"],
+      ] as const)
+        list.forEach((name, i) => log?.know(name, `<${label}-${i + 1}>`));
+      return names;
+    });
 
   /** A server that failed to start also lists no tools, so check its effective configuration. */
   const verifyClean = (connection: CodexConnection) =>
@@ -1141,9 +1158,6 @@ export const openCodexSession = Effect.fnUntraced(function* (
       );
       const servers = Decode.ServerStatusAnswer.parse(
         yield* connection.request("mcpServerStatus/list", { limit: 1000 }),
-      );
-      const skills = Decode.SkillsAnswer.parse(
-        yield* connection.request("skills/list", { cwds: [options.cwd] }),
       );
       const features = config.features ?? {};
       return (
@@ -1158,12 +1172,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         servers.nextCursor == null &&
         servers.data
           .filter((server) => !ours(server.name))
-          .every((server) => Object.keys(server.tools ?? {}).length === 0) &&
-        skills.data.every((entry) =>
-          entry.skills.every(
-            (skill) => skill.scope === "repo" || !skill.enabled,
-          ),
-        )
+          .every((server) => Object.keys(server.tools ?? {}).length === 0)
       );
     }).pipe(Effect.catchCause(() => Effect.succeed(false)));
 
@@ -1261,28 +1270,48 @@ export const openCodexSession = Effect.fnUntraced(function* (
       current = undefined;
       if (previous !== undefined) yield* closeScope(previous.scope);
       yield* still(active);
-      if (configuration === "clean") {
-        // Read at each clean start, so a server the person added since is switched off by name.
-        own = yield* readOwn;
+      if (configuration === "clean" || own === undefined) {
+        const allowedSkills =
+          roots === undefined
+            ? new Map()
+            : yield* Effect.tryPromise({
+                try: async () =>
+                  new Map(
+                    await Promise.all(
+                      (await findSkills(roots)).map(
+                        async ({ name, folder }) =>
+                          [
+                            await realpath(join(folder, "SKILL.md")),
+                            name,
+                          ] as const,
+                      ),
+                    ),
+                  ),
+                catch: () => unavailable("start-failed"),
+              });
+        own = { settings: yield* readOwn(allowedSkills), allowedSkills };
         yield* still(active);
+      }
+      const { settings, allowedSkills } = own;
+      if (configuration === "clean") {
         // A server of the person's under Neuve's name would take Neuve's place: refused.
-        if (collides(own)) {
+        if (collides(settings)) {
           yield* Effect.logWarning(
             "codex: a server of the person's has Neuve's name",
           );
           return yield* unavailable("start-failed");
         }
-        if (unaddressable(own) !== undefined)
+        if (unaddressable(settings) !== undefined)
           return yield* unavailable("start-failed");
       }
       const next = yield* startProcess(
         configuration,
-        own ?? EMPTY,
+        settings,
         toolServer,
         options.cwd,
         neuveSignIn?.tokenCommand,
       );
-      yield* prepare(next, configuration, active).pipe(
+      yield* prepare(next, configuration, allowedSkills, active).pipe(
         // A process that died after its last answer failed its preparation too.
         // One scheduler turn first, so a death the client has already read is seen here.
         Effect.andThen(Effect.yieldNow),
@@ -1302,9 +1331,23 @@ export const openCodexSession = Effect.fnUntraced(function* (
   const prepare = (
     next: Current,
     configuration: Configuration,
+    skills: ReadonlyMap<string, string>,
     active: Turn | undefined,
   ) =>
     Effect.gen(function* () {
+      const enabled = yield* Effect.gen(function* () {
+        yield* addCarried(next.connection);
+        return (yield* listSkills(next.connection)).filter(
+          (skill) => skill.enabled,
+        );
+      }).pipe(
+        Effect.catchCause(() => Effect.fail(unavailable("start-failed"))),
+      );
+      if (
+        enabled.length !== skills.size ||
+        enabled.some(({ name, path }) => skills.get(path) !== name)
+      )
+        return yield* unavailable("start-failed");
       if (configuration === "clean" && !(yield* verifyClean(next.connection)))
         return yield* unavailable("start-failed");
       yield* still(active);
@@ -1359,7 +1402,9 @@ export const openCodexSession = Effect.fnUntraced(function* (
   // the person's own Codex instead.
   yield* ensure("clean").pipe(
     Effect.catchTag("RuntimeUnavailable", (error) =>
-      own !== undefined && unaddressable(own) !== undefined && !collides(own)
+      own !== undefined &&
+      unaddressable(own.settings) !== undefined &&
+      !collides(own.settings)
         ? ensure("own")
         : Effect.fail(error),
     ),

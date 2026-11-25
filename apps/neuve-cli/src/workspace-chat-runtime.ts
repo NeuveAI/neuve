@@ -44,6 +44,7 @@ import { thisBuild } from "./review-worker.ts";
 export type ChatRuntimeSources = {
   registry: RuntimeRegistryShape;
   statuses: AccountStatusSource;
+  skills?: { home: string; carried?: string | undefined };
   unavailable?(): boolean;
   /** Where this process's runtime sessions write their protocol logs: its channel's own folder. */
   logIn?(folder: string, report: (path: string, error: unknown) => void): void;
@@ -58,6 +59,7 @@ type ClaudeRuntimeConfig = Exclude<
 /** One lazy registry and account-store scope, shared by all chats in this process. */
 export function productionChatSources(options: {
   home: string;
+  carriedSkills?: string | undefined;
   claude?: ClaudeRuntimeConfig;
   environment?: Readonly<Record<string, string | undefined>>;
 }): ChatRuntimeSources & {
@@ -141,6 +143,7 @@ export function productionChatSources(options: {
   const subscriptions = new Set<() => void>();
   let closing: Promise<void> | undefined;
   return {
+    skills: { home: options.home, carried: options.carriedSkills },
     registry: {
       accountEvents: Stream.unwrap(
         Effect.tryPromise(() => runtime.runPromise(RuntimeRegistry)).pipe(
@@ -332,6 +335,7 @@ export async function workspaceChatRuntime(
   const bridge = new ChatRuntimeBridge({
     registry: sources.registry,
     heads: await NativeHeads.open(stateDirectory),
+    ...(sources.skills === undefined ? {} : { skills: sources.skills }),
     log,
   });
   try {

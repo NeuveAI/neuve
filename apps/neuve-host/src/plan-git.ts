@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { userSkillRoots } from "@ace/channel";
+import { skillRoots } from "@neuve/runtime/skills";
 import { toolArguments, toolRefusal } from "@ace/channel/tool-arguments";
 import type { Context } from "@earendil-works/chord";
 import { defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
@@ -132,14 +132,11 @@ async function confined(tree: Tree, path: string, context: Context, allowMissing
 
 async function skillPath(tree: Tree, env: ExecutionEnv, path: string, kind: "file" | "directory", context: Context) {
 	const home = getOrThrow(await env.absolutePath("~", context));
-	const candidates = [
-		...[...userSkillRoots(home), ...(config.skills ? [config.skills] : [])].map(alias => ({ alias, fixed: undefined })),
-		...[".agents/skills", ".claude/skills"].map(dir => ({ alias: resolve(env.cwd, dir), fixed: join(tree.root, dir) })),
-	];
-	const roots = await Promise.all(candidates.map(async ({ alias, fixed }) => {
+	const { user, project, carried } = skillRoots({ home, cwd: env.cwd, carried: config.skills });
+	const expectedProjectRoot = join(tree.root, relative(env.cwd, project));
+	const roots = await Promise.all([user, project, carried].filter(alias => alias !== undefined).map(async alias => {
 		const actual = await realpath(alias).catch(() => undefined);
-		// The checkout cannot make another folder an allowed root by replacing a repository root.
-		return { alias, actual: fixed === undefined || fixed === actual ? actual : undefined };
+		return { alias, actual: alias !== project || actual === expectedProjectRoot ? actual : undefined };
 	}));
 	const requested = resolve(env.cwd, path);
 	if (!roots.some(({ alias, actual }) => actual !== undefined

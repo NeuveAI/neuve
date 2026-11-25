@@ -61,7 +61,7 @@ export const ServerStatusAnswer = loose({
 export const SkillsAnswer = loose({
   data: z.array(
     loose({
-      skills: z.array(loose({ name: text, scope: text, enabled: z.boolean() })),
+      skills: z.array(loose({ name: text, path: text, enabled: z.boolean() })),
     }),
   ),
 });
