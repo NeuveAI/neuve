@@ -5,6 +5,7 @@ import type { Listing } from "@ace/host/protocol";
 import { NOT_ALLOWED_TO_APPROVE, type PlanCommentActions, type PlanSelection, PlanView } from "@ace/ui";
 
 import { useAgentAvatar } from "../agent-avatar";
+import { usePlanReturn } from "../composer-mode";
 import { useDetails } from "../details";
 import { host } from "../host";
 import { planView } from "../plan-card";
@@ -36,6 +37,7 @@ export function Plan({ channel, chat, user, plan }: Props) {
 	const [loaded, setLoaded] = useState<Loaded>();
 	const [approving, setApproving] = useState(false);
 	const [error, setError] = useState<string>();
+	const returnFromPlan = usePlanReturn(channel.id, chat);
 
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
 	const id = shown?.id;
@@ -69,10 +71,12 @@ export function Plan({ channel, chat, user, plan }: Props) {
 
 	async function approve() {
 		if (!current?.hash) return;
+		const returned = returnFromPlan();
 		setApproving(true);
 		setError(undefined);
 		try {
 			await host.channel(channel.id, { op: "plan-approve", chat, author: user, plan: shown!.id, hash: current.hash });
+			returned();
 		} catch (cause) {
 			setError((cause as Error).message);
 		} finally {

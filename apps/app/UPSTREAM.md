@@ -38,3 +38,5 @@ The integration changes these boundaries:
 - The root check invokes each actual Ace compiler and its Vite build with output on the configured external volume. The unsupported direct Vite WebSocket proxy is removed. `bun workspace` owns the validated same-origin coding listener.
 
 The Base UI dependency patch from upstream is not applied. The root lockfile separately pins compatible Shiki dependencies for the Pierre and ProseMirror integration, and shares the React declaration version across the two frontend stacks. These are dependency-resolution changes, not component copies or type casts. The two apps retain their own React and Motion runtime versions.
+
+Approving a plan returns the approving browser's composer to the mode it had before Plan: `composer-mode.ts` keeps that mode per chat when the menu enters Plan, and the Plan tab (`panels/plan.tsx`) and the plan card's approval in `conversation.tsx` restore it once approval succeeds, unless the person has since left Plan.

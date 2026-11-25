@@ -19,6 +19,7 @@ import { isAgentAlias } from "./agent-mention";
 import { agentAuthor, agentAuthors, buildCards, readOnly } from "./build-card";
 import { Checks } from "./checks";
 import { Composer } from "./composer";
+import { usePlanReturn } from "./composer-mode";
 import { DeleteMessage } from "./delete-message";
 import { desktop } from "./desktop";
 import { EditMessage } from "./edit-message";
@@ -199,17 +200,20 @@ export function Conversation(
 			builds,
 		],
 	);
+	const returnFromPlan = usePlanReturn(channel.id, id);
 	const planActions = useMemo(
 		() => ({
 			mayApprove: mayAsk,
 			open: (plan: string) => openPlan?.(plan),
-			approve: (plan: string, hash: string) =>
-				host.channel(channel.id, { op: "plan-approve", chat: id, author: user, plan, hash }).then(
-					() => {},
+			approve: (plan: string, hash: string) => {
+				const returned = returnFromPlan();
+				return host.channel(channel.id, { op: "plan-approve", chat: id, author: user, plan, hash }).then(
+					() => returned(),
 					(error: Error) => void toast.error("Could not approve the plan", { description: error.message }),
-				),
+				);
+			},
 		}),
-		[mayAsk, openPlan, channel.id, id, user],
+		[mayAsk, openPlan, channel.id, id, user, returnFromPlan],
 	);
 	const buildActions = useMemo(
 		() => ({

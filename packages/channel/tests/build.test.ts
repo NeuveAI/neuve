@@ -1,3 +1,4 @@
+import { setChatMode } from "../src/plan-mode";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import { readFile, symlink, writeFile } from "node:fs/promises";
@@ -153,7 +154,7 @@ test("approval starts one ownerless implementer with the marked brief and write 
 		expect(await readFile(join(worktree!.path, "implemented.txt"), "utf8")).toBe("worktree only");
 		const info = await fixture.channel.info();
 		expect(info).toMatchObject({ chats: [
-			{ id: 1, mode: "plan", model: MODEL, effort: "high" },
+			{ id: 1, mode: "ace", model: MODEL, effort: "high" },
 			{ id: chat, mode: "ace", model: MODEL, effort: "high", cwd: worktree!.path, build: { id: build.id, role: "implementer" } },
 		] });
 		expect(info.chats[1]).not.toHaveProperty("parent");
@@ -165,12 +166,13 @@ test("approval starts one ownerless implementer with the marked brief and write 
 		finish.resolve();
 		await agent.until("reply", event => event.text === "Implemented.");
 		fixture.script(
-			tool("write", { path: "planning.txt", content: "blocked" }, "planning-write"),
-			fauxAssistantMessage("The write was refused."),
+			tool("write", { path: "planning.txt", content: "approved" }, "planning-write"),
+			fauxAssistantMessage("The approved chat can write."),
 		);
 		const receipt = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Try writing." });
 		await fixture.request({ op: "wait", submission: receipt.submission });
-		expect(await watch.until("result", event => event.call === "planning-write")).toMatchObject({ error: true });
+		expect(await watch.until("result", event => event.call === "planning-write")).toMatchObject({ error: false });
+		expect(await readFile(join(fixture.lane.path, "planning.txt"), "utf8")).toBe("approved");
 		await fixture.channel.close();
 		expect(run.said.filter(value => value.chat === chat)).toEqual([]);
 		expect(run.runs.filter(value => value.chat === chat)).toEqual([]);
@@ -872,6 +874,7 @@ test("agent start refuses invalid arguments, duplicate roles, and callers outsid
 	const other = await fixture.request<{ chat: number }>({ op: "chat", author: OWNER });
 	await refuse(await fixture.watch({ op: "watch", chat: other.chat }), other.chat, "not-agent", { role: "reviewer" },
 		"Only an agent of a plan can ask the host to start another agent.");
+	await run.harness.commit(tx => setChatMode(tx, ROOT_CONVERSATION_ID, "plan"), context);
 	await refuse(run.watch, 1, "planning-start", { role: "reviewer" }, "Plan mode is read-only. The agent_start tool is unavailable in plan mode.");
 	expect(run.worktrees).toHaveLength(2);
 	expect((await fixture.channel.info()).chats.filter(chat => chat.build)).toHaveLength(2);
@@ -1548,6 +1551,7 @@ test("an ask mention rechecks a plan paused during model selection", async () =>
 	const run = await setup();
 	const { fixture, watch } = run;
 	const { chat } = await startBuild(run);
+	await run.harness.commit(tx => setChatMode(tx, ROOT_CONVERSATION_ID, "plan"), context);
 	const { models } = fixture.scripted;
 	const selecting = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
@@ -1936,6 +1940,7 @@ test("agent messages refuse unknown recipients, outsiders, self, empty text, and
 	await refuse(other.chat, outside, "outside-build", valid, "Only an agent of a plan can message another agent of that plan.");
 	await refuse(chat, agent, "same-chat", { to: "implementer", text: "Ready." }, "Send the message to another agent of this plan.");
 	await refuse(chat, agent, "empty-text", { ...valid, text: "  " }, "Write a message to send.");
+	await run.harness.commit(tx => setChatMode(tx, ROOT_CONVERSATION_ID, "plan"), context);
 	await refuse(1, watch, "planning-message", valid, "Plan mode is read-only. The agent_message tool is unavailable in plan mode.");
 
 	const closedStates = [
