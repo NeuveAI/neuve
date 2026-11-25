@@ -1597,9 +1597,7 @@ export const openClaudeSession = (
                         if (turn.ending === undefined && hasQueuedWork) return;
                         if (turn.cleanup !== undefined) return;
                         let outcome = turn.failedOutcome ?? resultOutcome;
-                        // SDK retries have already ended. Only typed transient evidence plus
-                        // saved provider history authorizes the harness to consider continuing.
-                        // Accounting faults, refusals and ambiguous tool results never enter here.
+                        // The SDK emits this result after its own attempts end.
                         const typedTransient =
                           ("api_error_status" in frame &&
                             frame.api_error_status != null &&
@@ -1625,18 +1623,32 @@ export const openClaudeSession = (
                           outcome.disposition === "reusable" &&
                           outcome.failure._tag === "TurnFailed" &&
                           (outcome.failure.reason === "provider-unavailable" ||
-                            outcome.failure.reason === "provider-failed") &&
-                          (savedTools || (!turn.toolRan && callIds.size === 0))
+                            outcome.failure.reason === "provider-failed")
                         ) {
-                          outcome = {
-                            ...outcome,
-                            retry: {
-                              kind: "transient-provider",
-                              continuation: savedTools
-                                ? "resume"
-                                : "repeat-request",
-                            },
-                          };
+                          if (
+                            savedTools ||
+                            (!turn.toolRan &&
+                              callIds.size === 0 &&
+                              turn.sends.size === 1)
+                          ) {
+                            outcome = {
+                              ...outcome,
+                              retry: {
+                                kind: "transient-provider",
+                                continuation: savedTools
+                                  ? "resume"
+                                  : "repeat-request",
+                              },
+                            };
+                          } else if (
+                            !savedTools &&
+                            (turn.toolRan || callIds.size > 0)
+                          ) {
+                            outcome = failOutcome(
+                              "ambiguous-tool-effect",
+                              "reusable",
+                            );
+                          }
                         }
                         yield* finishLocked(turn, outcome);
                       }

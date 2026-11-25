@@ -582,24 +582,28 @@ const observedFetch = (
         /authorization|api[-_]?key|cookie/i.test(name) && value !== "",
     );
     if (authenticated && call.credentialInspection !== "ephemeral") {
-      const { CredentialEpochId, InspectionBudget } =
-        await import("../capture/credential-detectors.ts");
-      const registration = await call.credentialInspection.register({
-        epoch: CredentialEpochId.parse(call.id),
-        headers,
-        budget: new InspectionBudget(),
-        deduplicate: true,
-        ...(signal === undefined || signal === null ? {} : { signal }),
-      });
-      if (registration.status !== "registered")
-        throw new Error("Durable credential registration is unavailable");
-      call.capture({
-        type: "credential.registration",
-        scope: { runId: call.scope.runId },
-        callId: call.id,
-        epochId: registration.epoch,
-        policy: CREDENTIAL_INSPECTION_POLICY,
-      });
+      try {
+        const { CredentialEpochId, InspectionBudget } =
+          await import("../capture/credential-detectors.ts");
+        const registration = await call.credentialInspection.register({
+          epoch: CredentialEpochId.parse(call.id),
+          headers,
+          budget: new InspectionBudget(),
+          deduplicate: true,
+          ...(signal === undefined || signal === null ? {} : { signal }),
+        });
+        if (registration.status !== "registered")
+          throw new Error("Durable credential registration is unavailable");
+        call.capture({
+          type: "credential.registration",
+          scope: { runId: call.scope.runId },
+          callId: call.id,
+          epochId: registration.epoch,
+          policy: CREDENTIAL_INSPECTION_POLICY,
+        });
+      } catch (cause) {
+        throw captureFailed(call, "credential registration", cause);
+      }
     }
     await record(call, {
       type: "model.request",
@@ -635,12 +639,16 @@ const observedFetch = (
     );
     if (call.credentialGuard) {
       if (call.credentialInspection === "ephemeral")
-        await rememberEphemeralCredentials(
-          call.capture,
-          call.scope.runId,
-          call.id,
-          headers,
-        );
+        try {
+          await rememberEphemeralCredentials(
+            call.capture,
+            call.scope.runId,
+            call.id,
+            headers,
+          );
+        } catch (cause) {
+          throw captureFailed(call, "credential registration", cause);
+        }
       await recordEvent(call, "credential_guard", { status: "pending" });
     }
     const requestEvidence = eventEvidence(

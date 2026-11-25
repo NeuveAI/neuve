@@ -258,6 +258,7 @@ export class FakeSession {
       const frame = this.fake.frames.shift();
       if (!frame) throw new Error("Unexpected model request");
       frame.beforeMessage?.();
+      if (frame.text) this.emit({ type: "text", text: frame.text });
       if (frame.failure) {
         this.emit({
           type: "turn.finished",
@@ -271,7 +272,6 @@ export class FakeSession {
         });
         return;
       }
-      if (frame.text) this.emit({ type: "text", text: frame.text });
       // A runtime without resumeInTurn names a point only at a completed turn's end.
       const point = frame.resumePoint ?? `point-${this.fake.requests.length}`;
       const inTurn = this.fake.capabilities.resumeInTurn;

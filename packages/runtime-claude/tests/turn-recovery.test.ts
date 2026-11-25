@@ -1,5 +1,4 @@
 // Reason: tolerate only a known content-free closure, while keeping accounting fail-closed.
-// These constructed boundary cases are NOT the November incident replay.
 import { expect, test } from "bun:test";
 import type {
   SDKMessage,
@@ -47,7 +46,7 @@ function published() {
   return collector;
 }
 
-test("late known block closure preserves published response without reopening closed usage", () => {
+test("recorded-order reconstruction preserves a published response after a late block closure", () => {
   const collector = published();
   const closing = close();
   expect(collector.isPublishedTail(closing)).toBe(true);

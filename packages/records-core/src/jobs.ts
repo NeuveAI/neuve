@@ -16,7 +16,13 @@ export const jobsFor = (event: RecordEvent): ReadonlyArray<JobRequest> => {
   switch (event.kind) {
     case "turn.recovery-recorded@1":
       return event.payload.state === "scheduled"
-        ? [{ kind: "chat.turn-retry@1", dedupeKey: `chat.turn-retry:${event.payload.turn}:${event.payload.attempt}`, runAt: event.payload.nextAt! }]
+        ? [
+            {
+              kind: "chat.turn-retry@1",
+              dedupeKey: `chat.turn-retry:${event.payload.turn}:${event.payload.attempt}`,
+              runAt: event.payload.nextAt!,
+            },
+          ]
         : [];
     case "capture.filed@1":
       return [
@@ -292,17 +298,17 @@ export const JOB_POLICIES: Readonly<Record<JobKind, JobPolicy>> = {
     deadline: Duration.minutes(10),
     stallLimit: 2,
   },
-  // A hand-enqueued check of the worker; it waits behind product work in its slot.
-  // One delivery of an already-budgeted harness retry. Queue transport never retries model work.
+  // Delivery only wakes the harness, so recovering a stalled job cannot repeat a model call.
   "chat.turn-retry@1": {
     slot: "interactive",
     priority: 1,
     order: "oldest",
-    maxAttempts: 1,
+    maxAttempts: 3,
     backoff: Schedule.recurs(0),
-    deadline: Duration.minutes(30),
-    stallLimit: 0,
+    deadline: Duration.seconds(15),
+    stallLimit: 2,
   },
+  // A hand-enqueued check of the worker; it waits behind product work in its slot.
   "worker.probe": {
     slot: "background",
     priority: 3,

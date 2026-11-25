@@ -137,6 +137,10 @@ test("completed tool needs a saved provider result carrier before continuation c
   const ambiguous = await run([...toolEntries(), inbound(transient())]);
   expect(ambiguous.effects).toBe(1);
   expect(ambiguous.ended.outcome.status).toBe("failed");
+  expect(ambiguous.ended.outcome).toMatchObject({
+    status: "failed",
+    failure: { reason: "ambiguous-tool-effect" },
+  });
   expect(ambiguous.ended.outcome).not.toHaveProperty("retry");
   const safe = await run([
     ...toolEntries(),
@@ -186,7 +190,7 @@ test("displayed transient-looking text and terminal account or refusal outcomes 
 });
 
 // Reason: the exceptional skip must be observable without leaking the provider body.
-// Constructed regression order, not the retained November incident.
+// Recorded-order reconstruction from the worker warning, not the retained November incident.
 test("skipped closing-frame diagnostic contains only shape, reason and logical turn", async () => {
   const partial = (
     event: SDKPartialAssistantMessage["event"],

@@ -510,9 +510,8 @@ for (const fault of [
   });
 }
 
-// Reason: a known, content-free block closure after publication must not fail the completed turn.
-// This is a constructed boundary regression, not a captured incident replay.
-test("R24 known block stop after message stop preserves the completed tool turn", async () => {
+// Reason: a known, content-free block closure after publication must preserve the completed turn.
+test("recorded-order reconstruction of a late block stop preserves the completed tool turn", async () => {
   const capture = await scenario({
     late: false,
     endTurn: true,

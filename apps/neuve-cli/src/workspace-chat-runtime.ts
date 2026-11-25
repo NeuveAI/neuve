@@ -1,5 +1,14 @@
-import { join } from "node:path";
-import { storeLocationIn } from "@neuve/records-core";
+import { basename, join } from "node:path";
+import { realpath } from "node:fs/promises";
+import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
+import { config } from "@ace/host/host-config";
+import { StorageProfile } from "../../../scripts/pi-storage.ts";
+import { Starter, storeLocationIn } from "@neuve/records-core";
+import {
+  budgetSharedWork,
+  closeWorkerBudget,
+  workerBudget,
+} from "../../../packages/harness/src/budget/local.ts";
 import {
   createModels,
   type Models,
@@ -335,11 +344,47 @@ export async function workspaceChatRuntime(
       cause: error instanceof Error ? error.message : String(error),
     }),
   );
-  const recovery = await turnRecoveryStore(storeLocationIn(join(stateDirectory, "turn-recovery")), log);
+  const profile = config.environment?.["NEUVE_WORKSPACE_PROFILE"];
+  const heads = await NativeHeads.open(stateDirectory);
+  let budget: ReturnType<typeof workerBudget> | undefined;
+  const sharedTransport = () =>
+    (budget ??= workerBudget().catch((error: unknown) => {
+      budget = undefined;
+      throw error;
+    }));
+  const recovery = await (async () => {
+    if (!profile) return undefined;
+    const { paths } = StorageProfile.parse(JSON.parse(profile));
+    const location = storeLocationIn(
+      join(await realpath(paths.captures), "coding"),
+    );
+    return turnRecoveryStore(location, {
+      namespace: basename(stateDirectory),
+      log,
+      transport: {
+        claim: async (request) =>
+          budgetSharedWork(await sharedTransport()).claim(request),
+        recover: async () => {
+          await (await sharedTransport()).recoverSharedWork();
+        },
+      },
+      wake: (signal) =>
+        Effect.runPromise(
+          Starter.ensureWorkerAt(location, {
+            command: thisBuild(),
+            waitForReady: true,
+          }).pipe(Effect.asVoid, Effect.provide(BunFileSystem.layer)),
+          { signal },
+        ),
+    });
+  })().catch(async (error: unknown) => {
+    await heads.close();
+    throw error;
+  });
   const bridge = new ChatRuntimeBridge({
     registry: sources.registry,
-    recovery: recovery.driver,
-    heads: await NativeHeads.open(stateDirectory),
+    ...(recovery === undefined ? {} : { recovery: recovery.driver }),
+    heads,
     ...(sources.skills === undefined ? {} : { skills: sources.skills }),
     log,
   });
@@ -357,12 +402,13 @@ export async function workspaceChatRuntime(
       close: async () => {
         await extension.close();
         await layer.close();
-        await recovery.close();
+        await recovery?.close();
+        if (budget) await closeWorkerBudget();
       },
     };
   } catch (error) {
     await bridge.close();
-    await recovery.close();
+    await recovery?.close();
     throw error;
   }
 }
