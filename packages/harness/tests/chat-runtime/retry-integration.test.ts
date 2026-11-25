@@ -456,7 +456,8 @@ test("Stop cancels a pending retry durably; its later queue delivery cannot star
   }
 }, 20_000);
 
-test("a potentially executed tool without a durable result ends visibly instead of retrying", async () => {
+// Reason: a late result can end the failed turn while a later turn can still use tools.
+test("an ambiguous tool effect stops only the turn that left the result", async () => {
   const directory = await mkdtemp(join(tmpdir(), "neuve-ambiguous-retry-"));
   const logs: { event: string; fields: Readonly<Record<string, unknown>> }[] =
     [];
@@ -509,6 +510,18 @@ test("a potentially executed tool without a durable result ends visibly instead 
     ).toBe(false);
     expect(run.fake.opened).toHaveLength(1);
     expect(run.executed).toEqual([9]);
+    gate.resolve({ content: [{ type: "text", text: "late result" }] });
+    expect((await work).status).toBe("unanswered");
+    run.fake.frames.push(
+      {
+        calls: [{ callId: "later-tool", toolName: "probe", input: { n: 10 } }],
+      },
+      { text: "answered with the later result" },
+    );
+    expect((await run.submit("Use a tool on this new turn.")).status).toBe(
+      "done",
+    );
+    expect(run.executed).toEqual([9, 10]);
   } finally {
     gate.resolve({ content: [{ type: "text", text: "late result" }] });
     await work;
@@ -517,6 +530,47 @@ test("a potentially executed tool without a durable result ends visibly instead 
     await rm(directory, { recursive: true, force: true });
   }
 }, 20_000);
+
+// Reason: orphaned Records statuses must not prevent attachment and use of a channel.
+test("channel attaches when recovery replay includes missing and invalid conversation IDs", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "neuve-orphaned-retry-"));
+  const failures: unknown[] = [];
+  const store = await turnRecoveryStore(storeLocationIn(directory), {
+    namespace: "channel",
+    wake: async () => {},
+    log: (event, fields) => {
+      if (event === "chat-runtime.retry.status.failed")
+        failures.push(fields.chat);
+    },
+  });
+  let run: Awaited<ReturnType<typeof fixture>> | undefined;
+  try {
+    for (const chat of ["987654", "invalid-chat"]) {
+      await store.driver.begin({
+        turn: `turn-${chat}`,
+        chat,
+        checkpoint: {
+          id: "request",
+          generation: "generation",
+          account: "subscription",
+          session: "session",
+          continuation: "continuation",
+          transcriptDigest: "a".repeat(64),
+          resultsDigest: "b".repeat(64),
+          continuationMode: "repeat-request",
+        },
+      });
+    }
+    run = await fixture({ recovery: store.driver });
+    run.fake.frames.push({ text: "channel is ready" });
+    expect((await run.submit("Can you answer?")).status).toBe("done");
+    expect(failures.sort()).toEqual(["987654", "invalid-chat"]);
+  } finally {
+    await run?.close();
+    await store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 async function sharedSchedule(run: Awaited<ReturnType<typeof setup>>) {
   const checkpoint = {

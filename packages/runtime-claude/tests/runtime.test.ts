@@ -1138,8 +1138,8 @@ test("retries: api_retry reaches the contract and recovered overload still compl
   );
 });
 
-// Reason: only the harness's durable policy may retry; provider wording never resends a prompt.
-test("refresh lock: displayed server_error does not silently resend the request", async () => {
+// Reason: a typed server error can pass the request back to the harness for retry.
+test("refresh lock: a typed server error allows the request to recover", async () => {
   await sessionTest(
     [
       open,
@@ -1151,22 +1151,37 @@ test("refresh lock: displayed server_error does not silently resend the request"
         ),
       ),
       inbound(errorResult("error_during_execution")),
+      offer,
+      inbound(assistant(undefined, "Signed in.")),
+      inbound(result()),
       close,
     ],
     (session, reader) =>
       Effect.gen(function* () {
         yield* session.startTurn(normal);
         expect(yield* reader.until("turn.finished")).toMatchObject({
-          outcome: { status: "failed", failure: { reason: "provider-failed" } },
+          outcome: {
+            status: "failed",
+            disposition: "reusable",
+            retry: {
+              kind: "transient-provider",
+              continuation: "repeat-request",
+            },
+          },
         });
         expect(
           reader.seen.filter((e) => e.type === "turn.started"),
         ).toHaveLength(1);
+        yield* session.startTurn({ ...normal, turnId: "retry" });
+        expect(yield* reader.until("turn.finished")).toMatchObject({
+          turnId: "retry",
+          outcome: { status: "completed" },
+        });
       }),
   );
 });
 
-test("refresh lock: a response delta prevents replaying a turn with visible progress", async () => {
+test("refresh lock: the runtime never resends a request after provisional output", async () => {
   await sessionTest(
     [
       open,

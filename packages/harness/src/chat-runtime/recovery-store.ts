@@ -27,6 +27,7 @@ import {
 import type { Log } from "./transcript.ts";
 
 const Request = z.union([z.string(), z.array(ContentBlock)]);
+type StatusListener = Parameters<TurnRecoveryDriver["subscribe"]>[0];
 export async function turnRecoveryStore(
   location: StoreLocation,
   options: {
@@ -53,19 +54,27 @@ export async function turnRecoveryStore(
     await runtime.dispose();
     throw error;
   }
-  const listeners = new Set<
-    (chat: string, status: TurnRetryStatusState) => Promise<void>
-  >();
+  const listeners = new Set<StatusListener>();
+  const notifyListener = async (
+    listener: StatusListener,
+    state: TurnRecovery.RecoveryState,
+    status: TurnRetryStatusState,
+  ) => {
+    const chat = state.value.chat.slice(prefix.length);
+    try {
+      await listener(chat, status);
+    } catch {
+      log("chat-runtime.retry.status.failed", {
+        chat,
+        turn: state.value.turn,
+        event: state.event,
+      });
+    }
+  };
   const notify = async (state: TurnRecovery.RecoveryState) => {
     const status = await runtime.runPromise(TurnRecovery.status(state));
-    for (const listener of listeners) {
-      await listener(state.value.chat.slice(prefix.length), status).catch(() =>
-        log("chat-runtime.retry.status.failed", {
-          turn: state.value.turn,
-          event: state.event,
-        }),
-      );
-    }
+    for (const listener of listeners)
+      await notifyListener(listener, state, status);
     return state;
   };
   const scoped = <T extends TurnRecovery.RecoveryOrigin>(input: T): T =>
@@ -83,8 +92,9 @@ export async function turnRecoveryStore(
         for (const state of await runtime.runPromise(
           TurnRecovery.statuses(prefix),
         ))
-          await listener(
-            state.value.chat.slice(prefix.length),
+          await notifyListener(
+            listener,
+            state,
             await runtime.runPromise(TurnRecovery.status(state)),
           );
       } catch (error) {

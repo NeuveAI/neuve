@@ -46,7 +46,7 @@ function published() {
   return collector;
 }
 
-test("recorded-order reconstruction preserves a published response after a late block closure", () => {
+test("a late block closure preserves the published response", () => {
   const collector = published();
   const closing = close();
   expect(collector.isPublishedTail(closing)).toBe(true);

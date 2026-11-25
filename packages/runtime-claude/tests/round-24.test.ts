@@ -511,7 +511,7 @@ for (const fault of [
 }
 
 // Reason: a known, content-free block closure after publication must preserve the completed turn.
-test("recorded-order reconstruction of a late block stop preserves the completed tool turn", async () => {
+test("a late block stop preserves the completed tool turn", async () => {
   const capture = await scenario({
     late: false,
     endTurn: true,

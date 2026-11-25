@@ -67,6 +67,11 @@ interface Message {
   blockIndices: Set<number>;
   calls: Map<string, Call>;
 }
+export class InvalidStreamToolInput extends Error {
+  constructor(readonly callId: string) {
+    super("Invalid streamed tool input");
+  }
+}
 /** Root responses span per-block assistant frames (sdk.d.ts:3709). */
 export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
   let current: Message | undefined;
@@ -376,12 +381,29 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
         } else if (event.type === "content_block_stop") {
           const block = blocks.get(event.index);
           if (block !== undefined) {
-            const value = call(
-              block.id,
-              block.name,
-              block.json ? JSON.parse(block.json) : block.input,
-            );
-            if (value !== undefined) calls.push(value);
+            try {
+              const value = call(
+                block.id,
+                block.name,
+                block.json ? JSON.parse(block.json) : block.input,
+              );
+              if (value !== undefined) calls.push(value);
+            } catch (error) {
+              if (
+                !(
+                  error instanceof SyntaxError || error instanceof z.ZodError
+                ) ||
+                !streamOpen ||
+                current?.session !== frame.session_id ||
+                started.has(block.id) ||
+                !closingBlockFrame.safeParse(frame).success
+              )
+                throw error;
+              current = undefined;
+              blocks.clear();
+              streamOpen = false;
+              throw new InvalidStreamToolInput(block.id);
+            }
             blocks.delete(event.index);
           }
         } else if (event.type === "message_stop" && current !== undefined) {

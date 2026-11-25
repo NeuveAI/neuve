@@ -444,13 +444,29 @@ export class ChatRuntimeBridge {
           this.finish(undefined, request, "aborted");
       }
     }
+    const lastMessage = gen.messages.at(-1);
     if (
       priorRecovery?.value.state === "terminal" &&
       priorRecovery.value.reason === "ambiguous-tool-effect" &&
-      gen.messages.at(-1)?.role === "toolResult"
+      lastMessage?.role === "toolResult"
     ) {
-      this.finish(undefined, gen, "error", ambiguousToolEffect);
-      return;
+      const { transcriptDigest } = priorRecovery.value.checkpoint;
+      const callIndex = gen.messages.findLastIndex(
+        (message) =>
+          message.role === "assistant" &&
+          message.content.some(
+            (block) =>
+              block.type === "toolCall" && block.id === lastMessage.toolCallId,
+          ),
+      );
+      if (
+        headDigest(gen.messages) === transcriptDigest ||
+        (callIndex >= 0 &&
+          headDigest(gen.messages.slice(0, callIndex)) === transcriptDigest)
+      ) {
+        this.finish(undefined, gen, "error", ambiguousToolEffect);
+        return;
+      }
     }
     const conversationEpoch = this.conversationCloses.get(gen.owner);
     const accountEpoch = this.accountCloses.get(route.name);

@@ -19,7 +19,8 @@ const account = Account.parse({
   runtime: "claude-code",
   credential: { kind: "claude-config-folder" },
 });
-async function run(entries: Entry[]) {
+const carrier = "00000000-0000-4000-8000-000000000002";
+async function run(entries: Entry[], retryMessage?: string) {
   let effects = 0;
   const diagnostics: unknown[] = [];
   const policy: SessionPolicy = {
@@ -55,6 +56,14 @@ async function run(entries: Entry[]) {
     out({ type: "prompt.offer", message: "fixture" }),
     ...entries,
     out({ type: "query.close" }),
+    ...(retryMessage === undefined
+      ? []
+      : [
+          out({ type: "query.open" }),
+          out({ type: "prompt.offer", message: retryMessage }),
+          inbound(result()),
+          out({ type: "query.close" }),
+        ]),
   ]);
   const events = await Effect.runPromise(
     Effect.scoped(
@@ -66,16 +75,31 @@ async function run(entries: Entry[]) {
         });
         const session = yield* runtime.openSession(account, policy);
         yield* session.startTurn({ turnId: "one", message: "fixture" });
-        return yield* Stream.runCollect(
+        const collect = Stream.runCollect(
           session.events.pipe(
-            Stream.tap((event) =>
-              Effect.sync(() => {
-                RuntimeEvent.parse(event);
-              }),
-            ),
             Stream.takeUntil((event) => event.type === "turn.finished"),
           ),
+        ).pipe(
+          Effect.tap((events) =>
+            Effect.sync(() => {
+              for (const event of events) RuntimeEvent.parse(event);
+            }),
+          ),
         );
+        const events = yield* collect;
+        const ended = events.findLast(
+          (event) => event.type === "turn.finished",
+        );
+        if (ended?.type !== "turn.finished")
+          throw new Error("No terminal event");
+        if (retryMessage === undefined) return { ended };
+        expect(ended.outcome).toMatchObject({
+          status: "failed",
+          disposition: "reusable",
+          retry: { kind: "protocol" },
+        });
+        yield* session.startTurn({ turnId: "retry", message: retryMessage });
+        return { ended, retried: (yield* collect).at(-1) };
       }),
     ).pipe(
       Effect.provide(
@@ -97,9 +121,7 @@ async function run(entries: Entry[]) {
       Effect.timeout("3 seconds"),
     ),
   );
-  const ended = events.findLast((event) => event.type === "turn.finished");
-  if (ended?.type !== "turn.finished") throw new Error("No terminal event");
-  return { ended, effects, diagnostics };
+  return { ...events, effects, diagnostics, opens: fake.opens };
 }
 const transient = () => result({ is_error: true, api_error_status: 503 });
 const malformedToolUse = () =>
@@ -127,7 +149,6 @@ const toolEntries = (): Entry[] => [
     calls: [{ name: "note", callId: "effect", input: { value: "ok" } }],
   },
 ];
-const carrier = "00000000-0000-4000-8000-000000000002";
 const savedResult = () =>
   inbound({
     type: "user",
@@ -141,6 +162,51 @@ const savedResult = () =>
       ],
     },
   });
+const partial = (
+  event: SDKPartialAssistantMessage["event"],
+): SDKPartialAssistantMessage => ({
+  type: "stream_event",
+  event,
+  parent_tool_use_id: null,
+  uuid: crypto.randomUUID(),
+  session_id: SESSION_ID,
+});
+const invalidToolInput = (json: string) => {
+  const streamed = assistant(undefined).message;
+  return [
+    inbound(
+      partial({
+        type: "message_start",
+        message: {
+          ...streamed,
+          id: "malformed-message",
+          stop_reason: null,
+          content: [],
+        },
+      }),
+    ),
+    inbound(
+      partial({
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "malformed-call",
+          name: "mcp__neuve__note",
+          input: {},
+        },
+      }),
+    ),
+    inbound(
+      partial({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: json },
+      }),
+    ),
+    inbound(partial({ type: "content_block_stop", index: 0 })),
+  ];
+};
 
 test("typed transient result without tools permits safe request repetition", async () => {
   const { ended } = await run([inbound(transient())]);
@@ -264,18 +330,63 @@ test("displayed transient-looking text and terminal account or refusal outcomes 
   }
 });
 
-// Reason: the exceptional skip must be observable without leaking the provider body.
-// Recorded-order reconstruction from the worker warning, not the retained November incident.
-test("skipped closing-frame diagnostic contains only shape, reason and logical turn", async () => {
-  const partial = (
-    event: SDKPartialAssistantMessage["event"],
-  ): SDKPartialAssistantMessage => ({
-    type: "stream_event",
-    event,
-    parent_tool_use_id: null,
-    uuid: crypto.randomUUID(),
-    session_id: SESSION_ID,
+// Reason: the logged block-close path must permit a retry without running a truncated tool call.
+test("an open tool block with truncated JSON retries after the query closes", async () => {
+  const { ended, retried, effects, diagnostics } = await run(
+    invalidToolInput('{"value":'),
+    "fixture",
+  );
+  expect(ended.outcome).toMatchObject({
+    failure: { reason: "protocol-error" },
+    retry: { kind: "protocol", continuation: "repeat-request" },
   });
+  expect(retried).toMatchObject({
+    turnId: "retry",
+    outcome: { status: "completed" },
+  });
+  expect(effects).toBe(0);
+  expect(diagnostics.flat()).toContain(
+    "claude-runtime protocol-error site=message-receive frame=stream_event/content_block_stop",
+  );
+});
+
+// Reason: a failed JSON validation at block close must resume after the earlier recorded tool result.
+test("a malformed tool input retries from the previous saved carrier", async () => {
+  const { ended, retried, effects, opens } = await run(
+    [...toolEntries(), savedResult(), ...invalidToolInput('{"value":1e999}')],
+    "Continue from the saved tool result.",
+  );
+  expect(ended).toMatchObject({
+    resumePoint: carrier,
+    outcome: { retry: { kind: "protocol", continuation: "resume" } },
+  });
+  expect(retried).toMatchObject({
+    turnId: "retry",
+    outcome: { status: "completed" },
+  });
+  expect(effects).toBe(1);
+  expect(opens[1]).toMatchObject({
+    resume: SESSION_ID,
+    resumeSessionAt: carrier,
+  });
+});
+
+// Reason: a malformed block must not erase evidence that an earlier tool ran without a saved result.
+test("a malformed tool block cannot retry past an unsaved tool result", async () => {
+  const { ended, effects } = await run([
+    ...toolEntries(),
+    ...invalidToolInput('{"value":'),
+  ]);
+  expect(ended.outcome).toMatchObject({
+    status: "failed",
+    failure: { reason: "ambiguous-tool-effect" },
+  });
+  expect(ended.outcome).not.toHaveProperty("retry");
+  expect(effects).toBe(1);
+});
+
+// Reason: the exceptional skip must be observable without leaking the provider body.
+test("skipped closing-frame diagnostic contains only shape, reason and logical turn", async () => {
   const reply = assistant(undefined, "private-provider-body");
   const { ended, diagnostics } = await run([
     inbound(
