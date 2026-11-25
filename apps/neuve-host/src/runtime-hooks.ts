@@ -10,6 +10,7 @@ export type RuntimeHooks = {
 	modelAvailability?(): readonly import("@ace/channel/protocol").ModelRef[];
 	lanes?(id: string): string;
 	host?: HostOptions;
+	checkAccounts?(): Promise<void>;
 	listening?(port: number): void;
 	command?(args: readonly string[]): Promise<number | undefined>;
 	onFork?(source: string, fork: string): Promise<void>;

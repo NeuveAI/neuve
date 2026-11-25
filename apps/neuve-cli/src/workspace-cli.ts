@@ -972,12 +972,14 @@ async function workspace(args: readonly string[]): Promise<number> {
   try {
     const app = await buildCodingUi();
     configureReviewRoutes(resolveReview);
+    const chatSources = productionChatSources({
+      home: (await import("node:os")).homedir(),
+      environment,
+    });
     configureRuntime({
       nativeSources: workspaceNativeSources(storage),
       channelProvenance: true,
-    });
-    const chatSources = productionChatSources({
-      home: (await import("node:os")).homedir(),
+      checkAccounts: chatSources.checkAccounts,
     });
     const chatModels = await workspaceChatModels(undefined, chatSources);
     abort.signal.addEventListener(
@@ -1181,6 +1183,12 @@ async function workspace(args: readonly string[]): Promise<number> {
       1,
       `${JSON.stringify(workspaceReady({ url: host.url, tokenFile: join(home, "host.token"), web: coding.url, repository, pid: process.pid, project, repo: values.repo }))}\n`,
     );
+    void chatSources.checkAccounts().catch((error: unknown) => {
+      if (!abort.signal.aborted)
+        console.warn(
+          `neuve workspace: could not check accounts: ${message(error)}`,
+        );
+    });
     await done;
   } catch (error) {
     if (!stopping || failure !== undefined) failure ??= error;

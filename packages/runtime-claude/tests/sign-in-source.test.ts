@@ -13,6 +13,13 @@ const account = Account.parse({
 if (account.kind !== "claude-subscription")
   throw new Error("Fixture must be Claude");
 
+test("a first-party probe without sign-in evidence asks for Claude Code login", () => {
+  expect(probeSignIn(account, { apiProvider: "firstParty" })).toEqual({
+    state: "not-signed-in",
+    hint: { kind: "command", command: "claude auth login" },
+  });
+});
+
 for (const apiKeySource of ["/login managed key", "oauth"] as const)
   test(`a ${apiKeySource} sign-in is the account's own Claude Code login`, () => {
     expect(

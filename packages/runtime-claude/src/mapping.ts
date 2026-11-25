@@ -110,7 +110,7 @@ export function probeSignIn(
     info.apiKeySource !== undefined && info.apiKeySource !== "none" && !ownKey;
   if (
     !provider &&
-    info.tokenSource === "none" &&
+    (info.tokenSource ?? "none") === "none" &&
     !key &&
     !ownKey &&
     !info.email &&
