@@ -10,7 +10,7 @@ import { Effect, Layer, Logger, Stream } from "effect";
 import type { SDKPartialAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 import { makeRuntime } from "../src/runtime.ts";
 import { ClaudeExecutable, ClaudeProcess } from "../src/services.ts";
-import { assistant, result, SESSION_ID } from "./frames.ts";
+import { assistant, errorResult, result, SESSION_ID } from "./frames.ts";
 import { inbound, out, replay, type Entry } from "./replay.ts";
 
 const account = Account.parse({
@@ -102,6 +102,10 @@ async function run(entries: Entry[]) {
   return { ended, effects, diagnostics };
 }
 const transient = () => result({ is_error: true, api_error_status: 503 });
+const malformedToolUse = () =>
+  errorResult("error_during_execution", {
+    terminal_reason: "malformed_tool_use_exhausted",
+  });
 const toolReply = () => {
   const reply = assistant(undefined);
   reply.message.stop_reason = "tool_use";
@@ -123,6 +127,20 @@ const toolEntries = (): Entry[] => [
     calls: [{ name: "note", callId: "effect", input: { value: "ok" } }],
   },
 ];
+const carrier = "00000000-0000-4000-8000-000000000002";
+const savedResult = () =>
+  inbound({
+    type: "user",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    uuid: carrier,
+    message: {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "effect", content: "recorded" },
+      ],
+    },
+  });
 
 test("typed transient result without tools permits safe request repetition", async () => {
   const { ended } = await run([inbound(transient())]);
@@ -144,24 +162,81 @@ test("completed tool needs a saved provider result carrier before continuation c
   expect(ambiguous.ended.outcome).not.toHaveProperty("retry");
   const safe = await run([
     ...toolEntries(),
-    inbound({
-      type: "user",
-      parent_tool_use_id: null,
-      session_id: SESSION_ID,
-      uuid: "00000000-0000-4000-8000-000000000002",
-      message: {
-        role: "user",
-        content: [
-          { type: "tool_result", tool_use_id: "effect", content: "recorded" },
-        ],
-      },
-    }),
+    savedResult(),
     inbound(transient()),
   ]);
   expect(safe.effects).toBe(1);
   expect(safe.ended).toMatchObject({
-    resumePoint: "00000000-0000-4000-8000-000000000002",
+    resumePoint: carrier,
     outcome: { retry: { kind: "transient-provider", continuation: "resume" } },
+  });
+});
+
+// Reason: a bound malformed-tool result can repeat its single request before any tool runs.
+test("exhausted malformed tool use permits a protocol retry before tool execution", async () => {
+  const { ended } = await run([inbound(malformedToolUse())]);
+  expect(ended.outcome).toEqual({
+    status: "failed",
+    disposition: "reusable",
+    failure: {
+      _tag: "TurnFailed",
+      account: account.name,
+      reason: "protocol-error",
+    },
+    retry: { kind: "protocol", continuation: "repeat-request" },
+  });
+});
+
+// Reason: after a tool runs, a protocol retry needs its saved result in the provider session.
+test("exhausted malformed tool use resumes from a saved result carrier", async () => {
+  const { ended, effects } = await run([
+    ...toolEntries(),
+    savedResult(),
+    inbound(malformedToolUse()),
+  ]);
+  expect(effects).toBe(1);
+  expect(ended).toMatchObject({
+    resumePoint: carrier,
+    outcome: {
+      status: "failed",
+      disposition: "reusable",
+      failure: { reason: "protocol-error" },
+      retry: { kind: "protocol", continuation: "resume" },
+    },
+  });
+});
+
+// Reason: a tool that ran without a saved result might repeat its side effect on protocol retry.
+test("exhausted malformed tool use with an unsaved tool result ends the turn", async () => {
+  const { ended, effects } = await run([
+    ...toolEntries(),
+    inbound(malformedToolUse()),
+  ]);
+  expect(effects).toBe(1);
+  expect(ended.outcome).toEqual({
+    status: "failed",
+    disposition: "reusable",
+    failure: {
+      _tag: "TurnFailed",
+      account: account.name,
+      reason: "ambiguous-tool-effect",
+    },
+  });
+});
+
+// Reason: a result attributed to a foreign send breaks the stream's turn binding.
+test("an unbound malformed-tool result leaves the session broken", async () => {
+  const { ended } = await run([
+    inbound({ ...malformedToolUse(), user_message_uuid: "foreign-send" }),
+  ]);
+  expect(ended.outcome).toEqual({
+    status: "failed",
+    disposition: "broken",
+    failure: {
+      _tag: "TurnFailed",
+      account: account.name,
+      reason: "protocol-error",
+    },
   });
 });
 

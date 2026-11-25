@@ -482,9 +482,9 @@ export const openClaudeSession = (
                     );
                 }
                 const recorded = turn.ending ?? outcome;
-                // Cleanup failure invalidates the earlier continuation assertion.
+                // The child may also have stopped while cleanup was running.
                 const ending =
-                  !cleaned && recorded.status === "failed"
+                  stopped && recorded.status === "failed"
                     ? {
                         ...recorded,
                         disposition: "broken" as const,
@@ -1603,16 +1603,7 @@ export const openClaudeSession = (
                             frame.api_error_status != null &&
                             frame.api_error_status >= 500) ||
                           assistant?.code === "overloaded";
-                        const callIds = new Set([
-                          ...turn.observedCalls,
-                          ...turn.calls.keys(),
-                        ]);
-                        const savedTools =
-                          callIds.size > 0 &&
-                          turn.savedCarrier !== undefined &&
-                          [...callIds].every((id) => turn.savedResults.has(id));
                         if (
-                          typedTransient &&
                           frame.session_id === sessionId &&
                           !turn.refused &&
                           turn.rejected.size === 0 &&
@@ -1622,9 +1613,22 @@ export const openClaudeSession = (
                           outcome.status === "failed" &&
                           outcome.disposition === "reusable" &&
                           outcome.failure._tag === "TurnFailed" &&
-                          (outcome.failure.reason === "provider-unavailable" ||
-                            outcome.failure.reason === "provider-failed")
+                          (outcome.failure.reason === "protocol-error" ||
+                            (typedTransient &&
+                              (outcome.failure.reason ===
+                                "provider-unavailable" ||
+                                outcome.failure.reason === "provider-failed")))
                         ) {
+                          const callIds = new Set([
+                            ...turn.observedCalls,
+                            ...turn.calls.keys(),
+                          ]);
+                          const savedTools =
+                            callIds.size > 0 &&
+                            turn.savedCarrier !== undefined &&
+                            [...callIds].every((id) =>
+                              turn.savedResults.has(id),
+                            );
                           if (
                             savedTools ||
                             (!turn.toolRan &&
@@ -1634,16 +1638,16 @@ export const openClaudeSession = (
                             outcome = {
                               ...outcome,
                               retry: {
-                                kind: "transient-provider",
+                                kind:
+                                  outcome.failure.reason === "protocol-error"
+                                    ? "protocol"
+                                    : "transient-provider",
                                 continuation: savedTools
                                   ? "resume"
                                   : "repeat-request",
                               },
                             };
-                          } else if (
-                            !savedTools &&
-                            (turn.toolRan || callIds.size > 0)
-                          ) {
+                          } else {
                             outcome = failOutcome(
                               "ambiguous-tool-effect",
                               "reusable",
