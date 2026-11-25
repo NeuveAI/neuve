@@ -136,3 +136,8 @@ The channel dispatches comment requests through the same chat admission queue as
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 
 The coordinator runs the full composed check and isolated browser/CLI journeys at the frozen product hashes. Team membership, cloud deploy/compute, real keychain/provider authentication and remote transfers are not established by these tests. External independent review remains owner-operated; implementation completion and passing tests do not grant approval.
+
+Plan approval requests an idle-guarded return to the agent's mode in `src/channel.ts` and
+`src/plan-mode.ts`. Pending exits survive reopening, settle on run-state commits, and are
+superseded by deliberate choices or a newer draft in `src/plan.ts`. Channel tests cover
+approval, inherited busy descendants, recovery, revisions and supersession.

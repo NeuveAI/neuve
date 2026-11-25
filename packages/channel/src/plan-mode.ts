@@ -14,7 +14,13 @@ import {
 import { PLAN_COMMENT_TOOL, PLAN_TOOL, type ChatMode } from "./protocol";
 import { ATTENDED_SECTION } from "./approvals";
 
-export const ChatModesDoc = defineDoc<{ chats: Record<string, ChatMode> }>({
+export type PlanExit = { plan: string; hash: string };
+export type ModeTransition = { chat: ConversationId; previous: ChatMode; mode: ChatMode; approval: PlanExit };
+
+export const ChatModesDoc = defineDoc<{
+	chats: Record<string, ChatMode>;
+	pendingExits?: Record<string, PlanExit>;
+}>({
 	kind: "neuve.chat-modes",
 	version: 1,
 	scope: "session",
@@ -57,25 +63,55 @@ export async function isPlanning(
 /** A mode change also changes the permissions of descendants that inherit it. */
 async function checkIdle(tx: Tx, chat: ConversationId, modes: Readonly<Record<string, ChatMode>>) {
 	if ((await tx.doc(LiveDoc, chat)).run) {
-		throw new Error("The chat or a chat it started is busy. Stop it or wait before changing its mode.");
+		return false;
 	}
 	let cursor: Cursor | undefined;
 	do {
 		const page = await tx.scanConversations({ ownerConversationId: chat }, 256, cursor);
 		for (const child of page.items) {
-			if (modes[child.id] !== "plan") await checkIdle(tx, child.id, modes);
+			if (modes[child.id] !== "plan" && !await checkIdle(tx, child.id, modes)) return false;
 		}
 		cursor = page.next;
 	} while (cursor);
+	return true;
 }
 
 export async function setChatMode(tx: Tx, chat: ConversationId, mode: ChatMode) {
-	const { chats } = await tx.doc(ChatModesDoc);
-	const previous = chats[chat];
-	if ((previous ?? "ace") === mode) return;
-	await checkIdle(tx, chat, chats);
-	chats[chat] = mode;
-	return { previous };
+	const doc = await tx.doc(ChatModesDoc);
+	const previous = doc.chats[chat];
+	const pendingExit = doc.pendingExits?.[chat];
+	if ((previous ?? "ace") !== mode) {
+		if (!await checkIdle(tx, chat, doc.chats)) {
+			throw new Error("The chat or a chat it started is busy. Stop it or wait before changing its mode.");
+		}
+		doc.chats[chat] = mode;
+	} else if (!pendingExit) return;
+	// Even selecting Plan again deliberately supersedes an older approved session's exit.
+	if (doc.pendingExits) delete doc.pendingExits[chat];
+	return { previous, pendingExit: pendingExit ? { ...pendingExit } : undefined };
+}
+
+/** Called only in the transaction that records a new, validated approval. */
+export async function requestPlanExit(tx: Tx, chat: ConversationId, approval: PlanExit) {
+	const doc = await tx.doc(ChatModesDoc);
+	if (doc.chats[chat] !== "plan") return;
+	doc.pendingExits ??= {};
+	doc.pendingExits[chat] = approval;
+	return reconcilePlanExit(tx, chat);
+}
+
+/** The same idle boundary as a deliberate mode change; intent never changes a running turn. */
+export async function reconcilePlanExit(tx: Tx, chat: ConversationId): Promise<ModeTransition | undefined> {
+	const doc = await tx.doc(ChatModesDoc);
+	const approval = doc.pendingExits?.[chat];
+	if (!approval) return;
+	if (doc.chats[chat] !== "plan") {
+		delete doc.pendingExits![chat];
+		return;
+	}
+	if (!await checkIdle(tx, chat, doc.chats)) return;
+	await setChatMode(tx, chat, "ace");
+	return { chat, previous: "plan", mode: "ace", approval: { ...approval } };
 }
 
 // The bridge consumes this transient marker before its request becomes a runtime turn.
