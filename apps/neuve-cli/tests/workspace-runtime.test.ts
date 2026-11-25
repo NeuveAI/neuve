@@ -1,10 +1,13 @@
 import "../../neuve-host/tests/fixtures/memory-secrets";
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
+  localStorageProfile,
   PI_TRANSITION_STORAGE_PROFILE,
+  spawnEnvironment,
   type ValidatedStorage,
 } from "../../../scripts/pi-storage.ts";
 import {
@@ -15,6 +18,17 @@ import {
 import { configure } from "@ace/host/host-config";
 import { config as native } from "@ace/host/config";
 import { SOL_ROUTE } from "../../../packages/harness/src/route.ts";
+
+const inheritedWorkspace = {
+  ACE_HOME: "/owner/host",
+  ACE_CONFIG_HOME: "/owner/settings",
+  ACE_KEYCHAIN_SERVICE: "owner-keychain",
+  ACE_PORT: "4141",
+  ACE_USER: "owner",
+  NEUVE_HOST_CONFIG: "owner configuration",
+  NEUVE_WORKSPACE_PROFILE: JSON.stringify(PI_TRANSITION_STORAGE_PROFILE),
+  NEUVE_WORKSPACE_SOURCE: "/owner/source",
+};
 
 // Why: the selected Bun must avoid Vite probe hangs and match the version the checks run on.
 test("workspace accepts only Bun 1.4.4 before starting Vite", async () => {
@@ -52,8 +66,8 @@ test("workspace accepts only Bun 1.4.4 before starting Vite", async () => {
   }
 });
 
-test("dynamic workspace host chooses explicit free HTTPS while respecting configured HTTPS ports", async () => {
-  const root = await mkdtemp(join(tmpdir(), "workspace-tls-"));
+test("a workspace uses its profile for host identity and honors explicit HTTPS ports", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "workspace-tls-")));
   const paths = Object.fromEntries(
     Object.keys(PI_TRANSITION_STORAGE_PROFILE.paths).map((role) => [
       role,
@@ -114,14 +128,25 @@ test("dynamic workspace host chooses explicit free HTTPS while respecting config
     const dynamic = workspaceConfiguration({
       ...input,
       port: 0,
-      environment: {},
+      environment: spawnEnvironment(storage, inheritedWorkspace),
     });
     expect(dynamic.webPort).toBe(0);
     const appUrl = "http://127.0.0.1:54321/";
+    configure(dynamic);
+    expect(native.webPort).toBe(0);
     await writeWorkspaceRuntime(profile, root, dynamic, appUrl);
     expect(
       await Bun.file(join(dynamic.home, "workspace-runtime.json")).json(),
-    ).toMatchObject({ appUrl });
+    ).toMatchObject({
+      appUrl,
+      settings: join(profile.paths.state, "neuve-host", "settings"),
+      keychain: `neuve-${join(profile.paths.state, "neuve-host")}`,
+    });
+    expect(dynamic.environment).toEqual({
+      ...storage.environment,
+      NEUVE_WORKSPACE_PROFILE: JSON.stringify(profile),
+      NEUVE_WORKSPACE_SOURCE: root,
+    });
     // Why: a local profile must reach project admission without an inherited volume pin.
     const local = workspaceConfiguration({
       ...input,
@@ -171,12 +196,13 @@ test("dynamic workspace host chooses explicit free HTTPS while respecting config
       env: null,
       args: ["workspace", "worker"],
     });
-    configure(dynamic);
-    expect(native.webPort).toBe(0);
     const explicit = workspaceConfiguration({
       ...input,
       port: 0,
-      environment: { ACE_WEB_PORT: "54443" },
+      environment: spawnEnvironment(storage, {
+        ...inheritedWorkspace,
+        ACE_WEB_PORT: "54443",
+      }),
     });
     expect(explicit.webPort).toBe(54443);
     configure(explicit);
@@ -202,6 +228,85 @@ test("dynamic workspace host chooses explicit free HTTPS while respecting config
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an explicit Ace home uses its managed receipt when present", async () => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "workspace-receipt-")),
+  );
+  try {
+    const source = await realpath(join(import.meta.dirname, "../../.."));
+    const profile = await localStorageProfile(source, root);
+    const home = join(profile.paths.state, "neuve-host");
+    const lanes = join(profile.paths.worktrees, "neuve-lanes");
+    const settings = join(home, "receipt-settings");
+    await mkdir(home, { recursive: true });
+    await mkdir(lanes, { recursive: true });
+    await writeFile(
+      join(home, "workspace-runtime.json"),
+      JSON.stringify({
+        version: 1,
+        source,
+        profile,
+        settings,
+        keychain: "receipt-keychain",
+        configuration: {
+          home,
+          lanes,
+          user: "scratch",
+          port: 12345,
+          worker: [process.execPath],
+        },
+      }),
+    );
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        "--no-env-file",
+        "--preload",
+        fileURLToPath(
+          new URL(
+            "../../neuve-host/tests/fixtures/memory-secrets.ts",
+            import.meta.url,
+          ),
+        ),
+        "--eval",
+        `
+import { configureWorkspaceCli } from "./src/workspace-runtime.ts";
+import { config } from "@ace/host/config";
+const nativeHome = process.env.ACE_HOME;
+const unmanaged = await configureWorkspaceCli(["ls"]);
+const nativeSettings = config.settings;
+process.env.ACE_HOME = ${JSON.stringify(home)};
+const managed = await configureWorkspaceCli(["ls"]);
+console.log(JSON.stringify({ unmanaged, nativeHome, nativeSettings, managed, home: config.home, settings: config.settings, keychain: config.keychain, user: config.user, port: config.port }));
+`,
+      ],
+      {
+        cwd: join(source, "apps/neuve-cli"),
+        env: {
+          ...inheritedWorkspace,
+          PATH: "/usr/bin:/bin",
+          ACE_HOME: join(root, "native"),
+        },
+        stderr: "pipe",
+      },
+    );
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual({
+      unmanaged: false,
+      nativeHome: join(root, "native"),
+      nativeSettings: inheritedWorkspace.ACE_CONFIG_HOME,
+      managed: true,
+      home,
+      settings,
+      keychain: "receipt-keychain",
+      user: "scratch",
+      port: 12345,
+    });
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

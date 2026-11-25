@@ -211,17 +211,21 @@ export async function configureWorkspaceCli(
   args: readonly string[],
 ): Promise<boolean> {
   const source = await realpath(resolve(import.meta.dirname, "../../.."));
-  const initial = process.env.NEUVE_WORKSPACE_PROFILE
-    ? StorageProfile.parse(JSON.parse(process.env.NEUVE_WORKSPACE_PROFILE))
-    : await readStorageProfile(source);
-  const home = process.env.ACE_HOME ?? join(initial.paths.state, "neuve-host");
+  let home = process.env.ACE_HOME;
+  let initial: StorageProfile | undefined;
+  if (home === undefined) {
+    initial = process.env.NEUVE_WORKSPACE_PROFILE
+      ? StorageProfile.parse(JSON.parse(process.env.NEUVE_WORKSPACE_PROFILE))
+      : await readStorageProfile(source);
+    home = join(initial.paths.state, "neuve-host");
+  }
   let text: string;
   try {
     text = await readFile(join(home, RECEIPT), "utf8");
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
       throw error;
-    if (process.env.ACE_HOME !== undefined) return false;
+    if (initial === undefined) return false;
     const storage = await prepareStorage(
       await validateStorageProfile(initial, { checkout: source }),
     );
@@ -230,9 +234,8 @@ export async function configureWorkspaceCli(
       profile: initial,
       source,
       environment: spawnEnvironment(storage, process.env),
-      user:
-        process.env.ACE_USER ?? process.env.USER ?? process.env.LOGNAME ?? "",
-      port: Number(process.env.ACE_PORT ?? 4140),
+      user: process.env.USER ?? process.env.LOGNAME ?? "",
+      port: 4140,
       route: settingsRoute(),
     });
     await activateWorkspaceCli(
@@ -258,9 +261,8 @@ export async function configureWorkspaceCli(
     ...receipt.configuration,
     environment: {
       ...environment,
-      ACE_CONFIG_HOME: process.env.ACE_CONFIG_HOME ?? receipt.settings,
-      ACE_KEYCHAIN_SERVICE:
-        process.env.ACE_KEYCHAIN_SERVICE ?? receipt.keychain,
+      ACE_CONFIG_HOME: receipt.settings,
+      ACE_KEYCHAIN_SERVICE: receipt.keychain,
       NEUVE_WORKSPACE_PROFILE: JSON.stringify(receipt.profile),
       NEUVE_WORKSPACE_SOURCE: source,
     },

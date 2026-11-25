@@ -69,6 +69,32 @@ test("installed neuve comes from the current worker PATH and is kept after PATH 
 	}
 });
 
+test("installed neuve keeps the version when a background child holds stdout open", async () => {
+	const bin = await mkdtemp(join(tmpdir(), "worker probe "));
+	const path = join(bin, "neuve");
+	const pidFile = Bun.file(`${path}.pid`);
+	try {
+		await writeFile(path, '#!/bin/sh\n/bin/sleep 10 &\nprintf "%s\\n" "$!" > "$0.pid"\nprintf "neuve 7.8.9\\n"\n', {mode: 0o700});
+		const script = `
+import {installedNeuve} from ${JSON.stringify(new URL("../src/environment.ts", import.meta.url).href)};
+const start = performance.now();
+const installed = await installedNeuve();
+console.log(JSON.stringify({installed, elapsed: performance.now() - start}));
+`;
+		const result = Bun.spawnSync([process.execPath, "--no-env-file", "--eval", script], {
+			env: {PATH: bin}, stdout: "pipe", stderr: "pipe", timeout: 4500, killSignal: "SIGKILL",
+		});
+		expect(result.exitedDueToTimeout).toBe(false);
+		expect(result.exitCode, result.stderr.toString()).toBe(0);
+		const {installed, elapsed} = JSON.parse(result.stdout.toString());
+		expect(installed).toEqual({path, version: "neuve 7.8.9"});
+		expect(elapsed).toBeLessThan(4000);
+	} finally {
+		if (await pidFile.exists()) process.kill(Number(await pidFile.text()), "SIGKILL");
+		await rm(bin, {recursive: true, force: true});
+	}
+});
+
 test("the host Git reader follows the branch and verifies detached HEAD", async () => {
 	const root = await mkdtemp(join(tmpdir(), "worker git "));
 	try {

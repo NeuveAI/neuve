@@ -617,19 +617,27 @@ export const prepareStorage = async (
 };
 
 /**
- * The environment for a child process: `base` with every temporary and cache variable forced
- * onto the profile. Sign-in variables such as HOME pass through untouched.
+ * The environment for a child process. The profile supplies temporary and cache paths, and
+ * managed host identity must be set by the caller. HOME and ACE_WEB_PORT pass through.
  */
 export const spawnEnvironment = (
   storage: ValidatedStorage,
   base: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> => {
-  const forced = new Set(
-    Object.keys(storage.environment).map((key) => key.toUpperCase()),
-  );
+  const excluded = new Set([
+    ...Object.keys(storage.environment).map((key) => key.toUpperCase()),
+    "ACE_HOME",
+    "ACE_CONFIG_HOME",
+    "ACE_KEYCHAIN_SERVICE",
+    "ACE_PORT",
+    "ACE_USER",
+    "NEUVE_HOST_CONFIG",
+    "NEUVE_WORKSPACE_PROFILE",
+    "NEUVE_WORKSPACE_SOURCE",
+  ]);
   const environment: Record<string, string> = {};
   for (const [key, value] of Object.entries(base))
-    if (value !== undefined && !forced.has(key.toUpperCase()))
+    if (value !== undefined && !excluded.has(key.toUpperCase()))
       environment[key] = value;
   return { ...environment, ...storage.environment };
 };

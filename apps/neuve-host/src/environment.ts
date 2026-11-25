@@ -18,11 +18,30 @@ async function readInstalledNeuve() {
 		const child = Bun.spawn([path, "--version"], {
 			env: { PATH },
 			stdin: "ignore", stdout: "pipe", stderr: "ignore",
-			timeout: 2000, killSignal: "SIGKILL", maxBuffer: 2048,
+			killSignal: "SIGKILL", maxBuffer: 2048,
 		});
-		const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-		const version = out.trim();
-		if (code === 0 && version) return { path, version };
+		const reader = child.stdout.getReader();
+		const decoder = new TextDecoder();
+		let out = "";
+		const read = async () => {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) return;
+				out += decoder.decode(value, { stream: true });
+			}
+		};
+		const deadline = Promise.withResolvers<void>();
+		const timer = setTimeout(deadline.resolve, 2000);
+		try {
+			// A descendant can keep stdout open after the probe process exits.
+			await Promise.race([Promise.all([read(), child.exited]), deadline.promise]);
+			const version = (out + decoder.decode()).trim();
+			if (version && (child.exitCode === 0 || !child.killed)) return { path, version };
+		} finally {
+			clearTimeout(timer);
+			void reader.cancel().catch(() => {});
+			if (!child.killed) child.kill("SIGKILL");
+		}
 	} catch {
 		// The executable can disappear after PATH lookup.
 	}
