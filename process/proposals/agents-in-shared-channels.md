@@ -1,6 +1,6 @@
 # Agents in shared channels: proposal
 
-Status: proposal, drafted 23 November 2026 from the owner's conversation with the coordinator that day, revised the same day for the owner's eighth answer, and on 24 November for the ninth, tenth and eleventh. On 25 November it gained [Making an isolate fast and keeping the host lean](#making-an-isolate-fast-and-keeping-the-host-lean), for the owner's questions on speed, teardown and shared resources, and the owner's choice of an APFS disk image for sandbox storage (row 17.53). Nothing here is built. The owner's first answer accepted the narrow folders, the seventh decides where the reviewer's behaviour lives, the eighth decides where a shared channel's agents run, and the ninth gives each agent an isolate that is a micro-VM and asks for its teardown, and the tenth accepts the recommendations on which micro-VM and on when an agent is done; the rest is proposed. The [decisions record](../decisions.md) wins wherever this text differs from it. Code was read at `f1db36e`, and for the section on making an isolate fast at `a8fae1c`. For the ninth answer, two clones of this repository were timed on the owner's Mac; for that section, copies, clones, reads and deletes were timed on the LaCie drive on 25 November; nothing else was run.
+Status: proposal, drafted 23 November 2026 from the owner's conversation with the coordinator that day, revised the same day for the owner's eighth answer, and on 24 November for the ninth, tenth and eleventh. On 25 November it gained [Making an isolate fast and keeping the host lean](#making-an-isolate-fast-and-keeping-the-host-lean), for the owner's questions on speed, teardown and shared resources, and the owner's choice of an APFS disk image for sandbox storage (row 17.53). The same day, the owner ruled that every channel's agents run in isolates from the start (row 17.55), that a channel owns one branch per approved plan (row 17.56), and that an agent's work reaches that branch only by fast-forward (row 17.57). Nothing here is built. The owner's first answer accepted the narrow folders, the seventh decides where the reviewer's behaviour lives, the eighth decides where a shared channel's agents run, and the ninth gives each agent an isolate that is a micro-VM and asks for its teardown, and the tenth accepts the recommendations on which micro-VM and on when an agent is done; the rest is proposed. The [decisions record](../decisions.md) wins wherever this text differs from it. Code was read at `f1db36e`, and for the section on making an isolate fast at `a8fae1c`. For the ninth answer, two clones of this repository were timed on the owner's Mac; for that section, copies, clones, reads and deletes were timed on the LaCie drive on 25 November; nothing else was run.
 
 **What is decided.**
 
@@ -8,8 +8,9 @@ Status: proposal, drafted 23 November 2026 from the owner's conversation with th
 2. Inside that sandbox each agent has an isolate of its own: its own clone, which it owns entirely. Only a branch leaves, with its proof. Each isolate is a micro-VM, so that agents do not load the host machine.
 3. An agent's isolate is torn down and cleaned up when the agent is done or dismissed, and when its channel is archived.
 4. The micro-VM is Apple's containerization, which runs each isolate on the Virtualization framework on a Mac and on Cloud Hypervisor on Linux, behind one guest contract. See [Each isolate a micro-VM](#each-isolate-a-micro-vm).
-5. An agent is done when its branch is merged into the channel's branch or its plan is closed, and dismissing is a control of its own that ends an agent for good. See [Teardown](#teardown).
+5. An agent is done when its branch has landed on its plan's branch or its plan is closed, and dismissing is a control of its own that ends an agent for good. See [Teardown](#teardown).
 6. On the owner's Mac, sandbox storage is an APFS disk image on the LaCie drive. See [Making an isolate fast and keeping the host lean](#making-an-isolate-fast-and-keeping-the-host-lean).
+7. Every channel's agents run in isolates from the start, a one-person channel's included, and a channel can own branches from the start, one per approved plan, so it holds several over its life ([decisions record](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026), rows 17.55 and 17.56).
 
 **What is proposed on top.**
 
@@ -49,7 +50,7 @@ Status: proposal, drafted 23 November 2026 from the owner's conversation with th
  Ace's five served tools and the       │                                  scope read on the pushed branch,
  channel's state run here, outside     └──▶ broker ──▶ pushed branch ──▶  final review, read only;
  every micro-VM, as a user no agent runs as                               proof recorded against the push
- THE CHANNEL: threads, the work log and the plan are where agents coordinate; its branch is where they integrate
+ THE CHANNEL: threads, the work log and the plan are where agents coordinate; each approved plan's branch is where they integrate (row 17.56)
  TEARDOWN: agent done, agent dismissed, or channel archived → its micro-VM, clone and scratch removed;
            the pushed branch and the recorded proof stay
 ```
@@ -86,7 +87,7 @@ The owner chose an isolate per agent over one clone per channel with a work lane
 - **The 2 November ruling's sandbox "holds the chat's worktree".** In a shared channel it now holds a micro-VM per agent. The channel's state and Ace's five served tools stay in the sandbox outside every micro-VM (proposed reading).
 - **The shared sandbox is a machine, not a container.** A micro-VM needs the hardware's virtualization: a Mac with Apple silicon, or Linux with KVM on bare metal or in a virtual machine that allows nested virtualization. The one container per channel on Cloudflare that the 2 November ruling named cannot hold micro-VMs (inferred: Cloudflare's containers already run in its own micro-VMs, and nested virtualization there is not documented).
 
-**The narrow folders on the device, the coordinator's reading.** The recommendation put to the owner made the narrow folders the stopgap on a person's device, and the owner did not object. So they stay there, letting Codex agents commit now, until a one-person channel's agents also run in isolates of their own. Whether and when that happens is open below.
+**The narrow folders on the device, the coordinator's reading.** The recommendation put to the owner made the narrow folders the stopgap on a person's device, and the owner did not object. So they stay there, letting Codex agents commit now, until a one-person channel's agents also run in isolates of their own. That is now decided: every channel's agents run in isolates from the start (item 7, row 17.55).
 
 ## Each isolate a micro-VM
 
@@ -128,6 +129,17 @@ So the image is not slower to fill. A micro-VM's disk clones at once, which is t
 
 **Not verified.** Each figure above is one run, not repeated. Nothing ran inside a micro-VM. Whether Apple's containerization clones its disks with `clonefile` or copies them, how fast a micro-VM reads a shared folder, and whether a busy image with many isolates keeps these figures, are not known. Whether space freed inside the sparse bundle returns to the LaCie drive without compacting the image is not known.
 
+## How an agent's work reaches its plan's branch
+
+**Decided on 25 November 2026** ([row 17.57](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026)), with one branch per approved plan ([row 17.56](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026)). A Git merge can run code the repository defines, through merge drivers named in `.gitattributes` and through hooks, and Neuve's own processes run none of the repository's code (12.28). So nothing merges on the host:
+
+- **An agent integrates inside its own isolate.** Before it hands over, it rebases its branch onto the plan's latest branch there, where the repository's code may run, and resolves any conflict itself.
+- **Its commits leave through the one door** the sandbox ticket designs (NEU-72): Git writes them as one file inside the isolate, the channel worker fetches that file out through the workspace protocol, and the host checks the objects as they arrive and stores them under a Neuve ref before any branch moves.
+- **The plan's branch moves only by fast-forward,** done by the host or the broker. A fast-forward moves a ref and runs nothing, so no checkout, merge or repository code runs on the host, and host Git never opens a path an isolate can write.
+- **One integration at a time per plan.** The fast-forward is an atomic update of the plan's ref from the tip the agent rebased onto, so when another agent landed first, Git refuses it, and the agent rebases again in its isolate. With one implementer, and nothing else moving the plan's branch, every landing is a fast-forward.
+- **The plan's branch has no worktree.** It is only a ref in the repository's mirror and on GitHub, so it costs no disk.
+- **Clean-up follows.** An agent's branch, once fast-forwarded, equals the plan's branch and goes with the agent's isolate. When the plan's pull request merges, its branch is deleted, and the mirror keeps objects while any clone borrows them, as decided above.
+
 ## Teardown
 
 **Decided.** When an agent is done or dismissed, and when its channel is archived, its isolate, clone and scratch are removed. This carries the owner's [23 November ruling](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026) into Ace itself: lanes dispose of what they make, and archiving a channel in Ace disposes of what the channel made. None of T3 Code, opencode or Ace removes a worktree when a thread or channel is archived (read, in their source).
@@ -138,7 +150,7 @@ So the image is not slower to fill. A micro-VM's disk clones at once, which is t
 
 | Trigger                 | What it is                                                                                                                                                                                                      | What happens                                                                                                    |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| The agent is done       | The work it was started for has ended: its branch is merged into the channel's branch, or the plan it worked on is closed. Not the end of a turn, and not Stop, since a stopped agent starts again on a mention | The host collects its proof, the broker pushes its branch, then the micro-VM, clone and scratch are removed     |
+| The agent is done       | The work it was started for has ended: its branch has landed on its plan's branch, or the plan it worked on is closed. Not the end of a turn, and not Stop, since a stopped agent starts again on a mention | The host collects its proof, the broker pushes its branch, then the micro-VM, clone and scratch are removed     |
 | The agent is dismissed  | A person ends the agent for good. Ace has Stop, which a mention undoes, and nothing that ends an agent for good today, so dismissing needs a control of its own on the agent's line                             | The same, at once                                                                                               |
 | The channel is archived | Archiving the channel                                                                                                                                                                                           | Every isolate of the channel is torn down the same way, and its mirror is removed once no clone borrows from it |
 
@@ -202,7 +214,6 @@ The owner's first answer accepted them. With an isolate per agent decided, they 
 The tenth answer accepted what was recommended: which micro-VM, and what counts as done with what dismissing is. It covers only those; the points below had no recommendation, or were not put.
 
 - **Which machine is the shared sandbox.** A micro-VM needs a Mac with Apple silicon or Linux with KVM, not a container. Whether it is the owner's Mac on the tailnet for now, and how many agents one machine holds, is the owner's call. No recommendation was made.
-- **Whether a one-person channel's agents get isolates too.** That would retire the narrow folders on the device, and run every agent the same way, as the owner's 20 November ruling asks that the foundations be shared. On a Mac it needs macOS 26. No recommendation was made.
 - **Whose account a shared channel's turns run on.** The ruling keeps every key out of the sandbox; whose key the broker swaps in is still the open question of the 9 November ruling. The return session's research suggested the member who approved the plan, but this proposal made no recommendation.
 - **Whose name authors an unattended agent's commit.** The member who started the work, the one who approved the plan, or the bot account the owner plans ([23 November](../decisions.md#area-15-an-overnight-round-with-the-owner-away-23-november-2026)). No recommendation was made.
 - **Which branches the broker may push.** Only the channel's own, or any. Claude Code's proxy leaves this to branch protection. No recommendation was made.
