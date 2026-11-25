@@ -1,4 +1,4 @@
-import { TurnRetryStatusSchema } from "@neuve/records-schema";
+import { TurnRetryStatusSchema } from "@neuve/records-schema/turn-recovery";
 import { ApprovalAsked, WorkKind } from "@neuve/runtime/approval";
 import { z } from "zod";
 

@@ -1,4 +1,4 @@
-import type { TurnRetryStatus } from "@neuve/records-schema";
+import type { TurnRetryStatus } from "@neuve/records-schema/turn-recovery";
 import type { ApprovalAsked as RuntimeApprovalAsked, WorkKind } from "@neuve/runtime/approval";
 import type { JSONType } from "zod";
 import type { ReviewCard } from "./review-cards";
