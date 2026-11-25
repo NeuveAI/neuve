@@ -139,24 +139,37 @@ test.each(["feature", "other", "detached", "worktree"])(
   },
 );
 
-test("names all tips when a detached review needs a branch, then accepts the named tip", async () => {
-  const repo = fixture();
-  repo.git("branch", "followup", repo.head);
-  repo.git("switch", "--detach", repo.head);
-  await expect(repo.run(repo.request())).rejects.toThrow(
-    '"feature" and "followup" end at this review\'s head, so pass --branch <name> with the branch to review.',
-  );
-  const wrongBranch = () =>
-    repo.run(repo.request(repo.head, { branch: "other" }));
-  const refusal =
-    '--branch names no branch that ends at this review\'s head, so pass --branch with "feature" or "followup".';
-  await expect(wrongBranch()).rejects.toThrow(refusal);
-  const read = await repo.run(repo.read());
-  const review = await repo.run(repo.request(repo.head, { branch: "feature" }));
-  expect(review.cycleId).toBe(read.cycleId);
-  expect(review.openedCycle).toBe(false);
-  await expect(wrongBranch()).rejects.toThrow(refusal);
-});
+test.each(["detached", "other"])(
+  "names both branches at the review head from the %s checkout",
+  async (checkout) => {
+    const repo = fixture();
+    repo.git("branch", "followup", repo.head);
+    if (checkout === "detached") repo.git("switch", "--detach", repo.head);
+    else repo.git("switch", "-c", "other", repo.base);
+    await expect(repo.run(repo.request())).rejects.toThrow(
+      '"feature" and "followup" end at this review\'s head, so pass --branch <name> with the branch to review.',
+    );
+  },
+);
+
+test.each(["feature", "followup"])(
+  "accepts --branch %s when both branches end at the review head",
+  async (branch) => {
+    const repo = fixture();
+    repo.git("branch", "followup", repo.head);
+    if (branch === "feature") repo.git("switch", "followup");
+    const wrongBranch = () =>
+      repo.run(repo.request(repo.head, { branch: "other" }));
+    const refusal =
+      '--branch names no branch that ends at this review\'s head, so pass --branch with "feature" or "followup".';
+    await expect(wrongBranch()).rejects.toThrow(refusal);
+    const read = await repo.run(repo.read(branch));
+    const review = await repo.run(repo.request(repo.head, { branch }));
+    expect(review.cycleId).toBe(read.cycleId);
+    expect(review.openedCycle).toBe(false);
+    await expect(wrongBranch()).rejects.toThrow(refusal);
+  },
+);
 
 test("refuses a named branch that contains the head when another branch ends there", async () => {
   const repo = fixture();
@@ -406,14 +419,11 @@ test.each([false, true])(
       const reviewer = await repo.run(repo.read("reviewer"));
       const review = await repo.run(repo.request());
       expect(review.cycleId).toBe(reviewer.cycleId);
+      expect(review.openedCycle).toBe(false);
     } else {
-      await expect(repo.run(repo.request())).rejects.toThrow(
-        '"feature" and "reviewer" end at this review\'s head, so pass --branch <name> with the branch to review.',
-      );
-      const review = await repo.run(
-        repo.request(repo.head, { branch: "feature" }),
-      );
-      expect(review.cycleId).toBe(implementer.cycleId);
+      const review = await repo.run(repo.request());
+      expect(review.cycleId).not.toBe(implementer.cycleId);
+      expect(review.openedCycle).toBe(true);
     }
   },
 );

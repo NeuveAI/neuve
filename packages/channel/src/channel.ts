@@ -1334,7 +1334,12 @@ export class Channel {
 		if (cwd === this.#options.project && await isPlanning(this.#harness, chat, callContext, () => undefined)) return;
 		const name = `chat-${chat}`;
 		const recorded = (await this.#harness.snapshot(LanesDoc, callContext))?.lanes[name];
-		if (cwd !== this.#options.project && (!recorded?.hostCreated || recorded.chat !== chat || recorded.path !== cwd)) return;
+		if (cwd !== this.#options.project) {
+			if (!recorded?.hostCreated || recorded.chat !== chat || recorded.path !== cwd) return;
+			const exists = await this.#options.env(cwd).exists(cwd, callContext);
+			if (!exists.ok) throw exists.error;
+			if (exists.value) return;
+		}
 		if (recorded && (!recorded.hostCreated || recorded.chat !== chat)) throw new Error(`Work lane ${name} is already assigned; it was not adopted.`);
 		const lane = await host.worktree(name, undefined, { chat, ...(recorded ? { recorded } : {}) });
 		await this.#harness.commit(async tx => {

@@ -524,10 +524,9 @@ const localPlanIdentity = (cycleId: string) =>
     );
   });
 
-type ReviewBranch = {
-  readonly branch: string | undefined;
-  readonly ambiguous?: readonly string[];
-};
+type ReviewBranch =
+  | { readonly branch: string | undefined; readonly ambiguous?: never }
+  | { readonly ambiguous: readonly string[]; readonly branch?: never };
 
 const selectReviewCycle = (range: Range, target: ReviewBranch | undefined) =>
   Effect.gen(function* () {
@@ -680,10 +679,10 @@ export const requestReview = (options: ReviewOptions) =>
                 () => Effect.succeed(""),
               ),
             )).trimEnd();
-            return {
-              branch: tips.find((name) => `refs/heads/${name}` === checkout),
-              ambiguous: tips,
-            };
+            const branch = tips.find(
+              (name) => `refs/heads/${name}` === checkout,
+            );
+            return branch === undefined ? { ambiguous: tips } : { branch };
           })
         : undefined;
     // The cycle, the generation and the append are one write transaction (`BEGIN IMMEDIATE`), so

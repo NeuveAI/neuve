@@ -60,6 +60,45 @@ test("ordinary first write admission persists a registered external lane before 
 	expect(git(fixture.project, "for-each-ref", "--format=%(refname)", "refs/heads/one/chat-").trim().split("\n")).toHaveLength(1);
 });
 
+for (const { label, checkout, branch } of [
+	{ label: "switching branches", checkout: ["-b", "other"], branch: "other" },
+	{ label: "detaching HEAD", checkout: ["--detach"], branch: "" },
+]) test(`later turns stay in the recorded lane after ${label}`, async () => {
+	const run = await setup(), { fixture } = run;
+	fixture.script(fauxAssistantMessage("Placed"));
+	await ask(fixture);
+	const path = join(fixture.lanes, `chat-${ROOT_CONVERSATION_ID}`);
+	git(path, "checkout", ...checkout);
+	const head = git(path, "rev-parse", "HEAD");
+	for (const file of ["first-turn.txt", "second-turn.txt"]) {
+		fixture.script(shell(`pwd > ${file}`, file), fauxAssistantMessage("Done"));
+		await ask(fixture);
+		expect(await readFile(join(path, file), "utf8")).toBe(`${path}\n`);
+		expect(git(path, "branch", "--show-current").trim()).toBe(branch);
+		expect(git(path, "rev-parse", "HEAD")).toBe(head);
+	}
+});
+
+test("pending work resumes in its recorded lane after switching branches", async () => {
+	const run = await setup(), { fixture } = run;
+	fixture.script(fauxAssistantMessage("Placed"));
+	await ask(fixture);
+	const path = join(fixture.lanes, `chat-${ROOT_CONVERSATION_ID}`);
+	await fixture.channel.close();
+	fixture.options.resume = false;
+	await fixture.open();
+	const { submission } = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Pending", model: MODEL });
+	await fixture.channel.close();
+	git(path, "checkout", "-b", "other");
+	fixture.options.resume = true;
+	fixture.script(shell("pwd > resumed.txt"), fauxAssistantMessage("Resumed"));
+	await fixture.open();
+	expect(await fixture.request({ op: "wait", submission })).toBe("done");
+	expect(await cwd(run)).toBe(path);
+	expect(await readFile(join(path, "resumed.txt"), "utf8")).toBe(`${path}\n`);
+	expect(git(path, "branch", "--show-current").trim()).toBe("other");
+});
+
 test("Plan mode remains on checkout; switching to a writing turn provisions once", async () => {
 	const run = await setup();
 	run.fixture.script(fauxAssistantMessage("Planning"));
@@ -84,6 +123,7 @@ test("Plan can read its existing snapshot after archive without creating a new b
 	await ask(run.fixture, "plan");
 	expect(watch.of("result").find(event => event.call === "plan-restored-read")).toMatchObject({ error: false, text: "hello\n" });
 	expect(git(path, "rev-parse", "HEAD")).toBe(head);
+	expect(git(path, "branch", "--show-current").trim()).toBe(`one/chat-${ROOT_CONVERSATION_ID}`);
 	expect(await cwd(run)).toBe(path);
 	await watch.stop();
 });
@@ -155,7 +195,10 @@ test("interruption after Git creation recovers the same lane; unrecorded branch 
 	git(fixture.project, "branch", `one/${name}`, "HEAD");
 	await expect(ask(fixture)).rejects.toThrow("already exists without a recorded worktree");
 	expect(fixture.faux.state.callCount).toBe(0);
-	git(fixture.project, "worktree", "add", join(fixture.lanes, name), `one/${name}`);
+	const path = join(fixture.lanes, name);
+	git(fixture.project, "worktree", "add", "-b", "other", path, "HEAD");
+	await expect(ask(fixture)).rejects.toThrow("The worktree path is already in use.");
+	git(path, "checkout", `one/${name}`);
 	fixture.script(fauxAssistantMessage("Recovered"));
 	await ask(fixture);
 	expect(await cwd(run)).toBe(join(fixture.lanes, name));
