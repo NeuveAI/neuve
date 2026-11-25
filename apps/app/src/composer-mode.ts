@@ -9,12 +9,14 @@ export function agentMode(mode: string): ChatMode | undefined {
 }
 
 /**
- * The mode an ask carries: only one that changes the chat's stored mode, so a message in the mode
- * the chat already has is the plain ask the channel has always taken. A Chat message carries none.
+ * The mode an ask carries: the agent's mode only when it changes the chat's stored mode, so a
+ * message in that mode is the plain ask the channel has always taken. Plan is always carried, so a
+ * person planning on cancels an approved plan's exit still waiting on a busy chat; only a channel
+ * that knows modes stores Plan. A Chat message carries none.
  */
 export function askMode(mode: string, stored: ChatMode | undefined): ChatMode | undefined {
 	const asked = agentMode(mode);
-	return asked && asked !== (stored ?? "ace") ? asked : undefined;
+	return asked === "plan" || (asked && asked !== (stored ?? "ace")) ? asked : undefined;
 }
 
 const forgotten = new Set<string>();

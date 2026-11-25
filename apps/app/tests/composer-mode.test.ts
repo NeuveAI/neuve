@@ -78,12 +78,14 @@ test("the channel's old remembered mode is removed and each chat's stays", () =>
 	expect(useChatMode("c4", 1, undefined)[0]).toBe("plan");
 });
 
-// Why: a channel that predates the mode refuses a message carrying one, so a message in the mode
-// the chat already has must stay the plain ask; only a change of mode carries it.
-test("an ask carries a mode only when it changes the chat's", () => {
+// Why: a channel that predates the mode refuses a message carrying one, so a message in the agent's
+// mode the chat already has must stay the plain ask. Plan is always carried: only a channel that
+// knows modes stores it, and a Plan message is how a person who plans on cancels an approved plan's
+// exit still waiting on a busy chat.
+test("an ask carries the agent's mode only when it changes the chat's, and Plan always", () => {
 	expect(askMode("ace", undefined)).toBeUndefined();
 	expect(askMode("ace", "ace")).toBeUndefined();
-	expect(askMode("plan", "plan")).toBeUndefined();
+	expect(askMode("plan", "plan")).toBe("plan");
 	expect(askMode("plan", undefined)).toBe("plan");
 	expect(askMode("ace", "plan")).toBe("ace");
 	expect(askMode("chat", "plan")).toBeUndefined();
