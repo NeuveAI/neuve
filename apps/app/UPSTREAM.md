@@ -39,6 +39,4 @@ The integration changes these boundaries:
 
 The Base UI dependency patch from upstream is not applied. The root lockfile separately pins compatible Shiki dependencies for the Pierre and ProseMirror integration, and shares the React declaration version across the two frontend stacks. These are dependency-resolution changes, not component copies or type casts. The two apps retain their own React and Motion runtime versions.
 
-`src/composer-mode.ts` keeps the browser's pre-Plan choice per channel and chat. The explicit
-successful approval paths in `src/conversation.tsx` and `src/panels/plan.tsx` restore it once,
-without overriding a newer composer choice or changing another participant's browser.
+Approving a plan returns the approving browser's composer to the mode it had before Plan: `composer-mode.ts` keeps that mode per chat when the menu enters Plan, and the Plan tab (`panels/plan.tsx`) and the plan card's approval in `conversation.tsx` restore it once approval succeeds, unless the person has since left Plan.
