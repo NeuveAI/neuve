@@ -1105,6 +1105,8 @@ function useLayout(
 					if (!shown.has(open)) api.select({ tab: open, pane: home });
 				} else if (Split.can(current, { ...fit, move: { tab: open, to } })) {
 					api.move({ tab: open, to, fit });
+					// The pane it leaves would show its first tab; the chat stays in front there.
+					api.select({ tab: CHAT, pane: chat });
 				}
 				api.focus({ pane: current.focus });
 				return;
