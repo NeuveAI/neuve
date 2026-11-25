@@ -99,6 +99,9 @@ test.each([
 	{ location: "repository Codex", installed: "repo-agents" },
 	{ location: "ignored repository Claude Code", installed: "repo-claude" },
 	{ location: "both scopes", installed: "user-agents", duplicates: true },
+	// The skill the neuve command carries is there before anyone installs it, and any installed copy wins.
+	{ location: "the host's carried folder", installed: "carried" },
+	{ location: "user Codex over the carried copy", installed: "user-agents", carried: true },
 ] as const)("an Ace chat can list and read the Neuve skill at $location", async (fixture) => {
 	const root = await mkdtemp(join(tmpdir(), "neuve plan skill "));
 	try {
@@ -115,7 +118,9 @@ test.each([
 			"configured-claude": [join(claude, "skills"), join(claude, "skills")],
 			"repo-agents": [join(repo, ".agents", "skills"), ".agents/skills"],
 			"repo-claude": [join(repo, ".claude", "skills"), ".claude/skills"],
+			carried: [join(dir, "carried skills"), join(dir, "carried skills")],
 		} as const;
+		config.skills = paths.carried[0];
 		const [directory, display] = paths[fixture.installed];
 		const folderName = fixture.installed === "configured-claude" ? "linked-neuve" : "neuve";
 		const installed = join(directory, folderName);
@@ -138,6 +143,7 @@ test.each([
 			await writeSkill(join(paths["repo-agents"][0], "neuve"), "ignored repository copy");
 			await writeSkill(join(paths["repo-claude"][0], "neuve"), "ignored Claude repository copy");
 		}
+		if ("carried" in fixture) await writeSkill(join(paths.carried[0], "neuve"), "ignored carried copy");
 		for (const mode of ["ace", "plan"] as const) {
 			const { fake, models } = faux();
 			const channel = await open(repo, models, home);
@@ -171,6 +177,7 @@ test.each([
 			}
 		}
 	} finally {
+		delete config.skills;
 		await rm(root, { recursive: true, force: true });
 	}
 });

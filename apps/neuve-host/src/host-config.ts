@@ -83,6 +83,8 @@ export const HostConfigSchema = z.strictObject({
 	/** What a chat without a model runs, ahead of the provider's preference. */
 	model: ModelRefSchema.optional(),
 	thinkingLevel: z.enum(["low", "medium", "high"]).optional(),
+	/** The skills the `neuve` command carries, listed to agents after every installed skill. */
+	skills: directory("skills").optional(),
 	/** Native close, including any injected finalization, before the host reports failure. */
 	workerCloseTimeoutMs: z.int().positive().default(10_000),
 }).refine(

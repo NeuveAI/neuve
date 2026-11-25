@@ -4,12 +4,16 @@
 
 Proof is what you observed confirming that a unit's changed behaviour is correct: a test run, a type checker's or another declared analyser's output, logs, telemetry, a screenshot, a video. Each record answers one validation requirement, a statement of what must be observed, from the ticket or plan or implied by the change.
 
-- **Kinds must agree.** For browser-facing work, logs, screenshots and video; for server-facing work, telemetry and logs. One kind alone is not enough, and every applicable kind must point to the same result.
+- **Kinds must agree.** One kind alone is not enough, and every applicable kind must point to the same result. For browser-facing work: screenshots and video taken with the Chrome DevTools MCP, and the console, network and server logs of the same run. For backend and daemon work: telemetry and the regular log output of the real running code. For both: a test run, where the behaviour can be tested.
 - **A test run is one kind of proof, and a test is not proof by existing.** Record the run you observed, with its output.
 - **A script written to check the change is not proof.** Record the real behaviour it would stand in for.
 - **Never record more than you saw.** The claim says what the artefact shows, nothing more. Bogus or forged proof is a defect, and reviews look for it.
 
 On the review, each requirement shows as a checkpoint with a proof state: Missing (no record serves it), Out of date (the code or source changed after the record), Conflicting (records disagree), Thin, or Proven (two or more kinds, every applicable kind, a current test run among them where the behaviour can be tested, all current and in agreement). Every run checks again whether its proof is still current.
+
+## As the implementer, record it before you hand over
+
+Recording proof is part of implementing, not a step after review. For each validation requirement, observe the real running code in every applicable kind above and record each artefact with `neuve proof record`. Then run `neuve proof list` and say in your handover which requirements are proven, what is missing and why. The reviewer judges that proof ([review-verification.md](review-verification.md)).
 
 ## Record it
 
