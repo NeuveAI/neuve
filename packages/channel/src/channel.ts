@@ -1451,7 +1451,7 @@ export class Channel {
 	}
 
 	async #planExited({ chat, previous, mode, approval }: ModeTransition) {
-		this.#log("info", "plan.mode.exited", { chat, previous, mode, approval });
+		this.#log("info", "plan.mode.exited", { chat, previousChatMode: previous, chatMode: mode, approvedPlanId: approval.plan });
 		const agent = await this.#harness.snapshot(AgentDoc, chat, context);
 		const model = agent?.model ?? await this.#automatic().catch(() => undefined);
 		if (model) this.#agentChanged(chat, model, agent?.thinkingLevel ?? "off", mode);

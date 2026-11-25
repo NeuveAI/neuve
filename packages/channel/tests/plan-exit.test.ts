@@ -45,7 +45,7 @@ test("approval exits immediately once, and a revision exits with its own approva
 			expect(await run.mode()).toBe("ace");
 			expect((await run.state())?.pendingExits).toEqual({});
 			const logs = run.fixture.log.filter(item => item.event === "plan.mode.exited");
-			expect(logs.at(-1)?.fields).toMatchObject({ chat: ROOT_CONVERSATION_ID, previous: "plan", mode: "ace", approval: { plan: plan.id, hash: plan.hash } });
+			expect(logs.at(-1)?.fields).toMatchObject({ chat: ROOT_CONVERSATION_ID, previousChatMode: "plan", chatMode: "ace", approvedPlanId: plan.id });
 			await run.approve(plan);
 			expect(run.fixture.log.filter(item => item.event === "plan.mode.exited")).toHaveLength(logs.length);
 		}
