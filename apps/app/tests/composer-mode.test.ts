@@ -11,8 +11,14 @@ Object.assign(globalThis, {
 });
 mock.module("@ace/ui", () => ({
 	useLocalStorage<T>(key: string, fallback: T) {
-		const raw = stored.get(key);
-		return [raw === undefined ? fallback : JSON.parse(raw), (value: T) => stored.set(key, JSON.stringify(value))];
+		const read = (): T => {
+			const raw = stored.get(key);
+			return raw === undefined ? fallback : JSON.parse(raw);
+		};
+		// As the real hook does, an update reads the stored value when it is applied.
+		const set = (next: T | ((prev: T) => T)) =>
+			stored.set(key, JSON.stringify(typeof next === "function" ? (next as (prev: T) => T)(read()) : next));
+		return [read(), set];
 	},
 }));
 // The app keeps one composer across a channel's chats; its state is this one slot.
@@ -21,13 +27,14 @@ const react = await import("react");
 mock.module("react", () => ({
 	...react,
 	default: react,
+	useCallback: <T>(callback: T) => callback,
 	useState<T>(initial?: T) {
 		if (slot === undefined) slot = initial;
 		return [slot, (next: T) => void (slot = next)];
 	},
 }));
 beforeEach(() => void (slot = undefined));
-const { askMode, useChatMode } = await import("../src/composer-mode");
+const { askMode, usePlanReturn, useChatMode } = await import("../src/composer-mode");
 
 // Why: if two chats of a channel shared the remembered mode, a composer left on Plan in the
 // planning chat would open the channel's next chat in Plan, and nothing would say why.
@@ -74,13 +81,45 @@ test("the channel's old remembered mode is removed and each chat's stays", () =>
 	expect(useChatMode("c4", 1, undefined)[0]).toBe("plan");
 });
 
-// Why: a channel that predates the mode refuses a message carrying one, so a message in the mode
-// the chat already has must stay the plain ask; only a change of mode carries it.
-test("an ask carries a mode only when it changes the chat's", () => {
+// Why: a channel that predates the mode refuses a message carrying one, so a message in the agent's
+// mode the chat already has must stay the plain ask. Plan is always carried: only a channel that
+// knows modes stores it, and a Plan message is how a person who plans on cancels an approved plan's
+// exit still waiting on a busy chat.
+test("an ask carries the agent's mode only when it changes the chat's, and Plan always", () => {
 	expect(askMode("ace", undefined)).toBeUndefined();
 	expect(askMode("ace", "ace")).toBeUndefined();
-	expect(askMode("plan", "plan")).toBeUndefined();
+	expect(askMode("plan", "plan")).toBe("plan");
 	expect(askMode("plan", undefined)).toBe("plan");
 	expect(askMode("ace", "plan")).toBe("ace");
 	expect(askMode("chat", "plan")).toBeUndefined();
+});
+
+// Why: approving takes the planning chat out of Plan, so the approving person's composer goes back
+// to the mode it left for Plan. A choice the person makes while the approval is answered stays: one
+// out of Plan, and a new Plan session begun from another mode.
+test("approving returns the composer to the mode it had before Plan, and no further", () => {
+	for (const before of ["chat", "ace"]) {
+		const [, change] = useChatMode(before, 1, "ace");
+		change(before, true);
+		useChatMode(before, 1, "ace")[1]("plan", true);
+		slot = undefined;
+		expect(useChatMode(before, 1, "plan")[0]).toBe("plan");
+		usePlanReturn(before, 1)()();
+		expect(useChatMode(before, 1, "ace")[0]).toBe(before);
+	}
+	useChatMode("moved", 1, "ace")[1]("plan", true);
+	const moved = usePlanReturn("moved", 1)();
+	useChatMode("moved", 1, "plan")[1]("chat", true);
+	moved();
+	expect(useChatMode("moved", 1, "ace")[0]).toBe("chat");
+	useChatMode("again", 1, "ace")[1]("chat", true);
+	useChatMode("again", 1, "ace")[1]("plan", true);
+	const again = usePlanReturn("again", 1)();
+	useChatMode("again", 1, "plan")[1]("ace", true);
+	useChatMode("again", 1, "plan")[1]("plan", true);
+	again();
+	expect(useChatMode("again", 1, "plan")[0]).toBe("plan");
+	// A chat that opened in Plan from its stored mode, with nothing chosen here, returns to the agent's.
+	usePlanReturn("seeded", 1)()();
+	expect(useChatMode("seeded", 1, "ace")[0]).toBe("ace");
 });

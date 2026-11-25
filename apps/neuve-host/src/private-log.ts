@@ -122,6 +122,7 @@ const identifiers = new Set([
 	"build",
 	"branch",
 	"part",
+	"approvedPlanId",
 	"error",
 	"stack",
 	"code",
@@ -130,6 +131,8 @@ const kinds = new Map<string, readonly string[]>(
 	Object.entries({
 		state: ["starting", "delivered", "unavailable"],
 		role: ["implementer", "reviewer"],
+		previousChatMode: ["plan", "ace"],
+		chatMode: ["plan", "ace"],
 		op: [
 			"create",
 			"list",

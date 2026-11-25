@@ -1,16 +1,18 @@
 import "./fixtures/memory-secrets";
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// A request or tool can succeed while its operational log drops the name or leaks its words.
+// Private logs must keep operation names and Plan exits observable while dropping payloads.
 test("operational files exclude payload families and stay private on create, reopen and rotation", async () => {
 	if (!process.env.TMPDIR)
 		throw new Error("Set TMPDIR to the external temporary directory");
 	const root = await mkdtemp(join(tmpdir(), "host-log-"));
 	try {
+		const approvedPlanId = "synthetic-approved-plan";
 		const script = `
 import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { config } from ${JSON.stringify(fileURLToPath(new URL("../src/host-config.ts", import.meta.url)))};
@@ -21,6 +23,7 @@ const secret = "synthetic-operational-payload";
 const path = config.home + "/logs/probe.jsonl";
 open("probe");
 log("info", "probe.payload", { args: { command: secret }, prompt: secret, content: secret, result: secret, error: secret, stack: secret, cause: { error: secret }, call: secret, tool: secret, model: { provider: secret, modelId: secret }, requestId: secret, author: secret, trace: secret, channel: secret, name: secret, project: secret, url: secret, reason: secret, op: secret, provider: secret, unknown: secret, constructor: secret, usage: { input: 7, output: 2, cost: { total: 1 } }, chat: 3, task: 4, ms: 5, failed: true });
+log("info", "plan.mode.exited", { chat: 3, previousChatMode: "plan", chatMode: "ace", approvedPlanId: ${JSON.stringify(approvedPlanId)}, text: secret });
 const bytes = readFileSync(path, "utf8");
 const modes = [statSync(path).mode & 0o777];
 chmodSync(path, 0o644);
@@ -67,6 +70,14 @@ writeFileSync(config.home + "/receipt.json", JSON.stringify({ modes, dir: statSy
 		});
 		expect(receipt.records[0].callHash).toMatch(/^[a-f0-9]{64}$/);
 		expect(receipt.records[0]).not.toHaveProperty("args");
+		expect(receipt.records[1]).toMatchObject({
+			event: "plan.mode.exited",
+			chat: 3,
+			previousChatMode: "plan",
+			chatMode: "ace",
+			approvedPlanIdHash: createHash("sha256").update(approvedPlanId).digest("hex"),
+		});
+		expect(JSON.stringify(receipt.records[1])).not.toContain(approvedPlanId);
 		expect(receipt.rotated[0]).toMatchObject({
 			event: "tool.end",
 			tool: "bash",

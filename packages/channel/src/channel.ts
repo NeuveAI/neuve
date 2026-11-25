@@ -89,7 +89,7 @@ import {
 	changePlanComment, discardPlanCommentBatch, keepPlanComment, KEPT_PLAN_REPLIES_REASON, planCommentAnswers, planCommentBatch,
 	planComments, PlanCommentPlacements, preparePlanCommentSend, recoverPlanCommentSends, stagePlanCommentBatch, updatePlanCommentDelivery,
 } from "./plan-comments";
-import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode } from "./plan-mode";
+import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanExit, type ModeTransition } from "./plan-mode";
 import { progress } from "./progress";
 import { answer, PersonWaits, Questions } from "./questions";
 import type {
@@ -411,6 +411,7 @@ export class Channel {
 		// and subscription cannot miss a run transition. LiveDoc forks start empty in pi.
 		channel.#planState = await recoverPlanCommentSends(harness, await harness.snapshot(PlansDoc, context), context);
 		channel.#builds.observe(await harness.snapshot(BuildsDoc, context));
+		await channel.#reconcilePlanExits();
 		await channel.#restoreRunsAndHandoffs(handoffs);
 		channel.#unsubscribe = harness.subscribeCommits(({ changes }) => {
 			const commentMessages = channel.#observePlanCommentSends(changes);
@@ -486,6 +487,13 @@ export class Channel {
 					ended.push([scope.conversationId, inputs]);
 				}
 			}
+			if (changes.some(change => change.type === "document" && change.record.kind === LiveDoc.definition.kind
+				&& !(change.value as LiveState | null)?.run)
+				&& !channel.#closing.signal.aborted) {
+				const task = channel.#reconcilePlanExits().catch(error => channel.#log("error", "plan.exit.reconcile", failure(error)));
+				channel.#captionTasks.add(task);
+				void task.finally(() => channel.#captionTasks.delete(task));
+			}
 			if (runEnded) void channel.#builds.replyToMentions();
 			// Ending a run settles its inputs in the same commit, in no particular change order.
 			for (const [chat, inputs] of ended) {
@@ -522,6 +530,7 @@ export class Channel {
 		if (options.resume !== false) {
 			await channel.#builds.finishStops();
 			await channel.#builds.recoverMentionEntries();
+			await channel.#placeResumingChats();
 			harness.resume();
 			void channel.#builds.resume();
 		}
@@ -633,13 +642,16 @@ export class Channel {
 					await this.#mayInvoke(request.author);
 					const { id } = await this.#conversation(request.chat);
 					let admission: ReturnType<Builds["approve"]> | undefined;
+					let exit: ModeTransition | undefined;
 					const plan = await this.#plans.approve(this.#harness, id, request.plan, request.hash, request.author, context,
 						async (tx, stored, approved) => {
 							// Pi publishes the previous settings commit before running this transaction.
 							admission = this.#builds.approve(tx, id, stored.plan.hash, { stored, approved });
 							await admission;
+							exit = await requestPlanExit(tx, id, { plan: stored.plan.id, hash: stored.plan.hash });
 						});
 					const state = await (admission ?? this.#harness.commit(tx => this.#builds.approve(tx, id, plan.hash), context));
+					if (exit) await this.#planExited(exit);
 					return { id, plan, state };
 				});
 				const build = buildId(id, plan.hash);
@@ -1272,6 +1284,7 @@ export class Channel {
 		return this.#admitted(handle.id, async () => {
 			if (canSubmit?.() === false) return;
 			await this.#select(await this.#conversation(handle.id), {}, undefined, callContext);
+			await this.#placeChatLane(handle.id, callContext);
 			if (canSubmit?.() === false) return;
 			return handle.submit(input, callContext);
 		});
@@ -1335,6 +1348,45 @@ export class Channel {
 		const settings = await this.#harness.snapshot(SettingsDoc, context);
 		const refusal = this.#invokeRefusal(author, settings?.shared !== false);
 		if (refusal) throw new Error(refusal);
+	}
+
+	/** Runs within chat admission, or before scheduling resumes; never changes another lane. */
+	async #placeChatLane(chat: ConversationId, callContext: Context): Promise<void> {
+		const host = this.#options.build;
+		if (!host) return;
+		const cwd = (await this.#harness.snapshot(AgentDoc, chat, callContext))?.cwd || this.#options.project;
+		// Plan never leaves the checkout, but can restore its already assigned snapshot after archive.
+		if (cwd === this.#options.project && await isPlanning(this.#harness, chat, callContext, () => undefined)) return;
+		const name = `chat-${chat}`;
+		const recorded = (await this.#harness.snapshot(LanesDoc, callContext))?.lanes[name];
+		if (cwd !== this.#options.project) {
+			if (!recorded?.hostCreated || recorded.chat !== chat || recorded.path !== cwd) return;
+			const exists = await this.#options.env(cwd).exists(cwd, callContext);
+			if (!exists.ok) throw exists.error;
+			if (exists.value) return;
+		}
+		if (recorded && (!recorded.hostCreated || recorded.chat !== chat)) throw new Error(`Work lane ${name} is already assigned; it was not adopted.`);
+		const lane = await host.worktree({ chat, ...(recorded ? { recorded } : {}) });
+		await this.#harness.commit(async tx => {
+			(await tx.doc(LanesDoc)).lanes[name] = { chat, path: lane.path, base: lane.base, hostCreated: true };
+			await configure(tx, chat, { cwd: lane.path });
+		}, callContext);
+		this.#log("info", "chat.lane", { chat, ...lane });
+	}
+
+	/** Interrupted tasks bypass selection, so place their chats before any task can run. */
+	async #placeResumingChats(): Promise<void> {
+		if (!this.#options.build) return;
+		const chats = new Set<ConversationId>();
+		for (const status of ["pending", "running", "waiting"] as const) {
+			let cursor: Cursor | undefined;
+			do {
+				const page = await this.#harness.commit(tx => tx.scanTasks({ status, abortRequested: false }, 256, cursor), context);
+				for (const task of page.items) chats.add(task.conversationId);
+				cursor = page.next;
+			} while (cursor);
+		}
+		for (const chat of chats) await this.#placeChatLane(chat, context);
 	}
 
 	/** Model and effort apply to a whole run, never just its later turns. */
@@ -1410,15 +1462,21 @@ export class Channel {
 			}
 			if (!same && !modeChange) this.#agentChanged(conversation.id, model, thinkingLevel);
 			if (invocation) {
+				await this.#placeChatLane(conversation.id, callContext);
 				submission = (await this.#approvals.admit(this.#harness, conversation.id, invocation.attended, invocation.settled,
 					() => conversation.submit(invocation.input, callContext))).id;
 			}
 		} catch (error) {
 			if (modeChange) {
-				const { previous } = modeChange;
+				const { previous, pendingExit } = modeChange;
 				try {
 					await this.#harness.commit(async tx => {
-						const { chats } = await tx.doc(ChatModesDoc);
+						const modes = await tx.doc(ChatModesDoc);
+						const { chats } = modes;
+						if (pendingExit) {
+							modes.pendingExits ??= {};
+							modes.pendingExits[conversation.id] = pendingExit;
+						}
 						if (previous === undefined) delete chats[conversation.id];
 						else chats[conversation.id] = previous;
 						if (previousSelection) await configure(tx, conversation.id, previousSelection);
@@ -1433,6 +1491,26 @@ export class Channel {
 		}
 		if (modeChange) this.#agentChanged(conversation.id, model, thinkingLevel, mode);
 		return { model, effort: thinkingLevel, ...(submission === undefined ? {} : { submission }) };
+	}
+
+	async #reconcilePlanExits() {
+		const transitions = await this.#harness.commit(async tx => {
+			const doc = await tx.doc(ChatModesDoc);
+			const transitions: ModeTransition[] = [];
+			for (const id of Object.keys(doc.pendingExits ?? {})) {
+				const transition = await reconcilePlanExit(tx, Number(id) as ConversationId);
+				if (transition) transitions.push(transition);
+			}
+			return transitions;
+		}, context);
+		for (const transition of transitions) await this.#planExited(transition);
+	}
+
+	async #planExited({ chat, previous, mode, approval }: ModeTransition) {
+		this.#log("info", "plan.mode.exited", { chat, previousChatMode: previous, chatMode: mode, approvedPlanId: approval.plan });
+		const agent = await this.#harness.snapshot(AgentDoc, chat, context);
+		const model = agent?.model ?? await this.#automatic().catch(() => undefined);
+		if (model) this.#agentChanged(chat, model, agent?.thinkingLevel ?? "off", mode);
 	}
 
 	#agentChanged(chat: ChatId, model: ModelRef, effort: Effort, mode?: ChatMode) {

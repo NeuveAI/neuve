@@ -1,6 +1,8 @@
 import type { AgentName, Build, BuildAgent, Chat, ChatId, WorkMessage } from "@ace/channel/protocol";
 import type { AgentLineView, BuildCardView, Event, Mention } from "@ace/ui";
 
+import { AGENT_ALIAS } from "./agent-mention";
+
 const TIME = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 const ROLES = { implementer: "Implementer", reviewer: "Reviewer" } as const;
 
@@ -120,15 +122,18 @@ export function buildCards(builds: Build[], chat: ChatId, name: (author: string)
 }
 
 /**
- * What the agents said to each other, drawn as chat messages under each sender's role. The
- * recipient is named only where a build has more than two agents.
+ * What the agents said to each other, drawn as chat messages under each sender's role. The chat
+ * that drafted a plan writes as Neuve and names its recipient; between agents the recipient is
+ * named only where a build has more than two agents.
  */
 export function workEvents(builds: Build[], messages: WorkMessage[], topic: string): Event[] {
 	const agents = new Map(builds.flatMap((build) => build.agents.map((agent) => [agent.chat, { agent, build }])));
+	const planners = new Set(builds.map((build) => build.chat));
 	return messages.flatMap((message, index) => {
 		const from = agents.get(message.from);
-		if (!from) return [];
-		const to = from.build.agents.length > 2 && agents.get(message.to)?.agent;
+		if (!from && !planners.has(message.from)) return [];
+		const recipient = agents.get(message.to)?.agent;
+		const to = (!from || from.build.agents.length > 2) && recipient;
 		return [{
 			id: `${topic}::work:${index}`,
 			uid: `work:${index}`,
@@ -138,7 +143,7 @@ export function workEvents(builds: Build[], messages: WorkMessage[], topic: stri
 			sender: {
 				kind: "user",
 				value: agentAuthor(message.from),
-				display: agentName(from.agent),
+				display: from ? agentName(from.agent) : AGENT_ALIAS.label,
 				...(to ? { credit: `to ${agentName(to)}` } : {}),
 			},
 			// Agents' talk names no one by text: no `@name` in it is drawn as a mention.

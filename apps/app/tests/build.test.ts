@@ -121,12 +121,14 @@ test("a build's card follows its plan's card, only in the planning chat", () => 
 	}
 });
 
-// Why: the recipient is named only where more than two agents could be meant; a message from a
-// chat no build lists has no role to draw, so it is left out rather than drawn as a person.
-test("the work log names a recipient only past two agents and skips unknown senders", () => {
-	const two = workEvents([build()], [said(2, 3, "ready"), said(9, 2, "?")], "t") as Extract<Event, { type: "message" }>[];
+// Why: the recipient is named only where more than two agents could be meant; the chat that drafted
+// the plan writes as Neuve to either agent, so its recipient is always named; a message from a chat
+// no build lists has no role to draw, so it is left out rather than drawn as a person.
+test("the work log names a recipient only past two agents, draws the planning chat as Neuve and skips unknown senders", () => {
+	const two = workEvents([build()], [said(2, 3, "ready"), said(1, 3, "wake up"), said(9, 2, "?")], "t") as Extract<Event, { type: "message" }>[];
 	expect(two.map((event) => [event.sender.display, (event.sender as { credit?: string }).credit])).toEqual([
 		["Implementer", undefined],
+		["Neuve", "to Reviewer"],
 	]);
 	const four = build({ agents: [agent(2), agent(3, { role: "reviewer" }), agent(4, { part: "scheduler" })] });
 	const many = workEvents([four], [said(4, 2, "moved")], "t") as Extract<Event, { type: "message" }>[];
