@@ -349,11 +349,12 @@ export type AgentStartArgs =
 	| { role: "implementer"; part: string; brief: string }
 	| { role: "reviewer"; part?: string; brief?: never };
 
-/** The tool by which a build's agent sends free text to another agent of the same build. */
+/** The tool by which a build's agent or its planning chat sends free text to its agents. */
 export const AGENT_MESSAGE_TOOL = "agent_message";
 
 /**
- * What `AGENT_MESSAGE_TOOL` takes: the recipient by its role and part within the sender's build,
+ * What `AGENT_MESSAGE_TOOL` takes: the recipient by its role and part within the sender's build
+ * (or the planning chat's newest plan, following its recorded revision destination),
  * and the text. The tool refuses a name no agent of that build has.
  */
 export type AgentMessageArgs = { to: AgentRole; part?: string; text: string };

@@ -159,7 +159,7 @@ export function buildTools(builds: () => Builds) {
 			execute: (args, api, context) => builds().startAgent(args, api, context),
 		}), defineTool({
 			name: AGENT_MESSAGE_TOOL,
-			description: "Send a message to an agent of this plan. Name its role and give its path scope in the part field. Omit that field to reach the agent assigned to the whole plan.",
+			description: "Send a message to an agent of this plan, from a started agent or the chat that drafted the plan. Name its role and give its path scope in the part field. Omit that field to reach the agent assigned to the whole plan.",
 			parameters: Type.Object({
 				to: Role,
 				part: Type.Optional(Type.String()),
@@ -606,8 +606,12 @@ export class Builds {
 			if (existing?.submission !== undefined) return;
 			if (existing) return { build: existing.message.build };
 			const sender = this.agent(from);
-			const record = sender && records[sender.build];
-			if (!record) return { refusal: "Only an agent of a plan can message another agent of that plan." };
+			const latest = sender ? undefined : (await tx.doc(PlansDoc)).chats[from]?.at(-1)?.plan;
+			let record = sender ? records[sender.build] : latest && records[buildId(from, latest.hash)];
+			// Approved revisions reuse the preceding build's agents, as recorded at approval.
+			if (!sender && record?.build.state.kind === "delivered") record = records[record.build.state.to];
+			if (!record && (sender || !latest)) return { refusal: "Only an agent of a plan can message another agent of that plan." };
+			if (!record) return { refusal: "This plan has no started agent with that role and path scope. The plan has no started agents yet." };
 			const blocked = buildRefusal(record.build.state.kind);
 			if (blocked) return { refusal: blocked };
 			const recipient = record.starts[agentKey(to, part)];

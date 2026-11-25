@@ -1921,6 +1921,57 @@ test("messages by role and part steer after the shell, stay private, and appear 
 	expect(run.said.filter(value => value.chat === reviewer).map(value => value.author)).toEqual([OWNER]);
 });
 
+// Planning-chat routing must use its newest persisted plan, not the last build with a matching role.
+test("the drafting chat reaches both agents through revisions but never falls back from its newest draft", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { build, chat, reviewer } = await startPair(run);
+	const send = async (to: string, part: string | undefined, text: string, error = false, expected = "The message was sent.") => {
+		fixture.script(tool("agent_message", { to, ...(part ? { part } : {}), text }, text),
+			fauxAssistantMessage("Send finished."), ...(!error ? [fauxAssistantMessage("Received.")] : []));
+		const { submission } = await fixture.request<{ submission: number }>({
+			op: "ask", author: OWNER, mode: "ace", text: "Send the message.",
+		});
+		await fixture.request({ op: "wait", submission });
+		expect(await watch.until("result", event => event.call === text)).toMatchObject({ error, text: expected });
+		await until(() => fixture.channel.isIdle());
+	};
+	await send("implementer", undefined, "Planning implementer delivery.");
+	await send("reviewer", "exports", "Planning reviewer delivery.");
+	await send("reviewer", undefined, "Missing whole-plan reviewer.", true,
+		'This plan has no started agent with that role and path scope. The plan has started an implementer and a reviewer for "exports".');
+	const revision = await run.draft(revisedText);
+	await send("reviewer", "exports", "Newest draft has no agents.", true,
+		"This plan has no started agent with that role and path scope. The plan has no started agents yet.");
+	const finish = Promise.withResolvers<void>();
+	fixture.script(async () => { await finish.promise; return fauxAssistantMessage("Revision received."); });
+	await wake(run, "Continue implementing.", chat);
+	try {
+		await run.approve(revision);
+		expect((await buildAt(watch, 1, "delivered")).state).toEqual({ kind: "delivered", to: build.id });
+	} finally { finish.resolve(); }
+	await until(() => fixture.channel.isIdle());
+	// A later plan in another chat must not change the drafting chat's destination.
+	const other = await fixture.request<{ chat: number }>({ op: "chat", author: OWNER });
+	fixture.script(tool("plan_write", { text: "# Other chat plan" }, "other-plan"));
+	const otherDraft = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, chat: other.chat, mode: "plan", text: "Draft." });
+	await fixture.request({ op: "wait", submission: otherDraft.submission });
+	await send("reviewer", "exports", "Revised planning delivery.");
+	const messages = watch.of("builds").at(-1)!.messages;
+	expect(messages).toEqual([
+		{ build: build.id, from: 1, to: chat, text: "Planning implementer delivery.", at: expect.any(Number) },
+		{ build: build.id, from: 1, to: reviewer, text: "Planning reviewer delivery.", at: expect.any(Number) },
+		{ build: build.id, from: 1, to: reviewer, text: "Revised planning delivery.", at: expect.any(Number) },
+	]);
+	for (const message of messages) {
+		const target = await fixture.watch({ op: "watch", chat: message.to });
+		expect(target.of("message").filter(event => event.text === message.text)).toMatchObject([
+			{ author: "agent@1", text: message.text },
+		]);
+	}
+	expect(run.worktrees).toHaveLength(2);
+});
+
 // A rejected call could still wake an agent if a role or part were resolved outside the build.
 test("agent messages refuse unknown recipients, outsiders, self, empty text, and closed builds", async () => {
 	const run = await setup();
@@ -1957,8 +2008,11 @@ test("agent messages refuse unknown recipients, outsiders, self, empty text, and
 });
 
 // Pi can have admitted a message even when the work log still has only the pending record.
-for (const phase of ["before Pi admits the message", "after Pi admits the message"] as const) {
-	test(`reopening ${phase} sends one message and records it once`, async () => {
+for (const [phase, planning] of [
+	["before Pi admits the message", false], ["before Pi admits the message", true],
+	["after Pi admits the message", false], ["after Pi admits the message", true],
+] as const) {
+	test(`reopening ${phase} sends one ${planning ? "planning-chat" : "agent"} message and records it once`, async () => {
 		const calls: number[] = [];
 		const held = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
@@ -1999,11 +2053,26 @@ for (const phase of ["before Pi admits the message", "after Pi admits the messag
 		try {
 			const pair = await startPair(run);
 			reviewer = pair.reviewer;
+			const from = planning ? 1 : pair.chat;
+			if (planning) {
+				fixture.script(fauxAssistantMessage("Ready to coordinate."));
+				const { submission } = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, mode: "ace", text: "Coordinate." });
+				await fixture.request({ op: "wait", submission });
+			}
+			const senderWatch = planning ? run.watch : pair.agent;
 			const text = "Review the export queue.";
 			fixture.script(messageTool(text, "recover-message"),
 				fauxAssistantMessage("Ready."), fauxAssistantMessage("Ready."));
-			await wake(run, "Ask the reviewer to check the queue.", pair.chat);
+			await wake(run, "Ask the reviewer to check the queue.", from);
 			await held.promise;
+			if (planning) {
+				// A newer draft appearing after reservation must not retarget or refuse the replay.
+				await run.harness.commit(async tx => {
+					const plans = (await tx.doc(PlansDoc)).chats[1]!;
+					const prior = plans.at(-1)!;
+					plans.push({ ...prior, plan: { ...prior.plan, id: "newer-draft", hash: "newer-hash", state: "draft" } });
+				}, context);
+			}
 			const pending = await fixture.watch({ op: "watch", builds: true });
 			expect(pending.of("builds").at(-1)?.messages).toEqual([]);
 			const target = await fixture.watch({ op: "watch", chat: reviewer });
@@ -2016,13 +2085,13 @@ for (const phase of ["before Pi admits the message", "after Pi admits the messag
 				await closing;
 			} else {
 				release.resolve();
-				expect(await pair.agent.until("result", event => event.call === "recover-message")).toMatchObject({
+				expect(await senderWatch.until("result", event => event.call === "recover-message")).toMatchObject({
 					error: true, text: "The host could not finish sending this message.",
 				});
 				await until(() => fixture.channel.isIdle());
 			}
 			await fixture.restart();
-			const sender = await fixture.watch({ op: "watch", chat: pair.chat, builds: true });
+			const sender = await fixture.watch({ op: "watch", chat: from, builds: true });
 			if (phase === "before Pi admits the message") {
 				expect(await sender.until("result", event => event.call === "recover-message")).toMatchObject({
 					error: false, text: "The message was sent.",
@@ -2030,7 +2099,7 @@ for (const phase of ["before Pi admits the message", "after Pi admits the messag
 				expect(calls).toEqual([calls[0]!, calls[0]!]);
 			}
 			const log = await sender.until("builds", event => event.messages.length === 1);
-			expect(log.messages).toEqual([{ build: pair.build.id, from: pair.chat, to: reviewer, text, at: expect.any(Number) }]);
+			expect(log.messages).toEqual([{ build: pair.build.id, from, to: reviewer, text, at: expect.any(Number) }]);
 			const reopened = await fixture.watch({ op: "watch", chat: reviewer });
 			await reopened.until("message", event => event.text === text);
 			expect(reopened.of("message").filter(message => message.text === text)).toHaveLength(1);
