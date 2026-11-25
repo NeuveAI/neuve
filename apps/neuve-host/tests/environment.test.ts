@@ -69,7 +69,26 @@ test("installed neuve comes from the current worker PATH and is kept after PATH 
 	}
 });
 
-test("installed neuve keeps the version when a background child holds stdout open", async () => {
+test("installed neuve reports only the path when the version command exits nonzero", async () => {
+	const bin = await mkdtemp(join(tmpdir(), "worker probe "));
+	const path = join(bin, "neuve");
+	try {
+		await writeFile(path, '#!/bin/sh\nprintf "version unavailable\\n"\nexit 1\n', {mode: 0o700});
+		const script = `
+import {installedNeuve} from ${JSON.stringify(new URL("../src/environment.ts", import.meta.url).href)};
+console.log(JSON.stringify(await installedNeuve()));
+`;
+		const result = Bun.spawnSync([process.execPath, "--no-env-file", "--eval", script], {
+			env: {PATH: bin}, stdout: "pipe", stderr: "pipe",
+		});
+		expect(result.exitCode, result.stderr.toString()).toBe(0);
+		expect(JSON.parse(result.stdout.toString())).toEqual({path});
+	} finally {
+		await rm(bin, {recursive: true, force: true});
+	}
+});
+
+test("installed neuve reports only the path when a background child holds stdout past the deadline", async () => {
 	const bin = await mkdtemp(join(tmpdir(), "worker probe "));
 	const path = join(bin, "neuve");
 	const pidFile = Bun.file(`${path}.pid`);
@@ -87,7 +106,7 @@ console.log(JSON.stringify({installed, elapsed: performance.now() - start}));
 		expect(result.exitedDueToTimeout).toBe(false);
 		expect(result.exitCode, result.stderr.toString()).toBe(0);
 		const {installed, elapsed} = JSON.parse(result.stdout.toString());
-		expect(installed).toEqual({path, version: "neuve 7.8.9"});
+		expect(installed).toEqual({path});
 		expect(elapsed).toBeLessThan(4000);
 	} finally {
 		if (await pidFile.exists()) process.kill(Number(await pidFile.text()), "SIGKILL");

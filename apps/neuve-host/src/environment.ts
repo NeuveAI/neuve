@@ -34,9 +34,10 @@ async function readInstalledNeuve() {
 		const timer = setTimeout(deadline.resolve, 2000);
 		try {
 			// A descendant can keep stdout open after the probe process exits.
-			await Promise.race([Promise.all([read(), child.exited]), deadline.promise]);
+			const finished = await Promise.race([Promise.all([read(), child.exited]), deadline.promise]);
+			if (!finished || child.exitCode !== 0) return { path };
 			const version = (out + decoder.decode()).trim();
-			if (version && (child.exitCode === 0 || !child.killed)) return { path, version };
+			if (version) return { path, version };
 		} finally {
 			clearTimeout(timer);
 			void reader.cancel().catch(() => {});
