@@ -9,6 +9,7 @@ Status: proposal, drafted 23 November 2026 from the owner's conversation with th
 3. An agent's isolate is torn down and cleaned up when the agent is done or dismissed, and when its channel is archived.
 4. The micro-VM is Apple's containerization, which runs each isolate on the Virtualization framework on a Mac and on Cloud Hypervisor on Linux, behind one guest contract. See [Each isolate a micro-VM](#each-isolate-a-micro-vm).
 5. An agent is done when its branch is merged into the channel's branch or its plan is closed, and dismissing is a control of its own that ends an agent for good. See [Teardown](#teardown).
+6. On the owner's Mac, sandbox storage is an APFS disk image on the LaCie drive. See [Making an isolate fast and keeping the host lean](#making-an-isolate-fast-and-keeping-the-host-lean).
 
 **What is proposed on top.**
 
