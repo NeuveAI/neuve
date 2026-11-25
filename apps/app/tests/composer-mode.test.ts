@@ -102,9 +102,9 @@ test("approving returns the composer to the mode it had before Plan, and no furt
 		expect(useChatMode(before, 1, "ace")[0]).toBe(before);
 	}
 	useChatMode("moved", 1, "ace")[1]("plan", true);
-	useChatMode("moved", 1, "plan")[1]("ace", true);
+	useChatMode("moved", 1, "plan")[1]("chat", true);
 	usePlanReturn("moved", 1)();
-	expect(useChatMode("moved", 1, "ace")[0]).toBe("ace");
+	expect(useChatMode("moved", 1, "ace")[0]).toBe("chat");
 	// A chat that opened in Plan from its stored mode, with nothing chosen here, returns to the agent's.
 	usePlanReturn("seeded", 1)();
 	expect(useChatMode("seeded", 1, "ace")[0]).toBe("ace");
