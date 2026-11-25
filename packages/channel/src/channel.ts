@@ -516,6 +516,7 @@ export class Channel {
 		if (options.resume !== false) {
 			await channel.#builds.finishStops();
 			await channel.#builds.recoverMentionEntries();
+			await channel.#placeResumingChats();
 			harness.resume();
 			void channel.#builds.resume();
 		}
@@ -1269,6 +1270,7 @@ export class Channel {
 		return this.#admitted(handle.id, async () => {
 			if (canSubmit?.() === false) return;
 			await this.#select(await this.#conversation(handle.id), {}, undefined, callContext);
+			await this.#placeChatLane(handle.id, callContext);
 			if (canSubmit?.() === false) return;
 			return handle.submit(input, callContext);
 		});
@@ -1332,6 +1334,45 @@ export class Channel {
 		const settings = await this.#harness.snapshot(SettingsDoc, context);
 		const refusal = this.#invokeRefusal(author, settings?.shared !== false);
 		if (refusal) throw new Error(refusal);
+	}
+
+	/** Runs within chat admission, or before scheduling resumes; never changes another lane. */
+	async #placeChatLane(chat: ConversationId, callContext: Context): Promise<void> {
+		const host = this.#options.build;
+		if (!host) return;
+		const cwd = (await this.#harness.snapshot(AgentDoc, chat, callContext))?.cwd || this.#options.project;
+		// Plan never leaves the checkout, but can restore its already assigned snapshot after archive.
+		if (cwd === this.#options.project && await isPlanning(this.#harness, chat, callContext, () => undefined)) return;
+		const name = `chat-${chat}`;
+		const recorded = (await this.#harness.snapshot(LanesDoc, callContext))?.lanes[name];
+		if (cwd !== this.#options.project) {
+			if (!recorded?.hostCreated || recorded.chat !== chat || recorded.path !== cwd) return;
+			const exists = await this.#options.env(cwd).exists(cwd, callContext);
+			if (!exists.ok) throw exists.error;
+			if (exists.value) return;
+		}
+		if (recorded && (!recorded.hostCreated || recorded.chat !== chat)) throw new Error(`Work lane ${name} is already assigned; it was not adopted.`);
+		const lane = await host.worktree({ chat, ...(recorded ? { recorded } : {}) });
+		await this.#harness.commit(async tx => {
+			(await tx.doc(LanesDoc)).lanes[name] = { chat, path: lane.path, base: lane.base, hostCreated: true };
+			await configure(tx, chat, { cwd: lane.path });
+		}, callContext);
+		this.#log("info", "chat.lane", { chat, ...lane });
+	}
+
+	/** Interrupted tasks bypass selection, so place their chats before any task can run. */
+	async #placeResumingChats(): Promise<void> {
+		if (!this.#options.build) return;
+		const chats = new Set<ConversationId>();
+		for (const status of ["pending", "running", "waiting"] as const) {
+			let cursor: Cursor | undefined;
+			do {
+				const page = await this.#harness.commit(tx => tx.scanTasks({ status, abortRequested: false }, 256, cursor), context);
+				for (const task of page.items) chats.add(task.conversationId);
+				cursor = page.next;
+			} while (cursor);
+		}
+		for (const chat of chats) await this.#placeChatLane(chat, context);
 	}
 
 	/** Model and effort apply to a whole run, never just its later turns. */
@@ -1407,6 +1448,7 @@ export class Channel {
 			}
 			if (!same && !modeChange) this.#agentChanged(conversation.id, model, thinkingLevel);
 			if (invocation) {
+				await this.#placeChatLane(conversation.id, callContext);
 				submission = (await this.#approvals.admit(this.#harness, conversation.id, invocation.attended, invocation.settled,
 					() => conversation.submit(invocation.input, callContext))).id;
 			}

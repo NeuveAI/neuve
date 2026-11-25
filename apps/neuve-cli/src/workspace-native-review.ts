@@ -274,7 +274,9 @@ export function nativeReviewCallbacks(
           const values = {
             requestId: prepared.requestId,
             branch:
-              h.source || h.externalSources.length ? undefined : h.sourceBranch,
+              h.source || h.externalSources.length
+                ? undefined
+                : (h.sourceBranch ?? h.branch),
             branchCheckout: h.cwd,
             frozenConfig: PipelineConfig.parse(prepared.config),
             origin: h.origin,

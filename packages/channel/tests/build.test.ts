@@ -62,11 +62,13 @@ async function setup(options: {
 			if (outcome.kind === "failed") throw outcome.error;
 			return outcome.value as T;
 		},
-		async worktree(name, source) {
+		async worktree(...[target, source]) {
 			await options.beforeWorktree?.();
+			const name = typeof target === "string" ? target : `chat-${target.chat}`;
+			const recorded = typeof target === "string" ? undefined : target.recorded;
 			const result = await buildWorktree({
 				name: "one", project: fixture.project, lanes: fixture.lanes, env: cwd => scratchEnv(cwd, fixture.root),
-			}, name, context, source);
+			}, name, context, source, recorded);
 			worktrees.push(result);
 			return result;
 		},
@@ -876,7 +878,9 @@ test("agent start refuses invalid arguments, duplicate roles, and callers outsid
 		"Only an agent of a plan can ask the host to start another agent.");
 	await run.harness.commit(tx => setChatMode(tx, ROOT_CONVERSATION_ID, "plan"), context);
 	await refuse(run.watch, 1, "planning-start", { role: "reviewer" }, "Plan mode is read-only. The agent_start tool is unavailable in plan mode.");
-	expect(run.worktrees).toHaveLength(2);
+	// The ordinary writing chat also gets placement, without becoming a plan agent.
+	expect(run.worktrees).toHaveLength(3);
+	expect(run.worktrees[2]?.branch).toBe(`one/chat-${other.chat}`);
 	expect((await fixture.channel.info()).chats.filter(chat => chat.build)).toHaveLength(2);
 });
 

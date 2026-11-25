@@ -20,7 +20,7 @@ import { toolArguments, toolRefusal } from "./tool-arguments";
  * Version 1 lanes have no base.
  */
 export const LanesDoc = defineDoc<
-	{ lanes: Record<string, { chat: ConversationId; path: string; base?: string }> }
+	{ lanes: Record<string, { chat: ConversationId; path: string; base?: string; hostCreated?: true }> }
 >({
 	kind: "ace.lanes",
 	version: 2,

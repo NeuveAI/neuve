@@ -139,24 +139,47 @@ test.each(["feature", "other", "detached", "worktree"])(
   },
 );
 
-test("names all tips when a detached review needs a branch, then accepts the named tip", async () => {
+test.each(["detached", "other"])(
+  "names both branches at the review head from the %s checkout",
+  async (checkout) => {
+    const repo = fixture();
+    repo.git("branch", "followup", repo.head);
+    if (checkout === "detached") repo.git("switch", "--detach", repo.head);
+    else repo.git("switch", "-c", "other", repo.base);
+    await expect(repo.run(repo.request())).rejects.toThrow(
+      '"feature" and "followup" end at this review\'s head, so pass --branch <name> with the branch to review.',
+    );
+  },
+);
+
+test("joins the bound range cycle from a detached checkout at a shared tip", async () => {
   const repo = fixture();
+  const first = await repo.run(repo.request());
   repo.git("branch", "followup", repo.head);
   repo.git("switch", "--detach", repo.head);
-  await expect(repo.run(repo.request())).rejects.toThrow(
-    '"feature" and "followup" end at this review\'s head, so pass --branch <name> with the branch to review.',
-  );
-  const wrongBranch = () =>
-    repo.run(repo.request(repo.head, { branch: "other" }));
-  const refusal =
-    '--branch names no branch that ends at this review\'s head, so pass --branch with "feature" or "followup".';
-  await expect(wrongBranch()).rejects.toThrow(refusal);
-  const read = await repo.run(repo.read());
-  const review = await repo.run(repo.request(repo.head, { branch: "feature" }));
-  expect(review.cycleId).toBe(read.cycleId);
+  const review = await repo.run(repo.request());
+  expect(review.cycleId).toBe(first.cycleId);
   expect(review.openedCycle).toBe(false);
-  await expect(wrongBranch()).rejects.toThrow(refusal);
 });
+
+test.each(["feature", "followup"])(
+  "accepts --branch %s when both branches end at the review head",
+  async (branch) => {
+    const repo = fixture();
+    repo.git("branch", "followup", repo.head);
+    if (branch === "feature") repo.git("switch", "followup");
+    const wrongBranch = () =>
+      repo.run(repo.request(repo.head, { branch: "other" }));
+    const refusal =
+      '--branch names no branch that ends at this review\'s head, so pass --branch with "feature" or "followup".';
+    await expect(wrongBranch()).rejects.toThrow(refusal);
+    const read = await repo.run(repo.read(branch));
+    const review = await repo.run(repo.request(repo.head, { branch }));
+    expect(review.cycleId).toBe(read.cycleId);
+    expect(review.openedCycle).toBe(false);
+    await expect(wrongBranch()).rejects.toThrow(refusal);
+  },
+);
 
 test("refuses a named branch that contains the head when another branch ends there", async () => {
   const repo = fixture();
@@ -397,7 +420,7 @@ test("opens and reuses a range cycle from a detached checkout without an earlier
 });
 
 test.each([false, true])(
-  "reviews from a branch cut at the implementer's tip with reviewer read %s",
+  "selects a cycle at the implementer's tip with reviewer read %s",
   async (reviewerRead) => {
     const repo = fixture();
     const implementer = await repo.run(repo.read());
@@ -406,17 +429,53 @@ test.each([false, true])(
       const reviewer = await repo.run(repo.read("reviewer"));
       const review = await repo.run(repo.request());
       expect(review.cycleId).toBe(reviewer.cycleId);
-    } else {
-      await expect(repo.run(repo.request())).rejects.toThrow(
-        '"feature" and "reviewer" end at this review\'s head, so pass --branch <name> with the branch to review.',
-      );
-      const review = await repo.run(
-        repo.request(repo.head, { branch: "feature" }),
-      );
-      expect(review.cycleId).toBe(implementer.cycleId);
+      expect(review.openedCycle).toBe(false);
+      return;
     }
+    await expect(repo.run(repo.request())).rejects.toThrow(
+      '"feature" and "reviewer" end at this review\'s head, so pass --branch <name> with the branch to review.',
+    );
+    const review = await repo.run(
+      repo.request(repo.head, { branch: "feature" }),
+    );
+    expect(review.cycleId).toBe(implementer.cycleId);
+    expect(review.openedCycle).toBe(false);
   },
 );
+
+test("opens a cycle from the checkout when neither branch at the shared tip has a cycle", async () => {
+  const repo = fixture();
+  repo.git("branch", "channel/chat-1", repo.head);
+  const review = await repo.run(repo.request());
+  expect(review.openedCycle).toBe(true);
+  expect(review.events[0]).toMatchObject({
+    kind: "cycle.opened@1",
+    attribution: {
+      cycleId: review.cycleId,
+      range: { baseOid: repo.base, headOid: repo.head },
+    },
+  });
+});
+
+test("joins the checkout's cycle when a work lane at the same tip has no open cycle", async () => {
+  const repo = fixture();
+  const read = await repo.run(repo.read());
+  repo.git("branch", "channel/chat-1", repo.head);
+  const review = await repo.run(repo.request());
+  expect(review.cycleId).toBe(read.cycleId);
+  expect(review.openedCycle).toBe(false);
+});
+
+test("joins the checkout's cycle when another branch at the same tip has a newer open read cycle", async () => {
+  const repo = fixture();
+  const checkout = await repo.run(repo.read());
+  repo.git("branch", "followup", repo.head);
+  const other = await repo.run(repo.read("followup"));
+  expect(other.cycleId).not.toBe(checkout.cycleId);
+  const review = await repo.run(repo.request());
+  expect(review.cycleId).toBe(checkout.cycleId);
+  expect(review.openedCycle).toBe(false);
+});
 
 const withBranchRead = async <A>(
   repo: ReturnType<typeof fixture>,
