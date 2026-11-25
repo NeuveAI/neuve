@@ -10,7 +10,7 @@ Status: proposal, drafted 23 November 2026 from the owner's conversation with th
 4. The micro-VM is Apple's containerization, which runs each isolate on the Virtualization framework on a Mac and on Cloud Hypervisor on Linux, behind one guest contract. See [Each isolate a micro-VM](#each-isolate-a-micro-vm).
 5. An agent is done when its branch is merged into its plan's branch or its plan is closed, and dismissing is a control of its own that ends an agent for good. See [Teardown](#teardown).
 6. On the owner's Mac, sandbox storage is an APFS disk image on the LaCie drive. See [Making an isolate fast and keeping the host lean](#making-an-isolate-fast-and-keeping-the-host-lean).
-7. Every channel's agents run in isolates from the start, a one-person channel's included, and a channel can own its branch from the start ([decisions record](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026), row 17.55): one branch per approved plan, so a channel holds several over its life (row 17.56).
+7. Every channel's agents run in isolates from the start, a one-person channel's included, and a channel can own branches from the start, one per approved plan, so it holds several over its life ([decisions record](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026), rows 17.55 and 17.56).
 
 **What is proposed on top.**
 
