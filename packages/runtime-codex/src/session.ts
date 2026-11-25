@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
   RuntimeUnavailable,
   SignInRequired,
@@ -171,6 +171,10 @@ interface Current {
   ended: boolean;
 }
 
+type SkillPaths = ReadonlyMap<string, string | undefined>;
+const canonicalSkillPath = async (path: string) =>
+  isAbsolute(path) ? realpath(path).catch(() => undefined) : undefined;
+
 const EMPTY: OwnSettings = {
   mcpServers: [],
   plugins: [],
@@ -323,9 +327,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
   let model = policy.model;
   let threadModel: string | undefined;
   let threadId = "";
-  let own:
-    | { settings: OwnSettings; allowedSkills: ReadonlyMap<string, string> }
-    | undefined;
+  let own: { settings: OwnSettings; allowedSkills: SkillPaths } | undefined;
   let current: Current | undefined;
   let lastCheckedToken: string | undefined;
   let generation = 0;
@@ -1097,7 +1099,15 @@ export const openCodexSession = Effect.fnUntraced(function* (
       const data = Decode.SkillsAnswer.parse(
         yield* connection.request("skills/list", { cwds: [options.cwd] }),
       ).data;
-      return data.flatMap((entry) => entry.skills);
+      const skills = data.flatMap((entry) => entry.skills);
+      return yield* Effect.promise(() =>
+        Promise.all(
+          skills.map(async (skill) => ({
+            ...skill,
+            canonicalPath: await canonicalSkillPath(skill.path),
+          })),
+        ),
+      );
     });
   const roots = policy.skillRoots;
   const carried = roots?.carried;
@@ -1107,7 +1117,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
       : connection
           .request("skills/extraRoots/set", { extraRoots: [carried] })
           .pipe(Effect.asVoid);
-  const readOwn = (skills: ReadonlyMap<string, string>) =>
+  const readOwn = (skills: SkillPaths) =>
     Effect.gen(function* () {
       const probe = yield* startProcess(
         roots === undefined ? "clean" : "own",
@@ -1127,9 +1137,10 @@ export const openCodexSession = Effect.fnUntraced(function* (
           apps: Object.keys(config.apps ?? {}).filter(
             (name) => name !== "_default",
           ),
-          skills: discovered.map(({ path, name }) => ({
+          skills: discovered.map(({ path, name, canonicalPath }) => ({
             path,
-            enabled: skills.get(path) === name,
+            enabled:
+              canonicalPath !== undefined && skills.get(name) === canonicalPath,
           })),
           exclude: config.shell_environment_policy?.exclude ?? [],
         } satisfies OwnSettings;
@@ -1281,8 +1292,8 @@ export const openCodexSession = Effect.fnUntraced(function* (
                       (await findSkills(roots)).map(
                         async ({ name, folder }) =>
                           [
-                            await realpath(join(folder, "SKILL.md")),
                             name,
+                            await canonicalSkillPath(join(folder, "SKILL.md")),
                           ] as const,
                       ),
                     ),
@@ -1331,23 +1342,27 @@ export const openCodexSession = Effect.fnUntraced(function* (
   const prepare = (
     next: Current,
     configuration: Configuration,
-    skills: ReadonlyMap<string, string>,
+    skills: SkillPaths,
     active: Turn | undefined,
   ) =>
     Effect.gen(function* () {
-      const enabled = yield* Effect.gen(function* () {
+      const reported = yield* Effect.gen(function* () {
         yield* addCarried(next.connection);
-        return (yield* listSkills(next.connection)).filter(
-          (skill) => skill.enabled,
-        );
+        return yield* listSkills(next.connection);
       }).pipe(
         Effect.catchCause(() => Effect.fail(unavailable("start-failed"))),
       );
-      if (
-        enabled.length !== skills.size ||
-        enabled.some(({ name, path }) => skills.get(path) !== name)
-      )
-        return yield* unavailable("start-failed");
+      const missing = new Set(skills.keys());
+      for (const { enabled, name, canonicalPath } of reported) {
+        if (!enabled) continue;
+        if (canonicalPath === undefined || skills.get(name) !== canonicalPath)
+          return yield* unavailable("start-failed");
+        missing.delete(name);
+      }
+      if (missing.size !== 0)
+        yield* Effect.logWarning("codex: skills were not enabled", [
+          ...missing,
+        ]);
       if (configuration === "clean" && !(yield* verifyClean(next.connection)))
         return yield* unavailable("start-failed");
       yield* still(active);

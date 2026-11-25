@@ -1,5 +1,7 @@
 // The fake checks what crosses the Codex connection and what the session reports to its caller.
 import { describe, expect, test } from "bun:test";
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
   AccountRejected,
   AccountName,
@@ -1837,6 +1839,65 @@ describe("what the first tests missed", () => {
       );
     },
   );
+
+  test.each([
+    { label: "a different spelling of an allowed skill", enabled: true },
+    { label: "an allowed skill that Codex leaves disabled", enabled: false },
+  ])("Codex starts with $label", async ({ enabled }) => {
+    const project = resolve(import.meta.dir, "../../../apps/neuve-cli/skills");
+    const lowerCase = `${project}/neuve/skill.md`;
+    const path = enabled
+      ? await realpath(lowerCase).then(
+          () => lowerCase,
+          () => `${project}/neuve/./SKILL.md`,
+        )
+      : `${project}/neuve/SKILL.md`;
+    const flag = `skills.config=[{path=${JSON.stringify(path)},enabled=true}]`;
+    const fake = codex((message, process) =>
+      message.method === "skills/list"
+        ? {
+            data: [
+              {
+                skills: [
+                  {
+                    name: "neuve",
+                    path,
+                    enabled: enabled && process.args.includes(flag),
+                  },
+                ],
+              },
+            ],
+          }
+        : undefined,
+    );
+    const logs: unknown[] = [];
+    const session = await Effect.runPromise(
+      Effect.scoped(
+        openCodexSession({
+          account,
+          program: "/test/codex",
+          cwd: "/work",
+          environment: {},
+          policy: {
+            ...policy,
+            skillRoots: { user: project, project, carried: undefined },
+          },
+          start: { kind: "new" },
+          stopWait: "10 millis",
+        }),
+      ).pipe(
+        Effect.provide(fake.layer),
+        Effect.provide(
+          Logger.layer([Logger.make(({ message }) => logs.push(message))]),
+        ),
+      ),
+    );
+    expect(session.nativeSessionId).toBe("thread-1");
+    expect(fake.current().args).toContain(flag);
+    expect(logs).toEqual(
+      enabled ? [] : [["codex: skills were not enabled", ["neuve"]]],
+    );
+  });
 
   test("under ask, a request during a clean turn is declined, and one from Neuve's own server too", async () => {
     const fake = codex();
