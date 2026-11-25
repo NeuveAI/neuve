@@ -297,10 +297,7 @@ test.each(["same", "reordered", "different"] as const)(
           ),
         );
         writeFileSync(join(repo.repository, "plan.md"), "Live edit");
-        const first = yield* repo.request(repo.head, {
-          branch: "feature",
-          requestId,
-        });
+        const first = yield* repo.request(repo.head, { requestId });
         const second = yield* repo.request(repo.head, {
           repository: other,
         });
@@ -445,6 +442,20 @@ test.each([false, true])(
     expect(review.openedCycle).toBe(false);
   },
 );
+
+test("opens a cycle from the checkout when neither branch at the shared tip has a cycle", async () => {
+  const repo = fixture();
+  repo.git("branch", "channel/chat-1", repo.head);
+  const review = await repo.run(repo.request());
+  expect(review.openedCycle).toBe(true);
+  expect(review.events[0]).toMatchObject({
+    kind: "cycle.opened@1",
+    attribution: {
+      cycleId: review.cycleId,
+      range: { baseOid: repo.base, headOid: repo.head },
+    },
+  });
+});
 
 test("joins the checkout's cycle when a work lane at the same tip has no open cycle", async () => {
   const repo = fixture();
