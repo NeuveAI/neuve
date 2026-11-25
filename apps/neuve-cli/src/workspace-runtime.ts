@@ -6,7 +6,7 @@ import {
   rm,
   stat,
 } from "node:fs/promises";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { config as native } from "@ace/host/config";
@@ -15,6 +15,8 @@ import { Starter } from "@neuve/records-core";
 import { configureRuntime } from "@ace/host/runtime-hooks";
 import { workspaceNativeSources } from "./workspace-native-sources.ts";
 import { routeCodingDefaults } from "./workspace-models.ts";
+import { writeSkillShare } from "./skill-bundle.ts";
+import { findSkillSource } from "./skills-cli.ts";
 import {
   HostConfigSchema,
   configure,
@@ -111,8 +113,6 @@ export function workspaceConfiguration(input: {
   app?: string;
 }): HostConfig {
   const { home, lanes } = workspaceDirectories(input.storage);
-  // The Neuve skill this checkout carries, so its agents have it before anyone installs it.
-  const skills = join(input.source, "apps/neuve-cli/skills");
   const command = Bun.main.startsWith("/$bunfs/")
     ? [process.execPath]
     : [
@@ -137,7 +137,6 @@ export function workspaceConfiguration(input: {
         : {}),
     ...routeCodingDefaults(input.route),
     workerCloseTimeoutMs: 130_000,
-    ...(existsSync(join(skills, "neuve", "SKILL.md")) ? { skills } : {}),
     worker: [...command, "workspace", "worker"],
     environment: {
       ...input.environment,
@@ -145,6 +144,21 @@ export function workspaceConfiguration(input: {
       NEUVE_WORKSPACE_SOURCE: input.source,
     },
   });
+}
+
+/**
+ * Writes the Neuve skill this neuve carries, with its version, into the host's home on every
+ * launch, so the workspace's agents have it before anyone installs it.
+ */
+export async function writeCarriedSkill(
+  home: string,
+): Promise<{ skills?: string }> {
+  const carried = await findSkillSource();
+  if (!carried.found) return {};
+  const skills = join(home, "skills");
+  await rm(skills, { recursive: true, force: true });
+  await writeSkillShare({ bundle: carried.bundle, shareDirectory: skills });
+  return { skills };
 }
 
 async function activateWorkspaceCli(
@@ -158,6 +172,7 @@ async function activateWorkspaceCli(
   const local = args[0] === "serve" && args.includes("--loopback");
   const managed = configure({
     ...configuration,
+    ...(args[0] === "serve" ? await writeCarriedSkill(configuration.home) : {}),
     ...(local ? { channelScope: "local" } : {}),
   });
   await bindConfiguredCatalog(

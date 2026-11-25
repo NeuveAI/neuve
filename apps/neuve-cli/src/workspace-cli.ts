@@ -76,6 +76,7 @@ import { workspaceCaptureModels } from "./workspace-capture-models.ts";
 import {
   writeWorkspaceRuntime,
   workspaceConfiguration,
+  writeCarriedSkill,
   workspaceDirectories,
   requireWorkspaceBun,
 } from "./workspace-runtime.ts";
@@ -989,6 +990,20 @@ async function workspace(args: readonly string[]): Promise<number> {
         once: true,
       },
     );
+    const configuration = workspaceConfiguration({
+      storage,
+      environment,
+      profile,
+      source,
+      user,
+      port: hostPort,
+      route,
+      app,
+    });
+    const hostConfig = {
+      ...configuration,
+      ...(await writeCarriedSkill(configuration.home)),
+    };
     host = await startHost({
       loopback: values.loopback ?? false,
       ...nativeReviewCallbacks(
@@ -1006,16 +1021,7 @@ async function workspace(args: readonly string[]): Promise<number> {
           return actual;
         },
       ),
-      config: workspaceConfiguration({
-        storage,
-        environment,
-        profile,
-        source,
-        user,
-        port: hostPort,
-        route,
-        app,
-      }),
+      config: hostConfig,
       models: () => [
         ...routeHostModels(route, () =>
           route.provider === "claude"
