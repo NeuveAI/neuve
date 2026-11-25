@@ -121,6 +121,11 @@ type Props = {
 	/** Receives the function that shows the chat's Plan tab at a plan, opening one if needed. */
 	planOpener?: { current?: (plan?: string) => void };
 	/**
+	 * The chat's newest review with a batch overview, `null` when it has none, once known. A review
+	 * the layout hasn't opened a Review tab for opens one; those there on the chat's first load don't.
+	 */
+	review?: { review: string; path: string } | null;
+	/**
 	 * How many agents and messages the channel's work log holds; absent while the channel has no
 	 * build, when Work log is not offered. The first agent opens a Work log tab behind the chat, once.
 	 */
@@ -848,6 +853,7 @@ function useLayout(
 		opener,
 		plan,
 		planOpener,
+		review: newest,
 		shells,
 		work,
 		workOpener,
@@ -858,6 +864,7 @@ function useLayout(
 	const [meta, setMeta] = useState<Meta>(data.meta);
 	const [diff, setDiff] = useState(data.diff);
 	const [planned, setPlanned] = useState(data.plans);
+	const [reviewed, setReviewed] = useState(data.reviews);
 	const [seen, setSeen] = useState(data.work);
 	const state = useSyncExternalStore(api.subscribe, api.get, api.get);
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
@@ -880,8 +887,8 @@ function useLayout(
 		: undefined;
 
 	useEffect(() => {
-		write(id, state, meta, diff, planned, seen);
-	}, [id, state, meta, diff, planned, seen]);
+		write(id, state, meta, diff, planned, seen, reviewed);
+	}, [id, state, meta, diff, planned, seen, reviewed]);
 
 	const snapshot = useEffectEvent((): WindowState => {
 		const active = new Set(view.panes.map((pane) => pane.active));
@@ -896,7 +903,7 @@ function useLayout(
 			focused,
 		};
 	});
-	const persist = useEffectEvent(() => write(id, api.get(), meta, diff, planned, seen));
+	const persist = useEffectEvent(() => write(id, api.get(), meta, diff, planned, seen, reviewed));
 	const command = useEffectEvent((request: TabRename) => {
 		if (request.expires <= Date.now()) throw new Error("Tab rename expired");
 		if (request.channel !== id) throw new Error("This window is showing another channel");
@@ -944,6 +951,16 @@ function useLayout(
 		setMeta((meta) => ({ ...meta, [uid]: content("diff", chat) }));
 	}, [api, chat, changed, diff, meta]);
 
+	// A new tab goes beside the chat when there is room, else into the chat's pane, where `quiet`
+	// keeps it behind the chat.
+	function place(uid: string, quiet: boolean) {
+		const current = api.get();
+		const pane = Split.host(current, CHAT)?.uid;
+		const side = !flat && Split.can(current, { ...fit, open: { to: { pane, side: "right" } } });
+		const to: Split.Target | undefined = side ? { pane, side: "right" } : flat ? undefined : { pane };
+		return api.open({ tab: uid, to, ...(side ? { fit } : quiet ? { background: true } : {}) });
+	}
+
 	// A Plan tab opens beside the chat once for each new plan, or behind it when there is no room;
 	// a closed one stays closed until the agent writes another plan.
 	const beside = useEffectEvent((target?: string) => {
@@ -962,10 +979,7 @@ function useLayout(
 			return open;
 		}
 		const uid = `tab-${api.get().seq + 1}`;
-		const pane = Split.host(api.get(), CHAT)?.uid;
-		const side = !flat && Split.can(api.get(), { ...fit, open: { to: { pane, side: "right" } } });
-		const to: Split.Target | undefined = side ? { pane, side: "right" } : flat ? undefined : { pane };
-		if (!api.open({ tab: uid, to, ...(side ? { fit } : { background: true }) })) return;
+		if (!place(uid, true)) return;
 		setMeta((meta) => ({ ...meta, [uid]: at() }));
 		return uid;
 	});
@@ -1013,10 +1027,7 @@ function useLayout(
 			return activate(open);
 		}
 		const uid = `tab-${api.get().seq + 1}`;
-		const pane = Split.host(api.get(), CHAT)?.uid;
-		const side = !flat && Split.can(api.get(), { ...fit, open: { to: { pane, side: "right" } } });
-		const to: Split.Target | undefined = side ? { pane, side: "right" } : flat ? undefined : { pane };
-		if (!api.open({ tab: uid, to, ...(side ? { fit } : {}) })) return;
+		if (!place(uid, false)) return;
 		setMeta((meta) => ({ ...meta, [uid]: at }));
 		requestAnimationFrame(() => focus(uid));
 	});
@@ -1065,8 +1076,9 @@ function useLayout(
 	}, [opener]);
 
 	// One Review tab per channel takes every review link: the one shown in a pane, else the first.
-	// Every caller's path is checked again here, so nothing but a review entry route is framed.
-	const review = useEffectEvent((href: string) => {
+	// Every caller's path is checked again here, so nothing but a review entry route is framed. A
+	// `quiet` link, the chat's new review, moves or opens the tab without showing or focusing it.
+	const review = useEffectEvent((href: string, quiet = false) => {
 		const path = reviewPath(href);
 		if (!path) return;
 		const current = api.get();
@@ -1081,6 +1093,7 @@ function useLayout(
 				const name = value.name;
 				return { ...meta, [open]: { type: "review", path, ...(name ? { name } : undefined) } };
 			});
+			if (quiet) return;
 			const pane = Split.host(current, open);
 			api.select({ tab: open, pane: flat ? undefined : pane?.uid });
 			requestAnimationFrame(() => enter(open));
@@ -1088,12 +1101,24 @@ function useLayout(
 		}
 		const uid = `tab-${current.seq + 1}`;
 		const pane = Split.host(current, CHAT)?.uid;
-		if (!api.open({ tab: uid, to: flat ? undefined : { pane } })) return;
+		if (!(quiet ? place(uid, true) : api.open({ tab: uid, to: flat ? undefined : { pane } }))) return;
 		setMeta((meta) => ({ ...meta, [uid]: { type: "review", path } }));
-		requestAnimationFrame(() => enter(uid));
+		if (!quiet) requestAnimationFrame(() => enter(uid));
 	});
 
-	useLayoutEffect(() => register(id, review), [id]);
+	useLayoutEffect(() => register(id, (path) => review(path)), [id]);
+
+	// The Review tab moves to each new review the chat starts, opening beside the chat as a Plan tab
+	// does; a closed one stays closed until the next review. Reviews a chat holds the first time it
+	// loads here are only noted, so an upgrade doesn't open a tab in every channel with old reviews.
+	useEffect(() => {
+		if (newest === undefined) return;
+		const last = reviewed[chat];
+		const next = newest?.review ?? "";
+		if (last !== undefined && next <= last) return;
+		setReviewed((reviewed) => ({ ...reviewed, [chat]: next }));
+		if (last !== undefined && newest) review(newest.path, true);
+	}, [chat, newest, reviewed]);
 	const [link] = useState(() => (path: string) => review(path));
 
 	function nav(event: KeyboardEvent<HTMLElement>, pane: Split.Pane) {

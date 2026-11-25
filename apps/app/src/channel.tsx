@@ -29,7 +29,7 @@ import { agentName } from "./build-card";
 import { ChannelAccess } from "./channel-access";
 import { EFFORTS } from "./composer";
 import { Conversation } from "./conversation";
-import { forget, publish, useDetails, useNewestPlan } from "./details";
+import { forget, publish, useDetails, useNewestPlan, useNewestReview } from "./details";
 import { useAsked, useGit } from "./git";
 import { host, onOpen as onHostOpen } from "./host";
 import { CHAT, Layout } from "./layout/layout";
@@ -402,6 +402,7 @@ export function Channel(
 		return () => forget(channel.id);
 	}, [channel.id, chat]);
 	const plan = useNewestPlan(channel.id, chat);
+	const review = useNewestReview(channel.id, chat);
 	const { builds } = useDetails(channel.id);
 	// Agents and messages, so a new one marks the Work log tab; none while the channel has no build.
 	const work = builds?.list.length
@@ -428,6 +429,7 @@ export function Channel(
 			opener={opener}
 			plan={plan}
 			planOpener={planOpener}
+			review={review}
 			work={work}
 			workOpener={workOpener}
 			shells={shells}

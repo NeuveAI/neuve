@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import type { Build, Changes, GithubPull, Plan, PlanComment, WorkMessage } from "@ace/channel/protocol";
 import type { ChannelInfo } from "@ace/host/protocol";
 
+import type { NewestReview } from "./review-card";
 import type { Item } from "./transcript";
 
 /** A git or pull request action the chat's agent was asked to take. */
@@ -41,6 +42,8 @@ export type Details = {
 	 * submission that sent some of them, as the channel's events showed it.
 	 */
 	planComments?: { chat: number; list: PlanComment[]; sends?: number[] };
+	/** The shown chat's newest review with a batch overview, `null` when it has none, once its transcript has loaded. */
+	reviews?: { chat: number; newest: NewestReview | null };
 	/** Shows the chat's Plan tab, opening one beside the chat when none is open, at plan `id`. */
 	plan?: (id?: string) => void;
 	/** The channel's builds and what their agents said to each other, once a chat's transcript has loaded. */
@@ -89,5 +92,16 @@ export function useNewestPlan(channel: string, chat: number): string | undefined
 	return useSyncExternalStore(subscribe, () => {
 		const plans = values.get(channel)?.plans;
 		return plans?.chat === chat ? plans.list.at(-1)?.id : undefined;
+	});
+}
+
+/**
+ * The chat's newest review with a batch overview: `null` once the chat's transcript has loaded and
+ * it has none, undefined before then.
+ */
+export function useNewestReview(channel: string, chat: number): NewestReview | null | undefined {
+	return useSyncExternalStore(subscribe, () => {
+		const reviews = values.get(channel)?.reviews;
+		return reviews?.chat === chat ? reviews.newest : undefined;
 	});
 }

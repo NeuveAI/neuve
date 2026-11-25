@@ -46,6 +46,22 @@ export function reviewEntry(path: string): boolean {
 	return ENTRY.test(path);
 }
 
+/** A review and its batch overview route. */
+export type NewestReview = { review: string; path: string };
+
+/**
+ * The chat's newest admitted review whose batch overview is a review entry route. Review ids are
+ * time-ordered, so the greatest is the newest; `updatedAt` moves with every progress update.
+ */
+export function newestReview(cards: ReviewCards): NewestReview | null {
+	let newest: NewestReview | null = null;
+	for (const card of Object.values(cards)) {
+		if (card.kind !== "review" || !card.links || !reviewEntry(card.links.batch)) continue;
+		if (!newest || card.review > newest.review) newest = { review: card.review, path: card.links.batch };
+	}
+	return newest;
+}
+
 /** The host's mark on its notify wake, on a message or queued message; the mark, not the author, decides. */
 export function reviewNotice(value: { system?: ReviewNotice | BuildNotice }): ReviewNotice | undefined {
 	return value.system?.kind === "neuve:review:terminal" ? value.system : undefined;
