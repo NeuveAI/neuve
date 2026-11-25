@@ -2,6 +2,7 @@ import {
   awaitWithContext,
   BACKGROUND_CONTEXT,
 } from "@earendil-works/chord/context";
+import type { Context } from "@earendil-works/chord";
 import {
   AgentDoc,
   CompactionTask,
@@ -30,12 +31,20 @@ export const RECOVERY_ALLOW_TOOLS: readonly string[] = [
 export const STOP_ENTRY_KIND = "ace.stopped";
 export const QUESTIONS_DOC_KIND = "ace.questions";
 export const EDIT_ENTRY_KIND = "ace.edit";
+type ExecutionFolder = (
+  provider: string,
+  cwd: string | undefined,
+  chat: ConversationId,
+  context: Context,
+) => Promise<string | undefined>;
+
 export function chatRuntimeExtension(
   bridge: ChatRuntimeBridge,
   owns: (provider: string) => boolean,
   approvals?: (harness: Harness) => ApprovalStore,
 ) {
   let attached: Harness | undefined;
+  let executionFolder: ExecutionFolder | undefined;
   let redispatched = Promise.resolve({
     conversations: new Set<ConversationId>(),
     submissions: new Set<string>(),
@@ -96,12 +105,20 @@ export function chatRuntimeExtension(
           const recovered = (await redispatched).conversations.has(
             api.conversationId,
           );
+          const folder = executionFolder
+            ? await executionFolder(
+                agent.model.provider,
+                agent.cwd,
+                api.conversationId,
+                context,
+              )
+            : agent.cwd;
           bridge.identify(
             request.messages,
             api.conversationId,
             api.taskId,
             recovered,
-            agent.cwd,
+            folder,
           );
           const conversation = await attached.conversation(
             api.conversationId,
@@ -153,7 +170,7 @@ export function chatRuntimeExtension(
             api.conversationId,
             api.taskId,
             recovered,
-            agent.cwd,
+            folder,
           );
           return { messages };
         },
@@ -216,12 +233,14 @@ export function chatRuntimeExtension(
     access?: {
       onStop?: (listener: (chat: ConversationId) => Promise<void>) => void;
       onApprovalAnswer?: (send: ChatRuntimeBridge["replyToApproval"]) => void;
+      executionFolder?: ExecutionFolder;
     },
   ) {
     if (approvals) await bridge.attachApprovals(approvals(harness));
     access?.onStop?.((chat) => bridge.stopApprovals(chat));
     access?.onApprovalAnswer?.((...args) => bridge.replyToApproval(...args));
     attached = harness;
+    executionFolder = access?.executionFolder;
     // inspect is queued before resume or new submissions. Successors retain the conversation gate.
     const captured = harness.inspect(BACKGROUND_CONTEXT).then(async (view) => {
       const tools = new Map<string, string>();

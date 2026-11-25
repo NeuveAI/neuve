@@ -13,11 +13,9 @@ On the review, each requirement shows as a checkpoint with a proof state: Missin
 
 ## As the implementer, record it before you hand over
 
-Recording proof is part of implementing, not a step after review. For each validation requirement, observe the real running code in every applicable kind above and record each artefact with `neuve proof record`. If a required kind cannot be captured in this runtime, preserve every obtainable kind and continue to handover. Name the missing kind and the runtime limitation in the handover and existing scope or requirement surfaces. Do not ask for desktop access, an app, browser sign-in or credentials merely to capture proof; this does not permit bypassing access controls. Then run `neuve proof list` and say in your handover which requirements are proven, what is missing and why. The reviewer judges that proof ([review-verification.md](review-verification.md)).
+Record each applicable kind you observe with `neuve proof record`. If the runtime cannot capture a kind, keep every kind it can capture and carry on. Record the missing kind and why in your handover. Never ask for desktop access, an app, a sign-in or a credential to capture proof.
 
-A missing-kind explanation is not that kind of proof: a log saying “video missing” is not a video. Record only actual observations with the supported kinds and commands below; do not invent a missing-status command, proof kind or schema. If session attribution prevents recording, disclose that gap without inventing a session identity.
-
-Checkpoint meanings do not change: a video-specific requirement without a supporting video record is **Missing**. A broader requirement with tests or logs but another applicable kind unavailable may be **Thin**, not Proven and not automatically Missing. Keep screenshots, video and relevant console/network/server logs as the goal for browser work, and tests, telemetry and real logs where applicable. Capture additional kinds when this runtime makes them available.
+Run `neuve proof list` before handing over. A video requirement without a video record shows as **Missing**. The reviewer judges the proof using the [verification guide](review-verification.md).
 
 ## Record it
 

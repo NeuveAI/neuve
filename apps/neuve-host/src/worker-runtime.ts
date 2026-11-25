@@ -48,7 +48,11 @@ type ScopeResult = {
 
 /** What root's worker entry provides: the provider lane's models, built in the worker's process. */
 export type WorkerSetup = {
-	extensions?(context: WorkerContext): { extensions: readonly Extension[]; attach?(harness: Harness, admission?: WorkerAdmission): void | Promise<void> };
+	extensions?(context: WorkerContext): {
+		extensions: readonly Extension[];
+		ownTools?: Options["ownTools"];
+		attach?(harness: Harness, admission?: WorkerAdmission): void | Promise<void>;
+	};
 	checkpoint?(context: WorkerContext, request: NativeSourceRequest): Promise<NativeAuthorityReceipt>;
 	/** Acquire the source before any mutable native storage opens. Cleanup follows a confirmed native close. */
 	openSource?(context: WorkerContext): (() => void) | Promise<() => void>;
@@ -168,7 +172,14 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		worktree: (name, source) => buildWorktree(place, name, BACKGROUND_CONTEXT, source),
 		...(query ? { query: { sessionId: options.id, read: planScopeRead(place.project, plans, request => query(worker, request), files) } } : {}),
 	} : undefined;
-	const planOptions = { ...options, hostEnvironment: { host: `${hostname()} (${platform()}/${arch()})`, ...config.build }, ...(build ? { build } : {}), planFileAccess, planFiles: files, ...(config.skills ? { skills: config.skills } : {}) };
+	const planOptions = {
+		...options,
+		hostEnvironment: { host: `${hostname()} (${platform()}/${arch()})`, ...config.build },
+		...(build ? { build } : {}),
+		planFileAccess,
+		planFiles: files,
+		...(config.skills ? { skills: config.skills } : {}),
+	};
 	if (!setup) return Channel.open({
 		...planOptions,
 		extension: { ...options.extension, extensions: [...(options.extension?.extensions ?? []), planExplore] },
@@ -196,6 +207,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			...(setup.nonTurnModels ? {nonTurnModels: (kind: "caption" | "recap", chat: ConversationId) => setup.nonTurnModels!(worker, kind, chat, options.models)} : {}),
 		};
 		const channel = await Channel.open({...planOptions, log: privateLog.log, storage, models, extension, routeModel: setup.routeModel,
+			...(additional?.ownTools ? { ownTools: additional.ownTools } : {}),
 			...(setup.review ? {
 				feed: async (harness, submitInput) => {
 					const adapter = nativeReview(options.id);

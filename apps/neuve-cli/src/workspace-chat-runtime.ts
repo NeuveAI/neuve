@@ -221,12 +221,13 @@ function sourceModels(
 export type WorkerChatRuntime = {
   models: Models;
   owns(provider: string): boolean;
+  ownTools(provider: string): boolean;
   extensions: readonly Extension[];
   attach(
     harness: Harness,
     admission?: Pick<
       WorkerAdmission,
-      "onStop" | "onApprovalAnswer" | "requestAttendance"
+      "onStop" | "onApprovalAnswer" | "requestAttendance" | "executionFolder"
     >,
   ): void | Promise<void>;
   close(): Promise<void>;
@@ -320,6 +321,7 @@ export async function workspaceChatRuntime(
     return {
       models: native,
       owns: () => false,
+      ownTools: () => false,
       extensions: [],
       attach: () => {},
       close: async () => {},
@@ -344,10 +346,18 @@ export async function workspaceChatRuntime(
     return {
       models: sourceModels(layer.models, native, sources),
       owns: layer.owns,
+      ownTools: layer.ownTools,
       extensions: extension.extensions,
       attach(harness, admission) {
         admission?.requestAttendance?.(layer.owns);
-        return extension.attach(harness, admission);
+        return extension.attach(harness, {
+          ...admission,
+          async executionFolder(provider, cwd, chat, context) {
+            return admission && layer.ownTools(provider)
+              ? admission.executionFolder(cwd, chat, context)
+              : cwd;
+          },
+        });
       },
       close: async () => {
         await extension.close();

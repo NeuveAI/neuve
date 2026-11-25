@@ -40,28 +40,24 @@ For UI work, use Interface Craft and preserve the existing design. Make focused 
 
 ## Execution environment
 
-Ace serves channels, threads, the work log, plans and tools. Neuve is the `neuve` command and its skill, reviews and desk, **not a native application**. Ace's desktop tools use Ace's separately running desktop app; when unavailable, keep obtainable proof and disclose the gap rather than asking for an app or access.
+Neuve is the `neuve` command and its skill. Read Ace's request context for the running build and the chat's role, folder, branch, work lane and shell.
 
-Read the request's environment context for the running build, role, folder, branch, work lane and actual shell availability. Do not infer the running build from the lane's HEAD or infer shell access from an installed login shell.
-
-To check an Ace change, start a **second workspace from the lane**, with separate ports and storage, and observe it with Ace's browser tools. Never stop or restart the owner's live workspace on port 4141. Stop only processes started for this work, by recorded process IDs. The [development procedure](docs/development.md#validate-ace-in-a-second-workspace) owns setup, checks, isolated launch and cleanup commands.
+To check an Ace change, start a second workspace from the lane and drive it with Ace's browser tools. Leave the owner's workspace on port 4141 running. Stop only processes you started, by their recorded IDs. Follow the [second-workspace procedure](docs/development.md#validate-ace-in-a-second-workspace) for setup, launch and cleanup.
 
 ## Workspace
 
-The root is the Bun workspace and orchestration boundary.
-
-Ace's execution boundary is separate from Neuve's review layers:
+The root is the Bun workspace and orchestration boundary. The adopted `@ace/*` packages below link to their upstream records or notices.
 
 | Path | Holds |
 | --- | --- |
-| `apps/neuve-host` | Ace host, channel workers, host configuration and native dispatch |
-| `packages/channel` | Ace channel context, tool selection, chats, plans and work lanes |
-| `apps/app` | Ace browser interface |
-| `apps/desktop` | Ace's separately running native desktop client |
-| `packages/harness/src/chat-runtime` | Connections forwarding channel context and tools to supported agent runtimes |
-
-Neuve's review workspace:
-
+| [`apps/app`](apps/app/UPSTREAM.md) | Ace's coding app in the browser |
+| [`apps/neuve-host`](apps/neuve-host/UPSTREAM.md) | Ace's host and channel workers |
+| [`packages/channel`](packages/channel/UPSTREAM.md) | Ace's channel context, tools, threads, plans and work lanes |
+| [`packages/ui`](packages/ui/NOTICE.md) | Ace's shared UI components |
+| [`packages/split-tabs`](packages/split-tabs/NOTICE) | Ace's split-tab layout |
+| [`apps/desktop`](apps/desktop/UPSTREAM.md) | Ace's desktop app source, kept unbuilt on this host |
+| `packages/harness` | Neuve's review pipeline, including the connections that forward Ace context to Claude Code and Codex |
+| `packages/runtime*` | Neuve's runtime contract, also used by Ace's host, channel and app |
 
 | Path                                                          | Holds                                                                                                                                                                                                                                     |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

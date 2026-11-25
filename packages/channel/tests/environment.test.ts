@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Conversation } from "@earendil-works/pi-durable";
 import { Fixture, MODEL, OWNER, git } from "./helpers";
 
 let fixture: Fixture | undefined;
@@ -13,8 +15,11 @@ async function ask() {
 // Observe the actual provider-facing offer and prompt, not only extension installation.
 test("desktop selection follows host availability and channel settings on existing channels", async () => {
 	let available = false;
+	let root: Conversation | undefined;
 	fixture = await Fixture.create({ desktop: async () => ({ text: "ok" }), desktopAvailable: () => available,
-		browser: async () => ({ text: "browser" }) });
+		browser: async () => ({ text: "browser" }),
+		extension: { extensions: [], async attach(harness) { root = await harness.root(BACKGROUND_CONTEXT); } },
+	});
 	const observe = (enabled: boolean) => {
 		fixture!.script(request => {
 			const tools = getCurrentTools(request.messages).map(tool => tool.name);
@@ -28,6 +33,17 @@ test("desktop selection follows host availability and channel settings on existi
 	observe(false); await ask();
 	available = true;
 	observe(true); await ask();
+	if (!root) throw new Error("Missing root chat");
+	const agent = await root.agent(BACKGROUND_CONTEXT);
+	await root.configure({ extensions: agent.extensions }, BACKGROUND_CONTEXT);
+	const entry = (await root.context(BACKGROUND_CONTEXT)).entries.at(-1);
+	if (!entry) throw new Error("Missing root reply");
+	const child = await root.fork(entry.id, { ownership: { kind: "ownerless" } }, BACKGROUND_CONTEXT);
+	available = false;
+	observe(false);
+	const submission = await child.submit({ type: "input", content: "What can you observe?" }, BACKGROUND_CONTEXT);
+	expect((await submission.wait(BACKGROUND_CONTEXT)).status).toBe("done");
+	available = true;
 	await fixture.request({ op: "desktop", author: OWNER, enabled: false });
 	observe(false); await ask();
 	await fixture.request({ op: "desktop", author: OWNER, enabled: true });
@@ -45,7 +61,11 @@ test("desktop dispatch still checks settings after the model's offer", async () 
 		expect(getCurrentTools(request.messages).map(tool => tool.name)).toContain("desktop_apps");
 		await fixture!.request({ op: "desktop", author: OWNER, enabled: false });
 		return fauxAssistantMessage([fauxToolCall("desktop_apps", {}, { id: "late" })], { stopReason: "toolUse" });
-	}, fauxAssistantMessage("done"));
+	}, request => {
+		expect(getCurrentTools(request.messages).map(tool => tool.name)).not.toContain("desktop_apps");
+		expect(getCurrentSystemPrompt(request.messages)).not.toContain("<ace-desktop>");
+		return fauxAssistantMessage("done");
+	});
 	await ask();
 	expect(dispatched).toBe(0);
 });
@@ -54,7 +74,7 @@ test("context reports captured build separately from lane Git and refreshes deta
 	fixture = await Fixture.create({ hostEnvironment: { host: "fixture-host", version: "captured-version", commit: "captured-build" } });
 	fixture.script(request => {
 		const prompt = getCurrentSystemPrompt(request.messages);
-		expect(prompt).toContain("version captured-version; commit captured-build");
+		expect(prompt).toContain("version captured-version, commit captured-build");
 		expect(prompt).toContain("Role: main chat");
 		expect(prompt).toContain("Git branch: one/work");
 		expect(prompt).toContain("Work lane: work");
@@ -72,13 +92,39 @@ test("context reports captured build separately from lane Git and refreshes deta
 	await ask();
 });
 
+test("a runtime's own shell needs the worker's environment but does not need pi's bash", async () => {
+	let chat: Conversation | undefined;
+	fixture = await Fixture.create({ ownTools: provider => provider === MODEL.provider, extension: {
+		extensions: [],
+		async attach(harness) { chat = await harness.root(BACKGROUND_CONTEXT); },
+	} });
+	if (!chat) throw new Error("Missing root chat");
+	await chat.configure({ tools: [] }, BACKGROUND_CONTEXT);
+	fixture.script(request => {
+		const prompt = getCurrentSystemPrompt(request.messages);
+		expect(prompt).toContain("Runtime shell: available (runtime's own shell)");
+		expect(prompt).toContain("Git branch: one/work");
+		return fauxAssistantMessage("observed");
+	});
+	await ask();
+	await chat.configure({ cwd: fixture.project }, BACKGROUND_CONTEXT);
+	fixture.script(request => {
+		const prompt = getCurrentSystemPrompt(request.messages);
+		expect(prompt).toContain("Runtime shell: unavailable");
+		expect(prompt).toContain("Git branch: unknown (no runtime shell)");
+		expect(prompt).toContain("Installed neuve and its version: unknown (no runtime shell)");
+		return fauxAssistantMessage("observed");
+	});
+	await ask();
+});
+
 test("environment context discloses absent shell and no lane for each role without probing", async () => {
 	const { environment } = await import("../src/environment");
-	for (const role of [undefined, "implementer", "reviewer"]) {
-		const section = environment(undefined, () => role);
+	for (const role of ["main chat", "implementer", "reviewer"]) {
+		const section = environment(undefined, () => role, async () => false);
 		const text = await section.render({ conversationId: 1, agent: { cwd: "/no-lane", tools: [] },
 			env: undefined, read: { snapshot: async () => undefined } } as never, {} as never);
-		expect(text).toContain(`Role: ${role ?? "main chat"}`);
+		expect(text).toContain(`Role: ${role}`);
 		expect(text).toContain("Working folder: /no-lane");
 		expect(text).toContain("Work lane: none recorded");
 		expect(text).toContain("Runtime shell: unavailable");

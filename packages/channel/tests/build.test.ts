@@ -367,12 +367,14 @@ test("approving identical text after a failure delivers to the live implementer"
 	const failed = await buildAt(watch, 0, "failed");
 	fail = false;
 	const revision = await draft(revisedText);
+	const entered = Promise.withResolvers<void>();
 	const hold = Promise.withResolvers<void>();
 	try {
-		fixture.script(async () => { await hold.promise; return fauxAssistantMessage("Ready."); });
+		fixture.script(async () => { entered.resolve(); await hold.promise; return fauxAssistantMessage("Ready."); });
 		await approve(revision);
 		const live = await buildAt(watch, 1, "started");
 		const { chat } = live.agents[0]!;
+		await entered.promise;
 		const copy = await draft(planText);
 		fixture.script(fauxAssistantMessage("Revision read."));
 		await approve(copy);

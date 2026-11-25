@@ -9,16 +9,17 @@ import { config } from "./config";
 let client: DesktopClient | undefined;
 
 const clientPath = () => join(config.home, "desktop-client");
-export const desktopAvailable = () => existsSync(clientPath());
+const socketPath = () => join(config.home, "desktop.sock");
+// The app can leave the client link behind after its socket closes.
+export const desktopAvailable = () => existsSync(clientPath()) && existsSync(socketPath());
 
 export const desktop: Desktop = async (request, context) => {
 	// Whichever process started this worker, only the app serving this data directory's socket
 	// knows which signed client it accepts, so it publishes that client beside the socket.
-	const path = clientPath();
-	if (!desktopAvailable()) throw new Error("Ace’s desktop app is unavailable on this host; no desktop operation was dispatched. Continue with obtainable observations and disclose missing proof.");
+	if (!desktopAvailable()) throw new Error("Ace's desktop app isn't running on this host. No desktop operation ran.");
 	client ??= createDesktop({
-		client: path,
-		socket: join(config.home, "desktop.sock"),
+		client: clientPath(),
+		socket: socketPath(),
 		name: "Ace",
 	});
 	// Hosted links and pi rows carry only the bounded text and image, not the parsed copy.

@@ -168,6 +168,7 @@ export type Options = {
 	resume?: boolean;
 	storage: Storage;
 	models: Models;
+	ownTools?(provider: string): boolean;
 	env(cwd: string): ExecutionEnv;
 	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
 	planFileAccess?(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv;
@@ -201,7 +202,9 @@ export type Options = {
 	onSaid?(said: Said): void;
 	log: Log;
 	extension?: Omit<ChannelExtension, "attach"> & {
-		attach?(harness: Harness, admission: Admission & ApprovalAdmission): void | Promise<void>;
+		attach?(harness: Harness, admission: Admission & ApprovalAdmission & {
+			executionFolder(cwd: string | undefined, chat: ConversationId, context: Context): Promise<string | undefined>;
+		}): void | Promise<void>;
 	};
 	/** Host-owned document producers join before native storage closes. */
 	feed?(harness: Harness, submitInput: Channel["submitInput"]): Promise<{ close(): Promise<void>; pending(): boolean }>;
@@ -303,15 +306,13 @@ export class Channel {
 			(chat, work) => channel.#admitted(chat, work));
 		registry.install(questions.extension);
 		const execute = options.desktop;
-		const available = () => !!execute && !!channel && channel.#settings.desktop && (options.desktopAvailable?.() ?? true);
-		const effectiveRegistry = capabilities(registry, available);
+		const available = () => !!channel && channel.#settings.desktop && (options.desktopAvailable?.() ?? true);
 		if (execute) {
 			registry.install(desktop(async (request, context) => {
 				// Check every dispatch, including child chats and calls from already-active runs.
 				if (!channel.#settings.desktop) {
 					return {
-						text:
-							"Native desktop tools are off for this channel, and no desktop operation was dispatched. If the task needs them, ask the channel owner to turn on Channel desktop tools in the channel header, then wait for their reply instead of working around it.",
+						text: "Desktop tools are off for this channel. No desktop operation ran.",
 						isError: true,
 						outcome: "refused",
 					};
@@ -326,10 +327,17 @@ export class Channel {
 		registry.install(subagent((handle, input, scope) => channel.submitInput(handle, input, scope), questions.extension));
 		registry.install(metadata((value) => channel.#changed(value), options.claim));
 		registry.install(messaging(options.directory));
+		const role = (chat: number) => channel.#builds.agent(chat)?.role;
 		registry.install(
 			defineExtension({ name: "ace-channel", sections: [
-				room.section(options, chat => channel.#builds.agent(chat)?.role),
-				environment(options.hostEnvironment, chat => channel.#builds.agent(chat)?.role), instructions(options.models, options.skills),
+				room.section(options, role),
+				environment(
+					options.hostEnvironment,
+					chat => role(chat) ?? (chat === ROOT_CONVERSATION_ID ? "main chat" : "thread chat"),
+					planning,
+					options.ownTools,
+				),
+				instructions(options.models, options.skills),
 			] }),
 		);
 		registry.install(approvals.extension);
@@ -342,23 +350,24 @@ export class Channel {
 		registry.install(agents);
 		if (options.build?.query) registry.install(query);
 		install(registry, options.extension, planning, !!options.planFileAccess, log, (chat, scope) => channel.#builds.paused(chat, scope));
+		const executionEnv = async (cwd: string | undefined, chat: ConversationId, context: Context) => {
+			const folder = cwd || options.project;
+			const { planFileAccess } = options;
+			const chatPlanning = (context: Context) => planning(chat, context);
+			if (options.extension?.environment?.(folder) === false) {
+				if (!planFileAccess || !await chatPlanning(context).catch(() => false)) return;
+				// An environment granted by plan mode stays confined for its lifetime.
+				return planFileAccess(options.env(folder), async () => true);
+			}
+			const env = options.env(folder);
+			return planFileAccess?.(env, chatPlanning) ?? env;
+		};
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider)),
-			registry: effectiveRegistry,
-			settings: { get extensions() { return effectiveRegistry.snapshot().installed().filter(extension => extension.name !== query.name); } },
+			registry: execute ? capabilities(registry, available) : registry,
+			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },
 			conversationCreated: clearInheritedQuery,
-			env: async ({ cwd, conversationId }, context) => {
-				const folder = cwd || options.project;
-				const { planFileAccess } = options;
-				const chatPlanning = (context: Context) => planning(conversationId, context);
-				if (options.extension?.environment?.(folder) === false) {
-					if (!planFileAccess || !await chatPlanning(context).catch(() => false)) return;
-					// An environment granted by plan mode stays confined for its lifetime.
-					return planFileAccess(options.env(folder), async () => true);
-				}
-				const env = options.env(folder);
-				return planFileAccess?.(env, chatPlanning) ?? env;
-			},
+			env: ({ cwd, conversationId }, context) => executionEnv(cwd, conversationId, context),
 			onReport: (error) => log("error", "harness.report", failure(error)),
 		}, context);
 		ownedHarness = harness;
@@ -511,6 +520,7 @@ export class Channel {
 			onStop: stop => approvals.registerStop(stop),
 			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
+			executionFolder: async (cwd, chat, context) => (await executionEnv(cwd, chat, context))?.cwd,
 		});
 		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
 		if (options.resume !== false) {
