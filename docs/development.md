@@ -99,7 +99,7 @@ bun install --frozen-lockfile
 bun run check:graph
 ```
 
-From a lane on LaCie, plain `bun workspace` and `bun ace` use the owner's storage and runtime receipt. Give the launcher its own profile and point the CLI at that profile's host home. The [storage validator](../scripts/pi-storage.ts) checks that the lane and the main checkout share a Git common directory.
+From a lane, plain `bun workspace` and `bun ace` use the owner's storage and runtime receipt. Lanes sit under `~/Library/Application Support/Neuve/workspace/worktrees/neuve-lanes/<channel id>/`. Create the scratch folder on LaCie for the launcher's profile and point the CLI at that profile's host home. The [storage validator](../scripts/pi-storage.ts) checks that the lane and the main checkout share a Git common directory.
 
 ```sh
 lane="$(pwd -P)"
@@ -133,19 +133,22 @@ printf '%s\n' "$workspace_pid" > "$scratch/workspace.pid"
 printf '%s\n' "$input_pid" > "$scratch/input.pid"
 ```
 
-Wait for the `"neuve-host":"ready"` record in `startup.log` and use its `web` address. Keep tokens and token-bearing URLs out of commands, logs and proof. Run CLI commands from the lane with the isolated host home.
+Wait for the `"neuve-host":"ready"` record in `startup.log`. To sign in, type that workspace's `web` address straight into the browser with `#token=` followed by the token from its `tokenFile`. Use only the second workspace's token. Keep it and the sign-in URL out of command lines, logs, proof, screenshots, and commits.
+
+Run CLI commands from the lane with the isolated host home.
 
 ```sh
 ACE_HOME="$scratch/state/neuve-host" bun ace ls
 ```
 
-After validation, let the launcher close its host, workers and web listener.
+After validation, let the launcher close its host, workers and web listener. Once the launcher has exited, delete the scratch folder that holds the workspace's token file.
 
 ```sh
 kill -TERM "$(cat "$scratch/workspace.pid")"
 wait "$workspace_pid"
 kill -TERM "$(cat "$scratch/input.pid")"
 wait "$input_pid" || true
+rm -rf -- "$scratch"
 ```
 
 ## Linear planning integration

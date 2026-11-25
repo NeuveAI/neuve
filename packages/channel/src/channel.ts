@@ -202,9 +202,7 @@ export type Options = {
 	onSaid?(said: Said): void;
 	log: Log;
 	extension?: Omit<ChannelExtension, "attach"> & {
-		attach?(harness: Harness, admission: Admission & ApprovalAdmission & {
-			executionFolder(cwd: string | undefined, chat: ConversationId, context: Context): Promise<string | undefined>;
-		}): void | Promise<void>;
+		attach?(harness: Harness, admission: Admission & ApprovalAdmission): void | Promise<void>;
 	};
 	/** Host-owned document producers join before native storage closes. */
 	feed?(harness: Harness, submitInput: Channel["submitInput"]): Promise<{ close(): Promise<void>; pending(): boolean }>;
@@ -350,24 +348,23 @@ export class Channel {
 		registry.install(agents);
 		if (options.build?.query) registry.install(query);
 		install(registry, options.extension, planning, !!options.planFileAccess, log, (chat, scope) => channel.#builds.paused(chat, scope));
-		const executionEnv = async (cwd: string | undefined, chat: ConversationId, context: Context) => {
-			const folder = cwd || options.project;
-			const { planFileAccess } = options;
-			const chatPlanning = (context: Context) => planning(chat, context);
-			if (options.extension?.environment?.(folder) === false) {
-				if (!planFileAccess || !await chatPlanning(context).catch(() => false)) return;
-				// An environment granted by plan mode stays confined for its lifetime.
-				return planFileAccess(options.env(folder), async () => true);
-			}
-			const env = options.env(folder);
-			return planFileAccess?.(env, chatPlanning) ?? env;
-		};
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider)),
 			registry: execute ? capabilities(registry, available) : registry,
 			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },
 			conversationCreated: clearInheritedQuery,
-			env: ({ cwd, conversationId }, context) => executionEnv(cwd, conversationId, context),
+			env: async ({ cwd, conversationId }, context) => {
+				const folder = cwd || options.project;
+				const { planFileAccess } = options;
+				const chatPlanning = (context: Context) => planning(conversationId, context);
+				if (options.extension?.environment?.(folder) === false) {
+					if (!planFileAccess || !await chatPlanning(context).catch(() => false)) return;
+					// An environment granted by plan mode stays confined for its lifetime.
+					return planFileAccess(options.env(folder), async () => true);
+				}
+				const env = options.env(folder);
+				return planFileAccess?.(env, chatPlanning) ?? env;
+			},
 			onReport: (error) => log("error", "harness.report", failure(error)),
 		}, context);
 		ownedHarness = harness;
@@ -520,7 +517,6 @@ export class Channel {
 			onStop: stop => approvals.registerStop(stop),
 			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
-			executionFolder: async (cwd, chat, context) => (await executionEnv(cwd, chat, context))?.cwd,
 		});
 		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
 		if (options.resume !== false) {

@@ -2,13 +2,14 @@ import { afterEach, expect, test } from "bun:test";
 import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Conversation } from "@earendil-works/pi-durable";
+import type { ChatMode } from "../src/protocol";
 import { Fixture, MODEL, OWNER, git } from "./helpers";
 
 let fixture: Fixture | undefined;
 afterEach(async () => { await fixture?.dispose(); fixture = undefined; });
 
-async function ask() {
-	const { submission } = await fixture!.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Where do you run?", model: MODEL });
+async function ask(mode?: ChatMode) {
+	const { submission } = await fixture!.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Where do you run?", model: MODEL, mode });
 	expect(await fixture!.request({ op: "wait", submission })).toBe("done");
 }
 
@@ -71,28 +72,35 @@ test("desktop dispatch still checks settings after the model's offer", async () 
 });
 
 test("context reports captured build separately from lane Git and refreshes detached state", async () => {
-	fixture = await Fixture.create({ hostEnvironment: { host: "fixture-host", version: "captured-version", commit: "captured-build" } });
+	let chat: Conversation | undefined;
+	fixture = await Fixture.create({
+		hostEnvironment: { host: "fixture-host", version: "captured-version", commit: "captured-build" },
+		extension: { extensions: [], async attach(harness) { chat = await harness.root(BACKGROUND_CONTEXT); } },
+	});
 	fixture.script(request => {
 		const prompt = getCurrentSystemPrompt(request.messages);
 		expect(prompt).toContain("version captured-version, commit captured-build");
 		expect(prompt).toContain("Role: main chat");
 		expect(prompt).toContain("Git branch: one/work");
 		expect(prompt).toContain("Work lane: work");
-		expect(prompt).toContain("Runtime shell: available");
+		expect(prompt).toContain("Runtime shell: available (Ace's bash tool)");
 		return fauxAssistantMessage("observed");
 	});
 	await ask();
 	git(fixture.lane.path, "checkout", "--detach");
+	if (!chat) throw new Error("Missing root chat");
+	await chat.configure({ tools: [] }, BACKGROUND_CONTEXT);
 	fixture.script(request => {
 		const prompt = getCurrentSystemPrompt(request.messages);
 		expect(prompt).toContain("Git branch: detached HEAD");
 		expect(prompt).toContain("commit captured-build");
+		expect(prompt).toContain("Runtime shell: unavailable");
 		return fauxAssistantMessage("observed");
 	});
 	await ask();
 });
 
-test("a runtime's own shell needs the worker's environment but does not need pi's bash", async () => {
+test("a runtime's own shell uses its working folder even without Ace's environment", async () => {
 	let chat: Conversation | undefined;
 	fixture = await Fixture.create({ ownTools: provider => provider === MODEL.provider, extension: {
 		extensions: [],
@@ -110,12 +118,20 @@ test("a runtime's own shell needs the worker's environment but does not need pi'
 	await chat.configure({ cwd: fixture.project }, BACKGROUND_CONTEXT);
 	fixture.script(request => {
 		const prompt = getCurrentSystemPrompt(request.messages);
-		expect(prompt).toContain("Runtime shell: unavailable");
-		expect(prompt).toContain("Git branch: unknown (no runtime shell)");
-		expect(prompt).toContain("Installed neuve and its version: unknown (no runtime shell)");
+		expect(prompt).toContain(`Working folder: ${fixture!.project}`);
+		expect(prompt).toContain("Runtime shell: available (runtime's own shell)");
+		expect(prompt).toContain("Git branch: not probed (Ace has no execution environment)");
+		expect(prompt).toContain("Installed neuve and its version: not probed (Ace has no execution environment)");
 		return fauxAssistantMessage("observed");
 	});
 	await ask();
+	fixture.script(request => {
+		const prompt = getCurrentSystemPrompt(request.messages);
+		expect(prompt).toContain("Runtime shell: available (runtime's own shell, read-only in Plan mode)");
+		expect(prompt).toContain("Git branch: not probed (Ace has no execution environment)");
+		return fauxAssistantMessage("observed");
+	});
+	await ask("plan");
 });
 
 test("environment context discloses absent shell and no lane for each role without probing", async () => {
@@ -128,6 +144,6 @@ test("environment context discloses absent shell and no lane for each role witho
 		expect(text).toContain("Working folder: /no-lane");
 		expect(text).toContain("Work lane: none recorded");
 		expect(text).toContain("Runtime shell: unavailable");
-		expect(text).toContain("unknown (no runtime shell)");
+		expect(text).toContain("not probed (Ace has no execution environment)");
 	}
 });

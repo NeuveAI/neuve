@@ -40,7 +40,7 @@ For UI work, use Interface Craft and preserve the existing design. Make focused 
 
 ## Execution environment
 
-Neuve is the `neuve` command and its skill. Read Ace's request context for the running build and the chat's role, folder, branch, work lane and shell.
+Neuve is the `neuve` command and its skill, not an app. Read Ace's request context for the running build and the chat's role, folder, branch, work lane and shell. Ace's desktop tools need Ace's desktop app, which doesn't run on this host, so don't ask the person to open an app.
 
 To check an Ace change, start a second workspace from the lane and drive it with Ace's browser tools. Leave the owner's workspace on port 4141 running. Stop only processes you started, by their recorded IDs. Follow the [second-workspace procedure](docs/development.md#validate-ace-in-a-second-workspace) for setup, launch and cleanup.
 

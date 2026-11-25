@@ -227,7 +227,7 @@ export type WorkerChatRuntime = {
     harness: Harness,
     admission?: Pick<
       WorkerAdmission,
-      "onStop" | "onApprovalAnswer" | "requestAttendance" | "executionFolder"
+      "onStop" | "onApprovalAnswer" | "requestAttendance"
     >,
   ): void | Promise<void>;
   close(): Promise<void>;
@@ -350,14 +350,7 @@ export async function workspaceChatRuntime(
       extensions: extension.extensions,
       attach(harness, admission) {
         admission?.requestAttendance?.(layer.owns);
-        return extension.attach(harness, {
-          ...admission,
-          async executionFolder(provider, cwd, chat, context) {
-            return admission && layer.ownTools(provider)
-              ? admission.executionFolder(cwd, chat, context)
-              : cwd;
-          },
-        });
+        return extension.attach(harness, admission);
       },
       close: async () => {
         await extension.close();
