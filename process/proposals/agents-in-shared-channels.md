@@ -8,9 +8,9 @@ Status: proposal, drafted 23 November 2026 from the owner's conversation with th
 2. Inside that sandbox each agent has an isolate of its own: its own clone, which it owns entirely. Only a branch leaves, with its proof. Each isolate is a micro-VM, so that agents do not load the host machine.
 3. An agent's isolate is torn down and cleaned up when the agent is done or dismissed, and when its channel is archived.
 4. The micro-VM is Apple's containerization, which runs each isolate on the Virtualization framework on a Mac and on Cloud Hypervisor on Linux, behind one guest contract. See [Each isolate a micro-VM](#each-isolate-a-micro-vm).
-5. An agent is done when its branch is merged into the channel's branch or its plan is closed, and dismissing is a control of its own that ends an agent for good. See [Teardown](#teardown).
+5. An agent is done when its branch is merged into its plan's branch or its plan is closed, and dismissing is a control of its own that ends an agent for good. See [Teardown](#teardown).
 6. On the owner's Mac, sandbox storage is an APFS disk image on the LaCie drive. See [Making an isolate fast and keeping the host lean](#making-an-isolate-fast-and-keeping-the-host-lean).
-7. Every channel's agents run in isolates from the start, a one-person channel's included, and a channel can own its branch from the start ([decisions record](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026), row 17.55).
+7. Every channel's agents run in isolates from the start, a one-person channel's included, and a channel can own its branch from the start ([decisions record](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026), row 17.55): one branch per approved plan, so a channel holds several over its life (row 17.56).
 
 **What is proposed on top.**
 
@@ -50,7 +50,7 @@ Status: proposal, drafted 23 November 2026 from the owner's conversation with th
  Ace's five served tools and the       │                                  scope read on the pushed branch,
  channel's state run here, outside     └──▶ broker ──▶ pushed branch ──▶  final review, read only;
  every micro-VM, as a user no agent runs as                               proof recorded against the push
- THE CHANNEL: threads, the work log and the plan are where agents coordinate; its branch is where they integrate
+ THE CHANNEL: threads, the work log and the plan are where agents coordinate; each approved plan's branch is where they integrate (row 17.56)
  TEARDOWN: agent done, agent dismissed, or channel archived → its micro-VM, clone and scratch removed;
            the pushed branch and the recorded proof stay
 ```
@@ -139,7 +139,7 @@ So the image is not slower to fill. A micro-VM's disk clones at once, which is t
 
 | Trigger                 | What it is                                                                                                                                                                                                      | What happens                                                                                                    |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| The agent is done       | The work it was started for has ended: its branch is merged into the channel's branch, or the plan it worked on is closed. Not the end of a turn, and not Stop, since a stopped agent starts again on a mention | The host collects its proof, the broker pushes its branch, then the micro-VM, clone and scratch are removed     |
+| The agent is done       | The work it was started for has ended: its branch is merged into its plan's branch, or the plan it worked on is closed. Not the end of a turn, and not Stop, since a stopped agent starts again on a mention | The host collects its proof, the broker pushes its branch, then the micro-VM, clone and scratch are removed     |
 | The agent is dismissed  | A person ends the agent for good. Ace has Stop, which a mention undoes, and nothing that ends an agent for good today, so dismissing needs a control of its own on the agent's line                             | The same, at once                                                                                               |
 | The channel is archived | Archiving the channel                                                                                                                                                                                           | Every isolate of the channel is torn down the same way, and its mirror is removed once no clone borrows from it |
 
