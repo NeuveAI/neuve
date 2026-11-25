@@ -171,6 +171,8 @@ export type Options = {
 	planFileAccess?(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv;
 	/** The channel's Markdown files, in storage the host owns outside the project. */
 	planFiles?: PlanFiles;
+	/** A folder of skills the host carries, listed after every installed skill. */
+	skills?: string;
 	build?: BuildHost;
 	desktop?: Desktop;
 	browser?: Browser;
@@ -319,7 +321,7 @@ export class Channel {
 		registry.install(messaging(options.directory));
 		registry.install(
 			defineExtension({ name: "ace-channel", sections: [
-				room.section(options, chat => channel.#builds.agent(chat)?.role), instructions,
+				room.section(options, chat => channel.#builds.agent(chat)?.role), instructions(options.skills),
 			] }),
 		);
 		registry.install(approvals.extension);

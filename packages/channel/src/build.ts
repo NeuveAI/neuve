@@ -208,6 +208,7 @@ function briefText(plan: ScopeRead["plan"], { path, branch }: Worktree, start: S
 	const reference = [
 		`Approved plan "${plan.title}" (${plan.hash}).`,
 		`Work on branch ${branch} in the worktree at ${path}.`,
+		"Load the Neuve skill.",
 		...(query ? ["Ask for your scope with neuve_query using the plan's goal and done-when items as your question."] : []),
 		"",
 		plan.text,
@@ -218,7 +219,6 @@ function briefText(plan: ScopeRead["plan"], { path, branch }: Worktree, start: S
 	return [
 		...reference,
 		source ? `Review the implementer's work on branch ${source}.` : "Implement this plan.",
-		"Load the Neuve skill.",
 		...(source ? [] : ["Use agent_start to ask the host for a reviewer or another implementer."]),
 		"Use agent_message to message another agent of this plan.",
 	].join("\n");

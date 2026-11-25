@@ -167,7 +167,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		worktree: (name, source) => buildWorktree(place, name, BACKGROUND_CONTEXT, source),
 		...(query ? { query: { sessionId: options.id, read: planScopeRead(place.project, plans, request => query(worker, request), files) } } : {}),
 	} : undefined;
-	const planOptions = { ...options, ...(build ? { build } : {}), planFileAccess, planFiles: files };
+	const planOptions = { ...options, ...(build ? { build } : {}), planFileAccess, planFiles: files, ...(config.skills ? { skills: config.skills } : {}) };
 	if (!setup) return Channel.open({
 		...planOptions,
 		extension: { ...options.extension, extensions: [...(options.extension?.extensions ?? []), planExplore] },

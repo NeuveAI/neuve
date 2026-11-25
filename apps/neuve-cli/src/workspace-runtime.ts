@@ -6,7 +6,7 @@ import {
   rm,
   stat,
 } from "node:fs/promises";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { config as native } from "@ace/host/config";
@@ -111,6 +111,8 @@ export function workspaceConfiguration(input: {
   app?: string;
 }): HostConfig {
   const { home, lanes } = workspaceDirectories(input.storage);
+  // The Neuve skill this checkout carries, so its agents have it before anyone installs it.
+  const skills = join(input.source, "apps/neuve-cli/skills");
   const command = Bun.main.startsWith("/$bunfs/")
     ? [process.execPath]
     : [
@@ -135,6 +137,7 @@ export function workspaceConfiguration(input: {
         : {}),
     ...routeCodingDefaults(input.route),
     workerCloseTimeoutMs: 130_000,
+    ...(existsSync(join(skills, "neuve", "SKILL.md")) ? { skills } : {}),
     worker: [...command, "workspace", "worker"],
     environment: {
       ...input.environment,

@@ -1,11 +1,13 @@
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { userSkillRoots } from "@ace/channel";
 import { toolArguments, toolRefusal } from "@ace/channel/tool-arguments";
 import type { Context } from "@earendil-works/chord";
 import { defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { err, FileError, getOrThrow, ok, type ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { z } from "zod";
+import { config } from "./host-config";
 
 type Tree = { root: string; gitDirectories: string[] };
 const objectId = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
@@ -130,13 +132,8 @@ async function confined(tree: Tree, path: string, context: Context, allowMissing
 
 async function skillPath(tree: Tree, env: ExecutionEnv, path: string, kind: "file" | "directory", context: Context) {
 	const home = getOrThrow(await env.absolutePath("~", context));
-	// Keep these skill roots in step with packages/channel/src/context.ts.
-	const userRoots = [
-		join(home, ".agents", "skills"),
-		resolve(process.env["CLAUDE_CONFIG_DIR"] || join(home, ".claude"), "skills"),
-	];
 	const candidates = [
-		...userRoots.map(alias => ({ alias, fixed: undefined })),
+		...[...userSkillRoots(home), ...(config.skills ? [config.skills] : [])].map(alias => ({ alias, fixed: undefined })),
 		...[".agents/skills", ".claude/skills"].map(dir => ({ alias: resolve(env.cwd, dir), fixed: join(tree.root, dir) })),
 	];
 	const roots = await Promise.all(candidates.map(async ({ alias, fixed }) => {

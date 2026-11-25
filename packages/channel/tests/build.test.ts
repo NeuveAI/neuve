@@ -139,7 +139,7 @@ test("approval starts one ownerless implementer with the marked brief and write 
 		const agent = await fixture.watch({ op: "watch", chat, builds: true, approvals: true });
 		const brief = await agent.until("message");
 		expect(brief).toMatchObject({ author: "unknown", invoked: true, system: { kind: "neuve:build:brief", build: build.id } });
-		for (const text of [plan.title, plan.hash, worktree!.path, worktree!.branch, "agent_start", "agent_message"]) {
+		for (const text of [plan.title, plan.hash, worktree!.path, worktree!.branch, "agent_start", "agent_message", "Load the Neuve skill."]) {
 			expect(brief.text).toContain(text);
 		}
 		expect(brief.text).toContain(planText);
@@ -825,7 +825,7 @@ test("a second implementer gets its own branch, the approved model settings, and
 	const watch = await fixture.watch({ op: "watch", chat: started.chat });
 	const message = await watch.until("message");
 	expect(message).toMatchObject({ system: { kind: "neuve:build:brief", build: build.id } });
-	for (const text of [plan.title, plan.hash, planText, worktree.branch, "neuve_query"]) expect(message.text).toContain(text);
+	for (const text of [plan.title, plan.hash, planText, worktree.branch, "neuve_query", "Load the Neuve skill."]) expect(message.text).toContain(text);
 	expect(message.text).not.toContain(run.plans);
 	expect(message.text.split("\n\n").at(-1)).toBe(brief);
 	const info = (await fixture.channel.info()).chats.find(chat => chat.id === started.chat);

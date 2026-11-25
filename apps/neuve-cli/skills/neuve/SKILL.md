@@ -4,6 +4,7 @@ description: >
   Use Neuve, the code-review tool, from an agent session. Load it when the person asks you to set
   Neuve up, request or read a Neuve review, act on a Neuve review's findings or requests for
   changes, read scope before starting work, record proof for a change, or point them to the review desk; when you are the
+  implementer of work a Neuve review will follow, to read its scope and record its proof; when you are the
   independent reviewer of an implementer's work before a Neuve review, or a final reviewer
   alongside a Neuve review of a finished range; or when the repository's own instructions (AGENTS.md, CLAUDE.md) tell you to use
   Neuve. Not for general Git or coding work.
@@ -44,7 +45,7 @@ Read the one you need, when you need it:
 | [references/request-review.md](references/request-review.md) | Requesting a review of a range and reading its receipt, jobs and worker |
 | [references/lanes-and-dispositions.md](references/lanes-and-dispositions.md) | What a review says, who decides each lane, and what you do with it |
 | [references/desk.md](references/desk.md) | Sending a person to the batch overview and review desk |
-| [references/proof.md](references/proof.md) | Recording proof for a range, and saying what makes your session hard |
+| [references/proof.md](references/proof.md) | As the implementer, recording proof of your work before you hand it over; saying what makes your session hard |
 | [references/stack.md](references/stack.md) | Reading the pinned sources of the repository's frameworks and dependencies |
 | [references/inner-loop-scope.md](references/inner-loop-scope.md) | Reading code and scope before implementing or reviewing |
 | [references/inner-loop-reviewer.md](references/inner-loop-reviewer.md) | Reviewing an implementer's work before a Neuve review: how you work, what you own, and your report |
@@ -53,6 +54,6 @@ Read the one you need, when you need it:
 | [references/review-independence.md](references/review-independence.md) | As a reviewer: judging in a fresh context, before you see others' verdicts |
 | [references/review-against-scope.md](references/review-against-scope.md) | As a reviewer: judging against the scope row by row, and what findings become |
 
-**Where a review sits.** Neuve is the final review of finished work, not a check inside the loop that produces it. When a repository works with an implementer and a separate reviewer, those two finish first: the reviewer judges the work and requires corrections on its own ([references/inner-loop-reviewer.md](references/inner-loop-reviewer.md)). Once it approves, the reviewer requests one Neuve review of the whole range. The implementer doesn't request it, and nobody requests one per correction round.
+**Where a review sits.** Neuve is the final review of finished work, not a check inside the loop that produces it. When a repository works with an implementer and a separate reviewer, those two finish first: the implementer records proof of the work ([references/proof.md](references/proof.md)), and the reviewer judges the work and requires corrections on its own ([references/inner-loop-reviewer.md](references/inner-loop-reviewer.md)). Once it approves, the reviewer requests one Neuve review of the whole range. The implementer doesn't request it, and nobody requests one per correction round.
 
 A typical pass, when the person asks for a review or the repository's instructions say to request one: check the work is committed (ask before committing it yourself), run `neuve review <base>..<head> --detach`, read it with `neuve review show <base>..<head>`, fix what the findings ask with the person's goal in mind, and tell the person which units need their decision.

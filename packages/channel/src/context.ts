@@ -99,20 +99,27 @@ function shareDescriptions(descriptions: string[], remaining: number): string[] 
 	return suffixes;
 }
 
-async function skills(env: ExecutionEnv, context: Context): Promise<string | undefined> {
-	const home = getOrThrow(await env.absolutePath("~", context));
-	// Keep these skill roots in step with apps/neuve-host/src/plan-git.ts.
-	const userRoots = [
+/** The person's skill folders. Plan mode allows reads in these too, and in the host's carried folder. */
+export function userSkillRoots(home: string): string[] {
+	return [
 		join(home, ".agents", "skills"),
 		resolve(process.env["CLAUDE_CONFIG_DIR"] || join(home, ".claude"), "skills"),
 	];
+}
+
+/** `carried` is a folder of skills the host carries, such as the `neuve` command's own Neuve skill. */
+async function skills(env: ExecutionEnv, context: Context, carried?: string): Promise<string | undefined> {
+	const home = getOrThrow(await env.absolutePath("~", context));
+	const userRoots = userSkillRoots(home);
 	const repoRoots = [".agents/skills", ".claude/skills"];
-	// User skills win because the user-scope Neuve skill matches the installed command.
+	const carriedRoots = carried ? [carried] : [];
+	// User skills win because the user-scope Neuve skill matches the installed command; a carried
+	// skill comes last, so any installed copy wins over it.
 	const seen = new Set<string>();
 	type SkillEntry = { name: string; label: string; description: string };
-	const groups = new Map([...repoRoots, ...userRoots].map(dir => [dir, new Array<SkillEntry>()]));
+	const groups = new Map([...repoRoots, ...userRoots, ...carriedRoots].map(dir => [dir, new Array<SkillEntry>()]));
 	let descriptionCapped = false;
-	for (const dir of [...userRoots, ...repoRoots]) {
+	for (const dir of [...userRoots, ...repoRoots, ...carriedRoots]) {
 		const entries = groups.get(dir)!;
 		for (const entry of (await list(env, dir, context)).toSorted((a, b) => compareNames(a.name, b.name))) {
 			if (entry.kind !== "directory" && entry.kind !== "symlink") continue;
@@ -187,7 +194,7 @@ async function rules(env: ExecutionEnv, context: Context): Promise<string[]> {
  * The checkout's own instructions, read from the agent's working directory before each request so
  * a lane sees its own edits to them. Unchanged text is not resent, which keeps prompt caches warm.
  */
-export const instructions: PromptSection = {
+export const instructions = (carried?: string): PromptSection => ({
 	key: "project-instructions",
 	async render({ env }, context) {
 		if (!env) return;
@@ -200,7 +207,7 @@ export const instructions: PromptSection = {
 			seen.add(text);
 			parts.push(`<file path="${file}">\n${text}\n</file>`);
 		}
-		const found = await skills(env, context);
+		const found = await skills(env, context, carried);
 		if (found) parts.push(found);
 		const applicable = await rules(env, context);
 		if (applicable.length) {
@@ -212,4 +219,4 @@ export const instructions: PromptSection = {
 		}
 		return parts.length ? parts.join("\n\n") : undefined;
 	},
-};
+});
