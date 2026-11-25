@@ -1,3 +1,4 @@
+import { beginPlanApproval } from "./composer-mode";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { MENTION } from "@ace/channel/protocol";
@@ -203,11 +204,13 @@ export function Conversation(
 		() => ({
 			mayApprove: mayAsk,
 			open: (plan: string) => openPlan?.(plan),
-			approve: (plan: string, hash: string) =>
-				host.channel(channel.id, { op: "plan-approve", chat: id, author: user, plan, hash }).then(
-					() => {},
+			approve: (plan: string, hash: string) => {
+				const returned = beginPlanApproval(channel.id, id);
+				return host.channel(channel.id, { op: "plan-approve", chat: id, author: user, plan, hash }).then(
+					returned,
 					(error: Error) => void toast.error("Could not approve the plan", { description: error.message }),
-				),
+				);
+			},
 		}),
 		[mayAsk, openPlan, channel.id, id, user],
 	);

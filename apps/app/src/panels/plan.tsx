@@ -1,3 +1,4 @@
+import { beginPlanApproval } from "../composer-mode";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import type { PlanComment, PlanCommentsSent, Request } from "@ace/channel/protocol";
@@ -69,10 +70,12 @@ export function Plan({ channel, chat, user, plan }: Props) {
 
 	async function approve() {
 		if (!current?.hash) return;
+		const returned = beginPlanApproval(channel.id, chat);
 		setApproving(true);
 		setError(undefined);
 		try {
 			await host.channel(channel.id, { op: "plan-approve", chat, author: user, plan: shown!.id, hash: current.hash });
+			returned();
 		} catch (cause) {
 			setError((cause as Error).message);
 		} finally {

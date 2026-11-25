@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 
 import { useLocalStorage } from "@ace/ui";
 import type { ChatMode } from "@ace/channel/protocol";
@@ -18,28 +18,64 @@ export function askMode(mode: string, stored: ChatMode | undefined): ChatMode | 
 }
 
 const forgotten = new Set<string>();
+type Selection = { mode: string; revision: number };
+const selections = new Map<string, Selection>();
+const effective = new Map<string, string>();
+const listeners = new Set<() => void>();
+const scopeOf = (channel: string, chat: number) => `/channels/${channel}/${chat}`;
+const modeKey = (scope: string) => `ace:mode:${scope}`;
+const returnKey = (scope: string) => `ace:plan-return:${scope}`;
+const subscribe = (listener: () => void) => {
+	listeners.add(listener);
+	return () => { listeners.delete(listener); };
+};
+function read(key: string): unknown {
+	try { return JSON.parse(localStorage.getItem(key) ?? "null"); } catch { return null; }
+}
+function save(key: string, value: string) {
+	try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+}
+function select(scope: string, mode: string) {
+	selections.set(scope, { mode, revision: (selections.get(scope)?.revision ?? 0) + 1 });
+	effective.set(scope, mode);
+	for (const listener of listeners) listener();
+}
 
-/**
- * The composer's mode, remembered per chat so a composer left on Plan in one chat leaves its
- * channel's other chats be. Only a person's choice in the mode menu is remembered; a mode the
- * draft or a key moved to lasts while the chat is open. Until the chat's stored mode is known
- * (`stored` undefined), nothing but a choice moves the mode, so a planning chat opens in Plan.
- * The per-channel value it replaces is removed, not carried to a chat.
- */
+/** Capture at the explicit approval action, never on a plan event or a reconnect. */
+export function beginPlanApproval(channel: string, chat: number) {
+	const scope = scopeOf(channel, chat);
+	const revision = selections.get(scope)?.revision ?? 0;
+	const mode = effective.get(scope) ?? read(modeKey(scope));
+	const saved = read(returnKey(scope));
+	const returning = saved === "chat" ? "chat" : "ace";
+	let completed = false;
+	return () => {
+		if (completed) return;
+		completed = true;
+		if (mode !== "plan" || (selections.get(scope)?.revision ?? 0) !== revision) return;
+		save(modeKey(scope), returning);
+		select(scope, returning);
+	};
+}
+
+/** Browser-local choice and pre-Plan return mode, isolated per channel and chat. */
 export function useChatMode(channel: string, chat: number, stored: ChatMode | undefined) {
 	if (!forgotten.has(channel)) {
 		forgotten.add(channel);
-		try {
-			localStorage.removeItem(`ace:mode:/channels/${channel}`);
-		} catch {}
+		try { localStorage.removeItem(`ace:mode:/channels/${channel}`); } catch {}
 	}
-	const scope = `/channels/${channel}/${chat}`;
-	const [remembered, remember] = useLocalStorage<string | null>(`ace:mode:${scope}`, null);
-	const [moved, move] = useState<{ scope: string; mode: string }>();
-	const change = (mode: string, chosen = false) => {
-		if (chosen) remember(mode);
-		if (chosen || stored !== undefined) move({ scope, mode });
+	const scope = scopeOf(channel, chat);
+	const [remembered, remember] = useLocalStorage<string | null>(modeKey(scope), null);
+	const selection = useSyncExternalStore(subscribe, () => selections.get(scope), () => undefined);
+	const mode = selection?.mode ?? remembered ?? stored ?? "ace";
+	effective.set(scope, mode);
+	const change = (next: string, chosen = false) => {
+		if (!chosen && stored === undefined) return;
+		const previous = effective.get(scope) ?? mode;
+		if (next === "plan" && previous !== "plan") save(returnKey(scope), previous === "chat" ? "chat" : "ace");
+		if (chosen) remember(next);
+		// Temporary draft and keyboard changes remain temporary, but their return choice is durable.
+		select(scope, next);
 	};
-	const mode = (moved?.scope === scope ? moved.mode : undefined) ?? remembered ?? stored ?? "ace";
 	return [mode, change] as const;
 }
