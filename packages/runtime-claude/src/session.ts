@@ -113,6 +113,10 @@ interface Turn {
   endTurn: boolean;
   lastEntry?: string;
   lastEntryIsCarrier: boolean;
+  readonly observedCalls: Set<string>;
+  readonly savedResults: Set<string>;
+  savedCarrier?: string;
+  refused: boolean;
   readonly calls: Map<
     string,
     {
@@ -125,7 +129,6 @@ interface Turn {
   readonly scope: Scope.Closeable;
   readonly abort: AbortController;
   readonly usage: Map<string, CallUsage>;
-  progressed: boolean;
   readonly rejected: Map<string, ReturnType<typeof limitWindow>>;
   observations: TurnObservations;
   readonly sends: Set<string>;
@@ -134,7 +137,6 @@ interface Turn {
   readonly remainingCalls: Map<string, Set<string>>;
   readonly settledCalls: Map<string, CallSettlement>;
   toolRan: boolean;
-  refreshRetried: boolean;
   failedOutcome?: Extract<TurnOutcome, { status: "failed" }>;
   ending?: TurnOutcome;
   starting?: Fiber.Fiber<void, RuntimeUnavailable | TurnFailed>;
@@ -406,6 +408,12 @@ export const openClaudeSession = (
           yield* settleCallLocked(turn, callId);
         yield* emitStreamUsageLocked(turn);
         if (turn.lastEntryIsCarrier) resumePoint = turn.lastEntry;
+        const retryPoint =
+          outcome.status === "failed" &&
+          outcome.retry?.continuation === "resume"
+            ? turn.savedCarrier
+            : undefined;
+        if (retryPoint !== undefined) resumePoint = retryPoint;
         active = undefined;
         lastEndedByTool = turn.endTurn;
         server.clearStamps();
@@ -414,9 +422,11 @@ export const openClaudeSession = (
           turnId: turn.id,
           at: now(),
           outcome,
-          ...(turn.lastEntryIsCarrier && turn.lastEntry !== undefined
-            ? { resumePoint: turn.lastEntry }
-            : {}),
+          ...(retryPoint !== undefined
+            ? { resumePoint: retryPoint }
+            : turn.lastEntryIsCarrier && turn.lastEntry !== undefined
+              ? { resumePoint: turn.lastEntry }
+              : {}),
         });
         if (stopped) yield* Queue.end(queue);
       });
@@ -471,7 +481,16 @@ export const openClaudeSession = (
                       sessionScope,
                     );
                 }
-                const ending = turn.ending ?? outcome;
+                const recorded = turn.ending ?? outcome;
+                // Cleanup failure invalidates the earlier continuation assertion.
+                const ending =
+                  !cleaned && recorded.status === "failed"
+                    ? {
+                        ...recorded,
+                        disposition: "broken" as const,
+                        retry: undefined,
+                      }
+                    : recorded;
                 yield* publishLocked(
                   turn,
                   !cleaned && ending.status !== "failed" && !turn.endTurn
@@ -967,6 +986,7 @@ export const openClaudeSession = (
       Effect.gen(function* () {
         for (const message of messages) {
           const event = turn.messages.event(message, turn.id, now());
+          if (event.stopReason === "refusal") turn.refused = true;
           resumePoint = event.resumePoint;
           const remaining = new Set(
             event.toolCalls
@@ -1029,6 +1049,11 @@ export const openClaudeSession = (
       collected: ReturnType<Turn["messages"]["receive"]>,
     ) =>
       Effect.gen(function* () {
+        if (collected.skippedClosingFrame)
+          yield* Effect.logInfo("claude-runtime skipped-frame", {
+            reason: "closed-response",
+            frame: "stream_event/content_block_stop",
+          });
         const ready = [...collected.ready];
         let completed = collected.completed;
         // A result ledger already includes the request. Stream-derived totals need only its correction.
@@ -1391,12 +1416,33 @@ export const openClaudeSession = (
                             (block) => block.type === "tool_result",
                           );
                       }
+                      if (
+                        frame.type === "assistant" &&
+                        frame.parent_tool_use_id === null
+                      )
+                        for (const block of frame.message.content)
+                          if (block.type === "tool_use")
+                            turn.observedCalls.add(block.id);
+                      if (
+                        frame.type === "user" &&
+                        frame.parent_tool_use_id === null &&
+                        frame.session_id === sessionId &&
+                        frame.uuid !== undefined &&
+                        Array.isArray(frame.message.content)
+                      ) {
+                        for (const block of frame.message.content)
+                          if (block.type === "tool_result") {
+                            turn.savedResults.add(block.tool_use_id);
+                            turn.savedCarrier = frame.uuid;
+                          }
+                      }
                       yield* acceptMessagesLocked(turn, collected);
                       if (frame.type === "stream_event") {
                         if (
                           frame.event.type === "content_block_start" &&
                           frame.event.content_block.type === "tool_use"
                         ) {
+                          turn.observedCalls.add(frame.event.content_block.id);
                           const name = frame.event.content_block.name;
                           if (
                             !(name === "StructuredOutput" && turn.final) &&
@@ -1417,7 +1463,6 @@ export const openClaudeSession = (
                           frame.event.type === "content_block_delta" &&
                           frame.event.delta.type === "text_delta"
                         ) {
-                          turn.progressed = true;
                           yield* emit({
                             type: "text",
                             turnId: turn.id,
@@ -1535,23 +1580,6 @@ export const openClaudeSession = (
                           yield* offerHeldLocked(current, turn);
                         const hasQueuedWork = turn.pendingSends.size > 0;
                         const assistant = turn.observations.assistant;
-                        if (
-                          turn.ending === undefined &&
-                          !turn.refreshRetried &&
-                          !turn.toolRan &&
-                          !turn.progressed &&
-                          turn.sends.size === 1 &&
-                          turn.pendingSends.size === 0 &&
-                          assistant?.code === "server_error" &&
-                          /another Claude Code process is refreshing it/i.test(
-                            assistant.text,
-                          )
-                        ) {
-                          turn.refreshRetried = true;
-                          turn.observations = {};
-                          yield* sendLocked(current, turn, turn.message);
-                          return;
-                        }
                         const observed: TurnObservations = {
                           ...turn.observations,
                           limited: turn.rejected.values().next().value,
@@ -1567,7 +1595,48 @@ export const openClaudeSession = (
                           turn.failedOutcome ??= resultOutcome;
                         if (turn.ending === undefined && hasQueuedWork) return;
                         if (turn.cleanup !== undefined) return;
-                        const outcome = turn.failedOutcome ?? resultOutcome;
+                        let outcome = turn.failedOutcome ?? resultOutcome;
+                        // SDK retries have already ended. Only typed transient evidence plus
+                        // saved provider history authorizes the harness to consider continuing.
+                        // Accounting faults, refusals and ambiguous tool results never enter here.
+                        const typedTransient =
+                          ("api_error_status" in frame &&
+                            frame.api_error_status != null &&
+                            frame.api_error_status >= 500) ||
+                          assistant?.code === "overloaded";
+                        const callIds = new Set([
+                          ...turn.observedCalls,
+                          ...turn.calls.keys(),
+                        ]);
+                        const savedTools =
+                          callIds.size > 0 &&
+                          turn.savedCarrier !== undefined &&
+                          [...callIds].every((id) => turn.savedResults.has(id));
+                        if (
+                          typedTransient &&
+                          frame.session_id === sessionId &&
+                          !turn.refused &&
+                          turn.rejected.size === 0 &&
+                          assistant?.code !== "rate_limit" &&
+                          !hasQueuedWork &&
+                          turn.heldSteers.length === 0 &&
+                          outcome.status === "failed" &&
+                          outcome.disposition === "reusable" &&
+                          outcome.failure._tag === "TurnFailed" &&
+                          (outcome.failure.reason === "provider-unavailable" ||
+                            outcome.failure.reason === "provider-failed") &&
+                          (savedTools || (!turn.toolRan && callIds.size === 0))
+                        ) {
+                          outcome = {
+                            ...outcome,
+                            retry: {
+                              kind: "transient-provider",
+                              continuation: savedTools
+                                ? "resume"
+                                : "repeat-request",
+                            },
+                          };
+                        }
                         yield* finishLocked(turn, outcome);
                       }
                     }),
@@ -1826,13 +1895,15 @@ export const openClaudeSession = (
                   streamUsageAfterResult: false,
                   completedMessages: 0,
                   lastEntryIsCarrier: false,
+                  observedCalls: new Set(),
+                  savedResults: new Set(),
+                  refused: false,
                   calls: new Map(),
                   endTurn: false,
                   final: input.final === true,
                   scope: yield* Scope.fork(sessionScope),
                   abort: new AbortController(),
                   usage: new Map(),
-                  progressed: false,
                   rejected: new Map(),
                   observations: {},
                   sends: new Set(),
@@ -1841,7 +1912,6 @@ export const openClaudeSession = (
                   remainingCalls: new Map(),
                   settledCalls: new Map(),
                   toolRan: false,
-                  refreshRetried: false,
                 };
                 active = turn;
                 yield* emit({

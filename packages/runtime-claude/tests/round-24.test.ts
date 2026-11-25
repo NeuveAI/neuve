@@ -296,7 +296,8 @@ async function scenario({
           } satisfies Entry,
         ]
       : []),
-    ...(fault === undefined && !afterResult
+    ...((fault === undefined || fault === "block stop after stop") &&
+    !afterResult
       ? [
           ...(!endTurn ? [inbound(next)] : []),
           inbound(
@@ -496,7 +497,6 @@ for (const fault of [
   "assistant",
   "duplicate stop",
   "delta after stop",
-  "block stop after stop",
 ] satisfies Fault[]) {
   // Reason: publication follows message_stop; further blocks fault only after that response closes.
   test(`R24 still faults on ${fault} after the tool`, async () => {
@@ -509,6 +509,22 @@ for (const fault of [
     expect(capture.diagnosis?.firedPath).toBe("publishedFrameAfterEnding");
   });
 }
+
+// Reason: a known, content-free block closure after publication must not fail the completed turn.
+// This is a constructed boundary regression, not a captured incident replay.
+test("R24 known block stop after message stop preserves the completed tool turn", async () => {
+  const capture = await scenario({
+    late: false,
+    endTurn: true,
+    fault: "block stop after stop",
+  });
+  expect(capture.ending.outcome).toEqual({ status: "completed" });
+  expect(capture.handled).toBe(1);
+  expect(
+    capture.seen.filter((event) => event.type === "message.finished"),
+  ).toHaveLength(1);
+  expect(capture.diagnosis?.firedPath).toBe("none");
+});
 
 // Reason: new output after endTurn poisons the session; this guard passes before the fix.
 test("R24 new response after endTurn keeps the protocol fault", async () => {

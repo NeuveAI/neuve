@@ -1138,24 +1138,18 @@ test("retries: api_retry reaches the contract and recovered overload still compl
   );
 });
 
-test("refresh lock: retry only the initial server_error once before tools or output", async () => {
-  const locked = assistant(
-    "server_error",
-    "another Claude Code process is refreshing it",
-  );
-  const retried = {
-    ...locked,
-    uuid: crypto.randomUUID(),
-    message: { ...locked.message, id: "retry-message" },
-  };
+// Reason: only the harness's durable policy may retry; provider wording never resends a prompt.
+test("refresh lock: displayed server_error does not silently resend the request", async () => {
   await sessionTest(
     [
       open,
       offer,
-      inbound(locked),
-      inbound(errorResult("error_during_execution")),
-      offer,
-      inbound(retried),
+      inbound(
+        assistant(
+          "server_error",
+          "another Claude Code process is refreshing it",
+        ),
+      ),
       inbound(errorResult("error_during_execution")),
       close,
     ],

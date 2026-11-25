@@ -23,6 +23,11 @@ export const requestUsage = z.object({
     .object({ thinking_tokens: z.number().int().nonnegative() })
     .nullish(),
 });
+const closingBlock = z.strictObject({
+  type: z.literal("content_block_stop"),
+  index: z.number().int().nonnegative(),
+});
+const closingMessage = z.strictObject({ type: z.literal("message_stop") });
 const stopReason = (reason: string | null): Finished["stopReason"] => {
   switch (reason) {
     case "end_turn":
@@ -45,6 +50,9 @@ interface Message {
   usage: CallUsage;
   streamUsage: boolean;
   complete: boolean;
+  session: string;
+  streamed: boolean;
+  blockIndices: Set<number>;
   calls: Map<string, Call>;
 }
 /** Root responses span per-block assistant frames (sdk.d.ts:3709). */
@@ -54,6 +62,7 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
   let streamOpen = false;
   let streamInvalidated = false;
   let publishedStream: Message | undefined;
+  let closedStream: Message | undefined;
   let conversationId: string | undefined;
   const blocks = new Map<
     number,
@@ -67,11 +76,13 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
     calls: Call[],
     completed: number,
     usageUpdates: { model: string; delta: CallUsage }[] = [],
+    skippedClosingFrame = false,
   ) => ({
     calls,
     completed,
     ready: takeReady(),
     usageUpdates,
+    skippedClosingFrame,
   });
   const publish = () => {
     if (current?.complete && !emitted.has(current.id)) {
@@ -81,7 +92,10 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
       }
       emitted.add(current.id);
       ready.push(current);
-      if (streamOpen && !streamInvalidated) publishedStream = current;
+      if (current.streamed && !streamInvalidated) {
+        if (streamOpen) publishedStream = current;
+        else closedStream = current;
+      }
     }
   };
   const stash = () => {
@@ -143,14 +157,38 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
       : streamInvalidated ||
           (latestMessageId !== undefined && emitted.has(latestMessageId));
   };
+  const publishedTail = (frame: SDKMessage): Message | undefined => {
+    if (
+      frame.type !== "stream_event" ||
+      frame.parent_tool_use_id !== null ||
+      streamInvalidated
+    )
+      return;
+    const message = publishedStream ?? closedStream;
+    if (
+      message === undefined ||
+      message.id !== latestMessageId ||
+      frame.session_id !== message.session
+    )
+      return;
+    // After message_stop only a known, content-free block closure is harmless.
+    // Usage and message-stop tails retain their existing open-stream ordering rule.
+    if (
+      frame.event.type === "content_block_stop" &&
+      message.blockIndices.has(frame.event.index) &&
+      closingBlock.safeParse(frame.event).success
+    )
+      return message;
+    if (
+      publishedStream !== undefined &&
+      (frame.event.type === "message_delta" ||
+        (frame.event.type === "message_stop" &&
+          closingMessage.safeParse(frame.event).success))
+    )
+      return message;
+  };
   const isPublishedTail = (frame: SDKMessage) =>
-    publishedStream !== undefined &&
-    publishedStream.id === latestMessageId &&
-    frame.type === "stream_event" &&
-    frame.parent_tool_use_id === null &&
-    (frame.event.type === "content_block_stop" ||
-      frame.event.type === "message_delta" ||
-      frame.event.type === "message_stop");
+    publishedTail(frame) !== undefined;
   return {
     isPublishedFrame,
     isPublishedTail,
@@ -169,6 +207,7 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
     receive(frame: SDKMessage) {
       if (frame.type === "conversation_reset") {
         publishedStream = undefined;
+        closedStream = undefined;
         streamInvalidated = latestMessageId !== undefined;
         conversationId = frame.new_conversation_id;
         return collected([], 0);
@@ -179,6 +218,7 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
           conversationId !== frame.session_id
         ) {
           publishedStream = undefined;
+          closedStream = undefined;
           streamInvalidated = latestMessageId !== undefined;
         }
         conversationId = frame.session_id;
@@ -186,12 +226,9 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
       }
       if (frame.type === "assistant" || frame.type === "stream_event")
         conversationId ??= frame.session_id;
-      if (
-        isPublishedTail(frame) &&
-        frame.type === "stream_event" &&
-        publishedStream !== undefined
-      ) {
-        const message = publishedStream;
+      const tail = publishedTail(frame);
+      if (tail !== undefined && frame.type === "stream_event") {
+        const message = tail;
         if (frame.event.type === "message_delta") {
           const before = message.usage;
           message.streamUsage = true;
@@ -216,10 +253,13 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
             },
           ]);
         }
-        if (frame.event.type === "content_block_stop")
+        if (frame.event.type === "content_block_stop") {
           blocks.delete(frame.event.index);
-        else if (frame.event.type === "message_stop") {
+          return collected([], 0, [], true);
+        }
+        if (frame.event.type === "message_stop") {
           streamOpen = false;
+          closedStream = message;
           publishedStream = undefined;
         }
         return collected([], 0);
@@ -232,6 +272,7 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
         if (current?.id !== frame.message.id) {
           stash();
           publishedStream = undefined;
+          closedStream = undefined;
           streamOpen = false;
           streamInvalidated = false;
           latestMessageId = frame.message.id;
@@ -242,6 +283,9 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
             usage: zeroUsage(),
             streamUsage: false,
             complete: false,
+            session: frame.session_id,
+            streamed: false,
+            blockIndices: new Set(),
             calls: new Map(),
           };
         }
@@ -272,11 +316,14 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
         frame.parent_tool_use_id === null
       ) {
         const event = frame.event;
+        if (event.type === "content_block_start" && current !== undefined)
+          current.blockIndices.add(event.index);
         if (event.type === "message_start") {
           if (current?.id === event.message.id)
             return collected(calls, completed);
           stash();
           publishedStream = undefined;
+          closedStream = undefined;
           streamOpen = true;
           streamInvalidated = false;
           latestMessageId = event.message.id;
@@ -287,6 +334,9 @@ export function messageCollector(tools: ReadonlyArray<ToolDefinition>) {
             usage: zeroUsage(),
             streamUsage: true,
             complete: false,
+            session: frame.session_id,
+            streamed: true,
+            blockIndices: new Set(),
             calls: new Map(),
           };
           updateUsage(event.message.usage);
