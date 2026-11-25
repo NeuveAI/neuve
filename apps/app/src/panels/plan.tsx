@@ -71,11 +71,12 @@ export function Plan({ channel, chat, user, plan }: Props) {
 
 	async function approve() {
 		if (!current?.hash) return;
+		const returned = returnFromPlan();
 		setApproving(true);
 		setError(undefined);
 		try {
 			await host.channel(channel.id, { op: "plan-approve", chat, author: user, plan: shown!.id, hash: current.hash });
-			returnFromPlan();
+			returned();
 		} catch (cause) {
 			setError((cause as Error).message);
 		} finally {

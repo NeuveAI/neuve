@@ -11,11 +11,14 @@ Object.assign(globalThis, {
 });
 mock.module("@ace/ui", () => ({
 	useLocalStorage<T>(key: string, fallback: T) {
-		const raw = stored.get(key);
-		const value: T = raw === undefined ? fallback : JSON.parse(raw);
+		const read = (): T => {
+			const raw = stored.get(key);
+			return raw === undefined ? fallback : JSON.parse(raw);
+		};
+		// As the real hook does, an update reads the stored value when it is applied.
 		const set = (next: T | ((prev: T) => T)) =>
-			stored.set(key, JSON.stringify(typeof next === "function" ? (next as (prev: T) => T)(value) : next));
-		return [value, set];
+			stored.set(key, JSON.stringify(typeof next === "function" ? (next as (prev: T) => T)(read()) : next));
+		return [read(), set];
 	},
 }));
 // The app keeps one composer across a channel's chats; its state is this one slot.
@@ -92,7 +95,8 @@ test("an ask carries the agent's mode only when it changes the chat's, and Plan 
 });
 
 // Why: approving takes the planning chat out of Plan, so the approving person's composer goes back
-// to the mode it left for Plan; one the person has since moved out of Plan stays where they put it.
+// to the mode it left for Plan. A choice the person makes while the approval is answered stays: one
+// out of Plan, and a new Plan session begun from another mode.
 test("approving returns the composer to the mode it had before Plan, and no further", () => {
 	for (const before of ["chat", "ace"]) {
 		const [, change] = useChatMode(before, 1, "ace");
@@ -100,14 +104,22 @@ test("approving returns the composer to the mode it had before Plan, and no furt
 		useChatMode(before, 1, "ace")[1]("plan", true);
 		slot = undefined;
 		expect(useChatMode(before, 1, "plan")[0]).toBe("plan");
-		usePlanReturn(before, 1)();
+		usePlanReturn(before, 1)()();
 		expect(useChatMode(before, 1, "ace")[0]).toBe(before);
 	}
 	useChatMode("moved", 1, "ace")[1]("plan", true);
+	const moved = usePlanReturn("moved", 1)();
 	useChatMode("moved", 1, "plan")[1]("chat", true);
-	usePlanReturn("moved", 1)();
+	moved();
 	expect(useChatMode("moved", 1, "ace")[0]).toBe("chat");
+	useChatMode("again", 1, "ace")[1]("chat", true);
+	useChatMode("again", 1, "ace")[1]("plan", true);
+	const again = usePlanReturn("again", 1)();
+	useChatMode("again", 1, "plan")[1]("ace", true);
+	useChatMode("again", 1, "plan")[1]("plan", true);
+	again();
+	expect(useChatMode("again", 1, "plan")[0]).toBe("plan");
 	// A chat that opened in Plan from its stored mode, with nothing chosen here, returns to the agent's.
-	usePlanReturn("seeded", 1)();
+	usePlanReturn("seeded", 1)()();
 	expect(useChatMode("seeded", 1, "ace")[0]).toBe("ace");
 });

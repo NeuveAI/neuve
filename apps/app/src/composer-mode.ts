@@ -21,6 +21,17 @@ export function askMode(mode: string, stored: ChatMode | undefined): ChatMode | 
 
 const forgotten = new Set<string>();
 
+/** The mode the composer left for Plan, and which of the chat's Plan sessions it began. */
+type PlanSession = { mode: string; session: number };
+
+function planSession(scope: string): PlanSession | null {
+	try {
+		return JSON.parse(localStorage.getItem(`ace:plan-return:${scope}`) ?? "null");
+	} catch {
+		return null;
+	}
+}
+
 /**
  * The composer's mode, remembered per chat so a composer left on Plan in one chat leaves its
  * channel's other chats be. Only a person's choice in the mode menu is remembered; a mode the
@@ -38,11 +49,12 @@ export function useChatMode(channel: string, chat: number, stored: ChatMode | un
 	}
 	const scope = `/channels/${channel}/${chat}`;
 	const [remembered, remember] = useLocalStorage<string | null>(`ace:mode:${scope}`, null);
-	const [, rememberReturn] = useLocalStorage<string | null>(`ace:plan-return:${scope}`, null);
+	const [, rememberReturn] = useLocalStorage<PlanSession | null>(`ace:plan-return:${scope}`, null);
 	const [moved, move] = useState<{ scope: string; mode: string }>();
 	const mode = (moved?.scope === scope ? moved.mode : undefined) ?? remembered ?? stored ?? "ace";
 	const change = (next: string, chosen = false) => {
-		if (next === "plan" && mode !== "plan") rememberReturn(mode);
+		if (next === "plan" && mode !== "plan")
+			rememberReturn({ mode, session: (planSession(scope)?.session ?? 0) + 1 });
 		if (chosen) {
 			remember(next);
 			move(undefined);
@@ -52,15 +64,20 @@ export function useChatMode(channel: string, chat: number, stored: ChatMode | un
 }
 
 /**
- * Returns this browser's composer to the mode it had before Plan, once the person's approval of
- * the chat's plan succeeds. A composer the person has since moved out of Plan is left as it is.
+ * Returns this browser's composer to the mode it had before Plan. Called as the person approves the
+ * chat's plan; the call it returns, made once approval succeeds, returns the composer only while it
+ * is still in the Plan session that was approved, so a later choice or a new Plan session stays.
  */
 export function usePlanReturn(channel: string, chat: number) {
 	const scope = `/channels/${channel}/${chat}`;
 	const [, remember] = useLocalStorage<string | null>(`ace:mode:${scope}`, null);
-	const [before] = useLocalStorage<string | null>(`ace:plan-return:${scope}`, null);
-	return useCallback(
-		() => remember((mode) => (mode === null || mode === "plan" ? (before === "chat" ? "chat" : "ace") : mode)),
-		[remember, before],
-	);
+	return useCallback(() => {
+		const approved = planSession(scope);
+		return () =>
+			remember((mode) =>
+				(mode === null || mode === "plan") && planSession(scope)?.session === approved?.session
+					? approved?.mode === "chat" ? "chat" : "ace"
+					: mode,
+			);
+	}, [remember, scope]);
 }
