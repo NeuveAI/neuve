@@ -41,6 +41,8 @@ export type Listing = {
 	model?: ModelRef;
 	/** A fork's starting lane, which its root chat records only when its pi state is created. */
 	lane?: { name: string; path: string; base: string };
+	/** Only worktrees the host provisioned for chat admission; archive may remove these folders. */
+	chatLanes?: Record<string, { path: string; branch: string; base: string }>;
 	created: number;
 	/** When the transcript last grew; channels from older builds have none until they next do. */
 	active?: number;

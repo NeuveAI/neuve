@@ -25,21 +25,25 @@ function faux() {
 	return { fake, models };
 }
 
-function open(root: string, models: Models, home: string) {
+async function open(root: string, models: Models, home: string) {
 	const env = new class extends NodeExecutionEnv {
 		override async absolutePath(...args: Parameters<NodeExecutionEnv["absolutePath"]>): ReturnType<NodeExecutionEnv["absolutePath"]> {
 			const [path] = args;
 			return path === "~" || path.startsWith("~/") ? ok(join(home, path.slice(2))) : super.absolutePath(...args);
 		}
 	}({ cwd: root });
-	return openChannel({
+	// These file-policy fixtures have no catalog admission; exercise the environment gate alone.
+	const lanes = config.lanes;
+	Reflect.deleteProperty(config, "lanes");
+	try { return await openChannel({
 		id: "plan-test", name: "Plan test", owner: "owner", project: root,
 		defaultModel: async () => ({ provider: "plan-test", modelId: "agent" }),
 		storage: new MemoryStorage(), models,
 		env: () => env,
 		directory: { self: { id: "plan-test", name: "Plan test" }, list: async () => [], deliver: async () => {} },
 		log: () => {},
-	}, root);
+	}, root); }
+	finally { if (lanes !== undefined) config.lanes = lanes; }
 }
 
 async function ask(channel: Channel, request: Pick<Extract<Request, { op: "ask" }>, "mode" | "chat">) {
@@ -261,8 +265,8 @@ test("the gateway preserves an ask's mode and stamps the verified author", () =>
 	});
 });
 
-// Exercise the configured worker's lane rule and confined file access on the same checkout.
-test("the configured worker gives planning chats confined access without a lane", async () => {
+// Without a placement adapter, ordinary checkout environments stay denied; Plan reads still work.
+test("the worker without a placement adapter confines Plan reads and denies ordinary checkout tools", async () => {
 	const root = await mkdtemp(join(tmpdir(), "neuve plan checkout "));
 	const previous = runtimeHooks();
 	const previousLanes = config.lanes;
@@ -277,8 +281,7 @@ test("the configured worker gives planning chats confined access without a lane"
 		await writeFile(join(dir, "outside.txt"), "outside fixture");
 		git(repo, "add", "--", "tracked.txt");
 
-		config.lanes = join(dir, "lanes");
-		await mkdir(config.lanes);
+		Reflect.deleteProperty(config, "lanes");
 		configureRuntime({ worker: { models: (_, defaults) => defaults } });
 		const { fake, models } = faux();
 		const channel = await open(repo, models, join(dir, "home"));

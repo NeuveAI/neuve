@@ -20,7 +20,10 @@ type Worktree = { path: string; branch: string; base: string };
 type ReviewSource = Pick<Worktree, "branch" | "base">;
 export type BuildHost = {
 	share<T>(key: string, run: () => Promise<T>): Promise<T>;
-	worktree(name: string, source?: ReviewSource): Promise<Worktree>;
+	worktree(...args:
+		| [name: string, source?: ReviewSource]
+		| [placement: { chat: ConversationId; recorded?: { path: string; base?: string } }]
+	): Promise<Worktree>;
 	query?: {
 		sessionId: string;
 		read(input: ScopeRead): Promise<ScopeReadAnswer>;
@@ -159,7 +162,7 @@ export function buildTools(builds: () => Builds) {
 			execute: (args, api, context) => builds().startAgent(args, api, context),
 		}), defineTool({
 			name: AGENT_MESSAGE_TOOL,
-			description: "Send a message to an agent of this plan. Name its role and give its path scope in the part field. Omit that field to reach the agent assigned to the whole plan.",
+			description: "Send a message to an agent of this plan, from a started agent or the chat that drafted the plan. Name its role and give its path scope in the part field. Omit that field to reach the agent assigned to the whole plan.",
 			parameters: Type.Object({
 				to: Role,
 				part: Type.Optional(Type.String()),
@@ -606,13 +609,16 @@ export class Builds {
 			if (existing?.submission !== undefined) return;
 			if (existing) return { build: existing.message.build };
 			const sender = this.agent(from);
-			const record = sender && records[sender.build];
-			if (!record) return { refusal: "Only an agent of a plan can message another agent of that plan." };
-			const blocked = buildRefusal(record.build.state.kind);
+			const latest = sender ? undefined : (await tx.doc(PlansDoc)).chats[from]?.at(-1)?.plan;
+			let record = sender ? records[sender.build] : latest && records[buildId(from, latest.hash)];
+			// Approved revisions reuse the preceding build's agents, as recorded at approval.
+			if (!sender && record?.build.state.kind === "delivered") record = records[record.build.state.to];
+			if (!record && (sender || !latest)) return { refusal: "Only the chat that drafted a plan, or one of its agents, can message that plan's agents." };
+			const blocked = record && buildRefusal(record.build.state.kind);
 			if (blocked) return { refusal: blocked };
-			const recipient = record.starts[agentKey(to, part)];
-			if (recipient?.state.kind !== "started" || !recipient.brief) {
-				const agents = record.build.agents
+			const recipient = record?.starts[agentKey(to, part)];
+			if (!record || recipient?.state.kind !== "started" || !recipient.brief) {
+				const agents = !record ? [] : record.build.agents
 					.filter(({ role, part }) => record.starts[agentKey(role, part)]?.state.kind === "started")
 					.map(({ role, part }) => `${role === "implementer" ? "an" : "a"} ${role}${part === undefined ? "" : ` for ${JSON.stringify(part)}`}`);
 				const listing = agents.length ? `The plan has started ${new Intl.ListFormat("en").format(agents)}.` : "The plan has no started agents yet.";

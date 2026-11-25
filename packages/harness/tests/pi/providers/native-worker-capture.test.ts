@@ -62,6 +62,25 @@ test("actual non-route native worker keeps credential-masked raw reasoning and t
     join(root, "project"),
   ])
     mkdirSync(path, { recursive: true });
+  // A real channel's project admission requires a committed Git repository before chat placement.
+  for (const args of [
+    ["init", "-q", "-b", "main"],
+    [
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@neuve.invalid",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "fixture",
+    ],
+  ]) {
+    const result = Bun.spawnSync(["git", "-C", join(root, "project"), ...args]);
+    if (!result.success)
+      throw new Error(`Native fixture Git admission failed: ${result.stderr}`);
+  }
   writeFileSync(
     join(state, "channel.json"),
     JSON.stringify({

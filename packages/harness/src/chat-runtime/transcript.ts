@@ -34,7 +34,8 @@ const planningRequest = Symbol.for("neuve.chat.plan-request");
 /**
  * Neuve runs these tools outside the runtime sandbox. Questions and comment answers stay in the
  * chat, and plans use a host-chosen file. The host chooses build agent worktrees in owner-only
- * channels and limits agent messages to the same build.
+ * channels and limits agent messages to one build's agents, sent by those agents or by the chat
+ * that drafted the build's plan.
  */
 const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
   "question",

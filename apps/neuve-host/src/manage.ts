@@ -1,7 +1,7 @@
 import {extendModels} from "./model-availability";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 
@@ -17,6 +17,7 @@ import { models as providers } from "./keys";
 import { preference } from "./preferences";
 import { checkout, git } from "./projects";
 import { isInactive } from "./protocol";
+import { failure, log } from "./log";
 
 export function parseModel(value: string): ModelRef {
 	const split = value.indexOf("/");
@@ -206,7 +207,33 @@ export async function archive(id: string, archived: boolean): Promise<catalog.Li
 	if (archived) await kill(id);
 	const record = { ...catalog.read(id), archived };
 	catalog.write(record);
+	if (archived && !record.hosted && !record.compute) await disposeChatLanes(record);
 	return record;
+}
+
+/** Ownership is durable, not inferred from a folder name; explicit and build lanes stay put. */
+async function disposeChatLanes(record: catalog.Listing): Promise<void> {
+	for (const [name, lane] of Object.entries(record.chatLanes ?? {})) {
+		try {
+			const path = join(catalog.paths(record.id).lanes, name);
+			if (!/^chat-\d+$/.test(name) || lane.path !== path || lane.branch !== `${record.prefix}/${name}`) {
+				throw new Error("The work lane does not match its host-owned location and branch");
+			}
+			if (record.lane?.path === path || !existsSync(path)) continue;
+			const listed = await git(record.project, ["worktree", "list", "--porcelain", "-z"]);
+			if (listed.status !== 0) throw new Error(listed.stderr || "Could not read Git worktrees");
+			const found = listed.stdout.split("\0\0").map(item => item.split("\0")).find(fields => fields[0] === `worktree ${path}`);
+			if (!found?.includes(`branch refs/heads/${lane.branch}`)) throw new Error("The work lane's Git registration changed, so it was kept");
+			// Do not let status.showUntrackedFiles=no hide work from Git's removal check.
+			const removed = await git(record.project, ["-c", "status.showUntrackedFiles=normal", "worktree", "remove", "--", path]);
+			if (removed.status !== 0) throw new Error((removed.stderr || removed.stdout).trim() || "Git could not remove the work lane");
+			if (existsSync(path)) throw new Error("Git reported removal but the work lane folder remains");
+			log("info", "chat.lane.removed", { channel: record.id, path, branch: lane.branch });
+		} catch (error) {
+			// The channel is archived even when disposal is refused. History and dirty work survive.
+			log("warn", "chat.lane.retained", { channel: record.id, path: lane.path, ...failure(error) });
+		}
+	}
 }
 
 /** Dormant workers retire only once idle, so only a live worker can have work in progress. */

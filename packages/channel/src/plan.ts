@@ -3,7 +3,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, defineTool, LiveDoc, type ConversationId, type EntryId, type Harness, type SubmissionId, type Tx } from "@earendil-works/pi-durable";
 import type { Admission } from "./extensions";
 import type { Log } from "./log";
-import type { IsPlanning } from "./plan-mode";
+import { ChatModesDoc, type IsPlanning } from "./plan-mode";
 import { PLAN_TOOL, type Plan, type PlanComment } from "./protocol";
 
 declare const crypto: {
@@ -152,6 +152,9 @@ export class Plans {
 						};
 						const record = { plan, file, text: markdown };
 						await api.commit(async tx => {
+							// A newer draft makes an older approval's delayed exit obsolete.
+							const modes = await tx.doc(ChatModesDoc);
+							if (modes.pendingExits) delete modes.pendingExits[chat];
 							const { chats, comments } = await tx.doc(PlansDoc);
 							const plans = chats[chat];
 							if (!plans) chats[chat] = [record];

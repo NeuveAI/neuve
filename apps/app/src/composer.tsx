@@ -410,6 +410,8 @@ export function Composer(
 		if (sending.current) return;
 		sending.current = true;
 		setPending(true);
+		// A retry is sent from the composer's mode as any message is, so Plan stays Plan.
+		const change = blocked ? undefined : askMode(mode, chatMode);
 		try {
 			await host.channel(channel.id, {
 				op: "ask",
@@ -417,6 +419,7 @@ export function Composer(
 				author: user,
 				text: RETRY,
 				...(reset ? { automatic: true } : {}),
+				...(change ? { mode: change } : {}),
 				attended: true,
 			});
 			if (reset) {
