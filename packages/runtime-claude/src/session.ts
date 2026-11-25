@@ -1082,9 +1082,8 @@ export const openClaudeSession = (
           cwd: config.cwd,
           tools: plugin === undefined ? [] : ["Skill"],
           settingSources: [],
-          // The live PreToolUse experiment used false; true suppresses the fallback hook.
-          // settingSources remains empty: only this query's SDK hook is registered.
-          settings: { disableAllHooks: false },
+          // Disable skill and plugin hooks. SDK callbacks still run.
+          settings: { disableAllHooks: true },
           hooks: {
             PreToolUse: [
               { matcher: "mcp__neuve__.*", hooks: [server.stampToolUseId] },
