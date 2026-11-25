@@ -17,8 +17,10 @@ You need Git, [Bun](https://bun.sh) 1.4.4 and [Go](https://go.dev) 1.27 (an olde
 ```sh
 git clone --recurse-submodules https://github.com/NeuveAI/neuve.git
 cd neuve
+git submodule update --init --recursive apps/neuve-graph
 bun install --frozen-lockfile
 bun run setup:graph
+bun run build:graph
 ```
 
 `setup:graph` configures the Graph fork's upstream remote for external validation; building and querying don't need it. Neuve Graph is a [separate repository](https://github.com/NeuveAI/neuve-graph) mounted at `apps/neuve-graph`; before working in it, read its own `AGENTS.md`.
@@ -87,6 +89,63 @@ The [review settings](../packages/harness/src/settings.ts) supply the coding pro
 The installed `neuve` remains separate. `bun run dev` continues to start only the web app.
 
 The [pi implementation map](../architecture/decisions/0014-ace-style-pi-harness.md#implementation-entrypoints) links the runtime, capture contract, and fresh candidate comparison. The transition scope in the maintainers' Linear (NEU-50) holds acceptance and current status. The owner counted the port's regression validation as passed on 23 November 2026 ([decisions record](../process/decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026)).
+
+## Validate Ace in a second workspace
+
+Ace is the coding workspace, not the installed `neuve` command. The released installed `neuve` and its skill stay separate from a source build (`bun run build`) and from `bun ace`, which talks to a workspace. Do not run `install:cli` or replace the shared installed command to test an Ace change.
+
+Start from the assigned lane, after the [repository setup](#set-up-the-repository). Run the touched suites in check mode, for example:
+
+```sh
+NEUVE_MODE=check bun scripts/test-budget.ts --timeout 60000 packages/channel/tests apps/neuve-host/tests
+bun run check
+```
+
+The full check is required before review; passing is not approval. Keep its output with the other obtainable proof. Use the [storage profile validator](../scripts/pi-storage.ts) and the [current workspace launcher](../apps/neuve-cli/src/workspace-cli.ts), not an assumed profile shape. This example admits a lane outside the managed worktrees directory with `sourceCheckout` while isolating every writable storage role on LaCie. A profile using `sourceCheckout` must omit `volume`; it still validates the lane against the canonical clone's Git common directory.
+
+```sh
+# Run in the lane. Choose a fresh, work-specific root; never reuse the owner's profile.
+lane="$PWD"
+scratch="/Volumes/LaCie Blu/neuve-validation/environment-$(date +%s)"
+mkdir -p "$scratch"
+export SCRATCH="$scratch" LANE="$lane"
+bun -e 'import {writeFileSync} from "node:fs";
+const root=process.env.SCRATCH, lane=process.env.LANE;
+const canonical=Bun.spawnSync(["git","-C",lane,"worktree","list","--porcelain"]).stdout.toString().split("\n")[0].slice(9);
+writeFileSync(root+"/profile.json", JSON.stringify({sourceCheckout:lane,paths:{canonicalClone:canonical,worktrees:root+"/worktrees",state:root+"/state",captures:root+"/captures",cache:root+"/cache",bunCache:root+"/bun-cache",tmp:root+"/tmp",builds:root+"/builds"}}));'
+# Keep stdin open while the workspace runs. The launcher exits on EOF.
+mkfifo "$scratch/input"
+tail -f /dev/null > "$scratch/input" &
+input_pid=$!
+bun workspace --profile "$scratch/profile.json" --repo "$lane" --web-port 0 --port 0 --loopback < "$scratch/input" > "$scratch/startup.log" 2>&1 &
+workspace_pid=$!
+printf '%s\n' "$workspace_pid" > "$scratch/workspace.pid"
+printf '%s\n' "$input_pid" > "$scratch/input.pid"
+```
+
+Never stop or restart the owner's workspace on port **4141**. Free ports and `--loopback` keep this validation separate and off the tailnet. The readiness line is JSON with `"neuve-host":"ready"`, `pid`, `url`, `web`, `repository` and `tokenFile`. Wait for that record or a real startup failure; a background PID alone is not readiness. Retain startup/shutdown logs, excluding credentials and token-bearing URLs.
+
+Use Ace's browser tools to inspect the isolated workspace. The `web` address belongs to this launch. If its browser requests a workspace token, use **only this readiness record's `tokenFile`** through the workspace's normal authentication flow. Never use the owner's token or include the token or token-bearing URL in captured logs or proof. Browser inspection is not a video recording. If capture or interaction is unsupported, preserve obtainable observations and disclose the gap without asking for access or sign-in.
+
+Every CLI call must select the scratch home, otherwise `bun ace` can reach the owner's managed receipt:
+
+```sh
+ACE_HOME="$scratch/state/neuve-host" bun ace --help
+# Use this same ACE_HOME for subsequent scratch-only channel/ask/info calls.
+```
+
+The launch writes its runtime receipt in that home; it holds the validated profile, actual host port and worker configuration. The source checkout must match when `bun ace` reads it. Keep the workspace running while observing its channels. Do not claim rendered-context tests establish actual model behaviour: retain agent transcripts separately, or name the account/interaction limitation.
+
+Shut down only the PIDs recorded above. The launcher handles SIGTERM and closes its owned host, workers and web listeners. Wait for it to exit before removing scratch storage; if it fails, inspect its owned process tree and report the gap rather than killing by port or command name.
+
+```sh
+kill -TERM "$(cat "$scratch/workspace.pid")"
+wait "$workspace_pid"
+kill -TERM "$(cat "$scratch/input.pid")"
+wait "$input_pid" || true
+# Retain redacted proof outside this directory before deleting only this scratch root.
+rm -rf -- "$scratch"
+```
 
 ## Linear planning integration
 

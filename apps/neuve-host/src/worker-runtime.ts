@@ -1,3 +1,4 @@
+import { hostname, platform, arch } from "node:os";
 import * as catalog from "./catalog";
 import { nativeReview, startReviewFeed } from "./native-review";
 import {NativeSourceRequestSchema, NativeAuthorityReceiptSchema, type NativeSourceRequest, type NativeAuthorityReceipt} from "./native-source-protocol";
@@ -167,7 +168,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		worktree: (name, source) => buildWorktree(place, name, BACKGROUND_CONTEXT, source),
 		...(query ? { query: { sessionId: options.id, read: planScopeRead(place.project, plans, request => query(worker, request), files) } } : {}),
 	} : undefined;
-	const planOptions = { ...options, ...(build ? { build } : {}), planFileAccess, planFiles: files, ...(config.skills ? { skills: config.skills } : {}) };
+	const planOptions = { ...options, hostEnvironment: { host: `${hostname()} (${platform()}/${arch()})`, ...config.build }, ...(build ? { build } : {}), planFileAccess, planFiles: files, ...(config.skills ? { skills: config.skills } : {}) };
 	if (!setup) return Channel.open({
 		...planOptions,
 		extension: { ...options.extension, extensions: [...(options.extension?.extensions ?? []), planExplore] },

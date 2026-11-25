@@ -1,3 +1,4 @@
+import { CLI_VERSION } from "./cli-version";
 import {
   readFile,
   rename,
@@ -120,7 +121,11 @@ export function workspaceConfiguration(input: {
         ...Starter.sourceRunFlags(),
         join(input.source, "apps/neuve-cli/src/cli.ts"),
       ];
+  // Capture once at launch, before workers or lane commits can change this checkout.
+  const provenance = Bun.spawnSync(["git", "-C", input.source, "rev-parse", "HEAD"], { timeout: 2000 });
+  const commit = provenance.success ? provenance.stdout.toString().trim() : undefined;
   return HostConfigSchema.parse({
+    build: { version: CLI_VERSION, ...(commit ? { commit } : {}) },
     ...(input.app === undefined ? {} : { app: input.app }),
     home,
     lanes,

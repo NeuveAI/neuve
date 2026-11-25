@@ -65,6 +65,8 @@ import {
 	STRONG,
 } from "./captions";
 import { instructions } from "./context";
+import { environment, type HostEnvironment } from "./environment";
+import { capabilities } from "./capabilities";
 import { changes, fetchBase, patch } from "./changes";
 import { type Desktop, desktop } from "./desktop";
 import { HANDOFF, Handoffs } from "./handoffs";
@@ -174,7 +176,10 @@ export type Options = {
 	/** A folder of skills the host carries, listed after every installed skill. */
 	skills?: string;
 	build?: BuildHost;
+	hostEnvironment?: HostEnvironment;
 	desktop?: Desktop;
+	/** Host-owned dispatch availability; refreshed for every request and dispatch. */
+	desktopAvailable?(): boolean;
 	browser?: Browser;
 	images?: Images;
 	tabs?: Tabs;
@@ -298,6 +303,8 @@ export class Channel {
 			(chat, work) => channel.#admitted(chat, work));
 		registry.install(questions.extension);
 		const execute = options.desktop;
+		const available = () => !!execute && !!channel && channel.#settings.desktop && (options.desktopAvailable?.() ?? true);
+		const effectiveRegistry = capabilities(registry, available);
 		if (execute) {
 			registry.install(desktop(async (request, context) => {
 				// Check every dispatch, including child chats and calls from already-active runs.
@@ -321,7 +328,8 @@ export class Channel {
 		registry.install(messaging(options.directory));
 		registry.install(
 			defineExtension({ name: "ace-channel", sections: [
-				room.section(options, chat => channel.#builds.agent(chat)?.role), instructions(options.models, options.skills),
+				room.section(options, chat => channel.#builds.agent(chat)?.role),
+				environment(options.hostEnvironment, chat => channel.#builds.agent(chat)?.role), instructions(options.models, options.skills),
 			] }),
 		);
 		registry.install(approvals.extension);
@@ -336,8 +344,8 @@ export class Channel {
 		install(registry, options.extension, planning, !!options.planFileAccess, log, (chat, scope) => channel.#builds.paused(chat, scope));
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider)),
-			registry,
-			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },
+			registry: effectiveRegistry,
+			settings: { get extensions() { return effectiveRegistry.snapshot().installed().filter(extension => extension.name !== query.name); } },
 			conversationCreated: clearInheritedQuery,
 			env: async ({ cwd, conversationId }, context) => {
 				const folder = cwd || options.project;

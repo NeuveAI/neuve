@@ -38,9 +38,30 @@ These rules come from [Area 7 of the design decisions](process/decisions.md#area
 
 For UI work, use Interface Craft and preserve the existing design. Make focused corrections; no broad redesign is requested.
 
+## Execution environment
+
+Ace serves channels, threads, the work log, plans and tools. Neuve is the `neuve` command and its skill, reviews and desk, **not a native application**. Ace's desktop tools use Ace's separately running desktop app; when unavailable, keep obtainable proof and disclose the gap rather than asking for an app or access.
+
+Read the request's environment context for the running build, role, folder, branch, work lane and actual shell availability. Do not infer the running build from the lane's HEAD or infer shell access from an installed login shell.
+
+To check an Ace change, start a **second workspace from the lane**, with separate ports and storage, and observe it with Ace's browser tools. Never stop or restart the owner's live workspace on port 4141. Stop only processes started for this work, by recorded process IDs. The [development procedure](docs/development.md#validate-ace-in-a-second-workspace) owns setup, checks, isolated launch and cleanup commands.
+
 ## Workspace
 
 The root is the Bun workspace and orchestration boundary.
+
+Ace's execution boundary is separate from Neuve's review layers:
+
+| Path | Holds |
+| --- | --- |
+| `apps/neuve-host` | Ace host, channel workers, host configuration and native dispatch |
+| `packages/channel` | Ace channel context, tool selection, chats, plans and work lanes |
+| `apps/app` | Ace browser interface |
+| `apps/desktop` | Ace's separately running native desktop client |
+| `packages/harness/src/chat-runtime` | Connections forwarding channel context and tools to supported agent runtimes |
+
+Neuve's review workspace:
+
 
 | Path                                                          | Holds                                                                                                                                                                                                                                     |
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
