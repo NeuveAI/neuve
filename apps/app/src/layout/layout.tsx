@@ -1077,7 +1077,8 @@ function useLayout(
 
 	// One Review tab per channel takes every review link: the one shown in a pane, else the first.
 	// Every caller's path is checked again here, so nothing but a review entry route is framed. A
-	// `quiet` link, the chat's new review, moves or opens the tab without showing or focusing it.
+	// `quiet` link, the chat's new review, brings the tab into view without taking focus: beside the
+	// chat when there is room, else in front of it in a single-pane layout, else behind it.
 	const review = useEffectEvent((href: string, quiet = false) => {
 		const path = reviewPath(href);
 		if (!path) return;
@@ -1094,14 +1095,17 @@ function useLayout(
 				return { ...meta, [open]: { type: "review", path, ...(name ? { name } : undefined) } };
 			});
 			if (quiet) {
-				// A hidden tab comes into view without taking focus: beside the chat when it sits behind
-				// the chat and there is room, else at the front of its own pane.
-				if (flat || shown.has(open)) return;
 				const home = Split.host(current, open)?.uid;
 				const chat = Split.host(current, CHAT)?.uid;
 				const to: Split.Target = { pane: chat, side: "right" };
-				if (home !== chat) api.select({ tab: open, pane: home });
-				else if (Split.can(current, { ...fit, move: { tab: open, to } })) api.move({ tab: open, to, fit });
+				// A single-pane layout shows the focused pane's tab, so there selecting is what brings it
+				// forward; keyboard focus stays put, since nothing enters the review.
+				if (flat) return void api.select({ tab: open });
+				if (home !== chat) {
+					if (!shown.has(open)) api.select({ tab: open, pane: home });
+				} else if (Split.can(current, { ...fit, move: { tab: open, to } })) {
+					api.move({ tab: open, to, fit });
+				}
 				api.focus({ pane: current.focus });
 				return;
 			}
@@ -1112,9 +1116,15 @@ function useLayout(
 		}
 		const uid = `tab-${current.seq + 1}`;
 		const pane = Split.host(current, CHAT)?.uid;
-		if (!(quiet ? place(uid, true) : api.open({ tab: uid, to: flat ? undefined : { pane } }))) return;
+		const opened = !quiet
+			? api.open({ tab: uid, to: flat ? undefined : { pane } })
+			: flat
+			? api.open({ tab: uid })
+			: place(uid, true);
+		if (!opened) return;
 		setMeta((meta) => ({ ...meta, [uid]: { type: "review", path } }));
-		if (!quiet) requestAnimationFrame(() => enter(uid));
+		if (quiet) api.focus({ pane: current.focus });
+		else requestAnimationFrame(() => enter(uid));
 	});
 
 	useLayoutEffect(() => register(id, (path) => review(path)), [id]);
