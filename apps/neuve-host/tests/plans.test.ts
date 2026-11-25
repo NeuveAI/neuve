@@ -28,13 +28,18 @@ async function open(project: string, state: string, id = "plans", name = "plans"
 	const fake = fauxProvider({ provider: model.provider, models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
 	const models = createModels();
 	models.setProvider(fake.provider);
-	const channel = await openChannel({
+	// Direct plan-storage fixtures have no host catalog; placement is tested through the worker.
+	const lanes = config.lanes;
+	Reflect.deleteProperty(config, "lanes");
+	let channel: Awaited<ReturnType<typeof openChannel>>;
+	try { channel = await openChannel({
 		id, name, project, owner, model, models,
 		storage: await openNodeSqliteStorage(join(state, "channel.sqlite")),
 		env: cwd => new NodeExecutionEnv({ cwd }),
 		directory: { self: { id, name }, list: async () => [], deliver: async () => {} },
 		log: () => {},
-	}, state);
+	}, state); }
+	finally { if (lanes !== undefined) config.lanes = lanes; }
 	const request = async <T = unknown>(input: Request) => channel.handle(input, () => {}) as Promise<T>;
 	const watch = async (plans?: boolean, chat?: number, planComments?: boolean) => {
 		const events: Event[] = [];

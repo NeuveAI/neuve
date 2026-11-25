@@ -325,6 +325,8 @@ test("production sources deliver a worker chat through a fake Claude executable 
   const worker: WorkerContext = { sessionId: "worker", config, stateDirectory };
   let channel: Channel | undefined;
   let listing: Awaited<ReturnType<typeof workspaceChatModels>> | undefined;
+  // Runtime-only fixture: there is no host catalog or Git project to place chats in.
+  Reflect.deleteProperty(config, "lanes");
   const native = createModels();
   const background = fauxProvider({
     provider: "faux",
@@ -602,6 +604,8 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
   });
   const worker: WorkerContext = { sessionId: "worker", config, stateDirectory };
   let channel: Channel | undefined;
+  // Runtime-only fixture: placement is exercised through actual host/worker admission elsewhere.
+  Reflect.deleteProperty(config, "lanes");
   const native = createModels();
   try {
     const storage = await openWorkerStorage(setup, worker, () =>

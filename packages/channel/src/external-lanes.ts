@@ -43,10 +43,11 @@ async function addWorktree(env: ExecutionEnv, project: string, branch: string, p
 	await git(env, `-C ${quote(project)} worktree add -b ${quote(branch)} ${quote(path)} ${quote(commit)}`, context);
 }
 
-export async function buildWorktree(place: Place, name: string, context: Context, source?: { branch: string; base: string }) {
+export async function buildWorktree(place: Place, name: string, context: Context, source?: { branch: string; base: string }, recorded?: { path: string; base?: string }) {
 	const env = place.env(place.project);
 	const path = `${place.lanes}/${name}`;
 	const branch = `${place.name}/${name}`;
+	if (recorded && recorded.path !== path) throw new Error("The recorded chat lane is outside its host-owned location.");
 	const exists = await env.exists(path, context);
 	if (!exists.ok) throw exists.error;
 	if (exists.value) {
@@ -56,8 +57,17 @@ export async function buildWorktree(place: Place, name: string, context: Context
 			fields[0] === `worktree ${path}` && fields.includes(`branch refs/heads/${branch}`));
 		const base = found?.find(field => field.startsWith("HEAD "))?.slice(5);
 		if (!base) throw new Error("The worktree path is already in use.");
-		return { path, branch, base: source?.base ?? base };
+		return { path, branch, base: recorded?.base ?? source?.base ?? base };
 	}
+	if (recorded) {
+		// Archive removes the folder, not its branch or the chat's durable lane assignment.
+		const base = (await git(env, `-C ${quote(place.project)} rev-parse --verify ${quote(`refs/heads/${branch}^{commit}`)}`, context)).trim();
+		await git(env, `-C ${quote(place.project)} worktree add ${quote(path)} ${quote(branch)}`, context);
+		return { path, branch, base: recorded.base ?? base };
+	}
+	// An unrecorded branch with no matching worktree is not an interrupted creation we can prove.
+	const collision = await git(env, `-C ${quote(place.project)} for-each-ref --format='%(refname)' ${quote(`refs/heads/${branch}`)}`, context);
+	if (collision.split("\n").includes(`refs/heads/${branch}`)) throw new Error(`Branch ${branch} already exists without a recorded worktree; it was not adopted.`);
 	const { commit } = await select(env, place.project, source ? `refs/heads/${source.branch}` : "HEAD", context);
 	await addWorktree(env, place.project, branch, path, commit, context);
 	return { path, branch, base: source?.base ?? commit };
@@ -122,6 +132,7 @@ export function lanes(place: Place): Extension {
 							chat: api.conversationId,
 							path,
 							...(target ? { base: target } : {}),
+							...(current?.hostCreated && current.path === path ? { hostCreated: true as const } : {}),
 						};
 						await configure(tx, api.conversationId, { cwd: path });
 						return target;

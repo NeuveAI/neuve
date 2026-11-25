@@ -20,7 +20,10 @@ type Worktree = { path: string; branch: string; base: string };
 type ReviewSource = Pick<Worktree, "branch" | "base">;
 export type BuildHost = {
 	share<T>(key: string, run: () => Promise<T>): Promise<T>;
-	worktree(name: string, source?: ReviewSource): Promise<Worktree>;
+	worktree(name: string, source?: ReviewSource, placement?: {
+		chat: ConversationId;
+		recorded?: { path: string; base?: string };
+	}): Promise<Worktree>;
 	query?: {
 		sessionId: string;
 		read(input: ScopeRead): Promise<ScopeReadAnswer>;

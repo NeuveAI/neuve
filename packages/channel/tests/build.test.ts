@@ -873,7 +873,9 @@ test("agent start refuses invalid arguments, duplicate roles, and callers outsid
 	await refuse(await fixture.watch({ op: "watch", chat: other.chat }), other.chat, "not-agent", { role: "reviewer" },
 		"Only an agent of a plan can ask the host to start another agent.");
 	await refuse(run.watch, 1, "planning-start", { role: "reviewer" }, "Plan mode is read-only. The agent_start tool is unavailable in plan mode.");
-	expect(run.worktrees).toHaveLength(2);
+	// The ordinary writing chat also gets placement, without becoming a plan agent.
+	expect(run.worktrees).toHaveLength(3);
+	expect(run.worktrees[2]?.branch).toBe(`one/chat-${other.chat}`);
 	expect((await fixture.channel.info()).chats.filter(chat => chat.build)).toHaveLength(2);
 });
 
