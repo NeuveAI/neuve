@@ -2,14 +2,18 @@ import { existsSync, statSync } from "node:fs";
 import { createConnection } from "node:net";
 import { join } from "node:path";
 
-import type { Desktop } from "@ace/channel/desktop";
+import type { Desktop, DesktopResult } from "@ace/channel/desktop";
 import { createDesktop } from "@githubnext/desktop-tools";
 
 import { config } from "./config";
 
 let refusedSocket: string | undefined;
 
-const appMissing = "Ace's desktop app isn't running on this host. No desktop operation ran.";
+const appMissing = (): DesktopResult => ({
+	text: "Ace's desktop app isn't running on this host. No desktop operation ran.",
+	isError: true,
+	outcome: "refused",
+});
 const desktopPaths = () => ({
 	client: join(config.home, "desktop-client"),
 	socket: join(config.home, "desktop.sock"),
@@ -48,12 +52,12 @@ export const desktop: Desktop = async (request, context) => {
 	// knows which signed client it accepts, so it publishes that client beside the socket.
 	const paths = desktopPaths();
 	const identity = availableSocket(paths);
-	if (identity === undefined) throw new Error(appMissing);
+	if (identity === undefined) return appMissing();
 	// The client can report an unknown action outcome even if its process never connected.
 	// Check before launching it so a refused connection proves that no operation was sent.
 	if (await connectionRefused(paths.socket, context.abortSignal)) {
 		if (socketIdentity(paths.socket) === identity) refusedSocket = identity;
-		throw new Error(appMissing);
+		return appMissing();
 	}
 	const client = createDesktop({ ...paths, name: "Ace" });
 	// Hosted links and pi rows carry only the bounded text and image, not the parsed copy.

@@ -7,7 +7,11 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { config } from "../src/config";
 import { desktop, desktopAvailable } from "../src/desktop";
 
-const appMissing = "Ace's desktop app isn't running on this host. No desktop operation ran.";
+const appMissing = {
+	text: "Ace's desktop app isn't running on this host. No desktop operation ran.",
+	isError: true,
+	outcome: "refused",
+};
 
 async function withHome(run: (home: string) => Promise<void>) {
 	const home = await mkdtemp(join(tmpdir(), "desktop-"));
@@ -42,7 +46,7 @@ async function waitForListener(child: ReturnType<typeof startListener>) {
 
 test("desktop offer and dispatch are unavailable when both files are missing", () => withHome(async () => {
 	expect(desktopAvailable()).toBe(false);
-	await expect(desktop({ op: "apps" }, BACKGROUND_CONTEXT)).rejects.toHaveProperty("message", appMissing);
+	expect(await desktop({ op: "apps" }, BACKGROUND_CONTEXT)).toEqual(appMissing);
 }));
 
 test("a crashed desktop listener is refused and a new socket restores the offer", () => withHome(async (home) => {
@@ -71,7 +75,7 @@ createConnection(path).once("end", () => {
 		expect((await stat(socket)).isSocket()).toBe(true);
 		expect(desktopAvailable()).toBe(true);
 
-		await expect(desktop(request, BACKGROUND_CONTEXT)).rejects.toHaveProperty("message", appMissing);
+		expect(await desktop(request, BACKGROUND_CONTEXT)).toEqual(appMissing);
 		expect(existsSync(ran)).toBe(false);
 		expect((await stat(socket)).isSocket()).toBe(true);
 		expect(existsSync(client)).toBe(true);
