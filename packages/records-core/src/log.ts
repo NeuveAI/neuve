@@ -294,7 +294,7 @@ const appendOne = (
       yield* sql`INSERT INTO event_cycles ${sql.insert({ cycle_id: cycleId, event_seq: seq })}`;
 
     for (const job of jobsFor(event)) {
-      yield* sql`INSERT INTO jobs ${sql.insert({ kind: job.kind, dedupe_key: job.dedupeKey, event_id: event.id })}
+      yield* sql`INSERT INTO jobs ${sql.insert({ kind: job.kind, dedupe_key: job.dedupeKey, event_id: event.id, state: job.runAt === undefined ? "waiting" : "delayed", run_at: job.runAt ?? null })}
         ON CONFLICT (dedupe_key) DO UPDATE SET
           state = 'waiting', stalls = 0, run_at = NULL, started_at = NULL,
           finished_at = NULL, last_error = NULL, payload = NULL,

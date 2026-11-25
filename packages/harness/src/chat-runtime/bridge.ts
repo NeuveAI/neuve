@@ -1,3 +1,7 @@
+import type { TurnRecovery } from "@neuve/records-core";
+import type { TurnRecoveryCheckpoint } from "@neuve/records-schema";
+import { RecoveryOwnershipUnknown, type RecoveryResult, type TurnRecoveryDriver } from "./recovery.ts";
+import { continueSavedTurn, replayTool, retryAt, retryDecision, toolLedger } from "./retry.ts";
 import {
   createAssistantMessageEventStream,
   type AssistantMessageEventStream,
@@ -64,6 +68,8 @@ export type AccountRoute = {
 };
 type Generation = {
   settled: boolean;
+  recovery?: TurnRecovery.RecoveryState | undefined;
+  selection?: SessionPolicy["model"];
   owner: string;
   chat?: ConversationId;
   attended: boolean;
@@ -162,6 +168,7 @@ type Live = {
   /** The person's message that arrived after the runtime's turn had ended: the next turn's input. */
   followUp?: ContentBlock[] | undefined;
   generation?: Generation | undefined;
+  lastGeneration?: Generation;
   reserved?: Generation | undefined;
   replay?: { key: string; message: AssistantMessage };
   turn?: string | undefined;
@@ -170,6 +177,10 @@ type Live = {
     Parameters<NativeHeads["set"]>[1],
     "session" | "resumePoint" | "digest" | "checkpointThrough"
   >;
+  recovery?: TurnRecovery.RecoveryState | undefined;
+  recoveryEnd?: ((result: RecoveryResult) => void) | undefined;
+  retryRequest?: Parameters<RuntimeSession["startTurn"]>[0]["message"];
+  logicalTurn?: string | undefined;
   last: number;
   timer?: ReturnType<typeof setTimeout>;
   closing?: Promise<void>;
@@ -179,6 +190,7 @@ type Live = {
 };
 export interface BridgeOptions {
   registry: RuntimeRegistryShape;
+  recovery?: TurnRecoveryDriver;
   heads: NativeHeads;
   skills?: { home: string; carried?: string | undefined };
   log?: Log;
@@ -232,6 +244,9 @@ export class ChatRuntimeBridge {
   constructor(private readonly options: BridgeOptions) {
     this.log = options.log ?? (() => {});
     this.now = options.now ?? Date.now;
+  }
+  async subscribeRecovery(listener: Parameters<TurnRecoveryDriver["subscribe"]>[0]) {
+    return this.options.recovery?.subscribe(listener);
   }
   async attachApprovals(store: ApprovalStore) {
     await store.restart();
@@ -298,6 +313,7 @@ export class ChatRuntimeBridge {
     }
     const generation: Generation = {
       settled: false,
+      selection,
       key,
       owner:
         identity === undefined
@@ -325,11 +341,10 @@ export class ChatRuntimeBridge {
     };
     this.requests.set(key, generation);
     this.subscribe(generation, stream, options?.signal);
-    if (identity?.redispatched) {
-      this.finish(undefined, generation, "aborted");
-      return stream;
-    }
-    void this.generate(route, generation, selection).catch((error: unknown) => {
+    const run = identity?.redispatched
+      ? this.resumeRecovery(route, generation, selection)
+      : this.generate(route, generation, selection);
+    void run.catch((error: unknown) => {
       if (generation.settled) return;
       const parsed = RuntimeFailure.safeParse(error);
       const live = [...this.sessions].find(
@@ -388,6 +403,11 @@ export class ChatRuntimeBridge {
     gen: Generation,
     selection: SessionPolicy["model"],
   ) {
+    const priorRecovery = await this.options.recovery?.latest(gen.owner);
+    if (priorRecovery?.value.state === "terminal" && priorRecovery.value.reason === "ambiguous-tool-effect" && gen.messages.at(-1)?.role === "toolResult") {
+      this.finish(undefined, gen, "error", "A tool may have run without a recorded result. Automatic continuation is unsafe; send a message to recover the work.");
+      return;
+    }
     const conversationEpoch = this.conversationCloses.get(gen.owner);
     const accountEpoch = this.accountCloses.get(route.name);
     const cancelled = () =>
@@ -824,7 +844,7 @@ export class ChatRuntimeBridge {
     const scope = Scope.makeUnsafe();
     const configured = policy(
       offeredMessages(gen),
-      (_name, call) => this.wait(() => live, call),
+      (name, call, input) => this.wait(() => live, call, name, input),
       selection,
       {
         folder: gen.folder,
@@ -1081,6 +1101,7 @@ export class ChatRuntimeBridge {
     if (gen.settled) return false;
     live.reserved = undefined;
     live.generation = gen;
+    gen.recovery = live.recovery;
     gen.message.responseId = responseId(nativeId(live.state.session));
     if (live.holding) {
       live.holding = false;
@@ -1153,6 +1174,8 @@ export class ChatRuntimeBridge {
     }
     if (!(await this.markPending(live, "message"))) return;
     live.turn = crypto.randomUUID();
+    live.retryRequest = message;
+    live.logicalTurn ??= digest([{ role: "user", content: live.generation?.key ?? crypto.randomUUID(), timestamp: 0 }]);
     live.lastResumePoint = undefined;
     const folder = live.policy.folder;
     const access = live.generation?.planRequest ? "read-only" : "write";
@@ -1204,6 +1227,8 @@ export class ChatRuntimeBridge {
   private wait(
     read: () => Live | undefined,
     call: ToolCall | undefined,
+    name?: string,
+    input?: unknown,
   ): Effect.Effect<ToolOutcome> {
     return Effect.callback((resume) => {
       const live = read();
@@ -1224,6 +1249,21 @@ export class ChatRuntimeBridge {
         }
         resume(Effect.succeed(stoppedCall));
         return;
+      }
+      if (live.recovery && live.generation && name) {
+        try {
+          const recorded = replayTool(toolLedger(live.generation.messages), call.callId, name, input);
+          if (recorded) {
+            this.log("chat-runtime.retry.tool-replayed", { turn: live.recovery.value.turn, call: call.callId });
+            resume(Effect.succeed(recorded));
+            return;
+          }
+        } catch {
+          this.log("chat-runtime.retry.tool-ambiguous", { turn: live.recovery.value.turn, call: call.callId });
+          void this.closeLive(live);
+          resume(Effect.succeed(stoppedCall));
+          return;
+        }
       }
       const entry = live.calls.get(call.callId) ?? { delivered: false };
       live.calls.set(call.callId, entry);
@@ -1362,7 +1402,13 @@ export class ChatRuntimeBridge {
         new Set(live.policy.tools.map((tool) => tool.name)),
         this.log,
       );
-      for (const call of calls)
+      const ledger = live.recovery ? toolLedger(gen.messages) : undefined;
+      const freshCalls = ledger ? calls.filter((call) => {
+        if (call.type !== "toolCall" || !ledger.calls.has(call.id)) return true;
+        replayTool(ledger, call.id, call.name, call.arguments);
+        return false;
+      }) : calls;
+      for (const call of freshCalls)
         if (call.type === "toolCall") {
           live.calls.set(
             call.id,
@@ -1372,7 +1418,7 @@ export class ChatRuntimeBridge {
         }
       gen.message.usage = usage(event.usage);
       if (event.model) gen.message.responseModel = event.model;
-      if (event.stopReason === "tool-use" && !calls.length) return;
+      if (event.stopReason === "tool-use" && !freshCalls.length) return;
       gen.message.responseId = responseId(
         nativeId(session),
         event.stopReason === "end-turn" || event.stopReason === "tool-use"
@@ -1435,6 +1481,7 @@ export class ChatRuntimeBridge {
     }
     if (event.type === "turn.finished") {
       if ([...live.calls.values()].some((call) => !call.delivered)) {
+        if (event.outcome.status === "failed" && (gen ?? live.lastGeneration)) await this.retryTurn(live, (gen ?? live.lastGeneration)!, event);
         this.log("chat-runtime.protocol.fault", {
           reason: "turn-ended-with-held-calls",
         });
@@ -1444,6 +1491,15 @@ export class ChatRuntimeBridge {
       live.turn = undefined;
       if (gen) {
         if (event.outcome.status === "completed") {
+          let recovered: TurnRecovery.RecoveryState | undefined;
+          const recoveryEnd = live.recoveryEnd;
+          live.recoveryEnd = undefined;
+          if (live.recovery && this.options.recovery) {
+            recovered = await this.options.recovery.settle({ turn: live.recovery.value.turn, expected: live.recovery.event, state: "recovered" });
+            gen.recovery = undefined;
+            live.recovery = undefined;
+          }
+          live.logicalTurn = undefined;
           const point = turnResumePoint(event) ?? live.lastResumePoint;
           if (!point && !live.route.capabilities.resumeInTurn) {
             // The contract requires this turn's end as its resume point. Without it nothing proves
@@ -1473,6 +1529,7 @@ export class ChatRuntimeBridge {
             gen.message.responseId = responseId(nativeId(session), point, true);
             await this.recordHead(live, gen, point, "stop");
           }
+          if (recovered) recoveryEnd?.({ state: recovered, message: { ...structuredClone(gen.message), stopReason: "stop" } });
           // The person wrote while the ended turn was still being recorded: their message starts
           // the next turn, and its answer continues this generation.
           if (point && live.followUp !== undefined && !live.closing) {
@@ -1485,12 +1542,13 @@ export class ChatRuntimeBridge {
           this.finish(live, gen, "stop");
           if (!point) await this.closeLive(live);
         } else {
+          if (event.outcome.status === "failed" && await this.retryTurn(live, gen, event)) return;
           this.finish(
             live,
             gen,
             event.outcome.status === "interrupted" ? "aborted" : "error",
             event.outcome.status === "failed"
-              ? terminalText(event.outcome.failure)
+              ? gen.message.errorMessage ?? terminalText(event.outcome.failure)
               : undefined,
           );
           await this.closeLive(live);
@@ -1498,6 +1556,134 @@ export class ChatRuntimeBridge {
       }
       if (event.outcome.status !== "completed") await this.closeLive(live);
       this.idle(live);
+    }
+  }
+  private async resumeRecovery(route: AccountRoute, gen: Generation, selection: SessionPolicy["model"]) {
+    const driver = this.options.recovery;
+    const state = driver && await driver.find(gen.owner, digest([{ role: "user", content: gen.key, timestamp: 0 }]));
+    if (!driver || !state || (state.value.state !== "scheduled" && state.value.state !== "started") ||
+        state.value.checkpoint.transcriptDigest !== headDigest(gen.messages) ||
+        state.value.checkpoint.resultsDigest !== toolLedger(gen.messages).digest ||
+        state.value.checkpoint.account !== route.name ||
+        state.value.checkpoint.continuation !== JSON.stringify(route.continuation)) {
+      this.finish(undefined, gen, "aborted");
+      return;
+    }
+    gen.recovery = state;
+    await this.dispatchRecovery(route, gen, selection, state);
+  }
+  private async retryTurn(live: Live, gen: Generation, event: Extract<RuntimeEvent, { type: "turn.finished" }>) {
+    const driver = this.options.recovery;
+    if (!driver || live.state.kind !== "open") return false;
+    const ledger = toolLedger(gen.messages);
+    let decision = retryDecision(event.outcome, {
+      ledger: toolLedger(gen.messages.slice(gen.messages.findLastIndex((message) => message.role === "assistant" && pointer(message)?.completed === true) + 1)),
+      outstanding: live.pendingWork.size > 0 || [...live.calls.values()].some((call) => !call.delivered),
+      canResume: live.route.capabilities.resume,
+      ...(event.resumePoint === undefined ? {} : { resumePoint: event.resumePoint }),
+    });
+    // A repeated request cannot retract already streamed output from this generation.
+    if (decision.retry && gen.message.content.length > 0)
+      decision = { retry: false, reason: "unsafe-continuation" };
+    const request = decision.retry && decision.continuation === "repeat-request"
+      ? live.retryRequest : continueSavedTurn;
+    if (request === undefined) decision = { retry: false, reason: "unsafe-continuation" };
+    const checkpoint: TurnRecoveryCheckpoint = {
+      id: await driver.saveRequest(request ?? continueSavedTurn),
+      generation: digest([{ role: "user", content: gen.key, timestamp: 0 }]),
+      account: live.route.name,
+      session: nativeId(live.state.session),
+      ...(event.resumePoint === undefined ? {} : { resumePoint: event.resumePoint }),
+      continuation: JSON.stringify(live.route.continuation),
+      transcriptDigest: headDigest(gen.messages),
+      resultsDigest: ledger.digest,
+      continuationMode: decision.retry ? decision.continuation : "resume",
+    };
+    const initial = live.recovery ?? await driver.begin({
+      turn: live.logicalTurn ?? checkpoint.generation, chat: gen.owner, checkpoint,
+    });
+    live.recovery = initial;
+    gen.recovery = initial;
+    if (!decision.retry) {
+      const terminal = await driver.settle({ turn: initial.value.turn, expected: initial.event, state: "terminal", reason: decision.reason });
+      live.recoveryEnd?.({ state: terminal, message: { ...structuredClone(gen.message), stopReason: "error", errorMessage: event.outcome.status === "failed" ? terminalText(event.outcome.failure) : "Automatic continuation is unsafe." } });
+      live.recoveryEnd = undefined;
+      if (decision.reason === "ambiguous-tool-effect") gen.message.errorMessage = "A tool may have run without a recorded result. Automatic continuation is unsafe; send a message to recover the work.";
+      return false;
+    }
+    // Schedule computes the time only for a new attempt; an existing schedule keeps its chosen time.
+    const scheduled = await driver.schedule({
+      turn: initial.value.turn, expected: initial.event, checkpoint,
+      nextAt: retryAt(Math.min(5, initial.value.attempt + 1), this.now(), decision.retryAfterMs),
+      reason: decision.reason,
+    });
+    live.recovery = scheduled;
+    gen.recovery = scheduled;
+    live.recoveryEnd?.({ state: scheduled, message: structuredClone(gen.message) });
+    live.recoveryEnd = undefined;
+    if (scheduled.value.state !== "scheduled") return false;
+    // Keep the pi generation pending (and later chat input behind it), but retire the failed provider session.
+    live.generation = undefined;
+    await this.closeLive(live, false);
+    if (gen.settled) return true;
+    try {
+      await this.dispatchRecovery(live.route, gen, gen.selection, scheduled);
+    } catch (error) {
+      if (!gen.settled) {
+        const current = gen.recovery ?? scheduled;
+        if (error instanceof RecoveryOwnershipUnknown) {
+          gen.recovery = undefined;
+          this.finish(undefined, gen, "error", "This turn is owned by another worker; its continuation could not be safely joined.");
+          return true;
+        }
+        await driver.settle({ turn: current.value.turn, expected: current.event, state: "terminal", reason: "unsafe-continuation" })
+          .catch(() => this.log("chat-runtime.retry.publication.failed", { turn: current.value.turn }));
+        this.finish(undefined, gen, "error", "This turn could not safely continue. Send a message to recover it.");
+      }
+    }
+    return true;
+  }
+  private async dispatchRecovery(route: AccountRoute, gen: Generation, selection: SessionPolicy["model"], scheduled: TurnRecovery.RecoveryState) {
+    const driver = this.options.recovery!;
+    let holder = false;
+    const output = await driver.execute(scheduled, gen.cancellation.signal, async (signal, scheduled) => {
+      holder = true;
+      const started = await driver.wait(scheduled, signal);
+      gen.recovery = started;
+      if (gen.settled || signal.aborted || started.value.state !== "started") return { state: started };
+      const checkpoint = started.value.checkpoint;
+      if (checkpoint.transcriptDigest !== headDigest(gen.messages) || checkpoint.resultsDigest !== toolLedger(gen.messages).digest)
+        throw new Error("Durable recovery generation changed");
+      const cancelled = () => this.closed || gen.settled || signal.aborted;
+      const request = await driver.loadRequest(checkpoint.id);
+      if (cancelled()) return { state: started };
+      const live = await this.open(route, gen, selection, {
+        kind: "resume", session: checkpoint.session, fork: false,
+        ...(checkpoint.resumePoint === undefined ? {} : { at: checkpoint.resumePoint }),
+      }, cancelled);
+      if (!live || live.state.kind !== "open" || cancelled()) return { state: started };
+      live.recovery = started;
+      live.logicalTurn = started.value.turn;
+      await this.options.heads.set(gen.owner, {
+        session: nativeId(live.state.session), continuation: route.continuation,
+        previousDigest: checkpoint.transcriptDigest, digest: checkpoint.transcriptDigest,
+        ...(checkpoint.resumePoint === undefined ? {} : { resumePoint: checkpoint.resumePoint }),
+        checkpointThrough: checkpoint.transcriptDigest, pending: true, forkRequired: true, inputs: [],
+      });
+      const completed = Promise.withResolvers<RecoveryResult>();
+      live.recoveryEnd = completed.resolve;
+      if (!this.bind(live, gen)) return { state: started };
+      await this.start(live, request);
+      return completed.promise;
+    });
+    if (!holder && !gen.settled) {
+      gen.recovery = output.state;
+      if (output.state.value.state === "scheduled") {
+        await this.dispatchRecovery(route, gen, selection, output.state);
+      } else if (output.message) {
+        gen.message = structuredClone(output.message);
+        this.finish(undefined, gen, output.message.stopReason === "stop" ? "stop" : "error", output.message.errorMessage);
+      } else this.finish(undefined, gen, "error", "This turn could not safely continue. Send a message to recover it.");
     }
   }
   private async recordHead(
@@ -1561,6 +1747,8 @@ export class ChatRuntimeBridge {
   ) {
     if (gen.settled) return;
     gen.settled = true;
+    if (!this.closed && (reason === "error" || reason === "aborted") && gen.recovery && this.options.recovery)
+      void this.options.recovery.cancel(gen.recovery.value.turn).catch(() => this.log("chat-runtime.retry.cancel.failed", { turn: gen.recovery?.value.turn }));
     this.requests.delete(gen.key);
     gen.message.stopReason = reason;
     if (reason === "error" || reason === "aborted") {
@@ -1585,7 +1773,10 @@ export class ChatRuntimeBridge {
     }
     if (live) {
       live.replay = { key: gen.key, message: structuredClone(gen.message) };
-      if (live.generation === gen) live.generation = undefined;
+      if (live.generation === gen) {
+        live.lastGeneration = gen;
+        live.generation = undefined;
+      }
       if (
         reason === "toolUse" &&
         live.turn !== undefined &&
@@ -1650,6 +1841,9 @@ export class ChatRuntimeBridge {
   }
   /** Stop closes the records before pi aborts the turn and writes its Stop entry. */
   async stopApprovals(chat: ConversationId) {
+    if (this.options.recovery) await Promise.all([...this.requests.values()]
+      .filter((gen) => gen.chat === chat && gen.recovery)
+      .map((gen) => this.options.recovery!.cancel(gen.recovery!.value.turn)));
     const sessions = [...this.sessions].filter(
       (live) =>
         live.chat === chat && (live.turn || live.generation || live.reserved),
@@ -1748,6 +1942,11 @@ export class ChatRuntimeBridge {
         await this.resolveDelivery(live);
       } catch {
         this.log("chat-runtime.head.resolve.failed", { owner: live.owner });
+      }
+      if (live.recoveryEnd && live.recovery && this.options.recovery) {
+        const state = await this.options.recovery.settle({ turn: live.recovery.value.turn, expected: live.recovery.event, state: "terminal", reason: "unsafe-continuation" });
+        live.recoveryEnd({ state });
+        live.recoveryEnd = undefined;
       }
       this.sessions.delete(live);
       closed.resolve();

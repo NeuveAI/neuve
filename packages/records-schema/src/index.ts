@@ -16,3 +16,5 @@ export * from "./compatible-read.ts";
 
 export * from "./compatibility-refusals.ts";
 export * from "./reader-shapes.ts";
+
+export * from "./turn-recovery.ts";

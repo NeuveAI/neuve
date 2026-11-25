@@ -1,3 +1,4 @@
+import { watchTurnRecovery } from "./turn-recovery";
 import { ReviewCardsDoc } from "./review-cards";
 import { type ApprovalAdmission, ApprovalRequestsDoc, Approvals, requirePerson, watchApprovals } from "./approvals";
 import type { Context } from "@earendil-works/chord";
@@ -1732,7 +1733,8 @@ export class Channel {
 		let plans: DocumentWatch<PlansState> | undefined;
 		let builds: DocumentWatch<BuildsState> | undefined;
 		let approvals: Awaited<ReturnType<typeof watchApprovals>> | undefined;
-		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop(), builds?.stop(), approvals?.stop()]);
+		let recovery: Awaited<ReturnType<typeof watchTurnRecovery>> | undefined;
+		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop(), builds?.stop(), approvals?.stop(), recovery?.stop()]);
 		try {
 			if (request.planComments) await this.#flushPlanDeliveries();
 			await harness.commit(async tx => {
@@ -1756,6 +1758,7 @@ export class Channel {
 				sendBuilds(builds.value);
 				builds.start(async value => sendBuilds(value));
 			}
+			recovery = await watchTurnRecovery(harness, conversation.id, send);
 			if (request.approvals) approvals = await watchApprovals(harness, conversation.id, send);
 			if (plans) {
 				let lastPlans: string | undefined;

@@ -1,3 +1,4 @@
+import { TurnRetryStatusSchema } from "@neuve/records-schema";
 import { ApprovalAsked, WorkKind } from "@neuve/runtime/approval";
 import { z } from "zod";
 
@@ -225,6 +226,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("live"), ...base }),
 	z.object({ kind: z.literal("typing"), ...base, author: text }),
 	z.object({ kind: z.literal("approval-requests"), ...base, requests: z.array(ApprovalRequestSchema) }),
+	z.object({ kind: z.literal("turn-retry-status"), ...base, status: TurnRetryStatusSchema.optional() }),
 ]) satisfies z.ZodType<Event>;
 
 export const FrameSchema = z.union([

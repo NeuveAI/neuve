@@ -1,3 +1,4 @@
+import type { TurnRetryStatus } from "@neuve/records-schema";
 import type { ApprovalAsked as RuntimeApprovalAsked, WorkKind } from "@neuve/runtime/approval";
 import type { JSONType } from "zod";
 import type { ReviewCard } from "./review-cards";
@@ -819,6 +820,8 @@ export type Event =
 	 * first. Sent on attachment and every change when the watch opts in with `approvals`.
 	 */
 	| { kind: "approval-requests"; chat: ChatId; requests: ApprovalRequest[] }
+	/** Durable retry projection, sent initially and on every transition. */
+	| { kind: "turn-retry-status"; chat: ChatId; status?: TurnRetryStatus }
 	/** `author` is writing in the chat; live only, and stale once a few seconds pass without another. */
 	| { kind: "typing"; chat: ChatId; author: string };
 

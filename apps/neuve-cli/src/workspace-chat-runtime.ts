@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { storeLocationIn } from "@neuve/records-core";
 import {
   createModels,
   type Models,
@@ -20,6 +22,7 @@ import {
   chatRuntimeExtension,
   ChatRuntimeBridge,
   NativeHeads,
+  turnRecoveryStore,
   type AccountStatusSource,
   type ApprovalStore,
 } from "@neuve/harness/chat-runtime";
@@ -332,8 +335,10 @@ export async function workspaceChatRuntime(
       cause: error instanceof Error ? error.message : String(error),
     }),
   );
+  const recovery = await turnRecoveryStore(storeLocationIn(join(stateDirectory, "turn-recovery")), log);
   const bridge = new ChatRuntimeBridge({
     registry: sources.registry,
+    recovery: recovery.driver,
     heads: await NativeHeads.open(stateDirectory),
     ...(sources.skills === undefined ? {} : { skills: sources.skills }),
     log,
@@ -352,10 +357,12 @@ export async function workspaceChatRuntime(
       close: async () => {
         await extension.close();
         await layer.close();
+        await recovery.close();
       },
     };
   } catch (error) {
     await bridge.close();
+    await recovery.close();
     throw error;
   }
 }

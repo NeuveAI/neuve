@@ -1,3 +1,4 @@
+import { TurnRetryStatusDefinition } from "@neuve/records-schema";
 import {
   awaitWithContext,
   BACKGROUND_CONTEXT,
@@ -10,6 +11,7 @@ import {
   LiveDoc,
   ToolTask,
   defineExtension,
+  defineDoc,
   defineTool,
   hook,
   type Harness,
@@ -19,6 +21,8 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ApprovalStore, ChatRuntimeBridge } from "./bridge.ts";
 import { RUNTIME_WORK_TOOL } from "./transcript.ts";
 import { newest, pointer } from "./transcript.ts";
+
+const TurnRetryStatusDoc = defineDoc(TurnRetryStatusDefinition);
 
 export const RECOVERY_ALLOW_TOOLS: readonly string[] = [
   "question",
@@ -218,6 +222,13 @@ export function chatRuntimeExtension(
       onApprovalAnswer?: (send: ChatRuntimeBridge["replyToApproval"]) => void;
     },
   ) {
+    const stopRecovery = await bridge.subscribeRecovery(async (chat, status) => {
+      await harness.commit(async (tx) => {
+        const doc = await tx.doc(TurnRetryStatusDoc, Number(chat) as ConversationId);
+        if ((doc.current?.revision ?? -1) < status.revision) doc.current = status;
+      }, BACKGROUND_CONTEXT);
+    });
+    if (stopRecovery) subscriptions.add(stopRecovery);
     if (approvals) await bridge.attachApprovals(approvals(harness));
     access?.onStop?.((chat) => bridge.stopApprovals(chat));
     access?.onApprovalAnswer?.((...args) => bridge.replyToApproval(...args));

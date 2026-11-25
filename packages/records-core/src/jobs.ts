@@ -3,6 +3,8 @@ import type { JobKind, JobSlot, RecordEvent } from "@neuve/records-schema";
 
 export interface JobRequest {
   readonly kind: JobKind;
+  /** A persisted absolute delay, chosen once by the owning harness policy. */
+  readonly runAt?: string;
   /** Unique across the queue; a second request with the same key is the same job. */
   readonly dedupeKey: string;
   /** Rebuildable preparation added after historical events were written. */
@@ -12,6 +14,10 @@ export interface JobRequest {
 /** The jobs an event enqueues, in the event's own append transaction (D16, 8.12). */
 export const jobsFor = (event: RecordEvent): ReadonlyArray<JobRequest> => {
   switch (event.kind) {
+    case "turn.recovery-recorded@1":
+      return event.payload.state === "scheduled"
+        ? [{ kind: "chat.turn-retry@1", dedupeKey: `chat.turn-retry:${event.payload.turn}:${event.payload.attempt}`, runAt: event.payload.nextAt! }]
+        : [];
     case "capture.filed@1":
       return [
         {
@@ -287,6 +293,16 @@ export const JOB_POLICIES: Readonly<Record<JobKind, JobPolicy>> = {
     stallLimit: 2,
   },
   // A hand-enqueued check of the worker; it waits behind product work in its slot.
+  // One delivery of an already-budgeted harness retry. Queue transport never retries model work.
+  "chat.turn-retry@1": {
+    slot: "interactive",
+    priority: 1,
+    order: "oldest",
+    maxAttempts: 1,
+    backoff: Schedule.recurs(0),
+    deadline: Duration.minutes(30),
+    stallLimit: 0,
+  },
   "worker.probe": {
     slot: "background",
     priority: 3,
