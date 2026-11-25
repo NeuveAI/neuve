@@ -10,6 +10,7 @@ Status: proposal, drafted 23 November 2026 from the owner's conversation with th
 4. The micro-VM is Apple's containerization, which runs each isolate on the Virtualization framework on a Mac and on Cloud Hypervisor on Linux, behind one guest contract. See [Each isolate a micro-VM](#each-isolate-a-micro-vm).
 5. An agent is done when its branch is merged into the channel's branch or its plan is closed, and dismissing is a control of its own that ends an agent for good. See [Teardown](#teardown).
 6. On the owner's Mac, sandbox storage is an APFS disk image on the LaCie drive. See [Making an isolate fast and keeping the host lean](#making-an-isolate-fast-and-keeping-the-host-lean).
+7. Every channel's agents run in isolates from the start, a one-person channel's included, and a channel owns its branch from the start ([decisions record](../decisions.md#area-17-the-owners-rulings-on-returning-23-november-2026), row 17.55).
 
 **What is proposed on top.**
 
@@ -202,7 +203,6 @@ The owner's first answer accepted them. With an isolate per agent decided, they 
 The tenth answer accepted what was recommended: which micro-VM, and what counts as done with what dismissing is. It covers only those; the points below had no recommendation, or were not put.
 
 - **Which machine is the shared sandbox.** A micro-VM needs a Mac with Apple silicon or Linux with KVM, not a container. Whether it is the owner's Mac on the tailnet for now, and how many agents one machine holds, is the owner's call. No recommendation was made.
-- **Whether a one-person channel's agents get isolates too.** That would retire the narrow folders on the device, and run every agent the same way, as the owner's 20 November ruling asks that the foundations be shared. On a Mac it needs macOS 26. No recommendation was made.
 - **Whose account a shared channel's turns run on.** The ruling keeps every key out of the sandbox; whose key the broker swaps in is still the open question of the 9 November ruling. The return session's research suggested the member who approved the plan, but this proposal made no recommendation.
 - **Whose name authors an unattended agent's commit.** The member who started the work, the one who approved the plan, or the bot account the owner plans ([23 November](../decisions.md#area-15-an-overnight-round-with-the-owner-away-23-november-2026)). No recommendation was made.
 - **Which branches the broker may push.** Only the channel's own, or any. Claude Code's proxy leaves this to branch protection. No recommendation was made.
