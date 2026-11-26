@@ -44,7 +44,12 @@ createRoot(document.getElementById("root")!).render(
 				<div key={state} data-state={state} className="@container rounded-xl border border-border p-5">
 					<h2 className="mb-3 text-sm text-muted-foreground">{state}</h2>
 					<Group>
-						<Plugin plugin={plugin} disabled={false} request={async () => {}} />
+						<Plugin
+							plugin={plugin}
+							disabled={false}
+							// A host that could not open the browser, so Sign in offers the page as a link.
+							request={async () => ({ url: "https://linear.app/oauth/authorize", opened: false })}
+						/>
 					</Group>
 				</div>
 			))}

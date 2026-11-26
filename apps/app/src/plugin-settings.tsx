@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button, Switch } from "@ace/ui";
 import { IconChevronRight } from "@ace/ui/icons";
 import type { HostRequest, PluginSettings } from "@ace/host/protocol";
 
-import { KeyRow, Problem, Row } from "./settings-layout";
+import { KeyRow, Link, Problem, Row } from "./settings-layout";
 
 export function Plugin({ plugin, disabled, request }: {
 	plugin: PluginSettings;
@@ -12,7 +12,9 @@ export function Plugin({ plugin, disabled, request }: {
 	request: (request: HostRequest) => Promise<unknown>;
 }) {
 	const [action, setAction] = useState<{ busy?: boolean; error?: string }>({});
-	const [account, setAccount] = useState<{ busy?: boolean; error?: string }>({});
+	const [account, setAccount] = useState<
+		{ busy?: boolean; pending?: boolean; url?: string; error?: string }
+	>({});
 	const [keys, setKeys] = useState(() =>
 		!plugin.signIn
 		|| plugin.credentials.some(({ source }) => source === "keychain" || source === "environment")
@@ -28,21 +30,18 @@ export function Plugin({ plugin, disabled, request }: {
 		}
 	}
 
+	// The host's answer only opens the page; the sign-in ends when settings report it.
+	useEffect(() => setAccount({}), [plugin.signIn?.signedIn, plugin.signIn?.error]);
+
 	async function signIn() {
-		// A tab opened later than the click is blocked, so it opens now and the address follows.
-		const tab = window.open("", "_blank");
-		setAccount({ busy: true });
+		setAccount({ busy: true, pending: true });
 		try {
-			const { url } = await request({ op: "plugin-sign-in", plugin: plugin.name }) as { url: string };
-			if (tab) {
-				tab.opener = null;
-				tab.location.href = url;
-			} else {
-				window.open(url, "_blank", "noopener");
-			}
-			setAccount({});
+			const { url, opened } = await request({ op: "plugin-sign-in", plugin: plugin.name }) as {
+				url: string;
+				opened: boolean;
+			};
+			setAccount({ pending: true, ...(opened ? {} : { url }) });
 		} catch (error) {
-			tab?.close();
 			setAccount({ error: (error as Error).message });
 		}
 	}
@@ -78,6 +77,11 @@ export function Plugin({ plugin, disabled, request }: {
 						<>
 							{plugin.signIn.error && <Problem>{plugin.signIn.error}</Problem>}
 							{account.error && <Problem>{account.error}</Problem>}
+							{account.url && (
+								<p className="text-xs">
+									<Link href={account.url}>Open sign-in page</Link>
+								</p>
+							)}
 							{plugin.credentials.length > 0 && (
 								<Button
 									variant="ghost"
@@ -116,7 +120,7 @@ export function Plugin({ plugin, disabled, request }: {
 								disabled={disabled || account.busy}
 								onClick={() => void signIn()}
 							>
-								Sign in
+								{account.pending ? "Signing in…" : "Sign in"}
 							</Button>
 						)}
 				</Row>

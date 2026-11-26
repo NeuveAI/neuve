@@ -3,6 +3,19 @@ import { type ComponentProps, type ReactNode, useState } from "react";
 import { Button, Input } from "@ace/ui";
 import type { CredentialStatus } from "@ace/host/protocol";
 
+export function Link({ href, children }: { href: string; children: ReactNode }) {
+	return (
+		<a
+			href={href}
+			target="_blank"
+			rel="noopener noreferrer"
+			className="text-primary underline-offset-2 hover:underline"
+		>
+			{children}
+		</a>
+	);
+}
+
 export function Page({ children }: { children: ReactNode }) {
 	return <div className="flex flex-col gap-8">{children}</div>;
 }

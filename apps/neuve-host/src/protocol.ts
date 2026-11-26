@@ -389,7 +389,10 @@ export type HostRequest =
 	/** Saves or removes, in the keychain, a variable a carried plugin's servers receive. */
 	| { op: "plugin-key-set"; plugin: string; name: string; value: string }
 	| { op: "plugin-key-remove"; plugin: string; name: string }
-	/** Starts MCP's OAuth sign-in and answers `{ url }`, the page the person opens to authorize. */
+	/**
+	 * Starts MCP's OAuth sign-in and opens its page in this Mac's default browser, as Claude Code
+	 * does. Answers `{ url, opened }`; the app offers `url` only when the host could not open it.
+	 */
 	| { op: "plugin-sign-in"; plugin: string }
 	| { op: "plugin-sign-out"; plugin: string }
 	/**

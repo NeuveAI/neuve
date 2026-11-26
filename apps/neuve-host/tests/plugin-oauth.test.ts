@@ -20,7 +20,7 @@ import { pluginSettings } from "../src/settings";
 const access = (rotation: number) => `fixture-access-token-${rotation}`;
 const refreshToken = (rotation: number) => `fixture-refresh-token-${rotation}`;
 
-async function fixture(expiresIn = 3600) {
+async function fixture(expiresIn = 3600, opened = true) {
 	const routes: string[] = [];
 	let registration: string | undefined;
 	let redirect: string | undefined;
@@ -141,7 +141,11 @@ async function fixture(expiresIn = 3600) {
 	});
 	const endpoint = plugin.oauth.get("fixture");
 	if (!endpoint) throw new Error("Fixture requires OAuth");
-	const oauth = new PluginOAuth([plugin]);
+	const openedUrls: string[] = [];
+	const oauth = new PluginOAuth([plugin], async url => {
+		openedUrls.push(url);
+		return opened;
+	});
 	const logs: unknown[] = [];
 	const log: Log = (level, event, fields) => { logs.push({ level, event, fields }); };
 	let changes = 0;
@@ -167,7 +171,7 @@ async function fixture(expiresIn = 3600) {
 	});
 	config.port = owner.port!;
 	return {
-		routes, endpoint, plugin, log, logs,
+		routes, endpoint, plugin, log, logs, openedUrls,
 		changes: () => changes, refreshRequests: () => requests,
 		refreshesSettled: refreshesSettled.promise,
 		pauseRefresh() {
@@ -222,8 +226,10 @@ test("discovery, shared sign-in, PKCE, and the first authenticated tool call", a
 	const f = await fixture();
 	try {
 		const [first, second] = await Promise.all([f.signIn(), f.signIn()]);
+		expect(first.opened).toBe(true);
 		expect(second).toEqual(first);
 		expect(await f.signIn()).toEqual(first);
+		expect(f.openedUrls).toEqual([first.url, first.url, first.url]);
 		expect(f.routes).toEqual(["401", "resource metadata", "authorization metadata", "registration"]);
 		expect((await readSession(f.endpoint))?.kind).toBe("pending");
 		expect((await f.settings()).signIn).toEqual({ signedIn: false });
@@ -248,6 +254,21 @@ test("discovery, shared sign-in, PKCE, and the first authenticated tool call", a
 		expect(JSON.stringify(await f.settings())).not.toContain(refreshToken(0));
 		expect(Object.values(process.env)).not.toContain(access(0));
 		expect(Object.values(process.env)).not.toContain(refreshToken(0));
+	} finally {
+		await f.close();
+	}
+});
+
+// When the OS opener fails, the returned page can still finish the original Keychain-backed attempt.
+test("sign-in returns a usable fallback URL when the browser could not open", async () => {
+	const f = await fixture(3600, false);
+	try {
+		const result = await f.signIn();
+		expect(result.opened).toBe(false);
+		expect(f.openedUrls).toEqual([result.url]);
+		const callback = await f.authorize(result.url);
+		expect((await fetch(callback)).status).toBe(200);
+		expect((await f.settings()).signIn).toEqual({ signedIn: true });
 	} finally {
 		await f.close();
 	}

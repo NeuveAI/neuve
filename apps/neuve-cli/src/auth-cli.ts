@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { Effect, Layer, Logger } from "effect";
+import { openBrowser } from "@ace/host/open-browser";
 import {
   AccountDirectory,
   type AccountDirectoryShape,
@@ -73,21 +74,6 @@ export const AUTH_HELP = `Usage:
               Claude Code is missing; its sign-in may remain in the Keychain.
 
 Usage limits and the apps allowed to use your plan are at https://chatgpt.com/settings/usage.`;
-
-const openBrowser = async (url: string) => {
-  const command =
-    process.platform === "darwin"
-      ? ["open", url]
-      : process.platform === "win32"
-        ? ["rundll32", "url.dll,FileProtocolHandler", url]
-        : ["xdg-open", url];
-  try {
-    const child = Bun.spawn(command, { stdio: ["ignore", "ignore", "ignore"] });
-    return (await child.exited) === 0;
-  } catch {
-    return false;
-  }
-};
 
 const describe = (status: RouteProvider.OpenAiAuth.AuthStatus) =>
   status.signedIn

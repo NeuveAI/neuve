@@ -34,6 +34,7 @@ import { Plugin } from "./plugin-settings";
 import {
 	Group,
 	KeyRow,
+	Link,
 	Page,
 	Problem,
 	Row,
@@ -42,7 +43,6 @@ import {
 	Status,
 	TextRow,
 } from "./settings-layout";
-import { Link } from "./team-setup";
 import { UpdateSettings } from "./updates";
 
 export type Section = "general" | "providers" | "plugins" | "team" | "beta" | "host" | "computer" | "updates";

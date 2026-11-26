@@ -9,6 +9,7 @@ import {
 import { SharedWork } from "@neuve/records-core/shared-work";
 
 import { forget, peek } from "./keys";
+import { openBrowser } from "./open-browser";
 import { carriedPlugins, loopback, type OAuthServer, type Plugin } from "./plugin-manifest";
 import {
 	expired, fingerprint, oauthAccount, parseSession, readSession, saveSession, signedIn,
@@ -91,7 +92,7 @@ export class PluginOAuth {
 	private readonly starting = new SharedWork<{ url: string }>();
 	private readonly work = new SharedWork<void>();
 
-	constructor(plugins: readonly Plugin[] = carriedPlugins) {
+	constructor(plugins: readonly Plugin[] = carriedPlugins, private readonly open = openBrowser) {
 		this.plugins = new Map(plugins.map(plugin => [
 			plugin.name, [...plugin.oauth.values()].map(server => ({ server, lifetime: new AbortController() })),
 		]));
@@ -116,7 +117,7 @@ export class PluginOAuth {
 		return { signedIn: statuses.every(status => status.signedIn), ...(error ? { error } : {}) };
 	}
 
-	async signIn(plugin: string, port: number, changed: () => void): Promise<{ url: string }> {
+	async signIn(plugin: string, port: number, changed: () => void): Promise<{ url: string; opened: boolean }> {
 		const sessions = this.requirePlugin(plugin);
 		const { outcome } = await this.starting.run({ scope: "sign-in", key: plugin, run: async () => {
 			const existing = this.attempts.get(plugin);
@@ -138,7 +139,8 @@ export class PluginOAuth {
 			throw new Error("This plugin is already signed in.");
 		} });
 		if (outcome.kind !== "succeeded") throw new Error(signInFailed);
-		return outcome.value;
+		const { url } = outcome.value;
+		return { url, opened: await this.open(url) };
 	}
 
 	private async begin(session: Session, lifetime: AbortSignal, port: number, changed: () => void): Promise<string> {
