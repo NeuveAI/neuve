@@ -430,7 +430,9 @@ export function codingWorkerSetup(
       const runtime = chatRuntimes.get(worker.sessionId);
       return {
         extensions: runtime?.extensions ?? [],
-        ...(runtime ? { attach: runtime.attach } : {}),
+        ...(runtime
+          ? { attach: runtime.attach, ownTools: runtime.ownTools }
+          : {}),
       };
     },
     nonTurnModels(worker, purpose, conversationId, defaults) {

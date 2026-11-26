@@ -18,6 +18,7 @@ import { desktopRequest, desktopTools } from "@githubnext/desktop-tools/tools";
 // The request/result contract lives in the standalone package; pi tools and durability stay here.
 export * from "@githubnext/desktop-tools/protocol";
 export type Desktop = (request: DesktopRequest, context: Context) => Promise<DesktopResult>;
+export const DESKTOP_EXTENSION = "ace-desktop";
 
 export function result(value: DesktopResult): ToolExecutionResult {
 	return {
@@ -41,9 +42,9 @@ export function desktop(execute: Desktop): Extension {
 	};
 	// Definitions are shared with the standalone app's MCP server; replay and durability stay here.
 	return defineExtension({
-		name: "ace-desktop",
+		name: DESKTOP_EXTENSION,
 		sections: [{
-			key: "ace-desktop",
+			key: DESKTOP_EXTENSION,
 			render: async () =>
 				[
 					"Use desktop_* tools to observe and operate apps on this channel's execution host.",

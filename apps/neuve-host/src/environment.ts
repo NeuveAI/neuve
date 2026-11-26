@@ -3,6 +3,52 @@ import type { Diagnostics } from "./protocol";
 /** A command-line host inherits its terminal's environment; only the helper loads a login shell. */
 export const shell: Diagnostics["shell"] = { state: "adopted" };
 
+let neuve: ReturnType<typeof readInstalledNeuve> | undefined;
+
+/** Workers keep the result for their lifetime, including a missing executable. */
+export function installedNeuve() {
+	return neuve ??= readInstalledNeuve();
+}
+
+async function readInstalledNeuve() {
+	const PATH = process.env.PATH ?? "";
+	const path = Bun.which("neuve", { PATH });
+	if (!path) return;
+	try {
+		const child = Bun.spawn([path, "--version"], {
+			env: { PATH },
+			stdin: "ignore", stdout: "pipe", stderr: "ignore",
+			killSignal: "SIGKILL", maxBuffer: 2048,
+		});
+		const reader = child.stdout.getReader();
+		const decoder = new TextDecoder();
+		let out = "";
+		const read = async () => {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) return;
+				out += decoder.decode(value, { stream: true });
+			}
+		};
+		const deadline = Promise.withResolvers<void>();
+		const timer = setTimeout(deadline.resolve, 2000);
+		try {
+			// A descendant can keep stdout open after the probe process exits.
+			const finished = await Promise.race([Promise.all([read(), child.exited]), deadline.promise]);
+			if (!finished || child.exitCode !== 0) return { path };
+			const version = (out + decoder.decode()).trim();
+			if (version) return { path, version };
+		} finally {
+			clearTimeout(timer);
+			void reader.cancel().catch(() => {});
+			if (!child.killed) child.kill("SIGKILL");
+		}
+	} catch {
+		// The executable can disappear after PATH lookup.
+	}
+	return { path };
+}
+
 const mark = "__ace_env__";
 const command = () => [process.env.SHELL || "/bin/zsh", "-lc", `printf ${mark}; env -0`];
 let helpers = "";

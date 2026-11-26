@@ -52,6 +52,12 @@ export const GIT_LOCAL: ReadonlySet<string> = new Set([
  * profile (scripts/pi-storage.ts); the host has no default location and creates neither root.
  */
 export const HostConfigSchema = z.strictObject({
+	/** Captured by the launcher and carried unchanged into workers. */
+	build: z.strictObject({
+		version: z.string().optional(),
+		release: z.boolean().optional(),
+		commit: z.string().optional(),
+	}).optional(),
 	/** Existing directory on the validated state volume: catalog, channel stores, logs, token. */
 	home: directory("home"),
 	app: directory("app").optional(),

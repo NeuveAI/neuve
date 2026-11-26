@@ -66,6 +66,8 @@ import {
 	STRONG,
 } from "./captions";
 import { instructions } from "./context";
+import { environment, type HostEnvironment } from "./environment";
+import { capabilities } from "./capabilities";
 import { changes, fetchBase, patch } from "./changes";
 import { type Desktop, desktop } from "./desktop";
 import { HANDOFF, Handoffs } from "./handoffs";
@@ -167,6 +169,7 @@ export type Options = {
 	resume?: boolean;
 	storage: Storage;
 	models: Models;
+	ownTools?(provider: string): boolean;
 	env(cwd: string): ExecutionEnv;
 	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
 	planFileAccess?(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv;
@@ -175,7 +178,10 @@ export type Options = {
 	/** A folder of skills the host carries, listed after every installed skill. */
 	skills?: string;
 	build?: BuildHost;
+	hostEnvironment?: HostEnvironment;
 	desktop?: Desktop;
+	/** Host-owned dispatch availability; refreshed for every request and dispatch. */
+	desktopAvailable?(): boolean;
 	browser?: Browser;
 	images?: Images;
 	tabs?: Tabs;
@@ -299,13 +305,13 @@ export class Channel {
 			(chat, work) => channel.#admitted(chat, work));
 		registry.install(questions.extension);
 		const execute = options.desktop;
+		const available = () => !!channel && channel.#settings.desktop && (options.desktopAvailable?.() ?? true);
 		if (execute) {
 			registry.install(desktop(async (request, context) => {
 				// Check every dispatch, including child chats and calls from already-active runs.
 				if (!channel.#settings.desktop) {
 					return {
-						text:
-							"Native desktop tools are off for this channel, and no desktop operation was dispatched. If the task needs them, ask the channel owner to turn on Channel desktop tools in the channel header, then wait for their reply instead of working around it.",
+						text: "Desktop tools are off for this channel. No desktop operation ran.",
 						isError: true,
 						outcome: "refused",
 					};
@@ -320,9 +326,17 @@ export class Channel {
 		registry.install(subagent((handle, input, scope) => channel.submitInput(handle, input, scope), questions.extension));
 		registry.install(metadata((value) => channel.#changed(value), options.claim));
 		registry.install(messaging(options.directory));
+		const role = (chat: number) => channel.#builds.agent(chat)?.role;
 		registry.install(
 			defineExtension({ name: "ace-channel", sections: [
-				room.section(options, chat => channel.#builds.agent(chat)?.role), instructions(options.models, options.skills),
+				room.section(options, role),
+				environment(
+					options.hostEnvironment,
+					chat => role(chat) ?? (chat === ROOT_CONVERSATION_ID ? "main chat" : "thread chat"),
+					planning,
+					options.ownTools,
+				),
+				instructions(options.models, options.skills),
 			] }),
 		);
 		registry.install(approvals.extension);
@@ -337,7 +351,7 @@ export class Channel {
 		install(registry, options.extension, planning, !!options.planFileAccess, log, (chat, scope) => channel.#builds.paused(chat, scope));
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider)),
-			registry,
+			registry: execute ? capabilities(registry, available) : registry,
 			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },
 			conversationCreated: clearInheritedQuery,
 			env: async ({ cwd, conversationId }, context) => {

@@ -1,0 +1,50 @@
+import type { Context } from "@earendil-works/chord";
+import type { PromptSection } from "@earendil-works/pi-durable";
+import { LanesDoc } from "./lanes";
+import type { IsPlanning } from "./plan-mode";
+
+export type HostEnvironment = {
+	host: string;
+	version?: string;
+	release?: boolean;
+	commit?: string;
+	neuve: { path: string; version?: string } | undefined;
+	readBranch(folder: string, context: Context): Promise<string | undefined>;
+};
+
+export function environment(
+	host: HostEnvironment | undefined,
+	role: (chat: number) => string,
+	planning: IsPlanning,
+	ownTools?: (provider: string) => boolean,
+): PromptSection {
+	return {
+		key: "ace-environment",
+		async render({ conversationId, agent, env, read }, context) {
+			const native = agent.model !== undefined && ownTools?.(agent.model.provider);
+			const plan = await planning(conversationId, context);
+			const hasShell = native
+				? agent.cwd !== undefined
+				: env !== undefined && !plan && agent.tools.some(tool => tool.name === "bash");
+			const shell = native
+				? plan ? "runtime's own shell, read-only in Plan mode" : "runtime's own shell"
+				: "Ace's bash tool";
+			const folder = env?.cwd ?? agent.cwd;
+			const lanes = (await read.snapshot(LanesDoc, context))?.lanes ?? {};
+			const lane = Object.entries(lanes).find(([, lane]) => lane.path === folder);
+			const branch = folder === undefined ? undefined : await host?.readBranch(folder, context);
+			const buildKind = host?.release === undefined ? "" : host.release ? " (release build)" : " (source run)";
+			const neuve = host?.neuve
+				? `${host.neuve.path} (${host.neuve.version ?? "version unavailable"})`
+				: host ? "not found on the host's PATH" : "unknown (host metadata unavailable)";
+			return [
+				`Execution host: ${host?.host ?? "unknown (host metadata unavailable)"}.`,
+				`Running Ace build: version ${host?.version ?? "unknown"}${buildKind}, commit ${host?.commit ?? "unknown"}.`,
+				`Installed neuve and its version: ${neuve}.`,
+				`Role: ${role(conversationId)}. Working folder: ${folder ?? "unknown"}. Git branch: ${branch ?? "unknown"}.`,
+				`Work lane: ${lane?.[0] ?? "none recorded for this folder"}. Runtime shell: ${hasShell ? `available (${shell})` : "unavailable"}.`,
+				"Ace serves the channel, threads, work log, plan and tools. Neuve is the neuve command, its skill, reviews and the desk.",
+			].join("\n");
+		},
+	};
+}

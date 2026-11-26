@@ -13,7 +13,9 @@ On the review, each requirement shows as a checkpoint with a proof state: Missin
 
 ## As the implementer, record it before you hand over
 
-Recording proof is part of implementing, not a step after review. For each validation requirement, observe the real running code in every applicable kind above and record each artefact with `neuve proof record`. Then run `neuve proof list` and say in your handover which requirements are proven, what is missing and why. The reviewer judges that proof ([review-verification.md](review-verification.md)).
+Record each applicable kind you observe with `neuve proof record`. If the runtime cannot capture a kind, keep every kind it can capture and carry on. Record the missing kind and why in your handover. Never ask for desktop access, an app, a sign-in or a credential to capture proof.
+
+Run `neuve proof list` before handing over. A video requirement without a video record shows as **Missing**. The reviewer judges the proof using the [verification guide](review-verification.md).
 
 ## Record it
 

@@ -21,13 +21,12 @@ async function git(
 	{ accepted = [0], output, input }: { accepted?: number[]; output?: ToolExecutionApi["output"]; input?: Buffer } = {},
 ) {
 	const child = Bun.spawn([
-		"git", "--no-pager",
+		"git", "-C", cwd, "--no-pager",
 		"-c", "core.fsmonitor=false",
 		"-c", "core.hooksPath=/dev/null",
 		"-c", "protocol.allow=never",
 		...args,
 	], {
-		cwd,
 		env: {
 			PATH: process.env.PATH,
 			HOME: process.env.HOME,
@@ -55,6 +54,17 @@ async function git(
 	context.abortSignal?.throwIfAborted();
 	if (!accepted.includes(status)) throw new Error(`Git ${args[0]} failed with exit status ${status}.`);
 	return text;
+}
+
+export async function readBranch(cwd: string, context: Context): Promise<string | undefined> {
+	try {
+		const branch = await git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], context, { accepted: [0, 1] });
+		if (branch) return branch.replace(/\n$/, "");
+		const head = await git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], context);
+		if (objectId.test(head.trim())) return "detached HEAD";
+	} catch {
+		context.abortSignal?.throwIfAborted();
+	}
 }
 
 async function tree(cwd: string, context: Context): Promise<Tree> {

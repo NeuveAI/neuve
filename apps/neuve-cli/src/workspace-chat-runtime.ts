@@ -233,6 +233,7 @@ function sourceModels(
 export type WorkerChatRuntime = {
   models: Models;
   owns(provider: string): boolean;
+  ownTools(provider: string): boolean;
   extensions: readonly Extension[];
   attach(
     harness: Harness,
@@ -332,6 +333,7 @@ export async function workspaceChatRuntime(
     return {
       models: native,
       owns: () => false,
+      ownTools: () => false,
       extensions: [],
       attach: () => {},
       close: async () => {},
@@ -394,6 +396,7 @@ export async function workspaceChatRuntime(
     return {
       models: sourceModels(layer.models, native, sources),
       owns: layer.owns,
+      ownTools: layer.ownTools,
       extensions: extension.extensions,
       attach(harness, admission) {
         admission?.requestAttendance?.(layer.owns);

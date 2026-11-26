@@ -1,3 +1,4 @@
+import { hostname, platform, arch } from "node:os";
 import * as catalog from "./catalog";
 import { nativeReview, startReviewFeed } from "./native-review";
 import {NativeSourceRequestSchema, NativeAuthorityReceiptSchema, type NativeSourceRequest, type NativeAuthorityReceipt} from "./native-source-protocol";
@@ -19,7 +20,8 @@ import type { Planning } from "@ace/channel/planning";
 import type { Review } from "@ace/channel/review";
 import { config, configure, CONFIG_VARIABLE, GIT_LOCAL, type HostConfig } from "./host-config";
 import { configureRuntime, runtimeHooks } from "./runtime-hooks";
-import { planExplore, planFileAccess } from "./plan-git";
+import { planExplore, planFileAccess, readBranch } from "./plan-git";
+import { installedNeuve } from "./environment";
 import { git } from "./projects";
 /**
  * The channel a worker serves, given to root's factories before anything is created, so they can
@@ -47,7 +49,11 @@ type ScopeResult = {
 
 /** What root's worker entry provides: the provider lane's models, built in the worker's process. */
 export type WorkerSetup = {
-	extensions?(context: WorkerContext): { extensions: readonly Extension[]; attach?(harness: Harness, admission?: WorkerAdmission): void | Promise<void> };
+	extensions?(context: WorkerContext): {
+		extensions: readonly Extension[];
+		ownTools?: Options["ownTools"];
+		attach?(harness: Harness, admission?: WorkerAdmission): void | Promise<void>;
+	};
 	checkpoint?(context: WorkerContext, request: NativeSourceRequest): Promise<NativeAuthorityReceipt>;
 	/** Acquire the source before any mutable native storage opens. Cleanup follows a confirmed native close. */
 	openSource?(context: WorkerContext): (() => void) | Promise<() => void>;
@@ -177,7 +183,19 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		},
 		...(query ? { query: { sessionId: options.id, read: planScopeRead(place.project, plans, request => query(worker, request), files) } } : {}),
 	} : undefined;
-	const planOptions = { ...options, ...(build ? { build } : {}), planFileAccess, planFiles: files, ...(config.skills ? { skills: config.skills } : {}) };
+	const planOptions = {
+		...options,
+		hostEnvironment: {
+			host: `${hostname()} (${platform()}/${arch()})`,
+			...config.build,
+			neuve: await installedNeuve(),
+			readBranch,
+		},
+		...(build ? { build } : {}),
+		planFileAccess,
+		planFiles: files,
+		...(config.skills ? { skills: config.skills } : {}),
+	};
 	if (!setup) return Channel.open({
 		...planOptions,
 		extension: { ...options.extension, extensions: [...(options.extension?.extensions ?? []), planExplore] },
@@ -205,6 +223,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			...(setup.nonTurnModels ? {nonTurnModels: (kind: "caption" | "recap", chat: ConversationId) => setup.nonTurnModels!(worker, kind, chat, options.models)} : {}),
 		};
 		const channel = await Channel.open({...planOptions, log: privateLog.log, storage, models, extension, routeModel: setup.routeModel,
+			...(additional?.ownTools ? { ownTools: additional.ownTools } : {}),
 			...(setup.review ? {
 				feed: async (harness, submitInput) => {
 					const adapter = nativeReview(options.id);

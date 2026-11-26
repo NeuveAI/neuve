@@ -16,7 +16,7 @@ import { Channel, type Envelope, type Frame } from "@ace/channel";
 import * as catalog from "./catalog";
 import { request } from "./client";
 import { browser } from "./browser";
-import { desktop } from "./desktop";
+import { desktop, desktopAvailable } from "./desktop";
 import { images } from "./images";
 import { models, seal } from "./keys";
 import { defaultModel } from "./manage";
@@ -94,6 +94,7 @@ const channel = await openChannel({
 	storage: await workerStorage(id, paths.base, paths.storage),
 	models: models(),
 	desktop,
+	desktopAvailable,
 	browser,
 	images,
 	tabs: tabs(id),

@@ -45,6 +45,7 @@ function effort(
 export interface AccountModels {
   models: Models;
   owns(provider: string): boolean;
+  ownTools(provider: string): boolean;
   close(): Promise<void>;
 }
 export async function accountModels(
@@ -390,6 +391,8 @@ export async function accountModels(
   return {
     models,
     owns: (provider) => routes.has(provider),
+    ownTools: (provider) =>
+      routes.get(provider)?.capabilities.ownTools === true,
     close: async () => {
       closed = true;
       unsubscribe();
