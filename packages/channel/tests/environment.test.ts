@@ -106,7 +106,7 @@ test("main chat reports host facts on its lane and on the project checkout witho
 	fixture.script(request => {
 		const prompt = getCurrentSystemPrompt(request.messages);
 		expect(prompt).toContain("Git branch: detached HEAD");
-		expect(prompt).toContain("Context used: about 0% of 200,000 tokens.");
+		expect(prompt).toContain("Context used: 0–10% of 200,000 tokens.");
 		expect(prompt).toContain("commit captured-build");
 		expect(prompt).toContain("Runtime shell: unavailable");
 		return fauxAssistantMessage("observed");
@@ -140,9 +140,9 @@ test("requests in the same context tenth share the environment section", async (
 		});
 		await ask();
 	}
-	expect(prompts[1]).toContain("Context used: about 40% of 200,000 tokens.");
+	expect(prompts[1]).toContain("Context used: 40–50% of 200,000 tokens.");
 	expect(prompts[2]).toBe(prompts[1]);
-	expect(prompts[3]).toContain("Context used: about 50% of 200,000 tokens.");
+	expect(prompts[3]).toContain("Context used: 50–60% of 200,000 tokens.");
 });
 
 test("the channel compacts at the selected model's threshold and records completed turns after it", async () => {

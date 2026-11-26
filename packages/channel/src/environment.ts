@@ -32,9 +32,11 @@ export function environment(
 			const used = await modelContext?.used(conversationId, context);
 			const modelName = model && model.name !== model.id ? `${model.name} (${model.id})` : selection?.modelId;
 			const limit = model?.contextWindow.toLocaleString("en");
-			const contextUsage = used === undefined || !model?.contextWindow
+			// In tenths of the limit, so the section changes rarely and pi adds few copies of it.
+			const tenth = used !== undefined && model?.contextWindow ? Math.min(9, Math.floor(10 * used / model.contextWindow)) * 10 : undefined;
+			const contextUsage = tenth === undefined
 				? `unknown. Context limit: ${limit ?? "unknown"} tokens`
-				: `about ${Math.floor(10 * used / model.contextWindow) * 10}% of ${limit} tokens`;
+				: `${tenth}–${tenth + 10}% of ${limit} tokens`;
 			const plan = await planning(conversationId, context);
 			const hasShell = native
 				? agent.cwd !== undefined
