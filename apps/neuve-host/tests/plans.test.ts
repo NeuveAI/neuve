@@ -25,9 +25,13 @@ const model = { provider: "plans-test", modelId: "agent" };
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 async function open(project: string, state: string, id = "plans", name = "plans") {
-	const fake = fauxProvider({ provider: model.provider, models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
+	const scripted = () => fauxProvider({ provider: model.provider, models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
+	const fake = scripted();
 	const models = createModels();
 	models.setProvider(fake.provider);
+	// Count only the requests made by the planning agent.
+	const captions = createModels();
+	captions.setProvider(scripted().provider);
 	// Direct plan-storage fixtures have no host catalog; placement is tested through the worker.
 	const lanes = config.lanes;
 	Reflect.deleteProperty(config, "lanes");
@@ -38,6 +42,7 @@ async function open(project: string, state: string, id = "plans", name = "plans"
 		env: cwd => new NodeExecutionEnv({ cwd }),
 		directory: { self: { id, name }, list: async () => [], deliver: async () => {} },
 		log: () => {},
+		extension: { extensions: [], nonTurnModels: () => captions },
 	}, state); }
 	finally { if (lanes !== undefined) config.lanes = lanes; }
 	const request = async <T = unknown>(input: Request) => channel.handle(input, () => {}) as Promise<T>;

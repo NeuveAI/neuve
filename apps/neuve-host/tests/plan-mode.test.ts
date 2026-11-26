@@ -34,6 +34,7 @@ async function open(root: string, models: Models, home: string) {
 	}({ cwd: root });
 	// These file-policy fixtures have no catalog admission; exercise the environment gate alone.
 	const lanes = config.lanes;
+	const captions = faux().models;
 	Reflect.deleteProperty(config, "lanes");
 	try { return await openChannel({
 		id: "plan-test", name: "Plan test", owner: "owner", project: root,
@@ -42,6 +43,7 @@ async function open(root: string, models: Models, home: string) {
 		env: () => env,
 		directory: { self: { id: "plan-test", name: "Plan test" }, list: async () => [], deliver: async () => {} },
 		log: () => {},
+		extension: { extensions: [], nonTurnModels: () => captions },
 	}, root); }
 	finally { if (lanes !== undefined) config.lanes = lanes; }
 }
@@ -282,7 +284,8 @@ test("the worker without a placement adapter confines Plan reads and denies ordi
 		git(repo, "add", "--", "tracked.txt");
 
 		Reflect.deleteProperty(config, "lanes");
-		configureRuntime({ worker: { models: (_, defaults) => defaults } });
+		const captions = faux().models;
+		configureRuntime({ worker: { models: (_, defaults) => defaults, nonTurnModels: () => captions } });
 		const { fake, models } = faux();
 		const channel = await open(repo, models, join(dir, "home"));
 		try {

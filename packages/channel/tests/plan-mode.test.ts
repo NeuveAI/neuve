@@ -10,7 +10,7 @@ import { EventSchema } from "../src/frame";
 import { parseRequest } from "../src/parse";
 import { ChatModesDoc } from "../src/plan-mode";
 import type { ChannelInfo, ChatMode, Event, Request } from "../src/protocol";
-import { Fixture, isolateClaudeConfig, MODEL, OWNER, scratch, scratchEnv, until } from "./helpers";
+import { faux, Fixture, isolateClaudeConfig, MODEL, OWNER, scratch, scratchEnv, until } from "./helpers";
 
 // Both composers send through this parser before admission.
 test("an ask carries only a recognized chat mode through the parser", () => {
@@ -36,12 +36,15 @@ async function memoryChannel(options: Partial<Options> = {}) {
 	const fake = fauxProvider({ provider: MODEL.provider, models: [{ id: MODEL.modelId }, { id: "alternate" }], tokensPerSecond: 500 });
 	const models = createModels();
 	models.setProvider(fake.provider);
+	const captions = faux().models;
 	const channel = await Channel.open({
 		id: "plan", name: "Plan", owner: OWNER, project, models,
 		storage: new MemoryStorage(), model: MODEL, env: cwd => scratchEnv(cwd, root),
 		directory: { self: { id: "plan", name: "Plan" }, list: async () => [], deliver: async () => {} },
 		log: () => {},
 		...options,
+		// Captions and recaps now use the available model, so give them their own responses.
+		extension: { extensions: [], ...options.extension, nonTurnModels: () => captions },
 	});
 	const request = (input: Request) => channel.handle(input, () => {});
 	const ask = (fields: Pick<Extract<Request, { op: "ask" }>, "chat" | "mode" | "model" | "requestId"> = {}) =>

@@ -80,7 +80,7 @@ import {
 	remove,
 } from "./messages";
 import { metadata, MetadataDoc, validateName } from "./metadata";
-import { usable } from "./models";
+import { sameModel, usable } from "./models";
 import { ModelSettings, OwnerInputDoc, PendingModelDoc, type ModelSelection } from "./model-settings";
 import { modelNamedByOwner, modelTool } from "./model-tool";
 import { Plans, PlansDoc, type PlanCommentReceipt, type PlanFiles, type PlansState } from "./plan";
@@ -251,7 +251,7 @@ export class Channel {
 	#unbind?: () => void;
 	#closed?: Promise<void>;
 	#feed?: { close(): Promise<void>; pending(): boolean };
-	#captionTasks = new Set<Promise<void>>();
+	#backgroundTasks = new Set<Promise<void>>();
 	#admissions = new Map<ChatId, Promise<unknown>>();
 	#changingModes = new Map<ChatId, Promise<unknown>>();
 	#listeners = new Set<Listener>();
@@ -303,7 +303,13 @@ export class Channel {
 		registry.install(CodingTools);
 		const handoffs = new Handoffs(options.directory);
 		registry.install(handoffs.extension);
-		const waits = new PersonWaits((chat, phase) => { void Promise.resolve().then(() => channel.#asked(chat, phase)); });
+		const waits = new PersonWaits((chat, phase) => {
+			if (channel.#closing.signal.aborted) return;
+			const task = Promise.resolve().then(() => channel.#asked(chat, phase))
+				.catch(error => log("warn", "run.attention", failure(error)));
+			channel.#backgroundTasks.add(task);
+			void task.finally(() => channel.#backgroundTasks.delete(task));
+		});
 		const questions = new Questions(waits);
 		const approvals = new Approvals(waits, error => log("warn", "approval.dismiss.failed", failure(error)),
 			(chat, work) => channel.#admitted(chat, work));
@@ -519,15 +525,15 @@ export class Channel {
 				&& !(change.value as LiveState | null)?.run)
 				&& !channel.#closing.signal.aborted) {
 				const task = channel.#reconcilePlanExits().catch(error => channel.#log("error", "plan.exit.reconcile", failure(error)));
-				channel.#captionTasks.add(task);
-				void task.finally(() => channel.#captionTasks.delete(task));
+				channel.#backgroundTasks.add(task);
+				void task.finally(() => channel.#backgroundTasks.delete(task));
 			}
 			if (runEnded) void channel.#builds.replyToMentions();
 			// Ending a run settles its inputs in the same commit, in no particular change order.
 			for (const [chat, inputs] of ended) {
 				const task = channel.#ended(chat, inputs, changes);
-				channel.#captionTasks.add(task);
-				void task.finally(() => channel.#captionTasks.delete(task));
+				channel.#backgroundTasks.add(task);
+				void task.finally(() => channel.#backgroundTasks.delete(task));
 			}
 			for (const [chat, input] of began) void channel.#builds.state(chat, "running", input, true);
 			for (const chat of selected) void Promise.resolve().then(() => channel.#publishSelection(chat))
@@ -1080,8 +1086,8 @@ export class Channel {
 			const builds = this.#builds.close();
 			try { await this.#feed?.close(); } catch (error) { errors.push(error); }
 			// Native close seals admission and joins generation and tool tasks before storage closes.
-			// Caption calls are external producers, so join them before entering that boundary.
-			await Promise.allSettled(this.#captionTasks);
+			// Join channel notifications and captions while they can still read the store.
+			await Promise.allSettled(this.#backgroundTasks);
 			await Promise.allSettled(this.#admissions.values());
 			await builds;
 			await this.#approvals.close();
@@ -1344,14 +1350,57 @@ export class Channel {
 	}
 
 	async #submit(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, selection: ModelSelection, ownerText: string | undefined, callContext: Context): Promise<Submission> {
+		const chat = handle.id;
 		const requestId = input.requestId ?? (ownerText === undefined ? undefined : crypto.randomUUID());
-		await this.#harness.commit(async tx => {
-			if (requestId !== undefined && await tx.submissionByRequest(handle.id, requestId)) return;
-			await this.#modelSettings.select(tx, handle.id, selection, true);
-			const owner = await tx.doc(OwnerInputDoc, handle.id);
+		const undo = await this.#harness.commit(async tx => {
+			if (requestId !== undefined && await tx.submissionByRequest(chat, requestId)) return;
+			const agent = await tx.doc(AgentDoc, chat);
+			const change = await tx.doc(PendingModelDoc, chat);
+			const owner = await tx.doc(OwnerInputDoc, chat);
+			const previous = {
+				model: agent.model ? { ...agent.model } : null,
+				thinkingLevel: agent.thinkingLevel ?? null,
+			};
+			const pending = change.pending && {
+				...(change.pending.model ? { model: { ...change.pending.model } } : {}),
+				...(change.pending.effort === undefined ? {} : { effort: change.pending.effort }),
+			};
+			const priorInput = owner.input && { ...owner.input };
+			await this.#modelSettings.select(tx, chat, selection, true);
+			const configured = !sameModel(previous.model ?? undefined, agent.model)
+				|| previous.thinkingLevel !== (agent.thinkingLevel ?? null);
+			const selected = { model: agent.model && { ...agent.model }, effort: agent.thinkingLevel };
+			const applied = { model: change.pending?.model && { ...change.pending.model }, effort: change.pending?.effort };
+			const lastEntry = configured ? (await tx.scanEntries({ conversationId: chat }, 1)).items[0]?.id : undefined;
 			owner.input = ownerText !== undefined && requestId !== undefined ? { requestId, text: ownerText } : undefined;
+			return async (tx: Tx) => {
+				if (requestId !== undefined && await tx.submissionByRequest(chat, requestId)) return;
+				(await tx.doc(OwnerInputDoc, chat)).input = priorInput;
+				const agent = await tx.doc(AgentDoc, chat);
+				if (configured) {
+					// Pi can pick up a queued run between commits. Preserve the selection if it did.
+					if ((await tx.doc(LiveDoc, chat)).run
+						|| (await tx.scanEntries({ conversationId: chat }, 1)).items[0]?.id !== lastEntry
+						|| !sameModel(agent.model, selected.model) || agent.thinkingLevel !== selected.effort) return;
+					await configure(tx, chat, previous);
+				}
+				const change = await tx.doc(PendingModelDoc, chat);
+				if (sameModel(change.pending?.model, applied.model) && change.pending?.effort === applied.effort) {
+					change.pending = pending;
+				}
+			};
 		}, callContext);
-		return handle.submit(requestId === undefined ? input : { ...input, requestId }, callContext);
+		try {
+			return await handle.submit(requestId === undefined ? input : { ...input, requestId }, callContext);
+		} catch (error) {
+			if (undo) {
+				try { await this.#harness.commit(undo, context); }
+				catch (rollback) {
+					throw new AggregateError([error, rollback], "The chat could not restore its model settings after admission failed.");
+				}
+			}
+			throw error;
+		}
 	}
 
 	async #admit(request: Extract<Request, { op: "ask" }>, settled: Promise<unknown>) {
@@ -1681,8 +1730,8 @@ export class Channel {
 			} while (this.#captioning.get(id) && !this.#closing.signal.aborted);
 			this.#captioning.delete(id);
 		})();
-		this.#captionTasks.add(task);
-		void task.finally(() => this.#captionTasks.delete(task));
+		this.#backgroundTasks.add(task);
+		void task.finally(() => this.#backgroundTasks.delete(task));
 	}
 
 	async #captionPass(id: ConversationId): Promise<void> {
@@ -1702,7 +1751,7 @@ export class Channel {
 			const captured = this.#options.extension?.nonTurnModels?.(kind, id);
 			if (captured) {
 				const model = await pick(captured);
-				if (model && await usable(models, { provider: model.provider, modelId: model.id })) {
+				if (model && await usable(models, { provider: model.provider, modelId: model.id }).catch(() => false)) {
 					return { transport: captured, model };
 				}
 			}

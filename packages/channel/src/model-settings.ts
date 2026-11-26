@@ -38,8 +38,8 @@ export class ModelSettings {
 	) {}
 
 	async automatic(): Promise<ModelRef> {
-		const preferred = await this.defaultModel?.().catch(() => undefined);
-		return preferred && await usable(this.models, preferred) ? preferred : choose(this.models);
+		const preferred = await this.defaultModel?.();
+		return preferred && await usable(this.models, preferred).catch(() => false) ? preferred : choose(this.models);
 	}
 
 	listed() {
@@ -84,10 +84,11 @@ export class ModelSettings {
 	async #resolve(current: ModelRef | undefined, effort: Effort, pending: PendingModel, selection: ModelSelection): Promise<SelectedModel> {
 		const stored = selection.automatic ? undefined : pending.model ?? current;
 		const model = selection.model
-			?? (stored && await usable(this.models, stored) ? stored : await this.automatic());
+			?? (stored && await usable(this.models, stored).catch(() => false) ? stored : await this.automatic());
+		const offered = !selection.model || await usable(this.models, model);
 		const selected = this.models.getModel(model.provider, model.modelId);
 		if (!selected) throw new Error(`Model ${model.provider}/${model.modelId} is not offered. Choose another model.`);
-		if (selection.model && !await usable(this.models, model)) {
+		if (!offered) {
 			const name = this.models.getProvider(model.provider)?.name ?? model.provider;
 			throw new Error(`The ${name} API key is missing. Add it in Provider settings to invoke an agent. Chat is still available.`);
 		}

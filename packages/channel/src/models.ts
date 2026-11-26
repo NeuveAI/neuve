@@ -34,7 +34,7 @@ export async function available(models: Models, routeModel?: Omit<ModelOption, "
 }
 
 export async function usable(models: Models, model: ModelRef): Promise<boolean> {
-	const found = await models.getAvailable(model.provider).catch(() => []);
+	const found = await models.getAvailable(model.provider);
 	return found.some((value) => value.id === model.modelId);
 }
 

@@ -25,7 +25,11 @@ import {
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { ROOT_CONVERSATION_ID, type Harness } from "@earendil-works/pi-durable";
+import {
+  MemoryStorage,
+  ROOT_CONVERSATION_ID,
+  type Harness,
+} from "@earendil-works/pi-durable";
 import {
   createModels,
   fauxAssistantMessage,
@@ -34,8 +38,9 @@ import {
 import { HostConfigSchema, config } from "@ace/host/host-config";
 import { configureRuntime, runtimeHooks } from "@ace/host/runtime-hooks";
 import type { WorkerContext } from "@ace/host/worker-runtime";
-import type { Channel } from "@ace/channel";
+import type { Channel, ModelRef } from "@ace/channel";
 import {
+  claudeDefaultModel,
   productionChatSources,
   workspaceChatModels,
   workspaceChatRuntime,
@@ -51,7 +56,11 @@ import {
   result,
   textDelta,
 } from "../../../packages/runtime-claude/tests/frames.ts";
-import { until } from "../../../packages/harness/tests/chat-runtime/fixture.ts";
+import {
+  account as fakeAccount,
+  fixture,
+  until,
+} from "../../../packages/harness/tests/chat-runtime/fixture.ts";
 import {
   completed,
   created,
@@ -776,6 +785,98 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
     }
   }
 }, 20000);
+
+// Exercise worker admission with a live account catalogue as its status rows change.
+test("worker admission keeps Claude route and colliding account refusals", async () => {
+  const at = temporary();
+  const previousConfig = { ...config };
+  const previousHooks = runtimeHooks();
+  const claude = fakeAccount("claude");
+  const collision = fakeAccount("faux", "other");
+  const run = await fixture({ accounts: [claude, collision] });
+  const [claudeStatus, collidingStatus] = run.statuses.current();
+  const route = { account: claude, model: "claude-sonnet-test" };
+  const { openChannel } = await import("@ace/host/worker-runtime");
+  let channel: Channel | undefined;
+  try {
+    Reflect.deleteProperty(config, "lanes");
+    Reflect.deleteProperty(config, "model");
+    configureRuntime({
+      worker: {
+        models: () => run.models,
+        defaultModel: async () =>
+          claudeDefaultModel(route, run.statuses.current()),
+      },
+    });
+    const opened = await openChannel(
+      {
+        id: "account-admission",
+        name: "Account admission",
+        owner: "person",
+        project: at.root,
+        storage: new MemoryStorage(),
+        models: run.native,
+        env: (cwd) => new NodeExecutionEnv({ cwd }),
+        directory: {
+          self: { id: "account-admission", name: "Account admission" },
+          list: async () => [],
+          deliver: async () => {},
+        },
+        log: () => {},
+      },
+      at.root,
+    );
+    channel = opened;
+    const ask = (selection: { chat?: number; model?: ModelRef } = {}) =>
+      opened.handle(
+        { op: "ask", author: "person", text: "Hello", ...selection },
+        () => {},
+      );
+    run.fake.frames.push({ text: "Claude received the default turn" });
+    await ask();
+    await until(() => run.fake.requests.length === 1);
+    expect(run.fake.opened[0]).toMatchObject({
+      account: "claude",
+      policy: { model: { id: "sonnet" } },
+    });
+
+    const signIn = {
+      state: "not-signed-in",
+      hint: {
+        kind: "command",
+        command: "neuve auth login",
+        account: collision.name,
+      },
+    } as const;
+    run.statuses.set([
+      claudeStatus!,
+      { ...collidingStatus!, signIn, models: [] },
+    ]);
+    await expect(
+      ask({ model: { provider: "account:faux", modelId: "sonnet" } }),
+    ).rejects.toThrow(
+      "Sign in for faux: run neuve auth login faux on this machine, then send your message again.",
+    );
+    run.statuses.set([{ ...claudeStatus!, models: [] }, collidingStatus!]);
+    const { chat } = (await channel.handle(
+      { op: "chat", author: "person" },
+      () => {},
+    )) as { chat: number };
+    await expect(ask({ chat })).rejects.toThrow(
+      "Claude Code for account claude doesn't offer claude-sonnet-test",
+    );
+    expect(run.fake.requests).toHaveLength(1);
+  } finally {
+    try {
+      await channel?.close();
+    } finally {
+      await run.close();
+      replaceConfig(previousConfig);
+      configureRuntime({ worker: previousHooks.worker });
+      at.close();
+    }
+  }
+});
 
 // Reason: a group-writable Neuve folder must leave native pi models usable and fail account selection with the existing copy.
 test("an unreadable production store leaves pi executable", async () => {

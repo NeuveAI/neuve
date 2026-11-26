@@ -239,8 +239,10 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 				},
 			} : {}),
 			defaultModel: async () => {
-				const preferred = config.model ?? await setup.defaultModel?.(worker).catch(() => undefined);
-				return preferred && await usable(models, preferred) ? preferred : defaultModel(models);
+				if (config.model) {
+					if (await usable(models, config.model).catch(() => false)) return config.model;
+				} else if (setup.defaultModel) return setup.defaultModel(worker);
+				return defaultModel(models);
 			},
 		});
 		bound.set(channel, operations.handle);
