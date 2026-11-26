@@ -1,6 +1,11 @@
 import type { TurnRecovery } from "@neuve/records-core";
 import type { TurnRecoveryCheckpoint } from "@neuve/records-schema";
 import {
+  TURN_CANCELLED,
+  TURN_RETRY_FAILURE,
+  TurnRetryFailure,
+} from "@neuve/records-schema/turn-recovery";
+import {
   RecoveryOwnershipUnknown,
   type RecoveryResult,
   type TurnRecoveryDriver,
@@ -464,6 +469,7 @@ export class ChatRuntimeBridge {
         (callIndex >= 0 &&
           headDigest(gen.messages.slice(0, callIndex)) === transcriptDigest)
       ) {
+        gen.recovery = priorRecovery;
         this.finish(undefined, gen, "error", ambiguousToolEffect);
         return;
       }
@@ -1754,6 +1760,7 @@ export class ChatRuntimeBridge {
         state: "terminal",
         reason: decision.reason,
       });
+      gen.recovery = terminal;
       live.recoveryEnd?.({
         state: terminal,
         message: {
@@ -1823,7 +1830,7 @@ export class ChatRuntimeBridge {
         return;
       }
       const current = gen.recovery ?? scheduled;
-      await this.options.recovery
+      const terminal = await this.options.recovery
         ?.settle({
           turn: current.value.turn,
           expected: current.event,
@@ -1835,6 +1842,7 @@ export class ChatRuntimeBridge {
             turn: current.value.turn,
           }),
         );
+      if (terminal) gen.recovery = terminal;
       this.finish(undefined, gen, "error", unsafeContinuation);
     }
   }
@@ -1994,10 +2002,30 @@ export class ChatRuntimeBridge {
   ) {
     if (gen.settled) return;
     gen.settled = true;
+    const recovery = gen.recovery?.value;
+    if (reason === "aborted" || recovery?.state === "cancelled") {
+      (gen.message.diagnostics ??= []).push({
+        type: TURN_CANCELLED,
+        timestamp: this.now(),
+      });
+    } else if (reason === "error" && recovery?.state === "terminal") {
+      const details = TurnRetryFailure.safeParse({
+        turn: recovery.turn,
+        attempt: recovery.attempt,
+        reason: recovery.reason,
+      });
+      if (details.success)
+        (gen.message.diagnostics ??= []).push({
+          type: TURN_RETRY_FAILURE,
+          timestamp: this.now(),
+          details: details.data,
+        });
+    }
     if (
       !this.closed &&
       (reason === "error" || reason === "aborted") &&
       gen.recovery &&
+      recovery?.state !== "terminal" &&
       this.options.recovery
     )
       void this.options.recovery.cancel(gen.recovery.value.turn).catch(() =>

@@ -7,7 +7,7 @@ import type { ReviewCard } from "./review-cards";
 
 import { EffortSchema } from "./effort";
 import { ApprovalAnswerSchema, ChatModeSchema, ModelRefSchema } from "./parse";
-import type { ApprovalRequest, Build, Event, Frame, Plan, PlanComment, WorkMessage } from "./protocol";
+import type { AgentFailure, ApprovalRequest, Build, Event, Frame, Plan, PlanComment, WorkMessage } from "./protocol";
 
 export { ApprovalAsked as ApprovalAskedSchema };
 
@@ -108,6 +108,15 @@ export const PlanCommentSchema = z.object({
 }) satisfies z.ZodType<PlanComment>;
 // End of comments on a plan.
 
+const AgentFailureSchema = z.object({
+	role: z.enum(["implementer", "reviewer"]),
+	part: text.optional(),
+	turn: text,
+	at: z.number(),
+	reason: text,
+	attempts: z.int().positive(),
+}) satisfies z.ZodType<AgentFailure>;
+
 export const BuildSchema = z.object({
 	id: text,
 	chat: id,
@@ -130,10 +139,19 @@ export const BuildSchema = z.object({
 		started: z.number(),
 		state: z.enum(["running", "waiting", "done", "failed", "stopped"]),
 		caption: text.optional(),
+		failure: AgentFailureSchema.optional(),
 	})),
 }) satisfies z.ZodType<Build>;
 
-export const WorkMessageSchema = z.object({ build: text, from: id, to: id, at: z.number(), text }) satisfies z.ZodType<WorkMessage>;
+const workMessage = z.object({ build: text, from: id, to: id, at: z.number(), text });
+export const WorkMessageSchema = z.union([
+	workMessage.extend({
+		kind: z.literal("agent-failure"),
+		failure: AgentFailureSchema,
+		deliveries: z.array(z.object({ to: id, status: z.enum(["pending", "failed", "sent"]) })),
+	}),
+	workMessage.extend({ kind: z.never().optional() }),
+]) satisfies z.ZodType<WorkMessage>;
 
 export const EventSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("review-cards"), ...base, cards: z.record(text, ReviewCardSchema) }),

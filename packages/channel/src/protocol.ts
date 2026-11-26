@@ -275,6 +275,13 @@ export type AgentName = { role: AgentRole; part?: string };
  */
 export type AgentState = "running" | "waiting" | "done" | "failed" | "stopped";
 
+export type AgentFailure = AgentName & {
+	turn: string;
+	at: number;
+	reason: string;
+	attempts: number;
+};
+
 /** One agent of a build, as the host recorded its start; the host keeps `state` and `caption` current. */
 export type BuildAgent = AgentName & {
 	chat: ChatId;
@@ -285,6 +292,7 @@ export type BuildAgent = AgentName & {
 	state: AgentState;
 	/** The caption Ace last wrote for the chat's work: what the agent says it is doing. Absent before the first. */
 	caption?: string;
+	failure?: AgentFailure;
 };
 
 /** Where a build stands. The host writes it, and the build card says it plainly. */
@@ -337,7 +345,15 @@ export function buildId(chat: ChatId, hash: string): string {
  * What an agent of a build, or the chat that drafted its plan, said to one of the build's agents
  * with `AGENT_MESSAGE_TOOL`; the host records it when it delivers it.
  */
-export type WorkMessage = { build: string; from: ChatId; to: ChatId; at: number; text: string };
+export type AgentMessage = { build: string; from: ChatId; to: ChatId; at: number; text: string };
+export type WorkMessage = AgentMessage & (
+	| { kind?: never }
+	| {
+		kind: "agent-failure";
+		failure: AgentFailure;
+		deliveries: { to: ChatId; status: "pending" | "failed" | "sent" }[];
+	}
+);
 
 /** The tool by which a build's agent asks the host to start a reviewer or another implementer. */
 export const AGENT_START_TOOL = "agent_start";

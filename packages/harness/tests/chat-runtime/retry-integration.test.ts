@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { watchTurnRecovery } from "../../../channel/src/turn-recovery";
 import { hostBudget } from "../../src/budget/local.ts";
 import { sharedWorkSocket } from "@neuve/records-core/shared-work-socket";
+import { TURN_RETRY_FAILURE } from "@neuve/records-schema/turn-recovery";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ClaimEvent } from "@neuve/records-core/shared-work";
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -512,6 +514,26 @@ test("an ambiguous tool effect stops only the turn that left the result", async 
     expect(run.executed).toEqual([9]);
     gate.resolve({ content: [{ type: "text", text: "late result" }] });
     expect((await work).status).toBe("unanswered");
+    const { items } = await run.conversation.entries(
+      {},
+      1,
+      undefined,
+      BACKGROUND_CONTEXT,
+    );
+    const response = items[0]?.model?.[0];
+    expect(response).toMatchObject({
+      role: "assistant",
+      diagnostics: [
+        expect.objectContaining({
+          type: TURN_RETRY_FAILURE,
+          details: {
+            turn: expect.any(String),
+            reason: "ambiguous-tool-effect",
+            attempt: 0,
+          },
+        }),
+      ],
+    });
     run.fake.frames.push(
       {
         calls: [{ callId: "later-tool", toolName: "probe", input: { n: 10 } }],

@@ -89,6 +89,19 @@ export type TurnRecoveryPayload = z.infer<typeof TurnRecoveryPayload>;
 export type TurnRecoveryCheckpoint = z.infer<typeof TurnRecoveryCheckpoint>;
 export type TurnRecoveryReason = z.infer<typeof TurnRecoveryReason>;
 
+export const TurnRetryFailure = z.strictObject({
+  turn: identity,
+  attempt: z.int().min(0).max(5),
+  reason: TurnRecoveryReason.extract([
+    "retry-budget-exhausted",
+    "ambiguous-tool-effect",
+    "unsafe-continuation",
+    "terminal-runtime-failure",
+  ]),
+});
+export const TURN_RETRY_FAILURE = "neuve.turn_retry_failure";
+export const TURN_CANCELLED = "neuve.turn_cancelled";
+
 /** Rebuildable conversation projection. Records remains the scheduling and history authority. */
 export const TurnRetryStatusSchema = z.strictObject({
   turn: identity,

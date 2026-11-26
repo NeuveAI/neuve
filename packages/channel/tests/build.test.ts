@@ -7,11 +7,13 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { defineDoc, ROOT_CONVERSATION_ID, type ConversationId, type Harness, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { SharedWork } from "../../records-core/src/shared-work";
+import { TURN_CANCELLED, TURN_RETRY_FAILURE } from "@neuve/records-schema/turn-recovery";
 import { planScopeRead } from "../../../apps/neuve-host/src/worker-runtime";
 import { policy } from "../../harness/src/chat-runtime/transcript";
 import { ApprovalRequestsDoc } from "../src/approvals";
 import { BuildsDoc, type BuildHost } from "../src/build";
 import { buildWorktree } from "../src/external-lanes";
+import { EventSchema } from "../src/frame";
 import { PlansDoc } from "../src/plan";
 import type { Build, Plan, Request, RunEnd, Said } from "../src/protocol";
 import { Fixture, git, MODEL, OWNER, scratchEnv, until, type Watch } from "./helpers";
@@ -1203,6 +1205,219 @@ async function startPair(run: Awaited<ReturnType<typeof setup>>) {
 	return { ...first, reviewer: await startReviewer(run, first.chat) };
 }
 
+const failedResponse = () => fauxAssistantMessage("", {
+	stopReason: "error", errorMessage: "Private provider body",
+});
+
+// Reason: exhausting a plan agent's retries must be visible and wake the other agents of that plan.
+test("build failure records an exhausted turn and tells the reviewer and planning chat once", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { build, chat, reviewer } = await startPair(run);
+	const reviewerWatch = await fixture.watch({ op: "watch", chat: reviewer });
+	const at = Date.now();
+	fixture.script({
+		...failedResponse(),
+		diagnostics: [{
+			type: TURN_RETRY_FAILURE, timestamp: at,
+			details: { turn: "failed-logical-turn", reason: "retry-budget-exhausted", attempt: 5 },
+		}],
+	}, fauxAssistantMessage("Planning heard the failure."), fauxAssistantMessage("Review heard the failure."));
+	const submission = await wake(run, "Finish the export queue.", chat);
+	expect(await fixture.request({ op: "wait", submission })).toBe("unanswered");
+	const log = await watch.until("builds", event => event.messages.some(message =>
+		message.kind === "agent-failure" && message.deliveries.every(delivery => delivery.status === "sent")));
+	const failure = { role: "implementer", at, turn: "failed-logical-turn", reason: "retry-budget-exhausted", attempts: 6 };
+	expect(log.builds[0]).toMatchObject({ state: { kind: "started" }, agents: [
+		{ chat, state: "failed", failure }, { chat: reviewer },
+	] });
+	const lane = run.worktrees[0]!.branch.split("/").at(-1);
+	const text = `The implementer ended without an answer (retry-budget-exhausted, 6 attempts). Its work is in lane "${lane}" on branch "${run.worktrees[0]!.branch}". Review the work there and decide what to do next.`;
+	expect(log.messages).toEqual([{
+		kind: "agent-failure", build: build.id, from: chat, to: build.chat, at, text, failure,
+		deliveries: [{ to: build.chat, status: "sent" }, { to: reviewer, status: "sent" }],
+	}]);
+	expect(EventSchema.parse(JSON.parse(JSON.stringify(log)))).toEqual(log);
+	await until(() => fixture.channel.isIdle());
+	for (const recipient of [watch, reviewerWatch]) {
+		expect(recipient.of("message").filter(message => message.text === text)).toEqual([
+			expect.objectContaining({ invoked: true, author: `agent@${chat}` }),
+		]);
+	}
+	expect(JSON.stringify(log)).not.toContain("Private provider body");
+});
+
+// Reason: a shared outage must record a failed notice turn without waking the plan again.
+test("build failure records a reviewer's failed notice turn without sending another notice", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { build, chat, agent, reviewer } = await startPair(run);
+	const reviewing = await fixture.watch({ op: "watch", chat: reviewer });
+	const calls = fixture.faux.state.callCount;
+	const receiveNotice: FauxResponseStep = ({ messages }) =>
+		messages.some(message => message.role === "user" && typeof message.content === "string"
+			&& message.content.includes("Review the implementer's work on branch"))
+			? failedResponse()
+			: fauxAssistantMessage("Planning heard the failure.");
+	fixture.script(failedResponse(), receiveNotice, receiveNotice,
+		fauxAssistantMessage("Another notice arrived."), fauxAssistantMessage("Another notice arrived."));
+	const submission = await wake(run, "Finish the export queue.", chat);
+	expect(await fixture.request({ op: "wait", submission })).toBe("unanswered");
+	const failure = await watch.until("builds", event => event.messages.some(message =>
+		message.kind === "agent-failure" && message.from === reviewer));
+	expect(failure.builds[0]?.agents[1]).toMatchObject({
+		chat: reviewer, state: "failed", failure: { role: "reviewer", part: "exports", reason: "model_error", attempts: 1 },
+	});
+	await until(() => fixture.channel.isIdle());
+	const log = watch.of("builds").at(-1)!;
+	expect(log.messages).toEqual([
+		expect.objectContaining({ kind: "agent-failure", from: chat, deliveries: [
+			{ to: build.chat, status: "sent" }, { to: reviewer, status: "sent" },
+		] }),
+		expect.objectContaining({ kind: "agent-failure", from: reviewer, deliveries: [] }),
+	]);
+	for (const recipient of [watch, reviewing]) {
+		expect(recipient.of("message").filter(message => message.text === log.messages[0]!.text)).toEqual([
+			expect.objectContaining({ invoked: true, author: `agent@${chat}` }),
+		]);
+	}
+	for (const recipient of [watch, agent]) {
+		expect(recipient.of("message").filter(message => message.author === `agent@${reviewer}`)).toEqual([]);
+	}
+	expect(fixture.faux.state.callCount).toBe(calls + 3);
+	await fixture.restart();
+	await until(() => fixture.channel.isIdle());
+	const reopened = await fixture.watch({ op: "watch", builds: true });
+	expect(reopened.of("builds").at(-1)?.messages).toEqual(log.messages);
+	expect(fixture.faux.state.callCount).toBe(calls + 3);
+});
+
+// Reason: restart must recover both an unrecorded run ending and a missing delivery receipt without invoking twice.
+test("build failure retries a failed delivery across restart without invoking twice", async () => {
+	let interrupted = false;
+	const missedEnding = Promise.withResolvers<void>();
+	const run = await setup({
+		onStep(step) {
+			if (step === "build.agent.end.failed") missedEnding.resolve();
+			if (step !== "build.message.submitted" || interrupted) return;
+			interrupted = true;
+			const commit = spyOn(run.harness, "commit").mockImplementationOnce(async () => {
+				commit.mockRestore();
+				throw new Error("The work log write was interrupted.");
+			});
+		},
+	});
+	const { fixture } = run;
+	const { build, chat, reviewer } = await startPair(run);
+	const originalCommit = run.harness.commit.bind(run.harness);
+	const skipEnding = spyOn(run.harness, "commit").mockImplementation((change, scope) => originalCommit(async tx => {
+		const result = await change(tx);
+		const agent = (await tx.doc(BuildsDoc)).records[build.id]?.build.agents[0];
+		if (agent?.failure) {
+			skipEnding.mockRestore();
+			throw new Error("The worker closed after Pi settled the failed turn.");
+		}
+		return result;
+	}, scope));
+	fixture.script({
+		...failedResponse(),
+		diagnostics: [{
+			type: TURN_RETRY_FAILURE, timestamp: Date.now(),
+			details: { turn: "ended-before-projection", reason: "unsafe-continuation", attempt: 2 },
+		}],
+	}, fauxAssistantMessage("Planning heard the failure."), fauxAssistantMessage("Review heard the failure."));
+	const submission = await wake(run, "Finish the export queue.", chat);
+	expect(await fixture.request({ op: "wait", submission })).toBe("unanswered");
+	await missedEnding.promise;
+	await fixture.restart();
+	await until(() => fixture.channel.isIdle());
+	const watch = await fixture.watch({ op: "watch", builds: true });
+	const pending = watch.of("builds").at(-1)!;
+	expect(pending.messages).toHaveLength(1);
+	expect(pending.messages[0]).toMatchObject({
+		kind: "agent-failure", deliveries: [{ to: build.chat, status: "failed" }, { to: reviewer, status: "sent" }],
+	});
+	const calls = fixture.faux.state.callCount;
+	await fixture.restart();
+	const reopened = await fixture.watch({ op: "watch", builds: true });
+	const log = await reopened.until("builds", event => event.messages.some(message =>
+		message.kind === "agent-failure" && message.deliveries.every(delivery => delivery.status === "sent")));
+	expect(log.messages).toEqual([{
+		...pending.messages[0],
+		deliveries: [{ to: build.chat, status: "sent" }, { to: reviewer, status: "sent" }],
+	}]);
+	expect(log.builds[0]?.agents[0]?.failure).toMatchObject({
+		turn: "ended-before-projection", reason: "unsafe-continuation", attempts: 3,
+	});
+	const reviewerWatch = await fixture.watch({ op: "watch", chat: reviewer });
+	for (const recipient of [reopened, reviewerWatch]) {
+		expect(recipient.of("message").filter(message => message.text === log.messages[0]!.text)).toHaveLength(1);
+	}
+	expect(fixture.faux.state.callCount).toBe(calls);
+});
+
+// Reason: a person's Stop and runtime cancellation must not become failure handoffs.
+test("build failure handoff ignores a person's Stop and runtime cancellation", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { chat, agent, reviewer } = await startPair(run);
+	const release = Promise.withResolvers<void>();
+	const entered = Promise.withResolvers<void>();
+	fixture.script(async () => {
+		entered.resolve();
+		await release.promise;
+		return failedResponse();
+	});
+	try {
+		const submission = await wake(run, "Finish the export queue.", chat);
+		await entered.promise;
+		const stop = fixture.request({ op: "stop", chat, author: OWNER });
+		await until(() => run.harness.commit(tx => tx.scanTasks({ conversationId: chat as ConversationId, abortRequested: true }, 1), context)
+			.then(page => page.items.length));
+		release.resolve();
+		await stop;
+		expect(await fixture.request({ op: "wait", submission })).toBe("unanswered");
+		await agent.until("stopped");
+		const ended = await watch.until("builds", event => event.builds[0]?.agents[0]?.state === "stopped");
+		expect(ended.builds[0]?.agents[0]?.failure).toBeUndefined();
+		expect(ended.messages).toEqual([]);
+		fixture.script({
+			...failedResponse(),
+			stopReason: "aborted",
+			diagnostics: [{ type: TURN_CANCELLED, timestamp: Date.now() }],
+		});
+		const cancelled = await wake(run, "Continue the export queue.", chat);
+		expect(await fixture.request({ op: "wait", submission: cancelled })).toBe("unanswered");
+		await until(() => fixture.channel.isIdle());
+		expect(watch.of("builds").at(-1)?.messages).toEqual([]);
+		const reviewerWatch = await fixture.watch({ op: "watch", chat: reviewer });
+		expect(reviewerWatch.of("message").map(message => message.system?.kind)).toEqual(["neuve:build:brief"]);
+	} finally {
+		release.resolve();
+	}
+});
+
+// Reason: success after an unanswered turn clears the agent's current failure while keeping the work log.
+test("build failure clears on the agent's later success and remains in the log", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { reviewer } = await startPair(run);
+	fixture.script(failedResponse(), fauxAssistantMessage("Planning heard the failure."), fauxAssistantMessage("Implementation heard the failure."));
+	const failed = await wake(run, "Review the export queue.", reviewer);
+	expect(await fixture.request({ op: "wait", submission: failed })).toBe("unanswered");
+	const notice = await watch.until("builds", event => event.messages.some(message =>
+		message.kind === "agent-failure" && message.deliveries.every(delivery => delivery.status === "sent")));
+	expect(notice.builds[0]?.agents[1]?.failure).toMatchObject({ role: "reviewer", part: "exports", attempts: 1 });
+	await until(() => fixture.channel.isIdle());
+	const cursor = watch.events.length;
+	fixture.script(fauxAssistantMessage("The review is complete."));
+	const successful = await wake(run, "Continue the review.", reviewer);
+	expect(await fixture.request({ op: "wait", submission: successful })).toBe("done");
+	const recovered = await until(() => watch.events.slice(cursor).find(event =>
+		event.kind === "builds" && event.builds[0]?.agents[1]?.state === "done" && !event.builds[0]?.agents[1]?.failure));
+	expect(recovered).toMatchObject({ messages: notice.messages });
+});
+
 // Only the agent chat's queue and transcript show whether duplicate targets turn into extra steers.
 test("a say mention steers each distinct plan agent as the person without announcing it again", async () => {
 	const run = await setup();
@@ -1915,7 +2130,7 @@ test("messages by role and part steer after the shell, stay private, and appear 
 	expect(target.of("message").map(event => event.system?.kind ?? event.text)).toEqual(["neuve:build:brief", "Check the exports."]);
 	const log = await watch.until("builds", event => event.messages.length === texts.length);
 	expect(log.messages).toEqual(texts.map(text => ({ build: build.id, from: chat, to: reviewer, text, at: expect.any(Number) })));
-	fixture.script(fauxAssistantMessage("I read the updates."));
+	fixture.script(fauxAssistantMessage("I read the updates."), fauxAssistantMessage("I read the next update."));
 	await writeFile(join(folder, "release-shell"), "");
 	expect(await target.until("result", event => event.call === "review-shell")).toMatchObject({ error: false, text: "Shell finished." });
 	await target.until("message", event => event.text === texts.at(-1));
@@ -1948,11 +2163,14 @@ test("the drafting chat reaches both agents through revisions but never falls ba
 	await send("reviewer", "exports", "Newest draft has no agents.", true,
 		"This plan has no started agent with that role and path scope. The plan has no started agents yet.");
 	const finish = Promise.withResolvers<void>();
-	fixture.script(async () => { await finish.promise; return fauxAssistantMessage("Revision received."); });
+	const reviewing = await fixture.watch({ op: "watch", chat: reviewer });
+	fixture.script(async () => { await finish.promise; return fauxAssistantMessage("Implementation is ready."); },
+		fauxAssistantMessage("Revision received."), fauxAssistantMessage("Revision received."));
 	await wake(run, "Continue implementing.", chat);
 	try {
 		await run.approve(revision);
 		expect((await buildAt(watch, 1, "delivered")).state).toEqual({ kind: "delivered", to: build.id });
+		await reviewing.until("reply", event => event.text === "Revision received.");
 	} finally { finish.resolve(); }
 	await until(() => fixture.channel.isIdle());
 	// A later plan in another chat must not change the drafting chat's destination.
