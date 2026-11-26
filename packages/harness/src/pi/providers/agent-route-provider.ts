@@ -92,6 +92,7 @@ import {
   type StallPhase,
 } from "./wire.ts";
 import {
+  captureRouteFailure,
   refusalKind,
   routeFailureDiagnostic,
   schedulerText,
@@ -358,7 +359,7 @@ interface Call {
   };
   responded: boolean;
   credentials?: Headers;
-  captureFailure?: string;
+  captureFailure?: Failed;
   credentialGuard?: boolean;
   failure?: Failure;
   requestId?: string;
@@ -415,13 +416,17 @@ const record = async (call: Call, event: ModelCaptureEvent) => {
   }
 };
 
-const captureFailed = (call: Call, what: string, cause: unknown) => {
-  call.captureFailure ??= refusalEvidence(
-    `capture failed: ${what} was not recorded: ${messageOf(cause)}`,
-    call.credentials ?? new Headers(),
-  ).body;
-  return new Error(call.captureFailure);
-};
+const rememberCaptureFailure = (call: Call, what: string, cause: unknown) =>
+  (call.captureFailure ??= captureLost(
+    refusalEvidence(
+      `capture failed: ${what} was not recorded: ${messageOf(cause)}`,
+      call.credentials ?? new Headers(),
+    ).body,
+    cause,
+  ));
+
+const captureFailed = (call: Call, what: string, cause: unknown) =>
+  new Error(rememberCaptureFailure(call, what, cause).failure.detail);
 
 const recordEvent = async (call: Call, name: string, data: unknown) => {
   call.telemetry.event(name, data);
@@ -795,8 +800,8 @@ interface Failed {
   readonly transient?: boolean;
 }
 
-const captureLost = (detail: string): Failed => ({
-  failure: { kind: "capture", detail },
+const captureLost = (detail: string, cause: unknown): Failed => ({
+  failure: captureRouteFailure(detail, cause),
   type: "capture",
 });
 
@@ -899,10 +904,7 @@ const runCall = (input: {
   ) => {
     if (over) return;
     over = true;
-    let failed =
-      call?.captureFailure === undefined
-        ? reportedFailure
-        : captureLost(call.captureFailure);
+    let failed = call?.captureFailure ?? reportedFailure;
     if (failed !== undefined && call?.credentials !== undefined)
       failed = {
         ...failed,
@@ -963,10 +965,7 @@ const runCall = (input: {
             : { error: { type: failed.type, message: failed.failure.detail } }),
         });
       } catch (cause) {
-        failed = captureLost(
-          call.captureFailure ??
-            captureFailed(call, "model.end", cause).message,
-        );
+        failed = rememberCaptureFailure(call, "model.end", cause);
         message = failedWith(message, failed);
       }
     }
@@ -1048,6 +1047,11 @@ const runCall = (input: {
     try {
       prepared = await input.prepare(telemetry);
     } catch (error) {
+      if (error instanceof CaptureFailed)
+        return finish(
+          failedMessage(model),
+          captureLost(messageOf(error), error),
+        );
       if (parent.aborted)
         return finish(
           { ...failedMessage(model), stopReason: "aborted" },
@@ -1148,10 +1152,15 @@ const runCall = (input: {
       });
   })().catch(
     async (error: unknown) =>
-      await finish(failedMessage(model), {
-        failure: { kind: "stream", detail: messageOf(error) },
-        type: "transport",
-      }),
+      await finish(
+        failedMessage(model),
+        error instanceof CaptureFailed
+          ? captureLost(messageOf(error), error)
+          : {
+              failure: { kind: "stream", detail: messageOf(error) },
+              type: "transport",
+            },
+      ),
   );
   return outer;
 };

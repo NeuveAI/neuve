@@ -254,10 +254,12 @@ const sourceBytes = (
     ? Buffer.from(source.slice(start, start + length), "utf16le")
     : source.subarray(start, start + length);
 
+const exactUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
 export class CredentialJson {
-  readonly #text: string;
-  private constructor(text: string) {
-    this.#text = text;
+  readonly #source: string | Uint8Array;
+  private constructor(source: string | Uint8Array) {
+    this.#source = source;
   }
   static serialize(value: unknown): CredentialJson {
     let text: string | undefined;
@@ -270,10 +272,12 @@ export class CredentialJson {
       throw new Error("Credential JSON serialization failed");
     return new CredentialJson(text);
   }
-  static parse(text: string): {
+  static parse(input: string | Uint8Array): {
     readonly value: unknown;
     readonly source: CredentialJson;
   } {
+    const source = new CredentialJson(input);
+    const text = source.contents();
     let value: unknown;
     try {
       value = JSON.parse(text);
@@ -282,10 +286,12 @@ export class CredentialJson {
         throw new SyntaxError("Credential JSON source is invalid");
       throw new Error("Credential JSON validation unavailable");
     }
-    return { value, source: new CredentialJson(text) };
+    return { value, source };
   }
   contents(): string {
-    return this.#text;
+    return typeof this.#source === "string"
+      ? this.#source
+      : exactUtf8.decode(this.#source);
   }
   toJSON(): string {
     return "[Credential JSON source]";

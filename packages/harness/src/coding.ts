@@ -16,6 +16,7 @@ export {
   type JournalOptions,
 } from "./pi/capture/journal.ts";
 export type { AnyRouteConfig } from "./route.ts";
+export { CaptureFailed } from "./pi/capture/types.ts";
 export { settingsRoute } from "./request.ts";
 
 export {

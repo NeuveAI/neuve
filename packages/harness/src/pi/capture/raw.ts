@@ -30,8 +30,13 @@ import {
 } from "@neuve/records-core";
 import { nativeBackup, type BuildInput, DumpFailed } from "./build.ts";
 import { BackupStatus, CloseMode, PriceRate } from "./dump.ts";
-import { DEFAULT_LIMITS, type DumpLimits } from "./types.ts";
-import { sha256Of, readCaptureJournal, JOURNAL_FILE } from "./journal.ts";
+import { captureFileLimit, DEFAULT_LIMITS, type DumpLimits } from "./types.ts";
+import {
+  sha256Of,
+  readCaptureJournal,
+  JOURNAL_FILE,
+  OBJECTS_DIRECTORY,
+} from "./journal.ts";
 import { CloseInventory, checkedCount } from "./watchdog.ts";
 import { PrivateInspection } from "./private-inspection.ts";
 
@@ -101,17 +106,20 @@ export const fileRawCapture = (input: BuildInput) =>
     const contents: z.infer<typeof RawFile>[] = [];
     const blobs = yield* Blobs.BlobStore;
     let total = 0;
+    let largest = 0;
     const add = (name: string, bytes: Uint8Array, mediaType: string) =>
       Effect.gen(function* () {
         input.signal?.throwIfAborted();
         yield* Effect.try({
           try: () => {
             RawFile.shape.name.parse(name);
-            if (bytes.byteLength > limits.objectBytes)
+            const limit = captureFileLimit(name, limits);
+            if (bytes.byteLength > limit)
               throw new DumpFailed({
-                reason: `capture content is ${bytes.byteLength} bytes, over the ${limits.objectBytes}-byte object limit`,
+                reason: `capture content is ${bytes.byteLength} bytes, over the ${limit}-byte object limit`,
               });
             total = checkedCount(total, bytes.byteLength);
+            largest = Math.max(largest, bytes.byteLength);
             if (total > limits.totalBytes)
               throw new DumpFailed({
                 reason: `the dump is ${total} bytes, over the ${limits.totalBytes}-byte limit`,
@@ -147,13 +155,13 @@ export const fileRawCapture = (input: BuildInput) =>
           await lstat(join(input.journal, JOURNAL_FILE)).catch(() => undefined)
         )
           names.push(JOURNAL_FILE);
-        const objects = join(input.journal, "objects");
+        const objects = join(input.journal, OBJECTS_DIRECTORY);
         const info = await lstat(objects).catch(() => undefined);
         if (info !== undefined) {
           if (!info.isDirectory() || info.isSymbolicLink())
             throw new Error("raw capture objects is not a directory");
           for (const name of (await readdir(objects)).toSorted())
-            names.push(`objects/${name}`);
+            names.push(`${OBJECTS_DIRECTORY}/${name}`);
         }
         return names;
       },
@@ -170,9 +178,10 @@ export const fileRawCapture = (input: BuildInput) =>
             throw new Error(
               "raw capture requires unaliased regular journal files",
             );
-          if (info.size > limits.objectBytes)
+          const limit = captureFileLimit(name, limits);
+          if (info.size > limit)
             throw new DumpFailed({
-              reason: `capture content is ${info.size} bytes, over the ${limits.objectBytes}-byte object limit`,
+              reason: `capture content is ${info.size} bytes, over the ${limit}-byte object limit`,
             });
           const file = await open(
             path,
@@ -207,13 +216,28 @@ export const fileRawCapture = (input: BuildInput) =>
     const location = yield* captureStoreLocation;
     const journal = readCaptureJournal(input.journal, limits);
     const lines = journal._tag === "Read" ? journal.lines : [];
+    const stored = new Map(contents.map((file) => [file.name, file]));
+    const journalFile = stored.get(`capture/${JOURNAL_FILE}`);
+    if (
+      journal._tag === "Read" &&
+      (journalFile?.sha256 !==
+        (journal.bytes === null ? undefined : sha256Of(journal.bytes)) ||
+        [...journal.objects].some(([hash, { bytes }]) => {
+          const file = stored.get(`capture/${OBJECTS_DIRECTORY}/${hash}`);
+          return file?.sha256 !== hash || file.size !== bytes.byteLength;
+        }))
+    )
+      return yield* Effect.fail(new Error("raw journal changed during filing"));
+    const captureBytes = contents.reduce(
+      (total, file) =>
+        file.name.startsWith("capture/")
+          ? checkedCount(total, file.size)
+          : total,
+      0,
+    );
     const counts = measuredCloseInventory(
       lines,
-      checkedCount(
-        contents.find((content) => content.name === "capture/events.jsonl")
-          ?.size ?? 0,
-        native.bytes?.byteLength ?? 0,
-      ),
+      checkedCount(captureBytes, native.bytes?.byteLength ?? 0),
       native.metadata?.records ?? 0,
     );
     const sql = yield* SqlClient;
@@ -393,6 +417,15 @@ export const fileRawCapture = (input: BuildInput) =>
             return yield* Effect.fail(
               new Error("raw capture blob unavailable before filing"),
             );
+          if (journal._tag === "Read" && journal.objects.size > 0) {
+            const parts = batch.filter(
+              (hash) =>
+                hash !== rawCapture &&
+                (hash === journalFile?.sha256 || journal.objects.has(hash)),
+            );
+            if (parts.length > 0)
+              yield* sql`INSERT OR IGNORE INTO raw_capture_parts ${sql.insert(parts.map((part_hash) => ({ capture_hash: rawCapture, part_hash })))}`;
+          }
         }
         yield* Log.append([
           {
@@ -401,13 +434,7 @@ export const fileRawCapture = (input: BuildInput) =>
               runId: input.runId,
               counts,
               checkpoint,
-              sizes: {
-                total,
-                largest: Math.max(
-                  0,
-                  ...manifest.files.map((file) => file.size),
-                ),
-              },
+              sizes: { total, largest },
             }),
             idempotencyKey: filingKey,
           },
@@ -467,7 +494,10 @@ export const readRawCapture = (
     const files = new Map<string, Uint8Array>();
     let total = 0;
     for (const item of manifest.files) {
-      if (files.has(item.name) || item.size > limits.objectBytes)
+      if (
+        files.has(item.name) ||
+        item.size > captureFileLimit(item.name, limits)
+      )
         return yield* Effect.fail(
           new Error("invalid raw capture file inventory"),
         );

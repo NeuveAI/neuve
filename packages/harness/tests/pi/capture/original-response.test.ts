@@ -1,3 +1,4 @@
+import { dumpJournalLines } from "./fixture.ts";
 import { exportWhileOpen } from "./open-source.ts";
 import { captureSdk } from "./sdk-fixture.ts";
 import { expect, test } from "bun:test";
@@ -32,7 +33,7 @@ import {
   openCaptureJournal,
   sha256Of,
 } from "../../../src/pi/capture/journal.ts";
-import { Json, JournalLine } from "../../../src/pi/capture/types.ts";
+import { Json } from "../../../src/pi/capture/types.ts";
 import {
   created,
   completed,
@@ -352,11 +353,7 @@ for (const family of ["openai", "anthropic"] as const) {
       const bundle = await readDump(snapshot.directory);
       const raw: RawCaptureSources = {
         native: await readBackup(bundle.files.get("native/pi.sqlite")!),
-        lines: new TextDecoder()
-          .decode(bundle.files.get("journal/events.jsonl"))
-          .trim()
-          .split("\n")
-          .map((line) => JournalLine.parse(JSON.parse(line))),
+        lines: dumpJournalLines(bundle.files),
         tornLines: 0,
         backup: read.run.backup,
         journal: read.run.journal,
@@ -1003,11 +1000,7 @@ test("nested OpenAI stream errors reconcile the SDK, production route and native
     const bundle = await readDump(snapshot.directory);
     const raw: RawCaptureSources = {
       native: await readBackup(bundle.files.get("native/pi.sqlite")!),
-      lines: new TextDecoder()
-        .decode(bundle.files.get("journal/events.jsonl"))
-        .trim()
-        .split("\n")
-        .map((line) => JournalLine.parse(JSON.parse(line))),
+      lines: dumpJournalLines(bundle.files),
       tornLines: 0,
       backup: read.run.backup,
       journal: read.run.journal,

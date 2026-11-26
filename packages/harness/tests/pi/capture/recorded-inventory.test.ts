@@ -16,6 +16,7 @@ import {
   recordedCloseCeiling,
 } from "../../../src/pi/capture/recorded-inventory.ts";
 import { closeCeiling } from "../../../src/pi/capture/watchdog.ts";
+import { openCaptureJournal } from "../../../src/pi/capture/journal.ts";
 
 test("recorded inventory covers artifact views and a native backup with uncheckpointed WAL", async () => {
   const root = mkdtempSync(join(tmpdir(), "close-inventory-"));
@@ -66,6 +67,34 @@ test("a closed source that lost its WAL still counts its records", async () => {
     rmSync(`${path}-shm`, { force: true });
     expect(await recordedCloseInventory(root)).toMatchObject({ records: 2 });
     expect(existsSync(`${path}-wal`)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the close allowance includes a shared object once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "close-shared-object-"));
+  try {
+    const journal = openCaptureJournal(join(root, "capture"), "run");
+    const instructions = "content".repeat(1000);
+    for (const callId of ["first", "second"])
+      journal.capture({
+        type: "model.request",
+        scope: { runId: "run" },
+        callId,
+        route: "local",
+        provider: "local",
+        model: "local",
+        headerNames: [],
+        body: { status: "sent", json: { instructions } },
+      });
+    journal.close();
+    const recorded = await recordedCloseInventory(root);
+    expect(recorded.calls).toBe(2);
+    expect(recorded.bytes).toBe(
+      (await Bun.file(join(journal.directory, "events.jsonl")).arrayBuffer())
+        .byteLength + 7002,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

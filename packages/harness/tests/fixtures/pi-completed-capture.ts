@@ -24,7 +24,6 @@ import {
   rememberEphemeralCredentials,
   openManagedCredentialInspection,
 } from "../../src/pi/capture/safety.ts";
-import { JournalLine } from "../../src/pi/capture/types.ts";
 import {
   exportSnapshot,
   exportPortableSnapshot,
@@ -42,10 +41,9 @@ const scope = { runId };
 const journalPath = join(root, "journal");
 if (phase === "stale") {
   const path = join(journalPath, "events.jsonl");
-  const lines = readFileSync(path, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JournalLine.parse(JSON.parse(line)));
+  const journal = readCaptureJournal(journalPath);
+  if (journal._tag !== "Read") throw new Error("Fixture journal is unreadable");
+  const lines = journal.lines;
   writeFileSync(
     path,
     lines

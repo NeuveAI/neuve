@@ -5,6 +5,7 @@ import {
   AuxiliaryPurpose,
   CaptureScope,
   Json,
+  RAW_JOURNAL_FILE,
   LeadFate,
   LeadHandoff,
   RequestBody,
@@ -359,15 +360,12 @@ export const BackupStatus = z.discriminatedUnion("status", [
 ]);
 export type BackupStatus = z.infer<typeof BackupStatus>;
 
-export const RAW_JOURNAL_FILE = "journal/events.jsonl";
+export { RAW_JOURNAL_FILE, journalObjectFile } from "./types.ts";
 export const RAW_JOURNAL_MEDIA_TYPE = "application/x-ndjson";
 
 /**
- * The capture journal's `events.jsonl` byte for byte, as the dump was built from it: each request
- * body as the provider was sent it and each provider event as it came, the original of the masked
- * calls in the session files. Its hash is also what a close receipt is checked against before the
- * run folder goes: a reopened run appends to the journal, so a capture that no longer matches it is
- * stale. A portable copy withholds it.
+ * The journal file and its referenced objects preserve the original calls behind the masked session
+ * files. A close receipt checks those hashes before removing the run folder.
  */
 export const RawJournal = z.discriminatedUnion("status", [
   z.strictObject({
@@ -375,6 +373,9 @@ export const RawJournal = z.discriminatedUnion("status", [
     file: z.literal(RAW_JOURNAL_FILE),
     sha256: Sha256,
     size: z.int().nonnegative(),
+    objects: z
+      .array(z.strictObject({ sha256: Sha256, size: z.int().nonnegative() }))
+      .optional(),
   }),
   z.strictObject({ status: z.literal("unavailable"), reason: z.string() }),
   z.strictObject({ status: z.literal("withheld"), reason: z.string() }),

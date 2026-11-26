@@ -54,6 +54,7 @@ import {
   type WorkerSetup,
 } from "@ace/host/worker";
 import {
+  CaptureFailed,
   SourceOwnership,
   openManagedCredentialInspection,
   privateInspectionDirectory,
@@ -151,7 +152,7 @@ export function codingWorkerSetup(
     await keepWorkerFor({ project, job });
   });
   const reviewSessions = new Map<string, ReturnType<typeof nativeReview>>();
-  const journals = new Map<string, CaptureJournal>();
+  const journals = new Map<string, CaptureJournal | CaptureFailed>();
   const planningSessions = new Map<
     string,
     {
@@ -191,29 +192,45 @@ export function codingWorkerSetup(
   };
   const journal = (worker: WorkerContext) => {
     const known = journals.get(worker.sessionId);
+    if (known instanceof CaptureFailed) throw known;
     if (known) return known;
     inspection(worker);
-    const opened = openCaptureJournal(
-      join(worker.stateDirectory, "capture"),
-      worker.sessionId,
-      {
-        spillRoots: [realpathSync(tmpdir())],
-      },
-    );
-    opened.capture({
-      type: "run.start",
-      scope: { runId: worker.sessionId },
-      runKind: "coding",
-      sourceRevision: {
-        status: "not-applicable",
-        reason:
-          "A coding session spans mutable project work and has no single reviewed revision.",
-      },
-      route: `${route.provider}/${route.model}`,
-      pricing: route.price === null ? "subscription" : "metered",
-    });
-    journals.set(worker.sessionId, opened);
-    return opened;
+    try {
+      const opened = openCaptureJournal(
+        join(worker.stateDirectory, "capture"),
+        worker.sessionId,
+        { spillRoots: [realpathSync(tmpdir())] },
+      );
+      opened.capture({
+        type: "run.start",
+        scope: { runId: worker.sessionId },
+        runKind: "coding",
+        sourceRevision: {
+          status: "not-applicable",
+          reason:
+            "A coding session spans mutable project work and has no single reviewed revision.",
+        },
+        route: `${route.provider}/${route.model}`,
+        pricing: route.price === null ? "subscription" : "metered",
+      });
+      journals.set(worker.sessionId, opened);
+      return opened;
+    } catch (error) {
+      if (captureFull(error)) journals.set(worker.sessionId, error);
+      throw error;
+    }
+  };
+  const captureFull = (error: unknown): error is CaptureFailed =>
+    error instanceof CaptureFailed && error.kind === "full";
+  const modelCapture = (worker: WorkerContext) => {
+    try {
+      return journal(worker).capture;
+    } catch (error) {
+      if (!captureFull(error)) throw error;
+      return () => {
+        throw error;
+      };
+    }
   };
   return {
     async query(
@@ -398,7 +415,7 @@ export function codingWorkerSetup(
         ...transport,
         route,
         ...admission(worker),
-        capture: journal(worker).capture,
+        capture: modelCapture(worker),
         credentialInspection: inspection(worker),
         runId: worker.sessionId,
         sessionAffinity: worker.sessionId,
@@ -440,7 +457,7 @@ export function codingWorkerSetup(
         ...transport,
         route,
         ...admission(worker),
-        capture: journal(worker).capture,
+        capture: modelCapture(worker),
         credentialInspection: inspection(worker),
         runId: worker.sessionId,
         sessionAffinity: worker.sessionId,
@@ -449,10 +466,14 @@ export function codingWorkerSetup(
       });
     },
     onConversation(worker, conversationId) {
-      journal(worker).capture({
-        type: "session.bind",
-        scope: { runId: worker.sessionId, conversationId },
-      });
+      try {
+        journal(worker).capture({
+          type: "session.bind",
+          scope: { runId: worker.sessionId, conversationId },
+        });
+      } catch (error) {
+        if (!captureFull(error)) throw error;
+      }
     },
     priced: (model) =>
       [...chatRuntimes.values()].some((runtime) => runtime.owns(model.provider))

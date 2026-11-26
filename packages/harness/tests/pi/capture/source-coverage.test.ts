@@ -1,3 +1,4 @@
+import { dumpJournalLines } from "./fixture.ts";
 import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,7 +11,9 @@ import { exportWhileOpen } from "./open-source.ts";
 import { createRouteModels } from "../../../src/pi/providers/agent-route-provider.ts";
 import { SOL_ROUTE } from "../../../src/route.ts";
 import {
+  JOURNAL_FILE,
   openCaptureJournal,
+  readCaptureJournal,
   sha256Of,
 } from "../../../src/pi/capture/journal.ts";
 import {
@@ -19,7 +22,6 @@ import {
   encodeManifest,
 } from "../../../src/pi/capture/archive.ts";
 import { RunDump } from "../../../src/pi/capture/dump.ts";
-import { JournalLine } from "../../../src/pi/capture/types.ts";
 import {
   created,
   completed,
@@ -95,6 +97,12 @@ test("authenticated source coverage survives fresh readers and refuses every mis
     journal.close();
     endpoint.stop();
   }
+  const inline = readCaptureJournal(journalPath);
+  if (inline._tag !== "Read") throw new Error("Fixture journal is unreadable");
+  await writeFile(
+    join(journalPath, JOURNAL_FILE),
+    inline.lines.map((line) => JSON.stringify(line)).join("\n") + "\n",
+  );
   await mkdir(join(root, "datasets"));
   const input = {
     runId,
@@ -105,11 +113,7 @@ test("authenticated source coverage survives fresh readers and refuses every mis
   };
   const snapshot = await exportWhileOpen(input);
   const held = await readDump(snapshot.directory);
-  const original = new TextDecoder()
-    .decode(held.files.get("journal/events.jsonl"))
-    .trim()
-    .split("\n")
-    .map((line) => JournalLine.parse(JSON.parse(line)));
+  const original = dumpJournalLines(held.files);
   const calls = original.flatMap(({ event }) =>
     event.type === "model.request" ? [event.callId] : [],
   );

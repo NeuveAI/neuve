@@ -23,6 +23,7 @@ import {
 import { rememberEphemeralCredentials } from "../capture/safety.ts";
 import {
   CREDENTIAL_INSPECTION_POLICY,
+  CaptureFailed,
   CapturedEvent,
   CaptureScope,
   Json,
@@ -35,6 +36,11 @@ import {
   historicalEvidence,
   type CredentialCapture,
 } from "./credential-evidence.ts";
+import {
+  captureRouteFailure,
+  routeFailureDiagnostic,
+  schedulerText,
+} from "./failure.ts";
 
 export interface NativeModelsCaptureOptions {
   readonly capture: ModelCapture;
@@ -117,6 +123,19 @@ export const captureNativeModels = (
     let assembledHeaders = new Headers();
     let received = false;
     const startedAt = Date.now();
+    const captureAbort = new AbortController();
+    let captureFailure: CaptureFailed | undefined;
+    const capture = (event: ModelCaptureEvent) => {
+      try {
+        options.capture(event);
+      } catch (error) {
+        if (error instanceof CaptureFailed && error.kind === "full") {
+          captureFailure ??= error;
+          captureAbort.abort();
+        }
+        throw error;
+      }
+    };
     const write = async (event: ModelCaptureEvent) => {
       const evidence = eventEvidence(
         jsonCopy(event),
@@ -130,7 +149,7 @@ export const captureNativeModels = (
             options.credentialInspection,
             (epochs) => {
               for (const callId of epochs)
-                options.capture({
+                capture({
                   type: "credential.guard",
                   scope: { runId: scope.runId },
                   callId,
@@ -147,7 +166,7 @@ export const captureNativeModels = (
         parsed.type === "model.event" ||
         parsed.type === "model.end"
       )
-        options.capture(parsed);
+        capture(parsed);
       else throw new Error("Native capture identity changed");
     };
     const event = async (name: string, data: Json) => {
@@ -191,7 +210,7 @@ export const captureNativeModels = (
           });
           if (registration.status !== "registered")
             throw new Error("Native credential registration is unavailable");
-          options.capture({
+          capture({
             type: "credential.registration",
             scope: { runId: scope.runId },
             callId: current.id,
@@ -342,6 +361,11 @@ export const captureNativeModels = (
       { preconnect: base.preconnect },
     );
     return {
+      signal:
+        request.signal === undefined
+          ? captureAbort.signal
+          : AbortSignal.any([request.signal, captureAbort.signal]),
+      captureFailure: () => captureFailure,
       async transformHeaders(headers: ProviderHeaders) {
         const effective =
           (await request.transformHeaders?.(headers)) ?? headers;
@@ -387,7 +411,7 @@ export const captureNativeModels = (
             (epochs) => {
               exposed ||= epochs.length > 0;
               for (const callId of epochs)
-                options.capture({
+                capture({
                   type: "credential.guard",
                   scope: { runId: scope.runId },
                   callId,
@@ -397,7 +421,7 @@ export const captureNativeModels = (
           );
         if (exposed) {
           if (current.guarded)
-            options.capture({
+            capture({
               type: "credential.guard",
               scope: { runId: scope.runId },
               callId: current.id,
@@ -482,6 +506,8 @@ export const captureNativeModels = (
       try {
         const native = open();
         for await (const raw of native) {
+          const captureFailure = observer.captureFailure();
+          if (captureFailure !== undefined) throw captureFailure;
           const event = structuredClone(raw);
           await observer.inspect(event);
           if (event.type === "done" || event.type === "error")
@@ -496,11 +522,21 @@ export const captureNativeModels = (
         try {
           text = await observer.failureText(cause);
         } catch {}
-        const failure = failedMessage(model, text);
+        let failure = failedMessage(model, text);
         try {
-          await observer.end(failure);
+          if (observer.captureFailure() === undefined)
+            await observer.end(failure);
         } catch {
           /* Capture failure must not expose provider error data. */
+        }
+        const rejected = observer.captureFailure();
+        if (rejected !== undefined) {
+          const route = captureRouteFailure(rejected.detail, rejected);
+          failure = {
+            ...failure,
+            errorMessage: schedulerText("Model error", route),
+            diagnostics: [routeFailureDiagnostic(route, failure.timestamp)],
+          };
         }
         output.push({ type: "error", reason: "error", error: failure });
         output.end(failure);

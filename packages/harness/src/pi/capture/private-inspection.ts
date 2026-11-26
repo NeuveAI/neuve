@@ -704,6 +704,11 @@ export class PrivateInspection {
       !lines.some(({ event }) => event.type === "run.start")
     )
       fail("snapshot-journal-run", input.journal);
+    const journalHash = createHash("sha256");
+    for (const [index, frame] of frames.entries()) {
+      if (index > 0) journalHash.update("\n");
+      journalHash.update(frame.contents());
+    }
     const root = join(dirname(this.#options.directory), "snapshots");
     mkdirSync(root, { recursive: true, mode: 0o700 });
     identity(root, true);
@@ -739,9 +744,7 @@ export class PrivateInspection {
                     : { rawJournalSha256: input.rawJournalSha256 }),
                   runId: input.runId,
                   journal: input.journal,
-                  journalSha256: createHash("sha256")
-                    .update(frames.map((frame) => frame.contents()).join("\n"))
-                    .digest("hex"),
+                  journalSha256: journalHash.digest("hex"),
                   nativeSha256,
                 },
               ],

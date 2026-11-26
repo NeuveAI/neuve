@@ -9,6 +9,7 @@ import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Duration, Effect, Layer } from "effect";
 import * as TestClock from "effect/testing/TestClock";
+import { SqlClient } from "effect/sql/SqlClient";
 import { Admin, Blobs, Retention } from "../src/index.ts";
 import { freshLocation, removeTemporaryDirectories, runOn } from "./support.ts";
 
@@ -159,4 +160,55 @@ test("a blob folder that cannot be read never stops tombstoning; the prune repor
   expect(result.report.pruned.blobs).toBe(1);
   expect(result.report.leftoverFilesRemoved).toBeNull();
   expect(result.report.leftoverError).toContain("BlobScanFailed");
+});
+
+test("a shared journal object expires with the last raw capture that names it", async () => {
+  const location = freshLocation();
+  const outcome = await runOn(
+    location,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient;
+      const blobs = yield* Blobs.BlobStore;
+      const put = (text: string) =>
+        blobs.put({
+          bytes: bytes(text),
+          mediaType: "application/json",
+          retention: "raw-capture",
+        });
+      yield* TestClock.setTime(daysAgo(40));
+      const { blob: object } = yield* put("shared request object");
+      const { blob: older } = yield* put("older raw capture");
+      yield* TestClock.setTime(daysAgo(29));
+      const { blob: newer } = yield* put("newer raw capture");
+      yield* sql`INSERT INTO raw_capture_parts (capture_hash, part_hash) VALUES (${older.hash}, ${object.hash}), (${newer.hash}, ${object.hash})`;
+      yield* TestClock.setTime(NOW);
+      yield* sql`UPDATE blobs SET pruned_at = ${new Date(NOW).toISOString()}, content = NULL WHERE hash = ${object.hash}`;
+      const due = (yield* Retention.plan).due.blobs;
+      const first = yield* Retention.prune;
+      const status = () =>
+        Effect.forEach([older, newer, object], ({ hash }) =>
+          Effect.map(blobs.get(hash), ({ _tag }) => _tag),
+        );
+      const during = yield* status();
+      yield* TestClock.setTime(NOW + 2 * (NOW - daysAgo(1)));
+      const second = yield* Retention.prune;
+      const expired = yield* status();
+      return {
+        due,
+        first: first.pruned.blobs,
+        during,
+        second: second.pruned.blobs,
+        expired,
+      };
+    }).pipe(
+      Effect.provide(Layer.merge(Blobs.layer(location), TestClock.layer())),
+    ),
+  );
+  expect(outcome).toEqual({
+    due: 1,
+    first: 1,
+    during: ["Pruned", "Present", "Present"],
+    second: 2,
+    expired: ["Pruned", "Pruned", "Pruned"],
+  });
 });

@@ -28,20 +28,34 @@ export const RETAINED_SDK_ASSEMBLY_POLICY = "pinned-sdk-assemblies-v4";
 
 /**
  * The byte budgets every capture path holds to, checked against a file's size before its bytes are
- * read: one object (an artifact, pi's native backup, a dump file), a whole dump, and its manifest.
- * The journal file counts against the whole dump's budget. Anything over is refused, never cut short.
+ * read. The journal's own limit falls back to the object limit. It counts against the whole dump's budget.
  */
 export interface DumpLimits {
   readonly manifestBytes: number;
   readonly objectBytes: number;
   readonly totalBytes: number;
+  readonly journalBytes?: number;
 }
 
 export const DEFAULT_LIMITS: DumpLimits = {
-  manifestBytes: 4 * 1024 * 1024,
+  manifestBytes: 16 * 1024 * 1024,
   objectBytes: 512 * 1024 * 1024,
   totalBytes: 4 * 1024 * 1024 * 1024,
+  journalBytes: 2 * 1024 * 1024 * 1024,
 };
+
+export const JOURNAL_FILE = "events.jsonl";
+export const OBJECTS_DIRECTORY = "objects";
+export const RAW_JOURNAL_FILE = `journal/${JOURNAL_FILE}` as const;
+export const journalObjectFile = (sha256: string) =>
+  `journal/${OBJECTS_DIRECTORY}/${sha256}`;
+
+export const captureFileLimit = (name: string, limits: DumpLimits) =>
+  name === JOURNAL_FILE ||
+  name === `capture/${JOURNAL_FILE}` ||
+  name === RAW_JOURNAL_FILE
+    ? Math.min(limits.journalBytes ?? limits.objectBytes, limits.totalBytes)
+    : limits.objectBytes;
 
 /** A JSON value as stored; anything JSON would drop or change (`undefined`, `NaN`) is refused. */
 export type Json =
@@ -583,11 +597,11 @@ export type CaptureEvent =
 
 /**
  * Why an event was not kept. `invalid`: it failed its schema or belongs to another run (an
- * emitter's defect). `io`: the journal or an artifact's bytes could not be written. `failed`: an
- * earlier capture in this process failed, so nothing more is accepted.
+ * emitter's defect). `io`: the bytes could not be written. `full`: the capture reached a byte limit.
+ * `failed`: an earlier capture in this process failed, so nothing more is accepted.
  */
 export class CaptureFailed extends Data.TaggedError("CaptureFailed")<{
-  readonly kind: "invalid" | "io" | "failed";
+  readonly kind: "invalid" | "io" | "full" | "failed";
   readonly event: string;
   readonly detail: string;
 }> {}

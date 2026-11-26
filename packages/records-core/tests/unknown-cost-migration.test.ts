@@ -92,6 +92,7 @@ test("migration 9 over a store holding receipts keeps them, raises the writer, a
       "18_computation_operation_index",
       "19_worker_lock_and_job_notices",
       "20_evictable_outputs",
+      "21_raw_capture_parts",
     ],
     rebuilt: true,
   });

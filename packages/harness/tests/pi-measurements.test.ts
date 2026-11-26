@@ -4,7 +4,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openCaptureJournal } from "../src/pi/capture/journal.ts";
-import { JournalLine } from "../src/pi/capture/types.ts";
 import {
   beginNativeMeasurements,
   writeNativeMeasurements,
@@ -74,9 +73,7 @@ test("the claim watermark partitions calls and estimates even when request times
     readFileSync(path, "utf8")
       .trimEnd()
       .split("\n")
-      .map((line) =>
-        JSON.stringify({ ...JournalLine.parse(JSON.parse(line)), at: 1000 }),
-      )
+      .map((line) => JSON.stringify({ ...JSON.parse(line), at: 1000 }))
       .join("\n") + "\n",
   );
   writeNativeMeasurements(log, journal.directory, "medium", start);
