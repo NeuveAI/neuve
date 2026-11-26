@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { CaptureRead } from "../src/candidate/capture.ts";
 import { canonical } from "../src/harness-compare/full-test/finders-gate.ts";
 import {
+  answerKeyDigest,
   caseBasis,
   compareOwnedReviews,
   hash,
@@ -187,6 +188,7 @@ const fixture = (runId = "baseline") => {
   const judgments: DeliveryJudgments = {
     runId,
     basis: caseBasis(kase),
+    answerKey: answerKeyDigest(kase)!,
     armBlind: true,
     adjudicators: ["synthetic-output-judge"],
     record: "synthetic delivery judgments",
@@ -310,6 +312,110 @@ test("changed source, late expected judgments and different run/range identities
   const wrongRange = fixture();
   wrongRange.exported.case.head = "e".repeat(40);
   expect(wrongRange.read().quality).toBeNull();
+});
+
+test("missing or invalid request timestamps cannot establish that expected judgments predate a run", () => {
+  for (const timestamp of [
+    undefined,
+    null,
+    "",
+    "not-a-date",
+    "2026-99-99T00:00:00.000Z",
+  ]) {
+    const f = fixture("treatment");
+    f.rows[0]!.enqueuedAt = timestamp;
+    const score = f.read();
+    expect(score.blockers).toContain(
+      "missing or invalid expected-results/run-request timestamp",
+    );
+    expect(score.quality).toBeNull();
+    const comparison = compareOwnedReviews(
+      fixture().read(),
+      score,
+      "production",
+    );
+    expect(Object.values(comparison.differences).every((v) => v === null)).toBe(
+      true,
+    );
+  }
+  const invalidGold = fixture();
+  if (invalidGold.kase.adjudication.status === "frozen")
+    invalidGold.kase.adjudication.at = "not-a-date";
+  expect(() => invalidGold.read()).toThrow();
+});
+
+test("delivery judgments bind the entire frozen answer key, not just reviewed source", () => {
+  const f = fixture();
+  if (f.kase.adjudication.status !== "frozen")
+    throw new Error("synthetic frozen fixture required");
+  f.kase.adjudication.concerns.push({
+    id: "extra-required",
+    kind: "defect",
+    failurePath: "different expected denominator",
+    primary: [anchor],
+    context: [],
+  });
+  const score = f.read();
+  expect(score.basis).toBe(caseBasis(original));
+  expect(score.blockers).toContain(
+    "delivery judgments do not bind this frozen answer key",
+  );
+  expect(score.quality).toBeNull();
+
+  // Reasoning, attribution and adjudication provenance are frozen too, even with the same ids.
+  for (const change of ["failure-path", "primary", "record"] as const) {
+    const changed = fixture();
+    if (changed.kase.adjudication.status !== "frozen")
+      throw new Error("synthetic frozen fixture required");
+    if (change === "failure-path")
+      changed.kase.adjudication.concerns[0]!.failurePath =
+        "another failure path";
+    else if (change === "primary")
+      changed.kase.adjudication.concerns[0]!.primary = [
+        { ...anchor, startLine: 480, endLine: 480 },
+      ];
+    else changed.kase.adjudication.record = "another source-only adjudication";
+    expect(changed.read().quality).toBeNull();
+  }
+});
+
+test("valid runs of the same source but different frozen answer keys cannot pair in either comparison", () => {
+  const baseline = fixture().read();
+  const f = fixture("treatment");
+  if (f.kase.adjudication.status !== "frozen")
+    throw new Error("synthetic frozen fixture required");
+  f.kase.adjudication.concerns.push({
+    id: "extra-required",
+    kind: "defect",
+    failurePath: "different expected denominator",
+    primary: [anchor],
+    context: [],
+  });
+  // Independently labelled against the changed key: individually valid, not paired evidence.
+  f.judgments.answerKey = answerKeyDigest(f.kase)!;
+  const treatment = f.read();
+  expect(baseline.blockers).toEqual([]);
+  expect(treatment.blockers).toEqual([]);
+  expect(baseline.quality?.missed).toHaveLength(1);
+  expect(treatment.quality?.missed).toHaveLength(2);
+  expect(baseline.answerKey).not.toBe(treatment.answerKey);
+  for (const mode of ["production", "matched-total-cost"] as const) {
+    const comparison = compareOwnedReviews(baseline, treatment, mode);
+    expect(comparison.blockers).toContain(
+      "missing or different frozen answer keys",
+    );
+    expect(Object.values(comparison.differences).every((v) => v === null)).toBe(
+      true,
+    );
+    expect(comparison.completeScore).toBe(false);
+  }
+  expect(
+    compareOwnedReviews(
+      { ...baseline, answerKey: null },
+      baseline,
+      "production",
+    ).blockers,
+  ).toContain("missing or different frozen answer keys");
 });
 
 test("cutoff or unreadable publications are not successful empty reviews, and unjudged owned rows stay explicit", () => {
