@@ -377,6 +377,9 @@ async function keep(
         "The built Neuve did not open the workspace's Records store.",
       );
 
+    // Only commands run from the lane change into the clone; the build's own channels keep their lanes.
+    const { NEUVE_WORKSPACE_PROJECT: _, ...launcherEnvironment } =
+      childEnvironment;
     const ready = Promise.withResolvers<z.infer<typeof HostReady>>();
     launcher = spawnLogged(
       sourceCommand(
@@ -393,7 +396,7 @@ async function keep(
       ),
       {
         cwd: lane,
-        env: childEnvironment,
+        env: launcherEnvironment,
         stdin: "pipe",
         ipc(value: unknown) {
           const parsed = HostReady.safeParse(value);
