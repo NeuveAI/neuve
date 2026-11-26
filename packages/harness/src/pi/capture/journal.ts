@@ -859,6 +859,7 @@ export type JournalRead =
       readonly _tag: "Read";
       readonly lines: ReadonlyArray<JournalLine>;
       readonly frames: ReadonlyArray<CredentialJson>;
+      readonly compacted: ReadonlyArray<{ line: JournalLine; size: number }>;
       readonly objects: ReadonlyMap<string, JournalObject>;
       /** Lines cut short by a crash mid-append: the last line now, or ones a reopen moved aside. */
       readonly tornLines: number;
@@ -953,6 +954,7 @@ export const decodeCaptureJournal = (
     return { _tag: "TooLarge", size: bytes.byteLength, limit };
   const lines: JournalLine[] = [];
   const frames: CredentialJson[] = [];
+  const compacted: Array<{ line: JournalLine; size: number }> = [];
   const objects = new Map<string, JournalObject>();
   const values = new Map<string, Json>();
   let total = bytes?.byteLength ?? 0;
@@ -1025,6 +1027,7 @@ export const decodeCaptureJournal = (
         });
       lines.push(line);
       frames.push(parsed.source);
+      if (refs) compacted.push({ line, size: end - offset });
     } catch (error) {
       return {
         _tag: "Corrupt",
@@ -1053,6 +1056,7 @@ export const decodeCaptureJournal = (
     _tag: "Read",
     lines,
     frames,
+    compacted,
     objects,
     tornLines: moved + (offset < buffer.length ? 1 : 0),
     bytes,

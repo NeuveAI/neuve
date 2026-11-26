@@ -18,6 +18,7 @@ import {
 import {
   CredentialSourceUnavailable,
   credentialGuards,
+  credentialFrameIdentity,
   credentialInspection,
   credentialSourceHash,
   credentialSources,
@@ -66,6 +67,7 @@ import {
   type RawJournal,
 } from "./dump.ts";
 import {
+  JOURNAL_FILE,
   OBJECTS_DIRECTORY,
   journalObjectFrames,
   openCaptureJournal,
@@ -589,7 +591,6 @@ const build = async (
   }
   phase("inventory");
   const sourceHashes = [...sources.keys()].toSorted();
-  const sourceHash = credentialSourceHash(sourceHashes);
   const preliminary = !safety.requiresInspection
     ? { status: "certified" as const }
     : credentialInspection(
@@ -713,6 +714,24 @@ const build = async (
       }
       if (scanned === undefined)
         for (const source of sources.values()) await inspect(source);
+      const inlineLimit = captureFileLimit(JOURNAL_FILE, limits);
+      let inlineBytes = journal.compacted.reduce(
+        (bytes, { size }) => bytes - size,
+        journal.bytes?.byteLength ?? 0,
+      );
+      for (const { line } of journal.compacted) {
+        inlineBytes += Buffer.byteLength(JSON.stringify(line));
+        if (inlineBytes > inlineLimit) break;
+        await budget.checkpoint(4096);
+      }
+      if (inlineBytes <= inlineLimit) {
+        for (const { line } of journal.compacted) {
+          const frame = CredentialJson.serialize(line);
+          await inspect({ kind: "json", json: frame });
+          sourceHashes.push(credentialFrameIdentity(frame.contents()));
+        }
+      }
+      const sourceHash = credentialSourceHash(sourceHashes);
       phase("administration");
       for (const [index, line] of lines.entries())
         if (administrativeFrame(line)) {

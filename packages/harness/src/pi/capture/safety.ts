@@ -299,6 +299,10 @@ const sourceIdentity = (kind: string, value: string | Uint8Array) =>
 
 const POLICY = `${ARTIFACT_TEXT_POLICY}:${CREDENTIAL_INSPECTION_POLICY}:${RETAINED_SDK_ASSEMBLY_POLICY}:${RETAINED_SDK_PIN}`;
 const POLICY_SOURCE = sourceIdentity("policy", POLICY);
+const EVENT_FRAME = "event-frame";
+
+export const credentialFrameIdentity = (text: string) =>
+  sourceIdentity(EVENT_FRAME, text);
 
 export const credentialSourceHash = (sources: ReadonlyArray<string>) =>
   hash(JSON.stringify([...new Set(sources)].toSorted()));
@@ -487,7 +491,7 @@ export const visitCredentialSources = async (
     if (administrativeFrame(line)) continue;
     const frame = frames?.[index];
     await budget?.checkpoint(4096);
-    if (frame) await json("event-frame", frame);
+    if (frame) await json(EVENT_FRAME, frame);
     else await json("event", CredentialJson.serialize(line.event));
   }
   for (const object of objects) {
