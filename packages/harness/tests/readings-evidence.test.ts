@@ -3158,21 +3158,17 @@ const stepsOver = (evidence: GroupEvidence | undefined) => {
   };
 };
 
-/**
- * Computed on the clean tree at this round's parent (ef21511e) before any edit, by building the
- * mixed range's first group's Assess (no proofs), Lane review (goal "g", frame "frame-a", manifest
- * "manifest-a") and a claim check of its first section (turn limit 4) as below.
- */
+// The stage key now covers the context ceiling. These stage pins use the parent commit's inputs.
 const PARENT = {
   // Re-pinned (round 25): the pipeline version moved from 11 to 12.
   runKeyOff: "eb644e039b6bd267141e4fac4fd924486e3867fc70fdc0a37ce2a046631c5419",
-  assess: "8c8adc232d573b6c56e87274ce96ec99e26ca6802871daddaf0b4bb58136c0ad",
-  review: "aedcfd4c87e4850cbaa5765d8a550289e59f9c218af4d1977ba7e23d88753206",
-  claim: "000bb6025dd7c5e4c0dff51c75ab79032bc98d9104b1c44b0f3460ad89e98c7e",
+  assess: "d4ce158ffb74a3980be27356da6df7445914db5ae7c7922b4836938cb522955f",
+  review: "9759405c5bf0671c9f0de6089f912a8d07166961dd93dc90e5cb507b0b68cab7",
+  claim: "2e1f21570f0dc9d0da9e20ad3bd84caedd89e2a797b50af54c9ac72787a1e980",
 };
 
 // Reason: stored answers must be shared exactly when the question is the same.
-test("step keys are equal for equal evidence across runs and differ for different evidence; with the setting absent nothing keys apart from the parent commit", async () => {
+test("equal reading evidence shares step keys across runs, and changed evidence moves the keys of steps that read it", async () => {
   const slices = slicesOf(await indexOf());
   // Two runs that decided apart (another run, another stored read of the same commit) and show the
   // same rows: one stored answer.
@@ -3203,9 +3199,7 @@ test("step keys are equal for equal evidence across runs and differ for differen
   expect(none.assess).not.toBe(one.assess);
   expect(none.claim).not.toBe(one.claim);
 
-  // The parent commit's keys, on the mixed range: the run key without the setting is the same; a
-  // claim check shown no evidence keys as before; Assess and Lane review moved once with this
-  // round's recipe and prompt versions.
+  // The run key still matches the parent. The step pins below use the mixed range's parent inputs.
   expect(
     runKeyFor(
       { baseRef: "main", baseOid: "1".repeat(40), headOid: "2".repeat(40) },
@@ -3241,7 +3235,7 @@ test("step keys are equal for equal evidence across runs and differ for differen
       turnLimit: 4,
     }),
   );
-  // A claim check shown no evidence keys as before, with what it is offered set back; with it, apart.
+  // A claim check shown no evidence matches its pin with the offered input removed.
   expect(keyOf(withoutOffered(mixedClaim))).toBe(PARENT.claim);
   expect(keyOf(mixedClaim)).not.toBe(PARENT.claim);
   const mixedAssess = erased(
@@ -3264,8 +3258,7 @@ test("step keys are equal for equal evidence across runs and differ for differen
   );
   expect(keyOf(mixedAssess)).not.toBe(PARENT.assess);
   expect(keyOf(mixedReview)).not.toBe(PARENT.review);
-  // Only the recipe, the prompt versions, the stored version and what is offered moved: with them
-  // set back, each key is the parent's.
+  // Restoring the parent recipe, prompt versions, stored version and offered input recovers the pins.
   for (const [step, parent, back] of [
     [mixedAssess, PARENT.assess, { by: 7 }],
     [mixedReview, PARENT.review, { by: 9, answer: 4 }],

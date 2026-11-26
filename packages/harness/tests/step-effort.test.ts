@@ -1,3 +1,7 @@
+// Why: each kind of review step may run at its own effort (12 November), as a substitution of the
+// route's effort for that step only. A stage's stored key is what decides whether a later run reuses
+// it, so a review with nothing set must keep every key it had, and only a step that runs at another
+// effort may key apart.
 import { expect, test } from "bun:test";
 import { Option } from "effect";
 import { Computations } from "@neuve/records-core";
@@ -125,6 +129,7 @@ const settings = (review?: unknown) =>
     Settings.parse({ version: 1, ...(review === undefined ? {} : { review }) }),
   );
 
+// Reason: nothing else pins a key's value, and a silent change rebuilds every stored stage.
 test.each([OPUS_ROUTE, SOL_ROUTE])(
   "pins the default $provider run and stage keys",
   (route) => {

@@ -7,7 +7,9 @@ export type ReportedModelLimits = {
   [Limit in keyof ModelLimits]?: ModelLimits[Limit] | undefined;
 };
 
-// pi-ai 1.0.0 fills missing descriptor limits with these values in dist/providers/faux.js (createFauxCore).
+// Neuve's cautious defaults. GPT-5.3 Codex Spark has the smallest context window in
+// pi-ai's bundled Anthropic and Codex catalogues (dist/providers/data/{anthropic,openai-codex}.json).
+// The output cap matches pi-durable's blocking compaction reserve (dist/harness/agent.js).
 export const DEFAULT_MODEL_LIMITS: ModelLimits = {
   contextWindow: 128_000,
   maxTokens: 16_384,

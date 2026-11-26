@@ -1,3 +1,8 @@
+// Why (NEU-148, the readers' step keys): a review on another model, at another effort or on another
+// provider must never show another route's reading as its own. These read the same reading group
+// through the production reading task and agent step, twice over one real Records store (a store
+// opened again for each review, as two review processes open it), with pi-ai's faux provider as the
+// model (no network), and count what the computation store holds and what the model was asked.
 import { Database } from "bun:sqlite";
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -344,6 +349,9 @@ const twice = async (
 /** A second Anthropic model on the same route: only the model differs. */
 const OTHER_MODEL: AnyRouteConfig = { ...OPUS_ROUTE, model: "claude-other" };
 
+// Reason: the records lane's claim that Assess has no model in its key. The route's provider, model
+// and effort are in every reading step's key, outside its inputs (`agentStageSpec`): the same route
+// reuses the stored reading, another model, effort or provider makes its own.
 for (const kind of ["assess", "lane-review"] as const)
   test(`${kind} reuses the stored reading until its route or ceiling changes`, async () => {
     const location = storeLocationIn(join(directory, `${kind}-ceiling`));
