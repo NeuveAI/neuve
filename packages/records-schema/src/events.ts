@@ -1,3 +1,4 @@
+import { ReviewInformationFact } from "./review-information.ts";
 import { TurnRecoveryPayload } from "./turn-recovery.ts";
 import { JudgementLineage } from "./judgement-lineage.ts";
 import { z } from "zod";
@@ -1848,6 +1849,13 @@ export const TurnRecoveryPublished = event(
   Attribution,
 );
 
+/** Attributed observations outside a frozen package. No supersession or disposition authority. */
+export const ReviewInformationRecorded = event(
+  "review.information-recorded@1",
+  ReviewInformationFact.extend({ details: Sha256 }),
+  Attribution.extend({ cycleId: Ulid, runId: z.string().min(1).max(512) }),
+).extend({ causation: neverSupersedes });
+
 /** Every event kind Records accepts. Old versions stay in the union and are upcast on read. */
 export const RecordEvent = z.discriminatedUnion("kind", [
   ActorRegistered,
@@ -1861,6 +1869,7 @@ export const RecordEvent = z.discriminatedUnion("kind", [
   CycleLocalScopeSelected,
   ReviewOriginRecorded,
   ReviewRequested,
+  ReviewInformationRecorded,
   JudgementPreparationRequested,
   JudgementCounted,
   JudgementShadowChecked,

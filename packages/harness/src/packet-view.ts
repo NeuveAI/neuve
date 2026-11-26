@@ -1,8 +1,10 @@
+import { clipBytes } from "./budget.ts";
 import { posix } from "node:path";
 import {
   Checkpoints,
   type Dispositions,
   type PublishedPackets,
+  type ReviewInformation,
 } from "@neuve/records-core";
 
 /**
@@ -801,3 +803,82 @@ const isV2 = (packet: StandingPacket | ReadPacket): packet is ReadPacketV2 =>
  */
 export const describePacket = (packet: StandingPacket | ReadPacket) =>
   isV2(packet) ? describeV2(packet) : describeV1(packet);
+
+/** Outside the frozen packet: publication does not review or resolve a later observation. */
+export const describeReviewInformation = (page: {
+  readonly items: ReadonlyArray<ReviewInformation.InformationRow>;
+  readonly hasMore: boolean;
+  readonly nextSeq: number;
+}) => {
+  const items = page.items.filter(
+    ({ event }) => event.payload.classification !== "incoming",
+  );
+  if (items.length === 0 && !page.hasMore) return [];
+  const lines = [
+    "",
+    "Later review information and ownership gaps (outside the frozen package)",
+    "  These are attributed observations, not additional votes, approvals or resolved findings.",
+  ];
+  for (const item of items.slice(0, 64)) {
+    const fact = item.event.payload;
+    const destination =
+      fact.destination.kind === "owned"
+        ? `assignment ${fact.destination.assignmentId}; section ${fact.destination.sectionKey}; batch ${fact.destination.batchId}`
+        : `unknown ownership: ${fact.destination.reason}; candidate sections: ${fact.destination.sectionKeys.join(", ") || "none"}`;
+    lines.push(
+      `  ${line(fact.classification)}: claim ${line(fact.claim)}`,
+      `    original reviewer: assignment ${line(fact.producer.assignment)}, task ${fact.producer.task}`,
+      `    primary anchor: ${line(fact.anchor.path)} (${fact.anchor.side}) ${fact.anchor.startLine}-${fact.anchor.endLine}`,
+      `    destination: ${line(destination)}`,
+      `    verification: ${fact.verify.outcome}; computation ${line(fact.verify.computation ?? "unavailable")}`,
+      `    source cycle: ${line(item.event.attribution.cycleId)}; recorded by run ${line(item.event.attribution.runId)}`,
+    );
+    if (item.details.status === "available") {
+      // Compact before clipping: pretty-printing a small array can expand it into millions of lines.
+      const text = JSON.stringify(item.details.value);
+      const clipped = clipBytes(text, 4_096);
+      lines.push("    original report and source basis:", ...block(clipped));
+      if (clipped !== text)
+        lines.push(
+          `    Detail truncated for display; full retained blob ${item.event.payload.details}.`,
+        );
+    } else lines.push(...block(item.details.reason));
+  }
+  if (items.length > 64)
+    lines.push(
+      "  Further observations omitted from this bounded display; full facts remain retained.",
+    );
+  if (page.hasMore)
+    lines.push(
+      `  More retained observations exist after sequence ${page.nextSeq}; this view is incomplete.`,
+    );
+  const bounded: string[] = [];
+  const omitted =
+    "  Further review information omitted from this bounded display; retained facts and sources are unchanged.";
+  let bytes = 0;
+  for (const text of lines) {
+    const safe = clipBytes(text, 4_096);
+    const entries =
+      safe === text
+        ? [safe]
+        : [
+            safe,
+            "    Line truncated for display; see the retained review information.",
+          ];
+    const cost = entries.reduce(
+      (sum, entry) => sum + Buffer.byteLength(entry) + 1,
+      0,
+    );
+    // Reserve the final notice inside both ceilings; disclosures are output too.
+    if (
+      bytes + cost + Buffer.byteLength(omitted) + 1 > 32_768 ||
+      bounded.length + entries.length > 255
+    ) {
+      bounded.push(omitted);
+      break;
+    }
+    bounded.push(...entries);
+    bytes += cost;
+  }
+  return bounded;
+};

@@ -43,6 +43,7 @@ import {
   JobQueue,
   Log,
   PublishedPackets,
+  ReviewInformation,
   REVIEW_RUN_KINDS,
   ReviewStats,
   Starter,
@@ -165,8 +166,10 @@ the worker's environment), openai (${Route.SOL_ROUTE.model} on your ChatGPT plan
 or the name of a Claude subscription account (Opus through its Claude Code sign-in).
 Without it, the route is the "review.route" in your Neuve settings, else anthropic. Every route
 runs at the "review.effort" in your Neuve settings (low, medium or high), else medium. A kind of
-step named in "review.stepEffort" (frame, map, find, verify, assess, lane-review or brief) runs at the
-effort given there instead. With the section readings on, Assess and Lane review that
+step named in "review.stepEffort" (frame, map, verify, assess, lane-review or brief) runs at the
+effort given there instead. New reviews assign comprehensive Lane review to distinct owned
+sections within each batch; the legacy sectionReadings off switch cannot disable it. Assess
+remains a separate complexity and validation judgment. Assess and Lane review that
 "review.stepEffort" does not name run at the lower of the route's effort and medium; with
 "review.sectionReadingsEffort" set to by-risk, the readings' steps run at fixed levels instead,
 whatever "review.stepEffort" says.
@@ -1589,12 +1592,24 @@ export const showOutput = async (
       ),
     ),
   );
+  const reviewInformation = await execute(
+    withStore(repository, "read", (store) =>
+      ReviewInformation.forRun(runId, {
+        limit: 100,
+        detailsBytes: 65_536,
+      }).pipe(Effect.provide(Blobs.layer(store))),
+    ),
+  );
   const packetLines = [
     "",
     ...(packet === undefined
       ? ["No packet is published for this run yet."]
       : PacketView.describePacket(packet)),
   ];
+  const informationLines =
+    reviewInformation === undefined
+      ? []
+      : PacketView.describeReviewInformation(reviewInformation);
   const stageLines = ["", ...StageView.stageOutputLines(outputs)];
   const precomputeLines = [
     "",
@@ -1625,6 +1640,7 @@ export const showOutput = async (
         {
           ...(receipt ?? { runId, receipt: null }),
           packet: packet ?? null,
+          reviewInformation: reviewInformation ?? null,
           // The manifest as stored (an older run's holds each hunk's leads inline), and the
           // range's leads from their own computation: null until stored.
           manifest: stored?.storedManifest ?? null,
@@ -1646,6 +1662,7 @@ export const showOutput = async (
           .filter((r) => FOLLOW_TYPES.has(r.type))
           .map((r) => `  ${String(r.at ?? "")} ${describeRecord(r)}`),
         ...packetLines,
+        ...informationLines,
         ...stageLines,
         ...precomputeLines,
       ],
@@ -1660,6 +1677,7 @@ export const showOutput = async (
       `day-one counts for cycle ${receipt.cycleId} (from Records' projections)`,
       ...dayOneLines(cycleStats),
       ...packetLines,
+      ...informationLines,
       ...stageLines,
       ...precomputeLines,
     ],
