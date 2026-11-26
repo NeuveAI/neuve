@@ -19,15 +19,18 @@ import { pluginSettings } from "../src/settings";
 
 const access = (rotation: number) => `fixture-access-token-${rotation}`;
 const refreshToken = (rotation: number) => `fixture-refresh-token-${rotation}`;
+const authorizationCode = "00000000-0000-4000-8000-000000000000:0123456789abcdef:0123456789abcdef0123456789abcdef";
 
 async function fixture(expiresIn = 3600, opened = true) {
 	const routes: string[] = [];
 	let registration: string | undefined;
 	let redirect: string | undefined;
 	let challenge: string | null = null;
+	let authorized: URLSearchParams | undefined;
 	let rotation = 0;
 	let requests = 0;
 	let rejectAccess = false;
+	let rejectExchange = false;
 	let refreshFailure: { status: number; code: string } | undefined;
 	let remoteStop: Promise<void> | undefined;
 	const hold = Promise.withResolvers<void>();
@@ -82,6 +85,7 @@ async function fixture(expiresIn = 3600, opened = true) {
 					token_endpoint: `${url.origin}/token`, registration_endpoint: `${url.origin}/register`,
 					response_types_supported: ["code"], code_challenge_methods_supported: ["S256"],
 					token_endpoint_auth_methods_supported: ["none"],
+					authorization_response_iss_parameter_supported: true,
 				});
 			case "/register": {
 				routes.push("registration");
@@ -98,8 +102,9 @@ async function fixture(expiresIn = 3600, opened = true) {
 					|| params.get("scope") !== "read write" || params.get("resource") !== resource.href
 					|| params.get("code_challenge_method") !== "S256") return new Response(null, { status: 400 });
 				challenge = params.get("code_challenge");
+				authorized = params;
 				const callback = new URL(params.get("redirect_uri") ?? "");
-				callback.search = new URLSearchParams({ code: "fixture-code", state: params.get("state") ?? "" }).toString();
+				callback.search = new URLSearchParams({ code: authorizationCode, state: params.get("state") ?? "", iss: issuer.href }).toString();
 				redirect = callback.href;
 				return Response.redirect(callback);
 			}
@@ -110,9 +115,14 @@ async function fixture(expiresIn = 3600, opened = true) {
 				if (form.get("grant_type") === "authorization_code") {
 					routes.push("exchange");
 					const verifier = String(form.get("code_verifier"));
-					if (form.get("code") !== "fixture-code" || form.get("redirect_uri") !== registration
+					if (form.get("code") !== authorizationCode || form.get("redirect_uri") !== authorized?.get("redirect_uri")
+						|| form.get("resource") !== authorized?.get("resource")
 						|| createHash("sha256").update(verifier).digest("base64url") !== challenge)
 						return new Response(null, { status: 400 });
+					if (rejectExchange) return Response.json({
+						error: "invalid_grant",
+						error_description: `Do not log ${authorizationCode}, ${verifier}, or ${access(0)}`,
+					}, { status: 400 });
 				} else {
 					routes.push("refresh");
 					refreshing.resolve();
@@ -183,6 +193,7 @@ async function fixture(expiresIn = 3600, opened = true) {
 			return { started: getStarted.promise, resume: resumeGet.resolve };
 		},
 		rejectAccess: () => { rejectAccess = true; },
+		rejectExchange: () => { rejectExchange = true; },
 		failRefresh: (status: number, code: string) => { refreshFailure = { status, code }; },
 		allowRefresh: () => { refreshFailure = undefined; },
 		stopRemote,
@@ -228,10 +239,12 @@ test("discovery, shared sign-in, PKCE, and the first authenticated tool call", a
 		const [first, second] = await Promise.all([f.signIn(), f.signIn()]);
 		expect(first.opened).toBe(true);
 		expect(second).toEqual(first);
+		const pending = await readSession(f.endpoint);
+		expect(pending?.kind).toBe("pending");
 		expect(await f.signIn()).toEqual(first);
+		expect(await readSession(f.endpoint)).toEqual(pending);
 		expect(f.openedUrls).toEqual([first.url, first.url, first.url]);
 		expect(f.routes).toEqual(["401", "resource metadata", "authorization metadata", "registration"]);
-		expect((await readSession(f.endpoint))?.kind).toBe("pending");
 		expect((await f.settings()).signIn).toEqual({ signedIn: false });
 		const callback = await f.authorize(first.url);
 		expect(await (await fetch(callback)).text()).toBe("Signed in. You can close this tab.");
@@ -255,6 +268,70 @@ test("discovery, shared sign-in, PKCE, and the first authenticated tool call", a
 		expect(Object.values(process.env)).not.toContain(access(0));
 		expect(Object.values(process.env)).not.toContain(refreshToken(0));
 	} finally {
+		await f.close();
+	}
+});
+
+// A refused exchange must explain the failure without logging the provider's echoed credentials or replaying the code.
+test("a reused attempt reports the token endpoint refusal without retrying the code", async () => {
+	const f = await fixture();
+	const warnings = spyOn(console, "warn");
+	try {
+		const first = await f.signIn();
+		expect(await f.signIn()).toEqual(first);
+		f.rejectExchange();
+		const callback = await f.authorize(first.url);
+		expect((await fetch(callback)).status).toBe(400);
+		expect(f.routes.filter(route => route === "exchange")).toEqual(["exchange"]);
+		expect(f.logs).toEqual([{
+			level: "warn", event: "plugin.sign-in.failed", fields: {
+				plugin: "fixture", server: "fixture", step: "token-response",
+				errorClass: "OAuthError", oauthError: "invalid_grant", httpStatus: 400,
+			},
+		}]);
+		expect(warnings.mock.calls).toEqual([]);
+	} finally {
+		warnings.mockRestore();
+		await f.close();
+	}
+});
+
+// An issuer-advertising server must be checked before any single-use code leaves the host.
+test("a callback missing the advertised issuer stops before the token request", async () => {
+	const f = await fixture();
+	try {
+		const callback = await f.authorize((await f.signIn()).url);
+		callback.searchParams.delete("iss");
+		expect((await fetch(callback)).status).toBe(400);
+		expect(f.routes.at(-1)).toBe("authorize");
+		expect(f.logs).toEqual([{
+			level: "warn", event: "plugin.sign-in.failed", fields: {
+				plugin: "fixture", server: "fixture", step: "validate-issuer",
+				errorClass: "IssuerMismatchError", oauthError: null, httpStatus: null,
+			},
+		}]);
+	} finally {
+		await f.close();
+	}
+});
+
+// A failed Keychain write after a successful exchange must be distinguishable from a refused grant.
+test("a failed Keychain write is reported after the successful token response", async () => {
+	const f = await fixture();
+	const write = spyOn(Bun.secrets, "set");
+	try {
+		const callback = await f.authorize((await f.signIn()).url);
+		write.mockRejectedValueOnce(new Error(`Do not log ${access(0)}`));
+		expect((await fetch(callback)).status).toBe(400);
+		expect(f.routes.at(-1)).toBe("exchange");
+		expect(f.logs).toEqual([{
+			level: "warn", event: "plugin.sign-in.failed", fields: {
+				plugin: "fixture", server: "fixture", step: "persist-tokens",
+				errorClass: "Error", oauthError: null, httpStatus: 200,
+			},
+		}]);
+	} finally {
+		write.mockRestore();
 		await f.close();
 	}
 });

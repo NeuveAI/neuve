@@ -2,7 +2,8 @@ import { randomBytes } from "node:crypto";
 
 import type { Log } from "@ace/channel";
 import {
-	auth, Client, extractWWWAuthenticateParams, refreshAuthorization, StreamableHTTPClientTransport,
+	auth, Client, exchangeAuthorization, extractWWWAuthenticateParams, IssuerMismatchError, OAuthError,
+	OAuthErrorCode, refreshAuthorization, StreamableHTTPClientTransport,
 	UnauthorizedError, type AuthOptions, type FetchLike, type OAuthClientProvider, type OAuthDiscoveryState,
 	type StoredOAuthClientInformation,
 } from "@modelcontextprotocol/client";
@@ -22,7 +23,11 @@ const timeout = 15_000;
 const signInFailed = "Plugin sign-in failed. Try again.";
 const refreshFailed = "Plugin sign-in expired. Sign in again.";
 
-class GrantRefused extends Error {}
+const oauthErrors = new Set<string>(Object.values(OAuthErrorCode));
+const callbackErrorClasses = new Set([
+	"AbortError", "Error", "InsecureTokenEndpointError", "IssuerMismatchError",
+	"OAuthError", "SyntaxError", "TimeoutError", "TypeError", "ZodError", "$ZodError",
+]);
 
 type Session = {
 	server: OAuthServer;
@@ -35,8 +40,9 @@ type Attempt = {
 	session: Session;
 	state: string;
 	lifetime: AbortSignal;
+	redirectUrl: URL;
+	verifier?: string;
 	timer?: ReturnType<typeof setTimeout>;
-	transport?: StreamableHTTPClientTransport;
 	url?: string;
 };
 
@@ -48,33 +54,14 @@ function checkEndpoint(server: OAuthServer, url: URL): void {
 	}
 }
 
-function oauthFetch(server: OAuthServer, lifetime: AbortSignal, probe = false): FetchLike {
+function oauthFetch(server: OAuthServer, lifetime: AbortSignal, received?: (status: number) => void): FetchLike {
 	return async (input, init) => {
 		const url = new URL(input instanceof Request ? input.url : input);
 		checkEndpoint(server, url);
 		const signals = [lifetime, AbortSignal.timeout(timeout)];
 		if (init?.signal) signals.push(init.signal);
 		const response = await request(input, { ...init, redirect: "manual", signal: AbortSignal.any(signals) });
-		if (!probe && init?.method === "POST" && (response.status < 300 || response.status >= 400)) {
-			// SDK auth diagnostics can include the authorization server's error description.
-			if (!response.ok) {
-				if (response.status === 400 || response.status === 401) {
-					const body: unknown = await response.json().catch(() => null);
-					if (body && typeof body === "object" && "error" in body
-						&& (body.error === "invalid_grant" || body.error === "invalid_client")) {
-						throw new GrantRefused();
-					}
-				} else {
-					await response.body?.cancel();
-				}
-				throw new Error("The plugin authorization server rejected the request");
-			}
-			const body: unknown = await response.json();
-			if (body && typeof body === "object" && "error" in body) {
-				throw new Error("The plugin authorization server rejected the request");
-			}
-			return Response.json(body);
-		}
+		received?.(response.status);
 		return response;
 	};
 }
@@ -148,14 +135,13 @@ export class PluginOAuth {
 		const { server } = session;
 		const state = randomBytes(32).toString("hex");
 		const redirectUrl = new URL(`http://127.0.0.1:${port}/callback`);
-		const attempt: Attempt = { session, state, lifetime };
+		const attempt: Attempt = { session, state, lifetime, redirectUrl };
 		this.attempts.set(server.plugin, attempt);
 		const fetch = oauthFetch(server, lifetime);
 		let challenge: Pick<AuthOptions, "resourceMetadataUrl" | "scope"> | undefined;
 		let client: StoredOAuthClientInformation | undefined;
 		let discovery: OAuthDiscoveryState | undefined;
 		let resource: string | undefined;
-		let verifier: string | undefined;
 
 		const provider: OAuthClientProvider = {
 			redirectUrl,
@@ -170,16 +156,9 @@ export class PluginOAuth {
 			saveDiscoveryState: value => { discovery = value; },
 			saveResourceUrl: value => { resource = value; },
 			tokens: () => undefined,
-			saveTokens: async value => {
-				if (!client || !discovery) throw new Error(signInFailed);
-				await this.persist(session, lifetime, signedIn({ client, discovery, resource }, value));
-			},
-			codeVerifier: async () => {
-				const saved = await readSession(server);
-				if (saved?.kind !== "pending" || saved.verifier !== verifier) throw new Error(signInFailed);
-				return saved.verifier;
-			},
-			saveCodeVerifier: value => { verifier = value; },
+			saveTokens: () => { throw new Error(signInFailed); },
+			codeVerifier: () => { throw new Error(signInFailed); },
+			saveCodeVerifier: value => { attempt.verifier = value; },
 			redirectToAuthorization: url => {
 				checkEndpoint(server, url);
 				attempt.url = url.href;
@@ -189,7 +168,7 @@ export class PluginOAuth {
 		const probe = new Client({ name: "ace", version: "1" });
 		try {
 			await probe.connect(new StreamableHTTPClientTransport(server.url, {
-				fetch: oauthFetch(server, lifetime, true),
+				fetch,
 				requestInit: { headers: server.headers },
 				authProvider: { token: async () => undefined, onUnauthorized: async ({ response }) => {
 					challenge = extractWWWAuthenticateParams(response);
@@ -201,10 +180,10 @@ export class PluginOAuth {
 			});
 			if (!challenge) throw new Error(signInFailed);
 			const result = await auth(provider, { serverUrl: server.url, ...challenge, fetchFn: fetch });
+			const { verifier } = attempt;
 			if (result !== "REDIRECT" || !attempt.url || !client || !discovery || !verifier) throw new Error(signInFailed);
 			await this.persist(session, lifetime, { kind: "pending", client, discovery, resource, verifier });
 			lifetime.throwIfAborted();
-			attempt.transport = new StreamableHTTPClientTransport(server.url, { authProvider: provider, fetch });
 			attempt.timer = setTimeout(() => {
 				this.attempts.delete(server.plugin);
 				session.error = "Plugin sign-in timed out. Try again.";
@@ -228,23 +207,58 @@ export class PluginOAuth {
 		const params = new URL(request.url).searchParams;
 		const state = params.get("state");
 		const attempt = state && [...this.attempts.values()].find(item => item.state === state);
-		if (request.method !== "GET" || !attempt || !attempt.transport || params.getAll("state").length !== 1) {
+		if (request.method !== "GET" || !attempt || attempt.timer === undefined || params.getAll("state").length !== 1) {
 			return callbackPage("Invalid or expired plugin sign-in. Return to Ace to try again.", 400);
 		}
-		const { session, lifetime, transport, timer } = attempt;
-		attempt.transport = undefined;
+		const { session, lifetime, timer, redirectUrl } = attempt;
+		const { server } = session;
+		attempt.timer = undefined;
 		clearTimeout(timer);
+		let step = "callback-parameters";
+		let httpStatus: number | null = null;
 		try {
-			if (params.has("error") || params.getAll("code").length !== 1 || !params.get("code") || params.getAll("iss").length > 1)
+			const code = params.get("code");
+			if (params.has("error") || params.getAll("code").length !== 1 || !code || params.getAll("iss").length > 1)
 				throw new Error(signInFailed);
-			await transport.finishAuth(params);
+			step = "read-pending";
 			lifetime.throwIfAborted();
+			const pending = await readSession(server);
+			step = "match-pending";
+			if (pending?.kind !== "pending" || pending.verifier !== attempt.verifier)
+				throw new Error(signInFailed);
+			const { client, discovery, resource, verifier } = pending;
+			const metadata = discovery.authorizationServerMetadata;
+			const issuer = metadata?.issuer ?? discovery.authorizationServerUrl;
+			if (client.issuer !== issuer) throw new Error(signInFailed);
+			step = "token-request";
+			// The code is single-use. The SDK's higher-level auth() retries some OAuth refusals.
+			const tokens = await exchangeAuthorization(discovery.authorizationServerUrl, {
+				metadata, clientInformation: client, resource, authorizationCode: code,
+				iss: params.get("iss") ?? undefined, codeVerifier: verifier, redirectUri: redirectUrl,
+				fetchFn: oauthFetch(server, lifetime, status => {
+					step = "token-response";
+					httpStatus = status;
+				}),
+			});
+			step = "validate-tokens";
+			const value = signedIn(pending, { ...tokens, issuer });
+			step = "persist-tokens";
+			await this.persist(session, lifetime, value);
+			step = "complete-callback";
+			lifetime.throwIfAborted();
+			step = "notify-settings";
 			changed();
 			return callbackPage("Signed in. You can close this tab.");
-		} catch {
+		} catch (error) {
+			log("warn", "plugin.sign-in.failed", {
+				plugin: server.plugin, server: server.name,
+				step: error instanceof IssuerMismatchError ? "validate-issuer" : step,
+				errorClass: error instanceof Error && callbackErrorClasses.has(error.name) ? error.name : "UnknownError",
+				oauthError: error instanceof OAuthError ? (oauthErrors.has(error.code) ? error.code : "other") : null,
+				httpStatus,
+			});
 			if (!lifetime.aborted) {
 				session.error = signInFailed;
-				log("warn", "plugin.sign-in.failed", { plugin: session.server.plugin, server: session.server.name });
 				await this.remove(session, lifetime).catch(() => undefined);
 				changed();
 			}
@@ -286,18 +300,20 @@ export class PluginOAuth {
 			if (value?.kind !== "signed-in" || this.attempts.get(plugin)?.session === session) throw new UnauthorizedError();
 			const needsRefresh = expired(value) || (rejected !== undefined && rejected === fingerprint(value.tokens.access_token));
 			if (needsRefresh) {
+				let status: number | undefined;
 				try {
 					const { client, discovery, resource, tokens } = value;
 					if (!tokens.refresh_token) throw new UnauthorizedError();
 					const rotated = await refreshAuthorization(discovery.authorizationServerUrl, {
 						metadata: discovery.authorizationServerMetadata, clientInformation: client,
-						refreshToken: tokens.refresh_token, resource, fetchFn: oauthFetch(server, signal),
+						refreshToken: tokens.refresh_token, resource, fetchFn: oauthFetch(server, signal, received => { status = received; }),
 					});
 					await this.persist(session, signal, signedIn(value, { ...rotated, issuer: tokens.issuer }));
 				} catch (error) {
 					signal.throwIfAborted();
 					log("warn", "plugin.refresh.failed", { plugin, server: name });
-					if (error instanceof GrantRefused) {
+					if ((status === 400 || status === 401) && error instanceof OAuthError
+						&& (error.code === OAuthErrorCode.InvalidGrant || error.code === OAuthErrorCode.InvalidClient)) {
 						session.error = refreshFailed;
 						await this.remove(session, signal).finally(changed);
 					}
