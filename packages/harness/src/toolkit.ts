@@ -41,6 +41,8 @@ export const RECORDS: ToolHints = {
  * already started. An owner that takes no new work (finished, finishing or being stopped) gets none.
  */
 export interface ChildRequest {
+  /** A review claim registered atomically with its Verify child and recorded tool answer. */
+  readonly claimRegistration?: import("./pi/claim-settlement.ts").ClaimRegistration;
   /** The task that owns the child: its abort stops the child, and it waits for the child. */
   readonly owner: number;
   /** The child's name in its owner's children (`ChildrenDoc`). */
