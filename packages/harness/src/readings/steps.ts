@@ -60,6 +60,7 @@ import {
 import { ReadingListed, readingIndexOf, type Reading } from "./reading.ts";
 import type { RetainedReadingPlan } from "./assignments.ts";
 import { ReviewCheck } from "./review-check.ts";
+import { ReviewOrigin } from "./reviewer-claim-schema.ts";
 import { RecordedReviewClaim, ReviewEvidence } from "./reviewer-claims.ts";
 
 /**
@@ -181,6 +182,8 @@ export const LaneReviewStored = z.strictObject({
   /** The answer as code repaired it, of either form (`LaneReviewScopedAnswer` with scope and tests on). */
   answer: StoredLaneReviewAnswer,
   /** New ownership contract only; absent from historical outputs. */
+  /** Original native producer; absent historical values never adopt a current caller's identity. */
+  origin: ReviewOrigin.optional(),
   checks: z.array(ReviewCheck).optional(),
   claims: z.array(RecordedReviewClaim).optional(),
   contextEvidence: z.array(ReviewEvidence).optional(),

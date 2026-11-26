@@ -17,6 +17,7 @@ import {
 } from "./reviewer-claims.ts";
 
 import { ReviewCheck } from "./review-check.ts";
+import type { ReviewOrigin } from "./reviewer-claim-schema.ts";
 export { ReviewCheck } from "./review-check.ts";
 
 export const ComprehensiveAnswer = z.strictObject({
@@ -61,6 +62,8 @@ export const comprehensiveStep = (p: {
   readonly claims: () => ReadonlyArray<RecordedReviewClaim>;
   readonly evidence?: () => ReadonlyArray<ReviewEvidence>;
   readonly identity: Readonly<Record<string, unknown>>;
+  /** Composed only by the computation's producer; cache hits read its stored value unchanged. */
+  readonly origin?: ReviewOrigin;
   readonly turns: number;
 }): AgentStep<ComprehensiveAnswer, LaneReviewStored> => {
   const { base, index } = p;
@@ -162,6 +165,7 @@ export const comprehensiveStep = (p: {
         output: answer?.review,
         repairedFrom: undefined,
       }),
+      ...(p.origin === undefined ? {} : { origin: { ...p.origin } }),
       checks: answer?.checks ?? [],
       claims: [...p.claims()],
       contextEvidence: (p.evidence?.() ?? []).filter((entry) =>
@@ -227,6 +231,8 @@ export const comprehensiveStep = (p: {
     inputs: {
       ...base.inputs,
       contract: "batch-assignment-v1",
+      // v2 separates retained native producer metadata from reusable investigation inputs.
+      comprehensiveStored: 2,
       identity: sha256Hex(canonicalJson(p.identity)),
       turns: p.turns,
     },

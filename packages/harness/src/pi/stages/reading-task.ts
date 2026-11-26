@@ -1456,9 +1456,10 @@ export const readingStep = async (
     map: p.map,
     evidence: p.evidence ?? null,
   };
+  const origin = { reviewTask: p.review, assignmentTask: p.owner };
   const ledger = reviewerClaims({
     assignment: { id: p.group, source },
-    basis: { producer: by, source },
+    basis: { producer: by, source, origin },
     initial: reading.index.sections.map((section) => ({
       reference: `section.${section.index}`,
       text: renderReading(plan, params.group, {
@@ -1535,6 +1536,7 @@ export const readingStep = async (
         claims: ledger.claims,
         evidence: ledger.evidence,
         turns: bounds.turns,
+        origin,
         identity: {
           assignment: plan.groups.find((group) => group.id === p.group),
           source: plan.source,
@@ -1545,9 +1547,8 @@ export const readingStep = async (
           proofs,
           evidence,
           readingChars,
-          // Side-effecting claims belong to the original durable task; replay reuses its children.
-          owner: p.owner,
-          review: p.review,
+          // Native owner/review IDs bind tools and delivery, not the reusable judgment.
+          // Original IDs are retained in the producer's stored output and claim basis above.
         },
       }),
     ),

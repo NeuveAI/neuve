@@ -1,4 +1,3 @@
-import { ChildrenDoc } from "../src/pi/stages/docs.ts";
 // Why: exercise the production preparation, native tools, durable child registration, final
 // re-registration and rollback/replay together. Fixture source is retained in the manifest; only
 // structural preparation is supplied (as precompute would), so this needs neither Graph nor a model account.
@@ -44,15 +43,18 @@ import { planAssignments } from "../src/readings/assignments.ts";
 import { renderReading } from "../src/readings/reading.ts";
 import { LaneReviewStored } from "../src/readings/steps.ts";
 import { ClaimStored, claimVerdict } from "../src/readings/claims.ts";
+import { RecordedReviewClaim } from "../src/readings/reviewer-claim-schema.ts";
 import { McpClients, mcpClientsLayer } from "../src/mcp-client.ts";
 import { storedOutput, ventTool, type RangeView } from "../src/pipeline.ts";
 import { agentRoutes, clearInheritedAgentRoute } from "../src/pi/bindings.ts";
 import {
   initializeClaimSettlement,
   ClaimSettlementDoc,
+  restoreClaim,
 } from "../src/pi/claim-settlement.ts";
 import { agentKinds } from "../src/pi/stages/kinds.ts";
 import { KindParams } from "../src/pi/stages/run.ts";
+import { ChildrenDoc } from "../src/pi/stages/docs.ts";
 import {
   readingTask,
   readingStep,
@@ -76,7 +78,9 @@ const textOf = (v: unknown): string =>
 
 const execute = async (
   invalid: boolean | "abort" = false,
-  restoreAlias = false,
+  reuse?: "before-drain" | "concurrent" | "changed-context",
+  noClaims = false,
+  restore = false,
 ) => {
   const location = storeLocationIn(join(directory, mintUlid()));
   const scope = await Effect.runPromise(Scope.make());
@@ -123,6 +127,12 @@ const execute = async (
     records,
   };
   const run = stageRunner(ctx, clients);
+  const laterCtx = { ...ctx, runId: mintUlid() };
+  const sourceByReview = new Map<number, typeof ctx>();
+  const originalReviews = new Set<number>();
+  const originalReadReady = Promise.withResolvers<void>();
+  const allowOriginalDrain = Promise.withResolvers<void>();
+  let originalPaused = false;
   const store = async (op: string, output: unknown) =>
     run(
       Effect.gen(function* () {
@@ -223,6 +233,10 @@ const execute = async (
     structures: source.structures,
     source: { unavailable: "fixture" },
   }));
+  await remembered(laterCtx, `structures:${manifestKey}`, async () => ({
+    structures: source.structures,
+    source: { unavailable: "fixture" },
+  }));
   const group = plan.groups[0]!;
   const hunkMap = new Map(manifest.hunks.map((hunk) => [hunk.hunkId, hunk]));
   const index = renderReading(plan, group.id, {
@@ -298,19 +312,35 @@ const execute = async (
       gaps: [],
     },
   };
+  const changedView: RangeView = {
+    ...view,
+    snapshot:
+      view.snapshot === undefined
+        ? undefined
+        : {
+            ...view.snapshot,
+            sources: view.snapshot.sources.map((source) => ({
+              ...source,
+              sections: source.sections.map((section) => ({
+                ...section,
+                title: `${section.title} — revised context`,
+              })),
+            })),
+          },
+  };
   const models = createModels();
   const registry = createRegistry();
   let harness: Harness;
   let rounds = 0;
   let readingId: TaskId<ReadingTaskResult> | undefined;
   const sent: Array<ReadonlyArray<Message>> = [];
-  const agents: string[] = [];
   const routes = () =>
     agentRoutes({
       harness,
       models,
       runId: ctx.runId,
       createProvider: (binding) => {
+        let agentRound = 0;
         const faux = fauxProvider({
           api: "faux",
           provider: binding.logicalProvider,
@@ -319,7 +349,6 @@ const execute = async (
         faux.setResponses(
           Array.from({ length: 40 }, () => async (transcript, options) => {
             sent.push(transcript.messages);
-            agents.push(binding.agent);
             const text = textOf(transcript.messages);
             const reply = (name: string, args: any) =>
               fauxAssistantMessage(
@@ -332,7 +361,8 @@ const execute = async (
                 reason: "Fixture verification observed cited source",
               });
             rounds++;
-            if (rounds === 1)
+            agentRound++;
+            if (agentRound === 1)
               return fauxAssistantMessage(
                 [
                   fauxToolCall(
@@ -344,7 +374,7 @@ const execute = async (
                 ],
                 { stopReason: "toolUse" },
               );
-            if (rounds === 2)
+            if (agentRound === 2 && !noClaims)
               return reply("record_claim", {
                 anchor: { path, ...own },
                 kind: "defect",
@@ -387,29 +417,35 @@ const execute = async (
                 })),
                 sections: {
                   a: [],
-                  r: [first.index],
+                  r: noClaims ? [] : [first.index],
                   u: index.sections
-                    .filter((section) => section.index !== first.index)
+                    .filter(
+                      (section) => noClaims || section.index !== first.index,
+                    )
                     .map((section) => section.index),
                 },
-                comments: [
-                  {
-                    s: first.index,
-                    side: own.side,
-                    start: own.startLine,
-                    end: own.startLine,
-                    kind: "defect",
-                    effect: null,
-                    t: claimText,
-                    cites: [
-                      `${first.file}${own.side === "new" ? "n" : "o"}${own.startLine}`,
+                comments: noClaims
+                  ? []
+                  : [
+                      {
+                        s: first.index,
+                        side: own.side,
+                        start: own.startLine,
+                        end: own.startLine,
+                        kind: "defect",
+                        effect: null,
+                        t: claimText,
+                        cites: [
+                          `${first.file}${own.side === "new" ? "n" : "o"}${own.startLine}`,
+                        ],
+                        fails,
+                        row: "D1",
+                      },
                     ],
-                    fails,
-                    row: "D1",
-                  },
-                ],
                 unsure: index.sections
-                  .filter((section) => section.index !== first.index)
+                  .filter(
+                    (section) => noClaims || section.index !== first.index,
+                  )
                   .map((section) => ({
                     s: section.index,
                     t: "Additional context unavailable in this fixture",
@@ -445,9 +481,17 @@ const execute = async (
   const kinds = agentKinds(services, {
     prepare: async (_id, input) => ({
       step: await readingStep(
-        ctx,
+        sourceByReview.get(
+          Number((input.params as { review?: number }).review),
+        ) ?? ctx,
         run,
-        async () => view,
+        async () =>
+          reuse === "changed-context" &&
+          sourceByReview.get(
+            Number((input.params as { review?: number }).review),
+          ) === laterCtx
+            ? changedView
+            : view,
         input.kind === "verify-claim"
           ? {
               kind: "verify-claim",
@@ -462,37 +506,30 @@ const execute = async (
     }),
   });
   const nativeReading = readingTask(services, kinds.agentStep);
+  const childrenByAssignment: Record<number, Record<string, number>> = {};
+  const donePhase = nativeReading.definition.phases.done;
   let replays = 0;
-  let aliasRestored = false;
   const phase = nativeReading.definition.phases.claims;
   const reading = {
     definition: {
       ...nativeReading.definition,
       phases: {
         ...nativeReading.definition.phases,
+        done: async (task: any, runtime: any, c: any) => {
+          childrenByAssignment[Number(runtime.taskId)] =
+            (await runtime.snapshot(ChildrenDoc, runtime.taskId, c))
+              ?.children ?? {};
+          return donePhase(task, runtime, c);
+        },
         claims: async (task: any, runtime: any, c: any) => {
-          if (restoreAlias && !aliasRestored) {
-            // A follow-on's reading has no old child alias. Retained source producer numbers
-            // must not coincide with this native DB's current execution task numbers.
-            await runtime.commit(async (tx: any) => {
-              const children = await tx.doc(ChildrenDoc, runtime.taskId);
-              const ledger = await tx.doc(ClaimSettlementDoc);
-              const state = ledger.reviews[String(task.input.review)];
-              for (const [id, claim] of Object.entries(state.claims) as Array<
-                [string, any]
-              >) {
-                delete children.children[`claim.${claim.key}`];
-                delete state.claims[id];
-                state.claims[`retained:${claim.key}`] = {
-                  ...claim,
-                  id: `retained:${claim.key}`,
-                  producer: { ...claim.producer, task: 900 },
-                  source: { ...claim.source, runId: "original-native-run" },
-                };
-              }
-              return undefined;
-            }, c);
-            aliasRestored = true;
+          if (
+            reuse === "before-drain" &&
+            originalReviews.has(task.input.review) &&
+            !originalPaused
+          ) {
+            originalPaused = true;
+            originalReadReady.resolve();
+            await allowOriginalDrain.promise;
           }
           if (replays++ === 0) {
             const failure = new Error("rollback after registration");
@@ -519,7 +556,7 @@ const execute = async (
     },
   } as typeof nativeReading;
   const root = defineTask<
-    {},
+    { readonly later?: boolean },
     { phase: "start" } | { phase: "done"; reading: number },
     ReadingTaskResult
   >({
@@ -527,8 +564,13 @@ const execute = async (
     version: 1,
     initial: () => ({ phase: "start" }),
     phases: {
-      start: async (_task, runtime, c) =>
-        runtime.commit(async (tx) => {
+      start: async (task, runtime, c) => {
+        sourceByReview.set(
+          Number(runtime.taskId),
+          task.input.later ? laterCtx : ctx,
+        );
+        if (!task.input.later) originalReviews.add(Number(runtime.taskId));
+        return runtime.commit(async (tx) => {
           const id = await tx.createTask(
             reading,
             {
@@ -546,7 +588,18 @@ const execute = async (
           );
           readingId = id as TaskId<ReadingTaskResult>;
           await initializeClaimSettlement(tx, runtime.taskId, {
-            source: { manifestKey, frameKey, mapKey },
+            source: {
+              plan: planKey,
+              manifestKey,
+              frameKey,
+              mapKey,
+              runKey: ctx.runKey,
+              runId: task.input.later ? laterCtx.runId : ctx.runId,
+              cycle: ctx.cycleId,
+              head: ctx.range.headOid,
+              range: JSON.stringify(ctx.range),
+              config: JSON.stringify(ctx.config),
+            },
             assignments: [
               {
                 assignmentId: group.id,
@@ -570,13 +623,47 @@ const execute = async (
             ],
             unread: [],
           });
+          if (restore && task.input.later) {
+            const ledger = await tx.doc(ClaimSettlementDoc);
+            const originalReview = [...originalReviews][0]!;
+            const original = Object.values(
+              ledger.reviews[String(originalReview)]!.claims,
+            )[0]!;
+            const inline = RecordedReviewClaim.parse(original.report);
+            // Native execution is current; retained report/source/producer are not rewritten.
+            const check = await tx.createTask(
+              kinds.agentStep,
+              {
+                kind: "verify-claim",
+                params: {
+                  plan: planKey,
+                  group: group.id,
+                  manifest: manifestKey,
+                  claim: inline.key,
+                  inline: JSON.parse(JSON.stringify(inline)),
+                },
+                cutoffAt: Date.now() + 30_000,
+              },
+              { ownership: { kind: "task", taskId: runtime.taskId } },
+            );
+            await restoreClaim(tx, runtime.taskId, {
+              ...original,
+              verificationTask: Number(check),
+              retainedVerification: {
+                task: original.verificationTask,
+                key: null,
+                outcome: "unconfirmed",
+              },
+            });
+          }
           return {
             status: "waiting",
             on: [id],
             policy: "allSettled",
             checkpoint: { phase: "done", reading: Number(id) },
           };
-        }, c),
+        }, c);
+      },
       done: async (task, runtime, c) => {
         const [ended] = await runtime.outcomes(
           [task.state.checkpoint.reading as TaskId<ReadingTaskResult>],
@@ -623,19 +710,30 @@ const execute = async (
   );
   bound = routes();
   const conversation = await harness.root(context);
-  const id = await harness.commit(
-    (tx) =>
-      tx.createTask(
-        root,
-        {},
-        {
-          ownership: { kind: "conversation" },
-          conversationId: conversation.id,
-        },
-      ),
-    context,
-  );
+  const createRoot = (later: boolean) =>
+    harness.commit(
+      (tx) =>
+        tx.createTask(
+          root,
+          { later },
+          {
+            ownership: { kind: "conversation" },
+            conversationId: conversation.id,
+          },
+        ),
+      context,
+    );
+  const id = await createRoot(false);
+  let second: TaskId<ReadingTaskResult> | undefined;
+  if (reuse === "concurrent" || reuse === "changed-context")
+    second = await createRoot(true);
   harness.resume();
+  if (reuse === "before-drain") {
+    await originalReadReady.promise;
+    second = await createRoot(true);
+    await harness.waitForTask(second, context);
+    allowOriginalDrain.resolve();
+  }
   const ended = await harness.waitForTask(id, context);
   const settlement = (await harness.snapshot(ClaimSettlementDoc, context))!
     .reviews[String(id)]!;
@@ -643,17 +741,47 @@ const execute = async (
     ended.state.outcome.status === "completed"
       ? ended.state.outcome.result
       : undefined;
+  const reused: Array<{
+    result: ReadingTaskResult;
+    settlement: typeof settlement;
+  }> = [];
+  if (second !== undefined) {
+    const other = await harness.waitForTask(second, context);
+    if (other.state.outcome.status !== "completed")
+      throw new Error(JSON.stringify(other.state.outcome));
+    reused.push({
+      result: other.state.outcome.result,
+      settlement: (await harness.snapshot(ClaimSettlementDoc, context))!
+        .reviews[String(second)]!,
+    });
+    // A third distinct caller exercises completed-output reuse after the concurrent/reentrant case.
+    const replay = await createRoot(true);
+    const replayed = await harness.waitForTask(replay, context);
+    if (replayed.state.outcome.status !== "completed")
+      throw new Error(JSON.stringify(replayed.state.outcome));
+    reused.push({
+      result: replayed.state.outcome.result,
+      settlement: (await harness.snapshot(ClaimSettlementDoc, context))!
+        .reviews[String(replay)]!,
+    });
+  }
+  const tasks = await harness.commit(
+    async (tx) => (await tx.scanTasks({}, 1000)).items,
+    context,
+  );
   await harness.close(context);
   return {
+    childrenByAssignment,
     ctx,
+    laterCtx,
     run,
     result,
     settlement,
+    reused,
     sent,
     rows,
     replays,
-    aliasRestored,
-    agents,
+    tasks,
   };
 };
 
@@ -710,18 +838,179 @@ test("native interruption retains registered and partial claims without approvin
   expect(stored.unanswered).toHaveLength(stored.sections.length);
 }, 60_000);
 
-test("real reading finalization reuses the registered exact Verify after follow-on alias restoration", async () => {
-  const observed = await execute(false, true);
-  expect(observed.aliasRestored).toBe(true);
-  expect(observed.result?.claims).toHaveLength(1);
-  const claims = Object.values(observed.settlement.claims);
-  expect(claims).toHaveLength(1);
-  expect(claims[0]!.id).toStartWith("retained:");
-  expect(claims[0]!.producer.task).toBe(900);
-  expect(claims[0]!.source.runId).toBe("original-native-run");
-  expect(claims[0]!.verificationTask).not.toBe(900);
-  expect(
-    observed.agents.filter((agent) => agent.startsWith("verify.claim.")),
-  ).toHaveLength(1);
-  expect(observed.result!.claims[0]!.verifyKey).not.toBeNull();
+for (const mode of [
+  "before-drain",
+  "concurrent",
+  "restored-before-drain",
+] as const) {
+  test(`exact comprehensive work is shared across different native IDs and run labels (${mode})`, async () => {
+    const observed = await execute(
+      false,
+      mode === "restored-before-drain" ? "before-drain" : mode,
+      false,
+      mode === "restored-before-drain",
+    );
+    expect(observed.reused).toHaveLength(2);
+    const first = await observed.run(
+      storedOutput(observed.ctx, observed.result!.steps[0]!, LaneReviewStored),
+    );
+    expect(first.origin).toBeDefined();
+    expect(first.claims).toHaveLength(1);
+    expect(first.claims![0]!.basis!.origin).toEqual(first.origin);
+    const producers = new Set<number>();
+    for (const value of [
+      observed.result!,
+      ...observed.reused.map((entry) => entry.result),
+    ]) {
+      expect(value.steps).toEqual(observed.result!.steps);
+      expect(value.claims).toHaveLength(1);
+      expect(value.claims[0]!.verifyKey).toBe(
+        observed.result!.claims[0]!.verifyKey,
+      );
+      const stored = await observed.run(
+        storedOutput(observed.ctx, value.steps[0]!, LaneReviewStored),
+      );
+      expect(stored).toEqual(first);
+      for (const stage of value.stages)
+        if (stage.agent?.startsWith("lane-review."))
+          expect(["computed", "reused"]).toContain(stage.status);
+    }
+    for (const settlement of [
+      observed.settlement,
+      ...observed.reused.map((entry) => entry.settlement),
+    ]) {
+      const claims = Object.values(settlement.claims);
+      expect(claims).toHaveLength(1);
+      expect(RecordedReviewClaim.parse(claims[0]!.report)).toEqual(
+        first.claims![0]!,
+      );
+      expect(claims[0]!.basis.origin).toEqual(first.origin);
+      expect(claims[0]!.basis.producer).toEqual(first.by);
+      expect(claims[0]!.producer.task).toBe(first.origin!.assignmentTask);
+      expect(claims[0]!.source.runId).toBe(first.by!.run);
+      expect(claims[0]!.source.origin).toEqual(first.origin);
+      expect(claims[0]!.verificationTask).not.toBeNull();
+      const verify = observed.tasks.find(
+        (task) => Number(task.id) === claims[0]!.verificationTask,
+      )!;
+      const inline = (verify.input as { params: { inline: unknown } }).params
+        .inline;
+      expect(inline).toEqual(first.claims![0]);
+      expect(claims[0]!.destination.status).toBe("owned");
+      // Native delivery is rebound, but this output remains the original producer's report.
+      for (const assignment of settlement.assignments) {
+        expect(assignment.task).not.toBeNull();
+        if (assignment.task !== null) {
+          producers.add(assignment.task);
+          expect(
+            observed.childrenByAssignment[assignment.task]![
+              `claim.${claims[0]!.key}`
+            ],
+          ).toBe(claims[0]!.verificationTask!);
+          const currentReview = observed.tasks.find(
+            (task) => Number(task.id) === assignment.task,
+          )!.owner;
+          // Restored checks are review-owned in this database, never old native IDs.
+          if (
+            mode === "restored-before-drain" &&
+            assignment.task !== first.origin!.assignmentTask
+          )
+            expect(Number(verify.owner)).toBe(Number(currentReview));
+        }
+      }
+    }
+    expect(producers.size).toBe(3);
+    const verifications = observed.sent.filter((messages) =>
+      textOf(messages).includes("Check whether the supplied evidence"),
+    );
+    expect(verifications).toHaveLength(1);
+    const computed = [
+      observed.result!,
+      ...observed.reused.map((entry) => entry.result),
+    ]
+      .flatMap((value) => value.stages)
+      .filter(
+        (stage) =>
+          stage.agent?.startsWith("lane-review.") &&
+          stage.status === "computed",
+      );
+    expect(computed).toHaveLength(1);
+    expect(computed[0]!.agentResult!.modelCalls).toBeGreaterThan(0);
+    expect(observed.sent.length - verifications.length).toBe(
+      computed[0]!.agentResult!.modelCalls,
+    );
+    expect(observed.ctx.runId).not.toBe(observed.laterCtx.runId);
+    expect([observed.ctx.runId, observed.laterCtx.runId]).toContain(
+      first.by!.run,
+    );
+  }, 60_000);
+}
+
+test("a reused judgment with no claims keeps its original native producer before the original root drains", async () => {
+  const observed = await execute(false, "before-drain", true);
+  const original = await observed.run(
+    storedOutput(observed.ctx, observed.result!.steps[0]!, LaneReviewStored),
+  );
+  expect(original.claims).toEqual([]);
+  expect(original.origin).toBeDefined();
+  expect(original.by!.run).toBe(observed.ctx.runId);
+  for (const reused of observed.reused) {
+    expect(reused.result.steps).toEqual(observed.result!.steps);
+    const stored = await observed.run(
+      storedOutput(observed.ctx, reused.result.steps[0]!, LaneReviewStored),
+    );
+    expect(stored.origin).toEqual(original.origin);
+    expect(stored.by).toEqual(original.by);
+    expect(Object.values(reused.settlement.claims)).toEqual([]);
+  }
+  const computed = [
+    observed.result!,
+    ...observed.reused.map((entry) => entry.result),
+  ]
+    .flatMap((value) => value.stages)
+    .filter(
+      (stage) =>
+        stage.agent?.startsWith("lane-review.") && stage.status === "computed",
+    );
+  expect(computed).toHaveLength(1);
+  expect(observed.sent).toHaveLength(computed[0]!.agentResult!.modelCalls);
+}, 60_000);
+
+test("changed actual surrounding context misses the judgment cache even when source and assignment are unchanged", async () => {
+  const observed = await execute(false, "changed-context");
+  expect(observed.result!.steps[0]).not.toBe(
+    observed.reused[0]!.result.steps[0],
+  );
+  expect(observed.reused[0]!.result.steps).toEqual(
+    observed.reused[1]!.result.steps,
+  );
+  const original = await observed.run(
+    storedOutput(observed.ctx, observed.result!.steps[0]!, LaneReviewStored),
+  );
+  const changed = await observed.run(
+    storedOutput(
+      observed.ctx,
+      observed.reused[0]!.result.steps[0]!,
+      LaneReviewStored,
+    ),
+  );
+  expect(original.by!.run).toBe(observed.ctx.runId);
+  expect(changed.by!.run).toBe(observed.laterCtx.runId);
+  expect(changed.origin).not.toEqual(original.origin);
+  const computed = [
+    observed.result!,
+    ...observed.reused.map((entry) => entry.result),
+  ]
+    .flatMap((value) => value.stages)
+    .filter(
+      (stage) =>
+        stage.agent?.startsWith("lane-review.") && stage.status === "computed",
+    );
+  expect(computed).toHaveLength(2);
+  const verificationCalls = observed.sent.filter((messages) =>
+    textOf(messages).includes("Check whether the supplied evidence"),
+  ).length;
+  expect(observed.sent.length - verificationCalls).toBe(
+    computed.reduce((total, stage) => total + stage.agentResult!.modelCalls, 0),
+  );
 }, 60_000);

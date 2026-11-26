@@ -23,8 +23,17 @@ export const ReviewObservation = z.strictObject({
 });
 export type ReviewObservation = z.infer<typeof ReviewObservation>;
 
+/** Native producer identity is retained attribution, never a reusable judgment input or current task authority. */
+export const ReviewOrigin = z.strictObject({
+  reviewTask: z.int().min(0),
+  assignmentTask: z.int().min(0),
+});
+export type ReviewOrigin = z.infer<typeof ReviewOrigin>;
+
 /** Code-supplied source identity, retained verbatim so replay cannot reconstruct a different basis. */
 export const ReviewClaimBasis = z.strictObject({
+  /** Absent in historical outputs: original native task identity is unknown, not the new caller. */
+  origin: ReviewOrigin.optional(),
   producer: z.strictObject({
     review: z.string(),
     run: z.string(),
