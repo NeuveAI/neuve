@@ -28,13 +28,14 @@ const discovery = z.object({
 }) satisfies z.ZodType<OAuthDiscoveryState>;
 
 const registration = z.object({ client, discovery, resource: z.string().optional() });
+const headerSafeToken = z.string().regex(/^[\x21-\x7E]+$/);
 const tokens = z.object({
-	access_token: z.string().regex(/^[A-Za-z0-9._~+\/-]+=*$/),
-	refresh_token: z.string().min(1).optional(),
+	access_token: headerSafeToken,
+	refresh_token: headerSafeToken.optional(),
 	token_type: z.string().regex(/^bearer$/i),
 	issuer: z.string().optional(),
 	scope: z.string().optional(),
-	expires_in: z.number().nonnegative().optional(),
+	expires_in: z.number().optional(),
 }) satisfies z.ZodType<StoredOAuthTokens>;
 
 const session = z.discriminatedUnion("kind", [

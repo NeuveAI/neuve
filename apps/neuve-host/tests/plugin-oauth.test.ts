@@ -19,9 +19,14 @@ import { pluginSettings } from "../src/settings";
 
 const access = (rotation: number) => `fixture-access-token-${rotation}`;
 const refreshToken = (rotation: number) => `fixture-refresh-token-${rotation}`;
+const fixtureTokens = (rotation: number) => ({ access_token: access(rotation), refresh_token: refreshToken(rotation) });
+const linearTokens = (rotation: number) => ({
+	access_token: `00000000-0000-4000-8000-000000000000:0123456789abcde${rotation}:0123456789abcdef0123456789abcdef`,
+	refresh_token: `00000000-0000-4000-8000-000000000000:fedcba987654321${rotation}:fedcba9876543210fedcba9876543210`,
+});
 const authorizationCode = "00000000-0000-4000-8000-000000000000:0123456789abcdef:0123456789abcdef0123456789abcdef";
 
-async function fixture(expiresIn = 3600, opened = true) {
+async function fixture(expiresIn = 3600, opened = true, tokensFor = fixtureTokens) {
 	const routes: string[] = [];
 	let registration: string | undefined;
 	let redirect: string | undefined;
@@ -54,7 +59,8 @@ async function fixture(expiresIn = 3600, opened = true) {
 					getStarted.resolve();
 					await resumeGet.promise;
 				}
-				if ((bearer !== `Bearer ${access(rotation)}` || (rejectAccess && rotation === 0))
+				const token = tokensFor(rotation).access_token;
+				if ((bearer !== `Bearer ${token}` || (rejectAccess && rotation === 0))
 					&& bearer !== "Bearer fixture-api-key") {
 					routes.push("401");
 					if (holdGet && rejectAccess) {
@@ -72,7 +78,7 @@ async function fixture(expiresIn = 3600, opened = true) {
 					? { protocolVersion: data.params.protocolVersion, serverInfo: { name: "fixture", version: "1" }, capabilities: { tools: {} } }
 					: data.method === "tools/list"
 						? { tools: [{ name: "list_issues", inputSchema: { type: "object" } }] }
-						: { content: [{ type: "text", text: `Authorized with ${access(rotation)}. Two issues.` }] };
+						: { content: [{ type: "text", text: `Authorized with ${token}. Two issues.` }] };
 				return Response.json({ jsonrpc: "2.0", id: data.id, result });
 			}
 			case "/discover":
@@ -130,13 +136,13 @@ async function fixture(expiresIn = 3600, opened = true) {
 					if (refreshFailure) {
 						return Response.json({ error: refreshFailure.code, error_description: String(form.get("refresh_token")) }, { status: refreshFailure.status });
 					}
-					if (form.get("refresh_token") !== refreshToken(rotation)) {
+					if (form.get("refresh_token") !== tokensFor(rotation).refresh_token) {
 						return Response.json({ error: "invalid_grant", error_description: String(form.get("refresh_token")) }, { status: 400 });
 					}
 					rotation++;
 				}
 				return Response.json({
-					access_token: access(rotation), refresh_token: refreshToken(rotation), token_type: "Bearer",
+					...tokensFor(rotation), token_type: "Bearer",
 					expires_in: rotation === 0 ? expiresIn : 3600,
 				});
 			}
@@ -267,6 +273,61 @@ test("discovery, shared sign-in, PKCE, and the first authenticated tool call", a
 		expect(JSON.stringify(await f.settings())).not.toContain(refreshToken(0));
 		expect(Object.values(process.env)).not.toContain(access(0));
 		expect(Object.values(process.env)).not.toContain(refreshToken(0));
+	} finally {
+		await f.close();
+	}
+});
+
+// The browser callback must persist opaque colon-delimited tokens from a successful exchange.
+test("sign-in stores Linear-format tokens", async () => {
+	const f = await fixture(3600, true, linearTokens);
+	try {
+		await f.complete();
+		expect(await readSession(f.endpoint)).toMatchObject({ kind: "signed-in", tokens: linearTokens(0) });
+		expect((await f.settings()).signIn).toEqual({ signedIn: true });
+	} finally {
+		await f.close();
+	}
+});
+
+// An unsafe token must stay out of Keychain and the log must identify only the rejected field.
+test.each(["access_token", "refresh_token"].flatMap(field => [
+	{ field, name: "space", character: " " },
+	{ field, name: "CR", character: "\r" },
+	{ field, name: "LF", character: "\n" },
+]))("sign-in refuses $name in $field and logs only the field name", async ({ field, character }) => {
+	const f = await fixture(3600, true, rotation => ({
+		...fixtureTokens(rotation), [field]: `fixture-token${character}`,
+	}));
+	try {
+		const callback = await f.authorize((await f.signIn()).url);
+		expect((await fetch(callback)).status).toBe(400);
+		expect(await readSession(f.endpoint)).toBeUndefined();
+		expect(f.logs).toEqual([{
+			level: "warn", event: "plugin.sign-in.failed", fields: {
+				plugin: "fixture", server: "fixture", step: "validate-tokens",
+				errorClass: "ZodError", oauthError: null, httpStatus: 200, fields: [field],
+			},
+		}]);
+	} finally {
+		await f.close();
+	}
+});
+
+// Refresh must save the rotated opaque tokens and the worker must authenticate with the new access token.
+test("refresh stores and uses the rotated Linear-format tokens", async () => {
+	const f = await fixture(0, true, rotation =>
+		rotation === 0 ? { ...linearTokens(0), access_token: access(0) } : linearTokens(rotation));
+	try {
+		await f.complete();
+		const client = await f.connect();
+		try {
+			expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(["list_issues"]);
+			expect(f.routes.filter(route => route === "refresh")).toEqual(["refresh"]);
+			expect(await readSession(f.endpoint)).toMatchObject({ kind: "signed-in", tokens: linearTokens(1) });
+		} finally {
+			await client.close();
+		}
 	} finally {
 		await f.close();
 	}

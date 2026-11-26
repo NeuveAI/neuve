@@ -8,6 +8,7 @@ import {
 	type StoredOAuthClientInformation,
 } from "@modelcontextprotocol/client";
 import { SharedWork } from "@neuve/records-core/shared-work";
+import { ZodError } from "zod";
 
 import { forget, peek } from "./keys";
 import { openBrowser } from "./open-browser";
@@ -256,6 +257,9 @@ export class PluginOAuth {
 				errorClass: error instanceof Error && callbackErrorClasses.has(error.name) ? error.name : "UnknownError",
 				oauthError: error instanceof OAuthError ? (oauthErrors.has(error.code) ? error.code : "other") : null,
 				httpStatus,
+				...(step === "validate-tokens" && error instanceof ZodError
+					? { fields: error.issues.map(issue => issue.path.join(".")) }
+					: {}),
 			});
 			if (!lifetime.aborted) {
 				session.error = signInFailed;
