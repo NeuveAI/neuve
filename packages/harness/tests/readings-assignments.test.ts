@@ -1,19 +1,33 @@
 // Why: ownership omissions and overlaps can hide work or attach review authority to the wrong
 // source. These tests check actual manifest rows and explicit exclusions, not only packing labels.
 import { expect, test } from "bun:test";
+import { canonicalJson, sha256Hex } from "@neuve/records-core";
 import {
   ASSIGNMENT_RECIPE,
   AssignmentPlan,
   RetainedReadingPlan,
   assignmentOwner,
+  assignPreparedReadings,
   isAssignmentPlan,
   planAssignments,
   validateAssignments,
   type AssignmentInput,
 } from "../src/readings/assignments.ts";
-import { planReadings } from "../src/readings/plan.ts";
+import {
+  planReadings,
+  pairPlan,
+  type ReadingPlan,
+} from "../src/readings/plan.ts";
+import { PER_GROUP, PER_SECTION } from "../src/readings/pairing.ts";
 import { mapExclusion } from "../src/review-map.ts";
-import { diff, mixedRange } from "./fixtures/readings.ts";
+import {
+  diff,
+  mixedRange,
+  oidOf,
+  symbolStructure,
+} from "./fixtures/readings.ts";
+import type { ManifestHunk } from "../src/manifest.ts";
+import type { BlobStructure } from "../src/sections.ts";
 
 const source = {
   manifestKey: "manifest-1",
@@ -474,4 +488,202 @@ test("anchors spanning several section owners remain ambiguous rather than trans
       input.hunks,
     ),
   ).toThrow("invalid primary anchor");
+});
+
+test("prepared-section adoption and direct planning have identical assignment outputs without another section planning pass", () => {
+  const input = inputOf();
+  const prepared = planReadings(input);
+  expect(assignPreparedReadings(prepared, input)).toEqual(
+    planAssignments(input),
+  );
+  const changed = structuredClone(prepared);
+  changed.sections[0]!.owned = [];
+  expect(() => assignPreparedReadings(changed, input)).toThrow(
+    "missing or invented",
+  );
+});
+
+/** Twelve removing sections: each has six real unchanged source rows to pair with its removal. */
+const pairedInput = () => {
+  const hunks: ManifestHunk[] = [];
+  const structures = new Map<string, BlobStructure>();
+  const texts = new Map<string, string>();
+  const paths: string[] = [];
+  for (let at = 0; at < 12; at++) {
+    const name = `watch${String(at).padStart(2, "0")}`;
+    const path = `src/${name}.ts`;
+    const setup =
+      `export function ${name}(slot${at}) {\n` +
+      Array.from({ length: 6 }, (_, row) => `  slot${at}.keep${row}();\n`).join(
+        "",
+      );
+    const before = `${setup}  drop(slot${at});\n}\n`;
+    const after = `${setup}}\n`;
+    hunks.push(...diff(path, before, after));
+    structures.set(
+      oidOf(before),
+      symbolStructure(before, [
+        { start: 1, end: 9, kind: "declaration", name },
+      ]),
+    );
+    structures.set(
+      oidOf(after),
+      symbolStructure(after, [{ start: 1, end: 8, kind: "declaration", name }]),
+    );
+    texts.set(oidOf(before), before);
+    texts.set(oidOf(after), after);
+    paths.push(path);
+  }
+  const input: AssignmentInput = {
+    source,
+    hunks,
+    structures,
+    bounds: { maxItems: 8 },
+    batches: [
+      {
+        id: "combined",
+        hunkIds: hunks.map((hunk) => hunk.hunkId),
+        doneWhen: ["D1"],
+      },
+    ],
+  };
+  const old = planReadings({
+    ...input,
+    affinity: new Map(
+      paths.map((path, at) => [path, [at < 6 ? "old-a" : "old-b"]]),
+    ),
+  });
+  const prepared = pairPlan(
+    old,
+    new Map(hunks.map((hunk) => [hunk.hunkId, hunk])),
+    texts,
+  );
+  return { input, prepared, texts };
+};
+const pairedCount = (
+  plan: Pick<ReadingPlan, "sections">,
+  keys: ReadonlyArray<string>,
+) =>
+  plan.sections
+    .filter((section) => keys.includes(section.key))
+    .reduce((sum, section) => sum + (section.paired?.length ?? 0), 0);
+
+test("final assignment groups reapply pairing bounds instead of combining already-clipped old context", () => {
+  const { input, prepared, texts } = pairedInput();
+  expect(prepared.groups).toHaveLength(2);
+  expect(
+    prepared.groups.map((group) => pairedCount(prepared, group.keys)),
+  ).toEqual([PER_GROUP, PER_GROUP]);
+  const before = structuredClone(prepared);
+  const plan = assignPreparedReadings(prepared, {
+    ...input,
+    pairingTexts: texts,
+  });
+  expect(plan.groups.map((group) => group.keys.length)).toEqual([8, 4]);
+  // Blindly copying old pairs would overflow the newly combined group's context.
+  expect(pairedCount(prepared, plan.groups[0]!.keys)).toBeGreaterThan(
+    PER_GROUP,
+  );
+  expect(plan.groups.map((group) => pairedCount(plan, group.keys))).toEqual([
+    PER_GROUP,
+    PER_GROUP,
+  ]);
+  for (const section of plan.sections) {
+    const { paired: _paired, ...owned } = section;
+    const { paired: _oldPaired, ...original } = prepared.sections.find(
+      (candidate) => candidate.key === section.key,
+    )!;
+    expect(owned).toEqual(original);
+    expect(section.paired?.length ?? 0).toBeLessThanOrEqual(PER_SECTION);
+    for (const row of section.paired ?? []) {
+      const hunk = input.hunks.find((entry) =>
+        section.hunkIds.includes(entry.hunkId),
+      )!;
+      const oid = row.side === "new" ? hunk.newOid! : hunk.oldOid!;
+      expect(texts.get(oid)!.split("\n")[row.line - 1]).toBe(row.text);
+    }
+  }
+  expect(prepared).toEqual(before);
+  expect(validateAssignments(plan, input.hunks)).toEqual(plan);
+  const overflow = structuredClone(plan);
+  const last = overflow.sections.find((section) =>
+    plan.groups[0]!.keys.slice(4).includes(section.key),
+  )!;
+  last.paired = before.sections.find(
+    (section) => section.paired !== undefined,
+  )!.paired!;
+  expect(() => validateAssignments(overflow, input.hunks)).toThrow(
+    "final assignment context bound",
+  );
+});
+
+test("batch repartition recovers real pairing rows an old group's context bound omitted", () => {
+  const { input, prepared, texts } = pairedInput();
+  const batches = [0, 1].map((parity): AssignmentInput["batches"][number] => ({
+    id: `batch-${parity}`,
+    hunkIds: input.hunks
+      .filter((_, at) => at % 2 === parity)
+      .map((hunk) => hunk.hunkId),
+    doneWhen: ["D1"],
+  }));
+  const plan = assignPreparedReadings(prepared, {
+    ...input,
+    batches,
+    pairingTexts: texts,
+  });
+  expect(plan.groups).toHaveLength(2);
+  expect(plan.groups.map((group) => pairedCount(plan, group.keys))).toEqual([
+    PER_GROUP,
+    PER_GROUP,
+  ]);
+  expect(
+    plan.sections.some(
+      (section) =>
+        section.paired !== undefined &&
+        prepared.sections.find((candidate) => candidate.key === section.key)!
+          .paired === undefined,
+    ),
+  ).toBe(true);
+  expect(
+    plan.sections.map((section) => ({
+      key: section.key,
+      identity: section.identity,
+      owned: section.owned,
+    })),
+  ).toEqual(
+    prepared.sections.map((section) => ({
+      key: section.key,
+      identity: section.identity,
+      owned: section.owned,
+    })),
+  );
+  // Actual final context, not the unchanged group label, belongs in a computation's inputs.
+  const changed = structuredClone(plan);
+  const section = changed.sections.find((entry) => entry.paired !== undefined)!;
+  section.paired![0]!.text = "Different actual source context";
+  expect(changed.groups.map((group) => group.id)).toEqual(
+    plan.groups.map((group) => group.id),
+  );
+  expect(sha256Hex(canonicalJson(changed))).not.toBe(
+    sha256Hex(canonicalJson(plan)),
+  );
+});
+
+test("prepared pairs require complete source texts; retained context is regenerated, not blindly trusted", () => {
+  const { input, prepared, texts } = pairedInput();
+  expect(() => assignPreparedReadings(prepared, input)).toThrow(
+    "requires cached source texts",
+  );
+  expect(() =>
+    assignPreparedReadings(prepared, { ...input, pairingTexts: new Map() }),
+  ).toThrow("missing cached pairing source");
+  const forged = structuredClone(prepared);
+  forged.sections.find(
+    (section) => section.paired !== undefined,
+  )!.paired![0]!.text = "Not in the immutable source";
+  expect(
+    assignPreparedReadings(forged, { ...input, pairingTexts: texts }),
+  ).toEqual(
+    assignPreparedReadings(prepared, { ...input, pairingTexts: texts }),
+  );
 });

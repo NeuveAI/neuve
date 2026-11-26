@@ -7,11 +7,14 @@ import {
   ReadingPlan,
   PlanGroup,
   packReadingSections,
+  pairPlan,
+  pairingBlobs,
   planReadings,
   type PlanInput,
   READING_TOO_LARGE,
   type PlanSection,
 } from "./plan.ts";
+import { PER_GROUP, PER_SECTION, ROW_TEXT } from "./pairing.ts";
 
 /** A new execution contract, not a change to section or unit identity. */
 export const ASSIGNMENT_RECIPE = "neuve-owned-readings-v1";
@@ -215,6 +218,44 @@ export const validateAssignments = (
       section.identity.parts.name !== section.name
     )
       fail("section identity changed");
+    const expectedSpan =
+      section.identity.parts.side === "none" || section.identity.where === null
+        ? null
+        : { side: section.identity.parts.side, ...section.identity.where };
+    if (canonicalJson(section.span) !== canonicalJson(expectedSpan))
+      fail("section source span disagrees with identity");
+    if (section.paired !== undefined) {
+      if (section.paired.length > PER_SECTION)
+        fail("pairing exceeds section context bound");
+      unique(
+        section.paired.map((row) => `${row.side}:${row.line}`),
+        "pairing row",
+      );
+      for (const row of section.paired) {
+        if (
+          row.text.length > ROW_TEXT ||
+          section.basis !== "graph-symbols" ||
+          section.span === null ||
+          row.side !== section.span.side ||
+          row.line < section.span.startLine ||
+          row.line > section.span.endLine
+        )
+          fail("pairing row is outside section source context");
+        if (
+          manifest.some(
+            (hunk) =>
+              hunk.path === section.path &&
+              hunk.ownedRanges.some(
+                (range) =>
+                  range.side === row.side &&
+                  range.startLine <= row.line &&
+                  row.line < range.startLine + range.lineCount,
+              ),
+          )
+        )
+          fail("pairing row is changed work, not context");
+      }
+    }
     if (section.hunkIds.length === 0) fail("section has no source hunk");
     if (section.kind !== "nontext" && section.owned.length === 0)
       fail("text section owns no changed rows");
@@ -261,6 +302,11 @@ export const validateAssignments = (
         fail("assignment crosses batch ownership");
       return section;
     });
+    if (
+      members.reduce((sum, section) => sum + (section.paired?.length ?? 0), 0) >
+      PER_GROUP
+    )
+      fail("pairing exceeds final assignment context bound");
     const paths = [...new Set(members.map((s) => s.path))];
     const characters = members.reduce((sum, s) => sum + s.characters, 0);
     if (
@@ -296,16 +342,38 @@ export const validateAssignments = (
   return plan;
 };
 
-/** Settle membership first, then use the existing section packer independently inside each batch. */
-export const planAssignments = (input: AssignmentInput): AssignmentPlan => {
-  const pathHunks = new Map<string, ManifestHunk[]>();
-  for (const hunk of input.hunks)
-    pathHunks.set(hunk.path, [...(pathHunks.get(hunk.path) ?? []), hunk]);
-  const excluded = [...pathHunks].flatMap(([path, own]) => {
-    const reason = mapExclusion(path, own);
-    return reason === undefined ? [] : [{ path, reason }];
-  });
-  const reading = planReadings({ ...input, excluded });
+/** Inputs already prepared once by the source/structure/rule boundary. */
+export type PreparedAssignmentInput = Pick<
+  AssignmentInput,
+  "hunks" | "batches" | "source" | "affinity" | "split" | "context"
+> & {
+  /**
+   * Cached immutable texts for `pairingBlobs`, not another source-preparation pass. A caller
+   * adopting a previously paired plan supplies these even if the old group bound left no rows
+   * on a section. Pairing is recomputed only after FINAL assignment packing, so merged groups
+   * remain bounded and split groups recover rows an old group clipped.
+   *
+   * Absent means unpaired planning. Already retained paired rows cannot be adopted without text.
+   */
+  readonly pairingTexts?: ReadonlyMap<string, string> | undefined;
+};
+
+/**
+ * Reuse prepared sections verbatim; settle membership then pack each batch independently.
+ * Source preparation, section identity and rule decisions remain owned by the existing planner.
+ */
+export const assignPreparedReadings = (
+  prepared: ReadingPlan,
+  input: PreparedAssignmentInput,
+): AssignmentPlan => {
+  const reading = ReadingPlan.parse(prepared);
+  if (
+    input.pairingTexts === undefined &&
+    reading.sections.some((section) => section.paired !== undefined)
+  )
+    fail(
+      "prepared pairing requires cached source texts for final assignment groups",
+    );
   const hunks = new Map(input.hunks.map((hunk) => [hunk.hunkId, hunk]));
   const batches = input.batches
     .map((batch) => ({
@@ -337,9 +405,41 @@ export const planAssignments = (input: AssignmentInput): AssignmentPlan => {
       context: context.filter((ref) => group.keys.includes(ref.anchorKey)),
     }));
   });
-  const plan = validateAssignments(
+  // Validate the prepared source before pairing reads it. Old paired rows are not authority:
+  // they were clipped under obsolete groups and will be regenerated from the cached source.
+  const unpaired = reading.sections.map(
+    ({ paired: _paired, ...section }) => section,
+  );
+  validateAssignments(
     {
       ...reading,
+      sections: unpaired,
+      recipe: ASSIGNMENT_RECIPE,
+      source: input.source,
+      batches,
+      groups,
+    },
+    input.hunks,
+  );
+  // Keep the legacy reading recipe on this rendering view; no assignment/reading recipe cast.
+  const finalReading = ReadingPlan.parse({
+    ...reading,
+    sections: unpaired,
+    groups: groups.map(
+      ({ batchId: _batch, context: _context, ...group }) => group,
+    ),
+  });
+  if (input.pairingTexts !== undefined)
+    for (const blob of pairingBlobs(finalReading, hunks))
+      if (!input.pairingTexts.has(blob))
+        fail("missing cached pairing source text");
+  const paired =
+    input.pairingTexts === undefined
+      ? finalReading
+      : pairPlan(finalReading, hunks, input.pairingTexts);
+  const plan = validateAssignments(
+    {
+      ...paired,
       recipe: ASSIGNMENT_RECIPE,
       source: input.source,
       batches,
@@ -363,6 +463,18 @@ export const planAssignments = (input: AssignmentInput): AssignmentPlan => {
   )
     fail("context reference has no primary assignment");
   return plan;
+};
+
+/** Prepare an unpaired plan, then use the same assignment contract as stored prepared readings. */
+export const planAssignments = (input: AssignmentInput): AssignmentPlan => {
+  const pathHunks = new Map<string, ManifestHunk[]>();
+  for (const hunk of input.hunks)
+    pathHunks.set(hunk.path, [...(pathHunks.get(hunk.path) ?? []), hunk]);
+  const excluded = [...pathHunks].flatMap(([path, own]) => {
+    const reason = mapExclusion(path, own);
+    return reason === undefined ? [] : [{ path, reason }];
+  });
+  return assignPreparedReadings(planReadings({ ...input, excluded }), input);
 };
 
 export interface AssignmentAnchor {
