@@ -1,7 +1,8 @@
 // Why: a local capture refusal crosses an SDK that can report it as a connection error.
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { Effect } from "effect";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,14 +28,21 @@ import {
 } from "../../../src/pi/capture/journal.ts";
 import { buildDump } from "../../../src/pi/capture/build.ts";
 import {
+  captureRunDump,
+  exportCapturedDump,
   exportPortableSnapshot,
   exportSnapshot,
+  readCapturedDump,
   readSessionDump,
   sealCapturedDump,
 } from "../../../src/pi/capture/export.ts";
 import { fileRawCapture, scanRawCapture } from "../../../src/pi/capture/raw.ts";
-import { runIn, value } from "../capture/fixture.ts";
-import { CaptureFailed } from "../../../src/pi/capture/types.ts";
+import { scanStatus } from "../../../src/pi/capture/records.ts";
+import { runIn, scanCaptures, value } from "../capture/fixture.ts";
+import {
+  CAPTURE_LOSS_FILE,
+  CaptureFailed,
+} from "../../../src/pi/capture/types.ts";
 import { createRouteModels } from "../../../src/pi/providers/agent-route-provider.ts";
 import { captureNativeModels } from "../../../src/pi/providers/native-models-capture.ts";
 import { routeFailureOf } from "../../../src/pi/providers/failure.ts";
@@ -453,7 +461,7 @@ test("a native provider answers with a full journal and no recorded request", as
   }
 });
 
-test("credential registration that cannot be recorded anywhere ends before send", async () => {
+test("a capture without a durable hold ends before send if credential registration loss cannot be recorded", async () => {
   const directory = await mkdtemp(join(tmpdir(), "neuve-capture-refusal-"));
   try {
     const source = join(directory, "source");
@@ -514,3 +522,231 @@ test("credential registration that cannot be recorded anywhere ends before send"
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+// The call and the export have different failure rules. Check both with the same capture.
+for (const variant of [
+  "exposed",
+  "clean",
+  "unknown",
+  "unwritten",
+  "unwritten-journal",
+] as const) {
+  test(`a channel answers after losing a credential registration (${variant})`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "neuve-registration-loss-"));
+    const source = join(directory, "source");
+    const privateDirectory = join(directory, "private");
+    await mkdir(source);
+    const ownership = SourceOwnership.acquire(source);
+    const credentialInspection = createPrivateInspection({
+      ownership,
+      source,
+      directory: privateDirectory,
+      excludedRoots: [source],
+    });
+    const nativeDatabase = join(source, "pi.sqlite");
+    const storage = await openNodeSqliteStorage(nativeDatabase);
+    try {
+      const runId = "channel-registration-loss";
+      const scope = { runId };
+      const captureDirectory = join(source, "capture");
+      const log = openRunLog(storeLocationIn(directory), "worker");
+      const journal = openCaptureJournal(captureDirectory, runId, {
+        allowCredentialLoss: true,
+        log,
+      });
+      journal.capture({
+        type: "run.start",
+        scope,
+        runKind: "coding",
+        sourceRevision: { status: "not-applicable", reason: "Scratch chat" },
+        route: SOL_ROUTE.provider,
+        pricing: "subscription",
+      });
+      const journalWrite = variant === "unwritten-journal";
+      const canIdentify = variant === "clean" || variant === "exposed";
+      const unwritten = variant === "unwritten" || journalWrite;
+      const lossFile = join(captureDirectory, CAPTURE_LOSS_FILE);
+      if (unwritten) await mkdir(lossFile);
+      let writes = 0;
+      let sent = 0;
+      const capture = Object.assign(
+        (event: Parameters<typeof journal.capture>[0]) => {
+          if (journalWrite && event.type === "credential.registration") {
+            writes++;
+            throw new CaptureFailed({
+              kind: "io",
+              event: event.type,
+              detail: "disk is full",
+              writeCode: "ENOSPC",
+            });
+          }
+          journal.capture(event);
+        },
+        journal.capture,
+      );
+      const authorityPath = join(
+        await realpath(privateDirectory),
+        "authority.sqlite",
+      );
+      const exec = Database.prototype.exec;
+      const fault = spyOn(Database.prototype, "exec").mockImplementation(
+        function (this: Database, ...args) {
+          if (
+            !journalWrite &&
+            args[0] === "COMMIT" &&
+            this.filename === authorityPath
+          ) {
+            writes++;
+            // An uncertain commit can leave a durable detector that the scan can verify.
+            if (canIdentify) exec.apply(this, args);
+            throw Object.assign(new Error("registration write failed"), {
+              code: canIdentify ? "SQLITE_IOERR_FSYNC" : "SQLITE_FULL",
+            });
+          }
+          return exec.apply(this, args);
+        },
+      );
+      try {
+        const models = createRouteModels({
+          route: SOL_ROUTE,
+          retry: { maxRetries: 1, baseDelayMs: 1 },
+          log,
+          runId,
+          sessionAffinity: runId,
+          auth: { tokenCommand: tokenCommand(directory, "lease").path },
+          credentialInspection,
+          capture,
+          fetch: Object.assign(
+            async () => {
+              sent++;
+              return answer("Done.");
+            },
+            { preconnect() {} },
+          ),
+        });
+        const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
+        if (!model) throw new Error("Expected coding route model");
+        const result = await models.complete(model, prompt);
+        expect(routeFailureOf(result)).toBeUndefined();
+        expect(result.content).toContainEqual(
+          expect.objectContaining({ type: "text", text: "Done." }),
+        );
+        expect(result.stopReason).toBe("stop");
+        expect([writes, sent]).toEqual([2, 1]);
+      } finally {
+        fault.mockRestore();
+      }
+      await log.flush?.();
+      const call = log.read().find(({ type }) => type === "model.call");
+      expect(call?.failureKind).toBeUndefined();
+      expect(typeof call?.sentAt).toBe("string");
+      expect(
+        log.read().find(({ type }) => type === "capture.loss"),
+      ).toMatchObject({
+        callId: String(call?.call),
+        event: "credential.registration",
+        reason: canIdentify ? "I/O error" : "disk full",
+        persisted: !unwritten,
+      });
+      if (unwritten) await rm(lossFile, { recursive: true });
+
+      const callId = "later-call";
+      journal.capture({
+        type: "model.request",
+        scope,
+        callId,
+        route: "synthetic",
+        provider: "synthetic",
+        model: "synthetic",
+        headerNames: [],
+        credentialCoverage: "none",
+        body: {
+          status: "sent",
+          json: { text: variant === "clean" ? "Next." : "tok-1" },
+        },
+      });
+      journal.capture({ type: "model.response", scope, callId, status: 200 });
+      journal.capture({
+        type: "model.end",
+        scope,
+        callId,
+        outcome: "completed",
+      });
+      if (unwritten) {
+        expect(readCaptureLosses(captureDirectory)).toEqual([]);
+        expect(() => journal.close()).toThrow(
+          expect.objectContaining({
+            detail: "credential registration loss could not be recorded",
+          }),
+        );
+        const reopened = openCaptureJournal(captureDirectory, runId, {
+          allowCredentialLoss: true,
+        });
+        reopened.close();
+      } else journal.close();
+
+      const input = {
+        runId,
+        journal: captureDirectory,
+        nativeDatabase,
+        credentialInspection,
+      };
+      const location = storeLocationIn(join(directory, "records"));
+      const run = runIn(location);
+      const root = join(directory, "datasets");
+      await mkdir(root);
+      const { capture: raw } = value(await run(captureRunDump(input)));
+      const output = { capture: raw, root, retention: { policy: "synthetic" } };
+      const expectHeld = async () => {
+        for (const result of [
+          await run(readCapturedDump(raw)),
+          await run(exportCapturedDump(output)),
+          await run(exportCapturedDump({ ...output, redaction: "portable" })),
+        ])
+          expect(result._tag).toBe("Failure");
+      };
+      expect(value(await run(scanStatus(raw))).status).toBe("pending");
+      await expectHeld();
+      value(await run(scanCaptures(location)));
+      if (variant !== "clean") {
+        const status = value(await run(scanStatus(raw)));
+        expect(status.status).toBe("refused");
+        const reason =
+          variant === "exposed"
+            ? "credential exposure in exact source"
+            : "historical calls lack durable registration";
+        expect(status).toMatchObject({
+          reason: expect.stringContaining(reason),
+        });
+        await expectHeld();
+        await expect(exportSnapshot({ ...input, ...output })).rejects.toThrow(
+          reason,
+        );
+        return;
+      }
+      expect(value(await run(scanStatus(raw))).status).toBe("clean");
+      for (const redaction of ["restricted", "portable"] as const) {
+        const saved = value(
+          await run(exportCapturedDump({ ...output, redaction })),
+        );
+        const dump = await Effect.runPromise(readSessionDump(saved.directory));
+        expect(
+          dump.unjoined.map(({ callId, end }) => [callId, end?.outcome]),
+        ).toEqual([["later-call", "completed"]]);
+        expect(dump.run.gaps).toContainEqual({
+          code: "journal-failed",
+          count: 1,
+          kind: "capture",
+          detail: expect.stringContaining(
+            `call ${call?.call} lost capture at credential.registration`,
+          ),
+        });
+      }
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+      credentialInspection.close();
+      ownership.release();
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+}

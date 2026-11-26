@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { open, realpath, rename, rm } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { STORE_DIRECTORY_MODE, STORE_FILE_MODE } from "@neuve/records-core";
 import { z } from "zod";
@@ -189,6 +189,7 @@ export interface JournalOptions {
   /** The largest file `ingest` keeps, within `limits.objectBytes`; a larger one is refused, never cut short. */
   readonly maxSpillBytes?: number | undefined;
   readonly limits?: DumpLimits | undefined;
+  readonly allowCredentialLoss?: true;
   readonly onCaptureLoss?:
     ((loss: CaptureLoss, persisted: boolean) => void) | undefined;
 }
@@ -445,7 +446,7 @@ export const readCaptureLosses = (
   }
 };
 
-export const captureLossRecorder = (
+const captureLossRecorder = (
   directory: string,
   options: Pick<JournalOptions, "limits" | "onCaptureLoss"> = {},
 ): Required<Pick<ModelCapture, "recordLoss" | "journalFull">> => {
@@ -498,6 +499,16 @@ export const openCaptureJournal = (
   const objects = join(directory, OBJECTS_DIRECTORY);
   const limits = options.limits ?? DEFAULT_LIMITS;
   const limit = journalLimit(limits);
+  const closeReserve = options.allowCredentialLoss
+    ? Buffer.byteLength(
+        JSON.stringify({
+          v: CAPTURE_VERSION,
+          seq: Number.MAX_SAFE_INTEGER,
+          at: Number.MAX_SAFE_INTEGER,
+          event: { type: "journal.close", scope: { runId } },
+        }),
+      ) + 1
+    : 0;
   let seq: number;
   let journalBytes: number;
   try {
@@ -686,7 +697,12 @@ export const openCaptureJournal = (
       const text = `${JSON.stringify(line)}\n`;
       const bytes = Buffer.byteLength(text);
       serializedBytes += bytes;
-      if (journalBytes + bytes > limit)
+      if (
+        journalBytes +
+          bytes +
+          (event.type === "journal.close" ? 0 : closeReserve) >
+        limit
+      )
         throw new JournalFull(
           `${JOURNAL_FILE} would grow over the ${limit}-byte limit`,
           true,
@@ -721,7 +737,9 @@ export const openCaptureJournal = (
     append(
       type === "journal.failed"
         ? { type, scope: { runId }, reason: reason ?? "" }
-        : { type, scope: { runId } },
+        : type === "journal.open" && options.allowCredentialLoss
+          ? { type, scope: { runId }, allowCredentialLoss: true }
+          : { type, scope: { runId } },
     );
 
   const fail = (failure: CaptureFailed): never => {
@@ -858,6 +876,18 @@ export const openCaptureJournal = (
     limits: options.limits,
     onCaptureLoss(record, persisted) {
       if (persisted) pendingLosses.delete(record.callId);
+      else if (
+        options.allowCredentialLoss &&
+        record.event === "credential.registration"
+      )
+        pendingLosses.set(
+          record.callId,
+          new CaptureFailed({
+            kind: record.kind,
+            event: record.event,
+            detail: "credential registration loss could not be recorded",
+          }),
+        );
       options.log?.write({
         type: "capture.loss",
         runId,
@@ -867,10 +897,17 @@ export const openCaptureJournal = (
       options.onCaptureLoss?.(record, persisted);
     },
   });
-  const capture: Capture = Object.assign((event: CaptureEvent) => {
-    admit(event.type);
-    accept(event.type, stored(event));
-  }, loss);
+  const capture: Capture = Object.assign(
+    (event: CaptureEvent) => {
+      admit(event.type);
+      accept(event.type, stored(event));
+    },
+    loss,
+    {
+      allowCredentialLoss: () =>
+        options.allowCredentialLoss === true && state._tag === "Open",
+    },
+  );
 
   const roots = options.spillRoots ?? [];
   const maxSpillBytes = Math.min(
@@ -940,6 +977,12 @@ export const openCaptureJournal = (
 
   try {
     mark("journal.open");
+    // An unclosed session must hold exports even if no later write reaches disk.
+    if (options.allowCredentialLoss) {
+      fsyncSync(descriptor());
+      syncPath(directory);
+      syncPath(dirname(directory));
+    }
   } catch (error) {
     try {
       release();

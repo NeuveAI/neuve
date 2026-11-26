@@ -61,7 +61,6 @@ import {
   privateInspectionDirectory,
   type PrivateInspection,
   fullOutputPath,
-  captureLossRecorder,
   openCaptureJournal,
   openRouteAdmission,
   routeModel,
@@ -162,7 +161,6 @@ export function codingWorkerSetup(
   });
   const reviewSessions = new Map<string, ReturnType<typeof nativeReview>>();
   const journals = new Map<string, CaptureJournal>();
-  const modelCaptures = new Map<string, RouteModelsOptions["capture"]>();
   const planningSessions = new Map<
     string,
     {
@@ -210,6 +208,7 @@ export function codingWorkerSetup(
       {
         spillRoots: [realpathSync(tmpdir())],
         onCaptureLoss: reportCaptureLoss(worker),
+        allowCredentialLoss: true,
       },
     );
     journals.set(worker.sessionId, opened);
@@ -255,33 +254,10 @@ export function codingWorkerSetup(
     try {
       return journal(worker).capture;
     } catch (error) {
-      if (!captureWriteFailure(error)) throw error;
+      const opened = journals.get(worker.sessionId);
+      if (opened === undefined || !captureWriteFailure(error)) throw error;
+      return opened.capture;
     }
-    const known = modelCaptures.get(worker.sessionId);
-    if (known) return known;
-    const fallback = captureLossRecorder(
-      join(worker.stateDirectory, "capture"),
-      {
-        onCaptureLoss: reportCaptureLoss(worker),
-      },
-    );
-    const capture: RouteModelsOptions["capture"] = Object.assign(
-      (event: Parameters<RouteModelsOptions["capture"]>[0]) => {
-        journal(worker).capture(event);
-      },
-      {
-        journalFull: () =>
-          journals.get(worker.sessionId)?.capture.journalFull?.() ??
-          fallback.journalFull(),
-        recordLoss: (...args: Parameters<typeof fallback.recordLoss>) =>
-          (
-            journals.get(worker.sessionId)?.capture.recordLoss ??
-            fallback.recordLoss
-          )(...args),
-      },
-    );
-    modelCaptures.set(worker.sessionId, capture);
-    return capture;
   };
   return {
     async query(
@@ -635,7 +611,6 @@ export function codingWorkerSetup(
       } catch (error) {
         if (!captureWriteFailure(error)) throw error;
       } finally {
-        modelCaptures.delete(worker.sessionId);
         journals.delete(worker.sessionId);
       }
       const started = performance.now();

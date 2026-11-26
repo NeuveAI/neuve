@@ -40,6 +40,7 @@ import {
 } from "./credential-detectors.ts";
 import { openCaptureJournal, readCaptureJournal } from "./journal.ts";
 import type { ArtifactSource } from "./representation.ts";
+import { CaptureFailed } from "./types.ts";
 
 const FILE = "authority.sqlite";
 const MAX_STATE = 8 * 1024 * 1024;
@@ -325,6 +326,30 @@ const syncDirectory = (directory: string): void =>
       closeSync(fd);
     }
   });
+const writeRegistration = <T>(write: () => T): T => {
+  try {
+    return write();
+  } catch (error) {
+    const code =
+      error instanceof Error && "code" in error ? error.code : undefined;
+    if (
+      typeof code === "string" &&
+      (/^SQLITE_(?:FULL|READONLY(?:_[A-Z]+)?|IOERR_(?:WRITE|FSYNC|DIR_FSYNC|TRUNCATE|SHMSIZE))$/.test(
+        code,
+      ) ||
+        (error instanceof PrivateInspectionError &&
+          error.check === "fsync-directory" &&
+          /^(?:ENOSPC|EIO|EROFS|EACCES|EPERM)$/.test(code)))
+    )
+      throw new CaptureFailed({
+        kind: "io",
+        event: "credential.registration",
+        detail: "private credential registration could not be written",
+        writeCode: code,
+      });
+    throw error;
+  }
+};
 const mac = (key: Uint8Array, source: string, state: Uint8Array) =>
   createHmac("sha256", key)
     .update("private-inspection-v1\0")
@@ -958,7 +983,7 @@ export class PrivateInspection {
       return await operation();
     } catch (error) {
       rethrowBusy(error);
-      if (preserveFailure) throw error;
+      if (preserveFailure || error instanceof CaptureFailed) throw error;
       const failure = inspectionFailure(error);
       if (failure.reason === "budget" || failure.reason === "cancelled")
         return failure;
@@ -1003,8 +1028,7 @@ export class PrivateInspection {
   > {
     return this.#exclusive(async () => {
       this.#assert();
-      this.#database.exec("BEGIN IMMEDIATE");
-      let committed = false;
+      writeRegistration(() => this.#database.exec("BEGIN IMMEDIATE"));
       let engine: CredentialDetectors | undefined;
       let row: ReturnType<typeof readState> | undefined;
       let adopted = false;
@@ -1017,17 +1041,16 @@ export class PrivateInspection {
         const state = engine.encodePrivate(input.budget);
         if (state.byteLength > MAX_STATE)
           fail("state-size", join(this.#options.directory, FILE));
-        this.#database
-          .query("UPDATE authority SET state=?, mac=? WHERE id=1")
-          .run(
-            state,
-            row.provenanceText === undefined
-              ? mac(row.key, this.#source, state)
-              : provenanceMac(row.key, this.#source, state, row.provenanceText),
-          );
-        this.#database.exec("COMMIT");
-        committed = true;
-        syncDirectory(this.#options.directory);
+        const update = this.#database.query(
+          "UPDATE authority SET state=?, mac=? WHERE id=1",
+        );
+        const signature =
+          row.provenanceText === undefined
+            ? mac(row.key, this.#source, state)
+            : provenanceMac(row.key, this.#source, state, row.provenanceText);
+        writeRegistration(() => update.run(state, signature));
+        writeRegistration(() => this.#database.exec("COMMIT"));
+        writeRegistration(() => syncDirectory(this.#options.directory));
         this.#assert();
         const reread = readState(this.#database, this.#source, input.budget);
         if (!Buffer.from(state).equals(reread.state))
@@ -1040,7 +1063,7 @@ export class PrivateInspection {
       } finally {
         if (!adopted) engine?.destroy();
         row?.key.fill(0);
-        if (!committed) this.#database.exec("ROLLBACK");
+        if (this.#database.inTransaction) this.#database.exec("ROLLBACK");
       }
     });
   }
@@ -1160,8 +1183,18 @@ export class PrivateInspection {
     readonly json: CredentialJson;
     readonly budget: InspectionBudget;
     readonly signal?: AbortSignal;
+    /** A live call with a lost registration may have no historical epochs to observe. */
+    readonly allowEmpty?: boolean;
   }): Promise<InspectionResult> {
-    return this.#inspect((engine) => engine.inspectJson(input), input.budget);
+    return this.#inspect(
+      (engine) =>
+        input.allowEmpty &&
+        !input.signal?.aborted &&
+        engine.epochIds.length === 0
+          ? Promise.resolve({ status: "complete", epochs: [], matches: [] })
+          : engine.inspectJson(input),
+      input.budget,
+    );
   }
   async inspectArtifact(
     input: ArtifactSource & {

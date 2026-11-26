@@ -10,7 +10,6 @@ export {
   type RouteFailure,
 } from "./pi/providers/failure.ts";
 export {
-  captureLossRecorder,
   fullOutputPath,
   openCaptureJournal,
   type CaptureJournal,

@@ -20,13 +20,8 @@ import type {
   HarnessSettings,
 } from "@earendil-works/pi-durable";
 import { CallCapture } from "./capture-write.ts";
-import {
-  CredentialEpochId,
-  InspectionBudget,
-} from "../capture/credential-detectors.ts";
 import { rememberEphemeralCredentials } from "../capture/safety.ts";
 import {
-  CREDENTIAL_INSPECTION_POLICY,
   CaptureFailed,
   CapturedEvent,
   CaptureScope,
@@ -169,6 +164,8 @@ export const captureNativeModels = (
                   status: "exposed",
                 });
             },
+            undefined,
+            current?.writes.lostRegistration,
           )
         ).data;
       }
@@ -217,26 +214,14 @@ export const captureNativeModels = (
             current.id,
             headers,
           );
-        else {
-          const registration = await options.credentialInspection.register({
-            epoch: CredentialEpochId.parse(current.id),
+        else
+          await current.writes.register(
+            scope,
+            current.id,
+            options.credentialInspection,
             headers,
-            budget: new InspectionBudget(),
-            deduplicate: true,
-          });
-          if (registration.status !== "registered")
-            throw new Error("Native credential registration is unavailable");
-          await current.writes.write(
-            {
-              type: "credential.registration",
-              scope: { runId: scope.runId },
-              callId: current.id,
-              epochId: registration.epoch,
-              policy: CREDENTIAL_INSPECTION_POLICY,
-            },
             request.signal,
           );
-        }
       }
       const sdkContext = current.actualHttp
         ? contextOf?.(current.id)
@@ -442,6 +427,8 @@ export const captureNativeModels = (
                   status: "exposed",
                 });
             },
+            undefined,
+            current.writes.lostRegistration,
           );
         if (exposed) {
           if (current.guarded)
@@ -468,6 +455,8 @@ export const captureNativeModels = (
               data,
               options.credentialInspection,
               () => {},
+              undefined,
+              current.writes.lostRegistration,
             )
           ).data;
         return typeof data === "string"

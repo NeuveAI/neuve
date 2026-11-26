@@ -39,6 +39,7 @@ import {
 import {
   sha256Of,
   decodeCaptureLosses,
+  readCaptureLosses,
   readCaptureJournal,
   JOURNAL_FILE,
   OBJECTS_DIRECTORY,
@@ -237,6 +238,13 @@ export const fileRawCapture = (input: BuildInput) =>
     const lines = journal._tag === "Read" ? journal.lines : [];
     const stored = new Map(contents.map((file) => [file.name, file]));
     const journalFile = stored.get(`capture/${JOURNAL_FILE}`);
+    const latestLosses = yield* Effect.try(() =>
+      readCaptureLosses(input.journal, limits),
+    );
+    if (JSON.stringify(latestLosses) !== JSON.stringify(losses))
+      return yield* Effect.fail(
+        new Error("raw capture loss changed during filing"),
+      );
     if (
       journal._tag === "Read" &&
       (journalFile?.sha256 !==

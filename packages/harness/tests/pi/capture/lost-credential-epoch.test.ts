@@ -111,9 +111,11 @@ for (const variant of ["covered", "missing", "exposed"] as const) {
         root: datasets,
         retention,
       });
-      if (variant === "exposed") {
+      if (variant === "exposed" || variant === "missing") {
         await expect(exported).rejects.toThrow(
-          "credential exposure in exact source",
+          variant === "exposed"
+            ? "credential exposure in exact source"
+            : "historical calls lack durable registration",
         );
         return;
       }
@@ -128,62 +130,54 @@ for (const variant of ["covered", "missing", "exposed"] as const) {
           `call ${lostCall} lost capture at credential.registration`,
         ),
       });
-      if (variant === "missing") {
-        expect(dump.run.journal.status).toBe("unavailable");
-        expect(dump.run.backup.status).toBe("unavailable");
-        expect(dump.unjoined).toEqual([]);
-      } else {
-        expect(dump.run.journal.status).toBe("captured");
-        expect(dump.run.gaps.map(({ code }) => code)).toEqual([
-          "journal-failed",
-          "calls-unjoined",
-        ]);
-        expect(
-          dump.unjoined.map(({ callId, end }) => [callId, end?.outcome]),
-        ).toEqual([
-          ["first", "completed"],
-          ["second", "completed"],
-        ]);
-        const portable = await exportPortableSnapshot({
-          directory: snapshot.directory,
-          root: datasets,
-          retention,
-        });
-        const copy = await Effect.runPromise(
-          readSessionDump(portable.directory),
-        );
-        expect(copy.run.gaps).toEqual(dump.run.gaps);
-        expect(copy.unjoined.map(({ callId }) => callId)).toEqual([
-          "first",
-          "second",
-        ]);
-        const location = storeLocationIn(join(root, "records"));
-        const run = runIn(location);
-        const filed = value(
-          await run(
-            fileRawCapture({
-              runId,
-              journal: journal.directory,
-              nativeDatabase,
-              credentialInspection: authority,
-            }),
-          ),
-        );
-        const { backup } = dump.run;
-        if (backup.status !== "captured") throw new Error("Expected a backup");
-        expect(filed.manifest.checkpoint?.nativeSha256).toBe(backup.sha256);
-        const scanned = value(
-          await run(
-            scanRawCapture({
-              location,
-              rawCapture: filed.rawCapture,
-              seal: (sources, scan) => sealCapturedDump(sources, scan, false),
-            }),
-          ),
-        );
-        expect(scanned.run.gaps).toEqual(dump.run.gaps);
-        expect(scanned.run.journal).toEqual(dump.run.journal);
-      }
+      expect(dump.run.journal.status).toBe("captured");
+      expect(dump.run.gaps.map(({ code }) => code)).toEqual([
+        "journal-failed",
+        "calls-unjoined",
+      ]);
+      expect(
+        dump.unjoined.map(({ callId, end }) => [callId, end?.outcome]),
+      ).toEqual([
+        ["first", "completed"],
+        ["second", "completed"],
+      ]);
+      const portable = await exportPortableSnapshot({
+        directory: snapshot.directory,
+        root: datasets,
+        retention,
+      });
+      const copy = await Effect.runPromise(readSessionDump(portable.directory));
+      expect(copy.run.gaps).toEqual(dump.run.gaps);
+      expect(copy.unjoined.map(({ callId }) => callId)).toEqual([
+        "first",
+        "second",
+      ]);
+      const location = storeLocationIn(join(root, "records"));
+      const run = runIn(location);
+      const filed = value(
+        await run(
+          fileRawCapture({
+            runId,
+            journal: journal.directory,
+            nativeDatabase,
+            credentialInspection: authority,
+          }),
+        ),
+      );
+      const { backup } = dump.run;
+      if (backup.status !== "captured") throw new Error("Expected a backup");
+      expect(filed.manifest.checkpoint?.nativeSha256).toBe(backup.sha256);
+      const scanned = value(
+        await run(
+          scanRawCapture({
+            location,
+            rawCapture: filed.rawCapture,
+            seal: (sources, scan) => sealCapturedDump(sources, scan, false),
+          }),
+        ),
+      );
+      expect(scanned.run.gaps).toEqual(dump.run.gaps);
+      expect(scanned.run.journal).toEqual(dump.run.journal);
     } finally {
       await storage.close(BACKGROUND_CONTEXT);
       authority.close();

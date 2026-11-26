@@ -76,7 +76,6 @@ import {
   type SdkInvocation,
   type ModelCaptureEvent,
   RequestBody,
-  CREDENTIAL_INSPECTION_POLICY,
 } from "../capture/types.ts";
 import type { AgentRouteBinding, AgentRouteMode } from "../contracts.ts";
 import {
@@ -393,6 +392,7 @@ const record = async (call: Call, event: ModelCaptureEvent) => {
             });
         },
         call.signal,
+        call.captureWrites.lostRegistration,
       );
       data = historical.data;
     }
@@ -485,6 +485,7 @@ const inspectNativeCredentials = async (
           });
       },
       call.signal,
+      call.captureWrites.lostRegistration,
     );
   }
   const evidence = eventEvidence(
@@ -598,25 +599,11 @@ const observedFetch = (
     );
     if (authenticated && call.credentialInspection !== "ephemeral") {
       try {
-        const { CredentialEpochId, InspectionBudget } =
-          await import("../capture/credential-detectors.ts");
-        const registration = await call.credentialInspection.register({
-          epoch: CredentialEpochId.parse(call.id),
+        await call.captureWrites.register(
+          call.scope,
+          call.id,
+          call.credentialInspection,
           headers,
-          budget: new InspectionBudget(),
-          deduplicate: true,
-          ...(signal === undefined || signal === null ? {} : { signal }),
-        });
-        if (registration.status !== "registered")
-          throw new Error("Durable credential registration is unavailable");
-        await call.captureWrites.write(
-          {
-            type: "credential.registration",
-            scope: { runId: call.scope.runId },
-            callId: call.id,
-            epochId: registration.epoch,
-            policy: CREDENTIAL_INSPECTION_POLICY,
-          },
           call.captureSignal,
         );
       } catch (cause) {

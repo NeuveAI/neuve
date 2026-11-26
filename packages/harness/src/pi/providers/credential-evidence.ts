@@ -87,6 +87,7 @@ export const historicalEvidence = async (
   inspection: import("../capture/private-inspection.ts").PrivateInspection,
   observed: (epochs: ReadonlyArray<string>) => void,
   signal?: AbortSignal,
+  allowEmpty = false,
 ): Promise<{
   readonly data: Json;
   readonly exposedEpochs: ReadonlyArray<string>;
@@ -97,6 +98,7 @@ export const historicalEvidence = async (
   const result = await inspection.inspectJson({
     json: source,
     budget: new InspectionBudget(),
+    allowEmpty,
     ...(signal === undefined ? {} : { signal }),
   });
   const known =

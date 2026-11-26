@@ -558,6 +558,7 @@ export const JournalMark = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("journal.open"),
     scope: CaptureScope.pick({ runId: true }),
+    allowCredentialLoss: z.literal(true).optional(),
   }),
   z.strictObject({
     type: z.literal("journal.close"),
@@ -618,6 +619,7 @@ export class CaptureFailed extends Data.TaggedError("CaptureFailed")<{
       case "EPERM":
         return "permission denied";
       case "ENOSPC":
+      case "SQLITE_FULL":
         return "disk full";
       default:
         return "I/O error";
@@ -654,4 +656,5 @@ export type CaptureLoss = z.infer<typeof CaptureLoss>;
 export type ModelCapture = ((event: ModelCaptureEvent) => void) & {
   readonly recordLoss?: (loss: CaptureLoss, journalFull: boolean) => void;
   readonly journalFull?: () => boolean;
+  readonly allowCredentialLoss?: () => boolean;
 };

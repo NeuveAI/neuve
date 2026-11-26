@@ -119,8 +119,8 @@ export const credentialLossEpochs = (
   registrations: ReadonlyMap<string, string>,
 ) =>
   new Map(
-    losses.flatMap(({ callId, credentialCoverage, epochId }) =>
-      credentialCoverage === "required"
+    losses.flatMap(({ callId, event, credentialCoverage, epochId }) =>
+      event === "credential.registration" || credentialCoverage === "required"
         ? [[callId, registrations.get(callId) ?? epochId ?? callId] as const]
         : [],
     ),
@@ -130,6 +130,9 @@ type LossEvidence = {
   readonly epochs: ReadonlyMap<string, string>;
   readonly certificates?: readonly CredentialCertificate[];
 };
+
+export const CREDENTIAL_REGISTRATION_REFUSED =
+  "historical calls lack durable registration; export refused";
 
 export const credentialGuards = (
   lines: ReadonlyArray<JournalLine>,
@@ -163,6 +166,20 @@ export const credentialGuards = (
   const pending = new Set<string>();
   const observed = new Set<string>();
   const ended = new Set<string>();
+  let registrationUnaccountedFor = false;
+  for (const event of events) {
+    if (event.type === "journal.close") registrationUnaccountedFor = false;
+    if (event.type !== "journal.open") continue;
+    if (registrationUnaccountedFor) break;
+    registrationUnaccountedFor = event.allowCredentialLoss === true;
+  }
+  if (registrationUnaccountedFor)
+    return {
+      refusal: CREDENTIAL_REGISTRATION_REFUSED,
+      guards,
+      retainedPrefixCalls,
+      requiresInspection: true,
+    };
   for (const event of events) {
     if (event.type === "model.end") ended.add(event.callId);
     if (event.type === "model.request") {

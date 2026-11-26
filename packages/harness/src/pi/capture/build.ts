@@ -16,6 +16,7 @@ import {
   renderCloseDiagnostic,
 } from "./close-diagnostic.ts";
 import {
+  CREDENTIAL_REGISTRATION_REFUSED,
   CredentialSourceUnavailable,
   credentialGuards,
   credentialLossEpochs,
@@ -407,10 +408,28 @@ const build = async (
   const declared = input.declared ?? [];
 
   const limits = input.limits ?? DEFAULT_LIMITS;
-  const losses = readCaptureLosses(input.journal, limits);
+  const journalStat = () =>
+    lstat(join(input.journal, JOURNAL_FILE), { bigint: true }).catch(
+      (error: unknown) => {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+          return undefined;
+        throw error;
+      },
+    );
+  const beforeBackup =
+    input.capturedBackup === undefined ? await journalStat() : undefined;
   let journal = readCaptureJournal(input.journal, limits);
+  const losses = readCaptureLosses(input.journal, limits);
   const rawLines = journal._tag === "Read" ? journal.lines : [];
   const withholdSource = async () => {
+    if (losses.some(({ event }) => event === "credential.registration"))
+      throw new DumpFailed({
+        reason: CREDENTIAL_REGISTRATION_REFUSED,
+      });
     const reason = "Capture loss prevents certification of the original source";
     const recipe = ProjectionRecipe.parse({
       version: 1,
@@ -500,6 +519,19 @@ const build = async (
       : input.native === undefined
         ? { conversations: [], session: [] }
         : await readNative(input.native.reads, input.native.context);
+  if (input.capturedBackup === undefined) {
+    const current = await journalStat();
+    if (
+      current?.dev !== beforeBackup?.dev ||
+      current?.ino !== beforeBackup?.ino ||
+      current?.size !== beforeBackup?.size ||
+      current?.mtimeNs !== beforeBackup?.mtimeNs ||
+      current?.ctimeNs !== beforeBackup?.ctimeNs
+    )
+      throw new DumpFailed({
+        reason: "capture journal changed during native backup; export refused",
+      });
+  }
   progress.inventory = measuredCloseInventory(
     lines,
     [...journal.objects.values()].reduce(
@@ -748,7 +780,7 @@ const build = async (
         )
       )
         throw new DumpFailed({
-          reason: "historical calls lack durable registration; export refused",
+          reason: CREDENTIAL_REGISTRATION_REFUSED,
         });
       if (scanned !== undefined) {
         if (censusFailure !== undefined) censusRefusal(censusFailure.error);
