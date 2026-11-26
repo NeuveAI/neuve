@@ -25,10 +25,13 @@ import {
 import type { RetrieverConfig } from "./retriever.ts";
 import { GRAPH_DEADLINE_MS, SearchConfig } from "./search-config.ts";
 import { BLOB_STRUCTURE_RECIPE, SECTIONS_RECIPE } from "./sections.ts";
+import { DEFAULT_READING_BOUNDS } from "./reading-groups.ts";
+import { READING_RECIPE_SCOPE_AND_TESTS } from "./readings/plan.ts";
 import { StackToolsConfig } from "./stack/settings.ts";
 
 /** A new fixed review shape gets a new run key, including for an unfinished older request. */
-export const PIPELINE_VERSION = 12;
+export const PIPELINE_VERSION = 13;
+export const REVIEW_OWNERSHIP = "batch-assignment-v1" as const;
 
 /**
  * Development settings for slice H1's stub stages, recorded in the configuration and printed on its
@@ -66,9 +69,8 @@ export const keyedStub = (stub: StubSettings | undefined) => {
 };
 
 /**
- * What a review request freezes about responsibility sections (10.109): present unless the user's
- * settings turn them off (`review.responsibilitySections`), so a run with them off keeps its key. The
- * recipes are in it because the units are cut by both, so a recipe change is a new run.
+ * Responsibility section recipes frozen by a review request. New reviews always include these;
+ * historical configurations that omitted them remain readable without filling or relabelling.
  */
 export const SectionsConfig = z.strictObject({
   units: z.literal(true),
@@ -93,6 +95,8 @@ export const sectionsConfig = (
 
 /** The configuration frozen with a review request (`review.requested@1` payload `pipeline.config`). */
 export const PipelineConfig = z.strictObject({
+  /** Absent only on historical requests; never upgrades a frozen legacy task. */
+  ownership: z.literal(REVIEW_OWNERSHIP).optional(),
   externalContext: z
     .string()
     .regex(/^[a-f0-9]{64}$/)
@@ -137,15 +141,13 @@ export const PipelineConfig = z.strictObject({
    */
   stack: StackToolsConfig.optional(),
   /**
-   * Responsibility sections in the units stage's fill (10.109), present unless the user's settings
-   * turn them off (`review.responsibilitySections`). Absent: each file's hunks are one section
-   * each, and the run keeps the key it had before.
+   * Responsibility sections, required on new runs. Optional only to read historical configurations
+   * without changing their source, units or computation identity.
    */
   sections: SectionsConfig.optional(),
   /**
-   * The section readings (NEU-148), present unless the user's settings turn them off
-   * (`review.sectionReadings: "off"`). Absent: no readings, and the run keeps the key it had
-   * before.
+   * Required on new comprehensive reviews. Optional only for byte-preserving historical reads;
+   * absence never authorizes a current-version run without its sole general reviewer.
    */
   readings: z
     .strictObject({
@@ -159,9 +161,8 @@ export const PipelineConfig = z.strictObject({
       /** Effort by risk (`review.sectionReadingsEffort`): present only when the settings set it. */
       effort: z.literal("by-risk").optional(),
       /**
-       * Scope and tests (`review.sectionReadingsScopeAndTests`): present only when the settings set
-       * it, beside the readings' own recipe for it (`READING_RECIPE_SCOPE_AND_TESTS`). Lane review is
-       * asked whether a change was asked for, and Assess which shown tests exercise a requirement.
+       * Scope and tests are always on for new comprehensive reviews. Optional only so older
+       * frozen JSON stays readable without changing its computation identity.
        */
       scopeAndTests: z.literal(true).optional(),
       /**
@@ -179,6 +180,25 @@ export const PipelineConfig = z.strictObject({
     .optional(),
 });
 export type PipelineConfig = z.infer<typeof PipelineConfig>;
+
+/** Admission guard shared by execution and recomposition; historical JSON still parses unchanged. */
+export const currentPipelineProblem = (
+  version: number,
+  config: unknown,
+): string | undefined => {
+  if (version !== PIPELINE_VERSION)
+    return `This build cannot execute pipeline ${version}; it executes pipeline ${PIPELINE_VERSION}. Use a compatible build for legacy review requests, or request a distinct new review with this build. This refusal does not requeue the old request. Native state keeps its normal retention limit; published packages and durable computations are unchanged.`;
+  const parsed = PipelineConfig.safeParse(config);
+  if (
+    !parsed.success ||
+    parsed.data.ownership !== REVIEW_OWNERSHIP ||
+    parsed.data.sections === undefined ||
+    parsed.data.readings === undefined ||
+    parsed.data.readings.scopeAndTests !== true
+  )
+    return "This review lacks the required batch-owned comprehensive review configuration. It cannot execute or be upgraded in place; request a distinct new review.";
+  return undefined;
+};
 
 /** Refuse a frozen route whose account would run it through a different provider loop. */
 export const routeOwnsLoop = (
@@ -238,14 +258,19 @@ export const defaultConfig = (
    * lifetimes share every stage both completed.
    */
   lifetime: Duration.Duration = RUN_LIFETIME,
-  /** Responsibility sections (`sectionsConfig`); absent leaves the configuration as it was. */
+  /** New reviews always own sections; an absent override uses the required default. */
   sections?: SectionsConfig,
-  /** The section readings; absent leaves the configuration as it was. */
+  /** The comprehensive readings; absent uses the required default, never disables review. */
   readings?: ReadingsConfig,
 ): PipelineConfig => ({
+  ownership: REVIEW_OWNERSHIP,
   route,
   budgets: {
-    turnLimits: { ...turnLimits },
+    turnLimits: {
+      frame: turnLimits.frame,
+      map: turnLimits.map,
+      verify: turnLimits.verify,
+    },
     callsInFlight: CALLS_IN_FLIGHT,
     contextCeiling: contextCeiling(route),
     toolResultTokens: TOOL_RESULT_TOKENS,
@@ -263,8 +288,15 @@ export const defaultConfig = (
   },
   ...(search?.tools === undefined ? {} : { search: search.tools }),
   ...(stack === undefined ? {} : { stack }),
-  ...(sections === undefined ? {} : { sections }),
-  ...(readings === undefined ? {} : { readings }),
+  sections: sections ?? sectionsConfig(true)!,
+  readings: {
+    ...(readings ?? {
+      mode: "probe",
+      bounds: { ...DEFAULT_READING_BOUNDS },
+      recipe: READING_RECIPE_SCOPE_AND_TESTS,
+    }),
+    scopeAndTests: true,
+  },
 });
 
 /** The run's Precompute settings: frozen with the request, or the defaults for an older request. */
@@ -301,6 +333,9 @@ export const runSpec = (
   inputs: { baseOid: range.baseOid, headOid: range.headOid },
   config: JSON.parse(
     JSON.stringify({
+      ...(config.ownership === undefined
+        ? {}
+        : { ownership: config.ownership }),
       budgets: config.budgets,
       stub: keyedStub(config.stub),
       route: keyedRoute(config.route),

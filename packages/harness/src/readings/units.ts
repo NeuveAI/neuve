@@ -1,5 +1,5 @@
 import type { Lane } from "@neuve/records-schema";
-import { applyLane, overlaps, requirementsProof } from "../disposition.ts";
+import { applyLane, requirementsProof } from "../disposition.ts";
 import { LANE_ORDER } from "../lane-rule.ts";
 import type { Effect } from "./answers.ts";
 import {
@@ -241,8 +241,8 @@ const tierOf = (comment: UnitComment) => {
 };
 
 /**
- * A unit's comments in rank order: by tier; then those a finder and Lane review both anchor on
- * overlapping lines; then by number of cites; then by place. A comment the unit's request for
+ * A unit's comments in rank order: by tier, number of cites, then place.
+ * Shared anchors are not independent corroboration. A comment the unit's request for
  * changes rests on (`restsOn`) is always shown and does not count against the cut; of the rest,
  * the first three that are not refuted are shown and the others are below the cut. A refuted
  * claim keeps its place with fate `refuted` and is never shown. Every comment keeps its rank and
@@ -253,28 +253,14 @@ export const rankComments = (
   options: { readonly restsOn?: ReadonlyArray<string> | undefined } = {},
 ): ReadonlyArray<RankedComment> => {
   const restsOn = new Set(options.restsOn ?? []);
-  // Only a finder and Lane review agreeing counts; an impact comment from Assess or code never does.
-  const reviewers = (a: UnitComment, b: UnitComment) =>
-    (a.source === "finder" && b.source === "lane-review") ||
-    (a.source === "lane-review" && b.source === "finder");
-  const agreed = (comment: UnitComment) =>
-    comments.some(
-      (other) =>
-        reviewers(other, comment) &&
-        other.anchor.path === comment.anchor.path &&
-        other.anchor.side === comment.anchor.side &&
-        overlaps(other.anchor, comment.anchor),
-    );
   const placed = [...comments]
     .map((comment) => ({
       comment,
       tier: tierOf(comment),
-      agreed: agreed(comment),
     }))
     .sort(
       (a, b) =>
         a.tier - b.tier ||
-        Number(b.agreed) - Number(a.agreed) ||
         b.comment.cites - a.comment.cites ||
         (a.comment.anchor.path < b.comment.anchor.path
           ? -1

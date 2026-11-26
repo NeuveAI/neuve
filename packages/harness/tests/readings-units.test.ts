@@ -370,3 +370,55 @@ test("a requirement nothing proves is not hidden by a sibling section's proof", 
   });
   expect(proofs[1]).toEqual(proofs[0]);
 });
+
+// Shared lines are neither evidence of one defect nor an independent reviewer's corroboration.
+test("overlapping finder history does not outrank cited distinct concerns or merge same-line defects", () => {
+  const anchor = {
+    path: "a.ts",
+    side: "new" as const,
+    startLine: 4,
+    endLine: 4,
+  };
+  const comments: UnitComment[] = [
+    {
+      id: "original",
+      source: "lane-review",
+      kind: "defect",
+      verify: "confirmed",
+      anchor,
+      cites: 1,
+    },
+    {
+      id: "legacy-finder",
+      source: "finder",
+      kind: "defect",
+      verify: "confirmed",
+      anchor,
+      cites: 1,
+    },
+    {
+      id: "better-evidence",
+      source: "lane-review",
+      kind: "defect",
+      verify: "confirmed",
+      anchor: { ...anchor, startLine: 8, endLine: 8 },
+      cites: 3,
+    },
+    {
+      id: "same-line-distinct-failure",
+      source: "lane-review",
+      kind: "defect",
+      verify: "confirmed",
+      anchor,
+      cites: 1,
+    },
+  ];
+  const ranked = rankComments(comments, {
+    restsOn: ["same-line-distinct-failure"],
+  });
+  expect(ranked[0]!.id).toBe("better-evidence");
+  expect(new Set(ranked.map((row) => row.id)).size).toBe(4);
+  expect(
+    ranked.find((row) => row.id === "same-line-distinct-failure")!.fate,
+  ).toBe("shown");
+});

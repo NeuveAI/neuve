@@ -123,9 +123,6 @@ const RANGE = {
  * The run key of `defaultConfig()` over `RANGE` on this branch's base, before the probe existed
  * (computed there): a run without the setting must keep it.
  */
-const BASE_RUN_KEY =
-  // Re-pinned (round 25): the pipeline version moved from 11 to 12.
-  "eb644e039b6bd267141e4fac4fd924486e3867fc70fdc0a37ce2a046631c5419";
 
 /** Where every world stores the Frame its readings are collected with: one key for all. */
 const FRAME_SPEC: Computations.ComputationSpec = {
@@ -357,9 +354,8 @@ const world = async (name: string, config = defaultConfig()) => {
   return { ctx, run, rows, services, store, storeAt, open };
 };
 
-// Reason: off must cost nothing and change nothing.
-test("with the off switch a review keeps its configuration, run key, stage keys and has no readings port; without it, the block is frozen and the run key differs", async () => {
-  // The setting: `"probe"`, `"off"` or absent, nothing else.
+// Reason: the legacy off switch cannot bypass the sole general reviewer in new reviews.
+test("new configuration always freezes comprehensive readings and sections, while old frozen JSON is still readable", async () => {
   for (const sectionReadings of ["probe", "off"])
     expect(
       Settings.safeParse({ version: 1, review: { sectionReadings } }).success,
@@ -368,24 +364,13 @@ test("with the off switch a review keeps its configuration, run key, stage keys 
     Settings.safeParse({ version: 1, review: { sectionReadings: "on" } })
       .success,
   ).toBe(false);
+  const block = readingsConfig(Option.none());
+  expect(block.scopeAndTests).toBe(true);
   expect(
     readingsConfig(
       Option.some({ version: 1, review: { sectionReadings: "off" } }),
     ),
-  ).toBeUndefined();
-  // Absent and `"probe"` freeze the same block.
-  for (const settings of [
-    Option.none(),
-    Option.some({ version: 1 }),
-    Option.some({ version: 1, review: {} }),
-  ] satisfies ReadonlyArray<Option.Option<Settings>>)
-    expect(readingsConfig(settings)).toEqual(PROBE);
-  const block = readingsConfig(
-    Option.some({ version: 1, review: { sectionReadings: "probe" } }),
-  );
-  expect(block).toEqual(PROBE);
-
-  // The configuration a request freezes, its run key and an agent stage's key.
+  ).toEqual(block);
   const location = storeLocationIn(join(directory, "config"));
   const frozen = (readings: ReadingsConfig | undefined) =>
     Effect.runPromise(
@@ -394,43 +379,27 @@ test("with the off switch a review keeps its configuration, run key, stage keys 
         search: {},
         stack: undefined,
         deadline: undefined,
-        // Explicit, so only the readings block differs (sections are on by default).
         sections: undefined,
         readings,
       }),
     );
-  const off = await frozen(undefined);
-  expect(off).toEqual(defaultConfig());
-  expect("readings" in off).toBe(false);
-  expect(runKeyFor(RANGE, off)).toBe(BASE_RUN_KEY);
-  expect(JSON.stringify(runSpec(RANGE, off))).not.toContain("readings");
-  const on = await frozen(block);
-  expect(PipelineConfig.parse(on).readings).toEqual(PROBE);
+  const normal = await frozen(block);
+  const attemptedOff = await frozen(undefined);
+  expect(attemptedOff).toEqual(defaultConfig());
+  expect(attemptedOff.sections).toBeDefined();
+  expect(attemptedOff.readings).toEqual(block);
+  expect(runKeyFor(RANGE, normal)).toBe(runKeyFor(RANGE, attemptedOff));
   expect(
-    (runSpec(RANGE, on).config as { readings?: unknown }).readings,
-  ).toEqual(PROBE);
-  expect(runKeyFor(RANGE, on)).not.toBe(BASE_RUN_KEY);
-  // A stage's key reads only the route and the stub settings: the probe moves none of them.
-  const stage = (config: PipelineConfig) =>
-    Computations.computationKey(
-      agentStageSpec(
-        config,
-        { stage: "find", turnLimit: 11, agent: "find.correctness" },
-        { op: "harness.find", opVersion: 4, inputs: { lens: "correctness" } },
-      ),
-    ).key;
-  expect(stage(on)).toBe(stage(off));
-
-  // The stages: the readings port only with the block in the run's frozen configuration. The
-  // reading task is registered either way, so a stored run that holds readings always resumes.
-  const names = (stages: ReturnType<typeof reviewStages>) =>
-    (stages.extension.tasks ?? []).map((task) => task.definition.name);
-  const without = reviewStages((await world("off")).services);
-  expect(without.readings).toBeUndefined();
-  expect(names(without)).toContain(READING_TASK);
-  const withIt = reviewStages((await world("on", on)).services);
-  expect(withIt.readings).toBeDefined();
-  expect(names(withIt)).toEqual(names(without));
+    (runSpec(RANGE, normal).config as { readings?: unknown }).readings,
+  ).toEqual(block);
+  // Legacy parsing never fills an omitted block or relabels an old frozen request.
+  const {
+    readings: _readings,
+    sections: _sections,
+    ownership: _ownership,
+    ...legacy
+  } = normal;
+  expect(PipelineConfig.parse(legacy)).toEqual(legacy);
 }, 30_000);
 
 /** The readings fixture still gives each hunk the `leads` the manifest no longer holds. */

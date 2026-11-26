@@ -14,7 +14,7 @@ import {
   type StoreLocation,
 } from "@neuve/records-core";
 import { RecordEvent } from "@neuve/records-schema";
-import { CompletedRun } from "./config.ts";
+import { CompletedRun, currentPipelineProblem } from "./config.ts";
 import { reviewRunHandler } from "./handler.ts";
 import type { Receipt } from "./receipt.ts";
 
@@ -91,6 +91,12 @@ export const recompose = (options: {
       return yield* Effect.fail(
         new RecomposeRefused("--run must name a review request in this store."),
       );
+    const problem = currentPipelineProblem(
+      stored.payload.pipeline.version,
+      stored.payload.pipeline.config,
+    );
+    if (problem !== undefined)
+      return yield* Effect.fail(new RecomposeRefused(problem));
     // Only a completed run's stages are all stored: anything less would call the model.
     const store = yield* Computations.ComputationStore;
     const completed = Option.getOrUndefined(

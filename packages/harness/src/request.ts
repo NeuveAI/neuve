@@ -31,6 +31,7 @@ import {
 import {
   CompletedRun,
   PIPELINE_VERSION,
+  currentPipelineProblem,
   defaultConfig,
   runKeyFor,
   PipelineConfig,
@@ -41,10 +42,7 @@ import {
   type ReadingsConfig,
 } from "./config.ts";
 import { DEFAULT_READING_BOUNDS } from "./reading-groups.ts";
-import {
-  READING_RECIPE,
-  READING_RECIPE_SCOPE_AND_TESTS,
-} from "./readings/plan.ts";
+import { READING_RECIPE_SCOPE_AND_TESTS } from "./readings/plan.ts";
 import { readIntegrations, type Integrations } from "./integrations.ts";
 import { z } from "zod";
 import { git, resolveCommit } from "./git.ts";
@@ -69,7 +67,6 @@ import {
   reviewDeadline,
   reviewEffort,
   reviewReasoningSummaries,
-  reviewResponsibilitySections,
   reviewRoute,
   type Settings,
   reviewStepEffort,
@@ -191,31 +188,19 @@ export const settingsRoute = (settings = readSettings()): RouteConfig => {
     : namedRoute(RouteName.parse(named), settings);
 };
 
-/**
- * The section readings' block a review request freezes (NEU-148): unless the user's settings say
- * `review.sectionReadings: "off"`, which leaves it absent, so the run keeps the key it had before
- * the readings. Absent and `"probe"` freeze the same block. Effort by risk
- * (`review.sectionReadingsEffort: "by-risk"`) is frozen into it only when set. Scope and tests
- * (`review.sectionReadingsScopeAndTests: true`) is frozen only when set, with its own recipe;
- * absent or false, the block is byte for byte the one before it existed. The call-line lift is no
- * switch (round 13): `review.sectionReadingsCallsLiftGap` is ignored and nothing of it is frozen.
- * Rule skips (`review.sectionReadingsRuleSkips: true`) ride on whatever block the readings' mode
- * builds, as `ruleSkips: true`, only when set.
- */
+/** New reviews always run comprehensive review; legacy off/scope switches are read-only compatibility. */
 export const readingsConfig = (
   settings: Option.Option<Settings>,
-): ReadingsConfig | undefined => {
+): ReadingsConfig => {
   const review = Option.getOrUndefined(settings)?.review;
-  if (review?.sectionReadings === "off") return undefined;
-  const scopeAndTests = review?.sectionReadingsScopeAndTests === true;
   return withRuleSkips(review ?? {}, {
     mode: "probe",
     bounds: { ...DEFAULT_READING_BOUNDS },
-    recipe: scopeAndTests ? READING_RECIPE_SCOPE_AND_TESTS : READING_RECIPE,
+    recipe: READING_RECIPE_SCOPE_AND_TESTS,
     ...(review?.sectionReadingsEffort === "by-risk"
       ? { effort: "by-risk" as const }
       : {}),
-    ...(scopeAndTests ? { scopeAndTests: true as const } : {}),
+    scopeAndTests: true,
   });
 };
 
@@ -357,10 +342,7 @@ export type ReviewOptions = {
   readonly leads?: LeadsChoice | undefined;
   /** The stack tools the run is frozen with; from the user's settings (`stack.tools`) when absent. */
   readonly stack?: StackToolsConfig | undefined;
-  /**
-   * Responsibility sections the run is frozen with; from the user's settings
-   * (`review.responsibilitySections`, on unless false or the readings' off switch) when absent.
-   */
+  /** Responsibility sections; new reviews always supply these, even for undefined overrides. */
   readonly sections?: SectionsConfig | undefined;
   /**
    * The run's lifetime; from the user's settings (`review.deadline`) when not given, and 10 minutes
@@ -368,7 +350,7 @@ export type ReviewOptions = {
    * CLI and the desk freeze the same one.
    */
   readonly deadline?: Duration.Duration | undefined;
-  /** The section readings; from the user's settings (`review.sectionReadings`) when absent. */
+  /** Required comprehensive readings; undefined selects defaults, never disables review. */
   readonly readings?: ReadingsConfig | undefined;
 };
 
@@ -415,21 +397,13 @@ export const prepareReviewConfig = (
       "deadline" in options
         ? options.deadline
         : reviewDeadline(yield* Effect.sync(() => readSettings()));
-    // Responsibility sections (10.109): frozen unless the user's settings turn them off, so a run
-    // with them off keeps its key.
-    const sections =
-      "sections" in options
-        ? options.sections
-        : sectionsConfig(
-            reviewResponsibilitySections(
-              yield* Effect.sync(() => readSettings()),
-            ),
-          );
-    // The section readings (NEU-148): frozen unless the user's settings turn them off.
-    const readings =
-      "readings" in options
-        ? options.readings
-        : readingsConfig(yield* Effect.sync(() => readSettings()));
+    // Legacy settings and explicit undefined overrides cannot bypass the sole reviewer.
+    const sections = options.sections ?? sectionsConfig(true);
+    const readings = {
+      ...(options.readings ??
+        readingsConfig(yield* Effect.sync(() => readSettings()))),
+      scopeAndTests: true as const,
+    };
     const config = PipelineConfig.parse(
       defaultConfig(
         options.stub,
@@ -635,6 +609,8 @@ export const requestReview = (options: ReviewOptions) =>
           ...(yield* prepareReviewConfig(options)),
           ...(contextIdentity ? { externalContext: contextIdentity } : {}),
         };
+    const problem = currentPipelineProblem(PIPELINE_VERSION, preparedConfig);
+    if (problem !== undefined) return yield* Effect.fail(new Error(problem));
     if (options.frozenConfig !== undefined && options.runtimes !== undefined)
       yield* routeOwnsLoop(preparedConfig.route, options.runtimes);
     if (preparedConfig.externalContext !== contextIdentity)

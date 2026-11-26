@@ -47,6 +47,7 @@ import {
 } from "@neuve/records-core";
 import {
   PIPELINE_VERSION,
+  currentPipelineProblem,
   PipelineConfig,
   runConfig,
   runSpec,
@@ -150,6 +151,14 @@ export class NotAReviewRequest extends Data.TaggedError("NotAReviewRequest")<{
   readonly retryable: false;
 }> {}
 
+/** No new execution semantics may enter an older frozen run. */
+export class UnsupportedReviewPipeline extends Data.TaggedError(
+  "UnsupportedReviewPipeline",
+)<{
+  readonly message: string;
+  readonly retryable: false;
+}> {}
+
 /** The queue handed over a job without stamping its claim, which every claim does. */
 export class ClaimUnstamped extends Data.TaggedError("ClaimUnstamped")<{
   readonly message: string;
@@ -229,46 +238,6 @@ const knownRunJob = (seq: number) =>
     return row === undefined || JobKind.safeParse(row.kind).success;
   });
 
-/** Abandons older runs of the same range: a newer pipeline version supersedes them (proposal §1). */
-export const abandonSuperseded = (
-  location: StoreLocation,
-  runId: string,
-  baseOid: string,
-  headOid: string,
-) =>
-  Effect.gen(function* () {
-    for (const folder of yield* listRunFolders(location)) {
-      if (
-        folder.runId === runId ||
-        folder.compatible ||
-        Option.isNone(folder.manifest)
-      )
-        continue;
-      const manifest = folder.manifest.value;
-      if (!(yield* knownRunJob(manifest.jobSeq))) continue;
-      if (
-        manifest.range.baseOid === baseOid &&
-        manifest.range.headOid === headOid &&
-        manifest.pipelineVersion < PIPELINE_VERSION
-      ) {
-        const removed = yield* deleteRunFolder(location, folder.runId).pipe(
-          Effect.catchIf(
-            (error) => error instanceof SourceOwned,
-            () => Effect.succeed({ removed: false }),
-          ),
-        );
-        if (!removed.removed) continue;
-        openRunLog(location, folder.runId).write({
-          type: "run.abandoned",
-          reason: `superseded by run ${runId} on pipeline version ${PIPELINE_VERSION}`,
-        });
-        yield* Effect.logInfo(
-          `run ${folder.runId}: superseded by ${runId}; run folder deleted`,
-        );
-      }
-    }
-  });
-
 export interface HandlerOptions {
   readonly location: StoreLocation;
   readonly repository: string;
@@ -300,6 +269,15 @@ export const reviewRunHandler =
       if (event === undefined || event.kind !== "review.requested@1")
         return yield* new NotAReviewRequest({
           message: `job ${job.seq}'s event ${job.eventId} is not a review.requested@1`,
+          retryable: false,
+        });
+      const compatibilityProblem = currentPipelineProblem(
+        event.payload.pipeline.version,
+        event.payload.pipeline.config,
+      );
+      if (compatibilityProblem !== undefined)
+        return yield* new UnsupportedReviewPipeline({
+          message: compatibilityProblem,
           retryable: false,
         });
       // This claim of the job (host.ts `QueueClaim`): a held job comes back with its attempt
@@ -423,7 +401,6 @@ export const reviewRunHandler =
       yield* Effect.logInfo(
         `run ${runId} attempt ${job.attempts}: ${range.baseRef} ${range.baseOid.slice(0, 12)}..${range.headOid.slice(0, 12)}${earlier.length > 0 ? ` (resuming; first started ${earlier[0]?.at})` : ""}`,
       );
-      yield* abandonSuperseded(location, runId, range.baseOid, range.headOid);
       yield* sweepEndedRuns(location, runId).pipe(
         Effect.provide(JobQueue.layer),
       );
@@ -1037,6 +1014,15 @@ const dueRunFolders = (location: StoreLocation, except?: string) =>
           if (folder.compatible || Option.isNone(folder.manifest)) return;
           if (!(yield* knownRunJob(folder.manifest.value.jobSeq))) return;
           const job = yield* queue.inspect(folder.manifest.value.jobSeq);
+          // Refusal is not a terminal execution of this native state. Keep the original database
+          // for a compatible build, even after the worker serializes the nonretryable failure.
+          // Explicit drop and the age bound above remain authoritative.
+          if (
+            Option.isSome(job) &&
+            job.value.state === "failed" &&
+            job.value.lastError?.tag === "UnsupportedReviewPipeline"
+          )
+            return;
           if (
             Option.isSome(job) &&
             job.value.state !== "failed" &&

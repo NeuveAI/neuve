@@ -72,9 +72,8 @@ export const Settings = z.strictObject({
    * the run's stages key apart from a measured run's.
    * `responsibilitySections` (10.109): the units stage cuts each file's changed lines at the file's
    * own structure (an import block, a declaration, a function, a test, a heading section), read from
-   * the structures Precompute stored. On unless false; with `sectionReadings: "off"`, off unless
-   * true. With it off a review has exactly the units and computation keys it had before, and no
-   * structure is read.
+   * the structures Precompute stored. Legacy false/off settings remain parseable but cannot
+   * disable sections or comprehensive review in a new request.
    * `stepEffort`: the effort a kind of step runs at instead of `effort` (`frame`, `map`, `find`,
    * `verify`, `assess`, `lane-review`, `brief`); a kind it does not name runs at `effort`. The section
    * readings' steps differ. With their effort by risk off, Assess and Lane review run at their entry,
@@ -89,13 +88,7 @@ export const Settings = z.strictObject({
       stepEffort: StepEffort.optional(),
       reasoningSummaries: z.boolean().optional(),
       responsibilitySections: z.boolean().optional(),
-      /**
-       * The section readings (NEU-148). Absent or `"probe"`: a review plans, runs and collects the
-       * two section readings and records what they produced, without changing a published unit,
-       * and cuts responsibility sections unless `responsibilitySections` is false. `"off"`: the
-       * review before the readings, exactly: no readings, responsibility sections only when
-       * `responsibilitySections` is true, and every key as it was.
-       */
+      /** Legacy setting accepted for compatibility; neither value disables new comprehensive reviews. */
       sectionReadings: z.enum(["probe", "off"]).optional(),
       /**
        * `"by-risk"`, with the readings on: code decides from the plan which sections'
@@ -105,12 +98,7 @@ export const Settings = z.strictObject({
        * and medium; a claim check at its stage's effort.
        */
       sectionReadingsEffort: z.literal("by-risk").optional(),
-      /**
-       * `true`, with the readings on: Lane review is also asked whether each section's
-       * change was asked for by the goal and its done-when conditions, and Assess which shown test
-       * rows exercise each validation requirement (`testedBy`). Read only when the readings are on.
-       * Absent or false: the readings, their keys and their answers are exactly as before.
-       */
+      /** Legacy setting accepted on read; new comprehensive review always includes scope/tests. */
       sectionReadingsScopeAndTests: z.boolean().optional(),
       /**
        * Ignored (round 13): the call-line lift is the readings' behaviour, not a switch, so it
@@ -229,18 +217,10 @@ export const reviewStepEffort = (settings: Option.Option<Settings>) =>
 export const reviewReasoningSummaries = (settings: Option.Option<Settings>) =>
   Option.getOrUndefined(settings)?.review?.reasoningSummaries;
 
-/**
- * Whether the user's settings turn responsibility sections on: on unless false, and with the
- * readings' off switch (`sectionReadings: "off"`) off unless true, as before the flip.
- */
+/** Legacy off switches are accepted on read but cannot disable new reviews' owned sections. */
 export const reviewResponsibilitySections = (
-  settings: Option.Option<Settings>,
-): boolean => {
-  const review = Option.getOrUndefined(settings)?.review;
-  return review?.sectionReadings === "off"
-    ? review.responsibilitySections === true
-    : review?.responsibilitySections !== false;
-};
+  _settings: Option.Option<Settings>,
+): boolean => true;
 
 /** The review deadline the user's settings name, if any. */
 export const reviewDeadline = (settings: Option.Option<Settings>) => {

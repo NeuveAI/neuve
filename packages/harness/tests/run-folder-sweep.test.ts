@@ -186,20 +186,8 @@ test("sweep keeps a current-age active review.run@99 and compatible ended manife
           );
           writeFileSync(join(folder, "newer-state.json"), "newer work");
         }
-        const { abandonSuperseded } = yield* Effect.promise(
-          () => import("../src/handler.ts"),
-        );
-        yield* abandonSuperseded(
-          location,
-          mintUlid(),
-          "a".repeat(40),
-          "b".repeat(40),
-        );
-        expect(
-          Object.values(runs).every((id) =>
-            existsSync(runFolder(location, id)),
-          ),
-        ).toBe(true);
+        // A newer pipeline no longer abandons older native execution. Only the explicit drop
+        // and age/ended-state sweep below can authorize removal, under existing capture rules.
         const unknown = yield* deleteRunFolder(location, runs.unknown);
         expect(unknown.removed).toBe(false);
         const direct = yield* deleteRunFolder(location, runs.compatible);
