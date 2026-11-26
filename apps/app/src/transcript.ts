@@ -494,9 +494,6 @@ export function useTranscript(
 		let generation = 0;
 		let recoveries = 0;
 		let started = 0;
-		// Other agents' runs reach this watch only through their builds, so a start or end there
-		// reads info again, which is when a pending model change takes effect.
-		let runs = "";
 		setState(EMPTY);
 		setInfo(undefined);
 		const start = (restart = false) => {
@@ -544,15 +541,9 @@ export function useTranscript(
 						setRestarting(false);
 						replay = undefined;
 					}
+					// Any chat's model change comes as its `agent` event; a mode change only info holds.
 					if (event.kind === "agent") setInfo((info) => info && changed(info, event));
-					if (event.kind === "builds") {
-						const states = event.builds.flatMap((build) => build.agents.map((agent) => `${agent.chat}:${agent.state}`)).join();
-						if (states !== runs) {
-							runs = states;
-							void read();
-						}
-					}
-					if (event.kind === "run" || event.kind === "agent") void read();
+					if (event.kind === "run" || (event.kind === "agent" && event.mode !== undefined)) void read();
 				},
 				// A released watch belongs to an old generation; a reconnecting host restarts every watch.
 				closed(reason) {

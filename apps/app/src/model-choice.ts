@@ -2,10 +2,9 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { toast } from "@ace/ui";
 import type { Effort, ModelOption, ModelRef, PendingModel } from "@ace/channel/protocol";
-import type { ChannelInfo, Listing } from "@ace/host/protocol";
+import type { Listing } from "@ace/host/protocol";
 import type { AccountStatus } from "@neuve/runtime/status";
 
-import { publish } from "./details";
 import { host } from "./host";
 import { key, listed } from "./listed-models";
 
@@ -162,8 +161,6 @@ export function useModelChoice(
 				pending: !!answer.pending,
 			});
 			options.onPicked?.(model);
-			// The chat's own watch hears the change; the channel's other views read it from its info.
-			host.channel<ChannelInfo>(channel, { op: "info" }).then((info) => publish(channel, { info }), () => {});
 		} catch (error) {
 			setPicking(undefined);
 			const { message } = error as Error;
