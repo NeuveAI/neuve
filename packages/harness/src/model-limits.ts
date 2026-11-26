@@ -11,12 +11,11 @@ export const DEFAULT_MODEL_LIMITS: ModelLimits = {
   maxTokens: 8_192,
 };
 
-// The ChatGPT-plan window in process/decisions.md, 2.11. Codex applies
-// effective_context_window_percent to context_window. pi-ai's openai provider
-// supplies the output cap and supports Sign in with ChatGPT.
-export const SOL_PLAN_WINDOW = 475_000;
+// The signed-in ChatGPT plan catalog reports 500,000 context tokens for GPT-6.1 Sol.
+// The frozen review route uses 475,000, the 95% usable window in process/decisions.md.
+// pi-ai's OpenAI entry supplies the output cap.
 export const SOL_PLAN_LIMITS: ModelLimits = {
-  contextWindow: SOL_PLAN_WINDOW,
+  contextWindow: 475_000,
   maxTokens: OPENAI_MODELS["gpt-6.1-sol"].maxTokens,
 };
 
@@ -30,6 +29,29 @@ export const OPUS_API_LIMITS: ModelLimits = {
 // https://code.claude.com/docs/en/model-config#extended-context
 // https://code.claude.com/docs/en/env-vars
 export const OPUS_CODE_LIMITS = OPUS_API_LIMITS;
+
+// Claude Code's extended-context defaults and Anthropic's model output limits
+// cover these two IDs missing from the bundled pi-ai catalog.
+// https://code.claude.com/docs/en/model-config#extended-context
+// https://platform.claude.com/docs/en/models/overview
+export const CLAUDE_CODE_CATALOG_GAPS: Readonly<
+  Partial<Record<string, ModelLimits>>
+> = {
+  "claude-fable-5-2": { contextWindow: 1_000_000, maxTokens: 128_000 },
+  "claude-haiku-5-5": { contextWindow: 1_000_000, maxTokens: 128_000 },
+};
+
+// Codex's bundled windows at the release used to generate our app-server types.
+// Codex defaults to 95% usable and its model metadata has no output cap.
+// https://github.com/openai/codex/blob/581161ab41e643d942e1e1b5f561034060bf18e3/codex-rs/models-manager/models.json
+export const CODEX_BUNDLED_LIMITS: Readonly<
+  Partial<Record<string, ReportedModelLimits>>
+> = {
+  "gpt-6.1-sol": { contextWindow: SOL_PLAN_LIMITS.contextWindow },
+  "gpt-6.1-terra": { contextWindow: 475_000 },
+  "gpt-6.2-sol": { contextWindow: 475_000 },
+  "gpt-6.2-astra": { contextWindow: 258_400 },
+};
 
 type Observations = ReportedModelLimits | undefined;
 

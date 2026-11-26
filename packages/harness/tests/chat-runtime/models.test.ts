@@ -5,7 +5,14 @@ import {
   getSupportedThinkingLevels,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
-import { account, context, fixture, testModels, until } from "./fixture.ts";
+import {
+  account,
+  context,
+  FakeRuntime,
+  fixture,
+  testModels,
+  until,
+} from "./fixture.ts";
 import { Account, type SessionPolicy } from "@neuve/runtime";
 
 // Status order, names and absent lists must survive without invented model choices.
@@ -195,6 +202,95 @@ for (const { label, supportsEffort, supportedEffortLevels } of [
   });
 }
 
+test("account model rows have route limits before the first turn", async () => {
+  const fake = new FakeRuntime();
+  const codex = Account.parse({
+    name: "codex",
+    kind: "chatgpt-subscription",
+    runtime: "codex",
+    credential: { kind: "codex-home" },
+  });
+  const run = await fixture({
+    fake,
+    accounts: [account("claude"), codex],
+    runtimes: [
+      {
+        ...fake.shape,
+        kind: "codex",
+        continuation: ({ name }) => ({ runtime: "codex", key: name }),
+      },
+    ],
+    statusModels: [],
+  });
+  try {
+    const rows = (ids: string[]) =>
+      ids.map((id) => ({ id, displayName: id, description: "" }));
+    const [claudeStatus, codexStatus] = run.statuses.values;
+    run.statuses.set([
+      {
+        ...claudeStatus!,
+        models: [
+          { ...testModels[0]!, resolvedModel: "claude-sonnet-5-5" },
+          ...rows(["claude-fable-5-2", "claude-haiku-5-5", "unlisted"]),
+        ],
+      },
+      {
+        ...codexStatus!,
+        models: rows([
+          "gpt-6-sol",
+          "gpt-6.2-sol",
+          "gpt-6.2-astra",
+          "gpt-6.1-terra",
+        ]),
+      },
+    ]);
+    await until(() => run.models.getModels("codex").length === 4);
+
+    const limits = (account: string) =>
+      run.models
+        .getModels(account)
+        .map(({ id, contextWindow, maxTokens }) => [
+          id,
+          contextWindow,
+          maxTokens,
+        ]);
+    expect(limits("claude")).toEqual([
+      ["sonnet", 1_000_000, 128_000],
+      ["claude-fable-5-2", 1_000_000, 128_000],
+      ["claude-haiku-5-5", 1_000_000, 128_000],
+      ["unlisted", 64_000, 8_192],
+    ]);
+    expect(limits("codex")).toEqual([
+      ["gpt-6-sol", 272_000, 128_000],
+      ["gpt-6.2-sol", 475_000, 8_192],
+      ["gpt-6.2-astra", 258_400, 8_192],
+      ["gpt-6.1-terra", 475_000, 8_192],
+    ]);
+    expect(run.models.getModel("claude", "unlisted")?.contextWindow).toBe(
+      64_000,
+    );
+    expect(
+      fake.logs.filter(
+        ({ event, fields }) =>
+          event === "model-limits.default" && fields.account === "claude",
+      ),
+    ).toEqual([
+      {
+        event: "model-limits.default",
+        fields: {
+          account: "claude",
+          model: "unlisted",
+          contextWindow: 64_000,
+          maxTokens: 8_192,
+        },
+      },
+    ]);
+    expect(fake.opened).toHaveLength(0);
+  } finally {
+    await run.close();
+  }
+});
+
 // A runtime report wins even when the account's list is newer than the bundled catalogue.
 test("catalog limits seed each model, turn usage updates alias and pin only on that account", async () => {
   const native = createModels();
@@ -227,11 +323,6 @@ test("catalog limits seed each model, turn usage updates alias and pin only on t
     statusModels: [
       { ...testModels[0]!, contextWindow: 880_000 },
       { ...testModels[1]!, resolvedModel: "uncatalogued-real" },
-      {
-        id: "missing",
-        displayName: "Missing",
-        description: "Uncatalogued model",
-      },
     ],
   });
   const limits = (provider: string, id: string) => {
@@ -244,24 +335,6 @@ test("catalog limits seed each model, turn usage updates alias and pin only on t
       880_000, 64_000,
     ]);
     expect(limits("subscription", "real")).toEqual([300_000, 16_000]);
-    expect(limits("subscription", "missing")).toEqual([64_000, 8_192]);
-    expect(limits("subscription", "missing")).toEqual([64_000, 8_192]);
-    expect(
-      run.fake.logs.filter(
-        ({ event, fields }) =>
-          event === "model-limits.default" && fields.account === "subscription",
-      ),
-    ).toEqual([
-      {
-        event: "model-limits.default",
-        fields: {
-          account: "subscription",
-          model: "missing",
-          contextWindow: 64_000,
-          maxTokens: 8_192,
-        },
-      },
-    ]);
     run.fake.frames.push({
       text: "usage",
       modelUsage: {
@@ -307,7 +380,7 @@ test("catalog limits seed each model, turn usage updates alias and pin only on t
   try {
     expect(
       restarted.models.getModel("subscription", "sonnet")?.contextWindow,
-    ).toBe(64_000);
+    ).toBe(900_000);
   } finally {
     await restarted.close();
   }

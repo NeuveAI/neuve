@@ -9,6 +9,7 @@ import {
   type AuthResult,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
+import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.models";
 import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
 import { Effect } from "effect";
 import {
@@ -23,10 +24,10 @@ import { failureStream, terminalText } from "./failure.ts";
 import { newest, responseId } from "./transcript.ts";
 import type { Log } from "./transcript.ts";
 import {
+  CLAUDE_CODE_CATALOG_GAPS,
+  CODEX_BUNDLED_LIMITS,
   logDefaultModelLimits,
-  OPUS_CODE_LIMITS,
   resolveModelLimits,
-  SOL_PLAN_WINDOW,
   type ModelLimits,
 } from "../model-limits.ts";
 
@@ -35,8 +36,10 @@ export interface AccountStatusSource {
   subscribe(listener: (statuses: readonly AccountStatus[]) => void): () => void;
 }
 type Effort = NonNullable<NonNullable<SessionPolicy["model"]>["effort"]>;
-const codexCatalog: Readonly<Partial<Record<string, ModelLimits>>> =
-  OPENAI_CODEX_MODELS;
+const catalogs: Record<
+  "anthropic" | "openai-codex",
+  Readonly<Partial<Record<string, ModelLimits>>>
+> = { anthropic: ANTHROPIC_MODELS, "openai-codex": OPENAI_CODEX_MODELS };
 function resolveRow(status: AccountStatus, id: string) {
   const rows = status.models ?? [];
   return (
@@ -96,14 +99,15 @@ export async function accountModels(
     const provider =
       status.kind === "chatgpt-subscription"
         ? "openai-codex"
-        : status.kind === "anthropic-api-key"
+        : status.kind === "claude-subscription" ||
+            status.kind === "anthropic-api-key"
           ? "anthropic"
           : undefined;
     const documented =
-      status.kind === "chatgpt-subscription" && model === "gpt-6.1-sol"
-        ? { contextWindow: SOL_PLAN_WINDOW }
-        : status.kind === "claude-subscription" && model === "claude-opus-5-5"
-          ? OPUS_CODE_LIMITS
+      status.kind === "chatgpt-subscription"
+        ? CODEX_BUNDLED_LIMITS[model]
+        : status.kind === "claude-subscription"
+          ? CLAUDE_CODE_CATALOG_GAPS[model]
           : undefined;
     const levels = row.supportsEffort ? (row.supportedEffortLevels ?? []) : [];
     return {
@@ -129,8 +133,7 @@ export async function accountModels(
         { contextWindow: row.contextWindow, maxTokens: row.maxOutputTokens },
         documented,
         provider
-          ? (native.getModel(provider, model) ??
-              (provider === "openai-codex" ? codexCatalog[model] : undefined))
+          ? (native.getModel(provider, model) ?? catalogs[provider][model])
           : undefined,
         (defaults) => warn(status.name, model, defaults),
       ),
