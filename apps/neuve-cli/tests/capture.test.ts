@@ -102,7 +102,7 @@ test("setup hooks keeps foreign hooks and settings, backs files up, and is idemp
         "--command",
         "/opt/neuve/bin/neuve",
       ],
-      { programs: () => found() },
+      { programs: () => found(), stackStore: join(root, "stack") },
     );
 
   await setup();
@@ -322,6 +322,39 @@ test("commits are attributed to the committer only when ancestry was checked; ot
       sessionId: "dev@example.com",
     }),
   ).not.toBe(Identity.humanFingerprint("dev@example.com"));
+});
+
+// Registering an Ace worker must not change the committer credited by the Git hook.
+test("a commit from an Ace chat keeps the Git committer", async () => {
+  const { repo } = await repository();
+  const location = await Effect.runPromise(resolveStoreLocation(repo));
+  const table = Ancestry.parseProcessTable(`
+    ${process.pid} 100 Sat Oct 17 13:32:35 2026 neuve
+    100 1 Sat Oct 17 13:30:35 2026 bun
+  `);
+  const events = await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Sessions.writeSession(location, {
+        version: 1,
+        harness: "neuve-pi",
+        sessionId: "channel-a",
+        actorId: "a".repeat(64),
+        owner: Ancestry.identityOf(table.get(100)!),
+      });
+      return yield* capturePostCommit(repo, location, () => table, {
+        NEUVE_ACE_CHAT: "channel-a/7",
+      });
+    }).pipe(Effect.provide(BunFileSystem.layer)),
+  );
+  expect(
+    events.find((event) => event.kind === "commit.recorded@1"),
+  ).toMatchObject({
+    actor: Identity.humanFingerprint("dev@example.com"),
+    payload: {
+      link: "none",
+      committer: { name: "Dev Person", email: "Dev@Example.com" },
+    },
+  });
 });
 
 // Why (8.13): when the process table cannot be read, the session ID a harness sets in its shells may

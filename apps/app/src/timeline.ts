@@ -294,6 +294,9 @@ export function toEvents(
 				label,
 			} as Event;
 		}
+		if (item.kind === "review-requested") {
+			return { ...base, type: "neuve:review:card", call: `request:${item.review}` } as Event;
+		}
 		// Models narrate before calling tools, so the text introduces the group that follows it.
 		const content: Event.Message.Agent["content"] = item.text ? [text(item.text)] : [];
 		for (const call of item.tools) {

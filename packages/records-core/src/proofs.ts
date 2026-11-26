@@ -19,7 +19,11 @@ import { resolveCaller, type CallerResolution } from "./caller.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { decodeEnvelope } from "./codec.ts";
 import { CorruptRecord } from "./errors.ts";
-import { baseAlias } from "./identity.ts";
+import {
+  ACE_CHANNEL_HARNESS,
+  agentRegistration,
+  baseAlias,
+} from "./identity.ts";
 import { mintUlid } from "./ids.ts";
 import type { StoreLocation } from "./location.ts";
 import * as Log from "./log.ts";
@@ -727,6 +731,7 @@ export const record = (request: RecordRequest) =>
 const storeProof = (
   request: RecordRequest,
   prepared: Effect.Success<ReturnType<typeof prepareProof>>,
+  registration?: ReturnType<typeof agentRegistration>,
 ) =>
   Effect.gen(function* () {
     const { input } = request;
@@ -763,7 +768,8 @@ const storeProof = (
         artefact: stored.blob.hash,
       }),
     );
-    const [appended] = yield* Log.append([
+    const appended = (yield* Log.append([
+      ...(registration === undefined ? [] : [registration]),
       {
         id: mintUlid(),
         kind: "proof.recorded@1",
@@ -783,7 +789,7 @@ const storeProof = (
         refs: [{ ref: `blob:${stored.blob.hash}`, role: "artefact" }],
         payload: payload.data,
       },
-    ]);
+    ])).at(-1);
     if (appended === undefined)
       return yield* new CorruptRecord({
         message: "the proof's append returned nothing",
@@ -873,6 +879,9 @@ export const recordAsCaller = (
         mask: options.mask,
       },
       ready,
+      caller.harness === ACE_CHANNEL_HARNESS
+        ? agentRegistration(caller)
+        : undefined,
     );
     return { ...result, caller } satisfies CallerRecordResult;
   });

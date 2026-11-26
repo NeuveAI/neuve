@@ -1,14 +1,21 @@
 import { preserveUnknown, safeRead } from "@neuve/records-schema";
+import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { z } from "zod";
 import { withFileLock } from "./file-lock.ts";
 import { sha256Hex } from "./canonical.ts";
-import { STORE_DIRECTORY_MODE, type StoreLocation } from "./location.ts";
+import { identityOf, sameProcess, snapshotProcesses } from "./ancestry.ts";
+import { ACE_CHANNEL_HARNESS, agentFingerprint } from "./identity.ts";
+import {
+  resolveStoreLocation,
+  STORE_DIRECTORY_MODE,
+  type StoreLocation,
+} from "./location.ts";
 
 /**
- * Live agent sessions, as small files under `<store>/sessions/`, the way entire-cli keeps session
+ * Live standalone agent sessions, as small files under `<store>/sessions/`, the way entire-cli keeps session
  * state in the git common directory. Hooks read and write them without opening SQLite (D18). They hold
  * only what capture needs between hooks: the session's actor, the agent process that owns it (for
  * ancestry matching, D23) and the open turn's key. They are not records: the durable facts are the
@@ -42,13 +49,22 @@ export type SubagentState = z.infer<typeof SubagentState>;
 export const sessionsDirectory = (location: StoreLocation) =>
   join(location.directory, "sessions");
 
+const aceChannelSessionsDirectory = (location: StoreLocation) =>
+  join(location.directory, "ace-channel-sessions");
+
 const key = (value: string) => sha256Hex(value).slice(0, 24);
 
 const sessionDirectory = (
   location: StoreLocation,
   harness: string,
   sessionId: string,
-) => join(sessionsDirectory(location), `${harness}.${key(sessionId)}`);
+) =>
+  join(
+    harness === ACE_CHANNEL_HARNESS
+      ? aceChannelSessionsDirectory(location)
+      : sessionsDirectory(location),
+    `${harness}.${key(sessionId)}`,
+  );
 
 const SESSION_FILE = "session.json";
 const subagentFile = (subagentId: string) => `subagent.${key(subagentId)}.json`;
@@ -165,12 +181,17 @@ export const removeSession = (
   location: StoreLocation,
   harness: string,
   sessionId: string,
+  owner?: NonNullable<SessionState["owner"]>,
 ) =>
   withSessionLock(
     sessionDirectory(location, harness, sessionId),
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const directory = sessionDirectory(location, harness, sessionId);
+      if (owner !== undefined) {
+        const live = yield* readSession(location, harness, sessionId);
+        if (!live?.owner || !sameProcess(live.owner, owner)) return;
+      }
       if (yield* fs.exists(directory)) {
         for (const name of yield* fs.readDirectory(directory)) {
           const schema: z.ZodType | undefined =
@@ -196,20 +217,62 @@ export const removeSession = (
     }),
   );
 
-/** Every live session recorded in this store. */
-export const listSessions = (location: StoreLocation) =>
+export const openAceChannelSession = (
+  project: string,
+  sessionId: string,
+  warn: (error: unknown) => void,
+) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const location = yield* resolveStoreLocation(project).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const fs = yield* FileSystem;
+      if (location === undefined || !(yield* fs.exists(location.database)))
+        return;
+      const row = snapshotProcesses()?.get(process.pid);
+      if (row === undefined)
+        throw new Error("Cannot identify the channel worker process");
+      const owner = identityOf(row);
+      const harness = ACE_CHANNEL_HARNESS;
+      yield* writeSession(location, {
+        version: 1,
+        harness,
+        sessionId,
+        actorId: agentFingerprint({ harness, sessionId }),
+        owner,
+      });
+      return () =>
+        Effect.runPromise(
+          removeSession(location, harness, sessionId, owner).pipe(
+            Effect.provide(BunFileSystem.layer),
+          ),
+        );
+    }).pipe(Effect.provide(BunFileSystem.layer)),
+  ).catch((error: unknown) => {
+    warn(error);
+    return undefined;
+  });
+
+const listSessionDirectory = (directory: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem;
     const names = yield* fs
-      .readDirectory(sessionsDirectory(location))
+      .readDirectory(directory)
       .pipe(Effect.catchCause(() => Effect.succeed([] as Array<string>)));
     const states = yield* Effect.forEach(
       names.filter((name) => !name.endsWith(".lock")),
-      (name) =>
-        readJson(
-          SessionState,
-          join(sessionsDirectory(location), name, SESSION_FILE),
-        ),
+      (name) => readJson(SessionState, join(directory, name, SESSION_FILE)),
     );
     return states.filter((state) => state !== undefined);
   });
+
+export const listSessions = (location: StoreLocation) =>
+  listSessionDirectory(sessionsDirectory(location));
+
+export const listAceChannelSessions = (location: StoreLocation) =>
+  listSessionDirectory(aceChannelSessionsDirectory(location)).pipe(
+    Effect.map((states) =>
+      states.filter((state) => state.harness === ACE_CHANNEL_HARNESS),
+    ),
+  );

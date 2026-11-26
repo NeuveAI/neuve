@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import type { Event } from "@ace/ui";
+import type { ReviewCard } from "@ace/channel/review-cards";
+
+import type { Item } from "../src/transcript";
 
 const origin = "http://127.0.0.1:4141";
 const cycle = "01M67KE42FHX345RCRHW57DRQ5";
@@ -77,4 +81,39 @@ test("the newest review is the greatest review id whose batch overview is a revi
     d: { ...card("01M67KE42FHX345RCRHW57DRQ8", 10, null), links: { batch: `${base}/api/events`, desk: "/" } },
     e: { kind: "refused", reason: "uncommitted_changes", title: "t", detail: "d", fix: "f" },
   } as never)).toEqual({ review: newer, path: `${base}/cycles/${newer}` });
+});
+
+// Why: `withCards` reads one event per item and then the draft, so a request whose card hasn't
+// arrived must leave nothing at its entry without shifting the draft or the rows after it.
+test("a command-line request's card shows at its entry once the host writes it", () => {
+  const review = "01M67KE42FHX345RCRHW57DRQ5";
+  const items: Item[] = [
+    { kind: "message", key: "e1", at: 0, author: "a", text: "", invoked: true },
+    { kind: "review-requested", key: "e2", at: 1000, text: "", review },
+    { kind: "message", key: "e3", at: 2000, author: "a", text: "", invoked: true },
+  ];
+  const events = [...items, { key: "draft" }].map(({ key }) => ({ uid: key }) as Event);
+  const card: ReviewCard = {
+    kind: "review",
+    review,
+    source: "branch",
+    label: "b against main",
+    range: { branch: "b", base: "main", head: "h", commits: 1 },
+    recovered: false,
+    notify: false,
+    phase: "running",
+    stage: null,
+    stages: [],
+    finished: null,
+    stopped: null,
+    newCommits: null,
+    links: null,
+    updatedAt: 1000,
+  };
+  const shown = (held: Record<string, ReviewCard>) =>
+    cards.withCards(events, items, held, new Map(), "t", false, false);
+  expect(shown({}).map((event) => event.uid)).toEqual(["e1", "e3", "draft"]);
+  const placed = shown({ [`request:${review}`]: card });
+  expect(placed.map((event) => event.uid)).toEqual(["e1", "e2", "e3", "draft"]);
+  expect(placed[1]).toMatchObject({ card: { phase: "connection_lost" } });
 });

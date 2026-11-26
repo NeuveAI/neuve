@@ -12,6 +12,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 
 import { Channel, type Envelope, type Frame } from "@ace/channel";
+import { Identity, Sessions } from "@neuve/records-core/capture";
 
 import * as catalog from "./catalog";
 import { request } from "./client";
@@ -32,6 +33,7 @@ for (const op of ["plan-comment", "plan-comment-reply", "plan-comment-edit", "pl
 	ARCHIVED.add(op);
 }
 
+delete process.env[Identity.ACE_CHAT_VARIABLE];
 seal();
 
 const id = process.argv[2];
@@ -75,6 +77,10 @@ catalog.busy(id, false);
 clearClose(paths.base);
 
 const envs = new Map<string, NodeExecutionEnv>();
+const storage = await workerStorage(id, paths.base, paths.storage);
+const closeSession = await Sessions.openAceChannelSession(record.project, id, (error) =>
+	log("warn", "worker.session.unavailable", failure(error)),
+);
 const channel = await openChannel({
 	id,
 	name: record.name,
@@ -91,16 +97,20 @@ const channel = await openChannel({
 	model: record.model,
 	lane: record.lane,
 	defaultModel,
-	storage: await workerStorage(id, paths.base, paths.storage),
+	storage,
 	models: models(),
 	desktop,
 	desktopAvailable,
 	browser,
 	images,
 	tabs: tabs(id),
-	env(cwd) {
-		let env = envs.get(cwd);
-		if (!env) envs.set(cwd, env = new NodeExecutionEnv({ cwd }));
+	env(cwd, chat) {
+		const key = JSON.stringify([cwd, chat]);
+		let env = envs.get(key);
+		if (!env) {
+			const shellEnv = chat === undefined ? undefined : Identity.aceChatEnvironment(id, chat);
+			envs.set(key, env = new NodeExecutionEnv({ cwd, shellEnv }));
+		}
 		return env;
 	},
 	directory: {
@@ -119,7 +129,11 @@ const channel = await openChannel({
 		},
 	},
 	log,
-}, paths.base);
+}, paths.base).catch(async (error: unknown) => {
+	try { await closeSession?.(); }
+	catch (cleanup) { throw new AggregateError([error, cleanup], "Worker startup and session cleanup failed"); }
+	throw error;
+});
 
 const clients = new Set<Socket>();
 let quiet = Date.now();
@@ -151,6 +165,7 @@ async function exit(kill: boolean, reason: string) {
 	for (const env of envs.values()) {
 		try { await env.cleanup(BACKGROUND_CONTEXT); } catch (error) { errors.push(error); log("error", "worker.cleanup.failed", failure(error)); }
 	}
+	try { await closeSession?.(); } catch (error) { errors.push(error); log("error", "worker.session.close.failed", failure(error)); }
 	recordClose(paths.base, errors);
 	server.close();
 	rmSync(paths.socket, { force: true });

@@ -328,6 +328,7 @@ export async function workspaceChatRuntime(
   native: Models,
   stateDirectory: string,
   sources?: ChatRuntimeSources,
+  channel?: string,
 ): Promise<WorkerChatRuntime> {
   if (!sources)
     return {
@@ -385,6 +386,7 @@ export async function workspaceChatRuntime(
   });
   const bridge = new ChatRuntimeBridge({
     registry: sources.registry,
+    channel,
     ...(recovery === undefined ? {} : { recovery: recovery.driver }),
     heads,
     ...(sources.skills === undefined ? {} : { skills: sources.skills }),

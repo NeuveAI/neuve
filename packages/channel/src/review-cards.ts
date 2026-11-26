@@ -1,5 +1,6 @@
 import { defineDoc } from "@earendil-works/pi-durable";
 import type {
+	ReviewAdmission,
 	RefusalReason,
 	ReviewRange,
 	ReviewStatus,
@@ -42,6 +43,34 @@ export type ReviewCard =
 			links: { batch: string; desk: string } | null;
 			updatedAt: number;
 	  };
+
+export function admittedReviewCard(
+	value: Extract<ReviewAdmission, { outcome: "admitted" }>,
+	source: Extract<ReviewCard, { kind: "review" }>["source"],
+	comparison: string,
+	at: number,
+): ReviewCard {
+	const baseLabel = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(comparison)
+		? comparison.slice(0, 7)
+		: comparison.replace(/^refs\/(heads|remotes|tags)\//, "");
+	return {
+		kind: "review",
+		review: value.review,
+		source,
+		label: source === "pull_request" ? comparison : `${value.range.branch || value.range.head.slice(0, 7)} against ${baseLabel}`,
+		range: value.range,
+		recovered: value.recovered,
+		notify: value.notify,
+		phase: "queued",
+		stage: null,
+		stages: [],
+		finished: null,
+		stopped: null,
+		newCommits: null,
+		links: null,
+		updatedAt: at,
+	};
+}
 
 export const ReviewCardsDoc = defineDoc<{ cards: Record<string, ReviewCard> }>({
 	kind: "neuve.review-cards",

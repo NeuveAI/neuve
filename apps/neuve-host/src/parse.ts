@@ -137,6 +137,7 @@ z.strictObject({ op: z.literal("review-submit"), channel, prepared: ReviewSubmis
 z.strictObject({ op: z.literal("review-status"), channel, query: z.union([ReviewStatusQuerySchema, ReviewLookupSchema]) }),
 z.strictObject({ op: z.literal("review-outcome"), channel, query: ReviewLookupSchema }),
 z.strictObject({ op: z.literal("review-feed"), channel, query: ReviewFeedQuerySchema }),
+z.strictObject({ op: z.literal("review-requests"), channel, after: z.int().nonnegative() }),
 z.strictObject({ op: z.literal("review"), channel, chat, items: z.array(GitHubExternalRefSchema).max(16).optional() })
 ]);
 export const HostRequestSchema = z.union([ExtensionHostRequestSchema, NativeHostRequestSchema]);

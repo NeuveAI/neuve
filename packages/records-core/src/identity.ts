@@ -1,5 +1,7 @@
 import { wordlist } from "@scure/bip39/wordlists/english.js";
+import type { RecordEvent } from "@neuve/records-schema";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
+import { mintUlid } from "./ids.ts";
 
 /**
  * Actor identity without auth (D21, 6.6). A fingerprint is sha256 over the canonical JSON of a version
@@ -28,6 +30,53 @@ export const agentFingerprint = (input: {
     input.sessionId,
     input.subagentId ?? null,
   );
+
+export const ACE_CHANNEL_HARNESS = "neuve-pi";
+export const ACE_CHAT_VARIABLE = "NEUVE_ACE_CHAT";
+
+export const aceChatIdentity = (channel: string, chat: number) => {
+  const identity = {
+    harness: ACE_CHANNEL_HARNESS,
+    sessionId: channel,
+    subagentId: String(chat),
+  };
+  return { ...identity, actorId: agentFingerprint(identity) };
+};
+
+export const aceChatEnvironment = (channel: string, chat: number) => ({
+  [ACE_CHAT_VARIABLE]: `${channel}/${chat}`,
+});
+
+export const readAceChat = (channel: string, value: string | undefined) => {
+  const match = /^(.*)\/(0|[1-9]\d*)$/.exec(value ?? "");
+  if (match?.[1] !== channel) return;
+  const chat = Number(match[2]);
+  if (Number.isSafeInteger(chat)) return aceChatIdentity(channel, chat);
+};
+
+type ActorRegistration = Extract<RecordEvent, { kind: "actor.registered@1" }>;
+
+export const actorRegistration = (
+  actor: string,
+  payload: ActorRegistration["payload"],
+): ActorRegistration => ({
+  id: mintUlid(),
+  kind: "actor.registered@1",
+  idempotencyKey: `actor:${actor}:${sha256Hex(canonicalJson(payload)).slice(0, 16)}`,
+  actor,
+  occurredAt: new Date().toISOString(),
+  payload,
+});
+
+export const agentRegistration = (
+  input: Parameters<typeof agentFingerprint>[0],
+) =>
+  actorRegistration(agentFingerprint(input), {
+    actorKind: "agent",
+    harness: input.harness,
+    sessionId: input.sessionId,
+    ...(input.subagentId ? { subagentId: input.subagentId } : {}),
+  });
 
 /** Git treats email addresses case-insensitively in practice, so they are compared trimmed and lowercased. */
 export const normalizeEmail = (email: string) => email.trim().toLowerCase();
