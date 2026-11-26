@@ -2148,8 +2148,8 @@ test("messages by role and part steer after the shell, stay private, and appear 
 	expect(run.said.filter(value => value.chat === reviewer).map(value => value.author)).toEqual([OWNER]);
 });
 
-// Planning-chat routing must use its newest persisted plan, not the last build with a matching role.
-test("the drafting chat reaches both agents through revisions but never falls back from its newest draft", async () => {
+// Drafting a revision keeps messages on the approved plan's build.
+test("a chat in Plan mode reaches its approved plan's agents while drafting a revision", async () => {
 	const run = await setup();
 	const { fixture, watch } = run;
 	const { build, chat, reviewer } = await startPair(run);
@@ -2157,7 +2157,7 @@ test("the drafting chat reaches both agents through revisions but never falls ba
 		fixture.script(tool("agent_message", { to, ...(part ? { part } : {}), text }, text),
 			fauxAssistantMessage("Send finished."), ...(!error ? [fauxAssistantMessage("Received.")] : []));
 		const { submission } = await fixture.request<{ submission: number }>({
-			op: "ask", author: OWNER, mode: "ace", text: "Send the message.",
+			op: "ask", author: OWNER, mode: "plan", text: "Send the message.",
 		});
 		await fixture.request({ op: "wait", submission });
 		expect(await watch.until("result", event => event.call === text)).toMatchObject({ error, text: expected });
@@ -2168,8 +2168,7 @@ test("the drafting chat reaches both agents through revisions but never falls ba
 	await send("reviewer", undefined, "Missing whole-plan reviewer.", true,
 		'This plan has no started agent with that role and path scope. The plan has started an implementer and a reviewer for "exports".');
 	const revision = await run.draft(revisedText);
-	await send("reviewer", "exports", "Newest draft has no agents.", true,
-		"This plan has no started agent with that role and path scope. The plan has no started agents yet.");
+	await send("reviewer", "exports", "Review the draft revision.");
 	const finish = Promise.withResolvers<void>();
 	const reviewing = await fixture.watch({ op: "watch", chat: reviewer });
 	fixture.script(async () => { await finish.promise; return fauxAssistantMessage("Implementation is ready."); },
@@ -2186,11 +2185,22 @@ test("the drafting chat reaches both agents through revisions but never falls ba
 	fixture.script(tool("plan_write", { text: "# Other chat plan" }, "other-plan"));
 	const otherDraft = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, chat: other.chat, mode: "plan", text: "Draft." });
 	await fixture.request({ op: "wait", submission: otherDraft.submission });
+	const outside = await fixture.watch({ op: "watch", chat: other.chat });
+	fixture.script(tool("agent_message", { to: "implementer", text: "Review the first draft." }, "first-draft-message"),
+		fauxAssistantMessage("No message sent."));
+	const { submission } = await fixture.request<{ submission: number }>({
+		op: "ask", author: OWNER, chat: other.chat, mode: "plan", text: "Send the message.",
+	});
+	await fixture.request({ op: "wait", submission });
+	expect(await outside.until("result", event => event.call === "first-draft-message")).toMatchObject({
+		error: true, text: "This plan has no started agent with that role and path scope. The plan has no started agents yet.",
+	});
 	await send("reviewer", "exports", "Revised planning delivery.");
 	const messages = watch.of("builds").at(-1)!.messages;
 	expect(messages).toEqual([
 		{ build: build.id, from: 1, to: chat, text: "Planning implementer delivery.", at: expect.any(Number) },
 		{ build: build.id, from: 1, to: reviewer, text: "Planning reviewer delivery.", at: expect.any(Number) },
+		{ build: build.id, from: 1, to: reviewer, text: "Review the draft revision.", at: expect.any(Number) },
 		{ build: build.id, from: 1, to: reviewer, text: "Revised planning delivery.", at: expect.any(Number) },
 	]);
 	for (const message of messages) {
@@ -2221,8 +2231,6 @@ test("agent messages refuse unknown recipients, outsiders, self, empty text, and
 	await refuse(other.chat, outside, "outside-build", valid, "Only the chat that drafted a plan, or one of its agents, can message that plan's agents.");
 	await refuse(chat, agent, "same-chat", { to: "implementer", text: "Ready." }, "Send the message to another agent of this plan.");
 	await refuse(chat, agent, "empty-text", { ...valid, text: "  " }, "Write a message to send.");
-	await run.harness.commit(tx => setChatMode(tx, ROOT_CONVERSATION_ID, "plan"), context);
-	await refuse(1, watch, "planning-message", valid, "Plan mode is read-only. The agent_message tool is unavailable in plan mode.");
 
 	const closedStates = [
 		[{ kind: "paused", reason: "shared" }, "The plan's agents are paused while other people may ask them."],
