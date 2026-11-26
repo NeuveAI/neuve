@@ -20,6 +20,8 @@ export const project = (event: RecordEvent) =>
     // `supersedes` is read from the log (`liveDisposition`); comment version 3 and lineage refuse
     // one, so returning before the supersession insert loses no link they could hold.
     if (
+      event.kind === "turn.recovery-recorded@1" ||
+      event.kind === "turn.recovery-published@1" ||
       event.kind === "disposition.carried@1" ||
       event.kind === "comment.carried@1" ||
       event.kind === "comment.recorded@3" ||

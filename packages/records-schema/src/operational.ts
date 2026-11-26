@@ -40,6 +40,7 @@ export const JobKind = z.enum([
   "transcript.capture",
   "retention.prune",
   "worker.probe",
+  "chat.turn-retry@1",
   "review.run",
   "review.run@2",
   "judgement.prepare@1",

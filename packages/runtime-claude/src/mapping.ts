@@ -341,6 +341,8 @@ export function outcomeFromResult(
       },
       "broken",
     );
+  if (reason === "malformed_tool_use_exhausted")
+    return turnFailure("protocol-error");
   if (
     observations.overloaded ||
     code === "overloaded" ||

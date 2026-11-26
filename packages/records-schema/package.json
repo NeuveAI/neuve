@@ -5,8 +5,14 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "types": "./.types/src/index.d.ts",
-    "default": "./src/index.ts"
+    ".": {
+      "types": "./.types/src/index.d.ts",
+      "default": "./src/index.ts"
+    },
+    "./turn-recovery": {
+      "types": "./.types/src/turn-recovery.d.ts",
+      "default": "./src/turn-recovery.ts"
+    }
   },
   "dependencies": {
     "zod": "4"

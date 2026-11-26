@@ -1,4 +1,8 @@
 import {
+  TurnRetryStatusDefinition,
+  type TurnRetryStatusState,
+} from "@neuve/records-schema";
+import {
   awaitWithContext,
   BACKGROUND_CONTEXT,
 } from "@earendil-works/chord/context";
@@ -10,6 +14,7 @@ import {
   LiveDoc,
   ToolTask,
   defineExtension,
+  defineDoc,
   defineTool,
   hook,
   type Harness,
@@ -19,6 +24,12 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ApprovalStore, ChatRuntimeBridge } from "./bridge.ts";
 import { RUNTIME_WORK_TOOL } from "./transcript.ts";
 import { newest, pointer } from "./transcript.ts";
+import { routeFailureOf } from "../pi/providers/failure.ts";
+import { markTerminal } from "./failure.ts";
+
+const TurnRetryStatusDoc = defineDoc<TurnRetryStatusState>(
+  TurnRetryStatusDefinition,
+);
 
 export const RECOVERY_ALLOW_TOOLS: readonly string[] = [
   "question",
@@ -86,6 +97,12 @@ export function chatRuntimeExtension(
     ],
     hooks: [
       hook(GenerationTask, {
+        afterResponse(message) {
+          const failure = routeFailureOf(message);
+          if (failure?.kind !== "capture" || !failure.detail) return;
+          message.errorMessage = failure.detail;
+          markTerminal(message);
+        },
         async beforeRequest(request, api, context) {
           const agent = await api.snapshot(
             AgentDoc,
@@ -130,6 +147,14 @@ export function chatRuntimeExtension(
             message.role !== "assistant" ||
             !pointer(message) ||
             (message.stopReason !== "error" && message.stopReason !== "aborted")
+          )
+            return;
+          if (
+            recovered &&
+            view.entries.some(
+              (entry) =>
+                entry.byTaskId === api.taskId && entry.model?.includes(message),
+            )
           )
             return;
           if (
@@ -218,6 +243,21 @@ export function chatRuntimeExtension(
       onApprovalAnswer?: (send: ChatRuntimeBridge["replyToApproval"]) => void;
     },
   ) {
+    const stopRecovery = await bridge.subscribeRecovery(
+      async (chat, { revision, current }) => {
+        await harness.commit(async (tx) => {
+          const doc = await tx.doc(
+            TurnRetryStatusDoc,
+            Number(chat) as ConversationId,
+          );
+          if ((doc.revision ?? 0) >= revision) return;
+          doc.revision = revision;
+          if (current) doc.current = current;
+          else delete doc.current;
+        }, BACKGROUND_CONTEXT);
+      },
+    );
+    if (stopRecovery) subscriptions.add(stopRecovery);
     if (approvals) await bridge.attachApprovals(approvals(harness));
     access?.onStop?.((chat) => bridge.stopApprovals(chat));
     access?.onApprovalAnswer?.((...args) => bridge.replyToApproval(...args));

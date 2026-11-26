@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { Type, type Static } from "@earendil-works/pi-ai";
+import { Type, type AssistantMessage, type Static } from "@earendil-works/pi-ai";
+import { TURN_CANCELLED, TURN_RETRY_FAILURE, TurnRetryFailure } from "@neuve/records-schema/turn-recovery";
 import {
 	AgentDoc, configure, defineDoc, defineExtension, defineTool, InboxDoc, LiveDoc,
 	type ConversationId, type EntryId, type Harness, type InputSubmissionDraft, type SubmissionId, type SubmissionRecord, type TaskId, type ToolExecutionApi, type ToolExecutionResult, type Tx,
@@ -10,7 +11,7 @@ import type { Admission } from "./extensions";
 import { LanesDoc } from "./lanes";
 import { failure, type Log } from "./log";
 import { checkedPlanText, findPlan, PlansDoc, type StoredPlan } from "./plan";
-import { AGENT_MESSAGE_TOOL, AGENT_START_TOOL, buildId, type AgentMessageArgs, type AgentRole, type AgentStartArgs, type Build, type BuildAgent, type Effort, type ModelRef, type WorkMessage } from "./protocol";
+import { AGENT_MESSAGE_TOOL, AGENT_START_TOOL, buildId, failureCaption, type AgentFailure, type AgentMessage, type AgentMessageArgs, type AgentRole, type AgentStartArgs, type Build, type BuildAgent, type Effort, type ModelRef, type WorkMessage } from "./protocol";
 import { ReviewCardsDoc } from "./review-cards";
 import { content, draft, text as messageText } from "./room";
 
@@ -51,6 +52,8 @@ type Start = {
 	worktree?: Worktree;
 	brief?: { chat: ConversationId; requestId: string };
 	lane: string;
+	pendingRuns?: SubmissionId[];
+	lastRun?: SubmissionId;
 	state: Extract<Build["state"], { kind: "starting" | "started" | "failed" }>;
 } & (
 	| { role: "implementer" }
@@ -66,7 +69,13 @@ type StoredBuild = {
 	stopping?: { chat: ConversationId; running: boolean }[];
 };
 
-type StoredMessage = { requestId: string; message: WorkMessage & { to: ConversationId }; submission?: SubmissionId };
+type StoredMessage = {
+	requestId: string;
+	message: AgentMessage & { to: ConversationId };
+	submission?: SubmissionId;
+	failure?: AgentFailure;
+	deliveryFailed?: true;
+};
 export type Mention = { thread: ConversationId; requestId: string; author: string; text: string; agents: ConversationId[] };
 type PendingMention = Omit<Mention, "author" | "text"> & {
 	entry?: EntryId;
@@ -104,6 +113,7 @@ const scopeReadExtension = { name: "neuve-query" };
 const agentKey = (role: AgentRole, part?: string) => JSON.stringify([role, part ?? null]);
 const firstImplementer = agentKey("implementer");
 const messagePrefix = "neuve.build:message:";
+const failurePrefix = `${messagePrefix}failure:`;
 const mentionPrefix = "neuve.build:mention:";
 const stopped = "The plan's agents have been stopped.";
 const pendingStart = "The agent start is recorded and will finish when work resumes.";
@@ -137,10 +147,46 @@ function compactMention(mentions: StoredMention[], index: number, mention: Pendi
 }
 
 export function workLog(value: Readonly<BuildsState> | null): WorkMessage[] {
-	return (value?.messages ?? [])
-		.flatMap(({ message, submission }) => submission === undefined ? [] : [{ message, submission }])
+	const failures = new Map<string, Extract<WorkMessage, { kind: "agent-failure" }>>();
+	const messages = (value?.messages ?? [])
+		.flatMap(({ requestId, message, submission, failure, deliveryFailed }) => {
+			if (!failure) return submission === undefined ? [] : [{ message, submission }];
+			const key = JSON.stringify([message.build, message.from, failure.turn]);
+			let entry = failures.get(key);
+			if (!entry) {
+				entry = { ...message, kind: "agent-failure", failure, deliveries: [] };
+				failures.set(key, entry);
+			}
+			if (requestId.startsWith(messagePrefix)) {
+				entry.deliveries.push({
+					to: message.to,
+					status: submission !== undefined ? "sent" : deliveryFailed ? "failed" : "pending",
+				});
+			}
+			return [];
+		})
 		.sort((a, b) => a.submission - b.submission)
 		.map(({ message }) => message);
+	if (!failures.size) return messages;
+	return [...messages, ...failures.values()].sort((a, b) => a.at - b.at);
+}
+
+type EndedInput = Extract<SubmissionRecord, { type: "input"; status: "done" | "unanswered" }>;
+const endedInput = (input: SubmissionRecord | undefined): input is EndedInput =>
+	input?.type === "input" && (input.status === "done" || input.status === "unanswered");
+
+function runFailure(input: EndedInput, response?: AssistantMessage) {
+	if (input.status !== "unanswered" || input.entry === undefined) return;
+	if (["aborted", "reset", "stale", "cancelled", "canceled"].includes(input.reason)) return;
+	if (response?.diagnostics?.some(item => item.type === TURN_CANCELLED)) return;
+	const diagnostic = response?.diagnostics?.findLast(item => item.type === TURN_RETRY_FAILURE);
+	const retry = TurnRetryFailure.safeParse(diagnostic?.details);
+	if (diagnostic && retry.success) return {
+		turn: retry.data.turn, reason: retry.data.reason, attempts: retry.data.attempt + 1,
+		at: Number.isFinite(diagnostic.timestamp) ? diagnostic.timestamp : Date.now(),
+	};
+	const reason = ["model_error", "no_model", "faulted"].includes(input.reason) ? input.reason : "run_failed";
+	return { turn: `submission:${input.id}`, reason, attempts: 1, at: Date.now() };
 }
 
 function answer(text: string): ToolExecutionResult {
@@ -435,7 +481,7 @@ export class Builds {
 		Object.assign(record.build.agents[agent.index]!, change);
 	}
 
-	async state(chat: ConversationId, state: BuildAgent["state"], firstInput: SubmissionId | undefined) {
+	async state(chat: ConversationId, state: BuildAgent["state"], firstInput: SubmissionId | undefined, begin = false) {
 		const brief = this.agent(chat);
 		if (!brief) return;
 		await this.#track(this.harness.commit(async tx => {
@@ -443,9 +489,127 @@ export class Builds {
 			if ((await tx.doc(LiveDoc, chat)).run?.inputs[0] === firstInput) {
 				await this.updateAgent(tx, chat, { state });
 			}
+			if (begin && firstInput !== undefined) {
+				const start = (await tx.doc(BuildsDoc)).records[brief.build]?.starts[agentKey(brief.role, brief.part)];
+				if (start?.state.kind === "started" && (start.lastRun ?? 0) < firstInput && !start.pendingRuns?.includes(firstInput)) {
+					start.pendingRuns = [...(start.pendingRuns ?? []), firstInput];
+				}
+			}
 		}, context).catch(error => this.log("error", "build.agent.state.failed", {
 			build: brief.build, chat, state, ...failure(error),
 		})));
+	}
+
+	async endRun(chat: ConversationId, input: EndedInput, response?: AssistantMessage, deliver = true) {
+		const member = this.agent(chat);
+		if (!member) return;
+		const recordEnd = (async () => {
+			const failed = runFailure(input, response);
+			const requestIds = await this.harness.commit(async tx => {
+				const { records, messages } = await tx.doc(BuildsDoc);
+				const record = records[member.build];
+				const start = record?.starts[agentKey(member.role, member.part)];
+				if (!record || !start) return;
+				const pending = start.pendingRuns;
+				const remembered = pending !== undefined && pending.includes(input.id);
+				if (remembered) {
+					const remaining = pending.filter(id => id !== input.id);
+					if (remaining.length) start.pendingRuns = remaining;
+					else delete start.pendingRuns;
+				}
+				const latest = (start.lastRun ?? 0) < input.id;
+				if (!latest && !remembered) return;
+				const { build } = record;
+				const agent = build.agents[member.index]!;
+				if (latest) {
+					start.lastRun = input.id;
+					if (!record.stopping && !(await tx.doc(LiveDoc, chat)).run) {
+						agent.state = input.status === "done" ? "done" : failed ? "failed" : "stopped";
+					}
+					if (input.status === "done") delete agent.failure;
+				}
+				if (!failed || record.stopping || (start.state.kind !== "started" &&
+					!(start.state.kind === "starting" && start.brief?.requestId === input.requestId))) return;
+				if (messages.some(row => row.message.build === build.id && row.message.from === chat && row.failure?.turn === failed.turn)) return;
+				const { role, part } = member;
+				const notice: AgentFailure = { ...failed, role, ...(part === undefined ? {} : { part }) };
+				if (latest) agent.failure = notice;
+				const name = part === undefined ? role : `${role} for ${JSON.stringify(part)}`;
+				const branch = start.worktree?.branch;
+				const text = [
+					`${failureCaption(notice)}.`,
+					`The ${name} was working in lane ${JSON.stringify(start.lane)}${branch ? ` on branch ${JSON.stringify(branch)}` : ""}.`,
+					...(notice.reason === "ambiguous-tool-effect" ? ["Check whether the last tool ran before trying it again."] : []),
+					"Review the work there and decide what to do next.",
+				].join(" ");
+				const message = { build: build.id, from: chat, to: build.chat as ConversationId, at: notice.at, text };
+				const recipients = new Set([message.to]);
+				if (!input.requestId?.startsWith(failurePrefix)) {
+					for (const other of Object.values(record.starts)) {
+						if (other.state.kind === "started" && other.brief) recipients.add(other.brief.chat);
+					}
+				}
+				recipients.delete(chat);
+				return [...recipients].map(to => {
+					const requestId = failurePrefix + JSON.stringify([build.id, chat, notice.turn, to]);
+					messages.push({ requestId, message: { ...message, to }, failure: notice });
+					return requestId;
+				});
+			}, context);
+			if (!requestIds || !failed) return;
+			this.log("info", "build.agent.turn.failed", {
+				build: member.build, chat, ...failed,
+			});
+			const host = this.options.host;
+			if (!deliver || !host || !requestIds.length) return;
+			void this.#track((async () => {
+				for (const requestId of requestIds) {
+					if (this.#closing) return;
+					await host.share(requestId, () => this.#deliverMessage(requestId)).catch(error =>
+						this.#messageFailed(requestId, member.build, chat, error));
+				}
+			})());
+		})().catch(error => this.log("error", "build.agent.end.failed", { build: member.build, chat, ...failure(error) }));
+		await this.#track(recordEnd);
+	}
+
+	async reconcileRuns(): Promise<void> {
+		for (const { starts } of Object.values(this.#document?.records ?? {})) {
+			for (const { pendingRuns, brief, state, lastRun } of Object.values(starts)) {
+				if (!brief) continue;
+				if (state.kind === "starting" && lastRun === undefined) {
+					const input = await this.harness.commit(tx => tx.submissionByRequest(brief.chat, brief.requestId), context);
+					if (endedInput(input)) await this.endRun(brief.chat, input, await this.#failedResponse(brief.chat, input), false);
+				}
+				for (const run of pendingRuns ?? []) {
+					const input = await (await this.harness.submission(run, context))?.status(context);
+					if (!endedInput(input)) continue;
+					await this.endRun(brief.chat, input, await this.#failedResponse(brief.chat, input), false);
+				}
+			}
+		}
+	}
+
+	async #failedResponse(chat: ConversationId, input: EndedInput): Promise<AssistantMessage | undefined> {
+		if (input.status !== "unanswered" || input.reason !== "model_error" || input.entry === undefined) return;
+		return this.harness.commit(async tx => {
+			let cursor;
+			const seen = new Set<TaskId>();
+			let response: AssistantMessage | undefined;
+			do {
+				const page = await tx.scanEntries({ conversationId: chat, minEntryId: input.entry }, 64, cursor);
+				for (const entry of page.items) {
+					if (entry.byTaskId === undefined || seen.has(entry.byTaskId)) continue;
+					seen.add(entry.byTaskId);
+					const message = entry.model?.[0];
+					if (message?.role !== "assistant" || message.errorMessage !== input.detail) continue;
+					const task = await tx.task(entry.byTaskId);
+					if (task?.state.outcome?.status === "failed") response = message;
+				}
+				cursor = page.next;
+			} while (cursor);
+			return response;
+		}, context);
 	}
 
 	async approve(tx: Tx, chat: ConversationId, hash: string, fresh?: { stored: StoredPlan; approved: Build["approved"] }) {
@@ -686,11 +850,11 @@ export class Builds {
 			if (!ids) await this.replyToMentions();
 			for (const { requestId, message, submission } of messages) {
 				if (this.#closing) return;
-				if (submission !== undefined || (ids && !ids.includes(message.build))) continue;
+				if (!requestId.startsWith(messagePrefix) || submission !== undefined || (ids && !ids.includes(message.build))) continue;
 				await this.#resumePending(host, message.build, requestId, () => this.#deliverMessage(requestId),
 					() => this.#document?.messages.find(message => message.requestId === requestId)?.submission === undefined,
 				).catch(error =>
-					this.log("error", "build.message.resume.failed", { build: message.build, chat: message.to, ...failure(error) }));
+					this.#messageFailed(requestId, message.build, message.to, error, "build.message.resume.failed"));
 			}
 			const selected = ids ? ids.flatMap(id => records[id] ? [records[id]] : []) : Object.values(records);
 			await Promise.all(selected.map(async ({ build, revision, starts }) => {
@@ -755,9 +919,20 @@ export class Builds {
 		if (submission === undefined) return;
 		this.log("info", "build.message.submitted", { build, chat: to, submission });
 		await this.harness.commit(async tx => {
-			(await tx.doc(BuildsDoc)).messages.find(message => message.requestId === requestId)!.submission = submission;
+			const message = (await tx.doc(BuildsDoc)).messages.find(message => message.requestId === requestId)!;
+			message.submission = submission;
+			delete message.deliveryFailed;
 		}, context);
 		this.log("info", "build.message.delivered", { build, chat: to, submission });
+	}
+
+	async #messageFailed(requestId: string, build: string, chat: number, error: unknown, event = "build.message.failed") {
+		this.log("error", event, { build, chat, requestId, ...failure(error) });
+		if (!requestId.startsWith(failurePrefix)) return;
+		await this.harness.commit(async tx => {
+			const message = (await tx.doc(BuildsDoc)).messages.find(message => message.requestId === requestId);
+			if (message && message.submission === undefined) message.deliveryFailed = true;
+		}, context).catch(error => this.log("error", "build.message.receipt.failed", { build, chat, requestId, ...failure(error) }));
 	}
 
 	async #deliverMention(mention: PendingMention, ids?: readonly string[]): Promise<void> {
@@ -927,6 +1102,9 @@ export class Builds {
 			detail = `The ${role}'s start could not be recorded.`;
 			await update((saved, build) => {
 				saved.state = { kind: "started" };
+				if (saved.lastRun === undefined && !saved.pendingRuns?.includes(submission)) {
+					saved.pendingRuns = [...(saved.pendingRuns ?? []), submission];
+				}
 				if (first && build.state.kind === "starting") build.state = saved.state;
 			});
 			log(first ? "build.started" : "build.agent.started");

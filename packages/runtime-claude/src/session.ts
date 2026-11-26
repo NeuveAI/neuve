@@ -17,6 +17,7 @@ import {
   type RuntimeEvent,
   type RuntimeSession,
   type RuntimeModel,
+  type RetryEligibility,
   type SessionPolicy,
   type TurnOutcome,
   type ToolDefinition,
@@ -51,7 +52,7 @@ import {
   type TurnObservations,
 } from "./mapping.ts";
 import { ClaudeSdk, type QuerySession } from "./services.ts";
-import { messageCollector } from "./messages.ts";
+import { InvalidStreamToolInput, messageCollector } from "./messages.ts";
 import {
   consumesFrame,
   validFrame,
@@ -113,6 +114,10 @@ interface Turn {
   endTurn: boolean;
   lastEntry?: string;
   lastEntryIsCarrier: boolean;
+  readonly observedCalls: Set<string>;
+  readonly savedResults: Set<string>;
+  savedCarrier?: string;
+  refused: boolean;
   readonly calls: Map<
     string,
     {
@@ -125,7 +130,6 @@ interface Turn {
   readonly scope: Scope.Closeable;
   readonly abort: AbortController;
   readonly usage: Map<string, CallUsage>;
-  progressed: boolean;
   readonly rejected: Map<string, ReturnType<typeof limitWindow>>;
   observations: TurnObservations;
   readonly sends: Set<string>;
@@ -133,8 +137,7 @@ interface Turn {
   readonly heldSteers: SDKUserMessage[];
   readonly remainingCalls: Map<string, Set<string>>;
   readonly settledCalls: Map<string, CallSettlement>;
-  toolRan: boolean;
-  refreshRetried: boolean;
+  readonly admittedCalls: Set<string>;
   failedOutcome?: Extract<TurnOutcome, { status: "failed" }>;
   ending?: TurnOutcome;
   starting?: Fiber.Fiber<void, RuntimeUnavailable | TurnFailed>;
@@ -310,7 +313,7 @@ export const openClaudeSession = (
     const failOutcome = (
       reason: ConstructorParameters<typeof TurnFailed>[0]["reason"],
       disposition: "reusable" | "broken",
-    ): TurnOutcome => ({
+    ): Extract<TurnOutcome, { status: "failed" }> => ({
       status: "failed",
       disposition,
       failure: { _tag: "TurnFailed", account: account.name, reason },
@@ -406,6 +409,12 @@ export const openClaudeSession = (
           yield* settleCallLocked(turn, callId);
         yield* emitStreamUsageLocked(turn);
         if (turn.lastEntryIsCarrier) resumePoint = turn.lastEntry;
+        const retryPoint =
+          outcome.status === "failed" &&
+          outcome.retry?.continuation === "resume"
+            ? turn.savedCarrier
+            : undefined;
+        if (retryPoint !== undefined) resumePoint = retryPoint;
         active = undefined;
         lastEndedByTool = turn.endTurn;
         server.clearStamps();
@@ -414,9 +423,11 @@ export const openClaudeSession = (
           turnId: turn.id,
           at: now(),
           outcome,
-          ...(turn.lastEntryIsCarrier && turn.lastEntry !== undefined
-            ? { resumePoint: turn.lastEntry }
-            : {}),
+          ...(retryPoint !== undefined
+            ? { resumePoint: retryPoint }
+            : turn.lastEntryIsCarrier && turn.lastEntry !== undefined
+              ? { resumePoint: turn.lastEntry }
+              : {}),
         });
         if (stopped) yield* Queue.end(queue);
       });
@@ -471,7 +482,16 @@ export const openClaudeSession = (
                       sessionScope,
                     );
                 }
-                const ending = turn.ending ?? outcome;
+                const recorded = turn.ending ?? outcome;
+                // The child may also have stopped while cleanup was running.
+                const ending: TurnOutcome =
+                  stopped && recorded.status === "failed"
+                    ? {
+                        status: "failed",
+                        disposition: "broken",
+                        failure: recorded.failure,
+                      }
+                    : recorded;
                 yield* publishLocked(
                   turn,
                   !cleaned && ending.status !== "failed" && !turn.endTurn
@@ -534,6 +554,38 @@ export const openClaudeSession = (
       withProtocolWarning(dieLocked("protocol-error"), site, frame);
     const protocolFault = (site: ProtocolErrorSite) =>
       state(dieProtocolLocked(site));
+    const retryOutcome = (
+      turn: Turn,
+      outcome: Extract<TurnOutcome, { status: "failed" }>,
+      kind: RetryEligibility["kind"],
+    ): typeof outcome => {
+      if (
+        turn.refused ||
+        turn.rejected.size > 0 ||
+        turn.observations.assistant?.code === "rate_limit" ||
+        turn.heldSteers.length > 0
+      )
+        return outcome;
+      const callIds = new Set([
+        ...turn.observedCalls,
+        ...turn.calls.keys(),
+        ...turn.admittedCalls,
+      ]);
+      if (
+        callIds.size > 0 &&
+        callIds.size === turn.savedResults.size &&
+        turn.savedCarrier !== undefined &&
+        [...callIds].every((id) => turn.savedResults.has(id))
+      )
+        return { ...outcome, retry: { kind, continuation: "resume" } };
+      if (
+        callIds.size === 0 &&
+        turn.savedResults.size === 0 &&
+        turn.sends.size === 1
+      )
+        return { ...outcome, retry: { kind, continuation: "repeat-request" } };
+      return failOutcome("ambiguous-tool-effect", "reusable");
+    };
     const receiveLocked = (
       turn: Turn,
       frame: SDKMessage,
@@ -541,10 +593,44 @@ export const openClaudeSession = (
     ) =>
       Effect.try({
         try: () => turn.messages.receive(frame),
-        catch: () => undefined,
+        catch: (error) => error,
       }).pipe(
-        Effect.catch(() =>
-          dieProtocolLocked(site, frame).pipe(Effect.as(undefined)),
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            if (
+              !(error instanceof InvalidStreamToolInput) ||
+              site !== "message-receive" ||
+              frame.type !== "stream_event" ||
+              frame.session_id !== sessionId ||
+              child === undefined
+            )
+              return yield* dieProtocolLocked(site, frame).pipe(
+                Effect.as(undefined),
+              );
+            const id = error.callId;
+            if (
+              !turn.admittedCalls.has(id) &&
+              !turn.calls.has(id) &&
+              !turn.settledCalls.has(id) &&
+              !turn.savedResults.has(id)
+            )
+              turn.observedCalls.delete(id);
+            const failed = failOutcome("protocol-error", "reusable");
+            const outcome =
+              turn.pendingSends.size === 1
+                ? retryOutcome(turn, failed, "protocol")
+                : failed;
+            if (outcome.retry?.continuation === "resume")
+              resumePoint = turn.savedCarrier;
+            yield* withProtocolWarning(
+              disposeLocked(child).pipe(
+                Effect.andThen(finishLocked(turn, outcome)),
+              ),
+              site,
+              frame,
+            );
+            return undefined;
+          }),
         ),
       );
     const offerLocked = (current: Child, turn: Turn, message: SDKUserMessage) =>
@@ -674,24 +760,29 @@ export const openClaudeSession = (
                 wireName === "StructuredOutput" &&
                 turn?.final &&
                 turn.ending === undefined
-              )
+              ) {
+                turn.admittedCalls.add(options.toolUseID);
                 return {
                   behavior: "allow",
                   updatedInput: input,
                 } satisfies PermissionResult;
+              }
               if (skillTool(wireName)) {
                 const target = skillInput.safeParse(input);
-                return turn !== undefined &&
-                  turn.ending === undefined &&
-                  !stopped &&
-                  !options.signal.aborted &&
-                  target.success &&
-                  skillNames.includes(target.data.skill)
-                  ? ({
-                      behavior: "allow",
-                      updatedInput: input,
-                    } satisfies PermissionResult)
-                  : deny();
+                if (
+                  turn === undefined ||
+                  turn.ending !== undefined ||
+                  stopped ||
+                  options.signal.aborted ||
+                  !target.success ||
+                  !skillNames.includes(target.data.skill)
+                )
+                  return deny();
+                turn.admittedCalls.add(options.toolUseID);
+                return {
+                  behavior: "allow",
+                  updatedInput: input,
+                } satisfies PermissionResult;
               }
               if (definition === undefined) {
                 yield* dieProtocolLocked("permission-unknown-tool");
@@ -858,7 +949,7 @@ export const openClaudeSession = (
                         abort: callAbort,
                       };
                       turn.calls.set(callId, call);
-                      turn.toolRan = true;
+                      turn.admittedCalls.add(callId);
                       return true;
                     }),
                   );
@@ -967,6 +1058,7 @@ export const openClaudeSession = (
       Effect.gen(function* () {
         for (const message of messages) {
           const event = turn.messages.event(message, turn.id, now());
+          if (event.stopReason === "refusal") turn.refused = true;
           resumePoint = event.resumePoint;
           const remaining = new Set(
             event.toolCalls
@@ -1029,6 +1121,12 @@ export const openClaudeSession = (
       collected: ReturnType<Turn["messages"]["receive"]>,
     ) =>
       Effect.gen(function* () {
+        if (collected.skippedClosingFrame)
+          yield* Effect.logInfo("claude-runtime skipped-frame", {
+            turn: turn.id,
+            reason: "closed-response",
+            frame: "stream_event/content_block_stop",
+          });
         const ready = [...collected.ready];
         let completed = collected.completed;
         // A result ledger already includes the request. Stream-derived totals need only its correction.
@@ -1391,12 +1489,33 @@ export const openClaudeSession = (
                             (block) => block.type === "tool_result",
                           );
                       }
+                      if (
+                        frame.type === "assistant" &&
+                        frame.parent_tool_use_id === null
+                      )
+                        for (const block of frame.message.content)
+                          if (block.type === "tool_use")
+                            turn.observedCalls.add(block.id);
+                      if (
+                        frame.type === "user" &&
+                        frame.parent_tool_use_id === null &&
+                        frame.session_id === sessionId &&
+                        frame.uuid !== undefined &&
+                        Array.isArray(frame.message.content)
+                      ) {
+                        for (const block of frame.message.content)
+                          if (block.type === "tool_result") {
+                            turn.savedResults.add(block.tool_use_id);
+                            turn.savedCarrier = frame.uuid;
+                          }
+                      }
                       yield* acceptMessagesLocked(turn, collected);
                       if (frame.type === "stream_event") {
                         if (
                           frame.event.type === "content_block_start" &&
                           frame.event.content_block.type === "tool_use"
                         ) {
+                          turn.observedCalls.add(frame.event.content_block.id);
                           const name = frame.event.content_block.name;
                           if (
                             !(name === "StructuredOutput" && turn.final) &&
@@ -1417,7 +1536,6 @@ export const openClaudeSession = (
                           frame.event.type === "content_block_delta" &&
                           frame.event.delta.type === "text_delta"
                         ) {
-                          turn.progressed = true;
                           yield* emit({
                             type: "text",
                             turnId: turn.id,
@@ -1535,23 +1653,6 @@ export const openClaudeSession = (
                           yield* offerHeldLocked(current, turn);
                         const hasQueuedWork = turn.pendingSends.size > 0;
                         const assistant = turn.observations.assistant;
-                        if (
-                          turn.ending === undefined &&
-                          !turn.refreshRetried &&
-                          !turn.toolRan &&
-                          !turn.progressed &&
-                          turn.sends.size === 1 &&
-                          turn.pendingSends.size === 0 &&
-                          assistant?.code === "server_error" &&
-                          /another Claude Code process is refreshing it/i.test(
-                            assistant.text,
-                          )
-                        ) {
-                          turn.refreshRetried = true;
-                          turn.observations = {};
-                          yield* sendLocked(current, turn, turn.message);
-                          return;
-                        }
                         const observed: TurnObservations = {
                           ...turn.observations,
                           limited: turn.rejected.values().next().value,
@@ -1567,7 +1668,33 @@ export const openClaudeSession = (
                           turn.failedOutcome ??= resultOutcome;
                         if (turn.ending === undefined && hasQueuedWork) return;
                         if (turn.cleanup !== undefined) return;
-                        const outcome = turn.failedOutcome ?? resultOutcome;
+                        let outcome = turn.failedOutcome ?? resultOutcome;
+                        // The SDK emits this result after its own attempts end.
+                        const typedTransient =
+                          ("api_error_status" in frame &&
+                            frame.api_error_status != null &&
+                            frame.api_error_status >= 500) ||
+                          assistant?.code === "overloaded" ||
+                          assistant?.code === "server_error";
+                        if (
+                          frame.session_id === sessionId &&
+                          !hasQueuedWork &&
+                          outcome.status === "failed" &&
+                          outcome.disposition === "reusable" &&
+                          outcome.failure._tag === "TurnFailed" &&
+                          (outcome.failure.reason === "protocol-error" ||
+                            (typedTransient &&
+                              (outcome.failure.reason ===
+                                "provider-unavailable" ||
+                                outcome.failure.reason === "provider-failed")))
+                        )
+                          outcome = retryOutcome(
+                            turn,
+                            outcome,
+                            outcome.failure.reason === "protocol-error"
+                              ? "protocol"
+                              : "transient-provider",
+                          );
                         yield* finishLocked(turn, outcome);
                       }
                     }),
@@ -1826,13 +1953,15 @@ export const openClaudeSession = (
                   streamUsageAfterResult: false,
                   completedMessages: 0,
                   lastEntryIsCarrier: false,
+                  observedCalls: new Set(),
+                  savedResults: new Set(),
+                  refused: false,
                   calls: new Map(),
                   endTurn: false,
                   final: input.final === true,
                   scope: yield* Scope.fork(sessionScope),
                   abort: new AbortController(),
                   usage: new Map(),
-                  progressed: false,
                   rejected: new Map(),
                   observations: {},
                   sends: new Set(),
@@ -1840,8 +1969,7 @@ export const openClaudeSession = (
                   heldSteers: [],
                   remainingCalls: new Map(),
                   settledCalls: new Map(),
-                  toolRan: false,
-                  refreshRetried: false,
+                  admittedCalls: new Set(),
                 };
                 active = turn;
                 yield* emit({

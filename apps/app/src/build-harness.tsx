@@ -83,6 +83,19 @@ const CARDS: { label: string; build: Build }[] = [
 		label: "All agents ended",
 		build: build({ agents: [{ ...IMPLEMENTER, state: "done" }, { ...REVIEWER, state: "failed" }] }),
 	},
+	{
+		label: "An agent's retries ran out",
+		build: build({
+			agents: [
+				{
+					...IMPLEMENTER,
+					state: "failed",
+					failure: { role: "implementer", turn: "t1", at: T, reason: "retry-budget-exhausted", attempts: 6 },
+				},
+				REVIEWER,
+			],
+		}),
+	},
 	{ label: "Shared channel", build: build({ state: { kind: "unavailable", reason: "shared" }, agents: [] }) },
 	{ label: "Hosted channel", build: build({ state: { kind: "unavailable", reason: "hosted" }, agents: [] }) },
 	{

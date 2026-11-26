@@ -78,3 +78,5 @@ export {
   CompatibilitySource,
   compatibilityContext,
 } from "./compatibility-capture.ts";
+
+export * as TurnRecovery from "./turn-recovery.ts";

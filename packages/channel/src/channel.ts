@@ -1,3 +1,4 @@
+import { watchTurnRecovery } from "./turn-recovery";
 import { ReviewCardsDoc } from "./review-cards";
 import { type ApprovalAdmission, ApprovalRequestsDoc, Approvals, requirePerson, watchApprovals } from "./approvals";
 import type { Context } from "@earendil-works/chord";
@@ -414,6 +415,7 @@ export class Channel {
 				channel.#builds.postedMention(submission);
 			}
 			const ended: [ConversationId, readonly SubmissionId[]][] = [];
+			const began: [ConversationId, SubmissionId][] = [];
 			let runEnded = false;
 			for (const change of changes) {
 				if (change.type === "entry" && change.value.model?.[0]?.role === "assistant") {
@@ -461,16 +463,18 @@ export class Channel {
 				if (scope.kind !== "conversation") continue;
 				const { run } = (change.value || {}) as LiveState;
 				const inputs = channel.#runs.get(scope.conversationId);
-				if (inputs && inputs[0] !== run?.inputs[0]) runEnded = true;
+				if (inputs && inputs[0] !== run?.inputs[0]) {
+					runEnded = true;
+					if (!run || channel.#builds.agent(scope.conversationId)) ended.push([scope.conversationId, inputs]);
+				}
 				if (run) {
 					channel.#runs.set(scope.conversationId, run.inputs);
 					if (inputs?.[0] !== run.inputs[0]) {
-						void channel.#builds.state(scope.conversationId, "running", run.inputs[0]);
+						began.push([scope.conversationId, run.inputs[0]!]);
 					}
 				} else if (inputs) {
 					channel.#runs.delete(scope.conversationId);
 					channel.#caption(scope.conversationId);
-					ended.push([scope.conversationId, inputs]);
 				}
 			}
 			if (changes.some(change => change.type === "document" && change.record.kind === LiveDoc.definition.kind
@@ -487,6 +491,7 @@ export class Channel {
 				channel.#captionTasks.add(task);
 				void task.finally(() => channel.#captionTasks.delete(task));
 			}
+			for (const [chat, input] of began) void channel.#builds.state(chat, "running", input, true);
 			// Publish once per atomic commit, not once per chat or streaming delta.
 			channel.#publishBusy();
 			if (changes.some((change) => change.type === "entry")) channel.#activity();
@@ -515,6 +520,7 @@ export class Channel {
 		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
 		if (options.resume !== false) {
 			await channel.#builds.finishStops();
+			await channel.#builds.reconcileRuns();
 			await channel.#builds.recoverMentionEntries();
 			await channel.#placeResumingChats();
 			harness.resume();
@@ -868,14 +874,18 @@ export class Channel {
 		for (const change of changes) {
 			if (change.type === "submission") settled.set(change.value.id, change.value);
 		}
+		const first = settled.get(inputs[0]!);
 		const last = settled.get(inputs.at(-1)!);
-		if (!last) return;
+		if (!first || first.type !== "input" || (first.status !== "done" && first.status !== "unanswered") || !last) return;
 		const outcome = last.status === "done"
 			? "done"
-			: last.reason === "aborted"
+			: last.reason === "aborted" || last.reason === "reset"
 			? "stopped"
 			: "failed";
-		await this.#builds.state(chat, outcome, undefined);
+		const response = changes.findLast(change => change.type === "entry" &&
+			change.value.conversationId === chat && change.value.model?.[0]?.role === "assistant");
+		const message = response?.type === "entry" ? response.value.model?.[0] : undefined;
+		await this.#builds.endRun(chat, first, message?.role === "assistant" ? message : undefined);
 		await this.#publishRun(chat, inputs.map((id) => settled.get(id)), outcome);
 	}
 
@@ -1810,7 +1820,8 @@ export class Channel {
 		let plans: DocumentWatch<PlansState> | undefined;
 		let builds: DocumentWatch<BuildsState> | undefined;
 		let approvals: Awaited<ReturnType<typeof watchApprovals>> | undefined;
-		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop(), builds?.stop(), approvals?.stop()]);
+		let recovery: Awaited<ReturnType<typeof watchTurnRecovery>> | undefined;
+		const stopDocs = () => Promise.all([reviews?.stop(), plans?.stop(), builds?.stop(), approvals?.stop(), recovery?.stop()]);
 		try {
 			if (request.planComments) await this.#flushPlanDeliveries();
 			await harness.commit(async tx => {
@@ -1834,6 +1845,7 @@ export class Channel {
 				sendBuilds(builds.value);
 				builds.start(async value => sendBuilds(value));
 			}
+			recovery = await watchTurnRecovery(harness, conversation.id, send);
 			if (request.approvals) approvals = await watchApprovals(harness, conversation.id, send);
 			if (plans) {
 				let lastPlans: string | undefined;

@@ -33,10 +33,18 @@ import { commentSends, commentWords } from "./plan-comments";
 import { pendingQuestion, Question } from "./question";
 import { newestReview, reviewActions, reviewTab, withCards } from "./review-card";
 import { AGENT, credit, sources, toEvents } from "./timeline";
-import { useTranscript, useTyping } from "./transcript";
+import { type TurnRetry, useTranscript, useTyping } from "./transcript";
 import { Usage } from "./usage";
 
 const stopped = (who: string) => `${who} isn't responding. The chat continues when it answers.`;
+
+function retryLine(retry: TurnRetry | undefined) {
+	if (retry?.state !== "scheduled" && retry?.state !== "started") return undefined;
+	const cause = retry.reason === "reusable-protocol-failure" ? "The reply broke off" : "The model provider failed";
+	if (retry.state === "started" || !retry.nextAt) return `${cause}. Retrying now, attempt ${retry.attempt}.`;
+	const at = new Date(retry.nextAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+	return `${cause}. Retrying at ${at}, attempt ${retry.attempt}.`;
+}
 
 type Props = {
 	channel: Listing;
@@ -112,6 +120,7 @@ export function Conversation(
 		: channel.state === "dormant"
 		? "Starting channel"
 		: "Sending";
+	const retrying = retryLine(transcript.turnRetry);
 	const reply = transcript.items.findLast((item) => item.kind === "reply");
 	const question = reply?.kind === "reply" && pendingQuestion(reply.tools, transcript.busy);
 	const last = transcript.items.at(-1);
@@ -487,9 +496,9 @@ export function Conversation(
 				{typing.length > 0 && (
 					<ChatStatus className="absolute inset-x-5 bottom-full" typing={typing} disclaimer="" />
 				)}
-				{transcript.live && (notice || transition || transcript.restarting) && (
+				{transcript.live && (notice || transition || transcript.restarting || retrying) && (
 					<p className="pb-2 text-center text-xs text-muted-foreground" role="status">
-						{notice || transition || "Channel is restarting…"}
+						{notice || transition || (transcript.restarting ? "Channel is restarting…" : retrying)}
 					</p>
 				)}
 				{transcript.live && question && (

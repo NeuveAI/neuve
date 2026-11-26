@@ -15,3 +15,6 @@ export {
 } from "./extension.ts";
 export { NativeHeads } from "./heads.ts";
 export type { RuntimeRegistryShape } from "@neuve/runtime";
+
+export { turnRecoveryStore } from "./recovery-store.ts";
+export type { TurnRecoveryDriver } from "./recovery.ts";

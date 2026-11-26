@@ -169,6 +169,7 @@ export function definitions(
   handle: (
     name: string,
     call: ToolCall | undefined,
+    input: unknown,
   ) => Effect.Effect<import("@neuve/runtime").ToolOutcome>,
 ): ToolDefinition[] {
   return tools.map((tool) => ({
@@ -182,7 +183,7 @@ export function definitions(
       idempotent: false,
       openWorld: false,
     },
-    handle: (_input, call) => handle(tool.name, call),
+    handle: (input, call) => handle(tool.name, call, input),
   }));
 }
 export function policy(

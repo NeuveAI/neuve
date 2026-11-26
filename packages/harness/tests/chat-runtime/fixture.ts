@@ -108,6 +108,7 @@ export type Frame = {
   calls?: Extract<RuntimeEvent, { type: "message.finished" }>["toolCalls"];
   failure?: import("@neuve/runtime").RuntimeFailure;
   disposition?: "reusable" | "broken";
+  retry?: import("@neuve/runtime").RetryEligibility;
   delayHandler?: () => Promise<void>;
   resumePoint?: string;
   finishAfterResults?: string;
@@ -257,6 +258,7 @@ export class FakeSession {
       const frame = this.fake.frames.shift();
       if (!frame) throw new Error("Unexpected model request");
       frame.beforeMessage?.();
+      if (frame.text) this.emit({ type: "text", text: frame.text });
       if (frame.failure) {
         this.emit({
           type: "turn.finished",
@@ -264,11 +266,12 @@ export class FakeSession {
             status: "failed",
             failure: frame.failure,
             disposition: frame.disposition ?? "broken",
+            ...(frame.retry ? { retry: frame.retry } : {}),
           },
+          ...(frame.resumePoint ? { resumePoint: frame.resumePoint } : {}),
         });
         return;
       }
-      if (frame.text) this.emit({ type: "text", text: frame.text });
       // A runtime without resumeInTurn names a point only at a completed turn's end.
       const point = frame.resumePoint ?? `point-${this.fake.requests.length}`;
       const inTurn = this.fake.capabilities.resumeInTurn;
@@ -387,6 +390,8 @@ export async function fixture(
     conversationId?: ConversationId;
     fake?: FakeRuntime;
     idleMs?: number;
+    now?: () => number;
+    recovery?: import("../../src/chat-runtime/recovery.ts").TurnRecoveryDriver;
     headsDirectory?: string;
     statusModels?: readonly RuntimeModel[];
     native?: ReturnType<typeof createModels>;
@@ -442,6 +447,8 @@ export async function fixture(
   const bridge = new ChatRuntimeBridge({
     registry: runtime,
     heads,
+    ...(options.recovery ? { recovery: options.recovery } : {}),
+    ...(options.now ? { now: options.now } : {}),
     log: (event, fields) => fake.logs.push({ event, fields }),
     ...(options.idleMs === undefined ? {} : { idleMs: options.idleMs }),
   });

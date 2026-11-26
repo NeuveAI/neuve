@@ -245,6 +245,7 @@
         "@earendil-works/pi-ai": "1.0.0",
         "@earendil-works/pi-durable": "1.0.0",
         "@githubnext/desktop-tools": "github:githubnext/desktop-tools#c3e08eb55958ba87ca65e12f735d795bd2b921eb",
+        "@neuve/records-schema": "workspace:*",
         "@neuve/review-rules": "workspace:*",
         "@neuve/runtime": "workspace:*",
         "zod": "4.6.7",

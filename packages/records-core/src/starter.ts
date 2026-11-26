@@ -75,7 +75,7 @@ export type StartResult =
 export interface StartOptions {
   /** A path inside the repository or any of its worktrees. */
   readonly repository: string;
-  /** How to run `neuve`; `worker run --repo <repository>` is appended. Default: `neuve` on PATH. */
+  /** How to run `neuve`. Default: `neuve` on PATH. */
   readonly command?: ReadonlyArray<string>;
   /** Subscribers await the child's pushed bind acknowledgement, never readiness polling. */
   readonly waitForReady?: boolean;
@@ -100,7 +100,7 @@ export const ensureWorker = (options: StartOptions) =>
 
 export const ensureWorkerAt = (
   location: StoreLocation,
-  options: StartOptions,
+  options: Omit<StartOptions, "repository"> & { readonly repository?: string },
 ) =>
   Effect.gen(function* () {
     const mayWake = yield* requireCurrentWorkerClaim(location).pipe(
@@ -118,12 +118,23 @@ export const ensureWorkerAt = (
       const result: StartResult = { status: "running", socket };
       return result;
     }
+    const repository = options.repository;
+    const cwd = repository ?? location.directory;
+    const environment =
+      repository === undefined
+        ? {
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+            HOME: cwd,
+            TMPDIR: cwd,
+          }
+        : process.env;
     const command = [
       ...(options.command ?? ["neuve"]),
       "worker",
       "run",
-      "--repo",
-      options.repository,
+      ...(repository === undefined
+        ? ["--store", location.directory]
+        : ["--repo", repository]),
     ];
     // An uncertain read delegates acceptance to the worker, including when no socket exists yet.
     const waitForReady = options.waitForReady || !mayWake;
@@ -143,10 +154,10 @@ export const ensureWorkerAt = (
             stdio: captureReady
               ? ["ignore", output, output, "pipe"]
               : ["ignore", output, output],
-            cwd: options.repository,
+            cwd,
             env: captureReady
-              ? { ...process.env, NEUVE_WORKER_READY_FD: "3" }
-              : process.env,
+              ? { ...environment, NEUVE_WORKER_READY_FD: "3" }
+              : environment,
           });
           child.on("error", () => {});
           child.unref();

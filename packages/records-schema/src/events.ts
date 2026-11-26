@@ -1,3 +1,4 @@
+import { TurnRecoveryPayload } from "./turn-recovery.ts";
 import { JudgementLineage } from "./judgement-lineage.ts";
 import { z } from "zod";
 import {
@@ -1831,6 +1832,22 @@ export const CaptureMarked = event(
   Attribution.optional(),
 );
 
+export const TurnRecoveryRecorded = event(
+  "turn.recovery-recorded@1",
+  TurnRecoveryPayload,
+  Attribution,
+);
+export const TurnRecoveryPublished = event(
+  "turn.recovery-published@1",
+  z.strictObject({
+    turn: z.string().min(1).max(512),
+    schedule: Ulid,
+    attempt: z.int().min(1).max(5),
+    result: z.string().regex(/^[a-f0-9]{64}$/),
+  }),
+  Attribution,
+);
+
 /** Every event kind Records accepts. Old versions stay in the union and are upcast on read. */
 export const RecordEvent = z.discriminatedUnion("kind", [
   ActorRegistered,
@@ -1888,6 +1905,8 @@ export const RecordEvent = z.discriminatedUnion("kind", [
   FeedbackRecorded,
   FeedbackRecordedV2,
   ReviewListCleared,
+  TurnRecoveryRecorded,
+  TurnRecoveryPublished,
 ]);
 
 /** An event as read back from the log: the producer's envelope plus the writer's order and time. */

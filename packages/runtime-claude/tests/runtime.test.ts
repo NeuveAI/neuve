@@ -1138,41 +1138,50 @@ test("retries: api_retry reaches the contract and recovered overload still compl
   );
 });
 
-test("refresh lock: retry only the initial server_error once before tools or output", async () => {
-  const locked = assistant(
-    "server_error",
-    "another Claude Code process is refreshing it",
-  );
-  const retried = {
-    ...locked,
-    uuid: crypto.randomUUID(),
-    message: { ...locked.message, id: "retry-message" },
-  };
+// Reason: a typed server error can pass the request back to the harness for retry.
+test("refresh lock: a typed server error allows the request to recover", async () => {
   await sessionTest(
     [
       open,
       offer,
-      inbound(locked),
+      inbound(
+        assistant(
+          "server_error",
+          "another Claude Code process is refreshing it",
+        ),
+      ),
       inbound(errorResult("error_during_execution")),
       offer,
-      inbound(retried),
-      inbound(errorResult("error_during_execution")),
+      inbound(assistant(undefined, "Signed in.")),
+      inbound(result()),
       close,
     ],
     (session, reader) =>
       Effect.gen(function* () {
         yield* session.startTurn(normal);
         expect(yield* reader.until("turn.finished")).toMatchObject({
-          outcome: { status: "failed", failure: { reason: "provider-failed" } },
+          outcome: {
+            status: "failed",
+            disposition: "reusable",
+            retry: {
+              kind: "transient-provider",
+              continuation: "repeat-request",
+            },
+          },
         });
         expect(
           reader.seen.filter((e) => e.type === "turn.started"),
         ).toHaveLength(1);
+        yield* session.startTurn({ ...normal, turnId: "retry" });
+        expect(yield* reader.until("turn.finished")).toMatchObject({
+          turnId: "retry",
+          outcome: { status: "completed" },
+        });
       }),
   );
 });
 
-test("refresh lock: a response delta prevents replaying a turn with visible progress", async () => {
+test("refresh lock: the runtime never resends a request after provisional output", async () => {
   await sessionTest(
     [
       open,
@@ -1272,17 +1281,23 @@ test("interrupt: a query with no result closes and finishes interrupted exactly 
   );
 });
 
+// Reason: a broken provider outcome must be persistable as JSON with retry eligibility absent.
 test("stream failure: provider death finishes broken without exposing an event error channel", async () => {
   await sessionTest(
     [open, offer, { type: "stream_failure" }, close],
     (session, reader) =>
       Effect.gen(function* () {
         yield* session.startTurn(normal);
-        expect(yield* reader.until("turn.finished")).toMatchObject({
-          outcome: {
-            status: "failed",
-            disposition: "broken",
-            failure: { reason: "provider-failed" },
+        const event = yield* reader.until("turn.finished");
+        if (event.type !== "turn.finished")
+          throw new Error("Expected turn.finished");
+        expect(event.outcome).toStrictEqual({
+          status: "failed",
+          disposition: "broken",
+          failure: {
+            _tag: "TurnFailed",
+            account: account.name,
+            reason: "provider-failed",
           },
         });
       }),

@@ -1,4 +1,4 @@
-import type { AgentName, Build, BuildAgent, Chat, ChatId, WorkMessage } from "@ace/channel/protocol";
+import { failureCaption, type AgentName, type Build, type BuildAgent, type Chat, type ChatId, type WorkMessage } from "@ace/channel/protocol";
 import type { AgentLineView, BuildCardView, Event, Mention } from "@ace/ui";
 
 import { AGENT_ALIAS } from "./agent-mention";
@@ -59,11 +59,12 @@ export function readOnly(id: ChatId, chat: Chat | undefined, builds: Build[]): b
 }
 
 export function lineView(agent: BuildAgent): AgentLineView {
+	const caption = agent.state === "failed" && agent.failure ? failureCaption(agent.failure) : agent.caption;
 	return {
 		chat: agent.chat,
 		role: agent.role,
 		name: agentName(agent),
-		...(agent.caption ? { caption: agent.caption } : {}),
+		...(caption ? { caption } : {}),
 		state: agent.state,
 	};
 }

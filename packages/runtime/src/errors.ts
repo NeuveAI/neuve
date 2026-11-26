@@ -38,6 +38,7 @@ export const TurnFailureReason = z.enum([
   "provider-failed",
   "provider-unavailable",
   "protocol-error",
+  "ambiguous-tool-effect",
   "session-stopped",
   "previous-turn-active",
 ]);

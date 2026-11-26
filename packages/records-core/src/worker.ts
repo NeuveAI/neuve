@@ -229,6 +229,11 @@ export const defaultHandlers: Partial<Record<JobKind, JobHandler>> = {
   "transcript.capture": (job) => captureTranscript(job),
   "retention.prune": pruneJob,
   "worker.probe": probeHandler,
+  "chat.turn-retry@1": (job) =>
+    Effect.logInfo("Chat retry delivery is due", {
+      job: job.seq,
+      event: job.eventId,
+    }),
 };
 
 /**

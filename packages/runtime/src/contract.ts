@@ -1,7 +1,8 @@
 /**
  * The stage loop (re-prompts, submit tools, final generation and refusals) runs above
  * this contract. A runtime runs one turn per startTurn and owns its agent loop,
- * retries, compaction, resume, capture and credentials.
+ * provider-internal retries, compaction, resume, capture and credentials. Logical-turn
+ * retries belong to the harness and require an explicit safe continuation assertion.
  * Shared tools, telemetry, logs, receipts, budgets and stage policy read only these events.
  * For an ownsLoop runtime, Neuve's stage loop drives one turn per round;
  * the runtime's own model loop runs within that turn and calls Neuve's tool handlers.
@@ -171,6 +172,15 @@ export const InterruptReason = z.enum([
   "shutdown",
 ]);
 export type InterruptReason = z.infer<typeof InterruptReason>;
+/** Runtime assertion of safe continuation, not a retry policy or displayed error text. */
+export const RetryEligibility = z.strictObject({
+  kind: z.enum(["protocol", "transient-provider"]),
+  /** Resume saved provider history, or repeat a request proven to have had no tool effects. */
+  continuation: z.enum(["resume", "repeat-request"]),
+  /** Validated at ingress; the harness never schedules earlier than this provider delay. */
+  retryAfterMs: z.number().int().min(0).max(2_147_483_647).optional(),
+});
+export type RetryEligibility = z.infer<typeof RetryEligibility>;
 export const TurnOutcome = z.discriminatedUnion("status", [
   z.strictObject({
     status: z.literal("completed"),
@@ -181,12 +191,26 @@ export const TurnOutcome = z.discriminatedUnion("status", [
     status: z.literal("interrupted"),
     reason: InterruptReason.optional(),
   }),
-  z.strictObject({
-    status: z.literal("failed"),
-    failure: RuntimeFailure,
-    /** Reusable permits another turn, including final generation after a limit or overflow; broken requires closing. */
-    disposition: z.enum(["reusable", "broken"]),
-  }),
+  z
+    .strictObject({
+      status: z.literal("failed"),
+      failure: RuntimeFailure,
+      /** Reusable alone does not authorize automatic continuation. Broken always requires closing. */
+      disposition: z.enum(["reusable", "broken"]),
+      /** Absent is terminal for harness retries. Durable tools/checkpoints still need harness validation. */
+      retry: RetryEligibility.optional(),
+    })
+    .refine(
+      ({ disposition, failure, retry }) =>
+        retry === undefined ||
+        (disposition === "reusable" &&
+          failure._tag === "TurnFailed" &&
+          (retry.kind === "protocol"
+            ? failure.reason === "protocol-error"
+            : failure.reason === "provider-failed" ||
+              failure.reason === "provider-unavailable")),
+      "Only an explicitly safe reusable protocol or transient provider failure can retry",
+    ),
 ]);
 export type TurnOutcome = z.infer<typeof TurnOutcome>;
 const eventFields = {
@@ -203,8 +227,10 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
    * response on Claude Code. It lists every tool call of that unit. The runtime emits it as soon as the unit is known
    * complete: at message stop, or at the first tool handler call of that message when
    * the runtime calls handlers only after a response ends. It never waits on later
-   * frames. A frame of that unit arriving after the event ends the turn with TurnFailed
-   * protocol-error, never a second or partial event. Turn usage totals also include
+   * frames. Content-bearing or unattributable frames of that unit arriving after the event
+   * end the turn with TurnFailed protocol-error, never a second or partial event. A validated,
+   * content-free closing frame may be skipped with a diagnostic; valid trailing usage is retained.
+   * Turn usage totals also include
    * requests without message.finished: runtime retries, structured-output retries
    * and compaction.
    */
@@ -289,6 +315,7 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     ...eventFields,
+    /** A provider-internal attempt, never the harness's durable logical-turn retry budget. */
     type: z.literal("retry"),
     attempt: z.number().int().positive(),
     maxAttempts: z.number().int().positive().optional(),
@@ -342,24 +369,33 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     errored: z.boolean(),
     durationMs: z.number().nonnegative().optional(),
   }),
-  z.strictObject({
-    ...eventFields,
-    type: z.literal("turn.finished"),
-    outcome: TurnOutcome,
-    /**
-     * Set when a turn ends on a tool-result carrier with no trailing assistant message; names the point to
-     * resume or fork from. When set, it takes precedence over the turn's last message.finished resumePoint,
-     * so a resume keeps the round's tool results.
-     *
-     * On a runtime without resumeInTurn, whose messages carry no resume point, a completed turn sets this
-     * to the turn's end: the only point it can resume or fork from.
-     *
-     * The receipt a resume point gives: a resume point (message.finished's, or this one when set) names a
-     * point whose whole chain is in the native session. A completed turn.finished means every input given
-     * to the turn (its message, steers and tool results) precedes its final resume point.
-     */
-    resumePoint: z.string().min(1).optional(),
-  }),
+  z
+    .strictObject({
+      ...eventFields,
+      type: z.literal("turn.finished"),
+      outcome: TurnOutcome,
+      /**
+       * Set when a turn ends on a tool-result carrier with no trailing assistant message; names the point to
+       * resume or fork from. When set, it takes precedence over the turn's last message.finished resumePoint,
+       * so a resume keeps the round's tool results. Also required when a failed turn explicitly
+       * authorizes retry by saved-history resume; the point includes every completed tool result.
+       *
+       * On a runtime without resumeInTurn, whose messages carry no resume point, a completed turn sets this
+       * to the turn's end: the only point it can resume or fork from.
+       *
+       * The receipt a resume point gives: a resume point (message.finished's, or this one when set) names a
+       * point whose whole chain is in the native session. A completed turn.finished means every input given
+       * to the turn (its message, steers and tool results) precedes its final resume point.
+       */
+      resumePoint: z.string().min(1).optional(),
+    })
+    .refine(
+      ({ outcome, resumePoint }) =>
+        outcome.status !== "failed" ||
+        outcome.retry?.continuation !== "resume" ||
+        resumePoint !== undefined,
+      "Retrying saved history requires the failed turn's exact resume point",
+    ),
 ]);
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>;
 

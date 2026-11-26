@@ -121,6 +121,21 @@ test("a build's card follows its plan's card, only in the planning chat", () => 
 	}
 });
 
+// Why: the card is where a person sees that an agent gave up, so a failed agent's line must say why in
+// place of its stale caption, and must go back to its caption once a later turn clears the failure.
+test("a failed agent's line says why it stopped until a later turn clears the failure", () => {
+	const failure = { role: "implementer", turn: "t1", at: 0, reason: "retry-budget-exhausted", attempts: 6 } as const;
+	const line = (patch: Partial<BuildAgent>) =>
+		buildCards([build({ agents: [agent(2, { caption: "Editing retry.ts", ...patch })] })], 1, (name) => name)
+			.get("c1")!.agents[0]!;
+	expect(line({ state: "failed", failure })).toMatchObject({ state: "failed", caption: "Failed after 6 attempts" });
+	expect(line({ state: "failed", failure: { ...failure, reason: "ambiguous-tool-effect", attempts: 1 } }).caption)
+		.toBe("Stopped: a tool may have run without a recorded result");
+	expect(line({ state: "failed", failure: { ...failure, reason: "model_error", attempts: 1 } }).caption)
+		.toBe("Failed without an answer");
+	expect(line({ state: "running" }).caption).toBe("Editing retry.ts");
+});
+
 // Why: the recipient is named only where more than two agents could be meant; the chat that drafted
 // the plan writes as Neuve to either agent, so its recipient is always named; a message from a chat
 // no build lists has no role to draw, so it is left out rather than drawn as a person.

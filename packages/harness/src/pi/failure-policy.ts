@@ -144,6 +144,7 @@ export function runtimeFailurePolicy(
             : { action: "fail", retryable: false };
         case "no-output-schema":
         case "protocol-error":
+        case "ambiguous-tool-effect":
         case "session-stopped":
         case "previous-turn-active":
           return { action: "fail", retryable: false };
