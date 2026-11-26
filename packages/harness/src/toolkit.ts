@@ -1,3 +1,4 @@
+import type { JsonValue } from "@earendil-works/chord";
 import type { Effect } from "effect";
 import type {
   ToolCall,
@@ -40,9 +41,28 @@ export const RECORDS: ToolHints = {
  * name, so a call rerun after a crash, or a later call asking for the same name, finds the child
  * already started. An owner that takes no new work (finished, finishing or being stopped) gets none.
  */
+/** Execution bookkeeping only. Records owns retained reports and publication facts. */
+export type ClaimAnchor = {
+  readonly path: string;
+  readonly side: "old" | "new";
+  readonly startLine: number;
+  readonly endLine: number;
+};
+export type ClaimRegistration = {
+  readonly assignment: string;
+  readonly claim: {
+    readonly key: string;
+    readonly anchor: ClaimAnchor;
+    /** The exact attributed report, not an inferred destination judgment. */
+    readonly report: { [key: string]: JsonValue };
+    /** Exact source/evidence references the producer used, validated by its tool. */
+    readonly basis: { [key: string]: JsonValue };
+  };
+};
+
 export interface ChildRequest {
   /** A review claim registered atomically with its Verify child and recorded tool answer. */
-  readonly claimRegistration?: import("./pi/claim-settlement.ts").ClaimRegistration;
+  readonly claimRegistration?: ClaimRegistration;
   /** The task that owns the child: its abort stops the child, and it waits for the child. */
   readonly owner: number;
   /** The child's name in its owner's children (`ChildrenDoc`). */

@@ -8,24 +8,9 @@ import { canonicalJson } from "@neuve/records-core";
 
 const copyJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-/** Execution bookkeeping only. Records owns retained reports and publication facts. */
-export type ClaimAnchor = {
-  readonly path: string;
-  readonly side: "old" | "new";
-  readonly startLine: number;
-  readonly endLine: number;
-};
-export type ClaimRegistration = {
-  readonly assignment: string;
-  readonly claim: {
-    readonly key: string;
-    readonly anchor: ClaimAnchor;
-    /** The exact attributed report, not an inferred destination judgment. */
-    readonly report: JsonObject;
-    /** Exact source/evidence references the producer used, validated by its tool. */
-    readonly basis: JsonObject;
-  };
-};
+import type { ClaimAnchor, ClaimRegistration } from "../toolkit.ts";
+export type { ClaimAnchor, ClaimRegistration } from "../toolkit.ts";
+
 export type SettlementOwner = {
   readonly assignmentId: string;
   readonly sectionKey: string;
