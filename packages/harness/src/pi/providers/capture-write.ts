@@ -137,7 +137,7 @@ export class CallCapture {
           reason: cause.lossReason,
         };
         try {
-          recordLoss(loss, cause.journalFull === true);
+          recordLoss(loss, cause.journalFull === true, privateRegistration);
         } catch (error) {
           if (event.type === "credential.registration") throw error;
         }

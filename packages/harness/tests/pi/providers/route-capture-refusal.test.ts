@@ -3,7 +3,14 @@ import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { chmodSync } from "node:fs";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,14 +27,19 @@ import { storeLocationIn } from "@neuve/records-core";
 import { openRunLog } from "../../../src/run-log.ts";
 import { SOL_ROUTE } from "../../../src/route.ts";
 import { SourceOwnership } from "../../../src/pi/source-ownership.ts";
-import { createPrivateInspection } from "../../../src/pi/capture/private-inspection.ts";
+import {
+  createPrivateInspection,
+  openPrivateInspection,
+} from "../../../src/pi/capture/private-inspection.ts";
 import {
   JOURNAL_FILE,
   IDLE_RELEASE_MS,
+  decodeCaptureLosses,
   readCaptureJournal,
   readCaptureLosses,
   openCaptureJournal,
 } from "../../../src/pi/capture/journal.ts";
+import { decodeCredentialLossReserve } from "../../../src/pi/capture/credential-loss-reserve.ts";
 import { buildDump } from "../../../src/pi/capture/build.ts";
 import {
   captureRunDump,
@@ -43,7 +55,9 @@ import { scanStatus } from "../../../src/pi/capture/records.ts";
 import { runIn, scanCaptures, value } from "../capture/fixture.ts";
 import {
   CAPTURE_LOSS_FILE,
+  CREDENTIAL_LOSS_RESERVE_FILE,
   CaptureFailed,
+  DEFAULT_LIMITS,
 } from "../../../src/pi/capture/types.ts";
 import { createRouteModels } from "../../../src/pi/providers/agent-route-provider.ts";
 import { captureNativeModels } from "../../../src/pi/providers/native-models-capture.ts";
@@ -422,6 +436,61 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
   }
 });
 
+test("a full channel journal leaves the reserve empty when the private authority registers each call", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "neuve-full-channel-"));
+  const source = join(directory, "source");
+  await mkdir(source);
+  const ownership = SourceOwnership.acquire(source);
+  const credentialInspection = createPrivateInspection({
+    ownership,
+    source,
+    directory: join(directory, "private"),
+    excludedRoots: [source],
+  });
+  try {
+    const runId = "full-channel";
+    const journal = openCaptureJournal(join(source, "capture"), runId, {
+      allowCredentialLoss: true,
+      limits: { ...DEFAULT_LIMITS, journalBytes: 4096 },
+    });
+    const models = createRouteModels({
+      route: SOL_ROUTE,
+      retry: { maxRetries: 1, baseDelayMs: 1 },
+      log: openRunLog(storeLocationIn(directory), "worker"),
+      runId,
+      sessionAffinity: runId,
+      auth: { tokenCommand: tokenCommand(directory, "lease").path },
+      credentialInspection,
+      capture: journal.capture,
+      fetch: Object.assign(async () => answer("Done."), { preconnect() {} }),
+    });
+    const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
+    if (!model) throw new Error("Expected coding route model");
+    for (let call = 0; call < 20; call++) {
+      const result = await models.complete(model, prompt);
+      expect(routeFailureOf(result)).toBeUndefined();
+      expect(result.content).toContainEqual(
+        expect.objectContaining({ type: "text", text: "Done." }),
+      );
+    }
+    const losses = decodeCaptureLosses(
+      await readFile(join(journal.directory, CAPTURE_LOSS_FILE)),
+    );
+    expect(
+      losses.filter(({ event }) => event === "credential.registration").length,
+    ).toBeGreaterThan(8);
+    expect(losses.every(({ reason }) => reason === "journal limit")).toBe(true);
+    const reserve = await readFile(
+      join(journal.directory, CREDENTIAL_LOSS_RESERVE_FILE),
+    );
+    expect(decodeCredentialLossReserve(reserve, true)).toEqual([]);
+  } finally {
+    credentialInspection.close();
+    ownership.release();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a transient write refusal retries the same request and keeps its capture", async () => {
   const directory = await mkdtemp(join(tmpdir(), "neuve-capture-retry-"));
   try {
@@ -711,12 +780,13 @@ for (const variant of [
     const privateDirectory = join(directory, "private");
     await mkdir(source);
     const ownership = SourceOwnership.acquire(source);
-    const credentialInspection = createPrivateInspection({
+    const inspectionOptions = {
       ownership,
       source,
       directory: privateDirectory,
       excludedRoots: [source],
-    });
+    };
+    let credentialInspection = createPrivateInspection(inspectionOptions);
     const nativeDatabase = join(source, "pi.sqlite");
     const storage = await openNodeSqliteStorage(nativeDatabase);
     try {
@@ -740,7 +810,7 @@ for (const variant of [
       const clean = variant === "clean" || journalWrite;
       const full = variant === "full" || variant === "full-native";
       const canIdentify = variant !== "unknown" && !full;
-      const reserve = join(captureDirectory, "credential-loss.reserve");
+      const reserve = join(captureDirectory, CREDENTIAL_LOSS_RESERVE_FILE);
       const lossFile = join(captureDirectory, CAPTURE_LOSS_FILE);
       const auth = { tokenCommand: tokenCommand(directory, "lease").path };
       if (full) {
@@ -754,6 +824,7 @@ for (const variant of [
               reason: "disk full",
             },
             false,
+            true,
           );
       }
       let defaults: Awaited<ReturnType<typeof builtinModels>> | undefined;
@@ -825,24 +896,24 @@ for (const variant of [
           writeFileSync(path, data, options);
         },
       );
+      const options = {
+        route: SOL_ROUTE,
+        retry: { maxRetries: 1, baseDelayMs: 1 },
+        log,
+        runId,
+        sessionAffinity: runId,
+        auth,
+        credentialInspection,
+        capture,
+        fetch: Object.assign(
+          async () => {
+            sent++;
+            return answer("Done.");
+          },
+          { preconnect() {} },
+        ),
+      };
       try {
-        const options = {
-          route: SOL_ROUTE,
-          retry: { maxRetries: 1, baseDelayMs: 1 },
-          log,
-          runId,
-          sessionAffinity: runId,
-          auth,
-          credentialInspection,
-          capture,
-          fetch: Object.assign(
-            async () => {
-              sent++;
-              return answer("Done.");
-            },
-            { preconnect() {} },
-          ),
-        };
         const models =
           defaults === undefined
             ? createRouteModels(options)
@@ -912,6 +983,35 @@ for (const variant of [
           fs.writeSync(fd, Buffer.alloc(129, 0xa5), 0, 129, 0);
         } finally {
           fs.closeSync(fd);
+        }
+      }
+      if (variant === "missing" || variant === "zeroed" || variant === "torn") {
+        const beforeRestart =
+          variant === "missing" ? undefined : await readFile(reserve);
+        credentialInspection.close();
+        credentialInspection = openPrivateInspection(inspectionOptions);
+        const restarted = openCaptureJournal(captureDirectory, runId, {
+          allowCredentialLoss: true,
+          log,
+        });
+        try {
+          const models = createRouteModels({
+            ...options,
+            credentialInspection,
+            capture: restarted.capture,
+          });
+          const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
+          if (!model) throw new Error("Expected coding route model");
+          const result = await models.complete(model, prompt);
+          expect(routeFailureOf(result)).toBeUndefined();
+          expect(result.content).toContainEqual(
+            expect.objectContaining({ type: "text", text: "Done." }),
+          );
+          if (beforeRestart === undefined)
+            expect(fs.existsSync(reserve)).toBe(false);
+          else expect(await readFile(reserve)).toEqual(beforeRestart);
+        } finally {
+          restarted.close();
         }
       }
 

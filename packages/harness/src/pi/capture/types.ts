@@ -563,8 +563,6 @@ export const JournalMark = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("journal.open"),
     scope: CaptureScope.pick({ runId: true }),
-    // The old writer could dispatch without recording the loss.
-    allowCredentialLoss: z.literal(true).optional(),
     credentialLossReserve: z.literal(true).optional(),
   }),
   z.strictObject({
@@ -665,7 +663,11 @@ export const CaptureLoss = z.strictObject({
 export type CaptureLoss = z.infer<typeof CaptureLoss>;
 
 export type ModelCapture = ((event: ModelCaptureEvent) => void) & {
-  readonly recordLoss?: (loss: CaptureLoss, journalFull: boolean) => void;
+  readonly recordLoss?: (
+    loss: CaptureLoss,
+    journalFull: boolean,
+    privateRegistrationFailed?: boolean,
+  ) => void;
   readonly journalFull?: () => boolean;
   readonly allowCredentialLoss?: () => boolean;
 };

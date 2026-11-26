@@ -166,21 +166,6 @@ export const credentialGuards = (
   const pending = new Set<string>();
   const observed = new Set<string>();
   const ended = new Set<string>();
-  let legacySessionOpen = false;
-  for (const event of events) {
-    if (event.type === "journal.close") legacySessionOpen = false;
-    if (event.type !== "journal.open") continue;
-    if (legacySessionOpen) break;
-    legacySessionOpen = event.allowCredentialLoss === true;
-  }
-  if (legacySessionOpen)
-    return {
-      refusal:
-        "a legacy channel capture ended before its credential registration coverage could be confirmed; export refused",
-      guards,
-      retainedPrefixCalls,
-      requiresInspection: true,
-    };
   for (const event of events) {
     if (event.type === "model.end") ended.add(event.callId);
     if (event.type === "model.request") {

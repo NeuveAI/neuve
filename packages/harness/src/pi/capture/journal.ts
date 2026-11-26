@@ -456,43 +456,43 @@ const captureLossRecorder = (
   >,
 ): Required<Pick<ModelCapture, "recordLoss" | "journalFull">> => {
   const limits = options.limits ?? DEFAULT_LIMITS;
+  const path = join(directory, CAPTURE_LOSS_FILE);
+  const reserve = join(directory, CREDENTIAL_LOSS_RESERVE_FILE);
+  const recordOrdinaryLoss = (loss: CaptureLoss) => {
+    const losses = readOrdinaryCaptureLosses(directory, limits);
+    if (losses.some(({ callId }) => callId === loss.callId)) return;
+    const bytes = Buffer.from(
+      JSON.stringify([...losses, CaptureLoss.parse(loss)]) + "\n",
+    );
+    if (bytes.byteLength > captureFileLimit(CAPTURE_LOSS_FILE, limits))
+      throw new Error("Capture loss file reached its size limit");
+    const staging = join(directory, `${randomUUID()}.partial`);
+    try {
+      writeFileSync(staging, bytes, { mode: STORE_FILE_MODE, flag: "wx" });
+      syncPath(staging);
+      renameSync(staging, path);
+      syncPath(directory);
+    } finally {
+      rmSync(staging, { force: true });
+    }
+  };
   let full = false;
   return {
     journalFull: () => full,
-    recordLoss(loss, journalFull) {
+    recordLoss(loss, journalFull, privateRegistrationFailed) {
       full ||= journalFull;
+      const canUseReserve =
+        options.allowCredentialLoss && loss.event === "credential.registration";
       let persisted = false;
       try {
-        if (
-          options.allowCredentialLoss &&
-          loss.event === "credential.registration"
-        ) {
-          recordCredentialLoss(
-            join(directory, CREDENTIAL_LOSS_RESERVE_FILE),
-            loss,
-          );
+        if (canUseReserve && privateRegistrationFailed) {
+          recordCredentialLoss(reserve, loss);
         } else {
-          const losses = readOrdinaryCaptureLosses(directory, limits);
-          if (losses.some(({ callId }) => callId === loss.callId)) {
-            persisted = true;
-            return;
-          }
-          const bytes = Buffer.from(
-            JSON.stringify([...losses, CaptureLoss.parse(loss)]) + "\n",
-          );
-          if (bytes.byteLength > captureFileLimit(CAPTURE_LOSS_FILE, limits))
-            throw new Error("Capture loss file reached its size limit");
-          const staging = join(directory, `${randomUUID()}.partial`);
           try {
-            writeFileSync(staging, bytes, {
-              mode: STORE_FILE_MODE,
-              flag: "wx",
-            });
-            syncPath(staging);
-            renameSync(staging, join(directory, CAPTURE_LOSS_FILE));
-            syncPath(directory);
-          } finally {
-            rmSync(staging, { force: true });
+            recordOrdinaryLoss(loss);
+          } catch (error) {
+            if (!canUseReserve) throw error;
+            recordCredentialLoss(reserve, loss);
           }
         }
         persisted = true;
@@ -539,37 +539,33 @@ export const openCaptureJournal = (
     const reserve = join(directory, CREDENTIAL_LOSS_RESERVE_FILE);
     const sizeLimit = captureFileLimit(CREDENTIAL_LOSS_RESERVE_FILE, limits);
     try {
-      const existing = readLossFile(reserve, sizeLimit);
+      const existing = lstatSync(reserve, { throwIfNoEntry: false });
       if (existing === undefined) {
         const prior = readCaptureJournal(directory, limits);
         if (prior._tag !== "Read")
           throw new Error("the earlier journal cannot be read");
-        decodeCredentialLossReserve(
-          undefined,
-          expectsCredentialLossReserve(prior.lines),
-        );
-        const bytes = emptyCredentialLossReserve();
-        if (bytes.byteLength > sizeLimit)
-          throw new Error("the reserve exceeds the capture byte limit");
-        const staging = join(directory, `${randomUUID()}.partial`);
-        try {
-          const fd = openSync(staging, "wx", STORE_FILE_MODE);
+        // Keep a missing or damaged historical reserve visible to the export scan.
+        if (!expectsCredentialLossReserve(prior.lines)) {
+          const bytes = emptyCredentialLossReserve();
+          if (bytes.byteLength > sizeLimit)
+            throw new Error("the reserve exceeds the capture byte limit");
+          const staging = join(directory, `${randomUUID()}.partial`);
           try {
-            writeFileSync(fd, bytes);
-            fsyncSync(fd);
-            if (fstatSync(fd).blocks * 512 < bytes.byteLength)
-              throw new Error("the reserve blocks were not allocated");
+            const fd = openSync(staging, "wx", STORE_FILE_MODE);
+            try {
+              writeFileSync(fd, bytes);
+              fsyncSync(fd);
+              if (fstatSync(fd).blocks * 512 < bytes.byteLength)
+                throw new Error("the reserve blocks were not allocated");
+            } finally {
+              closeSync(fd);
+            }
+            renameSync(staging, reserve);
           } finally {
-            closeSync(fd);
+            rmSync(staging, { force: true });
           }
-          renameSync(staging, reserve);
-        } finally {
-          rmSync(staging, { force: true });
         }
-      } else {
-        decodeCredentialLossReserve(existing, true);
       }
-      syncPath(directory);
     } catch (error) {
       throw writeFailure(
         "journal.open",
