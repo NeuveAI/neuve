@@ -293,9 +293,8 @@ async function keep(
   process.on("SIGTERM", interrupt);
   process.on("disconnect", interrupt);
   let launcher: Bun.Subprocess<"pipe", number, number> | undefined;
-  let state: LaneWorkspace | undefined;
   try {
-    state = await withLaneWorkspace(
+    const state = await withLaneWorkspace(
       scratch,
       () => readLaneWorkspace(root, scratch),
       abort.signal,
@@ -431,12 +430,14 @@ async function keep(
       }),
     ]);
 
-    await signIn({ root, state, browserProfile, host, signal });
-    signal.throwIfAborted();
-    if (launcher.exitCode !== null)
-      throw new Error("The workspace launcher stopped during sign-in.");
-    state.ready = true;
-    await writeLaneWorkspace(state);
+    await signInAndMarkReady({
+      root,
+      state,
+      browserProfile,
+      host,
+      launcher,
+      signal,
+    });
     signal.throwIfAborted();
     process.off("disconnect", interrupt);
     process.send?.({
@@ -475,17 +476,19 @@ async function keep(
   }
 }
 
-async function signIn({
+async function signInAndMarkReady({
   root,
   state,
   browserProfile,
   host,
+  launcher,
   signal,
 }: {
   root: string;
   state: LaneWorkspace;
   browserProfile: string;
   host: z.infer<typeof HostReady>;
+  launcher: Bun.Subprocess<"pipe", number, number>;
   signal: AbortSignal;
 }) {
   const web = new URL(host.web);
@@ -544,6 +547,11 @@ async function signIn({
       } finally {
         cdp.close();
       }
+      signal.throwIfAborted();
+      if (launcher.exitCode !== null)
+        throw new Error("The workspace launcher stopped during sign-in.");
+      state.ready = true;
+      await writeLaneWorkspace(state);
     },
     signal,
   );

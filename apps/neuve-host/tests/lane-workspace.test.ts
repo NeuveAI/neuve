@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { signInWorkspaceTab } from "../src/browser";
 import * as catalog from "../src/catalog";
 import { bindConfiguredCatalog, configure } from "../src/host-config";
-import { stopLaneWorkspace, writeLaneWorkspace } from "../src/lane-workspace";
+import { readLaneWorkspace, stopLaneWorkspace, writeLaneWorkspace } from "../src/lane-workspace";
 import { open as openLog } from "../src/log";
 import { archive } from "../src/manage";
 
@@ -49,6 +49,36 @@ test("stop signals only a recorded process with the same start time and removes 
 		expect(signalled).toEqual([launcher.pid]);
 		expect(existsSync(scratch)).toBe(false);
 		expect(existsSync(unmarked)).toBe(true);
+	});
+});
+
+test("the last workspace using a lane-started browser stops it", async () => {
+	await fixture(async (root) => {
+		const first = await mkdtemp(join(root, "workspace-"));
+		const second = await mkdtemp(join(root, "workspace-"));
+		const profile = join(root, "browser");
+		const started = { pid: 49103, start: "browser start", host: hostname() };
+		await writeLaneWorkspace({
+			version: 1, scratch: first, lane: join(root, "first-lane"), ready: true,
+			keeper: { pid: 49101, start: "first keeper start", host: hostname() },
+			browser: { profile, started },
+		});
+		await writeLaneWorkspace({
+			version: 1, scratch: second, lane: join(root, "second-lane"), ready: true,
+			keeper: { pid: 49102, start: "second keeper start", host: hostname() },
+			browser: { profile },
+		});
+		const live = new Map([[started.pid, started]]);
+		const monitor = {
+			read: (pid: number) => live.get(pid),
+			terminate(pid: number) { live.delete(pid); },
+		};
+
+		expect(await stopLaneWorkspace(root, first, monitor)).toBe(true);
+		expect(live.get(started.pid)).toEqual(started);
+		expect((await readLaneWorkspace(root, second))?.browser).toEqual({ profile, started });
+		expect(await stopLaneWorkspace(root, second, monitor)).toBe(true);
+		expect(live.has(started.pid)).toBe(false);
 	});
 });
 

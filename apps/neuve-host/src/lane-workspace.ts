@@ -142,21 +142,33 @@ export async function stopLaneWorkspace(root: string, scratch: string, monitor =
 		}
 		await stopProcess(state.launcher, monitor);
 		await stopProcess(state.keeper, monitor);
-		const browser = state.browser;
-		if (browser) await withLaneBrowser(root, browser.profile, async () => {
-			if (browser.target) await closeWorkspaceTab(browser.profile, browser.target);
-			if (!browser.started) return;
-			for (const other of await workspaceDirectories(root)) {
-				if (other === scratch) continue;
-				const user = await readLaneWorkspace(root, other);
-				if (user?.browser?.profile === browser.profile) return;
+		const { keeper, browser: registeredBrowser } = state;
+		const removeScratch = async () => {
+			await rm(scratch, { recursive: true, force: true });
+			return true;
+		};
+		const finish = async () => {
+			// Another stop may have passed us the browser while we waited for the lock.
+			const current = await readLaneWorkspace(root, scratch);
+			if (!current || !Ancestry.sameProcess(current.keeper, keeper)) return false;
+			const browser = current.browser;
+			if (browser?.target) await closeWorkspaceTab(browser.profile, browser.target);
+			if (browser?.started) {
+				for (const other of await workspaceDirectories(root)) {
+					if (other === scratch) continue;
+					const user = await readLaneWorkspace(root, other);
+					if (user?.browser?.profile !== browser.profile) continue;
+					if (!user.browser.started) {
+						user.browser.started = browser.started;
+						await writeLaneWorkspace(user);
+					}
+					return removeScratch();
+				}
+				await stopProcess(browser.started, monitor);
 			}
-			await stopProcess(browser.started, monitor);
-		});
-		const current = await readLaneWorkspace(root, scratch);
-		if (!current || !Ancestry.sameProcess(current.keeper, state.keeper)) return false;
-		await rm(scratch, { recursive: true, force: true });
-		return true;
+			return removeScratch();
+		};
+		return registeredBrowser ? withLaneBrowser(root, registeredBrowser.profile, finish) : finish();
 	});
 }
 
