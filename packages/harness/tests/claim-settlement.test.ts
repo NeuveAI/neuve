@@ -6,6 +6,8 @@ import { createModels } from "@earendil-works/pi-ai";
 import {
   Harness,
   createRegistry,
+  defineExtension,
+  defineTask,
   type TaskId,
 } from "@earendil-works/pi-durable";
 import { MemoryStorage } from "@earendil-works/pi-durable/storage/memory";
@@ -280,6 +282,126 @@ test("follow-on initialization starts already-frozen destinations closed", async
     expect(recorded.timing).toBe("later-review-information");
     expect(recorded.verificationTask).toBeNull();
     expect(recorded.report).toEqual(claim().claim.report);
+  } finally {
+    await harness.close(context);
+  }
+});
+
+test("Verify child and registration commit together, and replay starts neither twice", async () => {
+  const { startChild } = await import("../src/pi/stages/tools.ts");
+  const { ChildrenDoc } = await import("../src/pi/stages/docs.ts");
+  const task = defineTask<{}, { phase: "run" }, {}>({
+    name: "test.claim-child",
+    version: 1,
+    initial: () => ({ phase: "run" }),
+    phases: {
+      run: async (_task, runtime, context) => {
+        await runtime.commit(
+          () => ({
+            status: "terminal",
+            outcome: { status: "completed", result: {} },
+          }),
+          context,
+        );
+      },
+    },
+  });
+  const registry = createRegistry();
+  registry.install(defineExtension({ name: "test.claims", tasks: [task] }));
+  const harness = await Harness.open(
+    new MemoryStorage(),
+    { models: createModels(), registry },
+    context,
+  );
+  try {
+    const root = await harness.root(context);
+    const review = await harness.commit(
+      (tx) =>
+        tx.createTask(
+          task,
+          {},
+          { ownership: { kind: "conversation" }, conversationId: root.id },
+        ),
+      context,
+    );
+    const producer = await harness.commit(async (tx) => {
+      const id = await tx.createTask(
+        task,
+        {},
+        { ownership: { kind: "task", taskId: review } },
+      );
+      const state = initial();
+      state.assignments[0] = { ...state.assignments[0]!, task: id };
+      await initializeClaimSettlement(tx, review, state);
+      return id;
+    }, context);
+    const request = {
+      owner: producer,
+      name: "claim.a",
+      task: task.definition.name,
+      input: {},
+      attributes: {},
+      kind: "verify-claim",
+      inputs: {},
+      claimRegistration: claim(),
+    };
+    // A failed transaction after registration simulates a crash before the durable commit.
+    await expect(
+      harness.commit(async (tx) => {
+        await startChild(tx, registry.snapshot(), request);
+        throw new Error("before commit");
+      }, context),
+    ).rejects.toThrow("before commit");
+    expect(
+      await harness.commit(
+        async (tx) =>
+          Object.keys(
+            (await tx.doc(ClaimSettlementDoc)).reviews[String(review)]!.claims,
+          ).length,
+        context,
+      ),
+    ).toBe(0);
+    const id = await harness.commit(
+      (tx) => startChild(tx, registry.snapshot(), request),
+      context,
+    );
+    expect(id).toBeNumber();
+    expect(
+      await harness.commit(
+        (tx) => startChild(tx, registry.snapshot(), request),
+        context,
+      ),
+    ).toBeUndefined();
+    const retained = await harness.commit(
+      async (tx) => ({
+        claims: copyJson(
+          (await tx.doc(ClaimSettlementDoc)).reviews[String(review)]!.claims,
+        ),
+        children: copyJson((await tx.doc(ChildrenDoc, producer)).children),
+      }),
+      context,
+    );
+    expect(Object.values(retained.claims)).toHaveLength(1);
+    expect(Object.values(retained.claims)[0]!.verificationTask).toBe(id!);
+    expect(retained.children).toEqual({ "claim.a": id! });
+    // A tool cannot claim another prepared assignment; the new Verify is rolled back too.
+    await expect(
+      harness.commit(
+        (tx) =>
+          startChild(tx, registry.snapshot(), {
+            ...request,
+            name: "claim.forged",
+            claimRegistration: { ...claim(), assignment: "b" },
+          }),
+        context,
+      ),
+    ).rejects.toThrow("does not own");
+    expect(
+      await harness.commit(
+        async (tx) => copyJson((await tx.doc(ChildrenDoc, producer)).children),
+        context,
+      ),
+    ).toEqual({ "claim.a": id! });
   } finally {
     await harness.close(context);
   }

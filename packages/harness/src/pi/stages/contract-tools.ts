@@ -5,13 +5,12 @@ import {
   TurnFailed,
   runtimeFailureToError,
   type ToolDefinition,
-  type ToolOutcome,
   type ToolCall,
 } from "@neuve/runtime";
 import { Effect } from "effect";
 import { physicalTurnId } from "./contract-recovery.ts";
 import { REMINDER_SHARE } from "../../budget.ts";
-import { capResult, RECORDS } from "../../toolkit.ts";
+import { capResult, RECORDS, type ToolOutcome } from "../../toolkit.ts";
 import { reminderText, submitNameOf } from "./agent.ts";
 import { ToolState, type ToolDeclaration } from "./docs.ts";
 import {
@@ -24,6 +23,7 @@ import {
   roundEnds,
   parseToolInput,
   submitted,
+  startChild,
   type ResolvedAgent,
 } from "./tools.ts";
 import type { StageServices } from "./services.ts";
@@ -234,6 +234,10 @@ export function contractTools(input: {
     }
     const completed = outcome;
     await store.update(async (doc, tx) => {
+      // Contract and pi stages share the same durable child/claim commit boundary. The
+      // runtime's returned tool answer is not recorded until registration also commits.
+      if (completed.child !== undefined)
+        await startChild(tx, services.registry.snapshot(), completed.child);
       doc.calls[call.callId] = {
         status: "completed",
         eligible,
