@@ -18,6 +18,7 @@ import { preference } from "./preferences";
 import { checkout, git } from "./projects";
 import { isInactive } from "./protocol";
 import { failure, log } from "./log";
+import { stopLaneWorkspaces } from "./lane-workspace";
 
 export function parseModel(value: string): ModelRef {
 	const split = value.indexOf("/");
@@ -203,12 +204,26 @@ export async function kill(id: string): Promise<void> {
 	}
 }
 
-export async function archive(id: string, archived: boolean): Promise<catalog.Listing> {
+export async function archive(id: string, archived: boolean, stopWorkspaces = stopLaneWorkspaces): Promise<catalog.Listing> {
 	if (archived) await kill(id);
 	const record = { ...catalog.read(id), archived };
 	catalog.write(record);
-	if (archived && !record.hosted && !record.compute) await disposeChatLanes(record);
+	if (archived && !record.hosted && !record.compute) {
+		await stopChannelLaneWorkspaces(record, stopWorkspaces);
+		await disposeChatLanes(record);
+	}
 	return record;
+}
+
+async function stopChannelLaneWorkspaces(record: catalog.Listing, stop = stopLaneWorkspaces): Promise<void> {
+	const paths = new Set(Object.values(record.chatLanes ?? {}).map(lane => lane.path));
+	if (record.lane) paths.add(record.lane.path);
+	const warn = (error: unknown) => log("warn", "lane.workspace.retained", { channel: record.id, ...failure(error) });
+	try {
+		await stop([...paths], warn);
+	} catch (error) {
+		warn(error);
+	}
 }
 
 /** Ownership is durable, not inferred from a folder name; explicit and build lanes stay put. */
@@ -280,7 +295,8 @@ async function hold(id: string): Promise<void> {
  * branches stay in the project. Lanes `lane new` created stay too, for `lane prune` or `lane rm`.
  */
 export async function remove(id: string): Promise<void> {
-	const { project, hosted, compute } = catalog.read(id);
+	const record = catalog.read(id);
+	const { project, hosted, compute } = record;
 	if (compute) {
 		// The service's DELETE also deletes the channel and ends its run, which a frozen channel
 		// (a failed start) would refuse to the host's own kill.
@@ -303,7 +319,10 @@ export async function remove(id: string): Promise<void> {
 				`${await refusal(response, "The hosting service")} The channel was not deleted.`,
 			);
 		}
-	} else await hold(id);
+	} else {
+		await hold(id);
+		await stopChannelLaneWorkspaces(record);
+	}
 	const { lanes } = catalog.paths(id);
 	try {
 		for (const lane of !(await import("./runtime-hooks")).runtimeHooks().lanes && existsSync(lanes) ? readdirSync(lanes) : []) {

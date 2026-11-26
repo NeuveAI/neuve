@@ -114,6 +114,7 @@ import { collectPublicQueryResult, runQueryGraph } from "./graph-query.ts";
 import type { PublicQueryEvent, RepositoryPath, Revision } from "./domain.ts";
 
 export const WORKSPACE_HELP = `Usage: neuve workspace [--profile <pi-transition|local|profile.json>] [--source <checkout>] [--repo <path>] [--port <n>] [--web-port <n>] [--user <name>] [--loopback]
+       neuve workspace lane [stop]
 Starts Neuve's coding home. Neuve reviews open under its /review/ paths.
 Neuve's configured team discovery and tailnet listeners remain active by default.
 --loopback keeps this host off the tailnet, peers, team directory and lobby presence.
@@ -610,6 +611,8 @@ export async function runWorkspaceCli(
 }
 
 async function workspace(args: readonly string[]): Promise<number> {
+  if (args[0] === "lane")
+    return (await import("./workspace-lane.ts")).workspaceLane(args.slice(1));
   if (args[0] === "worker") {
     const { HostConfigSchema, CONFIG_VARIABLE } =
       await import("@ace/host/host-config");
@@ -1150,9 +1153,10 @@ async function workspace(args: readonly string[]): Promise<number> {
     });
     await writeWorkspaceRuntime(profile, source, config, coding.url);
     // Reviews this build queued before the host last stopped get a worker of this build again.
-    void rearmWaitingReviews({
-      within: storage.volume?.mountPoint ?? "/",
-    }).catch(() => undefined);
+    if (!profile.isolatedProject)
+      void rearmWaitingReviews({
+        within: storage.volume?.mountPoint ?? "/",
+      }).catch(() => undefined);
     const client = new GatewayClient(host.url, host.token);
     let project: Project;
     try {
@@ -1188,10 +1192,17 @@ async function workspace(args: readonly string[]): Promise<number> {
     } finally {
       client.close();
     }
-    writeSync(
-      1,
-      `${JSON.stringify(workspaceReady({ url: host.url, tokenFile: join(home, "host.token"), web: coding.url, repository, pid: process.pid, project, repo: values.repo }))}\n`,
-    );
+    const ready = workspaceReady({
+      url: host.url,
+      tokenFile: join(home, "host.token"),
+      web: coding.url,
+      repository,
+      pid: process.pid,
+      project,
+      repo: values.repo,
+    });
+    writeSync(1, `${JSON.stringify(ready)}\n`);
+    if (profile.isolatedProject && process.connected) process.send?.(ready);
     void chatSources.checkAccounts().catch((error: unknown) => {
       if (!abort.signal.aborted)
         console.warn(

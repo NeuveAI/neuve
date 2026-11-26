@@ -28,29 +28,34 @@ class Refusal extends Error {}
 
 type Endpoint = { id: string; port: number; url: string };
 
-function launch(): string {
+export const developmentBrowserFlags = (directory: string) => [
+	`--user-data-dir=${directory}`, "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
+];
+
+function launch(directory = profile()): string {
 	const [chrome, note] = process.platform === "darwin"
 		? [`open -na "Google Chrome" --args`, ""]
 		: [
 			"chromium",
 			" Use google-chrome or another Chromium executable in place of chromium if needed.",
 		];
-	return `Launch Neuve's dedicated development browser with its own profile, for example: \`${chrome} --user-data-dir="${profile()}" --remote-debugging-port=0 --no-first-run --no-default-browser-check\`.${note}`;
+	const [, ...flags] = developmentBrowserFlags(directory);
+	return `Launch Neuve's dedicated development browser with its own profile, for example: \`${chrome} --user-data-dir="${directory}" ${flags.join(" ")}\`.${note}`;
 }
 
-async function endpoint(): Promise<Endpoint> {
+async function endpoint(directory = profile()): Promise<Endpoint> {
 	let text: string;
 	try {
-		text = await readFile(join(profile(), "DevToolsActivePort"), "utf8");
+		text = await readFile(join(directory, "DevToolsActivePort"), "utf8");
 	} catch {
-		throw new Refusal(`No dedicated development browser is running. ${launch()}`);
+		throw new Refusal(`No dedicated development browser is running. ${launch(directory)}`);
 	}
 	const [port, path] = text.split("\n");
 	const id = /^\/devtools\/browser\/([0-9a-f-]{36})$/.exec(path || "")?.[1];
 	const number = Number(port);
 	if (!/^\d{1,5}$/.test(port || "") || number < 1 || number > 65_535 || !id) {
 		throw new Refusal(
-			`The dedicated browser profile has an unreadable DevToolsActivePort file. ${launch()}`,
+			`The dedicated browser profile has an unreadable DevToolsActivePort file. ${launch(directory)}`,
 		);
 	}
 	return { id, port: number, url: `ws://127.0.0.1:${number}${path}` };
@@ -98,12 +103,13 @@ class Cdp {
 		signal.addEventListener("abort", () => this.close(abortError(signal)), { once: true });
 	}
 
-	static async open(url: string, signal: AbortSignal): Promise<Cdp> {
+	static async open(url: string, signal: AbortSignal, connectSignal = signal): Promise<Cdp> {
 		signal.throwIfAborted();
+		connectSignal.throwIfAborted();
 		const socket = new WebSocket(url);
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
-		const abort = () => reject(abortError(signal));
-		signal.addEventListener("abort", abort, { once: true });
+		const abort = () => reject(abortError(connectSignal));
+		connectSignal.addEventListener("abort", abort, { once: true });
 		socket.addEventListener("open", () => resolve(), { once: true });
 		socket.addEventListener("error", () => reject(new Error("Cannot connect")), { once: true });
 		socket.addEventListener("close", () => reject(new Error("Cannot connect")), { once: true });
@@ -114,7 +120,7 @@ class Cdp {
 			if (signal.aborted) throw error;
 			throw new Refusal(`The dedicated development browser is not reachable. ${launch()}`);
 		} finally {
-			signal.removeEventListener("abort", abort);
+			connectSignal.removeEventListener("abort", abort);
 		}
 		return new Cdp(socket, signal);
 	}
@@ -177,6 +183,16 @@ function abortError(signal: AbortSignal): Error {
 
 const encoder = new TextEncoder();
 
+function withoutToken(value: string): string {
+	const url = URL.parse(value);
+	if (!url) return value;
+	const fragment = new URLSearchParams(url.hash.slice(1));
+	if (!fragment.has("token")) return value;
+	fragment.delete("token");
+	url.hash = fragment.toString();
+	return url.href;
+}
+
 function bytes(text: string): number {
 	return encoder.encode(text).length;
 }
@@ -218,6 +234,63 @@ async function connect(signal: AbortSignal, target?: BrowserTarget) {
 	return { cdp, endpoint: found };
 }
 
+export async function connectDevelopmentBrowser(directory: string, signal: AbortSignal) {
+	const found = await endpoint(directory);
+	const connectSignal = AbortSignal.any([signal, AbortSignal.timeout(1500)]);
+	return { cdp: await Cdp.open(found.url, signal, connectSignal), endpoint: found };
+}
+
+export async function signInWorkspaceTab(
+	cdp: Pick<Cdp, "send">,
+	address: string,
+	token: string,
+	recordTarget: (id: string) => Promise<void>,
+	signal: AbortSignal,
+): Promise<void> {
+	const url = new URL(address);
+	url.hash = new URLSearchParams({ token }).toString();
+	try {
+		const { targetId } = await cdp.send("Target.createTarget", { url: url.href });
+		if (typeof targetId !== "string") throw new Error();
+		await recordTarget(targetId);
+		while (!signal.aborted) {
+			const reply = await cdp.send("Target.getTargetInfo", { targetId });
+			const info = reply.targetInfo;
+			const current = info && typeof info === "object" && "url" in info && typeof info.url === "string"
+				? URL.parse(info.url)
+				: null;
+			if (current?.origin === url.origin && !new URLSearchParams(current.hash.slice(1)).has("token")) return;
+			await Bun.sleep(100);
+		}
+	} catch {
+		// A DevTools error may echo the address. The caller closes the recorded target on failure.
+	}
+	throw new Error("The dedicated development browser did not complete workspace sign-in.");
+}
+
+export async function closeWorkspaceTab(
+	directory: string,
+	target: BrowserTarget,
+): Promise<void> {
+	const found = await endpoint(directory).catch(() => undefined);
+	if (!found || found.id !== target.browser) return;
+	const cdp = await Cdp.open(found.url, AbortSignal.timeout(3000)).catch(() => undefined);
+	if (!cdp) return;
+	try {
+		const { targetInfos } = await cdp.send("Target.getTargets");
+		if (!Array.isArray(targetInfos)) throw new Error();
+		if (!targetInfos.some((info: unknown) =>
+			info && typeof info === "object" && "targetId" in info && info.targetId === target.target_id
+		)) return;
+		const { success } = await cdp.send("Target.closeTarget", { targetId: target.target_id });
+		if (success !== true) throw new Error();
+	} catch {
+		throw new Error("Could not close the workspace's browser tab.");
+	} finally {
+		cdp.close();
+	}
+}
+
 async function attach(
 	cdp: Cdp,
 	target: BrowserTarget,
@@ -253,7 +326,7 @@ async function tabs(signal: AbortSignal): Promise<BrowserResult> {
 		const all = targetInfos.filter(isTab);
 		const listed = all.map((info) => ({
 			target: { browser: endpoint.id, target_id: info.targetId },
-			url: field(info.url),
+			url: field(withoutToken(info.url)),
 			title: field(info.title),
 			attached: info.attached,
 		}));
@@ -485,7 +558,7 @@ async function inspect(
 				: {
 					document: "changed",
 					loader_id: after.loaderId,
-					url: field(after.url),
+					url: field(withoutToken(after.url)),
 					warning:
 						"The main document changed during inspection. The accessibility tree and screenshot may describe different documents; inspect again for coherent evidence.",
 				};
@@ -500,7 +573,7 @@ async function inspect(
 		const header = {
 			target: request.target,
 			title: field(info.title),
-			document: { frame_id: before.id, loader_id: before.loaderId, url: field(before.url) },
+			document: { frame_id: before.id, loader_id: before.loaderId, url: field(withoutToken(before.url)) },
 			accessibility,
 			...(shot ? { screenshot: shot } : {}),
 			verification,

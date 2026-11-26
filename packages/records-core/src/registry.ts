@@ -109,7 +109,8 @@ const updateRegistry = (
  * no test's scratch checkout reaches the person's list.
  */
 const workerRegistryPath = () => {
-  if (process.env.NEUVE_TEST_PROCESS !== "1") return registryPath();
+  if (process.env.NEUVE_TEST_PROCESS !== "1")
+    return process.env.NEUVE_RECORDS_REGISTRY ?? registryPath();
   if (!process.env.NEUVE_BUDGET_DIRECTORY)
     throw new Error("Test processes require NEUVE_BUDGET_DIRECTORY");
   return join(process.env.NEUVE_BUDGET_DIRECTORY, "repositories.json");

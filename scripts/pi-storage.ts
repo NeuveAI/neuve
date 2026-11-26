@@ -39,13 +39,20 @@ export const StorageProfile = z
       })
       .optional(),
     paths: z.record(StorageRole, AbsolutePath),
-    /** A linked source checkout outside the managed worktrees folder, explicitly admitted by local. */
+    /** A source checkout outside the managed worktrees folder, explicitly admitted by local. */
     sourceCheckout: AbsolutePath.optional(),
+    /** The canonical project is a standalone local clone of the declared source. */
+    isolatedProject: z.literal(true).optional(),
   })
   .refine(
     (profile) =>
       profile.volume === undefined || profile.sourceCheckout === undefined,
     "A profile with a volume cannot also set sourceCheckout; it uses only its canonical clone and worktrees",
+  )
+  .refine(
+    (profile) =>
+      !profile.isolatedProject || profile.sourceCheckout !== undefined,
+    "An isolated project requires a sourceCheckout",
   );
 export type StorageProfile = z.infer<typeof StorageProfile>;
 
@@ -104,6 +111,7 @@ type VolumeReceipt = Readonly<{
 
 export type ValidatedStorage = Readonly<{
   volume: VolumeReceipt | undefined;
+  isolatedProject?: string;
   /** Real paths, on the declared volume when pinned. A folder that does not exist yet keeps the profile's spelling until `prepareStorage` creates it. */
   paths: Readonly<Record<StorageRole, string>>;
   gitCommonDir: string;
@@ -495,7 +503,17 @@ export const validateWorkspaceProject = async (
   storage: ValidatedStorage,
 ): Promise<string> => {
   const placed = await place(storage.volume, directory);
-  await gitCommonDir(storage.volume, placed.path);
+  const common = await gitCommonDir(storage.volume, placed.path);
+  if (
+    storage.isolatedProject !== undefined &&
+    (!inside(storage.isolatedProject, placed.path) ||
+      !inside(storage.isolatedProject, common))
+  )
+    throw new StorageRefused(
+      "checkout-foreign-repository",
+      placed.path,
+      "this workspace can use only projects and Git directories inside its scratch folder.",
+    );
   return placed.path;
 };
 
@@ -531,15 +549,38 @@ export const validateStorageProfile = async (
         `${role} would write inside a Git checkout.`,
       );
   const common = await gitCommonDir(volume, paths.canonicalClone);
-  if (
-    sourceCheckout !== undefined &&
-    (await gitCommonDir(volume, sourceCheckout.path)) !== common
-  )
+  const sourceCommon =
+    sourceCheckout === undefined
+      ? undefined
+      : await gitCommonDir(volume, sourceCheckout.path);
+  if (parsed.isolatedProject) {
+    const origin = await output([
+      "git",
+      "-C",
+      paths.canonicalClone,
+      "config",
+      "--local",
+      "--get",
+      "remote.origin.url",
+    ]);
+    if (
+      common !== join(paths.canonicalClone, ".git") ||
+      common === sourceCommon ||
+      origin.exitCode !== 0 ||
+      origin.stdout !== sourceCheckout?.path
+    )
+      throw new StorageRefused(
+        "checkout-foreign-repository",
+        paths.canonicalClone,
+        "an isolated project must be a standalone local clone of sourceCheckout.",
+      );
+  } else if (sourceCheckout !== undefined && sourceCommon !== common) {
     throw new StorageRefused(
       "checkout-foreign-repository",
       sourceCheckout.path,
       `its Git common directory is not ${common}.`,
     );
+  }
   if (options.checkout !== undefined) {
     const checkout = await place(volume, options.checkout);
     if (
@@ -555,11 +596,13 @@ export const validateStorageProfile = async (
           ? "a checkout is the canonical clone or one of the profile's worktrees."
           : "a checkout is the canonical clone, the declared source checkout or one of the profile's worktrees.",
       );
-    if ((await gitCommonDir(volume, checkout.path)) !== common)
+    const expected =
+      checkout.path === sourceCheckout?.path ? sourceCommon : common;
+    if ((await gitCommonDir(volume, checkout.path)) !== expected)
       throw new StorageRefused(
         "checkout-foreign-repository",
         checkout.path,
-        `its Git common directory is not ${common}.`,
+        `its Git common directory is not ${expected}.`,
       );
   }
   const environment = storageVariables(paths);
@@ -567,6 +610,9 @@ export const validateStorageProfile = async (
     await placeExactly(volume, path);
   const storage: ValidatedStorage = Object.freeze({
     volume,
+    ...(parsed.isolatedProject
+      ? { isolatedProject: dirname(paths.canonicalClone) }
+      : {}),
     paths,
     gitCommonDir: common,
     environment,
