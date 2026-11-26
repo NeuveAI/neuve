@@ -11,6 +11,7 @@ import {
   existsSync,
   fsyncSync,
   fstatSync,
+  ftruncateSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -31,6 +32,8 @@ import { maskArtifact } from "./mask.ts";
 import { isJsonObject } from "./json-walk.ts";
 import {
   CAPTURE_VERSION,
+  CAPTURE_LOSS_FILE,
+  CaptureLoss,
   captureFileLimit,
   CaptureFailed,
   DEFAULT_LIMITS,
@@ -44,6 +47,7 @@ import {
   RAW_JOURNAL_FILE,
   type Capture,
   type CaptureEvent,
+  type ModelCapture,
   type CaptureScope,
   type JournalMark,
 } from "./types.ts";
@@ -55,8 +59,8 @@ import {
  * is removed. Each line is one synchronous append, so a process crash keeps every line before it.
  *
  * Completeness is proved, never assumed: each process's session opens with `journal.open` and ends
- * with `journal.close` only while every capture in it succeeded. A failed capture writes nothing
- * further that its disclosure would depend on, so a full disk still leaves an unclosed session.
+ * with `journal.close`. Capture loss is kept separately so it can be recorded when this file
+ * is full. An unclosed session also discloses interruption.
  */
 
 export { JOURNAL_FILE, OBJECTS_DIRECTORY } from "./types.ts";
@@ -67,13 +71,28 @@ export const sha256Of = (bytes: Uint8Array) =>
 const journalLimit = (limits: DumpLimits) =>
   captureFileLimit(JOURNAL_FILE, limits);
 
-class JournalFull extends Error {}
+class JournalFull extends Error {
+  constructor(
+    message: string,
+    readonly journalFull = false,
+  ) {
+    super(message);
+  }
+}
 
 const writeFailure = (event: string, error: unknown) =>
   new CaptureFailed({
     kind: error instanceof JournalFull ? "full" : "io",
     event,
     detail: message(error),
+    ...(error instanceof JournalFull && error.journalFull
+      ? { journalFull: true }
+      : {}),
+    ...(error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string"
+      ? { writeCode: error.code }
+      : {}),
   });
 
 const DiskLine = JournalLine.extend({ refs: z.literal(true).optional() });
@@ -168,6 +187,8 @@ export interface JournalOptions {
   /** The largest file `ingest` keeps, within `limits.objectBytes`; a larger one is refused, never cut short. */
   readonly maxSpillBytes?: number | undefined;
   readonly limits?: DumpLimits | undefined;
+  readonly onCaptureLoss?:
+    ((loss: CaptureLoss, persisted: boolean) => void) | undefined;
 }
 
 export const DEFAULT_MAX_SPILL_BYTES = 256 * 1024 * 1024;
@@ -183,12 +204,9 @@ export interface CaptureJournal {
    */
   readonly ingest: (file: SpillFile) => Promise<void>;
   /**
-   * Ends this process's session with `journal.close`. Throws `CaptureFailed` when a capture failed
-   * earlier, which leaves the session unclosed and the run's dump incomplete, and fails the journal
-   * when an `ingest` is still in flight: its artifact would land after the close and be missing
-   * from a session marked whole. The runtime joins every callback before it closes. Every ending,
-   * a failure included, lets go of `events.jsonl`; a descriptor that then fails to close is thrown
-   * as `io` while the session stays closed, since its close mark is already written.
+   * Ends this process's session with `journal.close`. An unresolved write or an ingest still in
+   * flight leaves the session unclosed. Every ending releases the file. A descriptor close error
+   * is reported as `io` even when the close mark is already written.
    */
   readonly close: () => void;
   readonly certifyAll: (
@@ -223,6 +241,7 @@ const completeLines = (path: string, directory: string, limit: number) => {
   if (size > limit)
     throw new JournalFull(
       `${JOURNAL_FILE} is ${size} bytes, over the ${limit}-byte limit`,
+      true,
     );
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   let lines = 0;
@@ -390,6 +409,80 @@ const keepFile = async (objects: string, path: string, maxBytes: number) => {
   }
 };
 
+export const decodeCaptureLosses = (bytes: Uint8Array) =>
+  z
+    .array(CaptureLoss)
+    .parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+
+export const readCaptureLosses = (
+  directory: string,
+  limits = DEFAULT_LIMITS,
+) => {
+  const path = join(directory, CAPTURE_LOSS_FILE);
+  let fd: number;
+  try {
+    fd = openSync(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return [];
+    throw error;
+  }
+  try {
+    const info = fstatSync(fd);
+    if (
+      !info.isFile() ||
+      info.size > captureFileLimit(CAPTURE_LOSS_FILE, limits)
+    )
+      throw new Error("Capture loss file is outside its file or size limits");
+    return decodeCaptureLosses(readFileSync(fd));
+  } finally {
+    closeSync(fd);
+  }
+};
+
+export const captureLossRecorder = (
+  directory: string,
+  options: Pick<JournalOptions, "limits" | "onCaptureLoss"> = {},
+): Required<Pick<ModelCapture, "recordLoss" | "journalFull">> => {
+  const limits = options.limits ?? DEFAULT_LIMITS;
+  let full = false;
+  return {
+    journalFull: () => full,
+    recordLoss(loss, journalFull) {
+      full ||= journalFull;
+      let persisted = false;
+      try {
+        const losses = readCaptureLosses(directory, limits);
+        if (!losses.some(({ callId }) => callId === loss.callId)) {
+          const bytes = Buffer.from(
+            JSON.stringify([...losses, CaptureLoss.parse(loss)]) + "\n",
+          );
+          if (bytes.byteLength > captureFileLimit(CAPTURE_LOSS_FILE, limits))
+            throw new Error("Capture loss file reached its size limit");
+          const staging = join(directory, `${randomUUID()}.partial`);
+          try {
+            writeFileSync(staging, bytes, {
+              mode: STORE_FILE_MODE,
+              flag: "wx",
+            });
+            syncPath(staging);
+            renameSync(staging, join(directory, CAPTURE_LOSS_FILE));
+            syncPath(directory);
+          } finally {
+            rmSync(staging, { force: true });
+          }
+        }
+        persisted = true;
+      } finally {
+        options.onCaptureLoss?.(loss, persisted);
+      }
+    },
+  };
+};
+
 /**
  * Opens or reopens the journal of run `runId` and starts this process's session. A reopened journal
  * continues its sequence. Throws `CaptureFailed` when the session cannot be started.
@@ -486,16 +579,12 @@ export const openCaptureJournal = (
   };
   let state: JournalState = { _tag: "Open" };
   const keptHashes = new Set<string>();
-  const keep = (bytes: Uint8Array, sha256 = sha256Of(bytes)) => {
-    if (!keptHashes.has(sha256)) {
-      if (bytes.byteLength > limits.objectBytes)
-        throw new JournalFull(
-          `capture object exceeds the ${limits.objectBytes}-byte limit`,
-        );
-      keepBytes(objects, bytes, sha256);
-      keptHashes.add(sha256);
-    }
-    return sha256;
+  const keep = (bytes: Uint8Array, sha256: string) => {
+    if (bytes.byteLength > limits.objectBytes)
+      throw new JournalFull(
+        `capture object exceeds the ${limits.objectBytes}-byte limit`,
+      );
+    keepBytes(objects, bytes, sha256);
   };
   const priorLists = new Map<string, { seq: number; hashes: string[] }>();
   // A call lives in one process, so this session's requests are every call its events may name.
@@ -548,12 +637,15 @@ export const openCaptureJournal = (
       detail: `the session is closed whole, but ${JOURNAL_FILE} did not close: ${message(error)}`,
     });
 
+  let torn = false;
+  const pendingLosses = new Map<string, CaptureFailed>();
   const append = (event: JournalLine["event"], at = Date.now()) => {
     const started = options.log === undefined ? 0 : performance.now();
     let succeeded = false;
     try {
       const pending = new Map<string, Uint8Array>();
       let references = false;
+      const lists = new Map<string, { seq: number; hashes: string[] }>();
       const reference = (value: Json) => {
         references = true;
         const bytes = Buffer.from(JSON.stringify(value));
@@ -567,7 +659,7 @@ export const openCaptureJournal = (
         if (hashes.length === 0) return hashes;
         const key = `${field}:${hashes[0]}`;
         const prior = priorLists.get(key);
-        priorLists.set(key, { seq: seq + 1, hashes });
+        lists.set(key, { seq: seq + 1, hashes });
         if (prior === undefined) return hashes;
         let count = 0;
         while (count < hashes.length && hashes[count] === prior.hashes[count])
@@ -587,10 +679,19 @@ export const openCaptureJournal = (
       if (journalBytes + bytes > limit)
         throw new JournalFull(
           `${JOURNAL_FILE} would grow over the ${limit}-byte limit`,
+          true,
         );
       for (const [sha256, bytes] of pending) keep(bytes, sha256);
-      if (pending.size > 0) syncPath(objects);
-      appendFileSync(descriptor(), text);
+      if (pending.size > 0) {
+        syncPath(objects);
+        for (const sha256 of pending.keys()) keptHashes.add(sha256);
+      }
+      const fd = descriptor();
+      if (torn) ftruncateSync(fd, journalBytes);
+      torn = true;
+      appendFileSync(fd, text);
+      torn = false;
+      for (const [key, list] of lists) priorLists.set(key, list);
       appendedSinceSweep = true;
       journalBytes += bytes;
       seq += 1;
@@ -601,10 +702,7 @@ export const openCaptureJournal = (
         appendCount += 1;
         appendMs += elapsed;
         maxAppendMs = Math.max(maxAppendMs, elapsed);
-        if (!succeeded) {
-          appendFailures += 1;
-          summarize("error");
-        }
+        if (!succeeded) appendFailures += 1;
       }
     }
   };
@@ -643,9 +741,12 @@ export const openCaptureJournal = (
       );
     const readable = maskArtifact(event.mediaType, event.bytes);
     try {
-      const previous = keptHashes.size;
-      const sha256 = keep(event.bytes);
-      if (keptHashes.size !== previous) syncPath(objects);
+      const sha256 = sha256Of(event.bytes);
+      if (!keptHashes.has(sha256)) {
+        keep(event.bytes, sha256);
+        syncPath(objects);
+        keptHashes.add(sha256);
+      }
       if (readable._tag === "Malformed")
         return invalid(
           "artifact",
@@ -666,6 +767,8 @@ export const openCaptureJournal = (
   };
 
   const admit = (type: string) => {
+    if (state._tag === "Failed" && state.failure.kind === "io")
+      throw state.failure;
     if (state._tag !== "Open")
       throw new CaptureFailed({
         kind:
@@ -673,6 +776,9 @@ export const openCaptureJournal = (
             ? "full"
             : "failed",
         event: type,
+        ...(state._tag === "Failed" && state.failure.journalFull
+          ? { journalFull: true }
+          : {}),
         detail:
           state._tag === "Closed"
             ? "the journal's session is closed"
@@ -702,17 +808,49 @@ export const openCaptureJournal = (
     )
       return invalid(type, `call ${kept.callId} was never requested`);
     try {
+      if (
+        (type.startsWith("model.") || type === "credential.registration") &&
+        loss.journalFull()
+      )
+        throw new JournalFull(
+          `${JOURNAL_FILE} reached its ${limit}-byte limit`,
+          true,
+        );
       append(kept);
       if (kept.type === "model.request") requested.add(kept.callId);
+      if ("callId" in kept && pendingLosses.get(kept.callId)?.event === type)
+        pendingLosses.delete(kept.callId);
     } catch (error) {
-      fail(writeFailure(type, error));
+      const failure = writeFailure(type, error);
+      if (
+        "callId" in kept &&
+        (type.startsWith("model.") || type === "credential.registration")
+      ) {
+        pendingLosses.set(kept.callId, failure);
+        letGo();
+        throw failure;
+      }
+      fail(failure);
     }
   };
 
-  const capture: Capture = (event) => {
+  const loss = captureLossRecorder(directory, {
+    limits: options.limits,
+    onCaptureLoss(record, persisted) {
+      if (persisted) pendingLosses.delete(record.callId);
+      options.log?.write({
+        type: "capture.loss",
+        runId,
+        ...record,
+        persisted,
+      });
+      options.onCaptureLoss?.(record, persisted);
+    },
+  });
+  const capture: Capture = Object.assign((event: CaptureEvent) => {
     admit(event.type);
     accept(event.type, stored(event));
-  };
+  }, loss);
 
   const roots = options.spillRoots ?? [];
   const maxSpillBytes = Math.min(
@@ -761,6 +899,8 @@ export const openCaptureJournal = (
   const close = () => {
     if (state._tag === "Failed") throw state.failure;
     if (state._tag === "Closed") return;
+    const pending = pendingLosses.values().next().value;
+    if (pending !== undefined) fail(pending);
     if (ingesting > 0)
       invalid(
         "journal.close",
@@ -796,6 +936,8 @@ export const openCaptureJournal = (
   ) => {
     admit("credential.inspection");
     try {
+      const pending = pendingLosses.values().next().value;
+      if (pending !== undefined) fail(pending);
       if (!Number.isSafeInteger(count) || count < 1)
         return invalid(
           "credential.inspection",

@@ -15,9 +15,8 @@ import { PiUsage } from "./usage.ts";
  *
  * One callback, `Capture`, takes every event. The route's provider emits the four `model.*` events;
  * the runtime and stages emit the rest. Capture never changes what the model sees: callers hand
- * over copies of what they sent or received. A capture that cannot keep an event throws
- * `CaptureFailed` synchronously and keeps throwing for the rest of the process, so a request whose
- * capture failed is never dispatched and no later event can pretend the journal is whole.
+ * over copies of what they sent or received. The provider retries model capture writes and records
+ * capture loss when they run out. Invalid events and credential inspection failures stop the call.
  */
 
 export const CAPTURE_VERSION = 1;
@@ -45,6 +44,7 @@ export const DEFAULT_LIMITS: DumpLimits = {
 };
 
 export const JOURNAL_FILE = "events.jsonl";
+export const CAPTURE_LOSS_FILE = "capture-loss.json";
 export const OBJECTS_DIRECTORY = "objects";
 export const RAW_JOURNAL_FILE = `journal/${JOURNAL_FILE}` as const;
 export const journalObjectFile = (sha256: string) =>
@@ -55,7 +55,9 @@ export const captureFileLimit = (name: string, limits: DumpLimits) =>
   name === `capture/${JOURNAL_FILE}` ||
   name === RAW_JOURNAL_FILE
     ? Math.min(limits.journalBytes ?? limits.objectBytes, limits.totalBytes)
-    : limits.objectBytes;
+    : name === CAPTURE_LOSS_FILE || name === `capture/${CAPTURE_LOSS_FILE}`
+      ? Math.min(limits.manifestBytes, limits.totalBytes)
+      : limits.objectBytes;
 
 /** A JSON value as stored; anything JSON would drop or change (`undefined`, `NaN`) is refused. */
 export type Json =
@@ -604,13 +606,36 @@ export class CaptureFailed extends Data.TaggedError("CaptureFailed")<{
   readonly kind: "invalid" | "io" | "full" | "failed";
   readonly event: string;
   readonly detail: string;
+  readonly journalFull?: boolean;
+  readonly writeCode?: string;
 }> {}
 
-/**
- * The one capture callback. It appends synchronously and returns, or throws `CaptureFailed`. A
- * provider calls it for `model.request` before it dispatches, so a failed capture means the
- * request is never sent, and settles its stream as failed when a later event throws.
- */
-export type Capture = (event: CaptureEvent) => void;
+/** Appends synchronously or throws `CaptureFailed`. */
+export type Capture = ModelCapture & ((event: CaptureEvent) => void);
 
-export type ModelCapture = (event: ModelCaptureEvent) => void;
+export const CaptureLoss = z.strictObject({
+  callId: z.uuid(),
+  event: z.enum([
+    "credential.registration",
+    "model.request",
+    "model.response",
+    "model.event",
+    "model.end",
+  ]),
+  kind: z.enum(["io", "full"]),
+  reason: z.enum([
+    "journal limit",
+    "object limit",
+    "permission denied",
+    "disk full",
+    "I/O error",
+  ]),
+  at: z.iso.datetime(),
+  credentialCoverage: z.literal("required").optional(),
+});
+export type CaptureLoss = z.infer<typeof CaptureLoss>;
+
+export type ModelCapture = ((event: ModelCaptureEvent) => void) & {
+  readonly recordLoss?: (loss: CaptureLoss, journalFull: boolean) => void;
+  readonly journalFull?: () => boolean;
+};

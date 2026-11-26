@@ -1,7 +1,4 @@
-// Why: a dataset is only as complete as its journal, and a failed capture used to land in
-// a memory-only list that a crash erased. These pin that every failure is thrown to the emitter,
-// that nothing after it is accepted, and that the next process's dump discloses it from what is on
-// disk alone, including when the failed write was the disk refusing (no further write is assumed).
+// Why: a dump must disclose a rejected capture or a torn line even after the writer exits.
 import { afterAll, expect, test } from "bun:test";
 import {
   appendFileSync,
@@ -99,7 +96,7 @@ test("an invalid event is thrown to its emitter, nothing after it is kept, and t
 // The session writes through a descriptor it holds, which a later chmod no longer refuses, so the
 // refusal is the disk's own: a child under a file-size limit (its SIGXFSZ ignored, as a full disk
 // returns an error rather than a signal) writes what fits of one line, then gets EFBIG.
-test("a write the disk refuses fails the capture without another write, and the unclosed session alone discloses it", async () => {
+test("a later append replaces the torn tail left by a failed model capture write", async () => {
   const folder = join(directory, "refused");
   const child = Bun.spawnSync(
     [
@@ -118,17 +115,14 @@ test("a write the disk refuses fails the capture without another write, and the 
   const seen = JSON.parse(child.stdout.toString());
   expect(seen).toMatchObject({
     refused: "io:model.request",
-    next: "failed:run.end",
+    next: "kept",
     closed: "io:model.request",
   });
-  // The disk took part of the refused line; nothing was written after it.
   expect(seen.afterRefusal).toBeGreaterThan(seen.before);
-  expect(seen.afterClose).toBe(seen.afterRefusal);
+  expect(seen.afterClose).toBeLessThan(seen.afterRefusal);
   expect(statSync(join(folder, JOURNAL_FILE)).size).toBe(seen.afterClose);
   expect((await gapsOf(folder)).map(([code]) => code)).toEqual([
-    "journal-torn",
     "journal-interrupted",
-    "run-end-missing",
   ]);
 });
 

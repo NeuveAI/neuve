@@ -26,7 +26,7 @@ import {
   openPrivateInspection,
   type PrivateInspection,
 } from "./private-inspection.ts";
-import { readCaptureJournal } from "./journal.ts";
+import { readCaptureLosses, readCaptureJournal } from "./journal.ts";
 import {
   CREDENTIAL_INSPECTION_POLICY,
   RETAINED_SDK_ASSEMBLY_POLICY,
@@ -637,6 +637,9 @@ export const openManagedCredentialInspection = (input: {
   const journal = readCaptureJournal(input.journal);
   if (
     journal._tag !== "Read" ||
+    readCaptureLosses(input.journal).some(
+      ({ credentialCoverage }) => credentialCoverage === "required",
+    ) ||
     credentialGuards(journal.lines).requiresInspection ||
     journal.lines.some((line) => line.event.type === "credential.registration")
   )

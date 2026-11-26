@@ -529,6 +529,9 @@ export const validateProjection = async (input: {
         maskVersion: 1 as const,
         sourceValidationVersion: 6 as const,
         tornLines: input.tornLines,
+        ...(run.sourceRevision === null && run.runKind !== null
+          ? { captureLossRunKind: run.runKind }
+          : {}),
         declared: [],
         close: run.close,
         rate: run.rate,

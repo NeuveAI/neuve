@@ -72,6 +72,7 @@ import {
   journalObjectFrames,
   openCaptureJournal,
   readCaptureJournal,
+  readCaptureLosses,
   retainedPrefixProof,
   sha256Of,
 } from "./journal.ts";
@@ -404,7 +405,58 @@ const build = async (
   const declared = input.declared ?? [];
 
   const limits = input.limits ?? DEFAULT_LIMITS;
+  const losses = readCaptureLosses(input.journal, limits);
   let journal = readCaptureJournal(input.journal, limits);
+  const rawLines = journal._tag === "Read" ? journal.lines : [];
+  if (
+    losses.length > 0 &&
+    (input.credentialInspection !== undefined ||
+      journal._tag !== "Read" ||
+      credentialGuards(rawLines).requiresInspection ||
+      losses.some(
+        ({ credentialCoverage }) => credentialCoverage === "required",
+      ))
+  ) {
+    // An incomplete authenticated stream cannot certify its original request or native content.
+    // The raw filing keeps those bytes private. Only the loss record is safe to project.
+    const reason = "Capture loss prevents certification of the original source";
+    const recipe = ProjectionRecipe.parse({
+      version: 1,
+      maskVersion: 1,
+      sourceValidationVersion: 6,
+      tornLines: 0,
+      captureLosses: losses,
+      captureLossRunKind: rawLines.flatMap(({ event }) =>
+        event.type === "run.start" ? [event.runKind] : [],
+      )[0],
+      declared: [],
+      close: input.close ?? null,
+      rate,
+    });
+    const budget = closeInspectionBudget(
+      progress.inventory,
+      started,
+      input.signal,
+    );
+    progress.budget = budget;
+    phase("projection");
+    const projection = await deriveCapture(
+      input.runId,
+      {
+        native: { conversations: [], session: [] },
+        lines: [],
+        tornLines: 0,
+        backup: { status: "unavailable", reason },
+        journal: { status: "unavailable", reason },
+        artifacts: [],
+      },
+      recipe,
+      "original",
+      budget,
+    );
+    phase("finalization");
+    return sealProjection(projection, recipe, [], limits);
+  }
   if (journal._tag === "TooLarge")
     throw new DumpFailed({
       reason: `capture journal is ${journal.size} bytes, over the ${journal.limit}-byte limit`,
@@ -469,6 +521,7 @@ const build = async (
         ),
       ),
     ),
+    losses,
   );
   const { records, bytes, calls } = progress.inventory;
   const budget = closeInspectionBudget(
@@ -851,6 +904,7 @@ const build = async (
     maskVersion: 1,
     sourceValidationVersion: 6,
     tornLines: journal.tornLines,
+    ...(losses.length === 0 ? {} : { captureLosses: losses }),
     declared: retainedDeclarations(
       declared,
       native,
@@ -889,6 +943,46 @@ const build = async (
       throw error;
     });
   phase("finalization");
+  return sealProjection(
+    projection,
+    recipe,
+    [
+      ...(journal.bytes === null
+        ? []
+        : [
+            {
+              name: RAW_JOURNAL_FILE,
+              mediaType: RAW_JOURNAL_MEDIA_TYPE,
+              bytes: journal.bytes,
+            },
+          ]),
+      ...Array.from(journal.objects, ([sha256, { bytes }]) => ({
+        name: journalObjectFile(sha256),
+        mediaType: "application/json",
+        bytes,
+      })),
+      ...(backup.bytes === undefined
+        ? []
+        : [
+            {
+              name: NATIVE_BACKUP_FILE,
+              mediaType: NATIVE_BACKUP_MEDIA_TYPE,
+              bytes: backup.bytes,
+            },
+          ]),
+    ],
+    limits,
+    retainedPrefixProof(lines),
+  );
+};
+
+const sealProjection = (
+  projection: Awaited<ReturnType<typeof deriveCapture>>,
+  recipe: ProjectionRecipe,
+  originals: ReadonlyArray<DumpContent>,
+  limits: DumpLimits,
+  retainedPrefixCalls: readonly string[] = [],
+): BuiltDump => {
   const { run } = projection;
   const contents: Array<DumpContent> = [
     { name: "run.json", mediaType: "application/json", bytes: encode(run) },
@@ -904,29 +998,7 @@ const build = async (
       bytes: encode(projection.unjoined),
     },
     ...projection.artifacts,
-    ...(journal.bytes === null
-      ? []
-      : [
-          {
-            name: RAW_JOURNAL_FILE,
-            mediaType: RAW_JOURNAL_MEDIA_TYPE,
-            bytes: journal.bytes,
-          },
-        ]),
-    ...Array.from(journal.objects, ([sha256, { bytes }]) => ({
-      name: journalObjectFile(sha256),
-      mediaType: "application/json",
-      bytes,
-    })),
-    ...(backup.bytes === undefined
-      ? []
-      : [
-          {
-            name: NATIVE_BACKUP_FILE,
-            mediaType: NATIVE_BACKUP_MEDIA_TYPE,
-            bytes: backup.bytes,
-          },
-        ]),
+    ...originals,
   ];
   // What the dump's readers would refuse is refused here, before anything is stored.
   let total = 0;
@@ -942,7 +1014,7 @@ const build = async (
     throw new DumpFailed({
       reason: `the dump is ${total} bytes, over the ${limits.totalBytes}-byte limit`,
     });
-  return { run, contents, retainedPrefixCalls: retainedPrefixProof(lines) };
+  return { run, contents, retainedPrefixCalls };
 };
 
 export const buildDump = async (

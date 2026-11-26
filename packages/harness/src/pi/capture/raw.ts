@@ -30,9 +30,15 @@ import {
 } from "@neuve/records-core";
 import { nativeBackup, type BuildInput, DumpFailed } from "./build.ts";
 import { BackupStatus, CloseMode, PriceRate } from "./dump.ts";
-import { captureFileLimit, DEFAULT_LIMITS, type DumpLimits } from "./types.ts";
+import {
+  CAPTURE_LOSS_FILE,
+  captureFileLimit,
+  DEFAULT_LIMITS,
+  type DumpLimits,
+} from "./types.ts";
 import {
   sha256Of,
+  decodeCaptureLosses,
   readCaptureJournal,
   JOURNAL_FILE,
   OBJECTS_DIRECTORY,
@@ -54,7 +60,7 @@ const RawFile = z.strictObject({
   name: z
     .string()
     .regex(
-      /^(?:capture\/(?:events\.jsonl|objects\/[a-f0-9]{64}(?:\.original)?)|native\/pi\.sqlite)$/,
+      /^(?:capture\/(?:events\.jsonl|capture-loss\.json|objects\/[a-f0-9]{64}(?:\.original)?)|native\/pi\.sqlite)$/,
     ),
   sha256: Hash,
   size: z.int().nonnegative(),
@@ -151,10 +157,20 @@ export const fileRawCapture = (input: BuildInput) =>
     const names = yield* Effect.tryPromise({
       try: async () => {
         const names: string[] = [];
-        if (
-          await lstat(join(input.journal, JOURNAL_FILE)).catch(() => undefined)
-        )
-          names.push(JOURNAL_FILE);
+        for (const name of [JOURNAL_FILE, CAPTURE_LOSS_FILE]) {
+          if (
+            await lstat(join(input.journal, name)).catch((error: unknown) => {
+              if (
+                error instanceof Error &&
+                "code" in error &&
+                error.code === "ENOENT"
+              )
+                return undefined;
+              throw error;
+            })
+          )
+            names.push(name);
+        }
         const objects = join(input.journal, OBJECTS_DIRECTORY);
         const info = await lstat(objects).catch(() => undefined);
         if (info !== undefined) {
@@ -167,6 +183,7 @@ export const fileRawCapture = (input: BuildInput) =>
       },
       catch: (error) => error,
     });
+    let losses: ReturnType<typeof decodeCaptureLosses> = [];
     for (const name of names) {
       const bytes = yield* Effect.tryPromise({
         try: async () => {
@@ -206,6 +223,8 @@ export const fileRawCapture = (input: BuildInput) =>
         },
         catch: (error) => error,
       });
+      if (name === CAPTURE_LOSS_FILE)
+        losses = yield* Effect.try(() => decodeCaptureLosses(bytes));
       yield* add(`capture/${name}`, bytes, "application/octet-stream");
     }
     if (native.bytes !== undefined)
@@ -239,6 +258,7 @@ export const fileRawCapture = (input: BuildInput) =>
       lines,
       checkedCount(captureBytes, native.bytes?.byteLength ?? 0),
       native.metadata?.records ?? 0,
+      losses,
     );
     const sql = yield* SqlClient;
     // The state of this run defines a filing. The checkpoint's random storage identity does not.
@@ -282,12 +302,14 @@ export const fileRawCapture = (input: BuildInput) =>
               catch: (error) => error,
             }),
           );
+    const hasCaptureLoss = losses.length > 0;
     const needsInspection = lines.some(
       ({ event }) =>
         event.type === "credential.registration" ||
         event.type === "credential.guard",
     );
     if (
+      !hasCaptureLoss &&
       input.credentialInspection !== undefined &&
       native.bytes !== undefined &&
       native.status.status === "captured" &&
@@ -364,7 +386,7 @@ export const fileRawCapture = (input: BuildInput) =>
           );
         }),
       );
-    } else if (needsInspection)
+    } else if (needsInspection && !hasCaptureLoss)
       unscannable =
         native.bytes === undefined
           ? "credential inspection requires an exact native backup; source retained privately, export refused"

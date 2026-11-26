@@ -61,6 +61,7 @@ import {
   privateInspectionDirectory,
   type PrivateInspection,
   fullOutputPath,
+  captureLossRecorder,
   openCaptureJournal,
   openRouteAdmission,
   routeModel,
@@ -160,7 +161,8 @@ export function codingWorkerSetup(
     await keepWorkerFor({ project, job });
   });
   const reviewSessions = new Map<string, ReturnType<typeof nativeReview>>();
-  const journals = new Map<string, CaptureJournal | CaptureFailed>();
+  const journals = new Map<string, CaptureJournal>();
+  const modelCaptures = new Map<string, RouteModelsOptions["capture"]>();
   const planningSessions = new Map<
     string,
     {
@@ -200,45 +202,78 @@ export function codingWorkerSetup(
   };
   const journal = (worker: WorkerContext) => {
     const known = journals.get(worker.sessionId);
-    if (known instanceof CaptureFailed) throw known;
     if (known) return known;
     inspection(worker);
-    try {
-      const opened = openCaptureJournal(
-        join(worker.stateDirectory, "capture"),
-        worker.sessionId,
-        { spillRoots: [realpathSync(tmpdir())] },
-      );
-      opened.capture({
-        type: "run.start",
-        scope: { runId: worker.sessionId },
-        runKind: "coding",
-        sourceRevision: {
-          status: "not-applicable",
-          reason:
-            "A coding session spans mutable project work and has no single reviewed revision.",
-        },
-        route: `${route.provider}/${route.model}`,
-        pricing: route.price === null ? "subscription" : "metered",
-      });
-      journals.set(worker.sessionId, opened);
-      return opened;
-    } catch (error) {
-      if (captureFull(error)) journals.set(worker.sessionId, error);
-      throw error;
-    }
+    const opened = openCaptureJournal(
+      join(worker.stateDirectory, "capture"),
+      worker.sessionId,
+      {
+        spillRoots: [realpathSync(tmpdir())],
+        onCaptureLoss: reportCaptureLoss(worker),
+      },
+    );
+    journals.set(worker.sessionId, opened);
+    opened.capture({
+      type: "run.start",
+      scope: { runId: worker.sessionId },
+      runKind: "coding",
+      sourceRevision: {
+        status: "not-applicable",
+        reason:
+          "A coding session spans mutable project work and has no single reviewed revision.",
+      },
+      route: `${route.provider}/${route.model}`,
+      pricing: route.price === null ? "subscription" : "metered",
+    });
+    return opened;
   };
-  const captureFull = (error: unknown): error is CaptureFailed =>
-    error instanceof CaptureFailed && error.kind === "full";
+  const captureWriteFailure = (error: unknown): error is CaptureFailed =>
+    error instanceof CaptureFailed &&
+    (error.kind === "full" || error.kind === "io");
+  const reportCaptureLoss =
+    (worker: WorkerContext) =>
+    (
+      loss: Parameters<
+        NonNullable<RouteModelsOptions["capture"]["recordLoss"]>
+      >[0],
+      persisted: boolean,
+    ) => {
+      writeSync(
+        2,
+        `${JSON.stringify({ type: "capture.loss", runId: worker.sessionId, ...loss, persisted })}\n`,
+      );
+    };
   const modelCapture = (worker: WorkerContext) => {
     try {
       return journal(worker).capture;
     } catch (error) {
-      if (!captureFull(error)) throw error;
-      return () => {
-        throw error;
-      };
+      if (!captureWriteFailure(error)) throw error;
     }
+    const known = modelCaptures.get(worker.sessionId);
+    if (known) return known;
+    const fallback = captureLossRecorder(
+      join(worker.stateDirectory, "capture"),
+      {
+        onCaptureLoss: reportCaptureLoss(worker),
+      },
+    );
+    const capture: RouteModelsOptions["capture"] = Object.assign(
+      (event: Parameters<RouteModelsOptions["capture"]>[0]) => {
+        journal(worker).capture(event);
+      },
+      {
+        journalFull: () =>
+          journals.get(worker.sessionId)?.capture.journalFull?.() ??
+          fallback.journalFull(),
+        recordLoss: (...args: Parameters<typeof fallback.recordLoss>) =>
+          (
+            journals.get(worker.sessionId)?.capture.recordLoss ??
+            fallback.recordLoss
+          )(...args),
+      },
+    );
+    modelCaptures.set(worker.sessionId, capture);
+    return capture;
   };
   return {
     async query(
@@ -481,7 +516,7 @@ export function codingWorkerSetup(
           scope: { runId: worker.sessionId, conversationId },
         });
       } catch (error) {
-        if (!captureFull(error)) throw error;
+        if (!captureWriteFailure(error)) throw error;
       }
     },
     priced: (model) =>
@@ -557,25 +592,34 @@ export function codingWorkerSetup(
         await Promise.allSettled([...planning.pending]);
         planningSessions.delete(worker.sessionId);
       }
-      const captured = journal(worker);
+      const journalDirectory = join(worker.stateDirectory, "capture");
       const admissionPath = join(worker.stateDirectory, "route-admission.json");
       try {
-        captured.capture({
-          type: "artifact",
-          scope: { runId: worker.sessionId },
-          name: "route-admission.json",
-          mediaType: "application/json",
-          bytes: readFileSync(admissionPath),
-        });
-      } catch (cause) {
-        if (!(
-          cause instanceof Error &&
-          "code" in cause &&
-          cause.code === "ENOENT"
-        ))
-          throw cause;
+        const captured = journal(worker);
+        try {
+          captured.capture({
+            type: "artifact",
+            scope: { runId: worker.sessionId },
+            name: "route-admission.json",
+            mediaType: "application/json",
+            bytes: readFileSync(admissionPath),
+          });
+        } catch (cause) {
+          if (!(
+            cause instanceof Error &&
+            "code" in cause &&
+            cause.code === "ENOENT"
+          ))
+            throw cause;
+        } finally {
+          captured.close();
+        }
+      } catch (error) {
+        if (!captureWriteFailure(error)) throw error;
+      } finally {
+        modelCaptures.delete(worker.sessionId);
+        journals.delete(worker.sessionId);
       }
-      captured.close();
       const started = performance.now();
       const location = storeLocationIn(join(storage.paths.captures, "coding"));
       const snapshot = await Effect.runPromise(
@@ -583,7 +627,7 @@ export function codingWorkerSetup(
           Store.prepareForWrite,
           captureRunDump({
             runId: worker.sessionId,
-            journal: captured.directory,
+            journal: journalDirectory,
             credentialInspection: inspection(worker),
             nativeDatabase: join(worker.stateDirectory, "channel.sqlite"),
             close: "held",

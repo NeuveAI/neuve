@@ -29,7 +29,7 @@ import { CaptureFailed } from "../capture/types.ts";
  * - `stream`: the stream failed or ended without its terminal event; `stalled`: it went silent.
  * - `sign_in`: the Neuve sign-in could not give a token, before anything was sent.
  * - `binding`: the agent route binding was missing or named another route; nothing was sent.
- * - `capture`: an event could not be recorded, so the call is not answered.
+ * - `capture`: credential protection or capture validation stopped the call.
  * - `aborted`: the caller cancelled.
  */
 export type RouteFailureKind =
@@ -185,7 +185,7 @@ export const schedulerText = (
     (RETRIED_STATUS.has(kind) || (status < 500 && status !== 429));
   const phrase =
     kind === "capture" && failure.code === CAPTURE_FULL
-      ? "the capture journal is full"
+      ? "capture protection could not record required evidence"
       : kind === "sign_in" && transient
         ? "the route's credential is unavailable for now (network error)"
         : SCHEDULED[kind];

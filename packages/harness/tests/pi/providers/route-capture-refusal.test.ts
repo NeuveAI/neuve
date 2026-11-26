@@ -1,7 +1,8 @@
 // Why: a local capture refusal crosses an SDK that can report it as a connection error.
 import { expect, test } from "bun:test";
+import { Effect } from "effect";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { statSync } from "node:fs";
+import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,20 +17,51 @@ import { SourceOwnership } from "../../../src/pi/source-ownership.ts";
 import { createPrivateInspection } from "../../../src/pi/capture/private-inspection.ts";
 import {
   JOURNAL_FILE,
+  IDLE_RELEASE_MS,
+  readCaptureJournal,
+  readCaptureLosses,
   openCaptureJournal,
 } from "../../../src/pi/capture/journal.ts";
+import { buildDump } from "../../../src/pi/capture/build.ts";
+import {
+  exportPortableSnapshot,
+  exportSnapshot,
+  readSessionDump,
+  sealCapturedDump,
+} from "../../../src/pi/capture/export.ts";
+import { fileRawCapture, scanRawCapture } from "../../../src/pi/capture/raw.ts";
+import { runIn, value } from "../capture/fixture.ts";
 import { CaptureFailed } from "../../../src/pi/capture/types.ts";
 import { createRouteModels } from "../../../src/pi/providers/agent-route-provider.ts";
 import { captureNativeModels } from "../../../src/pi/providers/native-models-capture.ts";
 import { routeFailureOf } from "../../../src/pi/providers/failure.ts";
-import { created, sse, tokenCommand } from "./fixture.ts";
+import {
+  completed,
+  created,
+  messageItem,
+  sse,
+  tokenCommand,
+} from "./fixture.ts";
 
-test("capture exhaustion fails the first call, the next call, and a reopened call", async () => {
+const prompt = {
+  messages: [
+    { role: "user" as const, content: "Check the work.", timestamp: 1 },
+  ],
+};
+
+const answer = (text: string) =>
+  sse([
+    created("resp_note"),
+    ...messageItem(0, "msg_note", "final_answer", text),
+    completed("resp_note"),
+  ]);
+
+test("capture exhaustion leaves the first call, later calls and a reopened call answered", async () => {
   const directory = await mkdtemp(join(tmpdir(), "neuve-full-capture-"));
   const runId = "full-capture";
   const limits = {
-    objectBytes: 16384,
-    totalBytes: 16384,
+    objectBytes: 65536,
+    totalBytes: 65536,
     manifestBytes: 4096,
     journalBytes: 4096,
   };
@@ -46,14 +78,29 @@ test("capture exhaustion fails the first call, the next call, and a reopened cal
     try {
       const token = tokenCommand(directory, "lease");
       const log = openRunLog(storeLocationIn(directory), "worker");
+      const captureDirectory = join(directory, "capture");
       let sent = 0;
+      const text = "x".repeat(4096);
       const open = () => {
-        const journal = openCaptureJournal(join(directory, "capture"), runId, {
+        const journal = openCaptureJournal(captureDirectory, runId, {
           limits,
           log,
         });
+        if (sent === 0)
+          journal.capture({
+            type: "run.start",
+            scope: { runId },
+            runKind: "coding",
+            sourceRevision: {
+              status: "not-applicable",
+              reason: "Scratch chat",
+            },
+            route: SOL_ROUTE.provider,
+            pricing: "subscription",
+          });
         const models = createRouteModels({
           route: SOL_ROUTE,
+          retry: { maxRetries: 1, baseDelayMs: 1 },
           log,
           runId,
           sessionAffinity: runId,
@@ -63,68 +110,112 @@ test("capture exhaustion fails the first call, the next call, and a reopened cal
           fetch: Object.assign(
             async () => {
               sent++;
-              const size = statSync(join(journal.directory, JOURNAL_FILE)).size;
-              return sse([
-                created("resp_full"),
-                {
-                  type: "response.output_text.delta",
-                  delta: "x".repeat(
-                    Math.max(0, limits.journalBytes - size - 925),
-                  ),
-                },
-                { type: "response.output_text.delta", delta: "x".repeat(4096) },
-              ]);
+              return answer(text);
             },
             { preconnect() {} },
           ),
         });
         const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
         if (!model) throw new Error("Expected coding route model");
-        return () =>
-          models.complete(model, {
-            systemPrompt: "Review the code.",
-            messages: [
-              { role: "user", content: "Check the work.", timestamp: 1 },
-            ],
-          });
+        return { journal, complete: () => models.complete(model, prompt) };
       };
-      const complete = open();
-      const first = await complete();
-      const next = await complete();
-      const reopened = await open()();
-      const failures = [first, next, reopened].map(routeFailureOf);
-      console.log(JSON.stringify({ failures, sent }));
-      expect(failures.map((failure) => failure?.kind)).toEqual([
-        "capture",
-        "capture",
-        "capture",
-      ]);
-      for (const [index, result] of [first, next, reopened].entries()) {
-        expect(failures[index]?.detail).toContain(
-          "would grow over the 4096-byte limit",
+      const first = open();
+      const results = [await first.complete(), await first.complete()];
+      first.journal.close();
+      const reopened = open();
+      results.push(await reopened.complete());
+      for (const result of results) {
+        expect(result.content).toContainEqual(
+          expect.objectContaining({ type: "text", text }),
         );
-        expect(failures[index]?.code).toBe("capture_full");
-        expect(result.errorMessage).toBe(
-          "OpenAI API error: the capture journal is full",
-        );
-        expect(isRetryableAssistantError(result)).toBe(false);
+        expect(result.stopReason).toBe("stop");
+        expect(routeFailureOf(result)).toBeUndefined();
       }
-      expect(sent).toBe(1);
+      expect(sent).toBe(3);
       await log.flush?.();
       const calls = log.read().filter(({ type }) => type === "model.call");
       expect(
-        calls.map(({ failureKind, sentAt }) => [
-          failureKind,
-          typeof sentAt === "string",
-        ]),
+        calls.map(({ failureKind, sentAt }) => [failureKind, typeof sentAt]),
       ).toEqual([
-        ["capture", true],
-        ["capture", false],
-        ["capture", false],
+        [undefined, "string"],
+        [undefined, "string"],
+        [undefined, "string"],
       ]);
-      for (const row of log.read())
-        if (row.type === "model.call" || row.name === "harness.journal.append")
-          console.log(JSON.stringify(row));
+      const losses = readCaptureLosses(captureDirectory, limits);
+      expect(
+        losses.map(({ event, kind, reason }) => [event, kind, reason]),
+      ).toEqual([
+        ["model.event", "full", "journal limit"],
+        ["credential.registration", "full", "journal limit"],
+        ["model.request", "full", "journal limit"],
+      ]);
+      expect(losses.map(({ callId }) => callId)).toEqual(
+        calls.map(({ call }) => String(call)),
+      );
+      const journal = readCaptureJournal(captureDirectory, limits);
+      expect(journal._tag).toBe("Read");
+      if (journal._tag !== "Read") throw new Error("Expected journal");
+      const requests = journal.lines.flatMap(({ event }) =>
+        event.type === "model.request" ? [event.callId] : [],
+      );
+      expect(requests).toEqual(losses.slice(0, 1).map(({ callId }) => callId));
+      const { run, contents } = await buildDump({
+        journal: captureDirectory,
+        runId,
+        limits,
+        credentialInspection: inspection,
+      });
+      expect(run.complete).toBe(false);
+      const gap = run.gaps.find(({ code }) => code === "journal-failed");
+      expect(gap?.kind).toBe("capture");
+      expect(gap?.count).toBe(3);
+      for (const loss of losses)
+        expect(gap?.detail).toContain(
+          `call ${loss.callId} lost capture at ${loss.event}`,
+        );
+      expect(contents.map(({ name }) => name)).toEqual([
+        "run.json",
+        "source/projection.json",
+        "calls/unjoined.json",
+      ]);
+      const root = join(directory, "dataset");
+      await mkdir(root);
+      const retention = { policy: "test" };
+      const restricted = await exportSnapshot({
+        journal: captureDirectory,
+        runId,
+        limits,
+        root,
+        retention,
+        credentialInspection: inspection,
+      });
+      const portable = await exportPortableSnapshot({
+        directory: restricted.directory,
+        root,
+        retention,
+      });
+      const read = await Effect.runPromise(readSessionDump(portable.directory));
+      expect(read.run.gaps).toEqual(run.gaps);
+      expect(read.run.complete).toBe(false);
+      const location = storeLocationIn(join(directory, "records"));
+      const useStore = runIn(location);
+      const filed = value(
+        await useStore(fileRawCapture({ runId, journal: captureDirectory })),
+      );
+      expect(filed.manifest.counts.calls).toBe(3);
+      expect(filed.manifest.files.map(({ name }) => name)).toContain(
+        "capture/capture-loss.json",
+      );
+      const scanned = value(
+        await useStore(
+          scanRawCapture({
+            location,
+            rawCapture: filed.rawCapture,
+            seal: (sources, scan) => sealCapturedDump(sources, scan, false),
+          }),
+        ),
+      );
+      expect(scanned.run.gaps).toEqual(run.gaps);
     } finally {
       await inspection.close();
       ownership.release();
@@ -134,7 +225,63 @@ test("capture exhaustion fails the first call, the next call, and a reopened cal
   }
 });
 
-test("a native provider does not retry a full capture as a connection error", async () => {
+test("a transient write refusal retries the same request and keeps its capture", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "neuve-capture-retry-"));
+  try {
+    const runId = "capture-retry";
+    const journal = openCaptureJournal(directory, runId);
+    const path = join(directory, JOURNAL_FILE);
+    // The journal releases its descriptor after an idle interval. chmod then affects the next open.
+    await Bun.sleep(2 * IDLE_RELEASE_MS + 50);
+    chmodSync(path, 0o400);
+    let attempts = 0;
+    let sent = 0;
+    const token = tokenCommand(directory, "lease");
+    const capture = Object.assign(
+      (event: Parameters<typeof journal.capture>[0]) => {
+        if (event.type === "model.request" && ++attempts === 1)
+          setTimeout(() => chmodSync(path, 0o600), 0);
+        journal.capture(event);
+      },
+      journal.capture,
+    );
+    const models = createRouteModels({
+      capture,
+      credentialInspection: "ephemeral",
+      route: SOL_ROUTE,
+      retry: { maxRetries: 1, baseDelayMs: 20 },
+      runId,
+      sessionAffinity: runId,
+      auth: { tokenCommand: token.path },
+      fetch: Object.assign(
+        async () => {
+          sent++;
+          return answer("Done.");
+        },
+        { preconnect() {} },
+      ),
+    });
+    const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
+    if (!model) throw new Error("Expected coding route model");
+    expect((await models.complete(model, prompt)).stopReason).toBe("stop");
+    expect({ attempts, sent }).toEqual({ attempts: 2, sent: 1 });
+    expect(readCaptureLosses(directory)).toEqual([]);
+    journal.close();
+    const recorded = readCaptureJournal(directory);
+    expect(recorded._tag).toBe("Read");
+    if (recorded._tag !== "Read") throw new Error("Expected journal");
+    expect(
+      recorded.lines.filter(({ event }) => event.type === "model.request"),
+    ).toHaveLength(1);
+    expect(
+      recorded.lines.filter(({ event }) => event.type === "model.end"),
+    ).toHaveLength(1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a native provider answers with a full journal and no recorded request", async () => {
   const directory = await mkdtemp(join(tmpdir(), "neuve-native-full-capture-"));
   try {
     const credentials = new InMemoryCredentialStore();
@@ -160,14 +307,15 @@ test("a native provider does not retry a full capture as a connection error", as
     const models = captureNativeModels(defaults, {
       runId: "native-full",
       credentialInspection: "ephemeral",
-      capture(event) {
+      retry: { maxRetries: 1, baseDelayMs: 1 },
+      capture: Object.assign((event: Parameters<typeof journal.capture>[0]) => {
         if (event.type === "model.request") dispatches++;
         journal.capture(event);
-      },
+      }, journal.capture),
       fetch: Object.assign(
         async () => {
           sent++;
-          return sse([]);
+          return answer("Done.");
         },
         { preconnect() {} },
       ),
@@ -179,22 +327,34 @@ test("a native provider does not retry a full capture as a connection error", as
       },
       { maxRetries: 2 },
     );
-    expect(routeFailureOf(result)).toEqual({
-      kind: "capture",
-      code: "capture_full",
-      detail: "events.jsonl would grow over the 400-byte limit",
+    expect(result.stopReason).toBe("stop");
+    expect(routeFailureOf(result)).toBeUndefined();
+    expect([dispatches, sent]).toEqual([2, 1]);
+    const [loss] = readCaptureLosses(directory);
+    expect(loss).toMatchObject({
+      event: "model.request",
+      kind: "full",
+      reason: "journal limit",
     });
-    expect(result.errorMessage).toBe(
-      "Model error: the capture journal is full",
-    );
-    expect(isRetryableAssistantError(result)).toBe(false);
-    expect([dispatches, sent]).toEqual([1, 0]);
+    const { run } = await buildDump({
+      journal: directory,
+      runId: "native-full",
+    });
+    expect(run.complete).toBe(false);
+    expect(run.gaps).toContainEqual({
+      code: "journal-failed",
+      count: 1,
+      kind: "capture",
+      detail: expect.stringContaining(
+        `call ${loss?.callId} lost capture at model.request`,
+      ),
+    });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("a full capture journal during credential registration ends before send", async () => {
+test("credential registration that cannot be recorded anywhere ends before send", async () => {
   const directory = await mkdtemp(join(tmpdir(), "neuve-capture-refusal-"));
   try {
     const source = join(directory, "source");

@@ -37,7 +37,11 @@ import {
   type SimpleStreamOptions,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import type { ConversationId } from "@earendil-works/pi-durable";
+import type {
+  ConversationId,
+  HarnessSettings,
+} from "@earendil-works/pi-durable";
+import { CallCapture } from "./capture-write.ts";
 import {
   stream as anthropicMessages,
   type AnthropicOptions,
@@ -137,8 +141,7 @@ import {
  * which the route's auth never allows. The wire is the physical route's, under a logical ID and
  * under the physical one a coding session registers.
  *
- * Capture is part of the call. A request that cannot be recorded is never sent, and an event or end
- * that cannot be recorded fails the call, so no dataset reads a call as answered without its record.
+ * Capture retries its writes and records any loss separately. Credential safety failures stop the call.
  * A body that is not a JSON string is sent and recorded as missing, with the reason.
  */
 
@@ -150,6 +153,7 @@ export interface RouteTransportOptions {
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly log?: RunLog | undefined;
   readonly capture: ModelCapture;
+  readonly retry?: HarnessSettings["retry"] | undefined;
   readonly credentialInspection: CredentialCapture;
   /** The OpenAI route's stall limits; tests shorten them. */
   readonly stallLimits?: StallLimits | undefined;
@@ -345,6 +349,8 @@ interface Call {
   readonly id: string;
   readonly scope: CaptureScope;
   readonly capture: ModelCapture;
+  readonly captureWrites: CallCapture;
+  captureSignal?: AbortSignal | undefined;
   readonly credentialInspection: CredentialCapture;
   sdkContext?: ReturnType<typeof sdkContextSnapshot>;
   sdkInvocation?: ReturnType<typeof sdkInvocationTracker>;
@@ -365,7 +371,7 @@ interface Call {
   requestId?: string;
 }
 
-/** Records one event; a capture that throws fails the call with a message naming what was lost. */
+/** Check credential safety before attempting to write an event. */
 const record = async (call: Call, event: ModelCaptureEvent) => {
   try {
     const evidence = eventEvidence(
@@ -398,15 +404,18 @@ const record = async (call: Call, event: ModelCaptureEvent) => {
       kept.type !== "model.end"
     )
       throw new Error("credential exclusion changed a capture event identity");
-    call.capture(kept);
+    await call.captureWrites.write(kept, call.captureSignal);
     if (evidence.bodyRedactions.length > 0)
-      call.capture({
-        type: "model.event",
-        scope: call.scope,
-        callId: call.id,
-        name: "credential_redactions",
-        data: { name: event.type, bodyRedactions: evidence.bodyRedactions },
-      });
+      await call.captureWrites.write(
+        {
+          type: "model.event",
+          scope: call.scope,
+          callId: call.id,
+          name: "credential_redactions",
+          data: { name: event.type, bodyRedactions: evidence.bodyRedactions },
+        },
+        call.captureSignal,
+      );
   } catch (cause) {
     throw captureFailed(
       call,
@@ -582,6 +591,7 @@ const observedFetch = (
     init = { ...init, headers };
     call.credentials = headers;
     call.signal = signal ?? undefined;
+    call.captureSignal = call.signal;
     const authenticated = [...headers].some(
       ([name, value]) =>
         /authorization|api[-_]?key|cookie/i.test(name) && value !== "",
@@ -599,13 +609,16 @@ const observedFetch = (
         });
         if (registration.status !== "registered")
           throw new Error("Durable credential registration is unavailable");
-        call.capture({
-          type: "credential.registration",
-          scope: { runId: call.scope.runId },
-          callId: call.id,
-          epochId: registration.epoch,
-          policy: CREDENTIAL_INSPECTION_POLICY,
-        });
+        await call.captureWrites.write(
+          {
+            type: "credential.registration",
+            scope: { runId: call.scope.runId },
+            callId: call.id,
+            epochId: registration.epoch,
+            policy: CREDENTIAL_INSPECTION_POLICY,
+          },
+          call.captureSignal,
+        );
       } catch (cause) {
         throw captureFailed(call, "credential registration", cause);
       }
@@ -665,6 +678,7 @@ const observedFetch = (
         name: "model.request",
         bodyRedactions: requestEvidence.bodyRedactions,
       });
+    signal?.throwIfAborted();
     call.telemetry.sent();
     let response = await base(input, { ...init, redirect: "error" });
     call.telemetry.headers();
@@ -875,6 +889,7 @@ const runCall = (input: {
   readonly model: Model<Api>;
   readonly label: string;
   readonly capture: ModelCapture;
+  readonly retry: HarnessSettings["retry"];
   readonly signal: AbortSignal | undefined;
   readonly limits: StallLimits | undefined;
   readonly credentialInspection: CredentialCapture;
@@ -933,6 +948,7 @@ const runCall = (input: {
     telemetry.endStream();
     if (call?.requested === true) {
       call.signal = AbortSignal.timeout(30_000);
+      call.captureSignal = parent;
       const outcome = outcomeOf(message);
       try {
         if (call.sdkInvocation !== undefined)
@@ -1084,6 +1100,7 @@ const runCall = (input: {
       id: telemetry.id,
       scope: prepared.scope,
       capture: input.capture,
+      captureWrites: new CallCapture(input.capture, input.retry),
       credentialInspection: input.credentialInspection,
       rawCalls: [],
       requested: false,
@@ -1333,6 +1350,7 @@ const openAiProvider = (
       model: target,
       label: "OpenAI API error",
       capture: options.capture,
+      retry: options.retry,
       credentialInspection: options.credentialInspection,
       signal: streamOptions?.signal,
       limits,
@@ -1586,6 +1604,7 @@ const anthropicProvider = (
       model: target,
       label: "Anthropic API error",
       capture: options.capture,
+      retry: options.retry,
       credentialInspection: options.credentialInspection,
       signal: streamOptions?.signal,
       limits: undefined,

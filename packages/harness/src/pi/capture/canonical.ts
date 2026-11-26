@@ -1016,7 +1016,13 @@ export const deriveCapture = async (
   }
 
   const journalSessions = sessionsOf(lines);
-  const failures = journalSessions.flatMap((s) => s.failures);
+  const failures = [
+    ...journalSessions.flatMap((s) => s.failures),
+    ...(recipe.captureLosses ?? []).map(
+      ({ callId, event, kind, reason, at }) =>
+        `call ${callId} lost capture at ${event} (${kind}, ${reason}, ${at}). The rest of its capture was skipped.`,
+    ),
+  ];
   const interrupted = journalSessions.filter((s) => !s.closed);
   const differing = starts.filter(
     (other) => JSON.stringify(other) !== JSON.stringify(start),
@@ -1226,7 +1232,7 @@ export const deriveCapture = async (
     restrictRun(
       {
         runId,
-        runKind: start?.runKind ?? null,
+        runKind: start?.runKind ?? recipe.captureLossRunKind ?? null,
         sourceRevision: start?.sourceRevision ?? null,
         ...(start?.harnessRevision === undefined
           ? {}
