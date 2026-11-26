@@ -1,3 +1,4 @@
+import type { RetainedReadingPlan as ReadingPlan } from "./assignments.ts";
 import type { Context } from "@earendil-works/chord";
 import type {
   DocumentReader,
@@ -74,7 +75,6 @@ import {
 import {
   READING_RECIPE,
   isGitlink,
-  ReadingPlan,
   pairPlan,
   pairingBlobs,
   planReadings,

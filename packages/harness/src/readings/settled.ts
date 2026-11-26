@@ -1,3 +1,4 @@
+import type { RetainedReadingPlan as ReadingPlan } from "./assignments.ts";
 import { sha256Hex } from "@neuve/records-core";
 import {
   AssembledReference,
@@ -50,7 +51,6 @@ import type {
 import {
   isGitlink,
   type PlanSection,
-  type ReadingPlan,
   type UnreadCause,
 } from "./plan.ts";
 import {

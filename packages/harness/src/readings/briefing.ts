@@ -1,3 +1,4 @@
+import type { RetainedReadingPlan as ReadingPlan } from "./assignments.ts";
 import { sha256Hex } from "@neuve/records-core";
 import {
   ExplainedContent,
@@ -15,7 +16,7 @@ import type { RouteEffort } from "../route.ts";
 import { batchHandle, batchKeyOf } from "../publish-sections-input.ts";
 import { clip, type AssessJudgement } from "./answers.ts";
 import type { GroupEvidence } from "./evidence.ts";
-import { READING_RECIPE, type PlanSection, type ReadingPlan } from "./plan.ts";
+import { READING_RECIPE, type PlanSection } from "./plan.ts";
 import { oneLine, renderReading, type Reading } from "./reading.ts";
 import {
   GENERATED_GROUP,

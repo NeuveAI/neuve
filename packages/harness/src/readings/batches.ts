@@ -1,3 +1,4 @@
+import type { RetainedReadingPlan as ReadingPlan } from "./assignments.ts";
 import type { ManifestHunk } from "../manifest.ts";
 import type { LensEnd } from "../pi/review-task.ts";
 import type { FinderStatus } from "../pi/stages/finder-task.ts";
@@ -8,7 +9,6 @@ import {
   batchKeyOf,
   checkBatch,
 } from "../publish-sections-input.ts";
-import type { ReadingPlan } from "./plan.ts";
 import { briefingLayout } from "./briefing.ts";
 import {
   batchGroups,

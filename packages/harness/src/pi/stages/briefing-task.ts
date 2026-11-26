@@ -1,3 +1,4 @@
+import type { RetainedReadingPlan as ReadingPlan } from "../../readings/assignments.ts";
 import { copyJson, type Context } from "@earendil-works/chord";
 import {
   type Task,
@@ -23,7 +24,6 @@ import {
   digestMaterial,
   partMaterial,
 } from "../../readings/briefing.ts";
-import type { ReadingPlan } from "../../readings/plan.ts";
 import {
   AssessStored,
   assessOutcomes,

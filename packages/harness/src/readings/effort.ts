@@ -1,3 +1,4 @@
+import type { RetainedReadingPlan as ReadingPlan } from "./assignments.ts";
 import { addedLines, publicSurface } from "../lane-rule.ts";
 import type { ManifestHunk } from "../manifest.ts";
 import {
@@ -6,7 +7,7 @@ import {
   type RouteEffort,
 } from "../route.ts";
 import { removesDeclaration } from "./code-facts.ts";
-import type { PlanSection, ReadingPlan } from "./plan.ts";
+import type { PlanSection } from "./plan.ts";
 
 /**
  * The effort each reading step runs at (NEU-148), decided by code when the plan's reading tasks are
