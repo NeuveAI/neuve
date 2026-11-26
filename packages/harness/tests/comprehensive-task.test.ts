@@ -1,3 +1,4 @@
+import { ChildrenDoc } from "../src/pi/stages/docs.ts";
 // Why: exercise the production preparation, native tools, durable child registration, final
 // re-registration and rollback/replay together. Fixture source is retained in the manifest; only
 // structural preparation is supplied (as precompute would), so this needs neither Graph nor a model account.
@@ -73,7 +74,10 @@ const textOf = (v: unknown): string =>
         ? Object.values(v).map(textOf).join("\n")
         : "";
 
-const execute = async (invalid: boolean | "abort" = false) => {
+const execute = async (
+  invalid: boolean | "abort" = false,
+  restoreAlias = false,
+) => {
   const location = storeLocationIn(join(directory, mintUlid()));
   const scope = await Effect.runPromise(Scope.make());
   const records = await Effect.runPromise(
@@ -300,6 +304,7 @@ const execute = async (invalid: boolean | "abort" = false) => {
   let rounds = 0;
   let readingId: TaskId<ReadingTaskResult> | undefined;
   const sent: Array<ReadonlyArray<Message>> = [];
+  const agents: string[] = [];
   const routes = () =>
     agentRoutes({
       harness,
@@ -314,6 +319,7 @@ const execute = async (invalid: boolean | "abort" = false) => {
         faux.setResponses(
           Array.from({ length: 40 }, () => async (transcript, options) => {
             sent.push(transcript.messages);
+            agents.push(binding.agent);
             const text = textOf(transcript.messages);
             const reply = (name: string, args: any) =>
               fauxAssistantMessage(
@@ -457,6 +463,7 @@ const execute = async (invalid: boolean | "abort" = false) => {
   });
   const nativeReading = readingTask(services, kinds.agentStep);
   let replays = 0;
+  let aliasRestored = false;
   const phase = nativeReading.definition.phases.claims;
   const reading = {
     definition: {
@@ -464,6 +471,29 @@ const execute = async (invalid: boolean | "abort" = false) => {
       phases: {
         ...nativeReading.definition.phases,
         claims: async (task: any, runtime: any, c: any) => {
+          if (restoreAlias && !aliasRestored) {
+            // A follow-on's reading has no old child alias. Retained source producer numbers
+            // must not coincide with this native DB's current execution task numbers.
+            await runtime.commit(async (tx: any) => {
+              const children = await tx.doc(ChildrenDoc, runtime.taskId);
+              const ledger = await tx.doc(ClaimSettlementDoc);
+              const state = ledger.reviews[String(task.input.review)];
+              for (const [id, claim] of Object.entries(state.claims) as Array<
+                [string, any]
+              >) {
+                delete children.children[`claim.${claim.key}`];
+                delete state.claims[id];
+                state.claims[`retained:${claim.key}`] = {
+                  ...claim,
+                  id: `retained:${claim.key}`,
+                  producer: { ...claim.producer, task: 900 },
+                  source: { ...claim.source, runId: "original-native-run" },
+                };
+              }
+              return undefined;
+            }, c);
+            aliasRestored = true;
+          }
           if (replays++ === 0) {
             const failure = new Error("rollback after registration");
             try {
@@ -614,7 +644,17 @@ const execute = async (invalid: boolean | "abort" = false) => {
       ? ended.state.outcome.result
       : undefined;
   await harness.close(context);
-  return { ctx, run, result, settlement, sent, rows, replays };
+  return {
+    ctx,
+    run,
+    result,
+    settlement,
+    sent,
+    rows,
+    replays,
+    aliasRestored,
+    agents,
+  };
 };
 
 test("production comprehensive task exposes scope and explicit unavailable proof, registers one Verify and replays finalization with exact non-null evidence basis", async () => {
@@ -668,4 +708,20 @@ test("native interruption retains registered and partial claims without approvin
   expect(stored.claims).toHaveLength(1);
   expect(stored.answer.sections.a).toEqual([]);
   expect(stored.unanswered).toHaveLength(stored.sections.length);
+}, 60_000);
+
+test("real reading finalization reuses the registered exact Verify after follow-on alias restoration", async () => {
+  const observed = await execute(false, true);
+  expect(observed.aliasRestored).toBe(true);
+  expect(observed.result?.claims).toHaveLength(1);
+  const claims = Object.values(observed.settlement.claims);
+  expect(claims).toHaveLength(1);
+  expect(claims[0]!.id).toStartWith("retained:");
+  expect(claims[0]!.producer.task).toBe(900);
+  expect(claims[0]!.source.runId).toBe("original-native-run");
+  expect(claims[0]!.verificationTask).not.toBe(900);
+  expect(
+    observed.agents.filter((agent) => agent.startsWith("verify.claim.")),
+  ).toHaveLength(1);
+  expect(observed.result!.claims[0]!.verifyKey).not.toBeNull();
 }, 60_000);

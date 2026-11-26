@@ -16,6 +16,7 @@ import { z } from "zod";
 import {
   ClaimSettlementDoc,
   initializeClaimSettlement,
+  restoreClaim,
 } from "../src/pi/claim-settlement.ts";
 import { ChildrenDoc, ContractContextDoc } from "../src/pi/stages/docs.ts";
 import {
@@ -31,7 +32,7 @@ import { zeroUsage } from "../src/route.ts";
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-const fixture = async (rollbackCompleted: boolean) => {
+const fixture = async (rollbackCompleted: boolean, restore = false) => {
   const task = defineTask<{}, { phase: "run" }, {}>({
     name: "test.contract-claim",
     version: 1,
@@ -173,7 +174,22 @@ const fixture = async (rollbackCompleted: boolean) => {
     reminder: false,
     endedMessages: [],
   });
+  let restoredTask: number | undefined;
   await harness.commit(async (tx) => {
+    if (restore) {
+      // Force a new database's IDs away from the retained producer/check numbers.
+      for (let at = 0; at < 30; at++)
+        await tx.createTask(
+          task,
+          {},
+          { ownership: { kind: "task", taskId: review } },
+        );
+      restoredTask = await tx.createTask(
+        task,
+        {},
+        { ownership: { kind: "task", taskId: review } },
+      );
+    }
     await initializeClaimSettlement(tx, review, {
       source: { manifest: "manifest", cycle: "cycle", run: "run" },
       unread: [],
@@ -193,6 +209,25 @@ const fixture = async (rollbackCompleted: boolean) => {
         },
       ],
     });
+    if (restoredTask !== undefined)
+      await restoreClaim(tx, review, {
+        ...claim.claim,
+        id: "retained:original-report",
+        producer: { assignment: "assignment-a", task: 900 },
+        source: {
+          runId: "original-native-run",
+          cycle: "original-cycle",
+          head: "original-head",
+        },
+        verificationTask: restoredTask,
+        retainedVerification: { task: 800, key: null, outcome: "unconfirmed" },
+        destination: {
+          status: "unassigned",
+          reason: "unknown",
+          sectionKeys: [],
+        },
+        timing: "unknown-ownership",
+      });
     (await tx.doc(ContractContextDoc, step)).data = copyJson(initial);
   }, context);
   const native = contractStore(
@@ -296,6 +331,8 @@ const fixture = async (rollbackCompleted: boolean) => {
     snapshot,
     calls: () => calls,
     key: claim.claim.key,
+    restoredTask,
+    producer,
   };
 };
 
@@ -350,6 +387,38 @@ test("contractTools rolls back child, claim, answer and tool state together befo
   } finally {
     first.close(new Error("test ended"));
     reopened?.close(new Error("test ended"));
+    await world.harness.close(context);
+  }
+});
+
+test("contract finalization aliases a restored exact check despite different native producer IDs", async () => {
+  const world = await fixture(false, true);
+  const tools = world.open();
+  try {
+    await world.invoke(tools);
+    const state = await world.snapshot();
+    expect(world.producer).not.toBe(900);
+    expect(world.restoredTask).not.toBe(800);
+    expect(state.children[`claim.${world.key}`]).toBe(world.restoredTask!);
+    expect(Object.keys(state.claims)).toEqual(["retained:original-report"]);
+    const original = state.claims["retained:original-report"]!;
+    expect(original.producer).toEqual({
+      assignment: "assignment-a",
+      task: 900,
+    });
+    expect(original.source.runId).toBe("original-native-run");
+    expect(original.verificationTask).toBe(world.restoredTask!);
+    tools.close(new Error("reopen"));
+    const again = world.open();
+    try {
+      await world.invoke(again);
+    } finally {
+      again.close(new Error("test ended"));
+    }
+    expect(world.calls()).toBe(1);
+    expect(await world.snapshot()).toEqual(state);
+  } finally {
+    tools.close(new Error("test ended"));
     await world.harness.close(context);
   }
 });

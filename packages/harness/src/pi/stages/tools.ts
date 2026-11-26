@@ -67,7 +67,7 @@ import {
   type AgentStep,
 } from "./agent.ts";
 import { childId } from "./children.ts";
-import { registerClaim } from "../claim-settlement.ts";
+import { registerClaim, findRegisteredClaim } from "../claim-settlement.ts";
 import {
   AgentContextDoc,
   ChildrenDoc,
@@ -690,6 +690,27 @@ export const startChild = async (
         held,
       );
     return undefined;
+  }
+  if (request.claimRegistration !== undefined) {
+    const prior = await findRegisteredClaim(
+      tx,
+      owner.owner!,
+      request.claimRegistration,
+    );
+    if (
+      prior?.verificationTask !== undefined &&
+      prior.verificationTask !== null
+    ) {
+      await registerClaim(
+        tx,
+        owner.owner!,
+        owner.id,
+        request.claimRegistration,
+        prior.verificationTask,
+      );
+      children.children[request.name] = prior.verificationTask;
+      return undefined;
+    }
   }
   const task = registry.task(request.task);
   if (task === undefined)

@@ -25,7 +25,7 @@ export type SettlementSection = {
 export type SettlementAssignment = {
   readonly assignmentId: string;
   readonly batchId: string;
-  readonly task: number;
+  readonly task: number | null;
   readonly sections: Array<SettlementSection>;
 };
 export type ClaimDestination =
@@ -40,6 +40,12 @@ export type RegisteredClaim = ClaimRegistration["claim"] & {
   readonly producer: { readonly assignment: string; readonly task: number };
   readonly source: JsonObject;
   readonly verificationTask: number | null;
+  /** A retained specific check from an earlier native host, never a new independent vote. */
+  readonly retainedVerification?: {
+    readonly task: number | null;
+    readonly key: string | null;
+    readonly outcome: "confirmed" | "refuted" | "unconfirmed";
+  };
   readonly destination: ClaimDestination;
   readonly timing:
     "incoming" | "later-review-information" | "unknown-ownership";
@@ -87,9 +93,9 @@ export const initializeClaimSettlement = async (
   const tasks = new Set<number>();
   const sections = new Set<string>();
   for (const assignment of input.assignments) {
-    if (tasks.has(assignment.task))
+    if (assignment.task !== null && tasks.has(assignment.task))
       throw new Error("A reviewer task has multiple assignments");
-    tasks.add(assignment.task);
+    if (assignment.task !== null) tasks.add(assignment.task);
     for (const section of assignment.sections) {
       if (sections.has(section.key))
         throw new Error("A section has multiple primary owners");
@@ -152,6 +158,56 @@ export const claimDestination = (
   };
 };
 
+/** Exact retained report/basis reuse only; never anchor or semantic grouping. */
+export const registeredClaim = (
+  state: ClaimSettlement,
+  registration: ClaimRegistration,
+) =>
+  Object.values(state.claims).find(
+    (held) =>
+      held.producer.assignment === registration.assignment &&
+      held.key === registration.claim.key &&
+      canonicalJson([held.report, held.basis]) ===
+        canonicalJson([registration.claim.report, registration.claim.basis]),
+  );
+
+export const findRegisteredClaim = async (
+  tx: Tx,
+  review: TaskId,
+  registration: ClaimRegistration,
+) => {
+  const state = (await tx.doc(ClaimSettlementDoc)).reviews[String(review)];
+  const held =
+    state === undefined ? undefined : registeredClaim(state, registration);
+  return held === undefined ? undefined : copyJson(held);
+};
+
+/** Restore only after the caller validates permanent source/basis and creates a current check. */
+export const restoreClaim = async (
+  tx: Tx,
+  review: TaskId,
+  original: RegisteredClaim,
+) => {
+  const state = (await tx.doc(ClaimSettlementDoc)).reviews[String(review)];
+  if (state === undefined)
+    throw new Error("Restore requires settled assignment ownership");
+  const destination = claimDestination(state, original.anchor);
+  const claim: RegisteredClaim = copyJson({
+    ...original,
+    destination,
+    timing:
+      destination.status === "unassigned"
+        ? "unknown-ownership"
+        : state.closed[destination.batchId] === undefined
+          ? "incoming"
+          : "later-review-information",
+  });
+  const held = state.claims[claim.id];
+  if (held !== undefined && canonicalJson(held) !== canonicalJson(claim))
+    throw new Error("Restored claim changed on native replay");
+  state.claims[claim.id] = claim;
+};
+
 /** Pure transition, shared by native commits and race/replay contract tests. */
 export const registerInSettlement = (
   state: ClaimSettlement,
@@ -167,6 +223,23 @@ export const registerInSettlement = (
     producer.assignmentId !== registration.assignment
   )
     throw new Error("The recording task does not own the prepared assignment");
+  const prior = registeredClaim(state, registration);
+  if (prior !== undefined) {
+    if (
+      prior.verificationTask === null &&
+      prior.retainedVerification !== undefined &&
+      verificationTask !== null
+    ) {
+      const linked = copyJson({ ...prior, verificationTask });
+      state.claims[prior.id] = linked;
+      return linked;
+    }
+    if (prior.verificationTask !== verificationTask)
+      throw new Error(
+        "A recorded claim cannot change verification task during replay",
+      );
+    return prior;
+  }
   const { anchor, key } = registration.claim;
   if (
     !/^[0-9a-f]{64}$/.test(key) ||
@@ -283,4 +356,14 @@ export const closeInSettlement = (
   const basis = copyJson({ claims: ids, input });
   state.closed[batchId] = basis;
   return { status: "closed", basis };
+};
+
+/** Exact registered observation and its specific check, never a sibling verdict. */
+export type RoutedClaim = {
+  readonly claim: RegisteredClaim;
+  readonly verification: {
+    readonly key: string | null;
+    readonly reached: boolean;
+  };
+  readonly information?: string;
 };

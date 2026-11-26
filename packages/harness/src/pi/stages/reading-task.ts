@@ -100,7 +100,11 @@ import {
   comprehensiveBounds,
   reviewToolState,
 } from "../../readings/comprehensive.ts";
-import { registerClaim, type ClaimRegistration } from "../claim-settlement.ts";
+import {
+  registerClaim,
+  findRegisteredClaim,
+  type ClaimRegistration,
+} from "../claim-settlement.ts";
 import { readingOrder, renderReading } from "../../readings/reading.ts";
 import {
   AssessStored,
@@ -1907,6 +1911,29 @@ export const readingTask = (
                   child.claimRegistration,
                   held,
                 );
+              continue;
+            }
+            const prior =
+              child.claimRegistration === undefined
+                ? undefined
+                : await findRegisteredClaim(
+                    tx,
+                    childId(taskReview!),
+                    child.claimRegistration,
+                  );
+            if (
+              prior?.verificationTask !== undefined &&
+              prior.verificationTask !== null
+            ) {
+              await registerClaim(
+                tx,
+                childId(taskReview!),
+                runtime.taskId,
+                child.claimRegistration!,
+                prior.verificationTask,
+              );
+              doc.children[child.name] = prior.verificationTask;
+              ids.push(prior.verificationTask);
               continue;
             }
             const id = await tx.createTask(agentStep, child.input, {
