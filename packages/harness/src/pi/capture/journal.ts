@@ -638,7 +638,13 @@ export const openCaptureJournal = (
     });
 
   let torn = false;
-  const pendingLosses = new Map<string, CaptureFailed>();
+  // A loss without a call ID cannot be cleared by a call retry or a loss record.
+  const pendingLosses = new Map<string | undefined, CaptureFailed>();
+  const rejectWrite = (failure: CaptureFailed, callId?: string): never => {
+    pendingLosses.set(callId, failure);
+    letGo();
+    throw failure;
+  };
   const append = (event: JournalLine["event"], at = Date.now()) => {
     const started = options.log === undefined ? 0 : performance.now();
     let succeeded = false;
@@ -732,6 +738,11 @@ export const openCaptureJournal = (
   const invalid = (event: string, detail: string) =>
     fail(new CaptureFailed({ kind: "invalid", event, detail }));
 
+  const failIfPending = () => {
+    const pending = pendingLosses.values().next().value;
+    if (pending !== undefined) fail(pending);
+  };
+
   const stored = (event: CaptureEvent) => {
     if (event.type !== "artifact") return event;
     if (event.bytes.byteLength > limits.objectBytes)
@@ -762,7 +773,7 @@ export const openCaptureJournal = (
       };
     } catch (error) {
       if (error instanceof CaptureFailed) throw error;
-      return fail(writeFailure("artifact", error));
+      return rejectWrite(writeFailure("artifact", error));
     }
   };
 
@@ -822,14 +833,9 @@ export const openCaptureJournal = (
         pendingLosses.delete(kept.callId);
     } catch (error) {
       const failure = writeFailure(type, error);
-      if (
-        "callId" in kept &&
-        (type.startsWith("model.") || type === "credential.registration")
-      ) {
-        pendingLosses.set(kept.callId, failure);
-        letGo();
-        throw failure;
-      }
+      if (!("callId" in kept)) return rejectWrite(failure);
+      if (type.startsWith("model.") || type === "credential.registration")
+        return rejectWrite(failure, kept.callId);
       fail(failure);
     }
   };
@@ -878,12 +884,10 @@ export const openCaptureJournal = (
     } catch (error) {
       // Another capture may have failed while the file streamed; its failure stands.
       admit("artifact");
-      return fail(
-        new CaptureFailed({
-          kind: error instanceof SpillRefused ? "invalid" : "io",
-          event: "artifact",
-          detail: `${file.name}: ${message(error)}`,
-        }),
+      const detail = `${file.name}: ${message(error)}`;
+      if (error instanceof SpillRefused) return invalid("artifact", detail);
+      return rejectWrite(
+        new CaptureFailed({ kind: "io", event: "artifact", detail }),
       );
     }
     admit("artifact");
@@ -899,8 +903,7 @@ export const openCaptureJournal = (
   const close = () => {
     if (state._tag === "Failed") throw state.failure;
     if (state._tag === "Closed") return;
-    const pending = pendingLosses.values().next().value;
-    if (pending !== undefined) fail(pending);
+    failIfPending();
     if (ingesting > 0)
       invalid(
         "journal.close",
@@ -936,8 +939,7 @@ export const openCaptureJournal = (
   ) => {
     admit("credential.inspection");
     try {
-      const pending = pendingLosses.values().next().value;
-      if (pending !== undefined) fail(pending);
+      failIfPending();
       if (!Number.isSafeInteger(count) || count < 1)
         return invalid(
           "credential.inspection",
@@ -969,6 +971,7 @@ export const openCaptureJournal = (
       for (const row of rows) await inspect(CredentialJson.serialize(row));
       // The session may have failed or closed while certificates were prepared and inspected.
       admit("credential.inspection");
+      failIfPending();
       if (seq !== expected)
         return invalid(
           "credential.inspection",

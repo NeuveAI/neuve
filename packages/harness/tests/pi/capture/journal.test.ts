@@ -2,6 +2,7 @@
 import { afterAll, expect, test } from "bun:test";
 import {
   appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -15,6 +16,7 @@ import { join } from "node:path";
 import { buildDump } from "../../../src/pi/capture/build.ts";
 import {
   JOURNAL_FILE,
+  OBJECTS_DIRECTORY,
   openCaptureJournal,
 } from "../../../src/pi/capture/journal.ts";
 import type { CaptureEvent } from "../../../src/pi/capture/types.ts";
@@ -123,6 +125,39 @@ test("a later append replaces the torn tail left by a failed model capture write
   expect(statSync(join(folder, JOURNAL_FILE)).size).toBe(seen.afterClose);
   expect((await gapsOf(folder)).map(([code]) => code)).toEqual([
     "journal-interrupted",
+  ]);
+});
+
+test("a lost artifact leaves a gap in the dump after journal writes recover", async () => {
+  const folder = join(directory, "lost-artifact");
+  const journal = openCaptureJournal(folder, "R");
+  journal.capture(START);
+  const objects = join(folder, OBJECTS_DIRECTORY);
+  chmodSync(objects, 0o500);
+  try {
+    expect(
+      thrown(() =>
+        journal.capture({
+          type: "artifact",
+          scope: { runId: "R" },
+          name: "notes.txt",
+          mediaType: "text/plain",
+          bytes: Buffer.from("lost artifact"),
+        }),
+      ),
+    ).toMatchObject({ kind: "io", event: "artifact" });
+  } finally {
+    chmodSync(objects, 0o700);
+  }
+  journal.capture(END);
+  expect(thrown(() => journal.close())).toMatchObject({
+    kind: "io",
+    event: "artifact",
+  });
+  const { run } = await buildDump({ journal: folder, runId: "R" });
+  expect(run.complete).toBe(false);
+  expect(run.gaps.map(({ code, count }) => [code, count])).toEqual([
+    ["journal-interrupted", 1],
   ]);
 });
 

@@ -10,6 +10,7 @@ import {
   isRetryableAssistantError,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import { storeLocationIn } from "@neuve/records-core";
 import { openRunLog } from "../../../src/run-log.ts";
 import { SOL_ROUTE } from "../../../src/route.ts";
@@ -81,6 +82,7 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
       const captureDirectory = join(directory, "capture");
       let sent = 0;
       const text = "x".repeat(4096);
+      const retry = { maxRetries: 1, baseDelayMs: 1_000 };
       const open = () => {
         const journal = openCaptureJournal(captureDirectory, runId, {
           limits,
@@ -100,7 +102,7 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
           });
         const models = createRouteModels({
           route: SOL_ROUTE,
-          retry: { maxRetries: 1, baseDelayMs: 1 },
+          retry,
           log,
           runId,
           sessionAffinity: runId,
@@ -120,7 +122,10 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
         return { journal, complete: () => models.complete(model, prompt) };
       };
       const first = open();
-      const results = [await first.complete(), await first.complete()];
+      const firstResult = await first.complete();
+      const started = performance.now();
+      const results = [firstResult, await first.complete()];
+      expect(performance.now() - started).toBeLessThan(retry.baseDelayMs);
       first.journal.close();
       const reopened = open();
       results.push(await reopened.complete());
@@ -276,6 +281,86 @@ test("a transient write refusal retries the same request and keeps its capture",
     expect(
       recorded.lines.filter(({ event }) => event.type === "model.end"),
     ).toHaveLength(1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a transient session bind write refusal leaves later calls captured whole", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "neuve-capture-bind-"));
+  try {
+    const runId = "capture-bind";
+    const conversationId = ROOT_CONVERSATION_ID;
+    const journal = openCaptureJournal(directory, runId);
+    journal.capture({
+      type: "run.start",
+      scope: { runId },
+      runKind: "coding",
+      sourceRevision: { status: "not-applicable", reason: "Scratch chat" },
+      route: SOL_ROUTE.provider,
+      pricing: "subscription",
+    });
+    const path = join(directory, JOURNAL_FILE);
+    await Bun.sleep(2 * IDLE_RELEASE_MS + 50);
+    chmodSync(path, 0o400);
+    try {
+      expect(() =>
+        journal.capture({
+          type: "session.bind",
+          scope: { runId, conversationId },
+        }),
+      ).toThrow(expect.objectContaining({ kind: "io", event: "session.bind" }));
+    } finally {
+      chmodSync(path, 0o600);
+    }
+
+    const models = createRouteModels({
+      capture: journal.capture,
+      credentialInspection: "ephemeral",
+      route: SOL_ROUTE,
+      retry: { maxRetries: 1, baseDelayMs: 1 },
+      runId,
+      conversationId,
+      sessionAffinity: runId,
+      auth: { tokenCommand: tokenCommand(directory, "lease").path },
+      fetch: Object.assign(async () => answer("Done."), { preconnect() {} }),
+    });
+    const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
+    if (!model) throw new Error("Expected coding route model");
+    for (const result of [
+      await models.complete(model, prompt),
+      await models.complete(model, prompt),
+    ]) {
+      expect(result.stopReason).toBe("stop");
+      expect(result.content).toContainEqual(
+        expect.objectContaining({ type: "text", text: "Done." }),
+      );
+    }
+    expect(readCaptureLosses(directory)).toEqual([]);
+    expect(() => journal.close()).toThrow(
+      expect.objectContaining({ kind: "io", event: "session.bind" }),
+    );
+
+    const recorded = readCaptureJournal(directory);
+    if (recorded._tag !== "Read") throw new Error("Expected journal");
+    const events = recorded.lines.map(({ event }) => event);
+    expect(events.map(({ type }) => type)).not.toContain("journal.close");
+    const requests = events.flatMap((event) =>
+      event.type === "model.request" ? [event.callId] : [],
+    );
+    expect(requests).toHaveLength(2);
+    expect(
+      events.flatMap((event) =>
+        event.type === "model.response" ? [event.callId] : [],
+      ),
+    ).toEqual(requests);
+    expect(
+      events.flatMap((event) =>
+        event.type === "model.end" && event.outcome === "completed"
+          ? [event.callId]
+          : [],
+      ),
+    ).toEqual(requests);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
