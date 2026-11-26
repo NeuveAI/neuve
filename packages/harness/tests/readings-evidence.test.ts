@@ -110,6 +110,7 @@ import {
 import { CODE_GAPS } from "../src/readings/decide.ts";
 import {
   READING_RECIPE,
+  READING_RECIPE_SCOPE_AND_TESTS,
   planReadings,
   removalAttribution,
   symbolRemovedOf,
@@ -3172,7 +3173,7 @@ const PARENT = {
 };
 
 // Reason: stored answers must be shared exactly when the question is the same.
-test("step keys are equal for equal evidence across runs and differ for different evidence; with the setting absent nothing keys apart from the parent commit", async () => {
+test("step keys are equal for equal evidence; the new execution identity differs from historical runs", async () => {
   const slices = slicesOf(await indexOf());
   // Two runs that decided apart (another run, another stored read of the same commit) and show the
   // same rows: one stored answer.
@@ -3203,15 +3204,14 @@ test("step keys are equal for equal evidence across runs and differ for differen
   expect(none.assess).not.toBe(one.assess);
   expect(none.claim).not.toBe(one.claim);
 
-  // The parent commit's keys, on the mixed range: the run key without the setting is the same; a
-  // claim check shown no evidence keys as before; Assess and Lane review moved once with this
-  // round's recipe and prompt versions.
+  // New ownership changes the run key, not the source-only claim check below. Legacy step
+  // identities remain independently pinned; no old review is relabelled as the current pipeline.
   expect(
     runKeyFor(
       { baseRef: "main", baseOid: "1".repeat(40), headOid: "2".repeat(40) },
       defaultConfig(),
     ),
-  ).toBe(PARENT.runKeyOff);
+  ).not.toBe(PARENT.runKeyOff);
   const range = mixedRange();
   const mixed = planReadings({
     hunks: range.hunks,
@@ -4591,7 +4591,8 @@ test("the old switch is ignored: set or not, the readings block and the run key 
   expect(absent).toEqual({
     mode: "probe",
     bounds: { ...DEFAULT_READING_BOUNDS },
-    recipe: READING_RECIPE,
+    recipe: READING_RECIPE_SCOPE_AND_TESTS,
+    scopeAndTests: true,
   });
   expect(JSON.stringify(readingsConfig(Option.none()))).toBe(
     JSON.stringify(absent),
@@ -4614,13 +4615,13 @@ test("the old switch is ignored: set or not, the readings block and the run key 
     { ...absent!, callsLiftGap: true },
   );
   expect(PipelineConfig.parse(frozen).readings?.callsLiftGap).toBe(true);
-  // With the readings off it freezes nothing, and the run keeps the key it had.
-  expect(
-    readingsConfig(
-      settingsOf({ sectionReadings: "off", sectionReadingsCallsLiftGap: true }),
-    ),
-  ).toBeUndefined();
-  expect(keyWith(undefined)).toBe(PARENT.runKeyOff);
+  // The legacy off setting cannot bypass the sole comprehensive reviewer in a new request.
+  const legacyOff = readingsConfig(
+    settingsOf({ sectionReadings: "off", sectionReadingsCallsLiftGap: true }),
+  );
+  expect(legacyOff).toEqual(absent);
+  expect(keyWith(legacyOff)).toBe(keyWith(absent));
+  expect(keyWith(absent)).not.toBe(PARENT.runKeyOff);
   // Beside scope and tests, only scope and tests is frozen.
   const scoped = readingsConfig(
     settingsOf({

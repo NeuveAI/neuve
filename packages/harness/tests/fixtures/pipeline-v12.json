@@ -1,0 +1,107 @@
+{
+  "sourceRevision": "dd21803bbd3a930f1a677ebe0166c4dbc1695383",
+  "sourcePath": "packages/harness/src/config.ts",
+  "range": {
+    "baseRef": "main",
+    "baseOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "headOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "opVersion": 12,
+  "config": {
+    "route": {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "window": 1000000,
+      "maxOutputTokens": 128000,
+      "credentialVariable": "ANTHROPIC_API_KEY",
+      "account": {
+        "name": "anthropic",
+        "kind": "anthropic-api-key"
+      },
+      "price": {
+        "input": 4,
+        "output": 20,
+        "cacheWrite5m": 1.25,
+        "cacheWrite1h": 2,
+        "cacheRead": 0.05
+      }
+    },
+    "budgets": {
+      "turnLimits": {
+        "frame": 1,
+        "map": 1,
+        "find": 11,
+        "verify": 1
+      },
+      "callsInFlight": 8,
+      "contextCeiling": 500000,
+      "toolResultTokens": 3000,
+      "lifetimeMs": 600000,
+      "cutoffMs": 550000
+    },
+    "precompute": {
+      "retriever": {
+        "id": "bm25",
+        "recipe": "bm25-path-body-identifier-parts-v1"
+      },
+      "allowanceShare": 0.5,
+      "allowanceFloor": 4000,
+      "window": 1000000
+    }
+  },
+  "spec": {
+    "op": "review.run",
+    "opVersion": 12,
+    "inputs": {
+      "baseOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "config": {
+      "budgets": {
+        "turnLimits": {
+          "frame": 1,
+          "map": 1,
+          "find": 11,
+          "verify": 1
+        },
+        "callsInFlight": 8,
+        "contextCeiling": 500000,
+        "toolResultTokens": 3000,
+        "lifetimeMs": 600000,
+        "cutoffMs": 550000
+      },
+      "stub": null,
+      "route": {
+        "provider": "anthropic",
+        "model": "claude-opus-5-5",
+        "effort": "medium",
+        "window": 1000000,
+        "maxOutputTokens": 128000,
+        "credentialVariable": "ANTHROPIC_API_KEY",
+        "price": {
+          "input": 4,
+          "output": 20,
+          "cacheWrite5m": 1.25,
+          "cacheWrite1h": 2,
+          "cacheRead": 0.05
+        }
+      },
+      "precompute": {
+        "retriever": {
+          "id": "bm25",
+          "recipe": "bm25-path-body-identifier-parts-v1"
+        },
+        "allowanceShare": 0.5,
+        "allowanceFloor": 4000,
+        "window": 1000000
+      }
+    },
+    "route": {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "reasoning": "medium"
+    }
+  },
+  "runKey": "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c"
+}

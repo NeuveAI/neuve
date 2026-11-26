@@ -66,7 +66,7 @@ afterEach(async () => {
 const READINGS_ON = Option.some(
   Settings.parse({ version: 1, review: { sectionReadings: "probe" } }),
 );
-/** Readings are on by default; `review.sectionReadings: "off"` is the one way to turn them off. */
+/** Legacy off settings remain parseable but no longer disable current preparation. */
 const READINGS_OFF = Option.some(
   Settings.parse({ version: 1, review: { sectionReadings: "off" } }),
 );
@@ -178,20 +178,21 @@ const relationLines = (lines: readonly string[]) =>
 
 const NOT_STORED_GAP = { gap: "over-bound", tag: NOT_STORED } as const;
 
-// Why: with the readings setting off, commit preparation must read and store nothing new, and log
-// nothing new: the same rule a review's request freezes readings by decides it. Readings are on by
-// default, so only `review.sectionReadings: "off"` turns the step off.
-test("with readings off the step does nothing: no engine, no clone, nothing stored, no log line", async () => {
+// New comprehensive reviews require caller preparation even when an older settings file says off.
+test("legacy readings-off settings still prepare and retain current committed relations", async () => {
   const s = setup();
   const { value, lines } = await s.step(s.first, { settings: READINGS_OFF });
-  expect(value).toEqual({ readings: false });
-  expect(relationLines(lines)).toEqual([]);
-  expect(s.engine.spawns()).toEqual([]);
-  expect(existsSync(s.graphDirectory)).toBe(false);
-  expect(await s.stored(s.first, s.first)).toEqual({
-    base: NOT_STORED_GAP,
-    head: NOT_STORED_GAP,
+  expect(value).toMatchObject({
+    readings: true,
+    commit: { commit: s.first, outcome: "read" },
   });
+  expect(relationLines(lines)).toHaveLength(1);
+  expect(s.engine.spawns()).toEqual([s.first]);
+  expect(existsSync(s.graphDirectory)).toBe(true);
+  const stored = await s.stored(s.first, s.first);
+  expect(isRelationsGap(stored.base) || isRelationsGap(stored.head)).toBe(
+    false,
+  );
 }, 120_000);
 
 // Why: a review of a branch reads its head and its merge base with the default branch; both are
@@ -379,8 +380,8 @@ test("a newer commit recorded during the commit's read stops the merge-base read
   );
 }, 120_000);
 
-// Why: with readings off, the step leaves no trace, its span included; with them on, one span.
-test("the step's span is emitted only when the step runs", async () => {
+// Legacy switch values do not suppress the required preparation or its attributable telemetry.
+test("required preparation emits its span for legacy-off, explicit-on and default settings", async () => {
   const s = setup("trunk");
   const spans = async (settings: Option.Option<Settings>) => {
     const records: RunLogRecord[] = [];
@@ -405,7 +406,7 @@ test("the step's span is emitted only when the step runs", async () => {
       .filter((record) => record.type === "span")
       .map((record) => record["name"]);
   };
-  expect(await spans(READINGS_OFF)).toEqual([]);
+  expect(await spans(READINGS_OFF)).toContain("harness.commit.relations");
   expect(await spans(READINGS_ON)).toContain("harness.commit.relations");
   // No setting at all is the default, and the default has readings on: the step runs.
   expect(await spans(Option.none())).toContain("harness.commit.relations");

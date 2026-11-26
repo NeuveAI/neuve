@@ -1,10 +1,7 @@
-// Why: responsibility sections (10.109) are one switch, `review.responsibilitySections`, on by
-// default; the readings' off switch (`review.sectionReadings: "off"`) gives the review before the
-// readings, where it was off unless true. Off, a review must have exactly the configuration, run
-// key, stage keys and published units it had before the switch existed; on, a run must never share a key with one without, and the fill must
-// cut units at the file's own functions while each changed line keeps exactly the owner the review
-// rules give it; and a Graph that cannot be read, or a structure read that fails, must leave the
-// review to complete with one section per hunk and the gap counted. Each test states its reason.
+import pipelineV12 from "./fixtures/pipeline-v12.json";
+// Current public admission always requires responsibility sections and comprehensive readings.
+// Historical frozen input remains readable by the retained fill helpers; those helpers are tested
+// separately from new admission, without relabelling historical configuration as current execution.
 import { afterAll, expect, test } from "bun:test";
 import {
   existsSync,
@@ -66,7 +63,7 @@ import { prepareReviewConfig, readingsConfig } from "../src/request.ts";
 import { ReviewMap } from "../src/review-map.ts";
 import { openRunLog, type RunLogRecord } from "../src/run-log.ts";
 import { DEFAULT_READING_BOUNDS } from "../src/reading-groups.ts";
-import { READING_RECIPE } from "../src/readings/plan.ts";
+import { READING_RECIPE_SCOPE_AND_TESTS } from "../src/readings/plan.ts";
 import { BLOB_STRUCTURE_RECIPE, SECTIONS_RECIPE } from "../src/sections.ts";
 import { frame, mapOf } from "./fixtures/link.ts";
 
@@ -136,25 +133,18 @@ process.stdout.write(JSON.stringify(config));
   return PipelineConfig.parse(JSON.parse(child.stdout.toString()));
 };
 
-test("with the readings' off switch and the setting absent or off, the configuration has no sections block, so nothing of the switch enters the run key", () => {
-  // Reason: the switch-off guarantee at the key level. Proved as a property, with no key constant:
-  // a key computed on one commit does not survive other lanes' changes to the configuration. Off,
-  // the configuration has no `sections` property at all (an own key holding `undefined` would pass
-  // `toEqual`, so it is checked apart), is the default one, and what the run key hashes holds no
-  // `sections` key anywhere. The off switch keeps the readings out, so the whole configuration is
-  // the default one; `responsibilitySections: false` without it is in the freeze table below.
+// Public admission always freezes sections and comprehensive readings, including legacy false/off
+// settings and explicit undefined overrides. Historical JSON is tested separately below.
+test("legacy off settings and undefined overrides cannot disable new owned sections", () => {
   const base = defaultConfig();
-  expect(Object.hasOwn(base, "sections")).toBe(false);
-  expect(keysDeep(runSpec(range, base))).not.toContain("sections");
-  const offs = [
-    ...[
-      { version: 1, review: { sectionReadings: "off" } },
-      {
-        version: 1,
-        review: { sectionReadings: "off", responsibilitySections: false },
-      },
-    ].map((settings) => prepared(settings)),
-    // An explicit option overrides the settings, as the stack tools' does.
+  expect(Object.hasOwn(base, "sections")).toBe(true);
+  expect(keysDeep(runSpec(range, base))).toContain("sections");
+  for (const config of [
+    prepared({ version: 1, review: { sectionReadings: "off" } }),
+    prepared({
+      version: 1,
+      review: { sectionReadings: "off", responsibilitySections: false },
+    }),
     prepared(
       {
         version: 1,
@@ -162,11 +152,10 @@ test("with the readings' off switch and the setting absent or off, the configura
       },
       { sections: undefined },
     ),
-  ];
-  for (const config of offs) {
-    expect(Object.hasOwn(config, "sections")).toBe(false);
+  ]) {
     expect(config).toEqual(base);
-    expect(keysDeep(runSpec(range, config))).not.toContain("sections");
+    expect(config.readings?.scopeAndTests).toBe(true);
+    expect(Object.hasOwn(config, "sections")).toBe(true);
     expect(runKeyFor(range, config)).toBe(runKeyFor(range, base));
   }
 });
@@ -189,7 +178,7 @@ test("with the setting on, the block holds the recipes, parses, and the run key 
   // The block is what the run key hashes, so the check above would see a leak.
   expect(keysDeep(runSpec(range, config))).toContain("sections");
   const on = runKeyFor(range, config);
-  expect(on).not.toBe(runKeyFor(range, defaultConfig()));
+  expect(on).toBe(runKeyFor(range, defaultConfig()));
   expect(
     runKeyFor(range, {
       ...config,
@@ -214,75 +203,37 @@ test("with the setting on, the block holds the recipes, parses, and the run key 
   ).toBe(on);
 });
 
-/**
- * The run keys over `range` measured on the integration commit before the default flip
- * (`b1081149`): with no setting, and with `responsibilitySections: true`. The off switch must give
- * these byte for byte.
- */
-// Re-pinned (round 25): both moved with the pipeline version, 11 to 12, and nothing else.
-const BEFORE_FLIP_KEY =
-  "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c";
-const BEFORE_FLIP_SECTIONS_KEY =
-  "808a7d376028db0de6bb41c9c12400c9e55748345dd7c750186abd894bad7d85";
-
-test("the freeze table: no setting is the redesigned review, the off switch is the review before it byte for byte, and no setting is half on", () => {
-  // Reason: the default flip (NEU-148). With no setting a review freezes both the sections and the
-  // readings blocks; `"probe"` is the same run; `responsibilitySections: false` keeps only the
-  // readings; `sectionReadings: "off"` freezes exactly what the integration commit before the flip
-  // froze with no setting, and with `responsibilitySections: true` exactly what it froze with that.
-  // The configurations come from real settings files through `prepareReviewConfig`.
-  const sections = sectionsConfig(true)!;
-  const readings = readingsConfig(Option.none())!;
-  expect(readings).toEqual({
-    mode: "probe",
-    bounds: { ...DEFAULT_READING_BOUNDS },
-    recipe: READING_RECIPE,
-  });
-  const redesigned = { ...defaultConfig(), sections, readings };
-  const table: ReadonlyArray<{
-    readonly settings: unknown;
-    readonly frozen: PipelineConfig;
-  }> = [
-    { settings: undefined, frozen: redesigned },
-    { settings: { version: 1 }, frozen: redesigned },
-    { settings: { version: 1, review: {} }, frozen: redesigned },
+test("the current freeze table is always comprehensive while historical block absence parses unchanged", () => {
+  const current = defaultConfig();
+  const settings = [
+    undefined,
+    { version: 1 },
+    { version: 1, review: {} },
+    { version: 1, review: { sectionReadings: "probe" } },
+    { version: 1, review: { responsibilitySections: false } },
+    { version: 1, review: { sectionReadings: "off" } },
     {
-      settings: { version: 1, review: { sectionReadings: "probe" } },
-      frozen: redesigned,
-    },
-    {
-      settings: { version: 1, review: { responsibilitySections: false } },
-      frozen: { ...defaultConfig(), readings },
-    },
-    {
-      settings: { version: 1, review: { sectionReadings: "off" } },
-      frozen: defaultConfig(),
-    },
-    {
-      settings: {
-        version: 1,
-        review: { sectionReadings: "off", responsibilitySections: true },
-      },
-      frozen: { ...defaultConfig(), sections },
+      version: 1,
+      review: { sectionReadings: "off", responsibilitySections: true },
     },
   ];
-  const keys = table.map(({ settings, frozen }) => {
-    const config = prepared(settings);
-    // `toEqual` passes an own key holding `undefined`, so each absent block is checked apart.
-    expect(config).toEqual(frozen);
-    for (const block of ["sections", "readings"] as const)
-      expect(Object.hasOwn(config, block)).toBe(Object.hasOwn(frozen, block));
-    return runKeyFor(range, config);
+  expect(readingsConfig(Option.none())).toEqual({
+    mode: "probe",
+    bounds: { ...DEFAULT_READING_BOUNDS },
+    recipe: READING_RECIPE_SCOPE_AND_TESTS,
+    scopeAndTests: true,
   });
-  const [none, version, empty, probe, sectionsOff, off, offWithSections] = keys;
-  // No setting, an empty review block and `"probe"` are one run.
-  expect(new Set([none, version, empty, probe]).size).toBe(1);
-  // The off switch is the review before the flip, byte for byte.
-  expect(off).toBe(BEFORE_FLIP_KEY);
-  expect(off).toBe(runKeyFor(range, defaultConfig()));
-  expect(offWithSections).toBe(BEFORE_FLIP_SECTIONS_KEY);
-  // Every row that differs in a block has its own key.
-  expect(new Set([none, sectionsOff, off, offWithSections]).size).toBe(4);
+  for (const settingsFile of settings) {
+    const frozen = prepared(settingsFile);
+    expect(frozen).toEqual(current);
+    expect(frozen.sections).toEqual(sectionsConfig(true));
+    expect(frozen.readings?.scopeAndTests).toBe(true);
+    expect(runKeyFor(range, frozen)).toBe(runKeyFor(range, current));
+  }
+  const historical = PipelineConfig.parse(pipelineV12.config);
+  expect(canonicalJson(historical)).toBe(canonicalJson(pipelineV12.config));
+  expect(Object.hasOwn(historical, "sections")).toBe(false);
+  expect(Object.hasOwn(historical, "readings")).toBe(false);
 });
 
 const layerOf = (location: ReturnType<typeof storeLocationIn>) =>
@@ -440,7 +391,7 @@ const markdownRepository = (name: string) => {
   return { repository, range: { baseOid, headOid } };
 };
 
-test("with the block absent, fill reads no structure and stores exactly the batches built with no structures", async () => {
+test("the historical block-absent fill reader keeps its stored material without reading structures", async () => {
   // Reason: off must cost nothing and change nothing. Proved as a property, with no key constant:
   // a key computed on one commit does not survive other lanes' changes to what the fill stores.
   // First no structure read (no span, no gap), so a leak of the read fails here on any branch.
@@ -475,7 +426,7 @@ test("with the block absent, fill reads no structure and stores exactly the batc
   const { value, spans } = await runStore("off", (location) =>
     Effect.gen(function* () {
       const { ctx, inputs, map, filled } = yield* inputsIn(
-        defaultConfig(),
+        PipelineConfig.parse(pipelineV12.config),
         records,
       )(location);
       const stored = yield* Effect.forEach(filled.groups, (group) =>
@@ -542,7 +493,9 @@ test("with the block absent, fill reads no structure and stores exactly the batc
       ),
     ).then((run) => run.value);
   expect(value.key).toBeDefined();
-  expect(await keyIn("off-again", defaultConfig())).toBe(value.key);
+  expect(
+    await keyIn("off-again", PipelineConfig.parse(pipelineV12.config)),
+  ).toBe(value.key);
   expect(
     await keyIn(
       "off-on",
@@ -717,7 +670,7 @@ test.skipIf(graph.skip)(
         const off = yield* contextOf(
           location,
           repository,
-          defaultConfig(),
+          PipelineConfig.parse(pipelineV12.config),
           [],
           range,
         );

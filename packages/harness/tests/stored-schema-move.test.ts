@@ -13,7 +13,14 @@ import {
 import { FindSubmission, FindStored } from "../src/find.ts";
 import { VerifySubmission, VerifyStored } from "../src/verify.ts";
 import { LinkedReview } from "../src/disposition.ts";
-import { PIPELINE_VERSION, defaultConfig, runKeyFor } from "../src/config.ts";
+import pipelineV12 from "./fixtures/pipeline-v12.json";
+import {
+  PIPELINE_VERSION,
+  PipelineConfig,
+  defaultConfig,
+  runSpec,
+  runKeyFor,
+} from "../src/config.ts";
 import { agentStageSpec } from "../src/pipeline.ts";
 import { PUBLISH_VERSION } from "../src/publish.ts";
 import { OPUS_ROUTE, SOL_ROUTE } from "../src/route.ts";
@@ -69,7 +76,8 @@ const EXPECTED = {
     FRAME_PROMPT_VERSION: 2,
     MAP_PROMPT_VERSION: 2,
     PUBLISH_VERSION: 7,
-    PIPELINE_VERSION: 12,
+    // The ownership execution contract changes; stored answer/packet schemas above do not.
+    PIPELINE_VERSION: 13,
   },
 };
 if (process.env["PRINT_FINGERPRINTS"] === "1")
@@ -92,7 +100,7 @@ test("new runs have distinct keys while agent keys bind retry policy and reuse a
     headOid: "b".repeat(40),
   };
   const config = defaultConfig(undefined, OPUS_ROUTE);
-  expect(PIPELINE_VERSION).toBe(12);
+  expect(PIPELINE_VERSION).toBe(13);
   expect(runKeyFor(range, config)).not.toBe(
     runKeyFor(range, defaultConfig(undefined, SOL_ROUTE)),
   );
@@ -118,5 +126,26 @@ test("new runs have distinct keys while agent keys bind retry policy and reuse a
         cutoffMs: 1_150_000,
       },
     }),
+  );
+});
+
+// Captured once from the exact pre-change config.ts, never rebuilt from current defaults in tests.
+test("historical pipeline 12 frozen configuration parses and hashes unchanged, without becoming executable pipeline 13", () => {
+  const parsed = PipelineConfig.parse(pipelineV12.config);
+  expect(canonicalJson(parsed)).toBe(canonicalJson(pipelineV12.config));
+  expect(parsed).not.toHaveProperty("ownership");
+  expect(parsed).not.toHaveProperty("readings");
+  expect(parsed).not.toHaveProperty("sections");
+  expect(pipelineV12.opVersion).toBe(12);
+  expect(Computations.computationKey(pipelineV12.spec).key).toBe(
+    pipelineV12.runKey,
+  );
+  // Inspect old input material only. Current run admission intentionally uses a distinct version.
+  expect({
+    ...runSpec(pipelineV12.range, parsed),
+    opVersion: pipelineV12.opVersion,
+  }).toEqual(pipelineV12.spec);
+  expect(runKeyFor(pipelineV12.range, defaultConfig())).not.toBe(
+    pipelineV12.runKey,
   );
 });

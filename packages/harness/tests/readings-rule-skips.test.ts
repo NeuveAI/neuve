@@ -201,7 +201,7 @@ test("without the setting the readings block is the base's; with it the block ca
   const on = block({ sectionReadingsRuleSkips: true });
   expect(on).toEqual({ ...AT_BASE.config, ruleSkips: true });
   expect(PipelineConfig.shape.readings.parse(on)).toEqual(on);
-  // The setting turns no readings on: with the readings' off switch it freezes no block.
+  // Legacy off settings cannot disable new comprehensive review; rule skips remain explicit.
   expect(
     readingsConfig(
       Option.some(
@@ -211,7 +211,7 @@ test("without the setting the readings block is the base's; with it the block ca
         }),
       ),
     ),
-  ).toBeUndefined();
+  ).toMatchObject({ scopeAndTests: true, ruleSkips: true });
 });
 
 test("rule skips ride on whatever block a readings mode builds, never on a mode check", () => {

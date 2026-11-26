@@ -466,7 +466,7 @@ const BASE_RUN_KEY =
   "eb644e039b6bd267141e4fac4fd924486e3867fc70fdc0a37ce2a046631c5419";
 
 // Reason: nothing else moves.
-test("sections that remove nothing keep their text and key, groups without a removing section are byte for byte the parent's, and with readings absent nothing moves", () => {
+test("sections that remove nothing keep their text and key, groups without a removing section are byte for byte the parent's, and the current ownership run does not reuse a historical run key", () => {
   const range = watchRange();
   const { hunks, planned, plan } = plansOf(range, range.texts, {
     maxFiles: 1,
@@ -567,19 +567,19 @@ test("sections that remove nothing keep their text and key, groups without a rem
       ),
     ),
   ).toBe(JSON.stringify(mixedPlan));
-  // With the readings' off switch, nothing of the readings is frozen into the run, and its key is
-  // the one before the probe existed.
+  // Legacy off settings no longer remove required current readings. Historical source-only
+  // pairing identities above stay pinned; the execution identity deliberately changes.
   expect(
     readingsConfig(
       Option.some({ version: 1, review: { sectionReadings: "off" } }),
     ),
-  ).toBeUndefined();
+  ).toEqual(readingsConfig(Option.none()));
   expect(
     runKeyFor(
       { baseRef: "main", baseOid: "1".repeat(40), headOid: "2".repeat(40) },
       defaultConfig(),
     ),
-  ).toBe(BASE_RUN_KEY);
+  ).not.toBe(BASE_RUN_KEY);
 });
 
 // ---------------------------------------------------------------------------------------------

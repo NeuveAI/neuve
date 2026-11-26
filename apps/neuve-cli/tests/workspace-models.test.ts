@@ -102,7 +102,7 @@ test("the actual pinned built-in catalog retains native providers and OpenAI mod
 });
 
 // Why: A review route can list OpenAI as its provider while running on a ChatGPT account.
-test("direct routes list their accounts and keep their coding defaults and run keys; Claude adds no row", () => {
+test("direct routes list accounts and keep coding defaults and equivalent current review identity; Claude adds no row", () => {
   const route = (name?: "anthropic" | "openai" | "claude") =>
     settingsRoute(
       name === undefined
@@ -114,24 +114,14 @@ test("direct routes list their accounts and keep their coding defaults and run k
     baseOid: "a".repeat(40),
     headOid: "b".repeat(40),
   };
-  // The keys main gives these routes (route-accounts.test.ts pins the same).
-  for (const [name, provider, model, account, key] of [
-    [
-      undefined,
-      "anthropic",
-      "claude-opus-5-5",
-      "anthropic",
-      "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c",
-    ],
-    [
-      "openai",
-      "openai",
-      "gpt-6.1-sol",
-      "chatgpt",
-      "c27221fd3a490479b60e0a89bb6bd544f5ee23a30db748cbe28f0eb4f16d813e",
-    ],
+  // Implied default credentials and explicit account metadata name the same current review.
+  for (const [name, provider, model, account] of [
+    [undefined, "anthropic", "claude-opus-5-5", "anthropic"],
+    ["openai", "openai", "gpt-6.1-sol", "chatgpt"],
   ] as const) {
     const direct = route(name);
+    if (direct.provider === "claude")
+      throw new Error("A direct route fixture must not select Claude");
     expect(routeCodingDefaults(direct)).toEqual({
       model: { provider, modelId: model },
       thinkingLevel: "medium",
@@ -139,7 +129,10 @@ test("direct routes list their accounts and keep their coding defaults and run k
     expect(routeHostModels(direct, () => ["low", "high"])).toEqual([
       { provider, modelId: model, account, efforts: ["low", "high"] },
     ]);
-    expect(runKeyFor(range, defaultConfig(undefined, direct))).toBe(key);
+    const { account: _account, ...implied } = direct;
+    expect(runKeyFor(range, defaultConfig(undefined, direct))).toBe(
+      runKeyFor(range, defaultConfig(undefined, implied)),
+    );
   }
   const claude = route("claude");
   expect(routeCodingDefaults(claude)).toEqual({ thinkingLevel: "medium" });

@@ -113,7 +113,7 @@ const stageKeys = (
  */
 const GOLDEN = {
   anthropic: {
-    // Re-pinned (round 25): the pipeline version moved from 11 to 12; no stage key moved.
+    // Pipeline 12 run identity is historical; unchanged step keys remain reusable.
     run: "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c",
     frame: "a4ed3130b681459cf3b8af39281ba57e70e24b2f0e37185ed01308161d421a76",
     map: "568c94787aecd205f69e4857b1a505f5ecce3a68d22b2c4a77cecada846bd581",
@@ -136,21 +136,30 @@ const settings = (review?: unknown) =>
   );
 
 // Reason: nothing else pins a key's value, and a silent change rebuilds every stored stage.
-test("a review with nothing set keeps the run key and every stage key it had", () => {
-  expect(stageKeys(OPUS_ROUTE)).toEqual(GOLDEN.anthropic);
-  expect(stageKeys(SOL_ROUTE)).toEqual(GOLDEN.openai);
-  expect(stageKeys(settingsRoute(Option.none()))).toEqual(GOLDEN.anthropic);
+test("the new ownership pipeline changes run identity but preserves unchanged effort-bound step keys", () => {
+  for (const [route, previous] of [
+    [OPUS_ROUTE, GOLDEN.anthropic],
+    [SOL_ROUTE, GOLDEN.openai],
+  ] as const) {
+    const current = stageKeys(route);
+    expect(current.run).not.toBe(previous.run);
+    expect({ ...current, run: previous.run }).toEqual(previous);
+  }
+  expect(stageKeys(settingsRoute(Option.none()))).toEqual(
+    stageKeys(OPUS_ROUTE),
+  );
   expect(stageKeys(settingsRoute(settings({ route: "openai" })))).toEqual(
-    GOLDEN.openai,
+    stageKeys(SOL_ROUTE),
   );
 });
 
 // Reason: only what runs differently may key differently.
 test("a step at another effort moves its own key and no other step's", () => {
-  for (const [route, golden] of [
+  for (const [route, previous] of [
     [OPUS_ROUTE, GOLDEN.anthropic],
     [SOL_ROUTE, GOLDEN.openai],
   ] as const) {
+    const golden = { ...previous, run: stageKeys(route).run };
     const name = route.provider;
     // From the route's per-kind efforts.
     const fromMap = stageKeys(
@@ -195,7 +204,7 @@ test("an absent or empty map freezes the route as before; a set map changes the 
   );
   expect(
     runKeyFor(range, defaultConfig(undefined, settingsRoute(settings({})))),
-  ).toBe(GOLDEN.anthropic.run);
+  ).toBe(stageKeys(OPUS_ROUTE).run);
 
   const high = settingsRoute(settings({ stepEffort: { assess: "high" } }));
   const low = settingsRoute(settings({ stepEffort: { assess: "low" } }));

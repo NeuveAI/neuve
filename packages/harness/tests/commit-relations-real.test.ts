@@ -235,11 +235,9 @@ test.skipIf(graphPrerequisite.skip)(
   300_000,
 );
 
-// Why: with readings off, commit preparation reads and stores nothing new, and its output is what
-// it was before the step existed: the hunks line and nothing about relations. Readings are on by
-// default, so only `review.sectionReadings: "off"` turns the step off.
+// A legacy off settings file must not leave current comprehensive reviewers without caller context.
 test.skipIf(graphPrerequisite.skip)(
-  "with readings off the preparation child reads nothing, makes no clone and logs as before",
+  "legacy readings-off settings still prepare both committed sides through the public preparation child",
   async () => {
     graphPrerequisite.require();
     const s = fixture();
@@ -250,12 +248,12 @@ test.skipIf(graphPrerequisite.skip)(
     expect(output).toContain(
       `commit.prepare ${s.head.slice(0, 12)}: 1 hunk(s)`,
     );
-    expect(output).not.toContain("relations");
-    expect(await s.attempts()).toBe(0);
+    expect(output).toContain(`commit.prepare relations ${s.head.slice(0, 12)}`);
+    expect(await s.attempts()).toBe(2);
     const location = await Effect.runPromise(
       resolveStoreLocation(s.repository),
     );
-    expect(existsSync(relationsGraphDirectory(location))).toBe(false);
+    expect(existsSync(relationsGraphDirectory(location))).toBe(true);
   },
   300_000,
 );

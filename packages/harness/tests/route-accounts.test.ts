@@ -21,22 +21,15 @@ const range = {
   headOid: "b".repeat(40),
 };
 
-// Why: adding default account metadata must still join runs completed before this change.
-// The keys main's build gives these default routes, without accounts (step-effort.test.ts pins the
-// same), as of the merge of main 8b036a7f.
-test.each([
-  [
-    OPUS_ROUTE,
-    "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c",
-  ],
-  [
-    SOL_ROUTE,
-    "c27221fd3a490479b60e0a89bb6bd544f5ee23a30db748cbe28f0eb4f16d813e",
-  ],
-] as const)(
-  "the default $provider route keeps its base run key",
-  (route, key) => {
-    expect(runKeyFor(range, defaultConfig(undefined, route))).toBe(key);
+// Default account metadata must not split equivalent current-version work. Pipeline 13 is
+// intentionally a different review from pipeline 12; account identity is not a pipeline migration.
+test.each([OPUS_ROUTE, SOL_ROUTE])(
+  "the default $provider account shares the current key with its implied legacy credential",
+  (route) => {
+    const { account: _account, ...implied } = route;
+    expect(runKeyFor(range, defaultConfig(undefined, route))).toBe(
+      runKeyFor(range, defaultConfig(undefined, implied)),
+    );
   },
 );
 

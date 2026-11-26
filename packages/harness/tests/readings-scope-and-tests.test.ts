@@ -1,8 +1,7 @@
-// Why (NEU-148 WP6, round 11): the content study found that the readings miss a change the goal
-// never asked for, and a behaviour change no test exercises, because neither reading is asked (22 of
-// 24 misses on the high passes). Both questions are built behind one setting, off by default
-// (`review.sectionReadingsScopeAndTests`): Lane review is asked whether a section's change was asked
-// for, and Assess which shown test rows exercise each requirement (`testedBy`). By the owner's ruling
+import pipelineV12 from "./fixtures/pipeline-v12.json";
+// Scope and tests are required in current comprehensive review. Historical reading/answer
+// contracts stay readable below without making old off settings executable current admission.
+// Lane review checks scope fit and Assess receives test hints. By the owner's ruling
 // of 13 November a recognised test is a hint, never evidence: no code reads `testedBy` to decide. Each
 // test names the result it pins and why.
 import { afterAll, expect, test } from "bun:test";
@@ -20,6 +19,7 @@ import { Context, Effect, Exit, Layer, Option, Scope } from "effect";
 import {
   Blobs,
   Computations,
+  canonicalJson,
   Store,
   mintUlid,
   storeLocationIn,
@@ -219,92 +219,37 @@ const RANGE = {
 // ---------------------------------------------------------------------------------------------
 
 // Reason: it is measured before any default moves.
-test("with the setting off or absent, the frozen block, the run key, the plan's key, every reading text, step key and answer form are the parent's", () => {
-  // The frozen block and the run key: absent and false freeze the parent's block, byte for byte.
-  const absent = readingsConfig(settingsOf({ sectionReadings: "probe" }));
-  const off = readingsConfig(
-    settingsOf({
-      sectionReadings: "probe",
-      sectionReadingsScopeAndTests: false,
-    }),
-  );
-  expect(absent).toEqual(PARENT_BLOCK);
-  expect(JSON.stringify(off)).toBe(JSON.stringify(PARENT_BLOCK));
-  const parentKey = runKeyFor(
-    RANGE,
-    defaultConfig(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      PARENT_BLOCK,
-    ),
-  );
-  for (const block of [absent, off])
-    expect(
-      runKeyFor(
-        RANGE,
-        defaultConfig(
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          block,
-        ),
-      ),
-    ).toBe(parentKey);
-  // Read only when the readings are on: with their off switch, the setting freezes nothing.
-  expect(
-    readingsConfig(
-      settingsOf({
-        sectionReadings: "off",
-        sectionReadingsScopeAndTests: true,
-      }),
-    ),
-  ).toBeUndefined();
-  // On: its own recipe and field, so the run keys apart.
-  const on = readingsConfig(
-    settingsOf({
-      sectionReadings: "probe",
-      sectionReadingsScopeAndTests: true,
-    }),
-  )!;
-  expect(on).toEqual({
+test("new settings always include scope/tests while historical rendering and step schemas remain readable", () => {
+  // Current public settings cannot remove scope/tests, including old false/off switches.
+  const current = {
     ...PARENT_BLOCK,
     recipe: READING_RECIPE_SCOPE_AND_TESTS,
-    scopeAndTests: true,
-  });
-  expect(
-    PipelineConfig.parse(
-      defaultConfig(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        on,
-      ),
-    ).readings,
-  ).toEqual(on);
-  expect(
-    runKeyFor(
-      RANGE,
-      defaultConfig(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        on,
-      ),
-    ),
-  ).not.toBe(parentKey);
+    scopeAndTests: true as const,
+  };
+  for (const review of [
+    { sectionReadings: "probe" as const },
+    { sectionReadings: "probe" as const, sectionReadingsScopeAndTests: false },
+    { sectionReadings: "off" as const, sectionReadingsScopeAndTests: true },
+    { sectionReadings: "probe" as const, sectionReadingsScopeAndTests: true },
+  ]) {
+    const block = readingsConfig(settingsOf(review));
+    expect(block).toEqual(current);
+    const config = defaultConfig(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      block,
+    );
+    expect(config.readings).toEqual(current);
+    expect(runKeyFor(RANGE, config)).toBe(runKeyFor(RANGE, defaultConfig()));
+  }
+  const historical = { ...pipelineV12.config, readings: PARENT_BLOCK };
+  expect(canonicalJson(PipelineConfig.parse(historical))).toBe(
+    canonicalJson(historical),
+  );
   // The plan takes no part of the setting: its key's inputs hold the parent's recipe either way.
   expect(
     (
@@ -440,7 +385,7 @@ const repositoryOf = () => {
 
 // Reason: it is measured before any default moves; on a real range too.
 test.skipIf(graph.skip)(
-  "on a real range, the stored plan is the same with the setting on or off, and readingStep's Assess step with it off is the parent's step over the same reading",
+  "on a real range, the historical step reader retains its source basis and current review always includes scope/tests",
   async () => {
     graph.require();
     const { repository, range } = repositoryOf();
@@ -466,40 +411,38 @@ test.skipIf(graph.skip)(
       ),
       McpClients,
     );
-    const ctxOf = (readings: ReadingsConfig) => ({
+    const ctxOf = (readings: ReadingsConfig, historical = false) => ({
       location,
       repository,
       runId: mintUlid(),
       runKey: "f".repeat(64),
       range: { baseRef: "main", ...range },
       cycleId: mintUlid(),
-      config: defaultConfig(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        readings,
-      ),
+      config: historical
+        ? PipelineConfig.parse({ ...pipelineV12.config, readings })
+        : defaultConfig(
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            readings,
+          ),
       log: { path: "(memory)", write: () => {}, read: () => [] },
       startedAt: Date.now(),
       reconciliationId: mintUlid(),
       records,
     });
-    const off = readingsConfig(
-      settingsOf({
-        sectionReadings: "probe",
-        sectionReadingsScopeAndTests: false,
-      }),
-    )!;
+    // Exercise an explicitly frozen legacy step-reader input, not a new review with a bypass.
+    const off = PARENT_BLOCK;
     const on = readingsConfig(
       settingsOf({
         sectionReadings: "probe",
         sectionReadingsScopeAndTests: true,
       }),
     )!;
-    const ctx = { off: ctxOf(off), on: ctxOf(on) };
+    const ctx = { off: ctxOf(off, true), on: ctxOf(on) };
     const run = {
       off: stageRunner(ctx.off, clients),
       on: stageRunner(ctx.on, clients),
