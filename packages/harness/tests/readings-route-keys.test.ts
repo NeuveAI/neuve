@@ -1,8 +1,3 @@
-// Why (NEU-148, the readers' step keys): a review on another model, at another effort or on another
-// provider must never show another route's reading as its own. These read the same reading group
-// through the production reading task and agent step, twice over one real Records store (a store
-// opened again for each review, as two review processes open it), with pi-ai's faux provider as the
-// model (no network), and count what the computation store holds and what the model was asked.
 import { Database } from "bun:sqlite";
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -349,22 +344,23 @@ const twice = async (
 /** A second Anthropic model on the same route: only the model differs. */
 const OTHER_MODEL: AnyRouteConfig = { ...OPUS_ROUTE, model: "claude-other" };
 
-// Reason: the records lane's claim that Assess has no model in its key. The route's provider, model
-// and effort are in every reading step's key, outside its inputs (`agentStageSpec`): the same route
-// reuses the stored reading, another model, effort or provider makes its own.
 for (const kind of ["assess", "lane-review"] as const)
-  test(`${kind}: the same route reuses the stored reading; another model, effort or provider reads again`, async () => {
-    // The same route twice: one computation, and the second review asks the model nothing.
-    const same = await twice(
-      `${kind}-same`,
-      kind,
-      { route: OPUS_ROUTE },
-      { route: OPUS_ROUTE },
-    );
-    expect(same.first.calls).toBe(1);
-    expect(same.second.calls).toBe(0);
-    expect(same.second.steps).toEqual(same.first.steps);
-    expect(same.rows).toHaveLength(1);
+  test(`${kind} reuses the stored reading until its route or ceiling changes`, async () => {
+    const location = storeLocationIn(join(directory, `${kind}-ceiling`));
+    const old = await review(location, kind, {
+      ...SOL_ROUTE,
+      window: 1_050_000,
+    });
+    const current = await review(location, kind, SOL_ROUTE);
+    const reused = await review(location, kind, SOL_ROUTE);
+    expect([old.calls, current.calls, reused.calls]).toEqual([1, 1, 0]);
+    expect(current.steps).not.toEqual(old.steps);
+    expect(reused.steps).toEqual(current.steps);
+    expect(
+      stored(location, OP[kind])
+        .map(({ material }) => JSON.parse(material).config.contextCeiling)
+        .sort((a, b) => a - b),
+    ).toEqual([237_500, 525_000]);
 
     // Each pair differs in one thing only: two computations, the second read by the model.
     const route = (r: AnyRouteConfig, effort?: RouteEffort) =>

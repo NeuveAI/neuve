@@ -159,17 +159,20 @@ export function codingWorkerSetup(
   const openingChats = new Map<string, Promise<WorkerChatRuntime>>();
   let accountRoute: Awaited<ReturnType<typeof codingRouteLimits>>;
   const routeLimits = new SharedWork<AnyRouteConfig>();
-  const resolveChatRoute = async () => {
+  const resolveChatRoute = async (worker: WorkerContext) => {
     if (accountRoute || route.provider === "claude")
       return accountRoute ?? route;
     const { outcome } = await routeLimits.run({
       scope: "coding-route-limits",
       key: route.model,
       run: async () => {
-        accountRoute = await codingRouteLimits(route, transport, (fields) =>
-          process.stderr.write(
-            `${JSON.stringify({ event: "model-limits.resolved", ...fields })}\n`,
-          ),
+        accountRoute = await codingRouteLimits(
+          route,
+          { ...transport, admission: directAdmission(worker) },
+          (fields) =>
+            process.stderr.write(
+              `${JSON.stringify({ event: "model-limits.resolved", ...fields })}\n`,
+            ),
         );
         return { kind: "succeeded", value: accountRoute ?? route };
       },
@@ -446,7 +449,7 @@ export function codingWorkerSetup(
         const credentialInspection = inspection(worker);
         const models = workspaceCaptureModels(defaults, {
           ...transport,
-          route: await resolveChatRoute(),
+          route: await resolveChatRoute(worker),
           ...admission(worker),
           capture,
           credentialInspection,

@@ -30,7 +30,6 @@ test.each([
   ],
   [
     SOL_ROUTE,
-    // The Sol run key changed because its frozen context window changed.
     "94ddcd8de243036393bdf16cf8c2030dd275c5856e07eb9f9812146b3c5f7b25",
   ],
 ] as const)(

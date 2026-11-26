@@ -222,13 +222,15 @@ export const OPUS_ROUTE: AnthropicRouteConfig = {
 
 /**
  * GPT-6.1 Sol on the ChatGPT plan, at medium effort.
- * Decision 2.11 sets the usable window. pi-ai's OpenAI model catalogue gives the output cap.
+ * The model-window decision sets the usable window from Codex's plan metadata.
  */
 export const SOL_ROUTE: OpenAiRouteConfig = {
   provider: "openai",
   model: "gpt-6.1-sol",
   effort: "medium",
   window: 475_000,
+  // The review-call budget uses OpenAI's documented model cap.
+  // https://developers.openai.com/api/docs/models/gpt-6.1-sol
   maxOutputTokens: 128_000,
   credentialSource: "neuve-sign-in",
   account: { name: AccountName.parse("chatgpt"), kind: "chatgpt-subscription" },

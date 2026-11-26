@@ -36,7 +36,6 @@ import {
   OWNER,
 } from "../../../../../packages/channel/tests/helpers.ts";
 import { SOL_ROUTE } from "../../../src/route.ts";
-import { rejectedToken } from "../../../src/openai-auth.ts";
 import { readCaptureJournal } from "../../../src/pi/capture/journal.ts";
 import { openRouteAdmission, createRouteModels } from "../../../src/coding.ts";
 import {
@@ -650,17 +649,15 @@ test("admission precedes the credential owner, including a cancelled call", asyn
       route: SOL_ROUTE,
       auth: { tokenCommand: token.path },
     }).observe("2", Date.now());
-    const models = await (
-      await setup(path, endpoint)
-    ).models(worker(path), nativeModels());
-    expect(
-      endpoint.modelLists.map((headers) => headers.get("authorization")),
-    ).toEqual(["Bearer tok-1"]);
-    const leasesBeforeCall = token.runs();
-    expect(leasesBeforeCall).toBe(1);
-    // A cached catalogue lease would hide a premature credential request.
-    rejectedToken("tok-1");
-    await Bun.sleep(0);
+    const configured = await setup(path, endpoint);
+    const native = worker(path);
+    const opening = configured.models(native, nativeModels());
+    const models = configured.nonTurnModels!(
+      native,
+      "caption",
+      ROOT_CONVERSATION_ID,
+      nativeModels(),
+    );
     const result = await models.completeSimple(
       models.getModel("openai", SOL_ROUTE.model)!,
       {
@@ -675,16 +672,23 @@ test("admission precedes the credential owner, including a cancelled call", asyn
       { signal: AbortSignal.timeout(30) },
     );
     expect(result.stopReason).toBe("aborted");
-    expect(token.runs()).toBe(leasesBeforeCall);
+    expect(token.runs()).toBe(0);
+    expect(endpoint.modelLists).toHaveLength(0);
     expect(endpoint.received).toHaveLength(0);
     console.log(
       "ROUTE_AUTH_ORDER",
       JSON.stringify({
         stopReason: result.stopReason,
-        tokenLeases: token.runs() - leasesBeforeCall,
+        tokenLeases: token.runs(),
+        modelLists: endpoint.modelLists.length,
         requests: endpoint.received.length,
       }),
     );
+    await opening;
+    expect(token.runs()).toBe(1);
+    expect(
+      endpoint.modelLists.map((headers) => headers.get("authorization")),
+    ).toEqual(["Bearer tok-1"]);
   } finally {
     endpoint.stop();
     rmSync(path, { recursive: true, force: true });

@@ -7,9 +7,10 @@ export type ReportedModelLimits = {
   [Limit in keyof ModelLimits]?: ModelLimits[Limit] | undefined;
 };
 
+// pi-ai 1.0.0 fills missing descriptor limits with these values in dist/providers/faux.js (createFauxCore).
 export const DEFAULT_MODEL_LIMITS: ModelLimits = {
-  contextWindow: 64_000,
-  maxTokens: 8_192,
+  contextWindow: 128_000,
+  maxTokens: 16_384,
 };
 
 // Claude Code's extended-context defaults and Anthropic's model output limits

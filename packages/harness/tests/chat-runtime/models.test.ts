@@ -259,18 +259,18 @@ test("account model rows have route limits before the first turn", async () => {
       ["sonnet", 1_000_000, 128_000],
       ["claude-fable-5-2", 1_000_000, 128_000],
       ["claude-haiku-5-5", 1_000_000, 128_000],
-      ["unlisted", 64_000, 8_192],
+      ["unlisted", 128_000, 16_384],
     ]);
     expect(limits("codex")).toEqual([
       ["gpt-6-sol", 272_000, 128_000],
       // Codex's bundled window wins over pi-ai's 272,000-token entry.
       ["gpt-6.1-sol", 475_000, 128_000],
-      ["gpt-6.2-sol", 475_000, 8_192],
-      ["gpt-6.2-astra", 258_400, 8_192],
-      ["gpt-6.1-terra", 475_000, 8_192],
+      ["gpt-6.2-sol", 475_000, 16_384],
+      ["gpt-6.2-astra", 258_400, 16_384],
+      ["gpt-6.1-terra", 475_000, 16_384],
     ]);
     expect(run.models.getModel("claude", "unlisted")?.contextWindow).toBe(
-      64_000,
+      128_000,
     );
     expect(
       fake.logs.filter(
@@ -283,8 +283,8 @@ test("account model rows have route limits before the first turn", async () => {
         fields: {
           account: "claude",
           model: "unlisted",
-          contextWindow: 64_000,
-          maxTokens: 8_192,
+          contextWindow: 128_000,
+          maxTokens: 16_384,
         },
       },
     ]);
@@ -387,8 +387,8 @@ test("missing, partial and request usage limits keep the row or fallback, and a 
   const run = await fixture();
   try {
     for (const [modelUsage, expected] of [
-      [{ model: "sonnet" }, [64_000, 8_192]],
-      [{ model: "sonnet", maxOutputTokens: 48_000 }, [64_000, 48_000]],
+      [{ model: "sonnet" }, [128_000, 16_384]],
+      [{ model: "sonnet", maxOutputTokens: 48_000 }, [128_000, 48_000]],
       [
         {
           model: "sonnet",
@@ -396,7 +396,7 @@ test("missing, partial and request usage limits keep the row or fallback, and a 
           contextWindow: 500_000,
           maxOutputTokens: 50_000,
         },
-        [64_000, 48_000],
+        [128_000, 48_000],
       ],
       [{ model: "sonnet", contextWindow: 500_000 }, [500_000, 48_000]],
     ] as const) {

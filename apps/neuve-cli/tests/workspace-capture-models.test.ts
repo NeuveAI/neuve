@@ -11,6 +11,7 @@ import {
 import {
   CaptureFailed,
   codingRouteLimits,
+  openRouteAdmission,
   type RouteModelsOptions,
 } from "@neuve/harness/coding";
 import { SOL_ROUTE } from "../../../packages/harness/src/route.ts";
@@ -32,8 +33,14 @@ test.each([
   try {
     const token = tokenCommand(scratch, "lease");
     const observed: Readonly<Record<string, unknown>>[] = [];
+    const auth = { tokenCommand: token.path };
     const transport = {
-      auth: { tokenCommand: token.path },
+      auth,
+      admission: openRouteAdmission({
+        path: join(scratch, "route-admission.json"),
+        route: SOL_ROUTE,
+        auth,
+      }),
       fetch: Object.assign(
         async (input: RequestInfo | URL, init?: RequestInit) => {
           const request = new Request(input, init);
@@ -88,9 +95,17 @@ test("a missing ChatGPT sign-in leaves the configured route limits in place", as
   const directory = mkdtempSync(join(tmpdir(), "workspace-model-limits-"));
   try {
     const observed: Readonly<Record<string, unknown>>[] = [];
+    const auth = { directory, tokenCommand: null };
     const route = await codingRouteLimits(
       SOL_ROUTE,
-      { auth: { directory, tokenCommand: null } },
+      {
+        auth,
+        admission: openRouteAdmission({
+          path: join(directory, "route-admission.json"),
+          route: SOL_ROUTE,
+          auth,
+        }),
+      },
       (limits) => observed.push(limits),
     );
     expect(route).toBeUndefined();
@@ -227,7 +242,7 @@ test("only a provider breakoff near the last measured limit becomes an overflow"
   let captureFull = false;
   let sent = 0;
   const models = workspaceCaptureModels(createModels(), {
-    route: SOL_ROUTE,
+    route: { ...SOL_ROUTE, window: 100_000 },
     auth: { tokenCommand: token.path },
     runId: "workspace-context-overflow",
     sessionAffinity: "workspace-context-overflow",
@@ -251,7 +266,7 @@ test("only a provider breakoff near the last measured limit becomes an overflow"
   try {
     const model = models.getModel("openai", SOL_ROUTE.model);
     if (!model) throw new Error("Missing plan model");
-    expect(model.contextWindow).toBe(475_000);
+    expect(model.contextWindow).toBe(100_000);
     const turn = (tokens: number, compactedAt?: number) => {
       const previous = fauxAssistantMessage("Previous answer", {
         timestamp: 2,
@@ -280,14 +295,14 @@ test("only a provider breakoff near the last measured limit becomes an overflow"
         });
       return models.completeSimple(model, { messages });
     };
-    expect(routeFailureOf(await turn(200_000))?.kind).toBe("stream");
-    expect(routeFailureOf(await turn(460_000))?.kind).toBe("context_overflow");
-    expect(routeFailureOf(await turn(460_000, 3))?.kind).toBe("stream");
-    expect(routeFailureOf(await turn(460_000, 1))?.kind).toBe(
+    expect(routeFailureOf(await turn(80_000))?.kind).toBe("stream");
+    expect(routeFailureOf(await turn(86_000))?.kind).toBe("context_overflow");
+    expect(routeFailureOf(await turn(86_000, 3))?.kind).toBe("stream");
+    expect(routeFailureOf(await turn(86_000, 1))?.kind).toBe(
       "context_overflow",
     );
     captureFull = true;
-    expect(routeFailureOf(await turn(460_000))?.kind).toBe("capture");
+    expect(routeFailureOf(await turn(86_000))?.kind).toBe("capture");
     expect(sent).toBe(4);
   } finally {
     rmSync(scratch, { recursive: true, force: true });

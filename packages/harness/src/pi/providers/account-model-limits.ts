@@ -8,6 +8,7 @@ import {
 import { isClaudeSubscriptionToken } from "../../subscription-token.ts";
 import { routeModel } from "./route-model.ts";
 import type { RouteModelsOptions } from "./agent-route-provider.ts";
+import type { RouteAdmission } from "./route-admission.ts";
 
 const positive = z.number().int().positive().nullish().catch(undefined);
 const planCatalog = z.object({ models: z.array(z.unknown()) });
@@ -22,23 +23,53 @@ const anthropicModel = z.object({
   max_tokens: positive,
 });
 
+type CatalogTransport = Pick<
+  RouteModelsOptions,
+  "auth" | "baseUrl" | "fetch"
+> & {
+  readonly admission: RouteAdmission;
+};
+
 async function readAccountModel(
   route: DirectRouteConfig,
-  transport: Pick<RouteModelsOptions, "auth" | "baseUrl" | "fetch">,
+  transport: CatalogTransport,
 ) {
-  const signal = AbortSignal.timeout(4_000);
-  const fetch = transport.fetch ?? globalThis.fetch;
+  // Codex's best-effort catalog refresh deadline includes credential resolution.
+  // https://github.com/openai/codex/blob/581161ab41e643d942e1e1b5f561034060bf18e3/codex-rs/models-manager/src/manager.rs#L572-L598
+  const signal = AbortSignal.timeout(5_000);
+  const { admission } = transport;
   const base = (transport.baseUrl ?? routeModel(route).baseUrl).replace(
     /\/$/,
     "",
   );
+  const fetchModel = async (path: string, headers: Record<string, string>) => {
+    const response = await (transport.fetch ?? globalThis.fetch)(
+      `${base}${path}`,
+      {
+        headers,
+        redirect: "error",
+        signal,
+      },
+    );
+    if (!response.ok)
+      admission.observe(
+        response.headers.get("retry-after"),
+        Date.now(),
+        response.status,
+      );
+    return response;
+  };
+  await admission.wait(signal);
   if (route.provider === "openai") {
-    const { token } = await accessToken({ ...transport.auth, signal });
-    // https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference
-    const response = await fetch(`${base}/models`, {
-      headers: { authorization: `Bearer ${token}` },
-      redirect: "error",
+    const { token, expiresAt } = await accessToken({
+      ...transport.auth,
       signal,
+    });
+    await admission.wait(signal);
+    if (expiresAt <= Date.now()) return;
+    // https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference
+    const response = await fetchModel("/models", {
+      authorization: `Bearer ${token}`,
     });
     if (!response.ok) return;
     const list = planCatalog.parse(await response.json());
@@ -66,12 +97,11 @@ async function readAccountModel(
   const key = process.env[routeCredentialVariable(route)];
   if (!key || isClaudeSubscriptionToken(key)) return;
   // https://platform.claude.com/docs/en/api/http/models/retrieve
-  const response = await fetch(
-    `${base}/v1/models/${encodeURIComponent(route.model)}`,
+  const response = await fetchModel(
+    `/v1/models/${encodeURIComponent(route.model)}`,
     {
-      headers: { "x-api-key": key, "anthropic-version": "2026-10-21" },
-      redirect: "error",
-      signal,
+      "x-api-key": key,
+      "anthropic-version": "2026-10-21",
     },
   );
   if (!response.ok) return;
@@ -82,7 +112,7 @@ async function readAccountModel(
 /** Return a route only when the account reports at least one limit. */
 export async function codingRouteLimits(
   route: DirectRouteConfig,
-  transport: Pick<RouteModelsOptions, "auth" | "baseUrl" | "fetch">,
+  transport: CatalogTransport,
   log: (fields: Readonly<Record<string, unknown>>) => void,
 ): Promise<DirectRouteConfig | undefined> {
   const reported = await readAccountModel(route, transport).catch(

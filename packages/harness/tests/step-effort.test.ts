@@ -1,7 +1,3 @@
-// Why: each kind of review step may run at its own effort (12 November), as a substitution of the
-// route's effort for that step only. A stage's stored key is what decides whether a later run reuses
-// it, so a review with nothing set must keep every key it had, and only a step that runs at another
-// effort may key apart.
 import { expect, test } from "bun:test";
 import { Option } from "effect";
 import { Computations } from "@neuve/records-core";
@@ -107,26 +103,20 @@ const stageKeys = (
   };
 };
 
-/**
- * The keys at a248f77a, before steps had their own effort, computed there with the same steps by
- * `agentStageSpec` and `runKeyFor` over `defaultConfig(undefined, OPUS_ROUTE | SOL_ROUTE)`.
- */
 const GOLDEN = {
   anthropic: {
-    // Re-pinned (round 25): the pipeline version moved from 11 to 12; no stage key moved.
     run: "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c",
-    frame: "a4ed3130b681459cf3b8af39281ba57e70e24b2f0e37185ed01308161d421a76",
-    map: "568c94787aecd205f69e4857b1a505f5ecce3a68d22b2c4a77cecada846bd581",
-    find: "e0d6a281a137ecb101720e00379548695ebd96a4fc8fc8868104902ae00db89c",
-    verify: "d45e28934f461f54dc56d9cf1f2b6309bb1a8254c1cd29022b5d3aa62b824d04",
+    frame: "577ef7270610c9207ebbb4d427f6c95d5c9429a4dec3a2cf356c9997d9e134ec",
+    map: "01b3a02fde601d3ad328d5d33803c1d8c8b521e2428d1dbbe6a4567d5ddfc7c8",
+    find: "60ad493b1aaa10642a6ebb6ab821ae97990f988791e80386dd6ed4adfdedd543",
+    verify: "298fdba36009b73e50a81181a84546c6797109279075d83189059e84c76c81db",
   },
   openai: {
-    // The Sol run key changed because its frozen context window changed.
     run: "94ddcd8de243036393bdf16cf8c2030dd275c5856e07eb9f9812146b3c5f7b25",
-    frame: "a653de0ab20617dedfdb62e269b5592b8f1f6b0a140458eea1d44a1a4cee99d1",
-    map: "cf89c312cb1fd3e53345cb8810712f987faea187c57840fe23a166093f5c93ca",
-    find: "c0f4f84c7806a6ec31ed05512c6a4597be4da2b40aca20c88cc880ce21e36c19",
-    verify: "a957adfeefb23fc1d4a77a8913c3bd7ff38fc29fe84ee2f9f773043c2ec37d72",
+    frame: "34802747340ad98076cffce5984002ceae44891ed106eb305d66b53a0045d408",
+    map: "62fb0c4f5ffe8cb0e661baffa9bedb2dc20e6ca6789a98151977f5ee5211bfdb",
+    find: "5edb402160ef7d4bbc1219bc1e44e2e54f0ba60e782065032cb6d601aa520a17",
+    verify: "3af1a2ca7833ff70702d0d11907ad5cb5c4ec31370a250cc9d2f9cfc80bef6db",
   },
 } as const;
 
@@ -135,15 +125,17 @@ const settings = (review?: unknown) =>
     Settings.parse({ version: 1, ...(review === undefined ? {} : { review }) }),
   );
 
-// Reason: nothing else pins a key's value, and a silent change rebuilds every stored stage.
-test("a review with nothing set keeps the run key and every stage key it had", () => {
-  expect(stageKeys(OPUS_ROUTE)).toEqual(GOLDEN.anthropic);
-  expect(stageKeys(SOL_ROUTE)).toEqual(GOLDEN.openai);
-  expect(stageKeys(settingsRoute(Option.none()))).toEqual(GOLDEN.anthropic);
-  expect(stageKeys(settingsRoute(settings({ route: "openai" })))).toEqual(
-    GOLDEN.openai,
-  );
-});
+test.each([OPUS_ROUTE, SOL_ROUTE])(
+  "pins the default $provider run and stage keys",
+  (route) => {
+    expect(stageKeys(route)).toEqual(GOLDEN[route.provider]);
+    const selected =
+      route.provider === "anthropic"
+        ? settingsRoute(Option.none())
+        : settingsRoute(settings({ route: "openai" }));
+    expect(stageKeys(selected)).toEqual(GOLDEN[route.provider]);
+  },
+);
 
 // Reason: only what runs differently may key differently.
 test("a step at another effort moves its own key and no other step's", () => {

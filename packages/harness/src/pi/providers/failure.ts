@@ -43,11 +43,9 @@ export function streamEndedNearContextLimit(
       last.stopReason !== "length")
   )
     return false;
-  const margin = Math.min(
-    DEFAULT_COMPACTION_POLICY.reserveTokens,
-    model.contextWindow / 10,
-  );
-  return usageTokens >= model.contextWindow - margin;
+  const threshold =
+    model.contextWindow - DEFAULT_COMPACTION_POLICY.reserveTokens;
+  return threshold > 0 && usageTokens >= threshold;
 }
 
 /**

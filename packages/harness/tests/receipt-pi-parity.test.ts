@@ -15,7 +15,6 @@ for (const [named, jsonHash, textHash] of [
   ],
   [
     SOL_ROUTE,
-    // Sol's frozen review window moved to 475,000 tokens, changing the recorded ceiling.
     "ae641bdb3893e07daf79d1e0a6a061691142d7dad093ca95db95b7f03a626de4",
     "8754d26b2c4f25a8a921183e14e1573b43cf9772c038d59bb7f4f59d21d5d171",
   ],
