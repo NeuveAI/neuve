@@ -416,7 +416,6 @@ test("Verify child and registration commit together, and replay starts neither t
 });
 
 test("first registration of cached review preserves original producer/source before any old root drain", () => {
-  const state = initial();
   const producer = {
     run: "original-model-run",
     review: "c".repeat(64),
@@ -430,15 +429,18 @@ test("first registration of cached review preserves original producer/source bef
     map: "map",
     evidence: null,
   };
-  state.source = {
-    runId: "current-delivery-run",
-    runKey: producer.review,
-    cycle: "current-target-cycle",
-    head: producer.head,
-    plan: source.plan,
-    manifestKey: source.manifest,
-    frameKey: source.frame,
-    mapKey: source.map,
+  const state: ClaimSettlement = {
+    ...initial(),
+    source: {
+      runId: "current-delivery-run",
+      runKey: producer.review,
+      cycle: "current-target-cycle",
+      head: producer.head,
+      plan: source.plan,
+      manifestKey: source.manifest,
+      frameKey: source.frame,
+      mapKey: source.map,
+    },
   };
   const registration = claim();
   registration.claim.report["observation"] = {
@@ -472,8 +474,10 @@ test("first registration of cached review preserves original producer/source bef
 });
 
 test("missing historical origin and a forged immutable source never acquire today's reviewer identity", () => {
-  const state = initial();
-  state.source = { runKey: "c".repeat(64), head: "head", mapKey: "map" };
+  const state: ClaimSettlement = {
+    ...initial(),
+    source: { runKey: "c".repeat(64), head: "head", mapKey: "map" },
+  };
   const retained = claim();
   retained.claim.report["observation"] = {};
   expect(() => registerInSettlement(state, 10, retained, 42)).toThrow(
