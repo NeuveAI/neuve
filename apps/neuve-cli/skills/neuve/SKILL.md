@@ -25,6 +25,7 @@ Neuve reviews a commit range: it splits the range into batches, each with one fo
 
 ## Rules
 
+- **Read a new design against what it meets.** When a plan, ticket or request brings a new design, then before you plan, build or review it, find in the repository what it touches. That means the recorded decisions that conflict with it, the product principles it interacts or collides with, and the architecture records it interacts or collides with. Name each one. A newer, explicit design overrides an older decision it contradicts, and that older decision gets amended. Where it isn't clear which wins, ask the person. Never work around a conflict to deliver something close to what was asked.
 - **Ask, don't start.** Request a review only when the person asks, or when the repository's instructions say to: a review runs on the person's model account. Commit only when the person asks you to or their instructions say so; if the work isn't committed, ask.
 - **Only a recorded disposition approves what a person or an agent decides.** A commit, a queued or completed run, a passing check, a test or a ticket's status never does. A static-automation unit has no disposition: its checks give a status, red or green, which is not a person's approval.
 - **Never decide for a person.** On human-required work your review is a suggestion, not a decision. Never record or send a disposition in a person's name. Tell the person what waits on them and where to decide it.
