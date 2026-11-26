@@ -149,7 +149,7 @@ const toolEntries = (): Entry[] => [
     calls: [{ name: "note", callId: "effect", input: { value: "ok" } }],
   },
 ];
-const savedResult = () =>
+const savedResult = (callIds = ["effect"]) =>
   inbound({
     type: "user",
     parent_tool_use_id: null,
@@ -157,9 +157,11 @@ const savedResult = () =>
     uuid: carrier,
     message: {
       role: "user",
-      content: [
-        { type: "tool_result", tool_use_id: "effect", content: "recorded" },
-      ],
+      content: callIds.map((id) => ({
+        type: "tool_result",
+        tool_use_id: id,
+        content: "recorded",
+      })),
     },
   });
 const partial = (
@@ -233,6 +235,41 @@ test("completed tool needs a saved provider result carrier before continuation c
   ]);
   expect(safe.effects).toBe(1);
   expect(safe.ended).toMatchObject({
+    resumePoint: carrier,
+    outcome: { retry: { kind: "transient-provider", continuation: "resume" } },
+  });
+});
+
+// Reason: a saved carrier must account for exactly the calls observed in this turn.
+test("an unmatched saved tool result blocks retry while an exact match permits resume", async () => {
+  const extra = await run([
+    ...toolEntries(),
+    savedResult(["effect", "unobserved"]),
+    inbound(transient()),
+  ]);
+  expect(extra.effects).toBe(1);
+  expect(extra.ended.outcome).toEqual({
+    status: "failed",
+    disposition: "reusable",
+    failure: {
+      _tag: "TurnFailed",
+      account: account.name,
+      reason: "ambiguous-tool-effect",
+    },
+  });
+
+  const unobserved = await run([
+    savedResult(["unobserved"]),
+    inbound(transient()),
+  ]);
+  expect(unobserved.ended.outcome).toEqual(extra.ended.outcome);
+
+  const exact = await run([
+    ...toolEntries(),
+    savedResult(),
+    inbound(transient()),
+  ]);
+  expect(exact.ended).toMatchObject({
     resumePoint: carrier,
     outcome: { retry: { kind: "transient-provider", continuation: "resume" } },
   });

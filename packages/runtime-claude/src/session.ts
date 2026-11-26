@@ -573,11 +573,16 @@ export const openClaudeSession = (
       ]);
       if (
         callIds.size > 0 &&
+        callIds.size === turn.savedResults.size &&
         turn.savedCarrier !== undefined &&
         [...callIds].every((id) => turn.savedResults.has(id))
       )
         return { ...outcome, retry: { kind, continuation: "resume" } };
-      if (callIds.size === 0 && turn.sends.size === 1)
+      if (
+        callIds.size === 0 &&
+        turn.savedResults.size === 0 &&
+        turn.sends.size === 1
+      )
         return { ...outcome, retry: { kind, continuation: "repeat-request" } };
       return failOutcome("ambiguous-tool-effect", "reusable");
     };
