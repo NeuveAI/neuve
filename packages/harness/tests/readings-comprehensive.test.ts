@@ -8,7 +8,7 @@ import { renderReading } from "../src/readings/reading.ts";
 import {
   laneReviewStep,
   LaneReviewStored,
-  withOffered,
+  offeredDigest,
 } from "../src/readings/steps.ts";
 import {
   comprehensiveBounds,
@@ -66,16 +66,14 @@ const build = (retained: Array<RecordedReviewClaim> = []) => {
     keys: { frame: "frame", manifest: "manifest" },
     multiTurn: true,
   });
-  const step = withOffered(
-    comprehensiveStep({
-      base,
-      index: reading.index,
-      state: { load: () => {}, save: () => ({}) },
-      claims: () => retained,
-      identity: { assignment: plan.groups[0], source: "immutable" },
-      turns: 6,
-    }),
-  );
+  const step = comprehensiveStep({
+    base,
+    index: reading.index,
+    state: { load: () => {}, save: () => ({}) },
+    claims: () => retained,
+    identity: { assignment: plan.groups[0], source: "immutable" },
+    turns: 6,
+  });
   const answer: ComprehensiveAnswer = {
     review: {
       files: reading.index.files.map((file) => ({
@@ -118,6 +116,7 @@ test("all four concerns form one investigation with no quota or compulsory categ
   expect(step.spec.check!(answer)).toEqual([]);
   expect(step.compose(result(answer)).answer.comments).toEqual([]);
   expect(step.spec.turnLimit).toBe(6);
+  expect(step.inputs.offered).toBe(offeredDigest(step.spec));
   expect(comprehensiveBounds(96_000, 20).turns).toBeLessThanOrEqual(10);
   expect(comprehensiveBounds(96_000, 20).readingChars).toBeLessThanOrEqual(
     64_000,
