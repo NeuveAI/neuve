@@ -45,6 +45,8 @@ export const DEFAULT_LIMITS: DumpLimits = {
 
 export const JOURNAL_FILE = "events.jsonl";
 export const CAPTURE_LOSS_FILE = "capture-loss.json";
+export const CREDENTIAL_LOSS_RESERVE_FILE = "credential-loss.reserve";
+export const CREDENTIAL_LOSS_RESERVE_BYTES = 4096;
 export const OBJECTS_DIRECTORY = "objects";
 export const RAW_JOURNAL_FILE = `journal/${JOURNAL_FILE}` as const;
 export const journalObjectFile = (sha256: string) =>
@@ -57,7 +59,10 @@ export const captureFileLimit = (name: string, limits: DumpLimits) =>
     ? Math.min(limits.journalBytes ?? limits.objectBytes, limits.totalBytes)
     : name === CAPTURE_LOSS_FILE || name === `capture/${CAPTURE_LOSS_FILE}`
       ? Math.min(limits.manifestBytes, limits.totalBytes)
-      : limits.objectBytes;
+      : name === CREDENTIAL_LOSS_RESERVE_FILE ||
+          name === `capture/${CREDENTIAL_LOSS_RESERVE_FILE}`
+        ? Math.min(CREDENTIAL_LOSS_RESERVE_BYTES, limits.totalBytes)
+        : limits.objectBytes;
 
 /** A JSON value as stored; anything JSON would drop or change (`undefined`, `NaN`) is refused. */
 export type Json =
@@ -558,7 +563,9 @@ export const JournalMark = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("journal.open"),
     scope: CaptureScope.pick({ runId: true }),
+    // The old writer could dispatch without recording the loss.
     allowCredentialLoss: z.literal(true).optional(),
+    credentialLossReserve: z.literal(true).optional(),
   }),
   z.strictObject({
     type: z.literal("journal.close"),
@@ -611,6 +618,10 @@ export class CaptureFailed extends Data.TaggedError("CaptureFailed")<{
   readonly journalFull?: boolean;
   readonly writeCode?: string;
 }> {
+  override get message(): string {
+    return this.detail;
+  }
+
   get lossReason(): CaptureLoss["reason"] {
     if (this.kind === "full")
       return this.journalFull ? "journal limit" : "object limit";

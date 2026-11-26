@@ -115,7 +115,7 @@ for (const variant of ["covered", "missing", "exposed"] as const) {
         await expect(exported).rejects.toThrow(
           variant === "exposed"
             ? "credential exposure in exact source"
-            : "historical calls lack durable registration",
+            : "credential registration was lost and the scan could not identify the credential",
         );
         return;
       }

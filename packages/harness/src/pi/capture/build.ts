@@ -423,13 +423,12 @@ const build = async (
   const beforeBackup =
     input.capturedBackup === undefined ? await journalStat() : undefined;
   let journal = readCaptureJournal(input.journal, limits);
-  const losses = readCaptureLosses(input.journal, limits);
   const rawLines = journal._tag === "Read" ? journal.lines : [];
-  const withholdSource = async () => {
+  const readLosses = () => readCaptureLosses(input.journal, limits, rawLines);
+  const losses = readLosses();
+  const withholdSource = async (registrationReason: string) => {
     if (losses.some(({ event }) => event === "credential.registration"))
-      throw new DumpFailed({
-        reason: CREDENTIAL_REGISTRATION_REFUSED,
-      });
+      throw new DumpFailed({ reason: registrationReason });
     const reason = "Capture loss prevents certification of the original source";
     const recipe = ProjectionRecipe.parse({
       version: 1,
@@ -466,7 +465,10 @@ const build = async (
     phase("finalization");
     return sealProjection(projection, recipe, [], limits);
   };
-  if (losses.length > 0 && journal._tag !== "Read") return withholdSource();
+  if (losses.length > 0 && journal._tag !== "Read")
+    return withholdSource(
+      "credential registration was lost and the capture journal is unreadable; export refused",
+    );
   if (journal._tag === "TooLarge")
     throw new DumpFailed({
       reason: `capture journal is ${journal.size} bytes, over the ${journal.limit}-byte limit`,
@@ -488,7 +490,10 @@ const build = async (
   );
   const lossEpochs = credentialLossEpochs(losses, registrations);
   const authority = input.credentialInspection;
-  if (lossEpochs.size > 0 && authority === undefined) return withholdSource();
+  if (lossEpochs.size > 0 && authority === undefined)
+    return withholdSource(
+      "credential registration was lost and the private credential authority is unavailable; export refused",
+    );
   const safety = credentialGuards(
     lines,
     authority === undefined ? "certificates-only" : "inspect-retained-prefix",
@@ -531,6 +536,10 @@ const build = async (
       throw new DumpFailed({
         reason: "capture journal changed during native backup; export refused",
       });
+    if (JSON.stringify(readLosses()) !== JSON.stringify(losses))
+      throw new DumpFailed({
+        reason: "capture loss changed during native backup; export refused",
+      });
   }
   progress.inventory = measuredCloseInventory(
     lines,
@@ -571,7 +580,10 @@ const build = async (
         "credential inspection cannot certify a torn journal; source retained privately, export refused",
     });
   if (safety.requiresInspection && backup.status.status !== "captured") {
-    if (lossEpochs.size > 0) return withholdSource();
+    if (lossEpochs.size > 0)
+      return withholdSource(
+        "credential registration was lost and the exact native backup is unavailable; export refused",
+      );
     throw new DumpFailed({
       reason:
         "credential inspection requires an exact native backup; source retained privately, export refused",
@@ -646,7 +658,9 @@ const build = async (
     if (scanned.status === "inspected") {
       const inspectedEpochs = new Set<string>(scanned.epochs);
       if ([...lossEpochs.values()].some((epoch) => !inspectedEpochs.has(epoch)))
-        return withholdSource();
+        return withholdSource(
+          "credential registration was lost and the scan could not identify the credential; export refused",
+        );
       for (const [index, result] of scanned.results.entries()) {
         const item = kinds[index];
         if (item === undefined)

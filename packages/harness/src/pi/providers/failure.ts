@@ -12,6 +12,7 @@ import type {
   TaskId,
 } from "@earendil-works/pi-durable";
 import { NOT_RETRYABLE_CODES, USAGE_LIMIT } from "./wire.ts";
+import { RESERVE_FULL_REASON } from "../capture/credential-loss-reserve.ts";
 import { CaptureFailed } from "../capture/types.ts";
 
 /**
@@ -64,12 +65,18 @@ export interface RouteFailure {
 /** The `diagnostics` type the route's failure is recorded under. */
 export const ROUTE_FAILURE = "neuve.route_failure";
 export const CAPTURE_FULL = "capture_full";
+const CREDENTIAL_LOSS_RESERVE_FULL = "credential_loss_reserve_full";
 
 export const captureRouteFailure = (detail: string, cause: unknown) => ({
   kind: "capture" as const,
   detail,
   ...(cause instanceof CaptureFailed && cause.kind === "full"
-    ? { code: CAPTURE_FULL }
+    ? {
+        code:
+          cause.event === "credential.registration.reserve"
+            ? CREDENTIAL_LOSS_RESERVE_FULL
+            : CAPTURE_FULL,
+      }
     : {}),
 });
 
@@ -184,11 +191,13 @@ export const schedulerText = (
     (status < 200 || status >= 300) &&
     (RETRIED_STATUS.has(kind) || (status < 500 && status !== 429));
   const phrase =
-    kind === "capture" && failure.code === CAPTURE_FULL
-      ? "capture protection could not record required evidence"
-      : kind === "sign_in" && transient
-        ? "the route's credential is unavailable for now (network error)"
-        : SCHEDULED[kind];
+    kind === "capture" && failure.code === CREDENTIAL_LOSS_RESERVE_FULL
+      ? RESERVE_FULL_REASON
+      : kind === "capture" && failure.code === CAPTURE_FULL
+        ? "capture protection could not record required evidence"
+        : kind === "sign_in" && transient
+          ? "the route's credential is unavailable for now (network error)"
+          : SCHEDULED[kind];
   return `${label}${named ? ` (HTTP ${status})` : ""}: ${phrase}`;
 };
 

@@ -31,8 +31,16 @@ import { z } from "zod";
 import { maskArtifact } from "./mask.ts";
 import { isJsonObject } from "./json-walk.ts";
 import {
+  decodeCredentialLossReserve,
+  emptyCredentialLossReserve,
+  expectsCredentialLossReserve,
+  readLossFile,
+  recordCredentialLoss,
+} from "./credential-loss-reserve.ts";
+import {
   CAPTURE_VERSION,
   CAPTURE_LOSS_FILE,
+  CREDENTIAL_LOSS_RESERVE_FILE,
   CaptureLoss,
   captureFileLimit,
   CaptureFailed,
@@ -82,11 +90,11 @@ class JournalFull extends Error {
   }
 }
 
-const writeFailure = (event: string, error: unknown) =>
+const writeFailure = (event: string, error: unknown, detail = message(error)) =>
   new CaptureFailed({
     kind: error instanceof JournalFull ? "full" : "io",
     event,
-    detail: message(error),
+    detail,
     ...(error instanceof JournalFull && error.journalFull
       ? { journalFull: true }
       : {}),
@@ -417,38 +425,35 @@ export const decodeCaptureLosses = (bytes: Uint8Array) =>
     .array(CaptureLoss)
     .parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
 
+const readOrdinaryCaptureLosses = (directory: string, limits: DumpLimits) => {
+  const bytes = readLossFile(
+    join(directory, CAPTURE_LOSS_FILE),
+    captureFileLimit(CAPTURE_LOSS_FILE, limits),
+  );
+  return bytes === undefined ? [] : decodeCaptureLosses(bytes);
+};
+
 export const readCaptureLosses = (
   directory: string,
   limits = DEFAULT_LIMITS,
-) => {
-  const path = join(directory, CAPTURE_LOSS_FILE);
-  let fd: number;
-  try {
-    fd = openSync(
-      path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT")
-      return [];
-    throw error;
-  }
-  try {
-    const info = fstatSync(fd);
-    if (
-      !info.isFile() ||
-      info.size > captureFileLimit(CAPTURE_LOSS_FILE, limits)
-    )
-      throw new Error("Capture loss file is outside its file or size limits");
-    return decodeCaptureLosses(readFileSync(fd));
-  } finally {
-    closeSync(fd);
-  }
-};
+  lines: readonly JournalLine[] = [],
+) => [
+  ...readOrdinaryCaptureLosses(directory, limits),
+  ...decodeCredentialLossReserve(
+    readLossFile(
+      join(directory, CREDENTIAL_LOSS_RESERVE_FILE),
+      captureFileLimit(CREDENTIAL_LOSS_RESERVE_FILE, limits),
+    ),
+    expectsCredentialLossReserve(lines),
+  ),
+];
 
 const captureLossRecorder = (
   directory: string,
-  options: Pick<JournalOptions, "limits" | "onCaptureLoss"> = {},
+  options: Pick<
+    JournalOptions,
+    "limits" | "onCaptureLoss" | "allowCredentialLoss"
+  >,
 ): Required<Pick<ModelCapture, "recordLoss" | "journalFull">> => {
   const limits = options.limits ?? DEFAULT_LIMITS;
   let full = false;
@@ -458,8 +463,20 @@ const captureLossRecorder = (
       full ||= journalFull;
       let persisted = false;
       try {
-        const losses = readCaptureLosses(directory, limits);
-        if (!losses.some(({ callId }) => callId === loss.callId)) {
+        if (
+          options.allowCredentialLoss &&
+          loss.event === "credential.registration"
+        ) {
+          recordCredentialLoss(
+            join(directory, CREDENTIAL_LOSS_RESERVE_FILE),
+            loss,
+          );
+        } else {
+          const losses = readOrdinaryCaptureLosses(directory, limits);
+          if (losses.some(({ callId }) => callId === loss.callId)) {
+            persisted = true;
+            return;
+          }
           const bytes = Buffer.from(
             JSON.stringify([...losses, CaptureLoss.parse(loss)]) + "\n",
           );
@@ -499,16 +516,12 @@ export const openCaptureJournal = (
   const objects = join(directory, OBJECTS_DIRECTORY);
   const limits = options.limits ?? DEFAULT_LIMITS;
   const limit = journalLimit(limits);
-  const closeReserve = options.allowCredentialLoss
-    ? Buffer.byteLength(
-        JSON.stringify({
-          v: CAPTURE_VERSION,
-          seq: Number.MAX_SAFE_INTEGER,
-          at: Number.MAX_SAFE_INTEGER,
-          event: { type: "journal.close", scope: { runId } },
-        }),
-      ) + 1
-    : 0;
+  const openFailure = (error: unknown) =>
+    writeFailure(
+      "journal.open",
+      error,
+      `could not open the capture journal: ${message(error)}`,
+    );
   let seq: number;
   let journalBytes: number;
   try {
@@ -520,7 +533,50 @@ export const openCaptureJournal = (
       limit,
     ));
   } catch (error) {
-    throw writeFailure("journal.open", error);
+    throw openFailure(error);
+  }
+  if (options.allowCredentialLoss) {
+    const reserve = join(directory, CREDENTIAL_LOSS_RESERVE_FILE);
+    const sizeLimit = captureFileLimit(CREDENTIAL_LOSS_RESERVE_FILE, limits);
+    try {
+      const existing = readLossFile(reserve, sizeLimit);
+      if (existing === undefined) {
+        const prior = readCaptureJournal(directory, limits);
+        if (prior._tag !== "Read")
+          throw new Error("the earlier journal cannot be read");
+        decodeCredentialLossReserve(
+          undefined,
+          expectsCredentialLossReserve(prior.lines),
+        );
+        const bytes = emptyCredentialLossReserve();
+        if (bytes.byteLength > sizeLimit)
+          throw new Error("the reserve exceeds the capture byte limit");
+        const staging = join(directory, `${randomUUID()}.partial`);
+        try {
+          const fd = openSync(staging, "wx", STORE_FILE_MODE);
+          try {
+            writeFileSync(fd, bytes);
+            fsyncSync(fd);
+            if (fstatSync(fd).blocks * 512 < bytes.byteLength)
+              throw new Error("the reserve blocks were not allocated");
+          } finally {
+            closeSync(fd);
+          }
+          renameSync(staging, reserve);
+        } finally {
+          rmSync(staging, { force: true });
+        }
+      } else {
+        decodeCredentialLossReserve(existing, true);
+      }
+      syncPath(directory);
+    } catch (error) {
+      throw writeFailure(
+        "journal.open",
+        error,
+        `could not prepare the credential registration loss reserve: ${message(error)}`,
+      );
+    }
   }
   // The session appends through one descriptor, opened by its first line after a torn tail is cut,
   // instead of opening and closing the file per line (0.9-1.9 ms a line on a busy disk against
@@ -697,12 +753,7 @@ export const openCaptureJournal = (
       const text = `${JSON.stringify(line)}\n`;
       const bytes = Buffer.byteLength(text);
       serializedBytes += bytes;
-      if (
-        journalBytes +
-          bytes +
-          (event.type === "journal.close" ? 0 : closeReserve) >
-        limit
-      )
+      if (journalBytes + bytes > limit)
         throw new JournalFull(
           `${JOURNAL_FILE} would grow over the ${limit}-byte limit`,
           true,
@@ -738,7 +789,7 @@ export const openCaptureJournal = (
       type === "journal.failed"
         ? { type, scope: { runId }, reason: reason ?? "" }
         : type === "journal.open" && options.allowCredentialLoss
-          ? { type, scope: { runId }, allowCredentialLoss: true }
+          ? { type, scope: { runId }, credentialLossReserve: true }
           : { type, scope: { runId } },
     );
 
@@ -874,27 +925,20 @@ export const openCaptureJournal = (
 
   const loss = captureLossRecorder(directory, {
     limits: options.limits,
+    ...(options.allowCredentialLoss ? { allowCredentialLoss: true } : {}),
     onCaptureLoss(record, persisted) {
       if (persisted) pendingLosses.delete(record.callId);
-      else if (
-        options.allowCredentialLoss &&
-        record.event === "credential.registration"
-      )
-        pendingLosses.set(
-          record.callId,
-          new CaptureFailed({
-            kind: record.kind,
-            event: record.event,
-            detail: "credential registration loss could not be recorded",
-          }),
-        );
-      options.log?.write({
+      enqueueTelemetry(options.log, {
         type: "capture.loss",
         runId,
         ...record,
         persisted,
       });
-      options.onCaptureLoss?.(record, persisted);
+      try {
+        options.onCaptureLoss?.(record, persisted);
+      } catch {
+        // Reporting cannot change whether the loss was durably recorded.
+      }
     },
   });
   const capture: Capture = Object.assign(
@@ -977,7 +1021,7 @@ export const openCaptureJournal = (
 
   try {
     mark("journal.open");
-    // An unclosed session must hold exports even if no later write reaches disk.
+    // The journal must durably name the reserve before dispatch can use it.
     if (options.allowCredentialLoss) {
       fsyncSync(descriptor());
       syncPath(directory);
@@ -987,7 +1031,7 @@ export const openCaptureJournal = (
     try {
       release();
     } catch {}
-    throw writeFailure("journal.open", error);
+    throw openFailure(error);
   }
   const certifyAll: CaptureJournal["certifyAll"] = async (
     count,

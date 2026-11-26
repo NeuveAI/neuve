@@ -32,6 +32,7 @@ import { nativeBackup, type BuildInput, DumpFailed } from "./build.ts";
 import { BackupStatus, CloseMode, PriceRate } from "./dump.ts";
 import {
   CAPTURE_LOSS_FILE,
+  CREDENTIAL_LOSS_RESERVE_FILE,
   captureFileLimit,
   DEFAULT_LIMITS,
   type DumpLimits,
@@ -39,11 +40,15 @@ import {
 import {
   sha256Of,
   decodeCaptureLosses,
-  readCaptureLosses,
   readCaptureJournal,
   JOURNAL_FILE,
   OBJECTS_DIRECTORY,
 } from "./journal.ts";
+import {
+  decodeCredentialLossReserve,
+  expectsCredentialLossReserve,
+  readLossFile,
+} from "./credential-loss-reserve.ts";
 import { CloseInventory, checkedCount } from "./watchdog.ts";
 import { PrivateInspection } from "./private-inspection.ts";
 
@@ -61,7 +66,7 @@ const RawFile = z.strictObject({
   name: z
     .string()
     .regex(
-      /^(?:capture\/(?:events\.jsonl|capture-loss\.json|objects\/[a-f0-9]{64}(?:\.original)?)|native\/pi\.sqlite)$/,
+      /^(?:capture\/(?:events\.jsonl|capture-loss\.json|credential-loss\.reserve|objects\/[a-f0-9]{64}(?:\.original)?)|native\/pi\.sqlite)$/,
     ),
   sha256: Hash,
   size: z.int().nonnegative(),
@@ -158,7 +163,11 @@ export const fileRawCapture = (input: BuildInput) =>
     const names = yield* Effect.tryPromise({
       try: async () => {
         const names: string[] = [];
-        for (const name of [JOURNAL_FILE, CAPTURE_LOSS_FILE]) {
+        for (const name of [
+          JOURNAL_FILE,
+          CAPTURE_LOSS_FILE,
+          CREDENTIAL_LOSS_RESERVE_FILE,
+        ]) {
           if (
             await lstat(join(input.journal, name)).catch((error: unknown) => {
               if (
@@ -185,6 +194,7 @@ export const fileRawCapture = (input: BuildInput) =>
       catch: (error) => error,
     });
     let losses: ReturnType<typeof decodeCaptureLosses> = [];
+    let reserve: Uint8Array | undefined;
     for (const name of names) {
       const bytes = yield* Effect.tryPromise({
         try: async () => {
@@ -226,6 +236,7 @@ export const fileRawCapture = (input: BuildInput) =>
       });
       if (name === CAPTURE_LOSS_FILE)
         losses = yield* Effect.try(() => decodeCaptureLosses(bytes));
+      if (name === CREDENTIAL_LOSS_RESERVE_FILE) reserve = bytes;
       yield* add(`capture/${name}`, bytes, "application/octet-stream");
     }
     if (native.bytes !== undefined)
@@ -238,13 +249,30 @@ export const fileRawCapture = (input: BuildInput) =>
     const lines = journal._tag === "Read" ? journal.lines : [];
     const stored = new Map(contents.map((file) => [file.name, file]));
     const journalFile = stored.get(`capture/${JOURNAL_FILE}`);
-    const latestLosses = yield* Effect.try(() =>
-      readCaptureLosses(input.journal, limits),
-    );
-    if (JSON.stringify(latestLosses) !== JSON.stringify(losses))
-      return yield* Effect.fail(
-        new Error("raw capture loss changed during filing"),
+    for (const name of [CAPTURE_LOSS_FILE, CREDENTIAL_LOSS_RESERVE_FILE]) {
+      const latest = yield* Effect.try(() =>
+        readLossFile(join(input.journal, name), captureFileLimit(name, limits)),
       );
+      if (
+        (latest === undefined ? undefined : sha256Of(latest)) !==
+        stored.get(`capture/${name}`)?.sha256
+      )
+        return yield* Effect.fail(
+          new Error("raw capture loss changed during filing"),
+        );
+    }
+    let reserveRefusal: string | null = null;
+    try {
+      losses.push(
+        ...decodeCredentialLossReserve(
+          reserve,
+          expectsCredentialLossReserve(lines),
+        ),
+      );
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      reserveRefusal = error.message;
+    }
     if (
       journal._tag === "Read" &&
       (journalFile?.sha256 !==
@@ -296,7 +324,8 @@ export const fileRawCapture = (input: BuildInput) =>
     let checkpoint: NativeAuthorityReceipt | null = null;
     const authorityFailure = input.authorityFailure;
     let unscannable: string | null =
-      authorityFailure === undefined
+      reserveRefusal ??
+      (authorityFailure === undefined
         ? null
         : yield* Effect.flatMap(Clock.currentTimeMillis, (now) =>
             Effect.try({
@@ -309,7 +338,7 @@ export const fileRawCapture = (input: BuildInput) =>
                 ),
               catch: (error) => error,
             }),
-          );
+          ));
     const hasCaptureLoss = losses.length > 0;
     const needsInspection = lines.some(
       ({ event }) =>
@@ -317,6 +346,7 @@ export const fileRawCapture = (input: BuildInput) =>
         event.type === "credential.guard",
     );
     if (
+      reserveRefusal === null &&
       input.credentialInspection !== undefined &&
       native.bytes !== undefined &&
       native.status.status === "captured" &&
@@ -393,7 +423,7 @@ export const fileRawCapture = (input: BuildInput) =>
           );
         }),
       );
-    } else if (needsInspection && !hasCaptureLoss)
+    } else if (unscannable === null && needsInspection && !hasCaptureLoss)
       unscannable =
         native.bytes === undefined
           ? "credential inspection requires an exact native backup; source retained privately, export refused"

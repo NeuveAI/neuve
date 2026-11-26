@@ -139,8 +139,7 @@ export class CallCapture {
         try {
           recordLoss(loss, cause.journalFull === true);
         } catch (error) {
-          if (event.type === "credential.registration" && !mayLoseRegistration)
-            throw error;
+          if (event.type === "credential.registration") throw error;
         }
         return;
       }

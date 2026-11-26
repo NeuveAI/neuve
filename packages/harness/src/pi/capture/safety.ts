@@ -166,16 +166,17 @@ export const credentialGuards = (
   const pending = new Set<string>();
   const observed = new Set<string>();
   const ended = new Set<string>();
-  let registrationUnaccountedFor = false;
+  let legacySessionOpen = false;
   for (const event of events) {
-    if (event.type === "journal.close") registrationUnaccountedFor = false;
+    if (event.type === "journal.close") legacySessionOpen = false;
     if (event.type !== "journal.open") continue;
-    if (registrationUnaccountedFor) break;
-    registrationUnaccountedFor = event.allowCredentialLoss === true;
+    if (legacySessionOpen) break;
+    legacySessionOpen = event.allowCredentialLoss === true;
   }
-  if (registrationUnaccountedFor)
+  if (legacySessionOpen)
     return {
-      refusal: CREDENTIAL_REGISTRATION_REFUSED,
+      refusal:
+        "a legacy channel capture ended before its credential registration coverage could be confirmed; export refused",
       guards,
       retainedPrefixCalls,
       requiresInspection: true,
@@ -698,8 +699,10 @@ export const openManagedCredentialInspection = (input: {
   const journal = readCaptureJournal(input.journal);
   if (
     journal._tag !== "Read" ||
-    readCaptureLosses(input.journal).some(
-      ({ credentialCoverage }) => credentialCoverage === "required",
+    readCaptureLosses(input.journal, undefined, journal.lines).some(
+      ({ event, credentialCoverage }) =>
+        event === "credential.registration" ||
+        credentialCoverage === "required",
     ) ||
     credentialGuards(journal.lines).requiresInspection ||
     journal.lines.some((line) => line.event.type === "credential.registration")

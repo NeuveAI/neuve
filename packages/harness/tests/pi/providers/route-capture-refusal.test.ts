@@ -2,8 +2,10 @@
 import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Effect } from "effect";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { chmodSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -66,6 +68,174 @@ const answer = (text: string) =>
     ...messageItem(0, "msg_note", "final_answer", text),
     completed("resp_note"),
   ]);
+
+const diskFull = () =>
+  Object.assign(new Error("disk is full"), { code: "ENOSPC" });
+
+const captureWholeCall = (
+  journal: ReturnType<typeof openCaptureJournal>,
+  runId: string,
+  text: string,
+) => {
+  const scope = { runId };
+  const callId = "later-call";
+  journal.capture({
+    type: "model.request",
+    scope,
+    callId,
+    route: "synthetic",
+    provider: "synthetic",
+    model: "synthetic",
+    headerNames: [],
+    credentialCoverage: "none",
+    body: { status: "sent", json: { text } },
+  });
+  journal.capture({ type: "model.response", scope, callId, status: 200 });
+  journal.capture({ type: "model.end", scope, callId, outcome: "completed" });
+};
+
+// An interrupted channel with no credential loss must still export the calls it kept.
+for (const lostBind of [false, true]) {
+  test(`an interrupted channel exports without a credential hold (${lostBind ? "lost bind" : "crash"})`, async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "neuve-interrupted-channel-"),
+    );
+    const runId = "interrupted-channel";
+    const scope = { runId };
+    const nativeDatabase = join(directory, "pi.sqlite");
+    const storage = await openNodeSqliteStorage(nativeDatabase);
+    try {
+      const journal = openCaptureJournal(join(directory, "capture"), runId, {
+        allowCredentialLoss: true,
+      });
+      journal.capture({
+        type: "run.start",
+        scope,
+        runKind: "coding",
+        sourceRevision: { status: "not-applicable", reason: "Scratch chat" },
+        route: "synthetic",
+        pricing: "subscription",
+      });
+      captureWholeCall(journal, runId, "Done.");
+      if (lostBind) {
+        const fault = spyOn(fs, "appendFileSync").mockImplementation(() => {
+          throw diskFull();
+        });
+        try {
+          expect(() =>
+            journal.capture({
+              type: "session.bind",
+              scope: { runId, conversationId: ROOT_CONVERSATION_ID },
+            }),
+          ).toThrow(
+            expect.objectContaining({ kind: "io", event: "session.bind" }),
+          );
+        } finally {
+          fault.mockRestore();
+        }
+        expect(journal.close).toThrow(
+          expect.objectContaining({ event: "session.bind" }),
+        );
+      }
+      const root = join(directory, "datasets");
+      await mkdir(root);
+      const output = { root, retention: { policy: "synthetic" } };
+      const input = { runId, journal: journal.directory, nativeDatabase };
+      const direct = await exportSnapshot({ ...input, ...output });
+      const directPortable = await exportPortableSnapshot({
+        ...output,
+        directory: direct.directory,
+      });
+      const location = storeLocationIn(join(directory, "records"));
+      const run = runIn(location);
+      const { capture } = value(await run(captureRunDump(input)));
+      value(await run(scanCaptures(location)));
+      expect(value(await run(scanStatus(capture))).status).toBe("clean");
+      const restricted = value(
+        await run(exportCapturedDump({ ...output, capture })),
+      );
+      const portable = value(
+        await run(
+          exportCapturedDump({
+            ...output,
+            capture,
+            redaction: "portable",
+          }),
+        ),
+      );
+      const dumps = [
+        value(await run(readCapturedDump(capture))),
+        ...(await Promise.all(
+          [direct, directPortable, restricted, portable].map(({ directory }) =>
+            Effect.runPromise(readSessionDump(directory)),
+          ),
+        )),
+      ];
+      for (const { run, unjoined } of dumps) {
+        expect(
+          unjoined.map(({ callId, end }) => [callId, end?.outcome]),
+        ).toEqual([["later-call", "completed"]]);
+        expect(run.gaps).toContainEqual({
+          code: "journal-interrupted",
+          count: 1,
+          kind: "capture",
+          detail: expect.stringContaining(
+            lostBind
+              ? "Lost writes: session.bind"
+              : "ended without a clean close",
+          ),
+        });
+      }
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const target of ["journal", "reserve"] as const) {
+  test(`a channel cannot start when the ${target} cannot be written`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "neuve-capture-start-"));
+    try {
+      const fault =
+        target === "journal"
+          ? spyOn(fs, "appendFileSync").mockImplementation(() => {
+              throw diskFull();
+            })
+          : spyOn(fs, "writeFileSync").mockImplementation(() => {
+              throw diskFull();
+            });
+      try {
+        expect(() =>
+          openCaptureJournal(directory, "channel", {
+            allowCredentialLoss: true,
+          }),
+        ).toThrow(
+          expect.objectContaining({
+            event: "journal.open",
+            writeCode: "ENOSPC",
+            message: expect.stringContaining(
+              target === "journal"
+                ? "could not open the capture journal"
+                : "could not prepare the credential registration loss reserve",
+            ),
+          }),
+        );
+        expect(readCaptureJournal(directory)).toMatchObject({
+          _tag: "Read",
+          lines: [],
+        });
+      } finally {
+        fault.mockRestore();
+      }
+      openCaptureJournal(directory, "channel", {
+        allowCredentialLoss: true,
+      }).close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
 
 test("capture exhaustion leaves the first call, later calls and a reopened call answered", async () => {
   const directory = await mkdtemp(join(tmpdir(), "neuve-full-capture-"));
@@ -528,10 +698,14 @@ for (const variant of [
   "exposed",
   "clean",
   "unknown",
-  "unwritten",
-  "unwritten-journal",
+  "journal",
+  "torn",
+  "zeroed",
+  "missing",
+  "full",
+  "full-native",
 ] as const) {
-  test(`a channel answers after losing a credential registration (${variant})`, async () => {
+  test(`a channel with a lost credential registration (${variant})`, async () => {
     const directory = await mkdtemp(join(tmpdir(), "neuve-registration-loss-"));
     const source = join(directory, "source");
     const privateDirectory = join(directory, "private");
@@ -562,11 +736,35 @@ for (const variant of [
         route: SOL_ROUTE.provider,
         pricing: "subscription",
       });
-      const journalWrite = variant === "unwritten-journal";
-      const canIdentify = variant === "clean" || variant === "exposed";
-      const unwritten = variant === "unwritten" || journalWrite;
+      const journalWrite = variant === "journal";
+      const clean = variant === "clean" || journalWrite;
+      const full = variant === "full" || variant === "full-native";
+      const canIdentify = variant !== "unknown" && !full;
+      const reserve = join(captureDirectory, "credential-loss.reserve");
       const lossFile = join(captureDirectory, CAPTURE_LOSS_FILE);
-      if (unwritten) await mkdir(lossFile);
+      const auth = { tokenCommand: tokenCommand(directory, "lease").path };
+      if (full) {
+        for (let slot = 0; slot < 8; slot++)
+          journal.capture.recordLoss?.(
+            {
+              callId: randomUUID(),
+              event: "credential.registration",
+              at: new Date().toISOString(),
+              kind: "io",
+              reason: "disk full",
+            },
+            false,
+          );
+      }
+      let defaults: Awaited<ReturnType<typeof builtinModels>> | undefined;
+      if (variant === "full-native") {
+        const credentials = new InMemoryCredentialStore();
+        await credentials.modify("openai", async () => ({
+          type: "api_key",
+          key: "synthetic-key",
+        }));
+        defaults = await builtinModels({ credentials });
+      }
       let writes = 0;
       let sent = 0;
       const capture = Object.assign(
@@ -600,20 +798,41 @@ for (const variant of [
             // An uncertain commit can leave a durable detector that the scan can verify.
             if (canIdentify) exec.apply(this, args);
             throw Object.assign(new Error("registration write failed"), {
-              code: canIdentify ? "SQLITE_IOERR_FSYNC" : "SQLITE_FULL",
+              code: "SQLITE_FULL",
             });
           }
           return exec.apply(this, args);
         },
       );
+      // Journal appends and side-file creation require new space. The reserved
+      // positional write and sync still work on an already allocated file.
+      const appendFileSync = fs.appendFileSync;
+      const append = spyOn(fs, "appendFileSync").mockImplementation(
+        (path, data, options) => {
+          if (typeof path === "number") throw diskFull();
+          appendFileSync(path, data, options);
+        },
+      );
+      const writeFileSync = fs.writeFileSync;
+      const grow = spyOn(fs, "writeFileSync").mockImplementation(
+        (path, data, options) => {
+          if (
+            typeof path === "number" ||
+            (typeof path === "string" &&
+              path.startsWith(captureDirectory + "/"))
+          )
+            throw diskFull();
+          writeFileSync(path, data, options);
+        },
+      );
       try {
-        const models = createRouteModels({
+        const options = {
           route: SOL_ROUTE,
           retry: { maxRetries: 1, baseDelayMs: 1 },
           log,
           runId,
           sessionAffinity: runId,
-          auth: { tokenCommand: tokenCommand(directory, "lease").path },
+          auth,
           credentialInspection,
           capture,
           fetch: Object.assign(
@@ -623,10 +842,33 @@ for (const variant of [
             },
             { preconnect() {} },
           ),
-        });
-        const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
+        };
+        const models =
+          defaults === undefined
+            ? createRouteModels(options)
+            : captureNativeModels(defaults, options);
+        const model =
+          defaults === undefined
+            ? models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model)
+            : models
+                .getModels("openai")
+                .find(({ api }) => api === "openai-responses");
         if (!model) throw new Error("Expected coding route model");
         const result = await models.complete(model, prompt);
+        if (full) {
+          expect(routeFailureOf(result)).toMatchObject({
+            kind: "capture",
+            detail: expect.stringContaining(
+              "credential registration loss reserve is full. The call stopped because a credential could slip through unrecorded.",
+            ),
+          });
+          expect(result.errorMessage).toContain(
+            "credential registration loss reserve is full. The call stopped because a credential could slip through unrecorded.",
+          );
+          expect(isRetryableAssistantError(result)).toBe(false);
+          expect([writes, sent]).toEqual([2, 0]);
+          return;
+        }
         expect(routeFailureOf(result)).toBeUndefined();
         expect(result.content).toContainEqual(
           expect.objectContaining({ type: "text", text: "Done." }),
@@ -634,6 +876,8 @@ for (const variant of [
         expect(result.stopReason).toBe("stop");
         expect([writes, sent]).toEqual([2, 1]);
       } finally {
+        grow.mockRestore();
+        append.mockRestore();
         fault.mockRestore();
       }
       await log.flush?.();
@@ -645,45 +889,31 @@ for (const variant of [
       ).toMatchObject({
         callId: String(call?.call),
         event: "credential.registration",
-        reason: canIdentify ? "I/O error" : "disk full",
-        persisted: !unwritten,
+        reason: "disk full",
+        persisted: true,
       });
-      if (unwritten) await rm(lossFile, { recursive: true });
-
-      const callId = "later-call";
-      journal.capture({
-        type: "model.request",
-        scope,
-        callId,
-        route: "synthetic",
-        provider: "synthetic",
-        model: "synthetic",
-        headerNames: [],
-        credentialCoverage: "none",
-        body: {
-          status: "sent",
-          json: { text: variant === "clean" ? "Next." : "tok-1" },
+      expect(fs.existsSync(lossFile)).toBe(false);
+      expect(readCaptureLosses(captureDirectory)).toEqual([
+        {
+          callId: String(call?.call),
+          event: "credential.registration",
+          kind: "io",
+          reason: "disk full",
+          at: expect.any(String),
         },
-      });
-      journal.capture({ type: "model.response", scope, callId, status: 200 });
-      journal.capture({
-        type: "model.end",
-        scope,
-        callId,
-        outcome: "completed",
-      });
-      if (unwritten) {
-        expect(readCaptureLosses(captureDirectory)).toEqual([]);
-        expect(() => journal.close()).toThrow(
-          expect.objectContaining({
-            detail: "credential registration loss could not be recorded",
-          }),
-        );
-        const reopened = openCaptureJournal(captureDirectory, runId, {
-          allowCredentialLoss: true,
-        });
-        reopened.close();
-      } else journal.close();
+      ]);
+      captureWholeCall(journal, runId, clean ? "Next." : "tok-1");
+      // Leave the session unclosed. The reserve alone accounts for credential loss.
+      if (variant === "missing") await rm(reserve);
+      if (variant === "zeroed") await writeFile(reserve, Buffer.alloc(4096));
+      if (variant === "torn") {
+        const fd = fs.openSync(reserve, "r+");
+        try {
+          fs.writeSync(fd, Buffer.alloc(129, 0xa5), 0, 129, 0);
+        } finally {
+          fs.closeSync(fd);
+        }
+      }
 
       const input = {
         runId,
@@ -695,7 +925,18 @@ for (const variant of [
       const run = runIn(location);
       const root = join(directory, "datasets");
       await mkdir(root);
-      const { capture: raw } = value(await run(captureRunDump(input)));
+      const { capture: raw, raw: manifest } = value(
+        await run(captureRunDump(input)),
+      );
+      if (variant !== "missing")
+        expect(manifest.files).toContainEqual(
+          expect.objectContaining({
+            name: "capture/credential-loss.reserve",
+            size: 4096,
+          }),
+        );
+      if (clean || variant === "exposed" || variant === "unknown")
+        expect(manifest.counts.calls).toBe(2);
       const output = { capture: raw, root, retention: { policy: "synthetic" } };
       const expectHeld = async () => {
         for (const result of [
@@ -708,13 +949,17 @@ for (const variant of [
       expect(value(await run(scanStatus(raw))).status).toBe("pending");
       await expectHeld();
       value(await run(scanCaptures(location)));
-      if (variant !== "clean") {
+      if (!clean) {
         const status = value(await run(scanStatus(raw)));
         expect(status.status).toBe("refused");
         const reason =
           variant === "exposed"
             ? "credential exposure in exact source"
-            : "historical calls lack durable registration";
+            : variant === "unknown"
+              ? "the scan could not identify the credential"
+              : variant === "missing"
+                ? "credential registration loss reserve is missing"
+                : "credential registration loss reserve is damaged";
         expect(status).toMatchObject({
           reason: expect.stringContaining(reason),
         });
