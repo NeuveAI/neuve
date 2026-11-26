@@ -6,9 +6,9 @@ import linearMcp from "../plugins/linear/.mcp.json" with { type: "json" };
 const name = z.string().regex(/^[A-Za-z0-9_-]+$/);
 export const PluginPreferences = z.record(name, z.boolean());
 const values = z.record(z.string(), z.string());
-const server = z.discriminatedUnion("type", [
+const server = z.union([
 	z.strictObject({ type: z.literal("http"), url: z.string().min(1), headers: values.optional() }),
-	z.strictObject({ type: z.literal("stdio"), command: z.string().min(1), args: z.array(z.string()).optional(), env: values.optional() }),
+	z.strictObject({ type: z.literal("stdio").default("stdio"), command: z.string().min(1), args: z.array(z.string()).optional(), env: values.optional() }),
 ]);
 const variable = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const servers = z.record(name, server);
@@ -20,14 +20,22 @@ export const PluginManifest = z.strictObject({
 	manifest: z.strictObject({
 		name,
 		description: z.string().min(1),
+		version: z.string().optional(),
+		author: z.object({ name: z.string().min(1), email: z.string().optional(), url: z.string().optional() }).optional(),
+		homepage: z.string().optional(),
+		repository: z.string().optional(),
+		license: z.string().optional(),
+		keywords: z.array(z.string()).optional(),
+		mcpServers: servers.optional(),
 		interface: z.strictObject({ displayName: z.string().trim().min(1) }).optional(),
 		apiKey: z.record(name, z.string().regex(/^[A-Z_][A-Z0-9_]*$/)).optional(),
 	}),
-	mcp: z.union([z.strictObject({ mcpServers: servers }).transform(({ mcpServers }) => mcpServers), servers]),
+	mcp: z.union([z.strictObject({ mcpServers: servers }).transform(({ mcpServers }) => mcpServers), servers]).optional(),
 }).transform(({ manifest, mcp }, context) => {
+	const configured = { ...mcp, ...manifest.mcpServers };
 	const variables = new Set<string>();
 	const oauth = new Map<string, OAuthServer>();
-	for (const [name, config] of Object.entries(mcp)) {
+	for (const [name, config] of Object.entries(configured)) {
 		const fields = config.type === "http"
 			? [config.url, ...Object.values(config.headers ?? {})]
 			: [config.command, ...(config.args ?? []), ...Object.values(config.env ?? {})];
@@ -49,7 +57,7 @@ export const PluginManifest = z.strictObject({
 		name: manifest.name,
 		description: manifest.description,
 		displayName: manifest.interface?.displayName ?? manifest.name,
-		servers: mcp,
+		servers: configured,
 		variables,
 		oauth,
 		credentials: new Set([...variables, ...Object.values(manifest.apiKey ?? {})]),
@@ -67,7 +75,8 @@ export function expandPluginValue(value: string, credentials: ReadonlyMap<string
 	});
 }
 
-export const carriedPlugins = [PluginManifest.parse({ manifest: linear, mcp: linearMcp })];
+export const linearPlugin = PluginManifest.parse({ manifest: linear, mcp: linearMcp });
+export const carriedPlugins = [linearPlugin];
 const pluginSecrets = new Set(carriedPlugins.flatMap(plugin =>
 	[...plugin.credentials].flatMap(name => [name, `ACE_${name}`]),
 ));

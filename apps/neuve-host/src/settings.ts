@@ -19,6 +19,7 @@ import {
 	store,
 } from "./keys";
 import { carriedPlugins, type Plugin } from "./plugin-manifest";
+import { log } from "./log";
 import { pluginOAuth, type PluginOAuth } from "./plugin-oauth";
 import { defaultModel, models, parseModel } from "./manage";
 import { canonical } from "./move";
@@ -54,7 +55,12 @@ function provider(id: ProviderId) {
 /** Settings never waits on a keychain prompt; `fresh` reads again names whose last read prompted. */
 export async function settings(fresh?: boolean): Promise<Settings> {
 	const catalog = settled(fresh);
-	const enabled = pluginPreferences();
+	let enabled: ReturnType<typeof pluginPreferences> = {};
+	try {
+		enabled = pluginPreferences();
+	} catch {
+		log("warn", "plugin.preferences.failed");
+	}
 	const [statuses, plugins, usable, automatic] = await Promise.all([
 		Promise.all(
 			[...providers].map(async ([id, { name, key }]) =>

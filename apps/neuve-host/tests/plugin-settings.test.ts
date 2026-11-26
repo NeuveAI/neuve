@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -54,10 +54,12 @@ test("plugin settings validate native payloads, preserve preferences, and restri
 		const remove = parseNativeHostRequest({ op: "plugin-key-remove", plugin: "linear", name });
 		if (remove.op !== "plugin-key-remove") throw new Error("Missing key remove request");
 		await removePluginKey(remove.plugin, remove.name);
-		savePlugins({ linear: false });
+		await writeFile(join(root, "settings.json"), JSON.stringify({ folder: root, plugins: "on" }));
 		expect(await plugins()).toEqual([{
 			name: "linear", displayName: "Linear", description, enabled: false, signIn: { signedIn: false }, credentials: [{ name, source: "missing", stored: false }],
 		}]);
+		savePlugins({ linear: true });
+		expect((await plugins())[0]?.enabled).toBe(true);
 	} finally {
 		config.settings = previous;
 		for (const [index, name] of names.entries()) {

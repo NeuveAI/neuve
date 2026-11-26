@@ -71,6 +71,10 @@
 			"types": "./.types/src/browser.d.ts",
 			"default": "./src/browser.ts"
 		},
+		"./linear-plugin": {
+			"types": "./.types/src/linear-plugin.d.ts",
+			"default": "./src/linear-plugin.ts"
+		},
 		"./planning": {
 			"types": "./.types/src/planning.d.ts",
 			"default": "./src/planning.ts"

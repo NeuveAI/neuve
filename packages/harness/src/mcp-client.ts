@@ -5,12 +5,16 @@ import {
   StdioClientTransport,
   getDefaultEnvironment,
 } from "@modelcontextprotocol/client/stdio";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import {
+  StreamableHTTPClientTransport,
+  type StreamableHTTPClientTransportOptions,
+} from "@modelcontextprotocol/client";
 import { Context, Data, Deferred, Effect, Layer, Scope, Exit } from "effect";
 import type { z } from "zod";
 import {
   UnlistedVariable,
   expand,
+  type IntegrationFile,
   type IntegrationServer,
   type Integrations,
 } from "./integrations.ts";
@@ -80,7 +84,7 @@ const message = (error: unknown) =>
   (error instanceof Error ? error.message : String(error)).slice(0, 300);
 
 /** Builds the transport with the listed variables expanded from the environment now. */
-const transportFor = (name: string, server: IntegrationServer) => {
+const transportFor = (name: string, server: IntegrationServer, options: McpClientOptions) => {
   const unset: Array<string> = [];
   const take = (value: string) => {
     const expanded = expand(value, server.variables);
@@ -133,6 +137,7 @@ const transportFor = (name: string, server: IntegrationServer) => {
         new URL(take(server.transport.url)),
         {
           requestInit: { headers },
+          ...options.http?.(name),
         },
       ),
     };
@@ -150,6 +155,7 @@ const transportFor = (name: string, server: IntegrationServer) => {
 export type McpClientOptions = {
   readonly sanitizeError?: (error: unknown) => string;
   readonly captureDefinitions?: boolean;
+  readonly http?: (name: string) => Pick<StreamableHTTPClientTransportOptions, "authProvider" | "fetch"> | undefined;
 };
 
 export const connect = (
@@ -163,7 +169,7 @@ export const connect = (
         ? options.sanitizeError(error).slice(0, 300)
         : message(error);
     const built = yield* Effect.try({
-      try: () => transportFor(name, server),
+      try: () => transportFor(name, server, options),
       catch: (error) =>
         error instanceof IntegrationUnavailable
           ? error
@@ -311,7 +317,7 @@ export const connect = (
 export class McpClients extends Context.Service<
   McpClients,
   {
-    readonly integrations: Integrations;
+    readonly integrations: Integrations | IntegrationFile;
     readonly get: (
       server: string,
     ) => Effect.Effect<McpConnection, IntegrationUnavailable>;
@@ -320,7 +326,7 @@ export class McpClients extends Context.Service<
 
 /** The service for one scope (a run or a scope fetch): connections close when the scope closes. */
 export const mcpClientsLayer = (
-  integrations: Integrations,
+  integrations: Integrations | IntegrationFile,
   options: McpClientOptions = {},
 ) =>
   Layer.effect(
@@ -340,10 +346,10 @@ export const mcpClientsLayer = (
             IntegrationUnavailable
           >();
           opened.set(server, deferred);
-          const definition =
-            integrations.status === "configured"
-              ? integrations.file.servers[server]
-              : undefined;
+          const definitions = "servers" in integrations
+            ? integrations.servers
+            : integrations.status === "configured" ? integrations.file.servers : undefined;
+          const definition = definitions?.[server];
           // A caller that gives up (a timeout) never leaves the next caller waiting forever.
           const exit = yield* Effect.exit(
             definition === undefined

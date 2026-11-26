@@ -4,6 +4,7 @@ import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurr
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 
+import { serveOAuthFixture } from "./fixtures/oauth-http";
 import { expandPluginValue, PluginManifest } from "../src/plugin-manifest";
 import { pluginTools } from "../src/plugin-tools";
 
@@ -28,6 +29,22 @@ test("the manifest resolves the display name and restricts expansion to resolved
 	expect(PluginManifest.safeParse({ ...plugin, mcp: { mcpServers: { example: {
 		...plugin.mcp.mcpServers.example, command: "bun",
 	} } } }).success).toBe(false);
+});
+
+// Claude Code can carry the same untyped stdio definition inline and in .mcp.json.
+test("a Claude Code plugin can declare an untyped stdio server inline or beside its manifest", () => {
+	const server = { command: "npx", args: ["chrome-devtools-mcp@latest"] };
+	const manifest = {
+		name: "chrome-devtools-mcp", description: "Reliable automation in Chrome",
+		version: "0.21.0", author: { name: "Chrome DevTools" }, homepage: "https://developer.chrome.com/",
+		repository: "https://github.com/ChromeDevTools/chrome-devtools-mcp", license: "Apache-2.0",
+		keywords: ["chrome", "devtools"],
+	};
+	const mcpServers = { "chrome-devtools": server };
+	const expected = { "chrome-devtools": { type: "stdio", ...server } };
+	expect(PluginManifest.parse({ manifest: { ...manifest, mcpServers } }).servers).toEqual(expected);
+	expect(PluginManifest.parse({ manifest, mcp: { mcpServers } }).servers).toEqual(expected);
+	expect(PluginManifest.parse({ manifest: { ...manifest, mcpServers }, mcp: { mcpServers } }).servers).toEqual(expected);
 });
 
 const server = String.raw`
@@ -66,6 +83,9 @@ test("a running channel discovers, dispatches, and hides a plugin at the next re
 		(_level, event, fields) => log.push({ event, fields }),
 		[plugin], () => ({ fixture: enabled }), async () => credential,
 	);
+	let refreshed: Promise<void> = Promise.resolve();
+	const refresh = plugins.refresh;
+	plugins.refresh = registry => refreshed = refresh(registry);
 	const model = { provider: "faux", modelId: "agent" };
 	const fake = fauxProvider({ provider: model.provider, models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
 	const models = createModels();
@@ -100,15 +120,20 @@ test("a running channel discovers, dispatches, and hides a plugin at the next re
 	}
 	try {
 		expect((await ask()).offered).toEqual([]);
+		await refreshed;
 		enabled = true;
 		expect((await ask()).offered).toEqual([]);
+		await refreshed;
 		expect(log).toContainEqual({ event: "plugin.credential.unavailable", fields: { plugin: "fixture", name: "PLUGIN_FIXTURE" } });
 		credential = "unusable";
 		expect((await ask()).offered).toEqual([]);
+		await refreshed;
 		expect(log).toContainEqual({ event: "plugin.connection.failed", fields: { plugin: "fixture", server: "fixture" } });
 		credential = "fixture-value";
+		await ask();
+		await refreshed;
 		expect(await ask("ace", true)).toEqual({
-			offered: ["fixture_write_issue", "fixture_" + "r".repeat(56)],
+			offered: ["fixture_write_issue", "fixture_" + "r".repeat(44)],
 			result: [{ type: "text", text: "authorized:write.issue:tool argument" }],
 		});
 		expect(log).toContainEqual({ event: "plugin.connected", fields: { plugin: "fixture", server: "fixture", tools: 2 } });
@@ -124,4 +149,98 @@ test("a running channel discovers, dispatches, and hides a plugin at the next re
 	} finally {
 		await channel.close();
 	}
+});
+
+// Keep initialize unanswered through channel open and two admissions, then let the same request finish.
+test("an unanswered MCP connection does not delay channel open or messages", async () => {
+	const initialize = Promise.withResolvers<void>();
+	const connected = Promise.withResolvers<void>();
+	let initializations = 0;
+	const endpoint = serveOAuthFixture(async request => {
+		if (request.method === "GET") return new Response(null, { status: 405 });
+		const { id, method, params } = await request.json();
+		if (id === undefined) return new Response(null, { status: 202 });
+		if (method === "initialize") {
+			initializations++;
+			await initialize.promise;
+			return Response.json({ jsonrpc: "2.0", id, result: {
+				protocolVersion: params.protocolVersion, capabilities: { tools: {} },
+				serverInfo: { name: "pending", version: "1" },
+			} });
+		}
+		return Response.json({ jsonrpc: "2.0", id, result: {
+			tools: [{ name: "answer", inputSchema: { type: "object" } }],
+		} });
+	});
+	const plugin = PluginManifest.parse({
+		manifest: { name: "pending", description: "Holds initialization" },
+		mcp: { pending: { type: "http", url: endpoint.url.href, headers: { Authorization: "Bearer fixture" } } },
+	});
+	const plugins = pluginTools(() => {}, [plugin], () => ({ pending: true }));
+	const refresh = plugins.refresh;
+	plugins.refresh = registry => refresh(registry).then(() => { connected.resolve(); });
+	const model = { provider: "faux", modelId: "agent" };
+	const fake = fauxProvider({ provider: model.provider, models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
+	const models = createModels();
+	models.setProvider(fake.provider);
+	let channel: Channel | undefined;
+	try {
+		const before = performance.now();
+		channel = await Channel.open({
+			id: "pending-test", name: "pending-test", owner: "owner", project: import.meta.dir,
+			storage: new MemoryStorage(), defaultModel: async () => model, models, plugins,
+			env: cwd => new NodeExecutionEnv({ cwd }),
+			directory: { self: { id: "pending-test", name: "pending-test" }, list: async () => [], deliver: async () => {} },
+			log: () => {},
+		});
+		const opened = channel;
+		async function ask() {
+			const offer = Promise.withResolvers<string[]>();
+			fake.appendResponses([request => {
+				offer.resolve(getCurrentTools(request.messages).map(tool => tool.name).filter(name => name.startsWith("pending_")));
+				return fauxAssistantMessage("Done");
+			}]);
+			const response = await opened.handle({ op: "ask", author: "owner", text: "Say hello" }, () => {});
+			if (typeof response !== "object" || !response || !("submission" in response) || typeof response.submission !== "number")
+				throw new Error("Channel did not accept the request");
+			expect(await opened.handle({ op: "wait", submission: response.submission }, () => {})).toBe("done");
+			return offer.promise;
+		}
+		expect(await ask()).toEqual([]);
+		expect(await ask()).toEqual([]);
+		expect(performance.now() - before).toBeLessThan(2000);
+		initialize.resolve();
+		await connected.promise;
+		expect(await ask()).toEqual(["pending_answer"]);
+		expect(initializations).toBe(1);
+	} finally {
+		initialize.resolve();
+		await channel?.close();
+		await endpoint.stop(true);
+	}
+});
+
+// Closing while a credential read is unanswered must let shutdown finish and prevent a later install.
+test("a keychain read that finishes after close cannot install plugin tools", async () => {
+	const plugin = PluginManifest.parse({
+		manifest: { name: "fixture", description: "Blocked credential" },
+		mcp: { fixture: { command: process.execPath, args: ["--no-env-file", "--eval", server], env: { PLUGIN_FIXTURE: "${PLUGIN_FIXTURE}" } } },
+	});
+	const credential = Promise.withResolvers<string>();
+	const waiting = Promise.withResolvers<void>();
+	const plugins = pluginTools(() => {}, [plugin], () => ({ fixture: true }), () => {
+		waiting.resolve();
+		return credential.promise;
+	});
+	const { createRegistry } = await import("@earendil-works/pi-durable");
+	const registry = createRegistry();
+	const refresh = plugins.refresh(registry);
+	try {
+		await waiting.promise;
+		await plugins.close();
+	} finally {
+		credential.resolve("fixture-value");
+		await refresh;
+	}
+	expect(registry.snapshot().installed()).toEqual([]);
 });

@@ -241,7 +241,7 @@ export class Channel {
 	#options: Options;
 	#harness: Harness;
 	#log: Log;
-	#refreshPlugins?: () => Promise<void>;
+	#refreshPlugins?: () => void;
 	#metadata: Metadata;
 	#plans: Plans;
 	#builds: Builds;
@@ -361,18 +361,34 @@ export class Channel {
 		const installGuarded = install(registry, options.extension, planning, !!options.planFileAccess, log,
 			(chat, scope) => channel.#builds.paused(chat, scope));
 		const { plugins } = options;
-		const refreshPlugins = plugins && (() => plugins.refresh({
+		const unpublishedPlugins = new Set<string>();
+		const pluginRegistry = {
 			snapshot: () => registry.snapshot(),
-			uninstall: extension => registry.uninstall(extension),
-			install: installGuarded,
-		}));
+			uninstall: (extension: Parameters<Registry["uninstall"]>[0]) => {
+				unpublishedPlugins.delete(extension.name);
+				return registry.uninstall(extension);
+			},
+			install: (extension: Parameters<typeof installGuarded>[0]) => {
+				if (channel && channel.#closing.signal.aborted) return;
+				unpublishedPlugins.add(extension.name);
+				return installGuarded(extension);
+			},
+		};
+		let pluginRefresh: Promise<void> | undefined;
+		const refreshPlugins = plugins && (() => {
+			unpublishedPlugins.clear();
+			pluginRefresh ??= plugins.refresh(pluginRegistry)
+				.catch(() => log("warn", "plugin.refresh.unavailable"))
+				.finally(() => { pluginRefresh = undefined; });
+		});
 		const visible = execute || plugins
 			? capabilities(registry, () => [
 				...(execute && !available() ? [DESKTOP_EXTENSION] : []),
 				...(plugins?.hidden() ?? []),
+				...unpublishedPlugins,
 			])
 			: registry;
-		await refreshPlugins?.();
+		refreshPlugins?.();
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider), plugins?.httpTools),
 			registry: visible,
@@ -569,6 +585,13 @@ export class Channel {
 		return channel;
 		} catch (error) {
 			const errors: unknown[] = [error];
+			if (!ownedChannel) {
+				try {
+					await options.plugins?.close();
+				} catch (cleanup) {
+					errors.push(cleanup);
+				}
+			}
 			if (ownedChannel) {
 				try {
 					await ownedChannel.close();
@@ -587,11 +610,6 @@ export class Channel {
 					errors.push(cleanup);
 				}
 			} else {
-				try {
-					await options.plugins?.close();
-				} catch (cleanup) {
-					errors.push(cleanup);
-				}
 				try {
 					await options.storage.close(context);
 				} catch (cleanup) {
@@ -1311,7 +1329,7 @@ export class Channel {
 		const previous = this.#admissions.get(chat) || Promise.resolve();
 		// Selection and submission must stay together across concurrent clients.
 		const pending: Promise<T> = previous.catch(() => {}).then(async () => {
-			await this.#refreshPlugins?.();
+			this.#refreshPlugins?.();
 			return admit(pending);
 		});
 		this.#admissions.set(chat, pending);

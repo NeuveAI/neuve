@@ -14,6 +14,7 @@ import { oauthAccessToken, pluginOAuthTransport } from "./plugin-oauth-client";
 import { pluginPreferences } from "./preferences";
 
 const CONNECT = { timeout: 20_000 };
+const TOOL_NAME_LIMIT = 64 - "mcp__neuve__".length;
 const request = globalThis.fetch;
 
 function transport(config: PluginServer, credentials: ReadonlyMap<string, string>, oauth?: OAuthServer, signedIn = false) {
@@ -47,26 +48,24 @@ type Connection = {
 	httpTools: string[];
 };
 
-async function close(clients: Client[], plugin: string, log: Log): Promise<void> {
-	await Promise.all(clients.map(client => client.close().catch(() => {
-		log("warn", "plugin.close.failed", { plugin });
-	})));
-}
-
 async function connect(
 	plugin: Plugin, credentials: ReadonlyMap<string, string>, signedIn: ReadonlySet<string>, names: Set<string>, log: Log,
+	signal: AbortSignal, opened: Map<Client, { plugin: string; closing?: Promise<void> }>,
+	close: (clients: Client[]) => Promise<void>,
 ): Promise<{ connection: Connection; tools: ToolRegistration[] } | undefined> {
 	const connection: Connection = { credentials, signedIn, clients: [], httpTools: [] };
 	const tools: ToolRegistration[] = [];
 	for (const [server, config] of Object.entries(plugin.servers)) {
+		if (signal.aborted) return;
 		const client = new Client({ name: "ace", version: "1" });
+		opened.set(client, { plugin: plugin.name });
 		connection.clients.push(client);
 		try {
-			await client.connect(transport(config, credentials, plugin.oauth.get(server), signedIn.has(server)), CONNECT);
-			const { tools: listed } = await client.listTools(undefined, CONNECT);
+			await client.connect(transport(config, credentials, plugin.oauth.get(server), signedIn.has(server)), { ...CONNECT, signal });
+			const { tools: listed } = await client.listTools(undefined, { ...CONNECT, signal });
 			let accepted = 0;
 			for (const tool of listed) {
-				const name = `${server}_${tool.name}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+				const name = `${server}_${tool.name}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, TOOL_NAME_LIMIT);
 				const description = tool.description ?? "";
 				const reason = description.length > 4096 ? "description exceeds 4096 characters"
 					: declaresToolUseId(tool.inputSchema) ? "reserved input key"
@@ -106,8 +105,8 @@ async function connect(
 			}
 			log("info", "plugin.connected", { plugin: plugin.name, server, tools: accepted });
 		} catch {
-			log("warn", "plugin.connection.failed", { plugin: plugin.name, server });
-			await close(connection.clients, plugin.name, log);
+			if (!signal.aborted) log("warn", "plugin.connection.failed", { plugin: plugin.name, server });
+			await close(connection.clients);
 			return;
 		}
 	}
@@ -121,8 +120,20 @@ export function pluginTools(
 	readPreferences = pluginPreferences, lookup = key,
 ): NonNullable<Options["plugins"]> {
 	const active = new Map<Plugin, Connection>();
+	const opened = new Map<Client, { plugin: string; closing?: Promise<void> }>();
+	const lifetime = new AbortController();
 	const work = new SharedWork<void>();
-	const prefixes = plugins.flatMap(plugin => Object.keys(plugin.servers).map(server => `${server}_`.slice(0, 64)));
+	const prefixes = plugins.flatMap(plugin => Object.keys(plugin.servers).map(server => `${server}_`.slice(0, TOOL_NAME_LIMIT)));
+
+	async function close(clients: Client[]): Promise<void> {
+		await Promise.all(clients.map(client => {
+			const owned = opened.get(client);
+			if (!owned) return;
+			return owned.closing ??= client.close()
+				.catch(() => log("warn", "plugin.close.failed", { plugin: owned.plugin }))
+				.finally(() => { opened.delete(client); });
+		}));
+	}
 
 	function preferences() {
 		try {
@@ -146,25 +157,28 @@ export function pluginTools(
 			));
 		},
 		async refresh(registry) {
+			if (lifetime.signal.aborted) return;
 			await work.run({ scope: "plugins", key: "refresh", run: async () => {
 				let enabled = preferences();
 				for (;;) {
 					await reconcile(enabled, registry);
 					const next = preferences();
-					if (plugins.every(({ name }) => next[name] === enabled[name])) break;
+					if (lifetime.signal.aborted || plugins.every(({ name }) => next[name] === enabled[name])) break;
 					enabled = next;
 				}
 				return { kind: "succeeded", value: undefined };
 			} });
 		},
 		async close() {
-			await Promise.all([...active].map(([plugin, connection]) => close(connection.clients, plugin.name, log)));
+			lifetime.abort();
 			active.clear();
+			await close([...opened.keys()]);
 		},
 	};
 
 	async function reconcile(enabled: Record<string, boolean>, registry: Parameters<NonNullable<Options["plugins"]>["refresh"]>[0]) {
 		for (const plugin of plugins) {
+			if (lifetime.signal.aborted) return;
 			const name = extensionName(plugin);
 			const current = active.get(plugin);
 			const credentials = new Map<string, string>();
@@ -203,18 +217,24 @@ export function pluginTools(
 					break;
 				}
 			}
+			if (lifetime.signal.aborted) return;
 			if (current) {
 				if (ready && credentials.size === current.credentials.size && signedIn.size === current.signedIn.size
 					&& [...signedIn].every(name => current.signedIn.has(name))
 					&& [...credentials].every(([key, value]) => current.credentials.get(key) === value)) continue;
 				active.delete(plugin);
 				registry.uninstall({ name });
-				await close(current.clients, plugin.name, log);
+				await close(current.clients);
 			}
 			if (!ready) continue;
 			const names = new Set(registry.snapshot().tools().map(({ tool }) => tool.name));
-			const connected = await connect(plugin, credentials, signedIn, names, log);
+			const connected = await connect(plugin, credentials, signedIn, names, log, lifetime.signal, opened, close);
 			if (!connected) continue;
+			if (lifetime.signal.aborted) return;
+			if (preferences()[plugin.name] !== true) {
+				await close(connected.connection.clients);
+				continue;
+			}
 			active.set(plugin, connected.connection);
 			registry.install({ name, tools: connected.tools });
 		}

@@ -1,0 +1,20 @@
+{
+  "tools": ["list_issues", "get_issue"],
+  "identifiers": {
+    "identifier": "key",
+    "id": "id",
+    "uuid": "id",
+    "parentId": "id",
+    "workspaceId": "id",
+    "url": "url",
+    "assignee": "person",
+    "creator": "person",
+    "email": "email"
+  },
+  "planning": {
+    "sourceSchema": "linear-v1",
+    "search": { "tool": "list_issues", "queryArgument": "query", "cursorArgument": "cursor", "fixedArguments": { "limit": 50 } },
+    "issue": { "tool": "get_issue", "idArgument": "id" },
+    "dependencies": { "tool": "get_issue", "idArgument": "id", "fixedArguments": { "includeRelations": true } }
+  }
+}

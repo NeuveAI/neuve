@@ -123,7 +123,7 @@ export async function dispatchGateway(
 			return options.reviewRequests(catalog.read(request.channel).project, request.channel, request.after, signal);
 		}
 		case "planning-connections":
-			return PlanningConnectionsSchema.parse(options.planningConnections?.() || { connections: [], status: "unavailable", message: "Linear planning is not configured on this host." });
+			return PlanningConnectionsSchema.parse(await options.planningConnections?.() || { connections: [], status: "unavailable", message: "Linear planning is not configured on this host." });
 		case "reviews": {
 			if (request.item !== undefined) {
 				await reviewProjects.validateRepository(request.project);

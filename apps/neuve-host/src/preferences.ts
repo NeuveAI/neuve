@@ -53,13 +53,17 @@ export function folder(): string {
 }
 
 export function pluginPreferences(): Record<string, boolean> {
-	return PluginPreferences.parse(saved().plugins ?? {});
+	const { plugins } = saved();
+	return plugins === undefined ? {} : PluginPreferences.parse(plugins);
 }
 
 function save(patch: Saved): void {
 	const previous = saved();
 	const next = { ...previous, ...patch };
-	if (patch.plugins) next.plugins = { ...previous.plugins, ...patch.plugins };
+	if (patch.plugins) {
+		const existing = PluginPreferences.safeParse(previous.plugins);
+		next.plugins = { ...(existing.success ? existing.data : {}), ...patch.plugins };
+	}
 	mkdirSync(config.settings, { recursive: true, mode: 0o700 });
 	const temporary = join(config.settings, `.settings-${randomUUID()}.json`);
 	try {

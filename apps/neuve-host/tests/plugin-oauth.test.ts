@@ -30,7 +30,14 @@ async function fixture(expiresIn = 3600) {
 	let rejectAccess = false;
 	let rejectRefresh = false;
 	const hold = Promise.withResolvers<void>();
+	const refreshesSettled = Promise.withResolvers<void>();
+	let refreshReplies = 0;
 	const refreshing = Promise.withResolvers<void>();
+	const getStarted = Promise.withResolvers<void>();
+	const resumeGet = Promise.withResolvers<void>();
+	const bothRejected = Promise.withResolvers<void>();
+	let holdGet = false;
+	let rejections = 0;
 	let waiting = false;
 	const server = serveOAuthFixture(async request => {
 		const url = new URL(request.url);
@@ -39,9 +46,17 @@ async function fixture(expiresIn = 3600) {
 		switch (url.pathname) {
 			case "/mcp": {
 				const bearer = request.headers.get("authorization");
+				if (holdGet && request.method === "GET") {
+					getStarted.resolve();
+					await resumeGet.promise;
+				}
 				if ((bearer !== `Bearer ${access(rotation)}` || (rejectAccess && rotation === 0))
 					&& bearer !== "Bearer fixture-api-key") {
 					routes.push("401");
+					if (holdGet && rejectAccess) {
+						if (++rejections === 2) bothRejected.resolve();
+						await bothRejected.promise;
+					}
 					return new Response(null, {
 						status: 401, headers: { "www-authenticate": `Bearer realm="OAuth", resource_metadata="${url.origin}/discover", scope="read write"` },
 					});
@@ -141,15 +156,22 @@ async function fixture(expiresIn = 3600) {
 			return new Response(null, { status: 204 });
 		} catch {
 			return new Response(null, { status: 401 });
+		} finally {
+			if (++refreshReplies === 2) refreshesSettled.resolve();
 		}
 	});
 	config.port = owner.port!;
 	return {
 		routes, endpoint, plugin, log, logs,
 		changes: () => changes, refreshRequests: () => requests,
+		refreshesSettled: refreshesSettled.promise,
 		pauseRefresh() {
 			waiting = true;
 			return { started: refreshing.promise, release: hold.resolve };
+		},
+		pauseEventStream() {
+			holdGet = true;
+			return { started: getStarted.promise, resume: resumeGet.resolve };
 		},
 		rejectAccess: () => { rejectAccess = true; },
 		failRefresh: () => { rejectRefresh = true; },
@@ -270,13 +292,21 @@ test("a 401 on an active transport retries with the host's replacement access to
 	const f = await fixture();
 	try {
 		await f.complete();
+		const stream = f.pauseEventStream();
 		const client = await f.connect();
 		try {
+			await stream.started;
 			f.rejectAccess();
+			f.pauseRefresh();
+			stream.resume();
 			expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(["list_issues"]);
-			expect(f.routes.slice(-2)).toEqual(["401", "refresh"]);
-			expect(f.refreshRequests()).toBe(1);
+			await f.refreshesSettled;
+			expect(f.refreshRequests()).toBe(2);
+			expect(f.routes.filter(route => route === "refresh")).toEqual(["refresh"]);
+			const saved = await readSession(f.endpoint);
+			expect(saved?.kind === "signed-in" && saved.tokens.refresh_token).toBe(refreshToken(1));
 		} finally {
+			stream.resume();
 			await client.close();
 		}
 	} finally {
