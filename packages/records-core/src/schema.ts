@@ -6,6 +6,7 @@ import {
   evictableOutputsMigration,
 } from "./computation-schema.ts";
 import { jobQueueMigration } from "./queue-schema.ts";
+import { rawCapturePartsMigration } from "./raw-capture-parts.ts";
 import {
   reviewProjectionMigration,
   unknownCostMigration,
@@ -19,7 +20,7 @@ import { ventMigration, ventReconciliationMigration } from "./vent-schema.ts";
  * minimum writer: the highest floor a breaking migration declares (`MIGRATION_MIN_WRITERS`). Builds
  * whose `WRITER_VERSION` is below a store's minimum writer refuse it; every other build uses it.
  */
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 // 20: additive evictable outputs: kinds declared recomputable, pending blob removals, and the
 // "never delete" triggers made conditional; writer and projector floors stay unchanged.
 // 19: additive worker ownership marker and durable terminal job notices.
@@ -112,6 +113,7 @@ export const TABLE_ROLES = {
   worker_lock_claim: "jobs",
   job_notices: "jobs",
   blobs: "blobs",
+  raw_capture_parts: "blobs",
   computations: "computations",
   computation_attempts: "computations",
   computation_kinds: "computations",
@@ -322,4 +324,5 @@ export const migrations = {
   }),
   // Additive: older builds never delete, so the conditional triggers allow them nothing new.
   "20_evictable_outputs": evictableOutputsMigration,
+  "21_raw_capture_parts": rawCapturePartsMigration,
 };

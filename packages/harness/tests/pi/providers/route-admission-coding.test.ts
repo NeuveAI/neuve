@@ -36,7 +36,7 @@ import {
   OWNER,
 } from "../../../../../packages/channel/tests/helpers.ts";
 import { SOL_ROUTE } from "../../../src/route.ts";
-import { JournalLine } from "../../../src/pi/capture/types.ts";
+import { readCaptureJournal } from "../../../src/pi/capture/journal.ts";
 import { openRouteAdmission, createRouteModels } from "../../../src/coding.ts";
 import {
   openEndpoint,
@@ -349,10 +349,10 @@ test("reopened native summarize reads persisted floor without a repeated compact
       join(path, "capture/events.jsonl"),
       "utf8",
     );
-    const closedCapture = closedBytes
-      .trim()
-      .split("\n")
-      .map((line) => JournalLine.parse(JSON.parse(line)));
+    const closedJournal = readCaptureJournal(join(path, "capture"));
+    if (closedJournal._tag !== "Read")
+      throw new Error("Fixture journal is unreadable");
+    const closedCapture = closedJournal.lines;
     const artifact = closedCapture.findIndex(
       (line) =>
         line.event.type === "artifact" &&

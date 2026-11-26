@@ -450,6 +450,7 @@ export const visitCredentialSources = async (
   frames: ReadonlyArray<CredentialJson> | undefined,
   budget: InspectionBudget,
   visit: (identity: string, source: CredentialSource) => Promise<void>,
+  objects: readonly CredentialJson[] = [],
 ): Promise<void> => {
   const sources = new Set<string>();
   const accept = async (identity: string, source: CredentialSource) => {
@@ -488,6 +489,10 @@ export const visitCredentialSources = async (
     await budget?.checkpoint(4096);
     if (frame) await json("event-frame", frame);
     else await json("event", CredentialJson.serialize(line.event));
+  }
+  for (const object of objects) {
+    await budget?.checkpoint(4096);
+    await json("journal-object", object);
   }
   await authenticatedSdkViews(
     lines,
@@ -556,6 +561,7 @@ export const credentialSources = async (
   artifacts: Iterable<ArtifactSource> | AsyncIterable<ArtifactSource>,
   frames?: ReadonlyArray<CredentialJson>,
   budget: InspectionBudget = closeInspectionBudget(),
+  objects: readonly CredentialJson[] = [],
 ): Promise<ReadonlyMap<string, CredentialSource>> => {
   const sources = new Map<string, CredentialSource>();
   await visitCredentialSources(
@@ -569,6 +575,7 @@ export const credentialSources = async (
       sources.set(identity, source);
       budget.progress();
     },
+    objects,
   );
   return sources;
 };

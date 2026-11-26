@@ -118,7 +118,7 @@ test("a journal is refused once it would outgrow the dump, at capture, at reopen
   } as const;
   journal.capture(start);
   expect(await refusal(() => journal.capture(start))).toEqual([
-    "io",
+    "full",
     `${JOURNAL_FILE} would grow over the 400-byte limit`,
   ]);
   appendFileSync(join(at, JOURNAL_FILE), "x".repeat(400));
@@ -127,7 +127,7 @@ test("a journal is refused once it would outgrow the dump, at capture, at reopen
       openCaptureJournal(at, "R", { limits: limits(1024, 400) }),
     ),
   ).toEqual([
-    "io",
+    "full",
     expect.stringMatching(
       new RegExp(`^${JOURNAL_FILE} is \\d+ bytes, over the 400-byte limit$`),
     ),

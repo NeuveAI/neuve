@@ -1,3 +1,4 @@
+import { dumpJournalLines } from "./fixture.ts";
 import { captureSdk } from "./sdk-fixture.ts";
 import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
@@ -191,11 +192,7 @@ test("conversation and model source matrix refuses ownership and output contradi
     const bundle = await readDump(snapshot.directory);
     const raw: RawCaptureSources = {
       native: await readBackup(bundle.files.get("native/pi.sqlite")!),
-      lines: new TextDecoder()
-        .decode(bundle.files.get("journal/events.jsonl"))
-        .trim()
-        .split("\n")
-        .map((line) => JournalLine.parse(JSON.parse(line))),
+      lines: dumpJournalLines(bundle.files),
       tornLines: 0,
       backup: read.run.backup,
       journal: read.run.journal,
@@ -875,11 +872,7 @@ test("conversation and model source matrix refuses ownership and output contradi
     const compactionRaw: RawCaptureSources = {
       ...raw,
       native: await readBackup(compactionBundle.files.get("native/pi.sqlite")!),
-      lines: new TextDecoder()
-        .decode(compactionBundle.files.get("journal/events.jsonl"))
-        .trim()
-        .split("\n")
-        .map((line) => JournalLine.parse(JSON.parse(line))),
+      lines: dumpJournalLines(compactionBundle.files),
     };
     for (const field of [
       "input",

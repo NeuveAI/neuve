@@ -410,6 +410,7 @@ export const validateProjection = async (input: {
   readonly unjoined: ReadonlyArray<CallRecord>;
   readonly journal: ReadonlyArray<JournalLine>;
   readonly journalFrames?: ReadonlyArray<CredentialJson>;
+  readonly journalObjects?: ReadonlyArray<CredentialJson>;
   readonly files: ReadonlyMap<string, Uint8Array>;
   readonly portable: boolean;
   readonly snapshotId: string | undefined;
@@ -574,6 +575,7 @@ export const validateProjection = async (input: {
       })),
       input.journalFrames,
       input.budget,
+      input.journalObjects,
     ).catch((error: unknown) => {
       const failure = inspectionFailure(error);
       if (failure.reason === "budget" || failure.reason === "cancelled")

@@ -50,8 +50,9 @@ const exec = (statement: string) =>
     return yield* sql.unsafe<Record<string, unknown>>(statement);
   });
 
-/** The store as version 19 left it: migration 20's tables, indexes and triggers undone. */
 const BEFORE_20 = [
+  `DROP TRIGGER raw_capture_parts_guard`,
+  `DROP TABLE raw_capture_parts`,
   `DROP TRIGGER computations_evict_only`,
   `DROP TRIGGER computation_attempts_evict_only`,
   `DROP TRIGGER blobs_evict_only`,
@@ -66,7 +67,7 @@ const BEFORE_20 = [
   `CREATE TRIGGER computation_attempts_no_delete BEFORE DELETE ON computation_attempts
     BEGIN SELECT RAISE(ABORT, 'computation_attempts is append-only'); END`,
   `CREATE TRIGGER computations_append_only_delete BEFORE DELETE ON computations BEGIN SELECT RAISE(ABORT, 'computations is append-only'); END`,
-  `DELETE FROM records_migrations WHERE migration_id = 20`,
+  `DELETE FROM records_migrations WHERE migration_id >= 20`,
 ];
 
 const rows = Effect.all({
@@ -120,8 +121,7 @@ const storeWithOutputs = (location: StoreLocation) =>
     }),
   );
 
-test("a store at version 19 with outputs opens at 20 with everything it held, backed up first", async () => {
-  expect(SCHEMA_VERSION).toBe(20);
+test("a store at version 19 with outputs migrates with everything it held, backed up first", async () => {
   const location = freshLocation();
   await storeWithOutputs(location);
   const held = await runExisting(location, rows);
@@ -171,11 +171,11 @@ test("a store at version 19 with outputs opens at 20 with everything it held, ba
     "computations_append_only_delete",
   ]);
   expect(migrated).toEqual({
-    applied: ["20_evictable_outputs"],
+    applied: ["20_evictable_outputs", "21_raw_capture_parts"],
     rebuilt: false,
   });
   expect(readdirSync(`${location.directory}/backups`)).toHaveLength(1);
-  expect(after.version).toBe(20);
+  expect(after.version).toBe(SCHEMA_VERSION);
   // `blob_removals_cancel` deletes a pending mark when a blob row is inserted again.
   expect(after.triggers.map((row) => row["name"])).toEqual([
     "blob_removals_cancel",

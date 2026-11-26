@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { Cause, Effect, Exit, FileSystem, Layer, Option } from "effect";
+import { SqlClient } from "effect/sql/SqlClient";
 import { DatabaseSync } from "node:sqlite";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -27,7 +28,11 @@ import {
   removeRunFolder,
   runFolder,
 } from "../src/run-folder.ts";
-import { openCaptureJournal, sha256Of } from "../src/pi/capture/journal.ts";
+import {
+  OBJECTS_DIRECTORY,
+  openCaptureJournal,
+  sha256Of,
+} from "../src/pi/capture/journal.ts";
 import { readCapturedDump } from "../src/pi/capture/export.ts";
 import { SourceOwned, SourceOwnership } from "../src/pi/source-ownership.ts";
 
@@ -48,7 +53,11 @@ const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     ) as Effect.Effect<A, unknown, never>,
   );
 
-const endedNative = async (runId: string, native = true) => {
+const endedNative = async (
+  runId: string,
+  native = true,
+  instructions?: string,
+) => {
   await run(
     ensureRunFolder(location, {
       runId,
@@ -73,6 +82,26 @@ const endedNative = async (runId: string, native = true) => {
     route: "local",
     pricing: "subscription",
   });
+  if (instructions !== undefined) {
+    const scope = { runId };
+    journal.capture({
+      type: "model.request",
+      scope,
+      callId: "local",
+      route: "local",
+      provider: "local",
+      model: "local",
+      headerNames: [],
+      credentialCoverage: "none",
+      body: { status: "sent", json: { instructions } },
+    });
+    journal.capture({
+      type: "model.end",
+      scope,
+      callId: "local",
+      outcome: "failed",
+    });
+  }
   journal.capture({ type: "run.end", scope: { runId }, status: "completed" });
   journal.close();
   const receipt = Option.getOrThrow(
@@ -147,6 +176,34 @@ test("a missing native source refuses the receipt", async () => {
   const fixture = await endedNative("RECEIPT-MISSING");
   unlinkSync(fixture.database);
   await refuseStale(fixture);
+});
+
+test("a missing journal object invalidates an otherwise unchanged close receipt", async () => {
+  const instructions = "Evidence kept in the closed journal object.";
+  const fixture = await endedNative("RECEIPT-OBJECT", true, instructions);
+  const sha256 = sha256Of(Buffer.from(JSON.stringify(instructions)));
+  const protectedObjects = await run(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient;
+      return yield* sql<{
+        part: string;
+      }>`SELECT part_hash AS part FROM raw_capture_parts WHERE capture_hash = ${fixture.receipt.capture}`;
+    }),
+  );
+  expect(protectedObjects).toContainEqual({ part: sha256 });
+  unlinkSync(
+    join(
+      captureFolder(location, fixture.receipt.runId),
+      OBJECTS_DIRECTORY,
+      sha256,
+    ),
+  );
+  await refuseStale(fixture);
+  const dump = await run(readCapturedDump(fixture.receipt.capture));
+  expect(dump.unjoined[0]?.body).toEqual({
+    status: "sent",
+    json: { instructions },
+  });
 });
 
 // Receipt removal now trusts the stopped writer's capture and never opens its closed database.

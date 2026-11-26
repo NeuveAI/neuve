@@ -46,11 +46,17 @@ import {
 } from "./build.ts";
 import {
   CallRecord,
+  journalObjectFile,
   RunDump,
   SessionDump,
   type ArtifactRecord,
 } from "./dump.ts";
-import { sha256Of } from "./journal.ts";
+import {
+  decodeDumpJournal,
+  journalObjectFrames,
+  retainedPrefixProof,
+  sha256Of,
+} from "./journal.ts";
 import { validateProvenance, validateProjection } from "./provenance.ts";
 import { RECIPE_FILE, ProjectionRecipe } from "./sources.ts";
 import {
@@ -60,16 +66,15 @@ import {
 } from "./mask.ts";
 import { providerOutputAvailable } from "./provider-output.ts";
 import {
-  CredentialJson,
   inspectionFailure,
   type InspectionBudget,
 } from "./credential-detectors.ts";
 import {
   CAPTURE_VERSION,
+  captureFileLimit,
   CREDENTIAL_INSPECTION_POLICY,
   RETAINED_SDK_ASSEMBLY_POLICY,
   RETAINED_SDK_PIN,
-  JournalLine,
   type Json,
 } from "./types.ts";
 
@@ -88,34 +93,11 @@ import {
 
 export const DUMP_MEDIA_TYPE = "application/vnd.neuve.session-dump+json";
 
-const retainedPrefixProof = (
-  bytes: Uint8Array | undefined,
-): ReadonlyArray<string> => {
-  if (bytes === undefined) return [];
-  const calls = new Set<string>();
-  const rows = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
-    .decode(bytes)
-    .split("\n")
-    .slice(0, -1);
-  for (const row of rows) {
-    const parsed = JournalLine.safeParse(CredentialJson.parse(row).value);
-    if (!parsed.success)
-      throw new DumpRefused({
-        capture: "source",
-        reason: "restricted prefix evidence invalid",
-      });
-    const event = parsed.data.event;
-    if (event.type === "credential.inspection" && event.version === 3)
-      for (const call of event.retainedPrefixCalls) calls.add(call);
-  }
-  return [...calls].toSorted();
-};
-
 const manifestOf = (
   run: RunDump,
   redaction: Redaction,
   contents: ReadonlyArray<DumpContent>,
-  retainedPrefixCalls?: ReadonlyArray<string>,
+  retainedPrefixCalls: ReadonlyArray<string>,
 ): DumpManifest => ({
   format: DUMP_FORMAT,
   version: CAPTURE_VERSION,
@@ -125,18 +107,7 @@ const manifestOf = (
   inspectionPolicy: CREDENTIAL_INSPECTION_POLICY,
   retainedAssemblyPolicy: RETAINED_SDK_ASSEMBLY_POLICY,
   retainedSdkPin: RETAINED_SDK_PIN,
-  retainedPrefixCalls: [
-    ...(retainedPrefixCalls ??
-      retainedPrefixProof(
-        run.journal.status === "captured"
-          ? contents.find(
-              (content) =>
-                run.journal.status === "captured" &&
-                content.name === run.journal.file,
-            )?.bytes
-          : undefined,
-      )),
-  ].toSorted(),
+  retainedPrefixCalls: retainedPrefixCalls.toSorted(),
   files: contents.map((content) => ({
     name: content.name,
     mediaType: content.mediaType,
@@ -152,7 +123,12 @@ const sealed = async (
   scan?: DumpManifest["scan"],
 ) => {
   const manifest = {
-    ...manifestOf(dump.run, "restricted", dump.contents),
+    ...manifestOf(
+      dump.run,
+      "restricted",
+      dump.contents,
+      dump.retainedPrefixCalls,
+    ),
     ...(scan === undefined ? {} : { scan }),
   };
   const manifestBytes = encodeManifest(manifest);
@@ -365,11 +341,11 @@ const carried = (run: RunDump) => {
       sha256: run.backup.sha256,
       size: run.backup.size,
     });
-  if (run.journal.status === "captured")
-    files.set(run.journal.file, {
-      sha256: run.journal.sha256,
-      size: run.journal.size,
-    });
+  if (run.journal.status === "captured") {
+    files.set(run.journal.file, run.journal);
+    for (const object of run.journal.objects ?? [])
+      files.set(journalObjectFile(object.sha256), object);
+  }
   return files;
 };
 
@@ -386,6 +362,7 @@ const parseContents = async (
   snapshotId?: string,
   budget?: InspectionBudget,
   verified = false,
+  limits = DEFAULT_LIMITS,
 ): Promise<RestoredDump> => {
   budget?.charge("units", 0);
   const reject = (reason: string): never => {
@@ -457,55 +434,28 @@ const parseContents = async (
   const sessions = run.sessions.map((s) => json(SessionDump, s.file));
   const unjoined = json(z.array(CallRecord), "calls/unjoined.json");
   if (!verified) {
-    const journalLines: Array<JournalLine> = [];
-    const journalFrames: CredentialJson[] = [];
-    let tornLines = 0;
-    if (run.journal.status === "captured") {
-      const text = new TextDecoder("utf-8", {
-        fatal: true,
-        ignoreBOM: true,
-      }).decode(files.get(run.journal.file));
-      const rows = text.split("\n");
-      for (const [index, row] of rows.entries()) {
-        if (row === "" && index === rows.length - 1) continue;
-        let value: unknown;
-        let frame: CredentialJson | undefined;
-        try {
-          const parsed = CredentialJson.parse(row);
-          value = parsed.value;
-          frame = parsed.source;
-        } catch {
-          if (
-            index === rows.length - 1 &&
-            run.gaps.some((gap) => gap.code === "journal-torn")
-          ) {
-            tornLines += 1;
-            continue;
-          }
-          reject("raw journal contains an invalid line");
-        }
-        const parsed = JournalLine.safeParse(value);
-        if (!parsed.success)
-          reject("raw journal line does not match its schema");
-        else {
-          if (parsed.data.seq !== journalLines.length + 1)
-            reject("raw journal sequence is not contiguous");
-          journalLines.push(parsed.data);
-          if (frame === undefined) reject("raw journal source witness missing");
-          else journalFrames.push(frame);
-        }
-      }
-    }
+    const journal = decodeDumpJournal(files, limits);
+    if (journal._tag !== "Read") return reject("raw journal cannot be decoded");
+    const declaredObjects =
+      run.journal.status === "captured" ? (run.journal.objects ?? []) : [];
+    if (
+      declaredObjects.length !== journal.objects.size ||
+      new Set(declaredObjects.map(({ sha256 }) => sha256)).size !==
+        journal.objects.size ||
+      declaredObjects.some(
+        ({ sha256, size }) =>
+          journal.objects.get(sha256)?.bytes.byteLength !== size,
+      )
+    )
+      reject("raw journal object inventory disagrees with its references");
+    const tornLines =
+      run.gaps.find((gap) => gap.code === "journal-torn")?.count ?? 0;
+    if (journal.tornLines > tornLines)
+      reject("raw journal has an undisclosed torn line");
     if (
       !portable &&
       JSON.stringify(manifest.retainedPrefixCalls ?? []) !==
-        JSON.stringify(
-          retainedPrefixProof(
-            run.journal.status === "captured"
-              ? files.get(run.journal.file)
-              : undefined,
-          ),
-        )
+        JSON.stringify(retainedPrefixProof(journal.lines))
     )
       reject(
         "restricted retained-prefix proof disagrees with original journal",
@@ -516,18 +466,16 @@ const parseContents = async (
       run,
       sessions,
       unjoined,
-      journal: journalLines,
-      journalFrames,
+      journal: journal.lines,
+      journalFrames: journal.frames,
+      journalObjects: journalObjectFrames(journal.objects),
       files,
       portable,
       snapshotId,
       recipe: portable ? undefined : json(ProjectionRecipe, RECIPE_FILE),
-      tornLines: Math.max(
-        tornLines,
-        run.gaps.find((gap) => gap.code === "journal-torn")?.count ?? 0,
-      ),
+      tornLines,
     });
-    validateProvenance(source, run, sessions, unjoined, journalLines);
+    validateProvenance(source, run, sessions, unjoined, journal.lines);
   }
   budget?.charge("units", 0);
   return {
@@ -618,7 +566,11 @@ const readCapturedFiles = (
       return yield* reject("Records holds only restricted captures");
     const files = new Map<string, Uint8Array>();
     for (const file of manifest.files) {
-      const content = yield* read(file.sha256, limits.objectBytes, file.size);
+      const content = yield* read(
+        file.sha256,
+        captureFileLimit(file.name, limits),
+        file.size,
+      );
       if (content.byteLength !== file.size || sha256Of(content) !== file.sha256)
         return yield* reject(`${file.name}: checksum mismatch`);
       files.set(file.name, content);
@@ -663,6 +615,7 @@ export const readCapturedDump = (
           undefined,
           budget,
           true,
+          limits,
         ),
       catch: asRejection(held.source),
     });
@@ -698,6 +651,7 @@ export const readSessionDump = (
           dump.record.snapshotId,
           undefined,
           false,
+          limits,
         )),
         record: dump.record,
       };

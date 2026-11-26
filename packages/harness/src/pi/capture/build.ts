@@ -58,6 +58,7 @@ import {
   NATIVE_BACKUP_MEDIA_TYPE,
   RAW_JOURNAL_FILE,
   RAW_JOURNAL_MEDIA_TYPE,
+  journalObjectFile,
   type RunDump,
   type BackupStatus,
   type CloseMode,
@@ -66,11 +67,14 @@ import {
 } from "./dump.ts";
 import {
   OBJECTS_DIRECTORY,
+  journalObjectFrames,
   openCaptureJournal,
   readCaptureJournal,
+  retainedPrefixProof,
   sha256Of,
 } from "./journal.ts";
 import {
+  captureFileLimit,
   DEFAULT_LIMITS,
   type CapturedEvent,
   type DumpLimits,
@@ -141,6 +145,7 @@ export interface BuildInput {
 
 export interface BuiltDump {
   readonly run: RunDump;
+  readonly retainedPrefixCalls: readonly string[];
   readonly contents: ReadonlyArray<DumpContent>;
   readonly inspection?: CloseInspection;
 }
@@ -407,6 +412,7 @@ const build = async (
       reason: `capture journal line ${journal.line}: ${journal.reason}`,
     });
   let { lines } = journal;
+  const objectFrames = journalObjectFrames(journal.objects);
   if (lines.some(({ event }) => event.type === "native.import"))
     throw new NativeHistoryUncertified();
   const unsafe = credentialGuards(
@@ -442,7 +448,13 @@ const build = async (
         : await readNative(input.native.reads, input.native.context);
   progress.inventory = measuredCloseInventory(
     lines,
-    checkedCount(journal.bytes?.byteLength ?? 0, backup.bytes?.byteLength ?? 0),
+    [...journal.objects.values()].reduce(
+      (total, object) => checkedCount(total, object.bytes.byteLength),
+      checkedCount(
+        journal.bytes?.byteLength ?? 0,
+        backup.bytes?.byteLength ?? 0,
+      ),
+    ),
     checkedCount(
       native.session.length,
       ...native.conversations.map((conversation) =>
@@ -535,6 +547,7 @@ const build = async (
               kinds.push({ identity, kind: source.kind });
               await consume(source);
             },
+            objectFrames,
           );
           inventoryFinished = true;
         } catch (error) {
@@ -571,6 +584,7 @@ const build = async (
       artifacts(),
       journal.frames,
       budget,
+      objectFrames,
     ).catch(censusRefusal);
   }
   phase("inventory");
@@ -798,6 +812,14 @@ const build = async (
           file: RAW_JOURNAL_FILE,
           sha256: sha256Of(journal.bytes),
           size: journal.bytes.byteLength,
+          ...(journal.objects.size === 0
+            ? {}
+            : {
+                objects: [...journal.objects].map(([sha256, { bytes }]) => ({
+                  sha256,
+                  size: bytes.byteLength,
+                })),
+              }),
         };
   const originals = await Promise.all(
     of("artifact").map(async (event) => ({
@@ -872,6 +894,11 @@ const build = async (
             bytes: journal.bytes,
           },
         ]),
+    ...Array.from(journal.objects, ([sha256, { bytes }]) => ({
+      name: journalObjectFile(sha256),
+      mediaType: "application/json",
+      bytes,
+    })),
     ...(backup.bytes === undefined
       ? []
       : [
@@ -885,9 +912,10 @@ const build = async (
   // What the dump's readers would refuse is refused here, before anything is stored.
   let total = 0;
   for (const content of contents) {
-    if (content.bytes.byteLength > limits.objectBytes)
+    const limit = captureFileLimit(content.name, limits);
+    if (content.bytes.byteLength > limit)
       throw new DumpFailed({
-        reason: `${content.name} is ${content.bytes.byteLength} bytes, over the ${limits.objectBytes}-byte object limit`,
+        reason: `${content.name} is ${content.bytes.byteLength} bytes, over the ${limit}-byte object limit`,
       });
     total += content.bytes.byteLength;
   }
@@ -895,7 +923,7 @@ const build = async (
     throw new DumpFailed({
       reason: `the dump is ${total} bytes, over the ${limits.totalBytes}-byte limit`,
     });
-  return { run, contents };
+  return { run, contents, retainedPrefixCalls: retainedPrefixProof(lines) };
 };
 
 export const buildDump = async (

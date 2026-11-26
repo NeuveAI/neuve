@@ -77,6 +77,7 @@ test("a store from before the hybrid job refuses writes until migrate records th
       "18_computation_operation_index",
       "19_worker_lock_and_job_notices",
       "20_evictable_outputs",
+      "21_raw_capture_parts",
     ],
     rebuilt: true,
   });

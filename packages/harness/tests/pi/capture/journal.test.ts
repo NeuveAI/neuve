@@ -1,4 +1,4 @@
-// Why: a dataset is only as complete as its journal (10.148), and a failed capture used to land in
+// Why: a dataset is only as complete as its journal, and a failed capture used to land in
 // a memory-only list that a crash erased. These pin that every failure is thrown to the emitter,
 // that nothing after it is accepted, and that the next process's dump discloses it from what is on
 // disk alone, including when the failed write was the disk refusing (no further write is assumed).
@@ -7,6 +7,7 @@ import {
   appendFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -177,16 +178,16 @@ test("a line cut short by a crash is moved aside on reopen and disclosed as torn
   const folder = join(directory, "torn");
   const journal = openCaptureJournal(folder, "R");
   journal.capture(START);
-  appendFileSync(
-    join(folder, JOURNAL_FILE),
-    '{"v":1,"seq":3,"at":1,"event":{"type":"run.e',
-  );
+  const tail = '{"v":1,"seq":3,"at":1,"event":{"type":"' + "￥".repeat(30_000);
+  appendFileSync(join(folder, JOURNAL_FILE), tail);
   const reopened = openCaptureJournal(folder, "R");
   reopened.capture(END);
   reopened.close();
-  expect(
-    readdirSync(folder).filter((name) => name.startsWith("torn-")).length,
-  ).toBe(1);
+  const torn = readdirSync(folder).filter((name) => name.startsWith("torn-"));
+  expect(torn).toHaveLength(1);
+  const [partial] = torn;
+  if (!partial) throw new Error("Expected a torn journal frame");
+  expect(readFileSync(join(folder, partial), "utf8")).toBe(tail);
   expect((await gapsOf(folder)).map(([code, count]) => [code, count])).toEqual([
     ["journal-torn", 1],
     ["journal-interrupted", 1],
