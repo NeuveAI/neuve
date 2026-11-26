@@ -643,14 +643,14 @@ export const openCaptureJournal = (
       );
     const readable = maskArtifact(event.mediaType, event.bytes);
     try {
+      const previous = keptHashes.size;
+      const sha256 = keep(event.bytes);
+      if (keptHashes.size !== previous) syncPath(objects);
       if (readable._tag === "Malformed")
         return invalid(
           "artifact",
           `${event.name} (${event.mediaType}): ${readable.reason}`,
         );
-      const previous = keptHashes.size;
-      const sha256 = keep(event.bytes);
-      if (keptHashes.size !== previous) syncPath(objects);
       return {
         type: event.type,
         scope: event.scope,
