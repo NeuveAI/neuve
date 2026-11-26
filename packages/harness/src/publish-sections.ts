@@ -594,6 +594,45 @@ const walk = (cycleId: string, runKey: string) =>
     }
   });
 
+/**
+ * Immutable batch bases already selected by this sequence's existing publication mechanism.
+ * Includes an interrupted plan whose Records append has not finished. Follow-on hosts must not
+ * admit incoming claims into either basis: retry the selected plan and retain new observations
+ * as later information. `selected` is deliberately not a publication receipt or an approval.
+ * This is a read of retained computations, never a second publication store or scheduler.
+ */
+export const closedPublicationBatches = (cycleId: string, runKey: string) =>
+  Effect.gen(function* () {
+    const { chain, open } = yield* walk(cycleId, runKey);
+    const bases = [
+      ...chain.publications.map(({ plan }) => ({
+        plan,
+        status: "written" as const,
+      })),
+      ...(open === undefined
+        ? []
+        : [{ plan: open.plan, status: "selected" as const }]),
+    ];
+    const seen = new Set<string>();
+    return bases.flatMap(({ plan, status }) =>
+      plan.batches.flatMap((batch) => {
+        const key = batchKeyOf(batch.paths);
+        if (seen.has(key)) return [];
+        seen.add(key);
+        return [
+          {
+            key,
+            paths: sortedKeys(batch.paths),
+            sectionKeys: batch.sections
+              .map((section) => section.identity.key)
+              .sort(),
+            publication: { status, ordinal: plan.ordinal },
+          },
+        ];
+      }),
+    );
+  });
+
 // ---------------------------------------------------------------------------------------------
 // Lineage and carried decisions
 // ---------------------------------------------------------------------------------------------
