@@ -108,7 +108,6 @@ import {
   assessStep,
   laneReviewOutcomes,
   laneReviewStep,
-  withOffered,
   type ReadingProducer,
 } from "../../readings/steps.ts";
 import type { AgentReading } from "../contracts.ts";
@@ -1525,30 +1524,28 @@ export const readingStep = async (
   });
   return reread(
     erased(
-      withOffered(
-        comprehensiveStep({
-          base,
-          index: reading.index,
-          state: reviewToolState(state, ledger.state),
-          claims: ledger.claims,
-          evidence: ledger.evidence,
-          turns: bounds.turns,
-          identity: {
-            assignment: plan.groups.find((group) => group.id === p.group),
-            source: plan.source,
-            sections: planGroup(plan, p.group).keys.map((key) =>
-              plan.sections.find((section) => section.key === key),
-            ),
-            scope: sha256Hex(canonicalJson(rangeView.snapshot ?? null)),
-            proofs,
-            evidence,
-            readingChars,
-            // Side-effecting claims belong to the original durable task; replay reuses its children.
-            owner: p.owner,
-            review: p.review,
-          },
-        }),
-      ),
+      comprehensiveStep({
+        base,
+        index: reading.index,
+        state: reviewToolState(state, ledger.state),
+        claims: ledger.claims,
+        evidence: ledger.evidence,
+        turns: bounds.turns,
+        identity: {
+          assignment: plan.groups.find((group) => group.id === p.group),
+          source: plan.source,
+          sections: planGroup(plan, p.group).keys.map((key) =>
+            plan.sections.find((section) => section.key === key),
+          ),
+          scope: sha256Hex(canonicalJson(rangeView.snapshot ?? null)),
+          proofs,
+          evidence,
+          readingChars,
+          // Side-effecting claims belong to the original durable task; replay reuses its children.
+          owner: p.owner,
+          review: p.review,
+        },
+      }),
     ),
   );
 };

@@ -10,7 +10,7 @@ import {
   type AnyLaneReviewAnswer,
   type ReadingIndex,
 } from "./answers.ts";
-import type { LaneReviewStored } from "./steps.ts";
+import { LaneReviewStored, offeredDigest } from "./steps.ts";
 import {
   type RecordedReviewClaim,
   type ReviewEvidence,
@@ -173,8 +173,9 @@ export const comprehensiveStep = (p: {
       ),
     };
   };
-  return {
+  const step: AgentStep<ComprehensiveAnswer, LaneReviewStored> = {
     ...base,
+    schema: LaneReviewStored,
     spec: {
       ...base.spec,
       system: comprehensiveSystem,
@@ -236,6 +237,10 @@ export const comprehensiveStep = (p: {
     compose,
     partial: (summary) =>
       compose({ ...summary, status: "interrupted", output: undefined }),
+  };
+  return {
+    ...step,
+    inputs: { ...step.inputs, offered: offeredDigest(step.spec) },
   };
 };
 

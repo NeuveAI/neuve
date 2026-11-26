@@ -366,7 +366,7 @@ export const assessStep = (p: {
   const repair = (raw: unknown, index: ReadingIndex) =>
     assessRepair(raw, index, tested);
   const checks = checksOf(issues, reading.index);
-  return withOffered({
+  return withOffered<AnyAssessAnswer, AssessStored>({
     spec: {
       stage: p.stage,
       agent: `assess.${reading.groupId}`,
@@ -466,7 +466,7 @@ export const laneReviewStep = (p: {
           })
         : tool.handle(input),
   }));
-  return withOffered({
+  return withOffered<AnyLaneReviewAnswer, LaneReviewStored>({
     spec: {
       stage: p.stage,
       agent: `lane-review.${reading.groupId}`,
