@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { HostConfigSchema } from "@ace/host/host-config";
 import { createModels, type Message } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
@@ -20,6 +21,7 @@ import {
   tokenCommand,
 } from "../../../packages/harness/tests/pi/providers/fixture.ts";
 import { workspaceCaptureModels } from "../src/workspace-capture-models.ts";
+import { codingWorkerSetup } from "../src/workspace-cli.ts";
 
 test.each([
   { window: 100_000, percent: 80, usable: 80_000 },
@@ -54,6 +56,7 @@ test.each([
     const route = await codingRouteLimits(SOL_ROUTE, transport, (limits) =>
       observed.push(limits),
     );
+    if (!route) throw new Error("Account limits were not resolved");
     const model = workspaceCaptureModels(createModels(), {
       ...transport,
       route,
@@ -90,7 +93,7 @@ test("a missing ChatGPT sign-in leaves the configured route limits in place", as
       { auth: { directory, tokenCommand: null } },
       (limits) => observed.push(limits),
     );
-    expect(route).toEqual(SOL_ROUTE);
+    expect(route).toBeUndefined();
     expect(observed).toEqual([
       {
         account: "chatgpt",
@@ -103,6 +106,81 @@ test("a missing ChatGPT sign-in leaves the configured route limits in place", as
     ]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("chat openings retry a failed catalogue read, share the retry, and keep its limits", async () => {
+  // Credential inspection requires a directory outside temporary storage.
+  const scratch = mkdtempSync(
+    join(import.meta.dir, ".workspace-model-limits-"),
+  );
+  const releaseSources: (() => void)[] = [];
+  try {
+    const paths = {
+      canonicalClone: scratch,
+      worktrees: join(scratch, "lanes"),
+      state: join(scratch, "state"),
+      captures: join(scratch, "captures"),
+      cache: join(scratch, "cache"),
+      bunCache: join(scratch, "bun-cache"),
+      tmp: join(scratch, "tmp"),
+      builds: join(scratch, "builds"),
+    };
+    mkdirSync(paths.state);
+    mkdirSync(paths.worktrees);
+    const config = HostConfigSchema.parse({
+      home: paths.state,
+      lanes: paths.worktrees,
+      user: "person",
+      port: 0,
+      environment: {},
+      worker: [process.execPath],
+    });
+    const token = tokenCommand(scratch, "lease");
+    let requests = 0;
+    const setup = codingWorkerSetup({ paths }, SOL_ROUTE, {
+      auth: { tokenCommand: token.path },
+      fetch: Object.assign(
+        async () => {
+          if (++requests === 1) return new Response(null, { status: 503 });
+          return Response.json({
+            models: [
+              {
+                slug: SOL_ROUTE.model,
+                context_window: 100_000,
+                effective_context_window_percent: 80,
+                max_output_tokens: 12_000,
+              },
+            ],
+          });
+        },
+        { preconnect: () => {} },
+      ),
+    });
+    const openChat = async (sessionId: string) => {
+      const stateDirectory = join(paths.state, sessionId);
+      mkdirSync(stateDirectory, { mode: 0o700 });
+      const worker = { sessionId, config, stateDirectory };
+      const release = await setup.openSource?.(worker);
+      if (release) releaseSources.push(release);
+      const models = await setup.models(worker, createModels());
+      return models.getModel("openai", SOL_ROUTE.model);
+    };
+    expect(await openChat("first")).toMatchObject({
+      contextWindow: 475_000,
+      maxTokens: 128_000,
+    });
+    expect(requests).toBe(1);
+
+    const recovered = { contextWindow: 80_000, maxTokens: 12_000 };
+    const retry = await Promise.all([openChat("second"), openChat("third")]);
+    expect(retry).toMatchObject([recovered, recovered]);
+    expect(requests).toBe(2);
+    expect(await openChat("fourth")).toMatchObject(recovered);
+    expect(requests).toBe(2);
+  } finally {
+    for (const release of releaseSources) release();
+    rmSync(scratch, { recursive: true, force: true });
   }
 });
 

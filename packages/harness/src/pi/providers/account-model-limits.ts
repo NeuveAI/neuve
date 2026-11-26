@@ -79,26 +79,29 @@ async function readAccountModel(
   return { contextWindow: row.max_input_tokens, maxTokens: row.max_tokens };
 }
 
-/** The chat worker's account lookup is best effort and never changes a frozen review route. */
+/** Return a route only when the account reports at least one limit. */
 export async function codingRouteLimits(
   route: DirectRouteConfig,
   transport: Pick<RouteModelsOptions, "auth" | "baseUrl" | "fetch">,
   log: (fields: Readonly<Record<string, unknown>>) => void,
-): Promise<DirectRouteConfig> {
+): Promise<DirectRouteConfig | undefined> {
   const reported = await readAccountModel(route, transport).catch(
     () => undefined,
   );
   const window = reported?.contextWindow ?? route.window;
   const maxOutputTokens = reported?.maxTokens ?? route.maxOutputTokens;
+  const contextSource =
+    reported?.contextWindow == null ? "configured-route" : "account-catalog";
+  const outputSource =
+    reported?.maxTokens == null ? "configured-route" : "account-catalog";
   log({
     account: routeAccount(route)?.name ?? route.provider,
     model: route.model,
     contextWindow: window,
     maxOutputTokens,
-    contextSource:
-      reported?.contextWindow == null ? "configured-route" : "account-catalog",
-    outputSource:
-      reported?.maxTokens == null ? "configured-route" : "account-catalog",
+    contextSource,
+    outputSource,
   });
-  return { ...route, window, maxOutputTokens };
+  if (contextSource === "account-catalog" || outputSource === "account-catalog")
+    return { ...route, window, maxOutputTokens };
 }

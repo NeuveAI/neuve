@@ -80,6 +80,7 @@ import {
   Starter,
   storeLocationIn,
 } from "@neuve/records-core";
+import { SharedWork } from "@neuve/records-core/shared-work";
 import { captureRunDump } from "@neuve/harness/session-dump";
 import { workspaceCaptureModels } from "./workspace-capture-models.ts";
 import {
@@ -156,8 +157,26 @@ export function codingWorkerSetup(
 ): WorkerSetup {
   const chatRuntimes = new Map<string, WorkerChatRuntime>();
   const openingChats = new Map<string, Promise<WorkerChatRuntime>>();
-  let chatRoute = route;
-  let routeLimits: Promise<AnyRouteConfig> | undefined;
+  let accountRoute: Awaited<ReturnType<typeof codingRouteLimits>>;
+  const routeLimits = new SharedWork<AnyRouteConfig>();
+  const resolveChatRoute = async () => {
+    if (accountRoute || route.provider === "claude")
+      return accountRoute ?? route;
+    const { outcome } = await routeLimits.run({
+      scope: "coding-route-limits",
+      key: route.model,
+      run: async () => {
+        accountRoute = await codingRouteLimits(route, transport, (fields) =>
+          process.stderr.write(
+            `${JSON.stringify({ event: "model-limits.resolved", ...fields })}\n`,
+          ),
+        );
+        return { kind: "succeeded", value: accountRoute ?? route };
+      },
+    });
+    if (outcome.kind === "failed") throw outcome.error;
+    return outcome.value;
+  };
   configureReviewPreparation(async (project, range) => {
     const job = await CommitPrepare.requestRangePreparation(project, range);
     await keepWorkerFor({ project, job });
@@ -425,18 +444,9 @@ export function codingWorkerSetup(
       const opening = (async () => {
         const capture = modelCapture(worker);
         const credentialInspection = inspection(worker);
-        if (route.provider !== "claude")
-          chatRoute = await (routeLimits ??= codingRouteLimits(
-            route,
-            transport,
-            (fields) =>
-              process.stderr.write(
-                `${JSON.stringify({ event: "model-limits.resolved", ...fields })}\n`,
-              ),
-          ));
         const models = workspaceCaptureModels(defaults, {
           ...transport,
-          route: chatRoute,
+          route: await resolveChatRoute(),
           ...admission(worker),
           capture,
           credentialInspection,
@@ -480,7 +490,7 @@ export function codingWorkerSetup(
     nonTurnModels(worker, purpose, conversationId, defaults) {
       return workspaceCaptureModels(defaults, {
         ...transport,
-        route: chatRoute,
+        route: accountRoute ?? route,
         ...admission(worker),
         capture: modelCapture(worker),
         credentialInspection: inspection(worker),
