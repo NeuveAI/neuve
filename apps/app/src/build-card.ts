@@ -1,4 +1,4 @@
-import type { AgentName, Build, BuildAgent, Chat, ChatId, WorkMessage } from "@ace/channel/protocol";
+import type { AgentFailure, AgentName, Build, BuildAgent, Chat, ChatId, WorkMessage } from "@ace/channel/protocol";
 import type { AgentLineView, BuildCardView, Event, Mention } from "@ace/ui";
 
 import { AGENT_ALIAS } from "./agent-mention";
@@ -58,12 +58,29 @@ export function readOnly(id: ChatId, chat: Chat | undefined, builds: Build[]): b
 	return !!chat?.build || builds.some((build) => build.agents.some((agent) => agent.chat === id));
 }
 
+/** Why a failed agent stopped, in place of the caption its last work left. */
+function failureCaption({ reason, attempts }: AgentFailure): string {
+	switch (reason) {
+		case "retry-budget-exhausted":
+			return `Failed after ${attempts} attempts`;
+		case "ambiguous-tool-effect":
+			return "Stopped: a tool may have run without a recorded result";
+		case "unsafe-continuation":
+			return "Failed: the turn couldn't resume safely";
+		case "no_model":
+			return "Failed: no model to run on";
+		default:
+			return "Failed without an answer";
+	}
+}
+
 export function lineView(agent: BuildAgent): AgentLineView {
+	const caption = agent.state === "failed" && agent.failure ? failureCaption(agent.failure) : agent.caption;
 	return {
 		chat: agent.chat,
 		role: agent.role,
 		name: agentName(agent),
-		...(agent.caption ? { caption: agent.caption } : {}),
+		...(caption ? { caption } : {}),
 		state: agent.state,
 	};
 }
