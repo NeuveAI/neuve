@@ -13,7 +13,7 @@ import { HandleRegistryState } from "../../handle-schema.ts";
 import {
   RecordedReviewClaim,
   ReviewEvidence,
-} from "../../readings/reviewer-claims.ts";
+} from "../../readings/reviewer-claim-schema.ts";
 
 /**
  * What an agent context's tools hold between calls: its handles, recorded findings, reading budget

@@ -129,3 +129,38 @@ test("recording has no five-finding quota and own state is paged without sibling
   expect(page.text).not.toContain("Independent concern 9");
   expect(page.text).toContain("not verification or resolution");
 });
+
+// Why: persisted schema imports are also declaration dependencies. Pulling the executable claim
+// tools into contract-schema dragged the review pipeline into the host's capture-only closure.
+test("persisted claim schemas stay in a zod-only leaf and retain the public schema objects", async () => {
+  const leaf = new URL(
+    "../src/readings/reviewer-claim-schema.ts",
+    import.meta.url,
+  );
+  const imports = new Bun.Transpiler({ loader: "ts" }).scanImports(
+    await Bun.file(leaf).text(),
+  );
+  expect(imports.map((entry) => entry.path)).toEqual(["zod"]);
+  const contractImports = new Bun.Transpiler({ loader: "ts" }).scanImports(
+    await Bun.file(
+      new URL("../src/pi/stages/contract-schema.ts", import.meta.url),
+    ).text(),
+  );
+  expect(
+    contractImports.some((entry) =>
+      entry.path.endsWith("/reviewer-claim-schema.ts"),
+    ),
+  ).toBe(true);
+  expect(
+    contractImports.some((entry) => entry.path.endsWith("/reviewer-claims.ts")),
+  ).toBe(false);
+  const schemas = await import(leaf.href);
+  const tools = await import("../src/readings/reviewer-claims.ts");
+  for (const name of [
+    "ReviewEvidence",
+    "ReviewObservation",
+    "ReviewClaimBasis",
+    "RecordedReviewClaim",
+  ] as const)
+    expect(tools[name]).toBe(schemas[name]);
+});
