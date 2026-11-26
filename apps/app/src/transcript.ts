@@ -511,8 +511,11 @@ export function useTranscript(
 			// A re-watch replays the whole chat; the shown transcript stays until the replay is
 			// complete so the timeline, and what is expanded in it, stays mounted.
 			let replay: Transcript | undefined = EMPTY;
+			// The chats info names, and those a read already under way is for.
+			const known = new Set<number>();
 			const read = () =>
 				host.channel<ChannelInfo>(channel, { op: "info" }).then((value) => {
+					for (const { id } of value.chats) known.add(id);
 					if (current()) setInfo(value);
 				}, () => {});
 			refresh.current = () => void read();
@@ -543,7 +546,14 @@ export function useTranscript(
 					}
 					// Any chat's model change comes as its `agent` event; a mode change only info holds.
 					if (event.kind === "agent") setInfo((info) => info && changed(info, event));
-					if (event.kind === "run" || (event.kind === "agent" && event.mode !== undefined)) void read();
+					// A build's new agent is announced only by its builds, so its chat is read from info then.
+					const fresh = event.kind === "builds"
+						? event.builds.flatMap((build) => build.agents).filter((agent) => !known.has(agent.chat))
+						: [];
+					for (const { chat } of fresh) known.add(chat);
+					if (event.kind === "run" || (event.kind === "agent" && event.mode !== undefined) || fresh.length) {
+						void read();
+					}
 				},
 				// A released watch belongs to an old generation; a reconnecting host restarts every watch.
 				closed(reason) {

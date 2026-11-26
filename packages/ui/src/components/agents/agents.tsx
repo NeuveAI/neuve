@@ -56,11 +56,14 @@ export function RoleAvatar(
 	);
 }
 
-/** An agent's name and what it says it is doing, isolated so neither can reorder the other. */
+/**
+ * An agent's name and what it says it is doing, isolated so neither can reorder the other. Both
+ * truncate before the line's model and effort, which always show in full.
+ */
 function AgentLabel({ agent }: { agent: Pick<AgentLineView, "name" | "caption"> }) {
 	return (
 		<>
-			<bdi className="max-w-[60%] shrink-0 truncate font-medium text-foreground">{agent.name}</bdi>
+			<bdi className="min-w-0 max-w-[60%] truncate font-medium text-foreground">{agent.name}</bdi>
 			{agent.caption && <bdi className="min-w-0 flex-1 truncate text-muted-foreground">{agent.caption}</bdi>}
 		</>
 	);
@@ -82,7 +85,7 @@ export function AgentLine({ agent, plain }: { agent: AgentLineView; plain?: bool
 				? <RoleAvatar role={agent.role} size={20} />
 				: <img className="size-5 shrink-0 rounded-full object-cover" src={agent.avatar} alt="" />}
 			<AgentLabel agent={agent} />
-			<span className="ml-auto flex min-w-0 max-w-[45%] items-center gap-1.5">
+			<span className="ml-auto flex shrink-0 items-center gap-1.5">
 				{model?.(agent.chat, plain)}
 				<AgentStateIcon state={agent.state} />
 			</span>
