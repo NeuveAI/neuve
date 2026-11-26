@@ -119,11 +119,14 @@ export const credentialLossEpochs = (
   registrations: ReadonlyMap<string, string>,
 ) =>
   new Map(
-    losses.flatMap(({ callId, event, credentialCoverage, epochId }) =>
-      event === "credential.registration" || credentialCoverage === "required"
+    losses.flatMap((loss) => {
+      if (loss.event === "journal.open") return [];
+      const { callId, event, credentialCoverage, epochId } = loss;
+      return event === "credential.registration" ||
+        credentialCoverage === "required"
         ? [[callId, registrations.get(callId) ?? epochId ?? callId] as const]
-        : [],
-    ),
+        : [];
+    }),
   );
 
 type LossEvidence = {
@@ -685,9 +688,10 @@ export const openManagedCredentialInspection = (input: {
   if (
     journal._tag !== "Read" ||
     readCaptureLosses(input.journal, undefined, journal.lines).some(
-      ({ event, credentialCoverage }) =>
-        event === "credential.registration" ||
-        credentialCoverage === "required",
+      (loss) =>
+        loss.event !== "journal.open" &&
+        (loss.event === "credential.registration" ||
+          loss.credentialCoverage === "required"),
     ) ||
     credentialGuards(journal.lines).requiresInspection ||
     journal.lines.some((line) => line.event.type === "credential.registration")

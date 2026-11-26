@@ -362,25 +362,40 @@ for (const scenario of [
           reason: scenario === "registered" ? "journal limit" : "disk full",
         }));
       expect(losses).toHaveLength(hasReserve ? 2 : 1);
-      expect(events.filter(({ type }) => type === "capture.loss")).toEqual(
-        losses.map((loss) =>
+      const openLoss = {
+        sessionId: expect.any(String),
+        event: "journal.open",
+        kind: writable ? "full" : "io",
+        reason: writable ? "journal limit" : "disk full",
+      };
+      expect(events.filter(({ type }) => type === "capture.loss")).toEqual([
+        expect.objectContaining({
+          ...openLoss,
+          persisted: hasReserve,
+        }),
+        ...losses.map((loss) =>
           expect.objectContaining({ ...loss, persisted: hasReserve }),
         ),
-      );
+      ]);
       const lossFile = join(captureDirectory, CAPTURE_LOSS_FILE);
       const reserve = join(captureDirectory, CREDENTIAL_LOSS_RESERVE_FILE);
       const expected = losses.map((loss) => expect.objectContaining(loss));
-      if (scenario === "registered") {
-        expect(decodeCaptureLosses(await readFile(lossFile))).toEqual(expected);
+      const expectedOpen = expect.objectContaining(openLoss);
+      if (writable) {
+        expect(decodeCaptureLosses(await readFile(lossFile))).toEqual(
+          scenario === "registered"
+            ? [expectedOpen, ...expected]
+            : [expectedOpen],
+        );
         expect(
           decodeCredentialLossReserve(await readFile(reserve), true),
-        ).toEqual([]);
+        ).toEqual(scenario === "registered" ? [] : expected);
       } else {
         expect(fs.existsSync(lossFile)).toBe(false);
         if (hasReserve)
           expect(
             decodeCredentialLossReserve(await readFile(reserve), true),
-          ).toEqual(expected);
+          ).toEqual([expectedOpen, ...expected]);
         else expect(fs.existsSync(reserve)).toBe(false);
       }
       const input = {
@@ -405,7 +420,7 @@ for (const scenario of [
         );
         if (hasReserve) {
           const gap = run.gaps.find(({ code }) => code === "journal-failed");
-          expect(gap?.count).toBe(2);
+          expect(gap?.count).toBe(3);
           for (const loss of losses)
             expect(gap?.detail).toContain(
               `call ${loss.callId} lost capture at credential.registration`,
@@ -638,17 +653,23 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
         ["credential.registration", "full", "journal limit"],
         ["model.request", "full", "journal limit"],
       ]);
-      expect(losses.map(({ callId }) => callId)).toEqual(
+      expect(losses.map((loss) => "callId" in loss && loss.callId)).toEqual(
         calls.map(({ call }) => String(call)),
       );
-      expect(losses[1]?.epochId).toBe(losses[0]?.callId);
+      const [callLoss, registrationLoss] = losses;
+      if (
+        callLoss?.event !== "model.event" ||
+        registrationLoss?.event !== "credential.registration"
+      )
+        throw new Error("Expected the call and registration losses");
+      expect(registrationLoss.epochId).toBe(callLoss.callId);
       const journal = readCaptureJournal(captureDirectory, limits);
       expect(journal._tag).toBe("Read");
       if (journal._tag !== "Read") throw new Error("Expected journal");
       const requests = journal.lines.flatMap(({ event }) =>
         event.type === "model.request" ? [event.callId] : [],
       );
-      expect(requests).toEqual(losses.slice(0, 1).map(({ callId }) => callId));
+      expect(requests).toEqual([callLoss.callId]);
       const { run } = await buildDump({
         journal: captureDirectory,
         runId,
@@ -660,10 +681,13 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
       const gap = run.gaps.find(({ code }) => code === "journal-failed");
       expect(gap?.kind).toBe("capture");
       expect(gap?.count).toBe(3);
-      for (const loss of losses)
+      for (const loss of losses) {
+        if (loss.event === "journal.open")
+          throw new Error("Expected a model capture loss");
         expect(gap?.detail).toContain(
           `call ${loss.callId} lost capture at ${loss.event}`,
         );
+      }
       expect(run.journal.status).toBe("captured");
       expect(run.gaps.map(({ code }) => code)).not.toContain(
         "run-start-missing",
@@ -970,6 +994,8 @@ test("a native provider answers with a full journal and no recorded request", as
       kind: "full",
       reason: "journal limit",
     });
+    if (loss?.event !== "model.request")
+      throw new Error("Expected a model request loss");
     const { run } = await buildDump({
       journal: directory,
       runId: "native-full",
@@ -980,7 +1006,7 @@ test("a native provider answers with a full journal and no recorded request", as
       count: 1,
       kind: "capture",
       detail: expect.stringContaining(
-        `call ${loss?.callId} lost capture at model.request`,
+        `call ${loss.callId} lost capture at model.request`,
       ),
     });
   } finally {

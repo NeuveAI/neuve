@@ -639,15 +639,7 @@ export class CaptureFailed extends Data.TaggedError("CaptureFailed")<{
 /** Appends synchronously or throws `CaptureFailed`. */
 export type Capture = ModelCapture & ((event: CaptureEvent) => void);
 
-export const CaptureLoss = z.strictObject({
-  callId: z.uuid(),
-  event: z.enum([
-    "credential.registration",
-    "model.request",
-    "model.response",
-    "model.event",
-    "model.end",
-  ]),
+const CaptureLossFields = z.strictObject({
   kind: z.enum(["io", "full"]),
   reason: z.enum([
     "journal limit",
@@ -657,10 +649,29 @@ export const CaptureLoss = z.strictObject({
     "I/O error",
   ]),
   at: z.iso.datetime(),
-  credentialCoverage: z.literal("required").optional(),
-  epochId: z.uuid().optional(),
 });
+export const CaptureLoss = z.discriminatedUnion("event", [
+  CaptureLossFields.extend({
+    event: z.literal("journal.open"),
+    sessionId: z.uuid(),
+  }),
+  CaptureLossFields.extend({
+    callId: z.uuid(),
+    event: z.enum([
+      "credential.registration",
+      "model.request",
+      "model.response",
+      "model.event",
+      "model.end",
+    ]),
+    credentialCoverage: z.literal("required").optional(),
+    epochId: z.uuid().optional(),
+  }),
+]);
 export type CaptureLoss = z.infer<typeof CaptureLoss>;
+
+export const captureLossId = (loss: CaptureLoss) =>
+  loss.event === "journal.open" ? loss.sessionId : loss.callId;
 
 export type ModelCapture = ((event: ModelCaptureEvent) => void) & {
   readonly recordLoss?: (

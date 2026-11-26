@@ -42,7 +42,11 @@ export const measuredCloseInventory = (
     }),
   );
   if (losses.length === 0) return inventory;
-  const lostRequests = new Set(losses.map(({ callId }) => callId));
+  const lostRequests = new Set(
+    losses.flatMap((loss) =>
+      loss.event === "journal.open" ? [] : [loss.callId],
+    ),
+  );
   for (const { event } of lines)
     if (event.type === "model.request" && event.callId !== undefined)
       lostRequests.delete(event.callId);

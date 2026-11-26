@@ -1002,6 +1002,11 @@ test("the coding worker answers after its capture journal cannot reopen", async 
       );
       expect(readCaptureLosses(capture)).toEqual([
         expect.objectContaining({
+          sessionId: expect.any(String),
+          event: "journal.open",
+          reason: "disk full",
+        }),
+        expect.objectContaining({
           callId: expect.any(String),
           event: "credential.registration",
           reason: "disk full",

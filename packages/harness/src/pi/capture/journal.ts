@@ -42,6 +42,7 @@ import {
   CAPTURE_LOSS_FILE,
   CREDENTIAL_LOSS_RESERVE_FILE,
   CaptureLoss,
+  captureLossId,
   captureFileLimit,
   CaptureFailed,
   DEFAULT_LIMITS,
@@ -522,7 +523,8 @@ const captureLossRecorder = (
   const reserve = join(directory, CREDENTIAL_LOSS_RESERVE_FILE);
   const recordOrdinaryLoss = (loss: CaptureLoss) => {
     const losses = readOrdinaryCaptureLosses(directory, limits);
-    if (losses.some(({ callId }) => callId === loss.callId)) return;
+    if (losses.some((kept) => captureLossId(kept) === captureLossId(loss)))
+      return;
     const bytes = Buffer.from(
       JSON.stringify([...losses, CaptureLoss.parse(loss)]) + "\n",
     );
@@ -982,7 +984,8 @@ export const openCaptureJournal = (
     {
       limits,
       onCaptureLoss(record, persisted) {
-        if (persisted) pendingLosses.delete(record.callId);
+        if (persisted && record.event !== "journal.open")
+          pendingLosses.delete(record.callId);
         enqueueTelemetry(options.log, {
           type: "capture.loss",
           runId,
@@ -1112,6 +1115,21 @@ export const openCaptureJournal = (
     const failure = error instanceof CaptureFailed ? error : openFailure(error);
     failSession(failure);
     if (!options.allowCredentialLoss) throw failure;
+    if (failure.kind === "io" || failure.kind === "full")
+      try {
+        loss.recordLoss(
+          {
+            sessionId: randomUUID(),
+            event: "journal.open",
+            kind: failure.kind,
+            reason: failure.lossReason,
+            at: new Date().toISOString(),
+          },
+          failure.journalFull === true,
+        );
+      } catch {
+        // The recorder reports the failed write. The worker may continue.
+      }
   }
   const certifyAll: CaptureJournal["certifyAll"] = async (
     count,

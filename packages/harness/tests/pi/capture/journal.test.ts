@@ -1,5 +1,6 @@
 // Why: a dump must disclose a rejected capture or a torn line even after the writer exits.
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   appendFileSync,
   chmodSync,
@@ -18,8 +19,13 @@ import {
   JOURNAL_FILE,
   OBJECTS_DIRECTORY,
   openCaptureJournal,
+  readCaptureLosses,
 } from "../../../src/pi/capture/journal.ts";
-import type { CaptureEvent } from "../../../src/pi/capture/types.ts";
+import {
+  CAPTURE_LOSS_FILE,
+  DEFAULT_LIMITS,
+  type CaptureEvent,
+} from "../../../src/pi/capture/types.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "harness-capture-journal-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -53,6 +59,99 @@ const gapsOf = async (folder: string) =>
     gap.count,
     gap.detail,
   ]);
+
+for (const destination of ["loss file", "reserve", "log only"]) {
+  test(`a full journal discloses a restart without model calls in the ${destination}`, async () => {
+    const folder = join(directory, destination);
+    const previous = openCaptureJournal(folder, "R", {
+      allowCredentialLoss: true,
+    });
+    previous.capture(START);
+    previous.capture(END);
+    previous.close();
+    expect(
+      (await buildDump({ journal: folder, runId: "R" })).run.complete,
+    ).toBe(true);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      journalBytes: statSync(join(folder, JOURNAL_FILE)).size,
+    };
+    const diskFull = () => {
+      throw Object.assign(new Error("disk is full"), { code: "ENOSPC" });
+    };
+    const lossFileFault =
+      destination === "loss file"
+        ? undefined
+        : spyOn(fs, "writeFileSync").mockImplementation(diskFull);
+    const reserveFault =
+      destination === "log only"
+        ? spyOn(fs, "writeSync").mockImplementation(diskFull)
+        : undefined;
+    const reported: unknown[] = [];
+    try {
+      const journal = openCaptureJournal(folder, "R", {
+        limits,
+        allowCredentialLoss: true,
+        onCaptureLoss: (loss, persisted) => reported.push({ loss, persisted }),
+      });
+      const scope = { runId: "R", conversationId: 1 };
+      expect(
+        thrown(() => journal.capture({ type: "session.bind", scope })),
+      ).toMatchObject({ kind: "full", event: "journal.open" });
+      expect(
+        thrown(() =>
+          journal.capture({
+            type: "artifact",
+            scope,
+            name: "route-admission.json",
+            mediaType: "application/json",
+            bytes: Buffer.from("{}"),
+          }),
+        ),
+      ).toMatchObject({ kind: "full", event: "journal.open" });
+      expect(thrown(journal.close)).toMatchObject({
+        kind: "full",
+        event: "journal.open",
+      });
+    } finally {
+      reserveFault?.mockRestore();
+      lossFileFault?.mockRestore();
+    }
+
+    const { run } = await buildDump({ journal: folder, runId: "R", limits });
+    const persisted = destination !== "log only";
+    expect(run.complete).toBe(!persisted);
+    const losses = readCaptureLosses(folder, limits);
+    const startupLoss = expect.objectContaining({
+      sessionId: expect.any(String),
+      event: "journal.open",
+      kind: "full",
+      reason: "journal limit",
+    });
+    expect(reported).toEqual([{ loss: startupLoss, persisted }]);
+    expect(losses).toEqual(persisted ? [startupLoss] : []);
+    expect(fs.existsSync(join(folder, CAPTURE_LOSS_FILE))).toBe(
+      destination === "loss file",
+    );
+    if (persisted) {
+      const [loss] = losses;
+      if (loss?.event !== "journal.open")
+        throw new Error("Expected a journal open loss");
+      expect(run.gaps).toEqual([
+        {
+          kind: "capture",
+          code: "journal-failed",
+          count: 1,
+          detail: expect.stringContaining(
+            `session ${loss.sessionId} lost capture at journal.open`,
+          ),
+        },
+      ]);
+    } else {
+      expect(run.gaps).toEqual([]);
+    }
+  });
+}
 
 test("an invalid event is thrown to its emitter, nothing after it is kept, and the reopened journal's dump says so", async () => {
   const folder = join(directory, "invalid");

@@ -323,6 +323,7 @@ export const deriveCapture = async (
   );
   for (const loss of recipe.captureLosses ?? [])
     if (
+      loss.event !== "journal.open" &&
       loss.credentialCoverage === "required" &&
       calls.get(loss.callId)?.end === null
     )
@@ -1034,10 +1035,14 @@ export const deriveCapture = async (
   const journalSessions = sessionsOf(lines);
   const failures = [
     ...journalSessions.flatMap((s) => s.failures),
-    ...(recipe.captureLosses ?? []).map(
-      ({ callId, event, kind, reason, at }) =>
-        `call ${callId} lost capture at ${event} (${kind}, ${reason}, ${at}). The rest of its capture was skipped.`,
-    ),
+    ...(recipe.captureLosses ?? []).map((loss) => {
+      const { event, kind, reason, at } = loss;
+      const owner =
+        event === "journal.open"
+          ? `session ${loss.sessionId}`
+          : `call ${loss.callId}`;
+      return `${owner} lost capture at ${event} (${kind}, ${reason}, ${at}). The rest of its capture was skipped.`;
+    }),
   ];
   const interrupted = journalSessions.filter((s) => !s.closed);
   const lostWrites = interrupted.flatMap((session) => session.lostWrites);

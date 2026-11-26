@@ -11,6 +11,7 @@ import {
 import {
   CaptureFailed,
   CaptureLoss,
+  captureLossId,
   CREDENTIAL_LOSS_RESERVE_BYTES,
   type JournalLine,
 } from "./types.ts";
@@ -117,7 +118,7 @@ export const recordReservedCaptureLoss = (
       )
         throw new Error("credential registration loss reserve is damaged");
       const losses = decodeCredentialLossReserve(readFileSync(fd), true);
-      if (losses.some(({ callId }) => callId === loss.callId)) {
+      if (losses.some((kept) => captureLossId(kept) === captureLossId(loss))) {
         fsyncSync(fd);
         return;
       }
