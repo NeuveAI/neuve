@@ -196,6 +196,7 @@ export const stageProgress = (runId: string, stages: ReadonlyArray<string>) =>
  */
 export const REVIEW_EVENT_KINDS = [
   "review.requested@1",
+  "review.information-recorded@1",
   "stage.started@1",
   "stage.completed@1",
   "run.completed@1",

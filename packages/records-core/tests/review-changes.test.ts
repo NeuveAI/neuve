@@ -6,6 +6,8 @@ import { Effect } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import {
   Log,
+  PublishedPackets,
+  ReviewInformation,
   ReviewProgress,
   canonicalJson,
   mintUlid,
@@ -262,4 +264,95 @@ test("a cycle with no review request, or with an unfinished job of an unknown ki
     }),
   );
   expect(await going(location, cycleId)).toBe(false);
+});
+
+// A late fact can be the only write after publication and all model work has ended. The same
+// cycle mark used by the existing push stream must move, without revising the frozen package.
+test("later and unknown review information move the existing cycle mark without changing frozen publication or decisions", async () => {
+  const { newShapeReview } = await import("./review-fixtures.ts");
+  const { contentLayer, storeContent } = await import("./new-shape-support.ts");
+  const location = freshLocation();
+  const frozen = newShapeReview();
+  const result = await runOn(
+    location,
+    Effect.gen(function* () {
+      yield* storeContent(frozen);
+      yield* Log.append(frozen.all);
+      const before = yield* ReviewProgress.reviewSequence;
+      const packetBefore = yield* PublishedPackets.readExact(
+        frozen.events.second.id,
+      );
+      const sql = yield* SqlClient;
+      const stable = () => sql<{
+        kind: string;
+        envelope: string;
+      }>`SELECT kind, envelope FROM events
+      WHERE kind IN ('packet.published@1','packet.published@2','disposition.recorded@1','disposition.recorded@2','comment.recorded@1','comment.recorded@2','comment.recorded@3') ORDER BY seq`;
+      const stableBefore = yield* stable();
+      const fact: ReviewInformation.InformationInput = {
+        cycleId: frozen.cycleId,
+        runKey: sha256Hex(`run:${frozen.runId}`),
+        runId: frozen.runId,
+        claim: "late",
+        producer: { assignment: "original", task: 3 },
+        report: { text: "A late supported observation" },
+        source: { cycle: frozen.cycleId, run: frozen.runId },
+        anchor: { path: "src/large.ts", side: "new", startLine: 1, endLine: 1 },
+        destination: {
+          kind: "owned",
+          assignmentId: "destination",
+          sectionKey: "c".repeat(64),
+          batchId: "batch",
+        },
+        verify: { task: 4, computation: null, outcome: "unconfirmed" },
+        classification: "later-review-information",
+      };
+      const late = yield* ReviewInformation.record(fact);
+      const afterLate = yield* ReviewProgress.reviewSequence;
+      const lateCycles = yield* ReviewProgress.changedCycles(before, afterLate);
+      const unknown = yield* ReviewInformation.record({
+        ...fact,
+        claim: "unknown",
+        classification: "unknown-ownership",
+        destination: {
+          kind: "unassigned",
+          reason: "No primary owner",
+          sectionKeys: [],
+        },
+      });
+      const afterUnknown = yield* ReviewProgress.reviewSequence;
+      const unknownCycles = yield* ReviewProgress.changedCycles(
+        afterLate,
+        afterUnknown,
+      );
+      return {
+        before,
+        late,
+        afterLate,
+        lateCycles,
+        unknown,
+        afterUnknown,
+        unknownCycles,
+        packetBefore,
+        packetAfter: yield* PublishedPackets.readExact(frozen.events.second.id),
+        stableBefore,
+        stableAfter: yield* stable(),
+        page: yield* ReviewInformation.read({
+          cycleId: fact.cycleId,
+          runKey: fact.runKey,
+        }),
+      };
+    }).pipe(Effect.provide(contentLayer(location))),
+  );
+  expect(result.packetBefore).toBeDefined();
+  expect(result.afterLate).toBe(result.late.seq);
+  expect(result.afterLate).toBeGreaterThan(result.before);
+  expect(result.lateCycles).toEqual([frozen.cycleId]);
+  expect(result.afterUnknown).toBe(result.unknown.seq);
+  expect(result.unknownCycles).toEqual([frozen.cycleId]);
+  expect(result.packetAfter).toEqual(result.packetBefore);
+  expect(result.stableAfter).toEqual(result.stableBefore);
+  expect(
+    result.page.items.map((row) => row.event.payload.classification),
+  ).toEqual(["later-review-information", "unknown-ownership"]);
 });

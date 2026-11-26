@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Sha256 } from "./computations.ts";
+import { Ulid } from "./envelope.ts";
 
 /** Source facts only: recording this information never records a review disposition. */
 export const ReviewInformationDestination = z.discriminatedUnion("kind", [
@@ -46,6 +47,33 @@ export const ReviewInformationFact = z.strictObject({
     "unknown-ownership",
   ]),
 });
+
+/** A bounded read request, not a new attribution or decision. Filters precede paging. */
+export const ReviewInformationReadQuery = z.strictObject({
+  cycleId: Ulid,
+  runKey: Sha256,
+  afterSeq: z.int().nonnegative().optional(),
+  limit: z.int().min(1).max(1_000).optional(),
+  detailsBytes: z.int().min(0).max(1_048_576).optional(),
+  classifications: z
+    .array(ReviewInformationFact.shape.classification)
+    .min(1)
+    .max(3)
+    .optional(),
+  destination: z
+    .discriminatedUnion("kind", [
+      z.strictObject({
+        kind: z.literal("owned"),
+        sectionKeys: z.array(Sha256).min(1).max(4_096),
+      }),
+      // Unknown ownership is a separate query; candidate sections never imply an owner.
+      z.strictObject({ kind: z.literal("unassigned") }),
+    ])
+    .optional(),
+});
+export type ReviewInformationReadQuery = z.infer<
+  typeof ReviewInformationReadQuery
+>;
 
 /** Retained permanently, independently of the producer's native/capture lifetime. */
 export const ReviewInformationDetails = z.strictObject({

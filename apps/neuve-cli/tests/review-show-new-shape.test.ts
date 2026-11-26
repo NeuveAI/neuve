@@ -15,6 +15,8 @@ import {
   Blobs,
   Computations,
   PublishedPackets,
+  Log,
+  ReviewInformation,
   mintUlid,
   resolveStoreLocation,
   sha256Hex,
@@ -1013,3 +1015,82 @@ test("review show outside a git repository says so and exits 2", async () => {
     "neuve: --repo must name a folder inside a Git repository.\n",
   );
 }, 60_000);
+
+// The actual CLI must request relevant classes before its 100-row page, not discard ordinary
+// incoming facts after LIMIT and hide the first late/unknown observation behind them.
+test("review show exposes late and unknown facts beyond 100 incoming facts without changing its frozen packet", async () => {
+  const { repo, home, fixture, location } = await scratch();
+  const before = JSON.parse(show(home, repo, fixture.runId, true)) as Json;
+  const runKey = sha256Hex(`run:${fixture.runId}`);
+  await runOn(
+    location,
+    Effect.gen(function* () {
+      yield* Log.append([
+        {
+          ...envelope(
+            "review.requested@1",
+            `review.requested:${fixture.runId}`,
+            agent,
+            {
+              cycleId: fixture.cycleId,
+              range: { baseRef: "main", baseOid: "b".repeat(40), headOid },
+            },
+            { runKey, generation: 0, pipeline: { version: 13, config: {} } },
+          ),
+          id: fixture.runId,
+        },
+      ]);
+      const fact: ReviewInformation.InformationInput = {
+        cycleId: fixture.cycleId,
+        runKey,
+        runId: fixture.runId,
+        claim: "incoming-0",
+        producer: { assignment: "original-reviewer", task: 3 },
+        report: { text: "Source-backed observation" },
+        source: { cycle: fixture.cycleId, run: fixture.runId },
+        anchor: { path: "src/large.ts", side: "new", startLine: 1, endLine: 1 },
+        destination: {
+          kind: "owned",
+          assignmentId: "owner",
+          sectionKey: "c".repeat(64),
+          batchId: "batch",
+        },
+        verify: { task: 4, computation: null, outcome: "unconfirmed" },
+        classification: "incoming",
+      };
+      for (let i = 0; i < 101; i++)
+        yield* ReviewInformation.record({ ...fact, claim: `incoming-${i}` });
+      yield* ReviewInformation.record({
+        ...fact,
+        claim: "late-visible",
+        classification: "later-review-information",
+      });
+      yield* ReviewInformation.record({
+        ...fact,
+        claim: "unknown-visible",
+        classification: "unknown-ownership",
+        destination: {
+          kind: "unassigned",
+          reason: "No changed range owns the primary anchor",
+          sectionKeys: [],
+        },
+      });
+    }).pipe(Effect.provide(contentLayer(location))),
+  );
+  const after = JSON.parse(show(home, repo, fixture.runId, true)) as Json;
+  const facts = after["reviewInformation"] as {
+    items: Array<{ event: { payload: { claim: string } } }>;
+    hasMore: boolean;
+  };
+  expect(facts.items.map((row) => row.event.payload.claim)).toEqual([
+    "late-visible",
+    "unknown-visible",
+  ]);
+  expect(facts.hasMore).toBe(false);
+  expect(after["packet"]).toEqual(before["packet"]);
+  const text = show(home, repo, fixture.runId, false);
+  expect(text).toContain("late-visible");
+  expect(text).toContain("unknown-visible");
+  expect(text).toContain("outside the frozen package");
+  expect(text).not.toContain("incoming-100");
+});

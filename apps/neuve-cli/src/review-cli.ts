@@ -1595,6 +1595,7 @@ export const showOutput = async (
   const reviewInformation = await execute(
     withStore(repository, "read", (store) =>
       ReviewInformation.forRun(runId, {
+        classifications: ["later-review-information", "unknown-ownership"],
         limit: 100,
         detailsBytes: 65_536,
       }).pipe(Effect.provide(Blobs.layer(store))),

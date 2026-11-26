@@ -4,7 +4,7 @@ import { afterAll, expect, test } from "bun:test";
 import { Effect } from "effect";
 import type { FileSystem } from "effect/FileSystem";
 import { SqlClient } from "effect/sql/SqlClient";
-import { Blobs, ReviewInformation, mintUlid } from "../src/index.ts";
+import { Blobs, Log, ReviewInformation, mintUlid } from "../src/index.ts";
 import { freshLocation, removeTemporaryDirectories, runOn } from "./support.ts";
 
 afterAll(removeTemporaryDirectories);
@@ -238,4 +238,243 @@ test("concurrent drains join one immutable information fact", async () => {
   ).toHaveLength(1);
   expect(result.page.items).toHaveLength(1);
   expect(result.page.items[0]!.event.payload.producer).toEqual(fact.producer);
+});
+
+// Matching facts must be selected before LIMIT and before detail loading. A large unrelated
+// incoming claim cannot spend the small page or the source-detail allowance of a later claim.
+test("classification and stable-owner filters precede paging, while unknown ownership remains separate", async () => {
+  const location = freshLocation();
+  const fact = input();
+  const result = await on(
+    location,
+    Effect.gen(function* () {
+      for (let i = 0; i < 101; i++)
+        yield* ReviewInformation.record({
+          ...fact,
+          claim: `incoming-${i}`,
+          classification: "incoming",
+          report: { text: "x".repeat(2_000) },
+        });
+      yield* ReviewInformation.record({
+        ...fact,
+        claim: "other-owner",
+        destination: {
+          kind: "owned",
+          assignmentId: "sibling",
+          sectionKey: "f".repeat(64),
+          batchId: "other",
+        },
+      });
+      yield* ReviewInformation.record({
+        ...fact,
+        claim: "unknown",
+        destination: {
+          kind: "unassigned",
+          reason: "No primary owner",
+          sectionKeys: ["c".repeat(64)],
+        },
+        classification: "unknown-ownership",
+      });
+      yield* ReviewInformation.record({ ...fact, claim: "owned-late" });
+      yield* ReviewInformation.record({
+        ...fact,
+        claim: "another-owned-late",
+        producer: { ...fact.producer, assignment: "follow-on-assignment" },
+        destination: {
+          kind: "owned",
+          assignmentId: "new-map-label",
+          sectionKey: "c".repeat(64),
+          batchId: "new-batch-label",
+        },
+      });
+      yield* ReviewInformation.record({
+        ...fact,
+        claim: "other-run",
+        runKey: "b".repeat(64),
+      });
+      const query = { cycleId: fact.cycleId, runKey: fact.runKey };
+      const all = yield* ReviewInformation.read(query);
+      const owned = yield* ReviewInformation.read({
+        ...query,
+        classifications: ["later-review-information"],
+        destination: { kind: "owned", sectionKeys: ["c".repeat(64)] },
+        limit: 1,
+        detailsBytes: 1_000,
+      });
+      const next = yield* ReviewInformation.read({
+        ...query,
+        classifications: ["later-review-information"],
+        destination: { kind: "owned", sectionKeys: ["c".repeat(64)] },
+        limit: 1,
+        afterSeq: owned.nextSeq,
+      });
+      const unknown = yield* ReviewInformation.read({
+        ...query,
+        classifications: ["unknown-ownership"],
+        destination: { kind: "unassigned" },
+        limit: 1,
+      });
+      const late = yield* ReviewInformation.read({
+        ...query,
+        classifications: ["later-review-information", "unknown-ownership"],
+        limit: 2,
+      });
+      const nextLate = yield* ReviewInformation.read({
+        ...query,
+        classifications: ["later-review-information", "unknown-ownership"],
+        limit: 2,
+        afterSeq: late.nextSeq,
+      });
+      return { all, owned, next, unknown, late, nextLate };
+    }),
+  );
+  expect(result.all.items).toHaveLength(100);
+  expect(result.all.hasMore).toBe(true);
+  expect(result.all.items[0]!.event.payload.classification).toBe("incoming");
+  expect(result.owned.items.map((row) => row.event.payload.claim)).toEqual([
+    "owned-late",
+  ]);
+  expect(result.owned.items[0]!.details.status).toBe("available");
+  expect(result.owned.hasMore).toBe(true);
+  expect(result.next.items.map((row) => row.event.payload.claim)).toEqual([
+    "another-owned-late",
+  ]);
+  expect(result.next.hasMore).toBe(false);
+  expect(result.unknown.items.map((row) => row.event.payload.claim)).toEqual([
+    "unknown",
+  ]);
+  expect(result.unknown.items[0]!.event.payload.destination.kind).toBe(
+    "unassigned",
+  );
+  expect(result.unknown.hasMore).toBe(false);
+  expect(result.late.items.map((row) => row.event.payload.claim)).toEqual([
+    "other-owner",
+    "unknown",
+  ]);
+  expect(result.late.hasMore).toBe(true);
+  expect(result.nextLate.items.map((row) => row.event.payload.claim)).toEqual([
+    "owned-late",
+    "another-owned-late",
+  ]);
+  expect(result.nextLate.hasMore).toBe(false);
+});
+
+test("invalid and injection-shaped read filters are refused without changing retained facts", async () => {
+  const location = freshLocation();
+  const fact = input();
+  const bad = [
+    { classifications: [] },
+    { classifications: ["later-review-information') OR 1=1 --"] },
+    { destination: { kind: "owned", sectionKeys: [] } },
+    { destination: { kind: "owned", sectionKeys: ["c'.repeat(64) OR 1=1"] } },
+    { destination: { kind: "unassigned", sectionKeys: ["c".repeat(64)] } },
+    { limit: 0 },
+    { limit: 1_001 },
+    { afterSeq: -1 },
+    { afterSeq: 1.5 },
+    { detailsBytes: Number.POSITIVE_INFINITY },
+    { detailsBytes: Number.NaN },
+    { cycleId: "not-a-cycle" },
+    { runKey: "not-a-key" },
+  ];
+  const results = await on(
+    location,
+    Effect.gen(function* () {
+      yield* ReviewInformation.record(fact);
+      const errors = [];
+      for (const filter of bad)
+        errors.push(
+          yield* Effect.result(
+            ReviewInformation.read({
+              cycleId: fact.cycleId,
+              runKey: fact.runKey,
+              ...filter,
+            } as Parameters<typeof ReviewInformation.read>[0]),
+          ),
+        );
+      return {
+        errors,
+        page: yield* ReviewInformation.read({
+          cycleId: fact.cycleId,
+          runKey: fact.runKey,
+        }),
+      };
+    }),
+  );
+  expect(
+    results.errors.every(
+      (result) =>
+        result._tag === "Failure" &&
+        result.failure instanceof ReviewInformation.InformationRefused,
+    ),
+  ).toBe(true);
+  expect(results.page.items).toHaveLength(1);
+  expect(results.page.items[0]!.event.payload.claim).toBe(fact.claim);
+});
+
+test("forRun keeps the request's authoritative cycle/run identity while forwarding validated filters", async () => {
+  const location = freshLocation();
+  const fact = input();
+  const requestId = mintUlid();
+  const result = await on(
+    location,
+    Effect.gen(function* () {
+      yield* Log.append([
+        {
+          id: requestId,
+          actor: "f".repeat(64),
+          kind: "review.requested@1",
+          idempotencyKey: `request:${requestId}`,
+          occurredAt: new Date().toISOString(),
+          attribution: {
+            cycleId: fact.cycleId,
+            range: {
+              baseRef: "main",
+              baseOid: "a".repeat(40),
+              headOid: "b".repeat(40),
+            },
+          },
+          payload: {
+            runKey: fact.runKey,
+            generation: 0,
+            pipeline: { version: 13, config: {} },
+          },
+        },
+      ]);
+      yield* ReviewInformation.record(fact);
+      yield* ReviewInformation.record({
+        ...fact,
+        claim: "unknown",
+        classification: "unknown-ownership",
+        destination: {
+          kind: "unassigned",
+          reason: "No owner",
+          sectionKeys: [],
+        },
+      });
+      const filtered = yield* ReviewInformation.forRun(requestId, {
+        classifications: ["unknown-ownership"],
+        destination: { kind: "unassigned" },
+      });
+      const forged = yield* Effect.result(
+        ReviewInformation.forRun(requestId, {
+          cycleId: mintUlid(),
+          runKey: "e".repeat(64),
+        } as unknown as NonNullable<
+          Parameters<typeof ReviewInformation.forRun>[1]
+        >),
+      );
+      return { filtered, forged };
+    }),
+  );
+  expect(result.filtered?.items.map((row) => row.event.payload.claim)).toEqual([
+    "unknown",
+  ]);
+  expect(result.filtered?.items[0]!.event.attribution.cycleId).toBe(
+    fact.cycleId,
+  );
+  expect(result.forged).toMatchObject({
+    _tag: "Failure",
+    failure: { _tag: "InformationRefused" },
+  });
 });

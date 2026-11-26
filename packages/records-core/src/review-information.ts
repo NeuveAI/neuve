@@ -4,6 +4,7 @@ import {
   ReviewInformationDetails,
   ReviewInformationFact,
   ReviewInformationRecorded,
+  ReviewInformationReadQuery,
 } from "@neuve/records-schema";
 import { BlobStore } from "./blobs.ts";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
@@ -90,32 +91,40 @@ export interface InformationRow {
 }
 
 /** Independent side-channel projection; never inserts comments, changes closure or rewrites manifests. */
-export const read = (input: {
-  readonly cycleId: string;
-  readonly runKey: string;
-  readonly afterSeq?: number;
-  readonly limit?: number;
-  /** Aggregate bytes loaded for report/source details; omitted facts keep their durable references. */
-  readonly detailsBytes?: number;
-}) =>
+export const read = (input: ReviewInformationReadQuery) =>
   Effect.gen(function* () {
-    const limit = Math.min(1_000, Math.max(1, Math.trunc(input.limit ?? 100)));
+    const parsed = ReviewInformationReadQuery.safeParse(input);
+    if (!parsed.success)
+      return yield* new InformationRefused({
+        message: "Invalid review information read query",
+      });
+    const query = parsed.data;
+    const limit = query.limit ?? 100;
     const sql = yield* SqlClient;
+    const classification =
+      query.classifications === undefined
+        ? sql`1`
+        : sql`json_extract(envelope, '$.payload.classification') IN ${sql.in(query.classifications)}`;
+    const destination =
+      query.destination === undefined
+        ? sql`1`
+        : query.destination.kind === "unassigned"
+          ? sql`json_extract(envelope, '$.payload.destination.kind') = 'unassigned'`
+          : sql`json_extract(envelope, '$.payload.destination.kind') = 'owned'
+          AND json_extract(envelope, '$.payload.destination.sectionKey') IN ${sql.in(query.destination.sectionKeys)}`;
     const rows = yield* sql<{
       seq: number;
       envelope: string;
     }>`SELECT seq, envelope FROM events
-    WHERE kind = 'review.information-recorded@1'
-      AND json_extract(envelope, '$.attribution.cycleId') = ${input.cycleId}
-      AND json_extract(envelope, '$.payload.runKey') = ${input.runKey}
-      AND seq > ${input.afterSeq ?? 0}
-    ORDER BY seq LIMIT ${limit + 1}`;
+      WHERE kind = 'review.information-recorded@1'
+        AND json_extract(envelope, '$.attribution.cycleId') = ${query.cycleId}
+        AND json_extract(envelope, '$.payload.runKey') = ${query.runKey}
+        AND seq > ${query.afterSeq ?? 0}
+        AND ${classification} AND ${destination}
+      ORDER BY seq LIMIT ${limit + 1}`;
     const blobs = yield* BlobStore;
     const items: InformationRow[] = [];
-    let remainingDetails = Math.min(
-      MAX_DETAILS_BYTES,
-      Math.max(0, Math.trunc(input.detailsBytes ?? 65_536)),
-    );
+    let remainingDetails = query.detailsBytes ?? 65_536;
     for (const row of rows.slice(0, limit)) {
       const event = yield* Effect.try({
         try: () => ReviewInformationRecorded.parse(JSON.parse(row.envelope)),
@@ -170,25 +179,29 @@ export const read = (input: {
     return {
       items,
       hasMore: rows.length > limit,
-      nextSeq: items.at(-1)?.seq ?? input.afterSeq ?? 0,
+      nextSeq: items.at(-1)?.seq ?? query.afterSeq ?? 0,
     };
   });
 
 /** Includes follow-on runs' observations, even when this run has no published packet. */
 export const forRun = (
   runId: string,
-  page?: {
-    readonly afterSeq?: number;
-    readonly limit?: number;
-    readonly detailsBytes?: number;
-  },
+  page?: Omit<ReviewInformationReadQuery, "cycleId" | "runKey">,
 ) =>
   Effect.gen(function* () {
+    const parsed = ReviewInformationReadQuery.omit({
+      cycleId: true,
+      runKey: true,
+    }).safeParse(page ?? {});
+    if (!parsed.success)
+      return yield* new InformationRefused({
+        message: "Invalid review information page query",
+      });
     const held = Option.getOrUndefined(yield* get(runId));
     if (held?.event.kind !== "review.requested@1") return undefined;
     return yield* read({
+      ...parsed.data,
       cycleId: held.event.attribution.cycleId,
       runKey: held.event.payload.runKey,
-      ...page,
     });
   });
