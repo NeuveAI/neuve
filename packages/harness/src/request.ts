@@ -415,6 +415,8 @@ export const prepareReviewConfig = (
         readings,
       ),
     );
+    const problem = currentPipelineProblem(PIPELINE_VERSION, config);
+    if (problem !== undefined) return yield* Effect.fail(new Error(problem));
     if (options.runtimes !== undefined)
       yield* routeOwnsLoop(config.route, options.runtimes);
     return config;

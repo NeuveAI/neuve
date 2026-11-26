@@ -21,8 +21,8 @@ export const RouteAccount = z.strictObject({
 export type RouteAccount = z.infer<typeof RouteAccount>;
 
 /**
- * The kinds of review step an effort can be set for (12 November): the four agent stages, and the
- * readers' assessment, lane review and briefing.
+ * Frozen step names, including `find` for historical route and computation readback. New
+ * comprehensive-review admission removes the retired finder effort through currentReviewRoute.
  */
 export const StepKind = z.enum([
   "frame",
@@ -44,6 +44,15 @@ export const StepEffort = z.partialRecord(
   z.enum(["low", "medium", "high"]),
 );
 export type StepEffort = z.infer<typeof StepEffort>;
+
+/** New settings/admission only. Never apply this to a parsed frozen request or its runSpec. */
+export const currentStepEffort = (
+  effort: StepEffort | undefined,
+): StepEffort | undefined => {
+  if (effort === undefined) return undefined;
+  const { find: _find, ...active } = effort;
+  return Object.keys(active).length === 0 ? undefined : active;
+};
 
 /**
  * A model route frozen into each run's configuration (0008): the provider, the model, its effort,
@@ -136,6 +145,14 @@ export type AnyRouteConfig = z.infer<typeof AnyRouteConfig>;
 /** The route a run's configuration accepts. */
 export const RouteConfig = AnyRouteConfig;
 export type RouteConfig = z.infer<typeof RouteConfig>;
+
+/** Ignore retired finder-only effort knobs when creating new work, not when reading history. */
+export const currentReviewRoute = (route: RouteConfig): RouteConfig => {
+  const stepEffort = currentStepEffort(route.stepEffort);
+  if (stepEffort === route.stepEffort) return route;
+  const { stepEffort: _stepEffort, ...rest } = route;
+  return { ...rest, ...(stepEffort === undefined ? {} : { stepEffort }) };
+};
 
 export class RouteRuntimeMismatch extends Data.TaggedError(
   "RouteRuntimeMismatch",

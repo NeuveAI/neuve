@@ -17,6 +17,7 @@ import {
   OPUS_ROUTE,
   RouteConfig,
   computationRoute,
+  currentReviewRoute,
   routeAccount,
   routeRuntimeError,
   stageCapabilitiesMissing,
@@ -29,7 +30,7 @@ import { DEFAULT_READING_BOUNDS } from "./reading-groups.ts";
 import { READING_RECIPE_SCOPE_AND_TESTS } from "./readings/plan.ts";
 import { StackToolsConfig } from "./stack/settings.ts";
 
-/** A new fixed review shape gets a new run key, including for an unfinished older request. */
+/** A new review shape gets a distinct key; older frozen requests require a compatible build. */
 export const PIPELINE_VERSION = 13;
 export const REVIEW_OWNERSHIP = "batch-assignment-v1" as const;
 
@@ -107,6 +108,7 @@ export const PipelineConfig = z.strictObject({
     turnLimits: z.strictObject({
       frame: z.int().min(1).optional(),
       map: z.int().min(1).optional(),
+      /** Retained in frozen request JSON; never a current admission knob. */
       find: z.int().min(1).optional(),
       verify: z.int().min(1).optional(),
       // Read-only compatibility for frozen requests. These keys never schedule a stage.
@@ -197,6 +199,12 @@ export const currentPipelineProblem = (
     parsed.data.readings.scopeAndTests !== true
   )
     return "This review lacks the required batch-owned comprehensive review configuration. It cannot execute or be upgraded in place; request a distinct new review.";
+  if (
+    parsed.data.budgets.turnLimits.find !== undefined ||
+    parsed.data.route.stepEffort?.find !== undefined ||
+    parsed.data.stub?.hold?.stage === "find"
+  )
+    return "This frozen review carries retired finder-only configuration. It cannot execute or be normalized in place; request a distinct review with current configuration.";
   return undefined;
 };
 
@@ -238,10 +246,20 @@ export const runConfig = (
 };
 export type ReadingsConfig = NonNullable<PipelineConfig["readings"]>;
 
+// Legacy find-steps.ts remains a caller of this fallback. New configs never freeze it;
+// remove the fallback with that builder, not from historical PipelineConfig parsing.
 const turnLimits = { frame: 1, map: 1, find: 11, verify: 1 } satisfies Record<
   AgentStage,
   number
 >;
+
+const currentStub = (
+  stub: StubSettings | undefined,
+): StubSettings | undefined => {
+  if (stub?.hold?.stage !== "find") return stub;
+  const { hold: _hold, ...active } = stub;
+  return Object.keys(active).length === 0 ? undefined : active;
+};
 
 export const defaultConfig = (
   stub?: StubSettings,
@@ -262,42 +280,47 @@ export const defaultConfig = (
   sections?: SectionsConfig,
   /** The comprehensive readings; absent uses the required default, never disables review. */
   readings?: ReadingsConfig,
-): PipelineConfig => ({
-  ownership: REVIEW_OWNERSHIP,
-  route,
-  budgets: {
-    turnLimits: {
-      frame: turnLimits.frame,
-      map: turnLimits.map,
-      verify: turnLimits.verify,
+): PipelineConfig => {
+  const activeStub = currentStub(stub);
+  return {
+    ownership: REVIEW_OWNERSHIP,
+    route: currentReviewRoute(route),
+    budgets: {
+      turnLimits: {
+        frame: turnLimits.frame,
+        map: turnLimits.map,
+        verify: turnLimits.verify,
+      },
+      callsInFlight: CALLS_IN_FLIGHT,
+      contextCeiling: contextCeiling(route),
+      toolResultTokens: TOOL_RESULT_TOKENS,
+      lifetimeMs: Duration.toMillis(lifetime),
+      cutoffMs: Duration.toMillis(runCutoff(lifetime)),
     },
-    callsInFlight: CALLS_IN_FLIGHT,
-    contextCeiling: contextCeiling(route),
-    toolResultTokens: TOOL_RESULT_TOKENS,
-    lifetimeMs: Duration.toMillis(lifetime),
-    cutoffMs: Duration.toMillis(runCutoff(lifetime)),
-  },
-  ...(stub === undefined || Object.keys(stub).length === 0 ? {} : { stub }),
-  precompute: {
-    ...defaultManifestSettings(route.window),
-    ...(search?.leads === undefined ? {} : { retriever: search.leads }),
-    // Graph's lead round waits as long as a review waits on Graph at a time (0013).
-    ...(search?.leads?.id === "graph"
-      ? { graphWaitMs: search.tools?.graphDeadlineMs ?? GRAPH_DEADLINE_MS }
-      : {}),
-  },
-  ...(search?.tools === undefined ? {} : { search: search.tools }),
-  ...(stack === undefined ? {} : { stack }),
-  sections: sections ?? sectionsConfig(true)!,
-  readings: {
-    ...(readings ?? {
-      mode: "probe",
-      bounds: { ...DEFAULT_READING_BOUNDS },
-      recipe: READING_RECIPE_SCOPE_AND_TESTS,
-    }),
-    scopeAndTests: true,
-  },
-});
+    ...(activeStub === undefined || Object.keys(activeStub).length === 0
+      ? {}
+      : { stub: activeStub }),
+    precompute: {
+      ...defaultManifestSettings(route.window),
+      ...(search?.leads === undefined ? {} : { retriever: search.leads }),
+      // Graph's lead round waits as long as a review waits on Graph at a time (0013).
+      ...(search?.leads?.id === "graph"
+        ? { graphWaitMs: search.tools?.graphDeadlineMs ?? GRAPH_DEADLINE_MS }
+        : {}),
+    },
+    ...(search?.tools === undefined ? {} : { search: search.tools }),
+    ...(stack === undefined ? {} : { stack }),
+    sections: sections ?? sectionsConfig(true)!,
+    readings: {
+      ...(readings ?? {
+        mode: "probe",
+        bounds: { ...DEFAULT_READING_BOUNDS },
+        recipe: READING_RECIPE_SCOPE_AND_TESTS,
+      }),
+      scopeAndTests: true,
+    },
+  };
+};
 
 /** The run's Precompute settings: frozen with the request, or the defaults for an older request. */
 export const precomputeSettings = (config: PipelineConfig) =>

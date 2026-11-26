@@ -2,7 +2,13 @@
 // readings-off setting to bypass its only reviewer. The guard is exercised through real Records
 // admission/readback and the handler, not just an isolated version-number assertion.
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
@@ -25,11 +31,16 @@ import {
   PipelineConfig,
   REVIEW_OWNERSHIP,
   currentPipelineProblem,
+  runKeyFor,
   defaultConfig,
   runSpec,
 } from "../src/config.ts";
 import { reviewRunHandler, sweepEndedRuns } from "../src/handler.ts";
-import { prepareReviewConfig, readingsConfig } from "../src/request.ts";
+import {
+  prepareReviewConfig,
+  readingsConfig,
+  requestReview,
+} from "../src/request.ts";
 import { recompose } from "../src/recompose.ts";
 import { ensureRunFolder, runFolder } from "../src/run-folder.ts";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
@@ -204,4 +215,122 @@ test("legacy queued/resumed requests and follow-ons refuse before native executi
   expect(readFileSync(sentinel)).toEqual(originalNative);
   expect(result.recomposed._tag).toBe("Failure");
   expect(result.after).toEqual(result.before);
+});
+
+test("new public requests remain admitted after parsing and ignore obsolete finder-only controls", async () => {
+  const repository = join(root, "current-request-repo");
+  const git = (...args: string[]) => {
+    const result = Bun.spawnSync(["git", "-C", repository, ...args], {
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+    });
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  };
+  mkdirSync(repository);
+  git("init", "-q");
+  for (const text of ["before", "after"]) {
+    writeFileSync(join(repository, "file.txt"), text);
+    git("add", "file.txt");
+    git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "commit",
+      "-qm",
+      text,
+    );
+  }
+  const location = storeLocationIn(join(root, "current-request-store"));
+  const base = defaultConfig();
+  const controls = { ...base.route, stepEffort: { find: "high" as const } };
+  expect(
+    runKeyFor(
+      { baseRef: "main", baseOid: "a".repeat(40), headOid: "b".repeat(40) },
+      defaultConfig({ hold: { stage: "find", seconds: 1 } }, controls),
+    ),
+  ).toBe(
+    runKeyFor(
+      { baseRef: "main", baseOid: "a".repeat(40), headOid: "b".repeat(40) },
+      base,
+    ),
+  );
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Store.prepareForWrite;
+      const options = {
+        location,
+        repository,
+        range: "HEAD~1..HEAD",
+        requester: { _tag: "Unresolved" as const },
+        route: base.route,
+        search: {},
+        stack: undefined,
+        deadline: undefined,
+      };
+      const first = yield* requestReview(options);
+      const repeated = yield* requestReview({
+        ...options,
+        route: controls,
+        stub: { hold: { stage: "find", seconds: 1 } },
+      });
+      const parsed = PipelineConfig.parse(first.config);
+      const bad = [
+        {
+          ...parsed,
+          budgets: {
+            ...parsed.budgets,
+            turnLimits: { ...parsed.budgets.turnLimits, find: 11 },
+          },
+        },
+        { ...parsed, route: controls },
+        { ...parsed, stub: { hold: { stage: "find" as const, seconds: 1 } } },
+      ];
+      const sql = yield* SqlClient;
+      const count = () =>
+        sql<{
+          n: number;
+        }>`SELECT count(*) AS n FROM events WHERE kind='review.requested@1'`;
+      const before = yield* count();
+      for (const frozenConfig of bad) {
+        const snapshot = JSON.stringify(frozenConfig);
+        expect(currentPipelineProblem(13, frozenConfig)).toContain(
+          "retired finder-only",
+        );
+        const refused = yield* Effect.result(
+          requestReview({ ...options, frozenConfig }),
+        );
+        expect(refused._tag).toBe("Failure");
+        expect(JSON.stringify(frozenConfig)).toBe(snapshot);
+      }
+      return { first, repeated, parsed, before, after: yield* count() };
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          JobQueue.layer,
+          Computations.layer.pipe(Layer.provideMerge(Blobs.layer(location))),
+        ),
+      ),
+      Effect.provide(Store.layer(location, { create: true })),
+      Effect.provide(BunFileSystem.layer),
+    ),
+  );
+  expect(result.repeated.dedupeKey).toBe(result.first.dedupeKey);
+  expect(result.parsed).toEqual(result.first.config);
+  expect(currentPipelineProblem(13, result.parsed)).toBeUndefined();
+  expect(Object.hasOwn(result.parsed.budgets.turnLimits, "find")).toBe(false);
+  expect(result.repeated.config.route).toEqual(base.route);
+  expect(result.repeated.config.stub).toBeUndefined();
+  expect(result.after).toEqual(result.before);
+});
+
+test("preparation deadline names the shared existing bound rather than a second finder budget", async () => {
+  const { preparationDeadline, findDeadline } =
+    await import("../src/budget.ts");
+  expect(findDeadline).toBe(preparationDeadline);
+  expect(preparationDeadline(1_000, 1_000_000)).toBe(271_000);
+  expect(preparationDeadline(1_000, 100_000)).toBe(25_000);
 });

@@ -163,12 +163,12 @@ test("a step at another effort moves its own key and no other step's", () => {
     const name = route.provider;
     // From the route's per-kind efforts.
     const fromMap = stageKeys(
-      routeByName(name, undefined, undefined, { find: "high" }),
+      routeByName(name, undefined, undefined, { map: "high" }),
     );
-    expect(fromMap.find).not.toBe(golden.find);
-    expect([fromMap.frame, fromMap.map, fromMap.verify]).toEqual([
+    expect(fromMap.map).not.toBe(golden.map);
+    expect([fromMap.frame, fromMap.find, fromMap.verify]).toEqual([
       golden.frame,
-      golden.map,
+      golden.find,
       golden.verify,
     ]);
     // From the step's own effort.
@@ -258,4 +258,24 @@ test("the setting refuses unknown kinds and levels, and reads as nothing when un
       route: { ...OPUS_ROUTE, stepEffort: { investigate: "high" } },
     }),
   ).toThrow();
+});
+
+// Raw settings/frozen routes remain readable, but obsolete find-only effort is not new work.
+test("new route/settings admission ignores find effort without changing live effort controls", () => {
+  const base = stageKeys(OPUS_ROUTE);
+  expect(
+    stageKeys(settingsRoute(settings({ stepEffort: { find: "high" } }))),
+  ).toEqual(base);
+  expect(
+    stageKeys(routeByName("anthropic", undefined, undefined, { find: "high" })),
+  ).toEqual(base);
+  const mixed = settingsRoute(
+    settings({ stepEffort: { find: "high", verify: "high" } }),
+  );
+  expect(mixed.stepEffort).toEqual({ verify: "high" });
+  expect(stageKeys(mixed)).toEqual(
+    stageKeys(
+      routeByName("anthropic", undefined, undefined, { verify: "high" }),
+    ),
+  );
 });

@@ -22,7 +22,7 @@ import { JOB_POLICIES } from "@neuve/records-core";
 import { RUN_LIFETIME } from "./budget.ts";
 import { runLogTracer, type RunLog } from "./run-log.ts";
 import { StackSettings } from "./stack/settings.ts";
-import { StepEffort } from "./route.ts";
+import { StepEffort, currentStepEffort } from "./route.ts";
 import { isCompiled } from "./compiled.ts";
 
 /**
@@ -74,12 +74,13 @@ export const Settings = z.strictObject({
    * own structure (an import block, a declaration, a function, a test, a heading section), read from
    * the structures Precompute stored. Legacy false/off settings remain parseable but cannot
    * disable sections or comprehensive review in a new request.
-   * `stepEffort`: the effort a kind of step runs at instead of `effort` (`frame`, `map`, `find`,
+   * `stepEffort`: the effort a kind of step runs at instead of `effort` (`frame`, `map`,
    * `verify`, `assess`, `lane-review`, `brief`); a kind it does not name runs at `effort`. The section
    * readings' steps differ. With their effort by risk off, Assess and Lane review run at their entry,
    * else at the lower of `effort` and medium (`READING_EFFORT` in `readings/effort.ts`), and a claim
    * check at the `verify` entry, else `effort`. With it on (`sectionReadingsEffort`), all three run
    * at fixed levels whatever this names. Only the steps that run at another effort key apart.
+   * A historical `find` entry still parses but is ignored by new admission.
    */
   review: z
     .strictObject({
@@ -211,7 +212,7 @@ export const reviewEffort = (settings: Option.Option<Settings>) =>
 
 /** The per-kind step efforts the user's settings name, if any. */
 export const reviewStepEffort = (settings: Option.Option<Settings>) =>
-  Option.getOrUndefined(settings)?.review?.stepEffort;
+  currentStepEffort(Option.getOrUndefined(settings)?.review?.stepEffort);
 
 /** Whether the user's settings ask for reasoning summaries (telemetry for reading runs). */
 export const reviewReasoningSummaries = (settings: Option.Option<Settings>) =>

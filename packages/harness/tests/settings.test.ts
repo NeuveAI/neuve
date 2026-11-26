@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { Option } from "effect";
 import {
   Settings,
+  reviewStepEffort,
   otlpTarget,
   telemetryMode,
   type TelemetryMode,
@@ -66,4 +67,24 @@ test("the strictly parsed owner file accepts enabled and refuses unknown keys an
     },
   ])
     expect(() => Settings.parse(settings)).toThrow();
+});
+
+test("historical finder effort remains parseable but is not a current settings control", () => {
+  const raw = {
+    version: 1 as const,
+    review: { stepEffort: { find: "high" as const } },
+  };
+  const parsed = Settings.parse(raw);
+  expect(parsed).toEqual(raw);
+  expect(reviewStepEffort(Option.some(parsed))).toBeUndefined();
+  expect(
+    reviewStepEffort(
+      Option.some(
+        Settings.parse({
+          version: 1,
+          review: { stepEffort: { find: "high", assess: "high" } },
+        }),
+      ),
+    ),
+  ).toEqual({ assess: "high" });
 });

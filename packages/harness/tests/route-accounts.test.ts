@@ -1,8 +1,14 @@
+import pipelineV12 from "./fixtures/pipeline-v12.json";
 import { expect, test } from "bun:test";
 import { Option } from "effect";
-import { canonicalJson } from "@neuve/records-core";
+import { Computations, canonicalJson } from "@neuve/records-core";
 import { AccountName } from "@neuve/runtime";
-import { defaultConfig, PipelineConfig, runKeyFor } from "../src/config.ts";
+import {
+  defaultConfig,
+  PipelineConfig,
+  runKeyFor,
+  runSpec,
+} from "../src/config.ts";
 import { namedRoute, settingsRoute } from "../src/request.ts";
 import {
   ClaudeRouteConfig,
@@ -185,4 +191,36 @@ test("Claude routes require a subscription account and no price or credential", 
     expect(ClaudeRouteConfig.safeParse({ ...route, ...extra }).success).toBe(
       false,
     );
+});
+
+test("new finder-effort normalization never rewrites historical parsed route/configuration identity", () => {
+  const source = {
+    ...pipelineV12.config,
+    route: {
+      ...pipelineV12.config.route,
+      stepEffort: { find: "high" as const },
+    },
+  };
+  const parsed = PipelineConfig.parse(source);
+  expect(canonicalJson(parsed)).toBe(canonicalJson(source));
+  expect(parsed.route.stepEffort?.find).toBe("high");
+  const historical = {
+    ...runSpec(pipelineV12.range, parsed),
+    opVersion: pipelineV12.opVersion,
+  };
+  expect(
+    (historical.config as { route: { stepEffort: unknown } }).route.stepEffort,
+  ).toEqual({ find: "high" });
+  expect(Computations.computationKey(historical).key).not.toBe(
+    pipelineV12.runKey,
+  );
+  expect(runKeyFor(range, defaultConfig(undefined, parsed.route))).toBe(
+    runKeyFor(range, defaultConfig()),
+  );
+  expect(canonicalJson(PipelineConfig.parse(pipelineV12.config))).toBe(
+    canonicalJson(pipelineV12.config),
+  );
+  expect(Computations.computationKey(pipelineV12.spec).key).toBe(
+    pipelineV12.runKey,
+  );
 });

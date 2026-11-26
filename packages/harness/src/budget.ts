@@ -3,7 +3,7 @@ import { Duration } from "effect";
 import { z } from "zod";
 import type { RouteConfig } from "./route.ts";
 
-/** The fixed review shape, in receipt order (12.41). */
+/** Serialized stage names, including `find` for historical request holds and stage records. */
 export const Stage = z.enum([
   "precompute",
   "frame",
@@ -18,12 +18,18 @@ export type AgentStage = Extract<Stage, "frame" | "map" | "find" | "verify">;
 
 export const FRAME_DEADLINE_MS = 90_000;
 export const MAP_DEADLINE_MS = 120_000;
-export const FIND_DEADLINE_MS = 270_000;
+export const PREPARATION_DEADLINE_MS = 270_000;
 export const VERIFY_RESERVE_MS = 75_000;
+// Transitional last callers: front-task.ts and the scheduler-owned pi-host /
+// pi-review-readings-hook fixtures. Remove with those callers, not as serialized history.
 export const MIN_FIND_WINDOW_MS = 90_000;
 
-export const findDeadline = (start: number, cutoffAt: number) =>
-  Math.min(start + FIND_DEADLINE_MS, cutoffAt - VERIFY_RESERVE_MS);
+/** Bound plan preparation while preserving the existing verification reserve. */
+export const preparationDeadline = (start: number, cutoffAt: number) =>
+  Math.min(start + PREPARATION_DEADLINE_MS, cutoffAt - VERIFY_RESERVE_MS);
+
+/** Transitional alias for review-task/readings-plan-task callers until their owned handoff. */
+export const findDeadline = preparationDeadline;
 
 /** Model calls in flight per run, shared by every stage (10.27). */
 export const CALLS_IN_FLIGHT = 8;
