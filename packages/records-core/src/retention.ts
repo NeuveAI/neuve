@@ -16,6 +16,7 @@ import { BlobStore, type PrunedBlob } from "./blobs.ts";
 import { describeEvict, evictDeclared } from "./evictable.ts";
 import type { JobQueue } from "./queue.ts";
 import { assertCompatible, backupDirectory } from "./store.ts";
+import { RAW_CAPTURE_DAYS, unprotectedRawBlob } from "./raw-capture-parts.ts";
 
 /**
  * Retention of raw captures (5.8, 8.10, D26): transcripts, raw tool outputs and model bodies expire
@@ -23,7 +24,7 @@ import { assertCompatible, backupDirectory } from "./store.ts";
  * size, media type, class, capture and prune dates), so events and computations that reference it
  * stay intact and resolve to "pruned on <date>". Durable blobs are never pruned.
  */
-export const RAW_CAPTURE_RETENTION = Duration.days(30);
+export const RAW_CAPTURE_RETENTION = Duration.days(RAW_CAPTURE_DAYS);
 
 /** Raw captures pruned per write transaction, so a large backlog never holds the lock for long. */
 const PAGE = 500;
@@ -114,19 +115,20 @@ export const plan = Effect.gen(function* () {
   yield* assertCompatible;
   const nowMillis = yield* Clock.currentTimeMillis;
   const cutoff = cutoffAt(nowMillis);
+  const unprotected = (yield* unprotectedRawBlob(cutoff)) ?? sql`1`;
   const [due] = yield* sql<{
     blobs: number;
     bytes: number;
     oldest: string | null;
   }>`SELECT count(*) AS blobs, coalesce(sum(size), 0) AS bytes, min(captured_at) AS oldest
-    FROM blobs WHERE retention = 'raw-capture' AND pruned_at IS NULL AND captured_at < ${cutoff}`;
+    FROM blobs WHERE retention = 'raw-capture' AND pruned_at IS NULL AND captured_at < ${cutoff} AND ${unprotected}`;
   const byClass = yield* sql<{
     mediaType: string;
     placement: string;
     blobs: number;
     bytes: number;
   }>`SELECT media_type, placement, count(*) AS blobs, coalesce(sum(size), 0) AS bytes
-    FROM blobs WHERE retention = 'raw-capture' AND pruned_at IS NULL AND captured_at < ${cutoff}
+    FROM blobs WHERE retention = 'raw-capture' AND pruned_at IS NULL AND captured_at < ${cutoff} AND ${unprotected}
     GROUP BY media_type, placement ORDER BY media_type, placement`;
   const byAge: Array<Tally & { readonly label: string }> = [];
   for (const band of AGE_BANDS) {
@@ -147,7 +149,7 @@ export const plan = Effect.gen(function* () {
     blobs: number;
     bytes: number;
   }>`SELECT count(*) AS blobs, coalesce(sum(size), 0) AS bytes FROM blobs
-    WHERE retention = 'raw-capture' AND pruned_at IS NULL AND captured_at >= ${cutoff}`;
+    WHERE retention = 'raw-capture' AND pruned_at IS NULL AND (captured_at >= ${cutoff} OR NOT (${unprotected}))`;
   const [durable] = yield* sql<{
     blobs: number;
     bytes: number;
@@ -347,10 +349,12 @@ const pruneKey = (nowMillis: number) =>
 export const wantedPrune = Effect.gen(function* () {
   const sql = yield* SqlClient;
   const nowMillis = yield* Clock.currentTimeMillis;
+  const cutoff = cutoffAt(nowMillis);
+  const unprotected = (yield* unprotectedRawBlob(cutoff)) ?? sql`1`;
   const [due] = yield* sql<{
     hash: string;
   }>`SELECT hash FROM blobs
-    WHERE retention = 'raw-capture' AND pruned_at IS NULL AND captured_at < ${cutoffAt(nowMillis)}
+    WHERE retention = 'raw-capture' AND pruned_at IS NULL AND captured_at < ${cutoff} AND ${unprotected}
     LIMIT 1`;
   if (
     due === undefined &&

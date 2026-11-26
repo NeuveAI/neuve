@@ -1,7 +1,7 @@
 import { RunLog } from "@neuve/harness";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ReviewFeedSnapshotSchema } from "@ace/host/review-protocol";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import {
   mkdtempSync,
   readFileSync,
@@ -15,12 +15,16 @@ import { z } from "zod";
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import {
+  Actors,
   Blobs,
   Cycles,
   Identity,
   JobQueue,
   Log,
+  Proofs,
   ReviewOrigins,
+  Sessions,
+  Vents,
   mintUlid,
   resolveStoreLocation,
   sha256Hex,
@@ -34,6 +38,7 @@ import {
   readReviewFeedSnapshot,
 } from "../src/workspace-native-review";
 import { execute, withStore } from "../src/records-cli";
+import { requestRangeReview } from "../src/review-cli";
 import {
   newShapeReview,
   receipt,
@@ -53,6 +58,19 @@ const git = (...args: string[]) => {
   const r = Bun.spawnSync(["git", "-C", root, ...args]);
   if (r.exitCode) throw new Error(r.stderr.toString());
   return r.stdout.toString().trim();
+};
+const mockProcessTable = (rows: string) => {
+  const bin = mkdtempSync(join(tmpdir(), "native-review-process-table-"));
+  const path = process.env.PATH;
+  writeFileSync(join(bin, "ps"), `#!/bin/sh\nprintf '%s\\n' '${rows}'\n`, {
+    mode: 0o700,
+  });
+  process.env.PATH = `${bin}:${path ?? ""}`;
+  return () => {
+    if (path === undefined) delete process.env.PATH;
+    else process.env.PATH = path;
+    rmSync(bin, { recursive: true, force: true });
+  };
 };
 git("init", "-qb", "main");
 git("config", "user.email", "fixture@example.test");
@@ -450,6 +468,333 @@ const newIntent = (lifetime: number) => {
   intent.handoff.branch = "main";
   return intent;
 };
+
+// Requests must retain their targets and reach only their owning channel, including after catch-up.
+test("the Records request feed catches up on CLI reviews of its channel", async () => {
+  const channel = "request-feed";
+  const requester = {
+    _tag: "Agent" as const,
+    ...Identity.aceChatIdentity(channel, 7),
+  };
+  const range = `${base}..${head}`;
+  const branch = "request-feed-branch";
+  git("branch", branch, head);
+  try {
+    const tool = newIntent(61);
+    tool.handoff.channel = channel;
+    tool.handoff.chat = 7;
+    tool.handoff.origin = {
+      kind: "channel",
+      host: "fixture",
+      channel,
+      chat: 7,
+      items: [],
+    };
+    await callbacks.reviewSubmit(tool, async () => {});
+    const first = mintUlid();
+    await requestRangeReview(root, range, {
+      requestId: first,
+      requester,
+      branch,
+      frozenConfig: config,
+    });
+    await requestRangeReview(root, range, {
+      requester: {
+        _tag: "Agent",
+        ...Identity.aceChatIdentity("foreign-request-feed", 7),
+      },
+      frozenConfig: config,
+    });
+    git("branch", "-D", branch);
+    const signal = AbortSignal.timeout(5000);
+    expect(
+      (await callbacks.reviewRequests(root, channel, 0, signal))?.requests,
+    ).toEqual([
+      {
+        review: first,
+        chat: 7,
+        at: expect.any(Number),
+        baseRef: base,
+        range: { base, head, branch, commits: 1 },
+        pullRequest: null,
+      },
+    ]);
+  } finally {
+    git("update-ref", "-d", `refs/heads/${branch}`);
+  }
+}, 15000);
+
+// A review committed after subscription must reach the worker without a polling interval.
+test("a Records file change wakes a waiting CLI review request", async () => {
+  const channel = "live-request-feed";
+  const pull = "refs/pull/42/head";
+  const stop = new AbortController();
+  git("update-ref", pull, head);
+  const following = callbacks.reviewRequests(root, channel, 0, stop.signal);
+  void following.catch(() => {});
+  try {
+    await Bun.sleep(150);
+    const second = mintUlid();
+    await requestRangeReview(root, `${base}..${pull}`, {
+      requestId: second,
+      requester: { _tag: "Agent", ...Identity.aceChatIdentity(channel, 7) },
+      frozenConfig: config,
+    });
+    expect((await following)?.requests).toEqual([
+      {
+        review: second,
+        chat: 7,
+        at: expect.any(Number),
+        baseRef: base,
+        range: { base, head, branch: "", commits: 1 },
+        pullRequest: 42,
+      },
+    ]);
+  } finally {
+    stop.abort();
+    await following.catch(() => {});
+    git("update-ref", "-d", pull);
+  }
+}, 15000);
+
+// A batch with no usable requests must still advance, or it blocks every later card.
+test("the Records request feed advances past a missing presentation", async () => {
+  const channel = "missing-presentation";
+  const requester = {
+    _tag: "Agent" as const,
+    ...Identity.aceChatIdentity(channel, 7),
+  };
+  const range = `${base}..${head}`;
+  const seed = mintUlid();
+  const bad = mintUlid();
+  await requestRangeReview(root, range, {
+    requestId: seed,
+    requester,
+    frozenConfig: config,
+  });
+  const { after, skippedThrough } = await write(
+    Effect.gen(function* () {
+      const initial = Option.getOrThrow(yield* Log.get(seed));
+      const [skipped] = yield* Log.append([
+        {
+          ...initial.event,
+          id: bad,
+          idempotencyKey: `review.requested:${bad}`,
+          refs: [
+            { role: "command-line-review", ref: `blob:${"0".repeat(64)}` },
+          ],
+        },
+      ]);
+      return { after: initial.seq, skippedThrough: skipped!.seq };
+    }),
+  );
+  const warning = spyOn(console, "error");
+  try {
+    const signal = AbortSignal.timeout(5000);
+    expect(
+      await callbacks.reviewRequests(root, channel, after, signal),
+    ).toEqual({ after: skippedThrough, requests: [] });
+    const good = mintUlid();
+    await requestRangeReview(root, range, {
+      requestId: good,
+      requester,
+      frozenConfig: config,
+    });
+    expect(
+      (await callbacks.reviewRequests(root, channel, skippedThrough, signal))
+        ?.requests,
+    ).toEqual([
+      {
+        review: good,
+        chat: 7,
+        at: expect.any(Number),
+        baseRef: base,
+        range: { base, head, branch: "main", commits: 1 },
+        pullRequest: null,
+      },
+    ]);
+    const skipped = warning.mock.calls.filter((call) =>
+      call.includes(`Skipping review request ${bad}`),
+    );
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toContainEqual(
+      expect.objectContaining({ _tag: "BlobMissing" }),
+    );
+  } finally {
+    warning.mockRestore();
+  }
+}, 15000);
+
+// A missing worker process row must leave channel startup available.
+test("a channel worker with no process row opens without a live session", async () => {
+  const channel = "no-worker-row";
+  const location = await execute(resolveStoreLocation(root));
+  await execute(withStore(root, "create", Effect.void));
+  const warnings: unknown[] = [];
+  const restoreProcessTable = mockProcessTable("");
+  try {
+    expect(
+      await Sessions.openAceChannelSession(root, channel, (error) =>
+        warnings.push(error),
+      ),
+    ).toBeUndefined();
+  } finally {
+    restoreProcessTable();
+  }
+  expect(warnings).toEqual([
+    expect.objectContaining({
+      message: "Cannot identify the channel worker process",
+    }),
+  ]);
+  expect(
+    await execute(
+      withStore(
+        root,
+        "read",
+        Sessions.readSession(location, "neuve-pi", channel),
+      ),
+    ),
+  ).toBeUndefined();
+});
+
+// A chat's first CLI command can arrive before Records has registered its actor or opened a turn.
+test("CLI review, proof and vent record their owning Ace chats", async () => {
+  const previousChat = process.env.NEUVE_ACE_CHAT;
+  const location = await execute(resolveStoreLocation(root));
+  const channel = "cli-fixture";
+  const range = `${base}..${head}`;
+  const requestId = mintUlid();
+  await execute(withStore(root, "create", Effect.void));
+  const restoreProcessTable = mockProcessTable(
+    `${process.pid} 1 Sat Oct 17 13:30:35 2026 bun`,
+  );
+  try {
+    const close = await Sessions.openAceChannelSession(
+      root,
+      channel,
+      (error) => {
+        throw error;
+      },
+    );
+    if (!close) throw new Error("The fixture's Records store was not opened");
+    try {
+      expect(
+        await execute(withStore(root, "read", Sessions.listSessions(location))),
+      ).toEqual([]);
+      process.env.NEUVE_ACE_CHAT = "cli-fixture/7";
+      await requestRangeReview(root, range, {
+        requestId,
+        branch: "main",
+        frozenConfig: {
+          ...config,
+          budgets: {
+            ...config.budgets,
+            lifetimeMs: config.budgets.lifetimeMs + 57,
+          },
+        },
+      });
+      expect(
+        await readReviewFeedSnapshot(root, channel, { chat: 7 }),
+      ).toMatchObject({
+        review: requestId,
+        chat: 7,
+        progress: { phase: "queued" },
+      });
+      process.env.NEUVE_ACE_CHAT = "other-channel/7";
+      const unownedId = mintUlid();
+      const unowned = await requestRangeReview(root, range, {
+        requestId: unownedId,
+        branch: "main",
+        frozenConfig: config,
+      });
+      expect(unowned.request.actor).toBe(
+        Identity.humanFingerprint("fixture@example.test"),
+      );
+      await expect(
+        callbacks.reviewLookup(root, channel, { review: unownedId, chat: 7 }),
+      ).rejects.toThrow("does not hold this review request");
+      process.env.NEUVE_ACE_CHAT = "cli-fixture/8";
+      const proof = await execute(
+        withStore(
+          root,
+          "write",
+          Proofs.recordAsCaller(location, {
+            repository: root,
+            input: {
+              kind: "log",
+              range,
+              text: "fixture output",
+              claim: "The fixture ran.",
+              requirement: "Keep the chat's proof.",
+            },
+            mask: (text) => text,
+          }).pipe(Effect.provide(Blobs.layer(location))),
+        ),
+      );
+      expect(proof).toMatchObject({
+        status: "recorded",
+        caller: { subagentId: "8" },
+      });
+      process.env.NEUVE_ACE_CHAT = "cli-fixture/9";
+      const vent = await execute(
+        withStore(
+          root,
+          "write",
+          Vents.ventAsCaller(location, { text: "fixture vent" }).pipe(
+            Effect.provide(Blobs.layer(location)),
+          ),
+        ),
+      );
+      expect(vent).toMatchObject({
+        status: "recorded",
+        caller: { subagentId: "9" },
+      });
+      const rows = await execute(
+        withStore(
+          root,
+          "read",
+          Effect.all({
+            actors: Actors.list,
+            proofs: Log.history({ kind: "proof.recorded@1" }),
+            vents: Log.history({ kind: "vent.recorded@2" }),
+          }),
+        ),
+      );
+      expect(
+        rows.actors
+          .filter((actor) => actor.sessionId === channel)
+          .map((actor) => actor.subagentId)
+          .sort(),
+      ).toEqual(["7", "8", "9"]);
+      expect(rows.proofs.at(-1)?.event).toMatchObject({
+        actor: Identity.aceChatIdentity(channel, 8).actorId,
+        attribution: { sessionId: channel },
+      });
+      expect(rows.proofs.at(-1)?.event.attribution).not.toHaveProperty(
+        "turnKey",
+      );
+      expect(rows.vents.at(-1)?.event).toMatchObject({
+        actor: Identity.aceChatIdentity(channel, 9).actorId,
+        attribution: { sessionId: channel },
+      });
+    } finally {
+      await close();
+    }
+    expect(
+      await execute(
+        withStore(
+          root,
+          "read",
+          Sessions.readSession(location, "neuve-pi", channel),
+        ),
+      ),
+    ).toBeUndefined();
+  } finally {
+    restoreProcessTable();
+    if (previousChat === undefined) delete process.env.NEUVE_ACE_CHAT;
+    else process.env.NEUVE_ACE_CHAT = previousChat;
+  }
+});
 
 test("request-only lookup resolves the chat's latest job/run and the Records watch reports queue and stage progression", async () => {
   const intent = newIntent(41);

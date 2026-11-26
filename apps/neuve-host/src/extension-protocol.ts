@@ -1,5 +1,5 @@
 import type { ReviewLookup, ReviewStatus, ReviewOutcome, ReviewRefusal } from "@ace/channel/review-protocol";
-import type { ReviewTarget, ReviewSnapshot, NativeHandoff, PreparedReview, ReviewSubmission, NativeReviewResult, ReviewStatusQuery, ReviewFeedQuery, ReviewFeedSnapshot } from "./review-protocol";
+import type { ReviewTarget, ReviewSnapshot, NativeHandoff, PreparedReview, ReviewSubmission, NativeReviewResult, ReviewStatusQuery, ReviewFeedQuery, ReviewFeedSnapshot, ReviewRequestsReply } from "./review-protocol";
 import type { ReviewOrigin, GitHubExternalRef, ExternalReviewSource } from "@neuve/records-schema";
 import type { SourcePin } from "@ace/channel/planning-protocol";
 export type { ReviewOrigin, GitHubExternalRef, ExternalReviewSource } from "@neuve/records-schema";
@@ -48,6 +48,7 @@ export type NativeReviewCallbacks = {
 	reviewLookup?(project: string, channel: string, query: ReviewLookup): Promise<Omit<ReviewStatus, "new_commits"> | ReviewRefusal>;
 	reviewOutcome?(project: string, channel: string, query: ReviewLookup): Promise<ReviewOutcome | ReviewRefusal>;
 	reviewFeed?(project: string, channel: string, query: ReviewFeedQuery): Promise<{ stamp: string; snapshot: ReviewFeedSnapshot } | null>;
+	reviewRequests?(project: string, channel: string, after: number, signal: AbortSignal): Promise<ReviewRequestsReply | null>;
 };
 
 export type ExtensionRequest =
@@ -60,6 +61,7 @@ export type ExtensionRequest =
 	| { op: "review-status"; channel: string; query: ReviewStatusQuery | ReviewLookup }
 	| { op: "review-outcome"; channel: string; query: ReviewLookup }
 	| { op: "review-feed"; channel: string; query: ReviewFeedQuery }
+	| { op: "review-requests"; channel: string; after: number }
 	| { op: "review-pull"; project: string; repo: string; number: number; expectedHead?: string }
 	| { op: "review"; channel: string; chat?: number; items?: GitHubExternalRef[] }
 	| { op: "github-descriptor"; repo: string; number: number };

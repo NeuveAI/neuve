@@ -127,7 +127,7 @@ test("every ending in the process lets the file go: close, a refused event, a re
   // The journal's byte limit refuses the append itself, as a full disk would.
   const full = join(directory, "full");
   const small = openCaptureJournal(full, "R", {
-    limits: { ...DEFAULT_LIMITS, objectBytes: 512 },
+    limits: { ...DEFAULT_LIMITS, journalBytes: 512 },
   });
   small.capture(START);
   expect(
@@ -144,9 +144,9 @@ test("every ending in the process lets the file go: close, a refused event, a re
         body: { status: "sent", json: { input: "x".repeat(600) } },
       }),
     ),
-  ).toMatchObject({ kind: "io", event: "model.request" });
+  ).toMatchObject({ kind: "full", event: "model.request" });
   expect(holders(fileOf(full))).toBe(0);
-  expect(thrown(() => small.close())).toMatchObject({ kind: "io" });
+  expect(thrown(() => small.close())).toMatchObject({ kind: "full" });
 
   const certified = join(directory, "certified");
   const certifying = openCaptureJournal(certified, "R");
@@ -163,7 +163,7 @@ test("every ending in the process lets the file go: close, a refused event, a re
   // the session open (and now its descriptor). It fails the session, so it is never marked whole.
   const cut = join(directory, "cut");
   const cutting = openCaptureJournal(cut, "R", {
-    limits: { ...DEFAULT_LIMITS, objectBytes: 1_024 },
+    limits: { ...DEFAULT_LIMITS, journalBytes: 1_024 },
   });
   cutting.capture(START);
   const failure = await cutting
@@ -178,12 +178,12 @@ test("every ending in the process lets the file go: close, a refused event, a re
     );
   expect(failure).toMatchObject({
     _tag: "CaptureFailed",
-    kind: "io",
+    kind: "full",
     event: "credential.inspection",
   });
   expect(holders(fileOf(cut))).toBe(0);
   expect(lastEvent(cut)).toBe("credential.inspection");
-  expect(thrown(() => cutting.close())).toMatchObject({ kind: "io" });
+  expect(thrown(() => cutting.close())).toBe(failure);
   expect(lastEvent(cut)).toBe("credential.inspection");
 });
 

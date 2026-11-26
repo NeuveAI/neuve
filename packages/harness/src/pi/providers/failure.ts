@@ -12,6 +12,7 @@ import type {
   TaskId,
 } from "@earendil-works/pi-durable";
 import { NOT_RETRYABLE_CODES, USAGE_LIMIT } from "./wire.ts";
+import { CaptureFailed } from "../capture/types.ts";
 
 /**
  * Why a route call failed, as the route provider records it on the failed `AssistantMessage` it
@@ -62,6 +63,15 @@ export interface RouteFailure {
 
 /** The `diagnostics` type the route's failure is recorded under. */
 export const ROUTE_FAILURE = "neuve.route_failure";
+export const CAPTURE_FULL = "capture_full";
+
+export const captureRouteFailure = (detail: string, cause: unknown) => ({
+  kind: "capture" as const,
+  detail,
+  ...(cause instanceof CaptureFailed && cause.kind === "full"
+    ? { code: CAPTURE_FULL }
+    : {}),
+});
 
 const KINDS: ReadonlySet<string> = new Set<RouteFailureKind>([
   "auth",
@@ -163,7 +173,7 @@ const RETRIED_STATUS: ReadonlySet<RouteFailureKind> = new Set<RouteFailureKind>(
  */
 export const schedulerText = (
   label: string,
-  failure: Pick<RouteFailure, "kind" | "status">,
+  failure: Pick<RouteFailure, "kind" | "status" | "code">,
   transient = false,
 ) => {
   const { kind, status } = failure;
@@ -174,9 +184,11 @@ export const schedulerText = (
     (status < 200 || status >= 300) &&
     (RETRIED_STATUS.has(kind) || (status < 500 && status !== 429));
   const phrase =
-    kind === "sign_in" && transient
-      ? "the route's credential is unavailable for now (network error)"
-      : SCHEDULED[kind];
+    kind === "capture" && failure.code === CAPTURE_FULL
+      ? "the capture journal is full"
+      : kind === "sign_in" && transient
+        ? "the route's credential is unavailable for now (network error)"
+        : SCHEDULED[kind];
   return `${label}${named ? ` (HTTP ${status})` : ""}: ${phrase}`;
 };
 

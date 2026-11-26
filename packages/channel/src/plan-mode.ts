@@ -11,7 +11,7 @@ import {
 	type Harness,
 	type Tx,
 } from "@earendil-works/pi-durable";
-import { PLAN_COMMENT_TOOL, PLAN_TOOL, type ChatMode } from "./protocol";
+import { AGENT_MESSAGE_TOOL, PLAN_COMMENT_TOOL, PLAN_TOOL, type ChatMode } from "./protocol";
 import { ATTENDED_SECTION } from "./approvals";
 
 export type PlanExit = { plan: string; hash: string };
@@ -36,6 +36,7 @@ export const planTools: ReadonlySet<string> = new Set([
 	"question",
 	PLAN_TOOL,
 	PLAN_COMMENT_TOOL,
+	AGENT_MESSAGE_TOOL,
 	"runtime_work",
 ]);
 

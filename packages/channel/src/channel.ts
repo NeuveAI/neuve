@@ -121,6 +121,7 @@ import { exportSeed, importSeed, type Seed } from "./seed";
 import { type Tabs, tabs } from "./tabs";
 
 const ReviewNewCommitsEntry = defineEntry<ReviewNewCommits & { at: number }>("neuve:review:new-commits");
+const ReviewRequestedEntry = defineEntry<{ review: string; at: number }>("neuve:review:requested");
 const ReviewFeedDoc = defineDoc(ReviewFeedDefinition);
 
 declare const crypto: { randomUUID(): string };
@@ -170,7 +171,7 @@ export type Options = {
 	storage: Storage;
 	models: Models;
 	ownTools?(provider: string): boolean;
-	env(cwd: string): ExecutionEnv;
+	env(cwd: string, chat?: ChatId): ExecutionEnv;
 	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
 	planFileAccess?(env: ExecutionEnv, isPlanning: (context: Context) => Promise<boolean>): ExecutionEnv;
 	/** The channel's Markdown files, in storage the host owns outside the project. */
@@ -361,9 +362,9 @@ export class Channel {
 				if (options.extension?.environment?.(folder) === false) {
 					if (!planFileAccess || !await chatPlanning(context).catch(() => false)) return;
 					// An environment granted by plan mode stays confined for its lifetime.
-					return planFileAccess(options.env(folder), async () => true);
+					return planFileAccess(options.env(folder, conversationId), async () => true);
 				}
-				const env = options.env(folder);
+				const env = options.env(folder, conversationId);
 				return planFileAccess?.(env, chatPlanning) ?? env;
 			},
 			onReport: (error) => log("error", "harness.report", failure(error)),
@@ -2098,6 +2099,7 @@ function live(chat: ChatId, event: AgentEvent): Event[] {
 function events(entry: EntryRecord): Event[] {
 	const chat = entry.conversationId;
 	if (ReviewNewCommitsEntry.is(entry)) return [{ kind: "neuve:review:new-commits", chat, entry: entry.id, ...entry.data }];
+	if (ReviewRequestedEntry.is(entry)) return [{ kind: "neuve:review:requested", chat, entry: entry.id, ...entry.data }];
 	if (DeletionEntry.is(entry)) return [{ kind: "deleted", chat, entry: entry.data.target }];
 	if (EditEntry.is(entry)) {
 		const { target, text, at } = entry.data;

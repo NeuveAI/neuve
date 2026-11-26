@@ -1,3 +1,4 @@
+// Why: the native worker must keep the original capture while refusing its uncertified export.
 import { stopStoreWorker } from "../../../../records-core/tests/worker-process.ts";
 import { storeLocationIn } from "@neuve/records-core";
 import { runIn, value } from "../capture/fixture.ts";
@@ -25,6 +26,11 @@ import {
   openCaptureJournal,
   readSessionDump,
 } from "../../../src/session-dump.ts";
+import {
+  JOURNAL_FILE,
+  OBJECTS_DIRECTORY,
+  readCaptureJournal,
+} from "../../../src/pi/capture/journal.ts";
 import { exportWhileOpen } from "../capture/open-source.ts";
 import {
   created,
@@ -48,7 +54,6 @@ const frame = z.union([
   z.object({ id: z.number(), event: z.unknown() }),
 ]);
 
-// R8 crosses native dispatch, physical SDK transport, durable journal and public dump exports.
 test("actual non-route native worker keeps credential-masked raw reasoning and thought fields and preserves uncertified dump refusal", async () => {
   const root = mkdtempSync(join(tmpdir(), "r8-"));
   const evidence = process.env["NATIVE_CAPTURE_EVIDENCE"];
@@ -307,19 +312,72 @@ test("actual non-route native worker keeps credential-masked raw reasoning and t
         (request) => z.object({ model: z.string() }).parse(request.body).model,
       ),
     ).not.toContain(selected.configured.modelId);
-    const journal = readFileSync(join(state, "capture/events.jsonl"));
-    const raw = journal.toString();
-    for (const marker of [
-      reasoning,
-      encrypted,
-      thought,
-      thoughts,
-      "synthetic-schema-thought",
-    ])
-      expect(raw).toContain(marker);
-    expect(raw).not.toContain(key);
-    expect(raw).toContain('"name":"native_capture_gap"');
-    expect(raw).not.toContain('"name":"sdk_invocation_end"');
+    const capture = join(state, "capture");
+    const journal = readFileSync(join(capture, JOURNAL_FILE));
+    const read = readCaptureJournal(capture);
+    if (read._tag !== "Read") throw new Error("Native journal did not read");
+    const events = read.lines.map(({ event }) => event);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "model.event",
+          name: "response.reasoning_summary_text.delta",
+          data: expect.objectContaining({ delta: reasoning }),
+        }),
+        expect.objectContaining({
+          type: "model.event",
+          name: "response.output_item.done",
+          data: expect.objectContaining({
+            item: expect.objectContaining({
+              type: "reasoning",
+              encrypted_content: encrypted,
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          type: "model.event",
+          name: "response.output_item.done",
+          data: expect.objectContaining({
+            item: expect.objectContaining({
+              type: "function_call",
+              arguments: JSON.stringify({
+                command: "printf native-tool-proof",
+                thought,
+                thoughts: [thoughts],
+              }),
+            }),
+          }),
+        }),
+      ]),
+    );
+    const names = events.flatMap((event) =>
+      event.type === "model.event" ? [event.name] : [],
+    );
+    expect(names).toContain("native_capture_gap");
+    expect(names).not.toContain("sdk_invocation_end");
+
+    const tools = z.object({ tools: z.array(z.unknown()) });
+    const wireTools = tools.parse(received[0]?.body).tools;
+    const dispatch = events.find((event) => event.type === "model.request");
+    if (dispatch?.body.status !== "sent")
+      throw new Error("Native request body was not captured");
+    expect(tools.parse(dispatch.body.json).tools).toEqual(wireTools);
+
+    const objectDirectory = join(capture, OBJECTS_DIRECTORY);
+    const readObjects = () =>
+      new Map(
+        readdirSync(objectDirectory).map((name) => [
+          name,
+          readFileSync(join(objectDirectory, name)),
+        ]),
+      );
+    const objects = readObjects();
+    const toolBytes = Buffer.from(JSON.stringify(wireTools));
+    expect(toolBytes.includes("synthetic-schema-thought")).toBe(true);
+    expect(objects.get(hash(toolBytes))).toEqual(toolBytes);
+    expect(journal.includes(key)).toBe(false);
+    for (const bytes of objects.values())
+      expect(bytes.includes(key)).toBe(false);
     const reason =
       "call 1: SDK context unavailable; frame 0 other/other; callbacks 0/unknown (retained-stream-prefix); unavailable credential source census; source retained privately, export refused";
     expect(
@@ -361,7 +419,8 @@ test("actual non-route native worker keeps credential-masked raw reasoning and t
       reason: expect.stringMatching(new RegExp(`${RegExp.escape(reason)}$`)),
     });
     expect(readFileSync(join(state, "channel.sqlite"))).toEqual(database);
-    expect(readFileSync(join(state, "capture/events.jsonl"))).toEqual(journal);
+    expect(readFileSync(join(capture, JOURNAL_FILE))).toEqual(journal);
+    expect(readObjects()).toEqual(objects);
     const receipt = {
       root,
       selected,

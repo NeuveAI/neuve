@@ -129,7 +129,7 @@ test("a refused journal append emits one counted error and preserves the capture
   try {
     const journal = openCaptureJournal(join(folder, "capture"), "R", {
       log,
-      limits: { ...DEFAULT_LIMITS, objectBytes: 256 },
+      limits: { ...DEFAULT_LIMITS, journalBytes: 256 },
     });
     expect(() =>
       journal.capture({

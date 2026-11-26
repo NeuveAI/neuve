@@ -24,7 +24,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { ApprovalStore, ChatRuntimeBridge } from "./bridge.ts";
 import { RUNTIME_WORK_TOOL } from "./transcript.ts";
 import { newest, pointer } from "./transcript.ts";
-import { routeFailureOf } from "../pi/providers/failure.ts";
+import { CAPTURE_FULL, routeFailureOf } from "../pi/providers/failure.ts";
 import { markTerminal } from "./failure.ts";
 
 const TurnRetryStatusDoc = defineDoc<TurnRetryStatusState>(
@@ -99,7 +99,12 @@ export function chatRuntimeExtension(
       hook(GenerationTask, {
         afterResponse(message) {
           const failure = routeFailureOf(message);
-          if (failure?.kind !== "capture" || !failure.detail) return;
+          if (
+            failure?.kind !== "capture" ||
+            failure.code === CAPTURE_FULL ||
+            !failure.detail
+          )
+            return;
           message.errorMessage = failure.detail;
           markTerminal(message);
         },

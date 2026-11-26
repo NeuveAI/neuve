@@ -10,6 +10,7 @@ import { sha256Bytes } from "./canonical.ts";
 import { CorruptRecord } from "./errors.ts";
 import type { StoreLocation } from "./location.ts";
 import { assertCompatible, type StoreError } from "./store.ts";
+import { unprotectedRawBlob } from "./raw-capture-parts.ts";
 
 export { blobPath } from "./byte-storage.ts";
 
@@ -521,13 +522,22 @@ export const layerOnStorage = (location: StoreLocation) =>
             Effect.gen(function* () {
               yield* assertCompatible;
               yield* sql`PRAGMA secure_delete = ON`;
+              const unprotected = yield* unprotectedRawBlob(options.cutoff);
               // The guards on `blobs` allow exactly this change: bytes cleared, pruned date set,
               // retention and capture date kept.
-              return yield* sql<PrunedBlob>`UPDATE blobs SET pruned_at = ${at}, content = NULL
+              const rows =
+                yield* sql<PrunedBlob>`UPDATE blobs SET pruned_at = ${at}, content = NULL
                 WHERE hash IN (SELECT hash FROM blobs
                   WHERE retention = 'raw-capture' AND pruned_at IS NULL AND captured_at < ${options.cutoff}
+                    AND ${unprotected ?? sql`1`}
                   ORDER BY captured_at, hash LIMIT ${options.limit})
                 RETURNING hash, size, media_type, placement, captured_at`;
+              if (unprotected !== undefined && rows.length > 0)
+                yield* sql`DELETE FROM raw_capture_parts WHERE ${sql.in(
+                  "capture_hash",
+                  rows.map(({ hash }) => hash),
+                )}`;
+              return rows;
             }),
           );
           yield* removePrunedFiles(

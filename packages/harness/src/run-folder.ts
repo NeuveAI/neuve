@@ -1,9 +1,8 @@
 import { preserveUnknown, safeRead } from "@neuve/records-schema";
 import type { AuthorityCloseFailure } from "./pi/capture/authority-close.ts";
 import { readLegacyReceiptCapture } from "./pi/capture/export.ts";
-import { sha256Of } from "./pi/capture/journal.ts";
 import { readRawManifest } from "./pi/capture/raw.ts";
-import { lstat, readFile } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -42,10 +41,12 @@ import type { BackupStatus, PriceRate } from "./pi/capture/dump.ts";
 import { captureRunDump } from "./pi/capture/export.ts";
 import {
   JOURNAL_FILE,
+  OBJECTS_DIRECTORY,
+  captureFileIdentity,
   journalIdentity,
   type CaptureJournal,
 } from "./pi/capture/journal.ts";
-import { DEFAULT_LIMITS } from "./pi/capture/types.ts";
+import { captureFileLimit, DEFAULT_LIMITS } from "./pi/capture/types.ts";
 
 /**
  * A run's folder, `.git/neuve/runs/<run-id>/` (10.14, proposal §1): beside Records' local state and
@@ -504,7 +505,7 @@ const verifiedReceipt = (
         );
       const blobs = yield* Blobs.BlobStore;
       for (const file of held.manifest.files) {
-        if (file.size > DEFAULT_LIMITS.objectBytes)
+        if (file.size > captureFileLimit(file.name, DEFAULT_LIMITS))
           return yield* mismatch("raw capture exceeds its object byte cap");
         const metadata = yield* blobs.inspect(file.sha256);
         if (
@@ -518,17 +519,18 @@ const verifiedReceipt = (
           return yield* mismatch("raw capture file was pruned");
       }
       for (const file of held.manifest.files.filter((file) =>
-        file.name.startsWith("capture/"),
+        file.name.startsWith(`capture/${OBJECTS_DIRECTORY}/`),
       )) {
-        const bytes = yield* Effect.tryPromise({
-          try: () => readFile(join(runFolder(location, runId), file.name)),
+        const current = yield* Effect.tryPromise({
+          try: () =>
+            captureFileIdentity(join(runFolder(location, runId), file.name)),
           catch: () =>
             new ReceiptMismatch({
               runId,
               reason: "raw journal file unavailable",
             }),
         });
-        if (bytes.byteLength !== file.size || sha256Of(bytes) !== file.sha256)
+        if (current?.size !== file.size || current.sha256 !== file.sha256)
           return yield* mismatch(
             `the run's capture journal changed after capture ${receipt.capture}`,
           );
@@ -537,7 +539,7 @@ const verifiedReceipt = (
         journalIdentity(captureFolder(location, runId)),
       );
       const captured = held.manifest.files.find(
-        (file) => file.name === "capture/events.jsonl",
+        (file) => file.name === `capture/${JOURNAL_FILE}`,
       );
       if (
         captured === undefined
@@ -593,6 +595,26 @@ const verifiedReceipt = (
       return yield* mismatch(
         `the run's capture journal changed after capture ${receipt.capture}`,
       );
+    if (captured.status === "captured")
+      for (const object of captured.objects ?? []) {
+        const current = yield* Effect.tryPromise({
+          try: () =>
+            captureFileIdentity(
+              join(
+                captureFolder(location, runId),
+                OBJECTS_DIRECTORY,
+                object.sha256,
+              ),
+            ),
+          catch: () =>
+            new ReceiptMismatch({
+              runId,
+              reason: "raw journal object unavailable",
+            }),
+        });
+        if (current?.size !== object.size || current.sha256 !== object.sha256)
+          return yield* mismatch("a journal object changed after capture");
+      }
     yield* Effect.tryPromise({
       try: () =>
         verifyNativeFiles(piDatabase(location, runId), held.run.backup),

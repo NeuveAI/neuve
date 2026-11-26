@@ -48,6 +48,7 @@ export interface OwnSettings {
    * the token's variable is added to this list, never put in its place.
    */
   readonly exclude: ReadonlyArray<string>;
+  readonly includeOnly?: ReadonlyArray<string>;
 }
 export type Configuration = "own" | "clean";
 
@@ -93,9 +94,21 @@ export const launchArguments = (
   own: OwnSettings,
   toolServer: string | undefined,
   tokenCommand?: CodexTokenCommand,
-): ReadonlyArray<string> =>
-  flags([
+  environment?: SessionPolicy["environment"],
+): ReadonlyArray<string> => {
+  const variables = Object.entries(environment ?? {});
+  const includeOnly = own.includeOnly ?? [];
+  return flags([
     ...(tokenCommand === undefined ? [] : chatgptPlan(tokenCommand)),
+    ...variables.map(
+      ([name, value]) =>
+        `shell_environment_policy.set.${name}=${JSON.stringify(value)}`,
+    ),
+    ...(variables.length === 0 || includeOnly.length === 0
+      ? []
+      : [
+          `shell_environment_policy.include_only=${JSON.stringify([...new Set([...includeOnly, ...Object.keys(environment ?? {})])])}`,
+        ]),
     ...(toolServer === undefined
       ? []
       : [
@@ -132,6 +145,7 @@ export const launchArguments = (
           "notify=[]",
         ]),
   ]);
+};
 
 /**
  * Codex asks nothing. T3 Code sends a granular policy here that lets only an MCP server's prompt

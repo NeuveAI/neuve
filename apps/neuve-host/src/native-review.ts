@@ -1,12 +1,12 @@
 import { observeJudgementBranch } from "./judgement-hooks";
 import { ReviewAdmissionSchema, ReviewStatusSchema, ReviewOutcomeSchema, ReviewRefusalSchema, ReviewRefusalError, reviewRefusal } from "@ace/channel/review-protocol";
-import { ReviewFeedReplySchema, ReviewSubmissionSchema, reviewFeedFailure } from "./review-protocol";
+import { ReviewFeedReplySchema, ReviewRequestsReplySchema, ReviewSubmissionSchema, reviewFeedFailure } from "./review-protocol";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import { defineDoc, type Harness, type Cursor, type ConversationId } from "@earendil-works/pi-durable";
 import type { Channel, Log } from "@ace/channel";
 import { z } from "zod";
 import type { ReviewFeedSource } from "./review-protocol";
-import { ReviewCardsDoc, type ReviewCard } from "@ace/channel/review-cards";
+import { admittedReviewCard, ReviewCardsDoc, type ReviewCard } from "@ace/channel/review-cards";
 export { ReviewCardsDoc } from "@ace/channel/review-cards";
 import { ReviewFeedSnapshotSchema } from "./review-protocol";
 import { projectReviewCard } from "./review";
@@ -102,6 +102,18 @@ export function nativeReview(channel: string): {
 			},
 		},
 		source: {
+			async requests(after, signal) {
+				signal.throwIfAborted();
+				signal.addEventListener("abort", close, { once: true });
+				try {
+					const connected = await connection();
+					signal.throwIfAborted();
+					const raw = await connected.request({ op: "review-requests", channel, after });
+					return raw === null ? null : ReviewRequestsReplySchema.parse(raw);
+				} finally {
+					signal.removeEventListener("abort", close);
+				}
+			},
 			async watch(review, receive, context, failed) {
 				let stopped = false;
 				let after: string | undefined;
@@ -174,12 +186,17 @@ export async function startReviewFeed(
 ): Promise<{ close(): Promise<void>; pending(): boolean }> {
 	const watches = new Map<string, FeedWatch>();
 	const lifetime = withCancel(BACKGROUND_CONTEXT);
+	const discovery = new AbortController();
 	const work = new Set<Promise<unknown>>();
 	const now = options.now ?? Date.now;
 	let closed = false;
 	let closing: Promise<void> | undefined;
 	let scanning = Promise.resolve();
 	let retryTimer: ReturnType<typeof setTimeout> | undefined;
+	let after = 0;
+	let discovering = false;
+	let discoveryFailures = 0;
+	let discoveryRetryAt = Infinity;
 	const enabled = () => !closed && options.enabled?.() !== false;
 	const key = (watch: FeedWatch) => `${watch.chat}:${watch.call}`;
 	const track = (task: Promise<unknown>) => {
@@ -234,10 +251,51 @@ export async function startReviewFeed(
 	};
 	const scheduleRetry = () => {
 		clearTimeout(retryTimer);
-		const deadline = Math.min(...[...watches.values()].filter(watch => watch.state === "retrying").map(watch => watch.nextAt));
+		const deadline = Math.min(discoveryRetryAt, ...[...watches.values()].filter(watch => watch.state === "retrying").map(watch => watch.nextAt));
 		if (enabled() && Number.isFinite(deadline)) {
 			retryTimer = setTimeout(rescan, Math.max(1, deadline - now()));
 			retryTimer.unref();
+		}
+	};
+	const discover = async (requests: NonNullable<ReviewFeedSource["requests"]>) => {
+		discovering = true;
+		discoveryRetryAt = Infinity;
+		try {
+			while (enabled()) {
+				const reply = await requests(after, discovery.signal);
+				if (!enabled() || reply === null) break;
+				if (reply.after <= after) throw new Error("Records review request position did not advance");
+				for (const request of reply.requests) {
+					if (!enabled()) return;
+					const { review, at, range, baseRef, pullRequest } = request;
+					const chat = request.chat as ConversationId;
+					const posted = await harness.commit(async tx => {
+						if (!await tx.conversation(chat)) return false;
+						const doc = await tx.doc(ReviewCardsDoc, chat);
+						const key = `request:${review}`;
+						if (doc.cards[key]) return false;
+						await tx.appendEntry(chat, { kind: "neuve:review:requested", data: { review, at } });
+						doc.cards[key] = admittedReviewCard(
+							{ outcome: "admitted", review, range, notify: false, recovered: false },
+							pullRequest === null ? "branch" : "pull_request",
+							pullRequest === null ? baseRef : `Pull request #${pullRequest}`,
+							at,
+						);
+						return true;
+					}, BACKGROUND_CONTEXT);
+					if (posted) options.log("info", "review.card.requested", { chat, review });
+				}
+				after = reply.after;
+				discoveryFailures = 0;
+			}
+		} catch (error) {
+			if (enabled()) {
+				discoveryRetryAt = now() + reviewFeedRetryDelay(++discoveryFailures);
+				options.log("warn", "review.requests.failed", { error: error instanceof Error ? error.message : String(error) });
+			}
+		} finally {
+			discovering = false;
+			scheduleRetry();
 		}
 	};
 	const fail = (watch: FeedWatch, error: unknown) => {
@@ -326,6 +384,8 @@ export async function startReviewFeed(
 			clearTimeout(retryTimer);
 			return;
 		}
+		if (source.requests && !discovering && (discoveryRetryAt === Infinity || now() >= discoveryRetryAt))
+			track(discover(source.requests.bind(source)));
 		let cursor: Cursor | undefined;
 		do {
 			const page = await harness.commit(tx => tx.scanConversations({}, 256, cursor), BACKGROUND_CONTEXT);
@@ -381,6 +441,7 @@ export async function startReviewFeed(
 				clearInterval(timer);
 				clearTimeout(retryTimer);
 				unsubscribe();
+				discovery.abort();
 				lifetime.cancel();
 				for (const watch of watches.values()) detach(watch);
 				while (work.size) await Promise.allSettled([...work]);

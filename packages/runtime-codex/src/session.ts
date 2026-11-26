@@ -996,9 +996,10 @@ export const openCodexSession = Effect.fnUntraced(function* (
           settings,
           toolServer,
           tokenCommand,
+          policy.environment,
         ),
         env: codexEnvironment(
-          options.environment,
+          { ...options.environment, ...policy.environment },
           options.codexHome,
           toolServer === undefined ? undefined : token,
         ),
@@ -1143,6 +1144,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
               canonicalPath !== undefined && skills.get(name) === canonicalPath,
           })),
           exclude: config.shell_environment_policy?.exclude ?? [],
+          includeOnly: config.shell_environment_policy?.include_only ?? [],
         } satisfies OwnSettings;
       }).pipe(
         Effect.ensuring(closeScope(probe.scope)),

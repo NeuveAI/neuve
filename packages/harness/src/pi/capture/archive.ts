@@ -22,6 +22,7 @@ import { sha256Of } from "./journal.ts";
 import { PORTABLE_WITHHELD } from "./mask.ts";
 import {
   CAPTURE_VERSION,
+  captureFileLimit,
   CREDENTIAL_INSPECTION_POLICY,
   RETAINED_SDK_ASSEMBLY_POLICY,
   RETAINED_SDK_PIN,
@@ -202,7 +203,7 @@ export const decodeManifest = (
   for (const file of parsed.data.files) {
     if (names.has(file.name)) return `duplicate name ${file.name}`;
     names.add(file.name);
-    if (file.size > limits.objectBytes)
+    if (file.size > captureFileLimit(file.name, limits))
       return `${file.name} over the object size limit`;
     total += file.size;
     if (total > limits.totalBytes) return "dump over its total size limit";

@@ -739,6 +739,7 @@ export type Event =
 	 */
 	| { kind: "builds"; chat: ChatId; builds: Build[]; messages: WorkMessage[] }
 	| ({ kind: "neuve:review:new-commits"; chat: ChatId; entry: EntryId; at: number } & ReviewNewCommits)
+	| { kind: "neuve:review:requested"; chat: ChatId; entry: EntryId; at: number; review: string }
 	/**
 	 * The complete current message queue, sent on attachment and every committed change.
 	 * `withdrawn` lists the invoked messages this change removed without running them, as Stop

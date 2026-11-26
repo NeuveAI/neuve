@@ -1,3 +1,4 @@
+import { dumpJournalLines } from "./fixture.ts";
 import { z } from "zod";
 import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
@@ -33,7 +34,7 @@ import {
   ProjectionRecipe,
 } from "../../../src/pi/capture/sources.ts";
 import { PiUsageDoc } from "../../../src/pi/capture/usage.ts";
-import { Json, JournalLine } from "../../../src/pi/capture/types.ts";
+import { Json } from "../../../src/pi/capture/types.ts";
 import { readDump } from "../../../src/pi/capture/archive.ts";
 import { createRouteModels } from "../../../src/pi/providers/agent-route-provider.ts";
 import { SOL_ROUTE, OPUS_ROUTE } from "../../../src/route.ts";
@@ -243,11 +244,7 @@ test("native tool accounting reconciles every conversation, tool, counter and co
         ).map(([name, usage]) => [name, usage.totalTokens]),
       ),
     ).toEqual({ echo: 10 });
-    const lines = new TextDecoder()
-      .decode(file("journal/events.jsonl"))
-      .trim()
-      .split("\n")
-      .map((line) => JournalLine.parse(JSON.parse(line)));
+    const lines = dumpJournalLines(archive.files);
     const recipe = ProjectionRecipe.parse(
       JSON.parse(new TextDecoder().decode(file("source/projection.json"))),
     );

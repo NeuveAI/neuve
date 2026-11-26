@@ -48,7 +48,10 @@ import {
   openCaptureJournal,
   sha256Of,
 } from "../../../src/pi/capture/journal.ts";
-import type { PriceRate } from "../../../src/pi/capture/dump.ts";
+import {
+  journalObjectFile,
+  type PriceRate,
+} from "../../../src/pi/capture/dump.ts";
 import {
   captureFolder,
   ensureRunFolder,
@@ -396,10 +399,15 @@ test("a finished run's pi state is captured into Records before its folder is re
     },
   ]);
   expect(firstCall.headerNames).toEqual(["content-type", "session-id"]);
+  const reasoning = {
+    type: "reasoning",
+    encrypted_content: ENCRYPTED,
+    summary: [],
+  };
   expect(
     firstCall.body.status === "sent" &&
       (firstCall.body.json as { input: Array<unknown> }).input[0],
-  ).toEqual({ type: "reasoning", encrypted_content: ENCRYPTED, summary: [] });
+  ).toEqual(reasoning);
   const toolResult = session(root.id).entries.find(
     (entry) => (entry as { kind: string }).kind === "pi.tool-result",
   ) as { model: Array<{ content: Array<{ text: string }> }> };
@@ -467,15 +475,18 @@ test("a finished run's pi state is captured into Records before its folder is re
     ),
   );
   expect(stored.retentions).toEqual(["raw-capture"]);
-  // The masked files carry no identifier but keep the continuation; the original artifact, pi's
-  // native backup and the raw journal are the exact restricted bytes.
+  // Only the original artifact, pi's backup and the journal objects retain the identifiers.
+  const journalObject = expect.stringMatching(
+    /^journal\/objects\/[0-9a-f]{64}$/,
+  );
   expect(
     stored.texts
       .filter(([, text]) => text!.includes("example.com"))
       .map(([name]) => name),
   ).toEqual([
     "artifacts/0.original",
-    "journal/events.jsonl",
+    journalObject,
+    journalObject,
     "native/pi.sqlite",
   ]);
   expect(
@@ -487,7 +498,7 @@ test("a finished run's pi state is captured into Records before its folder is re
     [
       ...dump.run.sessions.map((s) => s.file),
       "calls/unjoined.json",
-      "journal/events.jsonl",
+      journalObjectFile(sha256Of(Buffer.from(JSON.stringify(reasoning)))),
     ].toSorted(),
   );
 

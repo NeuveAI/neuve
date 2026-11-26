@@ -7,7 +7,10 @@ import type { ReviewCard } from "@ace/channel/review-cards";
 import { openReview } from "./review-destination";
 import type { Item, Tool } from "./transcript";
 
-/** One chat's review cards, keyed by the start call that made each, as the host feed sends them. */
+/**
+ * One chat's review cards as the host feed sends them, keyed by the start call that made each, or
+ * by `request:` and the review for one requested from the command line.
+ */
 export type ReviewCards = Record<string, ReviewCard>;
 
 /** The host feed's review events, as the channel protocol carries them. */
@@ -332,8 +335,8 @@ export function reviewTool(
 }
 
 /**
- * Places each review start call's card, and each plan's card at the call that last wrote it, right
- * after the run that made it, so it reads under its call without splitting the agent's turn and
+ * Places each command-line request's card at its entry, and each review start call's card and each
+ * plan's card at the call that last wrote it right after the run that made it, so it reads under its call without splitting the agent's turn and
  * above anything that came later, such as a new-commit row. `events` holds one event per item,
  * then the streamed draft when there is one. `plans` holds each plan's card by its writing call.
  */
@@ -355,6 +358,11 @@ export function withCards(
 	};
 	items.forEach((item, index) => {
 		if (item.kind !== "reply") flush();
+		if (item.kind === "review-requested") {
+			const card = cards[`request:${item.review}`];
+			if (card) out.push({ ...events[index]!, card: view(card, connected) } as Event);
+			return;
+		}
 		out.push(events[index]!);
 		if (item.kind !== "reply") return;
 		for (const tool of item.tools) {

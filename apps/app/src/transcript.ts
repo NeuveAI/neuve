@@ -91,6 +91,15 @@ export type Item =
 		reviewedHead: string;
 		head: string;
 		label: string;
+	}
+	| {
+		/** A review this chat requested from the command line. */
+		kind: "review-requested";
+		key: string;
+		at: number;
+		text: "";
+		entry?: never;
+		review: string;
 	};
 
 
@@ -176,6 +185,11 @@ export function apply(state: Transcript, event: Event): Transcript {
 			return { ...state, builds: event.builds, messages: event.messages };
 		case "neuve:review:new-commits":
 			return { ...state, items: [...state.items, reviewCommits(event)] };
+		case "neuve:review:requested":
+			return {
+				...state,
+				items: [...state.items, { kind: "review-requested", key: `e${event.entry}`, at: event.at, text: "", review: event.review }],
+			};
 		case "queue": {
 			// A withdrawn send of plan comments leaves its words kept in the Plan tab, not in the composer.
 			const taken = event.withdrawn?.filter((message) => !state.commentSends.includes(message.submission));

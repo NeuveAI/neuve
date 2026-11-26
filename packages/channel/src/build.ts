@@ -773,7 +773,8 @@ export class Builds {
 			if (existing?.submission !== undefined) return;
 			if (existing) return { build: existing.message.build };
 			const sender = this.agent(from);
-			const latest = sender ? undefined : (await tx.doc(PlansDoc)).chats[from]?.at(-1)?.plan;
+			const plans = sender ? undefined : (await tx.doc(PlansDoc)).chats[from];
+			const latest = (plans?.findLast(({ plan }) => plan.state === "approved") ?? plans?.at(-1))?.plan;
 			let record = sender ? records[sender.build] : latest && records[buildId(from, latest.hash)];
 			// Approved revisions reuse the preceding build's agents, as recorded at approval.
 			if (!sender && record?.build.state.kind === "delivered") record = records[record.build.state.to];

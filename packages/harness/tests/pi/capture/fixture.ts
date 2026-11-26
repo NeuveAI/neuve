@@ -1,3 +1,4 @@
+import { decodeDumpJournal } from "../../../src/pi/capture/journal.ts";
 import { fileURLToPath } from "node:url";
 import { watch } from "node:fs";
 import { dirname } from "node:path";
@@ -448,3 +449,10 @@ export const scanCaptures = (location: StoreLocation) =>
       }),
     ),
   );
+
+export const dumpJournalLines = (files: ReadonlyMap<string, Uint8Array>) => {
+  const journal = decodeDumpJournal(files);
+  if (journal._tag !== "Read")
+    throw new Error("Fixture dump journal is unreadable");
+  return journal.lines;
+};

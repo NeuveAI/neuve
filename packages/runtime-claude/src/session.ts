@@ -1176,7 +1176,11 @@ export const openClaudeSession = (
         const effort = selectionEffort(selectedModel, models).effort;
         const options: Options = {
           pathToClaudeCodeExecutable: config.executable,
-          env: childEnvironment(config.environment, account, config.oauthToken),
+          env: childEnvironment(
+            { ...config.environment, ...policy.environment },
+            account,
+            config.oauthToken,
+          ),
           cwd: config.cwd,
           tools: plugin === undefined ? [] : ["Skill"],
           settingSources: [],

@@ -123,6 +123,7 @@ export interface SessionPolicy {
   /** Declared at open; only a completed startTurn({ final: true }) carries structuredOutput. */
   readonly outputSchema?: JsonSchema | undefined;
   readonly approvalPolicy: "allow" | "ask";
+  readonly environment?: Readonly<Record<string, string>> | undefined;
   /**
    * The folder the session's work is in: a chat's own worktree. A runtime that declares ownTools
    * starts there and refuses a session without it; pi and Claude Code ignore it, as they do a
