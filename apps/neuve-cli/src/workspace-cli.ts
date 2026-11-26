@@ -27,6 +27,7 @@ import {
   type WorkerChatRuntime,
 } from "./workspace-chat-runtime.ts";
 import { configureRuntime } from "@ace/host/runtime-hooks";
+import { GIT_LOCAL, workspaceSettingsEnvironment } from "@ace/host/host-config";
 import { checkpointNativeAuthority } from "@neuve/harness/native-source-authority";
 import {
   nativeReview,
@@ -726,10 +727,6 @@ async function workspace(args: readonly string[]): Promise<number> {
         " The installed CLI defaults to the pi-transition profile. Run bun workspace from your Neuve checkout, or pass --source <checkout>.";
     throw error;
   }
-  const environment = spawnEnvironment(validated, process.env);
-  // Git hook variables must not point either Records or Vite at the caller's index.
-  const { GIT_LOCAL } = await import("@ace/host/host-config");
-  for (const key of GIT_LOCAL) delete environment[key];
   const repository = await validateWorkspaceProject(
     values.repo ?? process.cwd(),
     validated,
@@ -760,6 +757,13 @@ async function workspace(args: readonly string[]): Promise<number> {
   requireWorkspaceBun(executable);
   const storage = await prepareStorage(validated);
   const { home } = workspaceDirectories(storage);
+  const aceSettings = profile.isolatedProject
+    ? workspaceSettingsEnvironment(home)
+    : {};
+  const environment = spawnEnvironment(storage, process.env);
+  Object.assign(environment, aceSettings);
+  // Git hook variables must not point either Records or Vite at the caller's index.
+  for (const key of GIT_LOCAL) delete environment[key];
   const webs = new ReviewWebs<Web>();
   const children = new Set<OwnedChild>();
   const abort = new AbortController();
@@ -820,6 +824,7 @@ async function workspace(args: readonly string[]): Promise<number> {
             NEUVE_HOST_URL: host.url,
             NEUVE_HOST_TOKEN_FILE: join(home, "host.token"),
           }),
+          ...aceSettings,
           ...storage.environment,
           NODE_ENV: "production",
           NEUVE_REVIEW_BASE: reviewBase(actual),

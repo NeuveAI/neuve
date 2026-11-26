@@ -6,7 +6,7 @@ import { Ancestry } from "@neuve/records-core";
 import { processAlive, withFileLock } from "@neuve/records-core/file-lock";
 import { z } from "zod";
 import { closeWorkspaceTab } from "./browser";
-import { GIT_LOCAL } from "./host-config";
+import { GIT_LOCAL, workspaceSettingsEnvironment } from "./host-config";
 
 const VOLUME = "/Volumes/LaCie Blu";
 const MARKER = ".neuve-lane-workspace.json";
@@ -24,9 +24,9 @@ const Marker = z.strictObject({
 	lane: absolutePath,
 	keeper: identity,
 	launcher: identity.optional(),
-	browser: z.strictObject({
+	// Strip the browser process identity from markers written by earlier builds.
+	browser: z.object({
 		profile: absolutePath,
-		started: identity.optional(),
 		target: z.strictObject({
 			browser: z.uuid(),
 			target_id: z.string().min(1),
@@ -37,8 +37,10 @@ const Marker = z.strictObject({
 export type LaneWorkspace = z.infer<typeof Marker>;
 
 export function laneWorkspaceEnvironment(scratch: string, path = process.env.PATH) {
+	const home = join(scratch, "state", "neuve-host");
 	return {
-		ACE_HOME: join(scratch, "state", "neuve-host"),
+		ACE_HOME: home,
+		...workspaceSettingsEnvironment(home),
 		NEUVE_RECORDS_REGISTRY: join(scratch, "state", "repositories.json"),
 		NEUVE_WORKSPACE_PROJECT: join(scratch, "project"),
 		PATH: `${join(scratch, "bin")}:${path ?? "/usr/bin:/bin"}`,
@@ -173,7 +175,7 @@ async function stopReviewWorker(scratch: string, run: typeof runWorkerCommand): 
 	}
 }
 
-export async function stopLaneWorkspace(root: string, scratch: string, monitor = processes, run = runWorkerCommand): Promise<boolean> {
+export async function stopLaneWorkspace(root: string, scratch: string, monitor = processes, run = runWorkerCommand, closeTab = closeWorkspaceTab): Promise<boolean> {
 	if (!await readLaneWorkspace(root, scratch)) return false;
 	return withLaneWorkspace(scratch, async () => {
 		let state = await readLaneWorkspace(root, scratch);
@@ -187,33 +189,10 @@ export async function stopLaneWorkspace(root: string, scratch: string, monitor =
 		await stopProcess(state.launcher, monitor);
 		await stopProcess(state.keeper, monitor);
 		await stopReviewWorker(scratch, run);
-		const { keeper, browser: registeredBrowser } = state;
-		const removeScratch = async () => {
-			await rm(scratch, { recursive: true, force: true });
-			return true;
-		};
-		const finish = async () => {
-			// Another stop may have passed us the browser while we waited for the lock.
-			const current = await readLaneWorkspace(root, scratch);
-			if (!current || !Ancestry.sameProcess(current.keeper, keeper)) return false;
-			const browser = current.browser;
-			if (browser?.target) await closeWorkspaceTab(browser.profile, browser.target);
-			if (browser?.started) {
-				for (const other of await workspaceDirectories(root)) {
-					if (other === scratch) continue;
-					const user = await readLaneWorkspace(root, other);
-					if (user?.browser?.profile !== browser.profile) continue;
-					if (!user.browser.started) {
-						user.browser.started = browser.started;
-						await writeLaneWorkspace(user);
-					}
-					return removeScratch();
-				}
-				await stopProcess(browser.started, monitor);
-			}
-			return removeScratch();
-		};
-		return registeredBrowser ? withLaneBrowser(root, registeredBrowser.profile, finish) : finish();
+		const { browser } = state;
+		if (browser?.target) await closeTab(browser.profile, browser.target);
+		await rm(scratch, { recursive: true, force: true });
+		return true;
 	});
 }
 

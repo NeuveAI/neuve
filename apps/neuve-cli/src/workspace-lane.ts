@@ -156,6 +156,8 @@ async function start(root: string, lane: string) {
     () => join(config.home, "browser"),
   );
   const scratch = await mkdtemp(join(root, "workspace-"));
+  const { ACE_HOME, ACE_CONFIG_HOME, ACE_KEYCHAIN_SERVICE } =
+    laneWorkspaceEnvironment(scratch);
   const reply = Promise.withResolvers<
     { ready: unknown } | { failure: string }
   >();
@@ -164,7 +166,12 @@ async function start(root: string, lane: string) {
       sourceCommand(lane, "lane", "--keep", scratch, browserProfile),
       {
         cwd: lane,
-        env: environmentOfCaller(),
+        env: {
+          ...environmentOfCaller(),
+          ACE_HOME,
+          ACE_CONFIG_HOME,
+          ACE_KEYCHAIN_SERVICE,
+        },
         stdin: "ignore",
         detached: true,
         ipc(value: unknown) {
@@ -234,7 +241,6 @@ async function start(root: string, lane: string) {
 }
 
 async function connectBrowser(
-  state: LaneWorkspace,
   browserProfile: string,
   signal: AbortSignal,
 ) {
@@ -261,16 +267,6 @@ async function connectBrowser(
       stderr: "ignore",
     },
   );
-  try {
-    state.browser = {
-      profile: browserProfile,
-      started: recordProcess(child.pid),
-    };
-    await writeLaneWorkspace(state);
-  } catch (error) {
-    await closeChild(child);
-    throw error;
-  }
   child.unref();
   while (!signal.aborted && child.exitCode === null) {
     const browser = await connectDevelopmentBrowser(
@@ -451,7 +447,6 @@ async function keep(
         pids: {
           launcher: launcher.pid,
           keeper: process.pid,
-          ...(state.browser?.started && { browser: state.browser.started.pid }),
         },
         scratch,
         log: startLog(scratch),
@@ -520,7 +515,6 @@ async function signInAndMarkReady({
     async () => {
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
       const { cdp, endpoint: browser } = await connectBrowser(
-        state,
         browserProfile,
         deadline,
       );
@@ -531,7 +525,6 @@ async function signInAndMarkReady({
           token,
           async (id) => {
             state.browser = {
-              ...state.browser,
               profile: browserProfile,
               target: { browser: browser.id, target_id: id },
             };

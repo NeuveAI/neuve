@@ -111,13 +111,21 @@ const originalWebPort = ace.webPort;
 import { configureRuntime } from "./runtime-hooks";
 import { join } from "node:path";
 
+export function workspaceSettingsEnvironment(home: string, environment: NodeJS.ProcessEnv = {}) {
+	return {
+		ACE_CONFIG_HOME: environment.ACE_CONFIG_HOME || join(home, "settings"),
+		ACE_KEYCHAIN_SERVICE: environment.ACE_KEYCHAIN_SERVICE || `neuve-${home}`,
+	};
+}
+
 /** Parses a host configuration at its boundary, the root entry or a worker's environment. */
 export function configure(value: unknown): HostConfig {
 	const parsed = HostConfigSchema.safeParse(value);
 	if (!parsed.success) throw new Error(`Invalid host configuration\n${z.prettifyError(parsed.error)}`);
 	for (const key of Object.keys(config)) Reflect.deleteProperty(config, key);
 	configureRuntime({lanes: (id) => join(parsed.data.lanes, id), workerCloseTimeoutMs: parsed.data.workerCloseTimeoutMs});
-	Object.assign(ace, { app: parsed.data.app || originalApp, settings: parsed.data.environment.ACE_CONFIG_HOME || join(parsed.data.home, "settings"), keychain: parsed.data.environment.ACE_KEYCHAIN_SERVICE || `neuve-${parsed.data.home}`, home: parsed.data.home, user: parsed.data.user, port: parsed.data.port, webPort: parsed.data.webPort ?? originalWebPort, worker: parsed.data.worker });
+	const { ACE_CONFIG_HOME: settings, ACE_KEYCHAIN_SERVICE: keychain } = workspaceSettingsEnvironment(parsed.data.home, parsed.data.environment);
+	Object.assign(ace, { app: parsed.data.app || originalApp, settings, keychain, home: parsed.data.home, user: parsed.data.user, port: parsed.data.port, webPort: parsed.data.webPort ?? originalWebPort, worker: parsed.data.worker });
 	for (const name of GIT_LOCAL) delete process.env[name];
 	process.env[CONFIG_VARIABLE] = JSON.stringify({...parsed.data, environment: publicEnvironment(parsed.data.environment)});
 	process.env.ACE_HOME = parsed.data.home;

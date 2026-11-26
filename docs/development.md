@@ -99,7 +99,7 @@ bun workspace lane
 
 The command builds Ace and Neuve from the lane and opens a signed-in tab in the caller's dedicated development browser. It returns once the tab has loaded and cleared the sign-in fragment. Its JSON record gives the addresses, ports, process IDs, build log, and environment for `neuve` and `bun ace`. Apply the record's `environment` when running those commands from the lane.
 
-Each run uses a separate scratch folder under `/Volumes/LaCie Blu/neuve-validation/`. Ace opens a local clone at the lane's HEAD so the build has its own Records store. Mount LaCie before starting.
+Each run uses a separate scratch folder under `/Volumes/LaCie Blu/neuve-validation/` and has its own Ace settings folder and keychain service. Ace opens a local clone at the lane's HEAD so the build has its own Records store. Mount LaCie before starting.
 
 Stop the build from the same lane before finishing or removing the lane:
 
@@ -107,7 +107,7 @@ Stop the build from the same lane before finishing or removing the lane:
 bun workspace lane stop
 ```
 
-Stop closes the workspace and its tab, then removes its scratch. It keeps a dedicated browser that was already running or that another workspace is using. Archiving the channel also stops builds for its recorded lanes.
+Stop shuts down the build, closes the build's tab, and removes its scratch. The dedicated development browser stays running. Archiving the channel also stops builds for its recorded lanes.
 
 ## Linear planning integration
 

@@ -126,6 +126,8 @@ export const ensureWorkerAt = (
             PATH: process.env.PATH ?? "/usr/bin:/bin",
             HOME: cwd,
             TMPDIR: cwd,
+            ACE_CONFIG_HOME: process.env.ACE_CONFIG_HOME,
+            ACE_KEYCHAIN_SERVICE: process.env.ACE_KEYCHAIN_SERVICE,
           }
         : process.env;
     const command = [

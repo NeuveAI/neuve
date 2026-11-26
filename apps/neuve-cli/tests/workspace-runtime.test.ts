@@ -17,6 +17,7 @@ import {
 } from "../src/workspace-runtime.ts";
 import { configure } from "@ace/host/host-config";
 import { config as native } from "@ace/host/config";
+import { laneWorkspaceEnvironment } from "@ace/host/lane-workspace";
 import { SOL_ROUTE } from "../../../packages/harness/src/route.ts";
 
 const inheritedWorkspace = {
@@ -135,13 +136,20 @@ test("a workspace uses its profile for host identity and honors explicit HTTPS p
     configure(dynamic);
     expect(native.webPort).toBe(0);
     await writeWorkspaceRuntime(profile, root, dynamic, appUrl);
+    const lane = laneWorkspaceEnvironment(root);
+    expect(lane.ACE_HOME).toBe(dynamic.home);
     expect(
-      await Bun.file(join(dynamic.home, "workspace-runtime.json")).json(),
+      await Bun.file(join(lane.ACE_HOME, "workspace-runtime.json")).json(),
     ).toMatchObject({
       appUrl,
-      settings: join(profile.paths.state, "neuve-host", "settings"),
-      keychain: `neuve-${join(profile.paths.state, "neuve-host")}`,
+      settings: lane.ACE_CONFIG_HOME,
+      keychain: lane.ACE_KEYCHAIN_SERVICE,
     });
+    expect(lane.ACE_CONFIG_HOME).toBe(join(dynamic.home, "settings"));
+    expect(lane.ACE_KEYCHAIN_SERVICE).not.toBe("ace");
+    expect(lane.ACE_KEYCHAIN_SERVICE).not.toBe(
+      laneWorkspaceEnvironment(join(root, "another-build")).ACE_KEYCHAIN_SERVICE,
+    );
     expect(dynamic.environment).toEqual({
       ...storage.environment,
       NEUVE_WORKSPACE_PROFILE: JSON.stringify(profile),

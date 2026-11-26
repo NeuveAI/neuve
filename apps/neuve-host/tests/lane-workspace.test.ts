@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { signInWorkspaceTab } from "../src/browser";
 import * as catalog from "../src/catalog";
 import { bindConfiguredCatalog, configure } from "../src/host-config";
-import { readLaneWorkspace, stopLaneWorkspace, writeLaneWorkspace } from "../src/lane-workspace";
+import { stopLaneWorkspace, writeLaneWorkspace } from "../src/lane-workspace";
 import { open as openLog } from "../src/log";
 import { archive } from "../src/manage";
 
@@ -98,33 +98,33 @@ test("stop retains the scratch until the lane build confirms its review worker h
 	});
 });
 
-test("the last workspace using a lane-started browser stops it", async () => {
+test("stop closes only the build's tab and leaves the development browser running", async () => {
 	await fixture(async (root) => {
-		const first = await mkdtemp(join(root, "workspace-"));
-		const second = await mkdtemp(join(root, "workspace-"));
+		const scratch = await mkdtemp(join(root, "workspace-"));
 		const profile = join(root, "browser");
 		const started = { pid: 49103, start: "browser start", host: hostname() };
-		await writeLaneWorkspace({
-			version: 1, scratch: first, lane: join(root, "first-lane"), ready: true,
-			keeper: { pid: 49101, start: "first keeper start", host: hostname() },
-			browser: { profile, started },
-		});
-		await writeLaneWorkspace({
-			version: 1, scratch: second, lane: join(root, "second-lane"), ready: true,
-			keeper: { pid: 49102, start: "second keeper start", host: hostname() },
-			browser: { profile },
-		});
-		const live = new Map([[started.pid, started]]);
-		const monitor = {
-			read: (pid: number) => live.get(pid),
-			terminate(pid: number) { live.delete(pid); },
+		const browser = {
+			profile, started,
+			target: { browser: "f7835d64-88c3-4b79-bfb3-08bd2b9f2271", target_id: "lane-tab" },
 		};
-
-		expect(await stopLaneWorkspace(root, first, monitor)).toBe(true);
-		expect(live.get(started.pid)).toEqual(started);
-		expect((await readLaneWorkspace(root, second))?.browser).toEqual({ profile, started });
-		expect(await stopLaneWorkspace(root, second, monitor)).toBe(true);
-		expect(live.has(started.pid)).toBe(false);
+		await writeLaneWorkspace({
+			version: 1, scratch, lane: join(root, "lane"), ready: true,
+			keeper: { pid: 49101, start: "keeper start", host: hostname() },
+			browser,
+		});
+		const signalled: number[] = [];
+		const monitor = {
+			read: (pid: number) => pid === started.pid && !signalled.includes(pid) ? started : undefined,
+			terminate(pid: number) { signalled.push(pid); },
+		};
+		const tabs = new Set(["lane-tab", "owner-tab"]);
+		expect(await stopLaneWorkspace(root, scratch, monitor, undefined, async (directory, target) => {
+			expect(directory).toBe(profile);
+			expect(target.browser).toBe(browser.target.browser);
+			tabs.delete(target.target_id);
+		})).toBe(true);
+		expect([...tabs]).toEqual(["owner-tab"]);
+		expect(signalled).toEqual([]);
 	});
 });
 
