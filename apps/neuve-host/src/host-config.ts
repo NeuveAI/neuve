@@ -4,6 +4,7 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 
 import { ModelRefSchema } from "@ace/channel/parse";
+import { Identity } from "@neuve/records-core/capture";
 
 /** An absolute directory that already exists, by its real path; nothing is created here. */
 const directory = (name: string) =>
@@ -79,10 +80,10 @@ export const HostConfigSchema = z.strictObject({
 	webPort: z.int().min(0).max(65_535).optional(),
 	/**
 	 * The complete environment for workers, terminals, and Git: `spawnEnvironment(storage, env)`,
-	 * without Git's repository-local variables.
+	 * without Git's repository-local variables or an inherited Ace chat.
 	 */
 	environment: z.record(z.string(), z.string()).transform((environment) =>
-		Object.fromEntries(Object.entries(environment).filter(([name]) => !GIT_LOCAL.has(name)))
+		Object.fromEntries(Object.entries(environment).filter(([name]) => !GIT_LOCAL.has(name) && name !== Identity.ACE_CHAT_VARIABLE))
 	),
 	/** The command that runs `runWorker`; the channel ID is appended. */
 	worker: z.tuple([z.string().min(1)], z.string().min(1)),
@@ -119,6 +120,7 @@ export function configure(value: unknown): HostConfig {
 	configureRuntime({lanes: (id) => join(parsed.data.lanes, id), workerCloseTimeoutMs: parsed.data.workerCloseTimeoutMs});
 	Object.assign(ace, { app: parsed.data.app || originalApp, settings: parsed.data.environment.ACE_CONFIG_HOME || join(parsed.data.home, "settings"), keychain: parsed.data.environment.ACE_KEYCHAIN_SERVICE || `neuve-${parsed.data.home}`, home: parsed.data.home, user: parsed.data.user, port: parsed.data.port, webPort: parsed.data.webPort ?? originalWebPort, worker: parsed.data.worker });
 	for (const name of GIT_LOCAL) delete process.env[name];
+	delete process.env[Identity.ACE_CHAT_VARIABLE];
 	process.env[CONFIG_VARIABLE] = JSON.stringify({...parsed.data, environment: publicEnvironment(parsed.data.environment)});
 	process.env.ACE_HOME = parsed.data.home;
 	process.env.ACE_CONFIG_HOME = ace.settings;

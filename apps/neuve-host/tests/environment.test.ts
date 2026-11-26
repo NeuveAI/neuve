@@ -9,6 +9,31 @@ import {BACKGROUND_CONTEXT} from "@earendil-works/chord/context";
 import {installedNeuve} from "../src/environment";
 import {readBranch} from "../src/plan-git";
 
+// A host launched from a chat must clear its identity before serializing the worker environment.
+test("host and worker startup drop an inherited Ace chat", async () => {
+	const root = await mkdtemp(join(tmpdir(), "worker-chat-env-"));
+	try {
+		const home = join(root, "h"), lanes = join(root, "l");
+		await mkdir(home); await mkdir(lanes);
+		const required = {home, lanes, user: "owner", port: 0, worker: [process.execPath], environment: {NEUVE_ACE_CHAT: "another-channel/3"}};
+		const script = `
+import {configure} from ${JSON.stringify(new URL("../src/host-config.ts", import.meta.url).href)};
+import {applyWorkerEnvironment} from ${JSON.stringify(new URL("../src/worker-runtime.ts", import.meta.url).href)};
+const host = configure(${JSON.stringify(required)});
+const inherited = process.env.NEUVE_ACE_CHAT;
+process.env.NEUVE_ACE_CHAT = "another-channel/4";
+applyWorkerEnvironment();
+console.log(JSON.stringify([host.environment, inherited ?? null, process.env.NEUVE_ACE_CHAT ?? null]));
+`;
+		const result = Bun.spawnSync([process.execPath, "--no-env-file", "--eval", script], {
+			env: {PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, NEUVE_ACE_CHAT: "another-channel/2"},
+			stdout: "pipe", stderr: "pipe",
+		});
+		expect(result.exitCode, result.stderr.toString()).toBe(0);
+		expect(JSON.parse(result.stdout.toString())).toEqual([{}, null, null]);
+	} finally { await rm(root, {recursive: true, force: true}); }
+});
+
 test("sequential managed configurations never install worker-only flags in the host", async () => {
 	const root = await mkdtemp(join(tmpdir(), "host-env-"));
 	try {

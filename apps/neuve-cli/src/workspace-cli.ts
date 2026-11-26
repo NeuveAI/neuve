@@ -70,7 +70,13 @@ import {
   type RouteModelsOptions,
 } from "@neuve/harness/coding";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import { Blobs, Store, Starter, storeLocationIn } from "@neuve/records-core";
+import {
+  Blobs,
+  Identity,
+  Store,
+  Starter,
+  storeLocationIn,
+} from "@neuve/records-core";
 import { captureRunDump } from "@neuve/harness/session-dump";
 import { workspaceCaptureModels } from "./workspace-capture-models.ts";
 import {
@@ -407,6 +413,7 @@ export function codingWorkerSetup(
         models,
         worker.stateDirectory,
         chatSources,
+        worker.sessionId,
       );
       openingChats.set(worker.sessionId, opening);
       const runtime = await opening;
@@ -610,6 +617,7 @@ export async function runWorkspaceCli(
 }
 
 async function workspace(args: readonly string[]): Promise<number> {
+  delete process.env[Identity.ACE_CHAT_VARIABLE];
   if (args[0] === "worker") {
     const { HostConfigSchema, CONFIG_VARIABLE } =
       await import("@ace/host/host-config");

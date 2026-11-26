@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import type { FileSystem } from "effect/FileSystem";
 import {
   lineage,
   sameProcess,
@@ -8,9 +9,12 @@ import {
 } from "./ancestry.ts";
 import { UnknownSession } from "./errors.ts";
 import {
+  ACE_CHANNEL_HARNESS,
+  ACE_CHAT_VARIABLE,
   AGENT_HARNESSES,
   agentFingerprint,
   isAgentHarness,
+  readAceChat,
   type AgentHarness,
 } from "./identity.ts";
 import type { StoreLocation } from "./location.ts";
@@ -57,7 +61,7 @@ export type CallerResolution =
    * while another harness's variable named no live session.
    */
   | { readonly _tag: "Unavailable" }
-  /** The process table was read and no live session recorded here owns an ancestor of the process. */
+  /** Ancestry was checked and no live agent session or Ace chat was identified. */
   | { readonly _tag: "None" };
 
 /**
@@ -155,22 +159,23 @@ const declaredSession = (
 /**
  * The session the given process (this one by default) runs under. An override wins. Otherwise one
  * process-table snapshot is walked from the process upward, and the nearest ancestor recorded as a live
- * session's owner names it. Subagents share their session's process, so ancestry links to the session,
- * never to a subagent; only the override can name one. When the table cannot be read, a session ID
- * the harness declared in the environment may name the session (8.13); links stay session-level.
+ * session's owner names it. An Ace channel worker owns one live session for its chats. The chat
+ * variable selects a chat of that channel. When the table cannot be read, a standalone harness's
+ * declared session ID may name the session (8.13).
  */
 export const resolveCaller = (
   location: StoreLocation,
   options: {
     readonly override?: string | undefined;
     readonly pid?: number | undefined;
+    readonly includeAceChats?: boolean | undefined;
     /** Reads the process table; `undefined` from it means the table could not be read. */
     readonly processes?: (() => Snapshot | undefined) | undefined;
-    /** Where declared session IDs are read (8.13). Default: this process's environment. */
+    /** Where session and chat variables are read. Default: this process's environment. */
     readonly environment?:
       Readonly<Record<string, string | undefined>> | undefined;
   } = {},
-) =>
+): Effect.Effect<CallerResolution, UnknownSession, FileSystem> =>
   Effect.gen(function* () {
     const sessions = yield* listSessions(location);
     if (options.override !== undefined) {
@@ -186,7 +191,12 @@ export const resolveCaller = (
     const snapshot = (options.processes ?? snapshotProcesses)();
     if (snapshot === undefined)
       return declaredSession(sessions, options.environment ?? process.env);
-    const owned = sessions.filter((session) => session.owner !== undefined);
+    const owned = sessions.filter(
+      (session) =>
+        session.owner !== undefined &&
+        (options.includeAceChats !== false ||
+          session.harness !== ACE_CHANNEL_HARNESS),
+    );
     for (const row of lineage(snapshot, options.pid ?? process.pid)) {
       const identity = identityOf(row);
       const matches = owned.filter((session) =>
@@ -194,20 +204,29 @@ export const resolveCaller = (
       );
       if (matches.length === 1) {
         const session = matches[0]!;
+        if (session.harness === ACE_CHANNEL_HARNESS) {
+          const chat = readAceChat(
+            session.sessionId,
+            (options.environment ?? process.env)[ACE_CHAT_VARIABLE],
+          );
+          return chat === undefined
+            ? { _tag: "None" }
+            : { _tag: "Linked", method: "ancestry", ...chat };
+        }
         return {
           _tag: "Linked",
           method: "ancestry",
           actorId: session.actorId,
           harness: session.harness,
           sessionId: session.sessionId,
-        } as CallerResolution;
+        };
       }
       if (matches.length > 1) {
         return {
           _tag: "Ambiguous",
           sessionIds: matches.map((session) => session.sessionId).sort(),
-        } as CallerResolution;
+        };
       }
     }
-    return { _tag: "None" } as CallerResolution;
+    return { _tag: "None" };
   });

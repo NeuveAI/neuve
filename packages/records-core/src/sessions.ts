@@ -1,11 +1,18 @@
 import { preserveUnknown, safeRead } from "@neuve/records-schema";
+import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { z } from "zod";
 import { withFileLock } from "./file-lock.ts";
 import { sha256Hex } from "./canonical.ts";
-import { STORE_DIRECTORY_MODE, type StoreLocation } from "./location.ts";
+import { identityOf, sameProcess, snapshotProcesses } from "./ancestry.ts";
+import { ACE_CHANNEL_HARNESS, agentFingerprint } from "./identity.ts";
+import {
+  resolveStoreLocation,
+  STORE_DIRECTORY_MODE,
+  type StoreLocation,
+} from "./location.ts";
 
 /**
  * Live agent sessions, as small files under `<store>/sessions/`, the way entire-cli keeps session
@@ -165,12 +172,17 @@ export const removeSession = (
   location: StoreLocation,
   harness: string,
   sessionId: string,
+  owner?: NonNullable<SessionState["owner"]>,
 ) =>
   withSessionLock(
     sessionDirectory(location, harness, sessionId),
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const directory = sessionDirectory(location, harness, sessionId);
+      if (owner !== undefined) {
+        const live = yield* readSession(location, harness, sessionId);
+        if (!live?.owner || !sameProcess(live.owner, owner)) return;
+      }
       if (yield* fs.exists(directory)) {
         for (const name of yield* fs.readDirectory(directory)) {
           const schema: z.ZodType | undefined =
@@ -194,6 +206,36 @@ export const removeSession = (
         force: true,
       });
     }),
+  );
+
+export const openAceChannelSession = (project: string, sessionId: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const location = yield* resolveStoreLocation(project).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const fs = yield* FileSystem;
+      if (location === undefined || !(yield* fs.exists(location.database)))
+        return;
+      const row = snapshotProcesses()?.get(process.pid);
+      if (row === undefined)
+        throw new Error("Cannot identify the channel worker process");
+      const owner = identityOf(row);
+      const harness = ACE_CHANNEL_HARNESS;
+      yield* writeSession(location, {
+        version: 1,
+        harness,
+        sessionId,
+        actorId: agentFingerprint({ harness, sessionId }),
+        owner,
+      });
+      return () =>
+        Effect.runPromise(
+          removeSession(location, harness, sessionId, owner).pipe(
+            Effect.provide(BunFileSystem.layer),
+          ),
+        );
+    }).pipe(Effect.provide(BunFileSystem.layer)),
   );
 
 /** Every live session recorded in this store. */

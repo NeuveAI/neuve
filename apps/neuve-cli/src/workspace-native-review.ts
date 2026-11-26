@@ -19,6 +19,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 import {
   Blobs,
   Computations,
+  Identity,
   JobQueue,
   Log,
   PublishedPackets,
@@ -283,9 +284,7 @@ export function nativeReviewCallbacks(
             externalSources: h.externalSources,
             requester: {
               _tag: "Agent" as const,
-              harness: "neuve-pi",
-              sessionId: h.channel,
-              subagentId: String(h.chat),
+              ...Identity.aceChatIdentity(h.channel, h.chat),
             },
             ...(h.source
               ? {
@@ -437,15 +436,18 @@ const resolveReview = (
 ) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
+    const actor =
+      query.review === undefined && query.chat !== undefined
+        ? Identity.aceChatIdentity(channel, query.chat).actorId
+        : null;
     const [row] = yield* sql<{
       id: string;
       chat: string | null;
     }>`SELECT e.id, a.subagent_id AS chat FROM events e
       JOIN projection_actors a ON a.actor_id = e.actor_id
-      WHERE e.kind = 'review.requested@1' AND a.harness = 'neuve-pi' AND a.session_id = ${channel}
+      WHERE e.kind = 'review.requested@1' AND a.harness = ${Identity.ACE_CHANNEL_HARNESS} AND a.session_id = ${channel}
         AND (${query.review ?? null} IS NULL OR e.id = ${query.review ?? null})
-        AND (${query.review !== undefined || query.chat === undefined ? null : String(query.chat)} IS NULL
-          OR a.subagent_id = ${query.chat === undefined ? null : String(query.chat)})
+        AND (${actor} IS NULL OR a.actor_id = ${actor})
       ORDER BY e.seq DESC LIMIT 1`;
     if (!row)
       throw new ReviewRefusalError(

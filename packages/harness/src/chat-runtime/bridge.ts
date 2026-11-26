@@ -1,4 +1,5 @@
 import type { TurnRecovery } from "@neuve/records-core";
+import { Identity } from "@neuve/records-core/capture";
 import type { TurnRecoveryCheckpoint } from "@neuve/records-schema";
 import {
   TURN_CANCELLED,
@@ -210,6 +211,7 @@ type Live = {
 };
 export interface BridgeOptions {
   registry: RuntimeRegistryShape;
+  channel?: string | undefined;
   recovery?: TurnRecoveryDriver;
   heads: NativeHeads;
   skills?: { home: string; carried?: string | undefined };
@@ -908,18 +910,24 @@ export class ChatRuntimeBridge {
       return;
     }
     const scope = Scope.makeUnsafe();
-    const configured = policy(
-      offeredMessages(gen),
-      (name, call, input) => this.wait(() => live, call, name, input),
-      selection,
-      {
-        folder: gen.folder,
-        skills: this.options.skills,
-        ownTools: route.capabilities.ownTools,
-        approvals: route.capabilities.approvals,
-        attended: gen.attended,
-      },
-    );
+    const { channel, skills } = this.options;
+    const configured = {
+      ...policy(
+        offeredMessages(gen),
+        (name, call, input) => this.wait(() => live, call, name, input),
+        selection,
+        {
+          folder: gen.folder,
+          skills,
+          ownTools: route.capabilities.ownTools,
+          approvals: route.capabilities.approvals,
+          attended: gen.attended,
+        },
+      ),
+      ...(channel === undefined || gen.chat === undefined
+        ? {}
+        : { environment: Identity.aceChatEnvironment(channel, gen.chat) }),
+    };
     const live: Live = {
       owner: gen.owner,
       ...(gen.chat === undefined ? {} : { chat: gen.chat }),

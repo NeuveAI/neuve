@@ -38,7 +38,10 @@ export const ConfigAnswer = loose({
     features: nullable(z.record(text, z.unknown())),
     web_search: z.unknown().optional(),
     shell_environment_policy: nullable(
-      loose({ exclude: nullable(z.array(text)) }),
+      loose({
+        exclude: nullable(z.array(text)),
+        include_only: nullable(z.array(text)),
+      }),
     ),
   }),
 });

@@ -19,6 +19,7 @@ import { openCodexSession, type CodexSignInCheck } from "../src/session.ts";
 import {
   codex,
   completed,
+  OWN,
   OWN_EXCLUDE,
   SILENT,
   type Process,
@@ -960,6 +961,36 @@ describe("the mode table", () => {
           expect(p.args.join(" ")).not.toContain("shell_environment_policy");
         }
       }),
+    );
+  });
+
+  // Codex can filter its own environment before spawning a shell, so the chat needs both launch inputs.
+  test("an Ace chat reaches the Codex process and its restricted shell environment", async () => {
+    const fake = codex((message, process) =>
+      message.method === "config/read" && process === fake.processes[0]
+        ? {
+            config: {
+              ...OWN,
+              shell_environment_policy: { include_only: ["PATH", "HOME"] },
+            },
+          }
+        : undefined,
+    );
+    await run(
+      fake,
+      () =>
+        Effect.sync(() => {
+          expect(
+            fake.processes.map((process) => process.env.NEUVE_ACE_CHAT),
+          ).toEqual(["channel-a/7", "channel-a/7"]);
+          expect(fake.current().args).toContain(
+            'shell_environment_policy.set.NEUVE_ACE_CHAT="channel-a/7"',
+          );
+          expect(fake.current().args).toContain(
+            'shell_environment_policy.include_only=["PATH","HOME","NEUVE_ACE_CHAT"]',
+          );
+        }),
+      { policy: { ...policy, environment: { NEUVE_ACE_CHAT: "channel-a/7" } } },
     );
   });
 });

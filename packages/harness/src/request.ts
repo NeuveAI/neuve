@@ -288,12 +288,12 @@ export const resolveRequester = (location: StoreLocation, repository: string) =>
     const caller = yield* Caller.resolveCaller(location).pipe(
       Effect.orElseSucceed(() => ({ _tag: "None" }) as const),
     );
-    if (caller._tag === "Linked")
-      return {
-        _tag: "Actor",
-        actorId: caller.actorId,
-        sessionId: caller.sessionId,
-      } as const;
+    if (caller._tag === "Linked") {
+      const { harness, sessionId, subagentId, actorId } = caller;
+      return harness === Identity.ACE_CHANNEL_HARNESS
+        ? ({ _tag: "Agent", harness, sessionId, subagentId } as const)
+        : ({ _tag: "Actor", actorId, sessionId } as const);
+    }
     return Option.getOrElse(yield* gitHuman(repository), (): Requester => ({
       _tag: "Unresolved",
     }));
@@ -302,24 +302,8 @@ export const resolveRequester = (location: StoreLocation, repository: string) =>
 /** The requester's actor ID and idempotent registration for a named person or native agent. */
 export const requesterAttribution = (requester: Requester) => {
   if (requester._tag === "Agent") {
-    const actor = Identity.agentFingerprint(requester);
-    const payload = {
-      actorKind: "agent",
-      harness: requester.harness,
-      sessionId: requester.sessionId,
-      ...(requester.subagentId ? { subagentId: requester.subagentId } : {}),
-    };
-    return {
-      actor,
-      registration: {
-        id: mintUlid(),
-        kind: "actor.registered@1",
-        idempotencyKey: `actor:${actor}:${sha256Hex(canonicalJson(payload)).slice(0, 16)}`,
-        actor,
-        occurredAt: new Date().toISOString(),
-        payload,
-      },
-    };
+    const registration = Identity.agentRegistration(requester);
+    return { actor: registration.actor, registration };
   }
   if (requester._tag === "Actor")
     return { actor: requester.actorId, registration: undefined };
@@ -328,23 +312,13 @@ export const requesterAttribution = (requester: Requester) => {
   const actor = Identity.humanFingerprint(requester.email);
   // Trimmed as Records' human commands trim it, so a person named by either path is one registration.
   const name = requester.displayName?.trim() ?? "";
-  const payload = {
+  const registration = Identity.actorRegistration(actor, {
     actorKind: "human",
     harness: "git",
     email: Identity.normalizeEmail(requester.email),
     ...(name === "" ? {} : { displayName: name }),
-  };
-  return {
-    actor,
-    registration: {
-      id: mintUlid(),
-      kind: "actor.registered@1",
-      idempotencyKey: `actor:${actor}:${sha256Hex(canonicalJson(payload)).slice(0, 16)}`,
-      actor,
-      occurredAt: new Date().toISOString(),
-      payload,
-    },
-  };
+  });
+  return { actor, registration };
 };
 
 export type ReviewOptions = {

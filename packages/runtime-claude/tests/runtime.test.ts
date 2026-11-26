@@ -116,6 +116,32 @@ const open = out({ type: "query.open" });
 const offer = out({ type: "prompt.offer", message: normal.message });
 const close = out({ type: "query.close" });
 
+// The per-chat environment must reach the SDK subprocess through the filtered account environment.
+test("a Claude Code subprocess inherits its Ace chat", async () => {
+  await sessionTest(
+    [
+      out({
+        type: "query.open",
+        check: (options) => {
+          expect(options.env).toMatchObject({
+            HOME: "/test/home",
+            NEUVE_ACE_CHAT: "channel-a/7",
+          });
+        },
+      }),
+      offer,
+      inbound(result()),
+      close,
+    ],
+    (session, reader) =>
+      Effect.gen(function* () {
+        yield* session.startTurn(normal);
+        yield* reader.until("turn.finished");
+      }),
+    { ...policy, environment: { NEUVE_ACE_CHAT: "channel-a/7" } },
+  );
+});
+
 async function finalOutputFormat(
   outputSchema: NonNullable<SessionPolicy["outputSchema"]>,
 ) {

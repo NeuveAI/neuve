@@ -57,6 +57,7 @@ const attributeTo = (
   Effect.gen(function* () {
     const resolution = yield* Caller.resolveCaller(location, {
       override: environment[SESSION_OVERRIDE_ENV] || undefined,
+      includeAceChats: false,
       processes,
       environment,
     }).pipe(
@@ -241,6 +242,7 @@ export const addSessionTrailer = (
     if (messageFile === undefined) return;
     const resolution = yield* Caller.resolveCaller(location, {
       override: process.env[SESSION_OVERRIDE_ENV] || undefined,
+      includeAceChats: false,
     });
     if (resolution._tag !== "Linked") return;
     yield* git(repository, [

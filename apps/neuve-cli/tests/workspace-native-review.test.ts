@@ -15,12 +15,16 @@ import { z } from "zod";
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import {
+  Actors,
   Blobs,
   Cycles,
   Identity,
   JobQueue,
   Log,
+  Proofs,
   ReviewOrigins,
+  Sessions,
+  Vents,
   mintUlid,
   resolveStoreLocation,
   sha256Hex,
@@ -34,6 +38,7 @@ import {
   readReviewFeedSnapshot,
 } from "../src/workspace-native-review";
 import { execute, withStore } from "../src/records-cli";
+import { requestRangeReview } from "../src/review-cli";
 import {
   newShapeReview,
   receipt,
@@ -450,6 +455,143 @@ const newIntent = (lifetime: number) => {
   intent.handoff.branch = "main";
   return intent;
 };
+
+// A chat's first CLI command can arrive before Records has registered its actor or opened a turn.
+test("CLI review, proof and vent record their owning Ace chats", async () => {
+  const bin = mkdtempSync(join(tmpdir(), "native-review-process-table-"));
+  const previousPath = process.env.PATH;
+  const previousChat = process.env.NEUVE_ACE_CHAT;
+  const location = await execute(resolveStoreLocation(root));
+  const channel = "cli-fixture";
+  const range = `${base}..${head}`;
+  const requestId = mintUlid();
+  await execute(withStore(root, "create", Effect.void));
+  writeFileSync(
+    join(bin, "ps"),
+    `#!/bin/sh\nprintf '${process.pid} 1 Sat Oct 17 13:30:35 2026 bun\\n'\n`,
+    { mode: 0o700 },
+  );
+  process.env.PATH = `${bin}:${previousPath ?? ""}`;
+  try {
+    const close = await Sessions.openAceChannelSession(root, channel);
+    if (!close) throw new Error("The fixture's Records store was not opened");
+    try {
+      process.env.NEUVE_ACE_CHAT = "cli-fixture/7";
+      await requestRangeReview(root, range, {
+        requestId,
+        branch: "main",
+        frozenConfig: {
+          ...config,
+          budgets: {
+            ...config.budgets,
+            lifetimeMs: config.budgets.lifetimeMs + 57,
+          },
+        },
+      });
+      expect(
+        await readReviewFeedSnapshot(root, channel, { chat: 7 }),
+      ).toMatchObject({
+        review: requestId,
+        chat: 7,
+        progress: { phase: "queued" },
+      });
+      process.env.NEUVE_ACE_CHAT = "other-channel/7";
+      const unownedId = mintUlid();
+      const unowned = await requestRangeReview(root, range, {
+        requestId: unownedId,
+        branch: "main",
+        frozenConfig: config,
+      });
+      expect(unowned.request.actor).toBe(
+        Identity.humanFingerprint("fixture@example.test"),
+      );
+      await expect(
+        callbacks.reviewLookup(root, channel, { review: unownedId, chat: 7 }),
+      ).rejects.toThrow("does not hold this review request");
+      process.env.NEUVE_ACE_CHAT = "cli-fixture/8";
+      const proof = await execute(
+        withStore(
+          root,
+          "write",
+          Proofs.recordAsCaller(location, {
+            repository: root,
+            input: {
+              kind: "log",
+              range,
+              text: "fixture output",
+              claim: "The fixture ran.",
+              requirement: "Keep the chat's proof.",
+            },
+            mask: (text) => text,
+          }).pipe(Effect.provide(Blobs.layer(location))),
+        ),
+      );
+      expect(proof).toMatchObject({
+        status: "recorded",
+        caller: { subagentId: "8" },
+      });
+      process.env.NEUVE_ACE_CHAT = "cli-fixture/9";
+      const vent = await execute(
+        withStore(
+          root,
+          "write",
+          Vents.ventAsCaller(location, { text: "fixture vent" }).pipe(
+            Effect.provide(Blobs.layer(location)),
+          ),
+        ),
+      );
+      expect(vent).toMatchObject({
+        status: "recorded",
+        caller: { subagentId: "9" },
+      });
+      const rows = await execute(
+        withStore(
+          root,
+          "read",
+          Effect.all({
+            actors: Actors.list,
+            proofs: Log.history({ kind: "proof.recorded@1" }),
+            vents: Log.history({ kind: "vent.recorded@2" }),
+          }),
+        ),
+      );
+      expect(
+        rows.actors
+          .filter((actor) => actor.sessionId === channel)
+          .map((actor) => actor.subagentId)
+          .sort(),
+      ).toEqual(["7", "8", "9"]);
+      expect(rows.proofs.at(-1)?.event).toMatchObject({
+        actor: Identity.aceChatIdentity(channel, 8).actorId,
+        attribution: { sessionId: channel },
+      });
+      expect(rows.proofs.at(-1)?.event.attribution).not.toHaveProperty(
+        "turnKey",
+      );
+      expect(rows.vents.at(-1)?.event).toMatchObject({
+        actor: Identity.aceChatIdentity(channel, 9).actorId,
+        attribution: { sessionId: channel },
+      });
+    } finally {
+      await close();
+    }
+    expect(
+      await execute(
+        withStore(
+          root,
+          "read",
+          Sessions.readSession(location, "neuve-pi", channel),
+        ),
+      ),
+    ).toBeUndefined();
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousChat === undefined) delete process.env.NEUVE_ACE_CHAT;
+    else process.env.NEUVE_ACE_CHAT = previousChat;
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
 
 test("request-only lookup resolves the chat's latest job/run and the Records watch reports queue and stage progression", async () => {
   const intent = newIntent(41);

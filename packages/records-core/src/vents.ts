@@ -9,7 +9,11 @@ import { BlobStore } from "./blobs.ts";
 import { resolveCaller, type CallerResolution } from "./caller.ts";
 import { decodeEnvelope } from "./codec.ts";
 import { CorruptRecord, InvalidEvent } from "./errors.ts";
-import { baseAlias } from "./identity.ts";
+import {
+  ACE_CHANNEL_HARNESS,
+  agentRegistration,
+  baseAlias,
+} from "./identity.ts";
 import { mintUlid } from "./ids.ts";
 import type { StoreLocation } from "./location.ts";
 import { append, earlierVent, ventKeyOf } from "./log.ts";
@@ -84,7 +88,11 @@ const parseVent = (
 export const record = (request: VentRequest) =>
   parseVent(request).pipe(Effect.flatMap((input) => storeVent(request, input)));
 
-const storeVent = (request: VentRequest, input: VentInput) =>
+const storeVent = (
+  request: VentRequest,
+  input: VentInput,
+  registration?: ReturnType<typeof agentRegistration>,
+) =>
   Effect.gen(function* () {
     const text = input.text.trim();
     const key = ventKeyOf({
@@ -105,7 +113,8 @@ const storeVent = (request: VentRequest, input: VentInput) =>
           mediaType: TEXT_CAPTURE_MEDIA_TYPE,
           retention: "raw-capture",
         });
-        const [result] = yield* append([
+        const result = (yield* append([
+          ...(registration === undefined ? [] : [registration]),
           {
             id: mintUlid(),
             kind: "vent.recorded@2",
@@ -126,7 +135,7 @@ const storeVent = (request: VentRequest, input: VentInput) =>
                 ? { reconciliationId: key.reconciliationId }
                 : {},
           },
-        ]);
+        ])).at(-1);
         const stored = yield* earlierVent(request.actorId, key);
         if (result === undefined || stored === undefined)
           return yield* new CorruptRecord({
@@ -202,6 +211,9 @@ export const ventAsCaller = (
         turnKey: open?.turnKey,
       },
       ready,
+      caller.harness === ACE_CHANNEL_HARNESS
+        ? agentRegistration(caller)
+        : undefined,
     );
     return {
       ...result,
