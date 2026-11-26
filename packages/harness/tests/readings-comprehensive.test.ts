@@ -259,3 +259,28 @@ test("claim verification identity includes its composed destination section", ()
     ).section,
   ).toBe("new-section");
 });
+
+// Why: a test process that imported steps first hid the adapter/store schema cycle. Each entry
+// order must execute in a fresh module graph rather than reusing this test's loaded modules.
+for (const order of [
+  ["comprehensive", "steps"],
+  ["steps", "comprehensive"],
+]) {
+  test(`fresh process initializes reviewer modules in ${order.join(" then ")} order`, async () => {
+    const modules = order.map(
+      (name) => new URL(`../src/readings/${name}.ts`, import.meta.url).href,
+    );
+    const source = `const first = await import(${JSON.stringify(modules[0])}); const second = await import(${JSON.stringify(modules[1])}); const adapter = ${order[0] === "comprehensive" ? "first" : "second"}; const store = ${order[0] === "steps" ? "first" : "second"}; if (!adapter.ComprehensiveAnswer || !store.LaneReviewStored) throw new Error("Missing review schemas"); console.log("reviewer schemas initialized");`;
+    const child = Bun.spawn(
+      [process.execPath, "--no-env-file", "--eval", source],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    expect(stdout).toContain("reviewer schemas initialized");
+  });
+}

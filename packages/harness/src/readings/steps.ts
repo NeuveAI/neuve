@@ -59,7 +59,7 @@ import {
 } from "./prompts.ts";
 import { ReadingListed, readingIndexOf, type Reading } from "./reading.ts";
 import type { RetainedReadingPlan } from "./assignments.ts";
-import { ReviewCheck } from "./comprehensive.ts";
+import { ReviewCheck } from "./review-check.ts";
 import { RecordedReviewClaim, ReviewEvidence } from "./reviewer-claims.ts";
 
 /**

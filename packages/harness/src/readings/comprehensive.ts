@@ -16,13 +16,9 @@ import {
   type ReviewEvidence,
 } from "./reviewer-claims.ts";
 
-/** A cited investigation, not four checklist booleans or four required mini-reports. */
-export const ReviewCheck = z.strictObject({
-  s: z.int().min(1),
-  checked: z.string().min(1).max(600),
-  cites: z.array(z.string().min(1)).min(1).max(8),
-});
-export type ReviewCheck = z.infer<typeof ReviewCheck>;
+import { ReviewCheck } from "./review-check.ts";
+export { ReviewCheck } from "./review-check.ts";
+
 export const ComprehensiveAnswer = z.strictObject({
   review: LaneReviewScopedAnswer,
   checks: z.array(ReviewCheck).max(400),
