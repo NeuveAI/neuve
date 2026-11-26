@@ -81,7 +81,7 @@ import {
 } from "./messages";
 import { metadata, MetadataDoc, validateName } from "./metadata";
 import { usable } from "./models";
-import { ModelSettings, PendingModelDoc, type ModelSelection } from "./model-settings";
+import { ModelSettings, OwnerInputDoc, PendingModelDoc, type ModelSelection } from "./model-settings";
 import { modelNamedByOwner, modelTool } from "./model-tool";
 import { Plans, PlansDoc, type PlanCommentReceipt, type PlanFiles, type PlansState } from "./plan";
 import {
@@ -382,7 +382,6 @@ export class Channel {
 			onReport: (error) => log("error", "harness.report", failure(error)),
 		}, context);
 		ownedHarness = harness;
-		modelSettings.attach(harness);
 		unbind = await observe(harness, options.extension);
 		// Only a new channel stores its settings at creation; an existing one without them is legacy.
 		if (!await harness.conversation(ROOT_CONVERSATION_ID, context)) {
@@ -1186,18 +1185,19 @@ export class Channel {
 		const selected = model && this.#options.models.getModel(model.provider, model.modelId);
 		if (selected) room.checkContext(selected, request);
 		const entry = room.draft(request.author, request.text, Date.now(), request);
-		if (requestId && value) {
-			const existing = await this.#afterMentionStops(() => this.#harness.commit(
-				tx => this.#claimMessage(tx, conversation.id, requestId, value, mention),
-				context,
-			));
-			if (existing !== undefined) return { submission: existing };
-		}
+		const existing = await this.#afterMentionStops(() => this.#harness.commit(async tx => {
+			if (requestId && value) {
+				const claimed = await this.#claimMessage(tx, conversation.id, requestId, value, mention);
+				if (claimed !== undefined) return claimed;
+			}
+			delete (await tx.doc(OwnerInputDoc, conversation.id)).input;
+		}, context));
+		if (existing !== undefined) return { submission: existing };
 		const submission = await conversation.submit({
 			type: "write",
 			entry,
 			...(requestId ? { requestId } : {}),
-		}, this.#modelSettings.passiveContext(conversation.id, context));
+		}, context);
 		return { submission: submission.id };
 	}
 
@@ -1339,8 +1339,19 @@ export class Channel {
 			const mention = isMentionSubmission(input);
 			const { author, text } = room.input(input.content);
 			const ownerText = mention && author === this.#options.owner ? text : undefined;
-			return handle.submit(input, this.#modelSettings.inputContext(handle.id, undefined, ownerText, callContext));
+			return this.#submit(handle, input, {}, ownerText, callContext);
 		});
+	}
+
+	async #submit(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, selection: ModelSelection, ownerText: string | undefined, callContext: Context): Promise<Submission> {
+		const requestId = input.requestId ?? (ownerText === undefined ? undefined : crypto.randomUUID());
+		await this.#harness.commit(async tx => {
+			if (requestId !== undefined && await tx.submissionByRequest(handle.id, requestId)) return;
+			await this.#modelSettings.select(tx, handle.id, selection, true);
+			const owner = await tx.doc(OwnerInputDoc, handle.id);
+			owner.input = ownerText !== undefined && requestId !== undefined ? { requestId, text: ownerText } : undefined;
+		}, callContext);
+		return handle.submit(requestId === undefined ? input : { ...input, requestId }, callContext);
 	}
 
 	async #admit(request: Extract<Request, { op: "ask" }>, settled: Promise<unknown>) {
@@ -1474,9 +1485,8 @@ export class Channel {
 				}, callContext);
 			}
 			await this.#placeChatLane(chat, callContext);
-			const admission = this.#modelSettings.inputContext(chat, selection, ownerText, callContext);
 			submission = (await this.#approvals.admit(this.#harness, chat, attended, settled,
-				() => conversation.submit(input, admission))).id;
+				() => this.#submit(conversation, input, selection ?? {}, ownerText, callContext))).id;
 		} catch (error) {
 			if (modeChange) {
 				const { previous, pendingExit } = modeChange;
@@ -1521,7 +1531,7 @@ export class Channel {
 	}
 
 	async #publishSelection(chat: ConversationId, mode?: ChatMode) {
-		if (!mode && ![...this.#listeners].some(listener => listener.chat === chat && listener.agent)) return;
+		if (!mode && ![...this.#listeners].some(listener => listener.agent)) return;
 		const [agent, change] = await Promise.all([
 			this.#harness.snapshot(AgentDoc, chat, context),
 			this.#harness.snapshot(PendingModelDoc, chat, context),
@@ -1538,7 +1548,7 @@ export class Channel {
 		};
 		if (mode !== undefined) this.#log("info", "plan.mode.changed", { chat, mode });
 		for (const listener of this.#listeners) {
-			if (listener.chat !== chat || !listener.agent) continue;
+			if (!listener.agent || (mode !== undefined && listener.chat !== chat)) continue;
 			try {
 				listener.send(event);
 			} catch {

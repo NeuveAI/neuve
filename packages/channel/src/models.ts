@@ -1,5 +1,6 @@
 import { type CreateModelsOptions, getSupportedThinkingLevels, type Models, type MutableModels } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { accountForProvider } from "@neuve/runtime/account";
 
 import type { ModelOption, ModelRef } from "./protocol";
 
@@ -20,14 +21,16 @@ export async function available(models: Models, routeModel?: Omit<ModelOption, "
 	const found = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 	const failed = results.find((result) => result.status === "rejected");
 	if (!found.length && failed?.status === "rejected") throw failed.reason;
-	return found.map((model) => ({
-		provider: model.provider,
-		modelId: model.id,
-		efforts: getSupportedThinkingLevels(model),
-		...(routeModel?.account !== undefined && routeModel.provider === model.provider && routeModel.modelId === model.id
-			? { account: routeModel.account }
-			: {}),
-	}));
+	return found.map((model) => {
+		const account = accountForProvider(model.provider)
+			?? (routeModel?.provider === model.provider && routeModel.modelId === model.id ? routeModel.account : undefined);
+		return {
+			provider: model.provider,
+			modelId: model.id,
+			efforts: getSupportedThinkingLevels(model),
+			...(account === undefined ? {} : { account }),
+		};
+	});
 }
 
 export async function usable(models: Models, model: ModelRef): Promise<boolean> {

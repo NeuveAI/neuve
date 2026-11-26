@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import { EffortSchema } from "./effort";
 import { sameModel } from "./models";
-import { ModelSettings, OwnerInputDoc, PendingModelDoc } from "./model-settings";
+import { ModelSettings, ownerInput, PendingModelDoc } from "./model-settings";
 import { ModelRefSchema } from "./parse";
 import { AGENT_MODEL_TOOL, type Effort, type ModelOption, type ModelRef, type PendingModel } from "./protocol";
 import { toolArguments } from "./tool-arguments";
@@ -68,7 +68,7 @@ const refused = "The owner's latest message must name one available model or eff
 export async function modelNamedByOwner(
 	tx: Tx, chat: ConversationId, requested: ModelRef, settings: ModelSettings,
 ): Promise<boolean> {
-	const { text } = await tx.doc(OwnerInputDoc, chat);
+	const text = await ownerInput(tx, chat);
 	if (text === undefined) return false;
 	const { named } = namedModels(words(text), await settings.listed().catch(() => []), settings.models);
 	return named.length === 1 && sameModel(named[0], requested);
@@ -82,9 +82,9 @@ export function modelTool(
 		name: "neuve-agent-model",
 		tools: [defineTool({
 			...argumentsForModel,
-			description: "Set an agent's model or effort when the channel owner explicitly names it in their latest message to you. Supply only what they named. A busy agent uses the change on its next run. Ask the owner to name the model or account if ambiguous.",
+			description: "Set an agent's model or effort when the channel owner explicitly names it in their latest message to you. Supply only what they named. A busy agent keeps the change pending until the channel sends it an input while idle. Ask the owner to name the model or account if ambiguous.",
 			execute: ({ role, part, model, effort }, api, context) => api.commit<ToolExecutionResult>(async tx => {
-				const { text } = await tx.doc(OwnerInputDoc, api.conversationId);
+				const text = await ownerInput(tx, api.conversationId);
 				if (text === undefined) return { content: [{ type: "text", text: refused }], isError: true };
 				const chat = await findChat(tx, api.conversationId, role, part);
 				if (chat === undefined) return {
@@ -109,7 +109,7 @@ export function modelTool(
 				const result = await settings.select(tx, chat, change);
 				const selected = result.pending?.model ?? result.model;
 				const level = result.pending?.effort ?? result.effort;
-				return { content: [{ type: "text", text: `${selected.provider}/${selected.modelId}, effort ${level}${result.pending ? ", on the next run." : "."}` }] };
+				return { content: [{ type: "text", text: `${selected.provider}/${selected.modelId}, effort ${level}${result.pending ? ", pending until an input is sent while idle." : "."}` }] };
 			}, context),
 		})],
 	});

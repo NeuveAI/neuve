@@ -13,6 +13,7 @@ import { ANTHROPIC_MODELS } from "@earendil-works/pi-ai/providers/anthropic.mode
 import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
 import { Effect } from "effect";
 import {
+  ACCOUNT_PROVIDER_PREFIX,
   unavailableText,
   type AccountStatus,
   type RuntimeRegistryShape,
@@ -40,6 +41,9 @@ const catalogs: Record<
   "anthropic" | "openai-codex",
   Readonly<Partial<Record<string, ModelLimits>>>
 > = { anthropic: ANTHROPIC_MODELS, "openai-codex": OPENAI_CODEX_MODELS };
+export const accountProviderId = (native: Models, name: string) =>
+  native.getProvider(name) ? ACCOUNT_PROVIDER_PREFIX + name : name;
+
 function resolveRow(status: AccountStatus, id: string) {
   const rows = status.models ?? [];
   return (
@@ -71,6 +75,7 @@ export async function accountModels(
   },
 ): Promise<AccountModels> {
   const added = createModels();
+  const providerId = (name: string) => accountProviderId(native, name);
   const limits = new Map<string, Map<string, Partial<ModelLimits>>>();
   const warn = logDefaultModelLimits(options.log);
   const stopLimits = options.bridge.subscribeModelLimits(
@@ -83,7 +88,7 @@ export async function accountModels(
       let known = limits.get(account);
       if (!known) limits.set(account, (known = new Map()));
       known.set(key, { ...known.get(key), ...value });
-      for (const candidate of added.getModels(account)) {
+      for (const candidate of added.getModels(providerId(account))) {
         const row = status && resolveRow(status, candidate.id);
         if ((row?.resolvedModel ?? row?.id ?? candidate.id) === key)
           Object.assign(candidate, value);
@@ -112,7 +117,7 @@ export async function accountModels(
     return {
       id,
       name: row.displayName,
-      provider: status.name,
+      provider: providerId(status.name),
       api: "neuve-runtime",
       baseUrl: "",
       reasoning: row.supportsEffort === true,
@@ -140,7 +145,6 @@ export async function accountModels(
     };
   };
   let routes = new Map<string, AccountRoute>();
-  const shadowed = new Set<string>();
   const rebuild = async (statuses: readonly AccountStatus[]) => {
     const next = new Map<string, AccountRoute>();
     for (const status of statuses) {
@@ -148,14 +152,6 @@ export async function accountModels(
         options.registry.capabilities(status.name).pipe(Effect.result),
       );
       if (caps._tag === "Failure" || !caps.success.ownsLoop) continue;
-      if (
-        native.getProviders().some((provider) => provider.id === status.name)
-      ) {
-        if (!shadowed.has(status.name))
-          options.log?.("chat-runtime.account.shadowed", { name: status.name });
-        shadowed.add(status.name);
-        continue;
-      }
       const continuation = await Effect.runPromise(
         options.registry.continuation(status.name).pipe(Effect.result),
       );
@@ -165,7 +161,7 @@ export async function accountModels(
         continuation: continuation.success,
         capabilities: caps.success,
       };
-      next.set(status.name, route);
+      next.set(providerId(status.name), route);
     }
     for (const [name, route] of routes)
       if (!next.has(name)) {
@@ -174,7 +170,8 @@ export async function accountModels(
       }
     routes = next;
     for (const status of statuses) {
-      const route = routes.get(status.name);
+      const id = providerId(status.name);
+      const route = routes.get(id);
       if (!route) continue;
       const models = (status.models ?? []).map((row) => makeModel(status, row));
       const stream: Parameters<typeof createProvider>[0]["api"] = {
@@ -185,7 +182,7 @@ export async function accountModels(
       };
       added.setProvider(
         createProvider({
-          id: route.name,
+          id,
           name: route.name,
           models,
           // Auth stays with the runtime; pi never receives or refreshes a credential.
@@ -238,7 +235,7 @@ export async function accountModels(
         model,
         text,
         previous.message?.role === "assistant" &&
-          previous.message.provider === route.name &&
+          previous.message.provider === model.provider &&
           previous.pointer
           ? responseId(previous.pointer.session)
           : undefined,
@@ -300,9 +297,10 @@ export async function accountModels(
       : owner(value).getAuth(value, overrides);
   }
   const getAccountModel = (provider: string, id: string) => {
+    const account = routes.get(provider)?.name;
     const status = options.statuses
       .current()
-      .find((status) => status.name === provider);
+      .find((status) => status.name === account);
     const row = status && resolveRow(status, id);
     return status && row ? makeModel(status, row, id) : undefined;
   };
@@ -387,9 +385,11 @@ export async function accountModels(
     provider: string | undefined,
     opts: Parameters<Models["getAvailable"]>[1],
   ) {
+    const account =
+      provider === undefined ? undefined : routes.get(provider)?.name;
     const status = options.statuses
       .current()
-      .find((status) => status.name === provider);
+      .find((status) => status.name === account);
     if (
       status &&
       status.signIn.state !== "signed-in" &&

@@ -2367,19 +2367,23 @@ test("a plan's unattended implementer cannot use its brief to change models", as
 	expect((await fixture.channel.info()).chats.find(value => value.id === chat)?.pending).toBeUndefined();
 });
 
-// A real owner mention counts even if the implementer was already running on a host input.
-test("an owner mention can schedule a model change during an implementer's run", async () => {
+// The build card watches the planning chat while the implementer's Work log watches its own chat.
+test("an owner mention can schedule a model change visible to both views during the run", async () => {
 	const run = await setup();
 	const { fixture } = run;
 	const { chat, agent } = await startBuild(run);
 	const alternate = offerRetiredModel(fixture);
 	const entered = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
+	const finish = Promise.withResolvers<void>();
 	fixture.script(async () => {
 		entered.resolve();
 		await release.promise;
 		return tool("set_agent_model", { role: "implementer", model: alternate }, "mentioned-model");
-	}, fauxAssistantMessage("Done."));
+	}, async () => {
+		await finish.promise;
+		return fauxAssistantMessage("Done.");
+	});
 	try {
 		const submission = await wake(run, "Work on exports.", chat);
 		await entered.promise;
@@ -2387,9 +2391,19 @@ test("an owner mention can schedule a model change during an implementer's run",
 		await agent.until("queue", event => event.messages.some(message => message.text === "Use old-model."));
 		release.resolve();
 		expect(await agent.until("result", event => event.call === "mentioned-model")).toMatchObject({ error: false });
-		expect((await fixture.channel.info()).chats.find(value => value.id === chat)).toMatchObject({
+		const update = {
 			model: MODEL, effort: "high", pending: { model: alternate, effort: "off" },
-		});
+		};
+		expect(await run.watch.until("agent", event => event.chat === chat && !!event.pending)).toMatchObject(update);
+		expect(await agent.until("agent", event => !!event.pending)).toMatchObject(update);
+		expect((await fixture.channel.info()).chats.find(value => value.id === chat)).toMatchObject({ ...update, busy: true });
+		finish.resolve();
 		expect(await fixture.request({ op: "wait", submission })).toBe("done");
-	} finally { release.resolve(); }
+		await fixture.request({ op: "select", author: OWNER, chat, model: alternate });
+		for (const view of [run.watch, agent]) {
+			const applied = await view.until("agent", event => event.chat === chat && event.model.provider === alternate.provider);
+			expect(applied).toMatchObject({ model: alternate, effort: "off" });
+			expect(applied.pending).toBeUndefined();
+		}
+	} finally { release.resolve(); finish.resolve(); }
 });

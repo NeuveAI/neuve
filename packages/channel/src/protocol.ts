@@ -716,7 +716,7 @@ export type Request =
 		actions?: boolean;
 		/** Include typing events; older clients do not understand them. */
 		typing?: boolean;
-		/** Include agent events; older clients do not understand them. */
+		/** Include model and effort updates for every chat in the channel, and mode updates for this chat. */
 		agent?: boolean;
 		/** Include stopped events; older clients do not understand them. */
 		stops?: boolean;
@@ -837,7 +837,7 @@ export type Event =
 	| { kind: "run"; chat: ChatId; state: "start" | "end" }
 	/** `author` stopped the run, whose aborted reply came before this. */
 	| { kind: "stopped"; chat: ChatId; at: number; author: string }
-	/** The chat's model, effort or mode changed, so the next run uses these; `info` has the mode. */
+	/** Model and effort for `chat`. An absent `pending` clears a previous pending change. */
 	| {
 		kind: "agent";
 		chat: ChatId;

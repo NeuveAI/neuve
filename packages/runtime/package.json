@@ -9,6 +9,10 @@
       "types": "./.types/src/index.d.ts",
       "default": "./src/index.ts"
     },
+    "./account": {
+      "types": "./.types/src/account.d.ts",
+      "default": "./src/account.ts"
+    },
     "./approval": {
       "types": "./.types/src/approval.d.ts",
       "default": "./src/approval.ts"

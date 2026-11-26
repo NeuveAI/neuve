@@ -4,6 +4,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-work
 import { type Harness, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 
 import { EventSchema } from "../src/frame";
+import type { Channel } from "../src/channel";
 import type { Request } from "../src/protocol";
 import { Fixture, MODEL, OWNER, until } from "./helpers";
 
@@ -23,15 +24,20 @@ function offer(fixture: Fixture, provider = alternate.provider, id = alternate.m
 
 async function setup() {
 	let harness: Harness | undefined;
+	let submitInput: Channel["submitInput"] | undefined;
 	const run = await Fixture.create({
-		feed: async value => { harness = value; return { close: async () => {}, pending: () => false }; },
+		feed: async (value, submit) => {
+			harness = value;
+			submitInput = submit;
+			return { close: async () => {}, pending: () => false };
+		},
 	});
 	fixture = run;
 	const channel = harness!;
 	const main = await channel.conversation(ROOT_CONVERSATION_ID, context);
-	if (!main) throw new Error("Missing main chat");
+	if (!main || !submitInput) throw new Error("Missing main chat or host admission");
 	await run.request({ op: "select", author: OWNER, ...unchanged });
-	return { run, main, watch: await run.watch() };
+	return { run, main, submitInput, watch: await run.watch() };
 }
 
 const callModelTool = (id: string, args: Parameters<typeof fauxToolCall>[1]) =>
@@ -74,13 +80,13 @@ test("a teammate's model fields are refused without changing any chat", async ()
 	expect(run.faux.state.callCount).toBe(0);
 });
 
-// Pi starts the next run from its own queue after the current run ends.
-for (const lost of [false, true]) test(`a queued review wake applies a pending model${lost ? " with lost-key fallback" : ""}`, async () => {
-	const { run, main, watch } = await setup();
+// Pi drains queued follow-ups itself, so a busy wake cannot apply pending settings at that boundary.
+for (const lost of [false, true]) test(`a queued review wake keeps the old settings until a channel input arrives while idle${lost ? " with lost-key fallback" : ""}`, async () => {
+	const { run, main, submitInput, watch } = await setup();
 	const other = offer(run, alternate.provider, alternate.modelId, 900);
 	other.appendResponses([fauxAssistantMessage("Next run used the pending model")]);
 	const blocked = blockTurn(run);
-	run.script(blocked.step, fauxAssistantMessage("Next run used the fallback model"));
+	run.script(blocked.step, fauxAssistantMessage("Queued wake used the running model"), fauxAssistantMessage("Next run used the fallback model"));
 	try {
 		const first = await run.request<{ submission: number }>({ op: "ask", author: OWNER, text: "start" });
 		await blocked.entered;
@@ -93,13 +99,18 @@ for (const lost of [false, true]) test(`a queued review wake applies a pending m
 			.rejects.toThrow("Attach a smaller file");
 		await expect(run.request({ op: "ask", author: OWNER, text: "file", files: [{ name: "large.txt", text: "x".repeat(2800) }] }))
 			.rejects.toThrow("Attach a smaller file");
-		const wake = await main.submit({ type: "input", content: "The review finished.", whenBusy: "followUp",
+		const wake = await submitInput(main, { type: "input", content: "The review finished.", whenBusy: "followUp",
 			requestId: "neuve.review:test:terminal:host-wake" }, context);
 		expect((await wake.status(context)).status).toBe("queued");
-		if (lost) run.scripted.models.deleteProvider(alternate.provider);
 		blocked.release();
 		expect(await run.request({ op: "wait", submission: first.submission })).toBe("done");
 		expect((await wake.wait(context)).status).toBe("done");
+		expect(await watch.until("reply", event => event.text === "Queued wake used the running model")).toMatchObject({ model: MODEL.modelId });
+		expect((await run.channel.info()).chats[0]).toMatchObject({ ...unchanged, pending });
+		if (lost) run.scripted.models.deleteProvider(alternate.provider);
+		const next = await submitInput(main, { type: "input", content: "A second review finished.",
+			requestId: "neuve.review:next:terminal:host-wake" }, context);
+		expect((await next.wait(context)).status).toBe("done");
 		const text = lost ? "Next run used the fallback model" : "Next run used the pending model";
 		expect(await watch.until("reply", event => event.text === text)).toMatchObject({ model: lost ? MODEL.modelId : alternate.modelId });
 		const final = await watch.until("agent", event => !event.pending && event.effort === "high");
@@ -129,7 +140,7 @@ for (const { name, text, args, ...options } of refusals) test(`the tool refuses 
 
 // An admitted steer changes who can authorize the tool, even when Pi has yet to place that input.
 for (const author of [OWNER, teammate, "agent@reviewer", "host", "teammate posting in the thread"] as const) test(`a busy chat receives a later input from ${author}`, async () => {
-	const { run, main, watch } = await setup();
+	const { run, main, submitInput, watch } = await setup();
 	offer(run);
 	await run.request({ op: "share", author: OWNER, shared: true });
 	const entered = Promise.withResolvers<void>();
@@ -143,7 +154,7 @@ for (const author of [OWNER, teammate, "agent@reviewer", "host", "teammate posti
 		await run.request({ op: "ask", author: OWNER, text: author === OWNER ? "Start" : "Use job-model" });
 		await entered.promise;
 		if (author === "host") {
-			await main.submit({ type: "input", whenBusy: "steer", content: "owner: Use job-model" }, context);
+			await submitInput(main, { type: "input", whenBusy: "steer", content: "owner: Use job-model" }, context);
 		} else if (author === "teammate posting in the thread") {
 			await run.request({ op: "say", author: teammate, text: "Use job-model" });
 		} else {
@@ -159,7 +170,7 @@ for (const author of [OWNER, teammate, "agent@reviewer", "host", "teammate posti
 
 // The tool may change just the named setting. Account qualification admits a duplicate model name.
 for (const setting of ["model", "effort"] as const) test(`a named ${setting} leaves the other setting in place`, async () => {
-	const { run, main, watch } = await setup();
+	const { run, watch } = await setup();
 	const other = offer(run);
 	other.appendResponses([fauxAssistantMessage("Changed")]);
 	offer(run, "other-account");
@@ -170,8 +181,8 @@ for (const setting of ["model", "effort"] as const) test(`a named ${setting} lea
 	expect(await watch.until("result", event => event.call === "model")).toMatchObject({ error: false });
 	expect((await run.channel.info()).chats[0]?.pending).toEqual(change);
 	expect(await run.request({ op: "wait", submission })).toBe("done");
-	const next = await main.submit({ type: "input", content: "Continue" }, context);
-	expect((await next.wait(context)).status).toBe("done");
+	const next = await run.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Continue" });
+	expect(await run.request({ op: "wait", submission: next.submission })).toBe("done");
 	expect((await run.channel.info()).chats[0]).toMatchObject({ ...unchanged, ...change });
 });
 

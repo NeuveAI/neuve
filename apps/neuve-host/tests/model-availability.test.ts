@@ -28,6 +28,14 @@ test("configured subscription identity reaches native preference admission and s
 		const native = {provider: "openai", modelId: "native-key-model"};
 		configureRuntime({modelAvailability: () => [configured, native]});
 		expect(await extendModels(Promise.resolve([native, {provider: "anthropic", modelId: "other-native"}]))).toEqual([native, {provider: "anthropic", modelId: "other-native"}, configured]);
+		// A managed sign-in and native key can list the same model under distinct provider IDs.
+		const managed = {provider: "account:openai", modelId: native.modelId, account: "openai"};
+		configureRuntime({modelAvailability: () => [managed]});
+		const listed = await extendModels(Promise.resolve([native]));
+		expect(listed).toEqual([native, managed]);
+		const pick = {provider: managed.provider, modelId: managed.modelId};
+		await setModel(pick, listed);
+		expect(preference()).toEqual(pick);
 		configureRuntime({modelAvailability: () => []});
 		await expect(extendModels(Promise.reject(new Error("native credentials failed")))).rejects.toThrow("native credentials failed");
 	} finally {await rm(root, {recursive: true, force: true});}
