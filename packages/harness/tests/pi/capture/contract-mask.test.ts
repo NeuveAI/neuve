@@ -434,3 +434,38 @@ test("older contexts parse and settled observed calls are cancelled while active
     "active-started": "pending",
   });
 });
+
+// Why: comprehensive reviewers retain actual source and interim claims, not just final answers.
+// These narratives must follow the same sanitization path on pi and contract capture exports.
+test("retained comprehensive evidence and claims are masked without becoming verdicts", async () => {
+  const source = state();
+  const secret = "private-review-source-secret";
+  source.toolState = {
+    ...source.toolState,
+    reviewEvidence: [{ reference: "section.1", text: secret }],
+    reviewClaims: [
+      {
+        key: "a".repeat(64),
+        section: "section-key",
+        ownership: "cross-boundary",
+        observation: {
+          anchor: { path: "caller.ts", side: "new", startLine: 1, endLine: 1 },
+          kind: "risk",
+          text: secret,
+          fails: secret,
+          evidence: ["section.1"],
+          row: secret,
+        },
+        evidence: [{ reference: "section.1", text: secret }],
+      },
+    ],
+  };
+  const { run } = await project(source, [secret]);
+  const masked = run.contractContexts?.[0]?.state.toolState;
+  expect(JSON.stringify(masked)).not.toContain(secret);
+  expect(masked?.reviewEvidence?.[0]?.text).toBe("<masked>");
+  expect(masked?.reviewClaims?.[0]?.observation.text).toBe("<masked>");
+  expect(masked?.reviewClaims?.[0]?.observation.kind).toBe("risk");
+  expect(masked?.reviewClaims?.[0]?.ownership).toBe("cross-boundary");
+  expect(source.toolState.reviewClaims?.[0]?.observation.text).toBe(secret);
+});

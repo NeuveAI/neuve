@@ -11,6 +11,10 @@ import type { LaneReviewJudgement } from "./answers.ts";
 import type { Claim } from "./decide.ts";
 import type { Reading } from "./reading.ts";
 import { withOffered } from "./steps.ts";
+import {
+  recordedClaimTask,
+  type RecordedReviewClaim,
+} from "./reviewer-claims.ts";
 
 /**
  * A Lane review defect comment is a claim, and each distinct claim is checked once, with fresh
@@ -185,3 +189,61 @@ export const claimVerdict = (
     : stored.decision === "keep"
       ? "confirmed"
       : "refuted";
+
+/** Fresh-context checking of an incrementally retained concern, independent of section verdicts. */
+export const recordedClaimVerifyStep = (p: {
+  readonly claim: RecordedReviewClaim;
+  readonly turnLimit: number;
+}): AgentStep<VerifySubmission, ClaimStored> => {
+  const evidence = recordedClaimTask(p.claim);
+  // An oversized source basis is not truncated into apparent confirmation.
+  const oversized = evidence.length > VERIFY_INPUT_CHARS;
+  const fallback = (): VerifySubmission => ({
+    decision: "drop",
+    reason: oversized
+      ? "The retained claim basis exceeds the bounded verification context; the claim was not judged."
+      : "The claim was not checked.",
+  });
+  return withOffered({
+    spec: {
+      stage: "verify",
+      agent: `verify.claim.${p.claim.key.slice(0, 12)}`,
+      turnLimit: p.turnLimit,
+      unanswered: "fail",
+      system: verifySystem,
+      task: oversized
+        ? "The complete source basis exceeds the verification bound. Submit drop; this check cannot judge the claim."
+        : evidence,
+      tools: [],
+      submit: {
+        description:
+          "Check this exact concern against its retained source basis, not the assignment again.",
+        schema: VerifySubmission,
+      },
+      backstop: fallback,
+    },
+    op: "harness.verify-claim",
+    opVersion: 2,
+    inputs: {
+      claim: p.claim.key,
+      section: p.claim.section,
+      basis: sha256Hex(evidence),
+      oversized,
+    },
+    compose: (result) => ({
+      ...(oversized ? fallback() : (result.output ?? fallback())),
+      claim: p.claim.key,
+      section: p.claim.section ?? `unknown:${p.claim.key}`,
+      source:
+        oversized || result.output === undefined
+          ? "backstop"
+          : result.status === "submitted"
+            ? "agent"
+            : result.status === "final-generation"
+              ? "final-generation"
+              : "backstop",
+    }),
+    schema: ClaimStored,
+    note: (stored) => `${stored.decision}; source ${stored.source}`,
+  });
+};
