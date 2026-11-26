@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { signInWorkspaceTab } from "../src/browser";
 import * as catalog from "../src/catalog";
 import { bindConfiguredCatalog, configure } from "../src/host-config";
-import { stopLaneWorkspace, writeLaneWorkspace } from "../src/lane-workspace";
+import { readLaneWorkspace, stopLaneWorkspace, writeLaneWorkspace } from "../src/lane-workspace";
 import { open as openLog } from "../src/log";
 import { archive } from "../src/manage";
 
@@ -52,49 +52,89 @@ test("stop signals only a recorded process with the same start time and removes 
 	});
 });
 
-test("stop retains the scratch until the lane build confirms its review worker has stopped", async () => {
+test("stop retains scratch until the launcher exits and both store workers have stopped", async () => {
 	await fixture(async (root) => {
 		const scratch = await mkdtemp(join(root, "workspace-"));
 		const bin = join(scratch, "bin");
 		const neuve = join(bin, "neuve");
 		const project = join(scratch, "project");
+		const coding = join(scratch, "captures", "coding");
+		const capture = join(coding, "neuve");
 		await mkdir(bin);
 		await writeFile(neuve, "");
 		await mkdir(join(project, ".git"), { recursive: true });
+		await mkdir(capture, { recursive: true });
+		await writeFile(join(capture, "records.sqlite"), "");
+		await mkdir(join(coding, "unrelated"));
+		const launcher = { pid: 49101, start: "launcher start", host: hostname() };
 		const keeper = { pid: 49102, start: "keeper start", host: hostname() };
-		await writeLaneWorkspace({ version: 1, scratch, lane: join(root, "lane"), keeper, ready: true });
+		await writeLaneWorkspace({ version: 1, scratch, lane: join(root, "lane"), launcher, keeper, ready: true });
 
-		let keeperAlive = true;
+		const live = new Map([[launcher.pid, launcher], [keeper.pid, keeper]]);
 		const monitor = {
-			read: () => keeperAlive ? keeper : undefined,
-			terminate() { keeperAlive = false; },
+			read: (pid: number) => live.get(pid),
+			terminate(pid: number) { live.delete(pid); },
 		};
-		let workerRunning = true;
+		let captureCanStop = false;
+		let captureWorkerRunning = true;
 		const commands: string[][] = [];
 		const run = async (command: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }) => {
 			commands.push(command);
-			expect(keeperAlive).toBe(false);
-			expect(existsSync(scratch)).toBe(true);
+			expect(live.size).toBe(0);
+			expect(existsSync(capture)).toBe(true);
 			expect(options.cwd).toBe(project);
 			expect(options.env.ACE_HOME).toBe(join(scratch, "state", "neuve-host"));
 			expect(options.env.NEUVE_RECORDS_REGISTRY).toBe(join(scratch, "state", "repositories.json"));
 			expect(options.env.NEUVE_WORKSPACE_PROJECT).toBe(project);
 			expect(options.env.PATH?.split(":")[0]).toBe(bin);
 			expect(options.timeout).toBeGreaterThan(0);
-			return command[2] === "status" && !workerRunning ? 3 : 0;
+			if (command[2] === "stop") {
+				if (command[4] === capture && captureCanStop) captureWorkerRunning = false;
+				return 0;
+			}
+			return command[4] === capture && captureWorkerRunning ? 0 : 3;
 		};
-		await expect(stopLaneWorkspace(root, scratch, monitor, run)).rejects.toThrow("The review worker is still running.");
-		expect(existsSync(scratch)).toBe(true);
+		await expect(stopLaneWorkspace(root, scratch, monitor, run)).rejects.toThrow(`The worker for ${capture} is still running.`);
+		expect((await readLaneWorkspace(root, scratch))?.lane).toBe(join(root, "lane"));
 
-		workerRunning = false;
+		captureCanStop = true;
 		expect(await stopLaneWorkspace(root, scratch, monitor, run)).toBe(true);
 		expect(existsSync(scratch)).toBe(false);
 		expect(commands).toEqual([
 			[neuve, "worker", "stop", "--repo", project],
 			[neuve, "worker", "status", "--repo", project],
+			[neuve, "worker", "stop", "--store", capture],
+			[neuve, "worker", "status", "--store", capture],
 			[neuve, "worker", "stop", "--repo", project],
 			[neuve, "worker", "status", "--repo", project],
+			[neuve, "worker", "stop", "--store", capture],
+			[neuve, "worker", "status", "--store", capture],
 		]);
+	});
+});
+
+test.skipIf(process.getuid?.() === 0)("a partial scratch removal fails and leaves the workspace discoverable for retry", async () => {
+	await fixture(async (root) => {
+		const scratch = await mkdtemp(join(root, "workspace-"));
+		const lane = join(root, "lane");
+		const blocked = join(scratch, "state");
+		await mkdir(blocked);
+		await writeFile(join(blocked, "entry"), "");
+		await writeLaneWorkspace({
+			version: 1, scratch, lane, ready: true,
+			keeper: { pid: 49101, start: "keeper start", host: hostname() },
+		});
+		const monitor = { read: () => undefined, terminate() { throw new Error("Unexpected signal."); } };
+		await chmod(blocked, 0o500);
+		try {
+			await expect(stopLaneWorkspace(root, scratch, monitor)).rejects.toThrow(scratch);
+			expect((await readLaneWorkspace(root, scratch))?.lane).toBe(lane);
+			expect(existsSync(join(blocked, "entry"))).toBe(true);
+		} finally {
+			await chmod(blocked, 0o700);
+		}
+		expect(await stopLaneWorkspace(root, scratch, monitor)).toBe(true);
+		expect(existsSync(scratch)).toBe(false);
 	});
 });
 
@@ -118,7 +158,8 @@ test("stop closes only the build's tab and leaves the development browser runnin
 			terminate(pid: number) { signalled.push(pid); },
 		};
 		const tabs = new Set(["lane-tab", "owner-tab"]);
-		expect(await stopLaneWorkspace(root, scratch, monitor, undefined, async (directory, target) => {
+		const run = async () => { throw new Error("Unexpected worker command."); };
+		expect(await stopLaneWorkspace(root, scratch, monitor, run, async (directory, target) => {
 			expect(directory).toBe(profile);
 			expect(target.browser).toBe(browser.target.browser);
 			tabs.delete(target.target_id);

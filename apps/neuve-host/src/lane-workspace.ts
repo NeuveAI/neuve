@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { Ancestry } from "@neuve/records-core";
+import { Ancestry, storeLocationIn } from "@neuve/records-core";
 import { processAlive, withFileLock } from "@neuve/records-core/file-lock";
 import { z } from "zod";
 import { closeWorkspaceTab } from "./browser";
@@ -49,6 +49,11 @@ export function laneWorkspaceEnvironment(scratch: string, path = process.env.PAT
 
 function missing(error: unknown): boolean {
 	return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function ignoreMissing(error: unknown): undefined {
+	if (!missing(error)) throw error;
+	return undefined;
 }
 
 export async function validationRoot(create = false): Promise<string | undefined> {
@@ -147,31 +152,63 @@ async function runWorkerCommand(command: string[], options: { cwd: string; env: 
 	}).exited;
 }
 
-async function stopReviewWorker(scratch: string, run: typeof runWorkerCommand): Promise<void> {
+async function stopWorkspaceWorkers(scratch: string, run: typeof runWorkerCommand): Promise<void> {
 	const binary = join(scratch, "bin", "neuve");
 	const environment = laneWorkspaceEnvironment(scratch);
 	const project = environment.NEUVE_WORKSPACE_PROJECT;
 	try {
-		const files = await Promise.all([lstat(binary), lstat(project)]).catch((error: unknown) => {
-			if (!missing(error)) throw error;
-		});
-		if (!files) return;
-		if (!files[0].isFile() || !files[1].isDirectory() || !(await lstat(join(project, ".git"))).isDirectory())
+		const executable = await lstat(binary).catch(ignoreMissing);
+		if (!executable) return;
+		const checkout = await lstat(project).catch(ignoreMissing);
+		const git = checkout?.isDirectory() ? await lstat(join(project, ".git")).catch(ignoreMissing) : undefined;
+		if (!executable.isFile() || (checkout && !checkout.isDirectory()) || (git && !git.isDirectory()))
 			throw new Error("Expected the lane's Neuve executable and project clone.");
+
+		const stores: { flag: "--repo" | "--store"; path: string }[] = [];
+		if (git) stores.push({ flag: "--repo", path: project });
+		const capture = storeLocationIn(join(scratch, "captures", "coding")).directory;
+		if ((await lstat(capture).catch(ignoreMissing))?.isDirectory() && await realpath(capture) === capture)
+			stores.push({ flag: "--store", path: capture });
 
 		const env: NodeJS.ProcessEnv = { ...process.env, ...environment };
 		for (const key of GIT_LOCAL) delete env[key];
-		const options = { cwd: project, env };
-		const stopped = await run([binary, "worker", "stop", "--repo", project], { ...options, timeout: 15_000 });
-		if (stopped !== 0) throw new Error(`neuve worker stop exited with code ${stopped}.`);
-
-		const status = await run([binary, "worker", "status", "--repo", project], { ...options, timeout: 5_000 });
-		if (status === 3) return; // The store has no worker.
-		if (status === 0) throw new Error("The review worker is still running.");
-		throw new Error(`neuve worker status exited with code ${status}.`);
+		const options = { cwd: git ? project : scratch, env };
+		for (const { flag, path } of stores) {
+			const stopped = await run([binary, "worker", "stop", flag, path], { ...options, timeout: 15_000 });
+			if (stopped !== 0) throw new Error(`neuve worker stop for ${path} exited with code ${stopped}.`);
+			const status = await run([binary, "worker", "status", flag, path], { ...options, timeout: 5_000 });
+			if (status === 3) continue; // The store has no worker.
+			if (status === 0) throw new Error(`The worker for ${path} is still running.`);
+			throw new Error(`neuve worker status for ${path} exited with code ${status}.`);
+		}
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
-		throw new Error(`Could not confirm review worker shutdown. Kept workspace scratch at ${scratch}. ${detail}`);
+		throw new Error(`Could not confirm worker shutdown. Kept workspace scratch at ${scratch}. ${detail}`);
+	}
+}
+
+async function removeWorkspaceScratch(state: LaneWorkspace): Promise<void> {
+	const { scratch } = state;
+	try {
+		const entries = await readdir(scratch).catch(ignoreMissing);
+		if (!entries) return;
+		for (const entry of entries) {
+			if (entry !== MARKER) await rm(join(scratch, entry), { recursive: true, force: true });
+		}
+		const remaining = await readdir(scratch).catch(ignoreMissing);
+		if (!remaining) return;
+		if (remaining.some((entry) => entry !== MARKER)) throw new Error("The directory still contains workspace files.");
+		await unlink(join(scratch, MARKER)).catch(ignoreMissing);
+		try {
+			await rmdir(scratch).catch(ignoreMissing);
+			if (await lstat(scratch).catch(ignoreMissing)) throw new Error("The directory still exists.");
+		} catch (error) {
+			await writeLaneWorkspace(state);
+			throw error;
+		}
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`Could not remove workspace scratch at ${scratch}. ${detail}`, { cause: error });
 	}
 }
 
@@ -188,10 +225,10 @@ export async function stopLaneWorkspace(root: string, scratch: string, monitor =
 		}
 		await stopProcess(state.launcher, monitor);
 		await stopProcess(state.keeper, monitor);
-		await stopReviewWorker(scratch, run);
+		await stopWorkspaceWorkers(scratch, run);
 		const { browser } = state;
 		if (browser?.target) await closeTab(browser.profile, browser.target);
-		await rm(scratch, { recursive: true, force: true });
+		await removeWorkspaceScratch(state);
 		return true;
 	});
 }
