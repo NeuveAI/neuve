@@ -484,12 +484,12 @@ export const openClaudeSession = (
                 }
                 const recorded = turn.ending ?? outcome;
                 // The child may also have stopped while cleanup was running.
-                const ending =
+                const ending: TurnOutcome =
                   stopped && recorded.status === "failed"
                     ? {
-                        ...recorded,
-                        disposition: "broken" as const,
-                        retry: undefined,
+                        status: "failed",
+                        disposition: "broken",
+                        failure: recorded.failure,
                       }
                     : recorded;
                 yield* publishLocked(
