@@ -414,3 +414,82 @@ test("Verify child and registration commit together, and replay starts neither t
     await harness.close(context);
   }
 });
+
+test("first registration of cached review preserves original producer/source before any old root drain", () => {
+  const state = initial();
+  const producer = {
+    run: "original-model-run",
+    review: "c".repeat(64),
+    cycle: "original-cycle",
+    head: "original-head",
+  };
+  const source = {
+    plan: "plan",
+    manifest: "manifest",
+    frame: "frame",
+    map: "map",
+    evidence: null,
+  };
+  state.source = {
+    runId: "current-delivery-run",
+    runKey: producer.review,
+    cycle: "current-target-cycle",
+    head: producer.head,
+    plan: source.plan,
+    manifestKey: source.manifest,
+    frameKey: source.frame,
+    mapKey: source.map,
+  };
+  const registration = claim();
+  registration.claim.report["observation"] = {
+    text: "Retained comprehensive report",
+  };
+  registration.claim.basis["producer"] = producer;
+  registration.claim.basis["source"] = source;
+  registration.claim.basis["origin"] = { reviewTask: 800, assignmentTask: 900 };
+  const recorded = registerInSettlement(state, 10, registration, 42);
+  expect(recorded.producer).toEqual({ assignment: "a", task: 900 });
+  expect(recorded.source.runId).toBe(producer.run);
+  expect(recorded.source.cycle).toBe(producer.cycle);
+  expect(recorded.source.origin).toEqual({
+    reviewTask: 800,
+    assignmentTask: 900,
+  });
+  expect(state.source.runId).toBe("current-delivery-run");
+  expect(state.source.cycle).toBe("current-target-cycle");
+  expect(recorded.verificationTask).toBe(42);
+  expect(registerInSettlement(state, 10, registration, 42)).toBe(recorded);
+  // Same words/anchor from a genuinely distinct original producer remain a separate report.
+  const independent = structuredClone(registration);
+  independent.claim.basis["producer"] = {
+    ...producer,
+    run: "another-original-run",
+  };
+  independent.claim.basis["origin"] = { reviewTask: 801, assignmentTask: 901 };
+  const second = registerInSettlement(state, 10, independent, 43);
+  expect(second.id).not.toBe(recorded.id);
+  expect(Object.keys(state.claims)).toHaveLength(2);
+});
+
+test("missing historical origin and a forged immutable source never acquire today's reviewer identity", () => {
+  const state = initial();
+  state.source = { runKey: "c".repeat(64), head: "head", mapKey: "map" };
+  const retained = claim();
+  retained.claim.report["observation"] = {};
+  expect(() => registerInSettlement(state, 10, retained, 42)).toThrow(
+    "original reviewer origin",
+  );
+  expect(state.claims).toEqual({});
+  retained.claim.basis["origin"] = { reviewTask: 800, assignmentTask: 900 };
+  retained.claim.basis["producer"] = {
+    run: "original",
+    review: state.source.runKey!,
+    cycle: "old-cycle",
+    head: "head",
+  };
+  retained.claim.basis["source"] = { map: "different-map" };
+  expect(() => registerInSettlement(state, 10, retained, 42)).toThrow(
+    "immutable assignment",
+  );
+  expect(state.claims).toEqual({});
+});

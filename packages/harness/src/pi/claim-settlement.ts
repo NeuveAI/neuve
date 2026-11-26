@@ -4,7 +4,7 @@ import {
   type TaskId,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { canonicalJson } from "@neuve/records-core";
+import { canonicalJson, sha256Hex } from "@neuve/records-core";
 
 const copyJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
@@ -208,6 +208,84 @@ export const restoreClaim = async (
   state.claims[claim.id] = claim;
 };
 
+const object = (value: unknown): Record<string, unknown> | undefined =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+
+/** Current transport ownership never manufactures missing historical reviewer attribution. */
+const originalAttribution = (
+  state: ClaimSettlement,
+  registration: ClaimRegistration,
+  task: number,
+) => {
+  if (registration.claim.report["observation"] === undefined)
+    return { task, source: state.source }; // A new native DTO, not a retained comprehensive answer.
+  const origin = object(registration.claim.basis["origin"]);
+  const producer = object(registration.claim.basis["producer"]);
+  const source = object(registration.claim.basis["source"]);
+  if (
+    origin === undefined ||
+    !Number.isSafeInteger(origin["assignmentTask"]) ||
+    !Number.isSafeInteger(origin["reviewTask"]) ||
+    Number(origin["assignmentTask"]) < 0 ||
+    Number(origin["reviewTask"]) < 0 ||
+    producer === undefined ||
+    source === undefined
+  )
+    throw new Error(
+      "Retained comprehensive report has no trustworthy original reviewer origin",
+    );
+  const text = (key: string) => {
+    const value = producer[key];
+    if (typeof value !== "string" || value === "")
+      throw new Error("Original reviewer attribution is missing");
+    return value;
+  };
+  const runId = text("run"),
+    runKey = text("review"),
+    cycle = text("cycle"),
+    head = text("head");
+  if (state.source["runKey"] !== undefined && state.source["runKey"] !== runKey)
+    throw new Error(
+      "Retained reviewer configuration differs from the current keyed work",
+    );
+  for (const [prepared, retained] of [
+    ["plan", "plan"],
+    ["manifestKey", "manifest"],
+    ["frameKey", "frame"],
+    ["mapKey", "map"],
+  ] as const)
+    if (
+      state.source[prepared] !== undefined &&
+      state.source[prepared] !== source[retained]
+    )
+      throw new Error(
+        "Retained claim source differs from the current immutable assignment",
+      );
+  if (
+    state.source["head"] !== undefined &&
+    state.source["head"] !== producer["head"]
+  )
+    throw new Error(
+      "Retained claim head differs from the current reviewed source",
+    );
+  return {
+    task: Number(origin["assignmentTask"]),
+    source: copyJson({
+      ...state.source,
+      runId,
+      runKey,
+      cycle,
+      head,
+      origin: {
+        reviewTask: Number(origin["reviewTask"]),
+        assignmentTask: Number(origin["assignmentTask"]),
+      },
+    }),
+  };
+};
+
 /** Pure transition, shared by native commits and race/replay contract tests. */
 export const registerInSettlement = (
   state: ClaimSettlement,
@@ -249,7 +327,11 @@ export const registerInSettlement = (
     anchor.endLine < anchor.startLine
   )
     throw new Error("A claim needs a valid key and primary changed anchor");
-  const id = `${producerTask}:${key}`;
+  const original = originalAttribution(state, registration, producerTask);
+  const id =
+    registration.claim.report["observation"] === undefined
+      ? `${producerTask}:${key}`
+      : `report:${sha256Hex(canonicalJson([producer.assignmentId, registration.claim.report, registration.claim.basis]))}`;
   const held = state.claims[id];
   if (held !== undefined) {
     if (
@@ -275,8 +357,8 @@ export const registerInSettlement = (
   const claim: RegisteredClaim = copyJson({
     ...registration.claim,
     id,
-    producer: { assignment: producer.assignmentId, task: producerTask },
-    source: state.source,
+    producer: { assignment: producer.assignmentId, task: original.task },
+    source: original.source,
     verificationTask,
     destination,
     timing:
