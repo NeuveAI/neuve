@@ -24,6 +24,7 @@ import {
 	type ConversationRecord,
 	type DocumentWatch,
 	createRegistry,
+	type Registry,
 	type Cursor,
 	defineDoc,
 	defineEntry,
@@ -69,7 +70,7 @@ import { instructions } from "./context";
 import { environment, type HostEnvironment } from "./environment";
 import { capabilities } from "./capabilities";
 import { changes, fetchBase, patch } from "./changes";
-import { type Desktop, desktop } from "./desktop";
+import { type Desktop, desktop, DESKTOP_EXTENSION } from "./desktop";
 import { HANDOFF, Handoffs } from "./handoffs";
 import { type Images, images } from "./images";
 import { lanes, LanesDoc } from "./lanes";
@@ -180,6 +181,13 @@ export type Options = {
 	skills?: string;
 	build?: BuildHost;
 	hostEnvironment?: HostEnvironment;
+	plugins?: {
+		hidden(): readonly string[];
+		ownsTool(name: string): boolean;
+		httpTools(): ReadonlySet<string>;
+		refresh(registry: Pick<Registry, "snapshot" | "install" | "uninstall">): Promise<void>;
+		close(): Promise<void>;
+	};
 	desktop?: Desktop;
 	/** Host-owned dispatch availability; refreshed for every request and dispatch. */
 	desktopAvailable?(): boolean;
@@ -233,6 +241,7 @@ export class Channel {
 	#options: Options;
 	#harness: Harness;
 	#log: Log;
+	#refreshPlugins?: () => Promise<void>;
 	#metadata: Metadata;
 	#plans: Plans;
 	#builds: Builds;
@@ -296,7 +305,7 @@ export class Channel {
 		const planning: IsPlanning = async (chat, context) =>
 			isPlanning(channel.#harness, chat, context, id => channel.#changingModes.get(id));
 		const registry = createRegistry();
-		registry.install(logging(log));
+		registry.install(logging(log, options.plugins?.ownsTool));
 		registry.install(CodingTools);
 		const handoffs = new Handoffs(options.directory);
 		registry.install(handoffs.extension);
@@ -349,10 +358,24 @@ export class Channel {
 		const { agents, query, clearInheritedQuery } = buildTools(() => channel.#builds);
 		registry.install(agents);
 		if (options.build?.query) registry.install(query);
-		install(registry, options.extension, planning, !!options.planFileAccess, log, (chat, scope) => channel.#builds.paused(chat, scope));
+		const installGuarded = install(registry, options.extension, planning, !!options.planFileAccess, log,
+			(chat, scope) => channel.#builds.paused(chat, scope));
+		const { plugins } = options;
+		const refreshPlugins = plugins && (() => plugins.refresh({
+			snapshot: () => registry.snapshot(),
+			uninstall: extension => registry.uninstall(extension),
+			install: installGuarded,
+		}));
+		const visible = execute || plugins
+			? capabilities(registry, () => [
+				...(execute && !available() ? [DESKTOP_EXTENSION] : []),
+				...(plugins?.hidden() ?? []),
+			])
+			: registry;
+		await refreshPlugins?.();
 		const harness = await Harness.open(options.storage, {
-			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider)),
-			registry: execute ? capabilities(registry, available) : registry,
+			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider), plugins?.httpTools),
+			registry: visible,
 			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },
 			conversationCreated: clearInheritedQuery,
 			env: async ({ cwd, conversationId }, context) => {
@@ -407,6 +430,7 @@ export class Channel {
 			approvals,
 		);
 		ownedChannel = channel;
+		channel.#refreshPlugins = refreshPlugins;
 		channel.#unbind = unbind;
 		channel.#changed(value);
 		// Scheduling has not resumed and no caller has this channel yet, so the initial snapshot
@@ -563,6 +587,11 @@ export class Channel {
 					errors.push(cleanup);
 				}
 			} else {
+				try {
+					await options.plugins?.close();
+				} catch (cleanup) {
+					errors.push(cleanup);
+				}
 				try {
 					await options.storage.close(context);
 				} catch (cleanup) {
@@ -1061,6 +1090,7 @@ export class Channel {
 			} catch (error) {
 				errors.push(error);
 			}
+			try { await this.#options.plugins?.close(); } catch (error) { errors.push(error); }
 			for (const remove of [this.#unsubscribe, this.#unbind]) {
 				try {
 					remove?.();
@@ -1280,7 +1310,10 @@ export class Channel {
 		const chat = id || ROOT_CONVERSATION_ID;
 		const previous = this.#admissions.get(chat) || Promise.resolve();
 		// Selection and submission must stay together across concurrent clients.
-		const pending: Promise<T> = previous.catch(() => {}).then(() => admit(pending));
+		const pending: Promise<T> = previous.catch(() => {}).then(async () => {
+			await this.#refreshPlugins?.();
+			return admit(pending);
+		});
 		this.#admissions.set(chat, pending);
 		try {
 			return await pending;

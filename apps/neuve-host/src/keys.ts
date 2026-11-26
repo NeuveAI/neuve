@@ -11,6 +11,7 @@ import type { MutableModels } from "@earendil-works/pi-ai";
 import { ClaudeSubscriptionTokenRefused, isClaudeSubscriptionToken } from "../../../packages/harness/src/subscription-token.ts";
 
 import { config } from "./config";
+import { secretName } from "./plugin-manifest";
 import type { CredentialStatus } from "./protocol";
 
 const sealed = new Map<string, string>();
@@ -24,11 +25,9 @@ const usable = (name: string, value: string | undefined) => refused(name, value)
  * `env` through its agent. Credentials leave `process.env` before any tool runs and stay
  * readable only through `key`.
  */
-const secret = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIALS?)$/;
-
 export function seal(): void {
 	for (const [name, value] of Object.entries(process.env)) {
-		if (!secret.test(name) || value === undefined) continue;
+		if (!secretName(name) || value === undefined) continue;
 		if (!subscriptionOnly(name)) sealed.set(name, value);
 		delete process.env[name];
 	}

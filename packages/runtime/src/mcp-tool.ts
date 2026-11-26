@@ -30,3 +30,20 @@ export function unknownTool(
     isError: true,
   };
 }
+
+export const TOOL_USE_ID_INPUT = "__neuve_tool_use_id";
+export function declaresToolUseId(schema: unknown): boolean {
+  if (schema === null || typeof schema !== "object") return false;
+  if (Array.isArray(schema)) return schema.some(declaresToolUseId);
+  return Object.entries(schema).some(
+    ([key, value]) =>
+      (key === "properties" &&
+        value !== null &&
+        typeof value === "object" &&
+        Object.hasOwn(value, TOOL_USE_ID_INPUT)) ||
+      (key === "required" &&
+        Array.isArray(value) &&
+        value.includes(TOOL_USE_ID_INPUT)) ||
+      declaresToolUseId(value),
+  );
+}

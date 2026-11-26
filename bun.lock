@@ -97,6 +97,7 @@
         "@earendil-works/pi-ai": "1.0.0",
         "@earendil-works/pi-durable": "1.0.0",
         "@githubnext/desktop-tools": "github:githubnext/desktop-tools#c3e08eb55958ba87ca65e12f735d795bd2b921eb",
+        "@modelcontextprotocol/client": "2.3.1",
         "@neuve/records-core": "workspace:*",
         "@neuve/records-schema": "workspace:*",
         "@neuve/runtime": "workspace:*",

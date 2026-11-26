@@ -42,7 +42,7 @@ import {
 	remove,
 } from "./manage";
 import * as peers from "./peers";
-import { compute as computeSettings, folder } from "./preferences";
+import { compute as computeSettings, folder, savePlugins } from "./preferences";
 import * as projects from "./projects";
 import {
 	channelProject,
@@ -64,11 +64,13 @@ import {
 	forgetKey,
 	invite,
 	removeKey,
+	removePluginKey,
 	setCompute,
 	setDirectory,
 	setFolder,
 	setKey,
 	setModel,
+	setPluginKey,
 	settings,
 	storeKey,
 } from "./settings";
@@ -525,6 +527,8 @@ const localOps = new Set<HostRequest["op"]>([
 	"key-set",
 	"key-check",
 	"key-remove",
+	"plugin-key-set",
+	"plugin-key-remove",
 	"preferences",
 	"team-peers",
 	"team-roster",
@@ -726,10 +730,17 @@ async function handle(
 		case "key-remove":
 			await removeKey(request.provider);
 			return settingsChanged();
+		case "plugin-key-set":
+			await setPluginKey(request.plugin, request.name, request.value);
+			return settingsChanged();
+		case "plugin-key-remove":
+			await removePluginKey(request.plugin, request.name);
+			return settingsChanged();
 		case "preferences":
 			if (request.model !== undefined) await setModel(request.model);
 			if (request.compute) await setCompute(request.compute);
 			if (request.folder !== undefined) setFolder(request.folder);
+			if (request.plugins !== undefined) savePlugins(request.plugins);
 			return settingsChanged();
 		case "key-store":
 			await storeKey(request.name, request.value);

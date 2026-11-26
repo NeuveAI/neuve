@@ -18,12 +18,14 @@ import {
 	settled,
 	store,
 } from "./keys";
+import { carriedPlugins } from "./plugin-manifest";
 import { defaultModel, models, parseModel } from "./manage";
 import { canonical } from "./move";
 import {
 	compute,
 	isModel,
 	preference,
+	pluginPreferences,
 	saveCompute,
 	saveFolder,
 	savePreference,
@@ -51,7 +53,8 @@ function provider(id: ProviderId) {
 /** Settings never waits on a keychain prompt; `fresh` reads again names whose last read prompted. */
 export async function settings(fresh?: boolean): Promise<Settings> {
 	const catalog = settled(fresh);
-	const [statuses, usable, automatic] = await Promise.all([
+	const enabled = pluginPreferences();
+	const [statuses, plugins, usable, automatic] = await Promise.all([
 		Promise.all(
 			[...providers].map(async ([id, { name, key }]) =>
 				Object.assign(
@@ -61,11 +64,16 @@ export async function settings(fresh?: boolean): Promise<Settings> {
 				)
 			),
 		),
+		Promise.all(carriedPlugins.map(async ({ name, displayName, description, variables }) => ({
+			name, displayName, description, enabled: enabled[name] === true,
+			credentials: await Promise.all([...variables].map(async name => ({ name, ...await latest(name, fresh) }))),
+		}))),
 		extendModels(available(catalog.models)).catch((error: Error) => error),
 		defaultModel(catalog.models).catch(() => undefined),
 	]);
 	return {
 		providers: statuses,
+		plugins,
 		model: preference(),
 		modelOverride: config.model ? parseModel(config.model) : undefined,
 		models: usable instanceof Error ? [] : usable,
@@ -113,6 +121,30 @@ async function check(id: ProviderId, value: string): Promise<void> {
 function isValue(value: unknown): value is string {
 	return typeof value === "string" && !!value.trim() && value.length <= 4096
 		&& !/[\r\n]/.test(value) && !value.includes("\0");
+}
+
+function requirePluginKey(plugin: string, name: string): void {
+	if (!carriedPlugins.find(item => item.name === plugin)?.variables.has(name))
+		throw new Error("Choose a credential used by the plugin");
+}
+
+export async function setPluginKey(plugin: string, name: string, value: string): Promise<void> {
+	requirePluginKey(plugin, name);
+	if (!isValue(value)) throw new Error("Enter a valid plugin credential");
+	try {
+		await store(name, value.trim());
+	} catch {
+		throw new Error("Could not save the plugin credential. Unlock the keychain and allow Neuve Helper, then retry.");
+	}
+}
+
+export async function removePluginKey(plugin: string, name: string): Promise<void> {
+	requirePluginKey(plugin, name);
+	try {
+		await forget(name);
+	} catch {
+		throw new Error("Could not remove the plugin credential. Unlock the keychain and allow Neuve Helper, then retry.");
+	}
 }
 
 export async function setKey(id: ProviderId, value: string): Promise<void> {

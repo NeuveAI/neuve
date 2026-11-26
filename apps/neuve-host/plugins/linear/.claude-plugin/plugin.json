@@ -1,0 +1,7 @@
+{
+  "name": "linear",
+  "description": "Read and update Linear issues, projects, and teams.",
+  "interface": {
+    "displayName": "Linear"
+  }
+}

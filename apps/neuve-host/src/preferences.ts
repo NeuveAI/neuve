@@ -6,6 +6,7 @@ import type { ModelRef } from "@ace/channel/protocol";
 
 import { config } from "./config";
 import * as directory from "./directory";
+import { PluginPreferences } from "./plugin-manifest";
 import type { Compute } from "./protocol";
 
 export function isModel(value: unknown): value is ModelRef {
@@ -14,7 +15,7 @@ export function isModel(value: unknown): value is ModelRef {
 		&& typeof value.modelId === "string" && value.modelId.length > 0;
 }
 
-type Saved = { model?: ModelRef | null; compute?: Compute; folder?: string };
+type Saved = { model?: ModelRef | null; compute?: Compute; folder?: string; plugins?: Record<string, boolean> };
 
 function saved(): Saved {
 	let text: string;
@@ -51,8 +52,14 @@ export function folder(): string {
 	return saved().folder || "~/code";
 }
 
+export function pluginPreferences(): Record<string, boolean> {
+	return PluginPreferences.parse(saved().plugins ?? {});
+}
+
 function save(patch: Saved): void {
-	const next = { ...saved(), ...patch };
+	const previous = saved();
+	const next = { ...previous, ...patch };
+	if (patch.plugins) next.plugins = { ...previous.plugins, ...patch.plugins };
 	mkdirSync(config.settings, { recursive: true, mode: 0o700 });
 	const temporary = join(config.settings, `.settings-${randomUUID()}.json`);
 	try {
@@ -70,6 +77,10 @@ export function savePreference(model: ModelRef | null): void {
 
 export function saveCompute(value: Compute): void {
 	save({ compute: value });
+}
+
+export function savePlugins(plugins: Record<string, boolean>): void {
+	save({ plugins });
 }
 
 export function saveFolder(value: string): void {

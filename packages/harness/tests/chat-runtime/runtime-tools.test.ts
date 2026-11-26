@@ -144,3 +144,31 @@ test("a read-only planning session is served the plan writer and told how to sav
   );
   expect(session.systemPrompt).not.toContain("with your own tools instead");
 });
+
+// Codex runs pi tools outside its sandbox, so only the worker's HTTP tool list can admit a plugin.
+test("the bridge offers carried HTTP tools in write turns and withholds them in plan mode", () => {
+  const offered = conversation(["linear_update_issue", "other_read_issue"]);
+  const pluginTools = new Set(["linear_update_issue"]);
+  const ace = policy(offered, handle, undefined, {
+    ownTools: true,
+    pluginTools,
+  });
+  expect(ace.tools.map((tool) => tool.name)).toEqual([
+    "question",
+    "linear_update_issue",
+  ]);
+  const planning = { role: "system" as const, content: "", timestamp: 1 };
+  Object.defineProperty(planning, Symbol.for("neuve.chat.plan-request"), {
+    value: true,
+  });
+  const plan = policy([...offered, planning], handle, undefined, {
+    ownTools: true,
+    pluginTools,
+  });
+  expect(plan.tools.map((tool) => tool.name)).toEqual(["question"]);
+  const disabled = policy(conversation([]), handle, undefined, {
+    ownTools: true,
+    pluginTools,
+  });
+  expect(disabled.tools.map((tool) => tool.name)).toEqual(["question"]);
+});

@@ -99,6 +99,7 @@ type Generation = {
   folder?: string | undefined;
   /** Channel policy for this request. Keep its temporary tool offer out of continuation digests. */
   planRequest?: SystemMessage;
+  pluginTools?: ReadonlySet<string>;
   cleanup: (() => void)[];
   head?: {
     owner: string;
@@ -111,6 +112,8 @@ const ambiguousToolEffect =
 const unsafeContinuation =
   "This turn could not safely continue. Send a message to recover it.";
 const planningRequest = Symbol.for("neuve.chat.plan-request");
+
+const sandboxPluginTools = Symbol.for("neuve.chat.sandbox-plugin-tools");
 
 function offeredMessages(
   generation: Generation,
@@ -310,6 +313,8 @@ export class ChatRuntimeBridge {
   ): AssistantMessageEventStream {
     const stream = createAssistantMessageEventStream();
     const requested = normalizeContext(context).messages;
+    const pluginTools: unknown =
+      options && Reflect.get(options, sandboxPluginTools);
     const planRequest = requested.find(
       (message): message is SystemMessage =>
         message.role === "system" &&
@@ -351,6 +356,7 @@ export class ChatRuntimeBridge {
       messages,
       ...(identity?.folder === undefined ? {} : { folder: identity.folder }),
       ...(planRequest === undefined ? {} : { planRequest }),
+      ...(pluginTools instanceof Set ? { pluginTools } : {}),
       cleanup: [],
       message: {
         role: "assistant",
@@ -665,6 +671,7 @@ export class ChatRuntimeBridge {
         folder: gen.folder,
         skills: this.options.skills,
         ownTools: route.capabilities.ownTools,
+        pluginTools: gen.pluginTools,
         approvals: route.capabilities.approvals,
         attended: gen.attended,
       },
@@ -920,6 +927,7 @@ export class ChatRuntimeBridge {
           folder: gen.folder,
           skills,
           ownTools: route.capabilities.ownTools,
+          pluginTools: gen.pluginTools,
           approvals: route.capabilities.approvals,
           attended: gen.attended,
         },

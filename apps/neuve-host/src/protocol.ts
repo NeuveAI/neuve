@@ -301,8 +301,19 @@ export type ProviderSettings = CredentialStatus & {
 	rejected?: true;
 };
 
+/** A plugin Ace carries: its MCP servers, given to every agent while it is on. */
+export type PluginSettings = {
+	name: string;
+	displayName: string;
+	description: string;
+	enabled: boolean;
+	/** The variables its servers receive, each found as a provider key is. */
+	credentials: (CredentialStatus & { name: string })[];
+};
+
 export type Settings = {
 	providers: ProviderSettings[];
+	plugins: PluginSettings[];
 	model: ModelRef | null;
 	modelOverride?: ModelRef;
 	models: ModelRef[];
@@ -372,7 +383,10 @@ export type HostRequest =
 	/** The projects folder, where a clone by URL goes unless the person picks another folder. */
 	| { op: "folder" }
 	/** Each field present is saved; the others keep their saved values. */
-	| { op: "preferences"; model?: ModelRef | null; compute?: Compute; folder?: string }
+	| { op: "preferences"; model?: ModelRef | null; compute?: Compute; folder?: string; plugins?: Record<string, boolean> }
+	/** Saves or removes, in the keychain, a variable a carried plugin's servers receive. */
+	| { op: "plugin-key-set"; plugin: string; name: string; value: string }
+	| { op: "plugin-key-remove"; plugin: string; name: string }
 	/**
 	 * Only this host's loopback clients save or remove keychain items and join or leave the
 	 * directory: Ace Helper saves them so it can read them back without a macOS prompt.

@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { failure, type Fields, type Level, type Log } from "@ace/channel";
 
 import { config } from "./host-config";
+import { carriedPlugins } from "./plugin-manifest";
 
 export { failure };
 
@@ -69,7 +70,7 @@ export const log: Log = (level: Level, event: string, fields?: Fields) => {
 		t: new Date().toISOString(),
 		level,
 		event,
-		...diagnostics({ ...base, ...fields }),
+		...diagnostics({ ...base, ...fields }, event.startsWith("plugin.")),
 	})}\n`;
 	if (size + line.length > LIMIT) rotate(file);
 	appendFileSync(file, line, { mode: 0o600 });
@@ -89,6 +90,7 @@ const metrics = new Set([
 	"failed",
 	"kill",
 	"clients",
+	"tools",
 	"code",
 	"input",
 	"output",
@@ -129,6 +131,9 @@ const identifiers = new Set([
 ]);
 const kinds = new Map<string, readonly string[]>(
 	Object.entries({
+		plugin: carriedPlugins.map(plugin => plugin.name),
+		server: carriedPlugins.flatMap(plugin => Object.keys(plugin.servers)),
+		outcome: ["ok", "error", "failed"],
 		state: ["starting", "delivered", "unavailable"],
 		role: ["implementer", "reviewer"],
 		previousChatMode: ["plan", "ace"],
@@ -191,12 +196,15 @@ const kinds = new Map<string, readonly string[]>(
 			"aborted",
 			"deferred",
 		],
-		reason: ["idle", "close", "shutdown", "signal"],
+		reason: [
+			"idle", "close", "shutdown", "signal",
+			"description exceeds 4096 characters", "reserved input key", "duplicate tool name",
+		],
 	}),
 );
 
 /** Operational records retain correlation hashes and metrics, never session or error payloads. */
-function diagnostics(fields: Fields): Fields {
+function diagnostics(fields: Fields, pluginEvent = false): Fields {
 	const kept: Fields = {};
 	for (const [key, value] of Object.entries(fields)) {
 		const kind = kinds.get(key);
@@ -206,7 +214,8 @@ function diagnostics(fields: Fields): Fields {
 		) {
 			kept[key] = value;
 		} else if (typeof value === "string" && (identifiers.has(key) || kind)) {
-			if (kind?.includes(value)) kept[key] = value;
+			const pluginTool = pluginEvent && key === "tool" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+			if (kind?.includes(value) || pluginTool) kept[key] = value;
 			else
 				kept[`${key}Hash`] = createHash("sha256").update(value).digest("hex");
 		} else if (

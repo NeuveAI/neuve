@@ -11,6 +11,7 @@ import { ExtensionRequestSchema } from "@ace/channel/operations-protocol";
 
 import { GithubKindSchema, GithubFilterSchema } from "@ace/channel/github";
 import type { HostEnvelope, HostRequest, WorkerRequest } from "./extension-protocol";
+import { PluginPreferences } from "./plugin-manifest";
 
 const channel = z.string();
 const terminal = z.string();
@@ -54,6 +55,8 @@ z.strictObject({op: z.literal("shares-changed")}),
 z.strictObject({op: z.literal("key-set"), provider: z.enum(["anthropic", "openai"]), value: z.string()}),
 z.strictObject({op: z.literal("key-check"), provider: z.enum(["anthropic", "openai"])}),
 z.strictObject({op: z.literal("key-remove"), provider: z.enum(["anthropic", "openai"])}),
+z.strictObject({op: z.literal("plugin-key-set"), plugin: z.string(), name: z.string(), value: z.string()}),
+z.strictObject({op: z.literal("plugin-key-remove"), plugin: z.string(), name: z.string()}),
 z.strictObject({op: z.literal("key-store"), name: z.string(), value: z.string()}),
 z.strictObject({op: z.literal("key-forget"), name: z.string()}),
 z.strictObject({op: z.literal("directory-set"), url: z.string().nullable(), secret: z.string().optional()}),
@@ -82,7 +85,7 @@ z.strictObject({ op: z.literal("github-detail"), repo: z.string(), kind: GithubK
 z.strictObject({ op: z.literal("github-files"), repo: z.string(), number: z.int().positive() }),
 z.strictObject({ op: z.literal("github-pull"), repo: z.string(), branch: z.string().min(1) }),
 z.strictObject({ op: z.literal("settings"), fresh: z.boolean().optional() }),
-z.strictObject({ op: z.literal("preferences"), model: ModelRefSchema.nullable().optional(), folder: z.string().optional(), compute: z.object({ enabled: z.boolean(), url: z.string().nullable() }).optional() }),
+z.strictObject({ op: z.literal("preferences"), model: ModelRefSchema.nullable().optional(), folder: z.string().optional(), plugins: PluginPreferences.optional(), compute: z.object({ enabled: z.boolean(), url: z.string().nullable() }).optional() }),
 z.strictObject({ op: z.literal("folder") }),
 z.strictObject({ op: z.literal("compute") }),
 z.strictObject({ op: z.literal("diagnostics"), sync: z.boolean().optional() }),

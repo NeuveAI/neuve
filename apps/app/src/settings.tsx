@@ -5,7 +5,6 @@ import {
 	Dialog,
 	DialogContent,
 	DialogTitle,
-	Input,
 	Switch,
 	type Theme,
 	useTheme,
@@ -19,6 +18,7 @@ import {
 	type IconProps,
 	IconServer,
 	IconSettings,
+	IconWrench,
 } from "@ace/ui/icons";
 import type { ProviderSettings, Settings as HostSettings } from "@ace/host/protocol";
 
@@ -30,9 +30,10 @@ import { useFolder } from "./folder";
 import { host } from "./host";
 import { HostStatus } from "./host-settings";
 import { NativeStatus } from "./native-settings";
+import { Plugin } from "./plugin-settings";
 import {
-	Confirm,
 	Group,
+	KeyRow,
 	Page,
 	Problem,
 	Row,
@@ -44,7 +45,7 @@ import {
 import { Link } from "./team-setup";
 import { UpdateSettings } from "./updates";
 
-export type Section = "general" | "providers" | "team" | "beta" | "host" | "computer" | "updates";
+export type Section = "general" | "providers" | "plugins" | "team" | "beta" | "host" | "computer" | "updates";
 
 type Info = { id: Section; label: string; icon: ComponentType<IconProps>; desktop?: boolean };
 
@@ -55,6 +56,7 @@ const groups: { label?: string; sections: Info[] }[] = [
 		sections: [
 			{ id: "general", label: "General", icon: IconSettings },
 			{ id: "providers", label: "Providers", icon: IconKey },
+			{ id: "plugins", label: "Plugins", icon: IconWrench },
 			{ id: "team", label: "Team", icon: IconGlobe },
 			{ id: "beta", label: "Beta", icon: IconBolt },
 		],
@@ -79,155 +81,18 @@ const themes: { value: Theme; label: string }[] = [
 	{ value: "dark", label: "Dark" },
 ];
 
-const sources = {
-	keychain: "Saved in Keychain",
-	environment: "From the environment",
-	missing: "Not set",
-	unavailable: "Keychain access needed",
-};
-
 function Provider({ provider, disabled }: { provider: ProviderSettings; disabled: boolean }) {
-	const [value, setValue] = useState("");
-	const [editing, setEditing] = useState(false);
-	const [confirm, setConfirm] = useState(false);
-	const [action, setAction] = useState<{ busy?: boolean; error?: string; message?: string }>({});
-	const id = `key-${provider.id}`;
-	const locked = disabled || action.busy;
-
-	async function run(op: "key-set" | "key-check" | "key-remove") {
-		setAction({ busy: true });
-		try {
-			await host.request(
-				op === "key-set"
-					? { op, provider: provider.id, value }
-					: { op, provider: provider.id },
-			);
-			if (op === "key-set") {
-				setValue("");
-				setEditing(false);
-			}
-			setConfirm(false);
-			setAction({
-				message: op === "key-check"
-					? "Connection verified."
-					: op === "key-remove"
-					? "Key removed."
-					: "Key saved.",
-			});
-		} catch (error) {
-			setAction({ error: (error as Error).message });
-		}
-	}
-
 	return (
-		<Row
-			id={`${id}-label`}
+		<KeyRow
+			id={`key-${provider.id}`}
 			label={provider.name}
-			description={`${
-				provider.override ? `${provider.override} overrides Keychain` : sources[provider.source]
-			}${provider.rejected ? `, but ${provider.name} rejected it` : ""}`}
-			footer={
-				<>
-					{editing && (
-						<form
-							className="flex flex-col gap-2 @md:flex-row"
-							onSubmit={(event) => {
-								event.preventDefault();
-								void run("key-set");
-							}}
-						>
-							<Input
-								id={id}
-								autoFocus
-								type="password"
-								autoComplete="new-password"
-								spellCheck={false}
-								aria-label={`${provider.name} API key`}
-								value={value}
-								maxLength={4096}
-								disabled={locked}
-								placeholder="API key"
-								onChange={(event) => setValue(event.target.value)}
-								onKeyDown={(event) => {
-									if (event.key !== "Escape" || action.busy) return;
-									// Escape cancels the key form before it reaches the dialog.
-									event.stopPropagation();
-									setEditing(false);
-									setValue("");
-								}}
-							/>
-							<div className="flex shrink-0 gap-2">
-								<Button type="submit" disabled={locked || !value.trim()}>Check and save</Button>
-								<Button
-									type="button"
-									variant="ghost"
-									disabled={action.busy}
-									onClick={() => {
-										setEditing(false);
-										setValue("");
-									}}
-								>
-									Cancel
-								</Button>
-							</div>
-						</form>
-					)}
-					{confirm && (
-						<Confirm
-							action="Remove key"
-							busy={locked}
-							onConfirm={() => void run("key-remove")}
-							onCancel={() => setConfirm(false)}
-						>
-							Remove the saved {provider.name} key?
-						</Confirm>
-					)}
-					{provider.waiting && <Status>{provider.waiting}…</Status>}
-					{provider.error && <Problem>{provider.error}</Problem>}
-					{action.busy && <Status>Checking…</Status>}
-					{action.error && <Problem>{action.error}</Problem>}
-					{action.message && <Status>{action.message}</Status>}
-				</>
-			}
-		>
-			{(provider.source === "keychain" || provider.source === "environment") && (
-				<Button
-					variant="outline"
-					aria-label={`Check ${provider.name} connection`}
-					disabled={locked}
-					onClick={() => void run("key-check")}
-				>
-					Check
-				</Button>
-			)}
-			{/* A saved key would go unused while the environment overrides it. */}
-			{!editing && !provider.override && (
-				<Button
-					variant="outline"
-					aria-label={`${provider.stored ? "Replace" : "Add"} ${provider.name} key`}
-					disabled={locked}
-					onClick={() => {
-						setConfirm(false);
-						setEditing(true);
-					}}
-				>
-					{provider.stored ? "Replace" : "Add key"}
-				</Button>
-			)}
-			{provider.stored && !confirm && (
-				<Button
-					variant="ghost"
-					aria-label={`Remove ${provider.name} key…`}
-					disabled={locked}
-					onClick={() => {
-						setEditing(false);
-						setConfirm(true);
-					}}
-				>
-					Remove…
-				</Button>
-			)}
-		</Row>
+			subject={`${provider.name} key`}
+			status={provider}
+			disabled={disabled}
+			onSave={(value) => host.request({ op: "key-set", provider: provider.id, value })}
+			onCheck={() => host.request({ op: "key-check", provider: provider.id })}
+			onRemove={() => host.request({ op: "key-remove", provider: provider.id })}
+		/>
 	);
 }
 
@@ -400,7 +265,7 @@ export function Settings(
 	}, []);
 
 	// Reading provider settings touches Keychain, so pages that don't show it never request it.
-	const needed = visited.has("general") || visited.has("providers");
+	const needed = visited.has("general") || visited.has("providers") || visited.has("plugins");
 	useEffect(() => {
 		if (status !== "open" || !needed) return;
 		let active = true;
@@ -426,8 +291,9 @@ export function Settings(
 
 	// A Keychain read waiting on a prompt lands in the background; show its result without a refresh.
 	const waiting = !!result.settings?.waiting
-		|| !!result.settings?.providers.some((provider) => provider.waiting);
-	const shown = section === "general" || section === "providers";
+		|| !!result.settings?.providers.some((provider) => provider.waiting)
+		|| !!result.settings?.plugins.some((plugin) => plugin.credentials.some((key) => key.waiting));
+	const shown = section === "general" || section === "providers" || section === "plugins";
 	useEffect(() => {
 		if (!shown || !waiting) return;
 		const timer = setTimeout(() => setRetry((value) => value + 1), 3000);
@@ -571,6 +437,23 @@ export function Settings(
 										))}
 									</Group>
 									{again === "done" && <Status>Read the keys again.</Status>}
+									{problems}
+								</Page>
+							</div>
+						)}
+						{visited.has("plugins") && (
+							<div hidden={section !== "plugins"}>
+								<Page>
+									<Group action={refresh("Refresh")}>
+										{result.settings?.plugins.map((plugin) => (
+											<Plugin
+												key={plugin.name}
+												plugin={plugin}
+												disabled={offline}
+												request={(request) => host.request(request)}
+											/>
+										))}
+									</Group>
 									{problems}
 								</Page>
 							</div>
