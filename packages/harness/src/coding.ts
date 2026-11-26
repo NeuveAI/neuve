@@ -18,6 +18,7 @@ export {
 export type { AnyRouteConfig } from "./route.ts";
 export { CaptureFailed } from "./pi/capture/types.ts";
 export { settingsRoute } from "./request.ts";
+export { codingRouteLimits } from "./pi/providers/account-model-limits.ts";
 
 export {
   openRouteAdmission,

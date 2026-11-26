@@ -49,6 +49,7 @@ import { readIntegrations, type Integrations } from "./integrations.ts";
 import { z } from "zod";
 import { git, resolveCommit } from "./git.ts";
 import type { RetrieverConfig } from "./retriever.ts";
+import { OPUS_CODE_LIMITS } from "./model-limits.ts";
 import {
   ClaudeRouteConfig,
   OPUS_ROUTE,
@@ -157,8 +158,8 @@ export const claudeRoute = (
     provider: "claude",
     account: { name: account.name, kind: account.kind },
     model: OPUS_ROUTE.model,
-    window: OPUS_ROUTE.window,
-    maxOutputTokens: OPUS_ROUTE.maxOutputTokens,
+    window: OPUS_CODE_LIMITS.contextWindow,
+    maxOutputTokens: OPUS_CODE_LIMITS.maxTokens,
     effort: reviewEffort(settings) ?? OPUS_ROUTE.effort,
     price: null,
     ...(stepEffort === undefined || Object.keys(stepEffort).length === 0

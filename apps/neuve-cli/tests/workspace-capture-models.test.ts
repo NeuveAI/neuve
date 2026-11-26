@@ -1,12 +1,78 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createModels } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai/providers/faux";
-import type { RouteModelsOptions } from "@neuve/harness/coding";
+import {
+  CaptureFailed,
+  codingRouteLimits,
+  type RouteModelsOptions,
+} from "@neuve/harness/coding";
 import { SOL_ROUTE } from "../../../packages/harness/src/route.ts";
+import { routeFailureOf } from "../../../packages/harness/src/pi/providers/failure.ts";
+import {
+  created,
+  sse,
+  tokenCommand,
+} from "../../../packages/harness/tests/pi/providers/fixture.ts";
 import { workspaceCaptureModels } from "../src/workspace-capture-models.ts";
+
+test("the signed-in account catalogue overrides each available limit independently", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "workspace-model-limits-"));
+  try {
+    const token = tokenCommand(scratch, "lease");
+    const observed: Readonly<Record<string, unknown>>[] = [];
+    const transport = {
+      auth: { tokenCommand: token.path },
+      fetch: Object.assign(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(input, init);
+          expect(request.url).toBe("https://api.openai.com/v1/models");
+          expect(request.headers.get("authorization")).toBe("Bearer tok-1");
+          return Response.json({
+            models: [
+              { slug: "other", context_window: 1_000_000 },
+              {
+                slug: SOL_ROUTE.model,
+                context_window: 100_000,
+                effective_context_window_percent: 80,
+              },
+            ],
+          });
+        },
+        { preconnect: () => {} },
+      ),
+    };
+    const route = await codingRouteLimits(SOL_ROUTE, transport, (limits) =>
+      observed.push(limits),
+    );
+    const model = workspaceCaptureModels(createModels(), {
+      ...transport,
+      route,
+      runId: "limits",
+      sessionAffinity: "limits",
+      credentialInspection: "ephemeral",
+      capture: () => {},
+    }).getModel("openai", SOL_ROUTE.model);
+    expect(model).toMatchObject({ contextWindow: 80_000, maxTokens: 128_000 });
+    expect(observed).toEqual([
+      {
+        account: "chatgpt",
+        model: "gpt-6.1-sol",
+        contextWindow: 80_000,
+        maxOutputTokens: 128_000,
+        contextSource: "account-catalog",
+        outputSource: "configured-route",
+      },
+    ]);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
 
 test("another OpenAI model stays executable and reports its native capture gap", async () => {
   const native = createModels();
@@ -43,4 +109,61 @@ test("another OpenAI model stays executable and reports its native capture gap",
     ),
   ).toBe(true);
   expect(models.getModel("openai", "gpt-6.1-sol")?.id).toBe("gpt-6.1-sol");
+});
+
+test("only a provider breakoff near the last measured limit becomes an overflow", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "workspace-context-overflow-"));
+  const token = tokenCommand(scratch, "lease");
+  let captureFull = false;
+  let sent = 0;
+  const models = workspaceCaptureModels(createModels(), {
+    route: SOL_ROUTE,
+    auth: { tokenCommand: token.path },
+    runId: "workspace-context-overflow",
+    sessionAffinity: "workspace-context-overflow",
+    credentialInspection: "ephemeral",
+    capture: (event) => {
+      if (captureFull && event.type === "model.request")
+        throw new CaptureFailed({
+          kind: "full",
+          event: event.type,
+          detail: "fixture capture is full",
+        });
+    },
+    fetch: Object.assign(
+      async () => {
+        sent++;
+        return sse([created("unfinished"), { type: "unexpected.frame" }]);
+      },
+      { preconnect: () => {} },
+    ),
+  });
+  try {
+    const model = models.getModel("openai", SOL_ROUTE.model);
+    if (!model) throw new Error("Missing plan model");
+    expect(model.contextWindow).toBe(475_000);
+    const turn = (tokens: number) => {
+      const previous = fauxAssistantMessage("Previous answer");
+      return models.completeSimple(model, {
+        messages: [
+          { role: "user", content: "First question", timestamp: 1 },
+          {
+            ...previous,
+            model: model.id,
+            provider: model.provider,
+            api: model.api,
+            usage: { ...previous.usage, input: tokens, totalTokens: tokens },
+          },
+          { role: "user", content: "Next question", timestamp: 2 },
+        ],
+      });
+    };
+    expect(routeFailureOf(await turn(200_000))?.kind).toBe("stream");
+    expect(routeFailureOf(await turn(460_000))?.kind).toBe("context_overflow");
+    captureFull = true;
+    expect(routeFailureOf(await turn(460_000))?.kind).toBe("capture");
+    expect(sent).toBe(2);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });

@@ -1,8 +1,13 @@
 import type { Context } from "@earendil-works/chord";
 import type {
+  Api,
   AssistantMessage,
   AssistantMessageDiagnostic,
+  Message,
+  Model,
 } from "@earendil-works/pi-ai";
+import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
+import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
 import type {
   Conversation,
   Cursor,
@@ -13,6 +18,36 @@ import type {
 } from "@earendil-works/pi-durable";
 import { NOT_RETRYABLE_CODES, USAGE_LIMIT } from "./wire.ts";
 import { CaptureFailed } from "../capture/types.ts";
+
+/** An early EOF on a serving request is an overflow only near the selected model's limit. */
+export function streamEndedNearContextLimit(
+  model: Model<Api>,
+  messages: readonly Message[],
+  detail: string,
+): boolean {
+  if (
+    !/\bstream ended (?:before|without) (?:an? )?(?:terminal(?: response)? event|(?:stop|finish) reason|message_stop)\b/i.test(
+      detail,
+    )
+  )
+    return false;
+  const last = messages.findLast(
+    (message) =>
+      message.role === "assistant" &&
+      message.provider === model.provider &&
+      message.model === model.id &&
+      (message.stopReason === "stop" ||
+        message.stopReason === "toolUse" ||
+        message.stopReason === "length") &&
+      calculateContextTokens(message.usage) > 0,
+  );
+  if (last?.role !== "assistant") return false;
+  const margin = Math.min(
+    DEFAULT_COMPACTION_POLICY.reserveTokens,
+    model.contextWindow / 10,
+  );
+  return calculateContextTokens(last.usage) >= model.contextWindow - margin;
+}
 
 /**
  * Why a route call failed, as the route provider records it on the failed `AssistantMessage` it

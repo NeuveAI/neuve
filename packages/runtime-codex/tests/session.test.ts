@@ -457,6 +457,7 @@ describe("each way a turn ends gives exactly one terminal event", () => {
         expect(read.events[6]).toMatchObject({
           scope: "turn",
           contextWindow: 400000,
+          contextTokens: 120,
           usage: { input: 40, cacheRead: 60, output: 20, thinking: 1 },
           costUsd: null,
         });

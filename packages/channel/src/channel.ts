@@ -17,6 +17,7 @@ import {
 	type AgentChange,
 	type AgentEvent,
 	type CommitChange,
+	CompactionEntry,
 	configure,
 	type Conversation,
 	type ConversationHandle,
@@ -336,6 +337,7 @@ export class Channel {
 					chat => role(chat) ?? (chat === ROOT_CONVERSATION_ID ? "main chat" : "thread chat"),
 					planning,
 					options.ownTools,
+					{ models: options.models, used: (id, scope) => channel.#used(id, scope) },
 				),
 				instructions(options.models, options.skills),
 			] }),
@@ -433,6 +435,9 @@ export class Channel {
 			const began: [ConversationId, SubmissionId][] = [];
 			let runEnded = false;
 			for (const change of changes) {
+				if (change.type === "entry" && CompactionEntry.is(change.value)) {
+					log("info", "chat.compacted", { chat: change.value.conversationId, reason: change.value.data.reason });
+				}
 				if (change.type === "entry" && change.value.model?.[0]?.role === "assistant") {
 					channel.#caption(change.value.conversationId);
 				}
@@ -823,12 +828,15 @@ export class Channel {
 	}
 
 	/** The newest response's own token count; providers report what that request carried. */
-	async #used(id: ConversationId): Promise<number | undefined> {
-		const conversation = await this.#harness.conversation(id, context);
-		const { messages } = await conversation!.context(context);
+	async #used(id: ConversationId, scope = context): Promise<number | undefined> {
+		const conversation = await this.#harness.conversation(id, scope);
+		if (!conversation) return;
+		const { messages } = await conversation.context(scope);
 		for (let index = messages.length - 1; index >= 0; index--) {
 			const message = messages[index]!;
 			if (message.role !== "assistant") continue;
+			const measured = message.diagnostics?.findLast(item => item.type === "neuve.context-usage")?.details?.["tokens"];
+			if (typeof measured === "number" && measured > 0) return measured;
 			const { input, output, cacheRead, cacheWrite } = message.usage;
 			const total = input + output + cacheRead + cacheWrite;
 			// A failed or aborted request reports nothing; the context is what the last real one carried.

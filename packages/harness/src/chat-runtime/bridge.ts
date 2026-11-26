@@ -244,14 +244,14 @@ export class ChatRuntimeBridge {
     (
       account: AccountName,
       model: string,
-      limits: { contextWindow: number; maxTokens?: number },
+      limits: { contextWindow?: number; maxTokens?: number },
     ) => void
   >();
   subscribeModelLimits(
     listener: (
       account: AccountName,
       model: string,
-      limits: { contextWindow: number; maxTokens?: number },
+      limits: { contextWindow?: number; maxTokens?: number },
     ) => void,
   ) {
     this.limitListeners.add(listener);
@@ -1565,12 +1565,29 @@ export class ChatRuntimeBridge {
       this.finish(live, gen, "toolUse");
       return;
     }
-    if (event.type === "usage" && event.scope === "turn" && event.model) {
-      // Codex reports the window and not the output limit: the window alone is still news.
-      if (event.contextWindow !== undefined)
+    if (event.type === "usage" && event.scope === "turn") {
+      if (gen && event.contextTokens !== undefined) {
+        gen.message.diagnostics = [
+          ...(gen.message.diagnostics ?? []).filter(
+            (item) => item.type !== "neuve.context-usage",
+          ),
+          {
+            type: "neuve.context-usage",
+            timestamp: gen.message.timestamp,
+            details: { tokens: event.contextTokens },
+          },
+        ];
+      }
+      if (
+        event.model &&
+        (event.contextWindow !== undefined ||
+          event.maxOutputTokens !== undefined)
+      )
         for (const listener of this.limitListeners)
           listener(live.route.name, event.model, {
-            contextWindow: event.contextWindow,
+            ...(event.contextWindow === undefined
+              ? {}
+              : { contextWindow: event.contextWindow }),
             ...(event.maxOutputTokens === undefined
               ? {}
               : { maxTokens: event.maxOutputTokens }),

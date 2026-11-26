@@ -1,5 +1,6 @@
 import type { Context } from "@earendil-works/chord";
-import type { PromptSection } from "@earendil-works/pi-durable";
+import type { Models } from "@earendil-works/pi-ai";
+import type { ConversationId, PromptSection } from "@earendil-works/pi-durable";
 import { LanesDoc } from "./lanes";
 import type { IsPlanning } from "./plan-mode";
 
@@ -17,11 +18,20 @@ export function environment(
 	role: (chat: number) => string,
 	planning: IsPlanning,
 	ownTools?: (provider: string) => boolean,
+	modelContext?: {
+		models: Pick<Models, "getModel">;
+		used: (chat: ConversationId, context: Context) => Promise<number | undefined>;
+	},
 ): PromptSection {
 	return {
 		key: "ace-environment",
 		async render({ conversationId, agent, env, read }, context) {
 			const native = agent.model !== undefined && ownTools?.(agent.model.provider);
+			const selection = agent.model;
+			const model = selection && modelContext?.models.getModel(selection.provider, selection.modelId);
+			const used = await modelContext?.used(conversationId, context);
+			const modelName = model && model.name !== model.id ? `${model.name} (${model.id})` : selection?.modelId;
+			const limit = model?.contextWindow.toLocaleString("en");
 			const plan = await planning(conversationId, context);
 			const hasShell = native
 				? agent.cwd !== undefined
@@ -42,6 +52,7 @@ export function environment(
 				`Running Ace build: version ${host?.version ?? "unknown"}${buildKind}, commit ${host?.commit ?? "unknown"}.`,
 				`Installed neuve and its version: ${neuve}.`,
 				`Role: ${role(conversationId)}. Working folder: ${folder ?? "unknown"}. Git branch: ${branch ?? "unknown"}.`,
+				`Model: ${modelName ?? "unknown"}. Effort: ${agent.thinkingLevel ?? "default"}. Context used: ${used?.toLocaleString("en") ?? "unknown"} tokens. Context limit: ${limit ?? "unknown"} tokens.`,
 				`Work lane: ${lane?.[0] ?? "none recorded for this folder"}. Runtime shell: ${hasShell ? `available (${shell})` : "unavailable"}.`,
 				"Ace serves the channel, threads, work log, plan and tools. Neuve is the neuve command, its skill, reviews and the desk.",
 			].join("\n");

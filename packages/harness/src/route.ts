@@ -6,6 +6,7 @@ import {
   RuntimeCapability,
   type RuntimeCapabilities,
 } from "@neuve/runtime";
+import { OPUS_API_LIMITS, SOL_PLAN_LIMITS } from "./model-limits.ts";
 
 /**
  * The route's configuration and accounting: what a run freezes, how its usage is read and priced.
@@ -199,17 +200,13 @@ export const routeRuntimeError = (
     : undefined;
 };
 
-/**
- * Opus 5.5 through the Anthropic API (2.12): 1,000,000 input tokens and 128,000 output tokens; 4 and
- * 20 USD per million input and output tokens; cache writes at 1.25 times input for 5 minutes and 2
- * times for 1 hour, cache reads at 0.05 times (proposal §3.8). Effect is `medium` everywhere (10.19).
- */
+/** Opus 5.5 through the Anthropic API, at medium effort. */
 export const OPUS_ROUTE: AnthropicRouteConfig = {
   provider: "anthropic",
   model: "claude-opus-5-5",
   effort: "medium",
-  window: 1_000_000,
-  maxOutputTokens: 128_000,
+  window: OPUS_API_LIMITS.contextWindow,
+  maxOutputTokens: OPUS_API_LIMITS.maxTokens,
   credentialVariable: "ANTHROPIC_API_KEY",
   account: { name: AccountName.parse("anthropic"), kind: "anthropic-api-key" },
   price: {
@@ -221,17 +218,13 @@ export const OPUS_ROUTE: AnthropicRouteConfig = {
   },
 };
 
-/**
- * GPT-6.1 Sol on the ChatGPT plan (10.85), at `medium` effort (10.19). OpenAI's model page
- * (developers.openai.com/api/docs/models/gpt-6.1-sol): a 1,050,000-token window (922,000 input at
- * most, above the 525,000-token ceiling half the window gives) and 128,000 output tokens.
- */
+/** GPT-6.1 Sol on the ChatGPT plan, at medium effort. */
 export const SOL_ROUTE: OpenAiRouteConfig = {
   provider: "openai",
   model: "gpt-6.1-sol",
   effort: "medium",
-  window: 1_050_000,
-  maxOutputTokens: 128_000,
+  window: SOL_PLAN_LIMITS.contextWindow,
+  maxOutputTokens: SOL_PLAN_LIMITS.maxTokens,
   credentialSource: "neuve-sign-in",
   account: { name: AccountName.parse("chatgpt"), kind: "chatgpt-subscription" },
   price: null,

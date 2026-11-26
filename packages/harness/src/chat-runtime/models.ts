@@ -9,6 +9,7 @@ import {
   type AuthResult,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
+import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
 import { Effect } from "effect";
 import {
   unavailableText,
@@ -21,12 +22,21 @@ import { ChatRuntimeBridge, type AccountRoute } from "./bridge.ts";
 import { failureStream, terminalText } from "./failure.ts";
 import { newest, responseId } from "./transcript.ts";
 import type { Log } from "./transcript.ts";
+import {
+  logDefaultModelLimits,
+  OPUS_CODE_LIMITS,
+  resolveModelLimits,
+  SOL_PLAN_WINDOW,
+  type ModelLimits,
+} from "../model-limits.ts";
 
 export interface AccountStatusSource {
   current(): readonly AccountStatus[];
   subscribe(listener: (statuses: readonly AccountStatus[]) => void): () => void;
 }
 type Effort = NonNullable<NonNullable<SessionPolicy["model"]>["effort"]>;
+const codexCatalog: Readonly<Partial<Record<string, ModelLimits>>> =
+  OPENAI_CODEX_MODELS;
 function resolveRow(status: AccountStatus, id: string) {
   const rows = status.models ?? [];
   return (
@@ -58,10 +68,8 @@ export async function accountModels(
   },
 ): Promise<AccountModels> {
   const added = createModels();
-  const limits = new Map<
-    string,
-    Map<string, { contextWindow: number; maxTokens?: number }>
-  >();
+  const limits = new Map<string, Map<string, Partial<ModelLimits>>>();
+  const warn = logDefaultModelLimits(options.log);
   const stopLimits = options.bridge.subscribeModelLimits(
     (account, model, value) => {
       const status = options.statuses
@@ -74,7 +82,7 @@ export async function accountModels(
       known.set(key, { ...known.get(key), ...value });
       for (const candidate of added.getModels(account)) {
         const row = status && resolveRow(status, candidate.id);
-        if ((row?.resolvedModel ?? row?.id) === key)
+        if ((row?.resolvedModel ?? row?.id ?? candidate.id) === key)
           Object.assign(candidate, value);
       }
     },
@@ -84,14 +92,19 @@ export async function accountModels(
     row: RuntimeModel,
     id = row.id,
   ): Model<Api> => {
-    // pi's catalogue entry for the model the row names, under whichever provider lists it: no
-    // vendor is assumed, and a row stored before rows carried limits keeps its real ones.
-    const listed = native.getModels();
-    const catalog =
-      (row.resolvedModel !== undefined &&
-        listed.find((model) => model.id === row.resolvedModel)) ||
-      listed.find((model) => model.id === row.id);
-    const known = limits.get(status.name)?.get(row.resolvedModel ?? row.id);
+    const model = row.resolvedModel ?? row.id;
+    const provider =
+      status.kind === "chatgpt-subscription"
+        ? "openai-codex"
+        : status.kind === "anthropic-api-key"
+          ? "anthropic"
+          : undefined;
+    const documented =
+      status.kind === "chatgpt-subscription" && model === "gpt-6.1-sol"
+        ? { contextWindow: SOL_PLAN_WINDOW }
+        : status.kind === "claude-subscription" && model === "claude-opus-5-5"
+          ? OPUS_CODE_LIMITS
+          : undefined;
     const levels = row.supportsEffort ? (row.supportedEffortLevels ?? []) : [];
     return {
       id,
@@ -111,14 +124,16 @@ export async function accountModels(
         ...Object.fromEntries(levels.map((level) => [level, level])),
       },
       input: ["text", "image"],
-      // A turn's report first, then the runtime's row, then the catalogue, then pi's defaults.
-      contextWindow:
-        known?.contextWindow ??
-        row.contextWindow ??
-        catalog?.contextWindow ??
-        200_000,
-      maxTokens:
-        known?.maxTokens ?? row.maxOutputTokens ?? catalog?.maxTokens ?? 32_000,
+      ...resolveModelLimits(
+        limits.get(status.name)?.get(model),
+        { contextWindow: row.contextWindow, maxTokens: row.maxOutputTokens },
+        documented,
+        provider
+          ? (native.getModel(provider, model) ??
+              (provider === "openai-codex" ? codexCatalog[model] : undefined))
+          : undefined,
+        (defaults) => warn(status.name, model, defaults),
+      ),
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     };
   };
