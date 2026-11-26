@@ -75,6 +75,14 @@ export const hash = (value: string | Uint8Array) =>
 export const caseBasis = (kase: Pick<StudyCase, "base" | "head" | "sources">) =>
   hash(canonical({ base: kase.base, head: kase.head, sources: kase.sources }));
 
+/** Source identity alone cannot freeze a denominator, failure path or attribution rule. */
+export const answerKeyDigest = (
+  kase: Pick<StudyCase, "adjudication">,
+): string | null =>
+  kase.adjudication.status === "frozen"
+    ? hash(canonical(kase.adjudication))
+    : null;
+
 /** Checks actual Git objects; a fix hash or an absent private archive cannot stand in for source. */
 export const sourceProblems = (
   repository: string,
@@ -114,6 +122,7 @@ export const sourceProblems = (
 export const DeliveryJudgments = z.strictObject({
   runId: Named,
   basis: Hash,
+  answerKey: Hash,
   armBlind: z.literal(true),
   adjudicators: z.array(Named).min(1),
   record: Named,
@@ -148,6 +157,7 @@ export const readOwnedReview = (input: {
     input.judgments === null ? null : DeliveryJudgments.parse(input.judgments);
   const blockers = sourceProblems(input.repository, kase);
   const basis = caseBasis(kase);
+  const answerKey = answerKeyDigest(kase);
   const gold = kase.adjudication;
   if (gold.status === "pending")
     blockers.push(`expected results pending: ${gold.reason}`);
@@ -183,12 +193,19 @@ export const readOwnedReview = (input: {
     blockers.push("capture/publication run identity does not match");
   if (probe?.exported?.runId !== run?.runId)
     blockers.push("export/publication run identity does not match");
-  const requestedAt = probe?.rows?.requestedAt;
-  if (
-    gold.status === "frozen" &&
-    (!requestedAt || Date.parse(gold.at) >= Date.parse(requestedAt))
-  )
-    blockers.push("expected results were not frozen before the run request");
+  const requestedAt = z.iso.datetime().safeParse(probe?.rows?.requestedAt);
+  if (gold.status === "frozen") {
+    const frozenAt = Date.parse(gold.at);
+    const requestTime = requestedAt.success
+      ? Date.parse(requestedAt.data)
+      : NaN;
+    if (!Number.isFinite(frozenAt) || !Number.isFinite(requestTime))
+      blockers.push(
+        "missing or invalid expected-results/run-request timestamp",
+      );
+    else if (frozenAt >= requestTime)
+      blockers.push("expected results were not frozen before the run request");
+  }
 
   const units =
     run === null ? [] : packetUnits(run.packet, { reads: READS_SECTIONS });
@@ -202,6 +219,8 @@ export const readOwnedReview = (input: {
   else {
     if (judgments.basis !== basis || judgments.runId !== run?.runId)
       blockers.push("delivery judgments name another source or run");
+    if (answerKey === null || judgments.answerKey !== answerKey)
+      blockers.push("delivery judgments do not bind this frozen answer key");
     if (!unique(judgments.comments.map((c) => c.id)))
       blockers.push("duplicate delivery judgment");
     for (const { comment } of comments) {
@@ -371,6 +390,7 @@ export const readOwnedReview = (input: {
     caseId: kase.id,
     family: kase.family,
     basis,
+    answerKey,
     runId: run?.runId ?? null,
     build: probe?.exported?.build.commit ?? null,
     config: probe?.exported ? configOf(probe.exported) : null,
@@ -402,6 +422,12 @@ export const compareOwnedReviews = (
     baseline.caseId !== treatment.caseId
   )
     blockers.push("unpaired source cases");
+  if (
+    !baseline.answerKey ||
+    !treatment.answerKey ||
+    baseline.answerKey !== treatment.answerKey
+  )
+    blockers.push("missing or different frozen answer keys");
   if (baseline.runId === treatment.runId)
     blockers.push("the arms are the same run");
   if (
