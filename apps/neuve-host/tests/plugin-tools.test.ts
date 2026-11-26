@@ -4,6 +4,7 @@ import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurr
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 
+import { Fixture, OWNER } from "../../../packages/channel/tests/helpers";
 import { serveOAuthFixture } from "./fixtures/oauth-http";
 import { expandPluginValue, PluginManifest } from "../src/plugin-manifest";
 import { pluginTools } from "../src/plugin-tools";
@@ -54,6 +55,7 @@ const inputSchema = { type: "object", properties: { text: { type: "string" } }, 
 for await (const line of createInterface({ input: process.stdin })) {
 	const { id, method, params } = JSON.parse(line);
 	if (id === undefined) continue;
+	if (method === "tools/call" && params.arguments.text === "drop transport") process.exit(0);
 	const result = method === "initialize"
 		? { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "test", version: "1" } }
 		: method === "tools/list" ? { tools: [
@@ -97,13 +99,13 @@ test("a running channel discovers, dispatches, and hides a plugin at the next re
 		directory: { self: { id: "plugin-test", name: "plugin-test" }, list: async () => [], deliver: async () => {} },
 		log: (_level, event, fields) => log.push({ event, fields }),
 	});
-	async function ask(mode: "ace" | "plan" = "ace", call = false) {
+	async function ask(mode: "ace" | "plan" = "ace", call?: string) {
 		let offered: string[] = [];
 		let result: unknown;
 		fake.appendResponses([request => {
 			offered = getCurrentTools(request.messages).map(tool => tool.name).filter(name => name.startsWith("fixture_"));
 			if (call) return fauxAssistantMessage([
-				fauxToolCall("fixture_write_issue", { text: "tool argument" }, { id: "mcp-write" }),
+				fauxToolCall("fixture_write_issue", { text: call }, { id: "mcp-write" }),
 			], { stopReason: "toolUse" });
 			return fauxAssistantMessage("Done");
 		}]);
@@ -132,7 +134,7 @@ test("a running channel discovers, dispatches, and hides a plugin at the next re
 		credential = "fixture-value";
 		await ask();
 		await refreshed;
-		expect(await ask("ace", true)).toEqual({
+		expect(await ask("ace", "tool argument")).toEqual({
 			offered: ["fixture_write_issue", "fixture_" + "r".repeat(44)],
 			result: [{ type: "text", text: "authorized:write.issue:tool argument" }],
 		});
@@ -143,6 +145,14 @@ test("a running channel discovers, dispatches, and hides a plugin at the next re
 		]);
 		expect(JSON.stringify(log)).not.toContain("tool argument");
 		expect(JSON.stringify(log)).not.toContain("fixture-value");
+		expect((await ask("ace", "drop transport")).result).toEqual([
+			{ type: "text", text: "The plugin tool call failed." },
+		]);
+		expect((await ask()).offered).toEqual([]);
+		await refreshed;
+		expect((await ask("ace", "after reconnect")).result).toEqual([
+			{ type: "text", text: "authorized:write.issue:after reconnect" },
+		]);
 		expect((await ask("plan")).offered).toEqual([]);
 		enabled = false;
 		expect((await ask()).offered).toEqual([]);
@@ -243,4 +253,63 @@ test("a keychain read that finishes after close cannot install plugin tools", as
 		await refresh;
 	}
 	expect(registry.snapshot().installed()).toEqual([]);
+});
+
+// A server can forget its session while credentials remain unchanged. Reconnect on a later admission.
+test("an expired HTTP session is replaced without restarting the channel or retrying the call", async () => {
+	let opened = 0;
+	let session: string | undefined;
+	const endpoint = serveOAuthFixture(async request => {
+		if (request.method === "GET") return new Response(null, { status: 405 });
+		const { id, method, params } = await request.json();
+		if (method === "initialize") {
+			session = `fixture-${++opened}`;
+			return Response.json({ jsonrpc: "2.0", id, result: {
+				protocolVersion: params.protocolVersion, capabilities: { tools: {} },
+				serverInfo: { name: "fixture", version: "1" },
+			} }, { headers: { "mcp-session-id": session } });
+		}
+		if (!session || request.headers.get("mcp-session-id") !== session)
+			return new Response("Session expired", { status: 404 });
+		if (id === undefined) return new Response(null, { status: 202 });
+		return Response.json({ jsonrpc: "2.0", id, result: method === "tools/list"
+			? { tools: [{ name: "answer", inputSchema: { type: "object" } }] }
+			: { content: [{ type: "text", text: `Answered in session ${opened}` }] },
+		});
+	});
+	const plugin = PluginManifest.parse({
+		manifest: { name: "session", description: "Forgets its MCP session" },
+		mcp: { session: { type: "http", url: endpoint.url.href, headers: { Authorization: "Bearer fixture" } } },
+	});
+	const plugins = pluginTools(() => {}, [plugin], () => ({ session: true }));
+	const refresh = plugins.refresh;
+	let refreshed = Promise.resolve();
+	plugins.refresh = registry => refreshed = refresh(registry);
+	let chat: Fixture | undefined;
+	try {
+		const channel = chat = await Fixture.create({ plugins });
+		await refreshed;
+		const watch = await channel.watch();
+		async function ask(text: string, call?: string) {
+			if (call) channel.script(fauxAssistantMessage(fauxToolCall("session_answer", {}, { id: call }), { stopReason: "toolUse" }));
+			channel.script(fauxAssistantMessage(text));
+			const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text });
+			expect(await channel.request({ op: "wait", submission })).toBe("done");
+			return call ? watch.until("result", event => event.call === call) : undefined;
+		}
+		expect((await ask("First call", "before-expiry"))?.text).toBe("Answered in session 1");
+		session = undefined;
+		const failed = await ask("Expired call", "expired");
+		expect(failed?.error).toBe(true);
+		expect(failed?.text).toBe("The plugin tool call failed.");
+		expect(opened).toBe(1);
+		await ask("Trigger reconnect");
+		await refreshed;
+		expect((await ask("After reconnect", "after-expiry"))?.text).toBe("Answered in session 2");
+		expect(opened).toBe(2);
+		await watch.stop();
+	} finally {
+		await chat?.dispose();
+		await endpoint.stop(true);
+	}
 });

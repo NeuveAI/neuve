@@ -28,7 +28,8 @@ async function fixture(expiresIn = 3600) {
 	let rotation = 0;
 	let requests = 0;
 	let rejectAccess = false;
-	let rejectRefresh = false;
+	let refreshFailure: { status: number; code: string } | undefined;
+	let remoteStop: Promise<void> | undefined;
 	const hold = Promise.withResolvers<void>();
 	const refreshesSettled = Promise.withResolvers<void>();
 	let refreshReplies = 0;
@@ -116,7 +117,10 @@ async function fixture(expiresIn = 3600) {
 					routes.push("refresh");
 					refreshing.resolve();
 					if (waiting) await hold.promise;
-					if (rejectRefresh || form.get("refresh_token") !== refreshToken(rotation)) {
+					if (refreshFailure) {
+						return Response.json({ error: refreshFailure.code, error_description: String(form.get("refresh_token")) }, { status: refreshFailure.status });
+					}
+					if (form.get("refresh_token") !== refreshToken(rotation)) {
 						return Response.json({ error: "invalid_grant", error_description: String(form.get("refresh_token")) }, { status: 400 });
 					}
 					rotation++;
@@ -130,6 +134,7 @@ async function fixture(expiresIn = 3600) {
 				return new Response(null, { status: 404 });
 		}
 	});
+	const stopRemote = () => remoteStop ??= Promise.resolve(server.stop(true));
 	const plugin = PluginManifest.parse({
 		manifest: { name: "fixture", description: "Local OAuth fixture", apiKey: { fixture: "FIXTURE_API_KEY" } },
 		mcp: { fixture: { type: "http", url: new URL("/mcp", server.url).href } },
@@ -174,7 +179,9 @@ async function fixture(expiresIn = 3600) {
 			return { started: getStarted.promise, resume: resumeGet.resolve };
 		},
 		rejectAccess: () => { rejectAccess = true; },
-		failRefresh: () => { rejectRefresh = true; },
+		failRefresh: (status: number, code: string) => { refreshFailure = { status, code }; },
+		allowRefresh: () => { refreshFailure = undefined; },
+		stopRemote,
 		signIn: () => oauth.signIn(plugin.name, config.port, changed),
 		signOut: () => oauth.signOut(plugin.name, changed),
 		settings: () => pluginSettings(plugin, true, true, oauth),
@@ -202,7 +209,7 @@ async function fixture(expiresIn = 3600) {
 			try {
 				await oauth.signOut(plugin.name, changed);
 			} finally {
-				await Promise.all([owner.stop(true), server.stop(true)]);
+				await Promise.all([owner.stop(true), stopRemote()]);
 				Object.assign(config, previous);
 				await rm(home, { recursive: true, force: true });
 			}
@@ -337,17 +344,21 @@ test("sign-out discards a refresh already in flight", async () => {
 	}
 });
 
-// A rejected refresh must remove tool availability and must never publish the server's diagnostic.
-test("a failed refresh leaves the plugin signed out and its logs contain no credentials", async () => {
+// A definitive refusal must clear Keychain and keep credential echoes out of diagnostics.
+test.each([
+	{ status: 400, code: "invalid_grant" },
+	{ status: 401, code: "invalid_client" },
+])("a $code refresh refusal removes the saved sign-in", async ({ status, code }) => {
 	const f = await fixture(0);
 	const warnings = spyOn(console, "warn");
 	const registry = createRegistry();
 	const worker = pluginTools(f.log, [f.plugin], () => ({ fixture: true }), async () => undefined);
 	try {
 		await f.complete();
-		f.failRefresh();
+		f.failRefresh(status, code);
 		await worker.refresh(registry);
 		expect(registry.snapshot().tools()).toEqual([]);
+		expect(await readSession(f.endpoint)).toBeUndefined();
 		expect((await f.settings()).signIn).toEqual({ signedIn: false, error: "Plugin sign-in expired. Sign in again." });
 		expect(f.logs).toEqual([
 			{ level: "warn", event: "plugin.refresh.failed", fields: { plugin: "fixture", server: "fixture" } },
@@ -360,6 +371,48 @@ test("a failed refresh leaves the plugin signed out and its logs contain no cred
 	} finally {
 		warnings.mockRestore();
 		await worker.close();
+		await f.close();
+	}
+});
+
+// A temporary outage must leave the original grant available for the next request to rotate.
+test.each([503, 429])("HTTP %i preserves sign-in and a later request recovers", async status => {
+	const f = await fixture(0);
+	const registry = createRegistry();
+	const worker = pluginTools(f.log, [f.plugin], () => ({ fixture: true }), async () => undefined);
+	try {
+		await f.complete();
+		const before = await readSession(f.endpoint);
+		expect(before?.kind === "signed-in" && before.tokens.refresh_token).toBe(refreshToken(0));
+		f.failRefresh(status, "invalid_grant");
+		await worker.refresh(registry);
+		expect(registry.snapshot().tools()).toEqual([]);
+		expect(await readSession(f.endpoint)).toEqual(before);
+		expect((await f.settings()).signIn).toEqual({ signedIn: true });
+		f.allowRefresh();
+		await worker.refresh(registry);
+		expect(registry.snapshot().tools().map(({ tool }) => tool.name)).toEqual(["fixture_list_issues"]);
+		const saved = await readSession(f.endpoint);
+		expect(saved?.kind === "signed-in" && saved.tokens.refresh_token).toBe(refreshToken(1));
+		expect(f.routes.filter(route => route === "refresh")).toEqual(["refresh", "refresh"]);
+	} finally {
+		await worker.close();
+		await f.close();
+	}
+});
+
+// A lost authorization-server listener never gives an OAuth refusal and cannot clear Keychain.
+test("a refresh network failure preserves the signed-in session", async () => {
+	const f = await fixture(0);
+	try {
+		await f.complete();
+		const before = await readSession(f.endpoint);
+		expect(before?.kind === "signed-in" && before.tokens.refresh_token).toBe(refreshToken(0));
+		await f.stopRemote();
+		await expect(f.connect()).rejects.toThrow();
+		expect(await readSession(f.endpoint)).toEqual(before);
+		expect((await f.settings()).signIn).toEqual({ signedIn: true });
+	} finally {
 		await f.close();
 	}
 });

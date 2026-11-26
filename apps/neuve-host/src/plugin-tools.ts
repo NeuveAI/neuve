@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import type { Options, Log } from "@ace/channel";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { Client, SdkError, SdkErrorCode, SdkHttpError, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { SharedWork } from "@neuve/records-core/shared-work";
 import { declaresToolUseId } from "@neuve/runtime";
@@ -46,23 +46,44 @@ type Connection = {
 	signedIn: ReadonlySet<string>;
 	clients: Client[];
 	httpTools: string[];
+	lost: boolean;
 };
+
+type PluginRegistry = Parameters<NonNullable<Options["plugins"]>["refresh"]>[0];
 
 async function connect(
 	plugin: Plugin, credentials: ReadonlyMap<string, string>, signedIn: ReadonlySet<string>, names: Set<string>, log: Log,
 	signal: AbortSignal, opened: Map<Client, { plugin: string; closing?: Promise<void> }>,
 	close: (clients: Client[]) => Promise<void>,
+	disconnected: (connection: Connection) => void,
 ): Promise<{ connection: Connection; tools: ToolRegistration[] } | undefined> {
-	const connection: Connection = { credentials, signedIn, clients: [], httpTools: [] };
+	const connection: Connection = { credentials, signedIn, clients: [], httpTools: [], lost: false };
 	const tools: ToolRegistration[] = [];
+	const lost = () => {
+		if (connection.lost || signal.aborted) return;
+		connection.lost = true;
+		disconnected(connection);
+	};
 	for (const [server, config] of Object.entries(plugin.servers)) {
 		if (signal.aborted) return;
 		const client = new Client({ name: "ace", version: "1" });
 		opened.set(client, { plugin: plugin.name });
 		connection.clients.push(client);
 		try {
-			await client.connect(transport(config, credentials, plugin.oauth.get(server), signedIn.has(server)), { ...CONNECT, signal });
+			const wire = transport(config, credentials, plugin.oauth.get(server), signedIn.has(server));
+			const observeError = (error: unknown) => {
+				if ((error instanceof SdkError && (error.code === SdkErrorCode.ConnectionClosed || error.code === SdkErrorCode.NotConnected))
+					|| (wire instanceof StreamableHTTPClientTransport && wire.sessionId
+						&& error instanceof SdkHttpError && error.status === 404)) lost();
+			};
+			client.onclose = lost;
+			client.onerror = observeError;
+			await client.connect(wire, { ...CONNECT, signal });
 			const { tools: listed } = await client.listTools(undefined, { ...CONNECT, signal });
+			if (connection.lost) {
+				await close(connection.clients);
+				return;
+			}
 			let accepted = 0;
 			for (const tool of listed) {
 				const name = `${server}_${tool.name}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, TOOL_NAME_LIMIT);
@@ -95,7 +116,8 @@ async function connect(
 								content: [{ type: "text", text: text || JSON.stringify(result.structuredContent) || "" }],
 								isError: result.isError === true,
 							};
-						} catch {
+						} catch (error) {
+							observeError(error);
 							return { content: [{ type: "text", text: "The plugin tool call failed." }], isError: true };
 						} finally {
 							log(outcome === "ok" ? "info" : "warn", "plugin.tool.call", { plugin: plugin.name, tool: name, outcome });
@@ -176,11 +198,17 @@ export function pluginTools(
 		},
 	};
 
-	async function reconcile(enabled: Record<string, boolean>, registry: Parameters<NonNullable<Options["plugins"]>["refresh"]>[0]) {
+	function retire(plugin: Plugin, connection: Connection, registry: PluginRegistry) {
+		if (active.get(plugin) !== connection) return;
+		active.delete(plugin);
+		registry.uninstall({ name: extensionName(plugin) });
+		return close(connection.clients);
+	}
+
+	async function reconcile(enabled: Record<string, boolean>, registry: PluginRegistry) {
 		for (const plugin of plugins) {
 			if (lifetime.signal.aborted) return;
 			const name = extensionName(plugin);
-			const current = active.get(plugin);
 			const credentials = new Map<string, string>();
 			const signedIn = new Set<string>();
 			let ready = enabled[plugin.name] === true;
@@ -218,20 +246,20 @@ export function pluginTools(
 				}
 			}
 			if (lifetime.signal.aborted) return;
+			const current = active.get(plugin);
 			if (current) {
 				if (ready && credentials.size === current.credentials.size && signedIn.size === current.signedIn.size
 					&& [...signedIn].every(name => current.signedIn.has(name))
 					&& [...credentials].every(([key, value]) => current.credentials.get(key) === value)) continue;
-				active.delete(plugin);
-				registry.uninstall({ name });
-				await close(current.clients);
+				await retire(plugin, current, registry);
 			}
 			if (!ready) continue;
 			const names = new Set(registry.snapshot().tools().map(({ tool }) => tool.name));
-			const connected = await connect(plugin, credentials, signedIn, names, log, lifetime.signal, opened, close);
+			const connected = await connect(plugin, credentials, signedIn, names, log, lifetime.signal, opened, close,
+				connection => { void retire(plugin, connection, registry); });
 			if (!connected) continue;
 			if (lifetime.signal.aborted) return;
-			if (preferences()[plugin.name] !== true) {
+			if (connected.connection.lost || preferences()[plugin.name] !== true) {
 				await close(connected.connection.clients);
 				continue;
 			}

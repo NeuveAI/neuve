@@ -21,6 +21,8 @@ const timeout = 15_000;
 const signInFailed = "Plugin sign-in failed. Try again.";
 const refreshFailed = "Plugin sign-in expired. Sign in again.";
 
+class GrantRefused extends Error {}
+
 type Session = {
 	server: OAuthServer;
 	lifetime: AbortController;
@@ -55,7 +57,15 @@ function oauthFetch(server: OAuthServer, lifetime: AbortSignal, probe = false): 
 		if (!probe && init?.method === "POST" && (response.status < 300 || response.status >= 400)) {
 			// SDK auth diagnostics can include the authorization server's error description.
 			if (!response.ok) {
-				await response.body?.cancel();
+				if (response.status === 400 || response.status === 401) {
+					const body: unknown = await response.json().catch(() => null);
+					if (body && typeof body === "object" && "error" in body
+						&& (body.error === "invalid_grant" || body.error === "invalid_client")) {
+						throw new GrantRefused();
+					}
+				} else {
+					await response.body?.cancel();
+				}
 				throw new Error("The plugin authorization server rejected the request");
 			}
 			const body: unknown = await response.json();
@@ -282,11 +292,13 @@ export class PluginOAuth {
 						refreshToken: tokens.refresh_token, resource, fetchFn: oauthFetch(server, signal),
 					});
 					await this.persist(session, signal, signedIn(value, { ...rotated, issuer: tokens.issuer }));
-				} catch {
+				} catch (error) {
 					signal.throwIfAborted();
-					session.error = refreshFailed;
 					log("warn", "plugin.refresh.failed", { plugin, server: name });
-					await this.remove(session, signal).finally(changed);
+					if (error instanceof GrantRefused) {
+						session.error = refreshFailed;
+						await this.remove(session, signal).finally(changed);
+					}
 					throw new UnauthorizedError();
 				}
 			}
