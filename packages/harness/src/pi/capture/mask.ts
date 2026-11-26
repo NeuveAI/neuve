@@ -621,6 +621,41 @@ const maskToolState = (
     }));
   return {
     ...state,
+    ...(state.reviewEvidence === undefined
+      ? {}
+      : {
+          reviewEvidence: state.reviewEvidence.map((entry) => ({
+            ...entry,
+            text: maskString(entry.text, declared),
+          })),
+        }),
+    ...(state.reviewClaims === undefined
+      ? {}
+      : {
+          reviewClaims: state.reviewClaims.map((claim) => ({
+            ...claim,
+            observation: {
+              ...claim.observation,
+              anchor: {
+                ...claim.observation.anchor,
+                path: maskString(claim.observation.anchor.path, declared),
+              },
+              text: maskString(claim.observation.text, declared).slice(0, 1200),
+              fails: maskString(claim.observation.fails, declared).slice(
+                0,
+                1200,
+              ),
+              row:
+                claim.observation.row === null
+                  ? null
+                  : maskString(claim.observation.row, declared),
+            },
+            evidence: claim.evidence.map((entry) => ({
+              ...entry,
+              text: maskString(entry.text, declared),
+            })),
+          })),
+        }),
     ...(state.handles === undefined
       ? {}
       : {

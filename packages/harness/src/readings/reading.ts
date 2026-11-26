@@ -11,7 +11,8 @@ import {
 } from "./answers.ts";
 import { codeFactsOf } from "./code-facts.ts";
 import type { EvidenceRow, GroupEvidence } from "./evidence.ts";
-import type { PlanSection, ReadingPlan } from "./plan.ts";
+import type { PlanSection } from "./plan.ts";
+import type { RetainedReadingPlan } from "./assignments.ts";
 
 /**
  * The text one reading call reads, and the index code checks its cites against.
@@ -542,7 +543,7 @@ const byCodeUnits = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** The group's sections in reading order, each file's together, and its files in the group's order. */
 const layout = (
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   only?: ReadonlyArray<string>,
 ) => {
@@ -582,7 +583,7 @@ const layout = (
 
 /** A group's section identity keys in the order its reading numbers them (section 1 first). */
 export const readingOrder = (
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
 ): Array<string> =>
   layout(plan, groupId).sections.map(({ section }) => section.key);
@@ -592,7 +593,7 @@ export const readingOrder = (
  * section carries what code writes into its Assess judgement from the plan (`codeFactsOf`).
  */
 export const readingIndexOf = (
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   listed: ReadingListed,
   only?: ReadonlyArray<string>,
@@ -624,17 +625,17 @@ export const readingIndexOf = (
 
 /** The text one call of a group reads, and its index; see the module comment. */
 export function renderReading(
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   sources: AssessSources,
 ): Reading<"assess">;
 export function renderReading(
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   sources: LaneReviewSources,
 ): Reading<"lane-review">;
 export function renderReading(
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   sources: AssessSources | LaneReviewSources,
 ): Reading<ReadingKind> {
@@ -715,6 +716,44 @@ export function renderReading(
       scopeLines,
     ),
   ];
+  if (sources.for === "lane-review" && "batches" in plan) {
+    const assignment = plan.groups.find((group) => group.id === groupId)!;
+    const indexed = plan.batches.slice(0, 40).map((batch) => {
+      const members = [...plan.sections, ...plan.unread].filter((section) =>
+        section.hunkIds.some((id) => batch.hunkIds.includes(id)),
+      );
+      const paths = [...new Set(members.map((section) => section.path))];
+      return `batch ${oneLine(batch.id)}${batch.id === assignment.batchId ? " (this assignment's batch)" : " (context only)"}: ${paths.slice(0, 20).map(oneLine).join(", ")}${paths.length > 20 ? `; ${paths.length - 20} more files` : ""}; requirements ${batch.doneWhen.map(oneLine).join(", ")}`;
+    });
+    const references = assignment.context.slice(0, 40).map((ref) => {
+      const section = [...plan.sections, ...plan.unread].find(
+        (section) => section.key === ref.sectionKey,
+      )!;
+      return `context path ${oneLine(section.path)}: ${oneLine(ref.reason)}; not owned, no approval`;
+    });
+    parts.push(
+      `Assignment and surrounding change index\n${dataBlock(
+        "assignment-index",
+        {},
+        [
+          `owned sections: ${sections.map((section) => section.index).join(", ")}`,
+          ...indexed,
+          ...(plan.batches.length > 40
+            ? [
+                `${plan.batches.length - 40} more batches not shown; use focused source lookups.`,
+              ]
+            : []),
+          ...references,
+          ...(assignment.context.length > 40
+            ? [
+                `${assignment.context.length - 40} more context references not shown.`,
+              ]
+            : []),
+          "Related source is context only. Assignment never establishes coverage or approval.",
+        ].join("\n"),
+      )}`,
+    );
+  }
   for (const file of files) {
     const own = sections.filter(({ file: index }) => index === file.index);
     const first = own[0]!.section;

@@ -1,3 +1,4 @@
+import type { RetainedReadingPlan } from "./assignments.ts";
 import { z } from "zod";
 import type { ManifestHunk } from "../manifest.ts";
 import type {
@@ -816,7 +817,7 @@ const firstOf = (
 
 /** Each section of a group in reading order, with its slice's head side when it was read. */
 const sectionsOf = (
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   slices: ReadonlyMap<string, RelationSlice> | null,
   hunks: Hunks,
@@ -839,7 +840,7 @@ const sectionsOf = (
 
 /** Every symbol a section of the group needs evidence for, within `SYMBOLS_PER_SECTION`. */
 const groupSymbols = (
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   slices: ReadonlyMap<string, RelationSlice>,
   hunks: Hunks,
@@ -854,7 +855,7 @@ const groupSymbols = (
  * `SYMBOLS_PER_SECTION`. The caller reads these files at the head commit.
  */
 export const callSitePaths = (
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   slices: ReadonlyMap<string, RelationSlice>,
   hunks: Hunks,
@@ -884,7 +885,7 @@ export const callSitePaths = (
  * test row.
  */
 export const chooseRows = (
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   slices: ReadonlyMap<string, RelationSlice> | null,
   lineAt: (path: string, line: number) => string | null,
@@ -975,7 +976,7 @@ export const chooseRows = (
  * said to reach nothing.
  */
 export const reachOf = (
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
   groupId: string,
   slices: ReadonlyMap<string, RelationSlice> | null,
   hunks: Hunks,

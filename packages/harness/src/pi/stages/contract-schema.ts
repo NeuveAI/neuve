@@ -10,6 +10,10 @@ import { addUsage, zeroUsage } from "../../route.ts";
 
 import { HeadRead, FindSubmission } from "../../find-schema.ts";
 import { HandleRegistryState } from "../../handle-schema.ts";
+import {
+  RecordedReviewClaim,
+  ReviewEvidence,
+} from "../../readings/reviewer-claims.ts";
 
 /**
  * What an agent context's tools hold between calls: its handles, recorded findings, reading budget
@@ -21,6 +25,8 @@ export const ToolState = z.strictObject({
   reading: z.strictObject({ used: z.int().min(0) }).optional(),
   findings: FindSubmission.optional(),
   headReads: z.array(HeadRead).optional(),
+  reviewEvidence: z.array(ReviewEvidence).optional(),
+  reviewClaims: z.array(RecordedReviewClaim).optional(),
 });
 export type ToolState = z.infer<typeof ToolState>;
 

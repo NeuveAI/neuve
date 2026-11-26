@@ -47,6 +47,7 @@ import { Lens } from "../../find.ts";
 import { erased } from "./agent.ts";
 import { stageOfKind, type ResolvedAgent } from "./tools.ts";
 import { readingStep } from "./reading-task.ts";
+import { RecordedReviewClaim } from "../../readings/reviewer-claims.ts";
 import { briefingAgent } from "./briefing-task.ts";
 
 /**
@@ -130,6 +131,10 @@ export const KindParams = {
     evidence: ReadingEvidence,
   }),
   "lane-review": z.strictObject({
+    owner: z.int().min(0).optional(),
+    review: z.int().min(0).optional(),
+    cutoffAt: z.number().optional(),
+    claimEffort: ReadingStepEffort,
     plan: z.string(),
     group: z.string(),
     rank: z.int().min(0),
@@ -145,7 +150,8 @@ export const KindParams = {
     plan: z.string(),
     group: z.string(),
     manifest: z.string(),
-    answer: z.string(),
+    answer: z.string().optional(),
+    inline: RecordedReviewClaim.optional(),
     claim: z.string(),
     effort: ReadingStepEffort,
     evidence: ReadingEvidence,

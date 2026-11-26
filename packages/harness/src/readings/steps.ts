@@ -41,11 +41,7 @@ import {
   type ReadingIndex,
 } from "./answers.ts";
 import type { ReadingOutcome } from "./decide.ts";
-import {
-  READING_RECIPE,
-  READING_RECIPE_SCOPE_AND_TESTS,
-  type ReadingPlan,
-} from "./plan.ts";
+import { READING_RECIPE, READING_RECIPE_SCOPE_AND_TESTS } from "./plan.ts";
 import {
   ASSESS_PROMPT_VERSION,
   ASSESS_SUBMIT,
@@ -62,6 +58,9 @@ import {
   type LaneReviewGoal,
 } from "./prompts.ts";
 import { ReadingListed, readingIndexOf, type Reading } from "./reading.ts";
+import type { RetainedReadingPlan } from "./assignments.ts";
+import { ReviewCheck } from "./comprehensive.ts";
+import { RecordedReviewClaim, ReviewEvidence } from "./reviewer-claims.ts";
 
 /**
  * The two readings as agent steps, one per reading group, built the way `verifyStep` is: a spec,
@@ -181,6 +180,10 @@ export const LaneReviewStored = z.strictObject({
   ...storedShape,
   /** The answer as code repaired it, of either form (`LaneReviewScopedAnswer` with scope and tests on). */
   answer: StoredLaneReviewAnswer,
+  /** New ownership contract only; absent from historical outputs. */
+  checks: z.array(ReviewCheck).optional(),
+  claims: z.array(RecordedReviewClaim).optional(),
+  contextEvidence: z.array(ReviewEvidence).optional(),
 });
 export type LaneReviewStored = z.infer<typeof LaneReviewStored>;
 
@@ -420,7 +423,8 @@ export const laneReviewStep = (p: {
   readonly stage: AgentStage;
   readonly reading: Reading<"lane-review">;
   readonly goal: LaneReviewGoal;
-  /** The tools it may call in its first turn, supplied by the caller. */
+  /** The tools of the investigation, supplied by the caller. */
+  readonly multiTurn?: boolean | undefined;
   readonly tools: ReadonlyArray<ToolSpec<unknown>>;
   /** What the tools hold between calls, when they hold anything. */
   readonly state?: ToolStateHolder | undefined;
@@ -455,7 +459,7 @@ export const laneReviewStep = (p: {
   const tools = p.tools.map((tool): ToolSpec<unknown> => ({
     ...tool,
     handle: (input) =>
-      turn > 1
+      p.multiTurn !== true && turn > 1
         ? Effect.succeed({
             text: `The tools were for your first turn. Answer now by calling ${LANE_REVIEW_SUBMIT}.`,
             error: "ToolsSpent",
@@ -529,7 +533,7 @@ export const laneReviewStep = (p: {
 /** The index a stored output was read against, checked to be the plan's group as it was read. */
 const storedIndex = (
   stored: Pick<AssessStored, "group" | "sections" | "listed">,
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
 ) => {
   // A re-read stores only the sections it read: its index is built over those alone.
   const index = readingIndexOf(
@@ -576,14 +580,14 @@ const outcomesOf = <J>(
 /** Each section's Assess outcome from a stored step output and the plan: an unanswered section is not judged (`failed`). */
 export const assessOutcomes = (
   stored: AssessStored,
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
 ): ReadonlyArray<SectionOutcome<AssessJudgement>> =>
   outcomesOf(stored, assessExpand(stored.answer, storedIndex(stored, plan)));
 
 /** Each section's Lane review outcome from a stored step output and the plan: an unanswered section is not judged (`failed`). */
 export const laneReviewOutcomes = (
   stored: LaneReviewStored,
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
 ): ReadonlyArray<SectionOutcome<LaneReviewJudgement>> =>
   outcomesOf(
     stored,
@@ -598,7 +602,7 @@ export const laneReviewOutcomes = (
  */
 export const testedByCounts = (
   stored: AssessStored,
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
 ): {
   readonly requirements: number;
   readonly testable: number;
@@ -632,7 +636,7 @@ export const notAskedCount = (stored: LaneReviewStored): number =>
  */
 export const notAskedKeys = (
   stored: LaneReviewStored,
-  plan: ReadingPlan,
+  plan: RetainedReadingPlan,
 ): Array<string> => {
   const listed = new Set(stored.answer.notAsked ?? []);
   if (listed.size === 0) return [];

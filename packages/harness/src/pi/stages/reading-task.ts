@@ -6,9 +6,15 @@ import {
   type TaskOutcome,
   type TaskRuntime,
 } from "@earendil-works/pi-durable";
-import { Computations, Proofs } from "@neuve/records-core";
+import {
+  Computations,
+  Proofs,
+  sha256Hex,
+  canonicalJson,
+} from "@neuve/records-core";
 import { SharedWork } from "@neuve/records-core/shared-work";
 import { Effect, Option } from "effect";
+import { dataBlock } from "../../data-block.ts";
 import { blobStructures, structureKeyOf } from "../../blob-structure.ts";
 import { cpuWork } from "../../budget/cpu.ts";
 import { turnLimitFor } from "../../config.ts";
@@ -28,6 +34,9 @@ import {
 } from "../../log-span.ts";
 import {
   defsTool,
+  readManyTool,
+  hunkTool,
+  scopeSectionTool,
   outlineTool,
   readTool,
   revisionViews,
@@ -42,6 +51,7 @@ import {
   type RunContext,
   type StageRecord,
 } from "../../pipeline.ts";
+import { proofReaders } from "../../proof-tools.ts";
 import type { RowBasis } from "../../proof-state.ts";
 import {
   isRelationsGap,
@@ -57,7 +67,11 @@ import { ReviewMap } from "../../review-map.ts";
 import type { RouteEffort } from "../../route.ts";
 import type { BlobStructure } from "../../sections.ts";
 import type { ReadingProof } from "../../readings/answers.ts";
-import { claimKey, claimVerifyStep } from "../../readings/claims.ts";
+import {
+  claimKey,
+  claimVerifyStep,
+  recordedClaimVerifyStep,
+} from "../../readings/claims.ts";
 import {
   EVIDENCE_RECIPE,
   GroupEvidence,
@@ -70,7 +84,23 @@ import {
   type HeadGateEnd,
   type HeadGateStatus,
 } from "../../readings/evidence.ts";
-import { ReadingPlan, planGroup } from "../../readings/plan.ts";
+import { planGroup } from "../../readings/plan.ts";
+import {
+  RetainedReadingPlan,
+  isAssignmentPlan,
+  validateAssignments,
+  assignmentOwner,
+} from "../../readings/assignments.ts";
+import {
+  reviewerClaims,
+  type RecordedReviewClaim,
+} from "../../readings/reviewer-claims.ts";
+import {
+  comprehensiveStep,
+  comprehensiveBounds,
+  reviewToolState,
+} from "../../readings/comprehensive.ts";
+import { registerClaim, type ClaimRegistration } from "../claim-settlement.ts";
 import { readingOrder, renderReading } from "../../readings/reading.ts";
 import {
   AssessStored,
@@ -78,12 +108,17 @@ import {
   assessStep,
   laneReviewOutcomes,
   laneReviewStep,
+  withOffered,
   type ReadingProducer,
 } from "../../readings/steps.ts";
 import type { AgentReading } from "../contracts.ts";
 import { definePolicyTask } from "../failure-policy.ts";
 import { erased, type AgentStep } from "./agent.ts";
-import type { AgentStepCheckpoint, AgentStepInput } from "./agent-step.ts";
+import {
+  AGENT_STEP,
+  type AgentStepCheckpoint,
+  type AgentStepInput,
+} from "./agent-step.ts";
 import { childId, resultOf } from "./children.ts";
 import { ChildrenDoc } from "./docs.ts";
 import type { FrontResult } from "./front-task.ts";
@@ -113,6 +148,8 @@ export type ReadingKind = "assess" | "lane-review";
 
 export type ReadingTaskInput = {
   readonly kind: ReadingKind;
+  /** Native review owner, for atomic registration of incoming claims. New assignments only. */
+  readonly review?: number | undefined;
   /** The stored reading plan's computation key. */
   readonly planKey: string;
   readonly group: string;
@@ -190,6 +227,7 @@ export const readingStepInput = (
   keys: Keys | undefined,
   only?: ReadonlyArray<string>,
   evidence?: string,
+  owner?: number,
 ): AgentStepInput => {
   const common = {
     plan: input.planKey,
@@ -206,7 +244,16 @@ export const readingStepInput = (
     params: copyJson(
       input.kind === "assess"
         ? common
-        : { ...common, frame: keys?.frame, map: keys?.map },
+        : {
+            ...common,
+            frame: keys?.frame,
+            map: keys?.map,
+            ...(owner === undefined ? {} : { owner, cutoffAt: input.cutoffAt }),
+            ...(input.review === undefined ? {} : { review: input.review }),
+            ...(input.claimEffort === undefined
+              ? {}
+              : { claimEffort: input.claimEffort }),
+          },
     ),
     cutoffAt: input.cutoffAt,
   };
@@ -218,19 +265,26 @@ export const readingStepInput = (
  */
 export const claimStepInput = (
   input: ReadingTaskInput,
-  claim: { readonly key: string; readonly answer: string },
+  claim: {
+    readonly key: string;
+    readonly answer: string;
+    readonly inline?: RecordedReviewClaim;
+  },
   evidence?: string,
 ): AgentStepInput => ({
   kind: "verify-claim",
-  params: {
+  params: copyJson({
     plan: input.planKey,
     group: input.group,
     manifest: input.manifestKey,
     answer: claim.answer,
     claim: claim.key,
+    ...("inline" in claim && claim.inline !== undefined
+      ? { inline: claim.inline }
+      : {}),
     ...(input.claimEffort === undefined ? {} : { effort: input.claimEffort }),
     ...(evidence === undefined ? {} : { evidence }),
-  },
+  }),
   cutoffAt: input.cutoffAt,
 });
 
@@ -327,6 +381,8 @@ type Claimed = {
   readonly section: string;
   /** The stored Lane review output the claim was read from. */
   readonly answer: string;
+  readonly inline?: RecordedReviewClaim;
+  readonly basis?: Record<string, unknown>;
 };
 
 type ReadingCheckpoint =
@@ -482,7 +538,7 @@ export const readPlan = (
   remembered(
     ctx,
     `plan:${key}`,
-    (shared) => run(storedOutput(ctx, key, ReadingPlan), shared),
+    (shared) => run(storedOutput(ctx, key, RetainedReadingPlan), shared),
     signal,
   );
 
@@ -1183,6 +1239,11 @@ export const readingStep = async (
   const { params } = input;
   const plan = await readPlan(ctx, run, params.plan, signal);
   const manifest = await readManifest(ctx, run, params.manifest, signal);
+  if (isAssignmentPlan(plan)) {
+    validateAssignments(plan, manifest.hunks);
+    if (plan.source.manifestKey !== params.manifest)
+      throw new Error("Assignment source differs from the reviewed manifest");
+  }
   const { structures } = await structuresRead(
     ctx,
     run,
@@ -1199,6 +1260,25 @@ export const readingStep = async (
       : await readEvidence(ctx, run, params.evidence, signal);
   if (input.kind === "verify-claim") {
     const p = input.params;
+    if (p.inline !== undefined) {
+      if (p.inline.key !== p.claim)
+        throw new Error(
+          "Inline claim identity differs from its requested check",
+        );
+      return withStepEffort(
+        erased(
+          recordedClaimVerifyStep({
+            claim: p.inline,
+            turnLimit: turnLimitFor(ctx.config, "verify"),
+          }),
+        ),
+        p.effort,
+      );
+    }
+    if (p.answer === undefined)
+      throw new Error(
+        "A claim check needs retained inline source or a stored answer",
+      );
     const stored = await run(
       storedOutput(ctx, p.answer, LaneReviewStored),
       signal,
@@ -1286,44 +1366,244 @@ export const readingStep = async (
   const p = input.params;
   const frame = await run(storedOutput(ctx, p.frame, Frame), signal);
   const map = await run(storedOutput(ctx, p.map, ReviewMap), signal);
-  const lookups = lookupContext(ctx, await view());
-  const budget = readingBudget(
-    [
-      readTool(lookups),
-      usesTool(lookups),
-      defsTool(lookups),
-      outlineTool(lookups),
-    ],
-    LANE_REVIEW_READING_CHARS,
+  const assigned = isAssignmentPlan(plan);
+  if (
+    assigned &&
+    (plan.source.frameKey !== p.frame || plan.source.mapKey !== p.map)
+  )
+    throw new Error(
+      "Assignment frame or batch map differs from the prepared source",
+    );
+  const rangeView = await view();
+  const lookups = lookupContext(ctx, rangeView);
+  const bounds = comprehensiveBounds(
+    planGroup(plan, params.group).totals.characters,
+    planGroup(plan, params.group).keys.length,
   );
+  const readingChars = assigned
+    ? bounds.readingChars
+    : LANE_REVIEW_READING_CHARS;
+  const raw = [
+    readTool(lookups),
+    usesTool(lookups),
+    defsTool(lookups),
+    outlineTool(lookups),
+  ];
+  const budget = readingBudget(
+    assigned
+      ? [
+          ...raw,
+          readManyTool(lookups),
+          hunkTool(lookups),
+          scopeSectionTool(lookups),
+          ...proofReaders({
+            repository: ctx.repository,
+            range: ctx.range,
+            services: ctx.records,
+            ownedPaths: paths,
+            currencyScope: "this assignment",
+          }),
+        ]
+      : raw,
+    readingChars,
+  );
+  const reading = renderReading(plan, params.group, {
+    for: "lane-review",
+    hunks,
+    structures,
+    proofs,
+    rows: rowsOf(frame, map),
+    only,
+    evidence,
+    scopeAndTests: assigned || scopeAndTests,
+  });
+  const state = toolState({ handles: lookups.handles, reading: budget });
+  const goal = {
+    goal: frame.goal,
+    doneWhen: frame.doneWhen.map(({ id, text }) => ({ id, text })),
+  };
+  if (!assigned)
+    return reread(
+      erased(
+        laneReviewStep({
+          stage: "verify",
+          reading,
+          goal,
+          tools: budget.tools,
+          readingChars,
+          state,
+          keys: { frame: p.frame, manifest: p.manifest },
+          scopeAndTests,
+          by,
+        }),
+      ),
+    );
+  if (
+    p.owner === undefined ||
+    p.review === undefined ||
+    p.cutoffAt === undefined
+  )
+    throw new Error(
+      "A comprehensive review needs its durable assignment and review owners",
+    );
+  const source = {
+    plan: p.plan,
+    manifest: p.manifest,
+    frame: p.frame,
+    map: p.map,
+    evidence: p.evidence ?? null,
+  };
+  const ledger = reviewerClaims({
+    assignment: { id: p.group, source },
+    basis: { producer: by, source },
+    initial: reading.index.sections.map((section) => ({
+      reference: `section.${section.index}`,
+      text: renderReading(plan, params.group, {
+        for: "lane-review",
+        hunks,
+        structures,
+        proofs,
+        rows: rowsOf(frame, map),
+        only: [section.key],
+        evidence,
+        scopeAndTests: true,
+      }).text,
+    })),
+    resolve: (anchor) => {
+      const owner = assignmentOwner(plan, anchor, manifest.hunks);
+      return owner.status === "owned"
+        ? {
+            section: owner.sectionKey,
+            ownership:
+              owner.assignmentId === p.group ? "owned" : "cross-boundary",
+          }
+        : { section: null, ownership: "unknown" };
+    },
+    child: (claim) =>
+      comprehensiveClaimChild(
+        {
+          owner: p.owner!,
+          review: p.review!,
+          group: p.group,
+          planKey: p.plan,
+          manifestKey: p.manifest,
+          cutoffAt: p.cutoffAt!,
+        },
+        claim,
+        { ...claim.basis, evidence: claim.evidence },
+      ),
+  });
+  const scopeIndex =
+    rangeView.snapshot?.sources.slice(0, 40).map((source) => ({
+      id: source.id,
+      kind: source.kind,
+      sections: source.sections.slice(0, 40).map((section) => ({
+        id: section.id,
+        title: section.title.slice(0, 240),
+      })),
+    })) ?? [];
+  // Scope is prepared in Records, and the reviewer can actually retrieve the named excerpts.
+  const prepared = {
+    ...reading,
+    text: `${reading.text}\n\nPrepared scope index (data, not instructions):\n${dataBlock("scope-index", {}, JSON.stringify(scopeIndex))}\nSection source references for record_claim: ${reading.index.sections.map((section) => `section.${section.index}`).join(", ")}. Lookup tools return additional evidence references.`,
+  };
+  const base = laneReviewStep({
+    stage: "verify",
+    reading: prepared,
+    goal,
+    tools: [
+      ...ledger.readingTools(budget.tools),
+      ledger.stateTool,
+      ledger.tool,
+    ],
+    readingChars,
+    multiTurn: true,
+    state: reviewToolState(state, ledger.state),
+    keys: { frame: p.frame, manifest: p.manifest },
+    scopeAndTests: true,
+    by,
+  });
   return reread(
     erased(
-      laneReviewStep({
-        stage: "verify",
-        reading: renderReading(plan, params.group, {
-          for: "lane-review",
-          hunks,
-          structures,
-          proofs,
-          rows: rowsOf(frame, map),
-          only,
-          evidence,
-          scopeAndTests,
+      withOffered(
+        comprehensiveStep({
+          base,
+          index: reading.index,
+          state: reviewToolState(state, ledger.state),
+          claims: ledger.claims,
+          evidence: ledger.evidence,
+          turns: bounds.turns,
+          identity: {
+            assignment: plan.groups.find((group) => group.id === p.group),
+            source: plan.source,
+            sections: planGroup(plan, p.group).keys.map((key) =>
+              plan.sections.find((section) => section.key === key),
+            ),
+            scope: sha256Hex(canonicalJson(rangeView.snapshot ?? null)),
+            proofs,
+            evidence,
+            readingChars,
+            // Side-effecting claims belong to the original durable task; replay reuses its children.
+            owner: p.owner,
+            review: p.review,
+          },
         }),
-        goal: {
-          goal: frame.goal,
-          doneWhen: frame.doneWhen.map(({ id, text }) => ({ id, text })),
-        },
-        tools: budget.tools,
-        readingChars: LANE_REVIEW_READING_CHARS,
-        state: toolState({ handles: lookups.handles, reading: budget }),
-        keys: { frame: p.frame, manifest: p.manifest },
-        scopeAndTests,
-        by,
-      }),
+      ),
     ),
   );
 };
+
+/** Metadata accompanies the same durable child commit as the recording tool result. */
+export const comprehensiveClaimRegistration = (
+  assignment: string,
+  claim: RecordedReviewClaim,
+  basis: Record<string, unknown>,
+): ClaimRegistration => ({
+  assignment,
+  claim: {
+    key: claim.key,
+    anchor: claim.observation.anchor,
+    report: copyJson(claim) as ClaimRegistration["claim"]["report"],
+    basis: copyJson(basis) as ClaimRegistration["claim"]["basis"],
+  },
+});
+
+export const comprehensiveClaimChild = (
+  input: {
+    readonly owner: number;
+    readonly review: number;
+    readonly group: string;
+    readonly planKey: string;
+    readonly manifestKey: string;
+    readonly cutoffAt: number;
+    readonly claimEffort?: RouteEffort;
+  },
+  claim: RecordedReviewClaim,
+  basis: Record<string, unknown>,
+) => ({
+  owner: input.owner,
+  name: `claim.${claim.key}`,
+  task: AGENT_STEP,
+  input: {
+    kind: "verify-claim",
+    params: copyJson({
+      plan: input.planKey,
+      group: input.group,
+      manifest: input.manifestKey,
+      claim: claim.key,
+      inline: claim,
+      ...(input.claimEffort === undefined ? {} : { effort: input.claimEffort }),
+    }),
+    cutoffAt: input.cutoffAt,
+  } satisfies AgentStepInput,
+  attributes: { "harness.claim": claim.key },
+  kind: "verify-claim",
+  inputs: {
+    plan: `computation:${input.planKey}`,
+    manifest: `computation:${input.manifestKey}`,
+  },
+  claimRegistration: comprehensiveClaimRegistration(input.group, claim, basis),
+});
 
 /**
  * Carries a reading step's kind and its group's rank to its route binding, so its calls queue as a
@@ -1426,7 +1706,9 @@ export const readingTask = (
     const record = resultOf(outcome);
     if (
       record?.key !== undefined &&
-      (record.status === "computed" || record.status === "reused")
+      (record.status === "computed" ||
+        record.status === "reused" ||
+        (kind === "lane-review" && record.status === "interrupted"))
     ) {
       try {
         const stored: AssessStored | LaneReviewStored =
@@ -1585,10 +1867,21 @@ export const readingTask = (
     children: ReadonlyArray<{
       readonly name: string;
       readonly input: AgentStepInput;
+      readonly claimRegistration?: ClaimRegistration;
     }>,
     next: (ids: ReadonlyArray<number>) => ReadingCheckpoint,
     context: Context,
   ) => {
+    const taskReview = children.some(
+      (child) => child.claimRegistration !== undefined,
+    )
+      ? (await runtime.getTask(runtime.taskId, context))?.owner
+      : undefined;
+    if (
+      children.some((child) => child.claimRegistration !== undefined) &&
+      taskReview === undefined
+    )
+      throw new Error("A claim registration requires the native review owner");
     const ids: Array<number> = [];
     const created: Array<{ name: string; id: number }> = [];
     await logTimed(
@@ -1609,12 +1902,28 @@ export const readingTask = (
             const held = doc.children[child.name];
             if (held !== undefined) {
               ids.push(held);
+              if (child.claimRegistration !== undefined)
+                await registerClaim(
+                  tx,
+                  childId(taskReview!),
+                  runtime.taskId,
+                  child.claimRegistration,
+                  held,
+                );
               continue;
             }
             const id = await tx.createTask(agentStep, child.input, {
               ownership: { kind: "task", taskId: runtime.taskId },
             });
             doc.children[child.name] = id;
+            if (child.claimRegistration !== undefined)
+              await registerClaim(
+                tx,
+                childId(taskReview!),
+                runtime.taskId,
+                child.claimRegistration,
+                id,
+              );
             ids.push(id);
             created.push({ name: child.name, id });
           }
@@ -1842,6 +2151,34 @@ export const readingTask = (
         storedOutput(ctx, key, LaneReviewStored),
         runtime.signal,
       );
+      if (stored.claims !== undefined) {
+        for (const claim of stored.claims)
+          if (!claims.some((held) => held.key === claim.key))
+            claims.push({
+              key: claim.key,
+              section: claim.section ?? `unknown:${claim.key}`,
+              answer: key,
+              inline: claim,
+              basis: {
+                ...(claim.basis ?? {
+                  producer: stored.by ?? null,
+                  source: {
+                    plan: input.planKey,
+                    manifest: input.manifestKey,
+                    frame: isAssignmentPlan(plan)
+                      ? plan.source.frameKey
+                      : (input.frameKey ?? null),
+                    map: isAssignmentPlan(plan)
+                      ? plan.source.mapKey
+                      : (input.mapKey ?? null),
+                    evidence: so.evidence ?? null,
+                  },
+                }),
+                evidence: claim.evidence,
+              },
+            });
+        continue;
+      }
       const answered = new Set(
         stored.sections.filter((s) => !stored.unanswered.includes(s)),
       );
@@ -1893,7 +2230,14 @@ export const readingTask = (
       [
         {
           name: "read",
-          input: stepOf(input, "read", keys, undefined, evidence),
+          input: stepOf(
+            input,
+            "read",
+            keys,
+            undefined,
+            evidence,
+            runtime.taskId,
+          ),
         },
       ],
       ([read]) => ({
@@ -2133,6 +2477,7 @@ export const readingTask = (
                     keysOf(task.input, at),
                     unanswered,
                     at.evidence,
+                    runtime.taskId,
                   ),
                 },
               ]
@@ -2156,6 +2501,9 @@ export const readingTask = (
         const claims = await claimsOf(task.input, runtime, context);
         // Past the cut-off no check is started: those claims are recorded as not reached.
         const late = runtime.now() >= task.input.cutoffAt;
+        const existing =
+          (await runtime.snapshot(ChildrenDoc, runtime.taskId, context))
+            ?.children ?? {};
         await start(
           runtime,
           "claims",
@@ -2164,6 +2512,15 @@ export const readingTask = (
             : claims.map((claim) => ({
                 name: `claim.${claim.key}`,
                 input: claimInput(task.input, claim, at.evidence),
+                ...(claim.inline === undefined
+                  ? {}
+                  : {
+                      claimRegistration: comprehensiveClaimRegistration(
+                        task.input.group,
+                        claim.inline,
+                        claim.basis ?? {},
+                      ),
+                    }),
               })),
           (ids) => ({
             phase: "done",
@@ -2172,7 +2529,9 @@ export const readingTask = (
             ...(at.evidence === undefined ? {} : { evidence: at.evidence }),
             claims: claims.map((claim, index) => ({
               ...claim,
-              task: late ? null : ids[index]!,
+              task: late
+                ? (existing[`claim.${claim.key}`] ?? null)
+                : ids[index]!,
             })),
             ...(late ? { late: true } : {}),
           }),
@@ -2203,12 +2562,15 @@ export const readingTask = (
       waits.resumed(runtime.taskId);
       const at = task.state.checkpoint;
       // Claims a Lane review made whose checks were never started are not reached.
+      const held =
+        (await runtime.snapshot(ChildrenDoc, runtime.taskId, context))
+          ?.children ?? {};
       const claims =
         at.phase === "done"
           ? at.claims
           : (await claimsOf(task.input, runtime, context)).map((claim) => ({
               ...claim,
-              task: null,
+              task: held[`claim.${claim.key}`] ?? null,
             }));
       const result = await gather(
         task.input,
