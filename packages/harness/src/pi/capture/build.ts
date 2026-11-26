@@ -18,6 +18,7 @@ import {
 import {
   CredentialSourceUnavailable,
   credentialGuards,
+  credentialLossEpochs,
   credentialFrameIdentity,
   credentialInspection,
   credentialSourceHash,
@@ -80,6 +81,7 @@ import {
   captureFileLimit,
   DEFAULT_LIMITS,
   type CapturedEvent,
+  type CredentialCertificate,
   type DumpLimits,
   type JournalLine,
 } from "./types.ts";
@@ -408,17 +410,7 @@ const build = async (
   const losses = readCaptureLosses(input.journal, limits);
   let journal = readCaptureJournal(input.journal, limits);
   const rawLines = journal._tag === "Read" ? journal.lines : [];
-  if (
-    losses.length > 0 &&
-    (input.credentialInspection !== undefined ||
-      journal._tag !== "Read" ||
-      credentialGuards(rawLines).requiresInspection ||
-      losses.some(
-        ({ credentialCoverage }) => credentialCoverage === "required",
-      ))
-  ) {
-    // An incomplete authenticated stream cannot certify its original request or native content.
-    // The raw filing keeps those bytes private. Only the loss record is safe to project.
+  const withholdSource = async () => {
     const reason = "Capture loss prevents certification of the original source";
     const recipe = ProjectionRecipe.parse({
       version: 1,
@@ -433,11 +425,9 @@ const build = async (
       close: input.close ?? null,
       rate,
     });
-    const budget = closeInspectionBudget(
-      progress.inventory,
-      started,
-      input.signal,
-    );
+    const budget =
+      progress.budget ??
+      closeInspectionBudget(progress.inventory, started, input.signal);
     progress.budget = budget;
     phase("projection");
     const projection = await deriveCapture(
@@ -456,7 +446,8 @@ const build = async (
     );
     phase("finalization");
     return sealProjection(projection, recipe, [], limits);
-  }
+  };
+  if (losses.length > 0 && journal._tag !== "Read") return withholdSource();
   if (journal._tag === "TooLarge")
     throw new DumpFailed({
       reason: `capture journal is ${journal.size} bytes, over the ${journal.limit}-byte limit`,
@@ -469,13 +460,22 @@ const build = async (
   const objectFrames = journalObjectFrames(journal.objects);
   if (lines.some(({ event }) => event.type === "native.import"))
     throw new NativeHistoryUncertified();
-  const unsafe = credentialGuards(
+  const registrations = new Map(
+    lines.flatMap(({ event }) =>
+      event.type === "credential.registration"
+        ? [[event.callId, event.epochId] as const]
+        : [],
+    ),
+  );
+  const lossEpochs = credentialLossEpochs(losses, registrations);
+  const authority = input.credentialInspection;
+  if (lossEpochs.size > 0 && authority === undefined) return withholdSource();
+  const safety = credentialGuards(
     lines,
-    input.credentialInspection === undefined
-      ? "certificates-only"
-      : "inspect-retained-prefix",
-  ).refusal;
-  if (unsafe !== null) throw new DumpFailed({ reason: unsafe });
+    authority === undefined ? "certificates-only" : "inspect-retained-prefix",
+    { epochs: lossEpochs },
+  );
+  if (safety.refusal !== null) throw new DumpFailed({ reason: safety.refusal });
   const backup =
     input.capturedBackup ??
     input.native?.reads.captureBackup?.(limits.objectBytes) ??
@@ -533,22 +533,18 @@ const build = async (
   budget.onProgress = () => input.progress?.();
   budget.charge("units", 0);
   phase("source-census");
-  const safety = credentialGuards(
-    lines,
-    input.credentialInspection === undefined
-      ? "certificates-only"
-      : "inspect-retained-prefix",
-  );
   if (safety.requiresInspection && journal.tornLines > 0)
     throw new DumpFailed({
       reason:
         "credential inspection cannot certify a torn journal; source retained privately, export refused",
     });
-  if (safety.requiresInspection && backup.status.status !== "captured")
+  if (safety.requiresInspection && backup.status.status !== "captured") {
+    if (lossEpochs.size > 0) return withholdSource();
     throw new DumpFailed({
       reason:
         "credential inspection requires an exact native backup; source retained privately, export refused",
     });
+  }
   type CheckedSource = {
     readonly kind: import("./safety.ts").CredentialSource["kind"];
     readonly result: InspectionResult;
@@ -583,9 +579,9 @@ const build = async (
   >;
   let inventoryFinished = false;
   const kinds: Array<{ identity: string; kind: CheckedSource["kind"] }> = [];
-  if (input.credentialInspection !== undefined && safety.requiresInspection) {
+  if (authority !== undefined && safety.requiresInspection) {
     const sourceFrames = journal.frames;
-    scanned = await input.credentialInspection.inspectSources({
+    scanned = await authority.inspectSources({
       progress: (value) => {
         progress.inspection = value;
       },
@@ -611,15 +607,14 @@ const build = async (
         }
       },
       requiredEpochs: [
-        ...new Set(
-          lines.flatMap(({ event }) =>
-            event.type === "credential.registration" ? [event.epochId] : [],
-          ),
-        ),
+        ...new Set([...registrations.values(), ...lossEpochs.values()]),
       ],
       budget,
     });
     if (scanned.status === "inspected") {
+      const inspectedEpochs = new Set<string>(scanned.epochs);
+      if ([...lossEpochs.values()].some((epoch) => !inspectedEpochs.has(epoch)))
+        return withholdSource();
       for (const [index, result] of scanned.results.entries()) {
         const item = kinds[index];
         if (item === undefined)
@@ -652,23 +647,19 @@ const build = async (
         sourceHashes,
         credentialAdministrationHash(lines, journal.frames),
       );
-  const registrations = new Map(
-    lines.flatMap(({ event }) =>
-      event.type === "credential.registration"
-        ? [[event.callId, event.epochId] as const]
-        : [],
-    ),
-  );
   const managed = registrations.size > 0;
-  const requiredCalls = [...safety.guards.keys()];
-  const authority = input.credentialInspection;
+  const requiredCalls = new Set([
+    ...safety.guards.keys(),
+    ...lossEpochs.keys(),
+  ]);
   const groups = new Map<string, string[]>();
   for (const callId of requiredCalls) {
-    const epoch = registrations.get(callId) ?? callId;
+    const epoch = lossEpochs.get(callId) ?? registrations.get(callId) ?? callId;
     const calls = groups.get(epoch) ?? [];
     calls.push(callId);
     groups.set(epoch, calls);
   }
+  let lossCertificates: CredentialCertificate[] | undefined;
   let exposed = false;
   let inspectionRecord = 0;
   const unavailableInspection = (
@@ -750,7 +741,12 @@ const build = async (
     try {
       if (scanned !== undefined && scanned.exposedEpochs.length > 0)
         exposed = true;
-      if (managed && requiredCalls.some((call) => !registrations.has(call)))
+      if (
+        managed &&
+        [...requiredCalls].some(
+          (call) => !lossEpochs.has(call) && !registrations.has(call),
+        )
+      )
         throw new DumpFailed({
           reason: "historical calls lack durable registration; export refused",
         });
@@ -795,10 +791,45 @@ const build = async (
             });
           await inspect({ kind: "json", json: frame });
         }
-      const capture = openCaptureJournal(input.journal, input.runId, {
-        limits,
-      });
-      try {
+      const certify = (administrationHash: string): CredentialCertificate[] =>
+        [...groups].map(([epochId, calls]) => {
+          const callId = calls[0];
+          if (callId === undefined)
+            throw new DumpFailed({
+              reason: "credential epoch has no dispatch",
+            });
+          return {
+            type: "credential.inspection",
+            scope: { runId: input.runId },
+            callId,
+            version: 3,
+            epochId,
+            calls,
+            retainedPrefixCalls: calls.filter((call) =>
+              safety.retainedPrefixCalls.includes(call),
+            ),
+            administration: "canonical-inspected-v1",
+            administrationHash,
+            sourceHash,
+            sourceHashes,
+            safe: true,
+          };
+        });
+      if (lossEpochs.size > 0) {
+        // A full or unwritable journal may be the reason for the loss.
+        await inspect({ kind: "json", json: CredentialJson.serialize(losses) });
+        lossCertificates = certify(
+          credentialAdministrationHash(lines, journal.frames, losses),
+        );
+        for (const certificate of lossCertificates)
+          await inspect({
+            kind: "json",
+            json: CredentialJson.serialize(certificate),
+          });
+      } else {
+        const capture = openCaptureJournal(input.journal, input.runId, {
+          limits,
+        });
         const newlyOpened = readCaptureJournal(input.journal, limits);
         if (newlyOpened._tag !== "Read")
           throw new DumpFailed({
@@ -817,41 +848,15 @@ const build = async (
                   )
                 : [],
             );
-            const administrationHash = credentialFramesAdministrationHash([
-              ...admin,
-              ...closing,
-            ]);
-            return [...groups].map(([epochId, calls]) => {
-              const callId = calls[0];
-              if (callId === undefined)
-                throw new DumpFailed({
-                  reason: "credential epoch has no dispatch",
-                });
-              return {
-                type: "credential.inspection" as const,
-                scope: { runId: input.runId },
-                callId,
-                version: 3 as const,
-                epochId,
-                calls,
-                retainedPrefixCalls: calls.filter((call) =>
-                  safety.retainedPrefixCalls.includes(call),
-                ),
-                administration: "canonical-inspected-v1" as const,
-                administrationHash,
-                sourceHash,
-                sourceHashes,
-                safe: true,
-              };
-            });
+            return certify(
+              credentialFramesAdministrationHash([...admin, ...closing]),
+            );
           },
           (frame) => inspect({ kind: "json", json: frame }),
         );
-      } catch (error) {
-        throw error;
       }
     } catch (error) {
-      if (exposed) {
+      if (exposed && lossEpochs.size === 0) {
         const capture = openCaptureJournal(input.journal, input.runId, {
           limits,
         });
@@ -869,12 +874,14 @@ const build = async (
       }
       throw error;
     }
-    journal = readCaptureJournal(input.journal, limits);
-    if (journal._tag !== "Read")
-      throw new DumpFailed({
-        reason: "credential certificate journal did not read back",
-      });
-    lines = journal.lines;
+    if (lossCertificates === undefined) {
+      journal = readCaptureJournal(input.journal, limits);
+      if (journal._tag !== "Read")
+        throw new DumpFailed({
+          reason: "credential certificate journal did not read back",
+        });
+      lines = journal.lines;
+    }
   }
   const rawJournal: RawJournal =
     journal.bytes === null
@@ -905,6 +912,9 @@ const build = async (
     sourceValidationVersion: 6,
     tornLines: journal.tornLines,
     ...(losses.length === 0 ? {} : { captureLosses: losses }),
+    ...(lossCertificates === undefined
+      ? {}
+      : { captureLossCertificates: lossCertificates }),
     declared: retainedDeclarations(
       declared,
       native,
@@ -972,7 +982,7 @@ const build = async (
           ]),
     ],
     limits,
-    retainedPrefixProof(lines),
+    retainedPrefixProof(lines, lossCertificates),
   );
 };
 

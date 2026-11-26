@@ -159,6 +159,7 @@ test("a lost artifact leaves a gap in the dump after journal writes recover", as
   expect(run.gaps.map(({ code, count }) => [code, count])).toEqual([
     ["journal-interrupted", 1],
   ]);
+  expect(run.gaps[0]?.detail).toContain("Lost writes: artifact.");
 });
 
 // R2: a close that raced an ingest marked the session whole while the spill landed after it, so the

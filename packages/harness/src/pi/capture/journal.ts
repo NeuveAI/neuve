@@ -50,6 +50,7 @@ import {
   type ModelCapture,
   type CaptureScope,
   type JournalMark,
+  type CredentialCertificate,
 } from "./types.ts";
 
 /**
@@ -64,6 +65,7 @@ import {
  */
 
 export { JOURNAL_FILE, OBJECTS_DIRECTORY } from "./types.ts";
+export const LOST_WRITE_PREFIX = "capture write lost: ";
 
 export const sha256Of = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -639,9 +641,11 @@ export const openCaptureJournal = (
 
   let torn = false;
   // A loss without a call ID cannot be cleared by a call retry or a loss record.
-  const pendingLosses = new Map<string | undefined, CaptureFailed>();
+  const pendingLosses = new Map<string, CaptureFailed>();
+  const pendingNonCallWrites = new Map<string, CaptureFailed>();
   const rejectWrite = (failure: CaptureFailed, callId?: string): never => {
-    pendingLosses.set(callId, failure);
+    if (callId === undefined) pendingNonCallWrites.set(failure.event, failure);
+    else pendingLosses.set(callId, failure);
     letGo();
     throw failure;
   };
@@ -722,8 +726,6 @@ export const openCaptureJournal = (
 
   const fail = (failure: CaptureFailed): never => {
     state = { _tag: "Failed", failure };
-    // Only an emitter's defect leaves the file as it was; after a failed write nothing else is
-    // written, and the unclosed session alone discloses the loss.
     if (failure.kind === "invalid")
       try {
         mark("journal.failed", `${failure.event}: ${failure.detail}`);
@@ -739,7 +741,19 @@ export const openCaptureJournal = (
     fail(new CaptureFailed({ kind: "invalid", event, detail }));
 
   const failIfPending = () => {
-    const pending = pendingLosses.values().next().value;
+    const pending =
+      pendingNonCallWrites.values().next().value ??
+      pendingLosses.values().next().value;
+    if (pendingNonCallWrites.size > 0)
+      try {
+        stillAtPath();
+        mark(
+          "journal.failed",
+          LOST_WRITE_PREFIX + [...pendingNonCallWrites.keys()].join(", "),
+        );
+      } catch {
+        // A journal that still cannot be written remains visibly unclosed.
+      }
     if (pending !== undefined) fail(pending);
   };
 
@@ -1222,9 +1236,12 @@ export const decodeDumpJournal = (
     limits,
   );
 
-export const retainedPrefixProof = (lines: readonly JournalLine[]) => {
+export const retainedPrefixProof = (
+  lines: readonly JournalLine[],
+  certificates: readonly CredentialCertificate[] = [],
+) => {
   const calls = new Set<string>();
-  for (const { event } of lines)
+  for (const event of [...lines.map(({ event }) => event), ...certificates])
     if (event.type === "credential.inspection" && event.version === 3)
       for (const call of event.retainedPrefixCalls) calls.add(call);
   return [...calls].toSorted();

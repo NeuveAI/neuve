@@ -62,17 +62,12 @@ export class CallCapture {
           ...(this.#credentialCoverage
             ? { credentialCoverage: "required" }
             : {}),
+          ...(event.type === "credential.registration" &&
+          event.epochId !== event.callId
+            ? { epochId: event.epochId }
+            : {}),
           kind: cause.kind,
-          reason:
-            cause.kind === "full"
-              ? cause.journalFull
-                ? "journal limit"
-                : "object limit"
-              : cause.writeCode === "EACCES" || cause.writeCode === "EPERM"
-                ? "permission denied"
-                : cause.writeCode === "ENOSPC"
-                  ? "disk full"
-                  : "I/O error",
+          reason: cause.lossReason,
         };
         try {
           recordLoss(loss, cause.journalFull === true);

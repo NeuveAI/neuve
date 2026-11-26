@@ -472,6 +472,32 @@ const ArtifactStored = z.strictObject({
   size: z.int().nonnegative(),
 });
 
+export const CredentialCertificate = z
+  .strictObject({
+    type: z.literal("credential.inspection"),
+    scope: CaptureScope.pick({ runId: true }),
+    callId: z.string().min(1),
+    version: z.literal(3),
+    epochId: z.string().min(1),
+    calls: z.array(z.string().min(1)).min(1),
+    retainedPrefixCalls: z.array(z.string().min(1)),
+    administration: z.literal("canonical-inspected-v1"),
+    administrationHash: z.string().regex(/^[0-9a-f]{64}$/),
+    sourceHash: z.string().regex(/^[0-9a-f]{64}$/),
+    sourceHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/)),
+    safe: z.boolean(),
+  })
+  .refine(
+    (event) =>
+      event.calls.includes(event.callId) &&
+      new Set(event.calls).size === event.calls.length &&
+      event.retainedPrefixCalls.every((call) => event.calls.includes(call)) &&
+      new Set(event.retainedPrefixCalls).size ===
+        event.retainedPrefixCalls.length,
+    "invalid credential epoch membership",
+  );
+export type CredentialCertificate = z.infer<typeof CredentialCertificate>;
+
 /** An event an emitter hands over, as the journal stores it. */
 export const CapturedEvent = z.discriminatedUnion("type", [
   z.strictObject({
@@ -502,32 +528,7 @@ export const CapturedEvent = z.discriminatedUnion("type", [
       sourceHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/)),
       safe: z.boolean(),
     }),
-    z
-      .strictObject({
-        type: z.literal("credential.inspection"),
-        scope: CaptureScope.pick({ runId: true }),
-        callId: z.string().min(1),
-        version: z.literal(3),
-        epochId: z.string().min(1),
-        calls: z.array(z.string().min(1)).min(1),
-        retainedPrefixCalls: z.array(z.string().min(1)),
-        administration: z.literal("canonical-inspected-v1"),
-        administrationHash: z.string().regex(/^[0-9a-f]{64}$/),
-        sourceHash: z.string().regex(/^[0-9a-f]{64}$/),
-        sourceHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/)),
-        safe: z.boolean(),
-      })
-      .refine(
-        (event) =>
-          event.calls.includes(event.callId) &&
-          new Set(event.calls).size === event.calls.length &&
-          event.retainedPrefixCalls.every((call) =>
-            event.calls.includes(call),
-          ) &&
-          new Set(event.retainedPrefixCalls).size ===
-            event.retainedPrefixCalls.length,
-        "invalid credential epoch membership",
-      ),
+    CredentialCertificate,
   ]),
   ModelRequest,
   ModelResponse,
@@ -608,7 +609,21 @@ export class CaptureFailed extends Data.TaggedError("CaptureFailed")<{
   readonly detail: string;
   readonly journalFull?: boolean;
   readonly writeCode?: string;
-}> {}
+}> {
+  get lossReason(): CaptureLoss["reason"] {
+    if (this.kind === "full")
+      return this.journalFull ? "journal limit" : "object limit";
+    switch (this.writeCode) {
+      case "EACCES":
+      case "EPERM":
+        return "permission denied";
+      case "ENOSPC":
+        return "disk full";
+      default:
+        return "I/O error";
+    }
+  }
+}
 
 /** Appends synchronously or throws `CaptureFailed`. */
 export type Capture = ModelCapture & ((event: CaptureEvent) => void);
@@ -632,6 +647,7 @@ export const CaptureLoss = z.strictObject({
   ]),
   at: z.iso.datetime(),
   credentialCoverage: z.literal("required").optional(),
+  epochId: z.uuid().optional(),
 });
 export type CaptureLoss = z.infer<typeof CaptureLoss>;
 

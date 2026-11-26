@@ -11,6 +11,8 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { storeLocationIn } from "@neuve/records-core";
 import { openRunLog } from "../../../src/run-log.ts";
 import { SOL_ROUTE } from "../../../src/route.ts";
@@ -61,8 +63,8 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
   const directory = await mkdtemp(join(tmpdir(), "neuve-full-capture-"));
   const runId = "full-capture";
   const limits = {
-    objectBytes: 65536,
-    totalBytes: 65536,
+    objectBytes: 1024 * 1024,
+    totalBytes: 2 * 1024 * 1024,
     manifestBytes: 4096,
     journalBytes: 4096,
   };
@@ -76,10 +78,12 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
       directory: join(directory, "private"),
       excludedRoots: [source],
     });
+    const nativeDatabase = join(source, "pi.sqlite");
+    const storage = await openNodeSqliteStorage(nativeDatabase);
     try {
       const token = tokenCommand(directory, "lease");
       const log = openRunLog(storeLocationIn(directory), "worker");
-      const captureDirectory = join(directory, "capture");
+      const captureDirectory = join(source, "capture");
       let sent = 0;
       const text = "x".repeat(4096);
       const retry = { maxRetries: 1, baseDelayMs: 1_000 };
@@ -157,6 +161,7 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
       expect(losses.map(({ callId }) => callId)).toEqual(
         calls.map(({ call }) => String(call)),
       );
+      expect(losses[1]?.epochId).toBe(losses[0]?.callId);
       const journal = readCaptureJournal(captureDirectory, limits);
       expect(journal._tag).toBe("Read");
       if (journal._tag !== "Read") throw new Error("Expected journal");
@@ -164,11 +169,12 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
         event.type === "model.request" ? [event.callId] : [],
       );
       expect(requests).toEqual(losses.slice(0, 1).map(({ callId }) => callId));
-      const { run, contents } = await buildDump({
+      const { run } = await buildDump({
         journal: captureDirectory,
         runId,
         limits,
         credentialInspection: inspection,
+        nativeDatabase,
       });
       expect(run.complete).toBe(false);
       const gap = run.gaps.find(({ code }) => code === "journal-failed");
@@ -178,11 +184,10 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
         expect(gap?.detail).toContain(
           `call ${loss.callId} lost capture at ${loss.event}`,
         );
-      expect(contents.map(({ name }) => name)).toEqual([
-        "run.json",
-        "source/projection.json",
-        "calls/unjoined.json",
-      ]);
+      expect(run.journal.status).toBe("captured");
+      expect(run.gaps.map(({ code }) => code)).not.toContain(
+        "run-start-missing",
+      );
       const root = join(directory, "dataset");
       await mkdir(root);
       const retention = { policy: "test" };
@@ -193,6 +198,7 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
         root,
         retention,
         credentialInspection: inspection,
+        nativeDatabase,
       });
       const portable = await exportPortableSnapshot({
         directory: restricted.directory,
@@ -205,7 +211,14 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
       const location = storeLocationIn(join(directory, "records"));
       const useStore = runIn(location);
       const filed = value(
-        await useStore(fileRawCapture({ runId, journal: captureDirectory })),
+        await useStore(
+          fileRawCapture({
+            runId,
+            journal: captureDirectory,
+            nativeDatabase,
+            credentialInspection: inspection,
+          }),
+        ),
       );
       expect(filed.manifest.counts.calls).toBe(3);
       expect(filed.manifest.files.map(({ name }) => name)).toContain(
@@ -222,6 +235,7 @@ test("capture exhaustion leaves the first call, later calls and a reopened call 
       );
       expect(scanned.run.gaps).toEqual(run.gaps);
     } finally {
+      await storage.close(BACKGROUND_CONTEXT);
       await inspection.close();
       ownership.release();
     }

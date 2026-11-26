@@ -1053,6 +1053,7 @@ export class PrivateInspection {
   }): Promise<
     | {
         readonly status: "inspected";
+        readonly epochs: ReadonlyArray<CredentialEpochId>;
         readonly results: ReadonlyArray<InspectionResult>;
         readonly exposedEpochs: ReadonlyArray<CredentialEpochId>;
       }
@@ -1063,6 +1064,7 @@ export class PrivateInspection {
     const outcome = await this.#exclusive<
       | {
           readonly status: "inspected";
+          readonly epochs: ReadonlyArray<CredentialEpochId>;
           readonly results: ReadonlyArray<InspectionResult>;
           readonly exposedEpochs: ReadonlyArray<CredentialEpochId>;
         }
@@ -1115,7 +1117,12 @@ export class PrivateInspection {
         } finally {
           current.key.fill(0);
         }
-        return { status: "inspected", results, exposedEpochs: [...observed] };
+        return {
+          status: "inspected",
+          epochs: engine.epochIds,
+          results,
+          exposedEpochs: [...observed],
+        };
       } catch (error) {
         rethrowBusy(error);
         const failure = inspectionFailure(error, [...observed]);

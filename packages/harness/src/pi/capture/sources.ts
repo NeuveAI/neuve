@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openPrivateCopy } from "@neuve/records-core/read-only";
 import { StoredDocument, CloseMode, PriceRate } from "./dump.ts";
-import { CaptureLoss, Json, RunKind } from "./types.ts";
+import { CaptureLoss, CredentialCertificate, Json, RunKind } from "./types.ts";
 
 export class DumpFailed extends Data.TaggedError("DumpFailed")<{
   readonly reason: string;
@@ -101,6 +101,7 @@ export const ProjectionRecipe = z.strictObject({
     .optional(),
   tornLines: z.int().nonnegative(),
   captureLosses: z.array(CaptureLoss).min(1).optional(),
+  captureLossCertificates: z.array(CredentialCertificate).min(1).optional(),
   captureLossRunKind: RunKind.optional(),
   declared: z.array(z.string()).max(256),
   close: CloseMode.nullable(),

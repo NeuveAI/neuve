@@ -309,7 +309,6 @@ export const fileRawCapture = (input: BuildInput) =>
         event.type === "credential.guard",
     );
     if (
-      !hasCaptureLoss &&
       input.credentialInspection !== undefined &&
       native.bytes !== undefined &&
       native.status.status === "captured" &&

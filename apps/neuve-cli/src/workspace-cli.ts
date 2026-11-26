@@ -227,15 +227,23 @@ export function codingWorkerSetup(
     });
     return opened;
   };
-  const captureWriteFailure = (error: unknown): error is CaptureFailed =>
+  const captureWriteFailure = (
+    error: unknown,
+  ): error is CaptureFailed & { readonly kind: "full" | "io" } =>
     error instanceof CaptureFailed &&
     (error.kind === "full" || error.kind === "io");
+  type CallLoss = Parameters<
+    NonNullable<RouteModelsOptions["capture"]["recordLoss"]>
+  >[0];
   const reportCaptureLoss =
     (worker: WorkerContext) =>
     (
-      loss: Parameters<
-        NonNullable<RouteModelsOptions["capture"]["recordLoss"]>
-      >[0],
+      loss:
+        | CallLoss
+        | (Pick<CallLoss, "at" | "kind" | "reason"> & {
+            event: "session.bind";
+            conversationId: number;
+          }),
       persisted: boolean,
     ) => {
       writeSync(
@@ -517,6 +525,16 @@ export function codingWorkerSetup(
         });
       } catch (error) {
         if (!captureWriteFailure(error)) throw error;
+        reportCaptureLoss(worker)(
+          {
+            event: "session.bind",
+            conversationId,
+            kind: error.kind,
+            reason: error.lossReason,
+            at: new Date().toISOString(),
+          },
+          false,
+        );
       }
     },
     priced: (model) =>
