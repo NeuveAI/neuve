@@ -511,6 +511,66 @@ export const removalAttribution = (
   };
 };
 
+/** Pack an already selected set of sections, without changing their identities or ownership. */
+export const packReadingSections = (
+  read: ReadonlyArray<PlanSection>,
+  hunks: ReadonlyMap<string, ManifestHunk>,
+  bounds: z.output<typeof ReadingBoundsSchema>,
+  input: Pick<PlanInput, "affinity" | "split"> = {},
+): Array<PlanGroup> => {
+  const items: Array<ReadingItem> = read.map((section) => {
+    const affinity = input.affinity?.get(section.path);
+    return {
+      key: section.key,
+      path: section.path,
+      characters: section.characters,
+      position: section.first,
+      ...(affinity === undefined ? {} : { affinity: [...affinity] }),
+    };
+  });
+  const ranks = new Map(read.map((section) => [section.key, section.rank]));
+  const packed = (of: ReadonlyArray<ReadingItem>) =>
+    readingGroups(of, bounds).groups.map((group) => ({
+      id: group.id,
+      keys: [...group.keys],
+      paths: [...group.paths],
+      totals: { ...group.totals },
+      notes: group.notes.map((note) => ({ ...note })),
+      rank: Math.max(0, ...group.keys.map((key) => ranks.get(key) ?? 0)),
+    }));
+  // Every other section packed as it would be with no pointer in the range, then each submodule
+  // pointer alone, after them: a pointer that moves changes only its own group.
+  const gitlinks = new Set(
+    read
+      .filter((section) =>
+        isGitlink(section.hunkIds.map((id) => hunks.get(id)!)),
+      )
+      .map((section) => section.key),
+  );
+  const packApart = (of: ReadonlyArray<ReadingItem>) => {
+    const rest = of.filter((item) => !gitlinks.has(item.key));
+    return [
+      ...(rest.length === 0 && of.length > 0 ? [] : packed(rest)),
+      ...of
+        .filter((item) => gitlinks.has(item.key))
+        .flatMap((item) => packed([item])),
+    ];
+  };
+  // Effort by risk: one packing per class, with the same bounds and directory fallback. A group's ID
+  // is the hash of its member keys (`readingGroups`), and the classes' keys are disjoint, so the IDs
+  // differ between them.
+  const classes =
+    input.split === "by-risk" ? effortFactsOf(read, hunks) : undefined;
+  return classes === undefined
+    ? packApart(items)
+    : [true, false].flatMap((high) => {
+        const of = items.filter(
+          (item) => isHigh(classes.get(item.key)) === high,
+        );
+        return of.length === 0 ? [] : packApart(of);
+      });
+};
+
 /** What the plan reads, in which groups and in which order: see the module comment. */
 export const planReadings = (input: PlanInput): ReadingPlan => {
   const bounds = ReadingBoundsSchema.parse(input.bounds ?? {});
@@ -651,7 +711,6 @@ export const planReadings = (input: PlanInput): ReadingPlan => {
         rank,
       },
       cause,
-      gitlink: isGitlink(own),
       decidedBy: cause === "rule-decided" ? decidedBy : undefined,
     };
   });
@@ -665,56 +724,7 @@ export const planReadings = (input: PlanInput): ReadingPlan => {
   const read = drafts
     .filter((draft) => draft.cause === null)
     .map((draft) => draft.section);
-  const items: Array<ReadingItem> = read.map((section) => {
-    const affinity = input.affinity?.get(section.path);
-    return {
-      key: section.key,
-      path: section.path,
-      characters: section.characters,
-      position: section.first,
-      ...(affinity === undefined ? {} : { affinity: [...affinity] }),
-    };
-  });
-  const ranks = new Map(read.map((section) => [section.key, section.rank]));
-  const packed = (of: ReadonlyArray<ReadingItem>) =>
-    readingGroups(of, bounds).groups.map((group) => ({
-      id: group.id,
-      keys: [...group.keys],
-      paths: [...group.paths],
-      totals: { ...group.totals },
-      notes: group.notes.map((note) => ({ ...note })),
-      rank: Math.max(0, ...group.keys.map((key) => ranks.get(key) ?? 0)),
-    }));
-  // Every other section packed as it would be with no pointer in the range, then each submodule
-  // pointer alone, after them: a pointer that moves changes only its own group.
-  const gitlinks = new Set(
-    drafts
-      .filter((draft) => draft.cause === null && draft.gitlink)
-      .map((draft) => draft.section.key),
-  );
-  const packApart = (of: ReadonlyArray<ReadingItem>) => {
-    const rest = of.filter((item) => !gitlinks.has(item.key));
-    return [
-      ...(rest.length === 0 && of.length > 0 ? [] : packed(rest)),
-      ...of
-        .filter((item) => gitlinks.has(item.key))
-        .flatMap((item) => packed([item])),
-    ];
-  };
-  // Effort by risk: one packing per class, with the same bounds and directory fallback. A group's ID
-  // is the hash of its member keys (`readingGroups`), and the classes' keys are disjoint, so the IDs
-  // differ between them.
-  const classes =
-    input.split === "by-risk" ? effortFactsOf(read, hunks) : undefined;
-  const groups =
-    classes === undefined
-      ? packApart(items)
-      : [true, false].flatMap((high) => {
-          const of = items.filter(
-            (item) => isHigh(classes.get(item.key)) === high,
-          );
-          return of.length === 0 ? [] : packApart(of);
-        });
+  const groups = packReadingSections(read, hunks, bounds, input);
 
   return ReadingPlan.parse({
     recipe: READING_RECIPE,
@@ -787,7 +797,10 @@ export const pairPlan = (
 };
 
 /** The group of a plan with this id; throws when the plan has none. */
-export const planGroup = (plan: ReadingPlan, groupId: string): PlanGroup => {
+export const planGroup = (
+  plan: Pick<ReadingPlan, "groups">,
+  groupId: string,
+): PlanGroup => {
   const group = plan.groups.find((candidate) => candidate.id === groupId);
   if (group === undefined)
     throw new Error(`The reading plan has no group ${groupId}`);
