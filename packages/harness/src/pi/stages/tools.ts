@@ -67,6 +67,7 @@ import {
   type AgentStep,
 } from "./agent.ts";
 import { childId } from "./children.ts";
+import { registerClaim } from "../claim-settlement.ts";
 import {
   AgentContextDoc,
   ChildrenDoc,
@@ -668,10 +669,28 @@ export const startChild = async (
     owner.abortRequested ||
     owner.state.status === "terminal" ||
     owner.state.status === "completing"
-  )
+  ) {
+    if (request.claimRegistration !== undefined)
+      throw new Error(
+        "A claim cannot be recorded after its producer stopped taking work",
+      );
     return undefined;
+  }
+  if (request.claimRegistration !== undefined && owner.owner === undefined)
+    throw new Error("A claim producer must belong to its review task");
   const children = await tx.doc(ChildrenDoc, owner.id);
-  if (children.children[request.name] !== undefined) return undefined;
+  const held = children.children[request.name];
+  if (held !== undefined) {
+    if (request.claimRegistration !== undefined)
+      await registerClaim(
+        tx,
+        owner.owner!,
+        owner.id,
+        request.claimRegistration,
+        held,
+      );
+    return undefined;
+  }
   const task = registry.task(request.task);
   if (task === undefined)
     throw new Error(
@@ -684,6 +703,14 @@ export const startChild = async (
     { ownership: { kind: "task", taskId: owner.id } },
   );
   children.children[request.name] = id;
+  if (request.claimRegistration !== undefined)
+    await registerClaim(
+      tx,
+      owner.owner!,
+      owner.id,
+      request.claimRegistration,
+      id,
+    );
   return id;
 };
 
