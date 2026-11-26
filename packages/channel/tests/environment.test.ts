@@ -93,7 +93,7 @@ test("main chat reports host facts on its lane and on the project checkout witho
 		expect(prompt).toContain("version captured-version (source run), commit captured-build");
 		expect(prompt).toContain("Installed neuve and its version: /host/bin/neuve (neuve 0.3.10)");
 		expect(prompt).toContain("Role: main chat");
-		expect(prompt).toContain("Model: coder. Effort: off. Context used: unknown tokens. Context limit: 200,000 tokens.");
+		expect(prompt).toContain("Model: coder. Effort: off. Context used: unknown. Context limit: 200,000 tokens.");
 		expect(prompt).toContain("Git branch: one/work");
 		expect(prompt).toContain("Work lane: work");
 		expect(prompt).toContain("Runtime shell: available (Ace's bash tool)");
@@ -106,7 +106,7 @@ test("main chat reports host facts on its lane and on the project checkout witho
 	fixture.script(request => {
 		const prompt = getCurrentSystemPrompt(request.messages);
 		expect(prompt).toContain("Git branch: detached HEAD");
-		expect(prompt).toMatch(/Context used: [\d,]+ tokens\. Context limit: 200,000 tokens/);
+		expect(prompt).toContain("Context used: about 0% of 200,000 tokens.");
 		expect(prompt).toContain("commit captured-build");
 		expect(prompt).toContain("Runtime shell: unavailable");
 		return fauxAssistantMessage("observed");
@@ -124,6 +124,25 @@ test("main chat reports host facts on its lane and on the project checkout witho
 	});
 	await ask();
 	expect(fixture.envs.has(fixture.project)).toBe(false);
+});
+
+test("requests in the same context tenth share the environment section", async () => {
+	fixture = await Fixture.create({ hostEnvironment });
+	const prompts: string[] = [];
+	// Each request uses the preceding response's reported context usage.
+	for (const tokens of [85_000, 95_000, 105_000, 110_000]) {
+		fixture.script(request => {
+			prompts.push(getCurrentSystemPrompt(request.messages));
+			return {
+				...fauxAssistantMessage("observed"),
+				diagnostics: [{ type: "neuve.context-usage", timestamp: 1, details: { tokens } }],
+			};
+		});
+		await ask();
+	}
+	expect(prompts[1]).toContain("Context used: about 40% of 200,000 tokens.");
+	expect(prompts[2]).toBe(prompts[1]);
+	expect(prompts[3]).toContain("Context used: about 50% of 200,000 tokens.");
 });
 
 test("the channel compacts at the selected model's threshold and records completed turns after it", async () => {

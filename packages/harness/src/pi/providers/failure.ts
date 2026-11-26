@@ -6,7 +6,7 @@ import type {
   Message,
   Model,
 } from "@earendil-works/pi-ai";
-import { calculateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
+import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
 import type {
   Conversation,
@@ -31,22 +31,23 @@ export function streamEndedNearContextLimit(
     )
   )
     return false;
-  const last = messages.findLast(
-    (message) =>
-      message.role === "assistant" &&
-      message.provider === model.provider &&
-      message.model === model.id &&
-      (message.stopReason === "stop" ||
-        message.stopReason === "toolUse" ||
-        message.stopReason === "length") &&
-      calculateContextTokens(message.usage) > 0,
-  );
-  if (last?.role !== "assistant") return false;
+  // Pi's transcript estimator drops usage that predates a prepended compaction summary.
+  const { lastUsageIndex, usageTokens } = estimateContextTokens(messages);
+  const last = lastUsageIndex === null ? undefined : messages[lastUsageIndex];
+  if (
+    last?.role !== "assistant" ||
+    last.provider !== model.provider ||
+    last.model !== model.id ||
+    (last.stopReason !== "stop" &&
+      last.stopReason !== "toolUse" &&
+      last.stopReason !== "length")
+  )
+    return false;
   const margin = Math.min(
     DEFAULT_COMPACTION_POLICY.reserveTokens,
     model.contextWindow / 10,
   );
-  return calculateContextTokens(last.usage) >= model.contextWindow - margin;
+  return usageTokens >= model.contextWindow - margin;
 }
 
 /**

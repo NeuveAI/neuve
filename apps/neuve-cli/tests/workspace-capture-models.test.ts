@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels } from "@earendil-works/pi-ai";
+import { createModels, type Message } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -21,7 +21,11 @@ import {
 } from "../../../packages/harness/tests/pi/providers/fixture.ts";
 import { workspaceCaptureModels } from "../src/workspace-capture-models.ts";
 
-test("the signed-in account catalogue overrides each available limit independently", async () => {
+test.each([
+  { window: 100_000, percent: 80, usable: 80_000 },
+  { window: 500_000, percent: undefined, usable: 475_000 },
+])("account catalogue supplies $usable tokens", async (row) => {
+  const { window, percent, usable } = row;
   const scratch = mkdtempSync(join(tmpdir(), "workspace-model-limits-"));
   try {
     const token = tokenCommand(scratch, "lease");
@@ -38,8 +42,8 @@ test("the signed-in account catalogue overrides each available limit independent
               { slug: "other", context_window: 1_000_000 },
               {
                 slug: SOL_ROUTE.model,
-                context_window: 100_000,
-                effective_context_window_percent: 80,
+                context_window: window,
+                effective_context_window_percent: percent,
               },
             ],
           });
@@ -58,12 +62,15 @@ test("the signed-in account catalogue overrides each available limit independent
       credentialInspection: "ephemeral",
       capture: () => {},
     }).getModel("openai", SOL_ROUTE.model);
-    expect(model).toMatchObject({ contextWindow: 80_000, maxTokens: 128_000 });
+    expect(model).toMatchObject({
+      contextWindow: usable,
+      maxTokens: 128_000,
+    });
     expect(observed).toEqual([
       {
         account: "chatgpt",
         model: "gpt-6.1-sol",
-        contextWindow: 80_000,
+        contextWindow: usable,
         maxOutputTokens: 128_000,
         contextSource: "account-catalog",
         outputSource: "configured-route",
@@ -71,6 +78,31 @@ test("the signed-in account catalogue overrides each available limit independent
     ]);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("a missing ChatGPT sign-in leaves the configured route limits in place", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "workspace-model-limits-"));
+  try {
+    const observed: Readonly<Record<string, unknown>>[] = [];
+    const route = await codingRouteLimits(
+      SOL_ROUTE,
+      { auth: { directory, tokenCommand: null } },
+      (limits) => observed.push(limits),
+    );
+    expect(route).toEqual(SOL_ROUTE);
+    expect(observed).toEqual([
+      {
+        account: "chatgpt",
+        model: "gpt-6.1-sol",
+        contextWindow: 475_000,
+        maxOutputTokens: 128_000,
+        contextSource: "configured-route",
+        outputSource: "configured-route",
+      },
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -142,27 +174,43 @@ test("only a provider breakoff near the last measured limit becomes an overflow"
     const model = models.getModel("openai", SOL_ROUTE.model);
     if (!model) throw new Error("Missing plan model");
     expect(model.contextWindow).toBe(475_000);
-    const turn = (tokens: number) => {
-      const previous = fauxAssistantMessage("Previous answer");
-      return models.completeSimple(model, {
-        messages: [
-          { role: "user", content: "First question", timestamp: 1 },
-          {
-            ...previous,
-            model: model.id,
-            provider: model.provider,
-            api: model.api,
-            usage: { ...previous.usage, input: tokens, totalTokens: tokens },
-          },
-          { role: "user", content: "Next question", timestamp: 2 },
-        ],
+    const turn = (tokens: number, compactedAt?: number) => {
+      const previous = fauxAssistantMessage("Previous answer", {
+        timestamp: 2,
       });
+      const messages: Message[] = [
+        { role: "user", content: "First question", timestamp: 1 },
+        {
+          ...previous,
+          model: model.id,
+          provider: model.provider,
+          api: model.api,
+          usage: { ...previous.usage, input: tokens, totalTokens: tokens },
+        },
+        { role: "user", content: "Next question", timestamp: 4 },
+      ];
+      if (compactedAt !== undefined)
+        messages.unshift({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier chat.\n</summary>",
+            },
+          ],
+          timestamp: compactedAt,
+        });
+      return models.completeSimple(model, { messages });
     };
     expect(routeFailureOf(await turn(200_000))?.kind).toBe("stream");
     expect(routeFailureOf(await turn(460_000))?.kind).toBe("context_overflow");
+    expect(routeFailureOf(await turn(460_000, 3))?.kind).toBe("stream");
+    expect(routeFailureOf(await turn(460_000, 1))?.kind).toBe(
+      "context_overflow",
+    );
     captureFull = true;
     expect(routeFailureOf(await turn(460_000))?.kind).toBe("capture");
-    expect(sent).toBe(2);
+    expect(sent).toBe(4);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

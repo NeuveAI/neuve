@@ -50,14 +50,14 @@ async function readAccountModel(
         effective_context_window_percent,
         max_output_tokens,
       } = row.data;
+      // Codex defaults to a 95% usable share.
+      // https://github.com/openai/codex/blob/581161ab41e643d942e1e1b5f561034060bf18e3/codex-rs/protocol/src/openai_models.rs#L384-L386
+      const usablePercent = effective_context_window_percent ?? 95;
       return {
         contextWindow:
           context_window == null
             ? undefined
-            : Math.floor(
-                (context_window * (effective_context_window_percent ?? 100)) /
-                  100,
-              ) || undefined,
+            : Math.floor((context_window * usablePercent) / 100) || undefined,
         maxTokens: max_output_tokens,
       };
     }

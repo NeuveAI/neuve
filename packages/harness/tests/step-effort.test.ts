@@ -121,8 +121,8 @@ const GOLDEN = {
     verify: "d45e28934f461f54dc56d9cf1f2b6309bb1a8254c1cd29022b5d3aa62b824d04",
   },
   openai: {
-    // Re-pinned (round 25): the pipeline version moved from 11 to 12.
-    run: "c27221fd3a490479b60e0a89bb6bd544f5ee23a30db748cbe28f0eb4f16d813e",
+    // The Sol run key changed because its frozen context window changed.
+    run: "94ddcd8de243036393bdf16cf8c2030dd275c5856e07eb9f9812146b3c5f7b25",
     frame: "a653de0ab20617dedfdb62e269b5592b8f1f6b0a140458eea1d44a1a4cee99d1",
     map: "cf89c312cb1fd3e53345cb8810712f987faea187c57840fe23a166093f5c93ca",
     find: "c0f4f84c7806a6ec31ed05512c6a4597be4da2b40aca20c88cc880ce21e36c19",

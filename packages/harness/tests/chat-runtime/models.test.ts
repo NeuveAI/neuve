@@ -238,13 +238,14 @@ test("account model rows have route limits before the first turn", async () => {
         ...codexStatus!,
         models: rows([
           "gpt-6-sol",
+          "gpt-6.1-sol",
           "gpt-6.2-sol",
           "gpt-6.2-astra",
           "gpt-6.1-terra",
         ]),
       },
     ]);
-    await until(() => run.models.getModels("codex").length === 4);
+    await until(() => run.models.getModels("codex").length === 5);
 
     const limits = (account: string) =>
       run.models
@@ -262,6 +263,8 @@ test("account model rows have route limits before the first turn", async () => {
     ]);
     expect(limits("codex")).toEqual([
       ["gpt-6-sol", 272_000, 128_000],
+      // Codex's bundled window wins over pi-ai's 272,000-token entry.
+      ["gpt-6.1-sol", 475_000, 128_000],
       ["gpt-6.2-sol", 475_000, 8_192],
       ["gpt-6.2-astra", 258_400, 8_192],
       ["gpt-6.1-terra", 475_000, 8_192],
@@ -312,14 +315,7 @@ test("catalog limits seed each model, turn usage updates alias and pin only on t
   );
   const run = await fixture({
     native,
-    accounts: ["subscription", "other"].map((name) =>
-      Account.parse({
-        name,
-        kind: "anthropic-api-key",
-        runtime: "claude-code",
-        credential: { kind: "environment", variable: "NEUVE_TEST_KEY" },
-      }),
-    ),
+    accounts: [account("subscription"), account("other")],
     statusModels: [
       { ...testModels[0]!, contextWindow: 880_000 },
       { ...testModels[1]!, resolvedModel: "uncatalogued-real" },

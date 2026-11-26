@@ -99,8 +99,7 @@ export async function accountModels(
     const provider =
       status.kind === "chatgpt-subscription"
         ? "openai-codex"
-        : status.kind === "claude-subscription" ||
-            status.kind === "anthropic-api-key"
+        : status.kind === "claude-subscription"
           ? "anthropic"
           : undefined;
     const documented =

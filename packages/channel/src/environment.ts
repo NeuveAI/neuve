@@ -32,6 +32,9 @@ export function environment(
 			const used = await modelContext?.used(conversationId, context);
 			const modelName = model && model.name !== model.id ? `${model.name} (${model.id})` : selection?.modelId;
 			const limit = model?.contextWindow.toLocaleString("en");
+			const contextUsage = used === undefined || !model?.contextWindow
+				? `unknown. Context limit: ${limit ?? "unknown"} tokens`
+				: `about ${Math.floor(10 * used / model.contextWindow) * 10}% of ${limit} tokens`;
 			const plan = await planning(conversationId, context);
 			const hasShell = native
 				? agent.cwd !== undefined
@@ -52,7 +55,7 @@ export function environment(
 				`Running Ace build: version ${host?.version ?? "unknown"}${buildKind}, commit ${host?.commit ?? "unknown"}.`,
 				`Installed neuve and its version: ${neuve}.`,
 				`Role: ${role(conversationId)}. Working folder: ${folder ?? "unknown"}. Git branch: ${branch ?? "unknown"}.`,
-				`Model: ${modelName ?? "unknown"}. Effort: ${agent.thinkingLevel ?? "default"}. Context used: ${used?.toLocaleString("en") ?? "unknown"} tokens. Context limit: ${limit ?? "unknown"} tokens.`,
+				`Model: ${modelName ?? "unknown"}. Effort: ${agent.thinkingLevel ?? "default"}. Context used: ${contextUsage}.`,
 				`Work lane: ${lane?.[0] ?? "none recorded for this folder"}. Runtime shell: ${hasShell ? `available (${shell})` : "unavailable"}.`,
 				"Ace serves the channel, threads, work log, plan and tools. Neuve is the neuve command, its skill, reviews and the desk.",
 			].join("\n");

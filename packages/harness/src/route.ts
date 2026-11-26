@@ -6,7 +6,6 @@ import {
   RuntimeCapability,
   type RuntimeCapabilities,
 } from "@neuve/runtime";
-import { OPUS_API_LIMITS, SOL_PLAN_LIMITS } from "./model-limits.ts";
 
 /**
  * The route's configuration and accounting: what a run freezes, how its usage is read and priced.
@@ -200,13 +199,16 @@ export const routeRuntimeError = (
     : undefined;
 };
 
-/** Opus 5.5 through the Anthropic API, at medium effort. */
+/**
+ * Opus 5.5 through the Anthropic API, at medium effort.
+ * https://platform.claude.com/docs/en/models/opus-5-5/overview
+ */
 export const OPUS_ROUTE: AnthropicRouteConfig = {
   provider: "anthropic",
   model: "claude-opus-5-5",
   effort: "medium",
-  window: OPUS_API_LIMITS.contextWindow,
-  maxOutputTokens: OPUS_API_LIMITS.maxTokens,
+  window: 1_000_000,
+  maxOutputTokens: 128_000,
   credentialVariable: "ANTHROPIC_API_KEY",
   account: { name: AccountName.parse("anthropic"), kind: "anthropic-api-key" },
   price: {
@@ -218,13 +220,16 @@ export const OPUS_ROUTE: AnthropicRouteConfig = {
   },
 };
 
-/** GPT-6.1 Sol on the ChatGPT plan, at medium effort. */
+/**
+ * GPT-6.1 Sol on the ChatGPT plan, at medium effort.
+ * Decision 2.11 sets the usable window. pi-ai's OpenAI model catalogue gives the output cap.
+ */
 export const SOL_ROUTE: OpenAiRouteConfig = {
   provider: "openai",
   model: "gpt-6.1-sol",
   effort: "medium",
-  window: SOL_PLAN_LIMITS.contextWindow,
-  maxOutputTokens: SOL_PLAN_LIMITS.maxTokens,
+  window: 475_000,
+  maxOutputTokens: 128_000,
   credentialSource: "neuve-sign-in",
   account: { name: AccountName.parse("chatgpt"), kind: "chatgpt-subscription" },
   price: null,

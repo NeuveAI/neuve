@@ -22,8 +22,7 @@ const range = {
 };
 
 // Why: adding default account metadata must still join runs completed before this change.
-// The keys main's build gives these default routes, without accounts (step-effort.test.ts pins the
-// same), as of the merge of main 8b036a7f.
+// These keys omit default account metadata. step-effort.test.ts pins the same keys.
 test.each([
   [
     OPUS_ROUTE,
@@ -31,7 +30,8 @@ test.each([
   ],
   [
     SOL_ROUTE,
-    "c27221fd3a490479b60e0a89bb6bd544f5ee23a30db748cbe28f0eb4f16d813e",
+    // The Sol run key changed because its frozen context window changed.
+    "94ddcd8de243036393bdf16cf8c2030dd275c5856e07eb9f9812146b3c5f7b25",
   ],
 ] as const)(
   "the default $provider route keeps its base run key",
