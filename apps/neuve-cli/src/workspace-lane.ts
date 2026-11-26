@@ -19,6 +19,7 @@ import { config } from "@ace/host/config";
 import { GIT_LOCAL } from "@ace/host/host-config";
 import {
   currentProcess,
+  laneWorkspaceEnvironment,
   readLaneWorkspace,
   stopLaneWorkspace,
   stopLaneWorkspaces,
@@ -344,12 +345,7 @@ async function keep(
     const bin = join(scratch, "bin");
     const neuve = join(bin, "neuve");
     await mkdir(bin);
-    const environment = {
-      ACE_HOME: join(profile.paths.state, "neuve-host"),
-      NEUVE_RECORDS_REGISTRY: join(profile.paths.state, "repositories.json"),
-      NEUVE_WORKSPACE_PROJECT: repository,
-      PATH: `${bin}:${env.PATH ?? "/usr/bin:/bin"}`,
-    };
+    const environment = laneWorkspaceEnvironment(scratch, env.PATH);
     const childEnvironment = {
       ...spawnEnvironment(storage, env),
       ...environment,

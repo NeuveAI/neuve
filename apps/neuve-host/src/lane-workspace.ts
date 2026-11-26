@@ -6,6 +6,7 @@ import { Ancestry } from "@neuve/records-core";
 import { processAlive, withFileLock } from "@neuve/records-core/file-lock";
 import { z } from "zod";
 import { closeWorkspaceTab } from "./browser";
+import { GIT_LOCAL } from "./host-config";
 
 const VOLUME = "/Volumes/LaCie Blu";
 const MARKER = ".neuve-lane-workspace.json";
@@ -34,6 +35,15 @@ const Marker = z.strictObject({
 	ready: z.boolean(),
 });
 export type LaneWorkspace = z.infer<typeof Marker>;
+
+export function laneWorkspaceEnvironment(scratch: string, path = process.env.PATH) {
+	return {
+		ACE_HOME: join(scratch, "state", "neuve-host"),
+		NEUVE_RECORDS_REGISTRY: join(scratch, "state", "repositories.json"),
+		NEUVE_WORKSPACE_PROJECT: join(scratch, "project"),
+		PATH: `${join(scratch, "bin")}:${path ?? "/usr/bin:/bin"}`,
+	};
+}
 
 function missing(error: unknown): boolean {
 	return error instanceof Error && "code" in error && error.code === "ENOENT";
@@ -129,7 +139,41 @@ async function stopProcess(recorded: Ancestry.ProcessIdentity | undefined, monit
 	}
 }
 
-export async function stopLaneWorkspace(root: string, scratch: string, monitor = processes): Promise<boolean> {
+async function runWorkerCommand(command: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }): Promise<number> {
+	return Bun.spawn(command, {
+		...options, stdin: "ignore", stdout: "ignore", stderr: "ignore", killSignal: "SIGKILL",
+	}).exited;
+}
+
+async function stopReviewWorker(scratch: string, run: typeof runWorkerCommand): Promise<void> {
+	const binary = join(scratch, "bin", "neuve");
+	const environment = laneWorkspaceEnvironment(scratch);
+	const project = environment.NEUVE_WORKSPACE_PROJECT;
+	try {
+		const files = await Promise.all([lstat(binary), lstat(project)]).catch((error: unknown) => {
+			if (!missing(error)) throw error;
+		});
+		if (!files) return;
+		if (!files[0].isFile() || !files[1].isDirectory() || !(await lstat(join(project, ".git"))).isDirectory())
+			throw new Error("Expected the lane's Neuve executable and project clone.");
+
+		const env: NodeJS.ProcessEnv = { ...process.env, ...environment };
+		for (const key of GIT_LOCAL) delete env[key];
+		const options = { cwd: project, env };
+		const stopped = await run([binary, "worker", "stop", "--repo", project], { ...options, timeout: 15_000 });
+		if (stopped !== 0) throw new Error(`neuve worker stop exited with code ${stopped}.`);
+
+		const status = await run([binary, "worker", "status", "--repo", project], { ...options, timeout: 5_000 });
+		if (status === 3) return; // The store has no worker.
+		if (status === 0) throw new Error("The review worker is still running.");
+		throw new Error(`neuve worker status exited with code ${status}.`);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`Could not confirm review worker shutdown. Kept workspace scratch at ${scratch}. ${detail}`);
+	}
+}
+
+export async function stopLaneWorkspace(root: string, scratch: string, monitor = processes, run = runWorkerCommand): Promise<boolean> {
 	if (!await readLaneWorkspace(root, scratch)) return false;
 	return withLaneWorkspace(scratch, async () => {
 		let state = await readLaneWorkspace(root, scratch);
@@ -142,6 +186,7 @@ export async function stopLaneWorkspace(root: string, scratch: string, monitor =
 		}
 		await stopProcess(state.launcher, monitor);
 		await stopProcess(state.keeper, monitor);
+		await stopReviewWorker(scratch, run);
 		const { keeper, browser: registeredBrowser } = state;
 		const removeScratch = async () => {
 			await rm(scratch, { recursive: true, force: true });
