@@ -305,6 +305,14 @@ test("Verify child and registration commit together, and replay starts neither t
         );
       },
     },
+    abort: async (_task, runtime, context) =>
+      runtime.commit(
+        () => ({
+          status: "terminal",
+          outcome: { status: "aborted", reason: "stopped" },
+        }),
+        context,
+      ),
   });
   const registry = createRegistry();
   registry.install(defineExtension({ name: "test.claims", tasks: [task] }));
