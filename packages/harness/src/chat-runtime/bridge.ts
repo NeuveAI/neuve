@@ -1821,12 +1821,7 @@ export class ChatRuntimeBridge {
       if (gen.settled) return;
       if (error instanceof RecoveryOwnershipUnknown) {
         gen.recovery = undefined;
-        this.finish(
-          undefined,
-          gen,
-          "error",
-          "The retry could not join the worker that owns this turn.",
-        );
+        this.finish(undefined, gen, "error", unsafeContinuation);
         return;
       }
       const current = gen.recovery ?? scheduled;

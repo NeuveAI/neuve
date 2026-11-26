@@ -1232,7 +1232,7 @@ test("build failure records an exhausted turn and tells the reviewer and plannin
 		{ chat, state: "failed", failure }, { chat: reviewer },
 	] });
 	const lane = run.worktrees[0]!.branch.split("/").at(-1);
-	const text = `The implementer ended without an answer (retry-budget-exhausted, 6 attempts). Its work is in lane "${lane}" on branch "${run.worktrees[0]!.branch}". Review the work there and decide what to do next.`;
+	const text = `Failed after 6 attempts. The implementer was working in lane "${lane}" on branch "${run.worktrees[0]!.branch}". Review the work there and decide what to do next.`;
 	expect(log.messages).toEqual([{
 		kind: "agent-failure", build: build.id, from: chat, to: build.chat, at, text, failure,
 		deliveries: [{ to: build.chat, status: "sent" }, { to: reviewer, status: "sent" }],
@@ -1247,8 +1247,8 @@ test("build failure records an exhausted turn and tells the reviewer and plannin
 	expect(JSON.stringify(log)).not.toContain("Private provider body");
 });
 
-// Reason: a shared outage must record a failed notice turn without waking the plan again.
-test("build failure records a reviewer's failed notice turn without sending another notice", async () => {
+// Reason: a failed notice turn must tell the planner in plain language without waking other build agents.
+test("build failure sends a reviewer's failed notice turn only to the planning chat", async () => {
 	const run = await setup();
 	const { fixture, watch } = run;
 	const { build, chat, agent, reviewer } = await startPair(run);
@@ -1259,8 +1259,8 @@ test("build failure records a reviewer's failed notice turn without sending anot
 			&& message.content.includes("Review the implementer's work on branch"))
 			? failedResponse()
 			: fauxAssistantMessage("Planning heard the failure.");
-	fixture.script(failedResponse(), receiveNotice, receiveNotice,
-		fauxAssistantMessage("Another notice arrived."), fauxAssistantMessage("Another notice arrived."));
+	fixture.script(failedResponse(), receiveNotice, receiveNotice, failedResponse(),
+		fauxAssistantMessage("Another notice arrived."));
 	const submission = await wake(run, "Finish the export queue.", chat);
 	expect(await fixture.request({ op: "wait", submission })).toBe("unanswered");
 	const failure = await watch.until("builds", event => event.messages.some(message =>
@@ -1274,22 +1274,28 @@ test("build failure records a reviewer's failed notice turn without sending anot
 		expect.objectContaining({ kind: "agent-failure", from: chat, deliveries: [
 			{ to: build.chat, status: "sent" }, { to: reviewer, status: "sent" },
 		] }),
-		expect.objectContaining({ kind: "agent-failure", from: reviewer, deliveries: [] }),
+		expect.objectContaining({ kind: "agent-failure", from: reviewer, deliveries: [
+			{ to: build.chat, status: "sent" },
+		] }),
 	]);
 	for (const recipient of [watch, reviewing]) {
 		expect(recipient.of("message").filter(message => message.text === log.messages[0]!.text)).toEqual([
 			expect.objectContaining({ invoked: true, author: `agent@${chat}` }),
 		]);
 	}
-	for (const recipient of [watch, agent]) {
-		expect(recipient.of("message").filter(message => message.author === `agent@${reviewer}`)).toEqual([]);
-	}
-	expect(fixture.faux.state.callCount).toBe(calls + 3);
+	const text = log.messages[1]!.text;
+	expect(text).toContain("Failed without an answer.");
+	expect(text).not.toContain("model_error");
+	expect(watch.of("message").filter(message => message.author === `agent@${reviewer}`)).toEqual([
+		expect.objectContaining({ invoked: true, text }),
+	]);
+	expect(agent.of("message").filter(message => message.author === `agent@${reviewer}`)).toEqual([]);
+	expect(fixture.faux.state.callCount).toBe(calls + 4);
 	await fixture.restart();
 	await until(() => fixture.channel.isIdle());
 	const reopened = await fixture.watch({ op: "watch", builds: true });
 	expect(reopened.of("builds").at(-1)?.messages).toEqual(log.messages);
-	expect(fixture.faux.state.callCount).toBe(calls + 3);
+	expect(fixture.faux.state.callCount).toBe(calls + 4);
 });
 
 // Reason: restart must recover both an unrecorded run ending and a missing delivery receipt without invoking twice.

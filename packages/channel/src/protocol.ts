@@ -282,6 +282,21 @@ export type AgentFailure = AgentName & {
 	attempts: number;
 };
 
+export function failureCaption({ reason, attempts }: AgentFailure): string {
+	switch (reason) {
+		case "retry-budget-exhausted":
+			return `Failed after ${attempts} attempts`;
+		case "ambiguous-tool-effect":
+			return "Stopped: a tool may have run without a recorded result";
+		case "unsafe-continuation":
+			return "Failed: the turn couldn't resume safely";
+		case "no_model":
+			return "Failed: no model to run on";
+		default:
+			return "Failed without an answer";
+	}
+}
+
 /** One agent of a build, as the host recorded its start; the host keeps `state` and `caption` current. */
 export type BuildAgent = AgentName & {
 	chat: ChatId;

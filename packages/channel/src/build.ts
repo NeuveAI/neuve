@@ -11,7 +11,7 @@ import type { Admission } from "./extensions";
 import { LanesDoc } from "./lanes";
 import { failure, type Log } from "./log";
 import { checkedPlanText, findPlan, PlansDoc, type StoredPlan } from "./plan";
-import { AGENT_MESSAGE_TOOL, AGENT_START_TOOL, buildId, type AgentFailure, type AgentMessage, type AgentMessageArgs, type AgentRole, type AgentStartArgs, type Build, type BuildAgent, type Effort, type ModelRef, type WorkMessage } from "./protocol";
+import { AGENT_MESSAGE_TOOL, AGENT_START_TOOL, buildId, failureCaption, type AgentFailure, type AgentMessage, type AgentMessageArgs, type AgentRole, type AgentStartArgs, type Build, type BuildAgent, type Effort, type ModelRef, type WorkMessage } from "./protocol";
 import { ReviewCardsDoc } from "./review-cards";
 import { content, draft, text as messageText } from "./room";
 
@@ -537,21 +537,18 @@ export class Builds {
 				const name = part === undefined ? role : `${role} for ${JSON.stringify(part)}`;
 				const branch = start.worktree?.branch;
 				const text = [
-					`The ${name} ended without an answer (${notice.reason}, ${notice.attempts} ${notice.attempts === 1 ? "attempt" : "attempts"}).`,
-					`Its work is in lane ${JSON.stringify(start.lane)}${branch ? ` on branch ${JSON.stringify(branch)}` : ""}.`,
+					`${failureCaption(notice)}.`,
+					`The ${name} was working in lane ${JSON.stringify(start.lane)}${branch ? ` on branch ${JSON.stringify(branch)}` : ""}.`,
 					...(notice.reason === "ambiguous-tool-effect" ? ["Check whether the last tool ran before trying it again."] : []),
 					"Review the work there and decide what to do next.",
 				].join(" ");
 				const message = { build: build.id, from: chat, to: build.chat as ConversationId, at: notice.at, text };
-				if (input.requestId?.startsWith(failurePrefix)) {
-					const requestId = "neuve.build:failure-log:" + JSON.stringify([build.id, chat, notice.turn]);
-					messages.push({ requestId, message, failure: notice });
-					return [];
+				const recipients = new Set([message.to]);
+				if (!input.requestId?.startsWith(failurePrefix)) {
+					for (const other of Object.values(record.starts)) {
+						if (other.state.kind === "started" && other.brief) recipients.add(other.brief.chat);
+					}
 				}
-				const recipients = new Set([
-					message.to,
-					...Object.values(record.starts).flatMap(other => other.state.kind === "started" && other.brief ? [other.brief.chat] : []),
-				]);
 				recipients.delete(chat);
 				return [...recipients].map(to => {
 					const requestId = failurePrefix + JSON.stringify([build.id, chat, notice.turn, to]);
