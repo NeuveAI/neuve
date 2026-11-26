@@ -78,7 +78,9 @@ clearClose(paths.base);
 
 const envs = new Map<string, NodeExecutionEnv>();
 const storage = await workerStorage(id, paths.base, paths.storage);
-const closeSession = await Sessions.openAceChannelSession(record.project, id);
+const closeSession = await Sessions.openAceChannelSession(record.project, id, (error) =>
+	log("warn", "worker.session.unavailable", failure(error)),
+);
 const channel = await openChannel({
 	id,
 	name: record.name,

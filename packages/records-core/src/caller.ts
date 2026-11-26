@@ -18,7 +18,11 @@ import {
   type AgentHarness,
 } from "./identity.ts";
 import type { StoreLocation } from "./location.ts";
-import { listSessions, type SessionState } from "./sessions.ts";
+import {
+  listAceChannelSessions,
+  listSessions,
+  type SessionState,
+} from "./sessions.ts";
 
 /**
  * The variable each supported harness sets to its session ID in the shells it runs (8.13). Claude
@@ -191,12 +195,14 @@ export const resolveCaller = (
     const snapshot = (options.processes ?? snapshotProcesses)();
     if (snapshot === undefined)
       return declaredSession(sessions, options.environment ?? process.env);
-    const owned = sessions.filter(
-      (session) =>
-        session.owner !== undefined &&
-        (options.includeAceChats !== false ||
-          session.harness !== ACE_CHANNEL_HARNESS),
-    );
+    const channels =
+      options.includeAceChats === false
+        ? []
+        : yield* listAceChannelSessions(location);
+    const owned = [
+      ...sessions.filter((session) => session.harness !== ACE_CHANNEL_HARNESS),
+      ...channels,
+    ].filter((session) => session.owner !== undefined);
     for (const row of lineage(snapshot, options.pid ?? process.pid)) {
       const identity = identityOf(row);
       const matches = owned.filter((session) =>

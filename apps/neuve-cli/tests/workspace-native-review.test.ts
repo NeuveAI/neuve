@@ -1,7 +1,7 @@
 import { RunLog } from "@neuve/harness";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ReviewFeedSnapshotSchema } from "@ace/host/review-protocol";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import {
   mkdtempSync,
   readFileSync,
@@ -58,6 +58,19 @@ const git = (...args: string[]) => {
   const r = Bun.spawnSync(["git", "-C", root, ...args]);
   if (r.exitCode) throw new Error(r.stderr.toString());
   return r.stdout.toString().trim();
+};
+const mockProcessTable = (rows: string) => {
+  const bin = mkdtempSync(join(tmpdir(), "native-review-process-table-"));
+  const path = process.env.PATH;
+  writeFileSync(join(bin, "ps"), `#!/bin/sh\nprintf '%s\\n' '${rows}'\n`, {
+    mode: 0o700,
+  });
+  process.env.PATH = `${bin}:${path ?? ""}`;
+  return () => {
+    if (path === undefined) delete process.env.PATH;
+    else process.env.PATH = path;
+    rmSync(bin, { recursive: true, force: true });
+  };
 };
 git("init", "-qb", "main");
 git("config", "user.email", "fixture@example.test");
@@ -544,26 +557,130 @@ test("a Records file change wakes a waiting CLI review request", async () => {
   }
 }, 15000);
 
+// A batch with no usable requests must still advance, or it blocks every later card.
+test("the Records request feed advances past a missing presentation", async () => {
+  const channel = "missing-presentation";
+  const requester = {
+    _tag: "Agent" as const,
+    ...Identity.aceChatIdentity(channel, 7),
+  };
+  const range = `${base}..${head}`;
+  const seed = mintUlid();
+  const bad = mintUlid();
+  await requestRangeReview(root, range, {
+    requestId: seed,
+    requester,
+    frozenConfig: config,
+  });
+  const { after, skippedThrough } = await write(
+    Effect.gen(function* () {
+      const initial = Option.getOrThrow(yield* Log.get(seed));
+      const [skipped] = yield* Log.append([
+        {
+          ...initial.event,
+          id: bad,
+          idempotencyKey: `review.requested:${bad}`,
+          refs: [
+            { role: "command-line-review", ref: `blob:${"0".repeat(64)}` },
+          ],
+        },
+      ]);
+      return { after: initial.seq, skippedThrough: skipped!.seq };
+    }),
+  );
+  const warning = spyOn(console, "error");
+  try {
+    const signal = AbortSignal.timeout(5000);
+    expect(
+      await callbacks.reviewRequests(root, channel, after, signal),
+    ).toEqual({ after: skippedThrough, requests: [] });
+    const good = mintUlid();
+    await requestRangeReview(root, range, {
+      requestId: good,
+      requester,
+      frozenConfig: config,
+    });
+    expect(
+      (await callbacks.reviewRequests(root, channel, skippedThrough, signal))
+        ?.requests,
+    ).toEqual([
+      {
+        review: good,
+        chat: 7,
+        at: expect.any(Number),
+        baseRef: base,
+        range: { base, head, branch: "main", commits: 1 },
+        pullRequest: null,
+      },
+    ]);
+    const skipped = warning.mock.calls.filter((call) =>
+      call.includes(`Skipping review request ${bad}`),
+    );
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toContainEqual(
+      expect.objectContaining({ _tag: "BlobMissing" }),
+    );
+  } finally {
+    warning.mockRestore();
+  }
+}, 15000);
+
+// A missing worker process row must leave channel startup available.
+test("a channel worker with no process row opens without a live session", async () => {
+  const channel = "no-worker-row";
+  const location = await execute(resolveStoreLocation(root));
+  await execute(withStore(root, "create", Effect.void));
+  const warnings: unknown[] = [];
+  const restoreProcessTable = mockProcessTable("");
+  try {
+    expect(
+      await Sessions.openAceChannelSession(root, channel, (error) =>
+        warnings.push(error),
+      ),
+    ).toBeUndefined();
+  } finally {
+    restoreProcessTable();
+  }
+  expect(warnings).toEqual([
+    expect.objectContaining({
+      message: "Cannot identify the channel worker process",
+    }),
+  ]);
+  expect(
+    await execute(
+      withStore(
+        root,
+        "read",
+        Sessions.readSession(location, "neuve-pi", channel),
+      ),
+    ),
+  ).toBeUndefined();
+});
+
 // A chat's first CLI command can arrive before Records has registered its actor or opened a turn.
 test("CLI review, proof and vent record their owning Ace chats", async () => {
-  const bin = mkdtempSync(join(tmpdir(), "native-review-process-table-"));
-  const previousPath = process.env.PATH;
   const previousChat = process.env.NEUVE_ACE_CHAT;
   const location = await execute(resolveStoreLocation(root));
   const channel = "cli-fixture";
   const range = `${base}..${head}`;
   const requestId = mintUlid();
   await execute(withStore(root, "create", Effect.void));
-  writeFileSync(
-    join(bin, "ps"),
-    `#!/bin/sh\nprintf '${process.pid} 1 Sat Oct 17 13:30:35 2026 bun\\n'\n`,
-    { mode: 0o700 },
+  const restoreProcessTable = mockProcessTable(
+    `${process.pid} 1 Sat Oct 17 13:30:35 2026 bun`,
   );
-  process.env.PATH = `${bin}:${previousPath ?? ""}`;
   try {
-    const close = await Sessions.openAceChannelSession(root, channel);
+    const close = await Sessions.openAceChannelSession(
+      root,
+      channel,
+      (error) => {
+        throw error;
+      },
+    );
     if (!close) throw new Error("The fixture's Records store was not opened");
     try {
+      expect(
+        await execute(withStore(root, "read", Sessions.listSessions(location))),
+      ).toEqual([]);
       process.env.NEUVE_ACE_CHAT = "cli-fixture/7";
       await requestRangeReview(root, range, {
         requestId,
@@ -673,11 +790,9 @@ test("CLI review, proof and vent record their owning Ace chats", async () => {
       ),
     ).toBeUndefined();
   } finally {
-    if (previousPath === undefined) delete process.env.PATH;
-    else process.env.PATH = previousPath;
+    restoreProcessTable();
     if (previousChat === undefined) delete process.env.NEUVE_ACE_CHAT;
     else process.env.NEUVE_ACE_CHAT = previousChat;
-    rmSync(bin, { recursive: true, force: true });
   }
 });
 

@@ -15,7 +15,7 @@ import {
 } from "./location.ts";
 
 /**
- * Live agent sessions, as small files under `<store>/sessions/`, the way entire-cli keeps session
+ * Live standalone agent sessions, as small files under `<store>/sessions/`, the way entire-cli keeps session
  * state in the git common directory. Hooks read and write them without opening SQLite (D18). They hold
  * only what capture needs between hooks: the session's actor, the agent process that owns it (for
  * ancestry matching, D23) and the open turn's key. They are not records: the durable facts are the
@@ -49,13 +49,22 @@ export type SubagentState = z.infer<typeof SubagentState>;
 export const sessionsDirectory = (location: StoreLocation) =>
   join(location.directory, "sessions");
 
+const aceChannelSessionsDirectory = (location: StoreLocation) =>
+  join(location.directory, "ace-channel-sessions");
+
 const key = (value: string) => sha256Hex(value).slice(0, 24);
 
 const sessionDirectory = (
   location: StoreLocation,
   harness: string,
   sessionId: string,
-) => join(sessionsDirectory(location), `${harness}.${key(sessionId)}`);
+) =>
+  join(
+    harness === ACE_CHANNEL_HARNESS
+      ? aceChannelSessionsDirectory(location)
+      : sessionsDirectory(location),
+    `${harness}.${key(sessionId)}`,
+  );
 
 const SESSION_FILE = "session.json";
 const subagentFile = (subagentId: string) => `subagent.${key(subagentId)}.json`;
@@ -208,7 +217,11 @@ export const removeSession = (
     }),
   );
 
-export const openAceChannelSession = (project: string, sessionId: string) =>
+export const openAceChannelSession = (
+  project: string,
+  sessionId: string,
+  warn: (error: unknown) => void,
+) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const location = yield* resolveStoreLocation(project).pipe(
@@ -236,22 +249,30 @@ export const openAceChannelSession = (project: string, sessionId: string) =>
           ),
         );
     }).pipe(Effect.provide(BunFileSystem.layer)),
-  );
+  ).catch((error: unknown) => {
+    warn(error);
+    return undefined;
+  });
 
-/** Every live session recorded in this store. */
-export const listSessions = (location: StoreLocation) =>
+const listSessionDirectory = (directory: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem;
     const names = yield* fs
-      .readDirectory(sessionsDirectory(location))
+      .readDirectory(directory)
       .pipe(Effect.catchCause(() => Effect.succeed([] as Array<string>)));
     const states = yield* Effect.forEach(
       names.filter((name) => !name.endsWith(".lock")),
-      (name) =>
-        readJson(
-          SessionState,
-          join(sessionsDirectory(location), name, SESSION_FILE),
-        ),
+      (name) => readJson(SessionState, join(directory, name, SESSION_FILE)),
     );
     return states.filter((state) => state !== undefined);
   });
+
+export const listSessions = (location: StoreLocation) =>
+  listSessionDirectory(sessionsDirectory(location));
+
+export const listAceChannelSessions = (location: StoreLocation) =>
+  listSessionDirectory(aceChannelSessionsDirectory(location)).pipe(
+    Effect.map((states) =>
+      states.filter((state) => state.harness === ACE_CHANNEL_HARNESS),
+    ),
+  );

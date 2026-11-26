@@ -169,7 +169,7 @@ export const ReviewRequestsReplySchema = z.strictObject({
 	requests: z.array(z.strictObject({
 		review: Ulid, chat: z.int().nonnegative(), at: z.int().nonnegative(),
 		range: ReviewRangeSchema, baseRef: z.string().min(1), pullRequest: z.int().positive().nullable(),
-	})).min(1).max(100),
+	})).max(100),
 });
 export type ReviewRequestsReply = z.infer<typeof ReviewRequestsReplySchema>;
 

@@ -16,8 +16,9 @@ import {
   type ReviewSubmission,
 } from "@ace/host/review-protocol";
 import { z } from "zod";
-import { Effect, Layer, Option } from "effect";
+import { Cause, Effect, Layer, Logger, Option } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
+import { isSqlError } from "effect/sql/SqlError";
 import {
   Blobs,
   Computations,
@@ -751,17 +752,37 @@ const readReviewRequests = (project: string, channel: string, after: number) =>
               pullRequest: null,
               commits: yield* reviewCommitCount(project, base, head),
             };
-        return {
+        return ReviewRequestsReplySchema.shape.requests.element.parse({
           review: event.id,
           chat: z.coerce.number().int().nonnegative().parse(row.chat),
           at: Date.parse(event.occurredAt),
           range: { base, head, branch, commits },
           baseRef,
           pullRequest,
-        };
-      }),
+        });
+      }).pipe(
+        Effect.catchCauseIf(
+          (cause) =>
+            !Cause.hasInterrupts(cause) &&
+            !cause.reasons.some(
+              (reason) =>
+                Cause.isFailReason(reason) && isSqlError(reason.error),
+            ),
+          (cause) =>
+            Effect.logWarning(
+              `Skipping review request ${row.id}`,
+              Cause.squash(cause),
+            ).pipe(
+              Effect.provideService(Logger.LogToStderr, true),
+              Effect.as(undefined),
+            ),
+        ),
+      ),
     );
-    return ReviewRequestsReplySchema.parse({ after: latest.seq, requests });
+    return {
+      after: latest.seq,
+      requests: requests.filter((request) => request !== undefined),
+    };
   });
 
 async function watchReviewRequests(

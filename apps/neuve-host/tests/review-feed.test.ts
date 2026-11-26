@@ -14,7 +14,7 @@ import { type Harness, ROOT_CONVERSATION_ID as chat, defineDoc } from "@earendil
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { ReviewCardsDoc, startReviewFeed, updateReviewBranch, configureReviewPreparation, reviewPreparationRetryDelay, reviewFeedRetryDelay } from "../src/native-review";
-import { ReviewFeedSnapshotSchema, reviewFeedFailure, type ReviewFeedSnapshot, type ReviewFeedSource } from "../src/review-protocol";
+import { ReviewFeedSnapshotSchema, ReviewRequestsReplySchema, reviewFeedFailure, type ReviewFeedSnapshot, type ReviewFeedSource } from "../src/review-protocol";
 
 const FeedDoc = defineDoc(ReviewFeedDefinition);
 const review = "01K00000000000000000000000";
@@ -107,7 +107,7 @@ async function fixture(notify = false) {
 }
 const finished = { units: 10, byReviewLane: { humanRequired: 3, humanSuggested: 2, agentic: 4, static: 1 }, needJudgment: 2, complete: false, gaps: 2, undecoded: 1 };
 
-// A restart can replay Records requests before the host resumes following their cards.
+// An empty batch must advance the host, and a restart can replay requests it already posted.
 test("CLI requests post one entry and card per review across restart", async () => {
 	const f = await fixture();
 	const first = "01K00000000000000000000002";
@@ -121,7 +121,8 @@ test("CLI requests post one entry and card per review across restart", async () 
 	const start = (offline: boolean) => f.openFeed({
 		watch: (id, receive) => (id === review ? f.source : id === first ? cli : offlineCli).watch(id, receive),
 		async requests(after, signal) {
-			if (!after) return { after: offline ? 2 : 1, requests: offline
+			if (!after) return ReviewRequestsReplySchema.parse({ after: 1, requests: [] });
+			if (after === 1) return { after: offline ? 3 : 2, requests: offline
 				? [request, { ...request, review: second, at: 180, pullRequest: 42 }]
 				: [request] };
 			return new Promise(resolve => signal.addEventListener("abort", () => resolve(null), { once: true }));
