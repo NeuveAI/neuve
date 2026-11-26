@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CaptureRead } from "../src/candidate/capture.ts";
+import ORIGINAL_HOOKS from "../../../validation/cases/owned-review/original-hook-ordering.json";
 import { canonical } from "../src/harness-compare/full-test/finders-gate.ts";
 import {
   answerKeyDigest,
@@ -306,6 +307,131 @@ test("candidate pins stay pending; absent historical objects fail closed without
   expect(Object.values(comparison.differences).every((v) => v === null)).toBe(
     true,
   );
+});
+
+test("original agent-hook ordering fixture preserves four immutable reports and keeps the readiness report separate", () => {
+  expect(hash(canonical(ORIGINAL_HOOKS))).toBe(
+    "2aa3d6b6ef9610fd70d2b942c3eec9192ea20208b2257b79c011fe58b3d80400",
+  );
+  expect(ORIGINAL_HOOKS.range).toEqual({
+    base: "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+    head: "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+  });
+  const reportHashes = new Map([
+    [
+      "01M7ZWKSDD003B43VK1GB47A8G",
+      "092c3f1ab6e37e9f548d34f5ff99eb78b38daee8dea371e5984d1ac61f6b4a5c",
+    ],
+    [
+      "01M7ZWKSDD003AJ1X0R7D69EEJ",
+      "bcfc32f79e7b22fa0c1877d30d250ed00678753da3a132d225461a4b9907ecb4",
+    ],
+    [
+      "01M7ZWKSDD003DH7Y2XVFZ7CPJ",
+      "8c7494bfaecc1327a34c30a84da9dcb0f1453ee614b6f20bca5d9e033aa7058a",
+    ],
+    [
+      "01M7ZWKSDD003331XX5MR7N1HS",
+      "a1d91e6eff4d69915a9de1ba25c25bb2a65ff9d2dccbf99f7646a384cec9fd3b",
+    ],
+  ]);
+  expect(ORIGINAL_HOOKS.reports).toHaveLength(4);
+  expect(ORIGINAL_HOOKS.reports.map((r) => r.record.event.id)).toEqual([
+    ...reportHashes.keys(),
+  ]);
+  for (const report of ORIGINAL_HOOKS.reports) {
+    const event = report.record.event;
+    expect(hash(canonical(report.record))).toBe(reportHashes.get(event.id)!);
+    expect(event.kind).toBe("comment.recorded@3");
+    expect(event.attribution.cycleId).toBe(ORIGINAL_HOOKS.cycle);
+    expect(event.payload.section).toBe(ORIGINAL_HOOKS.section);
+    expect(event.payload.anchor.path).toBe(
+      "apps/neuve-cli/src/capture/setup-hooks.ts",
+    );
+    expect(report.publisherActor).toBe(event.actor);
+    // Supporting source computations do not identify an original reviewer or another vote.
+    expect(report.originalProducer.status).toBe("unknown");
+    expect(report.sourceComputationRefs).toEqual([
+      ...new Set(event.payload.finding.evidence.map((e) => e.ref)),
+    ]);
+  }
+  const other = ORIGINAL_HOOKS.contrastingReport;
+  expect(other.record.event.id).toBe("01M7ZWKSDD003EV7Z8DP9T1G67");
+  expect(hash(canonical(other.record))).toBe(
+    "2d917ec087d48f0be4a229991a3b4865404979ce1f7648d0e4a733f537a87cec",
+  );
+  expect(other.record.event.payload.section).not.toBe(ORIGINAL_HOOKS.section);
+  expect(other.record.event.payload.anchor).toMatchObject({
+    startLine: 919,
+    endLine: 934,
+  });
+  expect(ORIGINAL_HOOKS.evaluation.status).toBe("pending");
+});
+
+test("frozen original source excerpts remain checkable without historical objects; availability is separate from gold", () => {
+  const kase: StudyCase = {
+    id: "original-agent-hook-ordering",
+    family: "original-agent-hook-ordering",
+    ...ORIGINAL_HOOKS.range,
+    sources: ORIGINAL_HOOKS.sources.map(({ revision, path, sha256 }) => ({
+      revision,
+      path,
+      sha256,
+    })),
+    placements: ["single-assignment"],
+    adjudication: {
+      status: "pending",
+      reason: "Historical reports are not independently adjudicated gold",
+    },
+  };
+  const problems = sourceProblems(repository, kase);
+  for (const source of ORIGINAL_HOOKS.sources) {
+    const actual = spawnSync("git", [
+      "-C",
+      repository,
+      "show",
+      `${source.revision}:${source.path}`,
+    ]);
+    for (const excerpt of source.excerpts) {
+      expect(hash(excerpt.text)).toBe(excerpt.sha256);
+      expect(excerpt.text.split("\n").length - 1).toBe(
+        excerpt.endLine - excerpt.startLine + 1,
+      );
+      if (actual.status === 0)
+        expect(
+          actual.stdout
+            .toString()
+            .split(/(?<=\n)/)
+            .slice(excerpt.startLine - 1, excerpt.endLine)
+            .join(""),
+        ).toBe(excerpt.text);
+    }
+    if (actual.status === 0) {
+      expect(hash(actual.stdout)).toBe(source.sha256);
+      const blob = spawnSync(
+        "git",
+        ["-C", repository, "rev-parse", `${source.revision}:${source.path}`],
+        { encoding: "utf8" },
+      );
+      expect(blob.status).toBe(0);
+      expect(blob.stdout.trim()).toBe(source.blob);
+    } else
+      expect(problems).toContain(
+        `source commit unavailable: ${source.revision}`,
+      );
+  }
+  // No fabricated replacement commit or safety skip: an absent original cannot be scored.
+  expect(sourceProblems(syntheticRepository, kase)).toContain(
+    `source commit unavailable: ${kase.head}`,
+  );
+  const unavailable = fixture().read({ kase });
+  expect(unavailable.quality).toBeNull();
+  expect(
+    unavailable.blockers.some((b) =>
+      b.startsWith("source commit unavailable:"),
+    ),
+  ).toBe(true);
+  expect(unavailable.blockers.some((b) => b.includes("pending"))).toBe(true);
 });
 
 test("retained publications and independent semantic labels preserve distinct same-line defects, duplicates, FP and individual misses", () => {

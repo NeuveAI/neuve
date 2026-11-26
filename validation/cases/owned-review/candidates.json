@@ -71,7 +71,7 @@
   "blocked": [
     {
       "case": "original-four-comment-hook-ordering",
-      "reason": "Original source and reports unavailable. Do not substitute an invented reproduction."
+      "reason": "Historical source and reports recovered in original-hook-ordering.json; independent gold and actual new-pipeline report measurement remain pending. This is not a scorable candidate or an invented replacement."
     }
   ]
 }

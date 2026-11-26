@@ -1,0 +1,312 @@
+{
+  "schemaVersion": 1,
+  "kind": "historical-source-and-delivery-fixture",
+  "range": {
+    "base": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+    "head": "8275d2875c6f91cdf04baa91ce9e3dc1149af216"
+  },
+  "cycle": "01M7ZW78DEW6025FJGENJVN5M2",
+  "section": "d4610f4e8f093b874e8a4f2f01c461fb92783f398ba5eb40f366391ac7238444",
+  "recovery": {
+    "source": "Public Records cycle export",
+    "exportSha256": "77e53d11cc271512c6f37e53443406092255e1dffb2ac1379ed4df5cd8da574c",
+    "exportedRecords": 297,
+    "selection": "Exact four event identities confirmed by the owner; no semantic clustering or representative is applied."
+  },
+  "sources": [
+    {
+      "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+      "path": "apps/neuve-cli/src/capture/setup-hooks.ts",
+      "blob": "e81f8f35573349173cfe9c299a628952275f57ad",
+      "sha256": "94425a28131b42444c484d8111094044dc2622ca06c986a81fbade078240f205",
+      "excerpts": [
+        {
+          "startLine": 290,
+          "endLine": 331,
+          "sha256": "4c9b53ed05e4119b97813a7e777a4d404bb9b6b236a8291f74332b3d1f881797",
+          "text": "const installAgentHooks = async (\n  path: string,\n  harness: AgentHarness,\n  command: string,\n  dryRun: boolean,\n): Promise<Change> => {\n  path = await linkTarget(path);\n  const present = await exists(path);\n  const config = present\n    ? (JSON.parse(await readFile(path, \"utf8\")) as Record<string, unknown>)\n    : {};\n  const hooks = {\n    ...((config[\"hooks\"] as Record<string, Array<HookGroup>> | undefined) ??\n      {}),\n  };\n  for (const [event, verb] of AGENT_EVENTS) {\n    const entry = {\n      type: \"command\",\n      command: agentHookCommand(command, harness, verb),\n      timeout: HOOK_TIMEOUT_SECONDS,\n    };\n    hooks[event] = [\n      ...withoutOwn(hooks[event] ?? []),\n      harness === \"codex\"\n        ? { matcher: null, hooks: [entry] }\n        : { matcher: \"\", hooks: [entry] },\n    ];\n  }\n  const next = `${JSON.stringify({ ...config, hooks }, null, 2)}\\n`;\n  if (present && next === (await readFile(path, \"utf8\")))\n    return { path, action: \"unchanged\" };\n  if (dryRun)\n    return { path, action: present ? \"would update\" : \"would create\" };\n  const backup = await replaceFile(path, next);\n  return {\n    path,\n    action:\n      backup === undefined\n        ? `created with ${AGENT_EVENTS.length} ${harness} hooks`\n        : `added ${AGENT_EVENTS.length} ${harness} hooks (other settings kept); backup ${backup}`,\n  };\n};\n"
+        }
+      ]
+    },
+    {
+      "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+      "path": "apps/neuve-cli/src/capture/setup-hooks.ts",
+      "blob": "6c91f3a9d64d4565975ab465808cfbd30db6bdd0",
+      "sha256": "2fc9a958e5c8304d2f97f6a382ff0659398293901adae12dd2ddd9ba758de0e3",
+      "excerpts": [
+        {
+          "startLine": 448,
+          "endLine": 556,
+          "sha256": "8aba9f5f3e7afbcf11caadbff25c673a06a31c55ac0ea87a3df1faf94662871b",
+          "text": "const withoutOwn = (groups: ReadonlyArray<HookGroup>) =>\n  groups.flatMap((group) => {\n    const hooks = group.hooks ?? [];\n    if (!hooks.some((hook) => isOwnCommand(hook.command ?? \"\"))) return [group];\n    const kept = hooks.filter((hook) => !isOwnCommand(hook.command ?? \"\"));\n    return kept.length > 0 ? [{ ...group, hooks: kept }] : [];\n  });\n\n/** The line inside an entry Neuve wrote: what it runs, for which agent, on which event. */\nconst OWN_LINE =\n  /^(.*) (claude-code|codex) ([a-z-]+) >\\/dev\\/null 2>&1; exit 0 # neuve-capture-hook$/s;\n\nconst unwrapped = (command: string) =>\n  /^sh -c '(.*)'$/s.exec(command)?.[1]?.replaceAll(`'\\\\''`, \"'\");\n\ntype AgentHooksState =\n  | { readonly state: \"missing\" }\n  | { readonly state: \"update\"; readonly why: string }\n  | {\n      readonly state: \"ok\";\n      /** Something Neuve couldn't judge, said beside the ok. */\n      readonly note?: string;\n      /** Each entry runs `prefix`, when one was given. */\n      readonly sameInstall: boolean;\n    };\n\n/**\n * Neuve's entries for one agent in a parsed hook file, against what `setup hooks` writes: one entry\n * per event, under the event's own verb, with Neuve's command form, timeout and matcher, running\n * files that are there. The one judgement `setup hooks` reports from and doctor shows. Which install\n * an entry runs is not judged; `sameInstall` only says whether it is `prefix`.\n */\nconst judgeAgentHooks = async (\n  file: HookFile,\n  harness: AgentHarness,\n  prefix?: string,\n): Promise<AgentHooksState> => {\n  const own = Object.entries(file.hooks ?? {}).flatMap(([event, groups]) =>\n    groups.flatMap((group) =>\n      (group.hooks ?? [])\n        .filter((hook) => isOwnCommand(hook.command ?? \"\"))\n        .map((hook) => ({ event, group, hook })),\n    ),\n  );\n  if (own.length === 0) return { state: \"missing\" };\n  const differs: string[] = [];\n  const gone = new Set<string>();\n  let unread = 0;\n  let sameInstall = true;\n  for (const [event] of AGENT_EVENTS) {\n    const count = own.filter((entry) => entry.event === event).length;\n    if (count === 0) differs.push(`its ${event} hook is missing`);\n    if (count > 1) differs.push(`${event} has ${count} Neuve hooks`);\n  }\n  const matcher = harness === \"codex\" ? null : \"\";\n  for (const { event, group, hook } of own) {\n    const verb = AGENT_EVENTS.find(([name]) => name === event)?.[1];\n    if (verb === undefined) differs.push(`a Neuve hook sits under ${event}`);\n    const line = OWN_LINE.exec(unwrapped(hook.command!) ?? \"\");\n    // Marked but not in Neuve's form is a command someone changed; unmarked, an older Neuve's form.\n    if (line === null) {\n      differs.push(\n        hook.command!.includes(COMMAND_MARKER)\n          ? `its ${event} hook's command was changed`\n          : `its ${event} hook is in an older form`,\n      );\n      continue;\n    }\n    const [, runs, agent, said] = line as unknown as [\n      string,\n      string,\n      string,\n      string,\n    ];\n    if (agent !== harness || (verb !== undefined && said !== verb))\n      differs.push(`its ${event} hook runs ${agent} ${said}`);\n    else if (hook.command !== agentHookCommand(runs, agent, said))\n      differs.push(`its ${event} hook's command was changed`);\n    if (prefix !== undefined && runs !== prefix) sameInstall = false;\n    const fields = hook as Record<string, unknown>;\n    if (\n      fields[\"type\"] !== \"command\" ||\n      fields[\"timeout\"] !== HOOK_TIMEOUT_SECONDS\n    )\n      differs.push(`its ${event} hook's type or timeout was changed`);\n    if (group[\"matcher\"] !== matcher || (group.hooks ?? []).length !== 1)\n      differs.push(`its ${event} hook's group was changed`);\n    const files = filesCalledBy(hook.command!);\n    if (files === undefined) unread += 1;\n    else\n      for (const needed of files)\n        if (!(await present(needed))) gone.add(needed.path);\n  }\n  if (gone.size > 0)\n    differs.unshift(\n      `Neuve's ${harness} hooks run ${[...gone].join(\", \")}, which isn't there or can't run, so they capture nothing`,\n    );\n  if (differs.length > 0)\n    return { state: \"update\", why: [...new Set(differs)].join(\"; \") };\n  return {\n    state: \"ok\",\n    sameInstall,\n    ...(unread === 0\n      ? {}\n      : {\n          note: `Neuve can't tell what ${unread} of its ${harness} hook entries run, so it can't say whether they work`,\n        }),\n  };\n};\n"
+        },
+        {
+          "startLine": 558,
+          "endLine": 627,
+          "sha256": "5f8d71684f43ba3bbde275fe5cfd899f564a70419a8cf8dc1a6e8ef7242c1a53",
+          "text": "const installAgentHooks = async (\n  path: string,\n  harness: AgentHarness,\n  command: string,\n  dryRun: boolean,\n): Promise<Change> => {\n  // A file of a shape this can't change safely stops here, in the words doctor uses. The file is\n  // read once; what is written is built from that read, so a file changed since can't make it throw.\n  const read = await readHookFile(path);\n  if (read.kind === \"unreadable\")\n    throw new Error(unreadableHookFile(path, harness, read.reason));\n  path = await linkTarget(path);\n  const present = read.kind === \"read\";\n  // Built from the file as written, so the person's keys, groups and entries keep their order;\n  // the schema has already said every value here is of the shape it relies on.\n  const config = present ? read.raw : {};\n  const hooks = {\n    ...((config[\"hooks\"] ?? {}) as Record<string, HookGroup[]>),\n  };\n  // Neuve's entries under an event it doesn't write are taken out too; an event left with nothing\n  // that was only Neuve's goes with them.\n  for (const [event, groups] of Object.entries(hooks))\n    if (!AGENT_EVENTS.some(([name]) => name === event)) {\n      const kept = withoutOwn(groups);\n      if (kept.length === 0 && groups.length > 0) delete hooks[event];\n      else hooks[event] = kept;\n    }\n  for (const [event, verb] of AGENT_EVENTS) {\n    const entry = {\n      type: \"command\",\n      command: agentHookCommand(command, harness, verb),\n      timeout: HOOK_TIMEOUT_SECONDS,\n    };\n    hooks[event] = [\n      ...withoutOwn(hooks[event] ?? []),\n      harness === \"codex\"\n        ? { matcher: null, hooks: [entry] }\n        : { matcher: \"\", hooks: [entry] },\n    ];\n  }\n  const built = { ...config, hooks };\n  const next = `${JSON.stringify(built, null, 2)}\\n`;\n  // As it should be, whatever its layout: the same keys in the same order. Nothing is written.\n  if (present && JSON.stringify(built) === JSON.stringify(read.raw))\n    return { path, action: \"unchanged\" };\n  // Neuve's entries already right and only their place or layout differs: said as that.\n  const judged = present\n    ? await judgeAgentHooks(read.file, harness, command)\n    : ({ state: \"missing\" } as const);\n  const reordered = judged.state === \"ok\" && judged.sameInstall;\n  if (dryRun)\n    return {\n      path,\n      action: reordered\n        ? \"would reorder\"\n        : present\n          ? \"would update\"\n          : \"would create\",\n    };\n  const backup = await replaceFile(path, next);\n  return {\n    path,\n    action:\n      backup === undefined\n        ? `created with ${AGENT_EVENTS.length} ${harness} hooks`\n        : reordered\n          ? `reordered: Neuve's ${harness} hooks were already right, and now come after the others (other settings kept); backup ${backup}`\n          : `added ${AGENT_EVENTS.length} ${harness} hooks (other settings kept); backup ${backup}`,\n  };\n};\n"
+        }
+      ]
+    }
+  ],
+  "reports": [
+    {
+      "record": {
+        "seq": 15476,
+        "recordedAt": "2026-11-21T20:26:24.127Z",
+        "event": {
+          "id": "01M7ZWKSDD003B43VK1GB47A8G",
+          "idempotencyKey": "review:01M7ZW78DEW6025FJGENJVN5M2:faf6cb0ee1ff9582fa01fe6682515489bd98f253419aa9b9bba5b578574ef319:u.303a91ddb251afc7:comment:85e0e7d44285ef8a#81dd6388c4c89515",
+          "actor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+          "occurredAt": "2026-11-21T20:26:24.045Z",
+          "kind": "comment.recorded@3",
+          "attribution": {
+            "cycleId": "01M7ZW78DEW6025FJGENJVN5M2",
+            "unitIds": ["01M7ZW78J0000FX04VG40QS59N"]
+          },
+          "payload": {
+            "body": "Already-correct hooks are still rewritten when a user's group follows Neuve's group (or Neuve's entry keys have another order). The equality check fails, the judgment is ok/sameInstall, but this only labels the subsequent write as reordered. Return unchanged for that judgment so repair preserves the user's layout and hook execution order.",
+            "anchor": {
+              "path": "apps/neuve-cli/src/capture/setup-hooks.ts",
+              "side": "new",
+              "startLine": 603,
+              "endLine": 607
+            },
+            "section": "d4610f4e8f093b874e8a4f2f01c461fb92783f398ba5eb40f366391ac7238444",
+            "finding": {
+              "kind": "defect",
+              "about": "code",
+              "evidence": [
+                {
+                  "ref": "computation:234e06463b260dce72025d07dfc0a00ac7b4863f370a6132e0f612716cc50f85",
+                  "entry": "apps/neuve-cli/src/capture/setup-hooks.ts:new:598-607"
+                },
+                {
+                  "ref": "computation:234e06463b260dce72025d07dfc0a00ac7b4863f370a6132e0f612716cc50f85",
+                  "entry": "apps/neuve-cli/src/capture/setup-hooks.ts:new:623-625"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "publisherActor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+      "originalProducer": {
+        "status": "unknown",
+        "reason": "Published event actor identifies the publisher. Evidence computations are supporting source references; no retained producer-to-report derivation has been established."
+      },
+      "sourceComputationRefs": [
+        "computation:234e06463b260dce72025d07dfc0a00ac7b4863f370a6132e0f612716cc50f85"
+      ]
+    },
+    {
+      "record": {
+        "seq": 15477,
+        "recordedAt": "2026-11-21T20:26:24.127Z",
+        "event": {
+          "id": "01M7ZWKSDD003AJ1X0R7D69EEJ",
+          "idempotencyKey": "review:01M7ZW78DEW6025FJGENJVN5M2:faf6cb0ee1ff9582fa01fe6682515489bd98f253419aa9b9bba5b578574ef319:u.303a91ddb251afc7:comment:cc7d06e490255988#4686c20299232643",
+          "actor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+          "occurredAt": "2026-11-21T20:26:24.045Z",
+          "kind": "comment.recorded@3",
+          "attribution": {
+            "cycleId": "01M7ZW78DEW6025FJGENJVN5M2",
+            "unitIds": ["01M7ZW78J0000FX04VG40QS59N"]
+          },
+          "payload": {
+            "body": "D4: An already-correct agent hook file is still rewritten when Neuve's group precedes a user's group (or its keys have another order). The code labels this 'reordered', then pretty-prints the whole file, changing hook order and layout despite doctor judging it ok.",
+            "anchor": {
+              "path": "apps/neuve-cli/src/capture/setup-hooks.ts",
+              "side": "new",
+              "startLine": 603,
+              "endLine": 607
+            },
+            "section": "d4610f4e8f093b874e8a4f2f01c461fb92783f398ba5eb40f366391ac7238444",
+            "finding": {
+              "kind": "defect",
+              "about": "code",
+              "evidence": [
+                {
+                  "ref": "computation:a3467eaab958540d5e65e8eff900dcc80800f0f9511d3c59d7dd50243e3eebeb",
+                  "entry": "hdeafeb8c3f3245f"
+                },
+                {
+                  "ref": "computation:6970a615eb759871fb99eec15b83dab8e87ad1817b7befb039d443e688863539",
+                  "entry": "S15.7"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "publisherActor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+      "originalProducer": {
+        "status": "unknown",
+        "reason": "Published event actor identifies the publisher. Evidence computations are supporting source references; no retained producer-to-report derivation has been established."
+      },
+      "sourceComputationRefs": [
+        "computation:a3467eaab958540d5e65e8eff900dcc80800f0f9511d3c59d7dd50243e3eebeb",
+        "computation:6970a615eb759871fb99eec15b83dab8e87ad1817b7befb039d443e688863539"
+      ]
+    },
+    {
+      "record": {
+        "seq": 15480,
+        "recordedAt": "2026-11-21T20:26:24.127Z",
+        "event": {
+          "id": "01M7ZWKSDD003DH7Y2XVFZ7CPJ",
+          "idempotencyKey": "review:01M7ZW78DEW6025FJGENJVN5M2:faf6cb0ee1ff9582fa01fe6682515489bd98f253419aa9b9bba5b578574ef319:u.303a91ddb251afc7:comment:4baf6302f36fbb02#760fe726c4b94eb8",
+          "actor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+          "occurredAt": "2026-11-21T20:26:24.045Z",
+          "kind": "comment.recorded@3",
+          "attribution": {
+            "cycleId": "01M7ZW78DEW6025FJGENJVN5M2",
+            "unitIds": ["01M7ZW78J0000FX04VG40QS59N"]
+          },
+          "payload": {
+            "body": "Already-correct agent hooks are still rewritten when their group/entry keys use a different order. The order-sensitive stringify comparison fails, and even an ok, sameInstall judgment proceeds to replaceFile, reformatting the user's file and creating a backup. Return unchanged for that judgment.",
+            "anchor": {
+              "path": "apps/neuve-cli/src/capture/setup-hooks.ts",
+              "side": "new",
+              "startLine": 600,
+              "endLine": 601
+            },
+            "section": "d4610f4e8f093b874e8a4f2f01c461fb92783f398ba5eb40f366391ac7238444",
+            "finding": {
+              "kind": "defect",
+              "about": "code",
+              "evidence": [
+                {
+                  "ref": "computation:a3467eaab958540d5e65e8eff900dcc80800f0f9511d3c59d7dd50243e3eebeb",
+                  "entry": "hdeafeb8c3f3245f"
+                },
+                {
+                  "ref": "computation:94c4ab229f123c78caa08d1f53ab0f2ba71b0b0d16c72a79aeb95f9516694e9f",
+                  "entry": "S15.7"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "publisherActor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+      "originalProducer": {
+        "status": "unknown",
+        "reason": "Published event actor identifies the publisher. Evidence computations are supporting source references; no retained producer-to-report derivation has been established."
+      },
+      "sourceComputationRefs": [
+        "computation:a3467eaab958540d5e65e8eff900dcc80800f0f9511d3c59d7dd50243e3eebeb",
+        "computation:94c4ab229f123c78caa08d1f53ab0f2ba71b0b0d16c72a79aeb95f9516694e9f"
+      ]
+    },
+    {
+      "record": {
+        "seq": 15481,
+        "recordedAt": "2026-11-21T20:26:24.127Z",
+        "event": {
+          "id": "01M7ZWKSDD003331XX5MR7N1HS",
+          "idempotencyKey": "review:01M7ZW78DEW6025FJGENJVN5M2:faf6cb0ee1ff9582fa01fe6682515489bd98f253419aa9b9bba5b578574ef319:u.303a91ddb251afc7:comment:2cdf6be57294c9db#ce4b78680302b438",
+          "actor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+          "occurredAt": "2026-11-21T20:26:24.045Z",
+          "kind": "comment.recorded@3",
+          "attribution": {
+            "cycleId": "01M7ZW78DEW6025FJGENJVN5M2",
+            "unitIds": ["01M7ZW78J0000FX04VG40QS59N"]
+          },
+          "payload": {
+            "body": "Already-correct agent hooks are rewritten when their JSON key order or position differs: the equality check is order-sensitive, and an ok/sameInstall judgement only labels the rewrite 'reordered'. This changes user layout and creates a backup despite no repair being needed.",
+            "anchor": {
+              "path": "apps/neuve-cli/src/capture/setup-hooks.ts",
+              "side": "new",
+              "startLine": 601,
+              "endLine": 601
+            },
+            "section": "d4610f4e8f093b874e8a4f2f01c461fb92783f398ba5eb40f366391ac7238444",
+            "finding": {
+              "kind": "defect",
+              "about": "code",
+              "evidence": [
+                {
+                  "ref": "computation:a3467eaab958540d5e65e8eff900dcc80800f0f9511d3c59d7dd50243e3eebeb",
+                  "entry": "hdeafeb8c3f3245f"
+                },
+                {
+                  "ref": "computation:468ba67e83d7ec62e786965815a4e3b7973566b8402ad2bcaee0c25afd0977df",
+                  "entry": "S15.7"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "publisherActor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+      "originalProducer": {
+        "status": "unknown",
+        "reason": "Published event actor identifies the publisher. Evidence computations are supporting source references; no retained producer-to-report derivation has been established."
+      },
+      "sourceComputationRefs": [
+        "computation:a3467eaab958540d5e65e8eff900dcc80800f0f9511d3c59d7dd50243e3eebeb",
+        "computation:468ba67e83d7ec62e786965815a4e3b7973566b8402ad2bcaee0c25afd0977df"
+      ]
+    }
+  ],
+  "contrastingReport": {
+    "record": {
+      "seq": 15479,
+      "recordedAt": "2026-11-21T20:26:24.127Z",
+      "event": {
+        "id": "01M7ZWKSDD003EV7Z8DP9T1G67",
+        "idempotencyKey": "review:01M7ZW78DEW6025FJGENJVN5M2:faf6cb0ee1ff9582fa01fe6682515489bd98f253419aa9b9bba5b578574ef319:u.303a91ddb251afc7:comment:0f881364c075e144#abd2ef1502e59591",
+        "actor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+        "occurredAt": "2026-11-21T20:26:24.045Z",
+        "kind": "comment.recorded@3",
+        "attribution": {
+          "cycleId": "01M7ZW78DEW6025FJGENJVN5M2",
+          "unitIds": ["01M7ZW78J0000FX04VG40QS59N"]
+        },
+        "payload": {
+          "body": "D1/D4: Capture readiness checks hookCommand but never config.command, which starts the worker. After a source checkout is removed, the cached hook bundle and Bun can still pass every capture check while the missing CLI entry prevents the worker from processing captured events.",
+          "anchor": {
+            "path": "apps/neuve-cli/src/capture/setup-hooks.ts",
+            "side": "new",
+            "startLine": 919,
+            "endLine": 934
+          },
+          "section": "4f291b23f50b3767247b135b45eff70019421173f7650dd8b171d3f74d94b3a1",
+          "finding": {
+            "kind": "defect",
+            "about": "code",
+            "evidence": [
+              {
+                "ref": "computation:a3467eaab958540d5e65e8eff900dcc80800f0f9511d3c59d7dd50243e3eebeb",
+                "entry": "h32cd0ac025f507a"
+              },
+              {
+                "ref": "computation:6970a615eb759871fb99eec15b83dab8e87ad1817b7befb039d443e688863539",
+                "entry": "S15.1"
+              },
+              {
+                "ref": "computation:6970a615eb759871fb99eec15b83dab8e87ad1817b7befb039d443e688863539",
+                "entry": "S15.7"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "publisherActor": "620d8625bb8ec7e4699c19e9410da2d46ff1cdba65a4e3a1ed77e4a5079b49a8",
+    "originalProducer": {
+      "status": "unknown",
+      "reason": "Published event actor identifies the publisher. Evidence computations are supporting source references; no retained producer-to-report derivation has been established."
+    },
+    "sourceComputationRefs": [
+      "computation:a3467eaab958540d5e65e8eff900dcc80800f0f9511d3c59d7dd50243e3eebeb",
+      "computation:6970a615eb759871fb99eec15b83dab8e87ad1817b7befb039d443e688863539"
+    ]
+  },
+  "evaluation": {
+    "status": "pending",
+    "reason": "This is historical publication evidence, not independent gold or a new-pipeline model result. A one-primary assignment/dispatch regression is owned by the scheduler slice. Actual new report count must be measured separately.",
+    "blindSourcePanels": "Exclude all report envelopes, bodies and judgments; provide only neutral exact-source material."
+  }
+}
