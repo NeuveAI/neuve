@@ -15,6 +15,7 @@ export type ModelRef = { provider: string; modelId: string };
 /** "off" leaves always-thinking providers at their default; otherwise disables reasoning. */
 export type Effort = ModelThinkingLevel;
 export type ModelOption = ModelRef & { efforts: Effort[]; account?: string };
+export type PendingModel = { model?: ModelRef; effort?: Effort };
 
 /** Cumulative usage for one chat, including compaction and usage reported by tools. */
 export type Usage = {
@@ -386,6 +387,7 @@ export type AgentStartArgs =
 
 /** The tool by which a build's agent or its planning chat sends free text to its agents. */
 export const AGENT_MESSAGE_TOOL = "agent_message";
+export const AGENT_MODEL_TOOL = "set_agent_model";
 
 /**
  * What `AGENT_MESSAGE_TOOL` takes: the recipient by its role and part within the sender's build
@@ -407,6 +409,7 @@ export type Chat = {
 	build?: AgentName & { id: string };
 	model?: ModelRef;
 	effort?: Effort;
+	pending?: PendingModel;
 	lane?: string;
 	/** The lane's worktree, present with `lane`. */
 	cwd?: string;
@@ -840,6 +843,7 @@ export type Event =
 		chat: ChatId;
 		model: ModelRef;
 		effort: Effort;
+		pending?: PendingModel;
 		/** The chat's stored mode, sent when it changes. */
 		mode?: ChatMode;
 	}

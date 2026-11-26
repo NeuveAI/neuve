@@ -572,6 +572,7 @@ export function Conversation(
 							user={user}
 							current={model}
 							currentEffort={chat?.effort}
+							pending={chat?.pending}
 							automatic={transcript.info?.automatic}
 							busy={transcript.busy}
 							waiting={waiting}

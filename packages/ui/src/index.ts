@@ -29,6 +29,7 @@ export {
 	type SendPayload,
 } from "./components/composer/chat-composer";
 export { Composer } from "./components/composer/composer";
+export { ModelPicker } from "./components/composer/model-picker";
 export { canSendMessage } from "./components/composer/send";
 export {
 	DiffView,
@@ -65,7 +66,7 @@ export {
 export { QuestionInput } from "./components/requests/question-input";
 export { NOT_ALLOWED_TO_APPROVE, PlanActionsProvider, type PlanActions, PlanCard } from "./components/requests/plan";
 export { BuildActionsProvider } from "./components/requests/build";
-export { AgentLabel, AgentLine, AgentStateIcon, RoleAvatar } from "./components/agents/agents";
+export { AgentLine, AgentModelProvider } from "./components/agents/agents";
 export { PlanView, type PlanViewProps } from "./components/plan/plan-view";
 export {
 	type PlanCommentActions,

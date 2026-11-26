@@ -1,4 +1,4 @@
-import type { ComponentType, CSSProperties } from "react";
+import { type ComponentType, createContext, type CSSProperties, type ReactNode, use } from "react";
 
 import {
 	IconCircleCheck,
@@ -57,7 +57,7 @@ export function RoleAvatar(
 }
 
 /** An agent's name and what it says it is doing, isolated so neither can reorder the other. */
-export function AgentLabel({ agent }: { agent: Pick<AgentLineView, "name" | "caption"> }) {
+function AgentLabel({ agent }: { agent: Pick<AgentLineView, "name" | "caption"> }) {
 	return (
 		<>
 			<bdi className="max-w-[60%] shrink-0 truncate font-medium text-foreground">{agent.name}</bdi>
@@ -66,13 +66,24 @@ export function AgentLabel({ agent }: { agent: Pick<AgentLineView, "name" | "cap
 	);
 }
 
-/** An agent's line where it is listed to pick from: the work log's rows and the mention list. */
-export function AgentLine({ agent }: { agent: AgentLineView }) {
+/**
+ * The model and effort an agent's chat runs on, as the app draws them on its line; `plain` where
+ * the line is itself a control, as in the mention list.
+ */
+const AgentModelContext = createContext<((chat: number, plain?: boolean) => ReactNode) | null>(null);
+export const AgentModelProvider = AgentModelContext.Provider;
+
+/** An agent's line, the same wherever it is listed: the work log, the build's card and the mention list. */
+export function AgentLine({ agent, plain }: { agent: AgentLineView; plain?: boolean }) {
+	let model = use(AgentModelContext);
 	return (
 		<>
-			<RoleAvatar role={agent.role} size={20} />
+			{agent.role
+				? <RoleAvatar role={agent.role} size={20} />
+				: <img className="size-5 shrink-0 rounded-full object-cover" src={agent.avatar} alt="" />}
 			<AgentLabel agent={agent} />
-			<span className="ml-auto flex shrink-0">
+			<span className="ml-auto flex min-w-0 max-w-[45%] items-center gap-1.5">
+				{model?.(agent.chat, plain)}
 				<AgentStateIcon state={agent.state} />
 			</span>
 		</>

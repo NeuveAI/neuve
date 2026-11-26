@@ -3,8 +3,6 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 import type { ModelOption, ModelRef } from "./protocol";
 
-const PREFERRED = ["anthropic/claude-opus-5-5", "openai/gpt-6-astra"];
-
 // Pi's legacy ChatGPT route uses a sign-in Ace cannot manage.
 const LEGACY_CHATGPT_PROVIDER = "openai-codex";
 
@@ -33,16 +31,17 @@ export async function available(models: Models, routeModel?: Omit<ModelOption, "
 }
 
 export async function usable(models: Models, model: ModelRef): Promise<boolean> {
-	const found = await models.getAvailable(model.provider);
+	const found = await models.getAvailable(model.provider).catch(() => []);
 	return found.some((value) => value.id === model.modelId);
+}
+
+export function sameModel(left: ModelRef | undefined, right: ModelRef | undefined): boolean {
+	return left?.provider === right?.provider && left?.modelId === right?.modelId;
 }
 
 /** Resolve an automatic choice only when admitting an agent invocation. */
 export async function choose(models: Models): Promise<ModelRef> {
-	const found = await available(models);
-	const byId = new Map(found.map((model) => [`${model.provider}/${model.modelId}`, model]));
-	const preferred = PREFERRED.find((id) => byId.has(id));
-	const selected = preferred ? byId.get(preferred) : found[0];
+	const [selected] = await available(models);
 	if (!selected) {
 		throw new Error(
 			"Add a provider key for this channel before invoking an agent. Chat is still available.",

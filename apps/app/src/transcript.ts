@@ -373,6 +373,17 @@ export function apply(state: Transcript, event: Event): Transcript {
 	}
 }
 
+/** The chat's model and effort as an `agent` event reports them; one without `pending` clears it. */
+function changed(info: ChannelInfo, event: Extract<Event, { kind: "agent" }>): ChannelInfo {
+	const { chat, model, effort, pending } = event;
+	return {
+		...info,
+		chats: info.chats.map(({ pending: _, ...value }, index) =>
+			value.id === chat ? { ...value, model, effort, ...(pending ? { pending } : {}) } : info.chats[index]!
+		),
+	};
+}
+
 /** The notice joins the stopped reply; a run stopped before replying gets a reply of its own. */
 function withdraw(items: Item[], messages: QueuedMessage[]): Item[] {
 	const last = items.at(-1);
@@ -483,6 +494,9 @@ export function useTranscript(
 		let generation = 0;
 		let recoveries = 0;
 		let started = 0;
+		// Other agents' runs reach this watch only through their builds, so a start or end there
+		// reads info again, which is when a pending model change takes effect.
+		let runs = "";
 		setState(EMPTY);
 		setInfo(undefined);
 		const start = (restart = false) => {
@@ -529,6 +543,14 @@ export function useTranscript(
 						setState(apply(replay, event));
 						setRestarting(false);
 						replay = undefined;
+					}
+					if (event.kind === "agent") setInfo((info) => info && changed(info, event));
+					if (event.kind === "builds") {
+						const states = event.builds.flatMap((build) => build.agents.map((agent) => `${agent.chat}:${agent.state}`)).join();
+						if (states !== runs) {
+							runs = states;
+							void read();
+						}
 					}
 					if (event.kind === "run" || event.kind === "agent") void read();
 				},

@@ -7,6 +7,8 @@ import {
 	defineExtension,
 	defineTool,
 	type EntryId,
+	type ConversationId,
+	type Tx,
 	type Extension,
 	GenerationTask,
 	hook,
@@ -14,7 +16,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { z } from "zod";
 
-import type { Delivery } from "./protocol";
+import type { Delivery, ModelRef } from "./protocol";
 import type { Channel } from "./channel";
 import { MetadataExtension } from "./metadata";
 import * as room from "./room";
@@ -38,7 +40,11 @@ const subagentArguments = toolArguments("subagent", z.strictObject({
  * reaches the child. The child stays in the channel afterwards for people to read or continue.
  * `without` lists extensions a child chat must not have, such as questions nobody would see.
  */
-export const subagent = (submitInput: Channel["submitInput"], ...without: Extension[]): Extension =>
+export const subagent = (
+	submitInput: Channel["submitInput"],
+	allowModel: (tx: Tx, chat: ConversationId, model: ModelRef) => Promise<boolean>,
+	...without: Extension[]
+): Extension =>
 	defineExtension({
 		name: "ace-subagent",
 		tools: [
@@ -56,12 +62,13 @@ export const subagent = (submitInput: Channel["submitInput"], ...without: Extens
 					const child = await api.commit(async (tx) => {
 						const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
 						if (existing) return existing.id;
+						const accepted = change && await allowModel(tx, api.conversationId, change);
 						const created = await tx.createConversation({
 							ownership: { kind: "task", taskId: api.taskId },
 						});
 						await configure(tx, created.id, {
-							extensions: { remove: [subagent(submitInput), MetadataExtension, ...without] },
-							...(change ? { model: change } : {}),
+							extensions: { remove: [{ name: "ace-subagent" }, MetadataExtension, ...without] },
+							...(accepted ? { model: change } : {}),
 						});
 						return created.id;
 					}, context);
@@ -73,16 +80,11 @@ export const subagent = (submitInput: Channel["submitInput"], ...without: Extens
 						content: room.content(author, args.task),
 						requestId: `subagent:${api.taskId}`,
 					} as const;
-					const submission = await (change ? handle.submit(request, context) : submitInput(handle, request, context));
+					const submission = await submitInput(handle, request, context);
 					const settled = await submission.wait(context);
 					if (settled.answer === undefined) {
-						if (args.model && settled.reason === "no_model") {
-							throw toolRefusal("subagent", args, [
-								`model: Model ${JSON.stringify(args.model)} is not available in this channel, so omit model to use your own.`,
-							]);
-						}
 						const childModel = (await api.snapshot(AgentDoc, child, context))?.model;
-						const requested = args.model || (childModel ? `${childModel.provider}/${childModel.modelId}` : "automatic model selection");
+						const requested = childModel ? `${childModel.provider}/${childModel.modelId}` : "automatic model selection";
 						const detail = typeof settled.detail === "string" ? settled.detail : JSON.stringify(settled.detail);
 						const reason = [settled.reason, detail].filter(Boolean).join(": ") || "no answer was recorded";
 						throw new Error(`Subagent chat ${child} ended unanswered with ${requested} (${reason})`);

@@ -692,7 +692,7 @@ function RichText({ className, ...props }: Props) {
 										view.current && item.action(view.current);
 									}}
 								>
-									{item.agent ? <AgentLine agent={item.agent} /> : (
+									{item.agent ? <AgentLine agent={item.agent} plain /> : (
 										<>
 											{item.avatar && (
 												<img

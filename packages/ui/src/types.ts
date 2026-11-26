@@ -331,10 +331,14 @@ export type PlanCardView = {
 /** The role the host gave an agent it started for an approved plan. */
 export type AgentRole = "implementer" | "reviewer";
 
-/** One agent of a build as a line shows it: its role, the name it goes by, its caption, and its state. */
+/**
+ * One agent as a line shows it: its role, or the main agent's avatar, the name it goes by, its
+ * caption, and its state.
+ */
 export type AgentLineView = {
 	chat: number;
-	role: AgentRole;
+	role?: AgentRole;
+	avatar?: string;
 	/** Its role, and its part where it has one. */
 	name: string;
 	caption?: string;

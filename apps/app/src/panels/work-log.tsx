@@ -1,8 +1,10 @@
 import { useMemo } from "react";
 
 import type { Listing } from "@ace/host/protocol";
-import { AgentLine, Timeline } from "@ace/ui";
+import { type AgentLineView, AgentLine, Timeline } from "@ace/ui";
 
+import { AGENT_ALIAS } from "../agent-mention";
+import { useAgentAvatar } from "../agent-avatar";
 import { agentAuthor, lineView, workEvents } from "../build-card";
 import { Conversation } from "../conversation";
 import { useDetails } from "../details";
@@ -19,12 +21,24 @@ type Props = {
 
 const NOTHING = () => {};
 
-/** The channel's work log: its build agents, one line each, then their conversation or one agent's own work. */
+/**
+ * The channel's work log: one line for the main agent of each chat that planned, and one for each
+ * of its builds' agents, then their conversation or one agent's own work.
+ */
 export function WorkLog({ channel, channels, user, chat, onChat, onOpen }: Props) {
-	const { builds } = useDetails(channel.id);
+	const { builds, info } = useDetails(channel.id);
+	const avatar = useAgentAvatar();
 	const list = builds?.list ?? [];
 	const agents = list.flatMap((build) => build.agents);
-	const chosen = agents.find((agent) => agent.chat === chat);
+	const lines: AgentLineView[] = [
+		...new Set(list.filter((build) => build.agents.length).map((build) => build.chat)),
+	].map((planner): AgentLineView => ({
+		chat: planner,
+		name: AGENT_ALIAS.label,
+		avatar,
+		state: info?.chats.find((value) => value.id === planner)?.busy ? "running" : "done",
+	})).concat(agents.map(lineView));
+	const chosen = lines.find((line) => line.chat === chat);
 	const events = useMemo(
 		() => workEvents(builds?.list ?? [], builds?.messages ?? [], channel.id),
 		[builds, channel.id],
@@ -37,18 +51,24 @@ export function WorkLog({ channel, channels, user, chat, onChat, onOpen }: Props
 		<section className="flex h-full min-h-0 flex-col bg-background">
 			{agents.length > 0 && (
 				<ul aria-label="Agents" className="flex shrink-0 flex-col gap-0.5 border-b border-border px-2 py-1.5">
-					{agents.map((agent) => {
-						const on = agent.chat === chosen?.chat;
+					{lines.map((line) => {
+						const on = line.chat === chosen?.chat;
+						// The row is the button, laid under the line so the line's model picker stays its own control.
 						return (
-							<li key={agent.chat}>
+							<li
+								key={line.chat}
+								className={`relative flex h-7 w-full min-w-0 items-center gap-2 rounded-lg squircle border border-transparent bg-clip-padding px-2 text-xs transition-colors duration-120 motion-reduce:transition-none ${
+									on ? "bg-popover/35 selected-surface dark:bg-black/32" : "hover:bg-muted/60"
+								}`}
+							>
 								<button
 									type="button"
 									aria-pressed={on}
-									className="flex h-7 w-full min-w-0 items-center gap-2 rounded-lg squircle border border-transparent bg-clip-padding px-2 text-left text-xs outline-none transition-colors duration-120 not-aria-pressed:hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-ring/50 aria-pressed:bg-popover/35 aria-pressed:selected-surface dark:aria-pressed:bg-black/32 motion-reduce:transition-none"
-									onClick={() => onChat(on ? undefined : agent.chat)}
-								>
-									<AgentLine agent={lineView(agent)} />
-								</button>
+									aria-label={line.name}
+									className="absolute inset-0 rounded-[inherit] outline-none focus-visible:outline-2 focus-visible:outline-ring/50"
+									onClick={() => onChat(on ? undefined : line.chat)}
+								/>
+								<AgentLine agent={line} />
 							</li>
 						);
 					})}

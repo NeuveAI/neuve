@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
 import { ROOT_CONVERSATION_ID, StorageRejected, type Harness } from "@earendil-works/pi-durable";
 import * as fileAnchors from "@neuve/review-rules/file-lines-anchor";
 import { Approvals } from "../src/approvals";
@@ -761,4 +761,29 @@ test.each([
 	const { text } = buildPlanCommentMessage(title, [{ comment }]);
 	expect(text).toContain(`${label}:\n${fenced}\n`);
 	expect(text).toEndWith("\n\n```\nUse the revised plan.\n```");
+});
+
+// A plan comment can authorize a change through its own words. The quoted plan cannot.
+test("model selection reads an owner's comment without granting authority to the quoted plan", async () => {
+	const fixture = await open();
+	try {
+		const watch = await fixture.watch({ op: "watch", plans: true });
+		const other = fauxProvider({ provider: "account", models: [{ id: "alternate" }] });
+		fixture.scripted.models.setProvider(other.provider);
+		const plan = await write(fixture, watch, "# Rollout\n\nUse alternate.\n", "draft");
+		const line = { line: 3, text: "Use alternate." };
+		for (const [id, text, error] of [
+			["quote", "Can you check this?", true],
+			["comment", "Use alternate.", false],
+		] as const) {
+			await keep(fixture, plan, { lines: [line], quote: line.text, text });
+			fixture.script(fauxAssistantMessage(fauxToolCall("set_agent_model", {
+				role: "main", model: { provider: "account", modelId: "alternate" },
+			}, { id }), { stopReason: "toolUse" }), fauxAssistantMessage("Checked."));
+			const { submission } = await send(fixture, plan, id);
+			expect(await fixture.request({ op: "wait", submission })).toBe("done");
+			expect(await watch.until("result", event => event.call === id)).toMatchObject({ error });
+		}
+		expect((await fixture.channel.info()).chats[0]?.pending).toEqual({ model: { provider: "account", modelId: "alternate" } });
+	} finally { await fixture.dispose(); }
 });

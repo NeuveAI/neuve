@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import { readFile, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, type FauxResponseStep } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, type FauxResponseStep } from "@earendil-works/pi-ai";
 import { defineDoc, ROOT_CONVERSATION_ID, type ConversationId, type Harness, type SubmissionId, type ToolRegistration } from "@earendil-works/pi-durable";
 import { SharedWork } from "../../records-core/src/shared-work";
 import { TURN_CANCELLED, TURN_RETRY_FAILURE } from "@neuve/records-schema/turn-recovery";
@@ -41,6 +41,7 @@ async function setup(options: {
 	beforeSharedResult?(): Promise<void>;
 	onSharedWait?(): void;
 	onStep?(step: string): void;
+	nonTurnModels?: Fixture["options"]["nonTurnModels"];
 	wrapTool?(tool: ToolRegistration): ToolRegistration;
 } = {}) {
 	const files = new Map<string, Uint8Array>();
@@ -87,6 +88,7 @@ async function setup(options: {
 			admission.onApprovalAnswer?.(async (_chat, _answer, record) => { await record(); return true; });
 		} },
 		tool: options.wrapTool,
+		...(options.nonTurnModels ? { nonTurnModels: options.nonTurnModels } : {}),
 		log: (_level, step) => options.onStep?.(step),
 		onSaid: value => said.push(value),
 		onRun: value => runs.push(value),
@@ -959,20 +961,21 @@ test("reopening during an agent start replays the same call and sends one brief"
 
 // A state update that submits input could wake a chat on its own.
 test("a build agent's question, answer, and captions update the work log without new input", async () => {
-	const run = await setup();
+	const captions = fauxProvider({ provider: MODEL.provider, models: [{ id: MODEL.modelId }], tokensPerSecond: 100_000 });
+	const captionModels = createModels();
+	captionModels.setProvider(captions.provider);
+	const run = await setup({ nonTurnModels: () => captionModels });
 	const { fixture, watch } = run;
 	const finish = Promise.withResolvers<void>();
 	try {
 		const { chat, agent } = await startBuild(run);
 		await watch.until("builds", event => event.builds[0]?.agents[0]?.state === "done");
 		const offset = watch.events.length;
-		const captions = fauxProvider({ provider: "anthropic", models: [{ id: "claude-haiku-4-5" }], tokensPerSecond: 100_000 });
 		captions.appendResponses([
 			fauxAssistantMessage("Checking the export approach"),
 			fauxAssistantMessage("Checked the export approach"),
 			fauxAssistantMessage("Asked which export approach to take."),
 		]);
-		fixture.scripted.models.setProvider(captions.provider);
 		fixture.script(
 			question("ask-approach"),
 			async () => {
@@ -2347,3 +2350,46 @@ for (const [phase, planning] of [
 		}
 	});
 }
+
+// A host brief must not authorize a tool call even if its plan text names the model.
+test("a plan's unattended implementer cannot use its brief to change models", async () => {
+	const run = await setup();
+	const { fixture } = run;
+	const alternate = offerRetiredModel(fixture);
+	const plan = await run.draft("# Export retries\n\nUse old-model for implementation.");
+	fixture.script(tool("set_agent_model", { role: "implementer", model: alternate }, "unattended-model"), fauxAssistantMessage("Ready."));
+	await run.approve(plan);
+	const build = await buildAt(run.watch, 0, "started");
+	const chat = build.agents[0]!.chat;
+	const agent = await fixture.watch({ op: "watch", chat });
+	expect(await agent.until("result", event => event.call === "unattended-model")).toMatchObject({ error: true });
+	expect((await fixture.channel.info()).chats.find(value => value.id === chat)).toMatchObject({ model: MODEL, effort: "high" });
+	expect((await fixture.channel.info()).chats.find(value => value.id === chat)?.pending).toBeUndefined();
+});
+
+// A real owner mention counts even if the implementer was already running on a host input.
+test("an owner mention can schedule a model change during an implementer's run", async () => {
+	const run = await setup();
+	const { fixture } = run;
+	const { chat, agent } = await startBuild(run);
+	const alternate = offerRetiredModel(fixture);
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	fixture.script(async () => {
+		entered.resolve();
+		await release.promise;
+		return tool("set_agent_model", { role: "implementer", model: alternate }, "mentioned-model");
+	}, fauxAssistantMessage("Done."));
+	try {
+		const submission = await wake(run, "Work on exports.", chat);
+		await entered.promise;
+		await fixture.request({ op: "say", author: OWNER, text: "Use old-model.", agents: [chat] });
+		await agent.until("queue", event => event.messages.some(message => message.text === "Use old-model."));
+		release.resolve();
+		expect(await agent.until("result", event => event.call === "mentioned-model")).toMatchObject({ error: false });
+		expect((await fixture.channel.info()).chats.find(value => value.id === chat)).toMatchObject({
+			model: MODEL, effort: "high", pending: { model: alternate, effort: "off" },
+		});
+		expect(await fixture.request({ op: "wait", submission })).toBe("done");
+	} finally { release.resolve(); }
+});
