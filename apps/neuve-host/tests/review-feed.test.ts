@@ -1,6 +1,7 @@
 import { ReviewRefusalError } from "@ace/channel/review-protocol";
 import type { ReviewCard } from "@ace/channel/review-cards";
-import { ReviewFeedDefinition } from "@ace/channel/protocol";
+import { EventSchema } from "@ace/channel/frame";
+import { ReviewFeedDefinition, type Event } from "@ace/channel/protocol";
 import { Channel } from "@ace/channel";
 import "./fixtures/memory-secrets";
 import { afterEach, expect, test } from "bun:test";
@@ -93,6 +94,7 @@ async function fixture(notify = false) {
 		return feed;
 	};
 	return { project, source, logs, start, provider, openFeed,
+		get channel() { return channel; },
 		notice: async () => (await harness.snapshot(FeedDoc, chat, context))?.notices[review],
 		submission: async () => {
 			const key = (await harness.snapshot(FeedDoc, chat, context))?.notices[review]?.requestId;
@@ -104,6 +106,55 @@ async function fixture(notify = false) {
 	};
 }
 const finished = { units: 10, byReviewLane: { humanRequired: 3, humanSuggested: 2, agentic: 4, static: 1 }, needJudgment: 2, complete: false, gaps: 2, undecoded: 1 };
+
+// A restart can replay Records requests before the host resumes following their cards.
+test("CLI requests post one entry and card per review across restart", async () => {
+	const f = await fixture();
+	const first = "01K00000000000000000000002";
+	const second = "01K00000000000000000000003";
+	const saved = await f.card();
+	if (saved.kind !== "review") throw new Error("Missing admitted fixture review");
+	const range = saved.range;
+	const request = { review: first, chat, at: 120, range, baseRef: "refs/heads/main", pullRequest: null };
+	const cli = new Source({ ...f.source.current, review: first });
+	const offlineCli = new Source({ ...f.source.current, review: second });
+	const start = (offline: boolean) => f.openFeed({
+		watch: (id, receive) => (id === review ? f.source : id === first ? cli : offlineCli).watch(id, receive),
+		async requests(after, signal) {
+			if (!after) return { after: offline ? 2 : 1, requests: offline
+				? [request, { ...request, review: second, at: 180, pullRequest: 42 }]
+				: [request] };
+			return new Promise(resolve => signal.addEventListener("abort", () => resolve(null), { once: true }));
+		},
+	}, { log: (_level, event) => f.logs.push(event), branchIntervalMs: 100000 });
+	const watch = async () => {
+		const events: Event[] = [];
+		await f.channel.handle({ op: "watch", chat }, event => events.push(EventSchema.parse(event)));
+		return events;
+	};
+	const before = await watch();
+	const feed = await start(false);
+	closes.push(() => feed.close());
+	const rows = (events: Event[]) => events.filter(event => event.kind === "neuve:review:requested");
+	await until(() => Promise.resolve(cli.initialized > 0 && rows(before).length === 1 && before.some(event =>
+		event.kind === "review-cards" && event.cards[`request:${first}`]?.kind === "review")));
+	await cli.emit({ phase: "running", stage: null });
+	const cards = async () => (await f.harness.snapshot(ReviewCardsDoc, chat, context))?.cards;
+	expect((await cards())?.[`request:${first}`]).toMatchObject({ phase: "running", label: "feature against main", range });
+	await feed.close();
+	await f.restart();
+	const after = await watch();
+	const restarted = await start(true);
+	closes.push(() => restarted.close());
+	await until(() => Promise.resolve(rows(after).length === 2));
+	expect(rows(after)).toEqual([
+		{ kind: "neuve:review:requested", chat, entry: expect.any(Number), review: first, at: 120 },
+		{ kind: "neuve:review:requested", chat, entry: expect.any(Number), review: second, at: 180 },
+	]);
+	expect((await cards())?.[`request:${first}`]).toMatchObject({ phase: "running" });
+	expect((await cards())?.[`request:${second}`]).toMatchObject({ kind: "review", source: "pull_request", label: "Pull request #42", range });
+	expect(f.logs.filter(event => event === "review.card.requested")).toHaveLength(2);
+}, 15000);
 
 // A review can finish after the chat's provider has been removed.
 test("a finished review notice wakes the chat on Automatic when its stored provider is gone", async () => {

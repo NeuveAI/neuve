@@ -87,6 +87,7 @@ type Client = {
 	/** The tailnet machine a peer connected from, as Tailscale named it. */
 	machine?: string;
 	local: boolean;
+	disconnected: AbortController;
 	channels: Map<string, Promise<Connection>>;
 	/** This client's connections to peer hosts, opened when it first uses one of their channels. */
 	remotes: Map<string, GatewayClient>;
@@ -1000,7 +1001,7 @@ function websocket(): Bun.WebSocketHandler<Client> {
 				...(request.op === "channel" ? { request: request.request.op } : {}),
 			};
 			// Listing and watching repeat constantly; everything else is a deliberate action.
-			const quiet = request.op === "review-feed" || request.op === "channels" || request.op === "projects"
+			const quiet = request.op === "review-feed" || request.op === "review-requests" || request.op === "channels" || request.op === "projects"
 				|| request.op === "window" || request.op === "windows" || request.op === "tab-result"
 				|| request.op === "hello" || request.op === "models"
 				|| request.op === "release" || request.op === "terminal-input"
@@ -1009,8 +1010,8 @@ function websocket(): Bun.WebSocketHandler<Client> {
 					&& ["watch", "info", "models", "typing"].includes(request.request.op));
 			const handling = closing || (updating && request.op !== "update-cancel")
 				? Promise.reject(new Error("Neuve is pausing or shutting down"))
-				: dispatchGateway(socket.data, request, trace, (channel) => connection(socket.data, channel), (native) => handle(socket, native, send, id, trace));
-			pending.add(handling);
+				: dispatchGateway(socket.data, request, trace, (channel) => connection(socket.data, channel), (native) => handle(socket, native, send, id, trace), socket.data.disconnected.signal);
+			if (request.op !== "review-requests") pending.add(handling);
 			try {
 				const value = await handling;
 				const refusal = ReviewRefusalSchema.safeParse(value);
@@ -1027,6 +1028,7 @@ function websocket(): Bun.WebSocketHandler<Client> {
 		},
 		close(socket, code) {
 			if (socket.data.lobby) return served.left(socket);
+			socket.data.disconnected.abort();
 			sockets.delete(socket);
 			windows.drop(socket);
 			if (socket.data.peer) asks.drop(socket, asksChanged);
@@ -1046,6 +1048,7 @@ function client(user: string, peer: boolean, local = false, machine?: string): C
 		user,
 		peer,
 		local,
+		disconnected: new AbortController(),
 		machine,
 		channels: new Map(),
 		remotes: new Map(),

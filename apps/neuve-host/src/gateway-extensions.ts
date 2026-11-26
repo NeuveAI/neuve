@@ -27,6 +27,7 @@ export async function dispatchGateway(
 	client: {local: boolean; peer: boolean; user: string}, request: HostRequest, trace: string,
 	connection: (channel: string) => Promise<Connection>,
 	native: (request: NativeHostRequest) => Promise<unknown>,
+	signal?: AbortSignal,
 ): Promise<unknown> {
 	const options: Partial<HostOptions> = runtimeHooks().host || {};
 	const requireOwner = () => {
@@ -115,6 +116,11 @@ export async function dispatchGateway(
 				const failure = reviewFeedFailure(error);
 				return refuseReview(failure.reason, failure.permanent ? "The recorded review is no longer available." : "Records is temporarily unavailable.");
 			}
+		}
+		case "review-requests": {
+			owned(request.channel);
+			if (!options.reviewRequests || !signal) throw new Error("Native Neuve review requests are unavailable on this host");
+			return options.reviewRequests(catalog.read(request.channel).project, request.channel, request.after, signal);
 		}
 		case "planning-connections":
 			return PlanningConnectionsSchema.parse(options.planningConnections?.() || { connections: [], status: "unavailable", message: "Linear planning is not configured on this host." });

@@ -121,6 +121,7 @@ import { exportSeed, importSeed, type Seed } from "./seed";
 import { type Tabs, tabs } from "./tabs";
 
 const ReviewNewCommitsEntry = defineEntry<ReviewNewCommits & { at: number }>("neuve:review:new-commits");
+const ReviewRequestedEntry = defineEntry<{ review: string; at: number }>("neuve:review:requested");
 const ReviewFeedDoc = defineDoc(ReviewFeedDefinition);
 
 declare const crypto: { randomUUID(): string };
@@ -2098,6 +2099,7 @@ function live(chat: ChatId, event: AgentEvent): Event[] {
 function events(entry: EntryRecord): Event[] {
 	const chat = entry.conversationId;
 	if (ReviewNewCommitsEntry.is(entry)) return [{ kind: "neuve:review:new-commits", chat, entry: entry.id, ...entry.data }];
+	if (ReviewRequestedEntry.is(entry)) return [{ kind: "neuve:review:requested", chat, entry: entry.id, ...entry.data }];
 	if (DeletionEntry.is(entry)) return [{ kind: "deleted", chat, entry: entry.data.target }];
 	if (EditEntry.is(entry)) {
 		const { target, text, at } = entry.data;

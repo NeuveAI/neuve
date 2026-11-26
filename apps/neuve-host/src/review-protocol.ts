@@ -1,4 +1,4 @@
-import { ReviewRefusalError, ReviewRefusalSchema } from "@ace/channel/review-protocol";
+import { ReviewRangeSchema, ReviewRefusalError, ReviewRefusalSchema } from "@ace/channel/review-protocol";
 import { z } from "zod";
 import { githubRef } from "./external-ref";
 import { ExternalRefSchema } from "@ace/channel/external-ref";
@@ -156,12 +156,22 @@ export type ReviewFeedSnapshot = z.infer<typeof ReviewFeedSnapshotSchema>;
 export type ReviewFeedSource = {
 	/** Resolve job/run from request identity. Deliver an initial snapshot and serialize later deliveries. */
 	watch(review: string, receive: (snapshot: unknown) => Promise<void>, context: import("@earendil-works/chord").Context, failed?: (error: unknown) => void): Promise<() => void | Promise<void>>;
+	requests?(after: number, signal: AbortSignal): Promise<ReviewRequestsReply | null>;
 };
 
 
 export const ReviewFeedQuerySchema = z.strictObject({ review: Ulid, after: z.string().max(64).optional() });
 export type ReviewFeedQuery = z.infer<typeof ReviewFeedQuerySchema>;
 export const ReviewFeedReplySchema = z.strictObject({ stamp: z.string(), snapshot: ReviewFeedSnapshotSchema });
+
+export const ReviewRequestsReplySchema = z.strictObject({
+	after: z.int().positive(),
+	requests: z.array(z.strictObject({
+		review: Ulid, chat: z.int().nonnegative(), at: z.int().nonnegative(),
+		range: ReviewRangeSchema, baseRef: z.string().min(1), pullRequest: z.int().positive().nullable(),
+	})).min(1).max(100),
+});
+export type ReviewRequestsReply = z.infer<typeof ReviewRequestsReplySchema>;
 
 /** Retry transport/store outages, but never repeatedly request an absent or invalid review. */
 export function reviewFeedFailure(error: unknown): { reason: "not_connected" | "not_found" | "records_mismatch"; permanent: boolean } {

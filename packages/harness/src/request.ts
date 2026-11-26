@@ -46,6 +46,7 @@ import {
   READING_RECIPE_SCOPE_AND_TESTS,
 } from "./readings/plan.ts";
 import { readIntegrations, type Integrations } from "./integrations.ts";
+import { z } from "zod";
 import { git, resolveCommit } from "./git.ts";
 import type { RetrieverConfig } from "./retriever.ts";
 import {
@@ -547,6 +548,28 @@ const selectReviewCycle = (range: Range, target: ReviewBranch | undefined) =>
     return undefined;
   });
 
+const reviewRequestIntent = (origin?: ReviewOrigin, scope?: CycleScopeSource) =>
+  `neuve-review-intent:${sha256Hex(canonicalJson({ origin: origin ?? null, scope: scope ?? null }))}`;
+
+export const commandLineReviewIntent = reviewRequestIntent();
+export const commandLineReviewRole = "command-line-review";
+export const CommandLineReview = z.strictObject({
+  branch: z.string(),
+  pullRequest: z.int().positive().nullable(),
+  commits: z.int().nonnegative(),
+});
+
+export const reviewCommitCount = (
+  repository: string,
+  base: string,
+  head: string,
+) =>
+  git(repository, ["rev-list", "--count", `${base}..${head}`]).pipe(
+    Effect.map((output) =>
+      z.coerce.number().int().nonnegative().parse(output.trim()),
+    ),
+  );
+
 export const requestReview = (options: ReviewOptions) =>
   Effect.gen(function* () {
     const origin =
@@ -623,7 +646,7 @@ export const requestReview = (options: ReviewOptions) =>
       options.requestId === undefined
         ? mintUlid()
         : Ulid.parse(options.requestId);
-    const intent = `neuve-review-intent:${sha256Hex(canonicalJson({ origin: origin ?? null, scope: selected ?? null }))}`;
+    const intent = reviewRequestIntent(origin, selected);
     const sql = yield* SqlClient;
     const store = yield* Computations.ComputationStore;
     const blobs = yield* Blobs.BlobStore;
@@ -670,6 +693,24 @@ export const requestReview = (options: ReviewOptions) =>
               (name) => `refs/heads/${name}` === checkout,
             );
             return { branch, sharedTips: tips };
+          })
+        : undefined;
+    const pullRequest = /^refs\/pull\/([1-9]\d{0,14})\/(?:head|merge)$/.exec(
+      head,
+    )?.[1];
+    const commandLine =
+      Option.isNone(recorded) &&
+      intent === commandLineReviewIntent &&
+      options.requester._tag === "Agent" &&
+      options.requester.harness === Identity.ACE_CHANNEL_HARNESS
+        ? CommandLineReview.parse({
+            branch: pullRequest ? "" : (branchSelection?.branch ?? ""),
+            pullRequest: pullRequest ? Number(pullRequest) : null,
+            commits: yield* reviewCommitCount(
+              options.repository,
+              range.baseOid,
+              range.headOid,
+            ),
           })
         : undefined;
     // The cycle, the generation and the append are one write transaction (`BEGIN IMMEDIATE`), so
@@ -906,11 +947,29 @@ export const requestReview = (options: ReviewOptions) =>
             });
           }
         }
+        const presentation =
+          commandLine === undefined
+            ? undefined
+            : yield* blobs.put({
+                bytes: new TextEncoder().encode(canonicalJson(commandLine)),
+                mediaType: "application/json",
+                retention: "durable",
+              });
         events.push({
           id: requestId,
           kind: "review.requested@1",
           idempotencyKey: `review.requested:${requestId}`,
           causation: { correlationId: intent },
+          ...(presentation === undefined
+            ? {}
+            : {
+                refs: [
+                  {
+                    role: commandLineReviewRole,
+                    ref: `blob:${presentation.blob.hash}`,
+                  },
+                ],
+              }),
           actor,
           occurredAt,
           attribution: { cycleId, range },

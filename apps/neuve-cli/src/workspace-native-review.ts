@@ -8,9 +8,11 @@ import {
 import { ReviewProgress } from "@neuve/records-core";
 import {
   ReviewFeedSnapshotSchema,
+  ReviewRequestsReplySchema,
   type ReviewFeedSnapshot,
   type ReviewFeedSource,
   type ReviewFeedQuery,
+  type ReviewRequestsReply,
   type ReviewSubmission,
 } from "@ace/host/review-protocol";
 import { z } from "zod";
@@ -24,6 +26,8 @@ import {
   Log,
   PublishedPackets,
   ReviewStats,
+  Store,
+  StoreMissing,
   canonicalJson,
   mintUlid,
   resolveStoreLocation,
@@ -32,7 +36,11 @@ import {
 } from "@neuve/records-core";
 import { PipelineConfig } from "@neuve/harness/config";
 import {
+  CommandLineReview,
+  commandLineReviewIntent,
+  commandLineReviewRole,
   prepareReviewConfig,
+  reviewCommitCount,
   requestReview,
   settingsRoute,
 } from "@neuve/harness/request";
@@ -395,6 +403,8 @@ export function nativeReviewCallbacks(
       return { review: value.review, complete, units, gaps, undecoded };
     },
     reviewFeed: reviewFeedReply,
+    reviewRequests: (project, channel, after, signal) =>
+      recordsReviewFeed(project, channel).requests(after, signal),
   };
 }
 
@@ -403,20 +413,7 @@ async function admissionDetails(
   recovered: boolean,
 ) {
   const h = prepared.handoff;
-  const child = Bun.spawn(
-    ["git", "-C", h.cwd, "rev-list", "--count", `${h.base}..${h.head}`],
-    { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-  );
-  const [output, error, exit] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  if (exit !== 0)
-    throw new Error(
-      error.trim() || "The pinned range commit count is unavailable",
-    );
-  const commits = z.coerce.number().int().nonnegative().parse(output.trim());
+  const commits = await execute(reviewCommitCount(h.cwd, h.base, h.head));
   return {
     recovered,
     commits,
@@ -713,13 +710,136 @@ const reviewFeedMark = async (
     ),
   );
 
+const readReviewRequests = (project: string, channel: string, after: number) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const rows = yield* sql<{ id: string; seq: number; chat: string }>`
+    SELECT e.id, e.seq, a.subagent_id AS chat FROM events e
+    JOIN projection_actors a ON a.actor_id = e.actor_id
+    WHERE e.kind = 'review.requested@1' AND e.seq > ${after}
+      AND a.harness = ${Identity.ACE_CHANNEL_HARNESS} AND a.session_id = ${channel}
+      AND a.subagent_id IS NOT NULL
+      AND json_extract(e.envelope, '$.causation.correlationId') = ${commandLineReviewIntent}
+      AND json_extract(e.envelope, '$.causation.causedBy') IS NULL
+    ORDER BY e.seq LIMIT 100`;
+    const latest = rows.at(-1);
+    if (!latest) return null;
+    const blobs = yield* Blobs.BlobStore;
+    const requests = yield* Effect.forEach(rows, (row) =>
+      Effect.gen(function* () {
+        const event = Option.getOrUndefined(yield* Log.get(row.id))?.event;
+        if (event?.kind !== "review.requested@1")
+          throw new Error("Records request did not decode");
+        const {
+          baseOid: base,
+          headOid: head,
+          baseRef,
+        } = event.attribution.range;
+        const reference = event.refs?.find(
+          ({ role }) => role === commandLineReviewRole,
+        );
+        const blob =
+          reference && (yield* blobs.get(reference.ref.slice("blob:".length)));
+        if (blob && blob._tag !== "Present")
+          throw new Error("Records request presentation is unavailable");
+        const { branch, pullRequest, commits } = blob
+          ? CommandLineReview.parse(
+              JSON.parse(new TextDecoder().decode(blob.bytes)),
+            )
+          : {
+              branch: "",
+              pullRequest: null,
+              commits: yield* reviewCommitCount(project, base, head),
+            };
+        return {
+          review: event.id,
+          chat: z.coerce.number().int().nonnegative().parse(row.chat),
+          at: Date.parse(event.occurredAt),
+          range: { base, head, branch, commits },
+          baseRef,
+          pullRequest,
+        };
+      }),
+    );
+    return ReviewRequestsReplySchema.parse({ after: latest.seq, requests });
+  });
+
+async function watchReviewRequests(
+  project: string,
+  channel: string,
+  after: number,
+  signal: AbortSignal,
+): Promise<ReviewRequestsReply | null> {
+  const location = await execute(resolveStoreLocation(project));
+  const read = readReviewRequests(project, channel, after).pipe(
+    Effect.provide(Blobs.layer(location)),
+  );
+  const available = (program: typeof read) =>
+    withStore(project, "read", program, location).pipe(
+      Effect.catchIf(
+        (error) => error instanceof StoreMissing,
+        () => Effect.succeed(null),
+      ),
+    );
+  const existing = await execute(available(read));
+  if (existing) return existing;
+  if (signal.aborted) return null;
+  let change = Promise.withResolvers<void>();
+  const watch = Store.watchChanges(location, () => change.resolve());
+  const stopped = Promise.withResolvers<void>();
+  const abort = () => {
+    stopped.resolve();
+    change.resolve();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  let failure: Error | undefined;
+  void watch.failed.then((error) => {
+    failure = error;
+    abort();
+  });
+  const nextChange = async () => {
+    if (failure) throw failure;
+    if (signal.aborted) return;
+    await change.promise;
+    change = Promise.withResolvers<void>();
+    if (failure) throw failure;
+  };
+  try {
+    await Promise.race([watch.ready, stopped.promise]);
+    while (!signal.aborted) {
+      if (failure) throw failure;
+      const armings = watch.armings;
+      const reply = await execute(
+        available(
+          Effect.gen(function* () {
+            while (!signal.aborted && watch.armings === armings) {
+              const requests = yield* read;
+              if (requests) return requests;
+              yield* Effect.promise(nextChange);
+            }
+            return null;
+          }),
+        ),
+      );
+      if (reply) return reply;
+      if (watch.armings === armings) await nextChange();
+    }
+    return null;
+  } finally {
+    signal.removeEventListener("abort", abort);
+    await watch.close();
+  }
+}
+
 /** Subscribe before reading; SQLite file changes drive projections, with a bounded retry for busy stores. */
 export function recordsReviewFeed(
   project: string,
   channel: string,
   options: { intervalMs?: number; report?(error: unknown): void } = {},
-): ReviewFeedSource {
+): ReviewFeedSource & Required<Pick<ReviewFeedSource, "requests">> {
   return {
+    requests: (after, signal) =>
+      watchReviewRequests(project, channel, after, signal),
     async watch(review, receive, context, failed) {
       const location = await execute(resolveStoreLocation(project));
       let stopped = false;

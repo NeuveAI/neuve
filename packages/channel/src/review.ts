@@ -31,7 +31,7 @@ import { PlanningDoc, emptyPlanningState } from "./planning";
 import { BuildsDoc } from "./build";
 import { LanesDoc } from "./lanes";
 import { ReviewContextDoc } from "./review-context";
-import { ReviewCardsDoc, type ReviewCard } from "./review-cards";
+import { admittedReviewCard, ReviewCardsDoc, type ReviewCard } from "./review-cards";
 import { toolArguments } from "./tool-arguments";
 
 export * from "./review-protocol";
@@ -110,34 +110,12 @@ function cardFor(
 		(target.kind === "project-branch" ? target.against : undefined) ??
 		(handoff.success ? handoff.data.against : undefined) ??
 		value.range.base;
-	const baseLabel = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(against)
-		? against.slice(0, 7)
-		: against.replace(/^refs\/(heads|remotes|tags)\//, "");
-	return {
-		kind: "review",
-		review: value.review,
-		source:
-			target.kind === "project-branch"
-				? "branch"
-				: target.kind === "pull-request"
-					? "pull_request"
-					: "lane",
-		label:
-			target.kind === "pull-request"
-				? `${target.repo}#${target.number}`
-				: `${value.range.branch} against ${baseLabel}`,
-		range: value.range,
-		recovered: value.recovered,
-		notify: value.notify,
-		phase: "queued",
-		stage: null,
-		stages: [],
-		finished: null,
-		stopped: null,
-		newCommits: null,
-		links: null,
-		updatedAt: Date.now(),
-	};
+	return admittedReviewCard(
+		value,
+		target.kind === "project-branch" ? "branch" : target.kind === "pull-request" ? "pull_request" : "lane",
+		target.kind === "pull-request" ? `${target.repo}#${target.number}` : against,
+		Date.now(),
+	);
 }
 
 export function review(adapter?: Review): Extension {

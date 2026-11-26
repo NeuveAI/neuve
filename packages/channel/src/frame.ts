@@ -159,6 +159,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("plan-comments"), ...base, comments: z.array(PlanCommentSchema) }),
 	z.object({ kind: z.literal("builds"), ...base, builds: z.array(BuildSchema), messages: z.array(WorkMessageSchema) }),
 	z.object({ kind: z.literal("neuve:review:new-commits"), ...base, entry: id, at: z.number(), review: text, branch: text, reviewedHead: text, head: text, label: text }),
+	z.object({ kind: z.literal("neuve:review:requested"), ...base, entry: id, at: z.number(), review: text }),
 	z.object({
 		kind: z.literal("queue"),
 		...base,

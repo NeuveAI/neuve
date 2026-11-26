@@ -456,6 +456,94 @@ const newIntent = (lifetime: number) => {
   return intent;
 };
 
+// Requests must retain their targets and reach only their owning channel, including after catch-up.
+test("the Records request feed catches up on CLI reviews of its channel", async () => {
+  const channel = "request-feed";
+  const requester = {
+    _tag: "Agent" as const,
+    ...Identity.aceChatIdentity(channel, 7),
+  };
+  const range = `${base}..${head}`;
+  const branch = "request-feed-branch";
+  git("branch", branch, head);
+  try {
+    const tool = newIntent(61);
+    tool.handoff.channel = channel;
+    tool.handoff.chat = 7;
+    tool.handoff.origin = {
+      kind: "channel",
+      host: "fixture",
+      channel,
+      chat: 7,
+      items: [],
+    };
+    await callbacks.reviewSubmit(tool, async () => {});
+    const first = mintUlid();
+    await requestRangeReview(root, range, {
+      requestId: first,
+      requester,
+      branch,
+      frozenConfig: config,
+    });
+    await requestRangeReview(root, range, {
+      requester: {
+        _tag: "Agent",
+        ...Identity.aceChatIdentity("foreign-request-feed", 7),
+      },
+      frozenConfig: config,
+    });
+    git("branch", "-D", branch);
+    const signal = AbortSignal.timeout(5000);
+    expect(
+      (await callbacks.reviewRequests(root, channel, 0, signal))?.requests,
+    ).toEqual([
+      {
+        review: first,
+        chat: 7,
+        at: expect.any(Number),
+        baseRef: base,
+        range: { base, head, branch, commits: 1 },
+        pullRequest: null,
+      },
+    ]);
+  } finally {
+    git("update-ref", "-d", `refs/heads/${branch}`);
+  }
+}, 15000);
+
+// A review committed after subscription must reach the worker without a polling interval.
+test("a Records file change wakes a waiting CLI review request", async () => {
+  const channel = "live-request-feed";
+  const pull = "refs/pull/42/head";
+  const stop = new AbortController();
+  git("update-ref", pull, head);
+  const following = callbacks.reviewRequests(root, channel, 0, stop.signal);
+  void following.catch(() => {});
+  try {
+    await Bun.sleep(150);
+    const second = mintUlid();
+    await requestRangeReview(root, `${base}..${pull}`, {
+      requestId: second,
+      requester: { _tag: "Agent", ...Identity.aceChatIdentity(channel, 7) },
+      frozenConfig: config,
+    });
+    expect((await following)?.requests).toEqual([
+      {
+        review: second,
+        chat: 7,
+        at: expect.any(Number),
+        baseRef: base,
+        range: { base, head, branch: "", commits: 1 },
+        pullRequest: 42,
+      },
+    ]);
+  } finally {
+    stop.abort();
+    await following.catch(() => {});
+    git("update-ref", "-d", pull);
+  }
+}, 15000);
+
 // A chat's first CLI command can arrive before Records has registered its actor or opened a turn.
 test("CLI review, proof and vent record their owning Ace chats", async () => {
   const bin = mkdtempSync(join(tmpdir(), "native-review-process-table-"));
