@@ -11,11 +11,12 @@ export interface Received {
 export type Responder = (request: Request) => Response | Promise<Response>;
 
 /**
- * A local provider endpoint. Requests are kept as received; answers are queued per `session-id`, so
- * concurrent agent conversations each get their own, or in one shared queue.
+ * A local provider endpoint. Model-list requests have their own response; inference answers are
+ * queued per `session-id`, or in one shared queue.
  */
 export const openEndpoint = () => {
   const received: Array<Received> = [];
+  const modelLists: Headers[] = [];
   const shared: Array<Responder> = [];
   const bySession = new Map<string, Array<Responder>>();
   const server = Bun.serve({
@@ -23,8 +24,13 @@ export const openEndpoint = () => {
     port: 0,
     idleTimeout: 30,
     fetch: async (request) => {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path.endsWith("/models")) {
+        modelLists.push(request.headers);
+        return Response.json({ models: [] });
+      }
       received.push({
-        path: new URL(request.url).pathname,
+        path,
         headers: request.headers,
         body: (await request.json()) as Record<string, unknown>,
       });
@@ -38,6 +44,7 @@ export const openEndpoint = () => {
   return {
     server,
     received,
+    modelLists,
     respond: (...responders: Array<Responder>) => {
       shared.push(...responders);
     },

@@ -36,6 +36,7 @@ import {
   OWNER,
 } from "../../../../../packages/channel/tests/helpers.ts";
 import { SOL_ROUTE } from "../../../src/route.ts";
+import { rejectedToken } from "../../../src/openai-auth.ts";
 import { readCaptureJournal } from "../../../src/pi/capture/journal.ts";
 import { openRouteAdmission, createRouteModels } from "../../../src/coding.ts";
 import {
@@ -652,6 +653,14 @@ test("admission precedes the credential owner, including a cancelled call", asyn
     const models = await (
       await setup(path, endpoint)
     ).models(worker(path), nativeModels());
+    expect(
+      endpoint.modelLists.map((headers) => headers.get("authorization")),
+    ).toEqual(["Bearer tok-1"]);
+    const leasesBeforeCall = token.runs();
+    expect(leasesBeforeCall).toBe(1);
+    // A cached catalogue lease would hide a premature credential request.
+    rejectedToken("tok-1");
+    await Bun.sleep(0);
     const result = await models.completeSimple(
       models.getModel("openai", SOL_ROUTE.model)!,
       {
@@ -666,14 +675,14 @@ test("admission precedes the credential owner, including a cancelled call", asyn
       { signal: AbortSignal.timeout(30) },
     );
     expect(result.stopReason).toBe("aborted");
-    expect(token.runs()).toBe(0);
+    expect(token.runs()).toBe(leasesBeforeCall);
     expect(endpoint.received).toHaveLength(0);
     console.log(
       "ROUTE_AUTH_ORDER",
       JSON.stringify({
         stopReason: result.stopReason,
-        tokenLeases: 0,
-        requests: 0,
+        tokenLeases: token.runs() - leasesBeforeCall,
+        requests: endpoint.received.length,
       }),
     );
   } finally {
