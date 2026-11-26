@@ -1,0 +1,50 @@
+# Range-owned review: pending comparison cases
+
+The [candidate manifest](candidates.json) pins two **bug-present introducing ranges**, with SHA-256 hashes of relevant source files at their actual base/head revisions. It contains no approved expected results. These public Git objects do not require the private archive. Neither baseline nor treatment has run.
+
+| Candidate                  | Pinned source to investigate                                                                                 | Why it belongs in the candidate set                                                                                                                                                                |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Failed branch listing      | The introduction of read-cycle reuse, including request admission, the Git boundary and Records cycle lookup | Ordinary error handling plus an interaction across changed modules. Investigate the path from a failed `for-each-ref` to cycle selection/opening; do not infer a defect solely from the later fix. |
+| Fenced heading attribution | The introduction of file-line anchors and their plan-source consumer                                         | Ordinary attribution behavior. Investigate a Markdown code fence containing heading-shaped text and the resulting section attribution.                                                             |
+
+These are **hypotheses for adjudication**, selected after inspecting source/history. They are not independently established gold or a representative quality benchmark. The subsequent branch-listing/fence correction is in Git history at `38ad3b1f3db1255bdc62f751718cb549eba53ce5`; that fixing commit is _not_ either reviewed head and must not be given to the review arms. The manifest preserves the full original reviewed range, not a cherry-picked change made to resemble it.
+
+The confirmed four-comment hook-ordering example remains a separate blocked case. Its original source and reports are unavailable. Do not substitute a newly invented example and claim it is that incident.
+
+## Freeze expected results before either arm
+
+An independent source-only adjudicator receives each exact base/head range, applicable requirements and a neutral question about changed behavior. It receives neither baseline/treatment outputs nor this implementer's proposed verdict or the later fix. It may read callers, definitions and tests at those revisions. Keep that source packet and the adjudicator's first reasoning outside any review-arm checkout.
+
+For each accepted concern, retain its concrete failure path, whether it is a code defect or requirement failure, acceptable primary changed anchors, supporting context, source citations and adjudicator identity. Retain rejected/disputed hypotheses and their reasons in the adjudication record; do not silently remove difficult cases. An absent requirement cannot be invented. A test/proof gap alone cannot be labelled a verified code defect.
+
+Only then replace the manifest's `pending` adjudication with `frozen`, citing that record, its timestamp and the `caseBasis` digest. The [offline adapter](../../../packages/evaluation/src/harness-compare/full-test/owned-review.ts) verifies the pinned Git bytes and requires freezing before the retained run request. The boolean independence/blinding fields are attestations, not technical proof of independence. Repository staffing requires separate Claude sessions; no such adjudication is claimed here.
+
+The placement list pre-registers candidate _execution variants_, not source alterations or product batches. The branch case proposes single-assignment, cross-assignment and cross-batch variants; the heading case proposes single-assignment and cross-assignment variants. Before running, adjudicate whether those placements fit real section boundaries and behavior/obligation batches. Never force an invalid batch split merely to obtain a boundary case. An infeasible variant stays visible and requires another independently frozen case. Both arms retain the same Git provenance. Actual assignments, context availability and batch placement must be established from integrated retained traces; a requested variant is not evidence that a boundary was exercised. Variants of one source case share a family and must not inflate an aggregate sample as independent defects.
+
+## Offline collection and comparison boundary
+
+After the integrated source is independently approved, use the existing review/capture collection, not a new runner. Keep baseline and treatment in separate output folders; pin actual build/configuration identities, account/model/effort, tool/prompt versions, execution bounds, source, context/proof inputs and run receipts. Historical frozen packages stay unchanged. No model/review dispatch is implemented or authorized by these files.
+
+For each run, the adapter reads its real `export.json`, `show.json` and retained reading rows through the [existing reading collector](../../../packages/evaluation/src/harness-compare/full-test/readings-gate.ts), [publication guards](../../../packages/evaluation/src/harness-compare/full-test/packets.ts), and [candidate capture eligibility](../../../packages/evaluation/src/candidate/capture.ts). Pass capture observations from `readCandidateCapture`; do not manufacture a clean capture. Missing/unavailable capture, pending gold, incomplete/unreadable runs, mismatched source/run identities and missing delivery judgments make quality unscorable and suppress numeric pair differences. This preserves the [capture architecture's](../../../architecture/decisions/0014-ace-style-pi-harness.md#captures-and-evaluations) distinction between retained observations and eligible evidence.
+
+A separate arm-blind adjudication maps _every delivered comment's exact hash_ to a frozen expected concern, an independently supported additional concern, or an unsupported report. Keep its reasoning/source basis in the cited record. Additional findings need their own semantic keys; being absent from the answer key does not make a report false. Supported reports with the same independently judged identity count as duplicates; different concerns at the same line stay distinct. Overlap checks attribution only, never semantic identity. This follows the [correction-attribution principle](../../../foundations/03-unit-history-and-metrics.md#count-the-correction-while-preserving-its-attributions).
+
+The partial quality fields count supported **delivered** concerns, duplicate reports, unsupported reports, each individual missed expected concern, and wrong/missing primary anchors. They are not verified/standing disposition recall: a delivered comment may have invalid decision-support links. Invalid local `restsOn` targets are listed separately. Claim-to-comment support remains an open gate. Wrong ownership is checked only against the comment anchor's start row in the published unit; it is not exhaustive range-ownership validation.
+
+Whole-run capture input includes ordinary input, cache reads and cache writes; output is separate. Lane-review claim-check cost is a labelled subset through `probeCounts`, never total Verify cost (which also includes the old finders' checks). Unjudged _owned_ rows are counted from retained reading outcomes, not taken as full-range coverage. First settled latency uses the existing reading metric, while first publication and completion use the existing export. Timing differences require comparable timing runs.
+
+## Still blocking a complete evaluation
+
+The adapter is an offline baseline, not a completed quality study. It reports these as **not measured**, never zero or passed:
+
+- Full-range missing/unreviewed ownership, including work absent from all assignments.
+- Repeated reading from retained lookup inputs, distinguishing necessary shared context from waste.
+- Total Verify cost, original claim producer, claim-to-comment mapping and valid decision-support chains.
+- Actual cross-assignment/cross-batch placement, registered incoming claims, frozen publication, late information and its source/cycle attribution.
+- Assignment size and context/budget effects on detection.
+
+Do not expand those adapters until the upstream retained interfaces are available and reviewed. Reuse them rather than enter evaluator guesses by hand. The [reviewer's-tax foundation](../../../foundations/05-reviewers-tax.md#established-measurement-priorities) requires wrong attribution, missing attribution and total token use separately; savings cannot stand in for quality.
+
+Run production-configuration and comparable-total-cost comparisons separately on the full independently frozen set. The current offline helper accepts _exactly matched total input/output tokens_ for its matched-cost numeric pair; no tolerance or monetary price rule has been approved. This is a diagnostic pairing, not a budget-setting implementation or a production cost claim. A practical matched-budget protocol still needs pre-registration before dispatch. Do not discard unmatched or failed cases to manufacture savings. Preserve every case-level miss and non-scorable outcome alongside denominators; aggregate reduction cannot hide a serious boundary miss.
+
+`compareOwnedReviews` always says the overall conclusion is **not established**. It provides partial observations/differences, never equivalent recall, an automatic savings claim, a pass, or approval. Neither these synthetic adapter tests nor lower token use completes the architectural evaluation gate. The original hook case, independent expected-result adjudication, full retained-interface adaptation and real integrated comparison remain open.
