@@ -148,7 +148,8 @@ test("a workspace uses its profile for host identity and honors explicit HTTPS p
     expect(lane.ACE_CONFIG_HOME).toBe(join(dynamic.home, "settings"));
     expect(lane.ACE_KEYCHAIN_SERVICE).not.toBe("ace");
     expect(lane.ACE_KEYCHAIN_SERVICE).not.toBe(
-      laneWorkspaceEnvironment(join(root, "another-build")).ACE_KEYCHAIN_SERVICE,
+      laneWorkspaceEnvironment(join(root, "another-build"))
+        .ACE_KEYCHAIN_SERVICE,
     );
     expect(dynamic.environment).toEqual({
       ...storage.environment,

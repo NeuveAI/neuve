@@ -240,10 +240,7 @@ async function start(root: string, lane: string) {
   }
 }
 
-async function connectBrowser(
-  browserProfile: string,
-  signal: AbortSignal,
-) {
+async function connectBrowser(browserProfile: string, signal: AbortSignal) {
   const connected = await connectDevelopmentBrowser(
     browserProfile,
     signal,
