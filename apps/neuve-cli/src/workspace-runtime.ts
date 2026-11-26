@@ -19,6 +19,7 @@ import { routeCodingDefaults } from "./workspace-models.ts";
 import { writeSkillShare } from "./skill-bundle.ts";
 import { findSkillSource } from "./skills-cli.ts";
 import {
+  GIT_LOCAL,
   HostConfigSchema,
   configure,
   bindConfiguredCatalog,
@@ -34,6 +35,15 @@ import {
 } from "../../../scripts/pi-storage.ts";
 
 const RECEIPT = "workspace-runtime.json";
+
+export function useWorkspaceProject(): void {
+  const project = process.env.NEUVE_WORKSPACE_PROJECT;
+  if (!project) return;
+  // Consumed here, so channels and workers this command starts keep their own folders.
+  delete process.env.NEUVE_WORKSPACE_PROJECT;
+  for (const key of GIT_LOCAL) delete process.env[key];
+  process.chdir(project);
+}
 
 export function requireWorkspaceBun(executable: string): void {
   let version = "unreadable";

@@ -18,7 +18,7 @@ import { Channel, type Options, type ModelRef } from "@ace/channel";
 import { channelOperations, ExtensionRequestSchema, MUTATING } from "@ace/channel/operations";
 import type { Planning } from "@ace/channel/planning";
 import type { Review } from "@ace/channel/review";
-import { config, configure, CONFIG_VARIABLE, GIT_LOCAL, type HostConfig } from "./host-config";
+import { config, configure, CONFIG_VARIABLE, GIT_LOCAL, workspaceSettingsEnvironment, type HostConfig } from "./host-config";
 import { configureRuntime, runtimeHooks } from "./runtime-hooks";
 import { planExplore, planFileAccess, readBranch } from "./plan-git";
 import { installedNeuve } from "./environment";
@@ -440,8 +440,7 @@ export function applyWorkerEnvironment(): void {
 	}
 	for (const [name, value] of Object.entries(config.environment)) process.env[name] = value;
 	process.env.ACE_HOME = config.home;
-	process.env.ACE_CONFIG_HOME = join(config.home, "settings");
-	process.env.ACE_KEYCHAIN_SERVICE = `neuve-${config.home}`;
+	Object.assign(process.env, workspaceSettingsEnvironment(config.home, config.environment));
 	process.env.ACE_PORT = String(config.port);
 	process.env.ACE_USER = config.user;
 	process.env[CONFIG_VARIABLE] = JSON.stringify(config);

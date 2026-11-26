@@ -661,6 +661,8 @@ export const startCaptureWorker = (
                 PATH: process.env["PATH"] ?? "/usr/bin:/bin",
                 HOME: location.directory,
                 TMPDIR: location.directory,
+                ACE_CONFIG_HOME: process.env.ACE_CONFIG_HOME,
+                ACE_KEYCHAIN_SERVICE: process.env.ACE_KEYCHAIN_SERVICE,
               },
             },
           );

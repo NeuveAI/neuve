@@ -62,6 +62,14 @@
 			"types": "./.types/src/host-config.d.ts",
 			"default": "./src/host-config.ts"
 		},
+		"./lane-workspace": {
+			"types": "./.types/src/lane-workspace.d.ts",
+			"default": "./src/lane-workspace.ts"
+		},
+		"./browser": {
+			"types": "./.types/src/browser.d.ts",
+			"default": "./src/browser.ts"
+		},
 		"./planning": {
 			"types": "./.types/src/planning.d.ts",
 			"default": "./src/planning.ts"

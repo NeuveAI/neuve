@@ -91,65 +91,23 @@ The [pi implementation map](../architecture/decisions/0014-ace-style-pi-harness.
 
 ## Validate Ace in a second workspace
 
-A fresh lane worktree starts with an empty Graph submodule and no `node_modules`. Prepare it from the lane.
+From a work lane with its dependencies installed, run:
 
 ```sh
-git submodule update --init apps/neuve-graph
-bun install --frozen-lockfile
-bun run check:graph
+bun workspace lane
 ```
 
-From a lane, plain `bun workspace` and `bun ace` use the owner's storage and runtime receipt. Lanes sit under `~/Library/Application Support/Neuve/workspace/worktrees/neuve-lanes/<channel id>/`. Create the scratch folder on LaCie for the launcher's profile and point the CLI at that profile's host home. The [storage validator](../scripts/pi-storage.ts) checks that the lane and the main checkout share a Git common directory.
+The command builds Ace and Neuve from the lane and opens a signed-in tab in the caller's dedicated development browser. It returns once the tab has loaded and cleared the sign-in fragment. Its JSON record gives the addresses, ports, process IDs, build log, and environment for `neuve` and `bun ace`. Apply the record's `environment` when running those commands from the lane.
+
+Each run uses a separate scratch folder under `/Volumes/LaCie Blu/neuve-validation/` and has its own Ace settings folder and keychain service. Ace opens a local clone at the lane's HEAD so the build has its own Records store. Mount LaCie before starting.
+
+Stop the build from the same lane before finishing or removing the lane:
 
 ```sh
-lane="$(pwd -P)"
-canonical="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
-scratch="$(mktemp -d '/Volumes/LaCie Blu/neuve-validation.XXXXXX')"
-cat > "$scratch/profile.json" <<EOF
-{
-  "sourceCheckout": "$lane",
-  "paths": {
-    "canonicalClone": "$canonical",
-    "worktrees": "$scratch/worktrees",
-    "state": "$scratch/state",
-    "captures": "$scratch/captures",
-    "cache": "$scratch/cache",
-    "bunCache": "$scratch/bun-cache",
-    "tmp": "$scratch/tmp",
-    "builds": "$scratch/builds"
-  }
-}
-EOF
-
-# Keep stdin open. The launcher exits on EOF.
-mkfifo "$scratch/input"
-tail -f /dev/null > "$scratch/input" &
-input_pid=$!
-bun --no-env-file ./apps/neuve-cli/src/cli.ts workspace \
-  --profile "$scratch/profile.json" --repo "$lane" --web-port 0 --port 0 --loopback \
-  < "$scratch/input" > "$scratch/startup.log" 2>&1 &
-workspace_pid=$!
-printf '%s\n' "$workspace_pid" > "$scratch/workspace.pid"
-printf '%s\n' "$input_pid" > "$scratch/input.pid"
+bun workspace lane stop
 ```
 
-Wait for the `"neuve-host":"ready"` record in `startup.log`. To sign in, type that workspace's `web` address straight into the browser with `#token=` followed by the token from its `tokenFile`. Use only the second workspace's token. Keep it and the sign-in URL out of command lines, logs, proof, screenshots, and commits.
-
-Run CLI commands from the lane with the isolated host home.
-
-```sh
-ACE_HOME="$scratch/state/neuve-host" bun ace ls
-```
-
-After validation, let the launcher close its host, workers and web listener. Once the launcher has exited, delete the scratch folder that holds the workspace's token file.
-
-```sh
-kill -TERM "$(cat "$scratch/workspace.pid")"
-wait "$workspace_pid"
-kill -TERM "$(cat "$scratch/input.pid")"
-wait "$input_pid" || true
-rm -rf -- "$scratch"
-```
+Stop shuts down the build, closes the build's tab, and removes its scratch. The dedicated development browser stays running. Archiving the channel also stops builds for its recorded lanes.
 
 ## Linear planning integration
 

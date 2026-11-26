@@ -213,6 +213,12 @@ const runQuery = async (args: readonly string[]): Promise<number> => {
 const main = async (args: readonly string[]): Promise<number> => {
   const command = args[0];
   if (
+    !RELEASE_BUILD &&
+    command !== "workspace" &&
+    process.env.NEUVE_WORKSPACE_PROJECT
+  )
+    (await import("./workspace-runtime.ts")).useWorkspaceProject();
+  if (
     command === "--help" ||
     command === "help" ||
     command === undefined ||
