@@ -2,17 +2,19 @@
 
 Status: accepted, 16 October 2026; revised 23 October 2026 and for NEU-148, November 2026. Source: decisions [1.10, 2.8, 4.1–4.14, 10.4, 10.9, 10.55–10.59, 10.109, 10.110, 10.120, 11.1, 11.8, 11.16–11.21, 13.23 and 14.3–14.6, 14.12, 14.13 and 14.19](../../process/decisions.md).
 
-## Fixed-shape trial
+## Execution assignments and historical compatibility
 
-The NEU-111 trial uses Frame's done-when conditions and Map's groups in place of agent-confirmed candidate batches. Code assigns each group proximity units, or, with responsibility sections on, units by section, preserving every changed range. Lockfiles and declared-generated files form one code-only batch.
+The owner's [range-owned comprehensive-review ruling](../../process/decisions.md#range-owned-comprehensive-review) replaces the four-finder trial with comprehensive Lane review within deterministic, bounded, single-batch assignments. Map still groups work by behavior or obligation. A reading group is an execution assignment, not a batch, review unit or approval boundary. One reviewer can cover several units and several assignments can contribute to one batch. Section and unit identity never change merely to make convenient execution groups.
 
-With the readings off, code fill records Facts, human-suggested and not-assessed for units without an assessment. Link adds kept, verified findings to the unit that owns their primary anchor. A defect produces a request for changes resting on its comments. Risks and questions add comments without a disposition. Link never approves, and untouched units have no disposition. Publish records pending Guided rows and one assessment gap per batch.
+Every reviewable changed row has one primary assignment, with explicit causes for work excluded, unreadable, too large or unreached. Assignment is not completed review. Reviewers may read callers, definitions, tests and sibling changes outside the assignment as attributed surrounding context without acquiring the neighboring disposition authority. Assess remains separate from comprehensive defect investigation.
 
-These trial rules hold only for a review with the readings off. Carried judgements and background model preparation are disabled during the trial. Old events and packets remain readable. The [pipeline record](0005-harness-pipeline.md) holds execution bounds. The owner settled the target in 13.23 and [Area 14](../../process/decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026): every unit in the agent-decided lanes carries its lane's judgement and disposition; work no agent could judge is human-required; results are published per settled batch. The established policy below is that target.
+A wholly cross-boundary observation routes by its primary changed anchor through claim verification to the destination owner, preserving its original producer and evidence. The routed claim is not a second independent vote and never implicitly approves its destination. A batch waits only for its required judgments and registered incoming claims. Registration and publication closure serialize; an observation discovered after closure is exposed as later review information, not inserted into the frozen package or treated as resolved. The [pipeline record](0005-harness-pipeline.md) defines the settlement contract and bounds.
+
+New-version reviews always use comprehensive review and responsibility sections; the historical readings-off configuration cannot bypass that responsibility. Older event/package schemas remain readable and unchanged. Legacy execution is handled explicitly under its pipeline identity, never silently upgraded into the new ownership contract. The established product policy below remains the authority for lanes, units and cycles.
 
 ## Established product policy
 
-The policy below remains the product reference where the trial has not replaced execution. It does not describe the trial's assessment coverage.
+The policy below is the product reference. Execution assignments divide investigation without changing its decision boundaries.
 
 - **Batches** come from behaviour and obligation. One commit range can produce several batches, each with a single focus. The batch overview shows one batch and its batch digest.
 - **Review units** are one file's sections that share a review lane, within a batch (10.109, 10.120). A section is part of a file's changed lines cut at Graph's symbol boundaries (a class kept whole, Markdown by heading, a named line-window fallback elsewhere). A unit owns only its sections' line ranges, removed lines included, plus surrounding context that may include padding and other code.
@@ -39,7 +41,7 @@ The policy below remains the product reference where the trial has not replaced 
 
 ## Consequences
 
-- With the readings off, the trial generates no quadrant assessments or suggested approvals. With them, every section is assessed and `assessment.recorded@4` records the lane, the rule version, each section's lane trail and the undecided counts by cause; the desk reads both the old and the new records. Older builds skip the new kinds and show no review for a new-style review, with a one-line notice.
-- Gaps never stop a package from reaching people. A batch waits only while one of its sections is not reached and a follow-on run remains, or while a quota refusal leaves it pending; both are disclosed.
+- New-version reviews retain per-section assessments and `assessment.recorded@4` lane trails and undecided counts. Historical readings-off packages keep their original lack of quadrant assessments or suggested approvals; no compatibility reader invents them. The desk reads supported old and new records. Older builds skip unsupported kinds and show no review for a new-style review, with a one-line notice.
+- Gaps never conceal work or manufacture an approval. Publication waits for the batch's required judgments and registered claim checks. Existing not-reached/follow-on and quota-pending rules remain disclosed; they do not introduce a range-wide reviewer barrier.
 - Records keeps each checkpoint's anchors with its requirement, so the BFF projects them and never infers lines.
 - The vocabulary entries for "review cycle" and "packet" need the owner's approval to reflect these definitions. The design's working words (section, reading group, code risk floor, backstop) do not become vocabulary.
