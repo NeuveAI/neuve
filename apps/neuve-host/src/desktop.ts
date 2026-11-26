@@ -36,8 +36,8 @@ const availableSocket = ({ client, socket } = desktopPaths()) => {
 
 export const desktopAvailable = () => availableSocket() !== undefined;
 
-const connectionRefused = (path: string, signal: AbortSignal) => new Promise<boolean>((resolve) => {
-	const socket = createConnection({ path, signal });
+const connectionRefused = (path: string, signal?: AbortSignal) => new Promise<boolean>((resolve) => {
+	const socket = createConnection(signal === undefined ? { path } : { path, signal });
 	socket.once("error", (error) => {
 		resolve("code" in error && (error.code === "ECONNREFUSED" || error.code === "ENOENT"));
 	});
