@@ -1,8 +1,15 @@
 // Evaluation integrity needs tests: incomplete evidence must not become measured recall/savings,
 // and semantic concern identity must not be inferred from overlapping anchors. The publications,
 // capture marks and expected judgments below are synthetic test data, not benchmark gold or proof.
-import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +37,54 @@ const candidates = (
 const original = candidates[0]!;
 const path = "packages/harness/src/request.ts";
 const anchor = { path, side: "new" as const, startLine: 479, endLine: 479 };
+// Adapter fixtures must not depend on historical objects in the developer checkout: CI is
+// shallow. One isolated synthetic commit supplies actual Git bytes, not benchmark gold.
+const syntheticRepository = mkdtempSync(join(tmpdir(), "owned-review-source-"));
+const git = (...args: string[]) => {
+  const result = spawnSync("git", ["-C", syntheticRepository, ...args], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0)
+    throw new Error(`synthetic Git fixture failed: ${result.stderr}`);
+  return result.stdout.trim();
+};
+git("init", "-q");
+mkdirSync(join(syntheticRepository, "packages/harness/src"), {
+  recursive: true,
+});
+const source = Array.from(
+  { length: 480 },
+  (_, i) => `// synthetic source row ${i + 1}`,
+).join("\n");
+writeFileSync(join(syntheticRepository, path), source);
+git("add", "--", path);
+git(
+  "-c",
+  "user.name=Synthetic fixture",
+  "-c",
+  "user.email=fixture@example.invalid",
+  "-c",
+  "commit.gpgsign=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "commit",
+  "-qm",
+  "Synthetic adapter source",
+);
+const revision = git("rev-parse", "HEAD");
+const synthetic: StudyCase = {
+  id: "synthetic-adapter",
+  family: "synthetic-adapter",
+  base: revision,
+  head: revision,
+  sources: [{ revision, path, sha256: hash(source) }],
+  placements: ["single-assignment"],
+  adjudication: {
+    status: "pending",
+    reason: "Synthetic fixture, never benchmark gold",
+  },
+};
+afterAll(() => rmSync(syntheticRepository, { recursive: true, force: true }));
 const folders: string[] = [];
 afterEach(() => {
   for (const folder of folders.splice(0))
@@ -69,10 +124,10 @@ const fixture = (runId = "baseline") => {
   const folder = mkdtempSync(join(tmpdir(), "owned-review-"));
   folders.push(folder);
   const kase: StudyCase = {
-    ...structuredClone(original),
+    ...structuredClone(synthetic),
     adjudication: {
       status: "frozen",
-      basis: caseBasis(original),
+      basis: caseBasis(synthetic),
       at: "2026-11-25T00:00:00.000Z",
       sourceOnly: true,
       adjudicators: ["synthetic-independent-judge"],
@@ -213,7 +268,7 @@ const fixture = (runId = "baseline") => {
   ) => {
     save();
     return readOwnedReview({
-      repository,
+      repository: syntheticRepository,
       folder,
       kase,
       judgments,
@@ -224,14 +279,26 @@ const fixture = (runId = "baseline") => {
   return { read, save, folder, kase, judgments, shown, exported, rows };
 };
 
-test("candidate ranges pin actual bug-present source, stay pending, and do not depend on private archives", () => {
+test("candidate pins stay pending; absent historical objects fail closed without requiring a full checkout", () => {
   expect(candidates.length).toBe(2);
   for (const c of candidates) {
-    expect(sourceProblems(repository, c)).toEqual([]);
+    const problems = sourceProblems(repository, c);
+    // Validate available history, but a shallow checkout cannot establish historical source.
+    if (problems.length > 0)
+      expect(
+        problems.some((p) => p.startsWith("source commit unavailable:")),
+      ).toBe(true);
     expect(c.adjudication.status).toBe("pending");
+    // This isolated repository deliberately has none of the historical candidate objects.
+    expect(sourceProblems(syntheticRepository, c)).toContain(
+      `source commit unavailable: ${c.head}`,
+    );
   }
   const f = fixture();
   const score = f.read({ kase: original });
+  expect(
+    score.blockers.some((b) => b.startsWith("source commit unavailable:")),
+  ).toBe(true);
   expect(score.quality).toBeNull();
   expect(score.blockers.some((b) => b.includes("pending"))).toBe(true);
   const comparison = compareOwnedReviews(score, score, "production");
@@ -356,7 +423,7 @@ test("delivery judgments bind the entire frozen answer key, not just reviewed so
     context: [],
   });
   const score = f.read();
-  expect(score.basis).toBe(caseBasis(original));
+  expect(score.basis).toBe(caseBasis(synthetic));
   expect(score.blockers).toContain(
     "delivery judgments do not bind this frozen answer key",
   );
