@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "branch-listing-failure",
+      "family": "branch-listing-failure",
+      "base": "f2b4d8054d4d62c4afd53020daf601643ef18019",
+      "head": "f2f0727b79da5fbd9328c1484580c7a3e77f5740",
+      "sources": [
+        {
+          "revision": "f2b4d8054d4d62c4afd53020daf601643ef18019",
+          "path": "packages/harness/src/request.ts",
+          "sha256": "09f50e2fab4053d3156df12ff8f3a22ab0b52eef6b3e3313953885ee56eb5f79"
+        },
+        {
+          "revision": "f2b4d8054d4d62c4afd53020daf601643ef18019",
+          "path": "packages/harness/src/git.ts",
+          "sha256": "143ea70052ebb5a552288971caa1036d482487bb87a63af3b1e6d0c549b68837"
+        },
+        {
+          "revision": "f2f0727b79da5fbd9328c1484580c7a3e77f5740",
+          "path": "packages/harness/src/request.ts",
+          "sha256": "3d4f5529dd1e75354d8116b02b79ec2f1ce29628791b6370ef967fe7ecd79788"
+        },
+        {
+          "revision": "f2f0727b79da5fbd9328c1484580c7a3e77f5740",
+          "path": "packages/harness/src/git.ts",
+          "sha256": "143ea70052ebb5a552288971caa1036d482487bb87a63af3b1e6d0c549b68837"
+        },
+        {
+          "revision": "f2f0727b79da5fbd9328c1484580c7a3e77f5740",
+          "path": "packages/records-core/src/cycles.ts",
+          "sha256": "6eb0bb2931f512036bbbb1017a91519e47624e43a55d2c24910e5590fe7ddb2c"
+        }
+      ],
+      "placements": ["single-assignment", "cross-assignment", "cross-batch"],
+      "adjudication": {
+        "status": "pending",
+        "reason": "Independent source-only adjudication has not frozen the failure path, anchors, requirements and placement feasibility. No baseline or treatment has run."
+      }
+    },
+    {
+      "id": "fenced-heading-attribution",
+      "family": "fenced-heading-attribution",
+      "base": "9008657ed07577750d834c35b06a88bf2d07c466",
+      "head": "97c8b54d1368177127331f28c1d840a5ab4138fa",
+      "sources": [
+        {
+          "revision": "9008657ed07577750d834c35b06a88bf2d07c466",
+          "path": "apps/neuve-host/src/plan-git.ts",
+          "sha256": "7e95687f9d3896ac30546e22d95c1ef29a12cc82cced31363e27a4eac9f87c5f"
+        },
+        {
+          "revision": "97c8b54d1368177127331f28c1d840a5ab4138fa",
+          "path": "packages/review-rules/src/file-lines-anchor.ts",
+          "sha256": "d94dc01a56f5ad8708c6d4787af2bf546d31631948726e106e1ffedf06b95fd4"
+        },
+        {
+          "revision": "97c8b54d1368177127331f28c1d840a5ab4138fa",
+          "path": "apps/neuve-host/src/plan-git.ts",
+          "sha256": "7e95687f9d3896ac30546e22d95c1ef29a12cc82cced31363e27a4eac9f87c5f"
+        }
+      ],
+      "placements": ["single-assignment", "cross-assignment"],
+      "adjudication": {
+        "status": "pending",
+        "reason": "Independent source-only adjudication has not frozen the failure path, anchors, requirements and placement feasibility. No baseline or treatment has run."
+      }
+    }
+  ],
+  "blocked": [
+    {
+      "case": "original-four-comment-hook-ordering",
+      "reason": "Original source and reports unavailable. Do not substitute an invented reproduction."
+    }
+  ]
+}
