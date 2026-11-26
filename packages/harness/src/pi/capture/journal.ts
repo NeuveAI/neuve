@@ -561,6 +561,7 @@ export const openCaptureJournal = (
               closeSync(fd);
             }
             renameSync(staging, reserve);
+            syncPath(directory);
           } finally {
             rmSync(staging, { force: true });
           }
