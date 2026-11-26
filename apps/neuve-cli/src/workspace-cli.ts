@@ -212,18 +212,22 @@ export function codingWorkerSetup(
       },
     );
     journals.set(worker.sessionId, opened);
-    opened.capture({
-      type: "run.start",
-      scope: { runId: worker.sessionId },
-      runKind: "coding",
-      sourceRevision: {
-        status: "not-applicable",
-        reason:
-          "A coding session spans mutable project work and has no single reviewed revision.",
-      },
-      route: `${route.provider}/${route.model}`,
-      pricing: route.price === null ? "subscription" : "metered",
-    });
+    try {
+      opened.capture({
+        type: "run.start",
+        scope: { runId: worker.sessionId },
+        runKind: "coding",
+        sourceRevision: {
+          status: "not-applicable",
+          reason:
+            "A coding session spans mutable project work and has no single reviewed revision.",
+        },
+        route: `${route.provider}/${route.model}`,
+        pricing: route.price === null ? "subscription" : "metered",
+      });
+    } catch (error) {
+      if (!captureWriteFailure(error)) throw error;
+    }
     return opened;
   };
   const captureWriteFailure = (
@@ -250,15 +254,6 @@ export function codingWorkerSetup(
         `${JSON.stringify({ type: "capture.loss", runId: worker.sessionId, ...loss, persisted })}\n`,
       );
     };
-  const modelCapture = (worker: WorkerContext) => {
-    try {
-      return journal(worker).capture;
-    } catch (error) {
-      const opened = journals.get(worker.sessionId);
-      if (opened === undefined || !captureWriteFailure(error)) throw error;
-      return opened.capture;
-    }
-  };
   return {
     async query(
       _worker,
@@ -442,7 +437,7 @@ export function codingWorkerSetup(
         ...transport,
         route,
         ...admission(worker),
-        capture: modelCapture(worker),
+        capture: journal(worker).capture,
         credentialInspection: inspection(worker),
         runId: worker.sessionId,
         sessionAffinity: worker.sessionId,
@@ -485,7 +480,7 @@ export function codingWorkerSetup(
         ...transport,
         route,
         ...admission(worker),
-        capture: modelCapture(worker),
+        capture: journal(worker).capture,
         credentialInspection: inspection(worker),
         runId: worker.sessionId,
         sessionAffinity: worker.sessionId,

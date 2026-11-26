@@ -207,44 +207,332 @@ for (const lostBind of [false, true]) {
   });
 }
 
-for (const target of ["journal", "reserve"] as const) {
-  test(`a channel cannot start when the ${target} cannot be written`, async () => {
+for (const scenario of [
+  "registered",
+  "unregistered",
+  "unwritable",
+  "no reserve",
+] as const) {
+  test(`a restarted channel handles credential loss (${scenario})`, async () => {
     const directory = await mkdtemp(join(tmpdir(), "neuve-capture-start-"));
+    const source = join(directory, "source");
+    await mkdir(source);
+    const ownership = SourceOwnership.acquire(source);
+    const inspection = createPrivateInspection({
+      ownership,
+      source,
+      directory: join(directory, "private"),
+      excludedRoots: [source],
+    });
+    const nativeDatabase = join(source, "pi.sqlite");
+    const storage = await openNodeSqliteStorage(nativeDatabase);
     try {
-      const fault =
-        target === "journal"
-          ? spyOn(fs, "appendFileSync").mockImplementation(() => {
-              throw diskFull();
-            })
-          : spyOn(fs, "writeFileSync").mockImplementation(() => {
-              throw diskFull();
-            });
+      const runId = "restarted-channel";
+      const captureDirectory = join(source, "capture");
+      const hasReserve = scenario !== "no reserve";
+      const writable = scenario === "registered" || scenario === "unregistered";
+      const previous = openCaptureJournal(captureDirectory, runId, {
+        ...(hasReserve ? { allowCredentialLoss: true } : {}),
+      });
+      previous.capture({
+        type: "run.start",
+        scope: { runId },
+        runKind: "coding",
+        sourceRevision: { status: "not-applicable", reason: "Scratch chat" },
+        route: SOL_ROUTE.provider,
+        pricing: "subscription",
+      });
+      const append = spyOn(fs, "appendFileSync").mockImplementation(() => {
+        throw diskFull();
+      });
       try {
-        expect(() =>
-          openCaptureJournal(directory, "channel", {
-            allowCredentialLoss: true,
-          }),
-        ).toThrow(
+        expect(previous.close).toThrow(
+          expect.objectContaining({ event: "journal.close" }),
+        );
+      } finally {
+        append.mockRestore();
+      }
+      const before = await readFile(join(captureDirectory, JOURNAL_FILE));
+      const limits = writable
+        ? { ...DEFAULT_LIMITS, journalBytes: before.byteLength }
+        : DEFAULT_LIMITS;
+      const auth = { tokenCommand: tokenCommand(directory, "lease").path };
+      const log = openRunLog(storeLocationIn(directory), "worker");
+      const appendFault = writable
+        ? undefined
+        : spyOn(fs, "appendFileSync").mockImplementation(() => {
+            throw diskFull();
+          });
+      const write = fs.writeFileSync;
+      const sideFileFault = writable
+        ? undefined
+        : spyOn(fs, "writeFileSync").mockImplementation(
+            (path, data, options) => {
+              if (
+                typeof path === "number" ||
+                (typeof path === "string" &&
+                  path.startsWith(captureDirectory + "/"))
+              )
+                throw diskFull();
+              write(path, data, options);
+            },
+          );
+      const exec = Database.prototype.exec;
+      const authorityFault =
+        scenario === "unregistered"
+          ? spyOn(Database.prototype, "exec").mockImplementation(function (
+              this: Database,
+              ...args
+            ) {
+              if (
+                args[0] === "COMMIT" &&
+                this.filename.endsWith("/private/authority.sqlite")
+              )
+                throw Object.assign(new Error("registration write failed"), {
+                  code: "SQLITE_FULL",
+                });
+              return exec.apply(this, args);
+            })
+          : undefined;
+      try {
+        const restarted = openCaptureJournal(captureDirectory, runId, {
+          allowCredentialLoss: true,
+          limits,
+          log,
+        });
+        let sent = 0;
+        const models = createRouteModels({
+          route: SOL_ROUTE,
+          retry: { maxRetries: 1, baseDelayMs: 1 },
+          log,
+          runId,
+          sessionAffinity: runId,
+          auth,
+          credentialInspection: inspection,
+          capture: restarted.capture,
+          fetch: Object.assign(
+            async () => {
+              sent++;
+              return answer("Done.");
+            },
+            { preconnect() {} },
+          ),
+        });
+        const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
+        if (!model) throw new Error("Expected coding route model");
+        if (hasReserve) {
+          for (const result of [
+            await models.complete(model, prompt),
+            await models.complete(model, prompt),
+          ]) {
+            expect(result.stopReason).toBe("stop");
+            expect(result.content).toContainEqual(
+              expect.objectContaining({ type: "text", text: "Done." }),
+            );
+          }
+          expect(sent).toBe(2);
+        } else {
+          const result = await models.complete(model, prompt);
+          expect(result.errorMessage).toContain(
+            "The call stopped because a credential could slip through unrecorded.",
+          );
+          expect(routeFailureOf(result)).toMatchObject({ kind: "capture" });
+          expect(isRetryableAssistantError(result)).toBe(false);
+          expect(sent).toBe(0);
+        }
+        expect(restarted.close).toThrow(
+          expect.objectContaining({ event: "journal.open" }),
+        );
+      } finally {
+        authorityFault?.mockRestore();
+        sideFileFault?.mockRestore();
+        appendFault?.mockRestore();
+      }
+      expect(await readFile(join(captureDirectory, JOURNAL_FILE))).toEqual(
+        before,
+      );
+      await log.flush?.();
+      const events = log.read();
+      const losses = events
+        .filter(({ type }) => type === "model.call")
+        .map(({ call }) => ({
+          callId: String(call),
+          event: "credential.registration",
+          kind: scenario === "registered" ? "full" : "io",
+          reason: scenario === "registered" ? "journal limit" : "disk full",
+        }));
+      expect(losses).toHaveLength(hasReserve ? 2 : 1);
+      expect(events.filter(({ type }) => type === "capture.loss")).toEqual(
+        losses.map((loss) =>
+          expect.objectContaining({ ...loss, persisted: hasReserve }),
+        ),
+      );
+      const lossFile = join(captureDirectory, CAPTURE_LOSS_FILE);
+      const reserve = join(captureDirectory, CREDENTIAL_LOSS_RESERVE_FILE);
+      const expected = losses.map((loss) => expect.objectContaining(loss));
+      if (scenario === "registered") {
+        expect(decodeCaptureLosses(await readFile(lossFile))).toEqual(expected);
+        expect(
+          decodeCredentialLossReserve(await readFile(reserve), true),
+        ).toEqual([]);
+      } else {
+        expect(fs.existsSync(lossFile)).toBe(false);
+        if (hasReserve)
+          expect(
+            decodeCredentialLossReserve(await readFile(reserve), true),
+          ).toEqual(expected);
+        else expect(fs.existsSync(reserve)).toBe(false);
+      }
+      const input = {
+        journal: captureDirectory,
+        runId,
+        limits,
+        nativeDatabase,
+        credentialInspection: inspection,
+      };
+      if (scenario === "unregistered") {
+        await expect(buildDump(input)).rejects.toThrow(
+          "the scan could not identify the credential",
+        );
+      } else {
+        const { run } = await buildDump(input);
+        expect(run.complete).toBe(false);
+        expect(run.gaps).toContainEqual(
           expect.objectContaining({
-            event: "journal.open",
-            writeCode: "ENOSPC",
-            message: expect.stringContaining(
-              target === "journal"
-                ? "could not open the capture journal"
-                : "could not prepare the credential registration loss reserve",
+            code: "journal-interrupted",
+            count: 1,
+          }),
+        );
+        if (hasReserve) {
+          const gap = run.gaps.find(({ code }) => code === "journal-failed");
+          expect(gap?.count).toBe(2);
+          for (const loss of losses)
+            expect(gap?.detail).toContain(
+              `call ${loss.callId} lost capture at credential.registration`,
+            );
+        }
+      }
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+      inspection.close();
+      ownership.release();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const reserveWritable of [true, false]) {
+  test(`ordinary capture loss when the loss record fails and the reserve is ${reserveWritable ? "writable" : "unwritable"}`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "neuve-ordinary-loss-"));
+    try {
+      const runId = "ordinary-loss";
+      const log = openRunLog(storeLocationIn(directory), "worker");
+      const captureDirectory = join(directory, "capture");
+      const journal = openCaptureJournal(captureDirectory, runId, {
+        allowCredentialLoss: true,
+        log,
+      });
+      const auth = { tokenCommand: tokenCommand(directory, "lease").path };
+      const models = createRouteModels({
+        route: SOL_ROUTE,
+        retry: { maxRetries: 1, baseDelayMs: 1 },
+        log,
+        runId,
+        sessionAffinity: runId,
+        auth,
+        credentialInspection: "ephemeral",
+        capture: journal.capture,
+        fetch: Object.assign(async () => answer("Done."), { preconnect() {} }),
+      });
+      const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
+      if (!model) throw new Error("Expected coding route model");
+      const append = fs.appendFileSync;
+      const journalFault = spyOn(fs, "appendFileSync").mockImplementation(
+        (path, data, options) => {
+          if (String(data).includes('"type":"model.request"')) throw diskFull();
+          append(path, data, options);
+        },
+      );
+      const writeFile = fs.writeFileSync;
+      const lossFault = spyOn(fs, "writeFileSync").mockImplementation(
+        (path, data, options) => {
+          if (
+            typeof path === "string" &&
+            path.startsWith(captureDirectory + "/") &&
+            path.endsWith(".partial")
+          )
+            throw diskFull();
+          writeFile(path, data, options);
+        },
+      );
+      let reserveWriteAttempts = 0;
+      const reserveFault = reserveWritable
+        ? undefined
+        : spyOn(fs, "writeSync").mockImplementation(() => {
+            reserveWriteAttempts++;
+            throw diskFull();
+          });
+      try {
+        const result = await models.complete(model, prompt);
+        expect(result.stopReason).toBe("stop");
+        expect(result.content).toContainEqual(
+          expect.objectContaining({ type: "text", text: "Done." }),
+        );
+      } finally {
+        reserveFault?.mockRestore();
+        lossFault.mockRestore();
+        journalFault.mockRestore();
+      }
+      const read = () =>
+        decodeCredentialLossReserve(
+          fs.readFileSync(join(captureDirectory, CREDENTIAL_LOSS_RESERVE_FILE)),
+          true,
+        );
+      await log.flush?.();
+      const call = log.read().find(({ type }) => type === "model.call");
+      const loss = {
+        callId: String(call?.call),
+        event: "model.request",
+        kind: "io",
+        reason: "disk full",
+      };
+      expect(read()).toEqual(
+        reserveWritable ? [expect.objectContaining(loss)] : [],
+      );
+      if (!reserveWritable) expect(reserveWriteAttempts).toBe(1);
+      expect(
+        log.read().find(({ type }) => type === "capture.loss"),
+      ).toMatchObject({
+        ...loss,
+        persisted: reserveWritable,
+      });
+      if (reserveWritable) journal.close();
+      else
+        expect(journal.close).toThrow(
+          expect.objectContaining({ event: "model.request" }),
+        );
+      const { run } = await buildDump({ journal: captureDirectory, runId });
+      expect(run.complete).toBe(false);
+      if (reserveWritable) {
+        expect(run.gaps).toContainEqual(
+          expect.objectContaining({
+            code: "journal-failed",
+            detail: expect.stringContaining(
+              `call ${loss.callId} lost capture at model.request`,
             ),
           }),
         );
-        expect(readCaptureJournal(directory)).toMatchObject({
-          _tag: "Read",
-          lines: [],
-        });
-      } finally {
-        fault.mockRestore();
+      } else {
+        expect(run.gaps).toContainEqual(
+          expect.objectContaining({
+            code: "journal-interrupted",
+            count: 1,
+          }),
+        );
+        expect(run.gaps.map(({ code }) => code)).not.toContain(
+          "journal-failed",
+        );
       }
-      openCaptureJournal(directory, "channel", {
-        allowCredentialLoss: true,
-      }).close();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

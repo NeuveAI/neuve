@@ -35,7 +35,7 @@ import {
   emptyCredentialLossReserve,
   expectsCredentialLossReserve,
   readLossFile,
-  recordCredentialLoss,
+  recordReservedCaptureLoss,
 } from "./credential-loss-reserve.ts";
 import {
   CAPTURE_VERSION,
@@ -313,6 +313,70 @@ const completeLines = (path: string, directory: string, limit: number) => {
   return { lines, bytes: end };
 };
 
+const earlierSessionNamedReserve = (
+  path: string,
+  runId: string,
+  priorBytes: number,
+): boolean => {
+  if (priorBytes === 0) return false;
+  const marker = Buffer.from('"credentialLossReserve":true');
+  const maxMarkBytes = Buffer.byteLength(JSON.stringify(runId)) + 256;
+  const chunk = Buffer.alloc(64 * 1024 + maxMarkBytes);
+  try {
+    const fd = openSync(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      const info = fstatSync(fd);
+      if (!info.isFile()) return false;
+      const size = Math.min(info.size, priorBytes);
+      for (let offset = 0, tail = 0; offset < size;) {
+        const count = readSync(
+          fd,
+          chunk,
+          tail,
+          Math.min(chunk.length - tail, size - offset),
+          offset,
+        );
+        if (count === 0) return false;
+        const bytes = chunk.subarray(0, tail + count);
+        for (
+          let at = bytes.indexOf(marker);
+          at !== -1;
+          at = bytes.indexOf(marker, at + marker.length)
+        ) {
+          const start = bytes.lastIndexOf(10, at) + 1;
+          const end = bytes.indexOf(10, at);
+          if (
+            end === -1 ||
+            end - start >= maxMarkBytes ||
+            (start === 0 && offset > tail)
+          )
+            continue;
+          const line = DiskLine.safeParse(
+            JSON.parse(bytes.toString("utf8", start, end)),
+          );
+          if (
+            line.success &&
+            line.data.event.scope.runId === runId &&
+            expectsCredentialLossReserve([line.data])
+          )
+            return true;
+        }
+        tail = Math.min(bytes.length, maxMarkBytes);
+        bytes.copy(chunk, 0, bytes.length - tail);
+        offset += count;
+      }
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // Without a readable earlier mark, reserve-only registration loss cannot be recorded safely.
+  }
+  return false;
+};
+
 const syncPath = (path: string) => {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -450,10 +514,8 @@ export const readCaptureLosses = (
 
 const captureLossRecorder = (
   directory: string,
-  options: Pick<
-    JournalOptions,
-    "limits" | "onCaptureLoss" | "allowCredentialLoss"
-  >,
+  options: Pick<JournalOptions, "limits" | "onCaptureLoss">,
+  reserveIsNamed: (() => boolean) | undefined,
 ): Required<Pick<ModelCapture, "recordLoss" | "journalFull">> => {
   const limits = options.limits ?? DEFAULT_LIMITS;
   const path = join(directory, CAPTURE_LOSS_FILE);
@@ -481,18 +543,16 @@ const captureLossRecorder = (
     journalFull: () => full,
     recordLoss(loss, journalFull, privateRegistrationFailed) {
       full ||= journalFull;
-      const canUseReserve =
-        options.allowCredentialLoss && loss.event === "credential.registration";
       let persisted = false;
       try {
-        if (canUseReserve && privateRegistrationFailed) {
-          recordCredentialLoss(reserve, loss);
+        if (privateRegistrationFailed) {
+          recordReservedCaptureLoss(reserve, loss, reserveIsNamed?.() === true);
         } else {
           try {
             recordOrdinaryLoss(loss);
           } catch (error) {
-            if (!canUseReserve) throw error;
-            recordCredentialLoss(reserve, loss);
+            if (reserveIsNamed === undefined) throw error;
+            recordReservedCaptureLoss(reserve, loss);
           }
         }
         persisted = true;
@@ -505,7 +565,7 @@ const captureLossRecorder = (
 
 /**
  * Opens or reopens the journal of run `runId` and starts this process's session. A reopened journal
- * continues its sequence. Throws `CaptureFailed` when the session cannot be started.
+ * continues its sequence. If a channel cannot start its journal, its handle still records losses.
  */
 export const openCaptureJournal = (
   directory: string,
@@ -522,20 +582,11 @@ export const openCaptureJournal = (
       error,
       `could not open the capture journal: ${message(error)}`,
     );
-  let seq: number;
-  let journalBytes: number;
-  try {
-    mkdirSync(objects, { recursive: true, mode: STORE_DIRECTORY_MODE });
-    syncPath(directory);
-    ({ lines: seq, bytes: journalBytes } = completeLines(
-      path,
-      directory,
-      limit,
-    ));
-  } catch (error) {
-    throw openFailure(error);
-  }
-  if (options.allowCredentialLoss) {
+  let seq = 0;
+  let journalBytes = 0;
+  let priorBytes: number | undefined;
+  let reserveNamed: boolean | undefined;
+  const prepareReserve = () => {
     const reserve = join(directory, CREDENTIAL_LOSS_RESERVE_FILE);
     const sizeLimit = captureFileLimit(CREDENTIAL_LOSS_RESERVE_FILE, limits);
     try {
@@ -574,7 +625,7 @@ export const openCaptureJournal = (
         `could not prepare the credential registration loss reserve: ${message(error)}`,
       );
     }
-  }
+  };
   // The session appends through one descriptor, opened by its first line after a torn tail is cut,
   // instead of opening and closing the file per line (0.9-1.9 ms a line on a busy disk against
   // 24-36 µs). Each line is still one complete write that reaches the file before `capture` returns,
@@ -790,7 +841,7 @@ export const openCaptureJournal = (
           : { type, scope: { runId } },
     );
 
-  const fail = (failure: CaptureFailed): never => {
+  const failSession = (failure: CaptureFailed) => {
     state = { _tag: "Failed", failure };
     if (failure.kind === "invalid")
       try {
@@ -800,6 +851,9 @@ export const openCaptureJournal = (
       release();
     } catch {}
     summarize("error");
+  };
+  const fail = (failure: CaptureFailed): never => {
+    failSession(failure);
     throw failure;
   };
 
@@ -858,7 +912,10 @@ export const openCaptureJournal = (
   };
 
   const admit = (type: string) => {
-    if (state._tag === "Failed" && state.failure.kind === "io")
+    if (
+      state._tag === "Failed" &&
+      (state.failure.kind === "io" || state.failure.event === "journal.open")
+    )
       throw state.failure;
     if (state._tag !== "Open")
       throw new CaptureFailed({
@@ -920,24 +977,36 @@ export const openCaptureJournal = (
     }
   };
 
-  const loss = captureLossRecorder(directory, {
-    limits: options.limits,
-    ...(options.allowCredentialLoss ? { allowCredentialLoss: true } : {}),
-    onCaptureLoss(record, persisted) {
-      if (persisted) pendingLosses.delete(record.callId);
-      enqueueTelemetry(options.log, {
-        type: "capture.loss",
-        runId,
-        ...record,
-        persisted,
-      });
-      try {
-        options.onCaptureLoss?.(record, persisted);
-      } catch {
-        // Reporting cannot change whether the loss was durably recorded.
-      }
+  const loss = captureLossRecorder(
+    directory,
+    {
+      limits,
+      onCaptureLoss(record, persisted) {
+        if (persisted) pendingLosses.delete(record.callId);
+        enqueueTelemetry(options.log, {
+          type: "capture.loss",
+          runId,
+          ...record,
+          persisted,
+        });
+        try {
+          options.onCaptureLoss?.(record, persisted);
+        } catch {
+          // Reporting cannot change whether the loss was durably recorded.
+        }
+      },
     },
-  });
+    // A failed startup may have created a reserve without durably naming it.
+    // Only an earlier mark can make a missing reserve hold that capture's export.
+    options.allowCredentialLoss
+      ? () =>
+          (reserveNamed ??= earlierSessionNamedReserve(
+            path,
+            runId,
+            priorBytes ?? limit,
+          ))
+      : undefined,
+  );
   const capture: Capture = Object.assign(
     (event: CaptureEvent) => {
       admit(event.type);
@@ -945,8 +1014,13 @@ export const openCaptureJournal = (
     },
     loss,
     {
+      journalFull: () =>
+        (state._tag === "Failed" && state.failure.journalFull === true) ||
+        loss.journalFull(),
       allowCredentialLoss: () =>
-        options.allowCredentialLoss === true && state._tag === "Open",
+        options.allowCredentialLoss === true &&
+        (state._tag === "Open" ||
+          (state._tag === "Failed" && state.failure.event === "journal.open")),
     },
   );
 
@@ -1017,18 +1091,27 @@ export const openCaptureJournal = (
   };
 
   try {
+    mkdirSync(objects, { recursive: true, mode: STORE_DIRECTORY_MODE });
+    syncPath(directory);
+    ({ lines: seq, bytes: journalBytes } = completeLines(
+      path,
+      directory,
+      limit,
+    ));
+    priorBytes = journalBytes;
+    if (options.allowCredentialLoss) prepareReserve();
     mark("journal.open");
     // The journal must durably name the reserve before dispatch can use it.
     if (options.allowCredentialLoss) {
       fsyncSync(descriptor());
       syncPath(directory);
       syncPath(dirname(directory));
+      reserveNamed = true;
     }
   } catch (error) {
-    try {
-      release();
-    } catch {}
-    throw openFailure(error);
+    const failure = error instanceof CaptureFailed ? error : openFailure(error);
+    failSession(failure);
+    if (!options.allowCredentialLoss) throw failure;
   }
   const certifyAll: CaptureJournal["certifyAll"] = async (
     count,

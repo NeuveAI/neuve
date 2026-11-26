@@ -140,6 +140,7 @@ export class CallCapture {
           recordLoss(loss, cause.journalFull === true, privateRegistration);
         } catch (error) {
           if (event.type === "credential.registration") throw error;
+          // The recorder reported the failed write. The unclosed journal still shows a gap.
         }
         return;
       }

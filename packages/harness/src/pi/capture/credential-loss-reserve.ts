@@ -15,8 +15,10 @@ import {
   type JournalLine,
 } from "./types.ts";
 
-export const RESERVE_FULL_REASON =
-  "The credential registration loss reserve is full. The call stopped because a credential could slip through unrecorded.";
+const STOPPED_CALL =
+  "The call stopped because a credential could slip through unrecorded.";
+export const RESERVE_FULL_REASON = `The credential registration loss reserve is full. ${STOPPED_CALL}`;
+export const RESERVE_UNWRITABLE_REASON = `Could not record credential registration loss. ${STOPPED_CALL}`;
 
 const slotBytes = 512;
 const digestBytes = 32;
@@ -24,9 +26,6 @@ const emptySlot = Buffer.alloc(slotBytes, 0xa5);
 const digest = (bytes: Uint8Array) =>
   createHash("sha256").update(bytes).digest();
 const decoder = new TextDecoder("utf-8", { fatal: true });
-const registrationLoss = CaptureLoss.omit({ credentialCoverage: true }).extend({
-  event: CaptureLoss.shape.event.extract(["credential.registration"]),
-});
 
 export const emptyCredentialLossReserve = () =>
   Buffer.alloc(CREDENTIAL_LOSS_RESERVE_BYTES, emptySlot);
@@ -88,7 +87,7 @@ export const decodeCredentialLossReserve = (
         !digest(body).equals(slot.subarray(0, digestBytes))
       )
         throw new Error("invalid reserve slot");
-      losses.push(registrationLoss.parse(JSON.parse(decoder.decode(body))));
+      losses.push(CaptureLoss.parse(JSON.parse(decoder.decode(body))));
     }
     return losses;
   } catch {
@@ -98,8 +97,13 @@ export const decodeCredentialLossReserve = (
   }
 };
 
-export const recordCredentialLoss = (path: string, loss: CaptureLoss) => {
+export const recordReservedCaptureLoss = (
+  path: string,
+  loss: CaptureLoss,
+  reserveNamed = true,
+) => {
   try {
+    if (!reserveNamed) throw new Error("the loss reserve is unavailable");
     const fd = openSync(
       path,
       constants.O_RDWR | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -124,14 +128,14 @@ export const recordCredentialLoss = (path: string, loss: CaptureLoss) => {
           event: "credential.registration.reserve",
           detail: RESERVE_FULL_REASON,
         });
-      const { credentialCoverage: _coverage, ...record } = loss;
-      const json = Buffer.from(JSON.stringify(registrationLoss.parse(record)));
+      const record = CaptureLoss.parse(loss);
+      if (record.event === "credential.registration")
+        delete record.credentialCoverage;
+      const json = Buffer.from(JSON.stringify(record));
       const slot = Buffer.alloc(slotBytes, " ");
       const body = slot.subarray(digestBytes);
       if (json.byteLength > body.byteLength)
-        throw new Error(
-          "credential registration loss does not fit in a reserve slot",
-        );
+        throw new Error("capture loss does not fit in a reserve slot");
       json.copy(body);
       digest(body).copy(slot);
       if (writeSync(fd, slot, 0, slot.byteLength, offset) !== slot.byteLength)
@@ -147,7 +151,7 @@ export const recordCredentialLoss = (path: string, loss: CaptureLoss) => {
     throw new CaptureFailed({
       kind: "io",
       event: "credential.registration.reserve",
-      detail: `Could not record credential registration loss. ${cause instanceof Error ? cause.message : String(cause)}. The call stopped because a credential could slip through unrecorded.`,
+      detail: `Could not record credential registration loss. ${cause instanceof Error ? cause.message : String(cause)}. ${STOPPED_CALL}`,
     });
   }
 };

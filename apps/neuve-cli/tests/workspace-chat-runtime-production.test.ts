@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import * as fs from "node:fs";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { Effect, Option, Stream } from "effect";
@@ -51,6 +52,17 @@ import {
   textDelta,
 } from "../../../packages/runtime-claude/tests/frames.ts";
 import { until } from "../../../packages/harness/tests/chat-runtime/fixture.ts";
+import {
+  completed,
+  created,
+  messageItem,
+  sse,
+  tokenCommand,
+} from "../../../packages/harness/tests/pi/providers/fixture.ts";
+import {
+  openCaptureJournal,
+  readCaptureLosses,
+} from "../../../packages/harness/src/pi/capture/journal.ts";
 
 // The host's config is one object for the whole test process, and other test files fill it too:
 // each test here replaces every field rather than merging into what an earlier file left.
@@ -935,6 +947,74 @@ test("a missing Claude executable leaves pi executable", async () => {
     at.close();
   }
 });
+
+test("the coding worker answers after its capture journal cannot reopen", async () => {
+  const at = temporary();
+  const paths = {
+    ...PI_TRANSITION_STORAGE_PROFILE.paths,
+    state: join(at.root, "state"),
+    captures: join(at.root, "captures"),
+    tmp: join(at.root, "tmp"),
+  };
+  const stateDirectory = join(paths.state, "worker");
+  const worker: WorkerContext = { sessionId: "worker", config, stateDirectory };
+  const capture = join(stateDirectory, "capture");
+  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+  const { codingWorkerSetup } = await import("../src/workspace-cli.ts");
+  const { path } = tokenCommand(at.root, "lease");
+  const setup = () =>
+    codingWorkerSetup({ paths }, SOL_ROUTE, {
+      auth: { tokenCommand: path },
+      fetch: Object.assign(
+        async () =>
+          sse([
+            created("response"),
+            ...messageItem(0, "message", "final_answer", "Done."),
+            completed("response"),
+          ]),
+        { preconnect() {} },
+      ),
+    });
+  try {
+    const releasePrevious = await setup().openSource?.(worker);
+    try {
+      openCaptureJournal(capture, worker.sessionId, {
+        allowCredentialLoss: true,
+      }).close();
+    } finally {
+      releasePrevious?.();
+    }
+    const restarted = setup();
+    const releaseRestarted = await restarted.openSource?.(worker);
+    const fault = spyOn(fs, "appendFileSync").mockImplementation(() => {
+      throw Object.assign(new Error("disk is full"), { code: "ENOSPC" });
+    });
+    try {
+      const models = await restarted.models(worker, createModels());
+      const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
+      if (!model) throw new Error("Expected coding route model");
+      const answer = await models.complete(model, {
+        messages: [{ role: "user", content: "Check the work.", timestamp: 1 }],
+      });
+      expect(answer.stopReason).toBe("stop");
+      expect(answer.content).toContainEqual(
+        expect.objectContaining({ type: "text", text: "Done." }),
+      );
+      expect(readCaptureLosses(capture)).toEqual([
+        expect.objectContaining({
+          callId: expect.any(String),
+          event: "credential.registration",
+          reason: "disk full",
+        }),
+      ]);
+    } finally {
+      fault.mockRestore();
+      releaseRestarted?.();
+    }
+  } finally {
+    at.close();
+  }
+}, 30_000);
 
 // Reason: coding chats use the worker's recoverable directory, including every directory operation behind the registry.
 for (const startup of [true, false]) {
