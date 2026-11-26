@@ -11,29 +11,48 @@ const server = z.discriminatedUnion("type", [
 	z.strictObject({ type: z.literal("stdio"), command: z.string().min(1), args: z.array(z.string()).optional(), env: values.optional() }),
 ]);
 const variable = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const servers = z.record(name, server);
+
+export type OAuthServer = { plugin: string; name: string; url: URL; headers?: Record<string, string>; apiKey?: string };
+export const loopback = (url: URL) => ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
 
 export const PluginManifest = z.strictObject({
 	manifest: z.strictObject({
 		name,
 		description: z.string().min(1),
 		interface: z.strictObject({ displayName: z.string().trim().min(1) }).optional(),
+		apiKey: z.record(name, z.string().regex(/^[A-Z_][A-Z0-9_]*$/)).optional(),
 	}),
-	mcp: z.strictObject({ mcpServers: z.record(name, server) }),
-}).transform(({ manifest, mcp }) => {
+	mcp: z.union([z.strictObject({ mcpServers: servers }).transform(({ mcpServers }) => mcpServers), servers]),
+}).transform(({ manifest, mcp }, context) => {
 	const variables = new Set<string>();
-	for (const config of Object.values(mcp.mcpServers)) {
+	const oauth = new Map<string, OAuthServer>();
+	for (const [name, config] of Object.entries(mcp)) {
 		const fields = config.type === "http"
 			? [config.url, ...Object.values(config.headers ?? {})]
 			: [config.command, ...(config.args ?? []), ...Object.values(config.env ?? {})];
-		for (const field of fields)
-			for (const [, name] of field.matchAll(variable)) variables.add(name);
+		const names = fields.flatMap(field => [...field.matchAll(variable)].map(([, name]) => name));
+		for (const name of names) variables.add(name);
+		if (config.type !== "http" || names.length
+			|| Object.keys(config.headers ?? {}).some(header => header.toLowerCase() === "authorization")) continue;
+		const url = URL.parse(config.url);
+		if (url && !url.username && !url.password && !url.hash && (
+			url.protocol === "https:" || (url.protocol === "http:" && loopback(url))
+		)) oauth.set(name, { plugin: manifest.name, name, url, headers: config.headers, apiKey: manifest.apiKey?.[name] });
+	}
+	for (const name of Object.keys(manifest.apiKey ?? {})) {
+		if (oauth.has(name)) continue;
+		context.issues.push({ code: "custom", message: "An API key fallback requires a headerless OAuth server", input: name });
+		return z.NEVER;
 	}
 	return {
 		name: manifest.name,
 		description: manifest.description,
 		displayName: manifest.interface?.displayName ?? manifest.name,
-		servers: mcp.mcpServers,
+		servers: mcp,
 		variables,
+		oauth,
+		credentials: new Set([...variables, ...Object.values(manifest.apiKey ?? {})]),
 	};
 });
 
@@ -50,7 +69,7 @@ export function expandPluginValue(value: string, credentials: ReadonlyMap<string
 
 export const carriedPlugins = [PluginManifest.parse({ manifest: linear, mcp: linearMcp })];
 const pluginSecrets = new Set(carriedPlugins.flatMap(plugin =>
-	[...plugin.variables].flatMap(name => [name, `ACE_${name}`]),
+	[...plugin.credentials].flatMap(name => [name, `ACE_${name}`]),
 ));
 
 export const secretName = (name: string) =>

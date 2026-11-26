@@ -57,6 +57,8 @@ z.strictObject({op: z.literal("key-check"), provider: z.enum(["anthropic", "open
 z.strictObject({op: z.literal("key-remove"), provider: z.enum(["anthropic", "openai"])}),
 z.strictObject({op: z.literal("plugin-key-set"), plugin: z.string(), name: z.string(), value: z.string()}),
 z.strictObject({op: z.literal("plugin-key-remove"), plugin: z.string(), name: z.string()}),
+z.strictObject({op: z.literal("plugin-sign-in"), plugin: z.string()}),
+z.strictObject({op: z.literal("plugin-sign-out"), plugin: z.string()}),
 z.strictObject({op: z.literal("key-store"), name: z.string(), value: z.string()}),
 z.strictObject({op: z.literal("key-forget"), name: z.string()}),
 z.strictObject({op: z.literal("directory-set"), url: z.string().nullable(), secret: z.string().optional()}),

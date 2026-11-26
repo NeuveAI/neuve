@@ -6,29 +6,30 @@ import { Plugin } from "./plugin-settings";
 import { Group, Page } from "./settings-layout";
 import "./styles.css";
 
-const linear = (enabled: boolean, key: CredentialStatus): PluginSettings => ({
+const missing: CredentialStatus = { source: "missing", stored: false };
+
+const linear = (
+	enabled: boolean,
+	key: CredentialStatus,
+	signIn?: PluginSettings["signIn"],
+): PluginSettings => ({
 	name: "linear",
 	displayName: "Linear",
 	description: "Read and update Linear issues, projects, and teams.",
 	enabled,
+	...(signIn ? { signIn } : {}),
 	credentials: [{ name: "LINEAR_API_KEY", ...key }],
 });
 
 const fixtures = {
-	"on, key saved": linear(true, { source: "keychain", stored: true }),
-	"off, key saved": linear(false, { source: "keychain", stored: true }),
-	"on, key missing": linear(true, { source: "missing", stored: false }),
-	"off, key missing": linear(false, { source: "missing", stored: false }),
-	"key from the environment": linear(true, {
-		source: "environment",
-		stored: false,
-		override: "ACE_LINEAR_API_KEY",
+	"signed out": linear(false, missing, { signedIn: false }),
+	"signed in": linear(true, missing, { signedIn: true }),
+	"sign-in error": linear(true, missing, {
+		signedIn: false,
+		error: "Linear refused the sign-in. Try again.",
 	}),
-	"keychain waiting": linear(true, {
-		source: "unavailable",
-		stored: null,
-		waiting: "Waiting for Keychain",
-	}),
+	"signed in, key set": linear(true, { source: "keychain", stored: true }, { signedIn: true }),
+	"no sign-in, key missing": linear(true, missing),
 };
 
 document.documentElement.classList.toggle(

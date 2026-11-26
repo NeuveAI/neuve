@@ -18,7 +18,8 @@ import {
 	settled,
 	store,
 } from "./keys";
-import { carriedPlugins } from "./plugin-manifest";
+import { carriedPlugins, type Plugin } from "./plugin-manifest";
+import { pluginOAuth, type PluginOAuth } from "./plugin-oauth";
 import { defaultModel, models, parseModel } from "./manage";
 import { canonical } from "./move";
 import {
@@ -30,7 +31,7 @@ import {
 	saveFolder,
 	savePreference,
 } from "./preferences";
-import type { Compute, Invite, ProviderId, Settings } from "./protocol";
+import type { Compute, Invite, PluginSettings, ProviderId, Settings } from "./protocol";
 import * as tailnet from "./tailnet";
 
 const providers = new Map(
@@ -64,10 +65,7 @@ export async function settings(fresh?: boolean): Promise<Settings> {
 				)
 			),
 		),
-		Promise.all(carriedPlugins.map(async ({ name, displayName, description, variables }) => ({
-			name, displayName, description, enabled: enabled[name] === true,
-			credentials: await Promise.all([...variables].map(async name => ({ name, ...await latest(name, fresh) }))),
-		}))),
+		Promise.all(carriedPlugins.map(plugin => pluginSettings(plugin, enabled[plugin.name] === true, fresh))),
 		extendModels(available(catalog.models)).catch((error: Error) => error),
 		defaultModel(catalog.models).catch(() => undefined),
 	]);
@@ -81,6 +79,15 @@ export async function settings(fresh?: boolean): Promise<Settings> {
 		waiting: catalog.waiting() ? KEYCHAIN_WAITING : undefined,
 		error: usable instanceof Error ? usable.message : undefined,
 	};
+}
+
+export async function pluginSettings(plugin: Plugin, enabled: boolean, fresh?: boolean, oauth: PluginOAuth = pluginOAuth): Promise<PluginSettings> {
+	const [credentials, signIn] = await Promise.all([
+		Promise.all([...plugin.credentials].map(async name => ({ name, ...await latest(name, fresh) }))),
+		oauth.status(plugin, fresh),
+	]);
+	const { name, displayName, description } = plugin;
+	return { name, displayName, description, enabled, credentials, ...(signIn ? { signIn } : {}) };
 }
 
 class Rejected extends Error {}
@@ -124,7 +131,7 @@ function isValue(value: unknown): value is string {
 }
 
 function requirePluginKey(plugin: string, name: string): void {
-	if (!carriedPlugins.find(item => item.name === plugin)?.variables.has(name))
+	if (!carriedPlugins.find(item => item.name === plugin)?.credentials.has(name))
 		throw new Error("Choose a credential used by the plugin");
 }
 

@@ -22,16 +22,23 @@ test("plugin settings validate native payloads, preserve preferences, and restri
 		const description = "Read and update Linear issues, projects, and teams.";
 		const name = "LINEAR_API_KEY";
 		expect(await plugins()).toEqual([{
-			name: "linear", displayName: "Linear", description, enabled: false, credentials: [{ name, source: "missing", stored: false }],
+			name: "linear", displayName: "Linear", description, enabled: false, signIn: { signedIn: false }, credentials: [{ name, source: "missing", stored: false }],
 		}]);
 		const preferences = parseNativeHostRequest({ op: "preferences", plugins: { linear: true } });
 		if (preferences.op !== "preferences" || !preferences.plugins) throw new Error("Missing plugin preferences");
 		savePlugins(preferences.plugins);
 		saveFolder(root);
 		expect(await plugins()).toEqual([{
-			name: "linear", displayName: "Linear", description, enabled: true, credentials: [{ name, source: "missing", stored: false }],
+			name: "linear", displayName: "Linear", description, enabled: true, signIn: { signedIn: false }, credentials: [{ name, source: "missing", stored: false }],
 		}]);
 		expect(() => parseNativeHostRequest({ op: "preferences", plugins: { linear: "on" } })).toThrow();
+
+		expect(parseNativeHostRequest({ op: "plugin-sign-in", plugin: "linear" })).toEqual({
+			op: "plugin-sign-in", plugin: "linear",
+		});
+		expect(parseNativeHostRequest({ op: "plugin-sign-out", plugin: "linear" })).toEqual({
+			op: "plugin-sign-out", plugin: "linear",
+		});
 
 		const { set, delete: removed } = calls;
 		await expect(setPluginKey("linear", "OPENAI_API_KEY", "unused")).rejects.toThrow("Choose a credential used by the plugin");
@@ -42,14 +49,14 @@ test("plugin settings validate native payloads, preserve preferences, and restri
 		if (stored.op !== "plugin-key-set") throw new Error("Missing key set request");
 		await setPluginKey(stored.plugin, stored.name, stored.value);
 		expect(await plugins()).toEqual([{
-			name: "linear", displayName: "Linear", description, enabled: true, credentials: [{ name, source: "keychain", stored: true }],
+			name: "linear", displayName: "Linear", description, enabled: true, signIn: { signedIn: false }, credentials: [{ name, source: "keychain", stored: true }],
 		}]);
 		const remove = parseNativeHostRequest({ op: "plugin-key-remove", plugin: "linear", name });
 		if (remove.op !== "plugin-key-remove") throw new Error("Missing key remove request");
 		await removePluginKey(remove.plugin, remove.name);
 		savePlugins({ linear: false });
 		expect(await plugins()).toEqual([{
-			name: "linear", displayName: "Linear", description, enabled: false, credentials: [{ name, source: "missing", stored: false }],
+			name: "linear", displayName: "Linear", description, enabled: false, signIn: { signedIn: false }, credentials: [{ name, source: "missing", stored: false }],
 		}]);
 	} finally {
 		config.settings = previous;

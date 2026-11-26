@@ -307,6 +307,8 @@ export type PluginSettings = {
 	displayName: string;
 	description: string;
 	enabled: boolean;
+	/** Present when a server signs in with MCP's OAuth flow; the tokens stay in the keychain. */
+	signIn?: { signedIn: boolean; error?: string };
 	/** The variables its servers receive, each found as a provider key is. */
 	credentials: (CredentialStatus & { name: string })[];
 };
@@ -387,6 +389,9 @@ export type HostRequest =
 	/** Saves or removes, in the keychain, a variable a carried plugin's servers receive. */
 	| { op: "plugin-key-set"; plugin: string; name: string; value: string }
 	| { op: "plugin-key-remove"; plugin: string; name: string }
+	/** Starts MCP's OAuth sign-in and answers `{ url }`, the page the person opens to authorize. */
+	| { op: "plugin-sign-in"; plugin: string }
+	| { op: "plugin-sign-out"; plugin: string }
 	/**
 	 * Only this host's loopback clients save or remove keychain items and join or leave the
 	 * directory: Ace Helper saves them so it can read them back without a macOS prompt.
