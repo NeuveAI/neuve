@@ -383,7 +383,7 @@ test("the reading budget cuts a result to what is left and counts it; given what
   expect(shown.length).toBeGreaterThan(0);
 }, 120_000);
 
-test("only read_many declares a larger cap; every other tool keeps 10.18's cap byte for byte", async () => {
+test("read_many declares a larger cap and the other lookups default to 3,000 tokens", async () => {
   const result = await withLookups("caps", (ctx) =>
     Effect.sync(() => ({
       others: [

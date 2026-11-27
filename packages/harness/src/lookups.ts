@@ -2363,7 +2363,6 @@ const UsesInput = z.strictObject({
 type UsesInput = z.infer<typeof UsesInput>;
 
 const WORD = /^[A-Za-z0-9_]+$/;
-const USES_PER_PAGE = 50;
 /** Printed bytes of a match's code and enclosing name; the rest is in `read`. */
 const CODE_BYTES = 320;
 const ENCLOSING_BYTES = 60;
@@ -2492,13 +2491,17 @@ const usesCandidates = (
     return route;
   });
 
-export const usesTool = (ctx: LookupContext): ToolSpec<unknown> =>
+export const usesTool = (
+  ctx: LookupContext,
+  resultCap?: typeof READ_MANY_CAP,
+): ToolSpec<unknown> =>
   defineTool({
     name: "uses",
     description:
       "Find every textual occurrence of an identifier at a revision (git grep over the tree, whole words), grouped by file, each with its line and enclosing symbol where a capability declares one. Textual, not semantic: it finds names, including in comments.",
     input: UsesInput,
     hints: READ_ONLY,
+    resultCap,
     handle: (input: UsesInput) =>
       answer(
         ctx,
@@ -2587,8 +2590,10 @@ export const usesTool = (ctx: LookupContext): ToolSpec<unknown> =>
               text: `No occurrence of ${input.identifier} at ${view.label} ${view.commit.slice(0, 12)}${input.paths === undefined ? "" : ` under ${input.paths.join(", ")}`} (git grep${word ? " -w" : ", fixed string with identifier boundaries"}, binary files skipped).`,
               empty: true,
             };
-          // Pages hold at most USES_PER_PAGE matches and break where an upper bound of their printed
-          // size would pass the result cap, so a page is never cut and every match is on one page.
+          // Size pages by an upper bound of their printed bytes so the result cap leaves every
+          // match intact.
+          const bodyBytes =
+            resultCap === undefined ? PAGE_BODY_BYTES : READ_MANY_BODY_BYTES;
           const pages: Array<Array<number>> = [[]];
           let used = 0;
           let file = "";
@@ -2598,11 +2603,7 @@ export const usesTool = (ctx: LookupContext): ToolSpec<unknown> =>
                 ? Buffer.byteLength(match.path) + USES_HEADER_BYTES
                 : 0;
             const bytes = header + USES_LINE_BYTES;
-            if (
-              pages.at(-1)!.length > 0 &&
-              (used + bytes > PAGE_BODY_BYTES ||
-                pages.at(-1)!.length >= USES_PER_PAGE)
-            ) {
+            if (pages.at(-1)!.length > 0 && used + bytes > bodyBytes) {
               pages.push([]);
               used = Buffer.byteLength(match.path) + USES_HEADER_BYTES;
             }

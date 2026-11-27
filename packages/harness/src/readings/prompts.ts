@@ -47,8 +47,9 @@ export const ASSESS_PROMPT_VERSION = 13;
  * changed code and any test shown do what the row asks, with cited lines (`ROW_READING`); the rule
  * for met is unchanged.
  * 18 (19 is the scope-and-tests variant's): the first two turns may use tools.
+ * 20 (21 is the scope-and-tests variant's): `uses` takes the same result cap as `read_many`.
  */
-export const LANE_REVIEW_PROMPT_VERSION = 18;
+export const LANE_REVIEW_PROMPT_VERSION = 20;
 
 /**
  * What a caller row and a test row show, and what they never show (the Graph relations hand-over's
@@ -147,7 +148,7 @@ What code checks, so an answer that breaks it does not stand:
  * change's files read separately.
  */
 export const ASSESS_TESTED_PROMPT_VERSION = 14;
-export const LANE_REVIEW_SCOPED_PROMPT_VERSION = 19;
+export const LANE_REVIEW_SCOPED_PROMPT_VERSION = 21;
 
 /** A base prompt with each of its lines replaced, refusing a line that is not there exactly once. */
 const replaced = (

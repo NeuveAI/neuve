@@ -95,6 +95,7 @@ import {
   laneReviewStep,
   type ReadingProducer,
 } from "../../readings/steps.ts";
+import { READ_MANY_CAP } from "../../toolkit.ts";
 import type { AgentReading } from "../contracts.ts";
 import { definePolicyTask } from "../failure-policy.ts";
 import { erased, type AgentStep } from "./agent.ts";
@@ -1358,7 +1359,7 @@ export const readingStep = async (
       readManyTool(lookups, {
         remaining: () => LANE_REVIEW_READING_CHARS - budget.save().used,
       }),
-      usesTool(lookups),
+      usesTool(lookups, READ_MANY_CAP),
       defsTool(lookups),
       outlineTool(lookups),
     ],

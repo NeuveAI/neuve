@@ -1127,6 +1127,71 @@ test("Lane review reads the caller after a large range in one tool call", async 
   expect(sawCaller).toBe(true);
 }, 60_000);
 
+// Lane review often spends its last tool turn on uses. A caller that would fit must reach it
+// on that turn, and a larger list still needs a continuation.
+test("Lane review receives a full caller list up to the uses cap and a page beyond it", async () => {
+  const files = Object.fromEntries(
+    [20, 60].flatMap((perFile) =>
+      Array.from({ length: 3 }, (_, file) => [
+        `src/callers-${perFile}/file${file}.ts`,
+        'import * as retries from "../retries.ts";\n' +
+          Array.from(
+            { length: perFile },
+            (_, line) =>
+              `const caller${file * perFile + line} = retries.retryLimit("${"retry context ".repeat(18)}");\n`,
+          ).join(""),
+      ]),
+    ),
+  );
+  const usesReplies = (messages: Parameters<Answer>[1]) =>
+    messages.flatMap((message) =>
+      message.role === "toolResult" && message.toolName === "uses"
+        ? message.content.flatMap((part) =>
+            part.type === "text" ? [part.text] : [],
+          )
+        : [],
+    );
+  const fallback = answerer();
+  const result = await run("uses-pages", {
+    base: {
+      ...files,
+      "src/retries.ts": "export const retryLimit = (_reason: string) => 1;\n",
+    },
+    head: {
+      ...files,
+      "src/retries.ts": "export const retryLimit = (_reason: string) => 2;\n",
+    },
+    answer: (agent, messages, hunks) => {
+      if (!agent.startsWith("lane-review."))
+        return fallback(agent, messages, hunks);
+      const paths = ["src/callers-20", "src/callers-60"];
+      const turn = usesReplies(messages).length;
+      const path = paths[turn];
+      if (path === undefined) return reviewWithClaims(agent, []);
+      return submit(`${agent}-uses-${turn}`, "uses", {
+        identifier: "retryLimit",
+        paths: [path],
+      });
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  const transcript = result.sent.findLast(({ agent }) =>
+    agent.startsWith("lane-review."),
+  );
+  const [whole, paged] = usesReplies(transcript?.messages ?? []);
+  expect(whole).toContain("60 occurrence(s) of retryLimit in 3 file(s)");
+  expect(whole).not.toMatch(/; page \d+ of|\[more: uses page|\[result cut/);
+  expect(
+    Array.from((whole ?? "").matchAll(/const caller(\d+) =/g), ([, n]) =>
+      Number(n),
+    ),
+  ).toEqual(Array.from({ length: 60 }, (_, n) => n));
+  expect(paged).toContain("180 occurrence(s) of retryLimit in 3 file(s)");
+  expect(paged).toMatch(/; page 1 of \d+/);
+  expect(paged).toContain("[more: uses page 2]");
+  expect(paged).not.toMatch(/const caller179 =|\[result cut/);
+}, 60_000);
+
 // A page can end before the caller. Lane review needs to read the continuation and still have
 // a turn left if its first submission is refused.
 test("Lane review follows a read_many continuation and can resubmit a refused answer", async () => {
