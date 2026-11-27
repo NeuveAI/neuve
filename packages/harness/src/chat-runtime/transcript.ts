@@ -29,6 +29,7 @@ export const RUNTIME_WORK_TOOL = "runtime_work";
 const CODING_TOOLS = new Set(CodingTools.tools?.map((tool) => tool.name) ?? []);
 export const PLAN_TOOL = "plan_write";
 const PLAN_COMMENT_TOOL = "plan_comment_answer";
+const COMMIT_TOOL = "neuve_commit";
 export const ATTENDED_SECTION = "neuve.chat.request-attended";
 const planningRequest = Symbol.for("neuve.chat.plan-request");
 /**
@@ -48,7 +49,7 @@ const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
   // The host chooses the repository, revision, branch and plan and bounds every scope path.
   "neuve_query",
   // The host commits only in the calling chat's recorded work lane.
-  "neuve_commit",
+  COMMIT_TOOL,
 ]);
 
 export type Log = (
@@ -244,6 +245,15 @@ export function policy(
   if (planning && served.some((tool) => tool.name === PLAN_TOOL)) {
     prompt.push(
       `Save the plan with Neuve's MCP tool \`${PLAN_TOOL}\`. It works in a read-only workspace.`,
+    );
+  }
+  if (
+    sandboxed &&
+    !planning &&
+    served.some((tool) => tool.name === COMMIT_TOOL)
+  ) {
+    prompt.push(
+      `Your sandbox can't write Git's folder, so commit this chat's work with Neuve's MCP tool \`${COMMIT_TOOL}\` instead of \`git commit\`.`,
     );
   }
   return {

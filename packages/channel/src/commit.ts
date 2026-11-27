@@ -18,7 +18,7 @@ export function commitTool(project: string) {
       defineTool({
         name: "neuve_commit",
         description:
-          "Commit all changes in this chat's work lane with the given message. Use this when asked to commit and your sandbox cannot write Git's shared folder.",
+          "Commit all changes in this chat's work lane with the given message, even when the sandbox blocks `git commit`.",
         parameters: Type.Object(
           {
             message: Type.String({ pattern: "^[^\\u0000]+$" }),

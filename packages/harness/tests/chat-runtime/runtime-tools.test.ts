@@ -83,6 +83,9 @@ test("an unattended runtime with its own sandbox is served only the tools that c
       .approvalPolicy,
   ).toBe("allow");
   expect(own.systemPrompt).toStartWith("prompt\n\n");
+  expect(own.systemPrompt).toContain(
+    "Your sandbox can't write Git's folder, so commit this chat's work with Neuve's MCP tool `neuve_commit` instead of `git commit`.",
+  );
   for (const name of ace) expect(own.systemPrompt).toContain(name);
   expect(own.systemPrompt).not.toContain("bash");
   const other = policy(offered, handle, undefined, {
@@ -150,6 +153,13 @@ test("a read-only planning session is served the plan writer and told how to sav
     "Save the plan with Neuve's MCP tool `plan_write`. It works in a read-only workspace.",
   );
   expect(session.systemPrompt).not.toContain("with your own tools instead");
+  const withCommit = policy(
+    [...conversation(["neuve_commit"]), planning],
+    handle,
+    undefined,
+    { ownTools: true },
+  );
+  expect(withCommit.systemPrompt).toBe("prompt");
 });
 
 // Codex runs pi tools outside its sandbox, so only the worker's HTTP tool list can admit a plugin.
