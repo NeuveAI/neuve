@@ -5,6 +5,7 @@ import {
 } from "../cross-batch-claims.ts";
 import { childId } from "./children.ts";
 import type { Context } from "@earendil-works/chord";
+import { defineDoc } from "@earendil-works/pi-durable";
 import type {
   Task,
   TaskId,
@@ -78,6 +79,38 @@ type Runtime = TaskRuntime<
   object
 >;
 type Readings = NonNullable<ReviewStagesPort["readings"]>;
+const BatchTurnDoc = defineDoc<{ passed: boolean }>({
+  kind: "neuve.batch-turn",
+  version: 1,
+  scope: "task",
+  initial: () => ({ passed: false }),
+});
+
+/** A predecessor releases the next waiter by finishing or by waiting on incoming checks. */
+const waitForTurn = async (
+  runtime: Runtime,
+  previous: TaskId<BatchWaiterResult>,
+  context: Context,
+) => {
+  const watch = await runtime.watchDoc(BatchTurnDoc, previous, context);
+  try {
+    if (watch?.value?.passed === true) return;
+    const ended = runtime.waitForTask(previous, context);
+    if (watch === undefined) {
+      await ended;
+      return;
+    }
+    const passed = new Promise<void>((resolve) => {
+      watch.start(async (value) => {
+        if (value?.passed === true) resolve();
+      });
+    });
+    await Promise.race([ended, passed]);
+  } finally {
+    await watch?.stop();
+  }
+};
+
 /** What a waiter calls: the readings' `settle` and the review's `publishSettled`. */
 export type WaiterPort = {
   readonly settle: NonNullable<Readings["settle"]>;
@@ -283,13 +316,10 @@ export const batchWaiterTask = (
         const on: Array<TaskId> =
           view === undefined
             ? []
-            : [
-                ...(batch?.readings ?? []).flatMap((name) => {
-                  const id = byName.get(name);
-                  return id === undefined ? [] : [id as TaskId];
-                }),
-                ...(input.previous === null ? [] : [input.previous as TaskId]),
-              ];
+            : (batch?.readings ?? []).flatMap((name) => {
+                const id = byName.get(name);
+                return id === undefined ? [] : [id];
+              });
         await commit(runtime, "wait", "publish", () =>
           runtime.commit(
             () =>
@@ -312,6 +342,8 @@ export const batchWaiterTask = (
           attributes(runtime, "publish"),
         );
         const input = task.input;
+        if (input.previous !== null)
+          await waitForTurn(runtime, input.previous, context);
         const ports = port();
         const { owner, view } = await reviewOf(runtime, context);
         const batch = view?.batches.batches[input.index];
@@ -335,8 +367,9 @@ export const batchWaiterTask = (
           const earlier = await Promise.all(
             view.waiters.slice(0, input.index).map(async ({ batch, task }) => {
               const ended = await endedOutcome(runtime, task, context);
-              return ended?.status === "completed" &&
-                ended.result.status === "published"
+              return ended === undefined ||
+                (ended.status === "completed" &&
+                  ended.result.status === "published")
                 ? []
                 : [batch];
             }),
@@ -350,15 +383,15 @@ export const batchWaiterTask = (
           const ownChecks = waiting.get(batch.key);
           if (ownChecks !== undefined)
             return commit(runtime, "publish", "publish", () =>
-              runtime.commit(
-                () => ({
+              runtime.commit(async (tx) => {
+                (await tx.doc(BatchTurnDoc, runtime.taskId)).passed = true;
+                return {
                   status: "waiting",
                   on: ownChecks,
                   policy: "allSettled",
                   checkpoint: { phase: "publish" },
-                }),
-                context,
-              ),
+                };
+              }, context),
             );
           // A later waiter can recover an earlier batch after a transient refusal.
           // An incoming check on an earlier batch must not delay the current one.
@@ -643,6 +676,7 @@ export const settledStages = (
       settle: readings.settle,
       publish: async (input, signal) => (await write(input, signal)).refused,
     };
+  const start = childOf(task);
   const port: Pick<
     ReviewStagesPort,
     | "batchWaiter"
@@ -653,7 +687,11 @@ export const settledStages = (
     | "retainUnpublishedClaims"
   > = ready
     ? {
-        batchWaiter: childOf(task),
+        batchWaiter: async (tx, input, owner) => {
+          const id = await start(tx, input, owner);
+          await tx.doc(BatchTurnDoc, id);
+          return id;
+        },
         publishSettled: publish,
         followOnLeft,
         followOn,

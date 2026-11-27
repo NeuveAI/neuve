@@ -241,6 +241,7 @@ const runReview = async (
     /** The read of the chain's totals fails (a store error). */
     readonly chainTotalsFails?: boolean;
     readonly incomingRace?: boolean;
+    readonly bypassIncomingCheck?: boolean;
     readonly firstSettleRefused?: boolean;
     /** The run's cut-off; by default ten minutes ahead. In the past, the run starts already cut off. */
     readonly cutoffAt?: number;
@@ -273,6 +274,9 @@ const runReview = async (
   let maxInFlight = 0;
   let firstCheckWaited = false;
   const firstCheckGate = gate();
+  const firstCheckWaiting = gate();
+  const firstPublished = gate();
+  const secondPublished = gate();
   let registerSecond: (() => Promise<void>) | undefined;
   let stopReview: () => void = () => {};
   let atPublish: () => void = () => {};
@@ -285,6 +289,16 @@ const runReview = async (
   const base = store.ctx({ runId, startedAt: T });
   const ctx = {
     ...base,
+    log: {
+      ...base.log,
+      write: (row: Parameters<typeof base.log.write>[0]) => {
+        base.log.write(row);
+        if (row.type !== "publish.waiter" || row["status"] !== "published")
+          return;
+        if (row["index"] === 0) firstPublished.open();
+        if (row["index"] === 1) secondPublished.open();
+      },
+    },
     config: {
       ...defaultConfig(),
       readings: {
@@ -429,7 +443,10 @@ const runReview = async (
                   )
                     return gap("not-reached");
                   const batch = byName[name];
-                  if (name !== "a" || !options.incomingRace)
+                  if (
+                    name !== "a" ||
+                    (!options.incomingRace && !options.bypassIncomingCheck)
+                  )
                     return { settled: true as const, batch };
                   const incoming = (input.incoming ?? []).flatMap((claim) => {
                     if (claim.verifyKey === null) return [];
@@ -640,7 +657,7 @@ const runReview = async (
   let id = options.reviewId;
   let stopWatching: (() => Promise<unknown>) | undefined;
   try {
-    if (options.incomingRace) {
+    if (options.incomingRace || options.bypassIncomingCheck) {
       const root = await harness.root(context);
       const register = (number: number) =>
         harness.commit(async (tx) => {
@@ -676,9 +693,10 @@ const runReview = async (
           return task;
         }, context);
       const first = await register(1);
-      registerSecond = async () => {
-        await harness.waitForTask(await register(2), context);
-      };
+      if (options.incomingRace)
+        registerSecond = async () => {
+          await harness.waitForTask(await register(2), context);
+        };
       const graph = await harness.watchTaskGraph(context);
       stopWatching = () => graph.stop();
       graph.start(async ({ tasks }) => {
@@ -692,7 +710,8 @@ const runReview = async (
           )
         ) {
           firstCheckWaited = true;
-          firstCheckGate.open();
+          firstCheckWaiting.open();
+          if (!options.bypassIncomingCheck) firstCheckGate.open();
         }
       });
     }
@@ -731,6 +750,16 @@ const runReview = async (
         if (commits.some((c) => JSON.stringify(c).includes('"publishing"')))
           break;
         await sleep(10);
+      }
+      if (options.bypassIncomingCheck) {
+        readingGates.a.open();
+        await Promise.race([firstCheckWaiting.opened, sleep(2_000)]);
+        readingGates.b.open();
+        await Promise.race([secondPublished.opened, sleep(2_000)]);
+        firstCheckGate.open();
+        await Promise.race([firstPublished.opened, sleep(2_000)]);
+        readingGates.c.open();
+        return;
       }
       for (const name of order) {
         readingGates[name].open();
@@ -944,6 +973,36 @@ test("a batch waits for an incoming check and includes a claim registered during
       anchor: { path: "src/a.ts", side: "new", startLine: 5, endLine: 5 },
     }),
   ]);
+});
+
+// A pending incoming check defers its target without delaying a decided batch.
+test("a decided batch publishes while an earlier batch waits for Verify", async () => {
+  const store = scratch({ cycleId: CYCLE });
+  const run = done(
+    await runReview(store, {
+      readings: ALL,
+      joined: true,
+      bypassIncomingCheck: true,
+    }),
+  );
+  expect(run.firstCheckWaited).toBe(true);
+  const [first, second] = await packetsOf(store);
+  expect(await batchesOf(store, first!)).toEqual(["Guards"]);
+  expect(await batchesOf(store, second!)).toEqual(["Guards", "Retry policy"]);
+  const packet = await store.run(PublishedPackets.readExact(second!.id));
+  if (packet?.kind !== "packet.published@2") throw new Error("No batch packet");
+  expect(
+    packet.batches.flatMap((batch) =>
+      batch.units.flatMap((unit) =>
+        unit.comments.map(({ payload }) => payload),
+      ),
+    ),
+  ).toContainEqual(
+    expect.objectContaining({
+      body: "Incoming claim 1.",
+      anchor: { path: "src/a.ts", side: "new", startLine: 3, endLine: 3 },
+    }),
+  );
 });
 
 // A transient refusal of the first batch must not leave it waiting for the ending packet.
