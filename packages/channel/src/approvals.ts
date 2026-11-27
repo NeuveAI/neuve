@@ -1,4 +1,5 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import type { Context } from "@earendil-works/chord";
 import type { SystemMessage } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, GenerationTask, hook, type ConversationId, type Harness } from "@earendil-works/pi-durable";
 import { ApprovalRequestsDefinition, type ApprovalRequest, type ApprovalRequestsState, type Event, type Request } from "./protocol";
