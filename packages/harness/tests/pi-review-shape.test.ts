@@ -1,5 +1,6 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { CrossBatchClaimsDoc } from "../src/pi/cross-batch-claims.ts";
+import type { AgentStepInput } from "../src/pi/stages/agent-step.ts";
 import { childId } from "../src/pi/stages/children.ts";
 import type { CrossBatchClaim } from "../src/readings/answers.ts";
 import { ClaimStored } from "../src/readings/claims.ts";
@@ -980,6 +981,74 @@ test("a claim whose Verify never starts at the cut-off stays in the run log", as
     LaneReviewStored,
   );
   expect(held.answer.crossBatchClaims).toEqual([claimOn(paths[1], earlyText)]);
+}, 60_000);
+
+// Stop a reading while its re-read is pending. Its stored first answer's claim must still be kept.
+test("a reading stopped before checking claims retains its incoming claim", async () => {
+  const rereading = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const fallback = answerer();
+  const result = await runReview({
+    directory: join(directory, "stopped-reading-claim"),
+    ...splitRange,
+    runAttempts: async (harness, start) => {
+      const review = await start();
+      await rereading.promise;
+      try {
+        const reread = await harness.commit(
+          async (tx) =>
+            (await tx.scanTasks({}, 1000)).items.find(({ kind, input }) => {
+              if (kind !== "neuve.agent-step") return false;
+              const step = input as AgentStepInput;
+              return (
+                step.kind === "lane-review" &&
+                (step.params as { part?: string }).part === "reread"
+              );
+            }),
+          context,
+        );
+        if (reread?.owner == null)
+          throw new Error("The re-read has no owning task");
+        const reading = childId(reread.owner);
+        await harness.abortTask(reading, context);
+        release.resolve();
+        expect(
+          (await harness.waitForTask(reading, context)).state.outcome.status,
+        ).toBe("aborted");
+        const registered = await harness.snapshot(CrossBatchClaimsDoc, context);
+        expect(Object.values(registered?.claims ?? {})).toEqual([
+          expect.objectContaining({
+            comment: claimOn(paths[1], earlyText),
+            task: null,
+          }),
+        ]);
+        return review;
+      } finally {
+        release.resolve();
+      }
+    },
+    answer: async (agent, messages, hunks) => {
+      if (agent === "map") return splitMap();
+      if (!agent.startsWith("lane-review."))
+        return fallback(agent, messages, hunks);
+      if (!textOf(messages).includes("export const first"))
+        return reviewWithClaims(agent, []);
+      if (!agent.endsWith(".reread"))
+        return reviewWithClaims(agent, [claimOn(paths[1], earlyText)], true);
+      rereading.resolve();
+      await release.promise;
+      return reviewWithClaims(agent, []);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(
+    result.sent.filter(({ agent }) => agent.startsWith("verify.claim.")),
+  ).toHaveLength(0);
+  expect(
+    result.log.read().filter(({ type }) => type === "review.claim-unpublished"),
+  ).toEqual([
+    expect.objectContaining({ reason: "check-not-completed", verify: null }),
+  ]);
 }, 60_000);
 
 // A batch can need more than one reading group. A section outside the source group can still
