@@ -33,8 +33,7 @@ import type { Receipt } from "./receipt.ts";
 export const RECOMPOSE_STEPS = {
   frame: "harness.frame",
   map: "harness.map",
-  find: "harness.find",
-  verify: "harness.verify",
+  verify: "harness.verify-claim",
 } as const;
 export type RecomposeStep = keyof typeof RECOMPOSE_STEPS;
 

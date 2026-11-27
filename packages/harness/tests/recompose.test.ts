@@ -34,8 +34,7 @@ test("a step a recompose cannot reuse stops the run as a refusal naming it, neve
   expect(RECOMPOSE_STEPS).toEqual({
     frame: "harness.frame",
     map: "harness.map",
-    find: "harness.find",
-    verify: "harness.verify",
+    verify: "harness.verify-claim",
   });
 });
 

@@ -84,11 +84,8 @@ export const PAGE_BODY_BYTES =
   TOOL_RESULT_BYTES - BUDGET_LINE_BYTES - RESULT_FRAME_BYTES;
 
 /**
- * `read_many`'s result cap (lookups.ts), the one tool the owner's ruling of 12 November lets past
- * 10.18's 3,000 tokens. A finder's reading turn brings 20–45 KB of results today across 4–16
- * calls; 20,000 UN9 tokens is about 45 KB, so one call carries the heaviest reading turn measured.
- * It uses less than 9% of the 237,500-token Sol ceiling. The finders' 200,000-character
- * reading budget still bounds what all their calls bring together.
+ * A multi-range read can return up to 20,000 estimated tokens, about 45 KB.
+ * The reading budget also limits the combined results of all calls in a Lane review.
  */
 export const READ_MANY_RESULT_TOKENS = 20_000;
 

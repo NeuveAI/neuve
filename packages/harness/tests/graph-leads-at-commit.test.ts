@@ -5,7 +5,7 @@ import { captureOutlineSource } from "../src/graph-outline.ts";
 // (graph-client's own tests do that). This runs the worker's own commit preparation child
 // (`neuve worker prepare-commit`) with settings that take leads from Graph, then, in this process
 // as the worker's review would, computes the range's manifest: the review must find the lead ready
-// without searching Graph, the lead search must use its own clone, and a review-time search must carry Graph's
+// without searching Graph. Lead search uses its own clone. A review-time search records Graph's
 // timings, the child's CPU and the two waits. It runs only where the engine is built
 // (`bun run build:graph`).
 import { afterAll, expect, test } from "bun:test";

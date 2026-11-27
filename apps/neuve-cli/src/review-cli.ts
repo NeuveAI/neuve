@@ -98,12 +98,12 @@ export const REVIEW_HELP = `Usage:
   neuve review ${REVIEW_DESK_COMMAND} [--repo <path>] [--port <n>]
               Open the batch overview and the review desk for the repository on this machine.
               Run neuve review ${REVIEW_DESK_COMMAND} --help for the options.
-  neuve review recompose --run <run-id> --store <dir> [--allow-model frame,map,find,verify] [--json] [--repo <path>]
+  neuve review recompose --run <run-id> --store <dir> [--allow-model frame,map,verify] [--json] [--repo <path>]
               Run a completed run's review again as a new run in the given store (a scratch copy
               of a case's store, never a working checkout's own), reusing every stored stage, to
               score a change to Link, Publish or the digest without a new review. Every agent
               step must find its stored output: one that would need the model stops the run and
-              is named, unless --allow-model lets the Frame, Map, Find or Verify
+              is named, unless --allow-model lets the Frame, Map or Verify
               step call it. Without
               --allow-model the run reads no credential and opens no connection; telemetry export
               and integration servers are off either way. --allow-model needs a lease
@@ -165,8 +165,8 @@ the worker's environment), openai (${Route.SOL_ROUTE.model} on your ChatGPT plan
 or the name of a Claude subscription account (Opus through its Claude Code sign-in).
 Without it, the route is the "review.route" in your Neuve settings, else anthropic. Every route
 runs at the "review.effort" in your Neuve settings (low, medium or high), else medium. A kind of
-step named in "review.stepEffort" (frame, map, find, verify, assess, lane-review or brief) runs at the
-effort given there instead. With the section readings on, Assess and Lane review that
+step named in "review.stepEffort" (frame, map, verify, assess, lane-review or brief) runs at the
+effort given there instead. Assess and Lane review that
 "review.stepEffort" does not name run at the lower of the route's effort and medium; with
 "review.sectionReadingsEffort" set to by-risk, the readings' steps run at fixed levels instead,
 whatever "review.stepEffort" says.

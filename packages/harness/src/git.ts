@@ -592,7 +592,7 @@ export interface FindLog {
   readonly mergeFiles?: ReadonlyMap<string, ReadonlyArray<string>>;
 }
 
-/** One range log read, shared by Find's four lenses. NUL paths preserve unusual file names.
+/** One range log read. NUL paths preserve unusual file names.
  * Merge paths are kept separately for path lookups and counts, never coverage or citations.
  */
 export const rangeCommitFiles = (

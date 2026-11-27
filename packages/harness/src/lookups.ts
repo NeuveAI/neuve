@@ -734,8 +734,6 @@ const noteShownHunks = (
 const hunkTouches = (hunk: ManifestHunk, path: string) =>
   [hunk.path, hunk.oldPath, hunk.newPath].includes(path);
 
-// No group or partition filter: no caller places hunks before its finders read them (Map runs
-// beside the finders, and groups are assigned at dedupe), so such a filter could only answer nothing.
 const HunksInput = z.strictObject({
   path: z
     .string()
@@ -938,8 +936,7 @@ const ReadManyInput = z.strictObject({
 type ReadManyInput = z.infer<typeof ReadManyInput>;
 
 /**
- * How a caller wires `read_many`. A `read` of the caller's own, such as the one its head reads are
- * recorded from (find.ts `recordingHeadReads`), comes only with `remaining`: a reading budget that
+ * How a caller wires `read_many`. A `read` of the caller's own comes with `remaining`: a budget that
  * cut the result after its pages were read would leave lines recorded that were never shown. That
  * `read` must be the unwrapped one, never the budget-wrapped tool, which would count every page
  * again on top of `read_many`'s whole result.
@@ -957,7 +954,7 @@ export type ReadManyOptions = {
   | {
       /** The `read` every range is read through, page by page, so what wraps it sees each page. */
       readonly read: ToolSpec<unknown>;
-      /** The characters the caller's reading budget has left (find.ts `readingBudget`). */
+      /** The characters the caller's reading budget has left. */
       readonly remaining: () => number;
     }
 );
@@ -1036,7 +1033,7 @@ export const readManyTool = (
 ): ToolSpec<unknown> => {
   const read = options.read ?? readTool(ctx);
   // Refusals come from a `read` that records nothing: a refusal repeats the path asked, so a path
-  // shaped like a page header must never be taken for lines read (find.ts `recordingHeadReads`).
+  // shaped like a page header must never be taken for lines read.
   const refusals = readTool(ctx);
   const hunk = hunkTool(ctx, options.allowed);
   /** The room a call over `entries` keeps for its note or its last words, before reading. */
@@ -2304,7 +2301,7 @@ export const rankedSearchTool = (
 
 /**
  * BM25 for `search`, whatever the leads come from: the frozen candidate's fallback, or BM25, as the
- * manifest's settings hold it (`searchRetriever`, manifest.ts), so the finders' keys hold it.
+ * manifest's settings hold it (`searchRetriever`, manifest.ts).
  */
 const lexicalConfig = (ctx: LookupContext): RetrieverConfig =>
   ctx.manifest.settings.search;
