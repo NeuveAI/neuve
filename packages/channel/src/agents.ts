@@ -29,11 +29,11 @@ async function answer(api: ToolExecutionApi, id: EntryId, context: Context): Pro
 }
 
 const SubagentModel = z.string().regex(/^(?:[^/\s]+\/\S+)?$/)
-	.describe("A model in provider/model-id form. Omit to inherit the parent chat's model.");
+	.describe("A model in provider/model-id form. Supply it only when the owner's latest message names it. Omit to inherit the parent chat's model.");
 const subagentArguments = toolArguments("subagent", z.strictObject({
 	task: z.string().describe("What the subagent should do"),
 	model: SubagentModel.optional(),
-}), { model: "a model in provider/model-id form, or omit model to inherit the parent chat's model" }, { coerce: true });
+}), { model: "a model in provider/model-id form named by the owner's latest message, or omit model to inherit the parent chat's model" }, { coerce: true });
 
 /**
  * A subagent works in a child chat owned by this tool call's task, so stopping or killing the parent
@@ -42,7 +42,7 @@ const subagentArguments = toolArguments("subagent", z.strictObject({
  */
 export const subagent = (
 	submitInput: Channel["submitInput"],
-	resolveModel: (tx: Tx, chat: ConversationId, model: ModelRef) => Promise<ModelRef | undefined>,
+	resolveModel: (tx: Tx, chat: ConversationId, model: ModelRef) => Promise<{ model: ModelRef } | { refusal: string }>,
 	...without: Extension[]
 ): Extension =>
 	defineExtension({
@@ -59,19 +59,22 @@ export const subagent = (
 					if (args.model && !SubagentModel.safeParse(args.model).success) subagentArguments.prepareArguments(args);
 					const split = args.model?.indexOf("/") ?? 0;
 					const change = args.model && { provider: args.model.slice(0, split), modelId: args.model.slice(split + 1) };
-					const child = await api.commit(async (tx) => {
+					const result = await api.commit<{ chat: ConversationId } | { refusal: string }>(async (tx) => {
 						const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
-						if (existing) return existing.id;
-						const model = change && await resolveModel(tx, api.conversationId, change);
+						if (existing) return { chat: existing.id };
+						const selection = change ? await resolveModel(tx, api.conversationId, change) : undefined;
+						if (selection && "refusal" in selection) return selection;
 						const created = await tx.createConversation({
 							ownership: { kind: "task", taskId: api.taskId },
 						});
 						await configure(tx, created.id, {
 							extensions: { remove: [{ name: "ace-subagent" }, MetadataExtension, ...without] },
-							...(model ? { model } : {}),
+							...selection,
 						});
-						return created.id;
+						return { chat: created.id };
 					}, context);
+					if ("refusal" in result) return { content: [{ type: "text", text: result.refusal }], isError: true };
+					const child = result.chat;
 					await api.details({ chat: child }, context);
 					const handle = (await api.conversation(child, context))!;
 					const author = `agent@${api.conversationId}`;

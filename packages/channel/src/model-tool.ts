@@ -3,7 +3,7 @@ import { AgentDoc, defineExtension, defineTool, type ConversationId, type ToolEx
 import { key as modelKey, modelGroups } from "@neuve/runtime/listed-models";
 import { z } from "zod";
 
-import { EffortSchema } from "./effort";
+import { EffortSchema, selectableEfforts } from "./effort";
 import { sameModel } from "./models";
 import { ModelSettings, ownerInput, PendingModelDoc } from "./model-settings";
 import { ModelRefSchema } from "./parse";
@@ -76,13 +76,31 @@ const effortNames: Record<Effort, string[]> = {
 
 const refused = "The owner's latest message must name one available model or effort. Name the account when a model appears twice.";
 
+async function namedSettings(tx: Tx, chat: ConversationId, text: string, settings: ModelSettings) {
+	const { groups, remaining, options } = await namedModels(words(text), settings);
+	const stored = await tx.doc(AgentDoc, chat);
+	const current = await tx.doc(PendingModelDoc, chat);
+	const effective = groups[0]?.[0] ?? options.find(option => sameModel(option, current.pending?.model ?? stored.model));
+	const efforts = effective ? selectableEfforts(effective.efforts) : [];
+	const foundEfforts = [...new Set(matches(remaining, efforts, value => effortNames[value]).map(({ entry }) => entry))];
+	return { groups, foundEfforts };
+}
+
+function unmatched({ groups, foundEfforts }: Awaited<ReturnType<typeof namedSettings>>): string {
+	const modelNames = groups.map(([first]) => modelKey(first)).join(", ") || "no available model";
+	const effortNames = foundEfforts.length ? `effort ${foundEfforts.join(", ")}` : "no available effort";
+	return `The owner's latest message matches ${modelNames} and ${effortNames}.`
+		+ (groups.length > 1 ? " Name the account when a model appears twice." : "");
+}
+
 export async function modelNamedByOwner(
 	tx: Tx, chat: ConversationId, requested: ModelRef, settings: ModelSettings,
-): Promise<ModelRef | undefined> {
+): Promise<{ model: ModelRef } | { refusal: string }> {
 	const text = await ownerInput(tx, chat);
-	if (text === undefined) return;
-	const { groups } = await namedModels(words(text), settings);
-	return servingModel(groups, requested);
+	if (text === undefined) return { refusal: refused };
+	const named = await namedSettings(tx, chat, text, settings);
+	const model = servingModel(named.groups, requested);
+	return model ? { model } : { refusal: unmatched(named) };
 }
 
 export function modelTool(
@@ -103,21 +121,13 @@ export function modelTool(
 					content: [{ type: "text", text: target.refusal }], isError: true,
 				};
 				const { chat } = target;
-				const { groups, remaining, options } = await namedModels(words(text), settings);
+				const named = await namedSettings(tx, chat, text, settings);
+				const { groups, foundEfforts } = named;
 				const serving = model && servingModel(groups, model);
-				const stored = await tx.doc(AgentDoc, chat);
-				const current = await tx.doc(PendingModelDoc, chat);
-				const effective = groups[0]?.[0] ?? options.find(option => sameModel(option, current.pending?.model ?? stored.model));
-				const efforts = effective?.efforts ?? [];
-				const foundEfforts = [...new Set(matches(remaining, efforts, value => effortNames[value]).map(({ entry }) => entry))];
 				if ((!model && effort === undefined) || groups.length > 1 || foundEfforts.length > 1
 					|| model !== undefined && serving === undefined
 					|| effort !== undefined && (foundEfforts.length !== 1 || foundEfforts[0] !== effort)) {
-					const modelNames = groups.map(([first]) => modelKey(first)).join(", ") || "no available model";
-					const effortNames = foundEfforts.length ? `effort ${foundEfforts.join(", ")}` : "no available effort";
-					const message = `The owner's latest message matches ${modelNames} and ${effortNames}.`
-						+ (groups.length > 1 ? " Name the account when a model appears twice." : "");
-					return { content: [{ type: "text", text: message }], isError: true };
+					return { content: [{ type: "text", text: unmatched(named) }], isError: true };
 				}
 				const change: PendingModel = {
 					...(serving ? { model: serving } : {}),

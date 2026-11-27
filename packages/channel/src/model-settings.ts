@@ -3,6 +3,7 @@ import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai";
 import { AgentDoc, configure, defineDoc, type ConversationId, type Harness, LiveDoc, type Tx } from "@earendil-works/pi-durable";
 import type { AccountStatus } from "@neuve/runtime/status";
 
+import { selectableEfforts } from "./effort";
 import { available, choose, sameModel, usable } from "./models";
 import type { Effort, ModelOption, ModelRef, PendingModel } from "./protocol";
 import { type Attached, checkContext } from "./room";
@@ -64,6 +65,13 @@ export class ModelSettings {
 		const explicit = !!selection.model || selection.effort !== undefined || selection.automatic === true;
 		const busy = !!(await tx.doc(LiveDoc, chat)).run;
 		const desired = await this.#resolve(state.model, effort, pending ?? {}, selection);
+		if (!busy && !admitting && pending?.model && state.model
+			&& !selection.model && !selection.automatic && selection.effort !== undefined) {
+			await configure(tx, chat, { thinkingLevel: desired.effort });
+			const change = { model: { ...pending.model } };
+			doc.pending = change;
+			return { model: { ...state.model }, effort: desired.effort, pending: change };
+		}
 		if (!busy && (admitting || explicit || !pending)) {
 			if (!sameModel(state.model, desired.model) || effort !== desired.effort) {
 				await configure(tx, chat, { model: desired.model, thinkingLevel: desired.effort });
@@ -95,8 +103,8 @@ export class ModelSettings {
 			throw new Error(`The ${name} API key is missing. Add it in Provider settings to invoke an agent. Chat is still available.`);
 		}
 		checkContext(selected, selection);
-		const levels = getSupportedThinkingLevels(selected);
-		const supports = (level: Effort) => level === "off" || levels.includes(level);
+		const levels = selectableEfforts(getSupportedThinkingLevels(selected));
+		const supports = (level: Effort) => levels.includes(level);
 		if (selection.effort !== undefined && !supports(selection.effort)) {
 			const listed = levels.filter(level => level !== "off");
 			throw new Error(

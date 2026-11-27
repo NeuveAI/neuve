@@ -122,6 +122,28 @@ for (const lost of [false, true]) test(`a queued review wake keeps the old setti
 	} finally { blocked.release(); }
 });
 
+// An effort edit is not an input admission and must leave the pending model for the next input.
+test("an idle effort-only selection keeps the pending model until input is admitted", async () => {
+	const { run, watch } = await setup();
+	offer(run).appendResponses([fauxAssistantMessage("Used the pending model")]);
+	const blocked = blockTurn(run);
+	run.script(blocked.step);
+	try {
+		const { submission } = await run.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Start" });
+		await blocked.entered;
+		await run.request({ op: "select", author: OWNER, model: alternate, effort: "high" });
+		blocked.release();
+		expect(await run.request({ op: "wait", submission })).toBe("done");
+		const edited = { model: MODEL, effort: "low", pending: { model: alternate } };
+		expect(await run.request({ op: "select", author: OWNER, effort: "low" })).toEqual(edited);
+		expect((await run.channel.info()).chats[0]).toMatchObject(edited);
+		await run.request({ op: "ask", author: OWNER, text: "Continue" });
+		expect(await watch.until("reply", event => event.text === "Used the pending model")).toMatchObject({ model: alternate.modelId });
+		expect((await run.channel.info()).chats[0]).toMatchObject({ model: alternate, effort: "low" });
+		expect((await run.channel.info()).chats[0]?.pending).toBeUndefined();
+	} finally { blocked.release(); }
+});
+
 // The live ask must resolve to one offered route before an agent can retry a refused call.
 test("the plain Opus ask has one match in the lane model list", async () => {
 	const { run, watch } = await setup([
@@ -179,6 +201,26 @@ const terra = { provider: "codex", modelId: "gpt-6.1-terra" };
 const account = (name: string, kind: AccountStatus["kind"], email?: string) => AccountStatus.parse({
 	name, kind, signIn: { state: "signed-in", ...(email ? { email } : {}) },
 	limits: [], checkedAt: "2026-11-27T00:00:00Z",
+});
+
+// Claude and Codex omit off in the catalogue but the default effort must work by message and picker.
+for (const [provider, modelId, kind] of [
+	["claude", "opus", "claude-subscription"],
+	["codex", terra.modelId, "chatgpt-subscription"],
+] as const) test(`the model tool accepts off on the ${provider} account without a listed off level`, async () => {
+	const { run, watch } = await setup([account(provider, kind)]);
+	const handle = fauxProvider({ provider, models: [{ id: modelId, reasoning: true }] });
+	const model = { ...handle.getModel(), thinkingLevelMap: { off: null } };
+	run.scripted.models.setProvider({ ...handle.provider, getModels: () => [model] });
+	handle.setResponses([callModelTool("default", { effort: "off" }), fauxAssistantMessage("Done")]);
+	const selected = { provider, modelId };
+	expect(await run.request({ op: "select", author: OWNER, model: selected, effort: "off" })).toEqual({ model: selected, effort: "off" });
+	await run.request({ op: "select", author: OWNER, effort: "medium" });
+	await run.request({ op: "ask", author: OWNER, text: "Use no reasoning." });
+	expect(await watch.until("result", event => event.call === "default")).toMatchObject({
+		error: false, text: `${provider}/${modelId}, effort off, pending until an input is sent while idle.`,
+	});
+	expect((await run.channel.info()).chats[0]?.pending).toEqual({ effort: "off" });
 });
 
 // The catalogue shows both routes, but the owner's words must select the route the picker shows.
@@ -272,10 +314,11 @@ for (const setting of ["model", "effort"] as const) test(`a named ${setting} lea
 	expect((await run.channel.info()).chats[0]).toMatchObject({ ...unchanged, ...change });
 });
 
-// The subagent tool accepts the model only when the channel can prove the owner named it.
-for (const reason of ["named", "unnamed", "replaced"] as const) test(`a subagent's requested model is ${reason}`, async () => {
+// A refused model needs an actionable tool result and must not start a child on the inherited model.
+for (const reason of ["omitted", "named", "unnamed", "ambiguous", "replaced"] as const) test(`a subagent's requested model is ${reason}`, async () => {
 	const { run, watch } = await setup();
 	const other = offer(run);
+	if (reason === "ambiguous") offer(run, "other-account");
 	other.appendResponses([fauxAssistantMessage("Alternate child")]);
 	await run.request({ op: "share", author: OWNER, shared: true });
 	const entered = Promise.withResolvers<void>();
@@ -283,18 +326,27 @@ for (const reason of ["named", "unnamed", "replaced"] as const) test(`a subagent
 	run.script(async () => {
 		entered.resolve();
 		await release.promise;
-		return fauxAssistantMessage(fauxToolCall("subagent", { task: "Inspect", model: "another/job-model" }, { id: "child" }), { stopReason: "toolUse" });
-	}, ...(reason === "named" ? [] : [fauxAssistantMessage("Inherited child")]), fauxAssistantMessage("Done"));
+		return fauxAssistantMessage(fauxToolCall("subagent", {
+			task: "Inspect", ...(reason === "omitted" ? {} : { model: "another/job-model" }),
+		}, { id: "child" }), { stopReason: "toolUse" });
+	}, fauxAssistantMessage("Inherited child"), fauxAssistantMessage("Done"));
 	try {
-		await run.request({ op: "ask", author: OWNER, text: reason === "unnamed" ? "Delegate" : "Delegate using job-model" });
+		await run.request({ op: "ask", author: OWNER, text: reason === "unnamed" ? "Delegate using coder at high effort" : "Delegate using job-model" });
 		await entered.promise;
 		if (reason === "replaced") await run.request({ op: "ask", author: teammate, text: "Keep using job-model" });
 		release.resolve();
-		expect(await watch.until("result", event => event.call === "child")).toMatchObject({
-			error: false, text: reason === "named" ? "Alternate child" : "Inherited child",
-		});
+		const result = await watch.until("result", event => event.call === "child");
+		const expected = {
+			omitted: { error: false, text: "Inherited child" },
+			named: { error: false, text: "Alternate child" },
+			unnamed: { error: true, text: "The owner's latest message matches faux/coder and effort high." },
+			ambiguous: { error: true, text: "The owner's latest message matches another/job-model, other-account/job-model and no available effort. Name the account when a model appears twice." },
+			replaced: { error: true, text: "The owner's latest message must name one available model or effort. Name the account when a model appears twice." },
+		};
+		expect(result).toMatchObject(expected[reason]);
 		const info = await run.channel.info();
-		expect(info.chats.find(chat => chat.parent === ROOT_CONVERSATION_ID)?.model).toEqual(reason === "named" ? alternate : MODEL);
+		expect(info.chats.filter(chat => chat.parent === ROOT_CONVERSATION_ID).map(chat => chat.model))
+			.toEqual(reason === "named" ? [alternate] : reason === "omitted" ? [MODEL] : []);
 	} finally { release.resolve(); }
 });
 
