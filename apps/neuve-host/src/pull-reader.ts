@@ -138,12 +138,15 @@ export class PullReaders {
 		const { outcome } = await this.#merges.run({
 			scope: reader.repo, key: JSON.stringify([number, head]), signal: this.#lifetime.signal,
 			run: async signal => {
+				const fields = { repo: reader.repo, branch, number, head };
 				try {
 					await this.github.merge(reader.repo, number, head, signal);
 				} catch (error) {
+					if (!signal.aborted) this.log("warn", "pull.merge.failed", { ...fields, ...failure(error) });
 					this.#wake(reader);
 					throw error;
 				}
+				this.log("info", "pull.merged", fields);
 				const merged: PullSnapshot = {
 					...snapshot, mergedAt: Date.now(), pull: { ...snapshot.pull, state: "merged", merge: undefined },
 				};
@@ -263,7 +266,11 @@ export class PullReaders {
 			if (finished) cache.delete(`/repos/${repo}/pulls/${finished.pull.number}`);
 			reader.number = found.number;
 			if (reader.number === undefined && plan?.open) {
-				reader.number = await this.github.draft(repo, branch, plan.title, plan.text, signal, headRepos);
+				const created = await this.github.draft(repo, branch, plan.title, plan.text, signal, headRepos);
+				if (created) {
+					reader.number = created.number;
+					this.log("info", "pull.draft.opened", { repo, branch, number: created.number, head: created.head.sha });
+				}
 				plan.open = false;
 			}
 			if (reader.number === undefined) {
@@ -318,6 +325,7 @@ export class PullReaders {
 		const active = reader.plan;
 		if (snapshot.pull.state === "draft" && active?.ready(head) && this.#readiedHead(reader, snapshot.node) !== head) {
 			await this.github.ready(snapshot.node, signal);
+			this.log("info", "pull.ready", { repo, branch, number: value.number, head });
 			reader.readied = { node: snapshot.node, head };
 			active.readiness?.record(snapshot.node, head);
 			reader.wake = true;

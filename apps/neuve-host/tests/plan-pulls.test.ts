@@ -177,7 +177,9 @@ test("run ends and moved heads wake one read for all branch subscribers", async 
 
 test("one existing pull request is adopted and another plan gets its own draft and review", async () => {
 	const second = "river/build-second";
+	const openedHead = "b".repeat(40);
 	const actions: unknown[] = [];
+	const transitions: unknown[] = [];
 	let created = false;
 	let readied = false;
 	let ready = false;
@@ -185,7 +187,8 @@ test("one existing pull request is adopted and another plan gets its own draft a
 		if (url.pathname.endsWith("/pulls") && request.method === "POST") {
 			actions.push(JSON.parse(String(request.body)));
 			created = true;
-			return Response.json(detail(8, second), { status: 201 });
+			const draft = detail(8, second, "open", true);
+			return Response.json({ ...draft, head: { ...draft.head, sha: openedHead } }, { status: 201 });
 		}
 		if (url.pathname.endsWith("/pulls")) {
 			const first = url.searchParams.get("head") === `owner:${branch}`;
@@ -204,7 +207,9 @@ test("one existing pull request is adopted and another plan gets its own draft a
 			return Response.json({ data: { markPullRequestReadyForReview: { pullRequest: { id: "pull-8" } } } });
 		}
 	});
-	const readers = new PullReaders(github, () => {});
+	const readers = new PullReaders(github, (level, event, fields) => {
+		if (event === "pull.draft.opened" || event === "pull.ready") transitions.push({ level, event, ...fields });
+	});
 	try {
 		const firstView = updates(readers, branch);
 		const secondView = updates(readers, second);
@@ -221,6 +226,10 @@ test("one existing pull request is adopted and another plan gets its own draft a
 		await until(() => secondView.values.at(-1)?.pull?.state === "open");
 		expect(secondView.values.at(-1)?.pull?.number).toBe(8);
 		expect(actions.at(-1)).toBe("ready");
+		expect(transitions).toEqual([
+			{ level: "info", event: "pull.draft.opened", repo, branch: second, number: 8, head: openedHead },
+			{ level: "info", event: "pull.ready", repo, branch: second, number: 8, head },
+		]);
 	} finally {
 		readers.close();
 	}
@@ -236,6 +245,7 @@ test("plan listings share pull reads and a new head returns only host-readied pu
 	let sha = head;
 	let draft = true;
 	const actions: string[] = [];
+	const stale: unknown[] = [];
 	let reads = 0;
 	const github = transport((url, request) => {
 		if (url.pathname === "/graphql") {
@@ -265,7 +275,9 @@ test("plan listings share pull reads and a new head returns only host-readied pu
 	});
 	const listings: Listing["plans"][] = [];
 	const start = () => {
-		const host = new PlanPulls(new PullReaders(github, () => {}), () => listings.push(host.summary(channel)));
+		const host = new PlanPulls(new PullReaders(github, (level, event, fields) => {
+			if (event === "pull.review.stale") stale.push({ level, ...fields });
+		}), () => listings.push(host.summary(channel)));
 		host.start();
 		return host;
 	};
@@ -317,6 +329,7 @@ test("plan listings share pull reads and a new head returns only host-readied pu
 		expect(listings.at(-1)).toEqual({ humanRequired: 5 });
 		expect(reads).toBe(3);
 		expect(actions).toEqual([`markPullRequestReadyForReview pull-7 ${head}`, `convertPullRequestToDraft pull-7 ${next}`]);
+		expect(stale).toEqual([{ level: "info", repo, branch, number: 7, head: next, reviewedHead: head }]);
 
 		publishBuildPulls(channel, [{ ...resumed, finishedReview: { humanRequired: 0, reviewerHeads: [head, next] } }, {
 			...second, build: { ...second.build, state: { kind: "stopped", by: "owner", at: 2 } },
@@ -341,6 +354,7 @@ test("plan listings share pull reads and a new head returns only host-readied pu
 
 test("GitHub refuses a merge when its head moved after the reader observed it", async () => {
 	const received: unknown[] = [];
+	const warnings: unknown[] = [];
 	const github = transport((url, request) => {
 		if (url.pathname.endsWith("/pulls")) return Response.json([detail(7, branch)]);
 		if (url.pathname.endsWith("/pulls/7")) return Response.json(detail(7, branch));
@@ -352,7 +366,9 @@ test("GitHub refuses a merge when its head moved after the reader observed it", 
 			return Response.json({ message: "Head branch was modified" }, { status: 409 });
 		}
 	});
-	const readers = new PullReaders(github, () => {});
+	const readers = new PullReaders(github, (level, event, fields) => {
+		if (level === "warn") warnings.push({ event, ...fields });
+	});
 	try {
 		const view = updates(readers, branch);
 		readers.plan(repo, branch, {
@@ -363,6 +379,9 @@ test("GitHub refuses a merge when its head moved after the reader observed it", 
 		await expect(readers.merge(repo, branch, "plan", 7, "b".repeat(40))).rejects.toThrow("Review its latest head");
 		await expect(readers.merge(repo, branch, "plan", 7, head)).rejects.toThrow("Head branch was modified.");
 		expect(received).toEqual([{ sha: head, merge_method: "squash" }]);
+		expect(warnings).toEqual([expect.objectContaining({
+			event: "pull.merge.failed", repo, branch, number: 7, head, error: "Head branch was modified.",
+		})]);
 		expect(view.values.at(-1)?.pull?.state).toBe("open");
 	} finally {
 		readers.close();
@@ -371,6 +390,7 @@ test("GitHub refuses a merge when its head moved after the reader observed it", 
 
 test("a successful merge publishes the result and cleans up the matching remote branch", async () => {
 	const actions: unknown[] = [];
+	const merged: unknown[] = [];
 	const github = transport((url, request) => {
 		if (url.pathname.endsWith("/pulls")) return Response.json([detail(7, branch)]);
 		if (url.pathname.endsWith("/pulls/7")) return Response.json(detail(7, branch));
@@ -389,7 +409,9 @@ test("a successful merge publishes the result and cleans up the matching remote 
 			return new Response(null, { status: 204 });
 		}
 	});
-	const readers = new PullReaders(github, () => {});
+	const readers = new PullReaders(github, (level, event, fields) => {
+		if (event === "pull.merged") merged.push({ level, ...fields });
+	});
 	try {
 		const view = updates(readers, branch);
 		readers.plan(repo, branch, {
@@ -400,6 +422,7 @@ test("a successful merge publishes the result and cleans up the matching remote 
 		await Promise.all([readers.merge(repo, branch, "plan", 7, head), readers.merge(repo, branch, "plan", 7, head)]);
 		expect(view.values.at(-1)?.pull?.state).toBe("merged");
 		expect(actions).toEqual([{ sha: head, merge_method: "merge" }, "deleted", { number: 7, sha: head, at: expect.any(Number) }]);
+		expect(merged).toEqual([{ level: "info", repo, branch, number: 7, head }]);
 	} finally {
 		readers.close();
 	}

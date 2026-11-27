@@ -601,11 +601,10 @@ export function pullGithub(fetcher: typeof globalThis.fetch = fetch, signIn = to
 				const compare = await json(`${path(repo)}/compare/${encodeURIComponent(comparisonBase)}...${encodeURIComponent(comparisonHead)}`,
 					z.object({ ahead_by: z.number() }), signal).catch(absent);
 				if (!compare?.ahead_by) continue;
-				const created = await json(`${path(repo)}/pulls`, PullRow, signal, "POST", {
+				return json(`${path(repo)}/pulls`, PullRow, signal, "POST", {
 					head: fork ? qualified(headRepo, branch) : branch, base, title, body: await body(), draft: true,
 					...(fork ? { head_repo: headRepo.split("/")[1] } : {}),
 				});
-				return created.number;
 			}
 		},
 		async ready(id: string, signal: AbortSignal) {
