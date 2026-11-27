@@ -111,7 +111,8 @@ export const launchArguments = (
           const prefix = `mcp_servers.${alias}`;
           const env = Object.entries(server.env ?? {})
             .map(
-              ([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`,
+              ([key, value]) =>
+                `${JSON.stringify(key)}=${JSON.stringify(value)}`,
             )
             .join(",");
           return [
