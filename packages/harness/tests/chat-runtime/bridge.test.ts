@@ -384,7 +384,10 @@ test("9: non-account requests pass straight through the Models layer, so pi chat
 test("10: provider collisions list and route both models, while equal account identities resume", async () => {
   const run = await fixture({
     accounts: [account(), account("faux")],
-    statusModels: [...testModels, { id: "coder", displayName: "Shared coder", description: "Shared coder" }],
+    statusModels: [
+      ...testModels,
+      { id: "coder", displayName: "Shared coder", description: "Shared coder" },
+    ],
   });
   try {
     expect(run.models.getModels("faux").map((model) => model.id)).toEqual([
