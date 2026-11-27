@@ -103,18 +103,21 @@ export const launchArguments = (
   const pluginServers =
     configuration === "own"
       ? Object.entries(mcpServers ?? {}).flatMap(([name, server]) => {
-          const preferred = `neuve_${name.replaceAll("-", "_")}`;
+          const preferred = `neuve_${name.replace(/[^A-Za-z0-9_]/gu, "_")}`;
           let alias = preferred;
           for (let count = 2; reserved.has(alias); count++)
             alias = `${preferred}_${count}`;
           reserved.add(alias);
           const prefix = `mcp_servers.${alias}`;
+          const env = Object.entries(server.env ?? {})
+            .map(
+              ([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`,
+            )
+            .join(",");
           return [
             `${prefix}.command=${JSON.stringify(server.command)}`,
             `${prefix}.args=${JSON.stringify(server.args ?? [])}`,
-            ...Object.entries(server.env ?? {}).map(
-              ([key, value]) => `${prefix}.env.${key}=${JSON.stringify(value)}`,
-            ),
+            ...(env === "" ? [] : [`${prefix}.env={${env}}`]),
             `${prefix}.default_tools_approval_mode="approve"`,
           ];
         })
