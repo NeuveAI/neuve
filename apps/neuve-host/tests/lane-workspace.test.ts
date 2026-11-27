@@ -10,6 +10,8 @@ import { readLaneWorkspace, stopLaneWorkspace, writeLaneWorkspace } from "../src
 import { open as openLog } from "../src/log";
 import { archive } from "../src/manage";
 
+const noKeychainEntries = async () => 44;
+
 async function fixture(run: (root: string) => Promise<void>) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "lane-workspace-")));
 	try {
@@ -41,11 +43,11 @@ test("stop signals only a recorded process with the same start time and removes 
 				live.delete(pid);
 			},
 		};
-		expect(await stopLaneWorkspace(root, unmarked, monitor)).toBe(false);
-		expect(await stopLaneWorkspace(root, alias, monitor)).toBe(false);
+		expect(await stopLaneWorkspace(root, unmarked, monitor, undefined, undefined, noKeychainEntries)).toBe(false);
+		expect(await stopLaneWorkspace(root, alias, monitor, undefined, undefined, noKeychainEntries)).toBe(false);
 		expect(signalled).toEqual([]);
-		expect(await stopLaneWorkspace(root, scratch, monitor)).toBe(true);
-		expect(await stopLaneWorkspace(root, scratch, monitor)).toBe(false);
+		expect(await stopLaneWorkspace(root, scratch, monitor, undefined, undefined, noKeychainEntries)).toBe(true);
+		expect(await stopLaneWorkspace(root, scratch, monitor, undefined, undefined, noKeychainEntries)).toBe(false);
 		expect(signalled).toEqual([launcher.pid]);
 		expect(existsSync(scratch)).toBe(false);
 		expect(existsSync(unmarked)).toBe(true);
@@ -94,11 +96,11 @@ test("stop retains scratch until the launcher exits and both store workers have 
 			}
 			return command[4] === capture && captureWorkerRunning ? 0 : 3;
 		};
-		await expect(stopLaneWorkspace(root, scratch, monitor, run)).rejects.toThrow(`The worker for ${capture} is still running.`);
+		await expect(stopLaneWorkspace(root, scratch, monitor, run, undefined, noKeychainEntries)).rejects.toThrow(`The worker for ${capture} is still running.`);
 		expect((await readLaneWorkspace(root, scratch))?.lane).toBe(join(root, "lane"));
 
 		captureCanStop = true;
-		expect(await stopLaneWorkspace(root, scratch, monitor, run)).toBe(true);
+		expect(await stopLaneWorkspace(root, scratch, monitor, run, undefined, noKeychainEntries)).toBe(true);
 		expect(existsSync(scratch)).toBe(false);
 		expect(commands).toEqual([
 			[neuve, "worker", "stop", "--repo", project],
@@ -110,6 +112,35 @@ test("stop retains scratch until the launcher exits and both store workers have 
 			[neuve, "worker", "stop", "--store", capture],
 			[neuve, "worker", "status", "--store", capture],
 		]);
+	});
+});
+
+test("stop clears the build's keychain entries and retains scratch on a keychain error", async () => {
+	await fixture(async (root) => {
+		const scratch = await mkdtemp(join(root, "workspace-"));
+		const lane = join(root, "lane");
+		await writeLaneWorkspace({
+			version: 1, scratch, lane, ready: true,
+			keeper: { pid: 49101, start: "keeper start", host: hostname() },
+		});
+		const monitor = { read: () => undefined, terminate() { throw new Error("Unexpected signal."); } };
+		const service = `neuve-${scratch}/state/neuve-host`;
+		const statuses = [0, 1, 0, 0, 44];
+		const runKeychain = async (command: string[]) => {
+			expect(command).toEqual(["/usr/bin/security", "delete-generic-password", "-s", service]);
+			expect((await readLaneWorkspace(root, scratch))?.lane).toBe(lane);
+			const status = statuses.shift();
+			if (status === undefined) throw new Error("Unexpected keychain command.");
+			return status;
+		};
+		const stop = () => stopLaneWorkspace(root, scratch, monitor, undefined, undefined, runKeychain);
+
+		await expect(stop()).rejects.toThrow("exited with code 1");
+		expect(statuses).toEqual([0, 0, 44]);
+		expect((await readLaneWorkspace(root, scratch))?.lane).toBe(lane);
+		expect(await stop()).toBe(true);
+		expect(statuses).toEqual([]);
+		expect(existsSync(scratch)).toBe(false);
 	});
 });
 
@@ -127,13 +158,13 @@ test.skipIf(process.getuid?.() === 0)("a partial scratch removal fails and leave
 		const monitor = { read: () => undefined, terminate() { throw new Error("Unexpected signal."); } };
 		await chmod(blocked, 0o500);
 		try {
-			await expect(stopLaneWorkspace(root, scratch, monitor)).rejects.toThrow(scratch);
+			await expect(stopLaneWorkspace(root, scratch, monitor, undefined, undefined, noKeychainEntries)).rejects.toThrow(scratch);
 			expect((await readLaneWorkspace(root, scratch))?.lane).toBe(lane);
 			expect(existsSync(join(blocked, "entry"))).toBe(true);
 		} finally {
 			await chmod(blocked, 0o700);
 		}
-		expect(await stopLaneWorkspace(root, scratch, monitor)).toBe(true);
+		expect(await stopLaneWorkspace(root, scratch, monitor, undefined, undefined, noKeychainEntries)).toBe(true);
 		expect(existsSync(scratch)).toBe(false);
 	});
 });
@@ -163,7 +194,7 @@ test("stop closes only the build's tab and leaves the development browser runnin
 			expect(directory).toBe(profile);
 			expect(target.browser).toBe(browser.target.browser);
 			tabs.delete(target.target_id);
-		})).toBe(true);
+		}, noKeychainEntries)).toBe(true);
 		expect([...tabs]).toEqual(["owner-tab"]);
 		expect(signalled).toEqual([]);
 	});

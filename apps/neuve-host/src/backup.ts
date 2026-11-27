@@ -169,11 +169,10 @@ export async function restore(
 	const draft = catalog.draft(
 		await project(options.dir || original.project),
 		original.model,
-		options.name,
+		options.name || catalog.restored(original.name),
 	);
 	const record: catalog.Listing = {
 		...draft,
-		name: options.name ? draft.name : catalog.restored(original.name),
 		named: !!options.name || original.named !== false,
 		summary: original.summary,
 	};

@@ -32,6 +32,23 @@ async function setup(configured: boolean) {
 	return join(root, "project");
 }
 
+for (const [branch, prefix] of [["release", "release-2"], ["release/old-work", "release-2"], ["release-notes", "release"]] as const) {
+	test(`native create chooses ${prefix} when ${branch} exists`, async () => {
+		const project = await setup(false);
+		const git = (...args: string[]) => {
+			const result = Bun.spawnSync(["git", "-C", project, ...args]);
+			if (!result.success) throw new Error(result.stderr.toString());
+			return result.stdout.toString();
+		};
+		git("branch", branch);
+		const refs = () => git("for-each-ref", "refs/heads/");
+		const before = refs();
+		const record = catalog.create(project, undefined, "release");
+		expect(catalog.read(record.id)).toMatchObject({name: "release", prefix});
+		expect(refs()).toBe(before);
+	});
+}
+
 for (const configured of [false, true]) {
 	test(`GitHub cloud create returns native compute admission with provenance configured=${configured}`, async () => {
 		const project = await setup(configured);

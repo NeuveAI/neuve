@@ -16,13 +16,14 @@ import { join } from "node:path";
 import { type Metadata, type ModelRef, type RunEnd, type Said, validateName } from "@ace/channel";
 
 import { config } from "./config";
+import { GIT_LOCAL } from "./host-config";
 import { identity } from "./tailnet";
 
 export type Listing = {
 	version: 2;
 	id: string;
 	name: string;
-	/** The original name remains the prefix for lane branches after a rename. */
+	/** The prefix chosen at creation remains fixed after a rename. */
 	prefix: string;
 	/** Whether the initial name was chosen deliberately rather than randomly. */
 	named: boolean;
@@ -165,6 +166,21 @@ function unused(base: string, names: Set<string>, first = 2): string {
 	return name;
 }
 
+function lanePrefix(project: string, name: string, names: Set<string>): string {
+	// Cloud channels may have no checkout on this host.
+	if (existsSync(join(project, ".git"))) {
+		const env = { ...process.env };
+		for (const key of GIT_LOCAL) delete env[key];
+		const refs = Bun.spawnSync(["git", "-C", project, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/"], { env });
+		if (!refs.success) throw new Error(refs.stderr.toString().trim() || "Could not read the project's Git branches.");
+		for (const ref of refs.stdout.toString().trimEnd().split("\n")) {
+			const [prefix] = ref.split("/", 1);
+			if (prefix) names.add(prefix);
+		}
+	}
+	return unused(name, names);
+}
+
 /**
  * Serializes a name check with the record write that claims the name, across the host process
  * and every channel worker; the transaction ends when the connection closes.
@@ -201,14 +217,12 @@ export function restored(name: string): string {
 }
 
 /**
- * A fork's record, not yet saved, named for its source and numbered past names in use. `branches`
- * holds lane prefixes left in the project by deleted channels. The name is not deliberate, so the
- * fork's agent names it once its work takes shape, as it would a random one.
+ * A fork's record, not yet saved, named for its source and numbered past channel names in use.
+ * The fork's agent names it once its work takes shape, as it would a random one.
  */
-export function fork(source: Listing, model: ModelRef | undefined, branches: Set<string>): Listing {
+export function fork(source: Listing, model: ModelRef | undefined): Listing {
 	const base = `fork-of-${source.name}`.slice(0, 63).replace(/-+$/, "");
-	const name = unused(base, new Set([...taken(), ...branches]));
-	return { ...draft(source.project, model), name, prefix: name };
+	return { ...draft(source.project, model, unused(base, taken())), named: false };
 }
 
 /** A new channel's record, not yet saved: a hosted channel saves it once the service has it. */
@@ -232,7 +246,7 @@ export function draft(project: string, model?: ModelRef, name?: string, hosted?:
 		version: 2,
 		id: randomBytes(8).toString("hex"),
 		name: chosen,
-		prefix: chosen,
+		prefix: lanePrefix(project, chosen, names),
 		named: !!name,
 		owner: user,
 		...(local ? {local: true as const} : {tailnet}),

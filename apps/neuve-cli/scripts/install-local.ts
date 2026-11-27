@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { chmodSync, rmSync, type Stats } from "node:fs";
 import {
   chmod,
@@ -45,6 +45,7 @@ import { buildDesk } from "./build-desk.ts";
 import { CLI_VERSION } from "../src/cli-version.ts";
 import {
   readSkillTemplate,
+  sha256Of,
   shareFiles,
   writeSkillShare,
   type SkillBundle,
@@ -131,9 +132,7 @@ const lstatIfPresent = async (path: string): Promise<Stats | null> => {
 };
 
 const sha256File = async (path: string): Promise<string> =>
-  createHash("sha256")
-    .update(await readFile(path))
-    .digest("hex");
+  sha256Of(await readFile(path));
 
 /**
  * The manifest is the only proof of what Neuve installed, so an unreadable one
