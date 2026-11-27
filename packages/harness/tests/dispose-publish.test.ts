@@ -11,7 +11,7 @@ import type { RunContext } from "../src/pipeline.ts";
 import { Log, PublishedPackets, mintUlid } from "@neuve/records-core";
 import { FindStored } from "../src/historical-find.ts";
 import { codeFilledBatch } from "../src/link.ts";
-import { publishPacket, clipText } from "../src/publish.ts";
+import { publishPacket, clipText, stableUlid } from "../src/publish.ts";
 import { AssembledBatch, citationIndex } from "../src/compose.ts";
 import { hunk, frame, put, storeFixture, inputsOf } from "./fixtures/link.ts";
 
@@ -237,6 +237,85 @@ const publishFixture = (ctx: RunContext["Service"], evidenceHunk = "h1") =>
       strongestStratum: frame.stratum,
     });
   });
+
+// Why: Records can reject a batch transaction; publication must disclose the failure and retain only stored IDs.
+test("a conflicting comment falls back event by event and projects the retained comment", async () => {
+  const own = storeFixture("link-publish-conflict-");
+  const result = await own.run(
+    Effect.gen(function* () {
+      const ctx = yield* own.ctx(),
+        inputs = inputsOf([hunk("h1", "a.ts")]);
+      const assembled = codeFilledBatch(inputs),
+        unit = assembled.units[0]!;
+      const namespace = `review:${ctx.cycleId}:${ctx.runKey}:`;
+      const earlier = mintUlid();
+      yield* Log.append([
+        {
+          id: earlier,
+          kind: "comment.recorded@2",
+          idempotencyKey: `${namespace}unit:${unit.id}:comment:0`,
+          actor: "a".repeat(64),
+          occurredAt: new Date().toISOString(),
+          attribution: {
+            cycleId: ctx.cycleId,
+            unitIds: [
+              stableUlid(
+                ctx.startedAt,
+                0,
+                `${namespace}entity:unit:${unit.id}`,
+              ),
+            ],
+          },
+          payload: { body: "An earlier comment." },
+        },
+      ]);
+      const finding = FindStored.shape.findings.element.parse({
+        id: "f1",
+        lens: "correctness",
+        hunkId: "h1",
+        claim: "The check is inverted.",
+        kind: "defect",
+        about: "code",
+        signal: null,
+        critical: false,
+        anchors: [{ path: "a.ts", side: "new", startLine: 11, endLine: 11 }],
+        doneWhen: "D1",
+        group: "g1",
+        evidence: [],
+      });
+      const key = yield* put(
+        "test.review",
+        linkedReview(inputs, assembled, unit, [finding]),
+      );
+      const assembledKey = yield* put("test.assembled", assembled);
+      const summary = yield* publishPacket(ctx, {
+        candidates: [
+          {
+            candidate: "g1",
+            assembledKey,
+            disposed: [{ unit: unit.id, key, status: "computed" }],
+          },
+        ],
+        stages: [],
+        sources: { manifest: null, changeMap: null, scope: null },
+        strongestStratum: frame.stratum,
+      });
+      const view = yield* PublishedPackets.runPacket(ctx.runId);
+      return { summary, view, earlier };
+    }),
+  );
+  expect(result.summary.complete).toBe(false);
+  expect(result.summary.findings).toEqual([
+    { id: "f1", fate: "withheld", reason: "comment-kept-earlier" },
+  ]);
+  expect(result.view?.gaps.map((gap) => gap.payload.kind)).toContain(
+    "publish-kept-earlier",
+  );
+  expect(result.view?.batches[0]?.units[0]?.comments[0]?.id).toBe(
+    result.earlier,
+  );
+  expect(result.view?.undecoded).toEqual([]);
+});
 
 // Why: multiple run keys retain history but readers and stats must use the newest packet.
 test("two run keys in a cycle expose only the newest packet's units to show and stats", async () => {
