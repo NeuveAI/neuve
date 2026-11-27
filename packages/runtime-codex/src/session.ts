@@ -1003,7 +1003,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           toolServer,
           tokenCommand,
           policy.environment,
-          { folder: cwd, mcpServers },
+          mcpServers,
         ),
         env: codexEnvironment(
           { ...options.environment, ...policy.environment },

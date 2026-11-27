@@ -867,16 +867,45 @@ describe("the mode table", () => {
     );
   });
 
-  test("the carried stdio server starts in the write process with the chat folder and a distinct name", async () => {
+  test("carried stdio servers keep distinct aliases after name normalization", () => {
+    const args = launchArguments(
+      "own",
+      { mcpServers: [], plugins: [], apps: [], exclude: [], skills: [] },
+      undefined,
+      undefined,
+      undefined,
+      {
+        "foo-bar": { type: "stdio", command: "first" },
+        foo_bar: { type: "stdio", command: "second" },
+      },
+    );
+    expect(
+      args.filter(
+        (arg) => arg.startsWith("mcp_servers.") && arg.includes(".command="),
+      ),
+    ).toEqual([
+      'mcp_servers.neuve_foo_bar.command="first"',
+      'mcp_servers.neuve_foo_bar_2.command="second"',
+    ]);
+  });
+
+  test("carried stdio servers start with their own arguments in the write process", async () => {
     const fake = codex();
     const server = {
       type: "stdio",
       command: "npx",
-      args: ["--autoConnect"],
+      args: ["--autoConnect", "--workspace=/work"],
     } as const;
     const scoped = {
       ...policy,
-      mcpServers: { "chrome-devtools": { ...server, args: [...server.args] } },
+      mcpServers: {
+        "chrome-devtools": { ...server, args: [...server.args] },
+        plain: {
+          type: "stdio" as const,
+          command: "plain-server",
+          args: ["--identify"],
+        },
+      },
     };
     await run(
       fake,
@@ -894,6 +923,9 @@ describe("the mode table", () => {
           );
           expect(fake.current().args).toContain(
             'mcp_servers.neuve_chrome_devtools.args=["--autoConnect","--workspace=/work"]',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_plain.args=["--identify"]',
           );
           expect(fake.current().args).toContain(
             'mcp_servers.neuve_chrome_devtools.default_tools_approval_mode="approve"',
@@ -919,21 +951,21 @@ describe("the mode table", () => {
       exclude: [],
       skills: [],
     };
-    const launch = (folder: string) =>
-      launchArguments("own", personal, undefined, undefined, undefined, {
-        folder,
-        mcpServers: scoped.mcpServers,
-      });
+    const args = launchArguments(
+      "own",
+      personal,
+      undefined,
+      undefined,
+      undefined,
+      scoped.mcpServers,
+    );
     expect(
-      launch("/work/chat lane").filter((arg) => arg.startsWith("mcp_servers.")),
+      args.filter((arg) => arg.startsWith("mcp_servers.neuve_chrome_devtools")),
     ).toEqual([
       'mcp_servers.neuve_chrome_devtools_2.command="npx"',
-      'mcp_servers.neuve_chrome_devtools_2.args=["--autoConnect","--workspace=/work/chat lane"]',
+      'mcp_servers.neuve_chrome_devtools_2.args=["--autoConnect","--workspace=/work"]',
       'mcp_servers.neuve_chrome_devtools_2.default_tools_approval_mode="approve"',
     ]);
-    expect(launch("/").some((arg) => arg.startsWith("mcp_servers."))).toBe(
-      false,
-    );
   });
 
   test("a turn without its folder and access is refused before it starts", async () => {
