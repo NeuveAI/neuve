@@ -455,6 +455,8 @@ function Rows() {
 		ROW({ name: "retry-exports", plans: { ready: true, humanRequired: 0 } }),
 		ROW({ name: "billing-sync", plans: { ready: false, humanRequired: 3 } }),
 		ROW({ name: "scheduler", needsAttention: "question" }),
+		ROW({ name: "ledger", plans: { ready: true, humanRequired: 0 }, mentionCount: 2 }),
+		ROW({ name: "importer", plans: { ready: false, humanRequired: 1 }, connection: "connected", agent: "thinking" }),
 		ROW({ name: "search-index", unreadCount: 1 }),
 		ROW({ name: "docs" }),
 	];
@@ -602,7 +604,7 @@ function Harness() {
 						))
 						: scene === "rows"
 						? (
-							<Frame label="Sidebar rows" height={260}>
+							<Frame label="Sidebar rows" height={340}>
 								<Rows />
 							</Frame>
 						)
