@@ -1100,7 +1100,7 @@ test("on, neither prompt nor reading shows the lane, the lane rule, or that an a
     on.review.opVersion,
     on.review.inputs["answer"],
     on.review.inputs["recipe"],
-  ]).toEqual([16, 7, READING_RECIPE_SCOPE_AND_TESTS]);
+  ]).toEqual([17, 8, READING_RECIPE_SCOPE_AND_TESTS]);
   expect(keyOf(on.assess)).not.toBe(keyOf(assessOf(src.id)));
   expect(keyOf(on.review)).not.toBe(keyOf(reviewOf(src.id)));
 });
