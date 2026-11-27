@@ -849,6 +849,47 @@ test("batch reviewers verify claims and leave published batches unchanged", asyn
   ]);
 }, 60_000);
 
+// Claims without owned changed lines must leave their anchor in the run log.
+test("a claim on an unchanged line is kept in the run log", async () => {
+  const fallback = answerer();
+  const unchanged = "export const unchanged = 42;\n";
+  const claim = { ...claimOn(paths[1], earlyText), startLine: 2, endLine: 2 };
+  const result = await runReview({
+    directory: join(directory, "unchanged-claim"),
+    ...splitRange,
+    base: {
+      ...splitRange.base,
+      [paths[1]]: splitRange.base[paths[1]] + unchanged,
+    },
+    head: {
+      ...splitRange.head,
+      [paths[1]]: splitRange.head[paths[1]] + unchanged,
+    },
+    answer: async (agent, messages, hunks) => {
+      if (agent === "map") return splitMap();
+      if (
+        agent.startsWith("lane-review.") &&
+        textOf(messages).includes("export const first")
+      )
+        return reviewWithClaims(agent, [claim]);
+      return fallback(agent, messages, hunks);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(
+    result.log.read().filter(({ type }) => type === "review.claim-unpublished"),
+  ).toEqual([
+    expect.objectContaining({
+      reason: "anchor-unowned",
+      anchor: { path: paths[1], side: "new", startLine: 2, endLine: 2 },
+      verify: null,
+    }),
+  ]);
+  expect(
+    commentsOf(result).some((comment) => comment.body.includes(earlyText)),
+  ).toBe(false);
+}, 60_000);
+
 // A new attempt uses the same session registry and stored Lane review answer. Stopping the first
 // attempt while one Verify is running must replace that check and reuse another that finished.
 test("a retried review replaces an aborted check and reuses a stored check", async () => {

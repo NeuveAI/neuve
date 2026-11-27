@@ -68,6 +68,7 @@ import type { RouteEffort } from "../../route.ts";
 import type { BlobStructure } from "../../sections.ts";
 import type { ReadingProof } from "../../readings/answers.ts";
 import {
+  claimAnchor,
   claimEvidence,
   claimKey,
   claimVerifyStep,
@@ -1982,17 +1983,42 @@ export const readingTask = (
       }),
     );
     const hunks = new Map(manifest.hunks.map((hunk) => [hunk.hunkId, hunk]));
+    let logged: Set<unknown> | undefined;
     for (const { answer, comment } of cross) {
-      if (comment.kind === "defect" && comment.fails.length === 0) continue;
       const owner = sectionOwning(plan, hunks, comment);
-      if (owner === undefined) continue;
-      const batch = batchOf.get(owner.section.path);
-      if (batch === undefined) continue;
-      const canonical = { ...comment, ...owner.anchor };
+      const canonical =
+        owner === undefined ? comment : { ...comment, ...owner.anchor };
       const claim =
         canonical.kind === "defect"
           ? claimKey(canonical)
           : commentKey(canonical);
+      if (owner === undefined) {
+        logged ??= new Set(
+          ctx.log
+            .read()
+            .filter((row) => row.type === "review.claim-unpublished")
+            .map((row) => row["claim"]),
+        );
+        if (!logged.has(claim)) {
+          ctx.log.write({
+            type: "review.claim-unpublished",
+            claim,
+            batch: null,
+            section: null,
+            reason: "anchor-unowned",
+            from: input.group,
+            answer,
+            verify: null,
+            kind: comment.kind,
+            anchor: claimAnchor(comment),
+          });
+          logged.add(claim);
+        }
+        continue;
+      }
+      if (comment.kind === "defect" && comment.fails.length === 0) continue;
+      const batch = batchOf.get(owner.section.path);
+      if (batch === undefined) continue;
       if (!claims.some((held) => held.key === claim))
         claims.push({
           key: claim,
