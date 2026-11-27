@@ -34,6 +34,7 @@ import type {
 import { Effect, Exit, Scope, Stream } from "effect";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import {
+  accountForProvider,
   RuntimeFailure,
   runtimeErrorToFailure,
   type AccountName,
@@ -502,12 +503,13 @@ export class ChatRuntimeBridge {
       previous.message?.role === "assistant" ? previous.message : undefined;
     const compatible =
       prior &&
-      (prior.provider === route.name ||
-        (await this.compatible(
-          prior.provider,
-          route.continuation,
-          gen.cancellation.signal,
-        )));
+      (prior.provider === gen.message.provider ||
+        (previous.pointer !== undefined &&
+          (await this.compatible(
+            prior.provider,
+            route.continuation,
+            gen.cancellation.signal,
+          ))));
     if (cancelled()) {
       this.finish(undefined, gen, "aborted");
       return;
@@ -539,7 +541,7 @@ export class ChatRuntimeBridge {
     // Without input receipts, only a completed-turn pointer is safe to replay after.
     let completed: AssistantMessage | undefined;
     if (compatible) {
-      const providers = new Set([route.name, prior?.provider]);
+      const providers = new Set([gen.message.provider, prior?.provider]);
       for (let index = gen.messages.length - 1; index >= 0; index--) {
         const message = gen.messages[index];
         if (message?.role !== "assistant") continue;
@@ -892,7 +894,7 @@ export class ChatRuntimeBridge {
     signal: AbortSignal,
   ) {
     const parsed = (await import("@neuve/runtime")).AccountName.safeParse(
-      provider,
+      accountForProvider(provider) ?? provider,
     );
     if (!parsed.success) return false;
     const identity = await Effect.runPromise(

@@ -4,7 +4,11 @@ export {
   type AccountRoute,
   type ApprovalStore,
 } from "./bridge.ts";
-export { accountModels, type AccountStatusSource } from "./models.ts";
+export {
+  accountModels,
+  accountProviderId,
+  type AccountStatusSource,
+} from "./models.ts";
 export { definitions } from "./transcript.ts";
 export {
   chatRuntimeExtension,

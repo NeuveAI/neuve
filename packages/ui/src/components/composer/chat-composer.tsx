@@ -9,12 +9,10 @@ import {
 	useEffect,
 	useImperativeHandle,
 	useLayoutEffect,
-	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { Toolbar } from "@base-ui/react/toolbar";
-import * as fuzzysort from "fuzzysort";
 import type { MarkType, Node as ProseMirrorNode, NodeType } from "prosemirror-model";
 import { TextSelection } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
@@ -29,18 +27,8 @@ import { parse } from "../../lib/markdown";
 import { cn, isUrl } from "../../lib/utils";
 import { Button } from "../../ui/button";
 import {
-	Combobox,
-	ComboboxContent,
-	ComboboxEmpty,
-	ComboboxInput,
-	ComboboxItem,
-	ComboboxList,
-	ComboboxTrigger,
-} from "../../ui/combobox";
-import {
 	DropdownMenu,
 	DropdownMenuContent,
-	DropdownMenuGroup,
 	DropdownMenuItem,
 	DropdownMenuLabel,
 	DropdownMenuSeparator,
@@ -57,6 +45,7 @@ import { ComposerToolbar, type ComposerToolbarEvent } from "./composer-toolbar";
 import { type Cause, held, modeChange } from "./mode-marker";
 import { canSendMessage } from "./send";
 import { mentionTokens } from "./mention-tokens";
+import { type Effort, type Model, ModelPicker } from "./model-picker";
 import { useAttachments } from "./use-attachments";
 import {
 	clearLink,
@@ -113,16 +102,6 @@ type Mode = {
 	cwd?: string[];
 };
 
-/** A selectable model (e.g. Opus, Sonnet). */
-type Model = {
-	id: string;
-	name: string;
-	vendor?: string;
-};
-
-/** A reasoning effort accepted by the selected model. */
-type Effort = { id: string; name: string };
-
 /** A selectable agent or execution mode. */
 type Agent = {
 	id: string;
@@ -132,10 +111,6 @@ type Agent = {
 	color?: string;
 	icon?: ComponentType<{ className?: string }>;
 };
-
-function text(model: Model) {
-	return [model.name, model.id, model.vendor].filter(Boolean).join(" ");
-}
 
 function glyph(mode?: Mode): ComponentType<{ className?: string; style?: CSSProperties }> {
 	if (mode?.icon) return mode.icon;
@@ -318,7 +293,6 @@ const DEFAULT_MODES: Mode[] = [
 	{ id: "chat", name: "Chat", placeholder: "Chat with your team, @ to mention" },
 ];
 
-const EMPTY_MODELS: Model[] = [];
 
 const EMPTY_ACTIVE: Active = {
 	bold: false,
@@ -530,7 +504,6 @@ function presentation({
 	models,
 	agents,
 	curAgent,
-	query,
 	editingRerun,
 	recording,
 	mic,
@@ -549,7 +522,6 @@ function presentation({
 	models?: Model[];
 	agents?: Agent[];
 	curAgent?: string;
-	query: string;
 	editingRerun: boolean;
 	recording: boolean;
 	mic: boolean;
@@ -575,7 +547,6 @@ function presentation({
 	let selectedAgent = agents?.find(item => item.id === curAgent) ?? agents?.[0];
 	let AgentIcon = selectedAgent?.icon
 		?? (selectedAgent?.id === "plan" ? IconListTodoMicro : IconSparkleMicro);
-	let filtering = query.trim().length > 0;
 	// The submit button doubles as the mic only while there is nothing to send; otherwise the
 	// options toolbar carries the mic so dictation can still extend a draft.
 	let voice = mic && !busy && empty && !curAttach.length;
@@ -606,7 +577,6 @@ function presentation({
 		showAgent,
 		selectedAgent,
 		AgentIcon,
-		filtering,
 		voice,
 		tip,
 	};
@@ -669,29 +639,17 @@ function useComposer({
 		attachments,
 		onAttachmentsChange,
 	);
-	let anchor = useRef<HTMLDivElement | null>(null);
 
 	let curMode = mode ?? (modes.some(item => item.id === modeState) ? modeState : modes[0]!.id);
 	let curModel = model
 		?? (models?.some(item => item.id === modelState) ? modelState : models?.[0]?.id);
 	let curAgent = agent
 		?? (agents?.some(item => item.id === agentState) ? agentState : agents?.[0]?.id);
-	let items = models ?? EMPTY_MODELS;
-	let [query, setQuery] = useState("");
-	let results = useMemo(() => {
-		let q = query.trim();
-		if (!q) return items;
-		let values = items.map(item => ({ item, value: text(item) }));
-		return fuzzysort.go(q, values, { key: "value" }).map(match => match.obj.item);
-	}, [items, query]);
-	let selected = items.find(item => item.id === curModel) ?? items[0];
 
 	let [empty, setEmpty] = useState(true);
 	let [value, setValue] = useState("");
 	let [recording, setRecording] = useState(false);
 	let [toolbar, setToolbar] = useState(tools);
-	let [modelMenu, setModelMenu] = useState(false);
-	let [keys, setKeys] = useState(false);
 	let [active, setActive] = useState(EMPTY_ACTIVE);
 	let [link, setLinkState] = useState<LinkState>(EMPTY_LINK);
 	let [emoji, setEmoji] = useState<EmojiState>(EMPTY_EMOJI);
@@ -752,7 +710,6 @@ function useComposer({
 	let typing = useRef(false);
 	let esc = useRef(0);
 	let timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-	let pendingModel = useRef<string | undefined>(undefined);
 
 	function type(value: boolean, force = false) {
 		if (timer.current) {
@@ -798,42 +755,6 @@ function useComposer({
 		agentRef.current = next;
 		if (latest.current.agent === undefined) setAgentState(next);
 		latest.current.onAgentChange?.(next);
-	}
-
-	function commitModel() {
-		let next = pendingModel.current;
-		pendingModel.current = undefined;
-		if (next) updateModel(next);
-	}
-
-	function openModelMenu(open: boolean) {
-		setModelMenu(open);
-		if (open) {
-			setKeys(false);
-			setQuery("");
-			commitModel();
-		}
-	}
-
-	function completeModelMenu(open: boolean) {
-		if (open) return;
-		setQuery("");
-		commitModel();
-	}
-
-	function selectModel(next: string) {
-		if (next === modelRef.current) return;
-		pendingModel.current = next;
-		setModelMenu(false);
-	}
-
-	function choose(next: Model | null) {
-		if (next) selectModel(next.id);
-	}
-
-	function focus(type: string) {
-		setKeys(type === "keyboard");
-		return true;
 	}
 
 	function clear() {
@@ -1154,7 +1075,6 @@ function useComposer({
 		showAgent,
 		selectedAgent,
 		AgentIcon,
-		filtering,
 		voice,
 		tip,
 	} = presentation({
@@ -1171,7 +1091,6 @@ function useComposer({
 		models,
 		agents,
 		curAgent,
-		query,
 		editingRerun,
 		recording,
 		mic,
@@ -1229,21 +1148,11 @@ function useComposer({
 		AgentIcon,
 		curAgent,
 		updateAgent,
-		items,
-		results,
-		selected,
-		query,
-		modelMenu,
-		filtering,
 		voice,
-		openModelMenu,
-		completeModelMenu,
-		setQuery,
-		choose,
-		anchor,
-		focus,
-		keys,
+		models,
 		curModel,
+		updateModel,
+		onModelChange,
 		setToolbar,
 		sendable,
 		tip,
@@ -1475,137 +1384,19 @@ function ComposerAgent({ state }: { state: ComposerState }) {
 	);
 }
 
-function ComposerEffort({ state }: { state: ComposerState }) {
-	let { efforts, effort, onEffortChange, view } = state;
-	let selected = efforts?.find(item => item.id === effort);
-	if (!selected || !onEffortChange) return null;
-	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger
-				render={
-					<Toolbar.Button
-						aria-label={`Reasoning effort: ${selected.name}`}
-						render={
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-6.5 px-2 text-muted-foreground"
-							/>
-						}
-					/>
-				}
-			>
-				<span className="truncate">{selected.name}</span>
-				<IconChevronDownMicro className="size-3 transition-transform duration-150 group-data-[popup-open]/button:scale-y-[-1]" />
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="start" sideOffset={6} className="min-w-36">
-				<DropdownMenuGroup>
-					<DropdownMenuLabel>Reasoning effort</DropdownMenuLabel>
-					{efforts?.map(entry => (
-						<DropdownMenuItem
-							key={entry.id}
-							onClick={() => {
-								onEffortChange(entry.id);
-								view.current?.focus();
-							}}
-						>
-							<span className="min-w-0 flex-1 truncate">{entry.name}</span>
-							{entry.id === effort && <IconCheckMicro className="size-3" />}
-						</DropdownMenuItem>
-					))}
-				</DropdownMenuGroup>
-			</DropdownMenuContent>
-		</DropdownMenu>
-	);
-}
-
 function ComposerModel({ state }: { state: ComposerState }) {
-	let {
-		items,
-		results,
-		selected,
-		query,
-		modelMenu,
-		filtering,
-		openModelMenu,
-		completeModelMenu,
-		setQuery,
-		choose,
-		anchor,
-		focus,
-		keys,
-		curModel,
-	} = state;
+	let { models, curModel, updateModel, onModelChange, efforts, effort, onEffortChange, view } = state;
 	return (
-		<Combobox<Model>
-			items={items}
-			filteredItems={results}
-			value={selected}
-			inputValue={query}
-			open={modelMenu}
-			autoHighlight={filtering}
-			itemToStringLabel={item => item.name}
-			itemToStringValue={item => item.id}
-			isItemEqualToValue={(item, value) => item.id === value.id}
-			onOpenChange={openModelMenu}
-			onOpenChangeComplete={completeModelMenu}
-			onInputValueChange={setQuery}
-			onValueChange={choose}
-		>
-			<div ref={anchor} className="inline-flex min-w-0">
-				<ComboboxTrigger
-					render={
-						<Toolbar.Button
-							render={
-								<Button
-									variant="ghost"
-									size="sm"
-									className="-ml-0.5 h-6.5 min-w-0 shrink px-2 text-muted-foreground"
-								/>
-							}
-						/>
-					}
-				>
-					<span className="truncate max-inline-[13rem]">
-						{selected?.name}
-					</span>
-				</ComboboxTrigger>
-			</div>
-			<ComboboxContent
-				anchor={anchor}
-				align="start"
-				sideOffset={6}
-				initialFocus={focus}
-				finalFocus={false}
-				className="w-[18rem] max-w-[calc(100vw-2rem)]"
-			>
-				<ComboboxInput
-					placeholder="Search models"
-					autoCorrect="off"
-					autoCapitalize="off"
-					spellCheck={false}
-					showClear
-					showTrigger={false}
-					className={cn(
-						!keys
-							&& "has-[[data-slot=input-group-control]:focus-visible]:border-inherit has-[[data-slot=input-group-control]:focus-visible]:ring-0",
-					)}
-				/>
-				<ComboboxEmpty>No models found</ComboboxEmpty>
-				<ComboboxList className="scrollbar-muted max-h-56">
-					{item => (
-						<ComboboxItem
-							key={item.id}
-							value={item}
-							aria-current={item.id === curModel ? "true" : undefined}
-							className="group/model pr-7 data-selected:bg-primary data-selected:font-medium data-selected:text-primary-foreground data-selected:**:text-primary-foreground"
-						>
-							<span className="min-w-0 flex-1 truncate">{item.name}</span>
-						</ComboboxItem>
-					)}
-				</ComboboxList>
-			</ComboboxContent>
-		</Combobox>
+		<ModelPicker
+			toolbar
+			models={models ?? []}
+			model={curModel}
+			onModelChange={onModelChange && updateModel}
+			efforts={efforts}
+			effort={effort}
+			onEffortChange={onEffortChange}
+			onDone={() => view.current?.focus()}
+		/>
 	);
 }
 
@@ -1636,7 +1427,6 @@ function ComposerOptions({ state }: { state: ComposerState }) {
 						{showMode && <ComposerMode state={state} />}
 						{showAgent && selectedAgent && <ComposerAgent state={state} />}
 						{showModel && <ComposerModel state={state} />}
-						{showModel && <ComposerEffort state={state} />}
 					</Toolbar.Group>
 				)}
 				{terminal
@@ -1946,8 +1736,6 @@ export {
 	type Agent,
 	ChatComposer,
 	type ChatComposerHandle,
-	type Effort,
 	type Mode,
-	type Model,
 	type SendPayload,
 };

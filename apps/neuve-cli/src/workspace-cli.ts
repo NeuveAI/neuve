@@ -468,6 +468,9 @@ export function codingWorkerSetup(
       return runtime.models;
     },
     routeModel: routeModelRef(route),
+    ...(chatSources
+      ? { accountStatuses: () => chatSources.statuses.current() }
+      : {}),
     ...(route.provider === "claude"
       ? {
           // The host has no default on a Claude route (`routeCodingDefaults`): the account's row

@@ -16,7 +16,7 @@ import { useAgentAvatar } from "./agent-avatar";
 import { Approval } from "./approval";
 import { approvalView, shownApprovals } from "./approval-card";
 import { isAgentAlias } from "./agent-mention";
-import { agentAuthor, agentAuthors, buildCards, readOnly } from "./build-card";
+import { agentAuthor, agentAuthors, agentName, buildCards, mentionName, readOnly } from "./build-card";
 import { Checks } from "./checks";
 import { Composer } from "./composer";
 import { usePlanReturn } from "./composer-mode";
@@ -337,6 +337,10 @@ export function Conversation(
 		() => Object.fromEntries([...agents].map(([author, agent]) => [author, agent.role])),
 		[agents],
 	);
+	const mentions = useMemo(() => [
+		...Object.entries(timelineAvatars).map(([name, avatar]) => ({ name, avatar })),
+		...[...agents.values()].map((agent) => ({ name: mentionName(agent), label: agentName(agent, [...agents.values()]) })),
+	], [timelineAvatars, agents]);
 	const presence = useSyncExternalStore(host.subscribe, () => host.presence);
 	const roster = useRoster();
 	// Mentions name people by GitHub login. A name still holding @ is a Tailscale login with no
@@ -446,6 +450,7 @@ export function Conversation(
 										editing={edited?.key}
 										onEdit={setEditing}
 										avatars={timelineAvatars}
+										mentions={mentions}
 										openSender={(sender) => {
 											const source = senders.get(sender);
 											return source && (() => onOpen(source));
@@ -572,6 +577,7 @@ export function Conversation(
 							user={user}
 							current={model}
 							currentEffort={chat?.effort}
+							pending={chat?.pending}
 							automatic={transcript.info?.automatic}
 							busy={transcript.busy}
 							waiting={waiting}

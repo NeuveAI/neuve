@@ -4,6 +4,7 @@ import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
 
 import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
+import type { Models } from "@earendil-works/pi-ai";
 
 import type { Changes, ChannelInfo, ModelRef } from "@ace/channel/protocol";
 import { available, choose, usable } from "@ace/channel/models";
@@ -32,11 +33,11 @@ export async function models(): Promise<ModelRef[]> {
 }
 
 /** `models` lets Settings resolve it without waiting on a keychain prompt. */
-export async function defaultModel(models = providers()): Promise<ModelRef> {
-	if (config.model) return parseModel(config.model);
+export async function defaultModel(models: Models = providers()): Promise<ModelRef> {
+	const configured = config.model && parseModel(config.model);
+	if (configured && await usable(models, configured).catch(() => false)) return configured;
 	const saved = preference();
-	// A saved default whose key expired or was removed must not block agents another key can run.
-	if (saved && await usable(models, saved)) return saved;
+	if (saved && await usable(models, saved).catch(() => false)) return saved;
 	return choose(models);
 }
 

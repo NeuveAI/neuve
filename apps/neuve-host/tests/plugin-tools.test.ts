@@ -7,6 +7,7 @@ import { Effect } from "effect";
 
 import { Fixture, OWNER } from "../../../packages/channel/tests/helpers";
 import { policy } from "../../../packages/harness/src/chat-runtime/transcript";
+import { fauxNonTurnModels } from "./fixtures/non-turn-models";
 import { serveOAuthFixture } from "./fixtures/oauth-http";
 import { expandPluginValue, PluginManifest } from "../src/plugin-manifest";
 import { pluginTools } from "../src/plugin-tools";
@@ -184,6 +185,7 @@ test("a running channel discovers, dispatches, and hides a plugin at the next re
 	const channel = await Channel.open({
 		id: "plugin-test", name: "plugin-test", owner: "owner", project: import.meta.dir,
 		storage: new MemoryStorage(), defaultModel: async () => model, models, plugins,
+		extension: { extensions: [], nonTurnModels: fauxNonTurnModels(model) },
 		env: cwd => new NodeExecutionEnv({ cwd }),
 		directory: { self: { id: "plugin-test", name: "plugin-test" }, list: async () => [], deliver: async () => {} },
 		log: (_level, event, fields) => log.push({ event, fields }),
@@ -298,6 +300,7 @@ test.each([
 		channel = await Channel.open({
 			id: "pending-test", name: "pending-test", owner: "owner", project: import.meta.dir,
 			storage: new MemoryStorage(), defaultModel: async () => model, models, plugins,
+			extension: { extensions: [], nonTurnModels: fauxNonTurnModels(model) },
 			env: cwd => new NodeExecutionEnv({ cwd }),
 			directory: { self: { id: "pending-test", name: "pending-test" }, list: async () => [], deliver: async () => {} },
 			log: () => {},

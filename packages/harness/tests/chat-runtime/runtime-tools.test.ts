@@ -95,9 +95,9 @@ test("an unattended runtime with its own sandbox is served only the tools that c
   expect(other.systemPrompt).toBe("prompt");
 });
 
-// A runtime may silently lose the build tools even though pi registered them for its chat.
-test("both build tools reach runtimes with or without their own tools", () => {
-  const buildTools = ["agent_start", "agent_message"];
+// A runtime may silently lose a channel tool even though Pi registered the checked handler.
+test("channel agent tools reach runtimes with or without their own tools", () => {
+  const buildTools = ["agent_start", "agent_message", "set_agent_model"];
   const offered = conversation([...buildTools, "lane"]);
   const own = policy(offered, handle, undefined, { ownTools: true });
   expect(own.tools.map((tool) => tool.name)).toEqual([
