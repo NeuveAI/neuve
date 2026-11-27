@@ -19,15 +19,29 @@ export async function placeWorkspaceGraph(input: {
   const destination = join(folder, "entire-graph");
   if (existsSync(join(source, ".git"))) {
     await mkdir(folder, { recursive: true, mode: 0o700 });
-    await build([
-      "go",
-      "-C",
-      source,
-      "build",
-      "-o",
-      destination,
-      "./cmd/entire-graph",
-    ]);
+    try {
+      await build([
+        "go",
+        "-C",
+        source,
+        "build",
+        "-o",
+        destination,
+        "./cmd/entire-graph",
+      ]);
+    } finally {
+      if (env.GOMODCACHE && existsSync(env.GOMODCACHE)) {
+        // Use the local Go toolchain even if the build failed to download a newer one.
+        const cleaned = Bun.spawnSync(["go", "clean", "-modcache"], {
+          cwd: scratch,
+          env: { ...env, GOTOOLCHAIN: "local" },
+        });
+        if (!cleaned.success)
+          throw new Error(
+            `Neuve Graph module cache cleanup failed: ${cleaned.stderr.toString().trim()}`,
+          );
+      }
+    }
     return destination;
   }
 

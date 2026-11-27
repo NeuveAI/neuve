@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -16,6 +17,78 @@ import { placeWorkspaceGraph } from "../src/workspace-graph.ts";
 
 const pin = "1".repeat(40);
 const engine = Buffer.from("#!/bin/sh\necho graph-fixture\n");
+
+test.each([0, 1])(
+  "lane scratch is removable after a Graph build exits %i",
+  async (exitCode) => {
+    const root = await mkdtemp(join(tmpdir(), "workspace-graph-build-"));
+    const lane = join(root, "lane");
+    const source = join(lane, "apps/neuve-graph");
+    const scratch = join(root, "scratch");
+    const cache = join(scratch, "cache", "go-mod");
+    const toolchain = join(cache, "golang.org/toolchain@v0.0.1-go1.27.0/bin");
+    try {
+      await mkdir(source, { recursive: true });
+      await writeFile(join(source, ".git"), "gitdir: fixture\n");
+      await writeFile(
+        join(root, "go"),
+        String.raw`#!/bin/sh
+set -eu
+case "$1" in
+  -C)
+    mkdir -p "$FIXTURE_TOOLCHAIN"
+    touch "$FIXTURE_TOOLCHAIN/go"
+    chmod 555 "$FIXTURE_TOOLCHAIN"
+    if [ "$FIXTURE_EXIT" -eq 0 ]; then
+      printf 'built Graph\n' > "$5"
+    fi
+    exit "$FIXTURE_EXIT"
+    ;;
+  clean)
+    [ "$2" = -modcache ]
+    chmod u+w "$FIXTURE_TOOLCHAIN"
+    rm -r "$GOMODCACHE"
+    ;;
+  *) exit 2 ;;
+esac
+`,
+        { mode: 0o700 },
+      );
+      const env = {
+        ...process.env,
+        PATH: `${root}:${process.env.PATH}`,
+        GOMODCACHE: cache,
+        FIXTURE_EXIT: String(exitCode),
+        FIXTURE_TOOLCHAIN: toolchain,
+      };
+
+      const placed = placeWorkspaceGraph({
+        lane,
+        scratch,
+        installed: null,
+        env,
+        build: async (command) => {
+          const result = Bun.spawnSync(command, { cwd: lane, env });
+          if (!result.success)
+            throw new Error(`Graph build failed with code ${result.exitCode}`);
+        },
+      });
+      if (exitCode === 0) {
+        const graph = await placed;
+        expect(graph).toBe(join(scratch, "lib/neuve/entire-graph"));
+        expect(await readFile(graph, "utf8")).toBe("built Graph\n");
+      } else {
+        await expect(placed).rejects.toThrow("Graph build failed with code 1");
+      }
+
+      await rm(scratch, { recursive: true, force: true });
+      await expect(lstat(scratch)).rejects.toHaveProperty("code", "ENOENT");
+    } finally {
+      await chmod(toolchain, 0o700).catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 for (const kind of [
   "matching",

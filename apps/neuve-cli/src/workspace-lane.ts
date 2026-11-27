@@ -348,7 +348,7 @@ async function keep(
       lane,
       scratch,
       installed: Bun.which("neuve"),
-      env,
+      env: buildOptions.env,
       build: (command) =>
         runBuildStep("Neuve Graph build", command, buildOptions, scratch),
     });
@@ -356,7 +356,6 @@ async function keep(
       ...laneWorkspaceEnvironment(scratch, env.PATH),
       // The source host runs scope reads with Bun as its executable, so it needs the path too.
       NEUVE_GRAPH_BINARY: graph,
-      NEUVE_BUDGET_DIRECTORY: join(scratch, "cache", "budget"),
     };
     const childEnvironment = {
       ...buildOptions.env,
