@@ -11,6 +11,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import {
   mcpTool,
+  TOOL_USE_ID_INPUT,
   TurnFailed,
   unknownTool,
   type Account,
@@ -19,22 +20,7 @@ import {
 import { z } from "zod";
 
 export const TOOL_TIMEOUT_MS = 2147483647;
-export const TOOL_USE_ID_INPUT = "__neuve_tool_use_id";
-export function declaresToolUseId(schema: unknown): boolean {
-  if (schema === null || typeof schema !== "object") return false;
-  if (Array.isArray(schema)) return schema.some(declaresToolUseId);
-  return Object.entries(schema).some(
-    ([key, value]) =>
-      (key === "properties" &&
-        value !== null &&
-        typeof value === "object" &&
-        Object.hasOwn(value, TOOL_USE_ID_INPUT)) ||
-      (key === "required" &&
-        Array.isArray(value) &&
-        value.includes(TOOL_USE_ID_INPUT)) ||
-      declaresToolUseId(value),
-  );
-}
+export { declaresToolUseId, TOOL_USE_ID_INPUT } from "@neuve/runtime";
 export class ClaudeToolDefinitionError extends TurnFailed {
   constructor(
     account: Account["name"],
@@ -61,6 +47,7 @@ export function toolServer(
     signal: AbortSignal,
   ) => Promise<CallToolResult>,
   onProtocolFault: () => Promise<void> = async () => {},
+  onUnknownTool?: () => Promise<void>,
 ): McpSdkServerConfigWithInstance & {
   readonly alwaysLoad: true;
   readonly stampToolUseId: HookCallback;
@@ -111,7 +98,7 @@ export function toolServer(
         (tool) => tool.name === request.params.name,
       );
       if (definition === undefined) {
-        await onProtocolFault();
+        await onUnknownTool?.();
         return unknownTool(request.params.name, tools);
       }
       // Live evidence: research/live-experiments.md (a), Claude Code 2.1.312, both parallel calls.

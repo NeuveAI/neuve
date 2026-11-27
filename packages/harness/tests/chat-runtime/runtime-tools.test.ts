@@ -95,9 +95,9 @@ test("an unattended runtime with its own sandbox is served only the tools that c
   expect(other.systemPrompt).toBe("prompt");
 });
 
-// A runtime may silently lose the build tools even though pi registered them for its chat.
-test("both build tools reach runtimes with or without their own tools", () => {
-  const buildTools = ["agent_start", "agent_message"];
+// A runtime may silently lose a channel tool even though Pi registered the checked handler.
+test("channel agent tools reach runtimes with or without their own tools", () => {
+  const buildTools = ["agent_start", "agent_message", "set_agent_model"];
   const offered = conversation([...buildTools, "lane"]);
   const own = policy(offered, handle, undefined, { ownTools: true });
   expect(own.tools.map((tool) => tool.name)).toEqual([
@@ -143,4 +143,32 @@ test("a read-only planning session is served the plan writer and told how to sav
     "Save the plan with Neuve's MCP tool `plan_write`. It works in a read-only workspace.",
   );
   expect(session.systemPrompt).not.toContain("with your own tools instead");
+});
+
+// Codex runs pi tools outside its sandbox, so only the worker's HTTP tool list can admit a plugin.
+test("the bridge offers carried HTTP tools in write turns and withholds them in plan mode", () => {
+  const offered = conversation(["linear_update_issue", "other_read_issue"]);
+  const pluginTools = new Set(["linear_update_issue"]);
+  const ace = policy(offered, handle, undefined, {
+    ownTools: true,
+    pluginTools,
+  });
+  expect(ace.tools.map((tool) => tool.name)).toEqual([
+    "question",
+    "linear_update_issue",
+  ]);
+  const planning = { role: "system" as const, content: "", timestamp: 1 };
+  Object.defineProperty(planning, Symbol.for("neuve.chat.plan-request"), {
+    value: true,
+  });
+  const plan = policy([...offered, planning], handle, undefined, {
+    ownTools: true,
+    pluginTools,
+  });
+  expect(plan.tools.map((tool) => tool.name)).toEqual(["question"]);
+  const disabled = policy(conversation([]), handle, undefined, {
+    ownTools: true,
+    pluginTools,
+  });
+  expect(disabled.tools.map((tool) => tool.name)).toEqual(["question"]);
 });

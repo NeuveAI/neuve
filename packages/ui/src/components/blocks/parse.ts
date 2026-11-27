@@ -154,16 +154,18 @@ type InlineNode =
 	| { kind: "text"; text: string; bold?: true; italic?: true; strike?: true; underline?: true }
 	| { kind: "code"; text: string }
 	| { kind: "link"; text: string; href: string }
-	| { kind: "mention"; name: string; avatar?: string }
+	| { kind: "mention"; name: string; avatar?: string; label?: string }
 	| { kind: "document"; uid: string; name: string; reference: string }
 	| { kind: "plan"; reference: string }
 	| { kind: "emoji"; name: string; src?: string };
 
-type Mention = { name: string; avatar?: string };
+type Mention = { name: string; avatar?: string; label?: string };
 type Carrier = Mention & { documents?: readonly DocumentCandidate[] };
 
 type References = {
 	avatars: Map<string, string> | null;
+	/** What a mention's chip reads where it differs from its name, such as an agent's. */
+	labels?: Map<string, string>;
 	documents: readonly DocumentCandidate[] | undefined;
 	plan: boolean;
 	/** Where given, the only names after @ drawn as mentions; any other is words. */
@@ -253,11 +255,14 @@ function references(
 	named?: readonly string[],
 ): References {
 	let map = new Map<string, string>();
+	let labels = new Map<string, string>();
 	for (let m of mentions || []) {
 		if (m.avatar) map.set(m.name.toLowerCase(), m.avatar);
+		if (m.label) labels.set(m.name.toLowerCase(), m.label);
 	}
 	return {
 		avatars: map.size ? map : null,
+		...(labels.size ? { labels } : {}),
 		documents: documents
 			?? (mentions as Carrier[] | undefined)?.find(mention => mention.documents)?.documents,
 		plan,
@@ -371,10 +376,11 @@ function inline(
 			if (refs.named && !refs.named.has(name.toLowerCase())) continue;
 			if (start > last) push(text.slice(last, start));
 			let avatar = refs.avatars?.get(name.toLowerCase());
+			let label = refs.labels?.get(name.toLowerCase());
 			let extra = MENTION_PAD_START + MENTION_PAD_END + MENTION_WRAP_GUARD
 				+ (avatar ? MENTION_AVATAR + MENTION_GAP : 0);
-			items.push({ text: name, font: MENTION_FONT, break: "never", extraWidth: extra });
-			nodes.push({ kind: "mention", name, avatar });
+			items.push({ text: label ?? name, font: MENTION_FONT, break: "never", extraWidth: extra });
+			nodes.push({ kind: "mention", name, avatar, ...(label ? { label } : {}) });
 			last = match.index + tok.length;
 			continue;
 		}

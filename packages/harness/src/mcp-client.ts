@@ -11,6 +11,7 @@ import type { z } from "zod";
 import {
   UnlistedVariable,
   expand,
+  type IntegrationFile,
   type IntegrationServer,
   type Integrations,
 } from "./integrations.ts";
@@ -80,7 +81,11 @@ const message = (error: unknown) =>
   (error instanceof Error ? error.message : String(error)).slice(0, 300);
 
 /** Builds the transport with the listed variables expanded from the environment now. */
-const transportFor = (name: string, server: IntegrationServer) => {
+const transportFor = (
+  name: string,
+  server: IntegrationServer,
+  options: McpClientOptions,
+) => {
   const unset: Array<string> = [];
   const take = (value: string) => {
     const expanded = expand(value, server.variables);
@@ -111,6 +116,7 @@ const transportFor = (name: string, server: IntegrationServer) => {
       unset.push(...missing);
       return {
         unset,
+        client: new Client(CLIENT_INFO),
         transport: new StdioClientTransport({
           command: server.transport.command,
           args: (server.transport.args ?? []).map(take),
@@ -127,14 +133,15 @@ const transportFor = (name: string, server: IntegrationServer) => {
         take(value),
       ]),
     );
+    const url = new URL(take(server.transport.url));
     return {
       unset,
-      transport: new StreamableHTTPClientTransport(
-        new URL(take(server.transport.url)),
-        {
+      ...(options.http?.(name, CLIENT_INFO) ?? {
+        client: new Client(CLIENT_INFO),
+        transport: new StreamableHTTPClientTransport(url, {
           requestInit: { headers },
-        },
-      ),
+        }),
+      }),
     };
   } catch (error) {
     if (error instanceof UnlistedVariable)
@@ -150,6 +157,10 @@ const transportFor = (name: string, server: IntegrationServer) => {
 export type McpClientOptions = {
   readonly sanitizeError?: (error: unknown) => string;
   readonly captureDefinitions?: boolean;
+  readonly http?: (
+    name: string,
+    info: ConstructorParameters<typeof Client>[0],
+  ) => { client: Client; transport: StreamableHTTPClientTransport } | undefined;
 };
 
 export const connect = (
@@ -163,7 +174,7 @@ export const connect = (
         ? options.sanitizeError(error).slice(0, 300)
         : message(error);
     const built = yield* Effect.try({
-      try: () => transportFor(name, server),
+      try: () => transportFor(name, server, options),
       catch: (error) =>
         error instanceof IntegrationUnavailable
           ? error
@@ -180,11 +191,10 @@ export const connect = (
     const client = yield* Effect.acquireRelease(
       Effect.tryPromise({
         try: async () => {
-          const client = new Client(CLIENT_INFO);
-          await client.connect(built.transport, {
+          await built.client.connect(built.transport, {
             timeout: CONNECT_TIMEOUT_MS,
           });
-          return client;
+          return built.client;
         },
         catch: (error) =>
           new IntegrationUnavailable({
@@ -311,7 +321,7 @@ export const connect = (
 export class McpClients extends Context.Service<
   McpClients,
   {
-    readonly integrations: Integrations;
+    readonly integrations: Integrations | IntegrationFile;
     readonly get: (
       server: string,
     ) => Effect.Effect<McpConnection, IntegrationUnavailable>;
@@ -320,7 +330,7 @@ export class McpClients extends Context.Service<
 
 /** The service for one scope (a run or a scope fetch): connections close when the scope closes. */
 export const mcpClientsLayer = (
-  integrations: Integrations,
+  integrations: Integrations | IntegrationFile,
   options: McpClientOptions = {},
 ) =>
   Layer.effect(
@@ -340,10 +350,13 @@ export const mcpClientsLayer = (
             IntegrationUnavailable
           >();
           opened.set(server, deferred);
-          const definition =
-            integrations.status === "configured"
-              ? integrations.file.servers[server]
-              : undefined;
+          const definitions =
+            "servers" in integrations
+              ? integrations.servers
+              : integrations.status === "configured"
+                ? integrations.file.servers
+                : undefined;
+          const definition = definitions?.[server];
           // A caller that gives up (a timeout) never leaves the next caller waiting forever.
           const exit = yield* Effect.exit(
             definition === undefined

@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { defineDoc, type UsageState } from "@earendil-works/pi-durable";
 
+import { available } from "./models";
 import type { ModelRef } from "./protocol";
 
 /**
@@ -28,40 +29,10 @@ export const CaptionsDoc = defineDoc<{
 	initial: () => ({ groups: {}, recaps: {} }),
 });
 
-/** Cheap, quick models in preference order; the chat's own provider is tried first. */
-export const FAST = [
-	"anthropic/claude-haiku-4-5",
-	"openai/gpt-6-luna",
-	"github-copilot/claude-haiku-4.5",
-	"github-copilot/gpt-6-luna",
-	"google/gemini-flash-lite-latest",
-];
-
-/** A recap runs once per run and is read first, so it gets a stronger model. */
-export const STRONG = [
-	"anthropic/claude-sonnet-5-5",
-	"openai/gpt-6-sol",
-	"github-copilot/claude-sonnet-5.5",
-	"github-copilot/gpt-6-sol",
-	"google/gemini-3.8-flash",
-];
-
-export async function pick(models: Models, ids: string[], chat?: ModelRef) {
-	const ordered = chat
-		? [
-			...ids.filter((id) => id.startsWith(`${chat.provider}/`)),
-			...ids.filter((id) => !id.startsWith(`${chat.provider}/`)),
-		]
-		: ids;
-	const available = new Map<string, Set<string>>();
-	for (const id of ordered) {
-		const [provider, modelId] = id.split("/") as [string, string];
-		if (!available.has(provider)) {
-			const found = await models.getAvailable(provider).catch(() => []);
-			available.set(provider, new Set(found.map((model) => model.id)));
-		}
-		if (available.get(provider)!.has(modelId)) return models.getModel(provider, modelId);
-	}
+export async function pick(models: Models, chat?: ModelRef) {
+	const [model] = await available(models).catch(() => []);
+	return (model && models.getModel(model.provider, model.modelId))
+		?? (chat && models.getModel(chat.provider, chat.modelId));
 }
 
 type Call = { id: string; name: string; args: unknown; result?: string; error?: boolean };

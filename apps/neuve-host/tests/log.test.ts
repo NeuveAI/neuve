@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Private logs must keep operation names and Plan exits observable while dropping payloads.
+// Private logs must keep operation names, Plan exits and plugin calls observable while dropping payloads.
 test("operational files exclude payload families and stay private on create, reopen and rotation", async () => {
 	if (!process.env.TMPDIR)
 		throw new Error("Set TMPDIR to the external temporary directory");
@@ -24,6 +24,8 @@ const path = config.home + "/logs/probe.jsonl";
 open("probe");
 log("info", "probe.payload", { args: { command: secret }, prompt: secret, content: secret, result: secret, error: secret, stack: secret, cause: { error: secret }, call: secret, tool: secret, model: { provider: secret, modelId: secret }, requestId: secret, author: secret, trace: secret, channel: secret, name: secret, project: secret, url: secret, reason: secret, op: secret, provider: secret, unknown: secret, constructor: secret, usage: { input: 7, output: 2, cost: { total: 1 } }, chat: 3, task: 4, ms: 5, failed: true });
 log("info", "plan.mode.exited", { chat: 3, previousChatMode: "plan", chatMode: "ace", approvedPlanId: ${JSON.stringify(approvedPlanId)}, text: secret });
+log("info", "plugin.connected", { plugin: "linear", server: "linear", tools: 2 });
+log("info", "plugin.tool.call", { plugin: "linear", tool: "linear_update_issue", outcome: "ok", args: { text: secret } });
 const bytes = readFileSync(path, "utf8");
 const modes = [statSync(path).mode & 0o777];
 chmodSync(path, 0o644);
@@ -78,6 +80,9 @@ writeFileSync(config.home + "/receipt.json", JSON.stringify({ modes, dir: statSy
 			approvedPlanIdHash: createHash("sha256").update(approvedPlanId).digest("hex"),
 		});
 		expect(JSON.stringify(receipt.records[1])).not.toContain(approvedPlanId);
+		expect(receipt.records[2]).toMatchObject({ event: "plugin.connected", plugin: "linear", server: "linear", tools: 2 });
+		expect(receipt.records[3]).toMatchObject({ event: "plugin.tool.call", plugin: "linear", tool: "linear_update_issue", outcome: "ok" });
+		expect(receipt.records[3]).not.toHaveProperty("args");
 		expect(receipt.rotated[0]).toMatchObject({
 			event: "tool.end",
 			tool: "bash",

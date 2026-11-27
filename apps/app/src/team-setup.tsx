@@ -18,7 +18,7 @@ import { type Diagnostics, TEAM_ASK_EXPIRES, type TeamPeer } from "@ace/host/pro
 import { host } from "./host";
 import { useDiagnostics } from "./host-settings";
 import { type Invite as Team, link, page, parse } from "./invite";
-import { Row, Status, Value, when } from "./settings-layout";
+import { Link, Row, Status, Value, when } from "./settings-layout";
 
 const DOCS = "https://github.com/githubnext/ace/blob/main/docs/setup.md";
 export const TEAM_SETUP = "ace:team-setup";
@@ -745,19 +745,6 @@ function Invite({ children }: { children: ReactNode }) {
 		<ol className="flex list-decimal flex-col gap-2 pl-5 text-sm marker:text-muted-foreground">
 			{children}
 		</ol>
-	);
-}
-
-export function Link({ href, children }: { href: string; children: ReactNode }) {
-	return (
-		<a
-			href={href}
-			target="_blank"
-			rel="noopener noreferrer"
-			className="text-primary underline-offset-2 hover:underline"
-		>
-			{children}
-		</a>
 	);
 }
 

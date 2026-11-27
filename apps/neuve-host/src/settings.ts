@@ -18,17 +18,21 @@ import {
 	settled,
 	store,
 } from "./keys";
+import { carriedPlugins, type Plugin } from "./plugin-manifest";
+import { log } from "./log";
+import { pluginOAuth, type PluginOAuth } from "./plugin-oauth";
 import { defaultModel, models, parseModel } from "./manage";
 import { canonical } from "./move";
 import {
 	compute,
 	isModel,
 	preference,
+	pluginPreferences,
 	saveCompute,
 	saveFolder,
 	savePreference,
 } from "./preferences";
-import type { Compute, Invite, ProviderId, Settings } from "./protocol";
+import type { Compute, Invite, PluginSettings, ProviderId, Settings } from "./protocol";
 import * as tailnet from "./tailnet";
 
 const providers = new Map(
@@ -51,7 +55,13 @@ function provider(id: ProviderId) {
 /** Settings never waits on a keychain prompt; `fresh` reads again names whose last read prompted. */
 export async function settings(fresh?: boolean): Promise<Settings> {
 	const catalog = settled(fresh);
-	const [statuses, usable, automatic] = await Promise.all([
+	let enabled: ReturnType<typeof pluginPreferences> = {};
+	try {
+		enabled = pluginPreferences();
+	} catch {
+		log("warn", "plugin.preferences.failed");
+	}
+	const [statuses, plugins, usable, automatic] = await Promise.all([
 		Promise.all(
 			[...providers].map(async ([id, { name, key }]) =>
 				Object.assign(
@@ -61,11 +71,13 @@ export async function settings(fresh?: boolean): Promise<Settings> {
 				)
 			),
 		),
+		Promise.all(carriedPlugins.map(plugin => pluginSettings(plugin, enabled[plugin.name] === true, fresh))),
 		extendModels(available(catalog.models)).catch((error: Error) => error),
 		defaultModel(catalog.models).catch(() => undefined),
 	]);
 	return {
 		providers: statuses,
+		plugins,
 		model: preference(),
 		modelOverride: config.model ? parseModel(config.model) : undefined,
 		models: usable instanceof Error ? [] : usable,
@@ -73,6 +85,15 @@ export async function settings(fresh?: boolean): Promise<Settings> {
 		waiting: catalog.waiting() ? KEYCHAIN_WAITING : undefined,
 		error: usable instanceof Error ? usable.message : undefined,
 	};
+}
+
+export async function pluginSettings(plugin: Plugin, enabled: boolean, fresh?: boolean, oauth: PluginOAuth = pluginOAuth): Promise<PluginSettings> {
+	const [credentials, signIn] = await Promise.all([
+		Promise.all([...plugin.credentials].map(async name => ({ name, ...await latest(name, fresh) }))),
+		oauth.status(plugin, fresh),
+	]);
+	const { name, displayName, description } = plugin;
+	return { name, displayName, description, enabled, credentials, ...(signIn ? { signIn } : {}) };
 }
 
 class Rejected extends Error {}
@@ -113,6 +134,30 @@ async function check(id: ProviderId, value: string): Promise<void> {
 function isValue(value: unknown): value is string {
 	return typeof value === "string" && !!value.trim() && value.length <= 4096
 		&& !/[\r\n]/.test(value) && !value.includes("\0");
+}
+
+function requirePluginKey(plugin: string, name: string): void {
+	if (!carriedPlugins.find(item => item.name === plugin)?.credentials.has(name))
+		throw new Error("Choose a credential used by the plugin");
+}
+
+export async function setPluginKey(plugin: string, name: string, value: string): Promise<void> {
+	requirePluginKey(plugin, name);
+	if (!isValue(value)) throw new Error("Enter a valid plugin credential");
+	try {
+		await store(name, value.trim());
+	} catch {
+		throw new Error("Could not save the plugin credential. Unlock the keychain and allow Neuve Helper, then retry.");
+	}
+}
+
+export async function removePluginKey(plugin: string, name: string): Promise<void> {
+	requirePluginKey(plugin, name);
+	try {
+		await forget(name);
+	} catch {
+		throw new Error("Could not remove the plugin credential. Unlock the keychain and allow Neuve Helper, then retry.");
+	}
 }
 
 export async function setKey(id: ProviderId, value: string): Promise<void> {

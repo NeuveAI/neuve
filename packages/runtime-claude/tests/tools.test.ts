@@ -68,6 +68,7 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
         },
       ],
     });
+    expect(faults).toBe(0);
     expect((await client.listTools()).tools).toMatchObject([
       {
         inputSchema: definition.inputSchema,
@@ -102,7 +103,7 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
       await client.callTool({ name: "read", arguments: {} }),
     ).toMatchObject({ isError: true });
     expect(handled).toHaveLength(2);
-    expect(faults).toBe(2);
+    expect(faults).toBe(1);
   } finally {
     await client.close();
     await server.instance.close();

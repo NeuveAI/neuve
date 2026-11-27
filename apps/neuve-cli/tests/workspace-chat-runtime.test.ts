@@ -25,6 +25,7 @@ test("absent injected sources preserve the existing Models object, so current pi
 
 test("the host lists status rows and their exact efforts only while signed in, so its picker follows the runtime", async () => {
   const run = await fixture({
+    accounts: [account(), account("faux")],
     statusModels: [
       ...testModels,
       {
@@ -63,7 +64,7 @@ test("the host lists status rows and their exact efforts only while signed in, s
       },
       statuses: run.statuses,
     });
-    expect(listing.current()).toEqual([
+    expect(listing.current().filter((row) => row.provider === name)).toEqual([
       {
         provider: name,
         modelId: "sonnet",
@@ -78,6 +79,15 @@ test("the host lists status rows and their exact efforts only while signed in, s
       { provider: name, modelId: "unspecified", efforts: [] },
       { provider: name, modelId: "no-levels", efforts: [] },
     ]);
+    // The host's picker needs the same selectable provider ID and real account name as the worker.
+    expect(
+      listing.current().filter((row) => row.account === "faux"),
+    ).toContainEqual({
+      provider: "account:faux",
+      account: "faux",
+      modelId: "sonnet",
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+    });
     run.statuses.set([
       {
         ...run.statuses.values[0]!,

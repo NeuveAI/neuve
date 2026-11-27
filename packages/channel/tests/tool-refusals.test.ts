@@ -161,7 +161,7 @@ test("chat tools retain pi's argument coercion and declared required fields", as
 });
 
 // Pi records the failure on the child, so this checks what crosses back to the parent.
-test("a subagent refuses an unavailable model and reports other child failures as errors", async () => {
+test("a subagent refuses a model the owner did not name and reports child failures as errors", async () => {
 	fixture = await Fixture.create();
 	const args = { task: "inspect", model: "faux/coder" };
 	fixture.script(
@@ -172,10 +172,10 @@ test("a subagent refuses an unavailable model and reports other child failures a
 	);
 	const watch = await fixture.watch();
 	try {
-		await fixture.request({ op: "ask", author: OWNER, text: "delegate", model: MODEL });
+		await fixture.request({ op: "ask", author: OWNER, text: "delegate to coder", model: MODEL });
 		const unavailable = await watch.until("result", event => event.call === "no-model");
-		expect(unavailable.error).toBe(true);
-		expect(unavailable.text).toContain('model: Model "nobody/none" is not available in this channel, so omit model to use your own.');
+		expect(unavailable).toMatchObject({ error: true });
+		expect(unavailable.text).toContain("matches faux/coder");
 		const result = await watch.until("result", event => event.call === "child");
 		expect(result.error).toBe(true);
 		expect(result.text).toContain("ended unanswered with faux/coder (model_error: The model rejected the request.)");

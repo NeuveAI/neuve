@@ -42,7 +42,9 @@ import {
 	remove,
 } from "./manage";
 import * as peers from "./peers";
-import { compute as computeSettings, folder } from "./preferences";
+import { pluginOAuth } from "./plugin-oauth";
+import { authorizePluginRefresh, PLUGIN_REFRESH_PATH } from "./plugin-oauth-client";
+import { compute as computeSettings, folder, savePlugins } from "./preferences";
 import * as projects from "./projects";
 import {
 	channelProject,
@@ -64,11 +66,13 @@ import {
 	forgetKey,
 	invite,
 	removeKey,
+	removePluginKey,
 	setCompute,
 	setDirectory,
 	setFolder,
 	setKey,
 	setModel,
+	setPluginKey,
 	settings,
 	storeKey,
 } from "./settings";
@@ -499,6 +503,8 @@ const windowOps = new Set<HostRequest["op"]>([
 ]);
 const moveOps = new Set<HostRequest["op"]>(["move-targets", "move"]);
 const keychainOps = new Set<HostRequest["op"]>([
+	"plugin-sign-in",
+	"plugin-sign-out",
 	"key-store",
 	"key-forget",
 	"directory-set",
@@ -525,6 +531,8 @@ const localOps = new Set<HostRequest["op"]>([
 	"key-set",
 	"key-check",
 	"key-remove",
+	"plugin-key-set",
+	"plugin-key-remove",
 	"preferences",
 	"team-peers",
 	"team-roster",
@@ -726,10 +734,21 @@ async function handle(
 		case "key-remove":
 			await removeKey(request.provider);
 			return settingsChanged();
+		case "plugin-key-set":
+			await setPluginKey(request.plugin, request.name, request.value);
+			return settingsChanged();
+		case "plugin-key-remove":
+			await removePluginKey(request.plugin, request.name);
+			return settingsChanged();
+		case "plugin-sign-in":
+			return pluginOAuth.signIn(request.plugin, config.port, settingsChanged);
+		case "plugin-sign-out":
+			return pluginOAuth.signOut(request.plugin, settingsChanged);
 		case "preferences":
 			if (request.model !== undefined) await setModel(request.model);
 			if (request.compute) await setCompute(request.compute);
 			if (request.folder !== undefined) setFolder(request.folder);
+			if (request.plugins !== undefined) savePlugins(request.plugins);
 			return settingsChanged();
 		case "key-store":
 			await storeKey(request.name, request.value);
@@ -1084,6 +1103,26 @@ function owner(port: number): Server<Client> {
 			const access = port === 0 ? (boundAccess ??= auth.owner(server.port!)) : initialAccess;
 			if (!access.accepts(request)) return new Response("Forbidden", { status: 403 });
 			const url = new URL(request.url);
+			if (url.pathname === "/callback") {
+				if (closing) return new Response("Neuve Helper is shutting down", { status: 503 });
+				server.timeout(request, 25);
+				return pluginOAuth.callback(request, settingsChanged, log);
+			}
+			if (url.pathname === PLUGIN_REFRESH_PATH) {
+				if (closing) return new Response(null, { status: 503 });
+				if (!authorizePluginRefresh(request, url))
+					return new Response(null, { status: 403 });
+				const plugin = url.searchParams.get("plugin");
+				const serverName = url.searchParams.get("server");
+				const rejected = url.searchParams.get("rejected") ?? undefined;
+				if (!plugin || !serverName || (rejected !== undefined && !/^[a-f0-9]{64}$/.test(rejected)))
+					return new Response(null, { status: 400 });
+				server.timeout(request, 25);
+				return pluginOAuth.refresh(plugin, serverName, rejected, settingsChanged, log).then(
+					() => new Response(null, { status: 204 }),
+					() => new Response(null, { status: 401 }),
+				);
+			}
 			if (url.pathname === "/review" || url.pathname.startsWith("/review/")) {
 				if (!access.authorizes(request)) return new Response(config.command, { status: 401 });
 				server.timeout(request, 120);

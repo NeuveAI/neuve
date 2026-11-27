@@ -5,7 +5,8 @@ import { IconCheck, IconDatabase, IconLaptop, IconLoader, IconX } from "@ace/ui/
 import type { Diagnostics, Member, ProviderId, Settings } from "@ace/host/protocol";
 
 import { host } from "./host";
-import { Checks, Choice, Copyable, Footer, Header, Link, Pill } from "./team-setup";
+import { Link } from "./settings-layout";
+import { Checks, Choice, Copyable, Footer, Header, Pill } from "./team-setup";
 
 const DOWNLOAD = "https://ace.githubnext.com";
 const TAILSCALE_USERS = "https://login.tailscale.com/admin/users";

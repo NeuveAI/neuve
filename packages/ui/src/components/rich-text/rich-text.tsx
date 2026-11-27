@@ -361,7 +361,7 @@ function useEditor(
 				agent: m.agent,
 				avatar: m.avatar,
 				action: (v) => {
-					insertMention(v, m.name, m.id, m.avatar);
+					insertMention(v, m.name, m.id, m.avatar, m.label);
 					onMention?.(m.name);
 				},
 			});
@@ -692,7 +692,7 @@ function RichText({ className, ...props }: Props) {
 										view.current && item.action(view.current);
 									}}
 								>
-									{item.agent ? <AgentLine agent={item.agent} /> : (
+									{item.agent ? <AgentLine agent={item.agent} plain /> : (
 										<>
 											{item.avatar && (
 												<img

@@ -3,7 +3,7 @@ import { createContext, use, useState } from "react";
 
 import type { BuildCardView } from "../../types";
 import { Button } from "../../ui/button";
-import { AgentLabel, AgentStateIcon } from "../agents/agents";
+import { AgentLine } from "../agents/agents";
 import { FONT } from "../blocks/constants";
 
 import { CARD, CARD_FOOTER, CARD_HEAD, RequestCard, RequestCardBody, RequestCardFooter, RequestCardHead } from "./card";
@@ -88,8 +88,7 @@ export function BuildCard({ view, width }: { view: BuildCardView; width: number 
 									className="flex min-w-0 items-center gap-2 text-xs"
 									style={{ blockSize: ROW }}
 								>
-									<AgentStateIcon state={agent.state} />
-									<AgentLabel agent={agent} />
+									<AgentLine agent={agent} />
 								</li>
 							))}
 						</ul>

@@ -1,5 +1,6 @@
 import "./fixtures/memory-secrets";
 import {expect, test} from "bun:test";
+import {createModels, fauxProvider} from "@earendil-works/pi-ai";
 import {mkdir, mkdtemp, rm} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
@@ -7,7 +8,7 @@ import {configure, bindConfiguredCatalog} from "../src/host-config";
 import {configureRuntime} from "../src/runtime-hooks";
 import {extendModels} from "../src/model-availability";
 import {checkModel, setModel, settings} from "../src/settings";
-import {models} from "../src/manage";
+import {defaultModel, models} from "../src/manage";
 import {preference} from "../src/preferences";
 
 test("configured subscription identity reaches native preference admission and settings without inventing a provider key", async () => {
@@ -27,6 +28,14 @@ test("configured subscription identity reaches native preference admission and s
 		const native = {provider: "openai", modelId: "native-key-model"};
 		configureRuntime({modelAvailability: () => [configured, native]});
 		expect(await extendModels(Promise.resolve([native, {provider: "anthropic", modelId: "other-native"}]))).toEqual([native, {provider: "anthropic", modelId: "other-native"}, configured]);
+		// A managed sign-in and native key can list the same model under distinct provider IDs.
+		const managed = {provider: "account:openai", modelId: native.modelId, account: "openai"};
+		configureRuntime({modelAvailability: () => [managed]});
+		const listed = await extendModels(Promise.resolve([native]));
+		expect(listed).toEqual([native, managed]);
+		const pick = {provider: managed.provider, modelId: managed.modelId};
+		await setModel(pick, listed);
+		expect(preference()).toEqual(pick);
 		configureRuntime({modelAvailability: () => []});
 		await expect(extendModels(Promise.reject(new Error("native credentials failed")))).rejects.toThrow("native credentials failed");
 	} finally {await rm(root, {recursive: true, force: true});}
@@ -51,5 +60,24 @@ test("an account's model is accepted from the host's list, and an unknown one is
 		await expect(checkModel({provider: "nobody", modelId: "x"}, host)).rejects.toThrow("There's no model provider or signed-in account named nobody.");
 		// Without the host's list (no workspace running), the account is not known here.
 		await expect(checkModel(account)).rejects.toThrow("neuve auth status codex --check");
+	} finally {await rm(root, {recursive: true, force: true});}
+});
+
+// The last selected default may belong to a managed account, even when the native catalogue has keys.
+test("the host uses the saved default from the worker catalogue and falls back if it disappears", async () => {
+	const root = await mkdtemp(join(tmpdir(), "model-default-"));
+	try {
+		await mkdir(join(root, "h")); await mkdir(join(root, "l"));
+		configure({home: join(root, "h"), lanes: join(root, "l"), user: "owner", port: 0, environment: {}, worker: [process.execPath]});
+		const catalogue = createModels();
+		const first = {provider: "test-native", modelId: "first"};
+		const account = {provider: "test-account", modelId: "preferred"};
+		for (const ref of [first, account]) {
+			catalogue.setProvider(fauxProvider({provider: ref.provider, models: [{id: ref.modelId}]}).provider);
+		}
+		await setModel(account, [first, account]);
+		expect(await defaultModel(catalogue)).toEqual(account);
+		catalogue.deleteProvider(account.provider);
+		expect(await defaultModel(catalogue)).toEqual(first);
 	} finally {await rm(root, {recursive: true, force: true});}
 });

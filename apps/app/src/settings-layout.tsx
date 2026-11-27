@@ -1,6 +1,20 @@
 import { type ComponentProps, type ReactNode, useState } from "react";
 
 import { Button, Input } from "@ace/ui";
+import type { CredentialStatus } from "@ace/host/protocol";
+
+export function Link({ href, children }: { href: string; children: ReactNode }) {
+	return (
+		<a
+			href={href}
+			target="_blank"
+			rel="noopener noreferrer"
+			className="text-primary underline-offset-2 hover:underline"
+		>
+			{children}
+		</a>
+	);
+}
 
 export function Page({ children }: { children: ReactNode }) {
 	return <div className="flex flex-col gap-8">{children}</div>;
@@ -120,6 +134,166 @@ export function TextRow({ label, description, saved, onSave, footer, disabled, .
 				/>
 				{dirty && <Button type="submit" disabled={locked}>Save</Button>}
 			</form>
+		</Row>
+	);
+}
+
+const sources = {
+	keychain: "Saved in Keychain",
+	environment: "From the environment",
+	missing: "Not set",
+	unavailable: "Keychain access needed",
+};
+
+/** A secret Ace finds as it finds a provider key: in the environment or in Keychain. */
+export function KeyRow({ id, label, subject, status, disabled, onSave, onRemove, onCheck }: {
+	id: string;
+	label: string;
+	/** What the controls name, such as "Anthropic key". */
+	subject: string;
+	status: CredentialStatus & { rejected?: true };
+	disabled: boolean;
+	onSave: (value: string) => Promise<unknown>;
+	onRemove: () => Promise<unknown>;
+	onCheck?: () => Promise<unknown>;
+}) {
+	const [value, setValue] = useState("");
+	const [editing, setEditing] = useState(false);
+	const [confirm, setConfirm] = useState(false);
+	const [action, setAction] = useState<{ busy?: boolean; error?: string; message?: string }>({});
+	const locked = disabled || action.busy;
+
+	async function run(op: "save" | "check" | "remove") {
+		setAction({ busy: true });
+		try {
+			await (op === "save" ? onSave(value) : op === "check" ? onCheck!() : onRemove());
+			if (op === "save") {
+				setValue("");
+				setEditing(false);
+			}
+			setConfirm(false);
+			setAction({
+				message: op === "check"
+					? "Connection verified."
+					: op === "remove"
+					? "Key removed."
+					: "Key saved.",
+			});
+		} catch (error) {
+			setAction({ error: (error as Error).message });
+		}
+	}
+
+	return (
+		<Row
+			id={`${id}-label`}
+			label={label}
+			description={`${
+				status.override ? `${status.override} overrides Keychain` : sources[status.source]
+			}${status.rejected ? `, but ${label} rejected it` : ""}`}
+			footer={
+				<>
+					{editing && (
+						<form
+							className="flex flex-col gap-2 @md:flex-row"
+							onSubmit={(event) => {
+								event.preventDefault();
+								void run("save");
+							}}
+						>
+							<Input
+								id={id}
+								autoFocus
+								type="password"
+								autoComplete="new-password"
+								spellCheck={false}
+								aria-label={subject}
+								value={value}
+								maxLength={4096}
+								disabled={locked}
+								placeholder="API key"
+								onChange={(event) => setValue(event.target.value)}
+								onKeyDown={(event) => {
+									if (event.key !== "Escape" || action.busy) return;
+									// Escape cancels the key form before it reaches the dialog.
+									event.stopPropagation();
+									setEditing(false);
+									setValue("");
+								}}
+							/>
+							<div className="flex shrink-0 gap-2">
+								<Button type="submit" disabled={locked || !value.trim()}>
+									{onCheck ? "Check and save" : "Save"}
+								</Button>
+								<Button
+									type="button"
+									variant="ghost"
+									disabled={action.busy}
+									onClick={() => {
+										setEditing(false);
+										setValue("");
+									}}
+								>
+									Cancel
+								</Button>
+							</div>
+						</form>
+					)}
+					{confirm && (
+						<Confirm
+							action="Remove key"
+							busy={locked}
+							onConfirm={() => void run("remove")}
+							onCancel={() => setConfirm(false)}
+						>
+							Remove the saved {subject}?
+						</Confirm>
+					)}
+					{status.waiting && <Status>{status.waiting}…</Status>}
+					{status.error && <Problem>{status.error}</Problem>}
+					{action.busy && onCheck && <Status>Checking…</Status>}
+					{action.error && <Problem>{action.error}</Problem>}
+					{action.message && <Status>{action.message}</Status>}
+				</>
+			}
+		>
+			{onCheck && (status.source === "keychain" || status.source === "environment") && (
+				<Button
+					variant="outline"
+					aria-label={`Check ${label} connection`}
+					disabled={locked}
+					onClick={() => void run("check")}
+				>
+					Check
+				</Button>
+			)}
+			{/* A saved key would go unused while the environment overrides it. */}
+			{!editing && !status.override && (
+				<Button
+					variant="outline"
+					aria-label={`${status.stored ? "Replace" : "Add"} ${subject}`}
+					disabled={locked}
+					onClick={() => {
+						setConfirm(false);
+						setEditing(true);
+					}}
+				>
+					{status.stored ? "Replace" : "Add key"}
+				</Button>
+			)}
+			{status.stored && !confirm && (
+				<Button
+					variant="ghost"
+					aria-label={`Remove ${subject}…`}
+					disabled={locked}
+					onClick={() => {
+						setEditing(false);
+						setConfirm(true);
+					}}
+				>
+					Remove…
+				</Button>
+			)}
 		</Row>
 	);
 }

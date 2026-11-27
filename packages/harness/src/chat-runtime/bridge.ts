@@ -34,6 +34,7 @@ import type {
 import { Effect, Exit, Scope, Stream } from "effect";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import {
+  accountForProvider,
   RuntimeFailure,
   runtimeErrorToFailure,
   type AccountName,
@@ -99,6 +100,7 @@ type Generation = {
   folder?: string | undefined;
   /** Channel policy for this request. Keep its temporary tool offer out of continuation digests. */
   planRequest?: SystemMessage;
+  pluginTools?: ReadonlySet<string>;
   cleanup: (() => void)[];
   head?: {
     owner: string;
@@ -111,6 +113,8 @@ const ambiguousToolEffect =
 const unsafeContinuation =
   "This turn could not safely continue. Send a message to recover it.";
 const planningRequest = Symbol.for("neuve.chat.plan-request");
+
+const sandboxPluginTools = Symbol.for("neuve.chat.sandbox-plugin-tools");
 
 function offeredMessages(
   generation: Generation,
@@ -310,6 +314,8 @@ export class ChatRuntimeBridge {
   ): AssistantMessageEventStream {
     const stream = createAssistantMessageEventStream();
     const requested = normalizeContext(context).messages;
+    const pluginTools: unknown =
+      options && Reflect.get(options, sandboxPluginTools);
     const planRequest = requested.find(
       (message): message is SystemMessage =>
         message.role === "system" &&
@@ -351,6 +357,7 @@ export class ChatRuntimeBridge {
       messages,
       ...(identity?.folder === undefined ? {} : { folder: identity.folder }),
       ...(planRequest === undefined ? {} : { planRequest }),
+      ...(pluginTools instanceof Set ? { pluginTools } : {}),
       cleanup: [],
       message: {
         role: "assistant",
@@ -496,12 +503,13 @@ export class ChatRuntimeBridge {
       previous.message?.role === "assistant" ? previous.message : undefined;
     const compatible =
       prior &&
-      (prior.provider === route.name ||
-        (await this.compatible(
-          prior.provider,
-          route.continuation,
-          gen.cancellation.signal,
-        )));
+      (prior.provider === gen.message.provider ||
+        (previous.pointer !== undefined &&
+          (await this.compatible(
+            prior.provider,
+            route.continuation,
+            gen.cancellation.signal,
+          ))));
     if (cancelled()) {
       this.finish(undefined, gen, "aborted");
       return;
@@ -533,7 +541,7 @@ export class ChatRuntimeBridge {
     // Without input receipts, only a completed-turn pointer is safe to replay after.
     let completed: AssistantMessage | undefined;
     if (compatible) {
-      const providers = new Set([route.name, prior?.provider]);
+      const providers = new Set([gen.message.provider, prior?.provider]);
       for (let index = gen.messages.length - 1; index >= 0; index--) {
         const message = gen.messages[index];
         if (message?.role !== "assistant") continue;
@@ -665,6 +673,7 @@ export class ChatRuntimeBridge {
         folder: gen.folder,
         skills: this.options.skills,
         ownTools: route.capabilities.ownTools,
+        pluginTools: gen.pluginTools,
         approvals: route.capabilities.approvals,
         attended: gen.attended,
       },
@@ -885,7 +894,7 @@ export class ChatRuntimeBridge {
     signal: AbortSignal,
   ) {
     const parsed = (await import("@neuve/runtime")).AccountName.safeParse(
-      provider,
+      accountForProvider(provider) ?? provider,
     );
     if (!parsed.success) return false;
     const identity = await Effect.runPromise(
@@ -920,6 +929,7 @@ export class ChatRuntimeBridge {
           folder: gen.folder,
           skills,
           ownTools: route.capabilities.ownTools,
+          pluginTools: gen.pluginTools,
           approvals: route.capabilities.approvals,
           attended: gen.attended,
         },

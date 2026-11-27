@@ -50,6 +50,7 @@ test("sequential managed configurations never install worker-only flags in the h
 	} finally {await rm(root, {recursive: true, force: true});}
 });
 
+// Plugin credentials take the same privileged path as provider keys and stay out of the worker snapshot.
 test("worker snapshots drop stale flags while native sealed-key precedence remains exact", async () => {
 	const root = await mkdtemp(join(tmpdir(), "worker-env-"));
 	try {
@@ -58,8 +59,10 @@ test("worker snapshots drop stale flags while native sealed-key precedence remai
 		const script = `
 import {configure} from ${JSON.stringify(new URL("../src/host-config.ts", import.meta.url).href)};
 import {applyWorkerEnvironment} from ${JSON.stringify(new URL("../src/worker-runtime.ts", import.meta.url).href)};
-import {models,seal} from ${JSON.stringify(new URL("../src/keys.ts", import.meta.url).href)};
-configure(${JSON.stringify(required)});
+import {key,models,seal} from ${JSON.stringify(new URL("../src/keys.ts", import.meta.url).href)};
+configure(${JSON.stringify({...required, environment: {...required.environment, LINEAR_API_KEY: "synthetic-linear-fallback"}})});
+process.env.LINEAR_API_KEY = "synthetic-linear-fallback";
+process.env.ACE_LINEAR_API_KEY = "synthetic-linear-override";
 process.env.STALE_WORKER_FLAG = "prior";
 process.env.ACE_OPENAI_API_KEY = "synthetic-override";
 process.env.OPENAI_API_KEY = "synthetic-fallback";
@@ -69,11 +72,11 @@ const defaults = models();
 const model = defaults.getModels("openai")[0];
 if (!model) throw new Error("Pinned SDK has no native OpenAI model");
 const auth = await defaults.getAuth(model);
-console.log(JSON.stringify({flag: process.env.KEEP, stale: process.env.STALE_WORKER_FLAG ?? null, rawCredential: process.env.ACE_OPENAI_API_KEY ?? null, usesOverride: JSON.stringify(auth).includes("synthetic-override"), publicCredential: process.env.NEUVE_HOST_CONFIG.includes("synthetic-override"), home: process.env.ACE_HOME}));
+console.log(JSON.stringify({flag: process.env.KEEP, stale: process.env.STALE_WORKER_FLAG ?? null, rawCredential: process.env.ACE_OPENAI_API_KEY ?? null, usesOverride: JSON.stringify(auth).includes("synthetic-override"), publicCredential: process.env.NEUVE_HOST_CONFIG.includes("synthetic-override"), linear: await key("LINEAR_API_KEY"), linearEnv: process.env.ACE_LINEAR_API_KEY ?? null, linearInSnapshot: process.env.NEUVE_HOST_CONFIG.includes("synthetic-linear"), home: process.env.ACE_HOME}));
 `;
 		const result = Bun.spawnSync([process.execPath, "--no-env-file", "--preload", fileURLToPath(new URL("./fixtures/memory-secrets.ts", import.meta.url)), "--eval", script], {env: {PATH: process.env.PATH, TMPDIR: process.env.TMPDIR}, stdout: "pipe", stderr: "pipe"});
 		expect(result.exitCode, result.stderr.toString()).toBe(0);
-		expect(JSON.parse(result.stdout.toString())).toEqual({flag: "snapshot", stale: null, rawCredential: null, usesOverride: true, publicCredential: false, home: required.home});
+		expect(JSON.parse(result.stdout.toString())).toEqual({flag: "snapshot", stale: null, rawCredential: null, usesOverride: true, publicCredential: false, linear: "synthetic-linear-override", linearEnv: null, linearInSnapshot: false, home: required.home});
 	} finally {await rm(root, {recursive: true, force: true});}
 });
 

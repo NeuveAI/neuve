@@ -6,6 +6,8 @@ import { z } from "zod";
 import { ModelRefSchema } from "@ace/channel/parse";
 import { Identity } from "@neuve/records-core/capture";
 
+import { secretName } from "./plugin-manifest";
+
 /** An absolute directory that already exists, by its real path; nothing is created here. */
 const directory = (name: string) =>
 	z.string().refine(isAbsolute, `The host's ${name} must be an absolute path`).transform(
@@ -138,9 +140,8 @@ export function configure(value: unknown): HostConfig {
 	return Object.assign(config, {...parsed.data, environment: publicEnvironment(parsed.data.environment)});
 }
 
-const SECRET_NAME = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIALS?)$/;
 function publicEnvironment(environment: Record<string, string>): Record<string, string> {
-	return Object.fromEntries(Object.entries(environment).filter(([name]) => !SECRET_NAME.test(name) && name !== CONFIG_VARIABLE));
+	return Object.fromEntries(Object.entries(environment).filter(([name]) => !secretName(name) && name !== CONFIG_VARIABLE));
 }
 
 /** A validated managed entry joins the same catalog scope before the original CLI executes. */

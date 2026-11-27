@@ -19,9 +19,11 @@ import { config } from "../src/host-config";
 import { remove } from "../src/manage";
 import { configureRuntime, runtimeHooks } from "../src/runtime-hooks";
 import { openChannel } from "../src/worker-runtime";
+import { fauxNonTurnModels } from "./fixtures/non-turn-models";
 
 const owner = "owner";
 const model = { provider: "plans-test", modelId: "agent" };
+const nonTurnModels = fauxNonTurnModels(model);
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 async function open(project: string, state: string, id = "plans", name = "plans") {
@@ -38,6 +40,7 @@ async function open(project: string, state: string, id = "plans", name = "plans"
 		env: cwd => new NodeExecutionEnv({ cwd }),
 		directory: { self: { id, name }, list: async () => [], deliver: async () => {} },
 		log: () => {},
+		extension: { extensions: [], nonTurnModels },
 	}, state); }
 	finally { if (lanes !== undefined) config.lanes = lanes; }
 	const request = async <T = unknown>(input: Request) => channel.handle(input, () => {}) as Promise<T>;
