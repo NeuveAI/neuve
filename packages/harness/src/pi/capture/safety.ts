@@ -28,6 +28,7 @@ import {
 } from "./private-inspection.ts";
 import { readCaptureLosses, readCaptureJournal } from "./journal.ts";
 import {
+  captureLossCredential,
   CREDENTIAL_INSPECTION_POLICY,
   RETAINED_SDK_ASSEMBLY_POLICY,
   RETAINED_SDK_PIN,
@@ -120,12 +121,13 @@ export const credentialLossEpochs = (
 ) =>
   new Map(
     losses.flatMap((loss) => {
-      if (loss.event === "journal.open") return [];
-      const { callId, event, credentialCoverage, epochId } = loss;
-      return event === "credential.registration" ||
-        credentialCoverage === "required"
-        ? [[callId, registrations.get(callId) ?? epochId ?? callId] as const]
-        : [];
+      const required =
+        captureLossCredential(loss) ?? loss.ordinaryOverflow?.credential;
+      if (required === undefined) return [];
+      const { callId, epochId } = required;
+      return [
+        [callId, registrations.get(callId) ?? epochId ?? callId] as const,
+      ];
     }),
   );
 

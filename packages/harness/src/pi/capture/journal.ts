@@ -548,13 +548,18 @@ const captureLossRecorder = (
       let persisted = false;
       try {
         if (privateRegistrationFailed) {
-          recordReservedCaptureLoss(reserve, loss, reserveIsNamed?.() === true);
+          recordReservedCaptureLoss(
+            reserve,
+            loss,
+            "credential",
+            reserveIsNamed?.() === true,
+          );
         } else {
           try {
             recordOrdinaryLoss(loss);
           } catch (error) {
             if (reserveIsNamed === undefined) throw error;
-            recordReservedCaptureLoss(reserve, loss);
+            recordReservedCaptureLoss(reserve, loss, "ordinary");
           }
         }
         persisted = true;

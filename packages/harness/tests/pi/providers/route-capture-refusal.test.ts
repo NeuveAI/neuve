@@ -2,7 +2,7 @@
 import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Effect } from "effect";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -389,13 +389,23 @@ for (const scenario of [
         );
         expect(
           decodeCredentialLossReserve(await readFile(reserve), true),
-        ).toEqual(scenario === "registered" ? [] : expected);
+        ).toEqual(scenario === "registered" ? [] : expected.slice(0, 1));
       } else {
         expect(fs.existsSync(lossFile)).toBe(false);
         if (hasReserve)
           expect(
             decodeCredentialLossReserve(await readFile(reserve), true),
-          ).toEqual([expectedOpen, ...expected]);
+          ).toEqual([
+            expect.objectContaining({
+              ...openLoss,
+              ordinaryOverflow: {
+                credential: {
+                  callId: losses[0]?.callId,
+                  epochId: expect.any(String),
+                },
+              },
+            }),
+          ]);
         else expect(fs.existsSync(reserve)).toBe(false);
       }
       const input = {
@@ -420,11 +430,26 @@ for (const scenario of [
         );
         if (hasReserve) {
           const gap = run.gaps.find(({ code }) => code === "journal-failed");
-          expect(gap?.count).toBe(3);
-          for (const loss of losses)
+          expect(gap?.count).toBe(scenario === "registered" ? 3 : 1);
+          if (scenario === "registered") {
+            for (const loss of losses)
+              expect(gap?.detail).toContain(
+                `call ${loss.callId} lost capture at credential.registration`,
+              );
+          } else {
+            expect(gap?.detail).toContain("lost capture at journal.open");
             expect(gap?.detail).toContain(
-              `call ${loss.callId} lost capture at credential.registration`,
+              "may be missing further ordinary losses",
             );
+            const later = openCaptureJournal(captureDirectory, runId, {
+              allowCredentialLoss: true,
+            });
+            captureWholeCall(later, runId, "tok-1");
+            later.close();
+            await expect(buildDump(input)).rejects.toThrow(
+              "credential exposure in exact source",
+            );
+          }
         }
       }
     } finally {
@@ -1083,10 +1108,13 @@ for (const variant of [
   "unknown",
   "journal",
   "torn",
+  "marker",
   "zeroed",
   "missing",
   "full",
   "full-native",
+  "ordinary-saturation",
+  "same-epoch",
 ] as const) {
   test(`a channel with a lost credential registration (${variant})`, async () => {
     const directory = await mkdtemp(join(tmpdir(), "neuve-registration-loss-"));
@@ -1123,15 +1151,19 @@ for (const variant of [
       const journalWrite = variant === "journal";
       const clean = variant === "clean" || journalWrite;
       const full = variant === "full" || variant === "full-native";
-      const canIdentify = variant !== "unknown" && !full;
+      const ordinarySaturation = variant === "ordinary-saturation";
+      const sameEpoch = variant === "same-epoch";
+      const canIdentify =
+        variant !== "unknown" && !ordinarySaturation && !sameEpoch && !full;
       const reserve = join(captureDirectory, CREDENTIAL_LOSS_RESERVE_FILE);
       const lossFile = join(captureDirectory, CAPTURE_LOSS_FILE);
       const auth = { tokenCommand: tokenCommand(directory, "lease").path };
       if (full) {
-        for (let slot = 0; slot < 8; slot++)
+        for (let slot = 0; slot < 7; slot++)
           journal.capture.recordLoss?.(
             {
               callId: randomUUID(),
+              epochId: randomUUID(),
               event: "credential.registration",
               at: new Date().toISOString(),
               kind: "io",
@@ -1176,7 +1208,8 @@ for (const variant of [
         function (this: Database, ...args) {
           if (
             !journalWrite &&
-            args[0] === "COMMIT" &&
+            args[0] ===
+              (sameEpoch && writes >= 12 ? "BEGIN IMMEDIATE" : "COMMIT") &&
             this.filename === authorityPath
           ) {
             writes++;
@@ -1227,7 +1260,28 @@ for (const variant of [
           { preconnect() {} },
         ),
       };
+      const ordinaryLoss = {
+        callId: randomUUID(),
+        event: "model.event" as const,
+        kind: "io" as const,
+        reason: "disk full" as const,
+        at: new Date().toISOString(),
+      };
+      const callCount = sameEpoch ? 12 : 1;
       try {
+        if (ordinarySaturation) {
+          journal.capture.recordLoss?.(ordinaryLoss, false);
+          for (let index = 0; index < 12; index++) {
+            try {
+              journal.capture.recordLoss?.(
+                { ...ordinaryLoss, callId: randomUUID() },
+                false,
+              );
+            } catch {
+              // A failed ordinary loss write does not stop model dispatch.
+            }
+          }
+        }
         const models =
           defaults === undefined
             ? createRouteModels(options)
@@ -1239,8 +1293,8 @@ for (const variant of [
                 .getModels("openai")
                 .find(({ api }) => api === "openai-responses");
         if (!model) throw new Error("Expected coding route model");
-        const result = await models.complete(model, prompt);
         if (full) {
+          const result = await models.complete(model, prompt);
           expect(routeFailureOf(result)).toMatchObject({
             kind: "capture",
             detail: expect.stringContaining(
@@ -1254,12 +1308,15 @@ for (const variant of [
           expect([writes, sent]).toEqual([2, 0]);
           return;
         }
-        expect(routeFailureOf(result)).toBeUndefined();
-        expect(result.content).toContainEqual(
-          expect.objectContaining({ type: "text", text: "Done." }),
-        );
-        expect(result.stopReason).toBe("stop");
-        expect([writes, sent]).toEqual([2, 1]);
+        for (let index = 0; index < callCount; index++) {
+          const result = await models.complete(model, prompt);
+          expect(routeFailureOf(result)).toBeUndefined();
+          expect(result.content).toContainEqual(
+            expect.objectContaining({ type: "text", text: "Done." }),
+          );
+          expect(result.stopReason).toBe("stop");
+        }
+        expect([writes, sent]).toEqual([2 * callCount, callCount]);
       } finally {
         grow.mockRestore();
         append.mockRestore();
@@ -1269,35 +1326,73 @@ for (const variant of [
       const call = log.read().find(({ type }) => type === "model.call");
       expect(call?.failureKind).toBeUndefined();
       expect(typeof call?.sentAt).toBe("string");
-      expect(
-        log.read().find(({ type }) => type === "capture.loss"),
-      ).toMatchObject({
+      const registrationLogs = log
+        .read()
+        .filter(
+          (entry) =>
+            entry.type === "capture.loss" &&
+            entry.event === "credential.registration",
+        );
+      expect(registrationLogs).toHaveLength(callCount);
+      expect(registrationLogs[0]).toMatchObject({
         callId: String(call?.call),
         event: "credential.registration",
         reason: "disk full",
         persisted: true,
       });
       expect(fs.existsSync(lossFile)).toBe(false);
-      expect(readCaptureLosses(captureDirectory)).toEqual([
-        {
+      const losses = readCaptureLosses(captureDirectory);
+      expect(losses).toEqual([
+        ...(ordinarySaturation
+          ? [{ ...ordinaryLoss, ordinaryOverflow: {} }]
+          : []),
+        expect.objectContaining({
           callId: String(call?.call),
           event: "credential.registration",
           kind: "io",
           reason: "disk full",
           at: expect.any(String),
-        },
+        }),
       ]);
-      captureWholeCall(journal, runId, clean ? "Next." : "tok-1");
+      if (sameEpoch) {
+        const epoch = losses[0];
+        expect(epoch).toMatchObject({ epochId: expect.any(String) });
+        expect(registrationLogs).toEqual(
+          Array.from({ length: callCount }, () =>
+            expect.objectContaining({
+              epochId:
+                epoch?.event === "credential.registration"
+                  ? epoch.epochId
+                  : undefined,
+              persisted: true,
+            }),
+          ),
+        );
+      }
+      captureWholeCall(
+        journal,
+        runId,
+        clean || variant === "marker" ? "Next." : "tok-1",
+      );
       // Leave the session unclosed. The reserve alone accounts for credential loss.
       if (variant === "missing") await rm(reserve);
       if (variant === "zeroed") await writeFile(reserve, Buffer.alloc(4096));
       if (variant === "torn") {
         const fd = fs.openSync(reserve, "r+");
         try {
-          fs.writeSync(fd, Buffer.alloc(129, 0xa5), 0, 129, 0);
+          fs.writeSync(fd, Buffer.alloc(129, 0xa5), 0, 129, 512);
         } finally {
           fs.closeSync(fd);
         }
+      }
+      if (variant === "marker") {
+        const bytes = await readFile(reserve);
+        // A checksummed loss in the previous format has no marker version.
+        const body = bytes.subarray(32, 512);
+        body.fill(0x20);
+        body.write(JSON.stringify(ordinaryLoss));
+        createHash("sha256").update(body).digest().copy(bytes);
+        await writeFile(reserve, bytes);
       }
       if (variant === "missing" || variant === "zeroed" || variant === "torn") {
         const beforeRestart =
@@ -1369,7 +1464,7 @@ for (const variant of [
         const reason =
           variant === "exposed"
             ? "credential exposure in exact source"
-            : variant === "unknown"
+            : variant === "unknown" || ordinarySaturation || sameEpoch
               ? "the scan could not identify the credential"
               : variant === "missing"
                 ? "credential registration loss reserve is missing"

@@ -23,8 +23,10 @@ import {
 } from "../../../src/pi/capture/journal.ts";
 import {
   CAPTURE_LOSS_FILE,
+  CREDENTIAL_LOSS_RESERVE_FILE,
   DEFAULT_LIMITS,
   type CaptureEvent,
+  type CaptureLoss,
 } from "../../../src/pi/capture/types.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "harness-capture-journal-"));
@@ -52,6 +54,54 @@ const thrown = (run: () => void) => {
     return error;
   }
 };
+
+test("ordinary losses keep only the first loss in the fixed reserve", async () => {
+  const folder = join(directory, "ordinary-loss-marker");
+  const journal = openCaptureJournal(folder, "R", {
+    allowCredentialLoss: true,
+  });
+  journal.capture(START);
+  journal.capture(END);
+  journal.close();
+  const reserve = join(folder, CREDENTIAL_LOSS_RESERVE_FILE);
+  const empty = readFileSync(reserve);
+  const first: CaptureLoss = {
+    callId: "9ebb6e01-424a-4b91-9137-43860e003713",
+    event: "model.event",
+    kind: "io",
+    reason: "disk full",
+    at: "2026-11-27T12:00:00.000Z",
+  };
+  const fault = spyOn(fs, "writeFileSync").mockImplementation(() => {
+    throw Object.assign(new Error("disk is full"), { code: "ENOSPC" });
+  });
+  try {
+    journal.capture.recordLoss?.(first, false);
+    for (let index = 0; index < 12; index++)
+      journal.capture.recordLoss?.(
+        { ...first, callId: crypto.randomUUID() },
+        false,
+      );
+  } finally {
+    fault.mockRestore();
+  }
+  const recorded = readFileSync(reserve);
+  expect(recorded.byteLength).toBe(4096);
+  expect(recorded.subarray(0, 512)).not.toEqual(empty.subarray(0, 512));
+  expect(recorded.subarray(512)).toEqual(empty.subarray(512));
+  expect(readCaptureLosses(folder)).toEqual([
+    { ...first, ordinaryOverflow: {} },
+  ]);
+  const { run } = await buildDump({ journal: folder, runId: "R" });
+  expect(run.complete).toBe(false);
+  expect(run.gaps).toContainEqual(
+    expect.objectContaining({
+      code: "journal-failed",
+      count: 1,
+      detail: expect.stringContaining("may be missing further ordinary losses"),
+    }),
+  );
+});
 
 const gapsOf = async (folder: string) =>
   (await buildDump({ runId: "R", journal: folder })).run.gaps.map((gap) => [

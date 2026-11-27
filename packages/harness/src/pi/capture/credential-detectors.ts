@@ -440,6 +440,7 @@ export class CredentialDetectors {
     readonly budget: InspectionBudget;
     readonly escapedUnits?: number;
     readonly deduplicate?: boolean;
+    readonly deriveEpoch?: boolean;
     readonly signal?: AbortSignal;
   }): Promise<
     | { readonly status: "registered"; readonly epoch: CredentialEpochId }
@@ -447,9 +448,6 @@ export class CredentialDetectors {
   > {
     try {
       if (this.#destroyed) throw new Incomplete("closed");
-      const existing = this.#state.epochs.find(
-        (epoch) => epoch.id === input.epoch,
-      );
       const bound = input.escapedUnits ?? 262_144;
       if (
         !Number.isSafeInteger(bound) ||
@@ -531,10 +529,14 @@ export class CredentialDetectors {
         }
       }
       if (records.size === 0) throw new Incomplete("invalid-metadata");
+      const recognition = { escapedThrough, records: [...records.values()] };
+      const id = input.deriveEpoch
+        ? this.#credentialEpoch(recognition)
+        : input.epoch;
+      const existing = this.#state.epochs.find((epoch) => epoch.id === id);
       const candidate = Epoch.parse({
-        id: input.epoch,
-        escapedThrough,
-        records: [...records.values()],
+        id,
+        ...recognition,
       });
       if (input.deduplicate && !existing) {
         const equivalent = this.#state.epochs.find(
@@ -557,10 +559,22 @@ export class CredentialDetectors {
       if (JSON.stringify(next).length > 8 * 1024 * 1024)
         throw new Incomplete("budget");
       this.#state = next;
-      return { status: "registered", epoch: input.epoch };
+      return { status: "registered", epoch: id };
     } catch (error) {
       return inspectionFailure(error);
     }
+  }
+  #credentialEpoch(recognition: Omit<Epoch, "id">): CredentialEpochId {
+    const bytes = this.#hmac(
+      "credential-epoch-v1",
+      Buffer.from(JSON.stringify(recognition)),
+    ).subarray(0, 16);
+    bytes.writeUInt8((bytes.readUInt8(6) & 0x0f) | 0x80, 6);
+    bytes.writeUInt8((bytes.readUInt8(8) & 0x3f) | 0x80, 8);
+    const hex = bytes.toString("hex");
+    return CredentialEpochId.parse(
+      `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`,
+    );
   }
   async #scan(
     source: string | Uint8Array,

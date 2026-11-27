@@ -54,15 +54,17 @@ export class CallCapture {
       callId,
       scope: { runId: scope.runId },
     };
+    const mayLoseRegistration = this.#capture.allowCredentialLoss?.() === true;
     const register = () =>
       authority.register({
         epoch: CredentialEpochId.parse(callId),
+        deriveEpoch: mayLoseRegistration,
         headers,
         budget: new InspectionBudget(),
         deduplicate: true,
         ...(signal === undefined ? {} : { signal }),
       });
-    const registration = this.#capture.allowCredentialLoss?.()
+    const registration = mayLoseRegistration
       ? await this.#write(event, register, signal, true)
       : await register();
     if (registration === undefined) {
@@ -123,6 +125,7 @@ export class CallCapture {
           this.#capture.allowCredentialLoss?.() === true;
         if (privateRegistration && !mayLoseRegistration) throw cause;
         this.#lost = true;
+        const epochId = cause.epochId ?? event.epochId;
         const loss: CaptureLoss = {
           callId: event.callId,
           event: event.type,
@@ -130,8 +133,8 @@ export class CallCapture {
           ...(this.#credentialCoverage
             ? { credentialCoverage: "required" }
             : {}),
-          ...(event.epochId !== undefined && event.epochId !== event.callId
-            ? { epochId: event.epochId }
+          ...(epochId !== undefined && epochId !== event.callId
+            ? { epochId }
             : {}),
           kind: cause.kind,
           reason: cause.lossReason,

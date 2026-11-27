@@ -1021,6 +1021,7 @@ export class PrivateInspection {
     readonly budget: InspectionBudget;
     readonly escapedUnits?: number;
     readonly deduplicate?: boolean;
+    readonly deriveEpoch?: boolean;
     readonly signal?: AbortSignal;
   }): Promise<
     | { readonly status: "registered"; readonly epoch: CredentialEpochId }
@@ -1028,14 +1029,25 @@ export class PrivateInspection {
   > {
     return this.#exclusive(async () => {
       this.#assert();
-      writeRegistration(() => this.#database.exec("BEGIN IMMEDIATE"));
+      let beginFailure: CaptureFailed | undefined;
+      try {
+        writeRegistration(() => this.#database.exec("BEGIN IMMEDIATE"));
+      } catch (cause) {
+        if (!input.deriveEpoch || !(cause instanceof CaptureFailed))
+          throw cause;
+        beginFailure = cause;
+      }
       let engine: CredentialDetectors | undefined;
       let row: ReturnType<typeof readState> | undefined;
+      let epochId: CredentialEpochId | undefined;
       let adopted = false;
       try {
         row = readState(this.#database, this.#source, input.budget);
         engine = this.#engineFor(row, input.budget).forkPrivate();
         const result = await engine.register(input);
+        if (result.status === "registered" && input.deriveEpoch)
+          epochId = result.epoch;
+        if (beginFailure !== undefined) throw beginFailure;
         if (result.status !== "registered") return result;
         this.#assert();
         const state = engine.encodePrivate(input.budget);
@@ -1060,6 +1072,10 @@ export class PrivateInspection {
         reread.key.fill(0);
         adopted = true;
         return result;
+      } catch (cause) {
+        if (epochId !== undefined && cause instanceof CaptureFailed)
+          throw new CaptureFailed({ ...cause, epochId });
+        throw cause;
       } finally {
         if (!adopted) engine?.destroy();
         row?.key.fill(0);

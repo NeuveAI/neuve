@@ -615,6 +615,7 @@ export class CaptureFailed extends Data.TaggedError("CaptureFailed")<{
   readonly detail: string;
   readonly journalFull?: boolean;
   readonly writeCode?: string;
+  readonly epochId?: string;
 }> {
   override get message(): string {
     return this.detail;
@@ -649,6 +650,13 @@ const CaptureLossFields = z.strictObject({
     "I/O error",
   ]),
   at: z.iso.datetime(),
+  ordinaryOverflow: z
+    .strictObject({
+      credential: z
+        .strictObject({ callId: z.uuid(), epochId: z.uuid().optional() })
+        .optional(),
+    })
+    .optional(),
 });
 export const CaptureLoss = z.discriminatedUnion("event", [
   CaptureLossFields.extend({
@@ -672,6 +680,13 @@ export type CaptureLoss = z.infer<typeof CaptureLoss>;
 
 export const captureLossId = (loss: CaptureLoss) =>
   loss.event === "journal.open" ? loss.sessionId : loss.callId;
+
+export const captureLossCredential = (loss: CaptureLoss) =>
+  loss.event !== "journal.open" &&
+  (loss.event === "credential.registration" ||
+    loss.credentialCoverage === "required")
+    ? { callId: loss.callId, epochId: loss.epochId }
+    : undefined;
 
 export type ModelCapture = ((event: ModelCaptureEvent) => void) & {
   readonly recordLoss?: (

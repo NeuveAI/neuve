@@ -1041,7 +1041,11 @@ export const deriveCapture = async (
         event === "journal.open"
           ? `session ${loss.sessionId}`
           : `call ${loss.callId}`;
-      return `${owner} lost capture at ${event} (${kind}, ${reason}, ${at}). The rest of its capture was skipped.`;
+      const overflow =
+        loss.ordinaryOverflow === undefined
+          ? ""
+          : " The loss record could not hold this loss and may be missing further ordinary losses.";
+      return `${owner} lost capture at ${event} (${kind}, ${reason}, ${at}). The rest of its capture was skipped.${overflow}`;
     }),
   ];
   const interrupted = journalSessions.filter((s) => !s.closed);
