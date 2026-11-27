@@ -581,6 +581,9 @@ export function pullGithub(fetcher: typeof globalThis.fetch = fetch, signIn = to
 		async ready(id: string, signal: AbortSignal) {
 			await graphql("mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }", id, signal);
 		},
+		async returnToDraft(id: string, signal: AbortSignal) {
+			await graphql("mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { id } } }", id, signal);
+		},
 		async merge(repo: string, number: number, sha: string, signal: AbortSignal) {
 			const value = await settings(repo, signal);
 			const merge_method = value.allow_squash_merge ? "squash"

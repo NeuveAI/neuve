@@ -120,6 +120,7 @@ export type Listing = {
 	active?: number;
 	/** Live channel-wide run projection; absent on older hosts, never authoritative. */
 	busy?: boolean;
+	plans?: { ready?: boolean; humanRequired?: number; waiting?: boolean };
 	/** The latest invoked run's end; absent on older hosts and before a channel's first one. */
 	ran?: RunEnd;
 	/** The latest message a person or another channel's agent wrote; absent on older hosts. */

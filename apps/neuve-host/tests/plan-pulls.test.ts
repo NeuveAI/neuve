@@ -4,18 +4,26 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Build } from "@ace/channel";
 
+import * as catalog from "../src/catalog";
 import { pullGithub } from "../src/github";
 import { parseHostEnvelope, parseHostFrame } from "../src/parse";
-import { requirePullOwner } from "../src/plan-pulls";
+import { PlanPulls, publishBuildPulls, requirePullOwner } from "../src/plan-pulls";
 import { removePlanWorktree } from "../src/plan-worktree";
 import { PullReaders } from "../src/pull-reader";
-import type { PullUpdate } from "../src/protocol";
+import type { Listing, PullUpdate } from "../src/protocol";
 
 const repo = "owner/project";
 const branch = "river/build-first";
 const head = "a".repeat(40);
 const now = "2026-11-27T12:00:00Z";
+
+function git(cwd: string, ...args: string[]) {
+	const result = Bun.spawnSync(["git", "-C", cwd, ...args], { stderr: "pipe" });
+	if (result.exitCode !== 0) throw Error(result.stderr.toString());
+	return result.stdout.toString().trim();
+}
 
 function detail(number: number, branch: string, state: "open" | "closed" | "merged" = "open", draft = false) {
 	return {
@@ -153,6 +161,110 @@ test("one existing pull request is adopted and another plan gets its own draft a
 	}
 });
 
+test("plan listings share pull reads and a new head returns only host-readied pulls to draft", async () => {
+	const home = await mkdtemp(join(tmpdir(), "plan-listing-"));
+	const original = { home: catalog.home, user: catalog.user, local: false };
+	const channel = "deadbeefdeadbeef";
+	const other = "river/build-other";
+	const next = "b".repeat(40);
+	let sha = head;
+	let draft = true;
+	const actions: string[] = [];
+	let reads = 0;
+	const github = transport((url, request) => {
+		if (url.pathname === "/graphql") {
+			const { query, variables: { id } } = JSON.parse(String(request.body));
+			const toDraft = query.includes("convertPullRequestToDraft");
+			const mutation = toDraft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview";
+			expect(query).toContain(mutation);
+			actions.push(`${mutation} ${id} ${sha}`);
+			draft = toDraft;
+			return Response.json({ data: { [mutation]: { pullRequest: { id } } } });
+		}
+		if (url.pathname.endsWith("/pulls")) {
+			return Response.json(url.searchParams.get("head") === `owner:${branch}`
+				? [detail(7, branch)] : [detail(8, other)]);
+		}
+		if (url.pathname.endsWith("/pulls/7")) {
+			reads++;
+			return Response.json({ ...detail(7, branch, "open", draft), head: { ref: branch, sha, repo: { full_name: repo } } });
+		}
+		if (url.pathname.endsWith("/pulls/8")) {
+			return Response.json({ ...detail(8, other), head: { ref: other, sha, repo: { full_name: repo } }, mergeable_state: "blocked" });
+		}
+	});
+	const listings: Listing["plans"][] = [];
+	const start = () => {
+		const host = new PlanPulls(new PullReaders(github, () => {}), () => listings.push(host.summary(channel)));
+		host.start();
+		return host;
+	};
+	const build = {
+		id: "first", chat: 1, branch, plan: { id: "first", hash: "first", title: "First", call: "first" },
+		approved: { by: "owner", at: 1 }, state: { kind: "started" },
+		agents: [{ chat: 2, role: "reviewer", state: "waiting", started: 1 }],
+	} satisfies Build;
+	const first = { build, ended: [], finishedReview: { humanRequired: 2, reviewerHeads: [head] } };
+	const second = {
+		...first, build: { ...build, id: "second", branch: other, agents: [] },
+		finishedReview: { humanRequired: 3, reviewerHeads: [] },
+	};
+	let host: PlanPulls | undefined;
+	try {
+		git(home, "init", "-q");
+		git(home, "remote", "add", "origin", `https://github.com/${repo}.git`);
+		catalog.bind({ home, user: "owner", local: true });
+		catalog.save({ id: channel, version: 2, name: "river", prefix: "river", named: true, local: true, owner: "owner", project: home, created: 1 });
+		publishBuildPulls(channel, [first, second]);
+		host = start();
+		await until(() => listings.length > 0);
+		const card = updates(host.readers, branch);
+		await until(() => listings.at(-1)?.ready === true);
+		expect(listings).toEqual([{ humanRequired: 5, waiting: true }, { ready: true, humanRequired: 5, waiting: true }]);
+		expect(card.values.at(-1)?.pull?.state).toBe("open");
+		expect(reads).toBe(2);
+		card.stop();
+
+		const resumed = { ...first, build: {
+			...build, agents: [{ chat: 2, role: "reviewer", state: "running", started: 1 }],
+		} satisfies Build };
+		publishBuildPulls(channel, [resumed, second]);
+		host.changed(`${channel}/build-pulls.json`);
+		await until(() => listings.at(-1)?.waiting !== true);
+		expect(listings.at(-1)).toEqual({ ready: true, humanRequired: 5 });
+		expect(reads).toBe(2);
+
+		host.close();
+		sha = next;
+		host = start();
+		const reopened = host;
+		await until(() => reopened.readers.current(repo, branch)?.state === "draft" &&
+			reopened.readers.current(repo, other)?.state === "open");
+		expect(listings.at(-1)).toEqual({ humanRequired: 5 });
+		expect(reads).toBe(3);
+		expect(actions).toEqual([`markPullRequestReadyForReview pull-7 ${head}`, `convertPullRequestToDraft pull-7 ${next}`]);
+
+		publishBuildPulls(channel, [{ ...resumed, finishedReview: { humanRequired: 0, reviewerHeads: [head, next] } }, {
+			...second, build: { ...second.build, state: { kind: "stopped", by: "owner", at: 2 } },
+		}]);
+		host.changed(`${channel}/build-pulls.json`);
+		await until(() => actions.length === 3 && listings.at(-1)?.ready === true);
+		expect(listings.slice(-2)).toEqual([undefined, { ready: true }]);
+		expect(actions.at(-1)).toBe(`markPullRequestReadyForReview pull-7 ${next}`);
+		expect(reads).toBe(5);
+
+		publishBuildPulls(channel, [{ ...first, build: { ...build, merged: { number: 7, at: 3 } } }]);
+		host.changed(`${channel}/build-pulls.json`);
+		await until(() => listings.at(-1) === undefined);
+		expect(host.summary(channel)).toBeUndefined();
+		expect(reads).toBe(5);
+	} finally {
+		host?.close();
+		catalog.bind(original);
+		await rm(home, { recursive: true, force: true });
+	}
+});
+
 test("GitHub refuses a merge when its head moved after the reader observed it", async () => {
 	const received: unknown[] = [];
 	const github = transport((url, request) => {
@@ -240,6 +352,11 @@ test("pull updates survive host frame parsing", () => {
 		} },
 	};
 	expect(parseHostFrame(JSON.stringify(frame))).toEqual(frame);
+	const channels = { channels: [{
+		id: "river", host: "local", name: "river", owner: "owner", project: "/project",
+		created: 1, state: "dormant", plans: { ready: true, humanRequired: 2, waiting: true },
+	}] };
+	expect(parseHostFrame(JSON.stringify(channels))).toEqual(channels);
 });
 
 test("cleanup leaves a dirty lane and removes it once clean at the merged head", async () => {
@@ -249,11 +366,6 @@ test("cleanup leaves a dirty lane and removes it once clean at the merged head",
 	const lane = "build-123";
 	const path = join(directory, lane);
 	const branch = `river/${lane}`;
-	const git = (cwd: string, ...args: string[]) => {
-		const result = Bun.spawnSync(["git", "-C", cwd, ...args], { stderr: "pipe" });
-		if (result.exitCode !== 0) throw Error(result.stderr.toString());
-		return result.stdout.toString().trim();
-	};
 	try {
 		git(root, "init", "-b", "main", project);
 		git(project, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "Base");

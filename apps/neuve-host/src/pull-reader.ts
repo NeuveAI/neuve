@@ -11,6 +11,8 @@ type PlanPull = {
 	open: boolean;
 	text(): Promise<string>;
 	ready(head: string): boolean;
+	readiness?: { head(node: string): string | undefined; record(node: string, head: string): void };
+	changed?(): void;
 	merged(number: number, head: string, at: number): Promise<void>;
 };
 type Listener = (state: { pull: GithubPull | null; error?: string }) => void;
@@ -22,7 +24,7 @@ type Reader = {
 	error?: string;
 	cache: Parameters<Github["find"]>[3];
 	checkHead?: string;
-	readiedHead?: string;
+	readied?: { node: string; head: string | undefined };
 	plan?: PlanPull;
 	finalized?: string;
 	wake: boolean;
@@ -78,6 +80,10 @@ export class PullReaders {
 		};
 	}
 
+	current(repo: string, branch: string): GithubPull | undefined {
+		return this.#readers.get(this.#key(repo, branch))?.snapshot?.pull;
+	}
+
 	plan(repo: string, branch: string, plan: PlanPull): () => void {
 		const reader = this.#get(repo, branch);
 		reader.plan = { ...plan, open: plan.open || reader.plan?.open === true };
@@ -108,7 +114,9 @@ export class PullReaders {
 			await this.#finish(reader, snapshot);
 			return;
 		}
-		if (snapshot.pull.state !== "open") throw new Error("The pull request must be open and ready for review before merging.");
+		if (snapshot.pull.state !== "open" || this.#staleReview(reader, snapshot.node, head)) {
+			throw new Error("The pull request must be open and ready for review before merging.");
+		}
 		const { outcome } = await this.#merges.run({
 			scope: reader.repo, key: JSON.stringify([number, head]), signal: this.#lifetime.signal,
 			run: async signal => {
@@ -134,6 +142,17 @@ export class PullReaders {
 		return { pull: reader.snapshot?.pull ?? null, ...(reader.error ? { error: reader.error } : {}) };
 	}
 
+	#readiedHead(reader: Reader, node: string) {
+		if (!reader.plan) return;
+		if (reader.readied?.node !== node) reader.readied = { node, head: reader.plan.readiness?.head(node) };
+		return reader.readied.head;
+	}
+
+	#staleReview(reader: Reader, node: string, head: string) {
+		const readied = this.#readiedHead(reader, node);
+		return readied !== undefined && readied !== head;
+	}
+
 	#publish(reader: Reader, value: PullSnapshot | null) {
 		const prior = this.#state(reader);
 		const initial = reader.snapshot === undefined;
@@ -141,6 +160,7 @@ export class PullReaders {
 		reader.error = undefined;
 		const state = this.#state(reader);
 		if (initial || JSON.stringify(prior) !== JSON.stringify(state)) {
+			reader.plan?.changed?.();
 			for (const listener of reader.listeners) listener(state);
 		}
 	}
@@ -221,6 +241,18 @@ export class PullReaders {
 		if (value.head.ref !== branch || value.head.repo && value.head.repo.full_name.toLowerCase() !== repo) {
 			throw new Error("GitHub returned a pull request from a different branch.");
 		}
+		signal.throwIfAborted();
+		// A person can merge while a conditional read is still answering.
+		if (reader.snapshot?.pull.state === "merged") return reader.snapshot;
+		if (value.state === "open" && !value.draft && this.#staleReview(reader, value.node_id, head)) {
+			const blocked = pullSnapshot({ ...value, mergeable: false, mergeable_state: "blocked" }, [], undefined);
+			this.#publish(reader, blocked);
+			await this.github.returnToDraft(value.node_id, signal);
+			this.log("info", "pull.review.stale", { repo, branch, number: value.number, head, reviewedHead: reader.readied?.head });
+			const draft = pullSnapshot({ ...value, draft: true, mergeable: false, mergeable_state: "draft" }, [], undefined);
+			this.#publish(reader, draft);
+			return draft;
+		}
 		if (reader.checkHead !== head) {
 			for (const path of cache.keys()) if (path.includes("/commits/")) cache.delete(path);
 			reader.checkHead = head;
@@ -235,14 +267,15 @@ export class PullReaders {
 			? await this.github.checks(repo, head, signal, cache)
 			: reader.snapshot?.pull.checks ?? [];
 		signal.throwIfAborted();
-		// A person can merge while a conditional read is still answering.
-		if (reader.snapshot?.pull.state === "merged") return reader.snapshot;
+		if (terminal(reader.snapshot)) return reader.snapshot ?? null;
 		const snapshot = pullSnapshot(value, checks, review);
 		this.#publish(reader, snapshot);
 		if (snapshot.pull.state === "merged") await this.#finish(reader, snapshot);
-		if (snapshot.pull.state === "draft" && reader.readiedHead !== head && reader.plan?.ready(head)) {
+		const active = reader.plan;
+		if (snapshot.pull.state === "draft" && active?.ready(head) && this.#readiedHead(reader, snapshot.node) !== head) {
 			await this.github.ready(snapshot.node, signal);
-			reader.readiedHead = head;
+			reader.readied = { node: snapshot.node, head };
+			active.readiness?.record(snapshot.node, head);
 			reader.wake = true;
 		}
 		return snapshot;

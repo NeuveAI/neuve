@@ -42,6 +42,7 @@ async function setup(options: {
 	beforeSharedResult?(): Promise<void>;
 	onSharedWait?(): void;
 	onStep?(step: string): void;
+	onBuildPulls?: Fixture["options"]["onBuildPulls"];
 	nonTurnModels?: Fixture["options"]["nonTurnModels"];
 	wrapTool?(tool: ToolRegistration): ToolRegistration;
 } = {}) {
@@ -93,6 +94,7 @@ async function setup(options: {
 		log: (_level, step) => options.onStep?.(step),
 		onSaid: value => said.push(value),
 		onRun: value => runs.push(value),
+		onBuildPulls: options.onBuildPulls,
 	});
 	fixtures.push(fixture);
 	const plans = join(fixture.root, "plans");
@@ -486,7 +488,8 @@ async function startBuild(run: Awaited<ReturnType<typeof setup>>, reply: FauxRes
 
 // A new plan in the same channel must not inherit the merged plan's branch or review.
 test("a published review and a merge follow the plan, and the next plan gets its own branch", async () => {
-	const run = await setup();
+	let pulls: Parameters<NonNullable<Fixture["options"]["onBuildPulls"]>>[0] = [];
+	const run = await setup({ onBuildPulls: value => { pulls = value; } });
 	const { fixture, watch } = run;
 	const { plan, build, chat } = await startBuild(run);
 	const branch = run.worktrees[0]!.branch;
@@ -519,6 +522,20 @@ test("a published review and a merge follow the plan, and the next plan gets its
 	expect(EventSchema.parse(reviewed)).toEqual(reviewed);
 	expect(reviewed.builds[0]!.review).toEqual({
 		chat: reviewer.chat, review: "review", phase: "finished", head, humanRequired: 2, desk: "/desk",
+	});
+	await run.harness.commit(async tx => {
+		const { cards } = await tx.doc(ReviewCardsDoc, chat as ConversationId);
+		cards.older = {
+			...card, review: "older", updatedAt: 3, newCommits: { head: "b".repeat(40) },
+			finished: { units: 1, byReviewLane: { humanRequired: 1, humanSuggested: 0, static: 0, agentic: 0 }, needJudgment: 1, complete: true, gaps: 0, undecoded: 0 },
+		};
+		cards.newer = {
+			...card, review: "newer", phase: "running", finished: null, links: null, updatedAt: 4,
+		};
+	}, context);
+	await watch.until("builds", event => event.builds[0]?.review?.review === "newer");
+	expect(pulls.find(row => row.build.id === build.id)?.finishedReview).toEqual({
+		humanRequired: 2, reviewerHeads: [head],
 	});
 
 	await fixture.channel.planPullMerged({ build: build.id, branch, head, number: 11, at: 25 });

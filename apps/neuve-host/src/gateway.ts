@@ -158,6 +158,8 @@ async function local(): Promise<Listing[]> {
 		if (ran) listing.ran = ran;
 		if (said) listing.said = said;
 		if (mentions) listing.mentions = mentions;
+		const plans = planPulls.summary(id);
+		if (plans) listing.plans = plans;
 		const { root, repo } = checkouts[index]!;
 		listing.root = root;
 		if (repo) listing.repo = repo;
@@ -1331,7 +1333,7 @@ export type Gateway = {server: Server<Client>; stop(): Promise<void>};
 
 export async function start(port: number, loopback = false, script?: string, managed = false): Promise<Gateway> {
 	closing = false;
-	planPulls = new PlanPulls();
+	planPulls = new PlanPulls(undefined, () => { if (!closing && !updating) void broadcast(); });
 	config.port = port;
 	config.loopback = loopback;
 	// Channel workers and agent shells reach this listener for the owner's windows.

@@ -69,6 +69,7 @@ type StoredBuild = {
 	revision?: { requests: Record<string, string> };
 	stopping?: { chat: ConversationId; running: boolean }[];
 	mergeCleanup?: { head: string };
+	finishedReview?: { humanRequired: number; reviewerHeads: string[] };
 };
 
 type StoredMessage = {
@@ -94,7 +95,7 @@ type MentionReply = {
 };
 export type BuildsState = { records: Record<string, StoredBuild>; messages: StoredMessage[]; mentions?: StoredMention[] };
 /** Local host projection of the committed build and its agents' last completed runs. */
-export type BuildPull = { build: Build & { branch: string }; ended: number[] };
+export type BuildPull = { build: Build; ended: number[]; finishedReview?: StoredBuild["finishedReview"] };
 export const BuildsDoc = defineDoc<BuildsState>({
 	kind: "neuve.builds",
 	version: 1,
@@ -362,10 +363,9 @@ export class Builds {
 	agent(chat: number) { return this.#agents.get(chat); }
 
 	pulls(): BuildPull[] {
-		return Object.values(this.#document?.records ?? {}).flatMap(({ build, starts }) => {
-			const branch = build.branch;
-			return branch ? [{ build: { ...build, branch }, ended: Object.values(starts).map(start => start.lastRun ?? 0) }] : [];
-		});
+		return Object.values(this.#document?.records ?? {}).map(({ build, starts, finishedReview }) => ({
+			build, ended: Object.values(starts).map(start => start.lastRun ?? 0), finishedReview,
+		}));
 	}
 
 	async pullText(id: string, branch: string): Promise<string> {
@@ -387,10 +387,25 @@ export class Builds {
 				const { build, starts } = record;
 				build.branch ??= starts[firstImplementer]?.worktree?.branch;
 				let latest: { chat: number; card: Extract<ReviewCard, { kind: "review" }> } | undefined;
-				for (const { chat } of build.agents) {
+				let finished: Extract<ReviewCard, { kind: "review" }> | undefined;
+				const reviewerHeads = new Set<string>();
+				for (const { chat, role } of build.agents) {
 					for (const card of Object.values((await tx.doc(ReviewCardsDoc, chat as ConversationId)).cards)) {
-						if (card.kind === "review" && (!latest || card.updatedAt > latest.card.updatedAt)) latest = { chat, card };
+						if (card.kind !== "review") continue;
+						if (!latest || card.updatedAt > latest.card.updatedAt) latest = { chat, card };
+						if (card.phase !== "finished") continue;
+						// Review IDs are time-ordered. Old cards can be updated when the branch moves.
+						if (!finished || card.review > finished.review) finished = card;
+						if (role === "reviewer") reviewerHeads.add(card.range.head);
 					}
+				}
+				const finishedReview = finished && {
+					humanRequired: finished.finished?.byReviewLane.humanRequired ?? 0,
+					reviewerHeads: [...reviewerHeads].sort(),
+				};
+				if (JSON.stringify(record.finishedReview) !== JSON.stringify(finishedReview)) {
+					if (finishedReview) record.finishedReview = finishedReview;
+					else delete record.finishedReview;
 				}
 				if (!latest) continue;
 				const { chat, card } = latest;
