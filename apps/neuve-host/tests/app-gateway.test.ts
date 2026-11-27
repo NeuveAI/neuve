@@ -245,6 +245,7 @@ test("actual Ace client crosses the real private host with watches, verified aut
 			expect(response.headers.get("content-type")).toBe("image/png");
 			expect(response.headers.get("x-content-type-options")).toBe("nosniff");
 			expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+			expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
 			expect(response.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
 			expect(new Uint8Array(await response.arrayBuffer())).toEqual(png);
 			expect((await fetch(new URL(path.replace(/\/0$/, "/1"), url), { headers: { Cookie: cookie } })).status).toBe(404);
@@ -274,4 +275,21 @@ test("the image response serves PNG bytes and refuses an active document type", 
 	expect(image.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
 	expect(image.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
 	expect(new Uint8Array(await image.arrayBuffer())).toEqual(Uint8Array.fromBase64(pngData));
+});
+
+test.each([
+	{ source: "a trusted Origin", origin: "https://app.example.test", corsOrigin: "https://app.example.test" },
+	{ source: "an untrusted Origin", origin: "https://app.example.test.foreign.invalid", corsOrigin: undefined },
+	{ source: "no Origin", origin: undefined, corsOrigin: undefined },
+])("the image response uses only the origin admitted by the listener ($source)", async ({ origin, corsOrigin }) => {
+	const url = new URL("https://host.example.test/images/0123456789abcdef/1/call/0");
+	const headers = origin ? { Origin: origin } : undefined;
+	const response = await toolImageResponse(new Request(url, { headers }), url.pathname, async () => ({
+		mimeType: "image/png",
+		data: pngData,
+	}), corsOrigin);
+	expect(response.status).toBe(200);
+	expect(response.headers.get("access-control-allow-origin")).toBe(corsOrigin ?? null);
+	expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+	expect(response.headers.get("vary")).toBe("Cookie, Authorization, Sec-WebSocket-Protocol, Origin");
 });

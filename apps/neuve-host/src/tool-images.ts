@@ -9,6 +9,7 @@ export async function toolImageResponse(
 	http: Request,
 	pathname: string,
 	read: (channel: string, request: Extract<ChannelRequest, { op: "tool-image" }>) => Promise<unknown>,
+	corsOrigin?: string,
 ): Promise<Response> {
 	if (http.method !== "GET" || http.headers.has("upgrade")) return new Response(null, { status: 405 });
 	const match = /^\/images\/([0-9a-f]{16})\/(\d+)\/([^/]+)\/(\d+)$/.exec(pathname);
@@ -28,6 +29,7 @@ export async function toolImageResponse(
 				"Cross-Origin-Resource-Policy": "same-origin",
 				"Cache-Control": "private, max-age=31536000, immutable",
 				Vary: "Cookie, Authorization, Sec-WebSocket-Protocol, Origin",
+				...(corsOrigin ? { "Access-Control-Allow-Origin": corsOrigin } : {}),
 			},
 		});
 	} catch {

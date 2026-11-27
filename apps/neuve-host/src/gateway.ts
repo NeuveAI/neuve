@@ -619,11 +619,20 @@ function releaseClient(client: Client) {
 	for (const remote of client.remotes.values()) remote.close();
 }
 
-async function serveToolImage(request: Request, pathname: string, client: Client): Promise<Response> {
+async function serveToolImage(
+	request: Request,
+	pathname: string,
+	client: Client,
+	corsOrigin?: string,
+): Promise<Response> {
 	if (closing || updating) return new Response(null, { status: 503 });
 	const trace = crypto.randomUUID().slice(0, 8);
-	const serving = toolImageResponse(request, pathname, (channel, request) =>
-		channelRequest(client, { op: "channel", channel, request }, undefined, trace));
+	const serving = toolImageResponse(
+		request,
+		pathname,
+		(channel, request) => channelRequest(client, { op: "channel", channel, request }, undefined, trace),
+		corsOrigin,
+	);
 	pending.add(serving);
 	try {
 		return await serving;
@@ -1255,7 +1264,9 @@ function team(machine: Machine, listener: web.Listener, tls?: Bun.TLSOptions): S
 				if (response?.headers.get("content-type")?.split(";")[0]?.trim() === "text/event-stream") server.timeout(request, 0);
 				return response;
 			}
-			if (image) return serveToolImage(request, url.pathname, client(user, false, false, from));
+			if (image) {
+				return serveToolImage(request, url.pathname, client(user, false, false, from), origin ?? undefined);
+			}
 			return server.upgrade(request, { data: client(user, !browser, false, from) })
 				? undefined
 				: new Response("Upgrade failed", { status: 400 });
