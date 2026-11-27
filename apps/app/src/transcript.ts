@@ -516,9 +516,15 @@ export function useTranscript(
 			// Each chat's latest `agent` event, numbered, so a read sent before it can't undo it.
 			let heard = 0;
 			const agents = new Map<number, { at: number; event: Extract<Event, { kind: "agent" }> }>();
+			// Reads are numbered too, so one answering after a later read has landed is dropped.
+			let reads = 0;
+			let landed = 0;
 			const read = () => {
 				const sent = heard;
+				const number = ++reads;
 				return host.channel<ChannelInfo>(channel, { op: "info" }).then((value) => {
+					if (number < landed) return;
+					landed = number;
 					for (const { id } of value.chats) known.add(id);
 					for (const { at, event } of agents.values()) if (at > sent) value = changed(value, event);
 					if (current()) setInfo(value);
