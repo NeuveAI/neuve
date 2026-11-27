@@ -21,6 +21,7 @@ const CONNECT = { timeout: 20_000 };
 const STARTUP_TIMEOUT = 10_000;
 const TOOL_NAME_LIMIT = 64 - "mcp__neuve__".length;
 const MCP_TEXT_LIMIT = 4096;
+const MAX_IMAGE_BYTES = 900_000;
 const request = globalThis.fetch;
 
 const expandValues = (fields: Record<string, string> | undefined, credentials: ReadonlyMap<string, string>) =>
@@ -172,12 +173,17 @@ async function connect(
 								{ signal: context.abortSignal, timeout: 30_000 },
 							);
 							outcome = result.isError ? "error" : "ok";
-							const text = result.content?.flatMap(block => block.type === "text" ? [block.text] : []).join("\n")
+							let text = result.content?.flatMap(block => block.type === "text" ? [block.text] : []).join("\n")
 								|| JSON.stringify(result.structuredContent) || "";
 							const images = result.content?.flatMap(block => block.type === "image"
 								? [{ type: "image" as const, data: block.data, mimeType: block.mimeType }] : []) ?? [];
+							const inlineImages = images.filter(({ data }) => Buffer.byteLength(data, "base64") <= MAX_IMAGE_BYTES);
+							if (inlineImages.length < images.length) {
+								const note = "An image was too large to include. Save it to a file with filePath.";
+								text = text ? `${text}\n${note}` : note;
+							}
 							return {
-								content: text || !images.length ? [...images, { type: "text", text }] : images,
+								content: text || !inlineImages.length ? [...inlineImages, { type: "text", text }] : inlineImages,
 								isError: result.isError === true,
 							};
 						} catch (error) {

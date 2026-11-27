@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Channel, type Fields } from "@ace/channel";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, getCurrentTools, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Effect } from "effect";
@@ -120,13 +120,17 @@ for await (const line of createInterface({ input: process.stdin })) {
 
 // An MCP peer asks for roots during initialization and returns the scope with an inline image.
 const screenshotServer = String.raw`
+import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 const send = message => console.log(JSON.stringify({ jsonrpc: "2.0", ...message }));
 let roots;
 let pending;
-const screenshot = id => send({ id, result: { content: [
-	{ type: "image", mimeType: "image/png", data: "aA==" }, { type: "text", text: JSON.stringify(roots) },
-] } });
+const screenshot = (id, { oversized }) => {
+	const data = oversized ? Buffer.alloc(900_001).toString("base64") : "aA==";
+	send({ id, result: { content: [
+		{ type: "image", mimeType: "image/png", data }, { type: "text", text: JSON.stringify(roots) },
+	] } });
+};
 for await (const line of createInterface({ input: process.stdin })) {
 	const { id, method, params, result } = JSON.parse(line);
 	if (method === "initialize") {
@@ -136,56 +140,83 @@ for await (const line of createInterface({ input: process.stdin })) {
 		if (roots === null) send({ id: "roots", method: "roots/list" });
 	} else if (id === "roots") {
 		roots = result.roots;
-		if (pending !== undefined) screenshot(pending);
+		if (pending !== undefined) screenshot(...pending);
 	} else if (method === "tools/list") {
-		send({ id, result: { tools: [{ name: "take_screenshot", inputSchema: { type: "object" } }] } });
+		send({ id, result: { tools: [{
+			name: "take_screenshot", inputSchema: { type: "object", properties: { oversized: { type: "boolean" } } },
+		}] } });
 	} else if (method === "tools/call") {
-		if (roots === null) pending = id;
-		else screenshot(id);
+		appendFileSync("devtools-calls.log", params.name + "\n");
+		if (roots === null) pending = [id, params.arguments];
+		else screenshot(id, params.arguments);
 	}
 }
 `;
 
-test("pi offers scoped Chrome DevTools to agents and delivers images and the chat's roots", async () => {
-	const plugin = PluginManifest.parse({
-		manifest: { name: "chrome-devtools", description: "Fixture", defaultEnabled: true },
-		mcp: { "chrome-devtools": { command: process.execPath, args: ["--no-env-file", "--eval", screenshotServer] } },
-	});
-	let preference: Record<string, boolean> = {};
-	const plugins = pluginTools(() => {}, [plugin], () => preference);
-	const channel = await Fixture.create({ plugins });
+const screenshotPlugin = PluginManifest.parse({
+	manifest: { name: "chrome-devtools", description: "Fixture", defaultEnabled: true },
+	mcp: { "chrome-devtools": { command: process.execPath, args: ["--no-env-file", "--eval", screenshotServer] } },
+});
+
+async function screenshotTurn(channel: Fixture, mode: "ace" | "plan", attended: boolean, args?: { oversized?: boolean }) {
 	const tool = "chrome-devtools_take_screenshot";
-	async function turn(mode: "ace" | "plan", attended: boolean, call = false) {
-		const offer = Promise.withResolvers<boolean>();
-		const blocks = Promise.withResolvers<unknown>();
-		channel.script(request => {
-			offer.resolve(getCurrentTools(request.messages).some(candidate => candidate.name === tool));
-			return call
-				? fauxAssistantMessage(fauxToolCall(tool, {}, { id: "screenshot" }), { stopReason: "toolUse" })
-				: fauxAssistantMessage("Done");
-		});
-		if (call) channel.script(request => {
-			const result = request.messages.findLast(item => item.role === "toolResult");
-			blocks.resolve(result?.content);
-			return fauxAssistantMessage("Done");
-		});
-		const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the browser", mode, attended });
-		expect(await channel.request({ op: "wait", submission })).toBe("done");
-		return { offered: await offer.promise, result: call ? await blocks.promise : undefined };
-	}
+	const offer = Promise.withResolvers<boolean>();
+	const blocks = Promise.withResolvers<ToolResultMessage["content"] | undefined>();
+	channel.script(request => {
+		offer.resolve(getCurrentTools(request.messages).some(candidate => candidate.name === tool));
+		return args
+			? fauxAssistantMessage(fauxToolCall(tool, args, { id: "screenshot" }), { stopReason: "toolUse" })
+			: fauxAssistantMessage("Done");
+	});
+	if (args) channel.script(request => {
+		const result = request.messages.findLast(item => item.role === "toolResult");
+		blocks.resolve(result?.content);
+		return fauxAssistantMessage("Done");
+	});
+	const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the browser", mode, attended });
+	expect(await channel.request({ op: "wait", submission })).toBe("done");
+	return { offered: await offer.promise, result: args ? await blocks.promise : undefined };
+}
+
+test("pi offers scoped Chrome DevTools to agents and delivers images and the chat's roots", async () => {
+	let preference: Record<string, boolean> = {};
+	const plugins = pluginTools(() => {}, [screenshotPlugin], () => preference);
+	const channel = await Fixture.create({ plugins });
 	try {
-		expect(await turn("ace", false, true)).toEqual({
+		expect(await screenshotTurn(channel, "ace", false, {})).toEqual({
 			offered: true,
 			result: [
 				{ type: "image", data: "aA==", mimeType: "image/png" },
 				{ type: "text", text: JSON.stringify([{ uri: pathToFileURL(channel.lane.path).href }]) },
 			],
 		});
-		expect((await turn("ace", true)).offered).toBe(false);
-		expect((await turn("plan", false)).offered).toBe(false);
+		const attended = await screenshotTurn(channel, "ace", true, {});
+		const calls = await Bun.file(join(channel.lane.path, "devtools-calls.log")).text();
+		expect({ ...attended, calls }).toEqual({
+			offered: false,
+			result: [{ type: "text", text: "This tool is unavailable in a person-driven chat." }],
+			calls: "take_screenshot\n",
+		});
+		expect((await screenshotTurn(channel, "plan", false)).offered).toBe(false);
 		preference = { "chrome-devtools": false };
 		expect(plugins.nativeServers?.()).toBeUndefined();
-		expect((await turn("ace", false)).offered).toBe(false);
+		expect((await screenshotTurn(channel, "ace", false)).offered).toBe(false);
+	} finally {
+		await channel.dispose();
+	}
+});
+
+test("pi drops an oversized plugin image and keeps the text with a filePath hint", async () => {
+	const plugins = pluginTools(() => {}, [screenshotPlugin], () => ({}));
+	const channel = await Fixture.create({ plugins });
+	try {
+		const { result } = await screenshotTurn(channel, "ace", false, { oversized: true });
+		expect(result?.map(block => block.type)).toEqual(["text"]);
+		expect(result).toEqual([{
+			type: "text",
+			text: JSON.stringify([{ uri: pathToFileURL(channel.lane.path).href }])
+				+ "\nAn image was too large to include. Save it to a file with filePath.",
+		}]);
 	} finally {
 		await channel.dispose();
 	}
