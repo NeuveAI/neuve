@@ -1,5 +1,5 @@
 // Updates must retain the fields an older reader dropped, including nested and variant data.
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -921,17 +921,74 @@ test("a successful parse reports stripped keys at each input location", () => {
   });
 });
 
-test("a pipe reports a key it strips and then restores", () => {
-  const schema = z
+describe("a pipe reports a key it strips and then restores", () => {
+  const pipe = z
     .object({ used: z.number() })
     .transform(({ used }) => ({ used, future: true }));
   const input = { used: 1, future: true };
-  expect(safeRead(schema, input, { notice: false })).toMatchObject({
-    success: true,
-    data: input,
-    droppedKeys: ["future"],
-    droppedPaths: [["future"]],
-  });
+
+  const cases = [
+    {
+      placement: "top level",
+      schema: pipe,
+      value: input,
+      data: { used: 1, future: true },
+      droppedKeys: ["future"],
+      droppedPaths: [["future"]],
+    },
+    {
+      placement: "object field",
+      schema: z.object({ child: pipe }),
+      value: { child: input },
+      data: { child: { used: 1, future: true } },
+      droppedKeys: ["child.future"],
+      droppedPaths: [["child", "future"]],
+    },
+    {
+      placement: "array element",
+      schema: z.array(pipe),
+      value: [input],
+      data: [{ used: 1, future: true }],
+      droppedKeys: ["[].future"],
+      droppedPaths: [[0, "future"]],
+    },
+    {
+      placement: "union option",
+      schema: z.union([z.string(), pipe]),
+      value: input,
+      data: { used: 1, future: true },
+      droppedKeys: ["future"],
+      droppedPaths: [["future"]],
+    },
+    {
+      placement: "optional",
+      schema: pipe.optional(),
+      value: input,
+      data: { used: 1, future: true },
+      droppedKeys: ["future"],
+      droppedPaths: [["future"]],
+    },
+    {
+      placement: "lazy",
+      schema: z.lazy(() => pipe),
+      value: input,
+      data: { used: 1, future: true },
+      droppedKeys: ["future"],
+      droppedPaths: [["future"]],
+    },
+  ];
+
+  test.each(cases)(
+    "$placement",
+    ({ schema, value, data, droppedKeys, droppedPaths }) => {
+      expect(safeRead<unknown>(schema, value, { notice: false })).toEqual({
+        success: true,
+        data,
+        droppedKeys,
+        droppedPaths,
+      });
+    },
+  );
 });
 
 test("tuple rest repairs its own elements without changing arity or optional-tail semantics", () => {
