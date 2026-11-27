@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { Effect, Layer, Logger } from "effect";
-import { openBrowser } from "@ace/host/open-browser";
+import { openBrowser } from "@neuve/runtime/open-browser";
 import {
   AccountDirectory,
   type AccountDirectoryShape,

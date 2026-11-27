@@ -11,7 +11,7 @@ import { SharedWork } from "@neuve/records-core/shared-work";
 import { z, ZodError } from "zod";
 
 import { forget, peek } from "./keys";
-import { openBrowser } from "./open-browser";
+import { openBrowser } from "@neuve/runtime/open-browser";
 import { carriedPlugins, loopback, type OAuthServer, type Plugin } from "./plugin-manifest";
 import {
 	expired, fingerprint, oauthAccount, parseSession, readSession, saveSession, signedIn,

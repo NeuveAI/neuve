@@ -71,10 +71,6 @@
 			"types": "./.types/src/browser.d.ts",
 			"default": "./src/browser.ts"
 		},
-		"./open-browser": {
-			"types": "./.types/src/open-browser.d.ts",
-			"default": "./src/open-browser.ts"
-		},
 		"./linear-plugin": {
 			"types": "./.types/src/linear-plugin.d.ts",
 			"default": "./src/linear-plugin.ts"
