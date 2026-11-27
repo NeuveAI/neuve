@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { InMemoryCredentialStore, Type } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { runWorker } from "@ace/host/worker";
-import { codingWorkerSetup } from "../../../../apps/neuve-cli/src/workspace-cli.ts";
+import { codingWorkerSetup } from "../../../../apps/neuve-cli/src/workspace-worker.ts";
 import { PI_TRANSITION_STORAGE_PROFILE } from "../../../../scripts/pi-storage.ts";
 import { SOL_ROUTE } from "../../src/route.ts";
 

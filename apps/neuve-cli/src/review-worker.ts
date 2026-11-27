@@ -14,6 +14,7 @@ import {
 import { readAsItStands, readWithoutLog } from "@neuve/records-core/read-only";
 import { execute, withStore } from "./records-cli";
 import { within } from "./volume-within";
+import { thisBuild } from "./cli-command.ts";
 
 /** Keep one repository/job through pushed settlement, reconnecting only on socket loss. */
 const upkeep = new SharedWork<string | undefined>();
@@ -50,10 +51,6 @@ const jobState = (project: string, seq: number) =>
     (job) => (Option.isSome(job) ? job.value.state : undefined),
     () => undefined,
   );
-
-/** Use the CLI entry explicitly because a test runner can own `Bun.main`. */
-export const thisBuild = (): ReadonlyArray<string> =>
-  Starter.currentCliCommand(resolve(import.meta.dir, "cli.ts"));
 
 export interface KeptWorker {
   /** Settles when the job left waiting (or the watch ended): the state it was last seen in. */

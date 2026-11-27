@@ -10,6 +10,7 @@ function image(
 	h: number,
 	alt = "",
 	fit: "cover" | "contain" = "cover",
+	cors = false,
 ): Block {
 	if (!w || !h) {
 		w = DEFAULT_W;
@@ -21,7 +22,7 @@ function image(
 			return { height: Math.round(h * scale), fit: Math.round(w * scale) };
 		},
 		render(width) {
-			return <ImageView src={src} w={w} h={h} alt={alt} width={width} fit={fit} />;
+			return <ImageView src={src} w={w} h={h} alt={alt} width={width} fit={fit} cors={cors} />;
 		},
 	};
 }

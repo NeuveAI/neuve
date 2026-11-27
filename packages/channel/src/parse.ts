@@ -8,6 +8,13 @@ export { EffortSchema };
 /** pi's chat, entry, and submission IDs. */
 const id = z.int().nonnegative();
 const chat = id.optional();
+export const ToolImageRequestSchema = z.strictObject({
+	op: z.literal("tool-image"),
+	chat: id,
+	call: z.string().min(1),
+	index: id,
+});
+export const ToolImageSchema = z.strictObject({ mimeType: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]), data: z.string() });
 export const ModelRefSchema = z.strictObject({ provider: z.string().min(1), modelId: z.string().min(1) });
 export const ChatModeSchema = z.enum(["ace", "plan"]);
 const images = z.array(z.strictObject({ mimeType: z.string(), data: z.string() })).optional();
@@ -89,6 +96,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 	z.strictObject({ op: z.literal("chat"), author, model: ModelRefSchema.optional() }),
 	answerOp,
 	z.strictObject({ op: z.literal("skip"), chat, call: z.string(), author }),
+	ToolImageRequestSchema,
 	z.strictObject({ op: z.literal("plan"), chat, plan: z.string().min(1) }),
 	z.strictObject({
 		op: z.literal("plan-approve"),

@@ -9,6 +9,7 @@ import type WebSocket from "ws";
 import { ownerCredential } from "./auth";
 import { config } from "./config";
 import type { Host } from "./host";
+import { isToolImagePath } from "./tool-images";
 import { Ulid } from "@neuve/records-schema";
 
 const ClientWebSocket: typeof WebSocket = typeof require === "function"
@@ -163,7 +164,8 @@ export async function serveCodingUi(options: CodingUiOptions): Promise<CodingUi>
 				if (review.headers.get("content-type")?.split(";")[0]?.trim() === "text/event-stream") server.timeout(request, 0);
 				return review;
 			}
-			if (url.pathname === "/ws") {
+			const image = isToolImagePath(url.pathname);
+			if (url.pathname === "/ws" || image) {
 				const suppliedOrigin = request.headers.get("origin");
 				const fetchSite = request.headers.get("sec-fetch-site");
 				if ((suppliedOrigin !== null && suppliedOrigin !== origin) || (fetchSite !== null && fetchSite !== "same-origin")) {
@@ -173,6 +175,18 @@ export async function serveCodingUi(options: CodingUiOptions): Promise<CodingUi>
 				const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
 				if (upgrade && (suppliedOrigin !== origin || url.search)) return new Response("Forbidden", { status: 403 });
 				if (!access.authorizes(request)) return new Response(config.command, { status: 401 });
+				if (image) {
+					if (request.headers.has("upgrade")) return new Response(null, { status: 405 });
+					try {
+						return await fetch(new URL(url.pathname, `http://${endpoint.host}`), {
+							headers: { Authorization: `Bearer ${options.host.token}` },
+							redirect: "error",
+							signal: request.signal,
+						});
+					} catch {
+						return new Response(null, { status: 502 });
+					}
+				}
 				if (!upgrade) {
 					return new Response("Connect to the coding host using a WebSocket", { headers: { ...HEADERS, "Cache-Control": "no-store" } });
 				}

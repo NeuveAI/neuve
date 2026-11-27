@@ -40,7 +40,7 @@ import {
 } from "../../../packages/harness/src/budget/local.ts";
 import { z } from "zod";
 import { closeChild } from "./workspace-child.ts";
-import { thisBuild } from "./review-worker.ts";
+import { thisBuild } from "./cli-command.ts";
 
 type BuildOptions = {
   source: string;

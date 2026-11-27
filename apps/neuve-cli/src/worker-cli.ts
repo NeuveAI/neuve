@@ -73,7 +73,7 @@ import {
   withStore,
   write,
 } from "./records-cli.ts";
-import { thisBuild } from "./review-worker.ts";
+import { thisBuild } from "./cli-command.ts";
 import { prepareWorkerStore, warnIfPaused } from "./installed-copy.ts";
 import { runStackFetchChild, runStackIndexChild } from "./stack-cli.ts";
 import { CLI_VERSION } from "./cli-version.ts";

@@ -20,11 +20,11 @@ import {
   resolveStoreLocation,
   type StoreLocation,
 } from "@neuve/records-core";
+import { thisBuild } from "../src/cli-command.ts";
 import { execute, withStore } from "../src/records-cli.ts";
 import {
   keepWorkerFor,
   rearmWaitingReviews,
-  thisBuild,
   WORKER_RECHECK_MS,
 } from "../src/review-worker.ts";
 

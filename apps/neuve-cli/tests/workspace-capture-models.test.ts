@@ -2,7 +2,12 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HostConfigSchema } from "@ace/host/host-config";
+import { config, HostConfigSchema } from "@ace/host/host-config";
+import { configureRuntime, runtimeHooks } from "@ace/host/runtime-hooks";
+import { openChannel } from "@ace/host/worker-runtime";
+import type { Channel } from "@ace/channel";
+import { MemoryStorage } from "@earendil-works/pi-durable";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createModels, type Message } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
@@ -17,12 +22,14 @@ import {
 import { SOL_ROUTE } from "../../../packages/harness/src/route.ts";
 import { routeFailureOf } from "../../../packages/harness/src/pi/providers/failure.ts";
 import {
+  completed,
   created,
+  messageItem,
   sse,
   tokenCommand,
 } from "../../../packages/harness/tests/pi/providers/fixture.ts";
 import { workspaceCaptureModels } from "../src/workspace-capture-models.ts";
-import { codingWorkerSetup } from "../src/workspace-cli.ts";
+import { codingWorkerSetup } from "../src/workspace-worker.ts";
 
 test.each([
   { window: 100_000, percent: 80, usable: 80_000 },
@@ -124,80 +131,174 @@ test("a missing ChatGPT sign-in leaves the configured route limits in place", as
   }
 });
 
-test("chat openings retry a failed catalogue read, share the retry, and keep its limits", async () => {
-  // Credential inspection requires a directory outside temporary storage.
-  const scratch = mkdtempSync(
-    join(import.meta.dir, ".workspace-model-limits-"),
-  );
-  const releaseSources: (() => void)[] = [];
-  try {
-    const paths = {
-      canonicalClone: scratch,
-      worktrees: join(scratch, "lanes"),
-      state: join(scratch, "state"),
-      captures: join(scratch, "captures"),
-      cache: join(scratch, "cache"),
-      bunCache: join(scratch, "bun-cache"),
-      tmp: join(scratch, "tmp"),
-      builds: join(scratch, "builds"),
-    };
-    mkdirSync(paths.state);
-    mkdirSync(paths.worktrees);
-    const config = HostConfigSchema.parse({
-      home: paths.state,
-      lanes: paths.worktrees,
-      user: "person",
-      port: 0,
-      environment: {},
-      worker: [process.execPath],
-    });
-    const token = tokenCommand(scratch, "lease");
-    let requests = 0;
-    const setup = codingWorkerSetup({ paths }, SOL_ROUTE, {
-      auth: { tokenCommand: token.path },
-      fetch: Object.assign(
-        async () => {
-          if (++requests === 1) return new Response(null, { status: 503 });
-          return Response.json({
-            models: [
-              {
-                slug: SOL_ROUTE.model,
-                context_window: 100_000,
-                effective_context_window_percent: 80,
-                max_output_tokens: 12_000,
-              },
-            ],
-          });
+test.each([true, false])(
+  "history stays available during catalog lookup and the first run uses its limits (%s)",
+  async (available) => {
+    // Credential inspection requires a directory outside temporary storage.
+    const scratch = mkdtempSync(
+      join(import.meta.dir, ".workspace-model-limits-"),
+    );
+    const previous = { ...config };
+    const previousHooks = runtimeHooks();
+    const catalog = Promise.withResolvers<Response>();
+    const started = Promise.withResolvers<void>();
+    let release: (() => void) | undefined;
+    let channel: Channel | undefined;
+    try {
+      const paths = {
+        canonicalClone: scratch,
+        worktrees: join(scratch, "lanes"),
+        state: join(scratch, "state"),
+        captures: join(scratch, "captures"),
+        cache: join(scratch, "cache"),
+        bunCache: join(scratch, "bun-cache"),
+        tmp: join(scratch, "tmp"),
+        builds: join(scratch, "builds"),
+      };
+      const stateDirectory = join(paths.state, "channel");
+      mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+      mkdirSync(paths.worktrees);
+      const model = { provider: "openai", modelId: SOL_ROUTE.model };
+      const settings = HostConfigSchema.parse({
+        home: paths.state,
+        lanes: paths.worktrees,
+        user: "person",
+        port: 0,
+        environment: {},
+        worker: [process.execPath],
+        model,
+      });
+      Object.assign(config, settings);
+      Reflect.deleteProperty(config, "lanes");
+      const worker = { sessionId: "channel", config: settings, stateDirectory };
+      const token = tokenCommand(scratch, "lease");
+      let lookups = 0;
+      let calls = 0;
+      const setup = codingWorkerSetup({ paths }, SOL_ROUTE, {
+        auth: { tokenCommand: token.path },
+        fetch: Object.assign(
+          async (input: RequestInfo | URL) => {
+            if (
+              new URL(
+                input instanceof Request ? input.url : String(input),
+              ).pathname.endsWith("/models")
+            ) {
+              lookups++;
+              started.resolve();
+              return catalog.promise;
+            }
+            calls++;
+            return sse([
+              created("first"),
+              ...messageItem(0, "answer", "final_answer", "first reply"),
+              completed("first"),
+            ]);
+          },
+          { preconnect: () => {} },
+        ),
+      });
+      release = await setup.openSource?.(worker);
+      if (!setup.prepareModels) throw new Error("Missing model preparation");
+      configureRuntime({
+        worker: { models: setup.models, prepareModels: setup.prepareModels },
+      });
+      const native = createModels();
+      channel = await openChannel(
+        {
+          id: "channel",
+          name: "channel",
+          owner: "person",
+          project: scratch,
+          model,
+          storage: new MemoryStorage(),
+          models: native,
+          env: (cwd) => new NodeExecutionEnv({ cwd }),
+          directory: {
+            self: { id: "channel", name: "channel" },
+            list: async () => [],
+            deliver: async () => {},
+          },
+          log: () => {},
         },
-        { preconnect: () => {} },
-      ),
-    });
-    const openChat = async (sessionId: string) => {
-      const stateDirectory = join(paths.state, sessionId);
-      mkdirSync(stateDirectory, { mode: 0o700 });
-      const worker = { sessionId, config, stateDirectory };
-      const release = await setup.openSource?.(worker);
-      if (release) releaseSources.push(release);
-      const models = await setup.models(worker, createModels());
-      return models.getModel("openai", SOL_ROUTE.model);
-    };
-    expect(await openChat("first")).toMatchObject({
-      contextWindow: 475_000,
-      maxTokens: 128_000,
-    });
-    expect(requests).toBe(1);
+        stateDirectory,
+      );
+      expect(lookups).toBe(0);
+      const models = await setup.models(worker, native);
+      expect(models.getModel("openai", SOL_ROUTE.model)).toMatchObject({
+        contextWindow: 475_000,
+        maxTokens: 128_000,
+      });
 
-    const recovered = { contextWindow: 80_000, maxTokens: 12_000 };
-    const retry = await Promise.all([openChat("second"), openChat("third")]);
-    expect(retry).toMatchObject([recovered, recovered]);
-    expect(requests).toBe(2);
-    expect(await openChat("fourth")).toMatchObject(recovered);
-    expect(requests).toBe(2);
-  } finally {
-    for (const release of releaseSources) release();
-    rmSync(scratch, { recursive: true, force: true });
-  }
-});
+      const send = () => {};
+      const ask = channel.handle(
+        { op: "ask", author: "person", text: "First" },
+        send,
+      );
+      await started.promise;
+      const events: string[] = [];
+      const watch = await channel.handle({ op: "watch" }, (event) =>
+        events.push(event.kind),
+      );
+      expect(events).toContain("live");
+      expect(await channel.info()).toMatchObject({ name: "channel" });
+      expect(calls).toBe(0);
+
+      catalog.resolve(
+        available
+          ? Response.json({
+              models: [
+                {
+                  slug: SOL_ROUTE.model,
+                  context_window: 100_000,
+                  effective_context_window_percent: 80,
+                  max_output_tokens: 12_000,
+                },
+              ],
+            })
+          : new Response(null, { status: 503 }),
+      );
+      const turn = await ask;
+      if (
+        !turn ||
+        typeof turn !== "object" ||
+        !("submission" in turn) ||
+        typeof turn.submission !== "number"
+      )
+        throw new Error("No submission was accepted");
+      expect(
+        await channel.handle({ op: "wait", submission: turn.submission }, send),
+      ).toBe("done");
+      const window = available ? 80_000 : 475_000;
+      expect((await channel.info()).chats[0]?.context?.window).toBe(window);
+      expect(models.getModel("openai", SOL_ROUTE.model)?.maxTokens).toBe(
+        available ? 12_000 : 128_000,
+      );
+      await setup.prepareModels?.(worker);
+      expect([lookups, calls]).toEqual([1, 1]);
+      if (
+        watch &&
+        typeof watch === "object" &&
+        "stop" in watch &&
+        typeof watch.stop === "function"
+      )
+        await watch.stop();
+    } finally {
+      catalog.resolve(new Response(null, { status: 503 }));
+      await channel?.close();
+      release?.();
+      configureRuntime(
+        Object.defineProperty({}, "worker", {
+          value: previousHooks.worker,
+          enumerable: true,
+        }),
+      );
+      Reflect.deleteProperty(config, "model");
+      Object.assign(config, previous);
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  },
+  15_000,
+);
 
 test("another OpenAI model stays executable and reports its native capture gap", async () => {
   const native = createModels();

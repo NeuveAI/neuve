@@ -272,7 +272,7 @@ test("production sources deliver a worker chat through a fake Claude executable 
   writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
   process.env.HOME = at.home;
   process.env.PATH = `${bin}:${previousPath}`;
-  const { codingWorkerSetup } = await import("../src/workspace-cli.ts");
+  const { codingWorkerSetup } = await import("../src/workspace-worker.ts");
   const { openChannel, openWorkerStorage } =
     await import("@ace/host/worker-runtime");
   const fake = fakeClaude(at.root);
@@ -534,7 +534,7 @@ test("a Claude review route opens coding sessions on the built-in account's Clau
   writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
   process.env.HOME = at.home;
   process.env.PATH = `${bin}:${previousPath}`;
-  const { codingWorkerSetup } = await import("../src/workspace-cli.ts");
+  const { codingWorkerSetup } = await import("../src/workspace-worker.ts");
   const { openChannel, openWorkerStorage } =
     await import("@ace/host/worker-runtime");
   const route = settingsRoute(
@@ -1066,7 +1066,7 @@ test("the coding worker answers after its capture journal cannot reopen", async 
   const worker: WorkerContext = { sessionId: "worker", config, stateDirectory };
   const capture = join(stateDirectory, "capture");
   mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
-  const { codingWorkerSetup } = await import("../src/workspace-cli.ts");
+  const { codingWorkerSetup } = await import("../src/workspace-worker.ts");
   const { path } = tokenCommand(at.root, "lease");
   const setup = () =>
     codingWorkerSetup({ paths }, SOL_ROUTE, {
@@ -1097,6 +1097,7 @@ test("the coding worker answers after its capture journal cannot reopen", async 
     });
     try {
       const models = await restarted.models(worker, createModels());
+      await restarted.prepareModels?.(worker);
       const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
       if (!model) throw new Error("Expected coding route model");
       const answer = await models.complete(model, {

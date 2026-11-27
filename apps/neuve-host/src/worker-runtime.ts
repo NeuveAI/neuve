@@ -64,6 +64,7 @@ export type WorkerSetup = {
 	review?(context: WorkerContext): Review | Promise<Review>;
 	query?(context: WorkerContext, request: ScopeQuery): Promise<ScopeResult>;
 	models(context: WorkerContext, defaults: Models): Models | Promise<Models>;
+	prepareModels?(context: WorkerContext): Promise<void>;
 	planning?(context: WorkerContext): Planning | undefined | Promise<Planning | undefined>;
 	/** What a chat without a model runs when the host configures none. */
 	defaultModel?(context: WorkerContext): Promise<ModelRef>;
@@ -229,6 +230,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			...(setup.nonTurnModels ? {nonTurnModels: (kind: "caption" | "recap", chat: ConversationId) => setup.nonTurnModels!(worker, kind, chat, options.models)} : {}),
 		};
 		const channel = await Channel.open({...planOptions, log: privateLog.log, storage, models, extension, routeModel: setup.routeModel,
+			...(setup.prepareModels ? { prepareModels: setup.prepareModels.bind(setup, worker) } : {}),
 			...(setup.accountStatuses ? { accountStatuses: setup.accountStatuses } : {}),
 			...(additional?.ownTools ? { ownTools: additional.ownTools } : {}),
 			...(setup.review ? {
@@ -434,10 +436,6 @@ export async function extensionRequest(channel: Channel, request: unknown, archi
 export async function workerStorage(id: string, stateDirectory: string, nativePath: string): Promise<Storage> {
 	const setup = runtimeHooks().worker;
 	return setup ? openWorkerStorage(setup, {sessionId: id, config, stateDirectory}, () => openNodeSqliteStorage(nativePath), nativePath) : openNodeSqliteStorage(nativePath);
-}
-export async function workerModels(id: string, stateDirectory: string, fallback: () => Models): Promise<Models> {
-	const setup = runtimeHooks().worker;
-	return setup ? setup.models({sessionId: id, config, stateDirectory}, fallback()) : fallback();
 }
 
 export async function bindWorkerCatalog(): Promise<void> {

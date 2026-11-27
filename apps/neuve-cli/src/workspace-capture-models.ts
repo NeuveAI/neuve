@@ -1,4 +1,4 @@
-import type { Models } from "@earendil-works/pi-ai";
+import type { Models, MutableModels } from "@earendil-works/pi-ai";
 import {
   createRouteModels,
   type RouteModelsOptions,
@@ -14,6 +14,7 @@ import { workspaceModels } from "./workspace-models.ts";
 export function workspaceCaptureModels(
   native: Models,
   options: RouteModelsOptions,
+  configured?: MutableModels,
 ): Models {
   const captured = captureNativeModels(native, {
     capture: options.capture,
@@ -28,5 +29,9 @@ export function workspaceCaptureModels(
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
   if (options.route.provider === "claude") return captured;
-  return workspaceModels(captured, createRouteModels(options), options.route);
+  return workspaceModels(
+    captured,
+    createRouteModels(options, configured),
+    options.route,
+  );
 }

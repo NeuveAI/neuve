@@ -31,7 +31,8 @@ export type Tool = {
 	result?: {
 		error: boolean;
 		text: string;
-		images?: Image[];
+		/** Each image's bytes stay on the host, read from its route by the chat that stored them. */
+		images?: (Pick<Image, "mimeType"> & { chat: ChatId })[];
 		interrupted?: boolean;
 		handoff?: boolean;
 	};
@@ -312,7 +313,9 @@ export function apply(state: Transcript, event: Event): Transcript {
 										result: {
 											error: event.error,
 											text: event.text,
-											...(event.images ? { images: event.images } : {}),
+											...(event.images
+												? { images: event.images.map((image) => ({ ...image, chat: event.chat })) }
+												: {}),
 											...(event.interrupted ? { interrupted: true } : {}),
 											...(event.handoff ? { handoff: true } : {}),
 										},

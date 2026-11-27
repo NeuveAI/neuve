@@ -172,6 +172,8 @@ export type Options = {
 	resume?: boolean;
 	storage: Storage;
 	models: Models;
+	/** Resolve model limits before work starts. History and model display use the current limits. */
+	prepareModels?(): Promise<void>;
 	ownTools?(provider: string): boolean;
 	env(cwd: string, chat?: ChatId): ExecutionEnv;
 	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
@@ -261,6 +263,7 @@ export class Channel {
 	#publishedBusy?: boolean;
 	#unsubscribe?: () => void;
 	#unbind?: () => void;
+	#resuming?: Promise<void>;
 	#closed?: Promise<void>;
 	#feed?: { close(): Promise<void>; pending(): boolean };
 	#backgroundTasks = new Set<Promise<void>>();
@@ -623,15 +626,28 @@ export class Channel {
 			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
-		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
-		if (options.resume !== false) {
-			await channel.#builds.finishStops();
-			await channel.#builds.reconcileRuns();
-			await channel.#builds.recoverMentionEntries();
-			await channel.#placeResumingChats();
-			harness.resume();
-			void channel.#builds.resume();
+		const prepareModels = options.resume !== false && options.prepareModels;
+		const deferred = prepareModels && await channel.#hasRecoverableWork();
+		const feed = Promise.resolve().then(async () => {
+			channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
+		});
+		if (prepareModels && deferred) {
+			const resuming = feed.then(() => prepareModels.call(options)).then(() => {
+				if (!channel.#closing.signal.aborted) return channel.#resumeWork();
+			});
+			channel.#resuming = resuming;
+			channel.#backgroundTasks.add(resuming);
+			void resuming.then(() => {
+				channel.#resuming = undefined;
+			}, error => {
+				void channel.close().catch(cleanup => log("error", "channel.close.failed", failure(cleanup)));
+				log("error", "channel.resume.failed", failure(error));
+			}).finally(() => {
+				channel.#backgroundTasks.delete(resuming);
+			});
 		}
+		await feed;
+		if (options.resume !== false && !deferred) await channel.#resumeWork();
 		log("info", "channel.open", { name: value.name, project: options.project });
 		return channel;
 		} catch (error) {
@@ -673,6 +689,9 @@ export class Channel {
 		}
 	}
 
+	/** Background recovery, which the worker observes to retire a channel that failed to open. */
+	get recovered(): Promise<void> | undefined { return this.#resuming; }
+
 	/** Runs a client request, logging its outcome with the caller's `trace` id. */
 	async handle(request: Request, send: Send, trace?: string): Promise<unknown> {
 		if (this.#closed) throw new Error("The channel is shutting down");
@@ -686,6 +705,10 @@ export class Channel {
 			...("model" in request && request.model ? { model: request.model } : {}),
 		};
 		try {
+			if (this.#resuming && request.op !== "watch" && request.op !== "info" && request.op !== "models" && request.op !== "tool-image") {
+				await this.#resuming;
+				if (this.#closed) throw new Error("The channel is shutting down");
+			}
 			const value = await this.#handle(request, send);
 			// Watches and polls are constant traffic; their failures still log below.
 			const level = request.op === "watch" || request.op === "info" || request.op === "models"
@@ -826,6 +849,8 @@ export class Channel {
 				return this.#rename(request);
 			case "watch":
 				return this.#watch(request, send);
+			case "tool-image":
+				return this.#toolImage(request);
 			case "typing": {
 				this.#author(request.author);
 				const { id } = await this.#conversation(request.chat);
@@ -1125,6 +1150,8 @@ export class Channel {
 
 	/** `author`'s kill records a Stop in each chat it ended, so their next runs know. */
 	async kill(author?: string): Promise<void> {
+		await this.#resuming;
+		if (this.#closed) throw new Error("The channel is shutting down");
 		const { chats } = await this.info();
 		const busy = chats.filter((chat) => chat.busy);
 		this.#log("warn", "channel.kill", { chats: busy.map((c) => c.id) });
@@ -1256,6 +1283,7 @@ export class Channel {
 		// The chat's next run reads this message, so it must fit the model the chat has now.
 		const stored = await this.#harness.snapshot(PendingModelDoc, conversation.id, context);
 		const model = stored?.pending?.model ?? (await conversation.agent(context)).model;
+		if (model && request.files?.length) await this.#options.prepareModels?.();
 		const selected = model && this.#options.models.getModel(model.provider, model.modelId);
 		if (selected) room.checkContext(selected, request);
 		const entry = room.draft(request.author, request.text, Date.now(), request);
@@ -1406,9 +1434,12 @@ export class Channel {
 
 	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context): Promise<Submission>;
 	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit: () => boolean): Promise<Submission | undefined>;
-	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
+	async submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
+		await this.#resuming;
+		if (this.#closed) throw new Error("The channel is shutting down");
 		return this.#admitted(handle.id, async () => {
 			if (canSubmit?.() === false) return;
+			await this.#options.prepareModels?.();
 			await this.#modelSettings.check(this.#harness, handle.id, {}, callContext);
 			if (canSubmit?.() === false) return;
 			await this.#placeChatLane(handle.id, callContext);
@@ -1579,6 +1610,25 @@ export class Channel {
 		for (const chat of chats) await this.#placeChatLane(chat, context);
 	}
 
+	async #hasRecoverableWork(): Promise<boolean> {
+		return this.#harness.commit(async tx => {
+			for (const status of ["pending", "running", "waiting"] as const) {
+				if ((await tx.scanTasks({ status, abortRequested: false }, 1)).items.length) return true;
+			}
+			return (await this.#options.storage.scanSubmissions({ status: "queued" }, 1, undefined, context)).items.length > 0;
+		}, context);
+	}
+
+	async #resumeWork(): Promise<void> {
+		await this.#builds.finishStops();
+		await this.#builds.reconcileRuns();
+		await this.#builds.recoverMentionEntries();
+		await this.#placeResumingChats();
+		if (this.#closing.signal.aborted) return;
+		this.#harness.resume();
+		void this.#builds.resume();
+	}
+
 	async #invoke(
 		conversation: Conversation,
 		{ bound, mode, attended, input, settled, selection, ownerText }: {
@@ -1596,6 +1646,7 @@ export class Channel {
 		let modeChange: Awaited<ReturnType<typeof setChatMode>>;
 		let submission: SubmissionId;
 		try {
+			await this.#options.prepareModels?.();
 			await this.#modelSettings.check(this.#harness, chat, selection ?? {}, callContext);
 			if (mode !== undefined) this.#changingModes.set(chat, settled);
 			if (mode !== undefined || bound) {
@@ -1819,6 +1870,7 @@ export class Channel {
 		const { models } = this.#options;
 		const signal = this.#closing.signal;
 		const pickFor = async (kind: "caption" | "recap") => {
+			await this.#options.prepareModels?.();
 			const captured = this.#options.extension?.nonTurnModels?.(kind, id);
 			if (captured) {
 				const model = await pick(captured);
@@ -1893,6 +1945,23 @@ export class Channel {
 				this.#listeners.delete(listener);
 			}
 		}
+	}
+
+	/** One stored tool-result image, read when a person opens its tool group. */
+	async #toolImage({ chat, call, index }: Extract<Request, { op: "tool-image" }>) {
+		const conversation = await this.#conversation(chat);
+		let cursor: Cursor | undefined;
+		do {
+			const page = await conversation.entries({}, 16, cursor, context);
+			for (const entry of page.items) {
+				const message = entry.model?.[0];
+				if (entry.conversationId !== chat || message?.role !== "toolResult" || message.toolCallId !== call) continue;
+				const image = room.images(message)?.[index];
+				if (image) return image;
+			}
+			cursor = page.next;
+		} while (cursor !== undefined);
+		throw new Error("No such tool image");
 	}
 
 	/** Replays the chat's active transcript, then streams. Resolves when the stream ends. */
@@ -2305,14 +2374,14 @@ function events(entry: EntryRecord): Event[] {
 		// pi reports this only when recovery finds an unsafe call that a previous worker started.
 		const interrupted = codes.includes("interrupted");
 		const handoff = codes.includes(HANDOFF);
-		const images = room.images(message);
+		const images = message.content.flatMap(block => block.type === "image" ? [{ mimeType: block.mimeType }] : []);
 		return [{
 			kind: "result",
 			chat,
 			call: message.toolCallId,
 			error: message.isError,
 			text: room.text(message),
-			...(images ? { images } : {}),
+			...(images.length ? { images } : {}),
 			...(stopped ? { stopped: true } : {}),
 			...(interrupted ? { interrupted: true } : {}),
 			...(handoff ? { handoff: true } : {}),

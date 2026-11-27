@@ -79,6 +79,7 @@ import {
 import { resume, shutdown } from "./shutdown";
 import { deploy as deployTeam } from "./team";
 import * as terminals from "./terminals";
+import { isToolImagePath, toolImageResponse } from "./tool-images";
 import * as web from "./web";
 import * as windows from "./windows";
 import * as workspace from "./workspace";
@@ -563,6 +564,84 @@ function authored(request: ChannelRequest, user: string): ChannelRequest {
 	return request;
 }
 
+async function channelRequest(
+	client: Client,
+	request: Extract<HostRequest, { op: "channel" }>,
+	watch: Watch | undefined,
+	trace: string,
+): Promise<unknown> {
+	if (catalog.owns(request.channel)) {
+		if (!await mayOpen(client, request.channel)) {
+			throw new Error("You don't have access to this channel's project");
+		}
+		if (request.request.op === "kill") {
+			if (client.user !== catalog.user) throw new Error("Only the channel's owner can kill it");
+			terminals.closeChannel(request.channel);
+		}
+		const forwarded = authored(request.request, client.user);
+		const target = await connection(client, request.channel);
+		return target.request(forwarded, watch, trace);
+	}
+	// A hosted channel outlives its host's reachability, so connect to its service directly rather than
+	// through the host. A reachable host's listing is current; otherwise the directory or that host's
+	// last listing says where it runs.
+	const known = !client.peer
+		&& (peers.listings().find((value) => value.id === request.channel)
+			|| [...directory.read().channels, ...peers.unreachable()].find((value) =>
+				value.id === request.channel && value.hosted
+			));
+	const hosted = known && known.hosted ? known : undefined;
+	if (hosted) {
+		if (!(await visible([hosted])).length) {
+			throw new Error("You don't have access to this channel's project");
+		}
+		if (request.request.op === "kill" && client.user !== hosted.owner) {
+			throw new Error("Only the channel's owner can kill it");
+		}
+		const forwarded = authored(request.request, client.user);
+		const target = await connection(client, request.channel, hosted.hosted);
+		return target.request(forwarded, watch, trace);
+	}
+	const machine = !client.peer && peers.find(request.channel);
+	if (!machine) throw new Error("No reachable host runs that channel");
+	const listing = peers.listings().find((value) => value.id === request.channel)!;
+	if (!(await visible([listing])).length) {
+		throw new Error("You don't have access to this channel's project");
+	}
+	const target = await remote(client, machine.name);
+	return target.channel(request.channel, request.request, watch, trace);
+}
+
+function releaseClient(client: Client) {
+	for (const open of client.channels.values()) {
+		open.then((connection) => connection.close(), () => {});
+	}
+	for (const remote of client.remotes.values()) remote.close();
+}
+
+async function serveToolImage(
+	request: Request,
+	pathname: string,
+	client: Client,
+	corsOrigin?: string,
+): Promise<Response> {
+	if (closing || updating) return new Response(null, { status: 503 });
+	const trace = crypto.randomUUID().slice(0, 8);
+	const serving = toolImageResponse(
+		request,
+		pathname,
+		(channel, request) => channelRequest(client, { op: "channel", channel, request }, undefined, trace),
+		corsOrigin,
+	);
+	pending.add(serving);
+	try {
+		return await serving;
+	} finally {
+		pending.delete(serving);
+		releaseClient(client);
+	}
+}
+
 async function handle(
 	socket: ServerWebSocket<Client>,
 	request: HostRequest,
@@ -922,46 +1001,7 @@ async function handle(
 					},
 				}
 				: undefined;
-			if (catalog.owns(request.channel)) {
-				if (!await mayOpen(client, request.channel)) {
-					throw new Error("You don't have access to this channel's project");
-				}
-				if (request.request.op === "kill") {
-					if (client.user !== catalog.user) throw new Error("Only the channel's owner can kill it");
-					terminals.closeChannel(request.channel);
-				}
-				const forwarded = authored(request.request, client.user);
-				const target = await connection(client, request.channel);
-				return target.request(forwarded, watch, trace);
-			}
-			// A hosted channel outlives its host's reachability, so connect to its service directly rather than
-			// through the host. A reachable host's listing is current; otherwise the directory or that host's
-			// last listing says where it runs.
-			const known = !client.peer
-				&& (peers.listings().find((value) => value.id === request.channel)
-					|| [...directory.read().channels, ...peers.unreachable()].find((value) =>
-						value.id === request.channel && value.hosted
-					));
-			const hosted = known && known.hosted ? known : undefined;
-			if (hosted) {
-				if (!(await visible([hosted])).length) {
-					throw new Error("You don't have access to this channel's project");
-				}
-				if (request.request.op === "kill" && client.user !== hosted.owner) {
-					throw new Error("Only the channel's owner can kill it");
-				}
-				const forwarded = authored(request.request, client.user);
-				const target = await connection(client, request.channel, hosted.hosted);
-				return target.request(forwarded, watch, trace);
-			}
-			const machine = !client.peer && peers.find(request.channel);
-			if (!machine) throw new Error("No reachable host runs that channel");
-			const listing = peers.listings().find((value) => value.id === request.channel)!;
-			if (!(await visible([listing])).length) {
-				throw new Error("You don't have access to this channel's project");
-			}
-			const target = await remote(client, machine.name);
-			return target.channel(request.channel, request.request, watch, trace);
+			return channelRequest(client, request, watch, trace);
 		}
 		case "release": {
 			const open = client.channels.get(request.channel);
@@ -978,8 +1018,7 @@ async function handle(
 function websocket(): Bun.WebSocketHandler<Client> {
 	return {
 		// Past the limit Bun drops frames silently, and a watch that loses one, such as a run's end,
-		// stays wrong; closing makes the client reconnect and re-watch. Screenshot-heavy chats replay
-		// tens of megabytes to a renderer that reads slowly while it draws them.
+		// stays wrong; closing makes the client reconnect and re-watch.
 		backpressureLimit: 128 * 1024 * 1024,
 		closeOnBackpressureLimit: true,
 		open(socket) {
@@ -1053,10 +1092,7 @@ function websocket(): Bun.WebSocketHandler<Client> {
 			if (socket.data.peer) asks.drop(socket, asksChanged);
 			if (!socket.data.peer) lobbyChanged();
 			log("info", "gateway.close", { user: socket.data.user, peer: socket.data.peer, code });
-			for (const open of socket.data.channels.values()) {
-				open.then((connection) => connection.close(), () => {});
-			}
-			for (const remote of socket.data.remotes.values()) remote.close();
+			releaseClient(socket.data);
 			for (const detach of socket.data.terminals.values()) detach();
 		},
 	};
@@ -1147,9 +1183,11 @@ function owner(port: number): Server<Client> {
 					headers: challenge ? { "x-ace-proof": access.proof(info, challenge) } : undefined,
 				});
 			}
-			if (url.pathname === "/ws") {
+			const image = isToolImagePath(url.pathname);
+			if (url.pathname === "/ws" || image) {
 				// The body names this build's command, so a signed-out page can say what to run.
 				if (!access.authorizes(request)) return new Response(config.command, { status: 401 });
+				if (image) return serveToolImage(request, url.pathname, client(catalog.user, false, true));
 				const protocols = request.headers.get("sec-websocket-protocol")?.split(",").map((value) =>
 					value.trim()
 				);
@@ -1183,16 +1221,17 @@ function team(machine: Machine, listener: web.Listener, tls?: Bun.TLSOptions): S
 			const url = new URL(request.url);
 			const origin = request.headers.get("origin");
 			const review = url.pathname === "/review" || url.pathname.startsWith("/review/");
+			const image = isToolImagePath(url.pathname);
 			if (url.pathname.startsWith("/directory/") && origin === null) {
 				return directoryRequest(url.pathname.slice("/directory".length), request, server);
 			}
-			if (!review && url.pathname !== "/ws") {
+			if (!review && !image && url.pathname !== "/ws") {
 				if (request.method !== "GET" || !hosts.has(request.headers.get("host") ?? "")) {
 					return new Response("Not found", { status: 404 });
 				}
 				return serveApp(url);
 			}
-			if (review && !hosts.has(request.headers.get("host") ?? "")) {
+			if ((review || image) && !hosts.has(request.headers.get("host") ?? "")) {
 				return new Response("Forbidden", { status: 403 });
 			}
 			// A page asks over plain HTTP, without an Origin, why its socket was refused (host.ts).
@@ -1212,7 +1251,7 @@ function team(machine: Machine, listener: web.Listener, tls?: Bun.TLSOptions): S
 				log("warn", "gateway.whois", { address: ip.address, ...failure(error) });
 				return new Response("Forbidden", { status: 403 });
 			}
-			const browser = review || origin !== null || !socket;
+			const browser = review || image || origin !== null || !socket;
 			if (browser && user !== catalog.user) {
 				log("warn", "gateway.browser.refused", { user, origin });
 				return new Response(`This is ${catalog.user}'s host. Open Neuve from your own host.`, {
@@ -1224,6 +1263,9 @@ function team(machine: Machine, listener: web.Listener, tls?: Bun.TLSOptions): S
 				const response = await web.reviewRequest(request);
 				if (response?.headers.get("content-type")?.split(";")[0]?.trim() === "text/event-stream") server.timeout(request, 0);
 				return response;
+			}
+			if (image) {
+				return serveToolImage(request, url.pathname, client(user, false, false, from), origin ?? undefined);
 			}
 			return server.upgrade(request, { data: client(user, !browser, false, from) })
 				? undefined
