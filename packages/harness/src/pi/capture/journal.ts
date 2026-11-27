@@ -546,23 +546,27 @@ const captureLossRecorder = (
     recordLoss(loss, journalFull, privateRegistrationFailed) {
       full ||= journalFull;
       let persisted = false;
+      let credentialAlreadyReserved = false;
       try {
         if (privateRegistrationFailed) {
-          recordReservedCaptureLoss(
+          persisted = recordReservedCaptureLoss(
             reserve,
             loss,
             "credential",
             reserveIsNamed?.() === true,
           );
-        } else {
-          try {
-            recordOrdinaryLoss(loss);
-          } catch (error) {
-            if (reserveIsNamed === undefined) throw error;
-            recordReservedCaptureLoss(reserve, loss, "ordinary");
-          }
+          if (persisted) return;
+          credentialAlreadyReserved = true;
         }
-        persisted = true;
+        try {
+          recordOrdinaryLoss(loss);
+          persisted = true;
+        } catch (error) {
+          if (reserveIsNamed === undefined) throw error;
+          persisted = recordReservedCaptureLoss(reserve, loss, "ordinary");
+        }
+      } catch (error) {
+        if (!credentialAlreadyReserved) throw error;
       } finally {
         options.onCaptureLoss?.(loss, persisted);
       }

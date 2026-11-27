@@ -13,6 +13,7 @@ import {
   CaptureFailed,
   CaptureLoss,
   captureLossCredential,
+  captureLossId,
   CREDENTIAL_LOSS_RESERVE_BYTES,
   type JournalLine,
 } from "./types.ts";
@@ -162,8 +163,10 @@ export const recordReservedCaptureLoss = (
         throw new Error("credential registration loss reserve is damaged");
       const { ordinary, credentials } = decodeReserve(readFileSync(fd));
       const record = CaptureLoss.parse(loss);
+      let saved: boolean;
       if (destination === "ordinary") {
         const first = ordinary?.loss ?? record;
+        saved = captureLossId(first) === captureLossId(record);
         // A later registered loss can require a whole-source scan even when the first loss did not.
         const newCoverage =
           captureLossCredential(first) === undefined &&
@@ -182,7 +185,8 @@ export const recordReservedCaptureLoss = (
       } else {
         if (record.event !== "credential.registration")
           throw new Error("credential slot requires a registration loss");
-        if (!credentials.has(record.epochId ?? record.callId)) {
+        saved = !credentials.has(record.epochId ?? record.callId);
+        if (saved) {
           const offset = (credentials.size + 1) * slotBytes;
           if (offset === CREDENTIAL_LOSS_RESERVE_BYTES)
             throw new CaptureFailed({
@@ -195,6 +199,7 @@ export const recordReservedCaptureLoss = (
         }
       }
       fsyncSync(fd);
+      return saved;
     } finally {
       closeSync(fd);
     }

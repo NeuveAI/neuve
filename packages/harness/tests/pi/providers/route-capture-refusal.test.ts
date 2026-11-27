@@ -374,7 +374,7 @@ for (const scenario of [
           persisted: hasReserve,
         }),
         ...losses.map((loss) =>
-          expect.objectContaining({ ...loss, persisted: hasReserve }),
+          expect.objectContaining({ ...loss, persisted: writable }),
         ),
       ]);
       const lossFile = join(captureDirectory, CAPTURE_LOSS_FILE);
@@ -385,7 +385,7 @@ for (const scenario of [
         expect(decodeCaptureLosses(await readFile(lossFile))).toEqual(
           scenario === "registered"
             ? [expectedOpen, ...expected]
-            : [expectedOpen],
+            : [expectedOpen, ...expected.slice(1)],
         );
         expect(
           decodeCredentialLossReserve(await readFile(reserve), true),
@@ -1115,6 +1115,8 @@ for (const variant of [
   "full-native",
   "ordinary-saturation",
   "same-epoch",
+  "same-epoch-recovered",
+  "same-epoch-marker",
 ] as const) {
   test(`a channel with a lost credential registration (${variant})`, async () => {
     const directory = await mkdtemp(join(tmpdir(), "neuve-registration-loss-"));
@@ -1149,10 +1151,12 @@ for (const variant of [
         pricing: "subscription",
       });
       const journalWrite = variant === "journal";
-      const clean = variant === "clean" || journalWrite;
+      const recovers =
+        variant === "same-epoch-recovered" || variant === "same-epoch-marker";
+      const clean = variant === "clean" || journalWrite || recovers;
       const full = variant === "full" || variant === "full-native";
       const ordinarySaturation = variant === "ordinary-saturation";
-      const sameEpoch = variant === "same-epoch";
+      const sameEpoch = variant === "same-epoch" || recovers;
       const canIdentify =
         variant !== "unknown" && !ordinarySaturation && !sameEpoch && !full;
       const reserve = join(captureDirectory, CREDENTIAL_LOSS_RESERVE_FILE);
@@ -1208,6 +1212,7 @@ for (const variant of [
         function (this: Database, ...args) {
           if (
             !journalWrite &&
+            (!recovers || sent < 2) &&
             args[0] ===
               (sameEpoch && writes >= 12 ? "BEGIN IMMEDIATE" : "COMMIT") &&
             this.filename === authorityPath
@@ -1235,9 +1240,11 @@ for (const variant of [
       const grow = spyOn(fs, "writeFileSync").mockImplementation(
         (path, data, options) => {
           if (
-            typeof path === "number" ||
-            (typeof path === "string" &&
-              path.startsWith(captureDirectory + "/"))
+            variant !== "same-epoch-recovered" &&
+            !(variant === "same-epoch-marker" && sent >= 2) &&
+            (typeof path === "number" ||
+              (typeof path === "string" &&
+                path.startsWith(captureDirectory + "/")))
           )
             throw diskFull();
           writeFileSync(path, data, options);
@@ -1267,7 +1274,7 @@ for (const variant of [
         reason: "disk full" as const,
         at: new Date().toISOString(),
       };
-      const callCount = sameEpoch ? 12 : 1;
+      const callCount = recovers ? 3 : sameEpoch ? 12 : 1;
       try {
         if (ordinarySaturation) {
           journal.capture.recordLoss?.(ordinaryLoss, false);
@@ -1309,21 +1316,33 @@ for (const variant of [
           return;
         }
         for (let index = 0; index < callCount; index++) {
-          const result = await models.complete(model, prompt);
+          const markerFault =
+            variant === "same-epoch" && index === 1
+              ? spyOn(fs, "writeSync").mockImplementation(() => {
+                  throw diskFull();
+                })
+              : undefined;
+          const result = await models
+            .complete(model, prompt)
+            .finally(() => markerFault?.mockRestore());
           expect(routeFailureOf(result)).toBeUndefined();
           expect(result.content).toContainEqual(
             expect.objectContaining({ type: "text", text: "Done." }),
           );
           expect(result.stopReason).toBe("stop");
         }
-        expect([writes, sent]).toEqual([2 * callCount, callCount]);
+        expect([writes, sent]).toEqual([
+          recovers ? 4 : 2 * callCount,
+          callCount,
+        ]);
       } finally {
         grow.mockRestore();
         append.mockRestore();
         fault.mockRestore();
       }
       await log.flush?.();
-      const call = log.read().find(({ type }) => type === "model.call");
+      const calls = log.read().filter(({ type }) => type === "model.call");
+      const call = calls[0];
       expect(call?.failureKind).toBeUndefined();
       expect(typeof call?.sentAt).toBe("string");
       const registrationLogs = log
@@ -1340,31 +1359,48 @@ for (const variant of [
         reason: "disk full",
         persisted: true,
       });
-      expect(fs.existsSync(lossFile)).toBe(false);
+      expect(fs.existsSync(lossFile)).toBe(recovers);
       const losses = readCaptureLosses(captureDirectory);
-      expect(losses).toEqual([
-        ...(ordinarySaturation
-          ? [{ ...ordinaryLoss, ordinaryOverflow: {} }]
-          : []),
-        expect.objectContaining({
-          callId: String(call?.call),
-          event: "credential.registration",
-          kind: "io",
-          reason: "disk full",
-          at: expect.any(String),
-        }),
-      ]);
+      const firstLoss = expect.objectContaining({
+        callId: String(call?.call),
+        event: "credential.registration",
+        kind: "io",
+        reason: "disk full",
+        at: expect.any(String),
+      });
+      if (!recovers)
+        expect(losses).toEqual([
+          ...(ordinarySaturation
+            ? [{ ...ordinaryLoss, ordinaryOverflow: {} }]
+            : []),
+          ...(sameEpoch
+            ? [
+                expect.objectContaining({
+                  callId: String(calls[2]?.call),
+                  event: "credential.registration",
+                  ordinaryOverflow: {},
+                }),
+              ]
+            : []),
+          firstLoss,
+        ]);
       if (sameEpoch) {
-        const epoch = losses[0];
+        const credentialSlots = decodeCredentialLossReserve(
+          await readFile(reserve),
+          true,
+        ).filter(({ ordinaryOverflow }) => ordinaryOverflow === undefined);
+        expect(credentialSlots).toEqual([firstLoss]);
+        const epoch = credentialSlots[0];
         expect(epoch).toMatchObject({ epochId: expect.any(String) });
         expect(registrationLogs).toEqual(
-          Array.from({ length: callCount }, () =>
+          calls.map(({ call }, index) =>
             expect.objectContaining({
+              callId: String(call),
               epochId:
                 epoch?.event === "credential.registration"
                   ? epoch.epochId
                   : undefined,
-              persisted: true,
+              persisted: recovers || index === 0 || index === 2,
             }),
           ),
         );
@@ -1444,7 +1480,10 @@ for (const variant of [
             size: 4096,
           }),
         );
-      if (clean || variant === "exposed" || variant === "unknown")
+      if (
+        !recovers &&
+        (clean || variant === "exposed" || variant === "unknown")
+      )
         expect(manifest.counts.calls).toBe(2);
       const output = { capture: raw, root, retention: { policy: "synthetic" } };
       const expectHeld = async () => {
@@ -1487,9 +1526,18 @@ for (const variant of [
         expect(
           dump.unjoined.map(({ callId, end }) => [callId, end?.outcome]),
         ).toEqual([["later-call", "completed"]]);
+        if (recovers) {
+          const gap = dump.run.gaps.find(
+            ({ code }) => code === "journal-failed",
+          );
+          for (const { call } of calls)
+            expect(gap?.detail).toContain(
+              `call ${call} lost capture at credential.registration`,
+            );
+        }
         expect(dump.run.gaps).toContainEqual({
           code: "journal-failed",
-          count: 1,
+          count: callCount,
           kind: "capture",
           detail: expect.stringContaining(
             `call ${call?.call} lost capture at credential.registration`,
