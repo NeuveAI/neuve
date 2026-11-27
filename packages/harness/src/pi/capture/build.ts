@@ -1,4 +1,7 @@
-import type { AuthorityCloseFailure } from "./authority-close.ts";
+import {
+  AUTHORITY_UNAVAILABLE,
+  type AuthorityCloseFailure,
+} from "./authority-close.ts";
 import { scanFailureKind } from "./scan-failure.ts";
 import { measuredCloseInventory, nativeRecordCount } from "./inventory.ts";
 import { inspectionBudgetRefusal } from "./inspection-refusal.ts";
@@ -389,6 +392,7 @@ type Event<T extends CapturedEvent["type"]> = Extract<
 
 const build = async (
   input: BuildInput,
+  journalRoot: string | undefined,
   started: number,
   progress: {
     phase: Diagnostic["phase"];
@@ -403,7 +407,8 @@ const build = async (
     progress.phase = name;
     input.progress?.();
   };
-  input.credentialInspection?.assertExportable();
+  const authority = input.credentialInspection;
+  authority?.assertExportable();
   const rate = input.rate ?? null;
   const declared = input.declared ?? [];
 
@@ -423,6 +428,19 @@ const build = async (
   const beforeBackup =
     input.capturedBackup === undefined ? await journalStat() : undefined;
   let journal = readCaptureJournal(input.journal, limits);
+  if (
+    authority !== undefined &&
+    (journalRoot === undefined ||
+      !authority.ownsCaptureJournal({
+        journal: journalRoot,
+        runId: input.runId,
+        bytes: journal._tag === "Read" ? journal.bytes : null,
+      }))
+  )
+    throw new DumpFailed({
+      reason:
+        "credential authority does not belong to this capture; export refused",
+    });
   const rawLines = journal._tag === "Read" ? journal.lines : [];
   const readLosses = () => readCaptureLosses(input.journal, limits, rawLines);
   const losses = readLosses();
@@ -478,9 +496,11 @@ const build = async (
       reason: `capture journal line ${journal.line}: ${journal.reason}`,
     });
   let { lines } = journal;
-  const objectFrames = journalObjectFrames(journal.objects);
   if (lines.some(({ event }) => event.type === "native.import"))
     throw new NativeHistoryUncertified();
+  const coding = lines.some(
+    ({ event }) => event.type === "run.start" && event.runKind === "coding",
+  );
   const registrations = new Map(
     lines.flatMap(({ event }) =>
       event.type === "credential.registration"
@@ -489,8 +509,7 @@ const build = async (
     ),
   );
   const lossEpochs = credentialLossEpochs(losses, registrations);
-  const authority = input.credentialInspection;
-  if (lossEpochs.size > 0 && authority === undefined)
+  if (lossEpochs.size > 0 && authority === undefined && !coding)
     return withholdSource(
       "credential registration was lost and the private credential authority is unavailable; export refused",
     );
@@ -500,6 +519,9 @@ const build = async (
     { epochs: lossEpochs },
   );
   if (safety.refusal !== null) throw new DumpFailed({ reason: safety.refusal });
+  if (authority === undefined && coding)
+    throw new DumpFailed({ reason: AUTHORITY_UNAVAILABLE });
+  const objectFrames = journalObjectFrames(journal.objects);
   const backup =
     input.capturedBackup ??
     input.native?.reads.captureBackup?.(limits.objectBytes) ??
@@ -1183,7 +1205,12 @@ export const buildDump = async (
     return closeDiagnostic;
   };
   try {
-    const result = await build(input, started, progress);
+    const result = await build(
+      root === undefined ? input : { ...input, journal: root },
+      root,
+      started,
+      progress,
+    );
     const budget = progress.budget;
     if (budget === undefined)
       throw new Error("close inspection budget missing");

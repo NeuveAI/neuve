@@ -689,6 +689,20 @@ export class PrivateInspection {
     }
     if (this.exportState() !== "fresh") throw new NativeHistoryUncertified();
   }
+  ownsCaptureJournal(input: {
+    readonly journal: string;
+    readonly runId: string;
+    readonly bytes: Uint8Array | null;
+  }): boolean {
+    const checkpoint = this.#checkpoint;
+    // A deferred scan stages the journal outside the original source.
+    return checkpoint === undefined
+      ? physicalWithin(this.#source, input.journal, new Map())
+      : input.runId === checkpoint.runId &&
+          input.bytes !== null &&
+          createHash("sha256").update(input.bytes).digest("hex") ===
+            checkpoint.journalSha256;
+  }
   hasCredentialEpochs(): boolean {
     this.#assert();
     const row = readState(this.#database, this.#source);

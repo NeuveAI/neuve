@@ -77,7 +77,7 @@ const endedNative = async (
   journal.capture({
     type: "run.start",
     scope: { runId },
-    runKind: "coding",
+    runKind: "reading",
     sourceRevision: "synthetic",
     route: "local",
     pricing: "subscription",

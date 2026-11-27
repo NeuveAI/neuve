@@ -24,7 +24,7 @@ test("generic non-generation credential guards certify exact native sources and 
   capture({
     type: "run.start",
     scope: { runId },
-    runKind: "coding",
+    runKind: "reading",
     sourceRevision: "synthetic",
     route: "anthropic",
     pricing: "metered",

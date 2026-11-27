@@ -1,4 +1,5 @@
 // Why: the native worker must keep the original capture while refusing its uncertified export.
+import { captureAuthority } from "../capture/fixture.ts";
 import { stopStoreWorker } from "../../../../records-core/tests/worker-process.ts";
 import { storeLocationIn } from "@neuve/records-core";
 import { runIn, value } from "../capture/fixture.ts";
@@ -416,7 +417,8 @@ test("actual non-route native worker keeps credential-masked raw reasoning and t
       }),
     ).rejects.toMatchObject({
       _tag: "DumpFailed",
-      reason: expect.stringMatching(new RegExp(`${RegExp.escape(reason)}$`)),
+      reason:
+        "historical credential authority is unavailable; source retained privately, export refused",
     });
     expect(readFileSync(join(state, "channel.sqlite"))).toEqual(database);
     expect(readFileSync(join(capture, JOURNAL_FILE))).toEqual(journal);
@@ -465,7 +467,8 @@ test("public portable export withholds synthetic reasoning while preserving thou
   const evidence = process.env["NATIVE_CAPTURE_EVIDENCE"];
   try {
     mkdirSync(join(root, "datasets"));
-    const journal = openCaptureJournal(join(root, "journal"), "r8-portable");
+    const source = join(root, "channel");
+    const journal = openCaptureJournal(join(source, "capture"), "r8-portable");
     journal.capture({
       type: "run.start",
       scope: { runId: "r8-portable" },
@@ -493,10 +496,12 @@ test("public portable export withholds synthetic reasoning while preserving thou
       bytes: original,
     });
     journal.close();
-    const rawJournal = readFileSync(join(root, "journal/events.jsonl"));
+    const rawJournal = readFileSync(join(journal.directory, JOURNAL_FILE));
+    using authority = captureAuthority(source);
     const restricted = await exportSnapshot({
+      credentialInspection: authority.inspection,
       runId: "r8-portable",
-      journal: join(root, "journal"),
+      journal: journal.directory,
       root: join(root, "datasets"),
       retention: { policy: "synthetic portable R8 fixture" },
     });

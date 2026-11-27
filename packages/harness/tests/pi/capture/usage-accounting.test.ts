@@ -1,4 +1,4 @@
-import { dumpJournalLines } from "./fixture.ts";
+import { captureAuthority, dumpJournalLines } from "./fixture.ts";
 import { z } from "zod";
 import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
@@ -64,7 +64,7 @@ test("native tool accounting reconciles every conversation, tool, counter and co
   journal.capture({
     type: "run.start",
     scope: { runId },
-    runKind: "coding",
+    runKind: "reading",
     sourceRevision: "synthetic",
     route: "chatgpt",
     pricing: "subscription",
@@ -141,7 +141,12 @@ test("native tool accounting reconciles every conversation, tool, counter and co
       ownedConversations.push(conversation);
       journal.capture({
         type: "session.bind",
-        scope: { runId, conversationId: conversation.id, stage: "investigate" },
+        scope: {
+          runId,
+          conversationId: conversation.id,
+          stage: "investigate",
+          agent: "accounting",
+        },
       });
       const names = index === 0 ? ["echo", "meter", "unmetered"] : ["echo"];
       endpoint.respond(
@@ -577,11 +582,13 @@ catch (error) { console.log(JSON.stringify({ exported: false, reason: error.reas
 test("a nonzero completed SDK receipt aborted before native compaction commit stays unjoined with its observed usage", async () => {
   const root = await mkdtemp(join(tmpdir(), "uncommitted-sdk-usage-"));
   const runId = "uncommitted-sdk-usage";
-  const journal = openCaptureJournal(join(root, "capture"), runId);
+  const source = join(root, "channel");
+  const journal = openCaptureJournal(join(source, "capture"), runId);
+  using authority = captureAuthority(source);
   const endpoint = openEndpoint();
   const token = tokenCommand(root, "lease");
   const base = createRouteModels({
-    credentialInspection: "ephemeral" as const,
+    credentialInspection: authority.inspection,
     route: SOL_ROUTE,
     runId,
     sessionAffinity: runId,
@@ -605,7 +612,7 @@ test("a nonzero completed SDK receipt aborted before native compaction commit st
       return key === "completeSimple" ? complete : Reflect.get(target, key);
     },
   });
-  const database = join(root, "pi.sqlite");
+  const database = join(source, "pi.sqlite");
   const harness = await Harness.open(
     await openNodeSqliteStorage(database),
     {
@@ -676,6 +683,7 @@ test("a nonzero completed SDK receipt aborted before native compaction commit st
     journal.close();
     await mkdir(join(root, "datasets"));
     const snapshot = await exportSnapshot({
+      credentialInspection: authority.inspection,
       runId,
       journal: journal.directory,
       nativeDatabase: database,
@@ -721,17 +729,19 @@ test("a nonzero completed SDK receipt aborted before native compaction commit st
 test("actual compaction preserves SDK component costs and one-hour cache counters", async () => {
   const root = await mkdtemp(join(tmpdir(), "priced-compaction-"));
   const runId = "priced-compaction";
-  const journal = openCaptureJournal(join(root, "capture"), runId);
+  const source = join(root, "channel");
+  const journal = openCaptureJournal(join(source, "capture"), runId);
+  using authority = captureAuthority(source);
   const endpoint = openEndpoint();
   const variable = "NEUVE_TEST_CAPTURE_COMPACTION_KEY";
   process.env[variable] = "synthetic-local-compaction-key";
   const route = { ...OPUS_ROUTE, credentialVariable: variable };
-  const database = join(root, "pi.sqlite");
+  const database = join(source, "pi.sqlite");
   const harness = await Harness.open(
     await openNodeSqliteStorage(database),
     {
       models: createRouteModels({
-        credentialInspection: "ephemeral" as const,
+        credentialInspection: authority.inspection,
         route,
         runId,
         sessionAffinity: runId,
@@ -820,6 +830,7 @@ test("actual compaction preserves SDK component costs and one-hour cache counter
     journal.close();
     await mkdir(join(root, "datasets"));
     const snapshot = await exportSnapshot({
+      credentialInspection: authority.inspection,
       runId,
       journal: journal.directory,
       nativeDatabase: database,

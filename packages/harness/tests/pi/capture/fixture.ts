@@ -1,7 +1,8 @@
 import { decodeDumpJournal } from "../../../src/pi/capture/journal.ts";
 import { fileURLToPath } from "node:url";
-import { watch } from "node:fs";
-import { dirname } from "node:path";
+import { mkdtempSync, rmSync, watch } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { ScanMachineBudget } from "../../../src/pi/capture/process.ts";
 import {
   scanMemoryGrant,
@@ -34,6 +35,33 @@ import type {
   CaptureScope,
   TokenUsage,
 } from "../../../src/pi/capture/types.ts";
+import { createPrivateInspection } from "../../../src/pi/capture/private-inspection.ts";
+import { SourceOwnership } from "../../../src/pi/source-ownership.ts";
+
+export const captureAuthority = (source: string) => {
+  const ownership = SourceOwnership.acquire(source);
+  const root = mkdtempSync(join(tmpdir(), "capture-authority-"));
+  try {
+    const inspection = createPrivateInspection({
+      ownership,
+      source,
+      directory: join(root, "private"),
+      excludedRoots: [source],
+    });
+    return {
+      inspection,
+      [Symbol.dispose]() {
+        inspection.close();
+        ownership.release();
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    ownership.release();
+    rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
+};
 
 export const recordsLayer = (location: StoreLocation) =>
   Blobs.layer(location).pipe(

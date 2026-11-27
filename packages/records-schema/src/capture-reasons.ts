@@ -224,6 +224,7 @@ export const CloseReasons = z.enum([
   "credential exposure in exact source; source retained privately, export refused",
   "invalid, unsupported or unavailable credential source census or artifact text representation; source retained privately, export refused",
   "historical credential authority is unavailable; source retained privately, export refused",
+  "credential authority does not belong to this capture; export refused",
   "historical calls lack durable registration; export refused",
   "credential registration loss reserve is missing; export refused",
   "credential registration loss reserve is damaged; export refused",

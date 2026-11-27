@@ -1,4 +1,4 @@
-import { dumpJournalLines } from "./fixture.ts";
+import { captureAuthority, dumpJournalLines } from "./fixture.ts";
 import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -46,7 +46,7 @@ test("authenticated source coverage survives fresh readers and refuses every mis
   journal.capture({
     type: "run.start",
     scope: { runId },
-    runKind: "coding",
+    runKind: "reading",
     sourceRevision: "synthetic",
     route: "chatgpt",
     pricing: "subscription",
@@ -331,8 +331,10 @@ test("native code without model generation stays complete while native-only assi
   const { readSessionDump } = await import("@neuve/harness/session-dump");
   const root = await mkdtemp(join(tmpdir(), "native-coverage-"));
   const runId = "native-coverage";
-  const database = join(root, "pi.sqlite");
-  const journal = openCaptureJournal(join(root, "capture"), runId);
+  const source = join(root, "channel");
+  const database = join(source, "pi.sqlite");
+  const journal = openCaptureJournal(join(source, "capture"), runId);
+  using authority = captureAuthority(source);
   const harness = await Harness.open(
     await openNodeSqliteStorage(database),
     { models: createModels(), registry: createRegistry() },
@@ -367,6 +369,7 @@ test("native code without model generation stays complete while native-only assi
     journal.close();
     await mkdir(join(root, "datasets"));
     const input = {
+      credentialInspection: authority.inspection,
       runId,
       journal: journal.directory,
       nativeDatabase: database,

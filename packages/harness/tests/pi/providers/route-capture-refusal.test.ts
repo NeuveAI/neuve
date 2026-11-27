@@ -52,7 +52,12 @@ import {
 } from "../../../src/pi/capture/export.ts";
 import { fileRawCapture, scanRawCapture } from "../../../src/pi/capture/raw.ts";
 import { scanStatus } from "../../../src/pi/capture/records.ts";
-import { runIn, scanCaptures, value } from "../capture/fixture.ts";
+import {
+  captureAuthority,
+  runIn,
+  scanCaptures,
+  value,
+} from "../capture/fixture.ts";
 import {
   CAPTURE_LOSS_FILE,
   CREDENTIAL_LOSS_RESERVE_FILE,
@@ -116,10 +121,13 @@ for (const lostBind of [false, true]) {
     );
     const runId = "interrupted-channel";
     const scope = { runId };
-    const nativeDatabase = join(directory, "pi.sqlite");
+    const source = join(directory, "channel");
+    await mkdir(source);
+    using authority = captureAuthority(source);
+    const nativeDatabase = join(source, "pi.sqlite");
     const storage = await openNodeSqliteStorage(nativeDatabase);
     try {
-      const journal = openCaptureJournal(join(directory, "capture"), runId, {
+      const journal = openCaptureJournal(join(source, "capture"), runId, {
         allowCredentialLoss: true,
       });
       journal.capture({
@@ -154,7 +162,12 @@ for (const lostBind of [false, true]) {
       const root = join(directory, "datasets");
       await mkdir(root);
       const output = { root, retention: { policy: "synthetic" } };
-      const input = { runId, journal: journal.directory, nativeDatabase };
+      const input = {
+        runId,
+        journal: journal.directory,
+        nativeDatabase,
+        credentialInspection: authority.inspection,
+      };
       const direct = await exportSnapshot({ ...input, ...output });
       const directPortable = await exportPortableSnapshot({
         ...output,

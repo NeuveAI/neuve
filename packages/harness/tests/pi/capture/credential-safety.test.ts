@@ -71,7 +71,7 @@ for (const variant of [
     journal.capture({
       type: "run.start",
       scope: { runId: variant },
-      runKind: "coding",
+      runKind: "reading",
       sourceRevision: "synthetic",
       route: "chatgpt",
       pricing: "subscription",
@@ -414,7 +414,7 @@ test("exact certified source reopens without credentials, while changed source r
   journal.capture({
     type: "run.start",
     scope: { runId },
-    runKind: "coding",
+    runKind: "reading",
     sourceRevision: "synthetic",
     route: "chatgpt",
     pricing: "subscription",

@@ -2,7 +2,8 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -26,6 +27,131 @@ import {
 import { createPrivateInspection } from "../../../src/pi/capture/private-inspection.ts";
 import { fileRawCapture, scanRawCapture } from "../../../src/pi/capture/raw.ts";
 import { sealCapturedDump } from "../../../src/pi/capture/export.ts";
+import { buildDump } from "../../../src/pi/capture/build.ts";
+
+for (const scenario of [
+  "own",
+  "unreadable",
+  "foreign",
+  "missing",
+  "filing",
+] as const) {
+  test(`authority-only credential coverage for a coding capture: ${scenario}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "authority-only-"));
+    const source = join(root, "channel-other");
+    const directory = join(root, "private");
+    mkdirSync(source);
+    const ownership = SourceOwnership.acquire(source);
+    const authority = createPrivateInspection({
+      ownership,
+      source,
+      directory,
+      excludedRoots: [source],
+    });
+    const nativeDatabase = join(source, "pi.sqlite");
+    const storage = await openNodeSqliteStorage(nativeDatabase);
+    try {
+      const secret = "synthetic-credential-known-only-to-authority";
+      const registration = await authority.register({
+        epoch: CredentialEpochId.parse(randomUUID()),
+        headers: new Headers({ authorization: `Bearer ${secret}` }),
+        budget: new InspectionBudget(),
+      });
+      expect(registration.status).toBe("registered");
+      const runId = "authority-only";
+      const scope = { runId };
+      const journal = openCaptureJournal(join(source, "capture"), runId);
+      journal.capture({
+        type: "run.start",
+        scope,
+        runKind: "coding",
+        sourceRevision: { status: "not-applicable", reason: "Scratch chat" },
+        route: "synthetic",
+        pricing: "subscription",
+      });
+      journal.capture({ type: "run.end", scope, status: "completed" });
+      journal.close();
+      chmodSync(join(journal.directory, JOURNAL_FILE), 0o400);
+      const input = { runId, journal: journal.directory, nativeDatabase };
+      if (scenario === "own") {
+        const clean = await buildDump({
+          ...input,
+          credentialInspection: authority,
+        });
+        expect(clean.run).toMatchObject({
+          complete: true,
+          backup: { status: "captured" },
+        });
+      }
+      const native = new Database(nativeDatabase);
+      try {
+        native.run("CREATE TABLE synthetic (value TEXT)");
+        native.run("INSERT INTO synthetic VALUES (?)", [secret]);
+      } finally {
+        native.close();
+      }
+      if (scenario === "own") {
+        await expect(
+          buildDump({ ...input, credentialInspection: authority }),
+        ).rejects.toThrow("credential exposure in exact source");
+      } else if (scenario === "foreign") {
+        const otherSource = join(root, "channel");
+        mkdirSync(otherSource);
+        const otherOwnership = SourceOwnership.acquire(otherSource);
+        const other = createPrivateInspection({
+          ownership: otherOwnership,
+          source: otherSource,
+          directory: join(root, "other-private"),
+          excludedRoots: [otherSource],
+        });
+        try {
+          await expect(
+            buildDump({ ...input, credentialInspection: other }),
+          ).rejects.toThrow(
+            "credential authority does not belong to this capture",
+          );
+        } finally {
+          other.close();
+          otherOwnership.release();
+        }
+      } else if (scenario === "missing") {
+        await expect(buildDump(input)).rejects.toThrow(
+          "historical credential authority is unavailable",
+        );
+      } else {
+        renameSync(
+          join(directory, "authority.sqlite"),
+          join(directory, "offline.sqlite"),
+        );
+        if (scenario === "unreadable") {
+          await expect(
+            buildDump({ ...input, credentialInspection: authority }),
+          ).rejects.toThrow("Private credential inspection unavailable");
+        } else {
+          const run = runIn(storeLocationIn(join(root, "records")));
+          const filed = value(
+            await run(
+              fileRawCapture({
+                ...input,
+                credentialInspection: authority,
+              }),
+            ),
+          );
+          expect(filed.manifest).toMatchObject({
+            checkpoint: null,
+            unscannable:
+              "historical credential authority is unavailable; source retained privately, export refused",
+          });
+        }
+      }
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+      authority.close();
+      ownership.release();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 for (const variant of ["covered", "missing", "exposed"] as const) {
   test(`a lost call with ${variant} credential coverage in a restricted dump`, async () => {

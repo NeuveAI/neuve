@@ -1,3 +1,4 @@
+import { captureAuthority } from "./pi/capture/fixture.ts";
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { readFile, rm, readdir, mkdir } from "node:fs/promises";
@@ -12,7 +13,8 @@ import { exportSnapshot } from "../src/session-dump";
 test("UI and native model planning reads reach journal and restricted export with safe failed outcomes", async () => {
   const directory = await scratch();
   const runId = "planning-capture";
-  const journal = openCaptureJournal(join(directory, "journal"), runId);
+  const source = join(directory, "channel");
+  const journal = openCaptureJournal(join(source, "capture"), runId);
   journal.capture({
     type: "run.start",
     scope: { runId },
@@ -108,7 +110,9 @@ test("UI and native model planning reads reach journal and restricted export wit
     await client.close();
     journal.close();
     await mkdir(join(directory, "exports"));
+    using authority = captureAuthority(source);
     const output = await exportSnapshot({
+      credentialInspection: authority.inspection,
       runId,
       journal: journal.directory,
       root: join(directory, "exports"),
