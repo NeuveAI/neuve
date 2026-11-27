@@ -9,6 +9,8 @@ import type {
 	GithubPull,
 } from "@ace/channel/protocol";
 
+import { z } from "zod";
+
 import { githubEnv } from "./keys";
 import { githubRepo, type HostRequest, NOT_GITHUB } from "./protocol";
 
@@ -278,15 +280,16 @@ export function remote(config: string): string | null {
 }
 
 /** Reading a remote needs no GitHub credentials, including on a teammate's host. */
-export async function project(path: string): Promise<string | null> {
-	const child = Bun.spawn(["git", "-C", path, ...REMOTES], {
+export async function project(path: string, originOnly = false): Promise<string | null> {
+	const arguments_ = originOnly ? ["config", "--local", "--get", "remote.origin.url"] : REMOTES;
+	const child = Bun.spawn(["git", "-C", path, ...arguments_], {
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "ignore",
 		timeout: 5000,
 	});
 	const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-	return code === 0 ? remote(out) : null;
+	return code === 0 ? remote(originOnly ? `remote.origin.url ${out.trim()}` : out) : null;
 }
 
 function item(value: Item, kind: GithubKind): GithubItem {
@@ -417,43 +420,210 @@ const REVIEWS: Record<string, GithubPull["review"]> = {
 	REVIEW_REQUIRED: "required",
 };
 
-/**
- * The newest pull request from `branch` in the repository itself, or null when there is none.
- * `--head` matches the branch name in any fork, and strangers open pull requests from their forks'
- * `master` or `main`, so pull requests from other repositories never count as the channel's.
- */
-export async function pull(repo: string, branch: string): Promise<GithubPull | null> {
-	if (!branch || branch.startsWith("-")) throw new Error("Invalid branch name");
-	const found = await gh<
-		(Item & {
-			isDraft: boolean;
-			statusCheckRollup: Check[];
-			headRefOid: string;
-			reviewDecision: string;
-			isCrossRepository: boolean;
-		})[]
-	>([
-		"pr",
-		"list",
-		"--repo",
-		repository(repo),
-		`--head=${branch}`,
-		"--state",
-		"all",
-		"--limit",
-		"30",
-		"--json",
-		`${FIELDS},isDraft,statusCheckRollup,headRefOid,reviewDecision,isCrossRepository`,
-	]);
-	const value = found.find((candidate) => !candidate.isCrossRepository);
-	if (!value) return null;
-	const review = REVIEWS[value.reviewDecision];
-	return {
-		...item(value, "prs"),
-		checks: value.statusCheckRollup.map(check),
-		sha: value.headRefOid,
-		...(review ? { review } : {}),
+const Ref = z.object({ ref: z.string(), sha: z.string(), repo: z.object({ full_name: z.string() }).nullable() });
+const PullRow = z.object({ number: z.int().positive(), head: Ref });
+const PullDetail = PullRow.extend({
+	node_id: z.string(), title: z.string(), html_url: z.string(), draft: z.boolean(),
+	state: z.enum(["open", "closed"]), merged_at: z.string().nullable(),
+	mergeable_state: z.string(), mergeable: z.boolean().nullable(),
+	user: z.object({ login: z.string() }).nullable(), created_at: z.string(), updated_at: z.string(),
+	labels: z.array(z.object({ name: z.string(), color: z.string() })),
+});
+const CheckRuns = z.object({ check_runs: z.array(z.object({
+	name: z.string(), details_url: z.string().nullable(), status: z.string(), conclusion: z.string().nullable(),
+})) });
+const Statuses = z.object({ statuses: z.array(z.object({
+	context: z.string(), target_url: z.string().nullable(), state: z.string(),
+})) });
+const RepoSettings = z.object({
+	default_branch: z.string(), allow_squash_merge: z.boolean(), allow_merge_commit: z.boolean(), allow_rebase_merge: z.boolean(),
+});
+const GithubError = z.object({ message: z.string() });
+type PullDetail = z.infer<typeof PullDetail>;
+
+export type PullSnapshot = {
+	pull: GithubPull;
+	node: string;
+	mergedAt?: number;
+};
+
+export class GithubRefusal extends Error {
+	constructor(readonly status: number, detail: string) {
+		super(detail);
+	}
+}
+
+async function token(): Promise<string> {
+	const env = environment();
+	if (env.GH_TOKEN) return env.GH_TOKEN;
+	const executable = Bun.which("gh", { PATH: process.env.PATH });
+	if (!executable) throw new Error("Install GitHub CLI on this host, then sign in with gh auth login.");
+	const child = Bun.spawn([executable, "auth", "token", "--hostname", "github.com"], {
+		env, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 5000,
+	});
+	const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+	if (code !== 0 || !out.trim()) throw new Error("Sign in to GitHub on this host with gh auth login.");
+	return out.trim();
+}
+
+type Cache = Map<string, { etag: string | null; value: unknown; next: string | undefined }>;
+export function pullGithub(fetcher: typeof globalThis.fetch = fetch, signIn = token) {
+	async function request(path: string, options: {
+		signal: AbortSignal; etag?: string | null; method?: "POST" | "PUT" | "DELETE"; body?: object;
+	}): Promise<Response> {
+		const { signal, method, body, etag } = options;
+		const url = new URL(path, "https://api.github.com");
+		if (url.origin !== "https://api.github.com") throw new Error("GitHub returned an invalid link.");
+		const response = await fetcher(url, {
+			method, signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+			headers: {
+				accept: "application/vnd.github+json", authorization: `Bearer ${await signIn()}`,
+				"x-github-api-version": "2022-11-28",
+				...(etag ? { "if-none-match": etag } : {}),
+				...(body ? { "content-type": "application/json" } : {}),
+			},
+			...(body ? { body: JSON.stringify(body) } : {}),
+		});
+		if (response.ok || response.status === 304) return response;
+		const error = GithubError.safeParse(await response.json().catch(() => null));
+		const detail = error.success ? error.data.message : `GitHub refused the request (HTTP ${response.status})`;
+		throw new GithubRefusal(response.status, /[.!?]$/.test(detail) ? detail : `${detail}.`);
+	}
+
+	async function read<T>(path: string, schema: z.ZodType<T>, signal: AbortSignal, cache: Cache) {
+		const saved = cache.get(path);
+		const response = await request(path, { signal, etag: saved?.etag });
+		const row = response.status === 304 && saved ? saved : {
+			etag: response.headers.get("etag"), value: await response.json(),
+			next: /<([^>]+)>; rel="next"/.exec(response.headers.get("link") ?? "")?.[1],
+		};
+		const value = schema.parse(row.value);
+		cache.set(path, row);
+		return { value, status: response.status, next: row.next };
+	}
+
+	async function pages<T>(path: string, schema: z.ZodType<T>, signal: AbortSignal, cache: Cache) {
+		const result: T[] = [];
+		for (let next: string | undefined = path; next;) {
+			const page: { value: T; next: string | undefined } = await read(next, schema, signal, cache);
+			result.push(page.value);
+			next = page.next;
+		}
+		return result;
+	}
+
+	async function json<T>(path: string, schema: z.ZodType<T>, signal: AbortSignal, method?: "POST" | "PUT", body?: object) {
+		const response = await request(path, { signal, method, body });
+		return schema.parse(await response.json());
+	}
+
+	async function graphql(query: string, id: string, signal: AbortSignal) {
+		const result = await json("/graphql", z.object({
+			data: z.unknown().optional(), errors: z.array(GithubError).optional(),
+		}), signal, "POST", { query, variables: { id } });
+		if (result.errors?.length) throw new Error(sentence(result.errors.map(error => error.message).join(" ")));
+		return result.data;
+	}
+
+	const path = (repo: string) => `/repos/${repository(repo)}`;
+	const absent = (error: unknown) => {
+		if (error instanceof GithubRefusal && error.status === 404) return null;
+		throw error;
 	};
+	const ref = (repo: string, branch: string) => `${path(repo)}/git/ref/heads/${branch.split("/").map(encodeURIComponent).join("/")}`;
+	const settings = (repo: string, signal: AbortSignal) => json(path(repo), RepoSettings, signal);
+
+	return {
+		async find(repo: string, branch: string, signal: AbortSignal, cache: Cache) {
+			const search = new URLSearchParams({ head: `${repo.split("/")[0]}:${branch}`, state: "all", sort: "created", direction: "desc", per_page: "100" });
+			const { value, status } = await read(`${path(repo)}/pulls?${search}`, z.array(PullRow), signal, cache);
+			return {
+				number: value.find(({ head }) => head.ref === branch && head.repo?.full_name.toLowerCase() === repo.toLowerCase())?.number,
+				status,
+			};
+		},
+		async detail(repo: string, number: number, signal: AbortSignal, cache: Cache) {
+			return read(`${path(repo)}/pulls/${number}`, PullDetail, signal, cache);
+		},
+		async checks(repo: string, sha: string, signal: AbortSignal, cache: Cache) {
+			const prefix = `${path(repo)}/commits/${encodeURIComponent(sha)}`;
+			const [runs, statuses] = await Promise.all([
+				pages(`${prefix}/check-runs?per_page=100`, CheckRuns, signal, cache),
+				pages(`${prefix}/status?per_page=100`, Statuses, signal, cache),
+			]);
+			return [
+				...runs.flatMap(page => page.check_runs.map(run => check({
+					__typename: "CheckRun", name: run.name, status: run.status.toUpperCase(),
+					conclusion: run.conclusion?.toUpperCase() ?? "", detailsUrl: run.details_url ?? undefined,
+				}))),
+				...statuses.flatMap(page => page.statuses.map(status => check({
+					__typename: "StatusContext", context: status.context, state: status.state.toUpperCase(),
+					targetUrl: status.target_url ?? undefined,
+				}))),
+			];
+		},
+		async review(id: string, signal: AbortSignal) {
+			const data = await graphql("query($id: ID!) { node(id: $id) { ... on PullRequest { reviewDecision } } }", id, signal);
+			const result = z.object({ node: z.object({ reviewDecision: z.string().nullable() }) }).parse(data);
+			return REVIEWS[result.node.reviewDecision ?? ""];
+		},
+		async draft(repo: string, branch: string, title: string, body: () => Promise<string>, signal: AbortSignal) {
+			const { default_branch: base } = await json(path(repo), RepoSettings.pick({ default_branch: true }), signal);
+			if (base === branch) return;
+			const compare = await json(`${path(repo)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}`,
+				z.object({ ahead_by: z.number() }), signal).catch(absent);
+			if (!compare?.ahead_by) return;
+			const created = await json(`${path(repo)}/pulls`, PullRow, signal, "POST", {
+				head: branch, base, title, body: await body(), draft: true,
+			});
+			return created.number;
+		},
+		async ready(id: string, signal: AbortSignal) {
+			await graphql("mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }", id, signal);
+		},
+		async merge(repo: string, number: number, sha: string, signal: AbortSignal) {
+			const value = await settings(repo, signal);
+			const merge_method = value.allow_squash_merge ? "squash"
+				: value.allow_merge_commit ? "merge" : value.allow_rebase_merge ? "rebase" : undefined;
+			if (!merge_method) throw new Error("The repository has no enabled merge method.");
+			const result = await json(`${path(repo)}/pulls/${number}/merge`, GithubError.extend({ merged: z.boolean() }), signal, "PUT", {
+				sha, merge_method,
+			});
+			if (!result.merged) throw new Error(/[.!?]$/.test(result.message) ? result.message : `${result.message}.`);
+		},
+		async deleteBranch(repo: string, branch: string, head: string, signal: AbortSignal) {
+			const url = ref(repo, branch);
+			const current = await json(url, z.object({ object: z.object({ sha: z.string() }) }), signal).catch(absent);
+			if (!current) return "missing";
+			if (current.object.sha !== head) return "moved";
+			try {
+				await request(url.replace("/git/ref/", "/git/refs/"), { method: "DELETE", signal });
+			} catch (error) {
+				if (error instanceof GithubRefusal && error.status === 404) return "missing";
+				if (error instanceof GithubRefusal && error.status === 422 &&
+					!await json(url, z.object({ object: z.object({ sha: z.string() }) }), signal).catch(absent)) return "missing";
+				throw error;
+			}
+			return "deleted";
+		},
+	};
+}
+
+export function pullSnapshot(value: PullDetail, checks: GithubCheck[], review: GithubPull["review"]): PullSnapshot {
+	const mergedAt = value.merged_at ? Date.parse(value.merged_at) : undefined;
+	const base = item({
+		number: value.number, title: value.title, url: value.html_url, isDraft: value.draft,
+		state: mergedAt !== undefined ? "MERGED" : value.state === "open" ? "OPEN" : "CLOSED",
+		author: value.user, createdAt: value.created_at, updatedAt: value.updated_at,
+		labels: value.labels, headRefName: value.head.ref, isCrossRepository: false,
+	}, "prs");
+	const merge = value.mergeable_state === "dirty" ? "conflicts"
+		: value.mergeable_state === "unknown" || value.mergeable === null ? "unknown"
+		: value.mergeable_state === "clean" || value.mergeable_state === "unstable" ? "ready" : "blocked";
+	return { node: value.node_id, mergedAt, pull: {
+		...base, checks, sha: value.head.sha, ...(review ? { review } : {}),
+		...(base.state === "open" || base.state === "draft" ? { merge } : {}),
+	} };
 }
 
 export async function files(repo: string, id: number): Promise<GithubFile[]> {

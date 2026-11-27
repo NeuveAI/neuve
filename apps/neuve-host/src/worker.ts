@@ -16,6 +16,7 @@ import { Identity, Sessions } from "@neuve/records-core/capture";
 
 import * as catalog from "./catalog";
 import { request } from "./client";
+import { publishBuildPulls } from "./plan-pulls";
 import { browser } from "./browser";
 import { desktop, desktopAvailable } from "./desktop";
 import { images } from "./images";
@@ -88,6 +89,7 @@ const channel = await openChannel({
 	named: record.named,
 	claim: async (name, exact) => catalog.claim(id, name, exact),
 	onMetadata: (value) => catalog.metadata(id, value),
+	onBuildPulls: (value) => publishBuildPulls(id, value),
 	onActivity: (at) => catalog.activity(id, at),
 	onBusy: (busy) => catalog.busy(id, busy),
 	onRun: (ran) => catalog.ran(id, ran),
@@ -212,8 +214,12 @@ function serve(socket: Socket) {
 			if (admitted) admitting++;
 			let value: unknown;
 			try {
-				const extension = await extensionRequest(channel, body, !!catalog.read(id).archived);
-				value = extension.handled ? extension.value : await channel.handle(parseNativeChannelRequest(body), (event) => send({ id: parsedId, event }), trace);
+				if (body.op === "plan-pull-text") value = await channel.planPullText(body.build, body.branch);
+				else if (body.op === "plan-pull-merged") value = await channel.planPullMerged(body);
+				else {
+					const extension = await extensionRequest(channel, body, !!catalog.read(id).archived);
+					value = extension.handled ? extension.value : await channel.handle(parseNativeChannelRequest(body), (event) => send({ id: parsedId, event }), trace);
+				}
 			} finally {
 				if (admitted && !--admitting) {
 					drained.resolve();

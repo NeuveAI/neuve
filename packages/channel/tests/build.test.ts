@@ -15,6 +15,7 @@ import { BuildsDoc, type BuildHost } from "../src/build";
 import { buildWorktree } from "../src/external-lanes";
 import { EventSchema } from "../src/frame";
 import { PlansDoc } from "../src/plan";
+import { ReviewCardsDoc, type ReviewCard } from "../src/review-cards";
 import type { Build, Plan, Request, RunEnd, Said } from "../src/protocol";
 import { Fixture, git, MODEL, OWNER, scratchEnv, until, type Watch } from "./helpers";
 
@@ -482,6 +483,62 @@ async function startBuild(run: Awaited<ReturnType<typeof setup>>, reply: FauxRes
 	await until(() => run.fixture.channel.isIdle());
 	return { plan, build, chat, agent };
 }
+
+// A new plan in the same channel must not inherit the merged plan's branch or review.
+test("a published review and a merge follow the plan, and the next plan gets its own branch", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	const { plan, build, chat } = await startBuild(run);
+	const branch = run.worktrees[0]!.branch;
+	expect(build.branch).toBe(branch);
+	expect(await fixture.channel.planPullText(build.id, branch)).toBe(planText);
+
+	fixture.script(
+		tool("agent_start", { role: "reviewer" }, "start-for-pull"),
+		fauxAssistantMessage("Review started."),
+		fauxAssistantMessage("Review finished."),
+	);
+	await fixture.request({ op: "wait", submission: await wake(run, "Start the reviewer.", chat) });
+	const withReviewer = await watch.until("builds", event => event.builds[0]?.agents.some(agent => agent.role === "reviewer") === true);
+	const reviewer = withReviewer.builds[0]!.agents.find(agent => agent.role === "reviewer")!;
+	await until(() => fixture.channel.isIdle());
+	const head = git(run.worktrees[0]!.path, "rev-parse", "HEAD").trim();
+	const card: Extract<ReviewCard, { kind: "review" }> = {
+		kind: "review", review: "review", source: "lane", label: "Review the plan", recovered: false, notify: false,
+		range: { branch, base: head, head, commits: 0 }, phase: "finished", stage: null, stages: [],
+		finished: { units: 2, byReviewLane: { humanRequired: 2, humanSuggested: 0, static: 0, agentic: 0 }, needJudgment: 2, complete: true, gaps: 0, undecoded: 0 },
+		links: { batch: "/batch", desk: "/desk" }, stopped: null, newCommits: null, updatedAt: 2,
+	};
+	await run.harness.commit(async tx => {
+		(await tx.doc(ReviewCardsDoc, reviewer.chat as ConversationId)).cards.review = card;
+		(await tx.doc(ReviewCardsDoc, chat as ConversationId)).cards.older = {
+			...card, review: "older", updatedAt: 1,
+		};
+	}, context);
+	const reviewed = await watch.until("builds", event => event.builds[0]?.review?.chat === reviewer.chat);
+	expect(EventSchema.parse(reviewed)).toEqual(reviewed);
+	expect(reviewed.builds[0]!.review).toEqual({
+		chat: reviewer.chat, review: "review", phase: "finished", head, humanRequired: 2, desk: "/desk",
+	});
+
+	await fixture.channel.planPullMerged({ build: build.id, branch, head, number: 11, at: 25 });
+	const merged = await watch.until("builds", event => event.builds[0]?.merged?.number === 11);
+	expect(EventSchema.parse(merged)).toEqual(merged);
+	expect(merged.builds[0]).toMatchObject({
+		merged: { number: 11, at: 25 }, agents: [{ state: "done" }, { state: "done" }],
+	});
+	await expect(fixture.channel.planPullText(build.id, branch)).rejects.toThrow("no longer open");
+
+	const other = await run.draft(revisedText);
+	expect(other.id).not.toBe(plan.id);
+	fixture.script(fauxAssistantMessage("Second plan ready."));
+	await run.approve(other);
+	const second = await buildAt(watch, 1, "started");
+	expect(second.branch).toBe(run.worktrees[2]!.branch);
+	expect(second.branch).not.toBe(branch);
+	expect(second.review).toBeUndefined();
+	expect(await fixture.channel.planPullText(second.id, second.branch!)).toBe(revisedText);
+});
 
 async function invoke(fixture: Fixture, text: string, chat?: number) {
 	const { submission } = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, text, chat });

@@ -168,6 +168,7 @@ export class GatewayClient {
 			this.channels = this.#listings(frame.channels);
 			return this.#emit();
 		}
+		if ("githubPull" in frame) return;
 		if ("terminal" in frame) return this.#terminals.get(frame.terminal)?.(frame);
 		const pending = this.#pending.get(frame.id);
 		if (!pending) return;

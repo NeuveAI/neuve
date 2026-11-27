@@ -2,7 +2,7 @@ import { TurnRetryStatusSchema } from "@neuve/records-schema/turn-recovery";
 import { ApprovalAsked, WorkKind } from "@neuve/runtime/approval";
 import { z } from "zod";
 
-import { RefusalReasonSchema, ReviewRangeSchema, ReviewStatusSchema } from "./review-protocol";
+import { RefusalReasonSchema, ReviewRangeSchema, ReviewStateSchema, ReviewStatusSchema } from "./review-protocol";
 import type { ReviewCard } from "./review-cards";
 
 import { EffortSchema } from "./effort";
@@ -141,6 +141,12 @@ export const BuildSchema = z.object({
 		caption: text.optional(),
 		failure: AgentFailureSchema.optional(),
 	})),
+	branch: text.optional(),
+	review: z.object({
+		chat: id, review: text, phase: z.union([ReviewStateSchema, z.literal("connection_lost")]),
+		head: text, humanRequired: z.int().nonnegative().optional(), desk: text.optional(),
+	}).optional(),
+	merged: z.object({ number: z.int().positive(), at: z.number() }).optional(),
 }) satisfies z.ZodType<Build>;
 
 const workMessage = z.object({ build: text, from: id, to: id, at: z.number(), text });

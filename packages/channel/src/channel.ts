@@ -204,6 +204,7 @@ export type Options = {
 	claim?(name: string, exact: boolean): Promise<string>;
 	/** Publish a projection of committed metadata to the runtime's channel catalog. */
 	onMetadata?(value: Metadata): void;
+	onBuildPulls?(value: ReturnType<Builds["pulls"]>): void;
 	/** Publish when the transcript last grew, in epoch milliseconds. */
 	onActivity?(at: number): void;
 	/** Rebuildable channel-wide projection of pi live runs, including child chats. */
@@ -511,6 +512,7 @@ export class Channel {
 			const selected = new Set<ConversationId>();
 			const ended: [ConversationId, readonly SubmissionId[]][] = [];
 			const began: [ConversationId, SubmissionId][] = [];
+			const reviewed: ConversationId[] = [];
 			let runEnded = false;
 			for (const change of changes) {
 				if (change.type === "entry" && CompactionEntry.is(change.value)) {
@@ -531,6 +533,7 @@ export class Channel {
 				}
 				if (change.record.kind === BuildsDoc.definition.kind) {
 					const woken = channel.#builds.observe(change.value as BuildsState | null);
+					channel.#publishBuildPulls();
 					if (options.resume !== false && woken.length) void Promise.resolve().then(() => channel.#builds.resume(woken));
 					continue;
 				}
@@ -562,6 +565,12 @@ export class Channel {
 					if (scope.kind === "conversation") approvals.changed(harness, scope.conversationId, change.value as ApprovalRequestsState | null);
 					continue;
 				}
+				if (change.record.kind === ReviewCardsDoc.definition.kind && change.record.scope.kind === "conversation") {
+					const cards = (change.value as { cards: Record<string, ReviewCard> } | null)?.cards;
+					if (Object.values(cards ?? {}).some(card => card.kind === "review")) {
+						reviewed.push(change.record.scope.conversationId);
+					}
+				}
 				if (change.record.kind !== LiveDoc.definition.kind) continue;
 				const { scope } = change.record;
 				if (scope.kind !== "conversation") continue;
@@ -589,6 +598,8 @@ export class Channel {
 				void task.finally(() => channel.#backgroundTasks.delete(task));
 			}
 			if (runEnded) void channel.#builds.replyToMentions();
+			if (reviewed.length) void channel.#builds.refreshReviews(reviewed)
+				.catch(error => log("error", "build.review.failed", failure(error)));
 			// Ending a run settles its inputs in the same commit, in no particular change order.
 			for (const [chat, inputs] of ended) {
 				const task = channel.#ended(chat, inputs, changes);
@@ -602,6 +613,10 @@ export class Channel {
 			channel.#publishBusy();
 			if (changes.some((change) => change.type === "entry")) channel.#activity();
 		});
+		if (options.onBuildPulls) {
+			await channel.#builds.refreshReviews();
+			channel.#publishBuildPulls();
+		}
 		if (options.relocate) {
 			await harness.commit(async (tx) => {
 				let cursor: Cursor | undefined;
@@ -626,6 +641,7 @@ export class Channel {
 		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
 		if (options.resume !== false) {
 			await channel.#builds.finishStops();
+			await channel.#builds.finishMergeCleanup(options.owner);
 			await channel.#builds.reconcileRuns();
 			await channel.#builds.recoverMentionEntries();
 			await channel.#placeResumingChats();
@@ -1521,6 +1537,19 @@ export class Channel {
 			throw new Error(waitForBrief);
 		}
 		return this.#harness.commit(tx => this.#modelSettings.select(tx, conversation.id, request), context);
+	}
+
+	#publishBuildPulls() {
+		try { this.#options.onBuildPulls?.(this.#builds.pulls()); }
+		catch (error) { this.#log("error", "build.pulls.failed", failure(error)); }
+	}
+
+	planPullText(build: string, branch: string) {
+		return this.#builds.pullText(build, branch);
+	}
+
+	planPullMerged(input: Parameters<Builds["pullMerged"]>[0]) {
+		return this.#builds.pullMerged(input, this.#options.owner);
 	}
 
 	#canInvoke(author: string, shared: boolean): boolean {

@@ -26,6 +26,7 @@ import * as served from "./directory-server";
 import { retryLoginShell, shell } from "./environment";
 import type { GatewayClient, Watch } from "./gateway-client";
 import * as github from "./github";
+import { PlanPulls } from "./plan-pulls";
 import { describe, health, HostConflict } from "./health";
 import { seal } from "./keys";
 import * as lobby from "./lobby";
@@ -97,6 +98,7 @@ type Client = {
 	remotes: Map<string, GatewayClient>;
 	/** Detaches this client from the terminals it opened; the shells keep running. */
 	terminals: Map<string, () => void>;
+	pulls: Map<string, () => void>;
 	/** A host's socket to a lobby of the directory this host serves, not a gateway client. */
 	lobby?: served.Seat;
 };
@@ -105,6 +107,7 @@ let name = hostname();
 /** Where teammates reach the directory this host serves, once it's on the tailnet. */
 let servedUrl: string | undefined;
 let closing = false;
+let planPulls = new PlanPulls();
 let updating = false;
 let update = 0;
 let suspending: Promise<unknown> | undefined;
@@ -525,7 +528,8 @@ const localOps = new Set<HostRequest["op"]>([
 	"github-list",
 	"github-detail",
 	"github-files",
-	"github-pull",
+	"github-pull-watch",
+	"github-pull-unwatch",
 	"settings",
 	"diagnostics",
 	"key-set",
@@ -716,8 +720,20 @@ async function handle(
 			return github.detail(request);
 		case "github-files":
 			return github.files(request.repo, request.number);
-		case "github-pull":
-			return github.pull(request.repo, request.branch);
+		case "github-pull-watch": {
+			const { repo, branch, subscription } = request;
+			const detach = planPulls.readers.watch(repo, branch, value =>
+				send({ githubPull: { subscription, repo, branch, ...value } }));
+			client.pulls.get(subscription)?.();
+			client.pulls.set(subscription, detach);
+			return;
+		}
+		case "github-pull-unwatch":
+			client.pulls.get(request.subscription)?.();
+			client.pulls.delete(request.subscription);
+			return;
+		case "plan-pull-merge":
+			return planPulls.merge(client, request);
 		case "settings":
 			if (request.fresh) {
 				void Promise.resolve().then(() => runtimeHooks().checkAccounts?.())
@@ -1058,6 +1074,7 @@ function websocket(): Bun.WebSocketHandler<Client> {
 			}
 			for (const remote of socket.data.remotes.values()) remote.close();
 			for (const detach of socket.data.terminals.values()) detach();
+			for (const detach of socket.data.pulls.values()) detach();
 		},
 	};
 }
@@ -1072,6 +1089,7 @@ function client(user: string, peer: boolean, local = false, machine?: string): C
 		channels: new Map(),
 		remotes: new Map(),
 		terminals: new Map(),
+		pulls: new Map(),
 	};
 }
 
@@ -1313,6 +1331,7 @@ export type Gateway = {server: Server<Client>; stop(): Promise<void>};
 
 export async function start(port: number, loopback = false, script?: string, managed = false): Promise<Gateway> {
 	closing = false;
+	planPulls = new PlanPulls();
 	config.port = port;
 	config.loopback = loopback;
 	// Channel workers and agent shells reach this listener for the owner's windows.
@@ -1346,6 +1365,7 @@ export async function start(port: number, loopback = false, script?: string, man
 	const servers = [server];
 	const cleanup: (() => void | Promise<void>)[] = [];
 	cleanup.push(accounts.onChange(accountsChanged));
+	cleanup.push(() => planPulls.close());
 	// A blocked event loop fails the desktop's health check, which then cannot tell a busy helper from a stopped one.
 	let tick = performance.now();
 	const stalls = setInterval(() => {
@@ -1480,6 +1500,7 @@ export async function start(port: number, loopback = false, script?: string, man
 	// Workers create and remove their sockets; tell clients when a channel starts or retires.
 	const watcher = watchCatalog(join(catalog.home, "channels"), (file) => {
 		if (closing || updating) return;
+		planPulls.changed(file);
 		catalogChanged(file);
 	}, error => {
 		log("error", "gateway.catalog.failed", failure(error));
@@ -1488,6 +1509,7 @@ export async function start(port: number, loopback = false, script?: string, man
 	cleanup.push(() => watcher.close());
 	await watcher.ready;
 	if (closing) throw new Error("Host closed during catalog watcher startup");
+	planPulls.start();
 	// A crashed worker leaves its socket and projection behind without a filesystem event.
 	// Probe only process liveness: sidebar observation must never attach to or wake a worker.
 	let crashed = new Set<string>();

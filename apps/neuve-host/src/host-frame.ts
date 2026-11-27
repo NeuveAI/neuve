@@ -11,7 +11,19 @@ const listing = z.object({
 	mentions: z.record(z.string(), z.number()).optional(),
 });
 
+const githubPull = z.object({
+	kind: z.enum(["prs", "issues"]), number: z.int().positive(), title: z.string(), url: z.string(),
+	state: z.enum(["open", "closed", "merged", "draft"]), author: z.string(), created: z.string(), updated: z.string(),
+	labels: z.array(z.object({ name: z.string(), color: z.string() })), head: z.string().optional(),
+	fork: z.boolean().optional(), sha: z.string().optional(),
+	checks: z.array(z.object({ name: z.string(), url: z.string().optional(), state: z.enum(["pending", "passed", "failed", "skipped"]) })),
+	review: z.enum(["approved", "changes", "required"]).optional(),
+	merge: z.enum(["ready", "blocked", "conflicts", "unknown"]).optional(),
+});
 const HostFrameSchema = z.union([
+	z.object({ githubPull: z.object({
+		subscription: z.string(), repo: z.string(), branch: z.string(), pull: githubPull.nullable(), error: z.string().optional(),
+	}) }),
 	z.object({ accounts: z.array(AccountStatus) }),
 	FrameSchema,
 	z.object({ hello: z.object({ user: z.string(), host: z.string(), github: z.string().optional(), team: z.string().optional(), directory: z.string().optional() }) }),

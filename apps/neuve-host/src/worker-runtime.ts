@@ -1,3 +1,4 @@
+import { removePlanWorktree } from "./plan-worktree";
 import { hostname, platform, arch } from "node:os";
 import * as catalog from "./catalog";
 import { nativeReview, startReviewFeed } from "./native-review";
@@ -175,6 +176,9 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			// A key identifies one operation and therefore one result type.
 			return outcome.value as T;
 		},
+		removeWorktree: (lane, worktree, head) => removePlanWorktree({
+			project: place.project, directory: place.lanes, prefix: place.name, lane, ...worktree, head,
+		}, options.log),
 		async worktree(...[target, source]) {
 			if (typeof target === "string") return buildWorktree(place, target, BACKGROUND_CONTEXT, source);
 			const name = `chat-${target.chat}`;
