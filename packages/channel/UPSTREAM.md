@@ -51,6 +51,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/NOTICE` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
 | `packages/channel/src/build.ts` | Selects the scope-read extension for chats started by an approved plan and pins the query inputs to the chat and its approved plan. |
 | `packages/channel/src/effort.ts` | Own integration module retained beside pinned Ace source; channel files stay runtime-neutral and import no Neuve package. |
+| `packages/channel/src/environment.ts` | Names the chat model and effort, and rounds reported context use down to tenths of the model's limit so the prompt stays stable within each tenth. |
 | `packages/channel/src/extensions.ts` | Runtime-neutral native Extension install/binding, conversation observation, tool wrapping and optional model/pricing callbacks. No Neuve imports or alternate plugin/scheduler system. |
 | `packages/channel/src/external-lanes.ts` | Installs the work lane tool for worktrees outside the checkout. Uses the native tool's argument schema, refusals, base selection, and ownership check. |
 | `packages/channel/src/external-ref.ts` | Channel owns opaque neutral references and legacy JSON receipts. Host alone validates/maps precise GitHub references, with an explicit versioned new encoding; existing durable values are not reinterpreted. |
@@ -134,6 +135,10 @@ The channel dispatches comment requests through the same chat admission queue as
 | `packages/channel/tests/build.test.ts` | Exercises approval, recovery, fresh reviewer context, delivery, stop-all, read-only routes, and pause with real Git and SQLite and a faux model. Ordinary write-capable chats receive their own placement without becoming build agents. |
 | `packages/channel/tests/chat-lanes.test.ts` | Exercises first-writable-turn placement, Plan-mode deferral, legacy migration, explicit cwd preservation, Git/persistence interruption recovery, branch collisions, retained-branch restoration, and pre-resume failure with real Git and SQLite. |
 | `packages/channel/tests/helpers.ts` | Keeps the fixture’s model registry mutable so the work log test can install a faux caption provider. |
+
+| Integration file | Model limits and compaction |
+| --- | --- |
+| `packages/channel/src/channel.ts` | Supplies model metadata and the last reported context use to the environment section. Logs committed compactions with the chat and reason. |
 
 Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
 

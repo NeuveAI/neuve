@@ -39,6 +39,7 @@ import {
   captureRouteFailure,
   routeFailureDiagnostic,
   schedulerText,
+  streamEndedNearContextLimit,
 } from "./failure.ts";
 
 export interface NativeModelsCaptureOptions {
@@ -477,15 +478,19 @@ export const captureNativeModels = (
         ? sdkContextSnapshot(id, model, normalizeContext(context))
         : undefined,
     );
-    return relay(model, observer, () =>
-      defaults.stream<Api>(model, context, {
-        ...request,
-        ...observer,
-        onProviderStreamEvent: async (data, selected) => {
-          await observer.providerEvent(data);
-          await request?.onProviderStreamEvent?.(data, selected);
-        },
-      }),
+    return relay(
+      model,
+      observer,
+      () =>
+        defaults.stream<Api>(model, context, {
+          ...request,
+          ...observer,
+          onProviderStreamEvent: async (data, selected) => {
+            await observer.providerEvent(data);
+            await request?.onProviderStreamEvent?.(data, selected);
+          },
+        }),
+      context.messages,
     );
   };
   const streamSimple = (
@@ -498,21 +503,26 @@ export const captureNativeModels = (
         ? sdkContextSnapshot(id, model, normalizeContext(context))
         : undefined,
     );
-    return relay(model, observer, () =>
-      defaults.streamSimple(model, context, {
-        ...request,
-        ...observer,
-        onProviderStreamEvent: async (data, selected) => {
-          await observer.providerEvent(data);
-          await request?.onProviderStreamEvent?.(data, selected);
-        },
-      }),
+    return relay(
+      model,
+      observer,
+      () =>
+        defaults.streamSimple(model, context, {
+          ...request,
+          ...observer,
+          onProviderStreamEvent: async (data, selected) => {
+            await observer.providerEvent(data);
+            await request?.onProviderStreamEvent?.(data, selected);
+          },
+        }),
+      context.messages,
     );
   };
   const relay = (
     model: Model<Api>,
     observer: ReturnType<typeof observe<Model<Api>>>,
     open: () => AssistantMessageEventStream,
+    messages: Context["messages"] = [],
   ) => {
     const output = new AssistantMessageEventStream();
     void (async () => {
@@ -523,6 +533,27 @@ export const captureNativeModels = (
           if (captureFailure !== undefined) throw captureFailure;
           const event = structuredClone(raw);
           await observer.inspect(event);
+          if (
+            event.type === "error" &&
+            event.error.stopReason === "error" &&
+            event.error.errorMessage !== undefined &&
+            streamEndedNearContextLimit(
+              model,
+              messages,
+              event.error.errorMessage,
+            )
+          ) {
+            const failure = {
+              kind: "context_overflow",
+              detail:
+                "The provider stream ended before its terminal event near the context limit.",
+            } as const;
+            event.error.errorMessage = schedulerText("Model error", failure);
+            event.error.diagnostics = [
+              ...(event.error.diagnostics ?? []),
+              routeFailureDiagnostic(failure, event.error.timestamp),
+            ];
+          }
           if (event.type === "done" || event.type === "error")
             await observer.end(
               event.type === "done" ? event.message : event.error,

@@ -99,6 +99,7 @@ import {
   refusalKind,
   routeFailureDiagnostic,
   schedulerText,
+  streamEndedNearContextLimit,
   type RouteFailure,
 } from "./failure.ts";
 
@@ -874,6 +875,7 @@ const runCall = (input: {
   readonly log?: RunLog | undefined;
   readonly route: AnyRouteConfig;
   readonly model: Model<Api>;
+  readonly messages: TranscriptContext["messages"];
   readonly label: string;
   readonly capture: ModelCapture;
   readonly retry: HarnessSettings["retry"];
@@ -907,6 +909,17 @@ const runCall = (input: {
     if (over) return;
     over = true;
     let failed = call?.captureFailure ?? reportedFailure;
+    if (
+      failed?.failure.kind === "stream" &&
+      call?.scope.stage === undefined &&
+      call?.answer?.status === 200 &&
+      streamEndedNearContextLimit(model, input.messages, failed.failure.detail)
+    ) {
+      failed = {
+        ...failed,
+        failure: { ...failed.failure, kind: "context_overflow" },
+      };
+    }
     if (failed !== undefined && call?.credentials !== undefined)
       failed = {
         ...failed,
@@ -1335,6 +1348,7 @@ const openAiProvider = (
       log: options.log,
       route,
       model: target,
+      messages: context.messages,
       label: "OpenAI API error",
       capture: options.capture,
       retry: options.retry,
@@ -1589,6 +1603,7 @@ const anthropicProvider = (
       log: options.log,
       route,
       model: target,
+      messages: context.messages,
       label: "Anthropic API error",
       capture: options.capture,
       retry: options.retry,

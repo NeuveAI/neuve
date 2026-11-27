@@ -1,5 +1,5 @@
 // Why: accepting Claude receipts must not change stored or printed pi receipts, including old
-// routes without account metadata. These hashes were computed with receipt.ts from HEAD 8a29d1f8.
+// routes without account metadata. The original hashes came from receipt.ts at 8a29d1f8.
 import { expect, test } from "bun:test";
 import { canonicalJson, sha256Hex } from "@neuve/records-core";
 import { RunReceipt } from "@neuve/records-schema";
@@ -15,8 +15,8 @@ for (const [named, jsonHash, textHash] of [
   ],
   [
     SOL_ROUTE,
-    "e04d7ea67bf0ae2cbf96e102487f1e696fe27bda442734e1494c6f2d512c13a3",
-    "6853a8456aec7eac7b7b088f3a2fead6da429e5a6b740532d52cc9531960a8a5",
+    "ae641bdb3893e07daf79d1e0a6a061691142d7dad093ca95db95b7f03a626de4",
+    "8754d26b2c4f25a8a921183e14e1573b43cf9772c038d59bb7f4f59d21d5d171",
   ],
 ] as const) {
   const { account: _account, ...legacy } = named;

@@ -1,8 +1,13 @@
 import type { Context } from "@earendil-works/chord";
 import type {
+  Api,
   AssistantMessage,
   AssistantMessageDiagnostic,
+  Message,
+  Model,
 } from "@earendil-works/pi-ai";
+import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
+import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
 import type {
   Conversation,
   Cursor,
@@ -17,6 +22,35 @@ import {
   RESERVE_UNWRITABLE_REASON,
 } from "../capture/credential-loss-reserve.ts";
 import { CaptureFailed } from "../capture/types.ts";
+
+/** An early EOF on a serving request is an overflow only near the selected model's limit. */
+export function streamEndedNearContextLimit(
+  model: Model<Api>,
+  messages: readonly Message[],
+  detail: string,
+): boolean {
+  if (
+    !/\bstream ended (?:before|without) (?:an? )?(?:terminal(?: response)? event|(?:stop|finish) reason|message_stop)\b/i.test(
+      detail,
+    )
+  )
+    return false;
+  // Pi's transcript estimator drops usage that predates a prepended compaction summary.
+  const { lastUsageIndex, usageTokens } = estimateContextTokens(messages);
+  const last = lastUsageIndex === null ? undefined : messages[lastUsageIndex];
+  if (
+    last?.role !== "assistant" ||
+    last.provider !== model.provider ||
+    last.model !== model.id ||
+    (last.stopReason !== "stop" &&
+      last.stopReason !== "toolUse" &&
+      last.stopReason !== "length")
+  )
+    return false;
+  const threshold =
+    model.contextWindow - DEFAULT_COMPACTION_POLICY.reserveTokens;
+  return threshold > 0 && usageTokens >= threshold;
+}
 
 /**
  * Why a route call failed, as the route provider records it on the failed `AssistantMessage` it

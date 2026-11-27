@@ -37,7 +37,11 @@ import {
 } from "../../../../../packages/channel/tests/helpers.ts";
 import { SOL_ROUTE } from "../../../src/route.ts";
 import { readCaptureJournal } from "../../../src/pi/capture/journal.ts";
-import { openRouteAdmission, createRouteModels } from "../../../src/coding.ts";
+import {
+  codingRouteLimits,
+  createRouteModels,
+  openRouteAdmission,
+} from "../../../src/coding.ts";
 import {
   openEndpoint,
   tokenCommand,
@@ -641,17 +645,46 @@ test("cancellation while actual Models wait sends nothing, and persistence failu
 
 test("admission precedes the credential owner, including a cancelled call", async () => {
   const path = root();
-  const endpoint = openEndpoint();
+  const requests: { path: string; authorization: string | null; at: number }[] =
+    [];
   try {
     const token = tokenCommand(path, "lease");
-    openRouteAdmission({
+    const heldAt = Date.now();
+    const admittedAt = heldAt + 2_000;
+    const auth = { tokenCommand: token.path };
+    const admission = openRouteAdmission({
       path: join(path, "route-admission.json"),
       route: SOL_ROUTE,
-      auth: { tokenCommand: token.path },
-    }).observe("2", Date.now());
-    const models = await (
-      await setup(path, endpoint)
-    ).models(worker(path), nativeModels());
+      auth,
+    });
+    admission.observe("2", heldAt);
+    const transport = {
+      auth,
+      admission,
+      fetch: Object.assign(
+        async (...args: Parameters<typeof fetch>) => {
+          const request = new Request(...args);
+          requests.push({
+            path: new URL(request.url).pathname,
+            authorization: request.headers.get("authorization"),
+            at: Date.now(),
+          });
+          return Response.json({ models: [] });
+        },
+        { preconnect: fetch.preconnect },
+      ),
+    };
+    const opening = codingRouteLimits(SOL_ROUTE, transport, () => {});
+    const models = createRouteModels({
+      ...transport,
+      route: SOL_ROUTE,
+      credentialInspection: "ephemeral",
+      capture: () => {},
+      runId: "coding-route-proof",
+      sessionAffinity: "coding-route-proof",
+      purpose: "caption",
+      conversationId: ROOT_CONVERSATION_ID,
+    });
     const result = await models.completeSimple(
       models.getModel("openai", SOL_ROUTE.model)!,
       {
@@ -665,19 +698,35 @@ test("admission precedes the credential owner, including a cancelled call", asyn
       },
       { signal: AbortSignal.timeout(30) },
     );
-    expect(result.stopReason).toBe("aborted");
-    expect(token.runs()).toBe(0);
-    expect(endpoint.received).toHaveLength(0);
+    const duringHold = {
+      stopReason: result.stopReason,
+      tokenLeases: token.runs(),
+      requests: requests.length,
+    };
+    await opening;
+    const modelListAfterMs = requests[0] && requests[0].at - heldAt;
     console.log(
       "ROUTE_AUTH_ORDER",
-      JSON.stringify({
-        stopReason: result.stopReason,
-        tokenLeases: 0,
-        requests: 0,
-      }),
+      JSON.stringify({ duringHold, modelListAfterMs }),
+    );
+    expect(duringHold).toEqual({
+      stopReason: "aborted",
+      tokenLeases: 0,
+      requests: 0,
+    });
+    expect(token.runs()).toBe(1);
+    expect(requests).toEqual([
+      {
+        path: "/v1/models",
+        authorization: "Bearer tok-1",
+        at: expect.any(Number),
+      },
+    ]);
+    expect(modelListAfterMs).toBeGreaterThanOrEqual(2_000);
+    expect(statSync(`${token.path}.count`).mtimeMs).toBeGreaterThanOrEqual(
+      admittedAt,
     );
   } finally {
-    endpoint.stop();
     rmSync(path, { recursive: true, force: true });
   }
 });

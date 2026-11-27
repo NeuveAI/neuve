@@ -353,18 +353,22 @@ const OTHER_MODEL: AnyRouteConfig = { ...OPUS_ROUTE, model: "claude-other" };
 // and effort are in every reading step's key, outside its inputs (`agentStageSpec`): the same route
 // reuses the stored reading, another model, effort or provider makes its own.
 for (const kind of ["assess", "lane-review"] as const)
-  test(`${kind}: the same route reuses the stored reading; another model, effort or provider reads again`, async () => {
-    // The same route twice: one computation, and the second review asks the model nothing.
-    const same = await twice(
-      `${kind}-same`,
-      kind,
-      { route: OPUS_ROUTE },
-      { route: OPUS_ROUTE },
-    );
-    expect(same.first.calls).toBe(1);
-    expect(same.second.calls).toBe(0);
-    expect(same.second.steps).toEqual(same.first.steps);
-    expect(same.rows).toHaveLength(1);
+  test(`${kind} reuses the stored reading until its route or ceiling changes`, async () => {
+    const location = storeLocationIn(join(directory, `${kind}-ceiling`));
+    const old = await review(location, kind, {
+      ...SOL_ROUTE,
+      window: 1_050_000,
+    });
+    const current = await review(location, kind, SOL_ROUTE);
+    const reused = await review(location, kind, SOL_ROUTE);
+    expect([old.calls, current.calls, reused.calls]).toEqual([1, 1, 0]);
+    expect(current.steps).not.toEqual(old.steps);
+    expect(reused.steps).toEqual(current.steps);
+    expect(
+      stored(location, OP[kind])
+        .map(({ material }) => JSON.parse(material).config.contextCeiling)
+        .sort((a, b) => a - b),
+    ).toEqual([237_500, 525_000]);
 
     // Each pair differs in one thing only: two computations, the second read by the model.
     const route = (r: AnyRouteConfig, effort?: RouteEffort) =>
