@@ -2006,7 +2006,11 @@ describe("what the first tests missed", () => {
                   {
                     name: "neuve",
                     path,
-                    enabled: enabled && process.args.includes(flag),
+                    enabled:
+                      !process.args.some((arg) =>
+                        arg.startsWith("skills.config="),
+                      ) ||
+                      (enabled && process.args.includes(flag)),
                   },
                 ],
               },
@@ -2046,13 +2050,21 @@ describe("what the first tests missed", () => {
   test.each([
     {
       reason: "write skills keep the highest-precedence path for each name",
+      disablesShared: false,
+      ignoresFlag: false,
+    },
+    {
+      reason:
+        "write skills keep the next enabled copy when the person's copy is off",
+      disablesShared: true,
       ignoresFlag: false,
     },
     {
       reason: "a write turn fails if Codex leaves a duplicate enabled",
+      disablesShared: false,
       ignoresFlag: true,
     },
-  ])("$reason", async ({ ignoresFlag }) => {
+  ])("$reason", async ({ disablesShared, ignoresFlag }) => {
     const cwd = await mkdtemp(resolve(import.meta.dir, ".skill-roots-"));
     try {
       const entries = [
@@ -2079,7 +2091,8 @@ describe("what the first tests missed", () => {
         );
         return entries.map((skill) => {
           const initiallyEnabled =
-            skill.folder !== "person/.agents/skills/personal";
+            skill.folder !== "person/.agents/skills/personal" &&
+            !(disablesShared && skill.folder === "person/.codex/skills/shared");
           const changed = flags?.includes(
             `{path=${JSON.stringify(skill.path)},enabled=${!initiallyEnabled}}`,
           );
@@ -2130,9 +2143,11 @@ describe("what the first tests missed", () => {
               fake.send("turn/completed", completed("completed"));
             if (!ignoresFlag)
               expect(enabled(own)).toEqual([
-                "person/.codex/skills/shared",
+                disablesShared
+                  ? ".agents/skills/shared"
+                  : "person/.codex/skills/shared",
                 ".codex/skills/project",
-                "person/.agents/skills/personal",
+                "person/.codex/skills/personal",
               ]);
             expect(yield* read.next("turn.finished")).toMatchObject({
               turnId: "write",

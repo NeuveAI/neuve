@@ -1161,6 +1161,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           for (const group of [...groups, undefined])
             for (const skill of discovered)
               if (
+                skill.enabled &&
                 !preferred.has(skill.name) &&
                 (group === undefined ||
                   group.some(
