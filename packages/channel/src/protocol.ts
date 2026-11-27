@@ -350,6 +350,25 @@ export type Build = {
 	state: BuildState;
 	/** Its agents, in the order the host started them. */
 	agents: BuildAgent[];
+	/** The plan's branch: the first implementer's lane branch, set once its worktree exists. */
+	branch?: string;
+	/** The plan's newest Neuve review, from the review cards of its agents' chats. */
+	review?: BuildReview;
+	/** The host merged the plan's pull request at `at`, in ms, at the person's click. */
+	merged?: { number: number; at: number };
+};
+
+/** A plan's newest Neuve review, as its card in agent chat `chat` last showed it. */
+export type BuildReview = {
+	chat: ChatId;
+	review: string;
+	phase: Extract<ReviewCard, { kind: "review" }>["phase"];
+	/** The reviewed head commit. */
+	head: string;
+	/** Units needing a person, once the review has finished. */
+	humanRequired?: number;
+	/** The review's batch on the desk, once it has one. */
+	desk?: string;
 };
 
 /** The one id of the build for version `hash` of a plan in planning chat `chat`. */
@@ -499,6 +518,11 @@ export type GithubPull = GithubItem & {
 	sha?: string;
 	/** What reviewers decided, when the base branch requires a review or someone gave one. */
 	review?: "approved" | "changes" | "required";
+	/**
+	 * Whether GitHub would merge it now: `ready` when it would, `blocked` by checks or required
+	 * reviews, `conflicts` with its base, `unknown` while GitHub works it out.
+	 */
+	merge?: "ready" | "blocked" | "conflicts" | "unknown";
 };
 export type GithubComment = {
 	id: string;
