@@ -1,3 +1,4 @@
+import { oneBatchPlanMap } from "./fixtures/readings.ts";
 // Why: rule skips (decision 14.17) let a section a code rule decides go without a model reading.
 // With the setting off, nothing may move: the plan, its key, the readings block and so the run key
 // must be byte for byte what the code at the base this branch is merged onto gave, or every stored
@@ -64,9 +65,9 @@ const AT_BASE = {
   plan: "209a650e9e276e00b787e7dc40bd8d7f20bee81070f93ff6fdf5746d2fed00fc",
   planByRisk:
     "31577f7ca9bc4dc553c952175bfeb83de5ca5583016696c1210200e85b0daf77",
-  planKey: "a5347245418f436f5bb200833adf79d1068bcfd7846707900d5fe9da74713119",
+  planKey: "10b128be7ac2b98b994ded7aa107bdbe2c003984cda83c566f0156e5de36d280",
   planKeyByRisk:
-    "0bcbc79bdf828fbbc90e76065300edb425ba25d38b41bbbdb285032e78bac949",
+    "db2bcfabef8e58ac089734f7d4c70c7d039b5482a2be005bb7167f3c64d9ee6a",
   config: {
     mode: "probe",
     bounds: { maxFiles: 16, maxCharacters: 48_000, maxItems: 40 },
@@ -136,14 +137,20 @@ test("with no decided sections the plan is byte for byte the base's", () => {
   expect(JSON.stringify(planOf(range))).not.toContain("decidedBy");
 });
 
-test("without rule skips the plan key is the base's; with them it keys apart and names the rules", () => {
-  // Why: a stored plan is found by this key; off, it must not move, and on, the plan depends on
-  // the judgements, so their key and the skips' recipe must be in it.
+test("the plan key includes Map and changes when it depends on rule judgements", () => {
+  // A replay must find the same plan, and changing Map or the rules must plan again.
   const spec = (extra: Partial<Parameters<typeof planSpec>[0]> = {}) =>
-    planSpec({ manifestKey: "m", bounds: BOUNDS, source: SOURCE, ...extra });
+    planSpec({
+      manifestKey: "m",
+      mapKey: "map",
+      bounds: BOUNDS,
+      source: SOURCE,
+      ...extra,
+    });
   expect(keyOf(spec())).toBe(AT_BASE.planKey);
   expect(keyOf(spec({ effort: "by-risk" }))).toBe(AT_BASE.planKeyByRisk);
   expect(keyOf(spec({ rules: undefined }))).toBe(AT_BASE.planKey);
+  expect(keyOf(spec({ mapKey: "different-map" }))).not.toBe(AT_BASE.planKey);
   for (const name of ["rules", "ruleSkips", "rulesRetryable"])
     expect(name in (spec().inputs as Record<string, unknown>)).toBe(false);
 
@@ -176,7 +183,13 @@ test("the plan keys on the rules computation that ran: retryable outcomes with t
   expect(keyOf(rulesRunSpec(stable, []))).toBe(keyOf(stable));
   const planKey = (rules: string) =>
     keyOf(
-      planSpec({ manifestKey: "m", bounds: BOUNDS, source: SOURCE, rules }),
+      planSpec({
+        manifestKey: "m",
+        mapKey: "map",
+        bounds: BOUNDS,
+        source: SOURCE,
+        rules,
+      }),
     );
   expect(planKey(keyOf(onA))).not.toBe(planKey(keyOf(onB)));
   expect(planKey(keyOf(rulesRunSpec(stable, [])))).toBe(planKey(keyOf(stable)));
@@ -448,6 +461,7 @@ test.skipIf(graph.skip)(
         storePlan(ctx, {
           manifestKey: manifest.key,
           bounds: DEFAULT_READING_BOUNDS,
+          map: oneBatchPlanMap(manifest),
           manifest: manifest.value,
         }),
       );

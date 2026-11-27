@@ -1,3 +1,4 @@
+import { oneBatchPlanMap } from "./fixtures/readings.ts";
 // Why (NEU-148 WP6, round 11): the content study found that the readings miss a change the goal
 // never asked for, and a behaviour change no test exercises, because neither reading is asked (22 of
 // 24 misses on the high passes). Both questions are built behind one setting, off by default
@@ -237,6 +238,7 @@ test("every setting admits comprehensive readings while historical answers and p
     (
       planSpec({
         manifestKey: "m",
+        mapKey: "map",
         bounds: DEFAULT_READING_BOUNDS,
         source: { unavailable: "test" },
       }).inputs as Record<string, unknown>
@@ -427,6 +429,7 @@ test.skipIf(graph.skip)(
       storePlan(ctx.off, {
         manifestKey: manifest.key,
         bounds,
+        map: oneBatchPlanMap(manifest),
         manifest: manifest.value,
       }),
     );
@@ -436,6 +439,7 @@ test.skipIf(graph.skip)(
         storePlan(ctx.on, {
           manifestKey: manifest.key,
           bounds,
+          map: oneBatchPlanMap(manifest),
           manifest: manifest.value,
         }),
       ),

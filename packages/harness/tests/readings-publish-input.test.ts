@@ -354,14 +354,6 @@ const review = async (name: string, options: Options = {}) => {
       source,
     ),
   );
-  const planKey = await run(
-    storePlan(ctx, {
-      manifestKey: manifest.key,
-      bounds: PROBE.bounds,
-      manifest: manifest.value,
-    }),
-  );
-  const plan = await run(storedOutput(ctx, planKey, ReadingPlan));
   const hunkList = manifest.value.hunks;
   const hunks = new Map(hunkList.map((hunk) => [hunk.hunkId, hunk]));
   const { structures } = await run(structuresOf(ctx, manifest.value));
@@ -399,6 +391,15 @@ const review = async (name: string, options: Options = {}) => {
     gaps: [],
   });
   const mapKey = await storeValue("test.map", map);
+  const planKey = await run(
+    storePlan(ctx, {
+      manifestKey: manifest.key,
+      bounds: PROBE.bounds,
+      manifest: manifest.value,
+      map: { key: mapKey, groups: map.groups },
+    }),
+  );
+  const plan = await run(storedOutput(ctx, planKey, ReadingPlan));
   // The Frame collect reads for each unit's Guided rows (round 25).
   const frameKey = await storeValue("test.frame", frame);
 

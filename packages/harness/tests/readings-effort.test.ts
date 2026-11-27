@@ -692,6 +692,7 @@ test("off, the plan is the parent commit's byte for byte; on, a file's flagged a
     Computations.computationKey(
       planSpec({
         manifestKey: "m",
+        mapKey: "map",
         bounds: { maxFiles: 16, maxCharacters: 48_000, maxItems: 40 },
         source: { sha256: "s" },
         ...(effort === undefined ? {} : { effort }),
@@ -702,6 +703,7 @@ test("off, the plan is the parent commit's byte for byte; on, a file's flagged a
     "effort" in
       (planSpec({
         manifestKey: "m",
+        mapKey: "map",
         bounds: { maxFiles: 16, maxCharacters: 48_000, maxItems: 40 },
         source: { sha256: "s" },
       }).inputs as Record<string, unknown>),

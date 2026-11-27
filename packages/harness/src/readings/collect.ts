@@ -37,7 +37,6 @@ import {
   type BlobStructure,
 } from "../sections.ts";
 import type { ReviewStagesPort } from "../pi/review-task.ts";
-import type { FrontResult } from "../pi/stages/front-task.ts";
 import type { RelationsResult } from "../pi/stages/relations-task.ts";
 import {
   ReadingsRunDoc,
@@ -179,30 +178,11 @@ export type CollectInput = Parameters<Port["collect"]>[0] & {
   readonly planCut?: boolean | undefined;
 };
 
-/**
- * What `prepare` reads, in either of two forms. Today's: the Frame and Map keys the review holds
- * once both landed. The early form, for a review that creates the readings as soon as the changed
- * sections exist: no Frame or Map key, but the front task that makes them (`front`), which every
- * reading task is given so it can see how that task ended, and each Lane review waits on for its
- * keys. The plan reads neither form's Frame or Map. Both forms are wider than the port's own input,
- * so the port's caller can pass today's form unchanged.
- */
-export type PrepareInput = (
-  | {
-      readonly frameKey: string;
-      readonly mapKey: string;
-      readonly manifestKey: string;
-      readonly cutoffAt: number;
-      readonly front?: undefined;
-    }
-  | {
-      readonly manifestKey: string;
-      readonly cutoffAt: number;
-      readonly front: TaskId<FrontResult>;
-      readonly frameKey?: undefined;
-      readonly mapKey?: undefined;
-    }
-) & {
+export type PrepareInput = {
+  readonly frameKey: string;
+  readonly mapKey: string;
+  readonly manifestKey: string;
+  readonly cutoffAt: number;
   /**
    * The head gate (`relations-task.ts`, `headGateOf`) every reading waits on before its read, so
    * its group decides with the head's relations when they come by the readings' bound. Absent: no
@@ -322,7 +302,7 @@ export const planSpec = (input: {
    * is exactly as before.
    */
   readonly rules?: string | undefined;
-  readonly mapKey?: string | undefined;
+  readonly mapKey: string;
 }): Computations.ComputationSpec => ({
   op: PLAN_OP,
   // 2: each section keeps its identity whole, its title and its code facts.
@@ -335,7 +315,8 @@ export const planSpec = (input: {
   // the commit (`pairPlan`).
   // 8: a submodule pointer section is in a reading group of its own (`isGitlink`), so the same
   // manifest gives another plan. Code only: the readings' recipe is not bumped again for it.
-  opVersion: input.mapKey === undefined ? 8 : 9,
+  // 9: reading groups are packed within Map's batches.
+  opVersion: 9,
   inputs: {
     manifest: `computation:${input.manifestKey}`,
     lockfiles: [...MAP_LOCKFILES],
@@ -344,9 +325,7 @@ export const planSpec = (input: {
     identity: SECTION_IDENTITY_RECIPE,
     structure: BLOB_STRUCTURE_RECIPE,
     source: input.source,
-    ...(input.mapKey === undefined
-      ? {}
-      : { map: `computation:${input.mapKey}` }),
+    map: `computation:${input.mapKey}`,
     bounds: { ...input.bounds },
     ...(input.effort === undefined ? {} : { effort: input.effort }),
     ...(input.rules === undefined
@@ -403,7 +382,12 @@ export const storePlan = (
     readonly manifestKey: string;
     readonly bounds: ReadingsConfig["bounds"];
     readonly manifest: RangeManifest;
-    readonly mapKey?: string | undefined;
+    readonly map: {
+      readonly key: string;
+      readonly groups: ReadonlyArray<{
+        readonly files: ReadonlyArray<{ readonly path: string }>;
+      }>;
+    };
     /** Effort by risk: pack the groups per class. */
     readonly effort?: "by-risk" | undefined;
   },
@@ -455,6 +439,7 @@ export const storePlan = (
         : undefined;
     const spec = planSpec({
       ...input,
+      mapKey: input.map.key,
       source: source.key,
       ...(rules === undefined ? {} : { rules: rules.key }),
     });
@@ -463,10 +448,6 @@ export const storePlan = (
       spec,
       Effect.gen(function* () {
         const { structures } = yield* structuresOf(ctx, input.manifest, source);
-        const map =
-          input.mapKey === undefined
-            ? undefined
-            : yield* storedOutput(ctx, input.mapKey, ReviewMap);
         const planned = yield* cpuWork(
           repositoryOwner(ctx.repository),
           Effect.sync(() =>
@@ -477,13 +458,9 @@ export const storePlan = (
               excluded: buildMapManifest(input.manifest).excluded,
               ...(input.effort === undefined ? {} : { split: input.effort }),
               ...(rules === undefined ? {} : { decided: rules.decided }),
-              ...(map === undefined
-                ? {}
-                : {
-                    batches: map.groups.map(
-                      (group) => new Set(group.files.map((file) => file.path)),
-                    ),
-                  }),
+              batches: input.map.groups.map(
+                (group) => new Set(group.files.map((file) => file.path)),
+              ),
             }),
           ),
         );
@@ -596,7 +573,6 @@ const Prepared = z.strictObject({
         rank: z.int().min(0),
         frameKey: z.string().optional(),
         mapKey: z.string().optional(),
-        front: z.int().min(0).optional(),
         /** The head gate every reading waits on (`ReadingTaskInput.relations`). */
         relations: z.int().min(0).optional(),
         manifestKey: z.string(),
@@ -622,7 +598,6 @@ const Prepared = z.strictObject({
           cutoffAt: z.number(),
           frameKey: z.string().optional(),
           mapKey: z.string().optional(),
-          front: z.int().min(0).optional(),
           effort: z.enum(["low", "medium", "high"]).optional(),
           role: z.enum(["parts", "digests"]).optional(),
         }),
@@ -673,8 +648,7 @@ export const byRiskOf = (
 /**
  * The reading tasks `prepare` lists for a plan, by rank, highest first, Assess before Lane review,
  * each with the effort its read and re-read run at, and a Lane review with its claims' checks' when
- * they have one of their own (`readingStepEffort`). Given the Frame and Map keys (today's form), each
- * Lane review task carries them; given the front task (the early form), every task carries its ID.
+ * they have one of their own (`readingStepEffort`). Each Lane review carries the Frame and Map keys.
  * Given the head gate, every task carries its ID too, and waits on it before its read.
  */
 export const readingTaskInputs = (
@@ -700,11 +674,9 @@ export const readingTaskInputs = (
           rank: group.rank,
           manifestKey: input.manifestKey,
           cutoffAt: input.cutoffAt,
-          ...(input.front !== undefined
-            ? { front: Number(input.front) }
-            : kind === "lane-review"
-              ? { frameKey: input.frameKey, mapKey: input.mapKey }
-              : {}),
+          ...(kind === "lane-review"
+            ? { frameKey: input.frameKey, mapKey: input.mapKey }
+            : {}),
           ...(effort === undefined ? {} : { effort }),
           ...(claimEffort === undefined ? {} : { claimEffort }),
           ...(input.relations === undefined
@@ -717,8 +689,8 @@ export const readingTaskInputs = (
 
 /**
  * The briefing tasks `prepare` lists for a plan (round 27): one per reading group, by rank, each at
- * the effort its calls run at (`readingStepEffort`, kind `brief`), given the Frame and Map keys or
- * the front task as the readings are. `create` adds every group's Assess task.
+ * the effort its calls run at (`readingStepEffort`, kind `brief`) and the Frame and Map keys.
+ * `create` adds every group's Assess task.
  */
 export const briefingTaskInputs = (
   plan: ReadingPlan,
@@ -734,9 +706,8 @@ export const briefingTaskInputs = (
       rank: group.rank,
       manifestKey: input.manifestKey,
       cutoffAt: input.cutoffAt,
-      ...(input.front !== undefined
-        ? { front: Number(input.front) }
-        : { frameKey: input.frameKey, mapKey: input.mapKey }),
+      frameKey: input.frameKey,
+      mapKey: input.mapKey,
       ...(effort === undefined ? {} : { effort }),
     };
     // The group's parts, and apart from them the digests of batches it shares and owns, which
@@ -1179,12 +1150,13 @@ export const readingsPort = (
     let manifest: RangeManifest;
     try {
       manifest = await readManifest(ctx, run, input.manifestKey, signal);
+      const map = await run(storedOutput(ctx, input.mapKey, ReviewMap), signal);
       planKey = await run(
         storePlan(ctx, {
           manifestKey: input.manifestKey,
           bounds: config.bounds,
           manifest,
-          mapKey: input.mapKey,
+          map: { key: input.mapKey, groups: map.groups },
           ...(config.effort === undefined ? {} : { effort: config.effort }),
         }),
         signal,

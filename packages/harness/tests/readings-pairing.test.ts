@@ -1,3 +1,4 @@
+import { oneBatchPlanMap } from "./fixtures/readings.ts";
 // Why (NEU-148 WP6, round 10): a removed line that released something (a listener, a timer, a
 // handle) is judged by the claim check on one section with no tools. Without the line that set it up,
 // the check cannot confirm a request lane review made with its tools, and drops it. The plan now
@@ -669,6 +670,7 @@ test.skipIf(graph.skip)(
       storePlan(ctx, {
         manifestKey: manifest.key,
         bounds: DEFAULT_READING_BOUNDS,
+        map: oneBatchPlanMap(manifest),
         manifest: manifest.value,
       }),
     );

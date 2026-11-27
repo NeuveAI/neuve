@@ -2,7 +2,7 @@ import { sha256Hex } from "@neuve/records-core";
 import type { Lane } from "@neuve/records-schema";
 import type { Suggestion } from "../../src/declarations.ts";
 import { hunkContentKey } from "../../src/hunks.ts";
-import type { ManifestHunk } from "../../src/manifest.ts";
+import type { ManifestHunk, RangeManifest } from "../../src/manifest.ts";
 import {
   computeBlobStructure,
   noStructure,
@@ -17,6 +17,20 @@ import type {
 } from "../../src/readings/decide.ts";
 import type { NamedProof } from "../../src/proof-state.ts";
 import type { Move } from "../../src/lane-rule.ts";
+
+export const oneBatchPlanMap = (manifest: {
+  readonly key: string;
+  readonly value: Pick<RangeManifest, "hunks">;
+}) => ({
+  key: `test-map:${manifest.key}`,
+  groups: [
+    {
+      files: [...new Set(manifest.value.hunks.map(({ path }) => path))].map(
+        (path) => ({ path }),
+      ),
+    },
+  ],
+});
 
 export const LANES: ReadonlyArray<Lane> = [
   "static-automation",

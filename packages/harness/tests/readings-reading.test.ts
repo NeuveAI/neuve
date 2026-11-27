@@ -776,6 +776,7 @@ test("the keys that carry the reading's rendering moved, and the listed digest d
   const planOf = (recipe: string) => {
     const spec = planSpec({
       manifestKey: "m",
+      mapKey: "map",
       bounds: { maxFiles: 16, maxCharacters: 48_000, maxItems: 40 },
       source: { sha256: "s" },
     });
