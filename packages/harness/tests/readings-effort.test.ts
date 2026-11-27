@@ -225,7 +225,7 @@ const keyOf = (
  * The row-reading round (a56671eb: each done-when row also gives its reading) moved the Lane review's
  * prompt version by two (12 to 14, past the scope-and-tests variant's 13) and its answer version from
  * 4 to 6 (past 5) on purpose, so every Lane review runs once again; it moved nothing else of these
- * keys, and no Assess or claim-check key. The two-tool-turn and caller-page rounds (17.67) then moved
+ * keys, and no Assess or claim-check key. The two-tool-turn and caller-page rounds (17.71) then moved
  * Lane review's prompt version by six more (14 to 20) and its turn limit from 3 to 4. The comparisons
  * with the parents set all of it back.
  */
