@@ -173,8 +173,7 @@ export function Composer(
 		return agents ? [{ name: AGENT_ALIAS.name, avatar }, ...working, ...people] : people;
 	}, [agents, working, members, avatar]);
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
-	// A chat that can't load can't answer either; asking again once it loads is how a refused
-	// channel's models recover, such as after a cloud workspace starts or Try again.
+	// A chat that can't load can't answer either, so its models are asked for once it loads.
 	const { models, error: modelError } = useModels(channel, agentic && ready);
 	// An agent draft leads with the agent's mention, except in Plan, which has no marker.
 	const agentDraft = (text: string) =>

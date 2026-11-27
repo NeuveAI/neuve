@@ -75,7 +75,7 @@ type Shown = {
 };
 
 /** What the picker shows for `picked` and `requested`, from the channel's own list of models. */
-export function shown(
+function shown(
 	models: readonly ModelOption[],
 	picked: string,
 	requested: Effort,

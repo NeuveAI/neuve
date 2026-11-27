@@ -410,7 +410,6 @@ export function Channel(
 	const work = builds?.list.length
 		? builds.list.reduce((sum, build) => sum + build.agents.length, 0) + builds.messages.length
 		: undefined;
-	// One list of models for every agent's line in the channel.
 	const { models } = useModels(channel, true);
 	const agentModel = useCallback(
 		(chat: number, plain?: boolean) => (

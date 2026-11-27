@@ -24,7 +24,6 @@ export function AgentModel({ channel, models, user, chat, plain }: Props) {
 				<>
 					<ModelPicker
 						size="line"
-						className="shrink"
 						models={running.choices}
 						model={running.model}
 						efforts={running.efforts}

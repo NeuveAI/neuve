@@ -337,7 +337,6 @@ export function Conversation(
 		() => Object.fromEntries([...agents].map(([author, agent]) => [author, agent.role])),
 		[agents],
 	);
-	// A mentioned agent's chip reads as its line does; its text keeps the mention's name.
 	const mentions = useMemo(() => [
 		...Object.entries(timelineAvatars).map(([name, avatar]) => ({ name, avatar })),
 		...[...agents.values()].map((agent) => ({ name: mentionName(agent), label: agentName(agent, [...agents.values()]) })),

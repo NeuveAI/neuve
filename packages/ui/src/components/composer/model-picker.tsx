@@ -29,7 +29,7 @@ export type Model = { id: string; name: string; vendor?: string };
 /** A reasoning effort accepted by the selected model. */
 export type Effort = { id: string; name: string };
 
-export type ModelPickerProps = {
+type ModelPickerProps = {
 	models: Model[];
 	model?: string;
 	/** Omitted, the model and effort show as text. */
