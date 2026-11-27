@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { loadavg, tmpdir } from "node:os";
+import { cpus, loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
 
 test("production coding owner survives fresh idle and genuine safe native continuation", async () => {
   const root = mkdtempSync(join(tmpdir(), "coding-certificate-reopen-"));
+  console.error(`[coding-reopen] diagnostic: ${cpus().length} CPUs, ${cpus()[0]?.model}`);
   const resolve = (path: string) => JSON.stringify(import.meta.resolve(path));
   const driver = join(root, "driver.ts");
   mkdirSync(join(root, "datasets", "coding"), { recursive: true });
