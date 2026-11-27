@@ -122,20 +122,55 @@ for (const lost of [false, true]) test(`a queued review wake keeps the old setti
 	} finally { blocked.release(); }
 });
 
-// A refusal must leave the owner with the same model and effort after the tool finishes.
+// The live ask must resolve to one offered route before an agent can retry a refused call.
+test("the plain Opus ask has one match in the lane model list", async () => {
+	const { run, watch } = await setup([
+		account("claude", "claude-subscription"),
+		account("codex", "chatgpt-subscription"),
+		account("main", "chatgpt-subscription"),
+	]);
+	const catalogue = await Bun.file(new URL("fixtures/plain-ask-lane-models.txt", import.meta.url)).text();
+	const rows = catalogue.trim().split("\n").slice(1);
+	for (const [provider, models] of Map.groupBy(rows, row => row.slice(0, row.indexOf("/")))) {
+		run.scripted.models.setProvider(fauxProvider({
+			provider, models: models.map(row => ({ id: row.slice(provider.length + 1), reasoning: true })),
+		}).provider);
+	}
+	const opus = { provider: "claude", modelId: "opus" };
+	run.script(
+		callModelTool("wrong-route", { model: { provider: "anthropic", modelId: "claude-opus-4-6" } }),
+		callModelTool("retry", { model: opus }),
+		fauxAssistantMessage("Done."),
+	);
+	await run.request({ op: "ask", author: OWNER, text: "move the frontend implementer to Opus" });
+	const refusal = await watch.until("result", event => event.call === "wrong-route");
+	expect(await watch.until("result", event => event.call === "retry")).toMatchObject({
+		error: false, text: "claude/opus, effort medium, pending until an input is sent while idle.",
+	});
+	expect((await run.channel.info()).chats[0]?.pending).toEqual({ model: opus });
+	expect(refusal).toMatchObject({
+		error: true, text: "The owner's latest message matches claude/opus and no available effort.",
+	});
+});
+
+// The tool must tell the caller what matched so it can retry, without changing either setting on refusal.
 const refusals = [
-	{ name: "a model outside the owner's words", text: "Use coder", args: { model: alternate } },
-	{ name: "a name that matches no model", text: "Use the big model", args: { model: alternate } },
-	{ name: "a name shared by two accounts", text: "Use job-model", args: { model: alternate }, duplicate: true },
-	{ name: "an effort outside the owner's words", text: "Use high effort", args: { effort: "low" } },
+	{ name: "a model outside the owner's words", text: "Use coder", args: { model: alternate }, matches: "faux/coder and no available effort" },
+	{ name: "a name that matches no model", text: "Use the big model", args: { model: alternate }, matches: "no available model and no available effort" },
+	{ name: "a name shared by two accounts", text: "Use job-model", args: { model: alternate }, duplicate: true,
+		matches: "another/job-model, other-account/job-model and no available effort" },
+	{ name: "an effort outside the owner's words", text: "Use high effort", args: { effort: "low" }, matches: "no available model and effort high" },
+	{ name: "two named effort levels", text: "Use low or high effort", args: { effort: "high" }, matches: "no available model and effort low, high" },
 ] as const;
-for (const { name, text, args, ...options } of refusals) test(`the tool refuses ${name}`, async () => {
+for (const { name, text, args, matches, ...options } of refusals) test(`the tool refuses ${name}`, async () => {
 	const { run, watch } = await setup();
 	offer(run);
 	if ("duplicate" in options) offer(run, "other-account");
 	run.script(callModelTool("model", args), fauxAssistantMessage("Please choose an available model."));
 	await run.request({ op: "ask", author: OWNER, text });
-	expect(await watch.until("result", event => event.call === "model")).toMatchObject({ error: true });
+	expect(await watch.until("result", event => event.call === "model")).toMatchObject({
+		error: true, text: expect.stringContaining(`The owner's latest message matches ${matches}.`),
+	});
 	expect((await run.channel.info()).chats[0]).toMatchObject(unchanged);
 	expect((await run.channel.info()).chats[0]?.pending).toBeUndefined();
 });

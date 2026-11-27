@@ -1,6 +1,6 @@
 import type { Models } from "@earendil-works/pi-ai";
 import { AgentDoc, defineExtension, defineTool, type ConversationId, type ToolExecutionResult, type Tx } from "@earendil-works/pi-durable";
-import { modelGroups } from "@neuve/runtime/listed-models";
+import { key as modelKey, modelGroups } from "@neuve/runtime/listed-models";
 import { z } from "zod";
 
 import { EffortSchema } from "./effort";
@@ -113,7 +113,11 @@ export function modelTool(
 				if ((!model && effort === undefined) || groups.length > 1 || foundEfforts.length > 1
 					|| model !== undefined && serving === undefined
 					|| effort !== undefined && (foundEfforts.length !== 1 || foundEfforts[0] !== effort)) {
-					return { content: [{ type: "text", text: refused }], isError: true };
+					const modelNames = groups.map(([first]) => modelKey(first)).join(", ") || "no available model";
+					const effortNames = foundEfforts.length ? `effort ${foundEfforts.join(", ")}` : "no available effort";
+					const message = `The owner's latest message matches ${modelNames} and ${effortNames}.`
+						+ (groups.length > 1 ? " Name the account when a model appears twice." : "");
+					return { content: [{ type: "text", text: message }], isError: true };
 				}
 				const change: PendingModel = {
 					...(serving ? { model: serving } : {}),
