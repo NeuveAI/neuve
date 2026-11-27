@@ -33,7 +33,6 @@ import { graphTestPrerequisite } from "../../../scripts/graph-test-prerequisite.
 import { defaultConfig, type ReadingsConfig } from "../src/config.ts";
 import { applyLane } from "../src/disposition.ts";
 import type { OwnedRange } from "@neuve/records-schema";
-import { FINDERS, FindStored } from "../src/find.ts";
 import { captureOutlineSource } from "../src/graph-outline.ts";
 import { defaultManifestSettings, frontManifest } from "../src/manifest.ts";
 import { McpClients, mcpClientsLayer } from "../src/mcp-client.ts";
@@ -618,88 +617,6 @@ const review = async (name: string, options: Options = {}) => {
   const labelHunk = hunkList.find((hunk) => hunk.path === "src/label.ts")!;
   const labelSection = plan.sections.find((s) => s.path === "src/label.ts")!;
   const labelLine = labelSection.owned.find((r) => r.side === "new")!.startLine;
-  const findKey = await storeValue(
-    "test.find",
-    FindStored.parse({
-      lens: "risky-edges",
-      source: "agent",
-      findings: [
-        {
-          id: "risky-edges.1",
-          lens: "risky-edges",
-          hunkId: labelHunk.hunkId,
-          claim: MARKS.finder,
-          kind: "risk",
-          about: "code",
-          signal: null,
-          critical: false,
-          anchors: [
-            {
-              path: "src/label.ts",
-              side: "new",
-              startLine: labelLine,
-              endLine: labelLine,
-            },
-          ],
-          doneWhen: null,
-          group: "m2",
-          evidence: [labelHunk.hunkId],
-        },
-        ...(options.strayFinding === true
-          ? [
-              {
-                id: "risky-edges.2",
-                lens: "risky-edges",
-                hunkId: labelHunk.hunkId,
-                claim: "STRAY-MARK a line no change owns",
-                kind: "risk",
-                about: "code",
-                signal: null,
-                critical: false,
-                anchors: [
-                  {
-                    path: "src/elsewhere.ts",
-                    side: "new",
-                    startLine: 1,
-                    endLine: 1,
-                  },
-                ],
-                doneWhen: null,
-                group: "m9",
-                evidence: [],
-              },
-            ]
-          : []),
-      ],
-      notes: [],
-      reading: { used: 0, limit: 1 },
-    }),
-  );
-  const finders = [
-    {
-      lens: "risky-edges" as const,
-      findKey,
-      findings: [
-        {
-          id: "risky-edges.1",
-          verifyKey: "verify-key",
-          status: "kept" as const,
-        },
-        ...(options.strayFinding === true
-          ? [
-              {
-                id: "risky-edges.2",
-                verifyKey: "verify-key-2",
-                status: "kept" as const,
-              },
-            ]
-          : []),
-      ],
-      stages: [],
-      end: { find: "completed" as const, verify: "completed" as const },
-    },
-  ];
-
   const registry = createRegistry();
   const services: StageServices = {
     ctx,
@@ -752,24 +669,10 @@ const review = async (name: string, options: Options = {}) => {
       context,
       signal,
     );
-  const batchesWithFinders = () =>
-    port.batches(
-      { ...keys, readings: readings.map(({ name }) => ({ name })), finders },
-      harness,
-      context,
-      signal,
-    );
-  // Every finder completed: the batch is held by its readings alone (`findersHold` is tested apart).
-  const findersEnded = FINDERS.map((lens) => ({
-    lens,
-    find: "completed" as const,
-    verify: "completed" as const,
-  }));
   const settle = (
     batch: string,
     last = false,
     ends: {
-      readonly findersEnded?: typeof findersEnded;
       readonly final?: boolean;
     } = {},
   ) =>
@@ -778,8 +681,7 @@ const review = async (name: string, options: Options = {}) => {
         ...keys,
         batch,
         readings,
-        finders,
-        findersEnded: ends.findersEnded ?? findersEnded,
+
         final: ends.final ?? false,
         last,
       },
@@ -788,7 +690,7 @@ const review = async (name: string, options: Options = {}) => {
       signal,
     );
   const collect = () =>
-    port.collect({ ...keys, readings, finders }, harness, context, signal);
+    port.collect({ ...keys, readings }, harness, context, signal);
   return {
     ctx,
     run,
@@ -798,11 +700,11 @@ const review = async (name: string, options: Options = {}) => {
     map,
     manifest: manifest.value,
     readings,
-    finders,
+
     defectKey,
     harness,
     batches,
-    batchesWithFinders,
+
     settle,
     collect,
   };
@@ -828,56 +730,6 @@ const allSettled = async (world: Review) => {
   return { listed, batches };
 };
 
-// Reason (round 14): the readers' own settle reads the finders' status. On a real review whose every
-// reading ended, a finder, or its Verify, not completed leaves each batch not reached with the plain
-// detail, whatever the status; with no successor (`final`) the same batch settles exactly as with
-// every finder completed.
-test.skipIf(graph.skip)(
-  "the readers' settle holds every batch while a finder has not completed, and settles it as before when the run is final",
-  async () => {
-    graph.require();
-    const world = await review("finders-hold");
-    const { listed, batches } = await allSettled(world);
-    for (const status of ["cutoff", "stopped", "skipped", "failed"] as const)
-      for (const step of ["find", "verify"] as const) {
-        const ends = FINDERS.map((lens) => ({
-          lens,
-          find: "completed" as const,
-          verify: "completed" as const,
-          ...(lens === "tests" ? { [step]: status } : {}),
-        }));
-        for (const [at, batch] of listed.batches.entries()) {
-          const held = await world.settle(batch.key, false, {
-            findersEnded: ends,
-          });
-          expect({ status, step, held }).toEqual({
-            status,
-            step,
-            held: {
-              settled: false,
-              gap: {
-                key: expect.stringMatching(/^batch-not-reached:/),
-                kind: "not-reached",
-                detail:
-                  status === "cutoff"
-                    ? "The finders did not finish before the review's cut-off, so this batch is still being judged."
-                    : "The finders did not finish, so this batch is not decided yet; the next run continues.",
-              },
-            },
-          });
-          const final = await world.settle(batch.key, false, {
-            findersEnded: ends,
-            final: true,
-          });
-          expect(final).toEqual({ settled: true, batch: batches[at]! });
-        }
-      }
-  },
-  120_000,
-);
-
-// Reason: a batch that fails the publisher's checks is not published, and the publisher is the one
-// that writes the review; so the real publisher, on a real store, must take every batch as built.
 test.skipIf(graph.skip)(
   "every batch of a real review passes the publisher's schema and checks, and the real publisher publishes them all with nothing refused",
   async () => {
@@ -1493,7 +1345,7 @@ test.skipIf(graph.skip)(
   "batches and settle write nothing and agree with what collect stores, its run gaps included; collect's decision is unchanged by them",
   async () => {
     graph.require();
-    const world = await review("agree", { strayFinding: true });
+    const world = await review("agree");
     const { batches } = await allSettled(world);
     expect(world.rows).toEqual([]);
     await world.collect();
@@ -1508,17 +1360,7 @@ test.skipIf(graph.skip)(
       return JSON.parse(JSON.stringify(rest));
     };
     expect(batches).toEqual(stored.batches.map(strip));
-    // The run's gaps: with the finders, exactly collect's, the stray finding among them; without
-    // them (the waiters' first call), only what the plan, manifest and Map give.
-    const withFinders = await world.batchesWithFinders();
-    expect(withFinders.gaps).toEqual(stored.gaps);
-    expect(withFinders.gaps.map((gap) => gap.kind)).toContain(
-      "finding-unplaced",
-    );
-    expect((await world.batches()).gaps.map((gap) => gap.kind)).not.toContain(
-      "finding-unplaced",
-    );
-    expect(withFinders.totals).toEqual(stored.totals);
+    expect((await world.batches()).gaps).toEqual(stored.gaps);
     const rowCount = world.rows.length;
     // Settling again after collect writes nothing more and gives the same batches.
     expect((await allSettled(world)).batches).toEqual(batches);

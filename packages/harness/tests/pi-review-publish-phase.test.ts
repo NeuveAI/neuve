@@ -24,7 +24,6 @@ import { Effect } from "effect";
 import { PublishedPackets } from "@neuve/records-core";
 import type { RecordEvent } from "@neuve/records-schema";
 import { defaultConfig } from "../src/config.ts";
-import { FINDERS } from "../src/find.ts";
 import {
   childOf,
   reviewExtension,
@@ -37,18 +36,8 @@ import {
   BATCH_WAITER_TASK,
   settledStages,
 } from "../src/pi/stages/batch-waiter-task.ts";
-import {
-  FINDER_STATUSES,
-  type FinderEnd,
-  type FinderInput,
-  type FinderResult,
-  type FinderStatus,
-} from "../src/pi/stages/finder-task.ts";
-import type { Lens } from "../src/find.ts";
-import { findersHold } from "../src/readings/batches.ts";
 import { droppedPlanGap } from "../src/readings/batches.ts";
 import { DROPPED_PLAN_GAP } from "../src/readings/collect.ts";
-import { findersEndedLine } from "../src/receipt.ts";
 import type { FrontInput, FrontResult } from "../src/pi/stages/front-task.ts";
 import { readingsPlanTask } from "../src/pi/stages/readings-plan-task.ts";
 import type { StageServices } from "../src/pi/stages/services.ts";
@@ -111,81 +100,12 @@ const gate = () => {
 
 /** How a reading ends: with an answer, cut off (not reached), or refused on quota. */
 type ReadingEnd = "completed" | "cutoff" | "quota";
-/**
- * How a stand-in finder ends: completed (the default); with a result whose `end` is the one given
- * (a status: its Find's; an object: both); or aborted with no result (the review fills in its entry).
- */
-type FinderChoice = FinderStatus | FinderEnd | "no-result";
-const recordStatus = (status: FinderStatus): StageRecord["status"] =>
-  status === "cutoff" || status === "stopped"
-    ? "interrupted"
-    : status === "skipped"
-      ? "skipped"
-      : "computed";
-
 const tasksOf = (gates: {
-  readonly finders: Promise<void>;
   readonly readings: Readonly<Record<string, Promise<void>>>;
   /** The front task ends with no Frame or Map, and starts no finder. */
   readonly frontFallback?: boolean;
   /** How each finder ends, by lens; absent, it completes. */
-  readonly finderEnds?: Partial<Record<Lens, FinderChoice>>;
 }) => {
-  const finder = defineTask<
-    FinderInput & { readonly end?: FinderChoice },
-    { phase: "run" },
-    FinderResult
-  >({
-    name: "test.finder",
-    version: 1,
-    initial: () => ({ phase: "run" }),
-    phases: {
-      run: async (task, runtime, context) => {
-        await Promise.race([gates.finders, abortOf(runtime.signal)]);
-        const choice = task.input.end ?? "completed";
-        const end: FinderEnd =
-          typeof choice === "object"
-            ? choice
-            : choice === "no-result"
-              ? { find: "cutoff", verify: "cutoff" }
-              : { find: choice, verify: "completed" };
-        await runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome:
-              choice === "no-result"
-                ? { status: "aborted", reason: "cutoff" }
-                : {
-                    status: "completed",
-                    result: {
-                      lens: task.input.lens,
-                      findKey: `find-${task.input.lens}`,
-                      findings: [],
-                      stages: [
-                        record(
-                          "find",
-                          `find.${task.input.lens}`,
-                          recordStatus(end.find),
-                        ),
-                      ],
-                      end,
-                    },
-                  },
-          }),
-          context,
-        );
-      },
-    },
-    abort: (_task, runtime, context) =>
-      runtime.commit(
-        () => ({
-          status: "terminal",
-          outcome: { status: "aborted", reason: "stopped" },
-        }),
-        context,
-      ),
-  });
-  // The front task starts the four finders, owned by the review, as the real one does when Frame lands.
   const front = defineTask<FrontInput, { phase: "run" }, FrontResult>({
     name: "test.front",
     version: 1,
@@ -212,29 +132,6 @@ const tasksOf = (gates: {
               },
             };
           const owner = (await tx.task(runtime.taskId))?.owner;
-          const finders: Array<{
-            lens: FinderInput["lens"];
-            task: TaskId<FinderResult>;
-          }> = [];
-          for (const lens of FINDERS)
-            finders.push({
-              lens,
-              task: await tx.createTask(
-                finder,
-                {
-                  lens,
-                  frameKey: "frame-key",
-                  manifestKey: "manifest-key",
-                  front: runtime.taskId,
-                  cutoffAt: task.input.cutoffAt,
-                  deadline: task.input.cutoffAt,
-                  ...(gates.finderEnds?.[lens] === undefined
-                    ? {}
-                    : { end: gates.finderEnds[lens] }),
-                },
-                { ownership: { kind: "task", taskId: owner! } },
-              ),
-            });
           return {
             status: "terminal",
             outcome: {
@@ -253,12 +150,6 @@ const tasksOf = (gates: {
                     detail: "An external source moved since it was read.",
                   },
                 ],
-                finders: {
-                  start: runtime.now(),
-                  deadline: task.input.cutoffAt,
-                  started: true,
-                  finders,
-                },
               },
             },
           };
@@ -314,7 +205,7 @@ const tasksOf = (gates: {
         context,
       ),
   });
-  return { finder, front, reading };
+  return { front, reading };
 };
 
 type Store = ReturnType<typeof scratch>;
@@ -362,7 +253,6 @@ const runReview = async (
     /** The request's run ID: each generation of a sequence is its own request. */
     readonly runId?: string;
     /** How each finder ends, by lens; absent, every finder completes. */
-    readonly finderEnds?: Partial<Record<Lens, FinderChoice>>;
     readonly storage?: Storage;
     readonly reviewId?: TaskId;
   },
@@ -370,14 +260,9 @@ const runReview = async (
   const fixtures = threeBatches();
   const byName = { a: fixtures.a, b: fixtures.b, c: fixtures.c } as const;
   const keyOf = (name: "a" | "b" | "c") => batchKeyOf(byName[name].paths);
-  const finders = gate();
   const readingGates = { a: gate(), b: gate(), c: gate() };
-  const { finder, front, reading } = tasksOf({
+  const { front, reading } = tasksOf({
     ...(options.frontFallback ? { frontFallback: true } : {}),
-    ...(options.finderEnds === undefined
-      ? {}
-      : { finderEnds: options.finderEnds }),
-    finders: finders.opened,
     readings: Object.fromEntries(
       Object.entries(readingGates).map(([n, g]) => [`r${n}`, g.opened]),
     ),
@@ -494,7 +379,6 @@ const runReview = async (
                         ]
                       : []),
                     RUN_GAP,
-                    ...(input.finders === undefined ? [] : [FINDER_GAP]),
                   ],
                 }),
                 // Settled when its reading completed; not reached when it was cut off, unless this
@@ -520,16 +404,6 @@ const runReview = async (
                     },
                   });
                   if (outcome?.status === "failed") return gap("quota");
-                  const held = findersHold(input.findersEnded, input.final);
-                  if (held !== undefined)
-                    return {
-                      settled: false as const,
-                      gap: {
-                        key: `batch:${name}`,
-                        kind: "not-reached",
-                        detail: held,
-                      },
-                    };
                   // A batch with no reading (the plan dropped): one that failed settles, every
                   // section the person's; one cut at its cut-off is not reached, as the readers
                   // decide it, unless this is the last allowed run.
@@ -668,7 +542,7 @@ const runReview = async (
   registry.install(
     defineExtension({
       name: "test.stages",
-      tasks: [front, finder, reading, plan, settled.task],
+      tasks: [front, reading, plan, settled.task],
     }),
   );
   registry.install(reviewExtension(observed));
@@ -716,7 +590,6 @@ const runReview = async (
     // a little apart, once the review made its waiters.
     const order = options.order ?? ["a", "b", "c"];
     const release = (async () => {
-      if (!options.holdFinders) finders.open();
       for (let i = 0; i < 250; i++) {
         if (
           options.holdFinders ||
@@ -728,14 +601,6 @@ const runReview = async (
       for (const name of order) {
         readingGates[name].open();
         await sleep(30);
-      }
-      if (options.holdFinders) {
-        // Every reading has ended; the finders have not: nothing may be published yet.
-        await sleep(50);
-        calls.push(
-          `before-finders:${ctx.log.read().filter((r) => r.type === "publish.settled").length}`,
-        );
-        finders.open();
       }
     })();
     if (options.crashAtCall !== undefined) {
@@ -858,50 +723,6 @@ const gapKinds = async (store: Store, packet: Packet) => {
 // Reason: with the readings off, or on without the builder (the probe's shape), the review commits,
 // creates and publishes exactly as before the publish phase existed: the old packet (`publish`),
 // no waiter, no `publishSettled` call, whether or not the publish phase's port is given.
-test("the off switch and the probe's shape publish exactly as before, with or without the publish port", async () => {
-  const clean = (run: Done) => ({
-    commits: run.commits,
-    published: run.published,
-    outcome: run.outcome,
-    waiters: run.waiters.length,
-    summaries: run.summaries.length,
-  });
-  const off = clean(
-    done(await runReview(scratch({ cycleId: CYCLE }), { publisher: false })),
-  );
-  const offWith = clean(done(await runReview(scratch({ cycleId: CYCLE }), {})));
-  expect(offWith).toEqual(off);
-  expect(off.waiters).toBe(0);
-  expect(off.summaries).toBe(0);
-  expect(off.published?.disclosures.map((d) => d.kind)).toEqual([
-    "source-moved",
-    "link",
-    "finding-unanchored",
-  ]);
-  const probe = clean(
-    done(
-      await runReview(scratch({ cycleId: CYCLE }), {
-        readings: ALL,
-        probe: true,
-        publisher: false,
-      }),
-    ),
-  );
-  const probeWith = clean(
-    done(
-      await runReview(scratch({ cycleId: CYCLE }), {
-        readings: ALL,
-        probe: true,
-      }),
-    ),
-  );
-  expect(probeWith).toEqual(probe);
-  expect(probe.waiters).toBe(0);
-  expect(probe.summaries).toBe(0);
-  expect(
-    probe.commits.some((c) => JSON.stringify(c).includes("publishing")),
-  ).toBe(false);
-});
 
 // Reason: the per-batch rule. Readings that end out of order still publish in batch order, one
 // serial call at a time, each packet superseding the last; the one ending call comes after every
@@ -959,14 +780,6 @@ test("three batches settled out of order publish in batch order, one call at a t
 
 // Reason: no batch publishes before the four finders (with their Verify children) end: the
 // readings all end first, and nothing is published until the finders do.
-test("no batch publishes before the finders end", async () => {
-  const store = scratch({ cycleId: CYCLE });
-  const run = done(
-    await runReview(store, { readings: ALL, holdFinders: true }),
-  );
-  expect(run.calls).toContain("before-finders:0");
-  expect((await packetsOf(store)).at(-1)?.payload.complete).toBe(true);
-});
 
 // Reason: the cut-off of the scheduler's amended shape. The review commits to Publish once its
 // readings ended and then waits for every waiter: a waiter that wakes after that publishes
@@ -992,23 +805,6 @@ test("waiters that wake after the review is at Publish end late; the ending call
 // freshness disclosure) and the run's gaps, the finders' included, are on every packet, so no
 // packet that holds agent decisions hides them; Link's own come on the ending packet, apart from
 // its placement of findings on the old units (`finding-unanchored`), which the new units replace.
-test("the review's disclosures are published: the early ones on every packet, Link's on the ending one", async () => {
-  const store = scratch({ cycleId: CYCLE });
-  done(await runReview(store, { readings: ALL, joined: true }));
-  const packets = await packetsOf(store);
-  expect(packets).toHaveLength(4);
-  for (const packet of packets)
-    expect(await gapKinds(store, packet)).toContain("source-moved");
-  // The run's gaps, the finders' included, are equal on every call.
-  for (const packet of packets)
-    expect(await gapKinds(store, packet)).toContain("findings-unread");
-  for (const packet of packets.slice(0, 3))
-    expect(await gapKinds(store, packet)).not.toContain("link");
-  expect(await gapKinds(store, packets[3]!)).toContain("link");
-  // Link's placement on the old units is not this path's: its unanchored finding is left out.
-  for (const packet of packets)
-    expect(await gapKinds(store, packet)).not.toContain("finding-unanchored");
-});
 
 // Reason: the gate ("a replay publishes identical packets") and record 0016. The same review run
 // again over the same Records writes nothing new; one stopped between two publications and resumed
@@ -1532,27 +1328,6 @@ test("a failed read of the follow-on cap counts as a successor that may exist: t
 // Reason (round 14, review N1): a passing store error is never taken for "no successor". With the
 // cap read failing at Link and a finder cut, no batch is decided, nothing says the finders did not
 // finish as though final, and one follow-on is asked.
-test("a failed cap read with a finder cut decides no batch and asks one follow-on", async () => {
-  const store = scratch({ cycleId: CYCLE });
-  const run = done(
-    await runReview(store, {
-      readings: ALL,
-      joined: true,
-      followOnLeftThrows: true,
-      finderEnds: { correctness: "cutoff" },
-    }),
-  );
-  expect(run.waiters.map((w) => w.outcome)).toEqual(Array(3).fill(notSettled));
-  expect(run.settles.every((s) => !s.final)).toBe(true);
-  expect(run.asked).toBe(1);
-  const packets = await packetsOf(store);
-  expect(packets).toHaveLength(1);
-  expect(packets[0]!.payload.added.batches).toBe(0);
-  expect(packets[0]!.payload.counts.pending).toEqual(TOTALS);
-  expect(await gapsOf(store, packets[0]!)).not.toContainEqual(
-    FINDERS_UNFINISHED,
-  );
-});
 
 // Reason (round 18, replacing ruling 5b's old-packet fallback for a plan that failed): with the
 // readings on and the plan dropped, a review never quietly publishes the old packet. A first run and
@@ -1658,163 +1433,12 @@ const expectNoSectionReversal = async (store: Store) => {
 // batch pending, and one follow-on is asked. With no successor (the cap reached, decided at Link),
 // the same review settles its batches, and every packet tells a reader, in plain words, that the
 // finders did not finish.
-test("a review whose finder was cut publishes no decided batch and asks one follow-on; with the cap reached it publishes and says the finders did not finish", async () => {
-  const store = scratch({ cycleId: CYCLE });
-  const run = done(
-    await runReview(store, {
-      readings: ALL,
-      joined: true,
-      finderEnds: { correctness: "cutoff" },
-    }),
-  );
-  expect(run.outcome.status).toBe("completed");
-  // Every waiter, woken by the cut finder, published nothing.
-  expect(run.waiters.map((w) => w.outcome)).toEqual(Array(3).fill(notSettled));
-  expect(run.settles.every((s) => !s.final)).toBe(true);
-  expect(run.asked).toBe(1);
-  const [only, ...more] = await packetsOf(store);
-  expect(more).toEqual([]);
-  expect(only!.payload.added.batches).toBe(0);
-  expect(only!.payload.complete).toBe(false);
-  expect(only!.payload.counts.pending).toEqual(TOTALS);
-  expect(await batchesOf(store, only!)).toEqual([]);
-  const gaps = await gapsOf(store, only!);
-  expect(gaps).toContainEqual({
-    kind: "batches-not-reached",
-    detail:
-      "The finders did not finish before the cut-off, so no batch was decided: they wait for a follow-on run, or for the next request when none starts.",
-  });
-  expect(gaps).toContainEqual({
-    kind: "not-reached",
-    detail:
-      "The finders did not finish before the review's cut-off, so this batch is still being judged.",
-  });
-  expect(gaps).not.toContainEqual(FINDERS_UNFINISHED);
-  // The cut finder's own interrupted record keeps the run timed-out.
-  expect(cutShortOf(run).map((s) => s.agent)).toEqual(["find.correctness"]);
-
-  // No successor: the cap was reached when the waiters were made. Each waiter publishes its batch,
-  // and the plain words are on every packet's run gaps, where a reader sees them.
-  const capStore = scratch({ cycleId: CYCLE });
-  const cap = done(
-    await runReview(capStore, {
-      readings: ALL,
-      joined: true,
-      finderEnds: { correctness: "cutoff" },
-      followOn: "cap-reached",
-    }),
-  );
-  expect(cap.asked).toBe(0);
-  expect(cap.waiters.map((w) => w.outcome)).toEqual(Array(3).fill(published));
-  expect(cap.settles.every((s) => s.final)).toBe(true);
-  const capPackets = await packetsOf(capStore);
-  expect(capPackets).toHaveLength(4);
-  for (const packet of capPackets)
-    expect(await gapsOf(capStore, packet)).toContainEqual(FINDERS_UNFINISHED);
-  expect(await batchesOf(capStore, capPackets.at(-1)!)).toEqual([
-    "Retry policy",
-    "Guards",
-    "Lookup table",
-  ]);
-});
 
 // Reason (round 14, the status): each status a finder, or its Verify, can end with, in turn, at the
 // settle point. Completed settles; every other leaves the batches not reached, with one follow-on
 // asked, unless the run can have no successor, when they settle and the packet says the finders did
 // not finish. A finder that left no result is the review's entry, never a completed one. The run
 // log's `finders.ended` row, which the receipt reads, says each finder's status.
-test("each finder status at the settle point: completed settles, every other holds the batches unless the run has no successor; the receipt says each", async () => {
-  const cases: Array<{
-    readonly choice: FinderChoice;
-    readonly label: string;
-  }> = [
-    ...FINDER_STATUSES.flatMap((status) => [
-      { choice: status, label: `find ${status}` },
-      {
-        choice: { find: "completed" as const, verify: status },
-        label: `Verify ${status}`,
-      },
-    ]),
-    { choice: "no-result", label: "no result" },
-  ];
-  for (const { choice, label } of cases)
-    for (const capReached of [false, true]) {
-      const store = scratch({ cycleId: CYCLE });
-      const run = done(
-        await runReview(store, {
-          readings: ALL,
-          joined: true,
-          finderEnds: { tests: choice },
-          ...(capReached ? { followOn: "cap-reached" as const } : {}),
-        }),
-      );
-      const completed =
-        choice === "completed" ||
-        (typeof choice === "object" && choice.verify === "completed");
-      const decided = completed || capReached;
-      const last = (await packetsOf(store)).at(-1)!;
-      expect({
-        label,
-        capReached,
-        batches: await batchesOf(store, last),
-      }).toEqual({
-        label,
-        capReached,
-        batches: decided ? ["Retry policy", "Guards", "Lookup table"] : [],
-      });
-      expect({ label, capReached, asked: run.asked }).toEqual({
-        label,
-        capReached,
-        asked: decided ? 0 : 1,
-      });
-      expect({
-        label,
-        capReached,
-        plain: (await gapsOf(store, last)).some(
-          (g) => g.kind === FINDERS_UNFINISHED.kind,
-        ),
-      }).toEqual({ label, capReached, plain: capReached && !completed });
-      // The receipt's line, from the row the review wrote.
-      const end =
-        choice === "no-result"
-          ? { find: "stopped", verify: "stopped" }
-          : typeof choice === "object"
-            ? choice
-            : { find: choice, verify: "completed" };
-      // Round 33 (C1): held, the ending call's gap and the synthetic stage name the cause: the
-      // cut-off only when the finder was cut; failed, stopped or skipped is "did not finish".
-      if (!decided) {
-        const cut =
-          (end.find === "cutoff" ? end.find : end.verify) === "cutoff";
-        expect({
-          label,
-          gap: (await gapsOf(store, last)).find(
-            (g) => g.kind === "batches-not-reached",
-          )?.detail,
-        }).toEqual({
-          label,
-          gap: `${cut ? "The finders did not finish before the cut-off, so no batch was decided" : "The finders did not finish, so no batch was decided yet"}: they wait for a follow-on run, or for the next request when none starts.`,
-        });
-        // The synthetic stage, only where no stage of the run is already cut short (a finder cut,
-        // stopped or skipped records its own).
-        const own = ["cutoff", "stopped", "skipped"].includes(end.find);
-        expect({
-          label,
-          note: cutShortOf(run).find((s) => s.agent === "link.batches")?.note,
-        }).toEqual({
-          label,
-          note: own
-            ? undefined
-            : `3 batch(es) not reached ${cut ? "by the cut-off" : "because the finders did not finish"}`,
-        });
-      }
-      const labelOf = (status: string) =>
-        status === "cutoff" ? "cut at the cut-off" : status;
-      expect(findersEndedLine(run.log)).toBe(
-        `Finders: scope-fit: find completed, Verify completed; correctness: find completed, Verify completed; risky-edges: find completed, Verify completed; tests: find ${labelOf(end.find)}, Verify ${labelOf(end.verify)}${completed ? "" : " (a follow-on runs it again)"}.`,
-      );
-    }
-}, 120_000);
 
 // Reason (14.6, round 14's chain under one run key): a follow-on reuses what is decided. Run 1
 // decides batch A with every finder completed and leaves B and C not reached; run 2, the follow-on
@@ -1862,39 +1486,3 @@ test("a chain under one run key: the follow-on leaves the decided batch byte-equ
 // Reason (the sequence that found this, plant 108): a review cut at its cut-off with a finder
 // unfinished publishes no decided batch; the follow-on under the same run key, its finders now
 // completed, decides them all, and matched by section key nothing is reversed.
-test("a review cut with a finder unfinished decides nothing; its follow-on completes it, reversing nothing by section key", async () => {
-  const store = scratch({ cycleId: CYCLE });
-  const first = done(
-    await runReview(store, {
-      readings: ALL,
-      joined: true,
-      finderEnds: {
-        "scope-fit": "no-result",
-        tests: { find: "completed", verify: "cutoff" },
-      },
-    }),
-  );
-  expect(first.asked).toBe(1);
-  const [cut] = await packetsOf(store);
-  expect(cut!.payload.added.batches).toBe(0);
-  expect((await bySection(store, cut!)).size).toBe(0);
-  const next = done(
-    await runReview(store, {
-      readings: ALL,
-      joined: true,
-      generation: 1,
-      runId: FOLLOW_ON_RUN,
-    }),
-  );
-  expect(next.outcome.status).toBe("completed");
-  expect(next.asked).toBe(0);
-  const packets = await expectNoSectionReversal(store);
-  const last = packets.at(-1)!;
-  expect(last.payload.complete).toBe(true);
-  expect(await batchesOf(store, last)).toEqual([
-    "Retry policy",
-    "Guards",
-    "Lookup table",
-  ]);
-  expect(await gapsOf(store, last)).not.toContainEqual(FINDERS_UNFINISHED);
-});

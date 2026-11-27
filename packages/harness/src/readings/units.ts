@@ -1,5 +1,5 @@
 import type { Lane } from "@neuve/records-schema";
-import { applyLane, overlaps, requirementsProof } from "../disposition.ts";
+import { applyLane, requirementsProof } from "../disposition.ts";
 import { LANE_ORDER } from "../lane-rule.ts";
 import type { Effect } from "./answers.ts";
 import {
@@ -183,10 +183,10 @@ export const SHOWN_COMMENTS = 3;
 export interface UnitComment {
   readonly id: string;
   /**
-   * Who raised it: Lane review, a finder, Assess (an impact entry) or code (a removal the code facts
+   * Who raised it: Lane review, Assess (an impact entry) or code (a removal the code facts
    * show and no impact entry names).
    */
-  readonly source: "lane-review" | "finder" | "assess" | "code";
+  readonly source: "lane-review" | "assess" | "code";
   readonly kind: "defect" | "risk" | "question" | "pattern-note" | "impact";
   /** An impact comment's effect. */
   readonly effect?: Effect | undefined;
@@ -241,8 +241,7 @@ const tierOf = (comment: UnitComment) => {
 };
 
 /**
- * A unit's comments in rank order: by tier; then those a finder and Lane review both anchor on
- * overlapping lines; then by number of cites; then by place. A comment the unit's request for
+ * A unit's comments in rank order: tier, number of citations, then position. A comment the unit's request for
  * changes rests on (`restsOn`) is always shown and does not count against the cut; of the rest,
  * the first three that are not refuted are shown and the others are below the cut. A refuted
  * claim keeps its place with fate `refuted` and is never shown. Every comment keeps its rank and
@@ -253,28 +252,14 @@ export const rankComments = (
   options: { readonly restsOn?: ReadonlyArray<string> | undefined } = {},
 ): ReadonlyArray<RankedComment> => {
   const restsOn = new Set(options.restsOn ?? []);
-  // Only a finder and Lane review agreeing counts; an impact comment from Assess or code never does.
-  const reviewers = (a: UnitComment, b: UnitComment) =>
-    (a.source === "finder" && b.source === "lane-review") ||
-    (a.source === "lane-review" && b.source === "finder");
-  const agreed = (comment: UnitComment) =>
-    comments.some(
-      (other) =>
-        reviewers(other, comment) &&
-        other.anchor.path === comment.anchor.path &&
-        other.anchor.side === comment.anchor.side &&
-        overlaps(other.anchor, comment.anchor),
-    );
   const placed = [...comments]
     .map((comment) => ({
       comment,
       tier: tierOf(comment),
-      agreed: agreed(comment),
     }))
     .sort(
       (a, b) =>
         a.tier - b.tier ||
-        Number(b.agreed) - Number(a.agreed) ||
         b.comment.cites - a.comment.cites ||
         (a.comment.anchor.path < b.comment.anchor.path
           ? -1

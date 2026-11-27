@@ -12,7 +12,6 @@ import {
   lineCiteOf,
 } from "@neuve/records-schema";
 import { publishSettled } from "../src/publish-sections.ts";
-import type { StoredFinding } from "../src/find.ts";
 import {
   assessExpand,
   type AssessAnswer,
@@ -23,13 +22,6 @@ import { readingIndexOf } from "../src/readings/reading.ts";
 import { COMMENT_ID, claimKey, commentKey } from "../src/readings/claims.ts";
 import { REMOVED_TEXT, codeFactsOf } from "../src/readings/code-facts.ts";
 import { planReadings, type ReadingPlan } from "../src/readings/plan.ts";
-import { recordedLane } from "../src/lane-rule.ts";
-import {
-  REBUILT_VERDICT_MOVES_NOTE,
-  replayHold,
-  replayNotes,
-  type StoredDecision,
-} from "../src/readings/replay-hold.ts";
 import { noStructure } from "../src/sections.ts";
 import {
   briefedOf,
@@ -50,7 +42,6 @@ import {
   unsureNote,
   type CollectedSection,
   type GuidedFrame,
-  type KeptFinding,
   type MapGroup,
   type SettledBatch,
 } from "../src/readings/settled.ts";
@@ -192,26 +183,6 @@ const collectedFor = (
     ],
   ]);
 
-/** A kept finder finding, by default a defect on helper's changed line, naming another Map group. */
-const finding = (overrides: Partial<StoredFinding> = {}): KeptFinding => ({
-  finding: {
-    id: "correctness.1",
-    lens: "correctness",
-    hunkId: helper.hunkIds[0]!,
-    claim: MARKS.finder,
-    kind: "defect",
-    about: "code",
-    signal: null,
-    critical: false,
-    anchors: [{ path: "src/parse.ts", side: "new", startLine: 4, endLine: 4 }],
-    doneWhen: null,
-    group: "m9",
-    evidence: [helper.hunkIds[0]!],
-    ...overrides,
-  },
-  findKey: FIND_KEY,
-});
-
 const group = (
   id: string,
   paths: ReadonlyArray<string>,
@@ -232,7 +203,6 @@ const build = (options: {
   readonly groups: ReadonlyArray<MapGroup>;
   /** The plan the sections were read in; the module's plan when absent. */
   readonly plan?: ReadingPlan;
-  readonly findings?: ReadonlyArray<KeptFinding>;
   readonly collected?: ReadonlyMap<string, CollectedSection>;
   /** The map's excluded list, when it is not the one the plan was made from. */
   readonly excluded?: typeof range.excluded;
@@ -250,7 +220,6 @@ const build = (options: {
     groups: options.groups,
     collected,
     proofs: new Map([["src/old.ts", RECORDS]]),
-    findings: options.findings ?? [],
     excluded: options.excluded ?? range.excluded,
     ...(options.relations === undefined
       ? {}
@@ -266,7 +235,7 @@ const build = (options: {
       frame: options.frame ?? NO_ROWS,
       sections: decided.sections,
       collected,
-      placement: decided.placement,
+
       proofs: options.proofs ?? new Set(["p1", "p2"]),
     }),
   };
@@ -365,7 +334,6 @@ test("a settled batch of a mixed range passes every check the publisher makes an
   // human-required unit: the kept-finding test covers that, 14.34.)
   const { out } = build({
     groups: [all],
-    findings: [finding({ about: "tests", kind: "risk" })],
   });
   expect(out.records.map((r) => [r.mapGroup, r.ready, r.problems])).toEqual([
     ["m1", true, []],
@@ -669,103 +637,8 @@ test("a settled batch of a mixed range passes every check the publisher makes an
 });
 
 // Reason: findings must not be lost or misplaced when units change shape.
-test("a kept finder defect makes its section request changes, placed by its anchor though it names another Map group", () => {
-  const { out, decided } = build({
-    groups: [group("m1", [...KEPT])],
-    findings: [finding()],
-  });
-  // A confirmed finder claim reached the deciding code before the lane and the verdict.
-  const entry = decided.sections.find((s) => s.section.key === helper.key)!;
-  expect(entry.claims).toEqual([
-    { id: "correctness.1", source: "finder", verify: "confirmed" },
-  ]);
-  expect(entry.decision).toMatchObject({
-    settled: true,
-    verdict: "request-changes",
-    restsOn: ["correctness.1"],
-  });
-  const unit = out.batches[0]!.units.find((u) =>
-    u.sectionKeys.includes(helper.key),
-  )!;
-  // The kept defect about code is also a move on complexity (14.28): helper, low and hard, becomes
-  // high and hard, cited on both axes, so human-required beside count.
-  expect(unit).toMatchObject({
-    lane: "human-required",
-    verdict: "request-changes",
-    disposition: "request-changes",
-  });
-  expect(unit.comments.filter((c) => c.section === helper.key)).toEqual([
-    {
-      id: "correctness.1",
-      section: helper.key,
-      kind: "defect",
-      about: "code",
-      body: MARKS.finder,
-      anchor: { path: "src/parse.ts", side: "new", startLine: 4, endLine: 4 },
-      evidence: [
-        { ref: `computation:${MANIFEST_KEY}`, entry: helper.hunkIds[0]! },
-      ],
-      shown: true,
-      restedOn: true,
-    },
-  ]);
-  // A finding's ID outside the records' form is hashed, the same in the claim and the comment.
-  const odd = build({
-    groups: [group("m1", [...KEPT])],
-    findings: [finding({ id: "correctness one" })],
-  }).out.batches[0]!.units.find((u) => u.sectionKeys.includes(helper.key))!;
-  const oddComment = odd.comments.find((c) => c.section === helper.key)!;
-  expect(oddComment.id).toMatch(/^f\.[0-9a-f]{64}$/);
-  expect(oddComment.restedOn).toBe(true);
-});
 
 // Reason: nothing dropped silently.
-test("a finding whose anchor no section owns is returned as unplaced with a reason and disclosed", () => {
-  const { out } = build({
-    groups: [group("m1", [...KEPT])],
-    findings: [
-      // The unchanged import line: no section owns it.
-      finding({
-        id: "risky-edges.1",
-        kind: "risk",
-        anchors: [
-          { path: "src/parse.ts", side: "new", startLine: 1, endLine: 1 },
-        ],
-      }),
-      // The excluded lockfile, on the batch's own group.
-      finding({
-        id: "risky-edges.2",
-        kind: "question",
-        group: "m1",
-        anchors: [{ path: "bun.lock", side: "new", startLine: 1, endLine: 1 }],
-      }),
-    ],
-  });
-  expect(out.unplaced).toEqual([
-    { id: "risky-edges.1", group: "m9", reason: "no-owner" },
-    { id: "risky-edges.2", group: "m1", reason: "excluded" },
-  ]);
-  // One gap about the run (its group is no batch), one on the batch it named.
-  expect(out.gaps).toEqual([
-    {
-      key: expect.stringMatching(/^finding-unplaced:[0-9a-f]{16}$/),
-      kind: "finding-unplaced",
-      detail:
-        "One verified finding is on lines no changed section owns, so it is not shown on any unit.",
-    },
-  ]);
-  expect(out.batches[0]!.gaps).toEqual([
-    {
-      key: expect.stringMatching(/^finding-unplaced:[0-9a-f]{16}$/),
-      kind: "finding-unplaced",
-      detail:
-        "One verified finding is on a lockfile or a generated file, which no reading reads, so it is not shown on any unit.",
-    },
-  ]);
-  // Neither is on any unit.
-  for (const unit of out.batches[0]!.units)
-    expect(unit.comments.map((c) => c.id)).not.toContain("risky-edges.1");
-});
 
 // Reason: a batch that is not settled is never published.
 test("an unsettled group yields no settled batch and counts in the totals as pending", () => {
@@ -907,7 +780,7 @@ test("a defect claim Verify neither confirmed nor refuted is handed over as a qu
     groups,
     collected,
     proofs: new Map(),
-    findings: [],
+
     excluded: [],
   });
   const out = settledBatches({
@@ -918,7 +791,7 @@ test("a defect claim Verify neither confirmed nor refuted is handed over as a qu
     frame: NO_ROWS,
     sections: decided.sections,
     collected,
-    placement: decided.placement,
+
     proofs: new Set(),
   });
   expect(out.batches).toHaveLength(1);
@@ -1296,164 +1169,6 @@ test("a file whose sections were read in two reading groups gives the units it g
 // so the person never saw it: as a move, the risk about code makes it high and easy, the reading's
 // agentic answer is void, and it is human-suggested with the agent's approval beside it. A finding
 // about tests makes it hard to validate; a pattern note moves nothing (ruling 1); nothing is lowered.
-test("a kept finding is a move on the matrix: a risk about code raises complexity, one about tests makes it hard, a pattern note moves nothing, the verdict kept", () => {
-  const groups = [group("m1", [...KEPT])];
-  // helper: low and easy, approved, its relations gap lifted (shown whole), so agentic on its own.
-  const lifted = new Map(collectedFor());
-  lifted.set(helper.key, {
-    assess: assessed(judgementFor("agentic")),
-    review: reviewed("approve"),
-    claims: [],
-    steps: STEP,
-  });
-  const decide = (findings: ReadonlyArray<KeptFinding>) => {
-    const { decided, out } = build({
-      groups,
-      collected: lifted,
-      findings,
-      relations: new Set([helper.key]),
-    });
-    const entryOf = (key: string) => {
-      const decision = decided.sections.find(
-        (s) => s.section.key === key,
-      )!.decision!;
-      if (!decision.settled) throw new Error("not settled");
-      return decision.entry;
-    };
-    const unitOf = (key: string) =>
-      out.batches[0]!.units.find((u) => u.sectionKeys.includes(key))!;
-    return { entryOf, unitOf };
-  };
-  const risk = finding({
-    id: "risky-edges.1",
-    lens: "risky-edges",
-    kind: "risk",
-  });
-  const recomputed = (
-    entry: ReturnType<ReturnType<typeof decide>["entryOf"]>,
-  ) =>
-    recordedLane(
-      {
-        assess: entry.assess,
-        lane: { floors: entry.lane.floors },
-      },
-      [],
-    );
-
-  // No kept finding: the lift makes it agentic, approved; no move and no floor.
-  const none = decide([]);
-  expect(none.entryOf(helper.key).lane).toEqual({
-    judged: "agentic",
-    surfaced: "agentic",
-    floors: [],
-    applied: "agentic",
-  });
-  expect(none.entryOf(helper.key).assess!.movement).toEqual([]);
-  expect(none.entryOf(helper.key).floorInputs.facts).toEqual({
-    removesDeclaration: false,
-    removesPublicName: false,
-    effects: [],
-  });
-
-  // The plant-203 shape: the kept risk about code is one move on complexity, cited by its ID; the
-  // section is human-suggested by `laneOf` itself (no floor), still approved, the finding shown.
-  const withRisk = decide([risk]);
-  const entry = withRisk.entryOf(helper.key);
-  expect(entry.assess!.movement).toEqual([
-    {
-      signal: "kept-finding",
-      axis: "complexity",
-      direction: "toward-human",
-      cites: ["risky-edges.1"],
-    },
-  ]);
-  expect(entry.lane).toEqual({
-    judged: "human-suggested",
-    surfaced: "human-suggested",
-    floors: [],
-    applied: "human-suggested",
-  });
-  // The stored entry's lane is what the rule gives from the entry alone.
-  expect(recomputed(entry).applied).toBe("human-suggested");
-  expect(recomputed(entry).quadrant).toBe("high-easy");
-  expect(entry.verdict).toBe("approve");
-  expect(withRisk.unitOf(helper.key)).toMatchObject({
-    lane: "human-suggested",
-    verdict: "approve",
-    disposition: "approve",
-  });
-  expect(
-    withRisk.unitOf(helper.key).comments.map((c) => [c.id, c.kind]),
-  ).toEqual([["risky-edges.1", "risk"]]);
-
-  // A question about code moves complexity the same way.
-  expect(
-    decide([finding({ id: "x.question", kind: "question" })]).entryOf(
-      helper.key,
-    ).lane.applied,
-  ).toBe("human-suggested");
-  // A risk about tests makes validation hard: low and hard, human-suggested.
-  const tests = decide([
-    finding({ id: "tests.1", lens: "tests", kind: "risk", about: "tests" }),
-  ]).entryOf(helper.key);
-  expect(tests.assess!.movement.map((m) => m.axis)).toEqual([
-    "ease-of-validation",
-  ]);
-  expect(recomputed(tests).quadrant).toBe("low-hard");
-  expect(tests.lane.applied).toBe("human-suggested");
-  // A pattern note gives no move: the section stays agentic, the note still shown on its unit.
-  const note = decide([finding({ id: "x.note", kind: "pattern-note" })]);
-  expect(note.entryOf(helper.key).assess!.movement).toEqual([]);
-  expect(note.entryOf(helper.key).lane.applied).toBe("agentic");
-  expect(note.unitOf(helper.key).comments.map((c) => [c.id, c.kind])).toEqual([
-    ["x.note", "pattern-note"],
-  ]);
-
-  // A kept defect: a move on complexity, and the verdict a request for changes resting on it, which
-  // under lane rule 5 also moves both axes (14.34): high and hard, human-required.
-  const withDefect = decide([finding()]);
-  expect(withDefect.entryOf(helper.key)).toMatchObject({
-    lane: { floors: [], applied: "human-required" },
-    verdict: "request-changes",
-    restsOn: ["correctness.1"],
-  });
-  expect(
-    withDefect
-      .entryOf(helper.key)
-      .assess!.movement.map((m) => [m.signal, m.axis]),
-  ).toEqual([
-    ["kept-finding", "complexity"],
-    ["confirmed-request-changes", "complexity"],
-    ["confirmed-request-changes", "ease-of-validation"],
-  ]);
-  expect(withDefect.unitOf(helper.key)).toMatchObject({
-    lane: "human-required",
-    disposition: "request-changes",
-  });
-
-  // Nothing is lowered: count is human-required, and a kept risk on it leaves it there.
-  const onCount = decide([
-    finding({
-      id: "risky-edges.2",
-      lens: "risky-edges",
-      kind: "risk",
-      hunkId: count.hunkIds[0]!,
-      anchors: [
-        { path: "src/parse.ts", side: "new", startLine: 11, endLine: 11 },
-      ],
-      evidence: [count.hunkIds[0]!],
-    }),
-  ]);
-  // The kept risk's move, then the two its confirmed Lane review defect's request gives (14.34).
-  expect(onCount.entryOf(count.key).assess!.movement).toHaveLength(3);
-  expect(onCount.entryOf(count.key).lane).toMatchObject({
-    floors: [],
-    applied: "human-required",
-  });
-  // A finding placed elsewhere moves nothing here.
-  expect(onCount.entryOf(helper.key).assess!.movement).toEqual([]);
-  expect(onCount.entryOf(helper.key).lane.applied).toBe("agentic");
-});
 
 // Reason (14.34, both axes; the release lane's clean-account run): a change to a test file had three
 // planted bugs, the Lane review requested changes on three defect claims Verify confirmed, no finder
@@ -1524,153 +1239,12 @@ test("a test file's request for changes on three confirmed Lane review defects i
       ),
     ).toHaveLength(1);
   }
-  // Kept finder defects about tests: rule 4's move on validation still comes first, then rule 5's two.
-  const onDrop = (id: string, kind: "defect" | "pattern-note") =>
-    finding({
-      id,
-      lens: "tests",
-      kind,
-      about: "tests",
-      hunkId: drop.hunkIds[0]!,
-      anchors: [
-        {
-          path: "src/old.ts",
-          side: "old",
-          startLine: owned.startLine,
-          endLine: owned.startLine,
-        },
-      ],
-      evidence: [drop.hunkIds[0]!],
-    });
-  const kept = build({
-    groups,
-    findings: [onDrop("tests.1", "defect"), onDrop("tests.2", "defect")],
-  });
-  const keptDecision = kept.decided.sections.find(
-    (s) => s.section.key === drop.key,
-  )!.decision!;
-  if (!keptDecision.settled) throw new Error("not settled");
-  expect(
-    keptDecision.entry.assess!.movement.map((m) => [m.signal, m.axis]),
-  ).toEqual([
-    ["kept-finding", "ease-of-validation"],
-    ["kept-finding", "ease-of-validation"],
-    ["confirmed-request-changes", "complexity"],
-    ["confirmed-request-changes", "ease-of-validation"],
-  ]);
-  expect(keptDecision.entry.lane.applied).toBe("human-required");
-  // An approval beside a kept pattern note: no move, the proven test stays static automation.
-  const note = build({ groups, findings: [onDrop("tests.3", "pattern-note")] });
-  const noteDecision = note.decided.sections.find(
-    (s) => s.section.key === drop.key,
-  )!.decision!;
-  if (!noteDecision.settled) throw new Error("not settled");
-  expect(noteDecision.entry.verdict).toBe("approve");
-  expect(noteDecision.entry.assess!.movement).toEqual([]);
-  expect(noteDecision.entry.lane.applied).toBe("static-automation");
 });
 
 // Reason (14.34): decisions stored under lane rule 4 hold no verdict moves, and gates replay such
 // runs to see what rule 5 would do. The replay rebuilds the moves from each decided section's stored
 // verdict and the confirmed claims it rests on, as the harness places them, and says so; the rule 4
 // columns never read them. A decision stored under rule 5 holds them, and the replay reads them.
-test("a decision stored under lane rule 4 replays with the verdict's moves rebuilt; one stored under rule 5 reads its own", () => {
-  const groups = [group("m1", [...KEPT])];
-  // helper low and easy, its relations shown, so the kept defect about code makes it high and easy.
-  const collected = new Map(collectedFor());
-  collected.set(helper.key, {
-    assess: assessed(judgementFor("agentic")),
-    review: reviewed("approve"),
-    claims: [],
-    steps: STEP,
-  });
-  const { decided } = build({
-    groups,
-    collected,
-    findings: [finding()],
-    relations: new Set([helper.key]),
-  });
-  const stored5: StoredDecision = {
-    plan: PLAN_KEY,
-    sections: decided.sections.map((s) => ({
-      key: s.section.key,
-      path: s.section.path,
-      decision: s.decision,
-    })),
-    units: [],
-    settled: [{ units: [{ laneRule: 5 }] }],
-  };
-  // The same decision as rule 4 stored it: no verdict moves, and rule 4's lane.
-  const stored4: StoredDecision = {
-    ...stored5,
-    settled: [{ units: [{ laneRule: 4 }] }],
-    sections: stored5.sections.map((s) => {
-      if (
-        s.decision === null ||
-        !s.decision.settled ||
-        s.decision.entry.assess === null
-      )
-        return s;
-      const assess = {
-        ...s.decision.entry.assess,
-        movement: s.decision.entry.assess.movement.filter(
-          (m) => m.signal === "kept-finding",
-        ),
-      };
-      const trail = recordedLane({ ...s.decision.entry, assess }, []);
-      return {
-        ...s,
-        decision: {
-          ...s.decision,
-          entry: {
-            ...s.decision.entry,
-            assess,
-            lane: { ...s.decision.entry.lane, applied: trail.applied },
-          },
-        },
-      };
-    }),
-  };
-  const replay = (decision: StoredDecision) =>
-    replayHold({ decision, plan, hunks, shown: new Set() });
-  const four = replay(stored4);
-  const five = replay(stored5);
-  const at = (rows: typeof four, key: string) =>
-    rows.find((r) => r.key === key)!;
-  for (const key of [helper.key, count.key]) {
-    const old = at(four, key);
-    const now = at(five, key);
-    expect([key, old.verdictMovesFrom, now.verdictMovesFrom]).toEqual([
-      key,
-      "rebuilt",
-      "stored",
-    ]);
-    // Rebuilt or stored, the same moves and the same rule 5 lanes.
-    expect(old.verdictMoves).toEqual(now.verdictMoves);
-    expect(old.verdictMoves.map((m) => m.axis)).toEqual([
-      "complexity",
-      "ease-of-validation",
-    ]);
-    expect([old.confirmedLift, old.confirmedHold]).toEqual([
-      now.confirmedLift,
-      now.confirmedHold,
-    ]);
-    expect(now.confirmedHold).toBe("human-required");
-    // The rule 4 columns read only the kept findings' moves, in both.
-    expect(old.matrixHold).toBe(now.matrixHold);
-  }
-  // helper: rule 4 human-suggested (high and easy by the kept defect), rule 5 human-required.
-  expect([
-    at(four, helper.key).matrixHold,
-    at(four, helper.key).confirmedHold,
-  ]).toEqual(["human-suggested", "human-required"]);
-  expect(at(five, helper.key).published).toBe("human-required");
-  // An approved section gets no verdict move either way.
-  expect(at(four, drop.key).verdictMoves).toEqual([]);
-  expect(at(four, drop.key).confirmedHold).toBe(at(four, drop.key).matrixHold);
-  expect(replayNotes(four)).toContain(REBUILT_VERDICT_MOVES_NOTE);
-  expect(replayNotes(five)).not.toContain(REBUILT_VERDICT_MOVES_NOTE);
-});
 
 // ---------------------------------------------------------------------------------------------
 // Round 25: the Guided stop, the review message, the suggestion and Briefed, by code
@@ -3566,7 +3140,7 @@ test("Guided row text, its words and its reading carry no section or decision co
     },
     sections: decision.sections,
     collected: briefingFixture.collected(),
-    placement: decision.placement,
+
     proofs: new Set(["p1", "p2"]),
   });
   const rows = out.batches

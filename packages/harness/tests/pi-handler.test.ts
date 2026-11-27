@@ -23,10 +23,8 @@ const root = mkdtempSync(
 );
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-// The policy and close cases test the handler's policy and native export at close, not the section
-// readings, which are on by default: their scratch home's settings turn the readings off, so the
-// review runs as before the flip.
-const readingsOff = (home: string) => {
+// Exercise a scratch home whose settings still contain the retired switch.
+const legacySettings = (home: string) => {
   mkdirSync(dirname(settingsPath(home)), { recursive: true });
   writeFileSync(
     settingsPath(home),
@@ -36,7 +34,7 @@ const readingsOff = (home: string) => {
 
 test("a lapsed credential holds the run, the same claim wakes nothing, and the next claim resumes it", async () => {
   mkdirSync(join(root, "home"));
-  readingsOff(join(root, "home"));
+  legacySettings(join(root, "home"));
   const {
     OPENAI_API_KEY: _openai,
     ANTHROPIC_API_KEY: _anthropic,
@@ -63,7 +61,8 @@ test("a lapsed credential holds the run, the same claim wakes nothing, and the n
   const observed = JSON.parse(lines[lines.length - 1]!);
 
   expect(observed.taskKinds).toContain("neuve.front");
-  expect(observed.taskKinds).toContain("neuve.finder");
+  expect(observed.taskKinds).not.toContain("neuve.finder");
+  expect(observed.taskKinds).toContain("neuve.reading");
   expect(observed.taskKinds).not.toContain("neuve.understand");
   expect(observed.taskKinds).not.toContain("neuve.batch");
   expect(observed.receiptTotals.retries).toBe(0);
@@ -206,7 +205,7 @@ test.each([
   async (policy) => {
     const directory = join(root, policy);
     mkdirSync(join(directory, "home"), { recursive: true });
-    readingsOff(join(directory, "home"));
+    legacySettings(join(directory, "home"));
     const {
       OPENAI_API_KEY: _openai,
       ANTHROPIC_API_KEY: _anthropic,
@@ -328,7 +327,7 @@ test.each([
   async (policy) => {
     const directory = join(root, policy);
     mkdirSync(join(directory, "home"), { recursive: true });
-    readingsOff(join(directory, "home"));
+    legacySettings(join(directory, "home"));
     const {
       OPENAI_API_KEY: _openai,
       ANTHROPIC_API_KEY: _anthropic,

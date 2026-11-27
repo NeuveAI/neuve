@@ -1009,9 +1009,9 @@ const startOf = (entry: ReadManyEntry) =>
 /** What a call answers when the reading budget is spent: the instruction first, so it survives. */
 const spentAnswer = (left: number) =>
   [
-    `Reading budget spent. Submit your findings. (${left.toLocaleString("en")} characters are left, too few to read any of these entries.)`,
-    "Reading budget spent. Submit your findings.",
-    "Submit your findings.",
+    `Reading budget spent. Submit your review. (${left.toLocaleString("en")} characters are left, too few to read any of these entries.)`,
+    "Reading budget spent. Submit your review.",
+    "Submit your review.",
     "Submit.",
   ].find((text) => text.length <= left) ?? "Submit.";
 
@@ -1434,7 +1434,7 @@ export const readManyTool = (
                   : later === 1
                     ? `, and entry ${stop.at + 2}`
                     : `, and entries ${stop.at + 2} to ${count}`;
-              text = `${text}\n[read_many stopped: the reading budget is all but spent, with fewer than ${Math.max(0, (remaining ?? 0) - text.length).toLocaleString("en")} characters left after this result, too few to show any more. Not read: entry ${stop.at + 1}${startOf(stop.next)}${rest}. There is nothing to ask again; submit your findings.]`;
+              text = `${text}\n[read_many stopped: the reading budget is all but spent, with fewer than ${Math.max(0, (remaining ?? 0) - text.length).toLocaleString("en")} characters left after this result, too few to show any more. Not read: entry ${stop.at + 1}${startOf(stop.next)}${rest}. There is nothing to ask again; submit your review.]`;
             }
           }
           yield* Effect.annotateCurrentSpan({

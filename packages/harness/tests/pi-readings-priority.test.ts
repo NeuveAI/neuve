@@ -51,9 +51,6 @@ const port: ReviewStagesPort = {
   front: async () => {
     throw new Error("no front in this test");
   },
-  finder: async () => {
-    throw new Error("no finder in this test");
-  },
   fill: async () => ({ record: record("link", "link.fill"), groups: [] }),
   link: async () => {
     throw new Error("no link in this test");

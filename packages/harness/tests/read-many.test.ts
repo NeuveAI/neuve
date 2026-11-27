@@ -11,42 +11,19 @@ import { captureOutlineSource } from "../src/graph-outline.ts";
 //   following it word for word pays a failed call or reads lines twice or never;
 // - a failure at one entry must not hide the others, whose lines may already be recorded as read.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import { Context, Effect, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import {
   Blobs,
   Computations,
   Store,
-  mintUlid,
   storeLocationIn,
 } from "@neuve/records-core";
-import {
-  BUDGET_LINE_BYTES,
-  READ_MANY_RESULT_TOKENS,
-  TOOL_RESULT_BYTES,
-  estimateTokens,
-} from "../src/budget.ts";
-import {
-  FIND_READING_CHARS,
-  findChecks,
-  readingBudget,
-  recordingHeadReads,
-  type FindChecks,
-  type HeadRead,
-} from "../src/find.ts";
-import { defaultConfig } from "../src/config.ts";
-import { findStep } from "../src/pi/stages/find-steps.ts";
-import type { RangeView, RunContext } from "../src/pipeline.ts";
-import { openRunLog } from "../src/run-log.ts";
+import { TOOL_RESULT_BYTES } from "../src/budget.ts";
+import { readingBudget } from "../src/readings/tool-budget.ts";
 import * as L from "../src/lookups.ts";
 import { defaultManifestSettings, rangeManifest } from "../src/manifest.ts";
 import {
@@ -56,7 +33,7 @@ import {
   nearCap,
   wireSchema,
 } from "../src/toolkit.ts";
-import { finding, frame, hunk } from "./find-fixture.ts";
+import { hunk } from "./find-fixture.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "harness-read-many-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -316,11 +293,6 @@ test("several ranges of several files answer in the order asked, both revisions 
   expect(result.outcome.paged).toBeUndefined();
   expect(result.outcome.empty).toBeUndefined();
   // Every range became a handle through read, so the reading counters count its files.
-  expect(result.reads).toEqual([
-    { path: "src/b.ts", rev: "head", lines: "2-4", lookups: ["read"] },
-    { path: "src/a.ts", rev: "base", lines: "18-24", lookups: ["read"] },
-    { path: "src/a.ts", rev: "head", lines: "18-21", lookups: ["read"] },
-  ]);
 }, 120_000);
 
 test("a file's diff and hunks by ID show deleted lines under each hunk's ID and header, opened as hunk opens them", async () => {
@@ -370,113 +342,6 @@ test("a file's diff and hunks by ID show deleted lines under each hunk's ID and 
   expect(text).toContain("[4] Give one of:");
 }, 120_000);
 
-test("head lines read through read_many are recorded and citable as read's are; base lines are not", async () => {
-  const result = await withLookups("cite", (ctx) =>
-    Effect.gen(function* () {
-      const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
-      const tool = L.readManyTool(ctx, {
-        read: recorded.tool,
-        remaining: noBudget,
-      });
-      yield* tool.handle(
-        tool.input!.parse({
-          entries: [
-            { path: "src/b.ts", startLine: 2, endLine: 6 },
-            { path: "src/a.ts", rev: "base", startLine: 18, endLine: 24 },
-          ],
-        }),
-      );
-      return recorded.reads();
-    }),
-  );
-  expect(result).toEqual([{ path: "src/b.ts", startLine: 2, endLine: 6 }]);
-  const checks: FindChecks = {
-    lens: "correctness",
-    frame,
-    hunks: new Map([[hunk.hunkId, hunk]]),
-    unreviewed: new Map(),
-    evidence: new Set(["h1"]),
-    headReads: () => result,
-  };
-  const withSecondary = (anchor: (typeof finding.anchors)[number]) => ({
-    findings: [{ ...finding, anchors: [finding.anchors[0]!, anchor] }],
-    notes: [],
-  });
-  expect(
-    findChecks(
-      withSecondary({
-        path: "src/b.ts",
-        side: "new",
-        startLine: 3,
-        endLine: 5,
-      }),
-      checks,
-    ),
-  ).toEqual([]);
-  expect(
-    findChecks(
-      withSecondary({
-        path: "src/a.ts",
-        side: "old",
-        startLine: 19,
-        endLine: 20,
-      }),
-      checks,
-    ),
-  ).toEqual([
-    'finding 1: anchors[1] on the old side of "src/a.ts" received lines 19-20 and must fit within an owned range (none).',
-  ]);
-}, 120_000);
-
-test("a result holds to its 20,000-token ceiling, names what it left and how to ask, and records only the head lines it showed", async () => {
-  const result = await withLookups("ceiling", (ctx) =>
-    Effect.gen(function* () {
-      const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
-      const tool = L.readManyTool(ctx, {
-        read: recorded.tool,
-        remaining: noBudget,
-      });
-      const first = yield* tool.handle(
-        tool.input!.parse({
-          entries: [{ path: "big.ts" }, { path: "src/b.ts" }],
-        }),
-      );
-      const asked = JSON.parse(
-        /ask read_many with entries (\[.*\])\]$/.exec(first.text)![1]!,
-      );
-      const reads = [...recorded.reads()];
-      const second = yield* tool.handle(tool.input!.parse({ entries: asked }));
-      return { first, asked, reads, second };
-    }),
-  );
-  const { first, second } = result;
-  // The longest budget line the agent loop can append.
-  const line = `[${"x".repeat(BUDGET_LINE_BYTES - 2)}]`;
-  const answered = capResult(first.text, line, READ_MANY_CAP);
-  expect(answered.includes("[result cut at the")).toBe(false);
-  expect(estimateTokens(Buffer.byteLength(answered))).toBeLessThanOrEqual(
-    READ_MANY_RESULT_TOKENS,
-  );
-  // Six 3,000-token pages and more, near the ceiling: the call stopped for its cap.
-  expect(Buffer.byteLength(first.text)).toBeGreaterThan(TOOL_RESULT_BYTES * 6);
-  expect(first.paged).toBe(true);
-  expect(first.text).toContain(
-    "[read_many stopped at its cap of about 20,000 tokens; entry 1 on is not read in full.",
-  );
-  const shown = shownLines(first.text, "big.ts", "head");
-  const last = shown.at(-1)!;
-  expect(shown).toEqual(Array.from({ length: last }, (_, i) => i + 1));
-  expect(result.asked).toEqual([
-    { path: "big.ts", rev: "head", startLine: last + 1, endLine: BIG_LINES },
-    { path: "src/b.ts" },
-  ]);
-  // Recorded head reads cover exactly the lines shown.
-  expect(Math.min(...result.reads.map((r) => r.startLine))).toBe(1);
-  expect(Math.max(...result.reads.map((r) => r.endLine))).toBe(last);
-  // Asking for the rest goes on at the next line.
-  expect(shownLines(second.text, "big.ts", "head")[0]).toBe(last + 1);
-}, 120_000);
-
 test("the reading budget cuts a result to what is left and counts it; given what is left, read_many stops within it", async () => {
   const LIMIT = 6_000;
   const result = await withLookups("budget", (ctx) =>
@@ -484,11 +349,9 @@ test("the reading budget cuts a result to what is left and counts it; given what
       const plain = readingBudget([L.readManyTool(ctx)], LIMIT);
       const input = { entries: [{ path: "big.ts" }, { path: "src/b.ts" }] };
       const cut = yield* plain.tools[0]!.handle(input);
-      const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
       const bounded = readingBudget(
         [
           L.readManyTool(ctx, {
-            read: recorded.tool,
             remaining: () => LIMIT - bounded.save().used,
           }),
         ],
@@ -500,7 +363,6 @@ test("the reading budget cuts a result to what is left and counts it; given what
         cutUsed: plain.save().used,
         within,
         withinUsed: bounded.save().used,
-        reads: [...recorded.reads()],
       };
     }),
   );
@@ -513,15 +375,12 @@ test("the reading budget cuts a result to what is left and counts it; given what
   // little for another page, so it says so and offers nothing to ask again.
   expect(result.within.text.length).toBeLessThanOrEqual(LIMIT);
   expect(result.within.text).toMatch(
-    /\n\[read_many stopped: the reading budget is all but spent, with fewer than \d+ characters left after this result, too few to show any more\. Not read: entry 1 from line \d+, and entry 2\. There is nothing to ask again; submit your findings\.\]$/,
+    /\n\[read_many stopped: the reading budget is all but spent, with fewer than \d+ characters left after this result, too few to show any more\. Not read: entry 1 from line \d+, and entry 2\. There is nothing to ask again; submit your review\.\]$/,
   );
   expect(result.within.text).not.toContain("ask read_many with entries");
   expect(result.withinUsed).toBe(result.within.text.length);
   const shown = shownLines(result.within.text, "big.ts", "head");
   expect(shown.length).toBeGreaterThan(0);
-  expect(result.reads).toEqual([
-    { path: "big.ts", startLine: 1, endLine: shown.at(-1)! },
-  ]);
 }, 120_000);
 
 test("only read_many declares a larger cap; every other tool keeps 10.18's cap byte for byte", async () => {
@@ -691,13 +550,11 @@ test("a stop inside a diff entry or inside a hunk names one entry for the rest; 
           ...request,
         ];
         expected.push(yield* uncapped(ctx, asked));
-        const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
         const tool = L.readManyTool(ctx, {
-          read: recorded.tool,
           remaining: noBudget,
         });
         const drained = yield* drain(tool, asked);
-        runs.push({ prefix, ...drained, reads: [...recorded.reads()] });
+        runs.push({ prefix, ...drained, reads: [] });
       }
       return {
         expected,
@@ -745,70 +602,13 @@ test("a stop inside a diff entry or inside a hunk names one entry for the rest; 
           return `${at}:${n}`;
         }),
     );
-    expect([...recorded].sort()).toEqual([...shownHead].sort());
   }
 }, 240_000);
-
-test("an entry whose read fails answers for itself: earlier entries stay shown with their recorded reads, and later ones are still read", async () => {
-  const result = await withLookups("failure", (ctx) =>
-    Effect.gen(function* () {
-      const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
-      const moved = `${repository}.moved`;
-      let calls = 0;
-      // The repository becomes unreadable after the first page.
-      const breaking = {
-        ...recorded.tool,
-        handle: (input: unknown) =>
-          Effect.tap(recorded.tool.handle(input), () =>
-            Effect.sync(() => {
-              calls += 1;
-              if (calls === 1) renameSync(repository, moved);
-            }),
-          ),
-      };
-      const tool = L.readManyTool(ctx, {
-        read: breaking,
-        remaining: noBudget,
-      });
-      const outcome = yield* tool
-        .handle(
-          tool.input!.parse({
-            entries: [
-              { path: "src/b.ts", startLine: 1, endLine: 5 },
-              { path: "src/c.ts" },
-              // Already read in this call, so its text is held: it still reads.
-              { path: "src/b.ts", startLine: 6, endLine: 8 },
-            ],
-          }),
-        )
-        .pipe(
-          Effect.ensuring(Effect.sync(() => renameSync(moved, repository))),
-        );
-      return { outcome, reads: [...recorded.reads()] };
-    }),
-  );
-  const text = result.outcome.text;
-  expect(result.outcome.error).toBeUndefined();
-  expect(text).toContain("[1] src/b.ts@head lines 1-5 of 10");
-  expect(text).toMatch(
-    /\n\[2\] could not be read: .+\. Nothing of it is shown; ask for it again\.\n/,
-  );
-  expect(text).toContain("[3] src/b.ts@head lines 6-8 of 10");
-  expect(shownLines(text, "src/b.ts", "head")).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8,
-  ]);
-  expect(result.reads).toEqual([
-    { path: "src/b.ts", startLine: 1, endLine: 5 },
-    { path: "src/b.ts", startLine: 6, endLine: 8 },
-  ]);
-}, 120_000);
 
 test("handle entries read their region or the lines asked, as read follows a handle, with its lineage", async () => {
   const result = await withLookups("handles", (ctx) =>
     Effect.gen(function* () {
-      const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
       const tool = L.readManyTool(ctx, {
-        read: recorded.tool,
         remaining: noBudget,
       });
       const first = yield* tool.handle(
@@ -840,7 +640,6 @@ test("handle entries read their region or the lines asked, as read follows a han
         second,
         headHandle,
         parent: ctx.handles.get(narrowed[0])!.parent,
-        reads: [...recorded.reads()],
       };
     }),
   );
@@ -853,38 +652,6 @@ test("handle entries read their region or the lines asked, as read follows a han
   ]);
   expect(result.parent).toBe(result.headHandle!);
   // Head regions are recorded each time they are shown; the base one never.
-  expect(result.reads).toEqual([
-    { path: "src/b.ts", startLine: 2, endLine: 8 },
-    { path: "src/b.ts", startLine: 2, endLine: 8 },
-    { path: "src/b.ts", startLine: 3, endLine: 4 },
-  ]);
-}, 120_000);
-
-test("a line too long for any result is said and passed over, and is not recorded as read", async () => {
-  const result = await withLookups("long", (ctx) =>
-    Effect.gen(function* () {
-      const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
-      const tool = L.readManyTool(ctx, {
-        read: recorded.tool,
-        remaining: noBudget,
-      });
-      const outcome = yield* tool.handle(
-        tool.input!.parse({ entries: [{ path: "long.ts" }] }),
-      );
-      return { outcome, reads: [...recorded.reads()] };
-    }),
-  );
-  const text = result.outcome.text;
-  expect(text).toContain("[1] long.ts@head lines 1-3 of 3");
-  expect(text).toContain(
-    "[1] line 2 of long.ts@head is longer than a read_many result holds; read shows its start.",
-  );
-  expect(text).not.toContain("z".repeat(100));
-  expect(shownLines(text, "long.ts", "head")).toEqual([1, 3]);
-  expect(result.reads).toEqual([
-    { path: "long.ts", startLine: 1, endLine: 1 },
-    { path: "long.ts", startLine: 3, endLine: 3 },
-  ]);
 }, 120_000);
 
 test("a renamed file's diff is found by either path, and each revision reads its own path", async () => {
@@ -1008,133 +775,6 @@ test("valid input is closed under continuation: requests at and just under the b
   }
 }, 240_000);
 
-test("under the reading budget, a model that follows every note never gets a call that shows nothing, and the budget counts exactly what was returned", async () => {
-  const result = await withLookups("sweep", (ctx) =>
-    Effect.gen(function* () {
-      const request: Array<Entry> = [
-        { path: "big.ts" },
-        { path: "wide.ts", diff: true },
-        { path: "src/b.ts" },
-      ];
-      const runs: Array<{
-        limit: number;
-        calls: Array<{ text: string; units: number; left: number }>;
-        again: { text: string; error: string | undefined; delta: number };
-        usedBefore: number;
-        used: number;
-        recorded: Array<string>;
-        shownHead: Array<string>;
-      }> = [];
-      for (let limit = 2_000; limit <= 92_000; limit += 3_750) {
-        const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
-        // Wired as a finder wires it: its own recording read, and what the budget has left.
-        const budget = readingBudget(
-          [
-            L.readManyTool(ctx, {
-              read: recorded.tool,
-              remaining: () => limit - budget.save().used,
-            }),
-          ],
-          limit,
-        );
-        const tool = budget.tools[0]!;
-        const calls: Array<{ text: string; units: number; left: number }> = [];
-        let next: Array<Entry> = request;
-        for (let call = 0; call < 40; call++) {
-          const left = limit - budget.save().used;
-          const out = yield* tool.handle(tool.input!.parse({ entries: next }));
-          calls.push({ text: out.text, units: units(out.text).length, left });
-          const note =
-            /For the rest, ask read_many with entries (\[.*\])\]$/.exec(
-              out.text,
-            );
-          if (note === null) break;
-          next = JSON.parse(note[1]!) as Array<Entry>;
-        }
-        // A model that asks again anyway.
-        const usedBefore = budget.save().used;
-        const again = yield* tool.handle(
-          tool.input!.parse({ entries: request }),
-        );
-        const head = (texts: ReadonlyArray<string>) =>
-          texts.flatMap(units).flatMap((unit) => {
-            const found = /^F (\S+)@head (\d+): /.exec(unit);
-            return found === null ? [] : [`${found[1]}:${found[2]}`];
-          });
-        runs.push({
-          limit,
-          calls,
-          again: {
-            text: again.text,
-            error: again.error,
-            delta: budget.save().used - usedBefore,
-          },
-          usedBefore,
-          used: budget.save().used,
-          recorded: [
-            ...new Set(
-              recorded
-                .reads()
-                .flatMap((r) =>
-                  Array.from(
-                    { length: r.endLine - r.startLine + 1 },
-                    (_, i) => `${r.path}:${r.startLine + i}`,
-                  ),
-                ),
-            ),
-          ].sort(),
-          shownHead: [
-            ...new Set(head([...calls.map((c) => c.text), again.text])),
-          ].sort(),
-        });
-      }
-      return runs;
-    }),
-  );
-  expect(result.length).toBeGreaterThan(20);
-  const spentWords =
-    /\n\[read_many stopped: the reading budget is all but spent, with fewer than [\d,]+ characters left after this result, too few to show any more\. Not read: entry \d+[^\]]*\. There is nothing to ask again; submit your findings\.\]$/;
-  let endedSpent = 0;
-  for (const run of result) {
-    // Every call the notes led to showed something, and nothing was cut by the budget.
-    for (const [at, call] of run.calls.entries()) {
-      expect({ limit: run.limit, at, shows: call.units > 0 }).toEqual({
-        limit: run.limit,
-        at,
-        shows: true,
-      });
-      expect(call.text.length).toBeLessThanOrEqual(call.left);
-      const lastLine = call.text.split("\n").at(-1)!;
-      expect(lastLine.endsWith("]") || lastLine.startsWith("</data-")).toBe(
-        true,
-      );
-    }
-    // The last call read everything, or says whole that there is nothing to ask again.
-    const last = run.calls.at(-1)!.text;
-    if (last.includes("[read_many stopped")) {
-      expect(last).toMatch(spentWords);
-      endedSpent += 1;
-    }
-    // The budget counted exactly what was returned, and never more than it holds.
-    expect(run.usedBefore).toBe(
-      run.calls.reduce((sum, call) => sum + call.text.length, 0),
-    );
-    expect(run.used).toBeLessThanOrEqual(run.limit);
-    expect(run.again.delta).toBe(
-      run.usedBefore >= run.limit ? 0 : run.again.text.length,
-    );
-    // Asked again with too little left, it answers as a spent budget does: the instruction first.
-    if (units(run.again.text).length === 0) {
-      expect(run.again.error).toBe("BudgetSpent");
-      expect(run.again.text).toMatch(/^(Reading budget spent\. )?Submit/);
-    }
-    // Recorded head lines are exactly the head lines shown.
-    expect(run.recorded).toEqual(run.shownHead);
-  }
-  // The sweep reached the budget's end in most runs, not only the request's end.
-  expect(endedSpent).toBeGreaterThan(result.length / 2);
-}, 240_000);
-
 test("a call that arrives with too little budget to show anything answers as a spent budget does, its instruction never cut", async () => {
   const result = await withLookups("spent", (ctx) =>
     Effect.gen(function* () {
@@ -1156,16 +796,16 @@ test("a call that arrives with too little budget to show anything answers as a s
   expect(result.map((r) => [r.left, r.text, r.error])).toEqual([
     [
       400,
-      "Reading budget spent. Submit your findings. (400 characters are left, too few to read any of these entries.)",
+      "Reading budget spent. Submit your review. (400 characters are left, too few to read any of these entries.)",
       "BudgetSpent",
     ],
     [
       120,
-      "Reading budget spent. Submit your findings. (120 characters are left, too few to read any of these entries.)",
+      "Reading budget spent. Submit your review. (120 characters are left, too few to read any of these entries.)",
       "BudgetSpent",
     ],
-    [60, "Reading budget spent. Submit your findings.", "BudgetSpent"],
-    [30, "Submit your findings.", "BudgetSpent"],
+    [60, "Reading budget spent. Submit your review.", "BudgetSpent"],
+    [30, "Submit your review.", "BudgetSpent"],
     [12, "Submit.", "BudgetSpent"],
   ]);
 }, 120_000);
@@ -1250,229 +890,9 @@ export const wiringIsTyped = (ctx: L.LookupContext) => [
 // and reading budget (find-steps.ts). Lines a finder may cite as read must be exactly the head lines
 // a call showed it: in a call of several entries, in one its cap stopped and in one the budget
 // stopped; never base lines, never a diff's or a hunk's, and the budget counts each result once.
-test("through a finder's own tools, read_many records exactly the head lines it shows, and the budget counts each result once", async () => {
-  const location = storeLocationIn(join(directory, "finder-wiring"));
-  const result = await Effect.runPromise(
-    Effect.gen(function* () {
-      const manifest = (yield* rangeManifest(
-        repository,
-        { baseOid: base, headOid: head },
-        defaultManifestSettings(1_000_000),
-        captureOutlineSource(),
-      )).value;
-      const views = yield* L.revisionViews(repository, manifest);
-      const records =
-        yield* Effect.context<
-          RunContext["Service"]["records"] extends Context.Context<infer S>
-            ? S
-            : never
-        >();
-      const runId = mintUlid();
-      const ctx: RunContext["Service"] = {
-        location,
-        repository,
-        runId,
-        runKey: "f".repeat(64),
-        range: { baseRef: "main", baseOid: base, headOid: head },
-        cycleId: mintUlid(),
-        config: defaultConfig(),
-        log: openRunLog(location, runId),
-        startedAt: Date.now(),
-        reconciliationId: mintUlid(),
-        records,
-      };
-      const view: RangeView = {
-        manifest,
-        snapshot: undefined,
-        head: views.head,
-        base: views.base,
-        hunks: new Map(manifest.hunks.map((h) => [h.hunkId, h])),
-        commits: yield* L.rangeCommits(repository, manifest),
-        byPath: new Map(),
-        searchFrequency: new Map(),
-      };
-      const step = yield* findStep(ctx, view, {
-        lens: "correctness",
-        frame,
-        keys: { frame: "frame-read-many", manifest: "manifest-read-many" },
-      });
-      const state = step.spec.state!;
-      type Saved = {
-        readonly reading: { readonly used: number };
-        readonly headReads: ReadonlyArray<HeadRead>;
-      };
-      const saved = () => state.save() as unknown as Saved;
-      const tool = step.spec.tools.find((t) => t.name === "read_many")!;
-      const call = (entries: ReadonlyArray<object>) =>
-        Effect.gen(function* () {
-          const before = saved();
-          const outcome = yield* tool.handle(tool.input!.parse({ entries }));
-          const after = saved();
-          return {
-            text: outcome.text,
-            // What this call added; the opening's shown lines were recorded before it.
-            recorded: after.headReads.slice(before.headReads.length),
-            counted: after.reading.used - before.reading.used,
-          };
-        });
-      const aHunk = manifest.hunks.find(
-        (h) =>
-          h.path === "src/a.ts" &&
-          h.ownedRanges.some(
-            (r) =>
-              r.side === "new" &&
-              r.startLine <= 10 &&
-              10 < r.startLine + r.lineCount,
-          ),
-      )!;
-      const several = yield* call([
-        { path: "src/b.ts", startLine: 2, endLine: 4 },
-        { path: "src/a.ts", rev: "base", startLine: 18, endLine: 24 },
-        { path: "src/a.ts", startLine: 18, endLine: 21 },
-        { path: "src/a.ts", diff: true },
-        { hunk: aHunk.hunkId },
-      ]);
-      const capped = yield* call([{ path: "big.ts" }]);
-      // Leave the budget about 8,000 characters, as late in a finder's reading.
-      state.load(
-        {
-          ...state.save(),
-          reading: { used: FIND_READING_CHARS - 8_000 },
-        } as never,
-        1,
-      );
-      const spent = yield* call([{ path: "big.ts", startLine: 1_000 }]);
-      const cite = (anchor: (typeof finding.anchors)[number]) =>
-        step.spec.check?.({
-          findings: [
-            {
-              ...finding,
-              evidence: [aHunk.hunkId],
-              anchors: [
-                { path: "src/a.ts", side: "new", startLine: 10, endLine: 10 },
-                anchor,
-              ],
-            },
-          ],
-          notes: [],
-        });
-      return { several, capped, spent, cite };
-    }).pipe(Effect.provide(storeLayer(location))),
-  );
-  const lineSet = (reads: ReadonlyArray<HeadRead>, path: string) =>
-    [
-      ...new Set(
-        reads
-          .filter((r) => r.path === path)
-          .flatMap((r) =>
-            Array.from(
-              { length: r.endLine - r.startLine + 1 },
-              (_, i) => r.startLine + i,
-            ),
-          ),
-      ),
-    ].sort((a, b) => a - b);
-  const { several, capped, spent } = result;
-  // Several entries: the head ranges asked are recorded; the base range, the diff and the hunk not.
-  expect(several.recorded).toEqual([
-    { path: "src/b.ts", startLine: 2, endLine: 4 },
-    { path: "src/a.ts", startLine: 18, endLine: 21 },
-  ]);
-  expect(shownLines(several.text, "src/a.ts", "base")).toEqual([
-    18, 19, 20, 21, 22, 23, 24,
-  ]);
-  expect(several.text).toContain(`[5] hunk of src/a.ts`);
-  for (const [outcome, path] of [
-    [several, "src/b.ts"],
-    [several, "src/a.ts"],
-    [capped, "big.ts"],
-    [spent, "big.ts"],
-  ] as const)
-    expect(lineSet(outcome.recorded, path)).toEqual(
-      shownLines(outcome.text, path, "head"),
-    );
-  // Stopped by its cap, and by the budget: some lines shown, and only those recorded.
-  expect(capped.text).toContain("[read_many stopped at its cap");
-  expect(shownLines(capped.text, "big.ts", "head").length).toBeGreaterThan(0);
-  expect(spent.text).toContain("reading budget");
-  expect(spent.text.length).toBeLessThanOrEqual(8_000);
-  expect(shownLines(spent.text, "big.ts", "head")[0]).toBe(1_000);
-  // Each result counted once, at its length: the recording read inside is not counted again.
-  for (const outcome of [several, capped, spent])
-    expect(outcome.counted).toBe(outcome.text.length);
-  // What was recorded is citable; base lines, and head lines no call showed, are not.
-  expect(
-    result.cite({ path: "src/b.ts", side: "new", startLine: 2, endLine: 4 }),
-  ).toEqual([]);
-  expect(
-    result.cite({ path: "src/a.ts", side: "old", startLine: 19, endLine: 20 }),
-  ).toEqual([
-    'finding 1: anchors[1] on the old side of "src/a.ts" received lines 19-20 and must fit within an owned range (10-10, 20-22).',
-  ]);
-  expect(
-    result.cite({ path: "src/b.ts", side: "new", startLine: 5, endLine: 6 }),
-  ).toEqual([
-    'finding 1: anchors[1] on the new side of "src/b.ts" received lines 5-6 and must fit within an owned range (none) or a head range already read (2-4).',
-  ]);
-}, 120_000);
 
 // Why: a handle's ID hashes the blob, path and lines, not the revision, so a file unchanged between
 // base and head has one handle per range, holding the revision of its first read. The head read of
 // such a range must still record what it showed (the prompt asks for both revisions where a deletion
 // matters), whichever revision was read first, through read and through read_many alike, and a base
 // read must add nothing.
-test("an unchanged file's range read at base and at head records the head read once, in either order, through read and read_many", async () => {
-  const result = await withLookups("both-revisions", (shared) =>
-    Effect.gen(function* () {
-      /** A fresh context: its own handle registry and recording read. */
-      const fresh = () => {
-        const ctx = { ...shared, handles: new L.HandleRegistry() };
-        const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
-        return { ctx, recorded };
-      };
-      const head = { path: "src/b.ts", startLine: 2, endLine: 4 };
-      const base = { ...head, rev: "base" };
-      const reads = (order: ReadonlyArray<object>) =>
-        Effect.gen(function* () {
-          const { recorded } = fresh();
-          const texts: Array<string> = [];
-          for (const input of order)
-            texts.push(
-              (yield* recorded.tool.handle(recorded.tool.input!.parse(input)))
-                .text,
-            );
-          return { texts, reads: [...recorded.reads()] };
-        });
-      const many = (entries: ReadonlyArray<object>) =>
-        Effect.gen(function* () {
-          const { ctx, recorded } = fresh();
-          const tool = L.readManyTool(ctx, {
-            read: recorded.tool,
-            remaining: noBudget,
-          });
-          const outcome = yield* tool.handle(tool.input!.parse({ entries }));
-          return { text: outcome.text, reads: [...recorded.reads()] };
-        });
-      return {
-        baseThenHead: yield* reads([base, head]),
-        headThenBase: yield* reads([head, base]),
-        manyBaseThenHead: yield* many([base, head]),
-        manyHeadThenBase: yield* many([head, base]),
-      };
-    }),
-  );
-  const once = [{ path: "src/b.ts", startLine: 2, endLine: 4 }];
-  // The cause: both reads answer under one handle.
-  const idOf = (text: string) => text.split(" ")[0];
-  expect(idOf(result.baseThenHead.texts[0]!)).toBe(
-    idOf(result.baseThenHead.texts[1]!),
-  );
-  expect(result.baseThenHead.texts[1]).toContain("src/b.ts@head lines 2-4");
-  expect(result.baseThenHead.reads).toEqual(once);
-  expect(result.headThenBase.reads).toEqual(once);
-  for (const outcome of [result.manyBaseThenHead, result.manyHeadThenBase]) {
-    expect(shownLines(outcome.text, "src/b.ts", "base")).toEqual([2, 3, 4]);
-    expect(shownLines(outcome.text, "src/b.ts", "head")).toEqual([2, 3, 4]);
-    expect(outcome.reads).toEqual(once);
-  }
-}, 120_000);

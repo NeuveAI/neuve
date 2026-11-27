@@ -235,31 +235,6 @@ test.skipIf(graphPrerequisite.skip)(
   300_000,
 );
 
-// Why: with readings off, commit preparation reads and stores nothing new, and its output is what
-// it was before the step existed: the hunks line and nothing about relations. Readings are on by
-// default, so only `review.sectionReadings: "off"` turns the step off.
-test.skipIf(graphPrerequisite.skip)(
-  "with readings off the preparation child reads nothing, makes no clone and logs as before",
-  async () => {
-    graphPrerequisite.require();
-    const s = fixture();
-    const output = s.prepareCommit(s.head, {
-      version: 1,
-      review: { sectionReadings: "off" },
-    });
-    expect(output).toContain(
-      `commit.prepare ${s.head.slice(0, 12)}: 1 hunk(s)`,
-    );
-    expect(output).not.toContain("relations");
-    expect(await s.attempts()).toBe(0);
-    const location = await Effect.runPromise(
-      resolveStoreLocation(s.repository),
-    );
-    expect(existsSync(relationsGraphDirectory(location))).toBe(false);
-  },
-  300_000,
-);
-
 // Why: a relations read is a whole-tree read; a range preparation (up to 58 commits) must never
 // gain one, whether it prepares a range or each of its commits.
 test.skipIf(graphPrerequisite.skip)(

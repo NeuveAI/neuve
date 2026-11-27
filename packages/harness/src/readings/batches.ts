@@ -1,6 +1,4 @@
 import type { ManifestHunk } from "../manifest.ts";
-import type { LensEnd } from "../pi/review-task.ts";
-import type { FinderStatus } from "../pi/stages/finder-task.ts";
 import { readingName } from "../pi/stages/reading-task.ts";
 import {
   SettledBatch as PublisherBatch,
@@ -117,34 +115,6 @@ const notSettled = (
   gap: { key: `batch-${kind}:${batchHandle(key)}`, kind, detail },
 });
 
-/** Whether a finder's step that ended so lets its review's batches settle. */
-const lets = (status: FinderStatus): boolean => {
-  switch (status) {
-    case "completed":
-      return true;
-    // A later run of this run key runs it again and may place findings on the batch.
-    case "cutoff":
-    case "stopped":
-    case "skipped":
-    case "failed":
-      return false;
-  }
-};
-
-/** What a finder's step that did not complete is told as: the cut-off, or anything else. */
-const heldAs = (status: FinderStatus): "cutoff" | "other" | "none" => {
-  switch (status) {
-    case "completed":
-      return "none";
-    case "cutoff":
-      return "cutoff";
-    case "stopped":
-    case "skipped":
-    case "failed":
-      return "other";
-  }
-};
-
 /**
  * The old packet's line, and a dropped plan's `collect` disclosure, when a review with the readings
  * on had no reading judge its sections and no batch said so.
@@ -176,47 +146,6 @@ export const droppedPlanGap = (why: PlanDrop, settled = true) => ({
 });
 
 /**
- * Why the finders hold the review's batches, as a person is told it: `cutoff` when every finder
- * step that did not complete was cut at the cut-off, `other` when any failed, was stopped or never
- * started, so the cut-off is named only when it is the cause; undefined when every one completed.
- */
-export const findersHeldBy = (
-  ended: ReadonlyArray<LensEnd>,
-): "cutoff" | "other" | undefined => {
-  // A Verify skipped because its Find was cut never started for the same cause: the cut-off.
-  const causes = ended.flatMap((e) =>
-    [
-      heldAs(e.find),
-      e.find === "cutoff" && e.verify === "skipped"
-        ? "cutoff"
-        : heldAs(e.verify),
-    ].filter((c) => c !== "none"),
-  );
-  return causes.length === 0
-    ? undefined
-    : causes.every((c) => c === "cutoff")
-      ? "cutoff"
-      : "other";
-};
-
-/**
- * Why the finders hold a batch, or undefined when they do not: a batch is decided only when nothing
- * later can change it, so while any finder, or its Verify, has not completed it is not reached,
- * unless the run can have no successor (`final`), when it settles and the packet says the finders
- * did not finish (`findersUnfinishedGap`). The cut-off is named only when it is the cause.
- */
-export const findersHold = (
-  ended: ReadonlyArray<LensEnd>,
-  final: boolean,
-): string | undefined => {
-  if (final || ended.every((e) => lets(e.find) && lets(e.verify)))
-    return undefined;
-  return findersHeldBy(ended) === "cutoff"
-    ? "The finders did not finish before the review's cut-off, so this batch is still being judged."
-    : "The finders did not finish, so this batch is not decided yet; the next run continues.";
-};
-
-/**
  * The publisher's value for a readers' batch: the batch without `withheld` (the comments left out,
  * which its `comments-withheld` gap already discloses, and which the publisher's schema does not
  * take), checked by the publisher's own schema and checks. Undefined fields are left out, as the
@@ -243,8 +172,7 @@ export const publisherBatch = (
  * (a reading the caller did not give at all is the collector's failed reading, as `collect` decides
  * it). Otherwise the batch's record from `settledBatches` decides: waiting on a refused reading is a
  * quota refusal; waiting on one not reached is not reached. A batch its readings settled is still
- * not reached while a finder or its Verify has not completed, unless the run is `final`
- * (`findersHold`); failing a check is refused. A settled, ready batch is handed over only if the
+ * pending while a reading was not reached. Failing a publisher check leaves the batch pending. A settled, ready batch is handed over only if the
  * publisher's schema and checks also take it.
  */
 export const settleBatch = (input: {
@@ -256,9 +184,7 @@ export const settleBatch = (input: {
   }>;
   readonly settled: Pick<SettledOutput, "batches" | "records">;
   readonly sections: ReadonlyArray<DecidedSection>;
-  /** How each of the review's finders ended (`finderEnds`). */
-  readonly findersEnded: ReadonlyArray<LensEnd>;
-  /** The run can have no successor: unfinished finders hold no batch. */
+  /** The run can have no successor. */
   readonly final: boolean;
 }): SettleResult => {
   const batch = input.batches.find((b) => b.key === input.key);
@@ -315,8 +241,6 @@ export const settleBatch = (input: {
           `${waiting.length} ${waiting.length === 1 ? "change" : "changes"} of this batch ${waiting.length === 1 ? "was" : "were"} not reached before the review's cut-off, so the batch is still being judged.`,
         );
   }
-  const held = findersHold(input.findersEnded, input.final);
-  if (held !== undefined) return notSettled("not-reached", input.key, held);
   // A briefing cut at the cut-off holds its batch as not reached while a follow-on is left, which
   // writes only what is missing; a final run publishes it with code's text and the `briefing-cut`
   // gap (round 27).

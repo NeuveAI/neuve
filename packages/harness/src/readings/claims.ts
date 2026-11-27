@@ -14,7 +14,7 @@ import { withOffered } from "./steps.ts";
 
 /**
  * A Lane review defect comment is a claim, and each distinct claim is checked once, with fresh
- * context and no tools, as Verify checks a finder's finding (`verify.ts`). Identical claims (the same
+ * context and no tools. Identical claims (the same
  * lines and the same words, up to case and spacing) share one key, so one check serves them all.
  */
 
@@ -63,20 +63,6 @@ export const commentKey = (
 /** The form a comment's ID takes for Records: printable ASCII with no space, at most 128 characters. */
 export const COMMENT_ID = /^[\x21-\x7e]{1,128}$/;
 
-/**
- * A finder's finding as a comment's ID and as a claim's: its own ID when it has the comment ID's
- * form, else `f.` and the SHA-256 of that ID.
- */
-export const findingCommentId = (id: string) =>
-  COMMENT_ID.test(id) ? id : `f.${sha256Hex(id)}`;
-
-/** A kept finder defect as a claim on the section that owns its anchor: Verify kept it, so it is confirmed. */
-export const finderClaim = (id: string): Claim => ({
-  id: findingCommentId(id),
-  source: "finder",
-  verify: "confirmed",
-});
-
 export const ClaimStored = VerifySubmission.extend({
   /** The claim's key. */
   claim: z.string().regex(/^[0-9a-f]{64}$/),
@@ -118,8 +104,7 @@ export const claimTask = (
 
 /**
  * The step that checks one claim. Keyed by the claim key, the section's identity key, the task it
- * is shown and what it is offered (`withOffered`: its system prompt is the finders' Verify's, which
- * no version here follows). No partial: a check the cut-off interrupted stores nothing, and its
+ * is shown and what it is offered (`withOffered`). No partial: a check the cut-off interrupted stores nothing, and its
  * claim stays unconfirmed.
  */
 export const claimVerifyStep = (p: {

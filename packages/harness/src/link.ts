@@ -10,7 +10,6 @@ import {
   AssembledBatch,
   AssembledDigest,
   codeUnits,
-  citationIndex,
   composeBatch,
   groupUnits,
   ownershipCheck,
@@ -19,9 +18,7 @@ import {
   type AssembledUnit,
   type UnitsPlan,
 } from "./compose.ts";
-import { LinkedReview, anchorResolves, guidedBasis } from "./disposition.ts";
 import { Frame } from "./frame.ts";
-import { FindStored } from "./find.ts";
 import { ReviewMap, ChangeMap } from "./review-map.ts";
 import { RangeManifest } from "./manifest.ts";
 import { snapshotByKey, type ScopeSnapshot } from "./scope.ts";
@@ -31,11 +28,7 @@ import {
   withRecords,
   type RunContext,
 } from "./pipeline.ts";
-import {
-  clipText,
-  type PublishCandidate,
-  type PublishInputs,
-} from "./publish.ts";
+import { clipText, type PublishCandidate } from "./publish.ts";
 import { proximityUnits } from "./units.ts";
 import {
   blobStructures,
@@ -45,15 +38,12 @@ import {
 import { captureOutlineSource } from "./graph-outline.ts";
 import { asStructure, type BlobStructure, type Structure } from "./sections.ts";
 import { step } from "./telemetry.ts";
-import type { FinderResult } from "./pi/stages/finder-task.ts";
 import type { RunSetup } from "./pi/stages/run.ts";
 
-export const LINK_VERSION = 2;
+export const LINK_VERSION = 3;
 export const DIGEST_CHARS = 2_000;
 export const EXCLUDED_GROUP = "generated";
 type Group = ReviewMap["groups"][number];
-type Finding = FindStored["findings"][number];
-type Disclosure = NonNullable<PublishInputs["disclosures"]>[number];
 
 /** Excluded files still own their changed lines, in one code-only batch. */
 export const fillGroups = (map: ReviewMap): Group[] => [
@@ -405,177 +395,29 @@ export const fill = (
     return { record, ...(yield* storedOutput(ctx, record.key, FillOutput)) };
   });
 
-export const placeFindings = (
-  units: ReadonlyArray<AssembledUnit>,
-  findings: ReadonlyArray<Finding>,
-) => {
-  const placed = new Map<string, Finding[]>();
-  const disclosures: Disclosure[] = [];
-  for (const finding of findings) {
-    const primary = finding.anchors[0];
-    const resolved =
-      primary === undefined
-        ? []
-        : units.filter(
-            (unit) =>
-              unit.batchId === finding.group &&
-              anchorResolves(primary, { unit, references: [] }),
-          );
-    const unit = resolved.length === 1 ? resolved[0] : undefined;
-    if (unit === undefined)
-      disclosures.push({
-        kind: "finding-unanchored",
-        detail:
-          "One verified finding has no unique unit owning its primary anchor and is not published.",
-      });
-    else placed.set(unit.id, [...(placed.get(unit.id) ?? []), finding]);
-  }
-  return { placed, disclosures };
-};
-
-export const linkedReview = (
-  inputs: BatchInputs,
-  assembled: AssembledBatch,
-  unit: AssembledUnit,
-  findings: ReadonlyArray<Finding>,
-): LinkedReview => {
-  const batch = assembled.batches.find((batch) => batch.id === unit.batchId);
-  if (batch === undefined || findings.length === 0)
-    throw new Error("Link needs a touched unit in a batch");
-  const guided = guidedBasis(inputs, batch, unit);
-  const citations = citationIndex(inputs, {
-    units: assembled.units,
-    proofs: assembled.proofs.map((proof) => ({ ...proof, listing: "" })),
-    references: [],
-  }).index;
-  const evidence = (finding: Finding) =>
-    [...new Set([finding.hunkId, ...finding.evidence])]
-      .filter((id) => citations.has(id))
-      .slice(0, 8);
-  const defects = findings.filter(
-    (finding) => finding.kind === "defect" && evidence(finding).length > 0,
-  );
-  return LinkedReview.parse({
-    unit: unit.id,
-    source: "agent",
-    uncited: false,
-    withheld: defects.length === 0,
-    notes: [],
-    guided,
-    citations: Object.fromEntries(citations),
-    review: {
-      verdict: defects.length > 0 ? "request-changes" : "approve",
-      criteria: guided.rows.map((row) => {
-        const defect = defects.find((finding) => finding.doneWhen === row.row);
-        return {
-          row: row.row,
-          status: defect === undefined ? "no-evidence" : "not-met",
-          does: clipText(
-            defect?.claim ??
-              "No verified defect establishes this condition's outcome.",
-            200,
-          ),
-          evidence: defect === undefined ? [] : evidence(defect),
-        };
-      }),
-      outside: [],
-      findings: findings.map((finding) => ({
-        id: finding.id,
-        anchor: finding.anchors[0],
-        kind: finding.kind,
-        about: finding.about,
-        signal: finding.signal,
-        text: clipText(
-          [
-            finding.claim,
-            ...finding.anchors
-              .slice(1)
-              .map(
-                (anchor) =>
-                  `${anchor.path} lines ${anchor.startLine}-${anchor.endLine} (${anchor.side === "new" ? "head" : "base"})`,
-              ),
-          ].join("; "),
-          400,
-        ),
-        evidence: evidence(finding),
-        row: null,
-      })),
-      message: clipText(
-        defects.length > 0
-          ? defects.map((finding) => finding.claim).join("\n")
-          : "Verified comments are recorded. This unit has no agent disposition.",
-        1200,
-      ),
-      gaps: findings.some(
-        (finding) =>
-          finding.kind === "defect" && evidence(finding).length === 0,
-      )
-        ? [
-            "A verified defect has no resolvable evidence and cannot support a disposition.",
-          ]
-        : [],
-    },
-  });
-};
-
-/** Append complete links only; the digest cap can never sever a finding's unit link. */
-const fitLines = (lines: ReadonlyArray<string>, cap: number) => {
-  let result = "";
-  for (const line of lines) {
-    const next = result === "" ? line : `${result}\n${line}`;
-    if (next.length > cap) break;
-    result = next;
-  }
-  return result;
-};
 const linkLabel = (text: string) =>
   text.replace(/[\[\]\\]/g, " ").replace(/\s+/g, " ");
 export const groupDigest = (
   frame: Frame,
   group: Group,
   units: ReadonlyArray<AssembledUnit>,
-  placed: ReadonlyMap<string, ReadonlyArray<Finding>>,
-  conditions: NonNullable<FindStored["conditions"]>,
-  limitations: ReadonlyArray<string>,
 ): AssembledDigest => {
-  const links = units.flatMap((unit) =>
-    (placed.get(unit.id) ?? []).map(
-      (finding) => `[${linkLabel(finding.claim)}](${unit.id})`,
-    ),
-  );
-  const header = clipText(
-    `${frame.goal}\n${group.why}\n${units.length} units.`,
-    1_000,
-  );
-  const digest = fitLines([header, ...links], DIGEST_CHARS);
-  const omitted =
-    links.length -
-    (digest === header
-      ? 0
-      : digest.split("\n").length - header.split("\n").length);
   return {
     batchId: group.id,
     source: "code",
-    digest,
+    digest: clipText(
+      `${frame.goal}\n${group.why}\n${units.length} units.`,
+      DIGEST_CHARS,
+    ),
     verification: frame.doneWhen
       .filter((row) => group.doneWhen.includes(row.id))
-      .map((row) => {
-        const condition = conditions.find(
-          (condition) => condition.doneWhen === row.id,
-        );
-        return `[${linkLabel(clipText(row.text, 240))}](${row.id}): ${condition?.verdict ?? "not checked"}${condition === undefined ? "" : `. ${condition.note}`}`;
-      })
+      .map(
+        (row) =>
+          `[${linkLabel(clipText(row.text, 240))}](${row.id}): not checked`,
+      )
       .join("\n"),
     uncertainty: [],
-    limitations: [
-      ...limitations,
-      ...(omitted > 0
-        ? [
-            `${omitted} findings are available in the units' comments beyond this digest's limit.`,
-          ]
-        : []),
-      "Units without verified defects carry no agent disposition.",
-    ],
+    limitations: ["No agent decision in this run."],
     verdictWords: 0,
   };
 };
@@ -607,71 +449,15 @@ export const link = (
     readonly mapKey: string;
     readonly manifestKey: string;
     readonly fill: FillResult;
-    readonly finders: ReadonlyArray<FinderResult>;
     readonly setup: RunSetup;
   },
 ) =>
   Effect.gen(function* () {
     const frame = yield* storedOutput(ctx, input.frameKey, Frame);
     const map = yield* storedOutput(ctx, input.mapKey, ReviewMap);
-    const manifest = yield* storedOutput(ctx, input.manifestKey, RangeManifest);
-    const snapshot =
-      input.setup.scopeKey === null
-        ? undefined
-        : yield* withRecords(ctx, snapshotByKey(input.setup.scopeKey));
-    const findings: Finding[] = [];
-    const conditions: NonNullable<FindStored["conditions"]> = [];
-    const disclosures: Disclosure[] = [];
-    const limitations: string[] = [];
-    for (const finder of input.finders) {
-      const stored =
-        finder.findKey === null
-          ? undefined
-          : yield* storedOutput(ctx, finder.findKey, FindStored);
-      const unverified = finder.findings.filter(
-        (finding) =>
-          finding.status === "unverified" ||
-          (finding.status === "kept" && finding.verifyKey === null),
-      ).length;
-      const dropped = finder.findings.filter(
-        (finding) => finding.status === "dropped",
-      ).length;
-      limitations.push(
-        `${finder.lens}: ${dropped} findings dropped by verification.`,
-      );
-      if (finder.reason !== undefined) {
-        limitations.push(`${finder.lens}: ${finder.reason}`);
-        disclosures.push({
-          kind: "finder-unavailable",
-          detail: `The ${finder.lens} finder has limited coverage. ${finder.reason}`,
-        });
-      }
-      if (unverified > 0) {
-        const detail = `${finder.lens}: ${unverified} findings were not verified and are not published.`;
-        disclosures.push({ kind: "findings-unverified", detail });
-        limitations.push(detail);
-      }
-      if (stored === undefined) continue;
-      if (stored.reading.used >= stored.reading.limit)
-        limitations.push(`${finder.lens} spent its reading budget.`);
-      if (finder.lens === "scope-fit")
-        conditions.push(...(stored.conditions ?? []));
-      for (const result of finder.findings)
-        if (result.status === "kept" && result.verifyKey !== null) {
-          const finding = stored.findings.find(
-            (finding) => finding.id === result.id,
-          );
-          if (finding !== undefined) findings.push(finding);
-        }
-    }
     const filled: AssembledBatch[] = [];
     for (const group of input.fill.groups)
       filled.push(yield* storedOutput(ctx, group.assembledKey, AssembledBatch));
-    const placement = placeFindings(
-      filled.flatMap((batch) => batch.units),
-      findings,
-    );
-    disclosures.push(...placement.disclosures);
     const record = yield* codeStage(
       ctx,
       "link",
@@ -683,18 +469,6 @@ export const link = (
           map: input.mapKey,
           manifest: input.manifestKey,
           fill: input.fill.groups,
-          finders: sha256Hex(
-            canonicalJson(
-              input.finders.map((finder) => ({
-                lens: finder.lens,
-                findKey: finder.findKey,
-                findings: finder.findings,
-                ...(finder.reason === undefined
-                  ? {}
-                  : { reason: finder.reason }),
-              })),
-            ),
-          ),
           scope: input.setup.scopeKey,
           sources: sha256Hex(canonicalJson(input.setup.pins)),
         },
@@ -712,38 +486,7 @@ export const link = (
           );
           if (group === undefined)
             throw new Error(`Missing group ${assembled.candidate}`);
-          const inputs = batchInputs(
-            frame,
-            map,
-            manifest,
-            group,
-            {
-              manifest: input.manifestKey,
-              changeMap: changeMapKey,
-              scope: input.setup.scopeKey,
-            },
-            snapshot,
-            input.setup,
-          );
-          const disposed = [];
-          for (const unit of assembled.units) {
-            const own = placement.placed.get(unit.id);
-            if (own === undefined) continue;
-            const key = yield* put(
-              "harness.link-review",
-              { frame: input.frameKey, map: input.mapKey },
-              linkedReview(inputs, assembled, unit, own),
-            );
-            disposed.push({ unit: unit.id, key, status: "computed" as const });
-          }
-          const digest = groupDigest(
-            frame,
-            group,
-            assembled.units,
-            placement.placed,
-            conditions,
-            limitations,
-          );
+          const digest = groupDigest(frame, group, assembled.units);
           for (const row of frame.doneWhen)
             assembled.citations[row.id] = {
               kind: "obligation",
@@ -767,17 +510,16 @@ export const link = (
               { frame: input.frameKey, map: input.mapKey },
               output,
             ),
-            disposed,
+            disposed: [],
           });
         }
-        return LinkOutput.parse({ candidates, changeMapKey, disclosures });
+        return LinkOutput.parse({ candidates, changeMapKey, disclosures: [] });
       }),
       {
         agent: "link",
         afterCutoff: true,
         schema: LinkOutput,
-        fixedNote:
-          "Verified findings linked to owned units; Link grants no approvals.",
+        fixedNote: "Map groups linked to their changed units.",
       },
     );
     if (record.key === undefined)

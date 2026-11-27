@@ -380,9 +380,21 @@ export type LaneReviewAnswer = z.infer<typeof LaneReviewAnswer>;
  * leaves the verdict lists and the unsure notes exactly as they are. Every section it names must
  * also be under `u`; it moves no section anywhere (code's decision reads the verdict lists only).
  */
+export const CrossBatchClaim = z.strictObject({
+  path: z.string().min(1).max(4096),
+  side: z.enum(["old", "new"]),
+  startLine: z.int().min(1),
+  endLine: z.int().min(1),
+  kind: z.enum(["defect", "risk", "question"]),
+  text: z.string().trim().min(1).max(ANSWER_BOUNDS.commentText),
+  fails: z.string().trim().max(ANSWER_BOUNDS.failsText),
+});
+export type CrossBatchClaim = z.infer<typeof CrossBatchClaim>;
+
 export const LaneReviewScopedAnswer = z.strictObject({
   ...LaneReviewAnswer.shape,
   notAsked: Sections,
+  crossBatchClaims: z.array(CrossBatchClaim).max(5).optional(),
 });
 export type LaneReviewScopedAnswer = z.infer<typeof LaneReviewScopedAnswer>;
 /** A new Lane review answer of either form. */
@@ -412,6 +424,7 @@ export const StoredLaneReviewAnswer = z.strictObject({
     }),
   ),
   notAsked: Sections.optional(),
+  crossBatchClaims: z.array(CrossBatchClaim).max(5).optional(),
 });
 
 /**
@@ -2122,6 +2135,9 @@ export function laneReviewRepair(
       files: repairedFiles,
       sections: repairedSections,
       comments: keptComments,
+      ...("crossBatchClaims" in answer && answer.crossBatchClaims !== undefined
+        ? { crossBatchClaims: answer.crossBatchClaims }
+        : {}),
       unsure: boundedNotes([
         ...answer.unsure.filter(
           (entry) => sections.has(entry.s) && !blank(entry.t),

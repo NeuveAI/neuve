@@ -1,3 +1,9 @@
+import {
+  CrossBatchClaimsDoc,
+  checkRecord,
+  type CheckedCrossBatchClaim,
+} from "../cross-batch-claims.ts";
+import { childId, resultOf } from "./children.ts";
 import type { Context } from "@earendil-works/chord";
 import type {
   Task,
@@ -12,6 +18,8 @@ import { logTimed, scopedLogSpan } from "../../log-span.ts";
 import type { StageRecord } from "../../pipeline.ts";
 import { recordPublishStage } from "../../publish.ts";
 import {
+  batchKeyOf,
+  publishedBatchClaims,
   publishSettled,
   type SectionsPublishSummary,
 } from "../../publish-sections.ts";
@@ -20,53 +28,21 @@ import { definePolicyTask as defineTask } from "../failure-policy.ts";
 import {
   childOf,
   disclosureGaps,
-  finderEnds,
-  finderResults,
-  findersAtLimitGap,
-  findersUnfinishedGap,
   publishingOf,
   type FollowOnAnswer,
   type Reading,
   type ReviewBatches,
-  type ReviewStagesPort,
   type SettledPublishInput,
+  type ReviewStagesPort,
 } from "../review-task.ts";
-import type { FinderInput, FinderResult } from "./finder-task.ts";
+import { storedOutput } from "../../pipeline.ts";
+import { ClaimStored, claimVerdict } from "../../readings/claims.ts";
 import type { StageServices } from "./services.ts";
 
-/**
- * The batch waiters of the publish phase (NEU-148, WP8; the scheduler lane's shape of 13 November,
- * `coordination/neu-148/design/publish-waiter-0016.md`, amended).
- *
- * - **One per batch.** The review creates every waiter in the one commit of its `link` phase that
- *   knows the batches, in batch order; that commit also names them in the review's checkpoint, so a
- *   replayed phase whose commit did not land creates them again and one that landed never does.
- * - **A chain.** Waiter k waits (a durable, pushed wait: `status: "waiting"`, `allSettled`) on its
- *   batch's reading tasks, the four finders (a finder ends after its Verify children) and waiter
- *   k-1. So no batch publishes before the finders end, and the calls are serial and in batch order
- *   by construction: no key, claim, lock, map, poll or timer of its own.
- * - **What it publishes.** On waking, it publishes only when the review is live (not stopped or
- *   finishing), not yet at Publish (it reads the review's `link` checkpoint, `publishingOf`), and
- *   its own batch is settled (`readings.settle`; never while a finder or its Verify has not
- *   completed, unless the run can have no successor): then one `publishSettled` call with every settled
- *   batch up to and including its own, in batch order, `ending: false`, the review's totals, and as
- *   gaps what the review disclosed by Link and the run's gaps from the plan, manifest and Map. A batch already in the run's chain is skipped by the publisher (frozen), so normally
- *   that publishes its own batch alone, and an earlier batch an earlier waiter could not publish is
- *   carried here. Otherwise it ends at once, publishing nothing, with a status that says why.
- * - **The cut-off.** The review waits for its readings, then commits to Publish waiting on every
- *   waiter: one that wakes after that ends `late`, and the review's ending call publishes its
- *   batch with the rest, after the last waiter ended.
- * - **No state of its own.** Its outcome says only how it ended; the chain in the computation store
- *   is the only record of what was published. A failed call is a recorded outcome (`failed`), never
- *   the review's failure, and the next waiter still runs.
- * - **No grant, no slot.** It makes no model call and takes no CPU grant: `publishSettled` runs
- *   through the stage runner, which binds the job's class but holds no grant, so a held publication
- *   key makes it wait for that publication (record 0016), never answer `KeyHeld`.
- */
 export const BATCH_WAITER_TASK = "neuve.batch-waiter";
 
 /**
- * Only its place and its predecessor: the batches, the readings and the finders are in the review's
+ * Its place and predecessor. The batches and readings are in the review's
  * `link` checkpoint that created it (`publishingOf`), so the stored inputs grow with the number of
  * batches, not with its square.
  */
@@ -88,7 +64,9 @@ export type BatchWaiterResult = {
   readonly kind?: "not-reached" | "quota" | "refused";
 };
 type WaiterCheckpoint =
-  { readonly phase: "wait" } | { readonly phase: "publish" };
+  | { readonly phase: "wait" }
+  | { readonly phase: "publish" }
+  | { readonly phase: "write"; readonly input: SettledPublishInput };
 type Runtime = TaskRuntime<
   BatchWaiterInput,
   WaiterCheckpoint,
@@ -140,13 +118,30 @@ export const endedOutcome = async <R>(
     : undefined;
 };
 
-/**
- * Every batch of `batches` up to and including `last`, settled or not, in batch order: what both a
- * waiter and the review's ending call hand on. Each batch's readings are read as they stand: one
- * not yet ended reads as undefined, which `settle` takes as not reached. Every call hands `settle`
- * each lens's end (`finderEnds`) and whether the run can have no successor (`final`): unless it is
- * final, a batch settles only once every finder completed.
- */
+/** Only registered Verify children can delay a batch. Later registrations can race selection. */
+export const crossBatchChecks = async (
+  runtime: Pick<Runtime, "getTask" | "snapshot">,
+  context: Context,
+  batch?: string,
+) => {
+  const registered = Object.values(
+    (await runtime.snapshot(CrossBatchClaimsDoc, context))?.claims ?? {},
+  ).filter((claim) => batch === undefined || claim.target.batch === batch);
+  const waiting: Array<TaskId<StageRecord>> = [];
+  const checked: Array<CheckedCrossBatchClaim> = [];
+  for (const claim of registered) {
+    if (claim.task === null) {
+      checked.push(checkRecord(claim, undefined));
+      continue;
+    }
+    const task = childId<StageRecord>(claim.task);
+    const outcome = await endedOutcome(runtime, task, context);
+    if (outcome === undefined) waiting.push(task);
+    else checked.push(checkRecord(claim, resultOf(outcome)));
+  }
+  return { registered, waiting, checked };
+};
+
 export const settleUpTo = async (
   runtime: Pick<Runtime, "getTask">,
   settle: WaiterPort["settle"],
@@ -156,8 +151,9 @@ export const settleUpTo = async (
     readonly manifestKey: string;
     readonly batches: ReviewBatches;
     readonly readings: ReadonlyArray<Reading>;
-    readonly finders: ReadonlyArray<FinderResult>;
     readonly through: number;
+    readonly from?: number;
+    readonly incoming?: ReadonlyArray<CheckedCrossBatchClaim>;
     readonly last: (batch: string) => boolean;
     readonly final: boolean;
     /** The readings' plan was cut at its cut-off (`Publishing.planCut`). */
@@ -168,12 +164,14 @@ export const settleUpTo = async (
   signal: AbortSignal,
 ) => {
   const byName = new Map(input.readings.map((r) => [r.name, r.task]));
-  const findersEnded = finderEnds(input.finders);
   const out: Array<{
     readonly key: string;
     readonly settled: Awaited<ReturnType<WaiterPort["settle"]>>;
   }> = [];
-  for (const batch of input.batches.batches.slice(0, input.through + 1)) {
+  for (const batch of input.batches.batches.slice(
+    input.from ?? 0,
+    input.through + 1,
+  )) {
     const readings = await Promise.all(
       batch.readings.map(async (name) => {
         const id = byName.get(name);
@@ -195,8 +193,13 @@ export const settleUpTo = async (
           manifestKey: input.manifestKey,
           batch: batch.key,
           readings,
-          finders: input.finders,
-          findersEnded,
+          ...(input.incoming === undefined
+            ? {}
+            : {
+                incoming: input.incoming.filter(
+                  (claim) => claim.target.batch === batch.key,
+                ),
+              }),
           final: input.final,
           last: input.last(batch.key),
           planCut: input.planCut === true,
@@ -267,7 +270,6 @@ export const batchWaiterTask = (
                   const id = byName.get(name);
                   return id === undefined ? [] : [id as TaskId];
                 }),
-                ...view.finders.map((f) => f.task as TaskId),
                 ...(input.previous === null ? [] : [input.previous as TaskId]),
               ];
         await commit(runtime, "wait", "publish", () =>
@@ -311,68 +313,105 @@ export const batchWaiterTask = (
         if (view === undefined) return finish({ status: "late" });
         if (batch === undefined || ports === undefined)
           return finish({ status: "failed" });
-        let result: BatchWaiterResult;
         try {
-          const outcomes = await Promise.all(
-            view.finders.map((f) => endedOutcome(runtime, f.task, context)),
+          const { registered, waiting, checked } = await crossBatchChecks(
+            runtime,
+            context,
+            batch.key,
           );
-          // Link's entry for a finder with no result, fixed in the review's checkpoint: a replayed
-          // waiter hands the same call.
-          const finders = finderResults(view.finders, outcomes, view.reason);
-          // With no successor (decided when the waiters were made), unfinished finders hold no
-          // batch, and the packet says they did not finish.
-          const settled = await settleUpTo(
+          if (waiting.length > 0)
+            return commit(runtime, "publish", "publish", () =>
+              runtime.commit(
+                () => ({
+                  status: "waiting",
+                  on: waiting,
+                  policy: "allSettled",
+                  checkpoint: { phase: "publish" },
+                }),
+                context,
+              ),
+            );
+          const [built] = await settleUpTo(
             runtime,
             ports.settle,
             {
               ...view,
-              finders,
+              from: input.index,
               through: input.index,
               last: () => false,
               final: view.final,
+              incoming: checked,
             },
             runtime,
             context,
             runtime.signal,
           );
-          const own = settled.at(-1)?.settled;
-          if (own === undefined || !own.settled)
-            result = {
-              status: "not-settled",
-              ...(own === undefined || own.settled
-                ? {}
-                : { kind: own.gap.kind }),
-            };
-          else {
-            await ports.publishSettled(
-              {
-                batches: settled.flatMap(({ settled: s }) =>
-                  s.settled ? [s.batch] : [],
-                ),
-                totals: view.batches.totals,
-                ending: false,
-                // On every call: what the review disclosed by Link (Precompute, the front's
-                // freshness, the finders' start) and the run's gaps from the plan, manifest, Map
-                // and finders, so no packet that holds agent decisions hides them. Link's and the
-                // readings' own disclosures come on the ending call.
-                gaps: [
-                  ...disclosureGaps(view.disclosures),
-                  ...view.batches.gaps,
-                  ...findersUnfinishedGap(finderEnds(finders), view.final),
-                  ...findersAtLimitGap(finders),
-                ],
-                // Read only for completeness, which a call that is not the ending one never has.
-                stages: [],
-              },
-              runtime.signal,
-            );
-            result = { status: "published" };
-          }
+          const own = built?.settled;
+          if (own === undefined) return finish({ status: "not-settled" });
+          if (!own.settled)
+            return finish({ status: "not-settled", kind: own.gap.kind });
+
+          await commit(runtime, "publish", "write", () =>
+            runtime.commit(async (tx) => {
+              // Select the input in the same native transaction used to register incoming claims.
+              // A new Verify child makes this build stale and will wake its retried phase.
+              const doc = await tx.doc(CrossBatchClaimsDoc);
+              const peers = Object.values(doc.claims).filter(
+                (claim) => claim.target.batch === batch.key,
+              );
+              if (
+                peers.length !== registered.length ||
+                registered.some(
+                  (claim) => doc.claims[claim.key]?.task !== claim.task,
+                )
+              )
+                return { status: "running", checkpoint: { phase: "publish" } };
+              return {
+                status: "running",
+                checkpoint: {
+                  phase: "write",
+                  input: {
+                    batches: [own.batch],
+                    totals: view.batches.totals,
+                    ending: false,
+                    gaps: [
+                      ...disclosureGaps(view.disclosures),
+                      ...view.batches.gaps,
+                    ],
+                    stages: [],
+                  },
+                },
+              };
+            }, context),
+          );
         } catch (error) {
           if (runtime.signal.aborted) throw error;
-          result = { status: "failed" };
+          await finish({ status: "failed" });
         }
-        await finish(result);
+      },
+      write: async (task, runtime, context) => {
+        const ports = port();
+        let status: BatchWaiterResult["status"] = "failed";
+        if (ports !== undefined)
+          try {
+            await ports.publishSettled(
+              task.state.checkpoint.input,
+              runtime.signal,
+            );
+            status = "published";
+          } catch (error) {
+            if (runtime.signal.aborted) throw error;
+          }
+        const batch = task.state.checkpoint.input.batches[0];
+        log?.write({
+          type: "publish.waiter",
+          taskId: runtime.taskId,
+          batch: batch === undefined ? null : batchKeyOf(batch.paths),
+          index: task.input.index,
+          status,
+          kind: null,
+        });
+        await end(runtime, { status }, context);
       },
     },
     abort: (_task, runtime, context) =>
@@ -450,6 +489,50 @@ export const settledStages = (
       }).pipe(Effect.withSpan("harness.stage.publish")),
       signal,
     );
+  const retainUnpublishedClaims: NonNullable<
+    ReviewStagesPort["retainUnpublishedClaims"]
+  > = async (claims, signal) => {
+    if (claims.length === 0) return;
+    const published = await services.run(
+      publishedBatchClaims(ctx.cycleId, ctx.runKey),
+      signal,
+    );
+    const logged = new Set(
+      ctx.log
+        .read()
+        .filter((row) => row.type === "review.claim-unpublished")
+        .map((row) => row["claim"]),
+    );
+    for (const { key, verifyKey, target, comment, from, answer } of claims) {
+      if (
+        published.get(target.batch)?.has(key) ||
+        logged.has(key) ||
+        verifyKey === null
+      )
+        continue;
+      const verify = await services.run(
+        storedOutput(ctx, verifyKey, ClaimStored),
+        signal,
+      );
+      if (verify.claim !== key || claimVerdict(verify) !== "confirmed")
+        continue;
+      const { kind, text: _text, fails: _fails, ...anchor } = comment;
+      ctx.log.write({
+        type: "review.claim-unpublished",
+        claim: key,
+        batch: target.batch,
+        section: target.section,
+        reason: published.has(target.batch)
+          ? "batch-published"
+          : "batch-pending",
+        from,
+        answer,
+        verify: verifyKey,
+        kind,
+        anchor,
+      });
+    }
+  };
   const followOn: NonNullable<ReviewStagesPort["followOn"]> = async (signal) =>
     services.run(
       ReviewFollowOn.requestFollowOn({
@@ -521,6 +604,7 @@ export const settledStages = (
     | "followOnLeft"
     | "followOn"
     | "chainTotals"
+    | "retainUnpublishedClaims"
   > = ready
     ? {
         batchWaiter: childOf(task),
@@ -528,6 +612,7 @@ export const settledStages = (
         followOnLeft,
         followOn,
         chainTotals,
+        retainUnpublishedClaims,
       }
     : {};
   return { task, port };

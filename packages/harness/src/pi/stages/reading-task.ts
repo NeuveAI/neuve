@@ -1,3 +1,4 @@
+import type { CrossBatchClaim } from "../../readings/answers.ts";
 import { copyJson, type Context } from "@earendil-works/chord";
 import {
   defineDoc,
@@ -13,7 +14,13 @@ import { blobStructures, structureKeyOf } from "../../blob-structure.ts";
 import { cpuWork } from "../../budget/cpu.ts";
 import { turnLimitFor } from "../../config.ts";
 import { readDeclarations, testStatusOf } from "../../declarations.ts";
-import { readingBudget } from "../../find.ts";
+import { readingBudget } from "../../readings/tool-budget.ts";
+import { sectionOwning } from "../../readings/settled.ts";
+import { batchKeyOf } from "../../publish-sections-input.ts";
+import {
+  CrossBatchClaimsDoc,
+  type CrossBatchReport,
+} from "../cross-batch-claims.ts";
 import { Frame } from "../../frame.ts";
 import { lsTree, readBlobs, type TreeEntry } from "../../git-objects.ts";
 import {
@@ -27,8 +34,10 @@ import {
   waitSpans,
 } from "../../log-span.ts";
 import {
+  blobTextOf,
   defsTool,
   outlineTool,
+  readManyTool,
   readTool,
   revisionViews,
   usesTool,
@@ -57,7 +66,11 @@ import { ReviewMap } from "../../review-map.ts";
 import type { RouteEffort } from "../../route.ts";
 import type { BlobStructure } from "../../sections.ts";
 import type { ReadingProof } from "../../readings/answers.ts";
-import { claimKey, claimVerifyStep } from "../../readings/claims.ts";
+import {
+  claimKey,
+  claimVerifyStep,
+  commentKey,
+} from "../../readings/claims.ts";
 import {
   EVIDENCE_RECIPE,
   GroupEvidence,
@@ -218,7 +231,11 @@ export const readingStepInput = (
  */
 export const claimStepInput = (
   input: ReadingTaskInput,
-  claim: { readonly key: string; readonly answer: string },
+  claim: {
+    readonly key: string;
+    readonly answer: string;
+    readonly crossBatch?: CrossBatchReport;
+  },
   evidence?: string,
 ): AgentStepInput => ({
   kind: "verify-claim",
@@ -228,6 +245,14 @@ export const claimStepInput = (
     manifest: input.manifestKey,
     answer: claim.answer,
     claim: claim.key,
+    ...(claim.crossBatch === undefined
+      ? {}
+      : {
+          crossBatch: {
+            section: claim.crossBatch.target.section,
+            comment: claim.crossBatch.comment,
+          },
+        }),
     ...(input.claimEffort === undefined ? {} : { effort: input.claimEffort }),
     ...(evidence === undefined ? {} : { evidence }),
   },
@@ -327,6 +352,7 @@ type Claimed = {
   readonly section: string;
   /** The stored Lane review output the claim was read from. */
   readonly answer: string;
+  readonly crossBatch?: CrossBatchReport;
 };
 
 type ReadingCheckpoint =
@@ -1183,6 +1209,35 @@ export const readingStep = async (
   const { params } = input;
   const plan = await readPlan(ctx, run, params.plan, signal);
   const manifest = await readManifest(ctx, run, params.manifest, signal);
+  if (input.kind === "verify-claim" && input.params.crossBatch !== undefined) {
+    const { comment, section } = input.params.crossBatch;
+    const hunk = manifest.hunks.find((hunk) =>
+      comment.side === "old"
+        ? hunk.oldPath === comment.path
+        : hunk.newPath === comment.path,
+    );
+    const blob = comment.side === "old" ? hunk?.oldOid : hunk?.newOid;
+    const text =
+      blob == null ? null : await run(blobTextOf(ctx.repository, blob), signal);
+    const first = Math.max(1, comment.startLine - 10);
+    const excerpt = text
+      ?.split("\n")
+      .slice(first - 1, comment.endLine + 10)
+      .map((line, index) => `${first + index}: ${line}`)
+      .join("\n");
+    return withStepEffort(
+      erased(
+        claimVerifyStep({
+          key: input.params.claim,
+          section,
+          comment,
+          reading: { text: excerpt ?? "[source unavailable]" },
+          turnLimit: turnLimitFor(ctx.config, "verify"),
+        }),
+      ),
+      input.params.effort,
+    );
+  }
   const { structures } = await structuresRead(
     ctx,
     run,
@@ -1287,9 +1342,12 @@ export const readingStep = async (
   const frame = await run(storedOutput(ctx, p.frame, Frame), signal);
   const map = await run(storedOutput(ctx, p.map, ReviewMap), signal);
   const lookups = lookupContext(ctx, await view());
-  const budget = readingBudget(
+  const budget: ReturnType<typeof readingBudget> = readingBudget(
     [
       readTool(lookups),
+      readManyTool(lookups, {
+        remaining: () => LANE_REVIEW_READING_CHARS - budget.save().used,
+      }),
       usesTool(lookups),
       defsTool(lookups),
       outlineTool(lookups),
@@ -1453,7 +1511,7 @@ export const readingTask = (
       : { state: "not-reached" };
   };
 
-  /** Which computations a task reads, as the finder records its children's (`task.inputs`). */
+  /** Which computations a task reads, (`task.inputs`). */
   const inputsOf = (
     runtime: Runtime,
     task: number,
@@ -1483,7 +1541,7 @@ export const readingTask = (
       : { frame: input.frameKey, map: input.mapKey });
 
   /**
-   * How the front task ended, as the finder reads it: a look, never a wait. Undefined while it has
+   * How the front task ended, if it has ended. Undefined while it has
    * not ended, and for a reading given no front task; its Frame and Map keys when it ended
    * (`completed`, or `aborted` with a result) holding both; null when it ended without one (null
    * keys, failed, faulted, orphaned, or stopped before it had them), or when there is no such task.
@@ -1585,9 +1643,11 @@ export const readingTask = (
     children: ReadonlyArray<{
       readonly name: string;
       readonly input: AgentStepInput;
+      readonly crossBatch?: CrossBatchReport;
     }>,
     next: (ids: ReadonlyArray<number>) => ReadingCheckpoint,
     context: Context,
+    reports: ReadonlyArray<CrossBatchReport> = [],
   ) => {
     const ids: Array<number> = [];
     const created: Array<{ name: string; id: number }> = [];
@@ -1605,8 +1665,16 @@ export const readingTask = (
           ids.length = 0;
           created.length = 0;
           const doc = await tx.doc(ChildrenDoc, runtime.taskId);
+          const registered =
+            reports.length === 0
+              ? undefined
+              : (await tx.doc(CrossBatchClaimsDoc)).claims;
           for (const child of children) {
-            const held = doc.children[child.name];
+            const shared =
+              child.crossBatch === undefined
+                ? undefined
+                : registered?.[child.crossBatch.key]?.task;
+            const held = shared ?? doc.children[child.name];
             if (held !== undefined) {
               ids.push(held);
               continue;
@@ -1617,7 +1685,15 @@ export const readingTask = (
             doc.children[child.name] = id;
             ids.push(id);
             created.push({ name: child.name, id });
+            if (registered !== undefined && child.crossBatch !== undefined)
+              registered[child.crossBatch.key] = {
+                ...child.crossBatch,
+                task: id,
+              };
           }
+          if (registered !== undefined)
+            for (const report of reports)
+              registered[report.key] ??= { ...report, task: null };
           const checkpoint = next(ids);
           return ids.length === 0
             ? { status: "running", checkpoint }
@@ -1828,6 +1904,10 @@ export const readingTask = (
     context: Context,
   ): Promise<Array<Claimed>> => {
     const claims: Array<Claimed> = [];
+    const cross: Array<{
+      readonly answer: string;
+      readonly comment: CrossBatchClaim;
+    }> = [];
     if (input.kind !== "lane-review") return claims;
     const so = await gather(input, runtime, context, []);
     const notJudged = new Set(so.notJudged.map((entry) => entry.section));
@@ -1842,6 +1922,8 @@ export const readingTask = (
         storedOutput(ctx, key, LaneReviewStored),
         runtime.signal,
       );
+      for (const comment of stored.answer.crossBatchClaims ?? [])
+        cross.push({ answer: key, comment });
       const answered = new Set(
         stored.sections.filter((s) => !stored.unanswered.includes(s)),
       );
@@ -1853,6 +1935,52 @@ export const readingTask = (
             if (!claims.some((held) => held.key === claim))
               claims.push({ key: claim, section, answer: key });
           }
+    }
+    if (cross.length === 0 || input.mapKey === undefined) return claims;
+    const manifest = await readManifest(
+      ctx,
+      services.run,
+      input.manifestKey,
+      runtime.signal,
+    );
+    const map = await services.run(
+      storedOutput(ctx, input.mapKey, ReviewMap),
+      runtime.signal,
+    );
+    const batchOf = new Map(
+      map.groups.flatMap((group) => {
+        const paths = group.files.map((file) => file.path);
+        const batch = batchKeyOf(paths);
+        return paths.map((path) => [path, batch] as const);
+      }),
+    );
+    const own = batchOf.get(planGroup(plan, input.group).paths[0] ?? "");
+    const hunks = new Map(manifest.hunks.map((hunk) => [hunk.hunkId, hunk]));
+    if (own === undefined) return claims;
+    for (const { answer, comment } of cross) {
+      if (comment.kind === "defect" && comment.fails.length === 0) continue;
+      const owner = sectionOwning(plan, hunks, comment);
+      if (owner === undefined) continue;
+      const batch = batchOf.get(owner.section.path);
+      if (batch === undefined || batch === own) continue;
+      const canonical = { ...comment, ...owner.anchor };
+      const claim =
+        canonical.kind === "defect"
+          ? claimKey(canonical)
+          : commentKey(canonical);
+      if (!claims.some((held) => held.key === claim))
+        claims.push({
+          key: claim,
+          section: owner.section.key,
+          answer,
+          crossBatch: {
+            key: claim,
+            from: input.group,
+            target: { batch, section: owner.section.key },
+            comment: canonical,
+            answer,
+          },
+        });
     }
     return claims;
   };
@@ -2021,7 +2149,7 @@ export const readingTask = (
       if (await waitForGate([])) return;
       return startRead(input, runtime, found, context);
     }
-    // The front task has not ended: wait for it (not a child, as the finder does), with the gate
+    // The front task has not ended: wait for it (a sibling task), with the gate
     // when there is one, then read with the keys its result holds. Its end wakes this task.
     const front = childId<FrontResult>(input.front);
     if (await waitForGate([front])) return;
@@ -2164,6 +2292,9 @@ export const readingTask = (
             : claims.map((claim) => ({
                 name: `claim.${claim.key}`,
                 input: claimInput(task.input, claim, at.evidence),
+                ...(claim.crossBatch === undefined
+                  ? {}
+                  : { crossBatch: claim.crossBatch }),
               })),
           (ids) => ({
             phase: "done",
@@ -2177,6 +2308,9 @@ export const readingTask = (
             ...(late ? { late: true } : {}),
           }),
           context,
+          claims.flatMap((claim) =>
+            claim.crossBatch === undefined ? [] : [claim.crossBatch],
+          ),
         );
       },
       done: async (task, runtime, context) => {

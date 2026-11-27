@@ -20,10 +20,7 @@ export const RouteAccount = z.strictObject({
 });
 export type RouteAccount = z.infer<typeof RouteAccount>;
 
-/**
- * The kinds of review step an effort can be set for (12 November): the four agent stages, and the
- * readers' assessment, lane review and briefing.
- */
+/** Step names in frozen configurations, including the retired find stage. */
 export const StepKind = z.enum([
   "frame",
   "map",
@@ -44,6 +41,12 @@ export const StepEffort = z.partialRecord(
   z.enum(["low", "medium", "high"]),
 );
 export type StepEffort = z.infer<typeof StepEffort>;
+
+export const activeStepEffort = (effort: StepEffort | undefined) => {
+  if (effort === undefined) return undefined;
+  const { find: _retired, ...active } = effort;
+  return Object.keys(active).length === 0 ? undefined : active;
+};
 
 /**
  * A model route frozen into each run's configuration (0008): the provider, the model, its effort,

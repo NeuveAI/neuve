@@ -31,13 +31,7 @@ import {
   mintUlid,
   storeLocationIn,
 } from "@neuve/records-core";
-import {
-  PipelineConfig,
-  defaultConfig,
-  runKeyFor,
-  runSpec,
-  type ReadingsConfig,
-} from "../src/config.ts";
+import { defaultConfig, type ReadingsConfig } from "../src/config.ts";
 import { AssessedSection } from "@neuve/records-schema";
 import { judgementCounts } from "../src/judgement-trace.ts";
 import { McpClients, mcpClientsLayer } from "../src/mcp-client.ts";
@@ -46,10 +40,7 @@ import {
   storedOutput,
   type StageRecord,
 } from "../src/pipeline.ts";
-import { prepareReviewConfig, readingsConfig } from "../src/request.ts";
 import type { RunLog, RunLogRecord } from "../src/run-log.ts";
-import { Settings } from "../src/settings.ts";
-import { reviewStages } from "../src/pi/stages/index.ts";
 import { agentKinds } from "../src/pi/stages/kinds.ts";
 import {
   READING_TASK,
@@ -57,7 +48,6 @@ import {
   readPlan,
   readingTask,
   remembered,
-  failureLabel,
   type ReadingTaskInput,
   type ReadingTaskResult,
 } from "../src/pi/stages/reading-task.ts";
@@ -70,7 +60,6 @@ import {
   readingsPort,
   settledOf,
 } from "../src/readings/collect.ts";
-import { FindStored } from "../src/find.ts";
 import { captureOutlineSource } from "../src/graph-outline.ts";
 import { OPUS_ROUTE, zeroUsage, type RouteEffort } from "../src/route.ts";
 import {
@@ -79,7 +68,6 @@ import {
   type RecordedEntry,
 } from "../src/lane-rule.ts";
 import type { AgentResult } from "../src/pi/stages/agent.ts";
-import type { FrontResult } from "../src/pi/stages/front-task.ts";
 import type {
   AssessAnswer,
   LaneReviewAnswer,
@@ -358,80 +346,6 @@ const world = async (name: string, config = defaultConfig()) => {
 };
 
 // Reason: off must cost nothing and change nothing.
-test("with the off switch a review keeps its configuration, run key, stage keys and has no readings port; without it, the block is frozen and the run key differs", async () => {
-  // The setting: `"probe"`, `"off"` or absent, nothing else.
-  for (const sectionReadings of ["probe", "off"])
-    expect(
-      Settings.safeParse({ version: 1, review: { sectionReadings } }).success,
-    ).toBe(true);
-  expect(
-    Settings.safeParse({ version: 1, review: { sectionReadings: "on" } })
-      .success,
-  ).toBe(false);
-  expect(
-    readingsConfig(
-      Option.some({ version: 1, review: { sectionReadings: "off" } }),
-    ),
-  ).toBeUndefined();
-  // Absent and `"probe"` freeze the same block.
-  for (const settings of [
-    Option.none(),
-    Option.some({ version: 1 }),
-    Option.some({ version: 1, review: {} }),
-  ] satisfies ReadonlyArray<Option.Option<Settings>>)
-    expect(readingsConfig(settings)).toEqual(PROBE);
-  const block = readingsConfig(
-    Option.some({ version: 1, review: { sectionReadings: "probe" } }),
-  );
-  expect(block).toEqual(PROBE);
-
-  // The configuration a request freezes, its run key and an agent stage's key.
-  const location = storeLocationIn(join(directory, "config"));
-  const frozen = (readings: ReadingsConfig | undefined) =>
-    Effect.runPromise(
-      prepareReviewConfig({
-        location,
-        search: {},
-        stack: undefined,
-        deadline: undefined,
-        // Explicit, so only the readings block differs (sections are on by default).
-        sections: undefined,
-        readings,
-      }),
-    );
-  const off = await frozen(undefined);
-  expect(off).toEqual(defaultConfig());
-  expect("readings" in off).toBe(false);
-  expect(runKeyFor(RANGE, off)).toBe(BASE_RUN_KEY);
-  expect(JSON.stringify(runSpec(RANGE, off))).not.toContain("readings");
-  const on = await frozen(block);
-  expect(PipelineConfig.parse(on).readings).toEqual(PROBE);
-  expect(
-    (runSpec(RANGE, on).config as { readings?: unknown }).readings,
-  ).toEqual(PROBE);
-  expect(runKeyFor(RANGE, on)).not.toBe(BASE_RUN_KEY);
-  // A stage's key reads only the route and the stub settings: the probe moves none of them.
-  const stage = (config: PipelineConfig) =>
-    Computations.computationKey(
-      agentStageSpec(
-        config,
-        { stage: "find", turnLimit: 11, agent: "find.correctness" },
-        { op: "harness.find", opVersion: 4, inputs: { lens: "correctness" } },
-      ),
-    ).key;
-  expect(stage(on)).toBe(stage(off));
-
-  // The stages: the readings port only with the block in the run's frozen configuration. The
-  // reading task is registered either way, so a stored run that holds readings always resumes.
-  const names = (stages: ReturnType<typeof reviewStages>) =>
-    (stages.extension.tasks ?? []).map((task) => task.definition.name);
-  const without = reviewStages((await world("off")).services);
-  expect(without.readings).toBeUndefined();
-  expect(names(without)).toContain(READING_TASK);
-  const withIt = reviewStages((await world("on", on)).services);
-  expect(withIt.readings).toBeDefined();
-  expect(names(withIt)).toEqual(names(without));
-}, 30_000);
 
 /** The readings fixture still gives each hunk the `leads` the manifest no longer holds. */
 const withoutLeads = (hunks: ReturnType<typeof mixedRange>["hunks"]) =>
@@ -497,6 +411,7 @@ test("prepare plans before the commit and create makes every reading task of a t
   await run.storeAt(
     planSpec({
       manifestKey,
+      mapKey,
       bounds: PROBE.bounds,
       source: captureOutlineSource().key,
     }),
@@ -614,106 +529,6 @@ test("prepare plans before the commit and create makes every reading task of a t
 // Reason: the review still calls `prepare` with the Frame and Map keys, and the timeline lane will
 // call it with the front task instead, before either exists; both forms must work, give the same
 // plan, and a replayed `create` must find the same tasks under either.
-test("prepare takes both input forms with no Map in the store: the keys go on Lane review tasks only, the front task on every task, and a replayed create finds each task", async () => {
-  type Listed = {
-    plan: string;
-    tasks: Array<{ name: string; input: ReadingTaskInput }>;
-  };
-  for (const form of ["today", "early"] as const) {
-    const run = await world(`forms-${form}`);
-    const range = mixedRange();
-    const manifestKey = await run.store(
-      "test.manifest",
-      manifestOf(withoutLeads(range.hunks)),
-    );
-    // The plan as a probe run stores it: its key names the manifest only, so no Map is needed.
-    await run.storeAt(
-      planSpec({
-        manifestKey,
-        bounds: PROBE.bounds,
-        source: captureOutlineSource().key,
-      }),
-      threeGroups(),
-    );
-    const { harness, port } = await run.open();
-    const signal = new AbortController().signal;
-    const cutoffAt = Date.now() + 60_000;
-    // Neither key names a stored computation: `prepare` reads no Frame and no Map.
-    const today = (await port.prepare(
-      { frameKey: "no-frame", mapKey: "no-map", manifestKey, cutoffAt },
-      signal,
-    )) as Listed;
-    const early = (await port.prepare(
-      { manifestKey, cutoffAt, front: 4242 as TaskId<FrontResult> },
-      signal,
-    )) as Listed;
-    expect(today.plan).toEqual(expect.any(String));
-    expect(early.plan).toBe(today.plan);
-    expect(early.tasks.map((t) => t.name)).toEqual(
-      today.tasks.map((t) => t.name),
-    );
-    expect(today.tasks).toHaveLength(6);
-    for (const { input } of today.tasks) {
-      expect(input.front).toBeUndefined();
-      expect([input.frameKey, input.mapKey]).toEqual(
-        input.kind === "lane-review"
-          ? ["no-frame", "no-map"]
-          : [undefined, undefined],
-      );
-    }
-    // The early form: no keys anywhere, and the front task's ID on every reading task. A Lane review
-    // waits on it; an Assess task only looks at it, and never waits.
-    for (const { input } of early.tasks) {
-      expect(input.front).toBe(4242);
-      expect([input.frameKey, input.mapKey]).toEqual([undefined, undefined]);
-    }
-    expect(run.rows.filter((row) => row.type === "readings.plan")).toHaveLength(
-      1,
-    );
-
-    // This form's `create`, twice in one commit (a replayed change) and again in a later commit:
-    // the same tasks each time, created once, each with the input `prepare` listed.
-    const prepared = form === "today" ? today : early;
-    const root = await harness.root(context);
-    const owner = await harness.commit(
-      (tx) =>
-        tx.createTask(
-          readingOwner,
-          {},
-          { ownership: { kind: "conversation" }, conversationId: root.id },
-        ),
-      context,
-    );
-    const [first, again] = await harness.commit(
-      async (tx) =>
-        [
-          await port.create(tx, prepared, owner),
-          await port.create(tx, prepared, owner),
-        ] as const,
-      context,
-    );
-    const later = await harness.commit(
-      (tx) => port.create(tx, prepared, owner),
-      context,
-    );
-    expect(first.map((r) => r.name)).toEqual(prepared.tasks.map((t) => t.name));
-    expect(again).toEqual(first);
-    expect(later).toEqual(first);
-    const stored = (
-      await harness.commit(
-        async (tx) => (await tx.scanTasks({}, 1000)).items,
-        context,
-      )
-    ).filter((task) => task.kind === READING_TASK);
-    expect(stored.map((task) => Number(task.id))).toEqual(
-      first.map((r) => Number(r.task)),
-    );
-    expect(stored.map((task): unknown => task.input)).toEqual(
-      prepared.tasks.map((t) => t.input),
-    );
-    await harness.close(context);
-  }
-}, 30_000);
 
 const result = <O>(output: O): AgentResult<O> => ({
   agent: "reading.test",
@@ -1042,41 +857,6 @@ test("collect decides every planned section as the deciding code does, forms uni
       } as TaskOutcome<unknown>,
     },
   ];
-  // A finder's kept risk on the first section's lines: a comment on its unit, never a row's text.
-  const first = plan.sections.find((s) => s.key === keys[0])!;
-  const findKey = await run.store(
-    "test.find",
-    FindStored.parse({
-      lens: "risky-edges",
-      source: "agent",
-      findings: [
-        {
-          id: "risky-edges.1",
-          lens: "risky-edges",
-          hunkId: first.hunkIds[0],
-          claim: MARKS.finder,
-          kind: "risk",
-          about: "code",
-          signal: null,
-          critical: false,
-          anchors: [
-            {
-              path: first.path,
-              side: at(1).side,
-              startLine: at(1).line,
-              endLine: at(1).line,
-            },
-          ],
-          doneWhen: null,
-          // Another Map group's id: placement is by anchor alone.
-          group: "m2",
-          evidence: [first.hunkIds[0]],
-        },
-      ],
-      notes: [],
-      reading: { used: 0, limit: 1 },
-    }),
-  );
   const { harness, port } = await run.open();
   await harness.commit(async (tx) => {
     (await tx.doc(ReadingsRunDoc)).plan = planKey;
@@ -1088,17 +868,6 @@ test("collect decides every planned section as the deciding code does, forms uni
       mapKey,
       manifestKey,
       readings,
-      finders: [
-        {
-          lens: "risky-edges",
-          findKey,
-          findings: [
-            { id: "risky-edges.1", verifyKey: "verify-key", status: "kept" },
-          ],
-          stages: [],
-          end: { find: "completed", verify: "completed" },
-        },
-      ],
     },
     harness,
     context,
@@ -1256,15 +1025,7 @@ test("collect decides every planned section as the deciding code does, forms uni
           },
         ],
       },
-      // The finder's kept risk about code, a move the rule reads (14.28).
-      movement: [
-        {
-          signal: "kept-finding",
-          axis: "complexity",
-          direction: "toward-human",
-          cites: [expect.any(String)],
-        },
-      ],
+      movement: [],
       lean: null,
       gaps: [
         { axis: "complexity", kind: "model" },
@@ -1450,13 +1211,7 @@ test("collect decides every planned section as the deciding code does, forms uni
   const entryRow = row(keys[0]!)["entry"] as {
     assess: { movement: Array<Record<string, unknown>> };
   };
-  expect(entryRow.assess.movement).toEqual([
-    expect.objectContaining({
-      signal: "kept-finding",
-      axis: "complexity",
-      direction: "toward-human",
-    }),
-  ]);
+  expect(entryRow.assess.movement).toEqual([]);
   const inUnits = stored.units
     .filter((g) => g.mapGroup !== "generated")
     .flatMap((g) => g.units.flatMap((u) => u.sectionKeys));
@@ -1611,7 +1366,6 @@ test("collect decides every planned section as the deciding code does, forms uni
   expect(batch("m2")).toMatchObject({ ready: false, reason: "waiting" });
   expect(decided).toMatchObject({
     batches: { total: 3, ready: 2 },
-    findings: { placed: 1, unplaced: 0 },
   });
   // The comment bodies are carried only in the stored decision, for the publisher: the Lane
   // review's comment and the finder's, on the first section's unit.
@@ -1627,7 +1381,6 @@ test("collect decides every planned section as the deciding code does, forms uni
   const bodies = forPublisher.batches[0]!.units.flatMap((u) =>
     u.comments.map((c) => [c.id, c.section, c.body]),
   );
-  expect(bodies).toContainEqual(["risky-edges.1", keys[0]!, MARKS.finder]);
   expect(bodies.map(([, , body]) => body)).toContain(MARKS.defect);
 
   // What the review gets: every record, the cut-off one with no gap of its own, and one disclosure.
@@ -2766,162 +2519,6 @@ test("concurrent callers of one read make one run; an aborted caller leaves the 
 
 // Reason: only a finding Verify kept may weigh on a section, and a kept finding that cannot be read
 // must never be skipped silently, since a section would then read as clear of it.
-test("collect takes only kept findings; a dropped or unverified one is neither a claim nor a comment, and a kept one it cannot read is a run gap", async () => {
-  const run = await world("collect-finders");
-  const range = mixedRange();
-  const plan = planReadings({
-    hunks: range.hunks,
-    structures: range.structures,
-    excluded: range.excluded,
-    bounds: { maxItems: 4 },
-  });
-  const planKey = await run.store("test.readings-plan", plan);
-  const manifestKey = await run.store(
-    "test.manifest",
-    manifestOf(withoutLeads(range.hunks)),
-  );
-  const mapKey = await run.store(
-    "test.map",
-    mapFor(withoutLeads(range.hunks), range.excluded),
-  );
-  // Three read sections, each the owner of one finding's anchor.
-  const [X, Y, Z] = plan.sections;
-  const findingOn = (id: string, section: (typeof plan.sections)[number]) => {
-    const owned = section.owned[0]!;
-    return {
-      id,
-      lens: "correctness",
-      hunkId: owned.hunkId,
-      claim: `FINDER-MARK ${id}`,
-      kind: "defect",
-      about: "code",
-      signal: null,
-      critical: true,
-      anchors: [
-        {
-          path: section.path,
-          side: owned.side,
-          startLine: owned.startLine,
-          endLine: owned.startLine,
-        },
-      ],
-      doneWhen: null,
-      group: "g9",
-      evidence: [],
-    };
-  };
-  const findKey = await run.store(
-    "test.find",
-    FindStored.parse({
-      lens: "correctness",
-      source: "agent",
-      findings: [
-        findingOn("correctness.1", X!),
-        findingOn("correctness.2", Y!),
-        findingOn("correctness.3", Z!),
-        findingOn("correctness.4", Z!),
-      ],
-      notes: [],
-      reading: { used: 0, limit: 1 },
-    }),
-  );
-  const { harness, port } = await run.open();
-  await harness.commit(async (tx) => {
-    (await tx.doc(ReadingsRunDoc)).plan = planKey;
-    return undefined;
-  }, context);
-  // Every reading failed: each section is settled, undecided, with no verdict of its own.
-  const readings = plan.groups.flatMap((group) =>
-    (["assess", "lane-review"] as const).map((kind) => ({
-      name: `${kind}.${group.id}`,
-      outcome: {
-        status: "failed",
-        error: { message: "the reading failed" },
-      } as TaskOutcome<unknown>,
-    })),
-  );
-  await port.collect(
-    {
-      frameKey: FRAME_KEY,
-      mapKey,
-      manifestKey,
-      readings,
-      finders: [
-        {
-          lens: "correctness",
-          findKey,
-          findings: [
-            // Kept: a confirmed claim on X.
-            { id: "correctness.1", verifyKey: "verify-1", status: "kept" },
-            // Dropped by Verify, unverified, and kept with no Verify: none takes part.
-            { id: "correctness.2", verifyKey: "verify-2", status: "dropped" },
-            { id: "correctness.3", verifyKey: null, status: "unverified" },
-            { id: "correctness.4", verifyKey: null, status: "kept" },
-            // Kept, but the stored output does not hold it.
-            { id: "correctness.9", verifyKey: "verify-9", status: "kept" },
-          ],
-          stages: [],
-          end: { find: "completed", verify: "completed" },
-        },
-        {
-          // Kept, but the finder's output cannot be read.
-          lens: "risky-edges",
-          findKey: "f".repeat(64),
-          findings: [
-            { id: "risky-edges.1", verifyKey: "verify-r", status: "kept" },
-          ],
-          stages: [],
-          end: { find: "completed", verify: "completed" },
-        },
-      ],
-    },
-    harness,
-    context,
-    new AbortController().signal,
-  );
-  await harness.close(context);
-
-  const row = (key: string) =>
-    run.rows.find((r) => r.type === "reading.section" && r["section"] === key)!;
-  // Only the kept, verified finding is a claim, and it makes its section request changes.
-  expect(row(X!.key)).toMatchObject({
-    verdict: "request-changes",
-    claims: [
-      expect.objectContaining({
-        key: "correctness.1",
-        source: "finder",
-        verify: "confirmed",
-        restsOn: true,
-      }),
-    ],
-  });
-  for (const section of [Y!, Z!])
-    expect(row(section.key)).toMatchObject({ verdict: null, claims: [] });
-  const decided = run.rows.find((r) => r.type === "readings.decision")!;
-  expect(decided["findings"]).toEqual({ placed: 1, unplaced: 0, unread: 2 });
-  // No finding's text in any row.
-  expect(
-    JSON.stringify(run.rows.filter((r) => r.type.startsWith("reading"))),
-  ).not.toContain("FINDER-MARK");
-  // For the publisher: one finder comment only, and the run says what could not be read; the
-  // settled batches are still handed over.
-  const forPublisher = await settledOf(run.services, decided["key"] as string);
-  const finderComments = forPublisher.batches
-    .flatMap((b) => b.units.flatMap((u) => u.comments))
-    .filter((c) => c.body.startsWith("FINDER-MARK"));
-  expect(finderComments.map((c) => [c.id, c.section, c.restedOn])).toEqual([
-    ["correctness.1", X!.key, true],
-  ]);
-  expect(forPublisher.batches.length).toBeGreaterThan(0);
-  expect(forPublisher.gaps).toEqual([
-    {
-      key: "findings-unread:2:2",
-      kind: "findings-unread",
-      detail:
-        "2 verified findings of 2 finders could not be read, so they are on no unit, and a unit shown with no finding may still have one.",
-    },
-  ]);
-}, 30_000);
 
 // Reason (round 2h): one confirmed check must not leave a second section that rests on the same
 // claim marked as disagreeing with it. A Lane review that writes the same defect (same words, one
@@ -3154,7 +2751,7 @@ const sharedClaim = async (
     return undefined;
   }, context);
   await port.collect(
-    { frameKey: FRAME_KEY, mapKey, manifestKey, readings, finders: [] },
+    { frameKey: FRAME_KEY, mapKey, manifestKey, readings },
     harness,
     context,
     new AbortController().signal,
@@ -3289,9 +2886,14 @@ test("create makes no reading and writes its row when the owner is completing or
     "test.manifest",
     manifestOf(withoutLeads(range.hunks)),
   );
+  const mapKey = await run.store(
+    "test.map",
+    mapFor(withoutLeads(range.hunks), range.excluded),
+  );
   await run.storeAt(
     planSpec({
       manifestKey,
+      mapKey,
       bounds: PROBE.bounds,
       source: captureOutlineSource().key,
     }),
@@ -3301,7 +2903,7 @@ test("create makes no reading and writes its row when the owner is completing or
   const prepared = await port.prepare(
     {
       frameKey: FRAME_KEY,
-      mapKey: "map-key",
+      mapKey,
       manifestKey,
       cutoffAt: Date.now() + 60_000,
     },
@@ -3396,6 +2998,7 @@ const riskRows = async (byRisk: boolean, effort: RouteEffort = "low") => {
   await run.storeAt(
     planSpec({
       manifestKey,
+      mapKey,
       bounds: PROBE.bounds,
       source: captureOutlineSource().key,
       ...(byRisk ? { effort: "by-risk" as const } : {}),

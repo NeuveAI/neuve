@@ -41,10 +41,7 @@ import {
   type ReadingsConfig,
 } from "./config.ts";
 import { DEFAULT_READING_BOUNDS } from "./reading-groups.ts";
-import {
-  READING_RECIPE,
-  READING_RECIPE_SCOPE_AND_TESTS,
-} from "./readings/plan.ts";
+import { READING_RECIPE_SCOPE_AND_TESTS } from "./readings/plan.ts";
 import { readIntegrations, type Integrations } from "./integrations.ts";
 import { z } from "zod";
 import { git, resolveCommit } from "./git.ts";
@@ -194,31 +191,19 @@ export const settingsRoute = (settings = readSettings()): RouteConfig => {
     : namedRoute(RouteName.parse(named), settings);
 };
 
-/**
- * The section readings' block a review request freezes (NEU-148): unless the user's settings say
- * `review.sectionReadings: "off"`, which leaves it absent, so the run keeps the key it had before
- * the readings. Absent and `"probe"` freeze the same block. Effort by risk
- * (`review.sectionReadingsEffort: "by-risk"`) is frozen into it only when set. Scope and tests
- * (`review.sectionReadingsScopeAndTests: true`) is frozen only when set, with its own recipe;
- * absent or false, the block is byte for byte the one before it existed. The call-line lift is no
- * switch (round 13): `review.sectionReadingsCallsLiftGap` is ignored and nothing of it is frozen.
- * Rule skips (`review.sectionReadingsRuleSkips: true`) ride on whatever block the readings' mode
- * builds, as `ruleSkips: true`, only when set.
- */
+/** The section readings configuration a new request freezes. */
 export const readingsConfig = (
   settings: Option.Option<Settings>,
-): ReadingsConfig | undefined => {
+): ReadingsConfig => {
   const review = Option.getOrUndefined(settings)?.review;
-  if (review?.sectionReadings === "off") return undefined;
-  const scopeAndTests = review?.sectionReadingsScopeAndTests === true;
   return withRuleSkips(review ?? {}, {
     mode: "probe",
     bounds: { ...DEFAULT_READING_BOUNDS },
-    recipe: scopeAndTests ? READING_RECIPE_SCOPE_AND_TESTS : READING_RECIPE,
+    recipe: READING_RECIPE_SCOPE_AND_TESTS,
+    scopeAndTests: true,
     ...(review?.sectionReadingsEffort === "by-risk"
       ? { effort: "by-risk" as const }
       : {}),
-    ...(scopeAndTests ? { scopeAndTests: true as const } : {}),
   });
 };
 

@@ -151,7 +151,7 @@ const setup = (branch = "main", file = "a.ts") => {
         commit: oid,
         source: engine.source,
         started: Date.now(),
-        settings: READINGS_ON,
+
         ...over,
       }),
     );
@@ -181,21 +181,6 @@ const NOT_STORED_GAP = { gap: "over-bound", tag: NOT_STORED } as const;
 // Why: with the readings setting off, commit preparation must read and store nothing new, and log
 // nothing new: the same rule a review's request freezes readings by decides it. Readings are on by
 // default, so only `review.sectionReadings: "off"` turns the step off.
-test("with readings off the step does nothing: no engine, no clone, nothing stored, no log line", async () => {
-  const s = setup();
-  const { value, lines } = await s.step(s.first, { settings: READINGS_OFF });
-  expect(value).toEqual({ readings: false });
-  expect(relationLines(lines)).toEqual([]);
-  expect(s.engine.spawns()).toEqual([]);
-  expect(existsSync(s.graphDirectory)).toBe(false);
-  expect(await s.stored(s.first, s.first)).toEqual({
-    base: NOT_STORED_GAP,
-    head: NOT_STORED_GAP,
-  });
-}, 120_000);
-
-// Why: a review of a branch reads its head and its merge base with the default branch; both are
-// read at commit time, the commit first, and a second preparation finds both stored.
 test("a branch commit on top of a default-branch commit gets both read, the commit first", async () => {
   const s = setup();
   git(s.repository, "checkout", "-q", "-b", "feature");
@@ -382,7 +367,7 @@ test("a newer commit recorded during the commit's read stops the merge-base read
 // Why: with readings off, the step leaves no trace, its span included; with them on, one span.
 test("the step's span is emitted only when the step runs", async () => {
   const s = setup("trunk");
-  const spans = async (settings: Option.Option<Settings>) => {
+  const spans = async () => {
     const records: RunLogRecord[] = [];
     const log = {
       path: "",
@@ -398,17 +383,13 @@ test("the step's span is emitted only when the step runs", async () => {
         commit: s.first,
         source: s.engine.source,
         started: Date.now(),
-        settings,
       }).pipe(Effect.provideService(Tracer.Tracer, runLogTracer(log))),
     );
     return records
       .filter((record) => record.type === "span")
       .map((record) => record["name"]);
   };
-  expect(await spans(READINGS_OFF)).toEqual([]);
-  expect(await spans(READINGS_ON)).toContain("harness.commit.relations");
-  // No setting at all is the default, and the default has readings on: the step runs.
-  expect(await spans(Option.none())).toContain("harness.commit.relations");
+  expect(await spans()).toContain("harness.commit.relations");
 }, 120_000);
 
 /**

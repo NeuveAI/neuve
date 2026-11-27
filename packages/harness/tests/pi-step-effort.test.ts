@@ -230,7 +230,7 @@ const responseHook = (
       vent: undefined as never,
     }),
   };
-  const extension = kindExtension("verify", [], tools);
+  const extension = kindExtension("verify-claim", [], tools);
   const handlers = extension.hooks![0]!.handlers as {
     readonly afterResponse: (
       message: AssistantMessage,

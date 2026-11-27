@@ -15,7 +15,6 @@ const unused = async (): Promise<never> => {
 };
 const port: ReviewStagesPort = {
   front: unused,
-  finder: unused,
   precompute: unused,
   fill: unused,
   link: unused,
@@ -25,7 +24,7 @@ const port: ReviewStagesPort = {
 test("a review stored by the earlier version restarts from Precompute", () => {
   const { definition } = reviewTask(port);
   expect(definition.version).toBe(REVIEW_TASK_VERSION);
-  expect(REVIEW_TASK_VERSION).toBe(6);
+  expect(REVIEW_TASK_VERSION).toBe(7);
   const input = {
     range: {
       baseRef: "main",

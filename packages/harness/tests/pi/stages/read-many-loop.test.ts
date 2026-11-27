@@ -17,11 +17,8 @@ import {
   TOOL_RESULT_BYTES,
   estimateTokens,
 } from "../../../src/budget.ts";
-import {
-  FIND_READING_CHARS,
-  readingBudget,
-  recordingHeadReads,
-} from "../../../src/find.ts";
+import { readingBudget } from "../../../src/readings/tool-budget.ts";
+const READING_CHARS = 200_000;
 import { captureOutlineSource } from "../../../src/graph-outline.ts";
 import * as L from "../../../src/lookups.ts";
 import {
@@ -88,13 +85,15 @@ test("read_many through the agent loop: its own cap on the wrapped spec, its bud
       traced: true,
       tools: (handles) => {
         const ctx: L.LookupContext = { ...built!, handles };
-        const recorded = recordingHeadReads(L.readTool(ctx), ctx.handles);
-        const budget = readingBudget([
-          L.readManyTool(ctx, {
-            read: recorded.tool,
-            remaining: () => FIND_READING_CHARS - budget.save().used,
-          }),
-        ]);
+
+        const budget = readingBudget(
+          [
+            L.readManyTool(ctx, {
+              remaining: () => READING_CHARS - budget.save().used,
+            }),
+          ],
+          READING_CHARS,
+        );
         return [L.logTool(ctx), L.treeTool(ctx), ...budget.tools];
       },
     },

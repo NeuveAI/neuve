@@ -211,7 +211,7 @@ test("without the setting the readings block is the base's; with it the block ca
         }),
       ),
     ),
-  ).toBeUndefined();
+  ).toEqual({ ...readingsConfig(Option.none()), ruleSkips: true });
 });
 
 test("rule skips ride on whatever block a readings mode builds, never on a mode check", () => {

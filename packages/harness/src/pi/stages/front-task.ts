@@ -1,16 +1,5 @@
 import { copyJson, type Context } from "@earendil-works/chord";
-import type { Task, TaskId, TaskRuntime, Tx } from "@earendil-works/pi-durable";
-import {
-  findDeadline,
-  MIN_FIND_WINDOW_MS,
-  VERIFY_RESERVE_MS,
-} from "../../budget.ts";
-import { FINDERS, type Lens } from "../../find.ts";
-import type {
-  FinderCheckpoint,
-  FinderInput,
-  FinderResult,
-} from "./finder-task.ts";
+import type { Task, TaskId, TaskRuntime } from "@earendil-works/pi-durable";
 import { Effect } from "effect";
 import {
   checkSources,
@@ -52,18 +41,6 @@ export type FrontInput = {
   readonly cutoffAt: number;
   readonly precompute: string;
 };
-/** The finders the front task started when Frame landed, owned by the review task. */
-export type StartedFinders = {
-  /** The start rule as measured when they were created (`MIN_FIND_WINDOW_MS`, `findDeadline`). */
-  readonly start: number;
-  readonly deadline: number;
-  /** False when too little time remained: none started, and the review discloses it. */
-  readonly started: boolean;
-  readonly finders: ReadonlyArray<{
-    readonly lens: Lens;
-    readonly task: TaskId<FinderResult>;
-  }>;
-};
 export type FrontResult = {
   readonly stages: ReadonlyArray<StageRecord>;
   readonly frameKey: string | null;
@@ -74,34 +51,22 @@ export type FrontResult = {
   readonly frameStratum: Stratum;
   readonly disclosures: Freshness["disclosures"];
   readonly reason?: string;
-  /** Absent when the front task never held a Frame key (it failed or was stopped before). */
-  readonly finders?: StartedFinders;
 };
 export type FrontCheckpoint =
   | { readonly phase: "setup" }
   | { readonly phase: "frame" }
   | { readonly phase: "map" }
-  | {
-      readonly phase: "done";
-      /** From the commit that starts Map: the finders started then. */
-      readonly finders?: StartedFinders;
-    };
+  | { readonly phase: "done" };
 type Runtime = TaskRuntime<FrontInput, FrontCheckpoint, FrontResult, object>;
 type StepId = TaskId<StageRecord>;
 const done = (record: StageRecord | undefined): record is StageRecord =>
   record !== undefined &&
   (record.status === "computed" || record.status === "reused");
 const recordOf = resultOf<StageRecord>;
-/** The finders a checkpoint holds: only `done` can. */
-const startedOf = (at: FrontCheckpoint) =>
-  at.phase === "done" ? at.finders : undefined;
-
 export const frontTask = (
   services: StageServices,
   run: StageRun,
   agentStep: Task<AgentStepInput, AgentStepCheckpoint, StageRecord, object>,
-  /** The finder task, which this task starts for the review when Frame lands. */
-  finder: Task<FinderInput, FinderCheckpoint, FinderResult, object>,
 ): Task<FrontInput, FrontCheckpoint, FrontResult, object> => {
   const { ctx } = services;
   const waits = waitSpans(ctx.log);
@@ -395,7 +360,6 @@ export const frontTask = (
     input: FrontInput,
     runtime: Runtime,
     context: Context,
-    finders: StartedFinders | undefined,
   ): Promise<FrontResult> => {
     const frame = await frameOf(input, runtime, context);
     const manifest = await manifestOf(input, runtime, context);
@@ -445,118 +409,7 @@ export const frontTask = (
       strongestStratum: facts.strongestStratum,
       frameStratum: frame.value.stratum,
       disclosures: frame.setup.disclosures,
-      ...(finders === undefined ? {} : { finders }),
     };
-  };
-  /**
-   * The finders, started when Frame has landed (the Frame key this task holds, possibly its
-   * fallback), in the commit that starts Map: owned by the review task, which this task's own owner
-   * is, so the review waits for them and its stop stops them. The start rule is the review's, as
-   * before, measured now; each finder waits for this task before dedupe, for the Map key.
-   */
-  const startFinders = async (
-    tx: Tx,
-    input: FrontInput,
-    runtime: Runtime,
-    frameKey: string,
-    manifestKey: string,
-  ): Promise<StartedFinders | undefined> => {
-    const self = await tx.task(runtime.taskId);
-    if (self?.owner === undefined) return undefined;
-    const now = runtime.now();
-    const deadline = findDeadline(now, input.cutoffAt);
-    const started =
-      input.cutoffAt - VERIFY_RESERVE_MS - now >= MIN_FIND_WINDOW_MS;
-    const finders: Array<{ lens: Lens; task: TaskId<FinderResult> }> = [];
-    if (started)
-      for (const lens of FINDERS)
-        finders.push({
-          lens,
-          task: await tx.createTask(
-            finder,
-            {
-              lens,
-              frameKey,
-              manifestKey,
-              front: runtime.taskId,
-              cutoffAt: input.cutoffAt,
-              deadline,
-            },
-            { ownership: { kind: "task", taskId: self.owner } },
-          ),
-        });
-    return { start: now, deadline, started, finders };
-  };
-  /**
-   * What a start of finders leaves in the run log: the schedule (once per review) and each finder's
-   * inputs (once per finder). Each is written only when the log lacks it, so the phase after the
-   * commit that started them can write what a crash right after that commit left out.
-   */
-  const logFinders = (
-    runtime: Runtime,
-    started: StartedFinders,
-    owner: TaskId | undefined,
-    /** Undefined when the finders' inputs cannot be read: their rows are then left out. */
-    keys: { frame: string; manifest: string } | undefined,
-    input: FrontInput,
-  ) => {
-    const logged = ctx.log.read();
-    const has = (type: string, taskId: TaskId | undefined) =>
-      logged.some((entry) => entry.type === type && entry["taskId"] === taskId);
-    if (!has("review.schedule", owner))
-      ctx.log.write({
-        type: "review.schedule",
-        taskId: owner,
-        front: runtime.taskId,
-        start: started.start,
-        deadline: started.deadline,
-        cutoffAt: input.cutoffAt,
-        finders: started.finders.length,
-        skipped: !started.started,
-      });
-    if (keys === undefined) return;
-    for (const finder of started.finders)
-      if (!has("task.inputs", finder.task))
-        ctx.log.write({
-          type: "task.inputs",
-          taskId: finder.task,
-          owner,
-          kind: `finder.${finder.lens}`,
-          inputs: {
-            frame: `computation:${keys.frame}`,
-            manifest: `computation:${keys.manifest}`,
-          },
-          front: runtime.taskId,
-        });
-  };
-  /**
-   * The finders' log, written again from the checkpoint by the phase after the commit that started
-   * them (`done`, or `abort`): a crash between that commit and `map`'s own writes leaves the log
-   * without them, and nothing else would write them. The keys are the ones the finders were given.
-   */
-  const relogFinders = async (
-    started: StartedFinders | undefined,
-    input: FrontInput,
-    runtime: Runtime,
-    context: Context,
-  ) => {
-    if (started === undefined) return;
-    const owner = (await runtime.getTask(runtime.taskId, context))?.owner;
-    const first = started.finders[0];
-    const given =
-      first === undefined
-        ? undefined
-        : ((await runtime.getTask(first.task, context))?.input as
-            FinderInput | undefined);
-    logFinders(
-      runtime,
-      started,
-      owner,
-      given === undefined
-        ? undefined
-        : { frame: given.frameKey, manifest: given.manifestKey },
-      input,
-    );
   };
   const waitFor = async (
     kind: "frame" | "map",
@@ -565,11 +418,8 @@ export const frontTask = (
     input: FrontInput,
     runtime: Runtime,
     context: Context,
-    /** In the same commit, for Map: the finders (once; a rerun after this commit is past it). */
-    alongside?: (tx: Tx) => Promise<StartedFinders | undefined>,
   ) => {
     const step: { id?: StepId; created?: boolean } = {};
-    let finders: StartedFinders | undefined;
     await logTimed(
       ctx.log,
       "harness.pi.commit",
@@ -583,8 +433,6 @@ export const frontTask = (
         runtime.commit(async (tx) => {
           const children = await tx.doc(ChildrenDoc, runtime.taskId);
           const held = children.children[kind];
-          // Reads before writes: a commit reads no task after it creates one.
-          finders = await alongside?.(tx);
           const id =
             held === undefined
               ? await tx.createTask(
@@ -598,16 +446,13 @@ export const frontTask = (
           step.created = held === undefined;
           return {
             status: "waiting",
-            checkpoint: {
-              phase: next,
-              ...(finders === undefined ? {} : { finders }),
-            },
+            checkpoint: { phase: next },
             on: [id],
             policy: "allSettled",
           };
         }, context),
     );
-    if (step.id === undefined) return finders;
+    if (step.id === undefined) return;
     // Which computations the step reads, so a collector joins it with their producers' ends.
     if (step.created)
       ctx.log.write({
@@ -630,7 +475,6 @@ export const frontTask = (
       "harness.waiting_on": kind,
       "harness.waiting_on_ids": String(step.id),
     });
-    return finders;
   };
   /** A phase-end commit, as its own span. */
   const commitSpan = (
@@ -661,7 +505,6 @@ export const frontTask = (
   };
   return defineTask<FrontInput, FrontCheckpoint, FrontResult>({
     name: FRONT_TASK,
-    // 2: the commit that starts Map also starts the finders, which `done` carries to the result.
     version: 2,
     initial: () => ({ phase: "setup" }),
     phases: {
@@ -730,61 +573,29 @@ export const frontTask = (
       map: async (task, runtime, context) => {
         using phaseSpan = phaseOf(runtime, "map");
         if (await failIf(runtime, context)) return;
-        // Frame has landed: its key (or its fallback's) is what the finders read.
         const frame = await frameOf(task.input, runtime, context);
         const manifest = await manifestOf(task.input, runtime, context);
-        const facts = await run.facts(task.input.precompute, runtime.signal);
-        const owner = (await runtime.getTask(runtime.taskId, context))?.owner;
-        const alongside = (tx: Tx) =>
-          startFinders(tx, task.input, runtime, frame.key, facts.manifest);
-        let finders: StartedFinders | undefined;
         if (manifest.value.entries.length === 0)
           await commitSpan(runtime, "map", "done", () =>
-            runtime.commit(async (tx) => {
-              finders = await alongside(tx);
-              return {
-                status: "running",
-                checkpoint: {
-                  phase: "done",
-                  ...(finders === undefined ? {} : { finders }),
-                },
-              };
-            }, context),
+            runtime.commit(
+              () => ({ status: "running", checkpoint: { phase: "done" } }),
+              context,
+            ),
           );
         else
-          finders = await waitFor(
+          await waitFor(
             "map",
             { frame: frame.key, manifest: manifest.key },
             "done",
             task.input,
             runtime,
             context,
-            alongside,
-          );
-        if (finders !== undefined)
-          logFinders(
-            runtime,
-            finders,
-            owner,
-            { frame: frame.key, manifest: facts.manifest },
-            task.input,
           );
       },
       done: async (task, runtime, context) => {
         using phaseSpan = phaseOf(runtime, "done");
-        await relogFinders(
-          task.state.checkpoint.finders,
-          task.input,
-          runtime,
-          context,
-        );
         if (await failIf(runtime, context)) return;
-        const result = await compose(
-          task.input,
-          runtime,
-          context,
-          task.state.checkpoint.finders,
-        );
+        const result = await compose(task.input, runtime, context);
         await commitSpan(runtime, "done", "terminal", () =>
           runtime.commit(
             () => ({
@@ -798,12 +609,6 @@ export const frontTask = (
     },
     abort: async (task, runtime, context) => {
       waits.resumed(runtime.taskId);
-      await relogFinders(
-        startedOf(task.state.checkpoint),
-        task.input,
-        runtime,
-        context,
-      );
       if (await failIf(runtime, context)) return;
       const control = await runtime.snapshot(RunControlDoc, context);
       if (!composeOnAbort(control?.stopCause)) {
@@ -813,7 +618,6 @@ export const frontTask = (
           setupDoc?.setup == null
             ? undefined
             : await run.setup(runtime, context);
-        const finders = startedOf(task.state.checkpoint);
         const result: FrontResult = {
           stages: (await records(runtime, context)).stages,
           frameKey: null,
@@ -827,8 +631,6 @@ export const frontTask = (
             control?.stopCause === "held-failure"
               ? "held route failure"
               : "user stop",
-          // The finders it started are the review's: they read no Map key from this result.
-          ...(finders === undefined ? {} : { finders }),
         };
         await runtime.commit(
           () => ({
@@ -839,12 +641,7 @@ export const frontTask = (
         );
         return;
       }
-      const result = await compose(
-        task.input,
-        runtime,
-        context,
-        startedOf(task.state.checkpoint),
-      );
+      const result = await compose(task.input, runtime, context);
       await runtime.commit(
         () => ({
           status: "terminal",

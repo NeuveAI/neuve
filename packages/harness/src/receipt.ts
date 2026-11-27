@@ -29,7 +29,7 @@ import {
 } from "@neuve/records-schema";
 import { type Stage } from "./budget.ts";
 import type { PipelineConfig } from "./config.ts";
-import type { FinderStatus } from "./pi/stages/finder-task.ts";
+type FinderStatus = "completed" | "cutoff" | "stopped" | "skipped" | "failed";
 import type { StageRecord } from "./pipeline.ts";
 import {
   routeAccount,

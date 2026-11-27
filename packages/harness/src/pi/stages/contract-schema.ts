@@ -29,8 +29,6 @@ export const AGENT_KINDS = [
   "scope-change",
   "frame",
   "map",
-  "find",
-  "verify",
   // The section readings (NEU-148), and the check of a Lane review's defect claim: its own kind,
   // since a kind's tool declarations are frozen by its first step and a claim's check has no tools.
   "assess",

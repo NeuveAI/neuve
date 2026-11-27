@@ -18,7 +18,6 @@ import {
   createRegistry,
   defineExtension,
   defineTask,
-  type TaskId,
 } from "@earendil-works/pi-durable";
 import { MemoryStorage } from "@earendil-works/pi-durable/storage/memory";
 import { Context, Effect, Layer, Scope } from "effect";
@@ -34,7 +33,6 @@ import type { RecordEvent } from "@neuve/records-schema";
 import { graphTestPrerequisite } from "../../../scripts/graph-test-prerequisite.ts";
 import type { Budget } from "../src/budget/scheduler.ts";
 import { defaultConfig, type ReadingsConfig } from "../src/config.ts";
-import { FINDERS } from "../src/find.ts";
 import { captureOutlineSource } from "../src/graph-outline.ts";
 import { defaultManifestSettings, frontManifest } from "../src/manifest.ts";
 import { McpClients, mcpClientsLayer } from "../src/mcp-client.ts";
@@ -47,10 +45,6 @@ import {
   type ReviewStagesPort,
 } from "../src/pi/review-task.ts";
 import { settledStages } from "../src/pi/stages/batch-waiter-task.ts";
-import type {
-  FinderInput,
-  FinderResult,
-} from "../src/pi/stages/finder-task.ts";
 import type { FrontInput, FrontResult } from "../src/pi/stages/front-task.ts";
 import { agentKinds } from "../src/pi/stages/kinds.ts";
 import { readingTask } from "../src/pi/stages/reading-task.ts";
@@ -61,7 +55,6 @@ import { readingsPort } from "../src/readings/collect.ts";
 import { READING_RECIPE } from "../src/readings/plan.ts";
 import { ReviewMap, buildMapManifest } from "../src/review-map.ts";
 import { buildReceipt } from "../src/receipt.ts";
-import { zeroUsage } from "../src/route.ts";
 import type { RunLog, RunLogRecord } from "../src/run-log.ts";
 import { frame } from "./fixtures/link.ts";
 import { eventsOf } from "./publish-sections-fixtures.ts";
@@ -208,13 +201,13 @@ const runReview = async (
     readonly change?: "code" | "empty";
     readonly readings?: boolean;
     /** How each finder's Find ended: by submit (the default) or at the finders' time limit. */
-    readonly finderEnd?: "submit" | "timeout";
+
     /** The stored Map holds none of the changed hunks, so no batch can be formed. */
     readonly emptyMap?: boolean;
     /** The run has the readings port but no publish phase (`settledStages` gives none). */
     readonly publisher?: boolean;
     /** The finders' Find records' status: computed (the default), or reused from a stored answer. */
-    readonly finderStatus?: "computed" | "reused";
+
     /** The run's cut-off from now; by default ten minutes. Under 75 s, the plan is cut at once. */
     readonly cutoffAfterMs?: number;
     /** False: no follow-on run is left under the cap, so this run has no successor. */
@@ -356,62 +349,6 @@ const runReview = async (
   const plan = readingsStages(log, port);
   const settled = settledStages(services, port);
 
-  // Stand-ins: each finder completes with no finding; the front task starts them and ends with
-  // the Frame and the Map.
-  const finder = defineTask<FinderInput, { phase: "run" }, FinderResult>({
-    name: "test.finder",
-    version: 1,
-    initial: () => ({ phase: "run" }),
-    phases: {
-      run: (task, runtime, context) =>
-        runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome: {
-              status: "completed",
-              result: {
-                lens: task.input.lens,
-                findKey: null,
-                findings: [],
-                stages: [
-                  {
-                    ...record(
-                      "find",
-                      `find.${task.input.lens}`,
-                      options.finderStatus ?? "computed",
-                    ),
-                    agentResult: {
-                      agent: `find.${task.input.lens}`,
-                      stage: "find",
-                      status: "submitted",
-                      endedBy: options.finderEnd ?? "submit",
-                      turnsUsed: 1,
-                      turnLimit: 12,
-                      finalGeneration: options.finderEnd === "timeout",
-                      usage: zeroUsage,
-                      costUsd: null,
-                      resumedTurns: 0,
-                      restarted: false,
-                      modelCalls: 1,
-                    },
-                  },
-                ],
-                end: { find: "completed", verify: "completed" },
-              },
-            },
-          }),
-          context,
-        ),
-    },
-    abort: (_task, runtime, context) =>
-      runtime.commit(
-        () => ({
-          status: "terminal",
-          outcome: { status: "aborted", reason: "stopped" },
-        }),
-        context,
-      ),
-  });
   const front = defineTask<FrontInput, { phase: "run" }, FrontResult>({
     name: "test.front",
     version: 1,
@@ -419,27 +356,6 @@ const runReview = async (
     phases: {
       run: (task, runtime, context) =>
         runtime.commit(async (tx) => {
-          const owner = (await tx.task(runtime.taskId))?.owner;
-          const finders: Array<{
-            lens: FinderInput["lens"];
-            task: TaskId<FinderResult>;
-          }> = [];
-          for (const lens of FINDERS)
-            finders.push({
-              lens,
-              task: await tx.createTask(
-                finder,
-                {
-                  lens,
-                  frameKey,
-                  manifestKey: manifest.key,
-                  front: runtime.taskId,
-                  cutoffAt: task.input.cutoffAt,
-                  deadline: task.input.cutoffAt,
-                },
-                { ownership: { kind: "task", taskId: owner! } },
-              ),
-            });
           return {
             status: "terminal",
             outcome: {
@@ -453,12 +369,6 @@ const runReview = async (
                 strongestStratum: "nothing",
                 frameStratum: "nothing",
                 disclosures: [],
-                finders: {
-                  start: runtime.now(),
-                  deadline: task.input.cutoffAt,
-                  started: true,
-                  finders,
-                },
               },
             },
           };
@@ -526,7 +436,7 @@ const runReview = async (
   registry.install(
     defineExtension({
       name: "test.stages",
-      tasks: [kinds.agentStep, reading, front, finder, plan.task, settled.task],
+      tasks: [kinds.agentStep, reading, front, plan.task, settled.task],
     }),
   );
   const review = reviewTask(stages, log);
@@ -673,59 +583,6 @@ test.skipIf(graph.skip)(
           (d) => d.kind === "section-readings",
         ),
       }).toEqual({ name, disclosures: [] });
-    }
-  },
-  240_000,
-);
-
-// Reason (the coordinator's addition, and round 31 for a reused answer): a finder that gave its final answer because the finders'
-// time limit came is still `completed`, but a person is told: the receipt carries one plain line and
-// the packet one disclosed gap. A finder that ended by submit gives neither.
-test.skipIf(graph.skip)(
-  "a finder answering at its time limit puts one line on the receipt and the packet; one ending by submit puts none",
-  async () => {
-    graph.require();
-    const LINE = "The finders answered at their time limit.";
-    const GAP =
-      "The finders answered at their time limit, so their findings are what they had found by then.";
-    // Round 31: a time-limited answer reused from the store (a follow-on, or a review sharing it)
-    // keeps how it ended, so it gives the same line.
-    for (const [finderEnd, finderStatus] of [
-      ["timeout", "computed"],
-      ["timeout", "reused"],
-      ["submit", "computed"],
-    ] as const) {
-      const run = await runReview(`finders-${finderEnd}-${finderStatus}`, {
-        admission: "refused",
-        finderEnd,
-        finderStatus,
-      });
-      const at = finderEnd === "timeout";
-      expect({ finderEnd, status: run.outcome?.status }).toEqual({
-        finderEnd,
-        status: "completed",
-      });
-      expect({
-        finderEnd,
-        lines: run.receipt.disclosures.filter((d) => d === LINE),
-      }).toEqual({ finderEnd, lines: at ? [LINE] : [] });
-      // The finders' status is unchanged: every one completed.
-      const ended = run.rows.filter((row) => row.type === "finders.ended");
-      expect(ended.at(-1)?.["finders"]).toEqual(
-        FINDERS.map((lens) => ({
-          lens,
-          find: "completed",
-          verify: "completed",
-          again: false,
-        })),
-      );
-      expect({
-        finderEnd,
-        gaps: run
-          .newest!.gaps.map((gap) => gap.payload)
-          .filter((gap) => gap.kind === "finders-at-limit")
-          .map((gap) => gap.detail),
-      }).toEqual({ finderEnd, gaps: at ? [GAP] : [] });
     }
   },
   240_000,

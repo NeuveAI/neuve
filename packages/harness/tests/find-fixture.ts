@@ -1,6 +1,7 @@
 import { Frame } from "../src/frame.ts";
 import { ReviewMap } from "../src/review-map.ts";
-import { Finding, type StoredFinding } from "../src/find.ts";
+import { Finding } from "../src/find-schema.ts";
+import type { StoredFinding } from "../src/historical-find.ts";
 import {
   ManifestHunk,
   RangeManifest,

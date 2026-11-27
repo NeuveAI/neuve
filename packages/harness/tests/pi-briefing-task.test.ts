@@ -684,7 +684,7 @@ const settledWith = async (
     ended: batch.readings.map((name) => ({ name, ended: true })),
     settled: out,
     sections: decision.sections,
-    findersEnded: [],
+
     final,
   });
 };

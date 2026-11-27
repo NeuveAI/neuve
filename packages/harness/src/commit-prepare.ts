@@ -58,7 +58,7 @@ import {
   searchRuntimeFrom,
   setSearchRuntime,
 } from "./search-config.ts";
-import { readSettings, type Settings } from "./settings.ts";
+import { readSettings } from "./settings.ts";
 import { indexRecipe, jsonComputation } from "./search-index.ts";
 import { defaultBranch } from "./graph-declare.ts";
 import {
@@ -406,8 +406,7 @@ const defaultMergeBase = (repository: string, commit: string) =>
  * it, only when there is exactly one other than the commit; each only within
  * `RELATIONS_START_BUDGET_MS` of the preparation's start. The engine reads the store's one Graph
  * clone (`relationsGraphDirectory`, the review's): an exact-commit read never reads its HEAD.
- * Never fails: a failed read leaves nothing stored and is the review's to read again. Logs one
- * line with readings on, none with them off.
+ * A failed read leaves nothing stored and is the review's to read again.
  */
 export const commitRelations = (
   input: Readonly<{
@@ -417,23 +416,9 @@ export const commitRelations = (
     source: OutlineSource;
     /** When the preparation started (`Clock` milliseconds). */
     started: number;
-    /** The user's settings; read from the settings file when absent. */
-    settings?: Option.Option<Settings>;
   }>,
 ) =>
   Effect.gen(function* () {
-    const settings =
-      input.settings ?? (yield* Effect.try(() => readSettings()));
-    // Loaded when the step runs, not with this module: `request.ts` reaches `config.ts`, which
-    // needs `manifest.ts`, which imports this module (through `commit-hybrid.ts`), so a static
-    // import would leave `config.ts` reading `manifest.ts` before it is defined. A load that
-    // fails is a failure of the step, caught below like any other.
-    const { readingsConfig } = yield* Effect.tryPromise(
-      () => import("./request.ts"),
-    );
-    if (readingsConfig(settings) === undefined)
-      return { readings: false } satisfies CommitRelations;
-    // The span, only for a step that runs: with readings off nothing is left behind.
     return yield* relationsStep(input).pipe(
       Effect.withSpan("harness.commit.relations", {
         attributes: { "harness.commit": input.commit },

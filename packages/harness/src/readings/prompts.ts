@@ -146,7 +146,7 @@ What code checks, so an answer that breaks it does not stand:
  * change's files read separately.
  */
 export const ASSESS_TESTED_PROMPT_VERSION = 14;
-export const LANE_REVIEW_SCOPED_PROMPT_VERSION = 15;
+export const LANE_REVIEW_SCOPED_PROMPT_VERSION = 16;
 
 /** A base prompt with each of its lines replaced, refusing a line that is not there exactly once. */
 const replaced = (
@@ -191,6 +191,14 @@ export const NOT_ASKED = {
 
 /** Lane review's system prompt with scope and tests on (`NOT_ASKED`). */
 export const laneReviewScopedSystem = replaced(laneReviewSystem, [
+  [
+    "Reach past the changed lines: who calls this, what path a failure takes.",
+    "Review these sections for scope fit, correctness, risky inputs and failure paths, and whether tests catch the behavior. Read surrounding code for context. Give verdicts and comments only on the sections you were assigned.",
+  ],
+  [
+    "What code checks, so an answer that breaks it does not stand:",
+    "- crossBatchClaims (optional, at most five): for a concrete claim on changed lines in another batch, report { path, side, startLine, endLine, kind: defect, risk or question, text, fails: the failure path for a defect, else empty }. Give no verdict on the other batch.\nWhat code checks, so an answer that breaks it does not stand:",
+  ],
   [
     "Answer unsure when you could not check what matters, and say what you could not check.",
     `Answer unsure when you could not check what matters, and say what you could not check. ${NOT_ASKED.sentence}`,

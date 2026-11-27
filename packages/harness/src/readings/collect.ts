@@ -1,3 +1,7 @@
+import type {
+  CheckedCrossBatchClaim,
+  CrossBatchReport,
+} from "../pi/cross-batch-claims.ts";
 import type { Context } from "@earendil-works/chord";
 import type {
   DocumentReader,
@@ -14,7 +18,7 @@ import type { Freshness } from "../freshness.ts";
 import { Frame } from "../frame.ts";
 import { readBlobs } from "../git-objects.ts";
 import { captureOutlineSource, type OutlineSource } from "../graph-outline.ts";
-import { addedLines, type Move, type RecordedEntry } from "../lane-rule.ts";
+import { type Move, type RecordedEntry } from "../lane-rule.ts";
 import type { RangeManifest } from "../manifest.ts";
 import type { RunLogRecord } from "../run-log.ts";
 import { storedOutput, withRecords, type StageRecord } from "../pipeline.ts";
@@ -32,7 +36,7 @@ import {
   SECTIONS_RECIPE,
   type BlobStructure,
 } from "../sections.ts";
-import type { LensEnd, ReviewStagesPort } from "../pi/review-task.ts";
+import type { ReviewStagesPort } from "../pi/review-task.ts";
 import type { FrontResult } from "../pi/stages/front-task.ts";
 import type { RelationsResult } from "../pi/stages/relations-task.ts";
 import {
@@ -58,9 +62,7 @@ import type {
   SectionBriefing,
   SettledBriefings,
 } from "./briefing-settle.ts";
-import type { AssessJudgement, LaneReviewJudgement } from "./answers.ts";
-import { FindStored } from "../find.ts";
-import type { FinderResult } from "../pi/stages/finder-task.ts";
+import type { LaneReviewJudgement } from "./answers.ts";
 import { ClaimStored, claimKey, claimVerdict } from "./claims.ts";
 import {
   gapKindOf,
@@ -106,7 +108,6 @@ import {
   settledBatches,
   stored as asStored,
   type CollectedSection,
-  type KeptFinding,
   type RunGap,
   type SettledBatch,
 } from "./settled.ts";
@@ -170,12 +171,7 @@ const ulidTime = (id: string) => {
   return time;
 };
 
-/**
- * What `collect` reads: the port's input, and the finders' results where its caller gives them (the
- * review task does not yet); a finder's kept defect is a claim on the section that owns its anchor.
- */
 export type CollectInput = Parameters<Port["collect"]>[0] & {
-  readonly finders?: ReadonlyArray<FinderResult> | undefined;
   /**
    * The readings' plan task ended cut at its cut-off: a plan that stands in for none stored is then
    * not reached, never failed. Absent or false, a missing plan failed.
@@ -215,10 +211,6 @@ export type PrepareInput = (
   readonly relations?: TaskId<RelationsResult> | undefined;
 };
 
-/**
- * The readings' port, whose `prepare` also takes the early form and whose `collect` also takes the
- * finders' results.
- */
 export type ReadingsPort = Omit<
   Port,
   "prepare" | "collect" | "batches" | "settle"
@@ -262,12 +254,6 @@ export type BatchesInput = MapInput & {
   readonly frameKey: string;
   readonly readings: ReadonlyArray<{ readonly name: string }>;
   /**
-   * Wider than the review's port: the finders' results, once they ended. Given, the run's gaps
-   * also say which verified findings could not be read and which no batch holds, as `collect`'s
-   * do; absent, they hold only what the plan, manifest and Map give.
-   */
-  readonly finders?: ReadonlyArray<FinderResult> | undefined;
-  /**
    * The readings' plan task ended cut at its cut-off: a plan that stands in for none stored is then
    * not reached, never failed. Absent or false, a missing plan failed.
    */
@@ -284,7 +270,7 @@ export interface BatchesOutput {
   readonly gaps: ReadonlyArray<PublishGap>;
 }
 
-/** What `settle` reads: one batch by key, its reading tasks' outcomes, the finders' results. */
+/** A batch, its reading outcomes and the results of its incoming checks. */
 export type SettleInput = MapInput & {
   readonly frameKey: string;
   /** `ReviewBatch["key"]`. */
@@ -294,10 +280,7 @@ export type SettleInput = MapInput & {
     readonly name: string;
     readonly outcome: TaskOutcome<unknown> | undefined;
   }>;
-  readonly finders: ReadonlyArray<FinderResult>;
-  /** How each of the review's finders ended: unless `final`, every one must have completed. */
-  readonly findersEnded: ReadonlyArray<LensEnd>;
-  /** No later run of this run key can change the batch, so unfinished finders hold none. */
+  readonly incoming?: ReadonlyArray<CheckedCrossBatchClaim>;
   readonly final: boolean;
   /**
    * True only on the review's ending call when no follow-on run is left: a section no reading
@@ -339,6 +322,7 @@ export const planSpec = (input: {
    * is exactly as before.
    */
   readonly rules?: string | undefined;
+  readonly mapKey?: string | undefined;
 }): Computations.ComputationSpec => ({
   op: PLAN_OP,
   // 2: each section keeps its identity whole, its title and its code facts.
@@ -351,7 +335,7 @@ export const planSpec = (input: {
   // the commit (`pairPlan`).
   // 8: a submodule pointer section is in a reading group of its own (`isGitlink`), so the same
   // manifest gives another plan. Code only: the readings' recipe is not bumped again for it.
-  opVersion: 8,
+  opVersion: input.mapKey === undefined ? 8 : 9,
   inputs: {
     manifest: `computation:${input.manifestKey}`,
     lockfiles: [...MAP_LOCKFILES],
@@ -360,6 +344,9 @@ export const planSpec = (input: {
     identity: SECTION_IDENTITY_RECIPE,
     structure: BLOB_STRUCTURE_RECIPE,
     source: input.source,
+    ...(input.mapKey === undefined
+      ? {}
+      : { map: `computation:${input.mapKey}` }),
     bounds: { ...input.bounds },
     ...(input.effort === undefined ? {} : { effort: input.effort }),
     ...(input.rules === undefined
@@ -416,6 +403,7 @@ export const storePlan = (
     readonly manifestKey: string;
     readonly bounds: ReadingsConfig["bounds"];
     readonly manifest: RangeManifest;
+    readonly mapKey?: string | undefined;
     /** Effort by risk: pack the groups per class. */
     readonly effort?: "by-risk" | undefined;
   },
@@ -475,31 +463,28 @@ export const storePlan = (
       spec,
       Effect.gen(function* () {
         const { structures } = yield* structuresOf(ctx, input.manifest, source);
+        const map =
+          input.mapKey === undefined
+            ? undefined
+            : yield* storedOutput(ctx, input.mapKey, ReviewMap);
         const planned = yield* cpuWork(
           repositoryOwner(ctx.repository),
           Effect.sync(() =>
-            rules === undefined
-              ? planOfManifest({
-                  manifest: input.manifest,
-                  structures,
-                  bounds: input.bounds,
-                  ...(input.effort === undefined
-                    ? {}
-                    : { effort: input.effort }),
-                })
-              : // `planOfManifest`'s input, with the decided sections.
-                planReadings({
-                  hunks: input.manifest.hunks,
-                  structures,
-                  bounds: input.bounds,
-                  excluded: buildMapManifest(input.manifest).excluded.map(
-                    ({ path, reason }) => ({ path, reason }),
-                  ),
-                  ...(input.effort === undefined
-                    ? {}
-                    : { split: input.effort }),
-                  decided: rules.decided,
-                }),
+            planReadings({
+              hunks: input.manifest.hunks,
+              structures,
+              bounds: input.bounds,
+              excluded: buildMapManifest(input.manifest).excluded,
+              ...(input.effort === undefined ? {} : { split: input.effort }),
+              ...(rules === undefined ? {} : { decided: rules.decided }),
+              ...(map === undefined
+                ? {}
+                : {
+                    batches: map.groups.map(
+                      (group) => new Set(group.files.map((file) => file.path)),
+                    ),
+                  }),
+            }),
           ),
         );
         const hunks = new Map(
@@ -1187,10 +1172,7 @@ export const readingsPort = (
    * highest first, Assess before Lane review. A plan that cannot be made is returned as such: the
    * probe never stops a review. The `readings.plan` row is written once per plan.
    *
-   * The plan reads the manifest only, so it needs neither the Frame nor the Map. Given their keys
-   * (today's form), each Lane review task carries them, as before. Given the front task instead
-   * (the early form), every reading task carries its ID: a Lane review waits on it for the keys,
-   * and an Assess task only looks at it, to stop when it ended with no Frame or Map.
+   * Current plans pack sections within Map batches. The saved plan carries each section's ownership.
    */
   const prepare: ReadingsPort["prepare"] = async (input, signal) => {
     let planKey: string;
@@ -1202,6 +1184,7 @@ export const readingsPort = (
           manifestKey: input.manifestKey,
           bounds: config.bounds,
           manifest,
+          mapKey: input.mapKey,
           ...(config.effort === undefined ? {} : { effort: config.effort }),
         }),
         signal,
@@ -1474,17 +1457,18 @@ export const readingsPort = (
   };
 
   /**
-   * Everything the readings decided, by code, from the plan, the stored answers of the readings
-   * given and the finders' kept findings: each section's outcomes and claims, every planned section
-   * decided, and every settled batch as the publisher takes it, with the figures `collect`'s rows
+   * Every section decision from the plan and stored answers, and every settled batch as the publisher takes it, with the figures `collect`'s rows
    * hold. It reads stored outputs only: it stores nothing, writes no row and calls no model, so the
    * collector and the batch waiters (`settle`) decide from one code path.
    */
   const judge = async (
     input: Pick<
       CollectInput,
-      "frameKey" | "mapKey" | "manifestKey" | "readings" | "finders"
-    > & { readonly last?: boolean | undefined },
+      "frameKey" | "mapKey" | "manifestKey" | "readings"
+    > & {
+      readonly last?: boolean | undefined;
+      readonly incoming?: ReadonlyArray<CheckedCrossBatchClaim>;
+    },
     plan: ReadingPlan,
     planKey: string,
     signal: AbortSignal,
@@ -2021,48 +2005,24 @@ export const readingsPort = (
       stages.push(...out.stages);
     }
 
-    // The finders' kept findings: those Verify kept, from each finder's stored output. The port's
-    // caller gives the finders' results only where it can; without them, no finding takes part.
-    const findings: Array<KeptFinding> = [];
+    const incoming = new Map<string, Array<CrossBatchReport>>();
+    for (const report of input.incoming ?? []) {
+      if (report.verifyKey === null) continue;
+      const verdict = await read(report.verifyKey, ClaimStored);
+      if (
+        verdict?.claim !== report.key ||
+        claimVerdict(verdict) !== "confirmed"
+      )
+        continue;
+      const reports = incoming.get(report.target.section) ?? [];
+      reports.push(report);
+      incoming.set(report.target.section, reports);
+    }
+
     const proofIds = new Set<string>();
     for (const byId of proofs.values())
       for (const id of byId.keys()) proofIds.add(id);
-    // A kept finding that cannot be read (its finder's output is not there, or does not hold it) is
-    // never skipped silently: the run says how many, since a section may then show clear of it.
-    const lost = { findings: 0, finders: 0 };
-    for (const finder of input.finders ?? []) {
-      const kept = finder.findings.filter(
-        (result) => result.status === "kept" && result.verifyKey !== null,
-      );
-      if (kept.length === 0) continue;
-      const found =
-        finder.findKey === null
-          ? undefined
-          : await read(finder.findKey, FindStored);
-      let missing = 0;
-      for (const result of kept) {
-        const finding = found?.findings.find((f) => f.id === result.id);
-        if (finding === undefined || finder.findKey === null) missing++;
-        else findings.push({ finding, findKey: finder.findKey });
-      }
-      if (missing > 0) {
-        lost.findings += missing;
-        lost.finders++;
-      }
-    }
-    const lostGaps =
-      lost.findings === 0
-        ? []
-        : [
-            {
-              key: `findings-unread:${lost.findings}:${lost.finders}`,
-              kind: "findings-unread",
-              detail: `${lost.findings} verified ${lost.findings === 1 ? "finding" : "findings"} of ${lost.finders} ${lost.finders === 1 ? "finder" : "finders"} could not be read, so ${lost.findings === 1 ? "it is" : "they are"} on no unit, and a unit shown with no finding may still have one.`,
-            },
-          ];
 
-    // Every planned section, read or unread, decided by code, the kept finder defects among its
-    // claims; then every settled batch as the publisher takes it.
     const groups = map.groups.map((group) => ({
       id: group.id,
       label: group.label,
@@ -2076,9 +2036,9 @@ export const readingsPort = (
       plan,
       hunks,
       groups,
+      incoming,
       collected,
       proofs,
-      findings,
       carried: carried.from,
       // The Map's list and the plan's are made by the same code (`buildMapManifest`) from the same
       // manifest, so they agree; a Map stored by another build of that rule could still differ, and
@@ -2097,10 +2057,9 @@ export const readingsPort = (
       groups,
       frame,
       sections: entries,
+      incoming,
       collected,
-      placement: decidedAll.placement,
       proofs: proofIds,
-      runGaps: lostGaps,
       ...(dropped === false ? {} : { dropped: true }),
       ...(briefings === undefined ? {} : { briefings }),
       // The same-batch references (round 27b): the groups' confirmed caller rows, at the head.
@@ -2140,7 +2099,6 @@ export const readingsPort = (
       entries,
       figures,
       gates,
-      lost,
       outcomes,
       relationsOf,
       reusedKeys,
@@ -2182,7 +2140,6 @@ export const readingsPort = (
       entries,
       figures,
       gates,
-      lost,
       outcomes,
       relationsOf,
       reusedKeys,
@@ -2219,7 +2176,6 @@ export const readingsPort = (
       batches: settled.records,
       totals: settled.totals,
       gaps: settled.gaps,
-      unplaced: settled.unplaced,
     });
     const steps = [...new Set(stepKeys)].sort();
     const verifies = [...new Set(verifyKeys)].sort();
@@ -2231,8 +2187,7 @@ export const readingsPort = (
           return yield* store.run(
             {
               op: DECISION_OP,
-              // 2: the settled batches for the publisher, every batch's record, the run's gaps and
-              // the kept finder findings among the claims.
+              // 2: the publisher's batches, their records, and the run's gaps.
               // 3: each unit's Guided stop from the Frame's done-when rows, and each section's Briefed.
               // 4: the briefing's Briefed, Explained and digest (round 27), from the stored calls
               // named in `briefings`, and a note on every undecided section.
@@ -2310,27 +2265,11 @@ export const readingsPort = (
           side: comment.side,
           startLine: comment.startLine,
           endLine: comment.endLine,
-          source: "lane-review" as "lane-review" | "finder",
+          source: "lane-review" as const,
           verify: (entry.claims.find((claim) => claim.id === key)?.verify ??
             "unconfirmed") as Claim["verify"],
           restsOn: restsOn.has(key),
         }));
-      // Each kept finder defect on it, by its ID and the lines it was placed on.
-      for (const placed of decidedAll.placement.placed)
-        if (
-          placed.section === entry.section.key &&
-          placed.kept.finding.kind === "defect"
-        )
-          claims.push({
-            key: placed.id,
-            path: placed.anchor.path,
-            side: placed.anchor.side,
-            startLine: placed.anchor.startLine,
-            endLine: placed.anchor.endLine,
-            source: "finder",
-            verify: "confirmed",
-            restsOn: restsOn.has(placed.id),
-          });
       rows.push({
         type: "reading.section",
         decision: decisionKey,
@@ -2556,11 +2495,6 @@ export const readingsPort = (
         total: settled.totals.batches,
         ready: settled.batches.length,
       },
-      findings: {
-        placed: decidedAll.placement.placed.length,
-        unplaced: decidedAll.placement.unplaced.length,
-        unread: lost.findings,
-      },
       // Every reading group by how its evidence was decided, and every planned section by what its
       // group was shown of its callers and tests: closed labels and counts.
       evidence: outcomes,
@@ -2687,7 +2621,6 @@ export const readingsPort = (
       groups,
       collected: collectedNone,
       proofs: new Map(),
-      findings: [],
       excluded: map.excluded.map(({ path, reason }) => ({ path, reason })),
     });
     const created = new Set(input.readings.map((reading) => reading.name));
@@ -2706,23 +2639,8 @@ export const readingsPort = (
       frame: { stratum: "", doneWhen: [] },
       sections: decided.sections,
       collected: collectedNone,
-      placement: decided.placement,
       proofs: new Set(),
     });
-    // With the finders, the run's gaps as `collect` finds them, from the same code: no reading's
-    // outcome changes which findings could not be read or which no batch holds.
-    const gaps =
-      input.finders === undefined
-        ? settled.gaps
-        : (
-            await judge(
-              { ...input, readings: [], finders: input.finders },
-              plan,
-              planKey,
-              signal,
-              dropped,
-            )
-          ).settled.gaps;
     const nothingToRead = plan.sections.length + plan.unread.length === 0;
     return {
       // A reading the plan listed but no task was made for is waited on by no one: `settle` then
@@ -2734,14 +2652,14 @@ export const readingsPort = (
       totals: settled.totals,
       gaps:
         dropped !== false && !nothingToRead
-          ? [droppedPlanGap(dropped, false), ...gaps]
-          : gaps,
+          ? [droppedPlanGap(dropped, false), ...settled.gaps]
+          : settled.gaps,
     };
   };
 
   /**
    * One batch as the publisher takes it, or not settled with a gap, decided by the same code as
-   * `collect` (`judge`) from the batch's readings and the finders' results. A reading given with no
+   * `collect` (`judge`) from the batch's readings and incoming checks. A reading given with no
    * outcome has not ended: the batch is not reached, never decided. Stores nothing, writes no row and
    * calls no model, so a replay gives the same value. Never throws for a reading's failure: anything
    * that cannot be read leaves the batch not settled (`refused`), and only an aborted signal throws.
@@ -2784,7 +2702,6 @@ export const readingsPort = (
         })),
         settled: judged.settled,
         sections: judged.entries,
-        findersEnded: input.findersEnded,
         final: input.final,
       });
     } catch (error) {

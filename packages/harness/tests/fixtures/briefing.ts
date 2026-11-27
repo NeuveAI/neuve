@@ -161,7 +161,7 @@ export const decided = (held = collected()) =>
     groups: [MAP_GROUP],
     collected: held,
     proofs: new Map([["src/old.ts", RECORDS]]),
-    findings: [],
+
     excluded,
   });
 
@@ -249,7 +249,7 @@ export const settle = (
     frame: FRAME,
     sections: decision.sections,
     collected: held,
-    placement: decision.placement,
+
     proofs: new Set(["p1", "p2"]),
     ...(briefings === undefined ? {} : { briefings }),
   });

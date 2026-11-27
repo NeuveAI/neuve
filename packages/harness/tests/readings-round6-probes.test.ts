@@ -443,7 +443,7 @@ const lab = async (
       ]),
     ) as never,
     proofs: new Map(p.sections.map((s) => [s.path, RECORDS])),
-    findings: [],
+
     excluded: [],
     relations: new Set(
       evidence.sections

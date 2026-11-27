@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import { Effect, Layer, Option, Tracer } from "effect";
+import { Effect, Layer, Tracer } from "effect";
 import {
   Blobs,
   Computations,
@@ -62,11 +62,8 @@ import {
   storedOutput,
   withRecords,
 } from "../src/pipeline.ts";
-import { prepareReviewConfig, readingsConfig } from "../src/request.ts";
 import { ReviewMap } from "../src/review-map.ts";
 import { openRunLog, type RunLogRecord } from "../src/run-log.ts";
-import { DEFAULT_READING_BOUNDS } from "../src/reading-groups.ts";
-import { READING_RECIPE } from "../src/readings/plan.ts";
 import { BLOB_STRUCTURE_RECIPE, SECTIONS_RECIPE } from "../src/sections.ts";
 import { frame, mapOf } from "./fixtures/link.ts";
 
@@ -136,41 +133,6 @@ process.stdout.write(JSON.stringify(config));
   return PipelineConfig.parse(JSON.parse(child.stdout.toString()));
 };
 
-test("with the readings' off switch and the setting absent or off, the configuration has no sections block, so nothing of the switch enters the run key", () => {
-  // Reason: the switch-off guarantee at the key level. Proved as a property, with no key constant:
-  // a key computed on one commit does not survive other lanes' changes to the configuration. Off,
-  // the configuration has no `sections` property at all (an own key holding `undefined` would pass
-  // `toEqual`, so it is checked apart), is the default one, and what the run key hashes holds no
-  // `sections` key anywhere. The off switch keeps the readings out, so the whole configuration is
-  // the default one; `responsibilitySections: false` without it is in the freeze table below.
-  const base = defaultConfig();
-  expect(Object.hasOwn(base, "sections")).toBe(false);
-  expect(keysDeep(runSpec(range, base))).not.toContain("sections");
-  const offs = [
-    ...[
-      { version: 1, review: { sectionReadings: "off" } },
-      {
-        version: 1,
-        review: { sectionReadings: "off", responsibilitySections: false },
-      },
-    ].map((settings) => prepared(settings)),
-    // An explicit option overrides the settings, as the stack tools' does.
-    prepared(
-      {
-        version: 1,
-        review: { sectionReadings: "off", responsibilitySections: true },
-      },
-      { sections: undefined },
-    ),
-  ];
-  for (const config of offs) {
-    expect(Object.hasOwn(config, "sections")).toBe(false);
-    expect(config).toEqual(base);
-    expect(keysDeep(runSpec(range, config))).not.toContain("sections");
-    expect(runKeyFor(range, config)).toBe(runKeyFor(range, base));
-  }
-});
-
 test("with the setting on, the block holds the recipes, parses, and the run key is its own", () => {
   // Reason: a run with sections must never share a key with one without, nor with one cut by
   // another recipe.
@@ -214,75 +176,29 @@ test("with the setting on, the block holds the recipes, parses, and the run key 
   ).toBe(on);
 });
 
-/**
- * The run keys over `range` measured on the integration commit before the default flip
- * (`b1081149`): with no setting, and with `responsibilitySections: true`. The off switch must give
- * these byte for byte.
- */
-// Re-pinned (round 25): both moved with the pipeline version, 11 to 12, and nothing else.
-const BEFORE_FLIP_KEY =
-  "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c";
-const BEFORE_FLIP_SECTIONS_KEY =
-  "808a7d376028db0de6bb41c9c12400c9e55748345dd7c750186abd894bad7d85";
-
-test("the freeze table: no setting is the redesigned review, the off switch is the review before it byte for byte, and no setting is half on", () => {
-  // Reason: the default flip (NEU-148). With no setting a review freezes both the sections and the
-  // readings blocks; `"probe"` is the same run; `responsibilitySections: false` keeps only the
-  // readings; `sectionReadings: "off"` freezes exactly what the integration commit before the flip
-  // froze with no setting, and with `responsibilitySections: true` exactly what it froze with that.
-  // The configurations come from real settings files through `prepareReviewConfig`.
-  const sections = sectionsConfig(true)!;
-  const readings = readingsConfig(Option.none())!;
-  expect(readings).toEqual({
-    mode: "probe",
-    bounds: { ...DEFAULT_READING_BOUNDS },
-    recipe: READING_RECIPE,
+test("old section reading settings freeze the current review without changing its key", () => {
+  const current = prepared(undefined);
+  const legacy = prepared({
+    version: 1,
+    review: {
+      sectionReadings: "off",
+      sectionReadingsScopeAndTests: false,
+      stepEffort: { find: "high" },
+    },
   });
-  const redesigned = { ...defaultConfig(), sections, readings };
-  const table: ReadonlyArray<{
-    readonly settings: unknown;
-    readonly frozen: PipelineConfig;
-  }> = [
-    { settings: undefined, frozen: redesigned },
-    { settings: { version: 1 }, frozen: redesigned },
-    { settings: { version: 1, review: {} }, frozen: redesigned },
-    {
-      settings: { version: 1, review: { sectionReadings: "probe" } },
-      frozen: redesigned,
-    },
-    {
-      settings: { version: 1, review: { responsibilitySections: false } },
-      frozen: { ...defaultConfig(), readings },
-    },
-    {
-      settings: { version: 1, review: { sectionReadings: "off" } },
-      frozen: defaultConfig(),
-    },
-    {
-      settings: {
-        version: 1,
-        review: { sectionReadings: "off", responsibilitySections: true },
-      },
-      frozen: { ...defaultConfig(), sections },
-    },
-  ];
-  const keys = table.map(({ settings, frozen }) => {
-    const config = prepared(settings);
-    // `toEqual` passes an own key holding `undefined`, so each absent block is checked apart.
-    expect(config).toEqual(frozen);
-    for (const block of ["sections", "readings"] as const)
-      expect(Object.hasOwn(config, block)).toBe(Object.hasOwn(frozen, block));
-    return runKeyFor(range, config);
+  expect(legacy).toEqual(current);
+  expect(runKeyFor(range, legacy)).toBe(runKeyFor(range, current));
+  expect(current.sections).toEqual(sectionsConfig(true));
+  expect(current.readings?.scopeAndTests).toBe(true);
+  expect(current.budgets.turnLimits.find).toBeUndefined();
+  expect(current.route.stepEffort).toBeUndefined();
+  const noSections = prepared({
+    version: 1,
+    review: { responsibilitySections: false },
   });
-  const [none, version, empty, probe, sectionsOff, off, offWithSections] = keys;
-  // No setting, an empty review block and `"probe"` are one run.
-  expect(new Set([none, version, empty, probe]).size).toBe(1);
-  // The off switch is the review before the flip, byte for byte.
-  expect(off).toBe(BEFORE_FLIP_KEY);
-  expect(off).toBe(runKeyFor(range, defaultConfig()));
-  expect(offWithSections).toBe(BEFORE_FLIP_SECTIONS_KEY);
-  // Every row that differs in a block has its own key.
-  expect(new Set([none, sectionsOff, off, offWithSections]).size).toBe(4);
+  expect(noSections.readings).toEqual(current.readings);
+  expect(noSections.sections).toBeUndefined();
+  expect(runKeyFor(range, noSections)).not.toBe(runKeyFor(range, current));
 });
 
 const layerOf = (location: ReturnType<typeof storeLocationIn>) =>
@@ -940,7 +856,7 @@ test("with Graph unavailable, or the structure read failing, fill completes with
           mapKey: inputs.mapKey,
           manifestKey: inputs.manifestKey,
           fill: cold,
-          finders: [],
+
           setup,
         });
         const disclosed = (yield* Log.history({

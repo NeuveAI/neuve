@@ -28,7 +28,6 @@ import { graphTestPrerequisite } from "../../../scripts/graph-test-prerequisite.
 import {
   PipelineConfig,
   defaultConfig,
-  runKeyFor,
   type ReadingsConfig,
 } from "../src/config.ts";
 import { captureOutlineSource } from "../src/graph-outline.ts";
@@ -219,92 +218,20 @@ const RANGE = {
 // ---------------------------------------------------------------------------------------------
 
 // Reason: it is measured before any default moves.
-test("with the setting off or absent, the frozen block, the run key, the plan's key, every reading text, step key and answer form are the parent's", () => {
-  // The frozen block and the run key: absent and false freeze the parent's block, byte for byte.
-  const absent = readingsConfig(settingsOf({ sectionReadings: "probe" }));
-  const off = readingsConfig(
-    settingsOf({
-      sectionReadings: "probe",
-      sectionReadingsScopeAndTests: false,
-    }),
-  );
-  expect(absent).toEqual(PARENT_BLOCK);
-  expect(JSON.stringify(off)).toBe(JSON.stringify(PARENT_BLOCK));
-  const parentKey = runKeyFor(
-    RANGE,
-    defaultConfig(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      PARENT_BLOCK,
-    ),
-  );
-  for (const block of [absent, off])
-    expect(
-      runKeyFor(
-        RANGE,
-        defaultConfig(
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          block,
-        ),
-      ),
-    ).toBe(parentKey);
-  // Read only when the readings are on: with their off switch, the setting freezes nothing.
-  expect(
-    readingsConfig(
-      settingsOf({
-        sectionReadings: "off",
-        sectionReadingsScopeAndTests: true,
-      }),
-    ),
-  ).toBeUndefined();
-  // On: its own recipe and field, so the run keys apart.
-  const on = readingsConfig(
-    settingsOf({
-      sectionReadings: "probe",
-      sectionReadingsScopeAndTests: true,
-    }),
-  )!;
-  expect(on).toEqual({
+test("every setting admits comprehensive readings while historical answers and plans still parse", () => {
+  const current = readingsConfig(Option.none());
+  for (const settings of [
+    settingsOf({ sectionReadings: "off" }),
+    settingsOf({ sectionReadingsScopeAndTests: false }),
+    settingsOf({ sectionReadingsScopeAndTests: true }),
+  ])
+    expect(readingsConfig(settings)).toEqual(current);
+  expect(current).toEqual({
     ...PARENT_BLOCK,
     recipe: READING_RECIPE_SCOPE_AND_TESTS,
     scopeAndTests: true,
   });
-  expect(
-    PipelineConfig.parse(
-      defaultConfig(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        on,
-      ),
-    ).readings,
-  ).toEqual(on);
-  expect(
-    runKeyFor(
-      RANGE,
-      defaultConfig(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        on,
-      ),
-    ),
-  ).not.toBe(parentKey);
+
   // The plan takes no part of the setting: its key's inputs hold the parent's recipe either way.
   expect(
     (
@@ -473,32 +400,14 @@ test.skipIf(graph.skip)(
       runKey: "f".repeat(64),
       range: { baseRef: "main", ...range },
       cycleId: mintUlid(),
-      config: defaultConfig(
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        readings,
-      ),
+      config: { ...defaultConfig(), readings },
       log: { path: "(memory)", write: () => {}, read: () => [] },
       startedAt: Date.now(),
       reconciliationId: mintUlid(),
       records,
     });
-    const off = readingsConfig(
-      settingsOf({
-        sectionReadings: "probe",
-        sectionReadingsScopeAndTests: false,
-      }),
-    )!;
-    const on = readingsConfig(
-      settingsOf({
-        sectionReadings: "probe",
-        sectionReadingsScopeAndTests: true,
-      }),
-    )!;
+    const off = PARENT_BLOCK;
+    const on = readingsConfig(Option.none());
     const ctx = { off: ctxOf(off), on: ctxOf(on) };
     const run = {
       off: stageRunner(ctx.off, clients),
@@ -1162,11 +1071,14 @@ test("on, neither prompt nor reading shows the lane, the lane rule, or that an a
   ).toBe(assessSystem);
   expect(laneReviewScopedSystem).toContain(NOT_ASKED.sentence);
   expect(laneReviewScopedSystem).toContain(NOT_ASKED.key);
-  expect(
-    laneReviewScopedSystem
-      .replace(` ${NOT_ASKED.sentence}`, "")
-      .replace(`\n${NOT_ASKED.key}`, ""),
-  ).toBe(laneReviewSystem);
+  for (const subject of [
+    "scope fit",
+    "correctness",
+    "risky inputs",
+    "whether tests catch the behavior",
+    "crossBatchClaims",
+  ])
+    expect(laneReviewScopedSystem).toContain(subject);
   // Assess stays blind to goal and scope.
   for (const word of ["done-when", "goal", "D1", "Counting returns"])
     expect(assessTask(assess)).not.toContain(word);
@@ -1182,7 +1094,7 @@ test("on, neither prompt nor reading shows the lane, the lane rule, or that an a
     on.review.opVersion,
     on.review.inputs["answer"],
     on.review.inputs["recipe"],
-  ]).toEqual([15, 7, READING_RECIPE_SCOPE_AND_TESTS]);
+  ]).toEqual([16, 7, READING_RECIPE_SCOPE_AND_TESTS]);
   expect(keyOf(on.assess)).not.toBe(keyOf(assessOf(src.id)));
   expect(keyOf(on.review)).not.toBe(keyOf(reviewOf(src.id)));
 });

@@ -1,14 +1,5 @@
 import type { FrontInput, FrontResult } from "../src/pi/stages/front-task.ts";
-import type {
-  FinderInput,
-  FinderResult,
-} from "../src/pi/stages/finder-task.ts";
-import { FINDERS } from "../src/find.ts";
-import {
-  findDeadline,
-  MIN_FIND_WINDOW_MS,
-  VERIFY_RESERVE_MS,
-} from "../src/budget.ts";
+import {} from "../src/budget.ts";
 // Why: the review host owns a run's lifecycle boundaries over pi's native durability: one review
 // task per run admitted across claims, Understand and independent batches as owned child tasks,
 // Publish after the cut-off with what the stages kept, a stop that aborts, and an agent step that
@@ -37,8 +28,6 @@ import {
   type HarnessSettings,
   type Storage,
   type SubmissionId,
-  type TaskId,
-  type Tx,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type {
@@ -285,44 +274,6 @@ const TASK_TEXT = "map the change into behaviours";
 const stagesOf =
   (spec: Stages, log: Log) =>
   ({ routes }: { readonly routes: AgentRouteRuntime }) => {
-    // The front task starts the finders when Frame lands (NEU-148 slice B), owned by the review,
-    // under the start rule, and returns them: the stand-ins do so in their last commit.
-    const withFinders = async (
-      tx: Tx,
-      runtime: { readonly taskId: TaskId; now(): number },
-      input: FrontInput,
-    ): Promise<FrontResult> => {
-      const self = await tx.task(runtime.taskId);
-      const now = runtime.now();
-      const deadline = findDeadline(now, input.cutoffAt);
-      const started =
-        input.cutoffAt - VERIFY_RESERVE_MS - now >= MIN_FIND_WINDOW_MS;
-      const finders: Array<{
-        lens: FinderInput["lens"];
-        task: TaskId<FinderResult>;
-      }> = [];
-      if (started && self?.owner !== undefined)
-        for (const lens of FINDERS)
-          finders.push({
-            lens,
-            task: await tx.createTask(
-              batch,
-              {
-                lens,
-                frameKey: "frame-key",
-                manifestKey: "manifest-key",
-                front: runtime.taskId,
-                cutoffAt: input.cutoffAt,
-                deadline,
-              },
-              { ownership: { kind: "task", taskId: self.owner } },
-            ),
-          });
-      return {
-        ...understood("frame.1"),
-        finders: { start: now, deadline, started, finders },
-      };
-    };
     const agentUnderstand = defineTask<
       FrontInput,
       AgentCheckpoint,
@@ -418,7 +369,7 @@ const stagesOf =
               status: "terminal",
               outcome: {
                 status: "completed",
-                result: await withFinders(tx, runtime, task.input),
+                result: understood("frame.1"),
               },
             }),
             context,
@@ -482,7 +433,7 @@ const stagesOf =
               status: "terminal",
               outcome: {
                 status: "completed",
-                result: await withFinders(tx, runtime, task.input),
+                result: understood("frame.1"),
               },
             }),
             context,
@@ -500,108 +451,24 @@ const stagesOf =
       },
     });
 
-    const behaviourOf = (id: string) =>
-      spec.behaviours?.[id] ?? { kind: "complete" };
-    const candidateOf = (
-      lens: FinderInput["lens"],
-      status: StageRecord["status"],
-    ): FinderResult => ({
-      lens,
-      findKey: status === "computed" ? `found-${lens}` : null,
-      findings: [],
-      stages: [record("find", `find.${lens}`, status)],
-      end: {
-        find: status === "computed" ? "completed" : "cutoff",
-        verify: "completed",
-      },
-    });
-    const batch = defineTask<FinderInput, { phase: "run" }, FinderResult>({
-      name: "test.batch",
-      version: 1,
-      initial: () => ({ phase: "run" }),
-      phases: {
-        run: async (task, runtime, context) => {
-          const id = `b${FINDERS.indexOf(task.input.lens) + 1}`;
-          const behaviour = behaviourOf(id);
-          log.started.push(id);
-          if (behaviour.kind === "fail")
-            return runtime.commit(
-              () => ({
-                status: "terminal",
-                outcome: {
-                  status: "failed",
-                  error: {
-                    message: `batch ${id} failed`,
-                    detail: { tag: "Broken", retryable: true },
-                  },
-                },
-              }),
-              context,
-            );
-          if (behaviour.kind === "never")
-            await runtime.sleep(task.input.cutoffAt + 3_600_000, context);
-          if (behaviour.kind === "complete" && behaviour.afterMs !== undefined)
-            await runtime.sleep(runtime.now() + behaviour.afterMs, context);
-          await runtime.commit(
-            () => ({
-              status: "terminal",
-              outcome: {
-                status: "completed",
-                result: candidateOf(task.input.lens, "computed"),
-              },
-            }),
-            context,
-          );
-        },
-      },
-      // A batch the run's cut-off stops keeps what it recorded, as the stage lane's batches do.
-      abort: async (task, runtime, context) => {
-        const behaviour = behaviourOf(
-          `b${FINDERS.indexOf(task.input.lens) + 1}`,
-        );
-        await runtime.commit(
-          () => ({
-            status: "terminal",
-            outcome:
-              behaviour.kind === "never" && behaviour.partial
-                ? {
-                    status: "aborted",
-                    reason: "cutoff",
-                    result: candidateOf(task.input.lens, "interrupted"),
-                  }
-                : { status: "aborted", reason: "cutoff" },
-          }),
-          context,
-        );
-      },
-    });
-
     const frame = spec.frame === "agent" ? agentUnderstand : plainUnderstand;
     const port: ReviewStagesPort = {
       front:
         spec.frame === "agent"
           ? childOf(agentUnderstand)
           : childOf(plainUnderstand),
-      finder: childOf(batch),
       fill: async () => ({ record: record("link", "link.fill"), groups: [] }),
       link: async (input) => {
         log.plan++;
         return {
           record: record("link", "link"),
-          candidates:
-            input.finders.length === 0
-              ? [
-                  {
-                    candidate: "coverage",
-                    assembledKey: "coverage-filled",
-                    disposed: [],
-                  },
-                ]
-              : input.finders.map((f) => ({
-                  candidate: f.lens,
-                  assembledKey: `assembled-${f.lens}`,
-                  disposed: [],
-                })),
+          candidates: [
+            {
+              candidate: "coverage",
+              assembledKey: "coverage-filled",
+              disposed: [],
+            },
+          ],
           changeMapKey: "change-map-key",
           disclosures: [],
         };
@@ -628,7 +495,7 @@ const stagesOf =
     };
     const extension: Extension = defineExtension({
       name: "test.stages",
-      tasks: [frame, batch],
+      tasks: [frame],
     });
     return { port, extension };
   };
@@ -732,26 +599,6 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T | "timeout"> =>
     ),
   ]);
 
-test("the host runs front and four finders, then links and publishes in lens order", async () => {
-  const log = newLog();
-  const run = await open(database(), {
-    claim: claim("t1"),
-    log,
-    stages: { behaviours: { b1: { kind: "complete", afterMs: 80 } } },
-  });
-  const end = await run.host.ended(context);
-  await run.host.close("ended", context);
-  expect(end.kind === "settled" && end.task.state.outcome.status).toBe(
-    "completed",
-  );
-  expect(log.started.sort()).toEqual(["b1", "b2", "b3", "b4"]);
-  expect(log.published[0]!.candidates.map((c) => c.candidate)).toEqual([
-    ...FINDERS,
-  ]);
-  expect(log.plan).toBe(1);
-  expect(run.exports).toEqual([{ mode: "ended", tasks: 6 }]);
-});
-
 test("a later claim continues the run's review and a repeated claim joins it; neither runs a stage twice", async () => {
   const path = database();
   const log = newLog();
@@ -783,47 +630,6 @@ test("a later claim continues the run's review and a repeated claim joins it; ne
     plan: 1,
     published: 1,
   });
-});
-
-test("a failed batch fails the review without publishing; the queue's retry admits a new review and keeps the old", async () => {
-  const path = database();
-  const log = newLog();
-  const failing = await open(path, {
-    claim: claim("t1"),
-    log,
-    stages: { behaviours: { b1: { kind: "fail" } } },
-  });
-  const failed = await failing.host.ended(context);
-  await failing.host.close("interrupted", context);
-
-  const retry = await open(path, {
-    claim: { jobSeq: 7, attempt: 2, claimedAt: "t2" },
-    log,
-    stages: {},
-  });
-  const retried = await retry.host.ended(context);
-  const old = await retry.host.harness.getTask(
-    failing.host.admission.taskId,
-    context,
-  );
-  await retry.host.close("ended", context);
-
-  expect(failed.kind === "settled" && failed.task.state.outcome).toEqual({
-    status: "failed",
-    error: {
-      message: "batch b1 failed",
-      detail: { tag: "Broken", retryable: true },
-    },
-  });
-  expect(retry.host.admission.admitted).toBe("created");
-  expect(retry.host.admission.taskId).not.toBe(failing.host.admission.taskId);
-  expect(old?.state.status === "terminal" && old.state.outcome.status).toBe(
-    "failed",
-  );
-  expect(retried.kind === "settled" && retried.task.state.outcome.status).toBe(
-    "completed",
-  );
-  expect(log.published.length).toBe(1);
 });
 
 test("past the cut-off the host interrupts front and still lets publication settle", async () => {
@@ -919,9 +725,6 @@ test("the stop bound includes an invocation that ignores cancellation and keeps 
             throw new Error("unused");
           },
           front: async () => {
-            throw new Error("unused");
-          },
-          finder: async () => {
             throw new Error("unused");
           },
           fill: async () => {
