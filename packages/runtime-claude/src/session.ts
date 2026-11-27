@@ -1213,7 +1213,7 @@ export const openClaudeSession = (
             account,
             config.oauthToken,
           ),
-          cwd: policy.folder ?? config.cwd,
+          cwd: policy.mcpServers && policy.folder ? policy.folder : config.cwd,
           tools: plugin === undefined ? [] : ["Skill"],
           settingSources: [],
           // Disable skill and plugin hooks. SDK callbacks still run.

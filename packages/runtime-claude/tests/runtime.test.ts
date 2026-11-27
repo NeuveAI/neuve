@@ -123,6 +123,7 @@ test("a Claude Code subprocess inherits its Ace chat", async () => {
       out({
         type: "query.open",
         check: (options) => {
+          expect(options.cwd).toBe(config.cwd);
           expect(options.env).toMatchObject({
             HOME: "/test/home",
             NEUVE_ACE_CHAT: "channel-a/7",
@@ -138,7 +139,11 @@ test("a Claude Code subprocess inherits its Ace chat", async () => {
         yield* session.startTurn(normal);
         yield* reader.until("turn.finished");
       }),
-    { ...policy, environment: { NEUVE_ACE_CHAT: "channel-a/7" } },
+    {
+      ...policy,
+      folder: "/work/chat folder",
+      environment: { NEUVE_ACE_CHAT: "channel-a/7" },
+    },
   );
 });
 

@@ -50,7 +50,6 @@ import {
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type { AccountStatus } from "@neuve/runtime/status";
-import type { SessionPolicy } from "@neuve/runtime";
 
 import { type Directory, messaging, subagent } from "./agents";
 import { type Browser, browser } from "./browser";
@@ -91,7 +90,7 @@ import {
 	changePlanComment, discardPlanCommentBatch, keepPlanComment, KEPT_PLAN_REPLIES_REASON, planCommentAnswers, planCommentBatch,
 	planComments, PlanCommentPlacements, preparePlanCommentSend, recoverPlanCommentSends, stagePlanCommentBatch, updatePlanCommentDelivery,
 } from "./plan-comments";
-import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanExit, type ModeTransition } from "./plan-mode";
+import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanExit, type ModeTransition, type PluginOffers } from "./plan-mode";
 import { progress } from "./progress";
 import { answer, PersonWaits, Questions } from "./questions";
 import type {
@@ -183,12 +182,9 @@ export type Options = {
 	skills?: string;
 	build?: BuildHost;
 	hostEnvironment?: HostEnvironment;
-	plugins?: {
+	plugins?: PluginOffers & {
 		hidden(): readonly string[];
 		ownsTool(name: string): boolean;
-		httpTools(): ReadonlySet<string>;
-		nativeServers?(): SessionPolicy["mcpServers"];
-		nativeTool?(name: string): boolean;
 		refresh(registry: Pick<Registry, "snapshot" | "install" | "uninstall">): Promise<void>;
 		waitForStartup(signal: AbortSignal): Promise<void>;
 		close(): Promise<void>;

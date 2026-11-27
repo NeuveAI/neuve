@@ -243,19 +243,20 @@ export function policy(
       `Save the plan with Neuve's MCP tool \`${PLAN_TOOL}\`. It works in a read-only workspace.`,
     );
   }
+  const mcpServers =
+    where.folder !== undefined && !planning && !where.attended
+      ? where.mcpServers
+      : undefined;
   return {
     systemPrompt: prompt.filter(Boolean).join("\n\n"),
     tools: definitions(served, handle),
     approvalPolicy,
     turnLimit: TurnLimit.parse(Number.MAX_SAFE_INTEGER),
     ...(model ? { model } : {}),
-    ...(where.folder === undefined ? {} : { folder: where.folder }),
-    ...(where.folder !== undefined &&
-    !planning &&
-    !where.attended &&
-    where.mcpServers !== undefined
-      ? { mcpServers: where.mcpServers }
+    ...(where.folder !== undefined && (sandboxed || mcpServers !== undefined)
+      ? { folder: where.folder }
       : {}),
+    ...(mcpServers === undefined ? {} : { mcpServers }),
     ...(where.skills !== undefined && where.folder !== undefined
       ? { skillRoots: skillRoots({ ...where.skills, cwd: where.folder }) }
       : {}),

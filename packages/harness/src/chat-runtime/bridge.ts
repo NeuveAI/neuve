@@ -99,7 +99,7 @@ type Generation = {
   /** The chat's own folder, from its agent: where a runtime with its own tools works. */
   folder?: string | undefined;
   /** Channel policy for this request. Keep its temporary tool offer out of continuation digests. */
-  planRequest?: SystemMessage;
+  toolOffer?: SystemMessage;
   pluginTools?: ReadonlySet<string>;
   mcpServers?: SessionPolicy["mcpServers"];
   cleanup: (() => void)[];
@@ -121,8 +121,8 @@ const nativePluginServers = Symbol.for("neuve.chat.native-plugin-servers");
 function offeredMessages(
   generation: Generation,
 ): readonly Context["messages"][number][] {
-  const { messages, planRequest } = generation;
-  return planRequest ? [...messages, planRequest] : messages;
+  const { messages, toolOffer } = generation;
+  return toolOffer ? [...messages, toolOffer] : messages;
 }
 
 type HeldCall = {
@@ -320,10 +320,9 @@ export class ChatRuntimeBridge {
       options && Reflect.get(options, sandboxPluginTools);
     const mcpServers: SessionPolicy["mcpServers"] =
       options && Reflect.get(options, nativePluginServers);
-    const planRequest = requested.find(
+    const toolOffer = requested.find(
       (message): message is SystemMessage =>
-        message.role === "system" &&
-        Reflect.get(message, planningRequest) === true,
+        message.role === "system" && Object.hasOwn(message, planningRequest),
     );
     const attendance = requested.findLast(
       (message): message is SystemMessage =>
@@ -331,7 +330,7 @@ export class ChatRuntimeBridge {
         Object.hasOwn(message.sections ?? {}, ATTENDED_SECTION),
     );
     const messages = requested.filter(
-      (message) => message !== planRequest && message !== attendance,
+      (message) => message !== toolOffer && message !== attendance,
     );
     const identity = messages
       .map((message) => this.identities.get(message))
@@ -360,7 +359,7 @@ export class ChatRuntimeBridge {
       streams: [],
       messages,
       ...(identity?.folder === undefined ? {} : { folder: identity.folder }),
-      ...(planRequest === undefined ? {} : { planRequest }),
+      ...(toolOffer === undefined ? {} : { toolOffer }),
       ...(pluginTools instanceof Set ? { pluginTools } : {}),
       ...(mcpServers === undefined ? {} : { mcpServers }),
       cleanup: [],
@@ -1269,8 +1268,14 @@ export class ChatRuntimeBridge {
     live.retryRequest = message;
     live.logicalTurn ??= crypto.randomUUID();
     live.lastResumePoint = undefined;
-    const folder = live.policy.folder;
-    const access = live.generation?.planRequest ? "read-only" : "write";
+    const folder = live.route.capabilities.ownTools
+      ? live.policy.folder
+      : undefined;
+    const offer = live.generation?.toolOffer;
+    const access =
+      offer && Reflect.get(offer, planningRequest) === true
+        ? "read-only"
+        : "write";
     await this.command(
       live,
       live.state.session.startTurn({

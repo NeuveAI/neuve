@@ -1,5 +1,6 @@
 import type { Context } from "@earendil-works/chord";
 import { getCurrentTools, type Models, type SystemMessage } from "@earendil-works/pi-ai";
+import type { SessionPolicy } from "@neuve/runtime";
 import {
 	defineDoc,
 	defineExtension,
@@ -13,7 +14,6 @@ import {
 } from "@earendil-works/pi-durable";
 import { AGENT_MESSAGE_TOOL, AGENT_MODEL_TOOL, PLAN_COMMENT_TOOL, PLAN_TOOL, type ChatMode } from "./protocol";
 import { ATTENDED_SECTION } from "./approvals";
-import type { Options } from "./channel";
 
 export type PlanExit = { plan: string; hash: string };
 export type ModeTransition = { chat: ConversationId; previous: ChatMode; mode: ChatMode; approval: PlanExit };
@@ -117,16 +117,22 @@ export async function reconcilePlanExit(tx: Tx, chat: ConversationId): Promise<M
 	return { chat, previous: "plan", mode: "ace", approval: { ...approval } };
 }
 
-// The bridge consumes this transient marker before its request becomes a runtime turn.
+// The bridge strips marked tool offers from the transcript. A true value denotes Plan mode.
 const planningRequest = Symbol.for("neuve.chat.plan-request");
 const sandboxPluginTools = Symbol.for("neuve.chat.sandbox-plugin-tools");
 const nativePluginServers = Symbol.for("neuve.chat.native-plugin-servers");
 const requestMode = "neuve.chat.request-mode";
 
+export type PluginOffers = {
+	httpTools(): ReadonlySet<string>;
+	nativeServers?(): SessionPolicy["mcpServers"];
+	nativeTool?(name: string): boolean;
+};
+
 /** Pi can commit a streamed partial instead of calling afterResponse when a run is interrupted. */
 export function planModeModels(
 	models: Models, receivesAttendance: (provider: string) => boolean,
-	plugins?: Pick<NonNullable<Options["plugins"]>, "httpTools" | "nativeServers" | "nativeTool">,
+	plugins?: PluginOffers,
 ): Models {
 	const streamSimple: Models["streamSimple"] = (model, request, options) => {
 		const decision = request.messages.findLast(message =>
@@ -155,7 +161,7 @@ export function planModeModels(
 				toolsRemoved: tools.filter(tool => mode === "plan" ? !planTools.has(tool.name) : plugins?.nativeTool?.(tool.name))
 					.map(({ name }) => ({ name })),
 			};
-			if (mode === "plan") Object.defineProperty(offer, planningRequest, { value: true });
+			Object.defineProperty(offer, planningRequest, { value: mode === "plan" });
 			if (mode === "plan" || offer.toolsRemoved?.length) messages.push(offer);
 		}
 		const pluginTools = mode === "ace" ? plugins?.httpTools() : undefined;

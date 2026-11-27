@@ -133,8 +133,8 @@ export interface SessionPolicy {
   readonly environment?: Readonly<Record<string, string>> | undefined;
   readonly mcpServers?: Readonly<Record<string, McpStdioServer>> | undefined;
   /**
-   * The folder the session's work is in: a chat's own worktree. A runtime that declares ownTools
-   * starts there and refuses a session without it. Native MCP servers use it for the chat's files.
+   * The chat's own worktree. A runtime that declares ownTools starts there and requires it
+   * for turn workspace access. A runtime with native MCP servers can also use it for their roots.
    */
   readonly folder?: string | undefined;
   readonly skillRoots?:

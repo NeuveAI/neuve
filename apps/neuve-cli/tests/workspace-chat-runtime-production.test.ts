@@ -334,9 +334,9 @@ test("production sources deliver a worker chat through a fake Claude executable 
         const extension = setup.extensions?.(worker);
         return {
           extensions: extension?.extensions ?? [],
-          attach: async (attached) => {
+          attach: async (attached, admission) => {
             harness = attached;
-            await extension?.attach?.(attached);
+            await extension?.attach?.(attached, admission);
           },
         };
       },
@@ -395,6 +395,7 @@ test("production sources deliver a worker chat through a fake Claude executable 
         op: "ask",
         author: "person",
         text: "Production worker turn",
+        attended: true,
         model: { provider: account.name, modelId: "default" },
       },
       () => {},
