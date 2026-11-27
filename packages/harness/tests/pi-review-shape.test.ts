@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { Effect } from "effect";
 import { AssembledBatch } from "../src/compose.ts";
+import type { StageRecord } from "../src/pipeline.ts";
 import {
   runReview,
   textOf,
@@ -639,13 +640,14 @@ test("batch reviewers verify claims and leave published batches unchanged", asyn
 }, 60_000);
 
 // A new attempt uses the same session registry and stored Lane review answer. Stopping the first
-// attempt while Verify is running must not make the new attempt reuse its aborted Verify.
-test("a retried review replaces an aborted check and publishes the claim", async () => {
+// attempt while one Verify is running must replace that check and reuse another that finished.
+test("a retried review replaces an aborted check and reuses a stored check", async () => {
   const firstVerify = Promise.withResolvers<void>();
   const reply = Promise.withResolvers<void>();
   const fallback = answerer();
+  const storedText = "Callers now receive a zero second constant.";
   let checks = 0;
-  let oldTask = 0;
+  let storedChecks = 0;
   const result = await runReview({
     directory: join(directory, "retried-check"),
     ...splitRange,
@@ -653,8 +655,22 @@ test("a retried review replaces an aborted check and publishes the claim", async
       const first = await start();
       await firstVerify.promise;
       const registered = await harness.snapshot(CrossBatchClaimsDoc, context);
-      oldTask = Object.values(registered?.claims ?? {})[0]?.task ?? 0;
-      expect(oldTask).toBeGreaterThan(0);
+      const held = Object.values(registered?.claims ?? {});
+      const oldTask = held.find(
+        ({ comment }) => comment.text === earlyText,
+      )?.task;
+      const storedTask = held.find(
+        ({ comment }) => comment.text === storedText,
+      )?.task;
+      if (oldTask == null || storedTask == null)
+        throw new Error("Claims were not registered");
+      expect(
+        (await harness.waitForTask(childId<StageRecord>(storedTask), context))
+          .state.outcome,
+      ).toMatchObject({
+        status: "completed",
+        result: { status: "computed", key: expect.any(String) },
+      });
       const graph = await harness.watchTaskGraph(context);
       graph.start(async ({ tasks }) => {
         const check = tasks[String(oldTask)];
@@ -681,10 +697,14 @@ test("a retried review replaces an aborted check and publishes the claim", async
         return reviewWithClaims(
           agent,
           textOf(messages).includes("export const first")
-            ? [claimOn(paths[1], earlyText)]
+            ? [claimOn(paths[1], earlyText), claimOn(paths[1], storedText)]
             : [],
         );
       if (agent.startsWith("verify.claim.")) {
+        if (textOf(messages).includes(storedText)) {
+          storedChecks++;
+          return verify(agent);
+        }
         if (++checks === 1) {
           firstVerify.resolve();
           await reply.promise;
@@ -697,6 +717,7 @@ test("a retried review replaces an aborted check and publishes the claim", async
   });
   expect(result.outcome.status).toBe("completed");
   expect(checks).toBe(2);
+  expect(storedChecks).toBe(1);
   expect(
     result.sent.filter(
       ({ agent, messages }) =>
@@ -706,6 +727,9 @@ test("a retried review replaces an aborted check and publishes the claim", async
   ).toHaveLength(1);
   expect(
     commentsOf(result).filter(({ body }) => body.includes(earlyText)),
+  ).toHaveLength(1);
+  expect(
+    commentsOf(result).filter(({ body }) => body.includes(storedText)),
   ).toHaveLength(1);
 }, 60_000);
 

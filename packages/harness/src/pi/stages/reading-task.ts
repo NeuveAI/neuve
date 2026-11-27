@@ -1670,24 +1670,23 @@ export const readingTask = (
             reports.length === 0
               ? undefined
               : (await tx.doc(CrossBatchClaimsDoc)).claims;
-          for (const child of children) {
-            const sharedId =
-              child.crossBatch === undefined
-                ? undefined
-                : registered?.[child.crossBatch.key]?.task;
-            const shared =
-              sharedId == null ? undefined : await tx.task(childId(sharedId));
-            const reusable =
-              shared !== undefined &&
-              (shared.state.status !== "terminal" ||
-                (shared.state.outcome.status === "completed" &&
-                  storedCheckKey(shared.state.outcome.result) !== null));
-            const held =
-              child.crossBatch === undefined
-                ? doc.children[child.name]
-                : reusable
-                  ? shared.id
-                  : undefined;
+          // The transaction permits task reads only before its first task creation.
+          const planned = await Promise.all(
+            children.map(async (child) => {
+              if (child.crossBatch === undefined)
+                return { child, held: doc.children[child.name] };
+              const sharedId = registered?.[child.crossBatch.key]?.task;
+              const shared =
+                sharedId == null ? undefined : await tx.task(childId(sharedId));
+              const reusable =
+                shared !== undefined &&
+                (shared.state.status !== "terminal" ||
+                  (shared.state.outcome.status === "completed" &&
+                    storedCheckKey(shared.state.outcome.result) !== null));
+              return { child, held: reusable ? shared.id : undefined };
+            }),
+          );
+          for (const { child, held } of planned) {
             if (held !== undefined) {
               ids.push(held);
               continue;
