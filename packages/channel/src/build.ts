@@ -284,6 +284,7 @@ function briefText(plan: ScopeRead["plan"], { path, branch }: Worktree, start: S
 		`Work on branch ${branch} in the worktree at ${path}.`,
 		"Load the Neuve skill.",
 		"Push your work with lane push. The host opens, readies and merges the plan's pull request. Do not run gh pr create, gh pr ready or gh pr merge.",
+		"If you push a new head to the plan's branch after the plan's Neuve review has published, use agent_message to ask the plan's reviewer to review the new head and request a fresh Neuve review once they approve it.",
 		...(query ? ["Ask for your scope with neuve_query using the plan's goal and done-when items as your question."] : []),
 		"",
 		plan.text,
@@ -293,7 +294,7 @@ function briefText(plan: ScopeRead["plan"], { path, branch }: Worktree, start: S
 	const source = start.role === "reviewer" ? start.source.branch : undefined;
 	return [
 		...reference,
-		source ? `Review the implementer's work on branch ${source}.` : "Implement this plan.",
+		source ? `Review the implementer's work on branch ${source}. If asked to review a new head, review it and request a fresh Neuve review once you approve it.` : "Implement this plan.",
 		...(source ? [] : ["Use agent_start to ask the host for a reviewer or another implementer."]),
 		"Use agent_message to message another agent of this plan.",
 	].join("\n");

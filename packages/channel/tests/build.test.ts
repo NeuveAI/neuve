@@ -22,6 +22,7 @@ import { Fixture, git, MODEL, OWNER, scratchEnv, until, type Watch } from "./hel
 const context = BACKGROUND_CONTEXT;
 const planText = "# Export retries\n\nKeep the retry in the export queue.";
 const revisedText = "# Export retries, revised\n\nKeep the retry in the export queue until delivery.";
+const postReviewPushGuidance = "If you push a new head to the plan's branch after the plan's Neuve review has published, use agent_message to ask the plan's reviewer to review the new head and request a fresh Neuve review once they approve it.";
 const tool = (name: string, args: Parameters<typeof fauxToolCall>[1], id: string) =>
 	fauxAssistantMessage(fauxToolCall(name, args, { id }), { stopReason: "toolUse" });
 const question = (id: string) => fauxAssistantMessage(fauxToolCall("question", {
@@ -153,6 +154,7 @@ test("approval starts one ownerless implementer with the marked brief and write 
 			expect(brief.text).toContain(text);
 		}
 		expect(brief.text).toContain(planText);
+		expect(brief.text).toContain(postReviewPushGuidance);
 		expect(brief.text).toContain("Ask for your scope with neuve_query");
 		expect(brief.text).not.toContain("neuve query");
 		expect(brief.text).not.toContain(run.plans);
@@ -902,6 +904,8 @@ test("a reviewer starts fresh on the asking implementer's branch head", async ()
 		for (const text of [revision.title, revision.hash, revisedText, `Review the implementer's work on branch ${implementer.branch}.`, "neuve_query", "agent_message"]) {
 			expect(message.text).toContain(text);
 		}
+		expect(message.text).toContain(postReviewPushGuidance);
+		expect(message.text).toContain("If asked to review a new head, review it and request a fresh Neuve review once you approve it.");
 		expect(message.text).not.toContain(run.plans);
 		expect(message.text).not.toContain(privateText);
 		expect(reviewerRoles).toEqual(["user"]);
@@ -943,6 +947,7 @@ test("a second implementer gets its own branch, the approved model settings, and
 	const message = await watch.until("message");
 	expect(message).toMatchObject({ system: { kind: "neuve:build:brief", build: build.id } });
 	for (const text of [plan.title, plan.hash, planText, worktree.branch, "neuve_query", "Load the Neuve skill."]) expect(message.text).toContain(text);
+	expect(message.text).toContain(postReviewPushGuidance);
 	expect(message.text).not.toContain(run.plans);
 	expect(message.text.split("\n\n").at(-1)).toBe(brief);
 	const info = (await fixture.channel.info()).chats.find(chat => chat.id === started.chat);
