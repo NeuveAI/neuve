@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CaptureRead } from "../src/candidate/capture.ts";
 import ORIGINAL_HOOKS from "../../../validation/cases/owned-review/original-hook-ordering.json";
+import CAPTURE_CONTROLS from "../../../validation/cases/owned-review/capture-setup-controls.json";
 import { canonical } from "../src/harness-compare/full-test/finders-gate.ts";
 import {
   answerKeyDigest,
@@ -281,7 +282,7 @@ const fixture = (runId = "baseline") => {
 };
 
 test("candidate pins stay pending; absent historical objects fail closed without requiring a full checkout", () => {
-  expect(candidates.length).toBe(2);
+  expect(candidates.length).toBe(3);
   for (const c of candidates) {
     const problems = sourceProblems(repository, c);
     // Validate available history, but a shallow checkout cannot establish historical source.
@@ -307,6 +308,67 @@ test("candidate pins stay pending; absent historical objects fail closed without
   expect(Object.values(comparison.differences).every((v) => v === null)).toBe(
     true,
   );
+});
+
+test("capture setup has one pending source case, not duplicate executions for its two candidate focuses", () => {
+  const matching = candidates.filter(
+    (c) =>
+      c.base === CAPTURE_CONTROLS.range.base &&
+      c.head === CAPTURE_CONTROLS.range.head,
+  );
+  expect(matching).toHaveLength(1);
+  const kase = matching[0]!;
+  expect(kase.id).toBe(CAPTURE_CONTROLS.sourceCase);
+  expect(kase.adjudication.status).toBe("pending");
+  // This is a set-definition invariant, not an implementation of runtime cost aggregation.
+  expect(new Set(candidates.map((c) => `${c.base}..${c.head}`)).size).toBe(
+    candidates.length,
+  );
+  expect(CAPTURE_CONTROLS.candidateFocuses).toHaveLength(2);
+  expect(new Set(CAPTURE_CONTROLS.candidateFocuses.map((f) => f.id)).size).toBe(
+    2,
+  );
+  for (const focus of CAPTURE_CONTROLS.candidateFocuses) {
+    expect(focus.status).toBe("candidate-not-label");
+    expect(
+      CAPTURE_CONTROLS.scenarios.some((s) => s.id === focus.scenario),
+    ).toBe(true);
+  }
+  for (const reference of CAPTURE_CONTROLS.sourceObligationReferences)
+    for (const path of reference.paths)
+      expect(
+        kase.sources.some(
+          (s) => s.path === path && s.revision === reference.revision,
+        ),
+      ).toBe(true);
+  expect(CAPTURE_CONTROLS.accounting.sumPerActualExecutionOnce).toBe(true);
+  expect(fixture().read({ kase }).quality).toBeNull();
+});
+
+test("capture controls are non-runnable proposals with no frozen labels, expected outcomes or transplanted planner identities", () => {
+  expect(StudyCase.safeParse(CAPTURE_CONTROLS).success).toBe(false);
+  expect(CAPTURE_CONTROLS.status).toBe("proposal");
+  expect(CAPTURE_CONTROLS.runnable).toBe(false);
+  expect(CAPTURE_CONTROLS.independentlySupportedConcerns).toBeNull();
+  expect(
+    CAPTURE_CONTROLS.scenarios.every((s) => s.expectedOutcome === null),
+  ).toBe(true);
+  expect(CAPTURE_CONTROLS.controlledPartition).toMatchObject({
+    status: "unprepared",
+    assignmentPlan: null,
+    requirementLinks: null,
+    contextSizes: null,
+    packingBounds: null,
+  });
+  expect(CAPTURE_CONTROLS.productionObservation).toMatchObject({
+    status: "not-run",
+    map: null,
+    assignments: null,
+  });
+  expect(CAPTURE_CONTROLS.authority).toMatchObject({
+    goldFrozen: false,
+    modelDispatchAuthorized: false,
+  });
 });
 
 test("original agent-hook ordering fixture preserves four immutable reports and keeps the readiness report separate", () => {

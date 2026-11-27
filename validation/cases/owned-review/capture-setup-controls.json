@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "sourceCase": "capture-setup-integration",
+  "range": {
+    "base": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+    "head": "8275d2875c6f91cdf04baa91ce9e3dc1149af216"
+  },
+  "status": "proposal",
+  "runnable": false,
+  "scenarios": [
+    {
+      "id": "existing-config-layout",
+      "inputs": {
+        "agentConfig": "Semantically current Neuve entries with different JSON key/group order; use normal installation and inspection behavior."
+      },
+      "trace": [
+        "configuration reading",
+        "classification",
+        "repair",
+        "preservation"
+      ],
+      "expectedOutcome": null
+    },
+    {
+      "id": "command-lifetime",
+      "inputs": {
+        "hookRuntimeAndCachedBundle": "present",
+        "configuredCliEntry": "missing",
+        "worker": "not-running",
+        "fallbacks": "Leave normal behavior enabled; do not disable fallback or recovery to manufacture a failure."
+      },
+      "trace": [
+        "all actual launcher resolution",
+        "fallback and recovery",
+        "spooling",
+        "worker startup",
+        "inspection",
+        "diagnostic consumer"
+      ],
+      "expectedOutcome": null
+    }
+  ],
+  "candidateFocuses": [
+    {
+      "id": "configuration-preservation",
+      "scenario": "existing-config-layout",
+      "status": "candidate-not-label"
+    },
+    {
+      "id": "capture-readiness",
+      "scenario": "command-lifetime",
+      "status": "candidate-not-label"
+    }
+  ],
+  "independentlySupportedConcerns": null,
+  "sourceObligationReferences": [
+    {
+      "role": "configuration and hook lifecycle declarations",
+      "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+      "paths": [
+        "apps/neuve-cli/src/capture/config.ts",
+        "apps/neuve-cli/src/capture/setup-hooks.ts"
+      ]
+    },
+    {
+      "role": "capture dispatch, worker launch, fallback and recovery consumers",
+      "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+      "paths": [
+        "apps/neuve-cli/src/capture/hook-cli.ts",
+        "apps/neuve-cli/src/version-skew.ts",
+        "packages/records-core/src/starter.ts"
+      ]
+    },
+    {
+      "role": "diagnostic and CLI consumers",
+      "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+      "paths": ["apps/neuve-cli/src/doctor.ts", "apps/neuve-cli/src/cli.ts"]
+    },
+    {
+      "role": "historical repository requirements; distinguish adopted obligations from implementation claims",
+      "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+      "paths": [
+        "process/decisions.md",
+        "vocabulary.md",
+        "foundations/04-review-units-and-context.md"
+      ]
+    }
+  ],
+  "historicalPartitionProvenance": {
+    "kind": "historical-publication",
+    "range": {
+      "base": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+      "head": "8275d2875c6f91cdf04baa91ce9e3dc1149af216"
+    },
+    "obligationDescriptions": [
+      "Hook file inspection and repair",
+      "CLI readiness and outstanding setup work"
+    ],
+    "use": "Descriptive provenance only, not new runtime batch/section/unit keys or the actual new production Map."
+  },
+  "controlledPartition": {
+    "status": "unprepared",
+    "assignmentPlan": null,
+    "requirementLinks": null,
+    "contextSizes": null,
+    "packingBounds": null,
+    "rule": "Prepare from the final approved same-source manifest, structure, scope, relations and proof inputs. Preserve actual section/unit identities; select the smallest justified bounded packing perturbation before treatment."
+  },
+  "productionObservation": {
+    "status": "not-run",
+    "map": null,
+    "assignments": null,
+    "rule": "Record actual production Map and assignment facts separately, including coalescence or missing context; never relabel a controlled partition as production."
+  },
+  "accounting": {
+    "sumPerActualExecutionOnce": true,
+    "executionIdentity": "Source case plus complete configuration/assignment/context computation identity plus replicate.",
+    "qualityIdentity": "Independently supported concern, only after the independent protocol settles it.",
+    "rule": "Several focused judgments of one execution do not duplicate source cases, tokens, latency or case denominators. Distinct actual configurations/replicates are separate executions, never multiplied by candidate-focus count."
+  },
+  "panelBoundary": {
+    "include": "Neutral exact source, applicable scope and scenario inputs only when separately authorized.",
+    "exclude": [
+      "historical report bodies and verdicts",
+      "anticipated defect anchors",
+      "prior first opinions",
+      "treatment outputs"
+    ],
+    "rule": "Trace all actual relevant paths and establish the requirement. An unsure or unsupported focus remains recorded; do not select or drop it after treatment."
+  },
+  "authority": {
+    "goldFrozen": false,
+    "modelDispatchAuthorized": false,
+    "claimInjection": "Specific injected claims can test structural/race contracts only; they never count as model discovery."
+  }
+}

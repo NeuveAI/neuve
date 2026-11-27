@@ -66,12 +66,125 @@
         "status": "pending",
         "reason": "Independent source-only adjudication has not frozen the failure path, anchors, requirements and placement feasibility. No baseline or treatment has run."
       }
+    },
+    {
+      "id": "capture-setup-integration",
+      "family": "capture-setup-integration",
+      "base": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+      "head": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+      "sources": [
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "apps/neuve-cli/src/capture/setup-hooks.ts",
+          "sha256": "94425a28131b42444c484d8111094044dc2622ca06c986a81fbade078240f205"
+        },
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "apps/neuve-cli/src/capture/config.ts",
+          "sha256": "b8cee85b1e114d7d74cd1a522a7bb12ea12fd1c28c2c5f60f05053090b49458f"
+        },
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "apps/neuve-cli/src/capture/hook-cli.ts",
+          "sha256": "35f59cacda90d75d343bca2b826f4f3c40f2e2b3d4c8999bf1fdf2ab583ee081"
+        },
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "apps/neuve-cli/src/version-skew.ts",
+          "sha256": "ce5afb098ba7a31710bc705a70825786d1d1b9cb4875d6f1b38f006ed984a4bb"
+        },
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "apps/neuve-cli/src/doctor.ts",
+          "sha256": "dc1bac378104e25ffd8bd64f5d23c3d465e2c1839dffd3756716509c35a0774c"
+        },
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "apps/neuve-cli/src/cli.ts",
+          "sha256": "ffa105f8e9809e351e3fbf17df264d87e54a97b782fcfe773740c31d3aab4609"
+        },
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "packages/records-core/src/starter.ts",
+          "sha256": "acbe67ef68a183df6e8dbf14f7c5747915c3a1879357f89840111ffb9b8b4211"
+        },
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "process/decisions.md",
+          "sha256": "85f5b5a6bdff6cb02a452003f80a7fd046d642aca58dcce23891624b05a13fd0"
+        },
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "vocabulary.md",
+          "sha256": "5ccfb6584119c1a43132c81c1491ba8f7bd068607c72115e44060e29ae20a39c"
+        },
+        {
+          "revision": "b80e11ae8edb232304f0ae6f2010df6e3331c210",
+          "path": "foundations/04-review-units-and-context.md",
+          "sha256": "f16c5cffed141e3b10bf5dee9d3670698e728fe00e16a7f57048023e9c52f427"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "apps/neuve-cli/src/capture/setup-hooks.ts",
+          "sha256": "2fc9a958e5c8304d2f97f6a382ff0659398293901adae12dd2ddd9ba758de0e3"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "apps/neuve-cli/src/capture/config.ts",
+          "sha256": "b8cee85b1e114d7d74cd1a522a7bb12ea12fd1c28c2c5f60f05053090b49458f"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "apps/neuve-cli/src/capture/hook-cli.ts",
+          "sha256": "35f59cacda90d75d343bca2b826f4f3c40f2e2b3d4c8999bf1fdf2ab583ee081"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "apps/neuve-cli/src/version-skew.ts",
+          "sha256": "ce5afb098ba7a31710bc705a70825786d1d1b9cb4875d6f1b38f006ed984a4bb"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "apps/neuve-cli/src/doctor.ts",
+          "sha256": "c5f75da7ddd3bb68fea8a271e2f925caa32f766b82c4939bd62e1860f9564489"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "apps/neuve-cli/src/cli.ts",
+          "sha256": "8e2496b62b7a41eef61462af7ab64904bbb600de5eccf67e3a73cb80ac477665"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "packages/records-core/src/starter.ts",
+          "sha256": "acbe67ef68a183df6e8dbf14f7c5747915c3a1879357f89840111ffb9b8b4211"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "process/decisions.md",
+          "sha256": "ce09bd6bd0a557490690b1ef8d23e8e5569fe38dff6d80d5f12a8c26267e6110"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "vocabulary.md",
+          "sha256": "5ccfb6584119c1a43132c81c1491ba8f7bd068607c72115e44060e29ae20a39c"
+        },
+        {
+          "revision": "8275d2875c6f91cdf04baa91ce9e3dc1149af216",
+          "path": "foundations/04-review-units-and-context.md",
+          "sha256": "f16c5cffed141e3b10bf5dee9d3670698e728fe00e16a7f57048023e9c52f427"
+        }
+      ],
+      "placements": ["single-assignment", "cross-assignment", "cross-batch"],
+      "adjudication": {
+        "status": "pending",
+        "reason": "Neutral source investigation, applicable scope, independent gold protocol and actual final same-source planner are not settled. Requested placements and candidate inputs are not observed outcomes or frozen concerns."
+      }
     }
   ],
   "blocked": [
     {
       "case": "original-four-comment-hook-ordering",
-      "reason": "Historical source and reports recovered in original-hook-ordering.json; independent gold and actual new-pipeline report measurement remain pending. This is not a scorable candidate or an invented replacement."
+      "reason": "Historical source and reports recovered in original-hook-ordering.json; one pending capture-setup-integration source case includes this range. Independent gold and actual new-pipeline report measurement remain pending. Historical reports are not gold or an additional runnable case."
     }
   ]
 }
