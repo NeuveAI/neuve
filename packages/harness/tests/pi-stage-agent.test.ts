@@ -740,19 +740,25 @@ test("outputOf reads computed, reused and interrupted outputs and ignores missin
   }
 });
 
-// Why: old frozen requests must still parse after the task graph changes its stage registry.
-test("old optional turn-limit keys decode while the new stages use their defaults", () => {
-  const current = defaultConfig();
-  expect(current.budgets.turnLimits).toEqual({
-    frame: 1,
-    map: 1,
-    find: 11,
-    verify: 1,
-  });
+// Historical turn-limit metadata remains readable without becoming a current finder control.
+test("old optional turn-limit keys decode while the current graph freezes no finder limit", async () => {
+  const { default: pipelineV12 } = await import("./fixtures/pipeline-v12.json");
+  const { canonicalJson } = await import("@neuve/records-core");
+  const { currentPipelineProblem } = await import("../src/config.ts");
+  const current = PipelineConfig.parse(defaultConfig());
+  expect(current.budgets.turnLimits).toEqual({ frame: 1, map: 1, verify: 1 });
+  expect(Object.hasOwn(current.budgets.turnLimits, "find")).toBe(false);
+  expect(currentPipelineProblem(13, current)).toBeUndefined();
+  const frozen = PipelineConfig.parse(pipelineV12.config);
+  expect(canonicalJson(frozen)).toBe(canonicalJson(pipelineV12.config));
+  expect(Computations.computationKey(pipelineV12.spec).key).toBe(
+    pipelineV12.runKey,
+  );
+  // Earlier optional names are tested on historical input, never on stripped current defaults.
   const legacy = PipelineConfig.parse({
-    ...current,
+    ...pipelineV12.config,
     budgets: {
-      ...current.budgets,
+      ...pipelineV12.config.budgets,
       turnLimits: {
         understand: 35,
         investigate: 35,

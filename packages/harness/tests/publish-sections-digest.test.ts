@@ -212,12 +212,14 @@ test("the digest holds its source, its obligations by unit handle, and verdict w
   expect(read.undecoded).toEqual([]);
 });
 
-// Why: a batch handed in without the new fields must publish the bytes e0ebb64d's build wrote,
-// whatever its uncertainty and limitations say, so no review in flight publishes differently. The
-// one move since is meant: code-built unit titles no longer name the lane (1cdaadba), and src/a.ts
-// has two units here, so their titles changed. With those titles put back the bytes are e0ebb64d's
-// (manifest d4b587dc…63c3, packet 01M7CMHXM0004JJ3H3PP0KS9VJ; checked in round 32).
-test("a batch without the new fields publishes the packet e0ebb64d wrote", async () => {
+// Historical code-publication input must reproduce its original bytes. This exercises the
+// retained publisher serializer in a scratch store, not old-version native/model admission.
+test("historical code-publication input preserves the packet e0ebb64d wrote", async () => {
+  const { default: pipelineV12 } = await import("./fixtures/pipeline-v12.json");
+  const { canonicalJson } = await import("@neuve/records-core");
+  const { PipelineConfig } = await import("../src/config.ts");
+  const historical = PipelineConfig.parse(pipelineV12.config);
+  expect(canonicalJson(historical)).toBe(canonicalJson(pipelineV12.config));
   const { a, b, c } = threeBatches();
   const withNotes = {
     ...a,
@@ -231,7 +233,10 @@ test("a batch without the new fields publishes the packet e0ebb64d wrote", async
   const result = await store.run(
     atTime(T)(
       Effect.gen(function* () {
-        const ctx = store.ctx({ runId: RUN, startedAt: T - 1_000 });
+        const ctx = {
+          ...store.ctx({ runId: RUN, startedAt: T - 1_000 }),
+          config: historical,
+        };
         const summary = yield* publishSettled(
           ctx,
           inputOf([withNotes, b, c], { ending: true }),
