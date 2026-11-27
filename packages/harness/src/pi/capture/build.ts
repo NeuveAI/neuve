@@ -574,21 +574,9 @@ const build = async (
   budget.onProgress = () => input.progress?.();
   budget.charge("units", 0);
   phase("source-census");
-  if (safety.requiresInspection && journal.tornLines > 0)
-    throw new DumpFailed({
-      reason:
-        "credential inspection cannot certify a torn journal; source retained privately, export refused",
-    });
-  if (safety.requiresInspection && backup.status.status !== "captured") {
-    if (lossEpochs.size > 0)
-      return withholdSource(
-        "credential registration was lost and the exact native backup is unavailable; export refused",
-      );
-    throw new DumpFailed({
-      reason:
-        "credential inspection requires an exact native backup; source retained privately, export refused",
-    });
-  }
+  const tornJournal = journal.tornLines > 0;
+  const exactBackup =
+    backup.status.status === "captured" && backup.bytes !== undefined;
   type CheckedSource = {
     readonly kind: import("./safety.ts").CredentialSource["kind"];
     readonly result: InspectionResult;
@@ -623,12 +611,16 @@ const build = async (
   >;
   let inventoryFinished = false;
   const kinds: Array<{ identity: string; kind: CheckedSource["kind"] }> = [];
-  if (authority !== undefined && safety.requiresInspection) {
+  if (authority !== undefined) {
     const sourceFrames = journal.frames;
     scanned = await authority.inspectSources({
       progress: (value) => {
         progress.inspection = value;
       },
+      shouldScan: (epochs) =>
+        (safety.requiresInspection || epochs.length > 0) &&
+        !tornJournal &&
+        exactBackup,
       sources: async (consume) => {
         try {
           await visitCredentialSources(
@@ -655,6 +647,28 @@ const build = async (
       ],
       budget,
     });
+  }
+  const authorityEpochs = scanned?.status === "inspected" ? scanned.epochs : [];
+  const requiresInspection =
+    safety.requiresInspection ||
+    authorityEpochs.length > 0 ||
+    scanned?.status === "unavailable";
+  if (requiresInspection && tornJournal)
+    throw new DumpFailed({
+      reason:
+        "credential inspection cannot certify a torn journal; source retained privately, export refused",
+    });
+  if (requiresInspection && !exactBackup) {
+    if (lossEpochs.size > 0)
+      return withholdSource(
+        "credential registration was lost and the exact native backup is unavailable; export refused",
+      );
+    throw new DumpFailed({
+      reason:
+        "credential inspection requires an exact native backup; source retained privately, export refused",
+    });
+  }
+  if (scanned !== undefined && requiresInspection) {
     if (scanned.status === "inspected") {
       const inspectedEpochs = new Set<string>(scanned.epochs);
       if ([...lossEpochs.values()].some((epoch) => !inspectedEpochs.has(epoch)))
@@ -685,7 +699,7 @@ const build = async (
   }
   phase("inventory");
   const sourceHashes = [...sources.keys()].toSorted();
-  const preliminary = !safety.requiresInspection
+  const preliminary = !requiresInspection
     ? { status: "certified" as const }
     : credentialInspection(
         input.runId,
@@ -705,6 +719,7 @@ const build = async (
     calls.push(callId);
     groups.set(epoch, calls);
   }
+  const requiredEpochs = [...new Set([...groups.keys(), ...authorityEpochs])];
   let lossCertificates: CredentialCertificate[] | undefined;
   let exposed = false;
   let inspectionRecord = 0;
@@ -718,7 +733,7 @@ const build = async (
         result.reason === "worker" || result.reason === "cancelled"
           ? result.reason
           : undefined,
-      reason: `durable credential inspection unavailable (${result.reason}${result.reason === "budget" ? `:${progress.inspection?.exhausted ?? budget.exhausted ?? "unknown"}` : result.reason === "private-store" ? `:${authority?.inspectionFailureCheck ?? "unknown"}` : ""}); inspection record ${record} (${kind}), required epochs ${groups.size}; source retained privately, export refused`,
+      reason: `durable credential inspection unavailable (${result.reason}${result.reason === "budget" ? `:${progress.inspection?.exhausted ?? budget.exhausted ?? "unknown"}` : result.reason === "private-store" ? `:${authority?.inspectionFailureCheck ?? "unknown"}` : ""}); inspection record ${record} (${kind}), required epochs ${requiredEpochs.length}; source retained privately, export refused`,
     });
   const inspect = async (
     source: import("./safety.ts").CredentialSource | CheckedSource,
@@ -737,11 +752,11 @@ const build = async (
       if (observed.length > 0) exposed = true;
       if (result.status !== "complete")
         throw unavailableInspection(result, record, source.kind);
-      const missing = [...groups.keys()].findIndex(
+      const missing = requiredEpochs.findIndex(
         (epoch) => !result.epochs.some((id) => id === epoch),
       );
       if (missing !== -1) {
-        const epoch = [...groups.keys()][missing];
+        const epoch = requiredEpochs[missing];
         const registration = lines.find(
           ({ event }) =>
             event.type === "credential.registration" && event.epochId === epoch,
@@ -781,7 +796,7 @@ const build = async (
       });
   };
   if (
-    safety.requiresInspection &&
+    requiresInspection &&
     (preliminary.status !== "certified" || scanned !== undefined)
   ) {
     try {
@@ -872,7 +887,7 @@ const build = async (
             kind: "json",
             json: CredentialJson.serialize(certificate),
           });
-      } else {
+      } else if (groups.size > 0) {
         const capture = openCaptureJournal(input.journal, input.runId, {
           limits,
         });
@@ -902,7 +917,7 @@ const build = async (
         );
       }
     } catch (error) {
-      if (exposed && lossEpochs.size === 0) {
+      if (exposed && lossEpochs.size === 0 && requiredCalls.size > 0) {
         const capture = openCaptureJournal(input.journal, input.runId, {
           limits,
         });
@@ -920,7 +935,7 @@ const build = async (
       }
       throw error;
     }
-    if (lossCertificates === undefined) {
+    if (lossCertificates === undefined && groups.size > 0) {
       journal = readCaptureJournal(input.journal, limits);
       if (journal._tag !== "Read")
         throw new DumpFailed({

@@ -31,7 +31,7 @@ import {
   CredentialDetectors,
   CredentialEpochId,
   type CredentialJson,
-  type InspectionBudget,
+  InspectionBudget,
   type InspectionResult,
   type InspectionUnavailable,
   type CredentialSource,
@@ -689,6 +689,15 @@ export class PrivateInspection {
     }
     if (this.exportState() !== "fresh") throw new NativeHistoryUncertified();
   }
+  hasCredentialEpochs(): boolean {
+    this.#assert();
+    const row = readState(this.#database, this.#source);
+    try {
+      return this.#engineFor(row, new InspectionBudget()).epochIds.length > 0;
+    } finally {
+      row.key.fill(0);
+    }
+  }
   async snapshotForNative(input: {
     readonly nativeDatabase: string;
     readonly nativeSha256: string;
@@ -1086,6 +1095,7 @@ export class PrivateInspection {
   /** One authenticated inventory, fenced against registration until every borrowed source is checked. */
   async inspectSources(input: {
     readonly sources: ReadonlyArray<CredentialSource> | SourceProducer;
+    readonly shouldScan?: (epochs: ReadonlyArray<CredentialEpochId>) => boolean;
     readonly progress?: (value: InspectionProgress) => void;
     readonly requiredEpochs: ReadonlyArray<string>;
     readonly budget: InspectionBudget;
@@ -1117,29 +1127,36 @@ export class PrivateInspection {
       try {
         row = readState(this.#database, this.#source, input.budget);
         const engine = this.#engineFor(row, input.budget);
+        const epochs = engine.epochIds;
         const sources = input.sources;
-        const results = await inspectInventory({
-          produce:
-            typeof sources === "function"
-              ? async (consume) =>
-                  sources(async (source) => {
-                    record++;
-                    await consume(source);
-                  })
-              : async (consume) => {
-                  for (const source of sources) await consume(source);
-                },
-          ...(typeof sources !== "function" && sources.length < 256
-            ? { width: 1 }
-            : {}),
-          engine,
-          key: row.key,
-          state: row.state,
-          budget: input.budget,
-          requiredEpochs: input.requiredEpochs,
-          observe: (epoch) => observed.add(epoch),
-          progress: input.progress,
-        });
+        const produce: SourceProducer =
+          typeof sources === "function"
+            ? async (consume) =>
+                sources(async (source) => {
+                  record++;
+                  await consume(source);
+                })
+            : async (consume) => {
+                for (const source of sources) await consume(source);
+              };
+        const results =
+          input.shouldScan?.(epochs) === false
+            ? []
+            : await inspectInventory({
+                produce,
+                ...(typeof sources !== "function" && sources.length < 256
+                  ? { width: 1 }
+                  : {}),
+                engine,
+                key: row.key,
+                state: row.state,
+                budget: input.budget,
+                requiredEpochs: [
+                  ...new Set([...input.requiredEpochs, ...epochs]),
+                ],
+                observe: (epoch) => observed.add(epoch),
+                progress: input.progress,
+              });
         record = results.length;
         this.#assert();
         this.#database.exec("COMMIT");
@@ -1158,7 +1175,7 @@ export class PrivateInspection {
         }
         return {
           status: "inspected",
-          epochs: engine.epochIds,
+          epochs,
           results,
           exposedEpochs: [...observed],
         };

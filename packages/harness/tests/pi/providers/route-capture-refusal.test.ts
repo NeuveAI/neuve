@@ -230,6 +230,7 @@ for (const scenario of [
       const runId = "restarted-channel";
       const captureDirectory = join(source, "capture");
       const hasReserve = scenario !== "no reserve";
+      const callCount = hasReserve ? 2 : 1;
       const writable = scenario === "registered" || scenario === "unregistered";
       const previous = openCaptureJournal(captureDirectory, runId, {
         ...(hasReserve ? { allowCredentialLoss: true } : {}),
@@ -320,26 +321,14 @@ for (const scenario of [
         });
         const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
         if (!model) throw new Error("Expected coding route model");
-        if (hasReserve) {
-          for (const result of [
-            await models.complete(model, prompt),
-            await models.complete(model, prompt),
-          ]) {
-            expect(result.stopReason).toBe("stop");
-            expect(result.content).toContainEqual(
-              expect.objectContaining({ type: "text", text: "Done." }),
-            );
-          }
-          expect(sent).toBe(2);
-        } else {
+        for (let index = 0; index < callCount; index++) {
           const result = await models.complete(model, prompt);
-          expect(result.errorMessage).toContain(
-            "The call stopped because a credential could slip through unrecorded.",
+          expect(result.stopReason).toBe("stop");
+          expect(result.content).toContainEqual(
+            expect.objectContaining({ type: "text", text: "Done." }),
           );
-          expect(routeFailureOf(result)).toMatchObject({ kind: "capture" });
-          expect(isRetryableAssistantError(result)).toBe(false);
-          expect(sent).toBe(0);
         }
+        expect(sent).toBe(callCount);
         expect(restarted.close).toThrow(
           expect.objectContaining({ event: "journal.open" }),
         );
@@ -361,7 +350,7 @@ for (const scenario of [
           kind: scenario === "registered" ? "full" : "io",
           reason: scenario === "registered" ? "journal limit" : "disk full",
         }));
-      expect(losses).toHaveLength(hasReserve ? 2 : 1);
+      expect(losses).toHaveLength(callCount);
       const openLoss = {
         sessionId: expect.any(String),
         event: "journal.open",
@@ -450,6 +439,60 @@ for (const scenario of [
               "credential exposure in exact source",
             );
           }
+        } else {
+          // The authority registered the call even though neither capture loss could be saved.
+          expect(readCaptureLosses(captureDirectory)).toEqual([]);
+          const location = storeLocationIn(join(directory, "records"));
+          const run = runIn(location);
+          const scan = async (source: Parameters<typeof captureRunDump>[0]) => {
+            const { capture } = value(await run(captureRunDump(source)));
+            value(await run(scanCaptures(location)));
+            return { capture, status: value(await run(scanStatus(capture))) };
+          };
+          const clean = await scan(input);
+          expect(clean.status.status).toBe("clean");
+          value(await run(readCapturedDump(clean.capture)));
+
+          const native = new Database(nativeDatabase);
+          try {
+            native.exec("CREATE TABLE synthetic_native_output (value TEXT)");
+            native
+              .query("INSERT INTO synthetic_native_output VALUES (?)")
+              .run("tok-1");
+          } finally {
+            native.close();
+          }
+          const exposed = await scan(input);
+          expect(exposed.status).toMatchObject({
+            status: "refused",
+            reason: expect.stringContaining(
+              "credential exposure in exact source",
+            ),
+          });
+          const root = join(directory, "datasets");
+          await mkdir(root);
+          const output = { root, retention: { policy: "synthetic" } };
+          expect(
+            (
+              await run(
+                exportCapturedDump({ ...output, capture: exposed.capture }),
+              )
+            )._tag,
+          ).toBe("Failure");
+          await expect(exportSnapshot({ ...input, ...output })).rejects.toThrow(
+            "credential exposure in exact source",
+          );
+          const unavailable = await scan({
+            journal: captureDirectory,
+            runId,
+            credentialInspection: inspection,
+          });
+          expect(unavailable.status).toMatchObject({
+            status: "refused",
+            reason: expect.stringContaining(
+              "credential inspection requires an exact native backup",
+            ),
+          });
         }
       }
     } finally {
@@ -458,7 +501,7 @@ for (const scenario of [
       ownership.release();
       await rm(directory, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 }
 
 for (const reserveWritable of [true, false]) {

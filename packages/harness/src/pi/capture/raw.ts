@@ -345,15 +345,15 @@ export const fileRawCapture = (input: BuildInput) =>
         event.type === "credential.registration" ||
         event.type === "credential.guard",
     );
+    const authority = input.credentialInspection;
     if (
       reserveRefusal === null &&
-      input.credentialInspection !== undefined &&
+      authority !== undefined &&
       native.bytes !== undefined &&
       native.status.status === "captured" &&
       journal._tag === "Read" &&
       journal.bytes !== null
     ) {
-      const authority = input.credentialInspection;
       const nativeBytes = native.bytes;
       const nativeSha256 = native.status.sha256;
       const journalSha256 = sha256Of(journal.bytes);
@@ -423,11 +423,18 @@ export const fileRawCapture = (input: BuildInput) =>
           );
         }),
       );
-    } else if (unscannable === null && needsInspection && !hasCaptureLoss)
-      unscannable =
-        native.bytes === undefined
-          ? "credential inspection requires an exact native backup; source retained privately, export refused"
-          : "historical credential authority is unavailable; source retained privately, export refused";
+    } else if (unscannable === null) {
+      const hasCredentialEpochs =
+        authority !== undefined &&
+        (yield* Effect.try(() => authority.hasCredentialEpochs()).pipe(
+          Effect.orElseSucceed(() => true),
+        ));
+      if (hasCredentialEpochs || (needsInspection && !hasCaptureLoss))
+        unscannable =
+          native.bytes === undefined
+            ? "credential inspection requires an exact native backup; source retained privately, export refused"
+            : "historical credential authority is unavailable; source retained privately, export refused";
+    }
     const manifest = RawCapture.parse({
       version: 1,
       runId: input.runId,
