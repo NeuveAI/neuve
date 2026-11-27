@@ -361,7 +361,7 @@ function useEditor(
 				agent: m.agent,
 				avatar: m.avatar,
 				action: (v) => {
-					insertMention(v, m.name, m.id, m.avatar);
+					insertMention(v, m.name, m.id, m.avatar, m.label);
 					onMention?.(m.name);
 				},
 			});

@@ -6,9 +6,24 @@ import { AGENT_ALIAS } from "./agent-mention";
 const TIME = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 const ROLES = { implementer: "Implementer", reviewer: "Reviewer" } as const;
 
-/** The name an agent goes by in its build: its role, and its part where it has one. */
-export function agentName({ role, part }: AgentName): string {
-	return part ? `${ROLES[role]} · ${part}` : ROLES[role];
+/**
+ * The name an agent goes by: its role, and its part where it has one, read short. A part that is a
+ * path goes by its last segment, and by as much more of the path as tells it from another agent of
+ * the same role among `others`.
+ */
+export function agentName({ role, part }: AgentName, others: readonly AgentName[] = []): string {
+	if (!part) return ROLES[role];
+	const parts = others.flatMap((other) => other.role === role && other.part && other.part !== part ? [other.part] : []);
+	const segments = part.split("/").filter(Boolean);
+	let short = part;
+	for (let n = 1; n < segments.length; n++) {
+		const tail = segments.slice(-n).join("/");
+		if (!parts.some((other) => other === tail || other.endsWith(`/${tail}`))) {
+			short = tail;
+			break;
+		}
+	}
+	return `${ROLES[role]} · ${short}`;
 }
 
 /** An agent's name as a mention token: its role, and its part where it has one. */
@@ -32,10 +47,13 @@ export function mentionable(builds: Build[]): Mention[] {
 	);
 	return agents.map(({ build, agent, name }) => {
 		const shared = agents.filter((other) => other.name === name).length > 1;
+		const line = lineView(agent, build.agents);
+		// The text carries the mention's name; its chip reads as the agent's line does.
 		return {
 			name,
+			label: line.name,
 			id: String(agent.chat),
-			agent: { ...lineView(agent), ...(shared ? { caption: build.plan.title } : {}) },
+			agent: { ...line, ...(shared ? { caption: build.plan.title } : {}) },
 		};
 	});
 }
@@ -58,12 +76,12 @@ export function readOnly(id: ChatId, chat: Chat | undefined, builds: Build[]): b
 	return !!chat?.build || builds.some((build) => build.agents.some((agent) => agent.chat === id));
 }
 
-export function lineView(agent: BuildAgent): AgentLineView {
+export function lineView(agent: BuildAgent, others: readonly AgentName[] = []): AgentLineView {
 	const caption = agent.state === "failed" && agent.failure ? failureCaption(agent.failure) : agent.caption;
 	return {
 		chat: agent.chat,
 		role: agent.role,
-		name: agentName(agent),
+		name: agentName(agent, others),
 		...(caption ? { caption } : {}),
 		state: agent.state,
 	};
@@ -99,7 +117,7 @@ export function buildView(build: Build, name: (author: string) => string): Build
 		...(title === undefined ? {} : { title }),
 		...(meta === undefined ? {} : { meta }),
 		...(tone ? { tone } : {}),
-		agents: agents.map(lineView),
+		agents: agents.map((agent) => lineView(agent, agents)),
 		stoppable: state.kind !== "stopped" && agents.some(alive),
 	});
 	const waiting = agents.some((agent) => agent.state === "waiting");
@@ -149,7 +167,7 @@ export function workEvents(builds: Build[], messages: WorkMessage[], topic: stri
 	return messages.flatMap((message, index) => {
 		const from = agents.get(message.from);
 		if (!from && !planners.has(message.from)) return [];
-		const recipient = agents.get(message.to)?.agent;
+		const recipient = agents.get(message.to);
 		const to = (!from || from.build.agents.length > 2) && recipient;
 		return [{
 			id: `${topic}::work:${index}`,
@@ -160,8 +178,8 @@ export function workEvents(builds: Build[], messages: WorkMessage[], topic: stri
 			sender: {
 				kind: "user",
 				value: agentAuthor(message.from),
-				display: from ? agentName(from.agent) : AGENT_ALIAS.label,
-				...(to ? { credit: `to ${agentName(to)}` } : {}),
+				display: from ? agentName(from.agent, from.build.agents) : AGENT_ALIAS.label,
+				...(to ? { credit: `to ${agentName(to.agent, to.build.agents)}` } : {}),
 			},
 			// Agents' talk names no one by text: no `@name` in it is drawn as a mention.
 			content: [{ type: "text", text: message.text, parts: [] }],

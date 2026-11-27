@@ -37,7 +37,7 @@ export function authorName(
 	agents?: ReadonlyMap<string, AgentName>,
 ): string {
 	const agent = agents?.get(author);
-	if (agent) return agentName(agent);
+	if (agent) return agentName(agent, [...agents!.values()]);
 	const source = channels.get(author);
 	if (source) return `#${source.name}`;
 	if (author.startsWith("agent@")) return author;
@@ -213,7 +213,7 @@ export function toEvents(
 		return {
 			kind: "agent",
 			value: self?.author ?? AGENT,
-			display: self ? agentName(self.agent) : AGENT_ALIAS.label,
+			display: self ? agentName(self.agent, [...agents.values()]) : AGENT_ALIAS.label,
 			...(value ? { credit: value } : {}),
 		};
 	};

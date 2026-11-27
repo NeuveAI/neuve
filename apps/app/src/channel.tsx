@@ -122,7 +122,7 @@ function workers(builds: Build[], open: ((chat?: number) => void) | undefined): 
 	return builds.flatMap((build) =>
 		build.agents.map((agent) => ({
 			id: `build:${agent.chat}`,
-			task: agentName(agent),
+			task: agentName(agent, build.agents),
 			state: agent.state,
 			...(open ? { open: () => open(agent.chat) } : {}),
 		}))

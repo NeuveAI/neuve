@@ -29,7 +29,7 @@ export function WorkLog({ channel, channels, user, chat, onChat, onOpen }: Props
 	const avatar = useAgentAvatar();
 	const list = builds?.list ?? [];
 	const agents = list.flatMap((build) => build.agents);
-	const lines = mainLines(list, info?.chats ?? [], avatar).concat(agents.map(lineView));
+	const lines = mainLines(list, info?.chats ?? [], avatar).concat(agents.map((agent) => lineView(agent, agents)));
 	const chosen = lines.find((line) => line.chat === chat);
 	const events = useMemo(
 		() => workEvents(builds?.list ?? [], builds?.messages ?? [], channel.id),
