@@ -622,7 +622,6 @@ const row = (
 
 const unconfirmed = { source: "lane-review", verify: "unconfirmed" } as const;
 const confirmed = { source: "lane-review", verify: "confirmed" } as const;
-const reviewConfirmed = { source: "lane-review", verify: "confirmed" } as const;
 const reviewRefuted = { source: "lane-review", verify: "refuted" } as const;
 
 export const OUTCOMES: ReadonlyArray<Outcome> = [
@@ -642,7 +641,7 @@ export const OUTCOMES: ReadonlyArray<Outcome> = [
   ),
   row(
     "assessed; Lane review requests changes on a confirmed defect",
-    { assess: "judged", review: "request-changes", claims: [reviewConfirmed] },
+    { assess: "judged", review: "request-changes", claims: [confirmed] },
     { lane: "human-required", undecided: null, verdict: "request-changes" },
   ),
   row(
@@ -682,7 +681,7 @@ export const OUTCOMES: ReadonlyArray<Outcome> = [
     {
       assess: "judged",
       review: "request-changes",
-      claims: [reviewConfirmed, unconfirmed],
+      claims: [confirmed, unconfirmed],
     },
     {
       lane: "human-required",
@@ -759,7 +758,7 @@ export const OUTCOMES: ReadonlyArray<Outcome> = [
   ),
   row(
     "Assess not judged; Lane review requests changes on a confirmed defect",
-    { assess: "failed", review: "request-changes", claims: [reviewConfirmed] },
+    { assess: "failed", review: "request-changes", claims: [confirmed] },
     {
       lane: "human-required",
       undecided: { cause: "failed", reading: "assess" },
