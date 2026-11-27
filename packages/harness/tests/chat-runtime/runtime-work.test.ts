@@ -313,9 +313,16 @@ test("a Codex chat with DevTools continues after a command and preserves overlap
     plugins: {
       httpTools: () => new Set(),
       nativeTool: (name) => name === browserTool,
-      nativeServers: () => ({
-        "chrome-devtools": { type: "stdio", command: "devtools-fixture" },
-      }),
+      nativeServers: (folder) =>
+        folder === undefined
+          ? undefined
+          : {
+              "chrome-devtools": {
+                type: "stdio",
+                command: "devtools-fixture",
+                args: [folder],
+              },
+            },
     },
   });
   run.pi.install(
@@ -444,7 +451,11 @@ test("a Codex chat with DevTools continues after a command and preserves overlap
     expect(opened[0]?.folder).toBe("/work/lane");
     expect(opened).toHaveLength(1);
     expect(opened[0]?.mcpServers).toEqual({
-      "chrome-devtools": { type: "stdio", command: "devtools-fixture" },
+      "chrome-devtools": {
+        type: "stdio",
+        command: "devtools-fixture",
+        args: ["/work/lane"],
+      },
     });
     expect(opened[0]?.tools.map((tool) => tool.name)).toEqual(["question"]);
     // A call the bridge did not record, as a model calling the tool would make, gets nothing.

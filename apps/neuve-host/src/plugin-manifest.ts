@@ -16,7 +16,10 @@ const server = z.union([
 ]);
 const variable = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const servers = z.record(name, server);
-const hostVariables = new Map([["ACE_BROWSER_PROFILE", () => join(config.home, "browser")]]);
+const hostVariables = new Map<string, (folder?: string) => string | undefined>([
+	["ACE_BROWSER_PROFILE", () => join(config.home, "browser")],
+	["ACE_CHAT_FOLDER", folder => folder],
+]);
 
 export type OAuthServer = { plugin: string; name: string; url: URL; headers?: Record<string, string>; apiKey?: string };
 export const loopback = (url: URL) => ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
@@ -77,9 +80,10 @@ export type PluginServer = z.output<typeof server>;
 export const pluginEnabled = (plugin: Plugin, preferences: z.output<typeof PluginPreferences>) =>
 	preferences[plugin.name] ?? plugin.defaultEnabled;
 
-export function expandPluginValue(value: string, credentials: ReadonlyMap<string, string>): string {
+export function expandPluginValue(value: string, credentials: ReadonlyMap<string, string>, folder?: string): string {
 	return value.replace(variable, (_, name: string) => {
-		const resolved = hostVariables.get(name)?.() ?? credentials.get(name);
+		const hostValue = hostVariables.get(name);
+		const resolved = hostValue ? hostValue(folder) : credentials.get(name);
 		if (resolved === undefined) throw new Error(`Missing plugin variable ${name}`);
 		return resolved;
 	});

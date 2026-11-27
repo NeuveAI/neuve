@@ -125,7 +125,7 @@ const requestMode = "neuve.chat.request-mode";
 
 export type PluginOffers = {
 	httpTools(): ReadonlySet<string>;
-	nativeServers?(): SessionPolicy["mcpServers"];
+	nativeServers?(folder?: string): SessionPolicy["mcpServers"];
 	nativeTool?(name: string): boolean;
 };
 
@@ -165,9 +165,9 @@ export function planModeModels(
 			if (mode === "plan" || offer.toolsRemoved?.length) messages.push(offer);
 		}
 		const pluginTools = mode === "ace" ? plugins?.httpTools() : undefined;
-		const mcpServers = mode === "ace" && keepAttendance ? plugins?.nativeServers?.() : undefined;
-		const streamOptions = pluginTools?.size || mcpServers
-			? { ...options, [sandboxPluginTools]: pluginTools, [nativePluginServers]: mcpServers }
+		const nativeServers = mode === "ace" && keepAttendance ? plugins?.nativeServers : undefined;
+		const streamOptions = pluginTools?.size || nativeServers
+			? { ...options, [sandboxPluginTools]: pluginTools, [nativePluginServers]: nativeServers }
 			: options;
 		const stream = models.streamSimple(model, { ...request, messages }, streamOptions);
 		return new Proxy(stream, {

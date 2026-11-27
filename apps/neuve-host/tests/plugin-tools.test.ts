@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Channel, type Fields } from "@ace/channel";
@@ -15,22 +16,31 @@ import { chromeDevToolsPlugin, expandPluginValue, PluginManifest, secretName } f
 import { pluginTools } from "../src/plugin-tools";
 import { config } from "../src/config";
 
-test("Chrome DevTools uses the host profile without a credential and is enabled by default", async () => {
+test("Chrome DevTools resolves both host folders without a credential and alone gets a workspace argument", async () => {
 	const home = config.home;
-	const plugins = pluginTools(() => {}, [chromeDevToolsPlugin], () => ({}));
+	const plugin = {
+		...chromeDevToolsPlugin,
+		servers: { ...chromeDevToolsPlugin.servers, plain: { type: "stdio" as const, command: "plain-server", args: ["--identify"] } },
+	};
+	const plugins = pluginTools(() => {}, [plugin], () => ({}));
 	try {
 		config.home = "/Volumes/Example Drive/ace";
+		const folder = realpathSync(import.meta.dir);
 		expect(chromeDevToolsPlugin.variables.size).toBe(0);
 		expect(chromeDevToolsPlugin.credentials.size).toBe(0);
 		expect(secretName("ACE_BROWSER_PROFILE")).toBe(false);
-		expect(plugins.nativeServers?.()).toEqual({
+		expect(plugins.nativeServers?.(folder)).toEqual({
 			"chrome-devtools": {
 				type: "stdio", command: "npx", args: [
 					"-y", "chrome-devtools-mcp@1.14.0", "--autoConnect", "--userDataDir",
-					join(config.home, "browser"), "--experimentalScreencast", "--no-usage-statistics", "--no-performance-crux",
+					join(config.home, "browser"), `--workspace=${folder}`,
+					"--experimentalScreencast", "--no-usage-statistics", "--no-performance-crux",
 				],
 			},
+			plain: { type: "stdio", command: "plain-server", args: ["--identify"] },
 		});
+		expect(plugins.nativeServers?.()).toBeUndefined();
+		expect(plugins.nativeServers?.("/")).toBeUndefined();
 	} finally {
 		config.home = home;
 		await plugins.close();
@@ -40,7 +50,7 @@ test("Chrome DevTools uses the host profile without a credential and is enabled 
 test("the native session policy reopens when Chrome DevTools changes and withholds it for Plan and attended chats", async () => {
 	const plugins = pluginTools(() => {}, [chromeDevToolsPlugin], () => ({}));
 	try {
-		const mcpServers = plugins.nativeServers?.();
+		const mcpServers = plugins.nativeServers?.(import.meta.dir);
 		const plan = { role: "system" as const, content: "", timestamp: 0,
 			[Symbol.for("neuve.chat.plan-request")]: true };
 		for (const ownTools of [true, false]) {
@@ -125,10 +135,11 @@ import { createInterface } from "node:readline";
 const send = message => console.log(JSON.stringify({ jsonrpc: "2.0", ...message }));
 let roots;
 let pending;
+const workspace = process.argv.find(arg => arg.startsWith("--workspace="));
 const screenshot = (id, { oversized }) => {
 	const data = oversized ? Buffer.alloc(900_001).toString("base64") : "aA==";
 	send({ id, result: { content: [
-		{ type: "image", mimeType: "image/png", data }, { type: "text", text: JSON.stringify(roots) },
+		{ type: "image", mimeType: "image/png", data }, { type: "text", text: JSON.stringify({ roots, workspace }) },
 	] } });
 };
 for await (const line of createInterface({ input: process.stdin })) {
@@ -153,11 +164,17 @@ for await (const line of createInterface({ input: process.stdin })) {
 }
 `;
 
+const devtoolsServer = chromeDevToolsPlugin.servers["chrome-devtools"];
+const workspaceArg = devtoolsServer?.type === "stdio" && devtoolsServer.args?.find(arg => arg.startsWith("--workspace="));
+if (!workspaceArg) throw new Error("Missing the DevTools workspace argument");
 const screenshotPlugin = PluginManifest.parse({
 	manifest: { name: "chrome-devtools", description: "Fixture", defaultEnabled: true },
-	mcp: { "chrome-devtools": { command: process.execPath, args: ["--no-env-file", "--eval", screenshotServer] } },
+	mcp: { "chrome-devtools": { command: process.execPath, args: ["--no-env-file", "--eval", screenshotServer, "--", workspaceArg] } },
 });
 
+const screenshotText = (folder: string) => JSON.stringify({
+	roots: [{ uri: pathToFileURL(folder).href }], workspace: `--workspace=${folder}`,
+});
 async function screenshotTurn(channel: Fixture, mode: "ace" | "plan", attended: boolean, args?: { oversized?: boolean }) {
 	const tool = "chrome-devtools_take_screenshot";
 	const offer = Promise.withResolvers<boolean>();
@@ -187,7 +204,7 @@ test("pi offers scoped Chrome DevTools to agents and delivers images and the cha
 			offered: true,
 			result: [
 				{ type: "image", data: "aA==", mimeType: "image/png" },
-				{ type: "text", text: JSON.stringify([{ uri: pathToFileURL(channel.lane.path).href }]) },
+				{ type: "text", text: screenshotText(channel.lane.path) },
 			],
 		});
 		const attended = await screenshotTurn(channel, "ace", true, {});
@@ -199,7 +216,7 @@ test("pi offers scoped Chrome DevTools to agents and delivers images and the cha
 		});
 		expect((await screenshotTurn(channel, "plan", false)).offered).toBe(false);
 		preference = { "chrome-devtools": false };
-		expect(plugins.nativeServers?.()).toBeUndefined();
+		expect(plugins.nativeServers?.(channel.lane.path)).toBeUndefined();
 		expect((await screenshotTurn(channel, "ace", false)).offered).toBe(false);
 	} finally {
 		await channel.dispose();
@@ -214,7 +231,7 @@ test("pi drops an oversized plugin image and keeps the text with a filePath hint
 		expect(result?.map(block => block.type)).toEqual(["text"]);
 		expect(result).toEqual([{
 			type: "text",
-			text: JSON.stringify([{ uri: pathToFileURL(channel.lane.path).href }])
+			text: screenshotText(channel.lane.path)
 				+ "\nAn image was too large to include. Save it to a file with filePath.",
 		}]);
 	} finally {

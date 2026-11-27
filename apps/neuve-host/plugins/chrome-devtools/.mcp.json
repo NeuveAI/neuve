@@ -5,7 +5,7 @@
 			"command": "npx",
 			"args": [
 				"-y", "chrome-devtools-mcp@1.14.0",
-				"--autoConnect", "--userDataDir", "${ACE_BROWSER_PROFILE}",
+				"--autoConnect", "--userDataDir", "${ACE_BROWSER_PROFILE}", "--workspace=${ACE_CHAT_FOLDER}",
 				"--experimentalScreencast", "--no-usage-statistics", "--no-performance-crux"
 			]
 		}

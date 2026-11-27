@@ -1,5 +1,5 @@
-import { homedir } from "node:os";
-import { realpath } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { realpathSync } from "node:fs";
 import { isAbsolute, parse } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -24,22 +24,33 @@ const MCP_TEXT_LIMIT = 4096;
 const MAX_IMAGE_BYTES = 900_000;
 const request = globalThis.fetch;
 
-const expandValues = (fields: Record<string, string> | undefined, credentials: ReadonlyMap<string, string>) =>
-	Object.fromEntries(Object.entries(fields ?? {}).map(([name, value]) => [name, expandPluginValue(value, credentials)]));
+const expandValues = (fields: Record<string, string> | undefined, credentials: ReadonlyMap<string, string>, folder?: string) =>
+	Object.fromEntries(Object.entries(fields ?? {}).map(([name, value]) => [name, expandPluginValue(value, credentials, folder)]));
 
-function stdio(config: Extract<PluginServer, { type: "stdio" }>, credentials: ReadonlyMap<string, string>): McpStdioServer {
+function chatFolder(folder: string | undefined): string | undefined {
+	if (!folder || !isAbsolute(folder)) return;
+	try {
+		const canonical = realpathSync(folder);
+		if (parse(canonical).root !== canonical) return canonical;
+	} catch {
+		return;
+	}
+}
+
+function stdio(config: Extract<PluginServer, { type: "stdio" }>, credentials: ReadonlyMap<string, string>, folder?: string): McpStdioServer {
+	const expand = (value: string) => expandPluginValue(value, credentials, folder);
 	return {
 		type: "stdio",
-		command: expandPluginValue(config.command, credentials),
-		...(config.args && { args: config.args.map(value => expandPluginValue(value, credentials)) }),
-		...(config.env && { env: expandValues(config.env, credentials) }),
+		command: expand(config.command),
+		...(config.args && { args: config.args.map(expand) }),
+		...(config.env && { env: expandValues(config.env, credentials, folder) }),
 	};
 }
 
-function transport(config: PluginServer, credentials: ReadonlyMap<string, string>, cwd = homedir()) {
+function transport(config: PluginServer, credentials: ReadonlyMap<string, string>, folder?: string) {
 	if (config.type === "stdio") return new StdioClientTransport({
-		...stdio(config, credentials),
-		cwd,
+		...stdio(config, credentials, folder),
+		cwd: folder ?? homedir(),
 		stderr: "ignore",
 	});
 	const url = new URL(expandPluginValue(config.url, credentials));
@@ -89,16 +100,16 @@ async function connect(
 			const oauth = plugin.oauth.get(server);
 			const { client, transport: wire } = oauth ? pluginMcp(oauth, lookup) : {
 				client: new Client({ name: "ace", version: "1" }),
-				transport: transport(config, credentials),
+				// Discovery only lists tools, so a chat-scoped server gets only the temporary directory here.
+				transport: transport(config, credentials, scoped ? chatFolder(tmpdir()) : undefined),
 			};
 			opened.set(client, { plugin: plugin.name });
 			connection.clients.add(client);
 			const chatClients = new Map<string, Client>();
 			const work = new SharedWork<Client>();
 			async function forChat({ conversationId, env }: ToolExecutionApi): Promise<Client> {
-				if (!env || !isAbsolute(env.cwd)) throw new Error("The chat has no working folder.");
-				const folder = await realpath(env.cwd);
-				if (parse(folder).root === folder) throw new Error("The chat has no working folder.");
+				const folder = chatFolder(env?.cwd);
+				if (!folder) throw new Error("The chat has no working folder.");
 				scopeSignal.throwIfAborted();
 				const key = JSON.stringify([conversationId, folder]);
 				const { outcome } = await work.run({ scope: "plugin.mcp.connect", key, run: async () => {
@@ -277,11 +288,12 @@ export function pluginTools(
 		},
 		ownsTool: name => prefixes.some(prefix => name.startsWith(prefix)),
 		nativeTool: name => Object.keys(chromeDevToolsPlugin.servers).some(server => name.startsWith(`${server}_`)),
-		nativeServers() {
+		nativeServers(cwd) {
+			const folder = chatFolder(cwd);
 			const plugin = plugins.find(browserPlugin);
-			if (!plugin || !pluginEnabled(plugin, preferences())) return;
+			if (!folder || !plugin || !pluginEnabled(plugin, preferences())) return;
 			return Object.fromEntries(Object.entries(plugin.servers).flatMap(([name, server]) =>
-				server.type === "stdio" ? [[name, stdio(server, new Map())]] : [],
+				server.type === "stdio" ? [[name, stdio(server, new Map(), folder)]] : [],
 			));
 		},
 		httpTools() {

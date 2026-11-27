@@ -318,8 +318,6 @@ export class ChatRuntimeBridge {
     const requested = normalizeContext(context).messages;
     const pluginTools: unknown =
       options && Reflect.get(options, sandboxPluginTools);
-    const mcpServers: SessionPolicy["mcpServers"] =
-      options && Reflect.get(options, nativePluginServers);
     const toolOffer = requested.find(
       (message): message is SystemMessage =>
         message.role === "system" && Object.hasOwn(message, planningRequest),
@@ -344,6 +342,10 @@ export class ChatRuntimeBridge {
       this.subscribe(known, stream, options?.signal);
       return stream;
     }
+    const nativeServers:
+      ((folder?: string) => SessionPolicy["mcpServers"]) | undefined =
+      options && Reflect.get(options, nativePluginServers);
+    const mcpServers = nativeServers?.(identity?.folder);
     const generation: Generation = {
       settled: false,
       selection,
