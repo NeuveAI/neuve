@@ -146,8 +146,8 @@ function ImageOpen(
 ) {
 	let [open, setOpen] = useState(false);
 	let [actual, setActual] = useState(false);
-	// Only inline images can be read back without the source's CORS consent.
-	let inline = src.startsWith("data:");
+	// Only inline and same-origin images can be read back without the source's CORS consent.
+	let readable = src.startsWith("data:") || new URL(src, location.href).origin === location.origin;
 	let show = () => {
 		setActual(false);
 		setOpen(true);
@@ -169,14 +169,14 @@ function ImageOpen(
 						<IconExpand />
 						Open Image
 					</ContextMenuItem>
-					{inline && <CopyImage src={src} />}
+					{readable && <CopyImage src={src} />}
 				</ContextMenuContent>
 			</ContextMenu>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="top-4 w-fit max-w-[calc(100vw-2rem)] p-0 [--dialog-top:1rem] sm:max-w-[calc(100vw-2rem)]">
 					<DialogTitle className="sr-only">{alt || "Image"}</DialogTitle>
-					{/* Remote images have no items, so the menu stays closed and only the native one is suppressed. */}
-					<ContextMenu disabled={!inline}>
+					{/* Cross-origin images have no items, so the menu stays closed and only the native one is suppressed. */}
+					<ContextMenu disabled={!readable}>
 						<ContextMenuTrigger
 							render={<img src={src} alt={alt} />}
 							className={actual
