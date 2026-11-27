@@ -53,9 +53,16 @@ test("tool images stay in storage during live delivery and replay", async () => 
 	expect(live.of("message")[0]?.images).toEqual([image]);
 	await live.stop();
 
+	const textPath = join(fixture.lane.path, "README.md");
+	await writeFile(textPath, "This result has no image.");
+	fixture.script(tool("read", { path: textPath }, "call/image"), fauxAssistantMessage("Read the text"));
+	const repeated = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Read a text file" });
+	expect(await settled(fixture, repeated.submission)).toBe("done");
+
 	await fixture.restart();
 	const watch = await fixture.watch();
 	expect(watch.of("result")).toContainEqual(expected);
+	expect(watch.of("result").filter(event => event.call === "call/image")).toHaveLength(2);
 	expect(watch.of("message")[0]?.images).toEqual([image]);
 	const request = { op: "tool-image", chat: 1, call: "call/image", index: 0 } as const;
 	expect(await fixture.request(request)).toEqual(image);

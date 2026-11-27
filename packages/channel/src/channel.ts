@@ -263,6 +263,7 @@ export class Channel {
 	#publishedBusy?: boolean;
 	#unsubscribe?: () => void;
 	#unbind?: () => void;
+	#resuming?: Promise<void>;
 	#closed?: Promise<void>;
 	#feed?: { close(): Promise<void>; pending(): boolean };
 	#backgroundTasks = new Set<Promise<void>>();
@@ -625,21 +626,28 @@ export class Channel {
 			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
-		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
-		if (options.resume !== false) {
-			if (options.prepareModels && await channel.#hasRecoverableWork()) {
-				const resuming = options.prepareModels().then(() => {
-					if (!channel.#closing.signal.aborted) return channel.#resumeWork();
-				});
-				channel.#resuming = resuming;
-				channel.#backgroundTasks.add(resuming);
-				void resuming.catch(error => log("error", "channel.resume.failed", failure(error))).finally(() => {
-					channel.#backgroundTasks.delete(resuming);
-				});
-			} else {
-				await channel.#resumeWork();
-			}
+		const prepareModels = options.resume !== false && options.prepareModels;
+		const deferred = prepareModels && await channel.#hasRecoverableWork();
+		const feed = Promise.resolve().then(async () => {
+			channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
+		});
+		if (prepareModels && deferred) {
+			const resuming = feed.then(() => prepareModels.call(options)).then(() => {
+				if (!channel.#closing.signal.aborted) return channel.#resumeWork();
+			});
+			channel.#resuming = resuming;
+			channel.#backgroundTasks.add(resuming);
+			void resuming.then(() => {
+				channel.#resuming = undefined;
+			}, error => {
+				void channel.close().catch(cleanup => log("error", "channel.close.failed", failure(cleanup)));
+				log("error", "channel.resume.failed", failure(error));
+			}).finally(() => {
+				channel.#backgroundTasks.delete(resuming);
+			});
 		}
+		await feed;
+		if (options.resume !== false && !deferred) await channel.#resumeWork();
 		log("info", "channel.open", { name: value.name, project: options.project });
 		return channel;
 		} catch (error) {
@@ -681,6 +689,9 @@ export class Channel {
 		}
 	}
 
+	/** Background recovery, which the worker observes to retire a channel that failed to open. */
+	get recovered(): Promise<void> | undefined { return this.#resuming; }
+
 	/** Runs a client request, logging its outcome with the caller's `trace` id. */
 	async handle(request: Request, send: Send, trace?: string): Promise<unknown> {
 		if (this.#closed) throw new Error("The channel is shutting down");
@@ -694,6 +705,10 @@ export class Channel {
 			...("model" in request && request.model ? { model: request.model } : {}),
 		};
 		try {
+			if (this.#resuming && request.op !== "watch" && request.op !== "info" && request.op !== "models" && request.op !== "tool-image") {
+				await this.#resuming;
+				if (this.#closed) throw new Error("The channel is shutting down");
+			}
 			const value = await this.#handle(request, send);
 			// Watches and polls are constant traffic; their failures still log below.
 			const level = request.op === "watch" || request.op === "info" || request.op === "models"
@@ -716,10 +731,8 @@ export class Channel {
 			case "models":
 				return this.#modelSettings.listed();
 			case "say":
-				await this.#resuming;
 				return this.#admitted(request.chat, () => this.#say(request));
 			case "ask":
-				await this.#resuming;
 				return this.#ask(request);
 			case "select":
 				return this.#admitted(request.chat, () => this.#pick(request));
@@ -779,7 +792,6 @@ export class Channel {
 			case "plan-comment-edit":
 			case "plan-comment-remove":
 			case "plan-comments-send":
-				if (request.op === "plan-comments-send") await this.#resuming;
 				return this.#admitted(request.chat, async settled => {
 					const conversation = await this.#writableChat(request.chat);
 					this.#author(request.author);
@@ -813,7 +825,6 @@ export class Channel {
 					: remove(this.#harness, id, entry, request.author, context);
 			}
 			case "stop": {
-				await this.#resuming;
 				this.#author(request.author);
 				// Whoever can't start a run here can't end the owner's either.
 				await this.#mayInvoke(request.author);
@@ -822,7 +833,6 @@ export class Channel {
 					? { by: request.author, at: Date.now() } : undefined);
 			}
 			case "build-stop":
-				await this.#resuming;
 				this.#author(request.author);
 				if (room.isAgent(request.author)) throw new Error("Only a person can stop the plan's agents.");
 				await this.#mayInvoke(request.author);
@@ -869,7 +879,6 @@ export class Channel {
 				return patch(env(cwd), cwd, project, lane?.base, request.file, request.state, context);
 			}
 			case "wait": {
-				await this.#resuming;
 				const submission = await this.#harness.submission(
 					request.submission as SubmissionId,
 					context,
@@ -1141,7 +1150,8 @@ export class Channel {
 
 	/** `author`'s kill records a Stop in each chat it ended, so their next runs know. */
 	async kill(author?: string): Promise<void> {
-		await this.#resuming?.catch(() => {});
+		await this.#resuming;
+		if (this.#closed) throw new Error("The channel is shutting down");
 		const { chats } = await this.info();
 		const busy = chats.filter((chat) => chat.busy);
 		this.#log("warn", "channel.kill", { chats: busy.map((c) => c.id) });
@@ -1426,6 +1436,7 @@ export class Channel {
 	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit: () => boolean): Promise<Submission | undefined>;
 	async submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
 		await this.#resuming;
+		if (this.#closed) throw new Error("The channel is shutting down");
 		return this.#admitted(handle.id, async () => {
 			if (canSubmit?.() === false) return;
 			await this.#options.prepareModels?.();
@@ -1599,14 +1610,12 @@ export class Channel {
 		for (const chat of chats) await this.#placeChatLane(chat, context);
 	}
 
-	#resuming: Promise<void> | undefined;
-
 	async #hasRecoverableWork(): Promise<boolean> {
 		return this.#harness.commit(async tx => {
 			for (const status of ["pending", "running", "waiting"] as const) {
 				if ((await tx.scanTasks({ status, abortRequested: false }, 1)).items.length) return true;
 			}
-			return false;
+			return (await this.#options.storage.scanSubmissions({ status: "queued" }, 1, undefined, context)).items.length > 0;
 		}, context);
 	}
 
@@ -1615,6 +1624,7 @@ export class Channel {
 		await this.#builds.reconcileRuns();
 		await this.#builds.recoverMentionEntries();
 		await this.#placeResumingChats();
+		if (this.#closing.signal.aborted) return;
 		this.#harness.resume();
 		void this.#builds.resume();
 	}
@@ -1948,7 +1958,6 @@ export class Channel {
 				if (entry.conversationId !== chat || message?.role !== "toolResult" || message.toolCallId !== call) continue;
 				const image = room.images(message)?.[index];
 				if (image) return image;
-				throw new Error("No such tool image");
 			}
 			cursor = page.next;
 		} while (cursor !== undefined);
