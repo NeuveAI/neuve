@@ -1,0 +1,10 @@
+{
+	"name": "chrome-devtools",
+	"version": "1.14.0",
+	"description": "Inspect and automate Ace's dedicated development browser.",
+	"author": { "name": "Google Chrome", "url": "https://developer.chrome.com/" },
+	"repository": "https://github.com/ChromeDevTools/chrome-devtools-mcp",
+	"license": "Apache-2.0",
+	"interface": { "displayName": "Chrome DevTools" },
+	"defaultEnabled": true
+}

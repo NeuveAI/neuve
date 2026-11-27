@@ -1,7 +1,11 @@
+import { join } from "node:path";
 import { z } from "zod";
 
+import chromeDevTools from "../plugins/chrome-devtools/.claude-plugin/plugin.json" with { type: "json" };
+import chromeDevToolsMcp from "../plugins/chrome-devtools/.mcp.json" with { type: "json" };
 import linear from "../plugins/linear/.claude-plugin/plugin.json" with { type: "json" };
 import linearMcp from "../plugins/linear/.mcp.json" with { type: "json" };
+import { config } from "./config";
 
 const name = z.string().regex(/^[A-Za-z0-9_-]+$/);
 export const PluginPreferences = z.record(name, z.boolean());
@@ -12,6 +16,7 @@ const server = z.union([
 ]);
 const variable = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const servers = z.record(name, server);
+const hostVariables = new Map([["ACE_BROWSER_PROFILE", () => join(config.home, "browser")]]);
 
 export type OAuthServer = { plugin: string; name: string; url: URL; headers?: Record<string, string>; apiKey?: string };
 export const loopback = (url: URL) => ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
@@ -28,6 +33,7 @@ export const PluginManifest = z.strictObject({
 		keywords: z.array(z.string()).optional(),
 		mcpServers: servers.optional(),
 		interface: z.strictObject({ displayName: z.string().trim().min(1) }).optional(),
+		defaultEnabled: z.boolean().default(false),
 		apiKey: z.record(name, z.string().regex(/^[A-Z_][A-Z0-9_]*$/)).optional(),
 	}),
 	mcp: z.union([z.strictObject({ mcpServers: servers }).transform(({ mcpServers }) => mcpServers), servers]).optional(),
@@ -40,7 +46,7 @@ export const PluginManifest = z.strictObject({
 			? [config.url, ...Object.values(config.headers ?? {})]
 			: [config.command, ...(config.args ?? []), ...Object.values(config.env ?? {})];
 		const names = fields.flatMap(field => [...field.matchAll(variable)].map(([, name]) => name));
-		for (const name of names) variables.add(name);
+		for (const name of names) if (!hostVariables.has(name)) variables.add(name);
 		if (config.type !== "http" || names.length
 			|| Object.keys(config.headers ?? {}).some(header => header.toLowerCase() === "authorization")) continue;
 		const url = URL.parse(config.url);
@@ -57,6 +63,7 @@ export const PluginManifest = z.strictObject({
 		name: manifest.name,
 		description: manifest.description,
 		displayName: manifest.interface?.displayName ?? manifest.name,
+		defaultEnabled: manifest.defaultEnabled,
 		servers: configured,
 		variables,
 		oauth,
@@ -67,16 +74,20 @@ export const PluginManifest = z.strictObject({
 export type Plugin = z.output<typeof PluginManifest>;
 export type PluginServer = z.output<typeof server>;
 
+export const pluginEnabled = (plugin: Plugin, preferences: z.output<typeof PluginPreferences>) =>
+	preferences[plugin.name] ?? plugin.defaultEnabled;
+
 export function expandPluginValue(value: string, credentials: ReadonlyMap<string, string>): string {
 	return value.replace(variable, (_, name: string) => {
-		const secret = credentials.get(name);
-		if (secret === undefined) throw new Error(`Missing plugin variable ${name}`);
-		return secret;
+		const resolved = hostVariables.get(name)?.() ?? credentials.get(name);
+		if (resolved === undefined) throw new Error(`Missing plugin variable ${name}`);
+		return resolved;
 	});
 }
 
 export const linearPlugin = PluginManifest.parse({ manifest: linear, mcp: linearMcp });
-export const carriedPlugins = [linearPlugin];
+export const chromeDevToolsPlugin = PluginManifest.parse({ manifest: chromeDevTools, mcp: chromeDevToolsMcp });
+export const carriedPlugins = [linearPlugin, chromeDevToolsPlugin];
 const pluginSecrets = new Set(carriedPlugins.flatMap(plugin =>
 	[...plugin.credentials].flatMap(name => [name, `ACE_${name}`]),
 ));

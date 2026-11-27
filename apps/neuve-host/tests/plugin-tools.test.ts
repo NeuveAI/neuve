@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Channel, type Fields } from "@ace/channel";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
@@ -6,11 +8,55 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Effect } from "effect";
 
 import { Fixture, OWNER } from "../../../packages/channel/tests/helpers";
-import { policy } from "../../../packages/harness/src/chat-runtime/transcript";
+import { policy, policyKey } from "../../../packages/harness/src/chat-runtime/transcript";
 import { fauxNonTurnModels } from "./fixtures/non-turn-models";
 import { serveOAuthFixture } from "./fixtures/oauth-http";
-import { expandPluginValue, PluginManifest } from "../src/plugin-manifest";
+import { chromeDevToolsPlugin, expandPluginValue, PluginManifest, secretName } from "../src/plugin-manifest";
 import { pluginTools } from "../src/plugin-tools";
+import { config } from "../src/config";
+
+test("Chrome DevTools uses the host profile without a credential and is enabled by default", async () => {
+	const home = config.home;
+	const plugins = pluginTools(() => {}, [chromeDevToolsPlugin], () => ({}));
+	try {
+		config.home = "/Volumes/Example Drive/ace";
+		expect(chromeDevToolsPlugin.variables.size).toBe(0);
+		expect(chromeDevToolsPlugin.credentials.size).toBe(0);
+		expect(secretName("ACE_BROWSER_PROFILE")).toBe(false);
+		expect(plugins.nativeServers?.()).toEqual({
+			"chrome-devtools": {
+				type: "stdio", command: "npx", args: [
+					"-y", "chrome-devtools-mcp@1.14.0", "--autoConnect", "--userDataDir",
+					join(config.home, "browser"), "--experimentalScreencast", "--no-usage-statistics", "--no-performance-crux",
+				],
+			},
+		});
+	} finally {
+		config.home = home;
+		await plugins.close();
+	}
+});
+
+test("the native session policy reopens when Chrome DevTools changes and withholds it for Plan and attended chats", async () => {
+	const plugins = pluginTools(() => {}, [chromeDevToolsPlugin], () => ({}));
+	try {
+		const mcpServers = plugins.nativeServers?.();
+		const plan = { role: "system" as const, content: "", timestamp: 0,
+			[Symbol.for("neuve.chat.plan-request")]: true };
+		for (const ownTools of [true, false]) {
+			const configured = { folder: import.meta.dir, ownTools, mcpServers };
+			const handle = () => Effect.succeed({ text: "" });
+			const on = policy([], handle, undefined, configured);
+			const off = policy([], handle, undefined, { ...configured, mcpServers: undefined });
+			expect(on.mcpServers?.["chrome-devtools"]?.command).toBe("npx");
+			expect(policyKey(on)).not.toBe(policyKey(off));
+			expect(policy([plan], handle, undefined, configured).mcpServers).toBeUndefined();
+			expect(policy([], handle, undefined, { ...configured, attended: true }).mcpServers).toBeUndefined();
+		}
+	} finally {
+		await plugins.close();
+	}
+});
 
 // The parser supplies a settings label and limits expansion to the credentials declared in the files.
 test("the manifest resolves the display name and restricts expansion to resolved credentials", () => {
@@ -71,6 +117,79 @@ for await (const line of createInterface({ input: process.stdin })) {
 	console.log(JSON.stringify({ jsonrpc: "2.0", id, result }));
 }
 `;
+
+// An MCP peer asks for roots during initialization and returns the scope with an inline image.
+const screenshotServer = String.raw`
+import { createInterface } from "node:readline";
+const send = message => console.log(JSON.stringify({ jsonrpc: "2.0", ...message }));
+let roots;
+let pending;
+const screenshot = id => send({ id, result: { content: [
+	{ type: "image", mimeType: "image/png", data: "aA==" }, { type: "text", text: JSON.stringify(roots) },
+] } });
+for await (const line of createInterface({ input: process.stdin })) {
+	const { id, method, params, result } = JSON.parse(line);
+	if (method === "initialize") {
+		roots = params.capabilities.roots ? null : [];
+		send({ id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } });
+	} else if (method === "notifications/initialized") {
+		if (roots === null) send({ id: "roots", method: "roots/list" });
+	} else if (id === "roots") {
+		roots = result.roots;
+		if (pending !== undefined) screenshot(pending);
+	} else if (method === "tools/list") {
+		send({ id, result: { tools: [{ name: "take_screenshot", inputSchema: { type: "object" } }] } });
+	} else if (method === "tools/call") {
+		if (roots === null) pending = id;
+		else screenshot(id);
+	}
+}
+`;
+
+test("pi offers scoped Chrome DevTools to agents and delivers images and the chat's roots", async () => {
+	const plugin = PluginManifest.parse({
+		manifest: { name: "chrome-devtools", description: "Fixture", defaultEnabled: true },
+		mcp: { "chrome-devtools": { command: process.execPath, args: ["--no-env-file", "--eval", screenshotServer] } },
+	});
+	let preference: Record<string, boolean> = {};
+	const plugins = pluginTools(() => {}, [plugin], () => preference);
+	const channel = await Fixture.create({ plugins });
+	const tool = "chrome-devtools_take_screenshot";
+	async function turn(mode: "ace" | "plan", attended: boolean, call = false) {
+		const offer = Promise.withResolvers<boolean>();
+		const blocks = Promise.withResolvers<unknown>();
+		channel.script(request => {
+			offer.resolve(getCurrentTools(request.messages).some(candidate => candidate.name === tool));
+			return call
+				? fauxAssistantMessage(fauxToolCall(tool, {}, { id: "screenshot" }), { stopReason: "toolUse" })
+				: fauxAssistantMessage("Done");
+		});
+		if (call) channel.script(request => {
+			const result = request.messages.findLast(item => item.role === "toolResult");
+			blocks.resolve(result?.content);
+			return fauxAssistantMessage("Done");
+		});
+		const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the browser", mode, attended });
+		expect(await channel.request({ op: "wait", submission })).toBe("done");
+		return { offered: await offer.promise, result: call ? await blocks.promise : undefined };
+	}
+	try {
+		expect(await turn("ace", false, true)).toEqual({
+			offered: true,
+			result: [
+				{ type: "image", data: "aA==", mimeType: "image/png" },
+				{ type: "text", text: JSON.stringify([{ uri: pathToFileURL(channel.lane.path).href }]) },
+			],
+		});
+		expect((await turn("ace", true)).offered).toBe(false);
+		expect((await turn("plan", false)).offered).toBe(false);
+		preference = { "chrome-devtools": false };
+		expect(plugins.nativeServers?.()).toBeUndefined();
+		expect((await turn("ace", false)).offered).toBe(false);
+	} finally {
+		await channel.dispose();
+	}
+});
 
 // Exercise the prompt from a real channel request and the bridge policy that consumes it.
 test("connected plugin guidance reaches pi and the bridged policy only while its tools are offered", async () => {

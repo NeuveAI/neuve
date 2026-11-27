@@ -1,5 +1,5 @@
 import planning from "../plugins/linear/planning.json" with { type: "json" };
-import { linearPlugin } from "./plugin-manifest";
+import { linearPlugin, pluginEnabled } from "./plugin-manifest";
 import { key } from "./keys";
 import { pluginCredential, pluginMcp } from "./plugin-oauth-client";
 
@@ -18,7 +18,7 @@ export function linearPlanningSource(plugin = linearPlugin) {
 		async available() {
 			try {
 				const { pluginPreferences } = await import("./preferences");
-				if (pluginPreferences()[plugin.name] !== true) return false;
+				if (!pluginEnabled(plugin, pluginPreferences())) return false;
 			} catch {
 				const { log } = await import("./log");
 				log("warn", "plugin.preferences.failed", { plugin: plugin.name });
