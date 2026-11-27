@@ -44,11 +44,11 @@ function transport(route: (url: URL, request: RequestInit) => Response | undefin
 		if (url.pathname === "/graphql" && String(init?.body).includes("reviewDecision")) {
 			return Response.json({ data: { node: { reviewDecision: "APPROVED" } } });
 		}
+		const served = route(url, init ?? {});
+		if (served) return served;
 		if (url.pathname.endsWith("/check-runs")) return Response.json({ check_runs: [] });
 		if (url.pathname.endsWith("/status")) return Response.json({ statuses: [] });
-		const served = route(url, init ?? {});
-		if (!served) throw new Error(`Unexpected request ${init?.method ?? "GET"} ${url}`);
-		return served;
+		throw new Error(`Unexpected request ${init?.method ?? "GET"} ${url}`);
 	}, { preconnect: () => {} }), async () => "fake");
 }
 
@@ -428,6 +428,10 @@ for (const forkOwner of ["maintainer", "owner"]) test(`a branch on ${forkOwner}'
 			return Response.json({ ahead_by: 1 });
 		}
 		if (url.pathname === `/repos/${repo}/pulls/9`) return Response.json({ ...pull, draft: false, mergeable_state: "clean" });
+		if (url.pathname.endsWith("/check-runs")) {
+			expect(url.pathname).toBe(`/repos/${repo}/commits/${head}/check-runs`);
+			return Response.json({ check_runs: [{ name: "CI", details_url: null, status: "completed", conclusion: "failure" }] });
+		}
 		if (url.pathname === `/repos/${repo}/pulls/9/merge`) {
 			expect(JSON.parse(String(request.body))).toEqual({ sha: head, merge_method: "squash" });
 			return Response.json({ message: "Pull request merged", merged: true });
@@ -442,7 +446,7 @@ for (const forkOwner of ["maintainer", "owner"]) test(`a branch on ${forkOwner}'
 		}, [repo, fork]);
 		const view = updates(readers, branch);
 		await until(() => view.values.at(-1)?.pull?.number === 9);
-		expect(view.values.at(-1)?.pull).toMatchObject({ sha: head, fork: true });
+		expect(view.values.at(-1)?.pull).toMatchObject({ sha: head, fork: true, checks: [{ name: "CI", state: "failed" }] });
 		await readers.merge(repo, branch, "plan", 9, head);
 		expect(view.values.at(-1)?.pull?.state).toBe("merged");
 		expect(paths.slice(-3)).toEqual([

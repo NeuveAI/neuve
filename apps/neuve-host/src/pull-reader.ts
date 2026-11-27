@@ -304,7 +304,7 @@ export class PullReaders {
 			})
 			: samePull?.pull.review;
 		const checks = value.state === "open"
-			? await this.github.checks(headRepo ?? repo, head, signal, cache)
+			? await this.github.checks(repo, head, signal, cache)
 			: samePull?.pull.checks ?? [];
 		signal.throwIfAborted();
 		if (reader.snapshot !== previous && terminal(reader.snapshot)) return reader.snapshot ?? null;
