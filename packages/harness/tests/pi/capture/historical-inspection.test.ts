@@ -50,7 +50,7 @@ for (const variant of [
             "durable credential inspection unavailable (unsupported)",
           );
           expect(result.reason).toMatch(
-            /inspection record [0-9]+ \((json|text|bytes)\), required epochs 1/,
+            /inspection record [0-9]+ \((json|text|bytes)\), required epochs 2/,
           );
         }
       }
