@@ -1097,6 +1097,7 @@ test("the coding worker answers after its capture journal cannot reopen", async 
     });
     try {
       const models = await restarted.models(worker, createModels());
+      await restarted.prepareModels?.(worker);
       const model = models.getModel(SOL_ROUTE.provider, SOL_ROUTE.model);
       if (!model) throw new Error("Expected coding route model");
       const answer = await models.complete(model, {

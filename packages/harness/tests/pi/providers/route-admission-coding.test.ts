@@ -138,6 +138,9 @@ test("actual worker setup shares a real 30-second floor across Channel generatio
   const native = worker(path);
   const fixture = await Fixture.create({
     models: await configured.models(native, nativeModels()),
+    prepareModels: async () => {
+      await configured.prepareModels?.(native);
+    },
     defaultModel: async () => model,
     nonTurnModels: (purpose, chat) =>
       configured.nonTurnModels!(native, purpose, chat, nativeModels()),
@@ -275,18 +278,20 @@ test("reopened native summarize reads persisted floor without a repeated compact
         ],
       }),
     );
-    const storage = await openWorkerStorage(configured, worker(path), () =>
+    const native = worker(path);
+    const storage = await openWorkerStorage(configured, native, () =>
       openNodeSqliteStorage(join(path, "channel.sqlite")),
     );
     const harness = await Harness.open(
       storage,
       {
-        models: await configured.models(worker(path), nativeModels()),
+        models: await configured.models(native, nativeModels()),
         registry,
         settings: { compaction: { keepRecentTokens: 1 } },
       },
       context,
     );
+    await configured.prepareModels?.(native);
     return {
       harness,
       configured,
@@ -566,6 +571,7 @@ test("cancellation while actual Models wait sends nothing, and persistence failu
   const native = worker(path);
   try {
     const models = await configured.models(native, nativeModels());
+    await configured.prepareModels?.(native);
     const selected = models.getModel("openai", SOL_ROUTE.model)!;
     const transcript = {
       messages: [
@@ -613,9 +619,10 @@ test("cancellation while actual Models wait sends nothing, and persistence failu
     );
   });
   try {
-    const models = await (
-      await setup(failedPath, failedEndpoint)
-    ).models(worker(failedPath), nativeModels());
+    const configured = await setup(failedPath, failedEndpoint);
+    const native = worker(failedPath);
+    const models = await configured.models(native, nativeModels());
+    await configured.prepareModels?.(native);
     const selected = models.getModel("openai", SOL_ROUTE.model)!;
     const transcript = {
       messages: [

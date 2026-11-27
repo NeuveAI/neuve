@@ -437,10 +437,6 @@ export async function workerStorage(id: string, stateDirectory: string, nativePa
 	const setup = runtimeHooks().worker;
 	return setup ? openWorkerStorage(setup, {sessionId: id, config, stateDirectory}, () => openNodeSqliteStorage(nativePath), nativePath) : openNodeSqliteStorage(nativePath);
 }
-export async function workerModels(id: string, stateDirectory: string, fallback: () => Models): Promise<Models> {
-	const setup = runtimeHooks().worker;
-	return setup ? setup.models({sessionId: id, config, stateDirectory}, fallback()) : fallback();
-}
 
 export async function bindWorkerCatalog(): Promise<void> {
 	if (runtimeHooks().worker) (await import("./catalog")).bind({home: config.home, user: config.user, local: config.channelScope === "local"});

@@ -63,6 +63,7 @@ try {
       const secret = request.headers.get("authorization").replace(/^Bearer /, "");
       return sse([created("safe-" + phase + readFileSync(token + ".count", "utf8").trim()), ...messageItem(0, "safe-" + phase + readFileSync(token + ".count", "utf8").trim(), "final_answer", phase === "echo" ? secret : "Safe response."), completed("safe-" + phase + readFileSync(token + ".count", "utf8").trim())]);
     });
+    await timed("setup.prepareModels", () => setup.prepareModels(worker));
     await timed("turn", async () => (await conversation.submit({ type: "input", content: "Safe input." }, context)).wait(context));
     await timed("harness.close", () => harness.close(context));
     if (phase === "crash") process.kill(process.pid, "SIGKILL");
@@ -155,9 +156,8 @@ finally {
         complete: true,
         turns: 1,
         requests: 0,
-        modelLists: 1,
-        // Each fresh worker leases once for its catalogue lookup.
-        leases: first.leases + cycle + 1,
+        modelLists: 0,
+        leases: first.leases,
         identity: first.identity,
       });
       expect(idle.before).toBe(idle.after);
@@ -168,6 +168,7 @@ finally {
       complete: true,
       turns: 2,
       requests: 1,
+      modelLists: 1,
     });
     expect(await run("idle")).toMatchObject({ ok: true, complete: true });
     expect(await run("mutate")).toMatchObject({ ok: true, complete: true });
