@@ -25,4 +25,6 @@ A default run lasts ten minutes and stops model work at 9:10. A cut-off retains 
 
 ## Retained boundaries
 
-Lookups read committed source and treat it as evidence. Records keeps published packets and retained computation outputs. A person's decision can carry to a unit with the same sections. The [proof requirements](../../process/decisions.md#area-11-verification-and-review-delivery-19-october-2026) govern what makes a requirement proven. A test's existence, or a test that calls changed code, gives a reviewer context. Proof requires evidence that meets the requirement.
+Lookups read committed source, keep bounded results and treat repository text as data. Agent retries and provider retries remain bounded. No stored computation or completed execution grants approval. The [proof requirements](../../process/decisions.md#area-11-verification-and-review-delivery-19-october-2026) still require applicable evidence to agree before anyone treats a requirement as proven. Missing evidence reaches readers as a gap. A test's existence, or a test that calls the changed code, is a hint shown to a model as context, never evidence: it lifts no gap, lowers no lane and settles nothing.
+
+Records keeps published packets and retained computation outputs. A person's decision can carry to a unit with the same sections.
