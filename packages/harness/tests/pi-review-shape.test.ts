@@ -15,6 +15,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { Effect } from "effect";
 import { AssembledBatch } from "../src/compose.ts";
 import type { StageRecord } from "../src/pipeline.ts";
+import { MARK } from "../src/pi/stages/agent.ts";
 import {
   runReview,
   textOf,
@@ -1124,6 +1125,96 @@ test("Lane review reads the caller after a large range in one tool call", async 
   });
   expect(result.outcome.status).toBe("completed");
   expect(sawCaller).toBe(true);
+}, 60_000);
+
+// A page can end before the caller. Lane review needs to read the continuation and still have
+// a turn left if its first submission is refused.
+test("Lane review follows a read_many continuation and can resubmit a refused answer", async () => {
+  const path = "src/retries.ts";
+  const caller = "src/schedule.ts";
+  const padding = Array.from(
+    { length: 450 },
+    (_, n) => `// ${n} ${"context ".repeat(12)}\n`,
+  ).join("");
+  const callerText = "export const schedule = () => retryLimit * 2;";
+  const untouched = {
+    [caller]: `import { retryLimit } from "./retries.ts";\n${callerText}\n`,
+  };
+  const checked = "The scheduler uses twice the retry limit.";
+  for (const refuseFirst of [false, true]) {
+    const fallback = answerer();
+    const result = await runReview({
+      directory: join(directory, `paged-caller-${refuseFirst}`),
+      base: {
+        [path]: `${padding}export const retryLimit = 1;\n`,
+        ...untouched,
+      },
+      head: {
+        [path]: `${padding}export const retryLimit = 2;\n`,
+        ...untouched,
+      },
+      message: "Raise the retry limit",
+      answer: (agent, messages, hunks) => {
+        if (!agent.startsWith("lane-review."))
+          return fallback(agent, messages, hunks);
+        const replies = messages.filter(
+          (message) => message.role === "toolResult",
+        );
+        const pages = replies.filter((reply) => reply.toolName === "read_many");
+        const call = (name: string, args: Parameters<typeof submit>[2]) =>
+          submit(`${agent}-${messages.length}`, name, args);
+        if (pages.length === 0)
+          return call("read_many", {
+            entries: [{ path }, { path: caller, startLine: 2, endLine: 2 }],
+          });
+        const page = pages.at(-1)?.content.find((part) => part.type === "text");
+        if (pages.length === 1) {
+          const continuation = page?.text.match(
+            /For the rest, ask read_many with entries (\[.*\])\]/,
+          )?.[1];
+          expect(page?.text).not.toContain(callerText);
+          if (continuation === undefined) throw new Error("Missing next page");
+          return call("read_many", { entries: JSON.parse(continuation) });
+        }
+        expect(page?.text).toContain(callerText);
+        const answer = {
+          files: [{ f: 1, checked, rows: null }],
+          sections: { a: [1], r: [], u: [] },
+          comments: [],
+          unsure: [],
+          notAsked: [],
+          crossBatchClaims: [],
+        };
+        const transcript = textOf(messages);
+        if (transcript.includes(MARK.final))
+          return fauxAssistantMessage(JSON.stringify(answer));
+        const refused = replies.some(
+          (reply) => reply.toolName === "submit_review",
+        );
+        return call(
+          "submit_review",
+          refuseFirst && !refused
+            ? { ...answer, sections: "approved" }
+            : answer,
+        );
+      },
+    });
+    if (result.outcome.status !== "completed")
+      throw new Error(`Review ${result.outcome.status}`);
+    const stages = result.outcome.result.stages.filter((stage) =>
+      stage.agent?.startsWith("lane-review."),
+    );
+    expect(stages.map((stage) => stage.agentResult)).toMatchObject([
+      {
+        status: "submitted",
+        endedBy: "submit",
+        turnsUsed: refuseFirst ? 4 : 3,
+      },
+    ]);
+    const stored = await result.read(stages[0]!.key!, LaneReviewStored);
+    expect(stored.answer.files).toEqual([{ f: 1, checked, rows: null }]);
+    expect(stored.answer.sections).toEqual({ a: [1], r: [], u: [] });
+  }
 }, 60_000);
 
 // The ending packet is already stored when retention appends the run-log row.

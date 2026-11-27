@@ -382,16 +382,16 @@ test("a backstop leaves every section not judged, and an answer missing one sect
 // the first probe run lost to a refused request; the extra turn lets the corrected answer come again
 // through the submit tool. Its cost must be known: the turn limits and retries are in the step's key
 // (as every step's are), and the worst case of model calls follows from them.
-test("Assess has two turns and Lane review three, one retry each, in their keys; the worst case is four and five calls", () => {
+test("Assess has two turns and Lane review four, one retry each, in their keys; the worst case is four and six calls", () => {
   const base = build();
   const assess = assessOf(base);
   const review = reviewOf(base, "Let callers count parsed items.");
   expect([assess.spec.turnLimit, assess.spec.retries]).toEqual([2, 1]);
-  expect([review.spec.turnLimit, review.spec.retries]).toEqual([3, 1]);
+  expect([review.spec.turnLimit, review.spec.retries]).toEqual([4, 1]);
   // Every turn (a sent-back answer, then a turn with no submission), then the final answer and one
   // refused final answer asked again: turnLimit + retries + 1.
   expect(worstCaseModelCalls(assess.spec)).toBe(4);
-  expect(worstCaseModelCalls(review.spec)).toBe(5);
+  expect(worstCaseModelCalls(review.spec)).toBe(6);
   // In each step's key, as every step's turn limit and retries are; another turn limit is another key.
   const keyed = [
     [

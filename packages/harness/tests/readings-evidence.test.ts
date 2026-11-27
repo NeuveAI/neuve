@@ -3255,20 +3255,16 @@ test("equal reading evidence shares step keys across runs, and changed evidence 
   );
   expect(keyOf(mixedAssess)).not.toBe(PARENT.assess);
   expect(keyOf(mixedReview)).not.toBe(PARENT.review);
-  // Restoring the parent recipe, prompt versions, stored version and offered input recovers the pins.
+  // Restoring the parent's prompt, budget and stored inputs recovers the pins.
   for (const [step, parent, back] of [
-    [mixedAssess, PARENT.assess, { by: 7 }],
-    [mixedReview, PARENT.review, { by: 9, answer: 4 }],
+    [mixedAssess, PARENT.assess, { opVersion: 6, turnLimit: 2 }],
+    [mixedReview, PARENT.review, { opVersion: 5, turnLimit: 3, answer: 4 }],
   ] as const)
     expect(
       keyOf({
         ...step,
-        // Rounds 6, 6e, 7, 7d and 10 each moved the prompt versions by one; round 9 by two, past
-        // the scope-and-tests variants' numbers. Round 15 added what the step is offered; round 17
-        // moved the stored version from 2 (the producer is stored with the output). The readers'
-        // round 30 moved Lane review's prompt by two more and its answer from 4 to 6 (each row's
-        // reading), past the variants' numbers.
-        opVersion: step.opVersion - back.by,
+        opVersion: back.opVersion,
+        spec: { ...step.spec, turnLimit: back.turnLimit },
         inputs: {
           ...withoutOffered(step).inputs,
           recipe: "neuve-reading-v3",

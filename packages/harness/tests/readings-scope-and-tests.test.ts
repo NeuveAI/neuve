@@ -291,9 +291,7 @@ test("every setting admits comprehensive readings while historical answers and p
       [
         review,
         {
-          // The readers' round 9 moved it from 10, past the variant's 11; round 30 from 12, past
-          // the variant's 13, and the answer from 4, past the variant's 5 (each row's reading).
-          opVersion: 14,
+          opVersion: 18,
           answer: 6,
           system: laneReviewSystem,
           schema: LaneReviewAnswer,
@@ -1100,7 +1098,7 @@ test("on, neither prompt nor reading shows the lane, the lane rule, or that an a
     on.review.opVersion,
     on.review.inputs["answer"],
     on.review.inputs["recipe"],
-  ]).toEqual([17, 8, READING_RECIPE_SCOPE_AND_TESTS]);
+  ]).toEqual([19, 8, READING_RECIPE_SCOPE_AND_TESTS]);
   expect(keyOf(on.assess)).not.toBe(keyOf(assessOf(src.id)));
   expect(keyOf(on.review)).not.toBe(keyOf(reviewOf(src.id)));
 });
