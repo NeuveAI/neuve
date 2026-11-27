@@ -89,6 +89,10 @@ export function pluginMcp(
 			&& Object.entries(value).some(([name, field]) => mask(name) !== name || exposesSecret(field));
 	}
 	const client = new (class extends Client {
+		override getInstructions() {
+			const text = super.getInstructions();
+			return text === undefined ? undefined : maskText(text);
+		}
 		override async listTools(...args: Parameters<Client["listTools"]>) {
 			const result = await super.listTools(...args);
 			return {

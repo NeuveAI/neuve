@@ -17,6 +17,7 @@ import { pluginPreferences } from "./preferences";
 const CONNECT = { timeout: 20_000 };
 const STARTUP_TIMEOUT = 10_000;
 const TOOL_NAME_LIMIT = 64 - "mcp__neuve__".length;
+const MCP_TEXT_LIMIT = 4096;
 const request = globalThis.fetch;
 
 function transport(config: PluginServer, credentials: ReadonlyMap<string, string>) {
@@ -58,9 +59,10 @@ async function connect(
 	signal: AbortSignal, opened: Map<Client, { plugin: string; closing?: Promise<void> }>,
 	close: (clients: Client[]) => Promise<void>,
 	disconnected: (connection: Connection) => void,
-): Promise<{ connection: Connection; tools: ToolRegistration[] } | undefined> {
+): Promise<{ connection: Connection; tools: ToolRegistration[]; instructions: string[] } | undefined> {
 	const connection: Connection = { credentials, signedIn, clients: [], httpTools: [], lost: false };
 	const tools: ToolRegistration[] = [];
+	const instructions: string[] = [];
 	const lost = () => {
 		if (connection.lost || signal.aborted) return;
 		connection.lost = true;
@@ -93,7 +95,7 @@ async function connect(
 			for (const tool of listed) {
 				const name = `${server}_${tool.name}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, TOOL_NAME_LIMIT);
 				const description = tool.description ?? "";
-				const reason = description.length > 4096 ? "description exceeds 4096 characters"
+				const reason = description.length > MCP_TEXT_LIMIT ? "description exceeds 4096 characters"
 					: declaresToolUseId(tool.inputSchema) ? "reserved input key"
 					: names.has(name) ? "duplicate tool name" : undefined;
 				if (reason) {
@@ -130,6 +132,15 @@ async function connect(
 					},
 				}));
 			}
+			let guidance = client.getInstructions() ?? "";
+			for (const value of credentials.values()) {
+				if (value) guidance = guidance.replaceAll(value, "[redacted]");
+			}
+			guidance = guidance.slice(0, MCP_TEXT_LIMIT);
+			if (guidance.trim()) {
+				const quoted = guidance.split(/\r\n?|\n|\u2028|\u2029/).map(line => `> ${line}`).join("\n");
+				instructions.push(`#### ${server}\n\n${quoted}`);
+			}
 			log("info", "plugin.connected", { plugin: plugin.name, server, tools: accepted });
 		} catch {
 			if (!signal.aborted) log("warn", "plugin.connection.failed", { plugin: plugin.name, server });
@@ -137,7 +148,7 @@ async function connect(
 			return;
 		}
 	}
-	return { connection, tools };
+	return { connection, tools, instructions };
 }
 
 const extensionName = (plugin: Plugin) => `ace-plugin-${plugin.name}`;
@@ -324,7 +335,10 @@ export function pluginTools(
 				return;
 			}
 			active.set(plugin, connected.connection);
-			registry.install({ name, tools: connected.tools });
+			const description = `## Plugin: ${plugin.displayName}\n${plugin.description}`;
+			const { instructions, tools } = connected;
+			const text = instructions.length ? [description, "### MCP Server Instructions", ...instructions].join("\n\n") : description;
+			registry.install({ name, tools, sections: tools.length ? [{ key: name, tag: false, render: () => text }] : [] });
 		} finally {
 			settleStartup(state);
 		}

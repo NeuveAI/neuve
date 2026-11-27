@@ -372,7 +372,20 @@ export class Channel {
 			install: (extension: Parameters<typeof installGuarded>[0]) => {
 				if (channel && channel.#closing.signal.aborted) return;
 				unpublishedPlugins.add(extension.name);
-				return installGuarded(extension);
+				const names = new Set(extension.tools?.map(tool => tool.name));
+				return installGuarded({
+					...extension,
+					sections: extension.sections?.map(section => ({
+						...section,
+						async render(input, context) {
+							const provider = input.agent.model?.provider;
+							const http = provider && options.ownTools?.(provider) ? plugins?.httpTools() : undefined;
+							if (!input.agent.tools.some(tool => names.has(tool.name) && (!http || http.has(tool.name)))) return;
+							if (await planning(input.conversationId, context)) return;
+							return section.render(input, context);
+						},
+					})),
+				});
 			},
 		};
 		let pluginRefresh: Promise<void> | undefined;

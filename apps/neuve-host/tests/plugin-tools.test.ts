@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { Channel, type Fields } from "@ace/channel";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { Effect } from "effect";
 
 import { Fixture, OWNER } from "../../../packages/channel/tests/helpers";
+import { policy } from "../../../packages/harness/src/chat-runtime/transcript";
 import { serveOAuthFixture } from "./fixtures/oauth-http";
 import { expandPluginValue, PluginManifest } from "../src/plugin-manifest";
 import { pluginTools } from "../src/plugin-tools";
@@ -68,6 +70,93 @@ for await (const line of createInterface({ input: process.stdin })) {
 	console.log(JSON.stringify({ jsonrpc: "2.0", id, result }));
 }
 `;
+
+// Exercise the prompt from a real channel request and the bridge policy that consumes it.
+test("connected plugin guidance reaches pi and the bridged policy only while its tools are offered", async () => {
+	const apiKey = "fixture-tracker-key";
+	let instructions = `Use find_issue to look up a ticket by ID.\nProvider detail: ${apiKey}`;
+	let enabled = true;
+	const endpoint = serveOAuthFixture(async request => {
+		if (request.headers.get("authorization") !== `Bearer ${apiKey}`) return new Response(null, { status: 401 });
+		if (request.method === "GET") return new Response(null, { status: 405 });
+		const { id, method, params } = await request.json();
+		if (id === undefined) return new Response(null, { status: 202 });
+		const result = method === "initialize"
+			? { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "tracker", version: "1" }, instructions }
+			: { tools: [{ name: "find_issue", description: "Find a ticket by ID.", inputSchema: { type: "object" } }] };
+		return Response.json({ jsonrpc: "2.0", id, result });
+	});
+	const plugin = PluginManifest.parse({
+		manifest: {
+			name: "tracker", interface: { displayName: "Fixture Tracker" },
+			description: "Read and update tickets.", apiKey: { tracker: "FIXTURE_TRACKER_KEY" },
+		},
+		mcp: { tracker: { type: "http", url: endpoint.url.href } },
+	});
+	const plugins = pluginTools(() => {}, [plugin], () => ({ tracker: enabled }), async () => apiKey);
+	let chat: Fixture | undefined;
+	try {
+		const channel = chat = await Fixture.create({
+			plugins,
+			planning: async () => ({ kind: "failure", reason: "unavailable", message: "Fixture planning." }),
+		});
+		async function ask(mode: "ace" | "plan" = "ace") {
+			const prompt = Promise.withResolvers<{ pi: string; bridge: string; offered: string[]; served: string[] }>();
+			channel.script(request => {
+				const bridged = policy(request.messages, () => Effect.succeed({ text: "" }), undefined, {
+					ownTools: true, pluginTools: plugins.httpTools(),
+				});
+				prompt.resolve({
+					pi: getCurrentSystemPrompt(request.messages), bridge: bridged.systemPrompt,
+					offered: getCurrentTools(request.messages).map(tool => tool.name),
+					served: bridged.tools.map(tool => tool.name),
+				});
+				return fauxAssistantMessage("Done");
+			});
+			const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the tool offer", mode });
+			expect(await channel.request({ op: "wait", submission })).toBe("done");
+			return prompt.promise;
+		}
+		const expected = [
+			"## Plugin: Fixture Tracker", "Read and update tickets.", "",
+			"### MCP Server Instructions", "", "#### tracker", "",
+			"> Use find_issue to look up a ticket by ID.", "> Provider detail: [redacted]",
+		].join("\n");
+		const first = await ask();
+		expect(first.offered).toContain("tracker_find_issue");
+		expect(first.served).toContain("tracker_find_issue");
+		for (const prompt of [first.pi, first.bridge]) {
+			expect(prompt).toContain(expected);
+			expect(prompt).not.toContain(apiKey);
+		}
+		const plan = await ask("plan");
+		expect(plan.offered).toContain("planning_issue");
+		expect(plan.pi).toContain("Linear planning tools read scope and dependencies.");
+		expect(plan.offered).not.toContain("tracker_find_issue");
+		expect(plan.pi).not.toContain("Fixture Tracker");
+		expect(plan.bridge).not.toContain("Fixture Tracker");
+		expect((await ask()).pi).toContain(expected);
+
+		enabled = false;
+		const off = await ask();
+		expect(off.offered).not.toContain("tracker_find_issue");
+		expect(off.served).not.toContain("tracker_find_issue");
+		expect(off.pi).not.toContain("Fixture Tracker");
+		expect(off.bridge).not.toContain("Fixture Tracker");
+
+		const kept = "x".repeat(4096);
+		instructions = kept + "do not forward this tail";
+		enabled = true;
+		const limited = await ask();
+		for (const prompt of [limited.pi, limited.bridge]) {
+			expect(prompt).toContain(`#### tracker\n\n> ${kept}`);
+			expect(prompt).not.toContain("do not forward this tail");
+		}
+	} finally {
+		await chat?.dispose();
+		await endpoint.stop(true);
+	}
+});
 
 // A live MCP server exercises Pi's tool offer and dispatch across settings changes on one channel.
 test("a running channel discovers, dispatches, and hides a plugin at the next request", async () => {
