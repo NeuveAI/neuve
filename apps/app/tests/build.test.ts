@@ -1,6 +1,6 @@
 import { expect, mock, test } from "bun:test";
 
-import type { Build, BuildAgent, Chat, WorkMessage } from "@ace/channel/protocol";
+import type { Build, BuildAgent, Chat, GithubPull, WorkMessage } from "@ace/channel/protocol";
 import type { Event } from "@ace/ui";
 
 mock.module("../src/host", () => ({ host: { channel: async () => undefined }, onOpen: () => () => {} }));
@@ -154,4 +154,45 @@ test("the work log names a recipient only past two agents, draws the planning ch
 test("the work log draws no name in agents' talk as a mention", () => {
 	const [event] = workEvents([build()], [said(2, 3, "ask @reviewer to look")], "t") as Extract<Event, { type: "message" }>[];
 	expect(event!.content).toEqual([{ type: "text", text: "ask @reviewer to look", parts: [] }]);
+});
+
+const SHA = "8".repeat(40);
+const pull = (patch: Partial<GithubPull> = {}): GithubPull => ({
+	kind: "prs",
+	number: 12,
+	title: "Retry failed exports",
+	url: "https://github.com/o/r/pull/12",
+	state: "open",
+	author: "me",
+	created: "",
+	updated: "",
+	labels: [],
+	checks: [],
+	sha: SHA,
+	merge: "ready",
+	...patch,
+});
+const planned = (patch: Partial<Build>, value: GithubPull) =>
+	buildCards([build({ branch: "o/build-p1", ...patch })], 1, (author) => author, new Map([["o/build-p1", value]])).get("c1")!;
+
+// Why: Merge is a host operation pinned to GitHub's head, so the card offers it only while GitHub
+// would merge that head, and never again once the build records the merge.
+test("the card offers Merge only for an open pull request GitHub would merge, until it is merged", () => {
+	expect(planned({}, pull()).mergeable).toBe(true);
+	expect(planned({}, pull({ state: "draft" })).mergeable).toBe(false);
+	expect(planned({}, pull({ merge: "blocked" })).mergeable).toBe(false);
+	expect(planned({}, pull({ sha: undefined })).mergeable).toBe(false);
+	const merged = planned({ merged: { number: 12, at: 0 } }, pull({ state: "merged" }));
+	expect([merged.mergeable, merged.title, merged.stoppable]).toEqual([false, "Merged", false]);
+});
+
+// Why: a review covers one head; once the branch moves past it, its count no longer speaks for the
+// pull request, and a desk link that isn't a review route must not become a link.
+test("the card's review goes stale past its head and keeps only review routes as its desk", () => {
+	const desk = `/review/${"a".repeat(64)}/cycles/01JD3Q5V8X2K7M9N4P6R1S0T3W/desk`;
+	const review = { chat: 3, review: "r", phase: "finished" as const, head: SHA, humanRequired: 2, desk };
+	expect(planned({ review }, pull()).review).toEqual({ phase: "finished", humanRequired: 2, desk, stale: false });
+	expect(planned({ review }, pull({ sha: "9".repeat(40) })).review?.stale).toBe(true);
+	expect(planned({ review: { ...review, desk: "https://elsewhere.example/desk" } }, pull()).review?.desk).toBeNull();
+	expect(planned({ review: { ...review, phase: "stopped" } }, pull()).review).toBeUndefined();
 });

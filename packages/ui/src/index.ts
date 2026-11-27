@@ -115,6 +115,7 @@ export {
 	type DetailsChanges,
 	type DetailsFact,
 	type DetailsLink,
+	type DetailsPlan,
 	type DetailsPull,
 	type DetailsSubagent,
 	SessionDetailsView,

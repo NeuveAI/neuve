@@ -12,11 +12,12 @@ import {
 } from "@ace/ui";
 import { channelProject, type Listing } from "@ace/host/protocol";
 
+import { AgentAsks } from "./agent-asks";
 import { useAgentAvatar } from "./agent-avatar";
 import { Approval } from "./approval";
 import { approvalView, shownApprovals } from "./approval-card";
 import { isAgentAlias } from "./agent-mention";
-import { agentAuthor, agentAuthors, agentName, buildCards, mentionName, readOnly } from "./build-card";
+import { agentAuthor, agentAuthors, agentName, buildBranches, buildCards, mentionName, readOnly } from "./build-card";
 import { Checks } from "./checks";
 import { Composer } from "./composer";
 import { usePlanReturn } from "./composer-mode";
@@ -30,6 +31,7 @@ import { OfflineHost, useRoster } from "./onboarding";
 import { present } from "./presence";
 import { planCards } from "./plan-card";
 import { commentSends, commentWords } from "./plan-comments";
+import { mergePlan, usePulls } from "./pull";
 import { pendingQuestion, Question } from "./question";
 import { newestReview, reviewActions, reviewTab, withCards } from "./review-card";
 import { AGENT, credit, sources, toEvents } from "./timeline";
@@ -141,9 +143,22 @@ export function Conversation(
 		const agent = agents.get(agentAuthor(id)) ?? chat?.build;
 		return agent && { author: agentAuthor(id), agent };
 	}, [agents, chat?.build, id]);
+	// The builds this chat planned: their cards' pull requests, and what their agents wait on.
+	const started = useMemo(() => transcript.builds.filter((build) => build.chat === id), [transcript.builds, id]);
+	const branches = useMemo(() => buildBranches(started), [started]);
+	const pulls = usePulls(channel.repo, branches);
 	const builds = useMemo(
-		() => buildCards(transcript.builds, id, (author) => author === user ? "you" : people[author] || author),
-		[transcript.builds, id, user, people],
+		() => buildCards(started, id, (author) => author === user ? "you" : people[author] || author, pulls),
+		[started, id, user, people, pulls],
+	);
+	const asking = useMemo(
+		() =>
+			started.flatMap((build) =>
+				build.merged ? [] : build.agents.flatMap((agent) =>
+					agent.state === "waiting" ? [{ chat: agent.chat, name: agentName(agent, build.agents) }] : []
+				)
+			),
+		[started],
 	);
 	const approvals = useMemo(
 		() =>
@@ -233,8 +248,13 @@ export function Conversation(
 					() => {},
 					(error: Error) => void toast.error("Could not stop the agents", { description: error.message }),
 				),
+			merge: (build: string) => {
+				const branch = started.find((value) => value.id === build)?.branch;
+				const pull = branch && pulls.get(branch);
+				return pull ? mergePlan(channel.id, build, pull) : Promise.reject(new Error("No pull request"));
+			},
 		}),
-		[mayAsk, openWork, channel.id, user],
+		[mayAsk, openWork, channel.id, user, started, pulls],
 	);
 	const review = useMemo(
 		() =>
@@ -530,6 +550,16 @@ export function Conversation(
 						))}
 					</div>
 				)}
+				{transcript.live && asking.map((agent) => (
+					<AgentAsks
+						key={agent.chat}
+						channel={channel}
+						chat={agent.chat}
+						name={agent.name}
+						user={user}
+						mayAnswer={mayAsk}
+					/>
+				))}
 				{transcript.live && <Checks channel={channel} chat={id} user={user} />}
 				{transcript.live && (
 					<MessageQueue

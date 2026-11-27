@@ -42,13 +42,17 @@ function Change({ patch }: { patch: string }) {
 		: <Code className={CODE} source={patch} language="diff" />;
 }
 
-/** One request's card. `sending` and `error` belong to this request's own answer. */
-export function ApprovalCard({ view, mayAnswer, sending, error, answer }: {
+/**
+ * One request's card. `sending` and `error` belong to this request's own answer; `requester` names
+ * a plan's agent whose request shows in the chat that planned it.
+ */
+export function ApprovalCard({ view, mayAnswer, sending, error, answer, requester }: {
 	view: ApprovalCardView;
 	mayAnswer: boolean;
 	sending?: Decision;
 	error?: string;
 	answer: (decision: Decision) => void;
+	requester?: string;
 }) {
 	if (view.state !== "open") {
 		const [tone, label] = SETTLED[view.state];
@@ -68,7 +72,10 @@ export function ApprovalCard({ view, mayAnswer, sending, error, answer }: {
 	}
 	return (
 		<RequestCard aria-label={view.title} className="mb-2 overflow-hidden">
-			<RequestCardHead title={<span className="min-w-0 [overflow-wrap:anywhere]">{view.title}</span>} />
+			<RequestCardHead
+				title={<span className="min-w-0 [overflow-wrap:anywhere]">{view.title}</span>}
+				meta={requester === undefined ? undefined : <>Requested by {requester}</>}
+			/>
 			<RequestCardBody className="flex flex-col gap-2">
 				{view.notes.map((note) => (
 					<p key={note} className="text-xs font-medium text-warning-strong">{note}</p>
@@ -139,18 +146,20 @@ export function ApprovalCard({ view, mayAnswer, sending, error, answer }: {
  * Answers one request. After a sent answer the buttons stay disabled until the channel's event
  * changes the request; a refusal shows its reason and lets the person answer again.
  */
-export function Approval({ channel, chat, user, view, mayAnswer }: {
+export function Approval({ channel, chat, user, view, mayAnswer, requester }: {
 	channel: string;
 	chat: number;
 	user: string;
 	view: ApprovalCardView;
 	mayAnswer: boolean;
+	requester?: string;
 }) {
 	const [sending, setSending] = useState<Decision>();
 	const [error, setError] = useState<string>();
 	return (
 		<ApprovalCard
 			view={view}
+			requester={requester}
 			mayAnswer={mayAnswer}
 			sending={sending}
 			error={error}

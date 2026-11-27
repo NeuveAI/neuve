@@ -3,6 +3,8 @@ import type { CSSProperties } from "react";
 import { AceAvatar } from "../ace-avatar/ace-avatar";
 import { cn } from "../../lib/utils";
 import { Badge } from "../../ui/badge";
+import { REVIEW_LANE_COLORS } from "../requests/review";
+import { needPerson } from "../session-details/session-details";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 
 import type { SidebarRow } from "./session-item.types";
@@ -46,6 +48,10 @@ function resolveBadge(data: SidebarRow): { show: boolean; pulse: boolean; color?
 	if (data.stopped) {
 		return { show: true, pulse: false, color: "var(--color-muted-foreground)" };
 	}
+	// A plan's state lasts until it changes, where unread activity ends once the row is opened.
+	// Merge's own colour, since the unread dot is already green.
+	if (data.plans?.ready) return { show: true, pulse: false, color: "var(--color-merged)" };
+	if (data.plans?.humanRequired) return { show: true, pulse: false, color: "var(--review-req)" };
 	if (data.unreadCount > 0 && data.pr?.state === "draft") {
 		return { show: true, pulse: false, color: "var(--color-muted-foreground)" };
 	}
@@ -228,16 +234,22 @@ export function RowGlyph({ data, selected }: { data: SidebarRow; selected?: bool
 		<Badge
 			show={badge.show}
 			pulse={badge.pulse}
+			className={data.plans ? REVIEW_LANE_COLORS : undefined}
 			style={badge.color ? { "--badge-color": badge.color } as CSSProperties : undefined}
 		>
 			{resolveIcon(data)}
 		</Badge>
 	);
 	// The gray dot alone doesn't say why the channel can't open (#361) or run tools.
+	let units = data.plans?.humanRequired ?? 0;
 	let reason = data.connection === "offline"
 		? `Offline: ${data.host} is unreachable`
 		: data.stopped
 		? "Stopped: its cloud workspace isn't running"
+		: data.plans?.ready
+		? "Pull request ready to merge"
+		: units
+		? needPerson(units)
 		: undefined;
 	if (!reason) return glyph;
 	return (

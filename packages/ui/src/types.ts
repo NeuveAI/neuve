@@ -356,6 +356,26 @@ export type BuildCardView = {
 	agents: AgentLineView[];
 	/** Whether any of its agents can still be stopped. */
 	stoppable: boolean;
+	/** The plan's pull request, as the host's reader last saw it. */
+	pull?: {
+		number: number;
+		title: string;
+		url: string;
+		state: "open" | "draft" | "closed" | "merged";
+		checks: { name: string; url?: string; state: "pending" | "passed" | "failed" | "skipped" }[];
+		conflicts: boolean;
+	};
+	/** The plan's newest Neuve review; `stale` once the branch has moved past the reviewed head. */
+	review?: {
+		phase: "queued" | "running" | "finished";
+		/** Units needing a person, once it finished. */
+		humanRequired?: number;
+		/** The batch on the desk, when it is a review entry route. */
+		desk: string | null;
+		stale: boolean;
+	};
+	/** Whether Merge is offered: GitHub would merge the pull request now. */
+	mergeable: boolean;
 };
 
 /** What a Neuve review card shows: a review card entry, or the start call still running. */

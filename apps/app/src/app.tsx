@@ -193,6 +193,9 @@ function row(
 	attention?: Attention,
 ): SidebarRow {
 	const outcome = attention?.mark;
+	// An agent of a plan waiting on a question or permission request marks the row as a question does.
+	const { plans } = channel as Listing & { plans?: { ready?: boolean; humanRequired?: number; waiting?: boolean } };
+	const asked = outcome === "question" || !!plans?.waiting;
 	const place = placement(channel);
 	// A host's channels are all its owner's, so this is also the host's owner-only check.
 	const own = channel.owner === user && channel.host === host;
@@ -228,11 +231,12 @@ function row(
 		host: channel.host,
 		stopped: place.kind === "cloud" && place.stopped,
 		// A run waiting on a question is still busy, but the row should show it waiting on them.
-		agent: channel.state === "running" && channel.busy && outcome !== "question"
-			? "thinking"
-			: "idle",
+		agent: channel.state === "running" && channel.busy && !asked ? "thinking" : "idle",
+		...(plans?.ready || plans?.humanRequired
+			? { plans: { ready: !!plans.ready, humanRequired: plans.humanRequired ?? 0 } }
+			: {}),
 		unreadCount: outcome === "done" || outcome === "message" ? 1 : 0,
-		needsAttention: outcome === "failed" || outcome === "question" ? outcome : undefined,
+		needsAttention: asked ? "question" : outcome === "failed" ? outcome : undefined,
 		mentionCount: attention?.mentions || 0,
 		lastActivityAt: Math.floor((channel.active || channel.created) / 1000),
 		online,
