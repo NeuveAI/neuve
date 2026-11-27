@@ -119,6 +119,18 @@ const stopped = "The plan's agents have been stopped.";
 const pendingStart = "The agent start is recorded and will finish when work resumes.";
 export const waitForBrief = "Wait for the host to send the agent’s brief.";
 
+function unknownAgent(records: readonly StoredBuild[]): string {
+	const agents = new Set(records.flatMap(record => record.build.agents
+		.filter(({ role, part }) => record.starts[agentKey(role, part)]?.state.kind === "started")
+		.map(({ role, part }) => `${role === "implementer" ? "an" : "a"} ${role}${part === undefined ? "" : ` for ${JSON.stringify(part)}`}`)));
+	const multiple = records.length > 1;
+	const target = multiple ? "The available plans have no unique started agent with that role and path scope."
+		: "This plan has no started agent with that role and path scope.";
+	const subject = multiple ? "The available plans have" : "The plan has";
+	const listing = agents.size ? `started ${new Intl.ListFormat("en").format(agents)}.` : "no started agents yet.";
+	return `${target} ${subject} ${listing}`;
+}
+
 export class MentionStopping extends Error {
 	constructor(readonly builds: string[]) { super(stopped); }
 }
@@ -351,11 +363,13 @@ export class Builds {
 			build.state.kind === "started" || build.state.kind === "starting");
 		const local = member ? candidates.filter(({ build }) => build.id === member.build)
 			: candidates.filter(({ build }) => build.chat === from);
-		const matches = (local.length ? local : member ? [] : candidates).flatMap(({ starts }) => {
+		const eligible = local.length ? local : member ? [] : candidates;
+		const matches = eligible.flatMap(({ starts }) => {
 			const start = starts[key];
 			return start?.state.kind === "started" && start.brief ? [start.brief.chat] : [];
 		});
-		return matches.length === 1 ? matches[0] : undefined;
+		const [chat] = matches;
+		return chat !== undefined && matches.length === 1 ? { chat } : { refusal: unknownAgent(eligible) };
 	}
 
 	isBrief(submission: SubmissionRecord): boolean {
@@ -798,11 +812,7 @@ export class Builds {
 			if (blocked) return { refusal: blocked };
 			const recipient = record?.starts[agentKey(to, part)];
 			if (!record || recipient?.state.kind !== "started" || !recipient.brief) {
-				const agents = !record ? [] : record.build.agents
-					.filter(({ role, part }) => record.starts[agentKey(role, part)]?.state.kind === "started")
-					.map(({ role, part }) => `${role === "implementer" ? "an" : "a"} ${role}${part === undefined ? "" : ` for ${JSON.stringify(part)}`}`);
-				const listing = agents.length ? `The plan has started ${new Intl.ListFormat("en").format(agents)}.` : "The plan has no started agents yet.";
-				return { refusal: `This plan has no started agent with that role and path scope. ${listing}` };
+				return { refusal: unknownAgent(record ? [record] : []) };
 			}
 			const chat = recipient.brief.chat;
 			if (chat === from) return { refusal: "Send the message to another agent of this plan." };

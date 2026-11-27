@@ -21,6 +21,10 @@
       "types": "./.types/src/status.d.ts",
       "default": "./src/status.ts"
     },
+    "./listed-models": {
+      "types": "./.types/src/listed-models.d.ts",
+      "default": "./src/listed-models.ts"
+    },
     "./sign-in-command": {
       "types": "./.types/src/sign-in-command.d.ts",
       "default": "./src/sign-in-command.ts"

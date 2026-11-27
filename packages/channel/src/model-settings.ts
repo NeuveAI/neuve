@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/chord";
 import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai";
 import { AgentDoc, configure, defineDoc, type ConversationId, type Harness, LiveDoc, type Tx } from "@earendil-works/pi-durable";
+import type { AccountStatus } from "@neuve/runtime/status";
 
 import { available, choose, sameModel, usable } from "./models";
 import type { Effort, ModelOption, ModelRef, PendingModel } from "./protocol";
@@ -35,6 +36,7 @@ export class ModelSettings {
 		readonly defaultModel?: () => Promise<ModelRef>,
 		readonly defaultEffort: Effort = "off",
 		readonly routeModel?: Omit<ModelOption, "efforts">,
+		readonly accountStatuses: () => readonly AccountStatus[] = () => [],
 	) {}
 
 	async automatic(): Promise<ModelRef> {

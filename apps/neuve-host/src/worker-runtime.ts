@@ -66,6 +66,7 @@ export type WorkerSetup = {
 	/** What a chat without a model runs when the host configures none. */
 	defaultModel?(context: WorkerContext): Promise<ModelRef>;
 	routeModel?: Options["routeModel"];
+	accountStatuses?: Options["accountStatuses"];
 	tool?(context: WorkerContext, tool: ToolRegistration): ToolRegistration;
 	onConversation?(context: WorkerContext, id: ConversationId): void;
 	priced?(model: ModelRef): boolean;
@@ -225,6 +226,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			...(setup.nonTurnModels ? {nonTurnModels: (kind: "caption" | "recap", chat: ConversationId) => setup.nonTurnModels!(worker, kind, chat, options.models)} : {}),
 		};
 		const channel = await Channel.open({...planOptions, log: privateLog.log, storage, models, extension, routeModel: setup.routeModel,
+			...(setup.accountStatuses ? { accountStatuses: setup.accountStatuses } : {}),
 			...(additional?.ownTools ? { ownTools: additional.ownTools } : {}),
 			...(setup.review ? {
 				feed: async (harness, submitInput) => {

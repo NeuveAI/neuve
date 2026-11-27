@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { type Harness, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
+import { AccountStatus } from "@neuve/runtime/status";
 
 import { EventSchema } from "../src/frame";
 import type { Channel } from "../src/channel";
@@ -22,10 +23,11 @@ function offer(fixture: Fixture, provider = alternate.provider, id = alternate.m
 	return handle;
 }
 
-async function setup() {
+async function setup(accounts: readonly AccountStatus[] = []) {
 	let harness: Harness | undefined;
 	let submitInput: Channel["submitInput"] | undefined;
 	const run = await Fixture.create({
+		accountStatuses: () => accounts,
 		feed: async (value, submit) => {
 			harness = value;
 			submitInput = submit;
@@ -136,6 +138,55 @@ for (const { name, text, args, ...options } of refusals) test(`the tool refuses 
 	expect(await watch.until("result", event => event.call === "model")).toMatchObject({ error: true });
 	expect((await run.channel.info()).chats[0]).toMatchObject(unchanged);
 	expect((await run.channel.info()).chats[0]?.pending).toBeUndefined();
+});
+
+const terra = { provider: "codex", modelId: "gpt-6.1-terra" };
+const account = (name: string, kind: AccountStatus["kind"], email?: string) => AccountStatus.parse({
+	name, kind, signIn: { state: "signed-in", ...(email ? { email } : {}) },
+	limits: [], checkedAt: "2026-11-27T00:00:00Z",
+});
+
+// The catalogue shows both routes, but the owner's words must select the route the picker shows.
+for (const [name, text, provider] of [
+	["unqualified", "Run it on gpt-6.1-terra, high effort.", "codex"],
+	["with ChatGPT named", "Use ChatGPT gpt-6.1-terra with high effort.", "main"],
+] as const) test(`one subscription model matches once ${name}`, async () => {
+	const { run, watch } = await setup([
+		account("codex", "chatgpt-subscription", "owner@example.com"),
+		account("main", "chatgpt-subscription"),
+	]);
+	offer(run, "codex", terra.modelId);
+	offer(run, "main", terra.modelId);
+	run.script(callModelTool("model", { model: { ...terra, provider }, effort: "high" }), fauxAssistantMessage("Done."));
+	await run.request({ op: "ask", author: OWNER, text });
+	expect(await watch.until("result", event => event.call === "model")).toMatchObject({
+		error: false, text: "codex/gpt-6.1-terra, effort high, pending until an input is sent while idle.",
+	});
+	expect((await run.channel.info()).chats[0]?.pending).toEqual({ model: terra, effort: "high" });
+});
+
+// The owner must choose an account when the picker offers separate rows for the same model.
+for (const [name, second] of [
+	["an API key", account("other-account", "openai-api-key")],
+	["a different subscription email", account("other-account", "chatgpt-subscription", "work@example.com")],
+] as const) test(`a subscription model shared with ${name} needs an account qualifier`, async () => {
+	const { run, watch } = await setup([
+		account("codex", "chatgpt-subscription", "owner@example.com"),
+		second,
+	]);
+	offer(run, "codex", terra.modelId);
+	offer(run, second.name, terra.modelId);
+	const model = { provider: second.name, modelId: terra.modelId };
+	run.script(callModelTool("ambiguous", { model }), fauxAssistantMessage("Which account?"),
+		callModelTool("qualified", { model }), fauxAssistantMessage("Done."));
+	const { submission } = await run.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Use gpt-6.1-terra." });
+	expect(await watch.until("result", event => event.call === "ambiguous")).toMatchObject({ error: true });
+	expect((await run.channel.info()).chats[0]).toMatchObject(unchanged);
+	expect((await run.channel.info()).chats[0]?.pending).toBeUndefined();
+	expect(await run.request({ op: "wait", submission })).toBe("done");
+	await run.request({ op: "ask", author: OWNER, text: "Use gpt-6.1-terra from other-account." });
+	expect(await watch.until("result", event => event.call === "qualified")).toMatchObject({ error: false });
+	expect((await run.channel.info()).chats[0]?.pending?.model).toEqual(model);
 });
 
 // An admitted steer changes who can authorize the tool, even when Pi has yet to place that input.

@@ -2351,6 +2351,19 @@ for (const [phase, planning] of [
 	});
 }
 
+// The first implementer works on the whole plan. The refusal tells the caller which roles and scopes to use.
+test("a model change for an unknown agent lists the plan's started agents", async () => {
+	const run = await setup();
+	const { fixture, watch } = run;
+	await startPair(run);
+	fixture.script(tool("set_agent_model", { role: "implementer", part: "packages/channel", effort: "high" }, "missing-model-target"),
+		fauxAssistantMessage("No model changed."));
+	await fixture.request({ op: "wait", submission: await invoke(fixture, "Use high effort for the implementer.") });
+	expect(await watch.until("result", event => event.call === "missing-model-target")).toMatchObject({
+		error: true, text: 'This plan has no started agent with that role and path scope. The plan has started an implementer and a reviewer for "exports".',
+	});
+});
+
 // A host brief must not authorize a tool call even if its plan text names the model.
 test("a plan's unattended implementer cannot use its brief to change models", async () => {
 	const run = await setup();

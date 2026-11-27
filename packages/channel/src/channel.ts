@@ -48,6 +48,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import type { AccountStatus } from "@neuve/runtime/status";
 
 import { type Directory, messaging, subagent } from "./agents";
 import { type Browser, browser } from "./browser";
@@ -165,6 +166,7 @@ export type Options = {
 	/** The host's current preference, consulted only for a chat's first agent invocation. */
 	defaultModel?(): Promise<ModelRef>;
 	routeModel?: Omit<ModelOption, "efforts"> | undefined;
+	accountStatuses?(): readonly AccountStatus[];
 	/** Administrative opens leave durable work for the configured worker. Defaults to true. */
 	resume?: boolean;
 	storage: Storage;
@@ -298,7 +300,8 @@ export class Channel {
 		const planning: IsPlanning = async (chat, context) =>
 			isPlanning(channel.#harness, chat, context, id => channel.#changingModes.get(id));
 		const registry = createRegistry();
-		const modelSettings = new ModelSettings(options.models, options.defaultModel, options.extension?.thinkingLevel, options.routeModel);
+		const modelSettings = new ModelSettings(options.models, options.defaultModel, options.extension?.thinkingLevel,
+			options.routeModel, options.accountStatuses);
 		registry.install(logging(log));
 		registry.install(CodingTools);
 		const handoffs = new Handoffs(options.directory);
@@ -338,8 +341,10 @@ export class Channel {
 			(tx, chat, requested) => modelNamedByOwner(tx, chat, requested, modelSettings),
 			questions.extension,
 		));
-		registry.install(modelTool(modelSettings, (tx, from, role, part) => {
-			if (role === "main") return Promise.resolve(part === undefined ? ROOT_CONVERSATION_ID : undefined);
+		registry.install(modelTool(modelSettings, async (tx, from, role, part) => {
+			if (role === "main") return part === undefined
+				? { chat: ROOT_CONVERSATION_ID }
+				: { refusal: "Omit the path scope for the main agent." };
 			return channel.#builds.findAgent(tx, from, role, part);
 		}));
 		registry.install(metadata((value) => channel.#changed(value), options.claim));

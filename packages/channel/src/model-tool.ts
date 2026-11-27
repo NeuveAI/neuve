@@ -1,5 +1,6 @@
 import type { Models } from "@earendil-works/pi-ai";
 import { AgentDoc, defineExtension, defineTool, type ConversationId, type ToolExecutionResult, type Tx } from "@earendil-works/pi-durable";
+import { modelGroups } from "@neuve/runtime/listed-models";
 import { z } from "zod";
 
 import { EffortSchema } from "./effort";
@@ -34,7 +35,9 @@ function matches<T>(text: readonly string[], entries: readonly T[], aliases: (en
 		start <= from && end >= to && (start < from || end > to)));
 }
 
-function namedModels(text: readonly string[], options: ModelOption[], models: Models) {
+async function namedModels(text: readonly string[], settings: ModelSettings) {
+	const options = await settings.listed().catch(() => []);
+	const { models } = settings;
 	const found = matches(text, options, ({ provider, modelId }) => {
 		const label = models.getModel(provider, modelId)?.name ?? modelId;
 		const names = [...new Set([modelId, label])];
@@ -47,10 +50,18 @@ function namedModels(text: readonly string[], options: ModelOption[], models: Mo
 		return end - start > Math.max(words(label).length, words(entry.modelId).length)
 			|| occurrences(remaining, [entry.account ?? entry.provider, models.getProvider(entry.provider)?.name ?? ""]).length > 0;
 	});
-	const named = [...new Set(found.filter(({ entry }) =>
+	const named = new Set(found.filter(({ entry }) =>
 		qualified.some(match => match.entry === entry)
-		|| !qualified.some(match => match.entry.modelId === entry.modelId)).map(({ entry }) => entry))];
-	return { named, remaining };
+		|| !qualified.some(match => match.entry.modelId === entry.modelId)).map(({ entry }) => entry));
+	const groups = modelGroups(options, settings.accountStatuses()).filter(group => group.some(model => named.has(model)));
+	return { groups, remaining, options };
+}
+
+function servingModel(groups: [ModelOption, ...ModelOption[]][], requested: ModelRef): ModelRef | undefined {
+	const [group] = groups;
+	if (groups.length !== 1 || !group?.some(route => sameModel(route, requested))) return;
+	const [{ provider, modelId }] = group;
+	return { provider, modelId };
 }
 
 const effortNames: Record<Effort, string[]> = {
@@ -67,16 +78,17 @@ const refused = "The owner's latest message must name one available model or eff
 
 export async function modelNamedByOwner(
 	tx: Tx, chat: ConversationId, requested: ModelRef, settings: ModelSettings,
-): Promise<boolean> {
+): Promise<ModelRef | undefined> {
 	const text = await ownerInput(tx, chat);
-	if (text === undefined) return false;
-	const { named } = namedModels(words(text), await settings.listed().catch(() => []), settings.models);
-	return named.length === 1 && sameModel(named[0], requested);
+	if (text === undefined) return;
+	const { groups } = await namedModels(words(text), settings);
+	return servingModel(groups, requested);
 }
 
 export function modelTool(
 	settings: ModelSettings,
-	findChat: (tx: Tx, from: ConversationId, role: "main" | "implementer" | "reviewer", part?: string) => Promise<ConversationId | undefined>,
+	findChat: (tx: Tx, from: ConversationId, role: "main" | "implementer" | "reviewer", part?: string) =>
+		Promise<{ chat: ConversationId } | { refusal: string }>,
 ) {
 	return defineExtension({
 		name: "neuve-agent-model",
@@ -86,24 +98,25 @@ export function modelTool(
 			execute: ({ role, part, model, effort }, api, context) => api.commit<ToolExecutionResult>(async tx => {
 				const text = await ownerInput(tx, api.conversationId);
 				if (text === undefined) return { content: [{ type: "text", text: refused }], isError: true };
-				const chat = await findChat(tx, api.conversationId, role, part);
-				if (chat === undefined) return {
-					content: [{ type: "text", text: "No agent has that role and path scope in this plan." }], isError: true,
+				const target = await findChat(tx, api.conversationId, role, part);
+				if ("refusal" in target) return {
+					content: [{ type: "text", text: target.refusal }], isError: true,
 				};
-				const options = await settings.listed().catch(() => []);
-				const { named, remaining } = namedModels(words(text), options, settings.models);
+				const { chat } = target;
+				const { groups, remaining, options } = await namedModels(words(text), settings);
+				const serving = model && servingModel(groups, model);
 				const stored = await tx.doc(AgentDoc, chat);
 				const current = await tx.doc(PendingModelDoc, chat);
-				const effective = named[0] ?? options.find(option => sameModel(option, current.pending?.model ?? stored.model));
+				const effective = groups[0]?.[0] ?? options.find(option => sameModel(option, current.pending?.model ?? stored.model));
 				const efforts = effective?.efforts ?? [];
 				const foundEfforts = [...new Set(matches(remaining, efforts, value => effortNames[value]).map(({ entry }) => entry))];
-				if ((!model && effort === undefined) || named.length > 1 || foundEfforts.length > 1
-					|| model !== undefined && (named.length !== 1 || !sameModel(named[0], model))
+				if ((!model && effort === undefined) || groups.length > 1 || foundEfforts.length > 1
+					|| model !== undefined && serving === undefined
 					|| effort !== undefined && (foundEfforts.length !== 1 || foundEfforts[0] !== effort)) {
 					return { content: [{ type: "text", text: refused }], isError: true };
 				}
 				const change: PendingModel = {
-					...(model ? { model } : {}),
+					...(serving ? { model: serving } : {}),
 					...(effort === undefined ? {} : { effort }),
 				};
 				const result = await settings.select(tx, chat, change);

@@ -42,7 +42,7 @@ const subagentArguments = toolArguments("subagent", z.strictObject({
  */
 export const subagent = (
 	submitInput: Channel["submitInput"],
-	allowModel: (tx: Tx, chat: ConversationId, model: ModelRef) => Promise<boolean>,
+	resolveModel: (tx: Tx, chat: ConversationId, model: ModelRef) => Promise<ModelRef | undefined>,
 	...without: Extension[]
 ): Extension =>
 	defineExtension({
@@ -62,13 +62,13 @@ export const subagent = (
 					const child = await api.commit(async (tx) => {
 						const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
 						if (existing) return existing.id;
-						const accepted = change && await allowModel(tx, api.conversationId, change);
+						const model = change && await resolveModel(tx, api.conversationId, change);
 						const created = await tx.createConversation({
 							ownership: { kind: "task", taskId: api.taskId },
 						});
 						await configure(tx, created.id, {
 							extensions: { remove: [{ name: "ace-subagent" }, MetadataExtension, ...without] },
-							...(accepted ? { model: change } : {}),
+							...(model ? { model } : {}),
 						});
 						return created.id;
 					}, context);
