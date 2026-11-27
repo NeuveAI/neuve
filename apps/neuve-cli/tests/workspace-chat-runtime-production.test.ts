@@ -872,7 +872,12 @@ test("worker admission keeps Claude route and colliding account refusals", async
     } finally {
       await run.close();
       replaceConfig(previousConfig);
-      configureRuntime({ worker: previousHooks.worker });
+      const restoredHooks = { ...previousHooks };
+      Object.defineProperty(restoredHooks, "worker", {
+        value: previousHooks.worker,
+        enumerable: true,
+      });
+      configureRuntime(restoredHooks);
       at.close();
     }
   }
