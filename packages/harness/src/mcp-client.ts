@@ -5,10 +5,7 @@ import {
   StdioClientTransport,
   getDefaultEnvironment,
 } from "@modelcontextprotocol/client/stdio";
-import {
-  StreamableHTTPClientTransport,
-  type StreamableHTTPClientTransportOptions,
-} from "@modelcontextprotocol/client";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { Context, Data, Deferred, Effect, Layer, Scope, Exit } from "effect";
 import type { z } from "zod";
 import {
@@ -119,6 +116,7 @@ const transportFor = (
       unset.push(...missing);
       return {
         unset,
+        client: new Client(CLIENT_INFO),
         transport: new StdioClientTransport({
           command: server.transport.command,
           args: (server.transport.args ?? []).map(take),
@@ -135,15 +133,15 @@ const transportFor = (
         take(value),
       ]),
     );
+    const url = new URL(take(server.transport.url));
     return {
       unset,
-      transport: new StreamableHTTPClientTransport(
-        new URL(take(server.transport.url)),
-        {
+      ...(options.http?.(name, CLIENT_INFO) ?? {
+        client: new Client(CLIENT_INFO),
+        transport: new StreamableHTTPClientTransport(url, {
           requestInit: { headers },
-          ...options.http?.(name),
-        },
-      ),
+        }),
+      }),
     };
   } catch (error) {
     if (error instanceof UnlistedVariable)
@@ -161,9 +159,8 @@ export type McpClientOptions = {
   readonly captureDefinitions?: boolean;
   readonly http?: (
     name: string,
-  ) =>
-    | Pick<StreamableHTTPClientTransportOptions, "authProvider" | "fetch">
-    | undefined;
+    info: ConstructorParameters<typeof Client>[0],
+  ) => { client: Client; transport: StreamableHTTPClientTransport } | undefined;
 };
 
 export const connect = (
@@ -194,11 +191,10 @@ export const connect = (
     const client = yield* Effect.acquireRelease(
       Effect.tryPromise({
         try: async () => {
-          const client = new Client(CLIENT_INFO);
-          await client.connect(built.transport, {
+          await built.client.connect(built.transport, {
             timeout: CONNECT_TIMEOUT_MS,
           });
-          return client;
+          return built.client;
         },
         catch: (error) =>
           new IntegrationUnavailable({

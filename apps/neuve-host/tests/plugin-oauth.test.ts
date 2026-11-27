@@ -5,13 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { serveOAuthFixture } from "./fixtures/oauth-http";
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createRegistry } from "@earendil-works/pi-durable";
 import type { Log } from "@ace/channel";
 
 import { config } from "../src/config";
 import { PluginManifest } from "../src/plugin-manifest";
-import { authorizePluginRefresh, PLUGIN_REFRESH_PATH, pluginOAuthTransport } from "../src/plugin-oauth-client";
+import { authorizePluginRefresh, PLUGIN_REFRESH_PATH, pluginMcp } from "../src/plugin-oauth-client";
 import { oauthAccount, readSession } from "../src/plugin-oauth-store";
 import { PluginOAuth } from "../src/plugin-oauth";
 import { pluginTools } from "../src/plugin-tools";
@@ -36,6 +35,7 @@ async function fixture(expiresIn = 3600, opened = true, tokensFor = fixtureToken
 	let requests = 0;
 	let rejectAccess = false;
 	let rejectExchange = false;
+	let rejectRegistration = false;
 	let refreshFailure: { status: number; code: string } | undefined;
 	let remoteStop: Promise<void> | undefined;
 	const hold = Promise.withResolvers<void>();
@@ -78,7 +78,10 @@ async function fixture(expiresIn = 3600, opened = true, tokensFor = fixtureToken
 					? { protocolVersion: data.params.protocolVersion, serverInfo: { name: "fixture", version: "1" }, capabilities: { tools: {} } }
 					: data.method === "tools/list"
 						? { tools: [{ name: "list_issues", inputSchema: { type: "object" } }] }
-						: { content: [{ type: "text", text: `Authorized with ${token}. Two issues.` }] };
+						: {
+							content: [{ type: "text", text: `Authorized with ${token}. Two issues.` }],
+							structuredContent: { items: [{ echo: token }] },
+						};
 				return Response.json({ jsonrpc: "2.0", id: data.id, result });
 			}
 			case "/discover":
@@ -95,6 +98,9 @@ async function fixture(expiresIn = 3600, opened = true, tokensFor = fixtureToken
 				});
 			case "/register": {
 				routes.push("registration");
+				if (rejectRegistration) return Response.json({
+					error: "invalid_client_metadata", error_description: "Do not log the submitted registration metadata.",
+				}, { status: 400 });
 				const data = await request.json();
 				registration = data.redirect_uris[0];
 				if (data.token_endpoint_auth_method !== "none" || !data.grant_types.includes("refresh_token"))
@@ -200,10 +206,11 @@ async function fixture(expiresIn = 3600, opened = true, tokensFor = fixtureToken
 		},
 		rejectAccess: () => { rejectAccess = true; },
 		rejectExchange: () => { rejectExchange = true; },
+		rejectRegistration: () => { rejectRegistration = true; },
 		failRefresh: (status: number, code: string) => { refreshFailure = { status, code }; },
 		allowRefresh: () => { refreshFailure = undefined; },
 		stopRemote,
-		signIn: () => oauth.signIn(plugin.name, config.port, changed),
+		signIn: () => oauth.signIn(plugin.name, config.port, changed, log),
 		signOut: () => oauth.signOut(plugin.name, changed),
 		settings: () => pluginSettings(plugin, true, true, oauth),
 		async authorize(url: string) {
@@ -217,9 +224,9 @@ async function fixture(expiresIn = 3600, opened = true, tokensFor = fixtureToken
 			expect((await fetch(callback)).status).toBe(200);
 		},
 		async connect() {
-			const client = new Client({ name: "fixture-worker", version: "1" });
+			const { client, transport } = pluginMcp(endpoint);
 			try {
-				await client.connect(new StreamableHTTPClientTransport(endpoint.url, pluginOAuthTransport(endpoint)));
+				await client.connect(transport);
 				return client;
 			} catch (error) {
 				await client.close();
@@ -273,6 +280,43 @@ test("discovery, shared sign-in, PKCE, and the first authenticated tool call", a
 		expect(JSON.stringify(await f.settings())).not.toContain(refreshToken(0));
 		expect(Object.values(process.env)).not.toContain(access(0));
 		expect(Object.values(process.env)).not.toContain(refreshToken(0));
+	} finally {
+		await f.close();
+	}
+});
+
+// A structural character in a bearer must leave the SDK handshake intact and stay out of tool results.
+test("a quote bearer is masked in decoded tool text and nested values", async () => {
+	const f = await fixture(3600, true, rotation => ({ ...fixtureTokens(rotation), access_token: '"' }));
+	try {
+		await f.complete();
+		const client = await f.connect();
+		try {
+			const result = await client.callTool({ name: "list_issues", arguments: {} });
+			expect(result.content).toEqual([{ type: "text", text: "Authorized with [redacted]. Two issues." }]);
+			expect(result.structuredContent).toEqual({ items: [{ echo: "[redacted]" }] });
+		} finally {
+			await client.close();
+		}
+	} finally {
+		await f.close();
+	}
+});
+
+// A failed registration must name its stage and safe error metadata without opening a browser or leaking the body.
+test("a rejected registration logs a failed sign-in start", async () => {
+	const f = await fixture();
+	try {
+		f.rejectRegistration();
+		await expect(f.signIn()).rejects.toThrow("Plugin sign-in failed. Try again.");
+		expect(f.logs).toEqual([{
+			level: "warn", event: "plugin.sign-in.failed", fields: {
+				plugin: "fixture", server: "fixture", step: "register-client",
+				errorClass: "RegistrationRejectedError", oauthError: "invalid_client_metadata", httpStatus: 400,
+			},
+		}]);
+		expect(f.openedUrls).toEqual([]);
+		expect(await readSession(f.endpoint)).toBeUndefined();
 	} finally {
 		await f.close();
 	}

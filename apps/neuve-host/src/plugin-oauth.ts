@@ -3,12 +3,12 @@ import { randomBytes } from "node:crypto";
 import type { Log } from "@ace/channel";
 import {
 	auth, Client, exchangeAuthorization, extractWWWAuthenticateParams, IssuerMismatchError, OAuthError,
-	OAuthErrorCode, refreshAuthorization, StreamableHTTPClientTransport,
+	OAuthErrorCode, refreshAuthorization, RegistrationRejectedError, StreamableHTTPClientTransport,
 	UnauthorizedError, type AuthOptions, type FetchLike, type OAuthClientProvider, type OAuthDiscoveryState,
 	type StoredOAuthClientInformation,
 } from "@modelcontextprotocol/client";
 import { SharedWork } from "@neuve/records-core/shared-work";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 
 import { forget, peek } from "./keys";
 import { openBrowser } from "./open-browser";
@@ -25,10 +25,37 @@ const signInFailed = "Plugin sign-in failed. Try again.";
 const refreshFailed = "Plugin sign-in expired. Sign in again.";
 
 const oauthErrors = new Set<string>(Object.values(OAuthErrorCode));
-const callbackErrorClasses = new Set([
+const signInErrorClasses = new Set([
 	"AbortError", "Error", "InsecureTokenEndpointError", "IssuerMismatchError",
-	"OAuthError", "SyntaxError", "TimeoutError", "TypeError", "ZodError", "$ZodError",
+	"OAuthError", "RegistrationRejectedError", "SdkError", "SdkHttpError", "SyntaxError",
+	"TimeoutError", "TypeError", "UnauthorizedError", "ZodError", "$ZodError",
 ]);
+const oauthErrorBody = z.object({ error: z.string() });
+
+type SignInDiagnostic = { step: string; httpStatus: number | null };
+
+function signInErrorCode(error: unknown): string | null {
+	if (error instanceof OAuthError) return oauthErrors.has(error.code) ? error.code : "other";
+	if (error instanceof RegistrationRejectedError) {
+		try {
+			const { error: code } = oauthErrorBody.parse(JSON.parse(error.body));
+			return oauthErrors.has(code) ? code : "other";
+		} catch {}
+	}
+	return null;
+}
+
+function logSignInFailure(log: Log, server: OAuthServer, diagnostic: SignInDiagnostic, error: unknown): void {
+	log("warn", "plugin.sign-in.failed", {
+		plugin: server.plugin, server: server.name,
+		...diagnostic,
+		errorClass: error instanceof Error && signInErrorClasses.has(error.name) ? error.name : "UnknownError",
+		oauthError: signInErrorCode(error),
+		...(diagnostic.step === "validate-tokens" && error instanceof ZodError
+			? { fields: error.issues.map(issue => issue.path.join(".")) }
+			: {}),
+	});
+}
 
 type Session = {
 	server: OAuthServer;
@@ -105,22 +132,24 @@ export class PluginOAuth {
 		return { signedIn: statuses.every(status => status.signedIn), ...(error ? { error } : {}) };
 	}
 
-	async signIn(plugin: string, port: number, changed: () => void): Promise<{ url: string; opened: boolean }> {
+	async signIn(plugin: string, port: number, changed: () => void, log?: Log): Promise<{ url: string; opened: boolean }> {
 		const sessions = this.requirePlugin(plugin);
 		const { outcome } = await this.starting.run({ scope: "sign-in", key: plugin, run: async () => {
 			const existing = this.attempts.get(plugin);
 			if (existing?.url) return { kind: "succeeded", value: { url: existing.url } };
 			for (const session of sessions) {
 				const lifetime = session.lifetime.signal;
+				const diagnostic: SignInDiagnostic = { step: "read-session", httpStatus: null };
 				try {
 					lifetime.throwIfAborted();
 					const value = await readSession(session.server);
 					lifetime.throwIfAborted();
 					if (value?.kind === "signed-in" && (!expired(value) || value.tokens.refresh_token)) continue;
 					await session.write?.catch(() => undefined);
-					const url = await this.begin(session, lifetime, port, changed);
+					const url = await this.begin(session, lifetime, port, changed, diagnostic);
 					return { kind: "succeeded", value: { url } };
-				} catch {
+				} catch (error) {
+					logSignInFailure(log ?? (await import("./log")).log, session.server, diagnostic, error);
 					throw new Error(signInFailed);
 				}
 			}
@@ -131,14 +160,16 @@ export class PluginOAuth {
 		return { url, opened: await this.open(url) };
 	}
 
-	private async begin(session: Session, lifetime: AbortSignal, port: number, changed: () => void): Promise<string> {
+	private async begin(
+		session: Session, lifetime: AbortSignal, port: number, changed: () => void, diagnostic: SignInDiagnostic,
+	): Promise<string> {
 		lifetime.throwIfAborted();
 		const { server } = session;
 		const state = randomBytes(32).toString("hex");
 		const redirectUrl = new URL(`http://127.0.0.1:${port}/callback`);
 		const attempt: Attempt = { session, state, lifetime, redirectUrl };
 		this.attempts.set(server.plugin, attempt);
-		const fetch = oauthFetch(server, lifetime);
+		const fetch = oauthFetch(server, lifetime, status => { diagnostic.httpStatus = status; });
 		let challenge: Pick<AuthOptions, "resourceMetadataUrl" | "scope"> | undefined;
 		let client: StoredOAuthClientInformation | undefined;
 		let discovery: OAuthDiscoveryState | undefined;
@@ -161,6 +192,7 @@ export class PluginOAuth {
 			codeVerifier: () => { throw new Error(signInFailed); },
 			saveCodeVerifier: value => { attempt.verifier = value; },
 			redirectToAuthorization: url => {
+				diagnostic.step = "authorize";
 				checkEndpoint(server, url);
 				attempt.url = url.href;
 			},
@@ -168,6 +200,7 @@ export class PluginOAuth {
 
 		const probe = new Client({ name: "ace", version: "1" });
 		try {
+			diagnostic.step = "probe";
 			await probe.connect(new StreamableHTTPClientTransport(server.url, {
 				fetch,
 				requestInit: { headers: server.headers },
@@ -180,9 +213,19 @@ export class PluginOAuth {
 				if (!challenge || !(error instanceof UnauthorizedError)) throw error;
 			});
 			if (!challenge) throw new Error(signInFailed);
-			const result = await auth(provider, { serverUrl: server.url, ...challenge, fetchFn: fetch });
+			diagnostic.step = "discover";
+			diagnostic.httpStatus = null;
+			const result = await auth(provider, {
+				serverUrl: server.url, ...challenge,
+				fetchFn: (input, init) => {
+					diagnostic.step = init?.method === "POST" ? "register-client" : "discover";
+					diagnostic.httpStatus = null;
+					return fetch(input, init);
+				},
+			});
 			const { verifier } = attempt;
 			if (result !== "REDIRECT" || !attempt.url || !client || !discovery || !verifier) throw new Error(signInFailed);
+			diagnostic.step = "persist-pending";
 			await this.persist(session, lifetime, { kind: "pending", client, discovery, resource, verifier });
 			lifetime.throwIfAborted();
 			attempt.timer = setTimeout(() => {
@@ -192,13 +235,13 @@ export class PluginOAuth {
 			}, 5 * 60_000).unref();
 			session.error = undefined;
 			return attempt.url;
-		} catch {
+		} catch (error) {
 			if (this.attempts.get(server.plugin) === attempt) this.attempts.delete(server.plugin);
 			if (!lifetime.aborted) {
 				session.error = signInFailed;
 				changed();
 			}
-			throw new Error(signInFailed);
+			throw error;
 		} finally {
 			await probe.close().catch(() => undefined);
 		}
@@ -251,16 +294,10 @@ export class PluginOAuth {
 			changed();
 			return callbackPage("Signed in. You can close this tab.");
 		} catch (error) {
-			log("warn", "plugin.sign-in.failed", {
-				plugin: server.plugin, server: server.name,
+			logSignInFailure(log, server, {
 				step: error instanceof IssuerMismatchError ? "validate-issuer" : step,
-				errorClass: error instanceof Error && callbackErrorClasses.has(error.name) ? error.name : "UnknownError",
-				oauthError: error instanceof OAuthError ? (oauthErrors.has(error.code) ? error.code : "other") : null,
 				httpStatus,
-				...(step === "validate-tokens" && error instanceof ZodError
-					? { fields: error.issues.map(issue => issue.path.join(".")) }
-					: {}),
-			});
+			}, error);
 			if (!lifetime.aborted) {
 				session.error = signInFailed;
 				await this.remove(session, lifetime).catch(() => undefined);

@@ -10,8 +10,8 @@ import { SharedWork } from "@neuve/records-core/shared-work";
 import { declaresToolUseId } from "@neuve/runtime";
 
 import { key } from "./keys";
-import { carriedPlugins, expandPluginValue, type OAuthServer, type Plugin, type PluginServer } from "./plugin-manifest";
-import { oauthAccessToken, pluginOAuthTransport } from "./plugin-oauth-client";
+import { carriedPlugins, expandPluginValue, type Plugin, type PluginServer } from "./plugin-manifest";
+import { pluginCredential, pluginMcp } from "./plugin-oauth-client";
 import { pluginPreferences } from "./preferences";
 
 const CONNECT = { timeout: 20_000 };
@@ -19,7 +19,7 @@ const STARTUP_TIMEOUT = 10_000;
 const TOOL_NAME_LIMIT = 64 - "mcp__neuve__".length;
 const request = globalThis.fetch;
 
-function transport(config: PluginServer, credentials: ReadonlyMap<string, string>, oauth?: OAuthServer, signedIn = false) {
+function transport(config: PluginServer, credentials: ReadonlyMap<string, string>) {
 	const expand = (value: string) => expandPluginValue(value, credentials);
 	const expandValues = (fields: Record<string, string> = {}) =>
 		Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, expand(value)]));
@@ -34,12 +34,9 @@ function transport(config: PluginServer, credentials: ReadonlyMap<string, string
 	const url = new URL(expand(config.url));
 	if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Expected an HTTP URL");
 	const headers = new Headers(expandValues(config.headers));
-	const fallback = !signedIn && oauth?.apiKey && credentials.get(oauth.apiKey);
-	if (fallback) headers.set("authorization", `Bearer ${fallback}`);
 	return new StreamableHTTPClientTransport(url, {
 		fetch: request,
 		requestInit: { headers, redirect: "error" },
-		...(oauth && signedIn ? pluginOAuthTransport(oauth) : {}),
 	});
 }
 
@@ -57,7 +54,7 @@ type EnabledPlugin = { startup?: Startup };
 type PluginRegistry = Parameters<NonNullable<Options["plugins"]>["refresh"]>[0];
 
 async function connect(
-	plugin: Plugin, credentials: ReadonlyMap<string, string>, signedIn: ReadonlySet<string>, names: Set<string>, log: Log,
+	plugin: Plugin, credentials: ReadonlyMap<string, string>, signedIn: ReadonlySet<string>, lookup: typeof key, names: Set<string>, log: Log,
 	signal: AbortSignal, opened: Map<Client, { plugin: string; closing?: Promise<void> }>,
 	close: (clients: Client[]) => Promise<void>,
 	disconnected: (connection: Connection) => void,
@@ -71,11 +68,14 @@ async function connect(
 	};
 	for (const [server, config] of Object.entries(plugin.servers)) {
 		if (signal.aborted) return;
-		const client = new Client({ name: "ace", version: "1" });
-		opened.set(client, { plugin: plugin.name });
-		connection.clients.push(client);
 		try {
-			const wire = transport(config, credentials, plugin.oauth.get(server), signedIn.has(server));
+			const oauth = plugin.oauth.get(server);
+			const { client, transport: wire } = oauth ? pluginMcp(oauth, lookup) : {
+				client: new Client({ name: "ace", version: "1" }),
+				transport: transport(config, credentials),
+			};
+			opened.set(client, { plugin: plugin.name });
+			connection.clients.push(client);
 			const observeError = (error: unknown) => {
 				if ((error instanceof SdkError && (error.code === SdkErrorCode.ConnectionClosed || error.code === SdkErrorCode.NotConnected))
 					|| (wire instanceof StreamableHTTPClientTransport && wire.sessionId
@@ -283,16 +283,14 @@ export function pluginTools(
 			if (ready) {
 				for (const [name, server] of plugin.oauth) {
 					try {
-						if (await oauthAccessToken(server)) {
+						const credential = await pluginCredential(server, name => Promise.resolve(credentials.get(name) ?? lookup(name)));
+						if (credential?.kind === "oauth") {
 							signedIn.add(name);
 							continue;
 						}
-						if (server.apiKey) {
-							const fallback = credentials.get(server.apiKey) ?? await lookup(server.apiKey);
-							if (fallback) {
-								credentials.set(server.apiKey, fallback);
-								continue;
-							}
+						if (credential?.kind === "api-key") {
+							credentials.set(credential.name, credential.value);
+							continue;
 						}
 					} catch {
 						// Sign-in and keychain failures stay outside the tool surface.
@@ -312,7 +310,7 @@ export function pluginTools(
 			}
 			if (!ready) return;
 			const names = new Set(registry.snapshot().tools().map(({ tool }) => tool.name));
-			const connected = await connect(plugin, credentials, signedIn, names, log, lifetime.signal, opened, close,
+			const connected = await connect(plugin, credentials, signedIn, lookup, names, log, lifetime.signal, opened, close,
 				connection => {
 					if (active.get(plugin) !== connection) return;
 					const enabled = enabledPlugins.get(plugin);

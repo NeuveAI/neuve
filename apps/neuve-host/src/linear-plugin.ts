@@ -1,9 +1,9 @@
 import planning from "../plugins/linear/planning.json" with { type: "json" };
 import { linearPlugin } from "./plugin-manifest";
-import { pluginOAuth } from "./plugin-oauth";
-import { pluginOAuthTransport } from "./plugin-oauth-client";
+import { key } from "./keys";
+import { pluginCredential, pluginMcp } from "./plugin-oauth-client";
 
-export function linearPlanningSource(plugin = linearPlugin, oauth = pluginOAuth) {
+export function linearPlanningSource(plugin = linearPlugin) {
 	const server = plugin.oauth.get("linear");
 	if (!server) throw new Error("Linear planning requires the plugin's OAuth server");
 	return {
@@ -14,16 +14,17 @@ export function linearPlanningSource(plugin = linearPlugin, oauth = pluginOAuth)
 			transport: { type: "http", url: server.url.href, headers: server.headers },
 			variables: [],
 		},
-		http: () => pluginOAuthTransport(server),
+		http: (_name: string, info: Parameters<typeof pluginMcp>[2]) => pluginMcp(server, key, info),
 		async available() {
 			try {
 				const { pluginPreferences } = await import("./preferences");
-				return pluginPreferences()[plugin.name] === true && (await oauth.status(plugin))?.signedIn === true;
+				if (pluginPreferences()[plugin.name] !== true) return false;
 			} catch {
 				const { log } = await import("./log");
 				log("warn", "plugin.preferences.failed", { plugin: plugin.name });
 				return false;
 			}
+			return pluginCredential(server).then(Boolean, () => false);
 		},
 	};
 }

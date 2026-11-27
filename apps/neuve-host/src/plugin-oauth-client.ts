@@ -1,9 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { UnauthorizedError, type AuthProvider, type FetchLike } from "@modelcontextprotocol/client";
+import { Client, StreamableHTTPClientTransport, UnauthorizedError } from "@modelcontextprotocol/client";
 
 import { token } from "./auth";
 import { config } from "./config";
+import { key } from "./keys";
 import type { OAuthServer } from "./plugin-manifest";
 import { expired, fingerprint, readSession } from "./plugin-oauth-store";
 
@@ -31,23 +32,7 @@ async function refresh({ plugin, name }: OAuthServer, rejected?: string): Promis
 	if (!response.ok) throw new UnauthorizedError();
 }
 
-function redactBody(response: Response, bearer: string): Response {
-	if (!response.body) return response;
-	let carry = "";
-	const body = response.body.pipeThrough(new TextDecoderStream()).pipeThrough(new TransformStream<string, string>({
-		transform(chunk, controller) {
-			carry += chunk;
-			const end = carry.lastIndexOf("\n") + 1;
-			if (!end) return;
-			controller.enqueue(carry.slice(0, end).replaceAll(bearer, "[redacted]"));
-			carry = carry.slice(end);
-		},
-		flush(controller) { controller.enqueue(carry.replaceAll(bearer, "[redacted]")); },
-	})).pipeThrough(new TextEncoderStream());
-	return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-}
-
-export async function oauthAccessToken(server: OAuthServer): Promise<string | undefined> {
+async function oauthAccessToken(server: OAuthServer): Promise<string | undefined> {
 	let saved = await readSession(server);
 	if (saved?.kind === "signed-in" && expired(saved)) {
 		await refresh(server);
@@ -56,14 +41,79 @@ export async function oauthAccessToken(server: OAuthServer): Promise<string | un
 	return saved?.kind === "signed-in" && !expired(saved) ? saved.tokens.access_token : undefined;
 }
 
-export function pluginOAuthTransport(server: OAuthServer): { authProvider: AuthProvider; fetch: FetchLike } {
+type Credential = { kind: "oauth"; value: string } | { kind: "api-key"; name: string; value: string };
+
+export async function pluginCredential(server: OAuthServer, lookup = key): Promise<Credential | undefined> {
+	const token = await oauthAccessToken(server);
+	if (token) return { kind: "oauth", value: token };
+	if (!server.apiKey) return;
+	const fallback = await lookup(server.apiKey);
+	if (fallback) return { kind: "api-key", name: server.apiKey, value: fallback };
+}
+
+export function pluginMcp(
+	server: OAuthServer, lookup = key, info: ConstructorParameters<typeof Client>[0] = { name: "ace", version: "1" },
+): { client: Client; transport: StreamableHTTPClientTransport } {
+	const sent = new Map<string, Credential["kind"]>();
 	const rejected = new WeakMap<Response, string>();
-	return {
+	const mask = (value: string) => {
+		for (const secret of sent.keys()) value = value.replaceAll(secret, "[redacted]");
+		return value;
+	};
+	function maskObject(value: object): Record<string, unknown> {
+		return Object.fromEntries(Object.entries(value).map(([name, field]) => [mask(name), maskValue(field)]));
+	}
+	function maskValue(value: unknown): unknown {
+		if (typeof value === "string") return maskText(value);
+		if (Array.isArray(value)) return value.map(maskValue);
+		if (value !== null && typeof value === "object") return maskObject(value);
+		return value;
+	}
+	function maskText(text: string): string {
+		if (sent.has(text)) return "[redacted]";
+		if (/^\s*[[{]/.test(text)) {
+			try {
+				const value: unknown = JSON.parse(text);
+				const decoded = JSON.stringify(value);
+				const masked = JSON.stringify(maskValue(value));
+				return decoded === masked ? text : masked;
+			} catch {
+				// This text block does not contain a JSON value.
+			}
+		}
+		return mask(text);
+	}
+	function exposesSecret(value: unknown): boolean {
+		if (typeof value === "string") return mask(value) !== value;
+		return value !== null && typeof value === "object"
+			&& Object.entries(value).some(([name, field]) => mask(name) !== name || exposesSecret(field));
+	}
+	const client = new (class extends Client {
+		override async listTools(...args: Parameters<Client["listTools"]>) {
+			const result = await super.listTools(...args);
+			return {
+				...result,
+				tools: result.tools.filter(tool => !exposesSecret(tool.name) && !exposesSecret(tool.inputSchema))
+					.map(tool => ({ ...tool, description: tool.description && mask(tool.description) })),
+			};
+		}
+		override async callTool(...args: Parameters<Client["callTool"]>) {
+			const result = await super.callTool(...args);
+			return {
+				...result,
+				content: result.content?.map(block => block.type === "text" ? { ...block, text: maskText(block.text) } : block),
+				structuredContent: result.structuredContent && maskObject(result.structuredContent),
+			};
+		}
+	})(info);
+	const transport = new StreamableHTTPClientTransport(server.url, {
+		requestInit: { headers: server.headers },
 		authProvider: {
 			async token() {
-				const token = await oauthAccessToken(server);
-				if (!token) throw new UnauthorizedError();
-				return token;
+				const credential = await pluginCredential(server, lookup);
+				if (!credential) throw new UnauthorizedError();
+				sent.set(credential.value, credential.kind);
+				return credential.value;
 			},
 			async onUnauthorized({ response }) {
 				const digest = rejected.get(response);
@@ -74,9 +124,10 @@ export function pluginOAuthTransport(server: OAuthServer): { authProvider: AuthP
 		async fetch(input, init) {
 			const response = await request(input, { ...init, redirect: "error" });
 			const bearer = new Headers(init?.headers).get("authorization")?.slice("Bearer ".length);
-			if (!bearer) return response;
-			if (response.status === 401) rejected.set(response, fingerprint(bearer));
-			return response.ok ? redactBody(response, bearer) : response;
+			if (response.status === 401 && bearer && sent.get(bearer) === "oauth")
+				rejected.set(response, fingerprint(bearer));
+			return response;
 		},
-	};
+	});
+	return { client, transport };
 }
