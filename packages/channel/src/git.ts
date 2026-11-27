@@ -15,6 +15,8 @@ export function gitArgs([command, ...args]: GitCommand, config: readonly string[
 	return [
 		...config.flatMap(value => ["-c", value]),
 		"-c", "core.fsmonitor=false",
+		// A relative hooks path resolves inside the lane, where an agent writes.
+		"-c", "core.hooksPath=/dev/null",
 		"-c", "submodule.recurse=false",
 		command, ...(submoduleFlags.get(command) ?? []), ...args,
 	];

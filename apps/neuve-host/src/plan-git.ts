@@ -23,7 +23,7 @@ async function git(
 ) {
 	const child = Bun.spawn([
 		"git", "-C", cwd, "--no-pager",
-		...gitArgs(args, ["core.hooksPath=/dev/null", "protocol.allow=never"]),
+		...gitArgs(args, ["protocol.allow=never"]),
 	], {
 		env: {
 			PATH: process.env.PATH,

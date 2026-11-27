@@ -71,7 +71,7 @@ export function git(dir: string, ...args: string[]): string {
 /**
  * What an agent can plant in its own lane: a submodule checkout, whose commit the lane records,
  * and an untracked nested repository, each with Git settings of its own that run a script through
- * fsmonitor and a clean filter. `.gitmodules` asks Git to look inside the submodule and to fetch
+ * fsmonitor, a clean filter and a fetch's upload program. `.gitmodules` asks Git to look inside the submodule and to fetch
  * into it. `ran` returns what the script recorded; the plant is checked live before it is cleared.
  */
 export async function plantNested(lane: string, root: string) {
@@ -82,6 +82,7 @@ export async function plantNested(lane: string, root: string) {
 	const plant = async (repo: string) => {
 		git(repo, "config", "core.fsmonitor", `'${script}'`);
 		git(repo, "config", "filter.x.clean", `'${script}' clean`);
+		git(repo, "config", "remote.origin.uploadpack", `'${script}' upload`);
 		// Same size, new content: Git must hash the file, which runs the clean filter.
 		await writeFile(join(repo, "file.txt"), "b\n");
 	};

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 
@@ -36,7 +36,7 @@ test("the changes view never runs a nested repository's settings and still shows
 	}
 });
 
-test("fetching a lane's base moves its ref without fetching into a nested repository", async () => {
+test("fetching a lane's base moves its ref and runs no hook or nested repository's program", async () => {
 	const fixture = await Fixture.create();
 	const cwd = fixture.lane.path;
 	const env = scratchEnv(cwd, fixture.root);
@@ -53,6 +53,11 @@ test("fetching a lane's base moves its ref without fetching into a nested reposi
 		git(source, "-c", "filter.x.clean=cat", "commit", "-qam", "move upstream submodule pointer");
 		git(upstream, "update-index", "--cacheinfo", `160000,${git(source, "rev-parse", "HEAD").trim()},sub`);
 		git(upstream, "commit", "-qm", "advance upstream");
+
+		// The project's own relative hooks path resolves inside the lane, where the agent writes a hook.
+		git(cwd, "config", "core.hooksPath", ".githooks");
+		await mkdir(join(cwd, ".githooks"));
+		await writeFile(join(cwd, ".githooks", "reference-transaction"), `#!/bin/sh\necho hook >> '${join(fixture.root, "nested ran")}'\n`, { mode: 0o755 });
 
 		await fetchBase(env, cwd, base, BACKGROUND_CONTEXT);
 		expect(git(cwd, "rev-parse", base).trim()).toBe(git(upstream, "rev-parse", "HEAD").trim());
