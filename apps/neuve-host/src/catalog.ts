@@ -14,6 +14,7 @@ import { userInfo } from "node:os";
 import { join } from "node:path";
 
 import { type Metadata, type ModelRef, type RunEnd, type Said, validateName } from "@ace/channel";
+import { gitArgs } from "@ace/channel/git";
 
 import { config } from "./config";
 import { GIT_LOCAL } from "./host-config";
@@ -171,7 +172,8 @@ function lanePrefix(project: string, name: string, names: Set<string>): string {
 	if (existsSync(join(project, ".git"))) {
 		const env = { ...process.env };
 		for (const key of GIT_LOCAL) delete env[key];
-		const refs = Bun.spawnSync(["git", "-C", project, "for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/"], { env });
+		const args = gitArgs(["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/"]);
+		const refs = Bun.spawnSync(["git", "-C", project, ...args], { env });
 		if (!refs.success) throw new Error(refs.stderr.toString().trim() || "Could not read the project's Git branches.");
 		for (const ref of refs.stdout.toString().trimEnd().split("\n")) {
 			const [prefix] = ref.split("/", 1);

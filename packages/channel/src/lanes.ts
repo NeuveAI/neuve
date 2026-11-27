@@ -11,7 +11,7 @@ import {
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { z } from "zod";
 
-import { git, quote, run } from "./git";
+import { git, quote, run, type GitCommand } from "./git";
 import { toolArguments, toolRefusal } from "./tool-arguments";
 
 /**
@@ -65,22 +65,22 @@ export type Selection = { base: string; commit: string };
 
 /** Fetches one remote branch to its remote-tracking ref, which then becomes the base. */
 async function fetched(
-	run: (args: string) => Promise<string>,
+	run: (args: GitCommand, quiet?: boolean) => Promise<string>,
 	remote: string,
 	branch: string,
 ): Promise<Selection> {
 	const base = `refs/remotes/${remote}/${branch}`;
-	await run(`fetch ${quote(remote)} ${quote(`+refs/heads/${branch}:${base}`)}`).catch((error) => {
+	await run(["fetch", remote, `+refs/heads/${branch}:${base}`]).catch((error) => {
 		throw new Error(`Could not fetch ${remote}/${branch} (${error.message})`);
 	});
-	const commit = (await run(`rev-parse --verify --end-of-options ${quote(`${base}^{commit}`)}`))
+	const commit = (await run(["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`]))
 		.trim();
 	return { base, commit };
 }
 
 /** A remote's HEAD names its default branch as the remote advertises it now. */
-async function advertised(run: (args: string) => Promise<string>, remote: string) {
-	const output = await run(`ls-remote --symref ${quote(remote)} HEAD`).catch((error) => {
+async function advertised(run: (args: GitCommand, quiet?: boolean) => Promise<string>, remote: string) {
+	const output = await run(["ls-remote", "--symref", remote, "HEAD"]).catch((error) => {
 		throw new Error(`Could not read ${remote}'s default branch (${error.message})`);
 	});
 	const branch = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(output)?.[1];
@@ -99,8 +99,8 @@ export async function select(
 	requested: string | undefined,
 	context: Context,
 ): Promise<Selection> {
-	const run = (args: string) => git(env, `-C ${quote(project)} ${args}`, context);
-	const remotes = (await run("remote")).split("\n");
+	const run = (args: GitCommand, quiet = false) => git(env, args, context, { cwd: project, quiet });
+	const remotes = (await run(["remote"])).split("\n");
 	if (!requested && remotes.includes("origin")) return advertised(run, "origin");
 	requested ||= "HEAD";
 	const ref = requested.replace(/^refs\/remotes\//, "");
@@ -111,11 +111,11 @@ export async function select(
 	if (branch === "HEAD") return advertised(run, remote!);
 	// An expression such as origin/main~2 is resolved locally like any other commit.
 	const isBranch = branch
-		&& await run(`check-ref-format ${quote(`refs/heads/${branch}`)}`).then(() => true, () => false);
+		&& await run(["check-ref-format", `refs/heads/${branch}`]).then(() => true, () => false);
 	if (isBranch) return fetched(run, remote!, branch);
 	// Output is parsed, so warnings such as an ambiguous name stay out of it.
 	const resolve = (option: string, revision: string) =>
-		run(`rev-parse --verify ${option} --end-of-options ${quote(revision)} 2>/dev/null`).then(
+		run(["rev-parse", "--verify", option, "--end-of-options", revision], true).then(
 			(output) => output.trim(),
 			() => {
 				throw new Error(`No branch, tag, or commit named ${JSON.stringify(requested)}`);

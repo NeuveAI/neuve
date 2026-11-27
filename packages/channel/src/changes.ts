@@ -1,7 +1,7 @@
 import type { Context } from "@earendil-works/chord";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 
-import { git, quote } from "./git";
+import { git, type GitCommand } from "./git";
 import type { Change, Changes } from "./protocol";
 
 const FILES = 500;
@@ -10,8 +10,8 @@ const PATCH = 512 * 1024;
 type Stat = Omit<Change, "version">;
 
 /** Reads parse stdout, so their stderr is dropped; exec combines the two streams. */
-const read = (env: ExecutionEnv, cwd: string, args: string, context: Context, ok?: number[]) =>
-	git(env, `${args} 2>/dev/null`, context, { cwd, ...(ok ? { ok } : {}) });
+const read = (env: ExecutionEnv, cwd: string, args: GitCommand, context: Context, ok?: number[]) =>
+	git(env, args, context, { cwd, quiet: true, ...(ok ? { ok } : {}) });
 
 /**
  * Lanes from before version 2 of `LanesDoc` recorded no base. They compare against origin's
@@ -19,14 +19,14 @@ const read = (env: ExecutionEnv, cwd: string, args: string, context: Context, ok
  * HEAD in a repository without origin.
  */
 async function legacy(env: ExecutionEnv, cwd: string, project: string, context: Context) {
-	const remotes = (await read(env, cwd, "remote", context)).split("\n");
+	const remotes = (await read(env, cwd, ["remote"], context)).split("\n");
 	if (!remotes.includes("origin")) {
-		return (await read(env, project, "rev-parse HEAD", context)).trim();
+		return (await read(env, project, ["rev-parse", "HEAD"], context)).trim();
 	}
-	const ref = (await read(env, cwd, "symbolic-ref -q refs/remotes/origin/HEAD", context, [0, 1]))
+	const ref = (await read(env, cwd, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"], context, [0, 1]))
 		.trim();
 	const commit = ref
-		&& await read(env, cwd, `rev-parse -q --verify ${quote(`${ref}^{commit}`)}`, context, [0, 1]);
+		&& await read(env, cwd, ["rev-parse", "-q", "--verify", `${ref}^{commit}`], context, [0, 1]);
 	if (commit) return ref;
 	throw new Error(
 		"origin's default branch is unknown locally. Run `git fetch origin` and `git remote set-head origin --auto` in the project, or switch to the lane with a base.",
@@ -44,10 +44,10 @@ async function base(
 	target: string | undefined,
 	context: Context,
 ) {
-	const head = (await read(env, cwd, "rev-parse HEAD", context)).trim();
+	const head = (await read(env, cwd, ["rev-parse", "HEAD"], context)).trim();
 	if (cwd === project) return { base: head, head, against: undefined };
 	const against = target || await legacy(env, cwd, project, context);
-	const fork = await read(env, cwd, `merge-base HEAD ${quote(against)}`, context).catch(() => {
+	const fork = await read(env, cwd, ["merge-base", "HEAD", against], context).catch(() => {
 		throw new Error(
 			`Could not find where the lane forked from ${against}. Switch to the lane with another base.`,
 		);
@@ -82,10 +82,10 @@ function numstat(text: string): Stat[] {
  * an unignored `node_modules`, is only counted so the Diff neither stats nor lists each file.
  */
 async function untracked(env: ExecutionEnv, cwd: string, context: Context) {
-	const list = async (args: string) =>
-		(await read(env, cwd, `ls-files --others --exclude-standard ${args} -z`, context))
+	const list = async (...args: string[]) =>
+		(await read(env, cwd, ["ls-files", "--others", "--exclude-standard", ...args, "-z"], context))
 			.split("\0").filter(Boolean);
-	const [entries, all] = await Promise.all([list("--directory --no-empty-directory"), list("")]);
+	const [entries, all] = await Promise.all([list("--directory", "--no-empty-directory"), list()]);
 	const counts = new Map(entries.filter((entry) => entry.endsWith("/")).map((dir) => [dir, 0]));
 	const owner = new Map<string, string>();
 	for (const file of all) {
@@ -107,7 +107,7 @@ async function untracked(env: ExecutionEnv, cwd: string, context: Context) {
 			const stat = await read(
 				env,
 				cwd,
-				`diff --no-index --numstat -z -- /dev/null ${quote(file)}`,
+				["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", file],
 				context,
 				[0, 1],
 			);
@@ -135,13 +135,13 @@ async function unpushed(
 	fork: string | undefined,
 	context: Context,
 ) {
-	const upstream = await read(env, cwd, `rev-list --count ${quote("@{upstream}..HEAD")}`, context, [
+	const upstream = await read(env, cwd, ["rev-list", "--count", "@{upstream}..HEAD"], context, [
 		0,
 		128,
 	]);
 	if (upstream) return Number(upstream);
-	if (!fork || !(await read(env, cwd, "remote", context)).trim()) return 0;
-	return Number(await read(env, cwd, `rev-list --count ${quote(`${fork}..HEAD`)}`, context));
+	if (!fork || !(await read(env, cwd, ["remote"], context)).trim()) return 0;
+	return Number(await read(env, cwd, ["rev-list", "--count", `${fork}..HEAD`], context));
 }
 
 export async function changes(
@@ -152,15 +152,15 @@ export async function changes(
 	context: Context,
 ): Promise<Changes> {
 	const { against, ...range } = await base(env, cwd, project, lane?.base, context);
-	const stat = async (args: string, state: Stat["state"]) =>
-		numstat(await read(env, cwd, `diff -M --numstat -z ${args}`, context))
+	const stat = async (revisions: string[], state: Stat["state"]) =>
+		numstat(await read(env, cwd, ["diff", "-M", "--numstat", "-z", ...revisions], context))
 			.map((change) => Object.assign(change, { state }));
 	const [branch, behind, ahead, committed, uncommitted, loose] = await Promise.all([
-		read(env, cwd, "rev-parse --abbrev-ref HEAD", context),
-		against && read(env, cwd, `rev-list --count ${quote(`HEAD..${against}`)}`, context),
+		read(env, cwd, ["rev-parse", "--abbrev-ref", "HEAD"], context),
+		against && read(env, cwd, ["rev-list", "--count", `HEAD..${against}`], context),
 		unpushed(env, cwd, against && range.base, context),
-		stat(`${range.base} ${range.head}`, "committed"),
-		stat(range.head, "uncommitted"),
+		stat([range.base, range.head], "committed"),
+		stat([range.head], "uncommitted"),
 		untracked(env, cwd, context),
 	]);
 	const files = await Promise.all(
@@ -199,17 +199,15 @@ export async function fetchBase(
 ) {
 	const ref = base?.startsWith("refs/remotes/") && base.slice("refs/remotes/".length);
 	if (!ref) return;
-	const remote = (await read(env, cwd, "remote", context)).split("\n")
+	const remote = (await read(env, cwd, ["remote"], context)).split("\n")
 		.filter((name) => name && ref.startsWith(`${name}/`))
 		.sort((a, b) => b.length - a.length)[0];
 	if (!remote) return;
 	const branch = ref.slice(remote.length + 1);
-	await git(env, `fetch -q ${quote(remote)} ${quote(`+refs/heads/${branch}:${base}`)}`, context, {
-		cwd,
-	});
+	await git(env, ["fetch", "-q", remote, `+refs/heads/${branch}:${base}`], context, { cwd });
 }
 
-/** `file` must be one `changes` listed; it is passed to git only as a quoted literal path. */
+/** `file` must be one `changes` listed. */
 export async function patch(
 	env: ExecutionEnv,
 	cwd: string,
@@ -223,34 +221,34 @@ export async function patch(
 		throw new Error(`Invalid path ${file}`);
 	}
 	const untracked = () =>
-		read(env, cwd, `diff --no-index -- /dev/null ${quote(file)}`, context, [0, 1]);
-	const tracked = async (range: string) => {
+		read(env, cwd, ["diff", "--no-index", "--", "/dev/null", file], context, [0, 1]);
+	const tracked = async (...revisions: string[]) => {
 		// A renamed file's diff needs its old path in the pathspec too.
-		const status = await read(env, cwd, `diff -M --name-status -z ${range}`, context);
+		const status = await read(env, cwd, ["diff", "-M", "--name-status", "-z", ...revisions], context);
 		const fields = status.split("\0");
-		let paths = quote(file);
+		const paths = [file];
 		for (let i = 0; i < fields.length - 1;) {
 			const status = fields[i++]!;
 			const before = fields[i++]!;
 			if (!status.startsWith("R") && !status.startsWith("C")) continue;
 			const after = fields[i++]!;
-			if (after === file) paths = `${quote(before)} ${quote(file)}`;
+			if (after === file) paths.unshift(before);
 		}
-		return read(env, cwd, `diff -M ${range} -- ${paths}`, context);
+		return read(env, cwd, ["diff", "-M", ...revisions, "--", ...paths], context);
 	};
 	const from = async () => (await base(env, cwd, project, target, context)).base;
 	let text: string;
 	if (state === "untracked") text = await untracked();
 	else if (state === "uncommitted") text = await tracked("HEAD");
-	else if (state === "committed") text = await tracked(`${await from()} HEAD`);
+	else if (state === "committed") text = await tracked(await from(), "HEAD");
 	else {
 		// Older clients list each file once, its worktree against the base.
 		const range = await from();
-		const known = await read(env, cwd, `ls-files -- ${quote(file)}`, context);
+		const known = await read(env, cwd, ["ls-files", "--", file], context);
 		const historic = await read(
 			env,
 			cwd,
-			`diff -M --name-status -z ${range} -- ${quote(file)}`,
+			["diff", "-M", "--name-status", "-z", range, "--", file],
 			context,
 		);
 		text = known.trim() || historic ? await tracked(range) : await untracked();

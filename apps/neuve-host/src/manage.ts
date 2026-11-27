@@ -235,7 +235,7 @@ async function disposeChatLanes(record: catalog.Listing): Promise<void> {
 			const found = listed.stdout.split("\0\0").map(item => item.split("\0")).find(fields => fields[0] === `worktree ${path}`);
 			if (!found?.includes(`branch refs/heads/${lane.branch}`)) throw new Error("The work lane's Git registration changed, so it was kept");
 			// Do not let status.showUntrackedFiles=no hide work from Git's removal check.
-			const removed = await git(record.project, ["-c", "status.showUntrackedFiles=normal", "worktree", "remove", "--", path]);
+			const removed = await git(record.project, ["worktree", "remove", "--", path], ["status.showUntrackedFiles=normal"]);
 			if (removed.status !== 0) throw new Error((removed.stderr || removed.stdout).trim() || "Git could not remove the work lane");
 			if (existsSync(path)) throw new Error("Git reported removal but the work lane folder remains");
 			log("info", "chat.lane.removed", { channel: record.id, path, branch: lane.branch });

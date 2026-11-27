@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import type { GitCommand } from "@ace/channel/git";
 import * as catalog from "./catalog";
 import { config, inside } from "./host-config";
 import {git} from "./projects";
 import type {LaneAssignment} from "./extension-protocol";
 const FIRST_LANE = "work";
 const NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
-async function output(dir: string, args: string[]): Promise<string> {
+async function output(dir: string, args: GitCommand): Promise<string> {
 	const result = await git(dir, args);
 	if (result.status !== 0) {
 		throw new Error((result.stderr || result.stdout).trim() || `git ${args[0]} failed`);

@@ -1,3 +1,4 @@
+import { gitArgs } from "@ace/channel/git";
 import type {
 	GithubCheck,
 	GithubComment,
@@ -187,13 +188,8 @@ async function gh<T>(args: string[]): Promise<T> {
  * `path`; only Git cleans up what its own failed clone created.
  */
 export async function clone(repo: string, path: string): Promise<void> {
-	const child = Bun.spawn([
-		"git",
-		"clone",
-		"--",
-		`https://github.com/${repository(repo)}.git`,
-		path,
-	], {
+	const command = gitArgs(["clone", "--", `https://github.com/${repository(repo)}.git`, path]);
+	const child = Bun.spawn(["git", ...command], {
 		env: { ...process.env, ...githubEnv(), GIT_TERMINAL_PROMPT: "0" },
 		stdin: "ignore",
 		stdout: "ignore",
@@ -249,7 +245,7 @@ export function login(changed: () => void): string | undefined {
 	return owner;
 }
 
-export const REMOTES = ["config", "--local", "--get-regexp", "^remote\\..*\\.(url|gh-resolved)$"];
+export const REMOTES = ["config", "--local", "--get-regexp", "^remote\\..*\\.(url|gh-resolved)$"] as const;
 
 /** The GitHub repository in `git config` output for REMOTES, preferring gh's chosen base. */
 export function remote(config: string): string | null {
@@ -279,7 +275,7 @@ export function remote(config: string): string | null {
 
 /** Reading a remote needs no GitHub credentials, including on a teammate's host. */
 export async function project(path: string): Promise<string | null> {
-	const child = Bun.spawn(["git", "-C", path, ...REMOTES], {
+	const child = Bun.spawn(["git", "-C", path, ...gitArgs(REMOTES)], {
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "ignore",

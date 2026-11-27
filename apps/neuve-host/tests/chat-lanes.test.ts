@@ -8,11 +8,14 @@ import { ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
 import type { Changes, ChannelInfo, Event } from "@ace/channel/protocol";
 import * as catalog from "../src/catalog";
 import { assign } from "../src/channel-create";
+import { unready } from "../src/compute";
 import { configure, bindConfiguredCatalog } from "../src/host-config";
 import { archive } from "../src/manage";
 import { open as openLog } from "../src/log";
 import { GatewayClient } from "../src/private-gateway-client";
+import { nativeHandoff } from "../src/review";
 import { startHost } from "./fixture-host";
+import { plantNested } from "../../../packages/channel/tests/helpers";
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -60,6 +63,41 @@ test("archive removes only host-created clean chat worktrees, retains refs/histo
 	expect(await readFile(join(catalog.paths(record.id).base, "history-proof.txt"), "utf8")).toBe("retained history");
 	expect((await archive(record.id, true)).archived).toBe(true);
 	expect((await archive(record.id, false)).chatLanes).toEqual(catalog.read(record.id).chatLanes);
+});
+
+// Review, the move to a cloud workspace and archive read a lane whose nested repositories an agent
+// can configure; none of them may run those repositories' settings on the host.
+test("review, compute and archive never run a nested repository's settings", async () => {
+	const { record, root } = await local();
+	const name = `chat-${ROOT_CONVERSATION_ID}`;
+	const lane = owned(record, name);
+	const { ran } = await plantNested(lane.path, root);
+	const head = git(lane.path, "rev-parse", "HEAD");
+	const review = () => nativeHandoff(record.id, { kind: "lane" }, {
+		chat: ROOT_CONVERSATION_ID,
+		lane: { name, path: lane.path, base: lane.base },
+		planning: { selection: null, review: null },
+		items: [],
+	});
+	const refused = await review().catch((error: Error) => error.message);
+	await rm(join(lane.path, "loose"), { recursive: true });
+	const reviewed = await review().catch((error: Error) => error.message);
+
+	const cloud = join(record.project, ".lane", "trees", record.prefix, "cloud");
+	git(record.project, "worktree", "add", "-qb", `${record.prefix}/cloud`, cloud, lane.base);
+	git(record.project, "remote", "add", "origin", record.project);
+	await mkdir(join(root, "cloud"));
+	const cloudPlant = await plantNested(cloud, join(root, "cloud"));
+	await rm(join(cloud, "loose"), { recursive: true });
+	const moving = await unready(record);
+	const archived = (await archive(record.id, true)).archived;
+
+	expect(await ran() + await cloudPlant.ran()).toBe("");
+	// The untracked nested repository counts once, as work only on disk; the submodule's own edits don't.
+	expect(refused).toContain("1 uncommitted or untracked path");
+	expect(reviewed).toMatchObject({ head, base: lane.base, cwd: lane.path });
+	expect(moving).toEqual([]);
+	expect(archived).toBe(true);
 });
 
 for (const reason of ["dirty", "locked", "changed registration"] as const) test(`archive honestly retains ${reason} lanes with a warning`, async () => {

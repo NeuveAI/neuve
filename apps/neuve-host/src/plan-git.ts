@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { skillRoots } from "@neuve/runtime/skills";
+import { gitArgs, type GitCommand } from "@ace/channel/git";
 import { toolArguments, toolRefusal } from "@ace/channel/tool-arguments";
 import type { Context } from "@earendil-works/chord";
 import { defineExtension, defineTool, type ToolExecutionApi } from "@earendil-works/pi-durable";
@@ -17,15 +18,12 @@ function error(code: FileError["code"], message: string): never {
 }
 
 async function git(
-	cwd: string, args: string[], context: Context,
+	cwd: string, args: GitCommand, context: Context,
 	{ accepted = [0], output, input }: { accepted?: number[]; output?: ToolExecutionApi["output"]; input?: Buffer } = {},
 ) {
 	const child = Bun.spawn([
 		"git", "-C", cwd, "--no-pager",
-		"-c", "core.fsmonitor=false",
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "protocol.allow=never",
-		...args,
+		...gitArgs(args, ["protocol.allow=never"]),
 	], {
 		env: {
 			PATH: process.env.PATH,
@@ -293,7 +291,7 @@ export const planExplore = defineExtension({
 				: [];
 			if (problems.length) throw toolRefusal("explore", args, problems);
 			const paths = ["--", ...(file ? [file] : [])];
-			const run = (command: string[], accepted = [0]) =>
+			const run = (command: GitCommand, accepted = [0]) =>
 				git(worktree.root, command, context, { accepted, output: api.output });
 			const noDrivers = ["--no-ext-diff", "--no-textconv"];
 			switch (args.action) {
@@ -323,7 +321,7 @@ export const planExplore = defineExtension({
 				}
 				case "compare": {
 					// Treat each side of a rename separately so an ignored source can't enter the patch.
-					const diff = ["diff", ...noDrivers, "--no-renames", "--ignore-submodules=all", "--no-relative", "--no-color"];
+					const diff = ["diff", ...noDrivers, "--no-renames", "--ignore-submodules=all", "--no-relative", "--no-color"] as const;
 					const selection = ["--end-of-options", ...revisions, "--",
 						...(file ? [`:(top,literal)${file}`] : [])];
 					const names = (await git(worktree.root, [...diff, "--name-only", "-z", ...selection], context))

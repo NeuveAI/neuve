@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 
-import { git, quote } from "./git";
+import { git } from "./git";
 import {
 	checkWorkLaneName,
 	guard,
@@ -40,7 +40,7 @@ export function isPlaced(cwd: string, project: string): boolean {
 }
 
 async function addWorktree(env: ExecutionEnv, project: string, branch: string, path: string, commit: string, context: Context) {
-	await git(env, `-C ${quote(project)} worktree add -b ${quote(branch)} ${quote(path)} ${quote(commit)}`, context);
+	await git(env, ["worktree", "add", "-b", branch, path, commit], context, { cwd: project });
 }
 
 export async function buildWorktree(place: Place, name: string, context: Context, source?: { branch: string; base: string }, recorded?: { path: string; base?: string }) {
@@ -51,7 +51,7 @@ export async function buildWorktree(place: Place, name: string, context: Context
 	const exists = await env.exists(path, context);
 	if (!exists.ok) throw exists.error;
 	if (exists.value || recorded) {
-		const worktrees = await git(env, `-C ${quote(place.project)} worktree list --porcelain -z`, context);
+		const worktrees = await git(env, ["worktree", "list", "--porcelain", "-z"], context, { cwd: place.project });
 		const found = worktrees.split("\0\0").map(record => record.split("\0")).find(fields =>
 			fields[0] === `worktree ${path}` && fields.includes(`branch refs/heads/${branch}`));
 		if (exists.value) {
@@ -61,13 +61,13 @@ export async function buildWorktree(place: Place, name: string, context: Context
 			return { path, branch, base: recorded?.base ?? source?.base ?? base };
 		}
 		// Archive removes the folder, not its branch or the chat's durable lane assignment.
-		const base = (await git(env, `-C ${quote(place.project)} rev-parse --verify ${quote(`refs/heads/${branch}^{commit}`)}`, context)).trim();
+		const base = (await git(env, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], context, { cwd: place.project })).trim();
 		const prunable = found?.some(field => field === "prunable" || field.startsWith("prunable "));
-		await git(env, `-C ${quote(place.project)} worktree add${prunable ? " -f" : ""} ${quote(path)} ${quote(branch)}`, context);
+		await git(env, ["worktree", "add", ...(prunable ? ["-f"] : []), path, branch], context, { cwd: place.project });
 		return { path, branch, base: recorded?.base ?? base };
 	}
 	// An unrecorded branch with no matching worktree is not an interrupted creation we can prove.
-	const collision = await git(env, `-C ${quote(place.project)} for-each-ref --format='%(refname)' ${quote(`refs/heads/${branch}`)}`, context);
+	const collision = await git(env, ["for-each-ref", "--format=%(refname)", `refs/heads/${branch}`], context, { cwd: place.project });
 	if (collision.split("\n").includes(`refs/heads/${branch}`)) throw new Error(`Branch ${branch} already exists without a recorded worktree; it was not adopted.`);
 	const { commit } = await select(env, place.project, source ? `refs/heads/${source.branch}` : "HEAD", context);
 	await addWorktree(env, place.project, branch, path, commit, context);

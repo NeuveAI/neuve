@@ -1,4 +1,5 @@
 import { SharedWork } from "@neuve/records-core/shared-work";
+import { gitArgs, type GitCommand } from "@ace/channel/git";
 import { observeJudgementFetch } from "./judgement-hooks";
 import { randomUUID } from "node:crypto";
 import {
@@ -32,14 +33,15 @@ let running = 0;
 const waiting: (() => void)[] = [];
 
 /** Git runs off the gateway's event loop, so a slow repository cannot stall every client. */
-export async function git(dir: string, args: string[]): Promise<Git> {
+export async function git(dir: string, args: GitCommand, config?: readonly string[]): Promise<Git> {
+	const command = gitArgs(args, config);
 	// A finishing call hands its slot straight to the next waiter, so the limit holds.
 	if (running < LIMIT) running++;
 	else await new Promise<void>((resolve) => waiting.push(resolve));
 	try {
 		// Without `env`, Bun resolves `git` on the startup PATH, before the login shell's is adopted.
-		const child = Bun.spawn(["git", "-C", dir, ...args], {
-			env: process.env,
+		const child = Bun.spawn(["git", "-C", dir, ...command], {
+			env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
 			stdin: "ignore",
 			stdout: "pipe",
 			stderr: "pipe",
@@ -217,7 +219,7 @@ Thumbs.db
  */
 export async function init(path: string): Promise<Project> {
 	if (!paths().includes(path)) throw new Error("Open this folder in Neuve first");
-	const run = async (args: string[]) => {
+	const run = async (args: GitCommand) => {
 		const result = await git(path, args);
 		if (result.status === null) throw new Error("Git is unavailable. Check Settings → Neuve Helper.");
 		if (result.status !== 0) throw new Error(result.stderr.trim() || `git ${args[0]} failed`);
