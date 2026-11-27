@@ -3,7 +3,7 @@ declare module "*.md" {
   export default text;
 }
 
-declare module "*/LICENSE" {
+declare module "*.txt" {
   const text: string;
   export default text;
 }

@@ -8,7 +8,7 @@ import {
   stat,
 } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
-import chromeDevToolsLicense from "../../neuve-host/plugins/chrome-devtools/LICENSE" with { type: "text" };
+import chromeDevToolsLicense from "../../neuve-host/plugins/chrome-devtools/LICENSE.txt" with { type: "text" };
 import chromeDevToolsSkill from "../../neuve-host/plugins/chrome-devtools/skills/chrome-devtools/SKILL.md" with { type: "text" };
 import { join, resolve } from "node:path";
 import { z } from "zod";
