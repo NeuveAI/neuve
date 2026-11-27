@@ -1,5 +1,6 @@
 /** Every turn ends through `finish`, which emits one terminal event and ignores later endings. See `PROTOCOL.md`. */
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -62,6 +63,7 @@ import {
   unaddressable,
   type CodexTokenCommand,
   type Configuration,
+  type GitWorktree,
   type OwnSettings,
 } from "./launch.ts";
 import { protocolLog, type LogEntry } from "./log.ts";
@@ -270,6 +272,42 @@ const errorOf = <E>(cause: Cause.Cause<E>) =>
 const asJson = (value: unknown) => {
   const parsed = z.json().safeParse(value);
   return parsed.success ? parsed.data : null;
+};
+const readGitWorktree = (folder: string): GitWorktree | undefined => {
+  try {
+    const git = Bun.spawnSync(
+      [
+        "git",
+        "-C",
+        folder,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-dir",
+        "--git-common-dir",
+        "--symbolic-full-name",
+        "HEAD",
+      ],
+      { stderr: "ignore" },
+    );
+    if (!git.success) return undefined;
+    const lines = git.stdout.toString().trimEnd().split("\n");
+    const [gitDir, commonDir, head] = lines;
+    if (
+      lines.length !== 3 ||
+      !gitDir ||
+      !isAbsolute(gitDir) ||
+      !commonDir ||
+      !isAbsolute(commonDir) ||
+      !head
+    )
+      return undefined;
+    // Git can follow symbolic refs beyond HEAD. Take the channel from HEAD itself.
+    if (readFileSync(join(gitDir, "HEAD"), "utf8").trimEnd() !== `ref: ${head}`)
+      return undefined;
+    return { gitDir, commonDir, head };
+  } catch {
+    return undefined;
+  }
 };
 const FileChanges = z.array(
   z.object({
@@ -1473,7 +1511,13 @@ export const openCodexSession = Effect.fnUntraced(function* (
         return yield* turnFailed("no-output-schema");
       if (input.workspace === undefined)
         return yield* turnFailed("protocol-error");
-      const settings = turnSettings(input.workspace, policy.approvalPolicy);
+      const settings = turnSettings(
+        input.workspace,
+        policy.approvalPolicy,
+        input.workspace.access === "write"
+          ? readGitWorktree(input.workspace.folder)
+          : undefined,
+      );
       const active: Turn = {
         id: input.turnId,
         final: input.final === true,

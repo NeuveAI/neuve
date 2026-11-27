@@ -1,6 +1,7 @@
 // The fake checks what crosses the Codex connection and what the session reports to its caller.
 import { describe, expect, test } from "bun:test";
-import { realpath } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import {
   AccountRejected,
@@ -821,6 +822,99 @@ describe("each way a turn ends gives exactly one terminal event", () => {
 // Why: what Codex may do in a turn is set by the folder and access the turn carries; a read-only
 // turn must run with none of the person's own additions on, which takes its own process.
 describe("the mode table", () => {
+  const laneGit = {
+    gitDir: "/repo/.git/worktrees/lane1",
+    commonDir: "/repo/.git",
+    head: "refs/heads/chan/lane1",
+  };
+
+  test.each([
+    ["the main checkout", { ...laneGit, gitDir: laneGit.commonDir }],
+    ["a detached HEAD", { ...laneGit, head: "HEAD" }],
+    [
+      "a branch with no channel folder",
+      { ...laneGit, head: "refs/heads/main" },
+    ],
+  ])("%s gets only the chat's folder", (_label, git) => {
+    expect(turnSettings(write, "allow", git).sandboxPolicy).toMatchObject({
+      type: "workspaceWrite",
+      writableRoots: ["/work"],
+    });
+  });
+
+  test("a read-only turn in a work lane gets no write roots", () => {
+    expect(turnSettings(readOnly, "allow", laneGit).sandboxPolicy).toEqual({
+      type: "readOnly",
+      networkAccess: false,
+    });
+  });
+
+  test("turn/start carries the Git roots of the turn's work lane", async () => {
+    const temporary = await mkdtemp(resolve(tmpdir(), "codex-lane-"));
+    try {
+      const root = await realpath(temporary);
+      const git = (...args: string[]) => {
+        const result = Bun.spawnSync(["git", ...args], {
+          cwd: root,
+          env: {
+            PATH: process.env.PATH,
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_NOSYSTEM: "1",
+          },
+          stderr: "pipe",
+        });
+        if (!result.success) throw new Error(result.stderr.toString());
+      };
+      git("init", "-q", "--template=", "-b", "main");
+      git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "fixture",
+      );
+      const lanePath = ".lane/trees/chan/lane1";
+      git("worktree", "add", "-q", "-b", "chan/lane1", lanePath);
+
+      const folder = resolve(root, lanePath);
+      const commonDir = resolve(root, ".git");
+      const gitDir = resolve(commonDir, "worktrees/lane1");
+      const fake = codex();
+      await run(fake, (session) =>
+        Effect.gen(function* () {
+          yield* startOn(fake, session, { ...write, folder });
+          expect(
+            written(fake.current(), "turn/start")[0]?.params,
+          ).toMatchObject({
+            cwd: folder,
+            sandboxPolicy: {
+              type: "workspaceWrite",
+              writableRoots: [
+                folder,
+                `${gitDir}/index`,
+                `${gitDir}/index.lock`,
+                `${gitDir}/HEAD.lock`,
+                `${gitDir}/ORIG_HEAD`,
+                `${gitDir}/ORIG_HEAD.lock`,
+                `${gitDir}/COMMIT_EDITMSG`,
+                `${gitDir}/logs`,
+                `${commonDir}/objects`,
+                `${commonDir}/refs/heads/chan`,
+                `${commonDir}/logs/refs/heads/chan`,
+              ],
+            },
+          });
+        }),
+      );
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
   test("a read-only turn runs clean; a write turn restarts on the person's Codex and resumes the thread", async () => {
     const fake = codex();
     await run(fake, (session, read) =>
