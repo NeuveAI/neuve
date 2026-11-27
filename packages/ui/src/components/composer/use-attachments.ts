@@ -70,5 +70,8 @@ export function useAttachments(
 		if (ref.current.length) update([]);
 	}
 
-	return { current, ref, add, remove, reset };
+	// The actions read only refs and setters, so the first render's serve for good, and the drop
+	// target that takes `add` keeps one subscription instead of resetting its state every render.
+	let [actions] = useState(() => ({ add, remove, reset }));
+	return { current, ref, ...actions };
 }
