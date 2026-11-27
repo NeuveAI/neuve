@@ -15,9 +15,8 @@ import { PiUsage } from "./usage.ts";
  *
  * One callback, `Capture`, takes every event. The route's provider emits the four `model.*` events;
  * the runtime and stages emit the rest. Capture never changes what the model sees: callers hand
- * over copies of what they sent or received. A capture that cannot keep an event throws
- * `CaptureFailed` synchronously and keeps throwing for the rest of the process, so a request whose
- * capture failed is never dispatched and no later event can pretend the journal is whole.
+ * over copies of what they sent or received. The provider retries model capture writes and records
+ * capture loss when they run out. Invalid events and credential inspection failures stop the call.
  */
 
 export const CAPTURE_VERSION = 1;
@@ -45,6 +44,9 @@ export const DEFAULT_LIMITS: DumpLimits = {
 };
 
 export const JOURNAL_FILE = "events.jsonl";
+export const CAPTURE_LOSS_FILE = "capture-loss.json";
+export const CREDENTIAL_LOSS_RESERVE_FILE = "credential-loss.reserve";
+export const CREDENTIAL_LOSS_RESERVE_BYTES = 4096;
 export const OBJECTS_DIRECTORY = "objects";
 export const RAW_JOURNAL_FILE = `journal/${JOURNAL_FILE}` as const;
 export const journalObjectFile = (sha256: string) =>
@@ -55,7 +57,12 @@ export const captureFileLimit = (name: string, limits: DumpLimits) =>
   name === `capture/${JOURNAL_FILE}` ||
   name === RAW_JOURNAL_FILE
     ? Math.min(limits.journalBytes ?? limits.objectBytes, limits.totalBytes)
-    : limits.objectBytes;
+    : name === CAPTURE_LOSS_FILE || name === `capture/${CAPTURE_LOSS_FILE}`
+      ? Math.min(limits.manifestBytes, limits.totalBytes)
+      : name === CREDENTIAL_LOSS_RESERVE_FILE ||
+          name === `capture/${CREDENTIAL_LOSS_RESERVE_FILE}`
+        ? Math.min(CREDENTIAL_LOSS_RESERVE_BYTES, limits.totalBytes)
+        : limits.objectBytes;
 
 /** A JSON value as stored; anything JSON would drop or change (`undefined`, `NaN`) is refused. */
 export type Json =
@@ -470,6 +477,32 @@ const ArtifactStored = z.strictObject({
   size: z.int().nonnegative(),
 });
 
+export const CredentialCertificate = z
+  .strictObject({
+    type: z.literal("credential.inspection"),
+    scope: CaptureScope.pick({ runId: true }),
+    callId: z.string().min(1),
+    version: z.literal(3),
+    epochId: z.string().min(1),
+    calls: z.array(z.string().min(1)).min(1),
+    retainedPrefixCalls: z.array(z.string().min(1)),
+    administration: z.literal("canonical-inspected-v1"),
+    administrationHash: z.string().regex(/^[0-9a-f]{64}$/),
+    sourceHash: z.string().regex(/^[0-9a-f]{64}$/),
+    sourceHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/)),
+    safe: z.boolean(),
+  })
+  .refine(
+    (event) =>
+      event.calls.includes(event.callId) &&
+      new Set(event.calls).size === event.calls.length &&
+      event.retainedPrefixCalls.every((call) => event.calls.includes(call)) &&
+      new Set(event.retainedPrefixCalls).size ===
+        event.retainedPrefixCalls.length,
+    "invalid credential epoch membership",
+  );
+export type CredentialCertificate = z.infer<typeof CredentialCertificate>;
+
 /** An event an emitter hands over, as the journal stores it. */
 export const CapturedEvent = z.discriminatedUnion("type", [
   z.strictObject({
@@ -500,32 +533,7 @@ export const CapturedEvent = z.discriminatedUnion("type", [
       sourceHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/)),
       safe: z.boolean(),
     }),
-    z
-      .strictObject({
-        type: z.literal("credential.inspection"),
-        scope: CaptureScope.pick({ runId: true }),
-        callId: z.string().min(1),
-        version: z.literal(3),
-        epochId: z.string().min(1),
-        calls: z.array(z.string().min(1)).min(1),
-        retainedPrefixCalls: z.array(z.string().min(1)),
-        administration: z.literal("canonical-inspected-v1"),
-        administrationHash: z.string().regex(/^[0-9a-f]{64}$/),
-        sourceHash: z.string().regex(/^[0-9a-f]{64}$/),
-        sourceHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/)),
-        safe: z.boolean(),
-      })
-      .refine(
-        (event) =>
-          event.calls.includes(event.callId) &&
-          new Set(event.calls).size === event.calls.length &&
-          event.retainedPrefixCalls.every((call) =>
-            event.calls.includes(call),
-          ) &&
-          new Set(event.retainedPrefixCalls).size ===
-            event.retainedPrefixCalls.length,
-        "invalid credential epoch membership",
-      ),
+    CredentialCertificate,
   ]),
   ModelRequest,
   ModelResponse,
@@ -555,6 +563,7 @@ export const JournalMark = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("journal.open"),
     scope: CaptureScope.pick({ runId: true }),
+    credentialLossReserve: z.literal(true).optional(),
   }),
   z.strictObject({
     type: z.literal("journal.close"),
@@ -604,13 +613,87 @@ export class CaptureFailed extends Data.TaggedError("CaptureFailed")<{
   readonly kind: "invalid" | "io" | "full" | "failed";
   readonly event: string;
   readonly detail: string;
-}> {}
+  readonly journalFull?: boolean;
+  readonly writeCode?: string;
+  readonly epochId?: string;
+}> {
+  override get message(): string {
+    return this.detail;
+  }
 
-/**
- * The one capture callback. It appends synchronously and returns, or throws `CaptureFailed`. A
- * provider calls it for `model.request` before it dispatches, so a failed capture means the
- * request is never sent, and settles its stream as failed when a later event throws.
- */
-export type Capture = (event: CaptureEvent) => void;
+  get lossReason(): CaptureLoss["reason"] {
+    if (this.kind === "full")
+      return this.journalFull ? "journal limit" : "object limit";
+    switch (this.writeCode) {
+      case "EACCES":
+      case "EPERM":
+        return "permission denied";
+      case "ENOSPC":
+      case "SQLITE_FULL":
+        return "disk full";
+      default:
+        return "I/O error";
+    }
+  }
+}
 
-export type ModelCapture = (event: ModelCaptureEvent) => void;
+/** Appends synchronously or throws `CaptureFailed`. */
+export type Capture = ModelCapture & ((event: CaptureEvent) => void);
+
+const CaptureLossFields = z.strictObject({
+  kind: z.enum(["io", "full"]),
+  reason: z.enum([
+    "journal limit",
+    "object limit",
+    "permission denied",
+    "disk full",
+    "I/O error",
+  ]),
+  at: z.iso.datetime(),
+  ordinaryOverflow: z
+    .strictObject({
+      credential: z
+        .strictObject({ callId: z.uuid(), epochId: z.uuid().optional() })
+        .optional(),
+    })
+    .optional(),
+});
+export const CaptureLoss = z.discriminatedUnion("event", [
+  CaptureLossFields.extend({
+    event: z.literal("journal.open"),
+    sessionId: z.uuid(),
+  }),
+  CaptureLossFields.extend({
+    callId: z.uuid(),
+    event: z.enum([
+      "credential.registration",
+      "model.request",
+      "model.response",
+      "model.event",
+      "model.end",
+    ]),
+    credentialCoverage: z.literal("required").optional(),
+    epochId: z.uuid().optional(),
+  }),
+]);
+export type CaptureLoss = z.infer<typeof CaptureLoss>;
+
+export const captureLossId = (loss: CaptureLoss) =>
+  loss.event === "journal.open" ? loss.sessionId : loss.callId;
+
+export const captureLossCredential = (loss: CaptureLoss) =>
+  loss.event !== "journal.open" &&
+  (loss.event === "credential.registration" ||
+    loss.credentialCoverage === "required")
+    ? { callId: loss.callId, epochId: loss.epochId }
+    : undefined;
+
+export type ModelCapture = ((event: ModelCaptureEvent) => void) & {
+  readonly recordLoss?: (
+    loss: CaptureLoss,
+    journalFull: boolean,
+    privateRegistrationFailed?: boolean,
+  ) => void;
+  readonly journalFull?: () => boolean;
+  readonly allowCredentialLoss?: () => boolean;
+};

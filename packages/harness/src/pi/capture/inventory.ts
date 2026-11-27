@@ -1,7 +1,12 @@
+import type { CaptureLoss } from "./types.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { checkedCount, CloseInventory } from "./watchdog.ts";
 
-type RecordedEvent = { readonly type: string; readonly size?: number };
+type RecordedEvent = {
+  readonly type: string;
+  readonly size?: number;
+  readonly callId?: string;
+};
 /** Recorded representations only. Artifacts have original, masked and parsed views. */
 export const countRecordedEvent = (
   inventory: CloseInventory,
@@ -25,8 +30,9 @@ export const measuredCloseInventory = (
   lines: readonly { readonly event: RecordedEvent }[],
   recordedBytes: number,
   nativeRecords: number,
-): CloseInventory =>
-  lines.reduce(
+  losses: readonly CaptureLoss[] = [],
+): CloseInventory => {
+  const inventory = lines.reduce(
     (inventory, { event }) => countRecordedEvent(inventory, event),
     CloseInventory.parse({
       records: nativeRecords,
@@ -35,6 +41,21 @@ export const measuredCloseInventory = (
       frames: 0,
     }),
   );
+  if (losses.length === 0) return inventory;
+  const lostRequests = new Set(
+    losses.flatMap((loss) =>
+      loss.event === "journal.open" ? [] : [loss.callId],
+    ),
+  );
+  for (const { event } of lines)
+    if (event.type === "model.request" && event.callId !== undefined)
+      lostRequests.delete(event.callId);
+  return CloseInventory.parse({
+    ...inventory,
+    records: checkedCount(inventory.records, losses.length),
+    calls: checkedCount(inventory.calls, lostRequests.size),
+  });
+};
 
 export const nativeRecordCount = (database: DatabaseSync) => {
   let records = 0;

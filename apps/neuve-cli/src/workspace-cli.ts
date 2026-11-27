@@ -185,7 +185,7 @@ export function codingWorkerSetup(
     await keepWorkerFor({ project, job });
   });
   const reviewSessions = new Map<string, ReturnType<typeof nativeReview>>();
-  const journals = new Map<string, CaptureJournal | CaptureFailed>();
+  const journals = new Map<string, CaptureJournal>();
   const planningSessions = new Map<
     string,
     {
@@ -225,15 +225,19 @@ export function codingWorkerSetup(
   };
   const journal = (worker: WorkerContext) => {
     const known = journals.get(worker.sessionId);
-    if (known instanceof CaptureFailed) throw known;
     if (known) return known;
     inspection(worker);
+    const opened = openCaptureJournal(
+      join(worker.stateDirectory, "capture"),
+      worker.sessionId,
+      {
+        spillRoots: [realpathSync(tmpdir())],
+        onCaptureLoss: reportCaptureLoss(worker),
+        allowCredentialLoss: true,
+      },
+    );
+    journals.set(worker.sessionId, opened);
     try {
-      const opened = openCaptureJournal(
-        join(worker.stateDirectory, "capture"),
-        worker.sessionId,
-        { spillRoots: [realpathSync(tmpdir())] },
-      );
       opened.capture({
         type: "run.start",
         scope: { runId: worker.sessionId },
@@ -246,25 +250,35 @@ export function codingWorkerSetup(
         route: `${route.provider}/${route.model}`,
         pricing: route.price === null ? "subscription" : "metered",
       });
-      journals.set(worker.sessionId, opened);
-      return opened;
     } catch (error) {
-      if (captureFull(error)) journals.set(worker.sessionId, error);
-      throw error;
+      if (!captureWriteFailure(error)) throw error;
     }
+    return opened;
   };
-  const captureFull = (error: unknown): error is CaptureFailed =>
-    error instanceof CaptureFailed && error.kind === "full";
-  const modelCapture = (worker: WorkerContext) => {
-    try {
-      return journal(worker).capture;
-    } catch (error) {
-      if (!captureFull(error)) throw error;
-      return () => {
-        throw error;
-      };
-    }
-  };
+  const captureWriteFailure = (
+    error: unknown,
+  ): error is CaptureFailed & { readonly kind: "full" | "io" } =>
+    error instanceof CaptureFailed &&
+    (error.kind === "full" || error.kind === "io");
+  type CallLoss = Parameters<
+    NonNullable<RouteModelsOptions["capture"]["recordLoss"]>
+  >[0];
+  const reportCaptureLoss =
+    (worker: WorkerContext) =>
+    (
+      loss:
+        | CallLoss
+        | (Pick<CallLoss, "at" | "kind" | "reason"> & {
+            event: "session.bind";
+            conversationId: number;
+          }),
+      persisted: boolean,
+    ) => {
+      writeSync(
+        2,
+        `${JSON.stringify({ type: "capture.loss", runId: worker.sessionId, ...loss, persisted })}\n`,
+      );
+    };
   return {
     async query(
       _worker,
@@ -445,7 +459,7 @@ export function codingWorkerSetup(
       const pending = openingChats.get(worker.sessionId);
       if (pending) return (await pending).models;
       const opening = (async () => {
-        const capture = modelCapture(worker);
+        const capture = journal(worker).capture;
         const credentialInspection = inspection(worker);
         const models = workspaceCaptureModels(defaults, {
           ...transport,
@@ -495,7 +509,7 @@ export function codingWorkerSetup(
         ...transport,
         route: accountRoute ?? route,
         ...admission(worker),
-        capture: modelCapture(worker),
+        capture: journal(worker).capture,
         credentialInspection: inspection(worker),
         runId: worker.sessionId,
         sessionAffinity: worker.sessionId,
@@ -510,7 +524,17 @@ export function codingWorkerSetup(
           scope: { runId: worker.sessionId, conversationId },
         });
       } catch (error) {
-        if (!captureFull(error)) throw error;
+        if (!captureWriteFailure(error)) throw error;
+        reportCaptureLoss(worker)(
+          {
+            event: "session.bind",
+            conversationId,
+            kind: error.kind,
+            reason: error.lossReason,
+            at: new Date().toISOString(),
+          },
+          false,
+        );
       }
     },
     priced: (model) =>
@@ -586,25 +610,33 @@ export function codingWorkerSetup(
         await Promise.allSettled([...planning.pending]);
         planningSessions.delete(worker.sessionId);
       }
-      const captured = journal(worker);
+      const journalDirectory = join(worker.stateDirectory, "capture");
       const admissionPath = join(worker.stateDirectory, "route-admission.json");
       try {
-        captured.capture({
-          type: "artifact",
-          scope: { runId: worker.sessionId },
-          name: "route-admission.json",
-          mediaType: "application/json",
-          bytes: readFileSync(admissionPath),
-        });
-      } catch (cause) {
-        if (!(
-          cause instanceof Error &&
-          "code" in cause &&
-          cause.code === "ENOENT"
-        ))
-          throw cause;
+        const captured = journal(worker);
+        try {
+          captured.capture({
+            type: "artifact",
+            scope: { runId: worker.sessionId },
+            name: "route-admission.json",
+            mediaType: "application/json",
+            bytes: readFileSync(admissionPath),
+          });
+        } catch (cause) {
+          if (!(
+            cause instanceof Error &&
+            "code" in cause &&
+            cause.code === "ENOENT"
+          ))
+            throw cause;
+        } finally {
+          captured.close();
+        }
+      } catch (error) {
+        if (!captureWriteFailure(error)) throw error;
+      } finally {
+        journals.delete(worker.sessionId);
       }
-      captured.close();
       const started = performance.now();
       const location = storeLocationIn(join(storage.paths.captures, "coding"));
       const snapshot = await Effect.runPromise(
@@ -612,7 +644,7 @@ export function codingWorkerSetup(
           Store.prepareForWrite,
           captureRunDump({
             runId: worker.sessionId,
-            journal: captured.directory,
+            journal: journalDirectory,
             credentialInspection: inspection(worker),
             nativeDatabase: join(worker.stateDirectory, "channel.sqlite"),
             close: "held",

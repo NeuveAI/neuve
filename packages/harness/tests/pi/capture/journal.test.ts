@@ -1,10 +1,9 @@
-// Why: a dataset is only as complete as its journal, and a failed capture used to land in
-// a memory-only list that a crash erased. These pin that every failure is thrown to the emitter,
-// that nothing after it is accepted, and that the next process's dump discloses it from what is on
-// disk alone, including when the failed write was the disk refusing (no further write is assumed).
-import { afterAll, expect, test } from "bun:test";
+// Why: a dump must disclose a rejected capture or a torn line even after the writer exits.
+import { afterAll, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import {
   appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -18,9 +17,17 @@ import { join } from "node:path";
 import { buildDump } from "../../../src/pi/capture/build.ts";
 import {
   JOURNAL_FILE,
+  OBJECTS_DIRECTORY,
   openCaptureJournal,
+  readCaptureLosses,
 } from "../../../src/pi/capture/journal.ts";
-import type { CaptureEvent } from "../../../src/pi/capture/types.ts";
+import {
+  CAPTURE_LOSS_FILE,
+  CREDENTIAL_LOSS_RESERVE_FILE,
+  DEFAULT_LIMITS,
+  type CaptureEvent,
+  type CaptureLoss,
+} from "../../../src/pi/capture/types.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "harness-capture-journal-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -48,12 +55,153 @@ const thrown = (run: () => void) => {
   }
 };
 
+test("ordinary losses keep only the first loss in the fixed reserve", async () => {
+  const folder = join(directory, "ordinary-loss-marker");
+  const journal = openCaptureJournal(folder, "R", {
+    allowCredentialLoss: true,
+  });
+  journal.capture(START);
+  journal.capture(END);
+  journal.close();
+  const reserve = join(folder, CREDENTIAL_LOSS_RESERVE_FILE);
+  const empty = readFileSync(reserve);
+  const first: CaptureLoss = {
+    callId: "9ebb6e01-424a-4b91-9137-43860e003713",
+    event: "model.event",
+    kind: "io",
+    reason: "disk full",
+    at: "2026-11-27T12:00:00.000Z",
+  };
+  const fault = spyOn(fs, "writeFileSync").mockImplementation(() => {
+    throw Object.assign(new Error("disk is full"), { code: "ENOSPC" });
+  });
+  try {
+    journal.capture.recordLoss?.(first, false);
+    for (let index = 0; index < 12; index++)
+      journal.capture.recordLoss?.(
+        { ...first, callId: crypto.randomUUID() },
+        false,
+      );
+  } finally {
+    fault.mockRestore();
+  }
+  const recorded = readFileSync(reserve);
+  expect(recorded.byteLength).toBe(4096);
+  expect(recorded.subarray(0, 512)).not.toEqual(empty.subarray(0, 512));
+  expect(recorded.subarray(512)).toEqual(empty.subarray(512));
+  expect(readCaptureLosses(folder)).toEqual([
+    { ...first, ordinaryOverflow: {} },
+  ]);
+  const { run } = await buildDump({ journal: folder, runId: "R" });
+  expect(run.complete).toBe(false);
+  expect(run.gaps).toContainEqual(
+    expect.objectContaining({
+      code: "journal-failed",
+      count: 1,
+      detail: expect.stringContaining("may be missing further ordinary losses"),
+    }),
+  );
+});
+
 const gapsOf = async (folder: string) =>
   (await buildDump({ runId: "R", journal: folder })).run.gaps.map((gap) => [
     gap.code,
     gap.count,
     gap.detail,
   ]);
+
+for (const destination of ["loss file", "reserve", "log only"]) {
+  test(`a full journal discloses a restart without model calls in the ${destination}`, async () => {
+    const folder = join(directory, destination);
+    const previous = openCaptureJournal(folder, "R", {
+      allowCredentialLoss: true,
+    });
+    previous.capture(START);
+    previous.capture(END);
+    previous.close();
+    expect(
+      (await buildDump({ journal: folder, runId: "R" })).run.complete,
+    ).toBe(true);
+    const limits = {
+      ...DEFAULT_LIMITS,
+      journalBytes: statSync(join(folder, JOURNAL_FILE)).size,
+    };
+    const diskFull = () => {
+      throw Object.assign(new Error("disk is full"), { code: "ENOSPC" });
+    };
+    const lossFileFault =
+      destination === "loss file"
+        ? undefined
+        : spyOn(fs, "writeFileSync").mockImplementation(diskFull);
+    const reserveFault =
+      destination === "log only"
+        ? spyOn(fs, "writeSync").mockImplementation(diskFull)
+        : undefined;
+    const reported: unknown[] = [];
+    try {
+      const journal = openCaptureJournal(folder, "R", {
+        limits,
+        allowCredentialLoss: true,
+        onCaptureLoss: (loss, persisted) => reported.push({ loss, persisted }),
+      });
+      const scope = { runId: "R", conversationId: 1 };
+      expect(
+        thrown(() => journal.capture({ type: "session.bind", scope })),
+      ).toMatchObject({ kind: "full", event: "journal.open" });
+      expect(
+        thrown(() =>
+          journal.capture({
+            type: "artifact",
+            scope,
+            name: "route-admission.json",
+            mediaType: "application/json",
+            bytes: Buffer.from("{}"),
+          }),
+        ),
+      ).toMatchObject({ kind: "full", event: "journal.open" });
+      expect(thrown(journal.close)).toMatchObject({
+        kind: "full",
+        event: "journal.open",
+      });
+    } finally {
+      reserveFault?.mockRestore();
+      lossFileFault?.mockRestore();
+    }
+
+    const { run } = await buildDump({ journal: folder, runId: "R", limits });
+    const persisted = destination !== "log only";
+    expect(run.complete).toBe(!persisted);
+    const losses = readCaptureLosses(folder, limits);
+    const startupLoss = expect.objectContaining({
+      sessionId: expect.any(String),
+      event: "journal.open",
+      kind: "full",
+      reason: "journal limit",
+    });
+    expect(reported).toEqual([{ loss: startupLoss, persisted }]);
+    expect(losses).toEqual(persisted ? [startupLoss] : []);
+    expect(fs.existsSync(join(folder, CAPTURE_LOSS_FILE))).toBe(
+      destination === "loss file",
+    );
+    if (persisted) {
+      const [loss] = losses;
+      if (loss?.event !== "journal.open")
+        throw new Error("Expected a journal open loss");
+      expect(run.gaps).toEqual([
+        {
+          kind: "capture",
+          code: "journal-failed",
+          count: 1,
+          detail: expect.stringContaining(
+            `session ${loss.sessionId} lost capture at journal.open`,
+          ),
+        },
+      ]);
+    } else {
+      expect(run.gaps).toEqual([]);
+    }
+  });
+}
 
 test("an invalid event is thrown to its emitter, nothing after it is kept, and the reopened journal's dump says so", async () => {
   const folder = join(directory, "invalid");
@@ -99,7 +247,7 @@ test("an invalid event is thrown to its emitter, nothing after it is kept, and t
 // The session writes through a descriptor it holds, which a later chmod no longer refuses, so the
 // refusal is the disk's own: a child under a file-size limit (its SIGXFSZ ignored, as a full disk
 // returns an error rather than a signal) writes what fits of one line, then gets EFBIG.
-test("a write the disk refuses fails the capture without another write, and the unclosed session alone discloses it", async () => {
+test("a later append replaces the torn tail left by a failed model capture write", async () => {
   const folder = join(directory, "refused");
   const child = Bun.spawnSync(
     [
@@ -118,18 +266,49 @@ test("a write the disk refuses fails the capture without another write, and the 
   const seen = JSON.parse(child.stdout.toString());
   expect(seen).toMatchObject({
     refused: "io:model.request",
-    next: "failed:run.end",
+    next: "kept",
     closed: "io:model.request",
   });
-  // The disk took part of the refused line; nothing was written after it.
   expect(seen.afterRefusal).toBeGreaterThan(seen.before);
-  expect(seen.afterClose).toBe(seen.afterRefusal);
+  expect(seen.afterClose).toBeLessThan(seen.afterRefusal);
   expect(statSync(join(folder, JOURNAL_FILE)).size).toBe(seen.afterClose);
   expect((await gapsOf(folder)).map(([code]) => code)).toEqual([
-    "journal-torn",
     "journal-interrupted",
-    "run-end-missing",
   ]);
+});
+
+test("a lost artifact leaves a gap in the dump after journal writes recover", async () => {
+  const folder = join(directory, "lost-artifact");
+  const journal = openCaptureJournal(folder, "R");
+  journal.capture(START);
+  const objects = join(folder, OBJECTS_DIRECTORY);
+  chmodSync(objects, 0o500);
+  try {
+    expect(
+      thrown(() =>
+        journal.capture({
+          type: "artifact",
+          scope: { runId: "R" },
+          name: "notes.txt",
+          mediaType: "text/plain",
+          bytes: Buffer.from("lost artifact"),
+        }),
+      ),
+    ).toMatchObject({ kind: "io", event: "artifact" });
+  } finally {
+    chmodSync(objects, 0o700);
+  }
+  journal.capture(END);
+  expect(thrown(() => journal.close())).toMatchObject({
+    kind: "io",
+    event: "artifact",
+  });
+  const { run } = await buildDump({ journal: folder, runId: "R" });
+  expect(run.complete).toBe(false);
+  expect(run.gaps.map(({ code, count }) => [code, count])).toEqual([
+    ["journal-interrupted", 1],
+  ]);
+  expect(run.gaps[0]?.detail).toContain("Lost writes: artifact.");
 });
 
 // R2: a close that raced an ingest marked the session whole while the spill landed after it, so the

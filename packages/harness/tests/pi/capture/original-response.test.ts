@@ -1,4 +1,4 @@
-import { dumpJournalLines } from "./fixture.ts";
+import { captureAuthority, dumpJournalLines } from "./fixture.ts";
 import { exportWhileOpen } from "./open-source.ts";
 import { captureSdk } from "./sdk-fixture.ts";
 import { expect, test } from "bun:test";
@@ -51,7 +51,9 @@ for (const family of ["openai", "anthropic"] as const) {
     const variable = "NEUVE_ORIGINAL_RESPONSE_SYNTHETIC_KEY";
     const prior = process.env[variable];
     process.env[variable] = "synthetic-local-key";
-    const journal = openCaptureJournal(join(directory, "capture"), runId);
+    const source = join(directory, "channel");
+    const journal = openCaptureJournal(join(source, "capture"), runId);
+    using authority = captureAuthority(source);
     const route =
       family === "openai"
         ? SOL_ROUTE
@@ -65,12 +67,12 @@ for (const family of ["openai", "anthropic"] as const) {
       route: route.provider,
       pricing: family === "openai" ? "subscription" : "metered",
     });
-    const database = join(directory, "pi.sqlite");
+    const database = join(source, "pi.sqlite");
     const harness = await Harness.open(
       await openNodeSqliteStorage(database),
       {
         models: createRouteModels({
-          credentialInspection: "ephemeral" as const,
+          credentialInspection: authority.inspection,
           route,
           runId,
           sessionAffinity: runId,
@@ -181,6 +183,7 @@ for (const family of ["openai", "anthropic"] as const) {
       const root = join(directory, "datasets");
       await mkdir(root);
       const snapshot = await exportWhileOpen({
+        credentialInspection: authority.inspection,
         runId,
         journal: journal.directory,
         nativeDatabase: database,
@@ -923,8 +926,10 @@ test("nested OpenAI stream errors reconcile the SDK, production route and native
   const directory = await mkdtemp(join(tmpdir(), "nested-stream-error-"));
   const runId = "synthetic-nested-error";
   const endpoint = openEndpoint();
-  const journal = openCaptureJournal(join(directory, "capture"), runId);
-  const database = join(directory, "pi.sqlite");
+  const source = join(directory, "channel");
+  const journal = openCaptureJournal(join(source, "capture"), runId);
+  using authority = captureAuthority(source);
+  const database = join(source, "pi.sqlite");
   const token = tokenCommand(directory, "synthetic-lease");
   journal.capture({
     type: "run.start",
@@ -938,7 +943,7 @@ test("nested OpenAI stream errors reconcile the SDK, production route and native
     await openNodeSqliteStorage(database),
     {
       models: createRouteModels({
-        credentialInspection: "ephemeral" as const,
+        credentialInspection: authority.inspection,
         route: SOL_ROUTE,
         runId,
         sessionAffinity: runId,
@@ -989,6 +994,7 @@ test("nested OpenAI stream errors reconcile the SDK, production route and native
     const root = join(directory, "datasets");
     await mkdir(root);
     const snapshot = await exportWhileOpen({
+      credentialInspection: authority.inspection,
       runId,
       journal: journal.directory,
       nativeDatabase: database,

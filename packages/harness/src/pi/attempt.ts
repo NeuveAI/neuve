@@ -34,7 +34,12 @@ import {
 } from "./capture/safety.ts";
 import { tmpdir } from "node:os";
 import { openCaptureJournal, type CaptureJournal } from "./capture/journal.ts";
-import { openReviewHost, type QueueClaim, type ReviewHost } from "./host.ts";
+import {
+  openReviewHost,
+  REVIEW_SETTINGS,
+  type QueueClaim,
+  type ReviewHost,
+} from "./host.ts";
 import { childOf } from "./review-task.ts";
 import {
   createAgentRouteProvider,
@@ -183,6 +188,7 @@ export const openAttempt = async (input: {
           : bindingProvider(route, {
               log: ctx.log,
               capture: captured.capture,
+              retry: REVIEW_SETTINGS.retry,
               credentialInspection: inspection,
               fetch: admittedFetch,
             }),

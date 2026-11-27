@@ -1,3 +1,4 @@
+import { captureAuthority } from "./fixture.ts";
 import { expect } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -138,11 +139,13 @@ const checkProjectionIn = async (
 ) => {
   const endpoint = openEndpoint();
   const runId = "canonical-matrix";
-  const database = join(directory, "pi.sqlite");
-  const journalPath = join(directory, "capture");
+  const source = join(directory, "channel");
+  const database = join(source, "pi.sqlite");
+  const journalPath = join(source, "capture");
   const datasets = join(directory, "datasets");
   await mkdir(datasets);
   const journal = openCaptureJournal(journalPath, runId);
+  using authority = captureAuthority(source);
   journal.capture({
     type: "run.start",
     scope: { runId },
@@ -158,7 +161,7 @@ const checkProjectionIn = async (
     await openNodeSqliteStorage(database),
     {
       models: createRouteModels({
-        credentialInspection: "ephemeral" as const,
+        credentialInspection: authority.inspection,
         route: SOL_ROUTE,
         runId,
         sessionAffinity: runId,
@@ -299,6 +302,7 @@ const checkProjectionIn = async (
   let snapshot;
   try {
     snapshot = await exportSnapshot({
+      credentialInspection: authority.inspection,
       runId,
       journal: journalPath,
       native: { reads: storage, context },

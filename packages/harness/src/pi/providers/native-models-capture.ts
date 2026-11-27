@@ -15,14 +15,13 @@ import type {
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { sdkContextSnapshot } from "../capture/retained-context.ts";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import type { ConversationId } from "@earendil-works/pi-durable";
-import {
-  CredentialEpochId,
-  InspectionBudget,
-} from "../capture/credential-detectors.ts";
+import type {
+  ConversationId,
+  HarnessSettings,
+} from "@earendil-works/pi-durable";
+import { CallCapture } from "./capture-write.ts";
 import { rememberEphemeralCredentials } from "../capture/safety.ts";
 import {
-  CREDENTIAL_INSPECTION_POLICY,
   CaptureFailed,
   CapturedEvent,
   CaptureScope,
@@ -45,6 +44,7 @@ import {
 
 export interface NativeModelsCaptureOptions {
   readonly capture: ModelCapture;
+  readonly retry?: HarnessSettings["retry"] | undefined;
   readonly credentialInspection: CredentialCapture;
   readonly runId: string;
   readonly agent?: string | undefined;
@@ -119,25 +119,33 @@ export const captureNativeModels = (
     ) => ReturnType<typeof sdkContextSnapshot> | undefined,
   ) => {
     let current:
-      | { id: string; headers: Headers; guarded: boolean; actualHttp: boolean }
+      | {
+          id: string;
+          headers: Headers;
+          guarded: boolean;
+          actualHttp: boolean;
+          writes: CallCapture;
+        }
       | undefined;
     let assembledHeaders = new Headers();
     let received = false;
     const startedAt = Date.now();
     const captureAbort = new AbortController();
     let captureFailure: CaptureFailed | undefined;
-    const capture = (event: ModelCaptureEvent) => {
-      try {
-        options.capture(event);
-      } catch (error) {
-        if (error instanceof CaptureFailed && error.kind === "full") {
-          captureFailure ??= error;
-          captureAbort.abort();
-        }
-        throw error;
-      }
+    const failCapture = (error: unknown): never => {
+      captureFailure ??=
+        error instanceof CaptureFailed
+          ? error
+          : new CaptureFailed({
+              kind: "invalid",
+              event: "model capture",
+              detail: "Native capture evidence or credential inspection failed",
+            });
+      captureAbort.abort();
+      throw error;
     };
-    const write = async (event: ModelCaptureEvent) => {
+    const capture = options.capture;
+    const checkedWrite = async (event: ModelCaptureEvent) => {
       const evidence = eventEvidence(
         jsonCopy(event),
         current?.headers ?? assembledHeaders,
@@ -157,6 +165,8 @@ export const captureNativeModels = (
                   status: "exposed",
                 });
             },
+            undefined,
+            current?.writes.lostRegistration,
           )
         ).data;
       }
@@ -167,9 +177,11 @@ export const captureNativeModels = (
         parsed.type === "model.event" ||
         parsed.type === "model.end"
       )
-        capture(parsed);
+        await current?.writes.write(parsed, request.signal);
       else throw new Error("Native capture identity changed");
     };
+    const write = (event: ModelCaptureEvent) =>
+      checkedWrite(event).catch(failCapture);
     const event = async (name: string, data: Json) => {
       if (current === undefined) return;
       await write({
@@ -192,6 +204,7 @@ export const captureNativeModels = (
         headers,
         guarded: authenticated(headers),
         actualHttp: path !== undefined,
+        writes: new CallCapture(capture, options.retry),
       };
       received = false;
       if (current.guarded) {
@@ -202,23 +215,14 @@ export const captureNativeModels = (
             current.id,
             headers,
           );
-        else {
-          const registration = await options.credentialInspection.register({
-            epoch: CredentialEpochId.parse(current.id),
+        else
+          await current.writes.register(
+            scope,
+            current.id,
+            options.credentialInspection,
             headers,
-            budget: new InspectionBudget(),
-            deduplicate: true,
-          });
-          if (registration.status !== "registered")
-            throw new Error("Native credential registration is unavailable");
-          capture({
-            type: "credential.registration",
-            scope: { runId: scope.runId },
-            callId: current.id,
-            epochId: registration.epoch,
-            policy: CREDENTIAL_INSPECTION_POLICY,
-          });
-        }
+            request.signal,
+          );
       }
       const sdkContext = current.actualHttp
         ? contextOf?.(current.id)
@@ -266,7 +270,7 @@ export const captureNativeModels = (
             reason: "Native transport did not expose its actual HTTP request",
           },
           assembledHeaders,
-        );
+        ).catch(failCapture);
     };
     const response = async (status: number, headers: Headers) => {
       await ensure();
@@ -354,7 +358,12 @@ export const captureNativeModels = (
             reason: "Native HTTP request body is not JSON",
           };
         }
-        await begin(body, assembled.headers, new URL(assembled.url).pathname);
+        await begin(
+          body,
+          assembled.headers,
+          new URL(assembled.url).pathname,
+        ).catch(failCapture);
+        request.signal?.throwIfAborted();
         const result = await base(input, init);
         await response(result.status, result.headers);
         return result;
@@ -419,6 +428,8 @@ export const captureNativeModels = (
                   status: "exposed",
                 });
             },
+            undefined,
+            current.writes.lostRegistration,
           );
         if (exposed) {
           if (current.guarded)
@@ -445,6 +456,8 @@ export const captureNativeModels = (
               data,
               options.credentialInspection,
               () => {},
+              undefined,
+              current.writes.lostRegistration,
             )
           ).data;
         return typeof data === "string"

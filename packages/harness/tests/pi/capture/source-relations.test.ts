@@ -1,4 +1,4 @@
-import { dumpJournalLines } from "./fixture.ts";
+import { captureAuthority, dumpJournalLines } from "./fixture.ts";
 import { captureSdk } from "./sdk-fixture.ts";
 import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
@@ -53,7 +53,9 @@ test("conversation and model source matrix refuses ownership and output contradi
   const directory = await mkdtemp(join(tmpdir(), "source-relations-"));
   const endpoint = openEndpoint();
   const runId = "source-relations";
-  let journal = openCaptureJournal(join(directory, "journal"), runId);
+  const source = join(directory, "channel");
+  let journal = openCaptureJournal(join(source, "capture"), runId);
+  using authority = captureAuthority(source);
   journal.capture({
     type: "run.start",
     scope: { runId },
@@ -62,13 +64,13 @@ test("conversation and model source matrix refuses ownership and output contradi
     route: "chatgpt",
     pricing: "subscription",
   });
-  const database = join(directory, "pi.sqlite");
+  const database = join(source, "pi.sqlite");
   const token = tokenCommand(directory, "synthetic-offline-lease");
   const harness = await Harness.open(
     await openNodeSqliteStorage(database),
     {
       models: createRouteModels({
-        credentialInspection: "ephemeral" as const,
+        credentialInspection: authority.inspection,
         route: SOL_ROUTE,
         runId,
         sessionAffinity: runId,
@@ -146,6 +148,7 @@ test("conversation and model source matrix refuses ownership and output contradi
     journal.capture({ type: "run.end", scope: { runId }, status: "completed" });
     journal.close();
     const input = {
+      credentialInspection: authority.inspection,
       runId,
       journal: journal.directory,
       nativeDatabase: database,

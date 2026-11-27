@@ -26,8 +26,9 @@ import {
   openPrivateInspection,
   type PrivateInspection,
 } from "./private-inspection.ts";
-import { readCaptureJournal } from "./journal.ts";
+import { readCaptureLosses, readCaptureJournal } from "./journal.ts";
 import {
+  captureLossCredential,
   CREDENTIAL_INSPECTION_POLICY,
   RETAINED_SDK_ASSEMBLY_POLICY,
   RETAINED_SDK_PIN,
@@ -37,7 +38,13 @@ import { tmpdir } from "node:os";
 import type { NativeSnapshot } from "./sources.ts";
 import { openAsItStands, openPrivateCopy } from "@neuve/records-core/read-only";
 import { z } from "zod";
-import type { Capture, JournalLine, ModelCapture } from "./types.ts";
+import type {
+  Capture,
+  CaptureLoss,
+  CredentialCertificate,
+  JournalLine,
+  ModelCapture,
+} from "./types.ts";
 
 const CredentialGuard = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("pending") }),
@@ -108,6 +115,30 @@ const interruptedCredentialCalls = (
   );
 };
 
+export const credentialLossEpochs = (
+  losses: readonly CaptureLoss[],
+  registrations: ReadonlyMap<string, string>,
+) =>
+  new Map(
+    losses.flatMap((loss) => {
+      const required =
+        captureLossCredential(loss) ?? loss.ordinaryOverflow?.credential;
+      if (required === undefined) return [];
+      const { callId, epochId } = required;
+      return [
+        [callId, registrations.get(callId) ?? epochId ?? callId] as const,
+      ];
+    }),
+  );
+
+type LossEvidence = {
+  readonly epochs: ReadonlyMap<string, string>;
+  readonly certificates?: readonly CredentialCertificate[];
+};
+
+export const CREDENTIAL_REGISTRATION_REFUSED =
+  "historical calls lack durable registration; export refused";
+
 export const credentialGuards = (
   lines: ReadonlyArray<JournalLine>,
   mode:
@@ -116,22 +147,32 @@ export const credentialGuards = (
     | {
         readonly portableRetainedPrefixes: ReadonlySet<string>;
       } = "certificates-only",
+  loss?: LossEvidence,
 ) => {
   const retainedPrefixCalls: string[] = [];
   const interrupted = interruptedCredentialCalls(lines);
+  const events = [
+    ...lines.map(({ event }) => event),
+    ...(loss?.certificates ?? []),
+  ];
   const certifiedRetained = new Set(
-    lines.flatMap(({ event }) =>
+    events.flatMap((event) =>
       event.type === "credential.inspection" && event.version === 3
         ? event.retainedPrefixCalls
         : [],
     ),
   );
   const guards = new Map<string, z.infer<typeof CredentialGuard>>();
+  const certifiedLosses = new Set(
+    loss?.certificates?.flatMap((certificate) => certificate.calls),
+  );
   const registrations = new Map<string, string>();
-  const required = new Set<string>();
+  const required = new Set(loss?.epochs.keys());
   const pending = new Set<string>();
   const observed = new Set<string>();
-  for (const { event } of lines) {
+  const ended = new Set<string>();
+  for (const event of events) {
+    if (event.type === "model.end") ended.add(event.callId);
     if (event.type === "model.request") {
       const authenticated = event.headerNames.some((name) =>
         /authorization|api[-_]?key|cookie/i.test(name),
@@ -183,15 +224,14 @@ export const credentialGuards = (
         observed.add(event.callId);
     }
   }
-  for (const { event } of lines) {
+  for (const event of events) {
     if (event.type === "credential.inspection") {
       if (
         event.version === 3 &&
-        event.calls.some(
-          (call) =>
-            registrations.has(call) &&
-            registrations.get(call) !== event.epochId,
-        )
+        event.calls.some((call) => {
+          const epoch = registrations.get(call) ?? loss?.epochs.get(call);
+          return epoch !== undefined && epoch !== event.epochId;
+        })
       )
         return {
           refusal:
@@ -254,6 +294,16 @@ export const credentialGuards = (
     }
   }
   for (const callId of required) {
+    if (loss?.epochs.has(callId)) {
+      if (mode !== "inspect-retained-prefix" && !certifiedLosses.has(callId))
+        return {
+          refusal: "lost call lacks a credential certificate; export refused",
+          guards,
+          retainedPrefixCalls,
+          requiresInspection: true,
+        };
+      if (!ended.has(callId)) continue;
+    }
     if (!pending.has(callId))
       return {
         refusal:
@@ -325,6 +375,7 @@ export const administrativeFrame = (line: JournalLine): boolean =>
 export const credentialAdministrationHash = (
   lines: ReadonlyArray<JournalLine>,
   frames: ReadonlyArray<CredentialJson>,
+  losses?: readonly CaptureLoss[],
 ): string => {
   const values: string[] = [];
   for (const [index, line] of lines.entries())
@@ -337,6 +388,7 @@ export const credentialAdministrationHash = (
         throw new Error("Noncanonical credential administration");
       values.push(frame.contents());
     }
+  if (losses !== undefined) values.push(JSON.stringify(losses));
   return hash(Buffer.from(JSON.stringify(values), "utf16le"));
 };
 export const credentialFramesAdministrationHash = (
@@ -637,6 +689,12 @@ export const openManagedCredentialInspection = (input: {
   const journal = readCaptureJournal(input.journal);
   if (
     journal._tag !== "Read" ||
+    readCaptureLosses(input.journal, undefined, journal.lines).some(
+      (loss) =>
+        loss.event !== "journal.open" &&
+        (loss.event === "credential.registration" ||
+          loss.credentialCoverage === "required"),
+    ) ||
     credentialGuards(journal.lines).requiresInspection ||
     journal.lines.some((line) => line.event.type === "credential.registration")
   )
@@ -665,9 +723,12 @@ export const openManagedCredentialInspection = (input: {
   return createPrivateInspection(options);
 };
 
-const certifiedSources = (lines: ReadonlyArray<JournalLine>) => {
+const certifiedSources = (
+  lines: ReadonlyArray<JournalLine>,
+  certificates: readonly CredentialCertificate[] = [],
+) => {
   const sources = new Map<string, Set<string>>();
-  for (const { event } of lines)
+  for (const event of [...lines.map(({ event }) => event), ...certificates])
     if (
       event.type === "credential.inspection" &&
       event.safe &&
@@ -759,13 +820,18 @@ export const credentialRefusal = (
   lines: ReadonlyArray<JournalLine>,
   sourceHashes?: ReadonlyArray<string>,
   administrationHash?: string,
+  loss?: LossEvidence,
 ): string | null => {
-  const { refusal, guards, requiresInspection } = credentialGuards(lines);
+  const { refusal, guards, requiresInspection } = credentialGuards(
+    lines,
+    "certificates-only",
+    loss,
+  );
   if (refusal !== null) return refusal;
   if (!requiresInspection) return null;
   if (sourceHashes === undefined)
     return "credential source evidence is required; export refused";
-  const covered = certifiedSources(lines);
+  const covered = certifiedSources(lines, loss?.certificates);
   return [...guards].some(
     ([callId, guard]) =>
       guard.status !== "checked" ||

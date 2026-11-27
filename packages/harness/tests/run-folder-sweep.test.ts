@@ -88,7 +88,7 @@ test("the sweep captures native state before removing ended, jobless and 30-day-
           journal.capture({
             type: "run.start",
             scope: { runId: runs.completed },
-            runKind: "coding",
+            runKind: "reading",
             sourceRevision: "synthetic",
             route: "local",
             pricing: "subscription",

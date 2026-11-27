@@ -275,7 +275,7 @@ export type LeadLedger = z.infer<typeof LeadLedger>;
 export const GapCode = z.enum([
   /** Journal lines cut short by a crash mid-append. */
   "journal-torn",
-  /** A capture failed and its reason was written. */
+  /** The capture records which evidence was lost and why. */
   "journal-failed",
   /** A process's journal session ended without its clean close: a crash, or a failed capture. */
   "journal-interrupted",
