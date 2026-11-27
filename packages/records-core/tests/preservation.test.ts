@@ -887,6 +887,53 @@ test("object strict, strip, loose and typed catchall modes keep their own unknow
   ).toBe(false);
 });
 
+test("a successful parse reports stripped keys at each input location", () => {
+  const leaf = z.object({ used: z.number() });
+  const schema = z.object({
+    child: leaf,
+    items: z.array(leaf),
+    choice: z.union([z.string(), leaf]),
+  });
+  const used = { used: 1 };
+  const added = { ...used, future: true };
+  expect(
+    safeRead(
+      schema,
+      { child: added, items: [added], choice: added, future: true },
+      { notice: false },
+    ),
+  ).toMatchObject({
+    success: true,
+    droppedKeys: ["child.future", "items.[].future", "choice.future", "future"],
+    droppedPaths: [
+      ["child", "future"],
+      ["items", 0, "future"],
+      ["choice", "future"],
+      ["future"],
+    ],
+  });
+  expect(
+    safeRead(schema, { child: used, items: [used], choice: used }),
+  ).toMatchObject({
+    success: true,
+    droppedKeys: [],
+    droppedPaths: [],
+  });
+});
+
+test("a pipe reports a key it strips and then restores", () => {
+  const schema = z
+    .object({ used: z.number() })
+    .transform(({ used }) => ({ used, future: true }));
+  const input = { used: 1, future: true };
+  expect(safeRead(schema, input, { notice: false })).toMatchObject({
+    success: true,
+    data: input,
+    droppedKeys: ["future"],
+    droppedPaths: [["future"]],
+  });
+});
+
 test("tuple rest repairs its own elements without changing arity or optional-tail semantics", () => {
   const leaf = z.strictObject({ used: z.number() });
   const schema = z.tuple([z.literal("tag"), leaf.optional()], leaf);
