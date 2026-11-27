@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { Effect } from "effect";
+import { RecordEvent } from "@neuve/records-schema";
 import {
   Actors,
   Ancestry,
@@ -324,8 +325,7 @@ test("commits are attributed to the committer only when ancestry was checked; ot
   ).not.toBe(Identity.humanFingerprint("dev@example.com"));
 });
 
-// Registering an Ace worker must not change the committer credited by the Git hook.
-test("a commit from an Ace chat keeps the Git committer", async () => {
+test("the commit hook credits the Ace chat and keeps the Git committer", async () => {
   const { repo } = await repository();
   const location = await Effect.runPromise(resolveStoreLocation(repo));
   const table = Ancestry.parseProcessTable(`
@@ -349,11 +349,83 @@ test("a commit from an Ace chat keeps the Git committer", async () => {
   expect(
     events.find((event) => event.kind === "commit.recorded@1"),
   ).toMatchObject({
-    actor: Identity.humanFingerprint("dev@example.com"),
+    actor: "8d363b88e4af85ffdbe2d61c53dc32810d6e8c7b17d3f895c5546a35f353e98e",
+    attribution: { sessionId: "channel-a" },
     payload: {
-      link: "none",
+      link: "ancestry",
       committer: { name: "Dev Person", email: "Dev@Example.com" },
     },
+  });
+});
+
+test("a real Git hook follows the commit process back to the Ace channel worker", async () => {
+  const { root, repo } = await repository();
+  const location = await Effect.runPromise(resolveStoreLocation(repo));
+  const worker = Ancestry.snapshotProcesses()?.get(process.pid);
+  if (!worker)
+    throw new Error(
+      "The test needs ps to identify the channel worker process.",
+    );
+  await Effect.runPromise(
+    Sessions.writeSession(location, {
+      version: 1,
+      harness: "neuve-pi",
+      sessionId: "channel-a",
+      actorId: Identity.agentFingerprint({
+        harness: "neuve-pi",
+        sessionId: "channel-a",
+      }),
+      owner: Ancestry.identityOf(worker),
+    }).pipe(Effect.provide(BunFileSystem.layer)),
+  );
+
+  const hooks = join(root, "hooks");
+  await mkdir(hooks);
+  git(repo, "config", "core.hooksPath", hooks);
+  const hook = join(root, "capture.ts");
+  const output = join(root, "commit-events.json");
+  await writeFile(
+    hook,
+    `
+    import { Effect } from ${JSON.stringify(import.meta.resolve("effect"))};
+    import { layer } from ${JSON.stringify(import.meta.resolve("@effect/platform-bun/BunFileSystem"))};
+    import { resolveStoreLocation } from ${JSON.stringify(import.meta.resolve("@neuve/records-core"))};
+    import { capturePostCommit } from ${JSON.stringify(import.meta.resolve("../src/capture/git-hooks.ts"))};
+    const repo = process.cwd();
+    const location = await Effect.runPromise(resolveStoreLocation(repo));
+    const events = await Effect.runPromise(capturePostCommit(repo, location).pipe(Effect.provide(layer)));
+    await Bun.write(process.env.NEUVE_TEST_HOOK_OUTPUT, JSON.stringify(events));
+  `,
+  );
+  await writeFile(
+    join(hooks, "post-commit"),
+    '#!/bin/sh\nexec "$NEUVE_TEST_BUN" --no-env-file "$NEUVE_TEST_HOOK"\n',
+    { mode: 0o755 },
+  );
+  const result = Bun.spawnSync(
+    ["git", "-C", repo, "commit", "--allow-empty", "-m", "Chat commit"],
+    {
+      env: {
+        ...process.env,
+        ...Identity.aceChatEnvironment("channel-a", 7),
+        [SESSION_OVERRIDE_ENV]: "",
+        NEUVE_TEST_BUN: process.execPath,
+        NEUVE_TEST_HOOK: hook,
+        NEUVE_TEST_HOOK_OUTPUT: output,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  expect(result.stderr.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+  const events = RecordEvent.array().parse(await Bun.file(output).json());
+  expect(
+    events.find((event) => event.kind === "commit.recorded@1"),
+  ).toMatchObject({
+    actor: "8d363b88e4af85ffdbe2d61c53dc32810d6e8c7b17d3f895c5546a35f353e98e",
+    attribution: { sessionId: "channel-a" },
+    payload: { oid: git(repo, "rev-parse", "HEAD"), link: "ancestry" },
   });
 });
 

@@ -57,7 +57,6 @@ const attributeTo = (
   Effect.gen(function* () {
     const resolution = yield* Caller.resolveCaller(location, {
       override: environment[SESSION_OVERRIDE_ENV] || undefined,
-      includeAceChats: false,
       processes,
       environment,
     }).pipe(

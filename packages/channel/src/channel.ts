@@ -67,6 +67,7 @@ import { instructions } from "./context";
 import { environment, type HostEnvironment } from "./environment";
 import { capabilities } from "./capabilities";
 import { changes, fetchBase, patch } from "./changes";
+import { commitTool } from "./commit";
 import { type Desktop, desktop, DESKTOP_EXTENSION } from "./desktop";
 import { HANDOFF, Handoffs } from "./handoffs";
 import { type Images, images } from "./images";
@@ -346,6 +347,7 @@ export class Channel {
 		if (options.images) registry.install(images(options.images));
 		if (options.tabs) registry.install(tabs(options.tabs));
 		registry.install(lanes({ ...options, name: options.prefix || options.name }));
+		registry.install(commitTool(options.project));
 		registry.install(subagent(
 			(handle, input, scope) => channel.submitInput(handle, input, scope),
 			(tx, chat, requested) => modelNamedByOwner(tx, chat, requested, modelSettings),

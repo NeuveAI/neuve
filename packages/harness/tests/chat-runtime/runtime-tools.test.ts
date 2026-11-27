@@ -51,7 +51,12 @@ test("pi's shell and file tools and the pass-through are kept from a runtime wit
 // the answer tool writes to a comment thread in the chat's session state.
 // The runtime must hear which tools were withheld because its prompt still describes them.
 test("an unattended runtime with its own sandbox is served only the tools that cannot widen it, and told which are withheld", () => {
-  const offered = conversation(["plan_write", "plan_comment_answer", ...ace]);
+  const offered = conversation([
+    "plan_write",
+    "plan_comment_answer",
+    "neuve_commit",
+    ...ace,
+  ]);
   const own = policy(offered, handle, undefined, {
     folder: "/work",
     ownTools: true,
@@ -61,6 +66,7 @@ test("an unattended runtime with its own sandbox is served only the tools that c
     "question",
     "plan_write",
     "plan_comment_answer",
+    "neuve_commit",
   ]);
   const attended = policy(offered, handle, undefined, {
     ownTools: true,
@@ -90,6 +96,7 @@ test("an unattended runtime with its own sandbox is served only the tools that c
     "question",
     "plan_write",
     "plan_comment_answer",
+    "neuve_commit",
     ...ace,
   ]);
   expect(other.systemPrompt).toBe("prompt");

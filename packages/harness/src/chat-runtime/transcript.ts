@@ -47,6 +47,8 @@ const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
   "set_agent_model",
   // The host chooses the repository, revision, branch and plan and bounds every scope path.
   "neuve_query",
+  // The host commits only in the calling chat's recorded work lane.
+  "neuve_commit",
 ]);
 
 export type Log = (
