@@ -1056,6 +1056,16 @@ export const openClaudeSession = (
               { signal },
             ),
           () => runPromise(protocolFault("tool-server-protocol")),
+          () =>
+            runPromise(
+              state(
+                Effect.suspend(() =>
+                  child?.ready === true
+                    ? Effect.void
+                    : dieProtocolLocked("tool-server-protocol"),
+                ),
+              ),
+            ),
         ),
       catch: () => undefined,
     }).pipe(

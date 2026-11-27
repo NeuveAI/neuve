@@ -47,6 +47,7 @@ export function toolServer(
     signal: AbortSignal,
   ) => Promise<CallToolResult>,
   onProtocolFault: () => Promise<void> = async () => {},
+  onUnknownTool?: () => Promise<void>,
 ): McpSdkServerConfigWithInstance & {
   readonly alwaysLoad: true;
   readonly stampToolUseId: HookCallback;
@@ -96,8 +97,10 @@ export function toolServer(
       const definition = definitions.find(
         (tool) => tool.name === request.params.name,
       );
-      if (definition === undefined)
+      if (definition === undefined) {
+        await onUnknownTool?.();
         return unknownTool(request.params.name, tools);
+      }
       // Live evidence: research/live-experiments.md (a), Claude Code 2.1.312, both parallel calls.
       const input = request.params.arguments ?? {};
       const direct = request.params._meta?.[TOOL_USE_ID_META];
