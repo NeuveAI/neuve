@@ -5,6 +5,7 @@ import {
   childOf,
   reviewTask,
   reviewExtension,
+  type ReviewOutcome,
 } from "../../src/pi/review-task.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +19,11 @@ import {
   type AssistantMessage,
   type Message,
 } from "@earendil-works/pi-ai";
-import { Harness, createRegistry } from "@earendil-works/pi-durable";
+import {
+  Harness,
+  createRegistry,
+  type TaskId,
+} from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Context, Effect, Layer, Scope, Tracer } from "effect";
 import type { z } from "zod";
@@ -35,6 +40,7 @@ import { RangeManifest, type ManifestHunk } from "../../src/manifest.ts";
 import { McpClients, mcpClientsLayer } from "../../src/mcp-client.ts";
 import { storedOutput } from "../../src/pipeline.ts";
 import { openRunLog, runLogTracer } from "../../src/run-log.ts";
+import type { RunLogRecord } from "../../src/run-log.ts";
 import {
   agentRoutes,
   clearInheritedAgentRoute,
@@ -107,6 +113,12 @@ export const runReview = async (options: {
   /** Called as Publish starts. */
   readonly onPublish?: () => void;
   readonly afterBatchPublished?: (index: number) => void;
+  readonly readingMaxFiles?: number;
+  readonly onLog?: (record: RunLogRecord, reachCutoff: () => void) => void;
+  readonly runAttempts?: (
+    harness: Harness,
+    start: () => Promise<TaskId<ReviewOutcome>>,
+  ) => Promise<TaskId<ReviewOutcome>>;
   /** Wraps the range's leads computation (`harness.range-leads`), to hold or fail it. */
   readonly leads?: <A, E, R>(
     compute: Effect.Effect<A, E, R>,
@@ -185,6 +197,20 @@ export const runReview = async (options: {
   );
   const runId = mintUlid();
   const log = openRunLog(location, runId);
+  const defaults = defaultConfig();
+  const config =
+    options.readingMaxFiles === undefined || defaults.readings === undefined
+      ? defaults
+      : {
+          ...defaults,
+          readings: {
+            ...defaults.readings,
+            bounds: {
+              ...defaults.readings.bounds,
+              maxFiles: options.readingMaxFiles,
+            },
+          },
+        };
   const ctx = {
     location,
     repository,
@@ -192,10 +218,13 @@ export const runReview = async (options: {
     runKey: "f".repeat(64),
     range: { baseRef: "main", baseOid, headOid },
     cycleId: mintUlid(),
-    config: defaultConfig(),
+    config,
     log: {
       ...log,
       write: (record: Parameters<typeof log.write>[0]) => {
+        options.onLog?.(record, () => {
+          advanced = true;
+        });
         log.write(record);
         if (
           record.type === "publish.waiter" &&
@@ -376,24 +405,26 @@ export const runReview = async (options: {
     await routes().restoreAgentRoutes(context);
     await stages.restore(harness, context);
     const root = await harness.root(context);
-    const id = await harness.commit(
-      (tx) =>
-        tx.createTask(
-          task,
-          {
-            range: ctx.range,
-            config: ctx.config,
-            runKey: ctx.runKey,
-            runId: ctx.runId,
-            cycleId: ctx.cycleId,
-            generation: 0,
-            cutoffAt,
-          },
-          { ownership: { kind: "conversation" }, conversationId: root.id },
-        ),
-      context,
-    );
+    const start = () =>
+      open().commit(
+        (tx) =>
+          tx.createTask(
+            task,
+            {
+              range: ctx.range,
+              config: ctx.config,
+              runKey: ctx.runKey,
+              runId: ctx.runId,
+              cycleId: ctx.cycleId,
+              generation: 0,
+              cutoffAt,
+            },
+            { ownership: { kind: "conversation" }, conversationId: root.id },
+          ),
+        context,
+      );
     harness.resume();
+    const id = await (options.runAttempts?.(harness, start) ?? start());
     if (options.abortBeforeFill) {
       await fillEntered;
       await harness.abortTask(id, context);

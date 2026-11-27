@@ -19,6 +19,7 @@ import { sectionOwning } from "../../readings/settled.ts";
 import { batchKeyOf } from "../../publish-sections-input.ts";
 import {
   CrossBatchClaimsDoc,
+  storedCheckKey,
   type CrossBatchReport,
 } from "../cross-batch-claims.ts";
 import { Frame } from "../../frame.ts";
@@ -409,11 +410,11 @@ type AgentStepTask = Task<
 >;
 
 /**
- * The run's readings as `create` left them: the plan's key (null when it could not be computed, with
- * why) and each reading task by name, so a replayed `create` makes none twice and `collect` reads the
- * plan the readings ran on.
+ * The current review task's plan and reading task IDs. Replaying its plan reuses its children.
+ * A new attempt creates children of its own and can reuse their stored computation outputs.
  */
 export const ReadingsRunDoc = defineDoc<{
+  owner?: number;
   plan: string | null;
   unavailable: string | null;
   tasks: { [name: string]: number };
@@ -1180,7 +1181,7 @@ const rowsOf = (frame: Frame, map: ReviewMap) => {
 };
 
 /** A Lane review's tools for its one tool turn, under one reading budget. */
-export const LANE_REVIEW_READING_CHARS = 24_000;
+export const LANE_REVIEW_READING_CHARS = 200_000;
 
 type ReadingParams =
   | { readonly kind: "assess"; readonly params: KindParams<"assess"> }
@@ -1670,11 +1671,23 @@ export const readingTask = (
               ? undefined
               : (await tx.doc(CrossBatchClaimsDoc)).claims;
           for (const child of children) {
-            const shared =
+            const sharedId =
               child.crossBatch === undefined
                 ? undefined
                 : registered?.[child.crossBatch.key]?.task;
-            const held = shared ?? doc.children[child.name];
+            const shared =
+              sharedId == null ? undefined : await tx.task(childId(sharedId));
+            const reusable =
+              shared !== undefined &&
+              (shared.state.status !== "terminal" ||
+                (shared.state.outcome.status === "completed" &&
+                  storedCheckKey(shared.state.outcome.result) !== null));
+            const held =
+              child.crossBatch === undefined
+                ? doc.children[child.name]
+                : reusable
+                  ? shared.id
+                  : undefined;
             if (held !== undefined) {
               ids.push(held);
               continue;
@@ -1936,7 +1949,12 @@ export const readingTask = (
               claims.push({ key: claim, section, answer: key });
           }
     }
-    if (cross.length === 0 || input.mapKey === undefined) return claims;
+    if (cross.length === 0) return claims;
+    // Older reading tasks carried the front task. Current plans pass its Map key directly.
+    const mapKey =
+      input.mapKey ?? (await frontKeys(input, runtime, context))?.map;
+    if (mapKey === undefined)
+      throw new Error("A Lane review with claims has no Map");
     const manifest = await readManifest(
       ctx,
       services.run,
@@ -1944,7 +1962,7 @@ export const readingTask = (
       runtime.signal,
     );
     const map = await services.run(
-      storedOutput(ctx, input.mapKey, ReviewMap),
+      storedOutput(ctx, mapKey, ReviewMap),
       runtime.signal,
     );
     const batchOf = new Map(
@@ -1954,15 +1972,13 @@ export const readingTask = (
         return paths.map((path) => [path, batch] as const);
       }),
     );
-    const own = batchOf.get(planGroup(plan, input.group).paths[0] ?? "");
     const hunks = new Map(manifest.hunks.map((hunk) => [hunk.hunkId, hunk]));
-    if (own === undefined) return claims;
     for (const { answer, comment } of cross) {
       if (comment.kind === "defect" && comment.fails.length === 0) continue;
       const owner = sectionOwning(plan, hunks, comment);
       if (owner === undefined) continue;
       const batch = batchOf.get(owner.section.path);
-      if (batch === undefined || batch === own) continue;
+      if (batch === undefined) continue;
       const canonical = { ...comment, ...owner.anchor };
       const claim =
         canonical.kind === "defect"
@@ -2356,13 +2372,18 @@ export const readingTask = (
       );
       const reason =
         runtime.now() >= task.input.cutoffAt ? "cutoff" : "stopped";
-      await runtime.commit(
-        () => ({
+      await runtime.commit(async (tx) => {
+        const reports = claims.flatMap((claim) => claim.crossBatch ?? []);
+        if (reports.length > 0) {
+          const { claims: registered } = await tx.doc(CrossBatchClaimsDoc);
+          for (const report of reports)
+            registered[report.key] ??= { ...report, task: null };
+        }
+        return {
           status: "terminal",
           outcome: { status: "aborted", reason, result: json(result) },
-        }),
-        context,
-      );
+        };
+      }, context);
     },
   });
 };

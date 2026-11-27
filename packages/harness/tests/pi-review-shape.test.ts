@@ -1,3 +1,7 @@
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { CrossBatchClaimsDoc } from "../src/pi/cross-batch-claims.ts";
+import { childId } from "../src/pi/stages/children.ts";
+import type { CrossBatchClaim } from "../src/readings/answers.ts";
 import { LaneReviewStored } from "../src/readings/steps.ts";
 import { UnitSections } from "@neuve/records-schema";
 // Run the production task graph and publisher on a committed range with a scripted model.
@@ -81,7 +85,8 @@ const answerer = (): Answer => {
         notAsked: [],
         crossBatchClaims: [],
       });
-    if (agent.startsWith("brief.")) return fauxAssistantMessage("No briefing.");
+    if (agent.startsWith("brief.") || agent.startsWith("digest."))
+      return fauxAssistantMessage("No briefing.");
     throw new Error(`No fixture answer for ${agent}`);
   };
 };
@@ -165,8 +170,6 @@ const coverage = async (
     ),
   ).toBe(true);
 };
-
-// Why: a finder with no returned result cannot count as a completed search.
 
 test("aborting the review publishes nothing", async () => {
   const result = await run("abort", { abortReview: true });
@@ -479,17 +482,72 @@ test("stopping the review while its leads run aborts them and publishes nothing"
   ).toHaveLength(0);
 }, 60_000);
 
-// Why (NEU-148): the waits a review's timings are read from are these records and spans; nothing
-// else asserts them. Counts, kinds, keys and task IDs only.
+const paths = ["src/first.ts", "src/second.ts"] as const;
+const splitRange = {
+  base: {
+    [paths[0]]: "export const first = 1;\n",
+    [paths[1]]: "export const second = 1;\n",
+  },
+  head: {
+    [paths[0]]: "export const first = 0;\n",
+    [paths[1]]: "export const second = 0;\n",
+  },
+  message: "Change the two constants",
+};
+const earlyText = "The second constant can now be zero.";
+const lateText = "The first constant can now be zero.";
+const claimOn = (path: string, text: string): CrossBatchClaim => ({
+  path,
+  side: "new",
+  startLine: 1,
+  endLine: 1,
+  kind: "defect",
+  text,
+  fails: "A caller dividing by the constant divides by zero.",
+});
+const submit = (
+  agent: string,
+  name: string,
+  args: Parameters<typeof toolTurn>[0][number]["args"],
+) => toolTurn([{ name, id: agent, args }]);
+const reviewWithClaims = (agent: string, claims: CrossBatchClaim[]) =>
+  submit(agent, "submit_review", {
+    sections: { a: [], r: [], u: [1] },
+    files: [
+      {
+        f: 1,
+        checked: "Checked the new value.",
+        rows: [{ row: "D1", status: "no-evidence", reading: "", cites: [] }],
+      },
+    ],
+    comments: [],
+    unsure: [{ s: 1, t: "The caller is unavailable." }],
+    notAsked: [],
+    crossBatchClaims: claims,
+  });
+const verify = (agent: string) =>
+  submit(agent, "submit_verify", {
+    decision: "keep",
+    reason: "The pinned source shows the constant is zero.",
+  });
+const splitMap = () =>
+  submit("map", "submit_map", {
+    groups: paths.map((path, i) => ({
+      label: `Change ${path}`,
+      why: "Change one constant.",
+      tier: "core",
+      doneWhen: ["D1"],
+      entries: [`f${i + 1}`],
+    })),
+  });
+const commentsOf = (result: Awaited<ReturnType<typeof runReview>>) =>
+  result.publicationHistory.flatMap(({ event }) =>
+    event.kind === "comment.recorded@3" ? [event.payload] : [],
+  );
 
-// Why: a replay between logging the schedule and committing children must not double-count it.
-
-// Both files are in one directory, so only Map's batches keep their readings apart.
-// Keep the second reviewer open until the first batch reaches Records.
+// Both files share a directory. Map must separate their readings. Hold the second reviewer
+// until the first batch reaches Records to prove the outgoing claim can't reopen it.
 test("batch reviewers verify claims and leave published batches unchanged", async () => {
-  const paths = ["src/first.ts", "src/second.ts"];
-  const earlyText = "The second constant can now be zero.";
-  const lateText = "The first constant can now be zero.";
   const { promise: firstPublished, resolve: openSecond } =
     Promise.withResolvers<void>();
   const laneViews: string[] = [];
@@ -497,99 +555,26 @@ test("batch reviewers verify claims and leave published batches unchanged", asyn
   const fallback = answerer();
   const result = await runReview({
     directory: join(directory, "cross-batch"),
-    base: {
-      [paths[0]!]: "export const first = 1;\n",
-      [paths[1]!]: "export const second = 1;\n",
-    },
-    head: {
-      [paths[0]!]: "export const first = 0;\n",
-      [paths[1]!]: "export const second = 0;\n",
-    },
-    message: "Split the two changes",
+    ...splitRange,
     afterBatchPublished: (index) => {
       if (index === 0) openSecond();
     },
     answer: async (agent, messages, hunks) => {
-      if (agent === "map")
-        return toolTurn([
-          {
-            name: "submit_map",
-            id: "map",
-            args: {
-              groups: [
-                {
-                  label: "First limit",
-                  why: "Change the first limit.",
-                  tier: "core",
-                  doneWhen: ["D1"],
-                  entries: ["f1"],
-                },
-                {
-                  label: "Second limit",
-                  why: "Change the second limit.",
-                  tier: "core",
-                  doneWhen: ["D1"],
-                  entries: ["f2"],
-                },
-              ],
-            },
-          },
-        ]);
+      if (agent === "map") return splitMap();
       if (agent.startsWith("lane-review.")) {
         const text = textOf(messages);
         laneViews.push(text);
         const readsFirst = text.includes("export const first");
         if (!readsFirst) await firstPublished;
-        return toolTurn([
-          {
-            name: "submit_review",
-            id: agent,
-            args: {
-              sections: { a: [], r: [], u: [1] },
-              files: [
-                {
-                  f: 1,
-                  checked: "Checked the new value.",
-                  rows: [
-                    {
-                      row: "D1",
-                      status: "no-evidence",
-                      reading: "",
-                      cites: [],
-                    },
-                  ],
-                },
-              ],
-              comments: [],
-              unsure: [{ s: 1, t: "The caller is unavailable." }],
-              notAsked: [],
-              crossBatchClaims: [
-                {
-                  path: (readsFirst ? paths[1] : paths[0])!,
-                  side: "new",
-                  startLine: 1,
-                  endLine: 1,
-                  kind: "defect",
-                  text: readsFirst ? earlyText : lateText,
-                  fails: "A caller dividing by the constant divides by zero.",
-                },
-              ],
-            },
-          },
+        return reviewWithClaims(agent, [
+          readsFirst
+            ? claimOn(paths[1], earlyText)
+            : claimOn(paths[0], lateText),
         ]);
       }
       if (agent.startsWith("verify.claim.")) {
         verifyViews.push(textOf(messages));
-        return toolTurn([
-          {
-            name: "submit_verify",
-            id: agent,
-            args: {
-              decision: "keep",
-              reason: "The pinned source shows the constant is zero.",
-            },
-          },
-        ]);
+        return verify(agent);
       }
       return fallback(agent, messages, hunks);
     },
@@ -624,9 +609,7 @@ test("batch reviewers verify claims and leave published batches unchanged", asyn
         view.includes(lateText) && view.includes("export const first = 0;"),
     ),
   ).toBe(true);
-  const comments = result.publicationHistory.flatMap(({ event }) =>
-    event.kind === "comment.recorded@3" ? [event.payload] : [],
-  );
+  const comments = commentsOf(result);
   expect(
     comments.filter((comment) => comment.body.includes(earlyText)),
   ).toHaveLength(1);
@@ -653,4 +636,230 @@ test("batch reviewers verify claims and leave published batches unchanged", asyn
       text: lateText,
     }),
   ]);
+}, 60_000);
+
+// A new attempt uses the same session registry and stored Lane review answer. Stopping the first
+// attempt while Verify is running must not make the new attempt reuse its aborted Verify.
+test("a retried review replaces an aborted check and publishes the claim", async () => {
+  const firstVerify = Promise.withResolvers<void>();
+  const reply = Promise.withResolvers<void>();
+  const fallback = answerer();
+  let checks = 0;
+  let oldTask = 0;
+  const result = await runReview({
+    directory: join(directory, "retried-check"),
+    ...splitRange,
+    runAttempts: async (harness, start) => {
+      const first = await start();
+      await firstVerify.promise;
+      const registered = await harness.snapshot(CrossBatchClaimsDoc, context);
+      oldTask = Object.values(registered?.claims ?? {})[0]?.task ?? 0;
+      expect(oldTask).toBeGreaterThan(0);
+      const graph = await harness.watchTaskGraph(context);
+      graph.start(async ({ tasks }) => {
+        const check = tasks[String(oldTask)];
+        if (check === undefined || check.abortRequested) reply.resolve();
+      });
+      try {
+        await harness.abortTask(first, context);
+        await reply.promise;
+      } finally {
+        await graph.stop();
+      }
+      expect(
+        (await harness.waitForTask(first, context)).state.outcome.status,
+      ).toBe("aborted");
+      expect(
+        (await harness.waitForTask(childId(oldTask), context)).state.outcome
+          .status,
+      ).toBe("aborted");
+      return start();
+    },
+    answer: async (agent, messages, hunks) => {
+      if (agent === "map") return splitMap();
+      if (agent.startsWith("lane-review."))
+        return reviewWithClaims(
+          agent,
+          textOf(messages).includes("export const first")
+            ? [claimOn(paths[1], earlyText)]
+            : [],
+        );
+      if (agent.startsWith("verify.claim.")) {
+        if (++checks === 1) {
+          firstVerify.resolve();
+          await reply.promise;
+          return fauxAssistantMessage("The check was interrupted.");
+        }
+        return verify(agent);
+      }
+      return fallback(agent, messages, hunks);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(checks).toBe(2);
+  expect(
+    result.sent.filter(
+      ({ agent, messages }) =>
+        agent.startsWith("lane-review.") &&
+        textOf(messages).includes("export const first"),
+    ),
+  ).toHaveLength(1);
+  expect(
+    commentsOf(result).filter(({ body }) => body.includes(earlyText)),
+  ).toHaveLength(1);
+}, 60_000);
+
+// Once Lane review stores its answer, the cut-off can prevent Verify from ever starting.
+test("a claim whose Verify never starts at the cut-off stays in the run log", async () => {
+  const fallback = answerer();
+  const result = await runReview({
+    directory: join(directory, "cutoff-claim"),
+    ...splitRange,
+    readingMaxFiles: 1,
+    onLog: (row, reachCutoff) => {
+      if (
+        row.type === "stage" &&
+        String(row["agent"]).startsWith("lane-review.") &&
+        row["status"] === "computed"
+      )
+        reachCutoff();
+    },
+    answer: (agent, messages, hunks) =>
+      agent.startsWith("lane-review.")
+        ? reviewWithClaims(agent, [claimOn(paths[1], earlyText)])
+        : fallback(agent, messages, hunks),
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(
+    result.sent.filter(({ agent }) => agent.startsWith("verify.claim.")),
+  ).toHaveLength(0);
+  const claims = result.log
+    .read()
+    .filter(({ type }) => type === "review.claim-unpublished");
+  expect(claims).toEqual([
+    expect.objectContaining({
+      reason: "check-not-completed",
+      anchor: { path: paths[1], side: "new", startLine: 1, endLine: 1 },
+      verify: null,
+    }),
+  ]);
+  const held = await result.read(
+    String(claims[0]?.["answer"]),
+    LaneReviewStored,
+  );
+  expect(held.answer.crossBatchClaims).toEqual([claimOn(paths[1], earlyText)]);
+}, 60_000);
+
+// A batch can need more than one reading group. A section outside the source group can still
+// receive a confirmed claim on its own changed line.
+test("a claim on another reading group reaches the same batch", async () => {
+  const fallback = answerer();
+  const result = await runReview({
+    directory: join(directory, "same-batch"),
+    ...splitRange,
+    readingMaxFiles: 1,
+    answer: (agent, messages, hunks) => {
+      if (agent.startsWith("lane-review."))
+        return reviewWithClaims(
+          agent,
+          textOf(messages).includes("export const first")
+            ? [claimOn(paths[1], earlyText)]
+            : [],
+        );
+      if (agent.startsWith("verify.claim.")) return verify(agent);
+      return fallback(agent, messages, hunks);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(
+    result.sent.filter(({ agent }) => agent.startsWith("verify.claim.")),
+  ).toHaveLength(1);
+  expect(
+    commentsOf(result).filter(({ body }) => body.includes(earlyText)),
+  ).toEqual([
+    expect.objectContaining({
+      anchor: expect.objectContaining({ path: paths[1] }),
+    }),
+  ]);
+}, 60_000);
+
+// A Lane review can ask for its changed file and an unchanged caller in one read_many.
+// The file fits that tool's cap but previously consumed the review's whole budget.
+test("Lane review reads the caller after a large range in one tool call", async () => {
+  const path = "src/retries.ts";
+  const caller = "src/schedule.ts";
+  const padding = Array.from(
+    { length: 280 },
+    (_, n) => `// ${n} ${"context ".repeat(12)}\n`,
+  ).join("");
+  const callerText = "export const schedule = () => retryLimit * 2;";
+  const untouched = {
+    [caller]: `import { retryLimit } from "./retries.ts";\n${callerText}\n`,
+  };
+  const fallback = answerer();
+  let sawCaller = false;
+  const result = await runReview({
+    directory: join(directory, "multi-range-caller"),
+    base: { [path]: `${padding}export const retryLimit = 1;\n`, ...untouched },
+    head: { [path]: `${padding}export const retryLimit = 2;\n`, ...untouched },
+    message: "Raise the retry limit",
+    answer: (agent, messages, hunks) => {
+      if (!agent.startsWith("lane-review."))
+        return fallback(agent, messages, hunks);
+      const toolReply = messages.find(
+        (message) =>
+          message.role === "toolResult" && message.toolName === "read_many",
+      );
+      if (toolReply === undefined)
+        return submit(agent, "read_many", {
+          entries: [
+            { path, startLine: 1, endLine: 281 },
+            { path: caller, startLine: 2, endLine: 2 },
+          ],
+        });
+      sawCaller = textOf([toolReply]).includes(callerText);
+      return reviewWithClaims(agent, []);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(sawCaller).toBe(true);
+}, 60_000);
+
+// The ending packet is already stored when retention appends the run-log row.
+test("a run-log write failure cannot fail a published review", async () => {
+  const fallback = answerer();
+  const firstPublished = Promise.withResolvers<void>();
+  let failedWrites = 0;
+  const result = await runReview({
+    directory: join(directory, "retention-failure"),
+    ...splitRange,
+    afterBatchPublished: (index) => {
+      if (index === 0) firstPublished.resolve();
+    },
+    onLog: (row) => {
+      if (row.type === "review.claim-unpublished") {
+        failedWrites++;
+        throw new Error("run log write refused");
+      }
+    },
+    answer: async (agent, messages, hunks) => {
+      if (agent === "map") return splitMap();
+      if (agent.startsWith("verify.claim.")) return verify(agent);
+      if (agent.startsWith("lane-review.")) {
+        if (textOf(messages).includes("export const first"))
+          return reviewWithClaims(agent, []);
+        await firstPublished.promise;
+        return reviewWithClaims(agent, [claimOn(paths[0], lateText)]);
+      }
+      return fallback(agent, messages, hunks);
+    },
+  });
+  expect(failedWrites).toBe(1);
+  expect(result.outcome.status).toBe("completed");
+  expect(
+    result.publicationHistory.some(
+      ({ event }) =>
+        event.kind === "packet.published@2" && event.payload.complete,
+    ),
+  ).toBe(true);
 }, 60_000);

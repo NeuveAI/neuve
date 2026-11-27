@@ -1307,11 +1307,15 @@ export const readingsPort = (
       }
       step = "document";
       const doc = await tx.doc(ReadingsRunDoc);
+      if (doc.owner !== owner) {
+        doc.owner = owner;
+        doc.tasks = {};
+      }
+      doc.plan = prepared.plan;
       if (prepared.plan === null) {
         doc.unavailable = prepared.unavailable;
         return [];
       }
-      doc.plan = prepared.plan;
       doc.unavailable = null;
       step = "task";
       const created: Array<{ name: string; task: TaskId<unknown> }> = [];

@@ -598,8 +598,7 @@ const walk = (cycleId: string, runKey: string) =>
 // Lineage and carried decisions
 // ---------------------------------------------------------------------------------------------
 
-/** The earlier units of each packet fixed in the sequence's first plan. */
-/** Comments delivered by a packet in this publication chain, including earlier attempts. */
+/** Comment fates for batches that reached a packet in this publication chain. */
 export const publishedBatchClaims = (cycleId: string, runKey: string) =>
   Effect.map(
     walk(cycleId, runKey),
@@ -608,22 +607,13 @@ export const publishedBatchClaims = (cycleId: string, runKey: string) =>
         chain.packetBatches.flatMap((batch) => {
           const key = batch["key"];
           return typeof key === "string"
-            ? [
-                [
-                  key,
-                  new Set(
-                    chain.fates
-                      .get(key)
-                      ?.filter((fate) => fate.fate === "published")
-                      .map((fate) => fate.id),
-                  ),
-                ] as const,
-              ]
+            ? [[key, chain.fates.get(key) ?? []] as const]
             : [];
         }),
       ),
   );
 
+/** The earlier units of each packet fixed in the sequence's first plan. */
 const earlierSets = (lineage: Plan["lineage"]) =>
   Effect.gen(function* () {
     const sets: Array<{

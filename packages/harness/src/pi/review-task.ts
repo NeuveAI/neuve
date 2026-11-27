@@ -23,7 +23,7 @@ import { logTimed, scopedLogSpan, waitSpans } from "../log-span.ts";
 import type { PrecomputeOutput, StageRecord } from "../pipeline.ts";
 import type { PublishCandidate } from "../publish.ts";
 import type { SettledBatch } from "../publish-sections.ts";
-import type { RunLog } from "../run-log.ts";
+import { enqueueTelemetry, type RunLog } from "../run-log.ts";
 import type { ReviewRunInput } from "./contracts.ts";
 import { definePolicyTask as defineTask } from "./failure-policy.ts";
 import type { FrontInput, FrontResult } from "./stages/front-task.ts";
@@ -414,6 +414,7 @@ export const publishingOf = (checkpoint: unknown) => {
         manifestKey: at.manifestKey!,
         readings: at.readings ?? [],
         batches: at.publishing.batches,
+        waiters: at.publishing.waiters,
         final: at.publishing.final ?? false,
         planCut: at.publishing.planCut === true,
         disclosures: at.sources?.disclosures ?? [],
@@ -808,7 +809,12 @@ export const reviewTask = (
       },
       runtime.signal,
     );
-    await stages.retainUnpublishedClaims?.(checked, runtime.signal);
+    try {
+      await stages.retainUnpublishedClaims?.(checked, runtime.signal);
+    } catch (error) {
+      if (runtime.signal.aborted) throw error;
+      enqueueTelemetry(log, { type: "review.claim-retention", failed: true });
+    }
     return { published: [...cut, ...published], ask: pending };
   };
   const review = defineTask<ReviewTaskInput, ReviewCheckpoint, ReviewOutcome>({

@@ -3,10 +3,8 @@
 // order (the scheduler lane's shape, `design/publish-waiter-0016.md`, amended), and ends with one
 // `ending: true` call after every waiter ended; a batch not reached by the cut-off is never
 // published partially, and the run asks once for its follow-on run. These tests drive the real
-// review task, the real plan task and the real waiter task on a real pi Harness, with stand-in
-// front, finder and reading tasks and a stand-in readings port (`batches`, `settle`: implementer
-// A's builder is not on this branch). Every publication is the real `publishSettled` against a
-// real Records store, through the real port (`settledStages`); only the follow-on ask is a fake.
+// review task, plan task and waiter task on a real pi Harness with scripted readings and checks.
+// Every publication uses the real `publishSettled` and Records store.
 import { expect, test } from "bun:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
@@ -24,6 +22,7 @@ import { Effect } from "effect";
 import { PublishedPackets } from "@neuve/records-core";
 import type { RecordEvent } from "@neuve/records-schema";
 import { defaultConfig } from "../src/config.ts";
+import { CrossBatchClaimsDoc } from "../src/pi/cross-batch-claims.ts";
 import {
   childOf,
   reviewExtension,
@@ -45,6 +44,7 @@ import type { PrecomputeOutput, StageRecord } from "../src/pipeline.ts";
 import { batchKeyOf } from "../src/publish-sections.ts";
 import {
   atTime,
+  comment,
   eventsOf,
   keyedOf,
   scratch,
@@ -83,12 +83,6 @@ const RUN_GAP = {
   kind: "graph-unavailable",
   detail: "Graph was not reachable.",
 };
-const FINDER_GAP = {
-  key: "run:findings-unread",
-  kind: "findings-unread",
-  detail: "One verified finding could not be read.",
-};
-
 /** A gate the test opens: what a stand-in task waits on before it ends. */
 const gate = () => {
   let open: () => void = () => {};
@@ -102,9 +96,8 @@ const gate = () => {
 type ReadingEnd = "completed" | "cutoff" | "quota";
 const tasksOf = (gates: {
   readonly readings: Readonly<Record<string, Promise<void>>>;
-  /** The front task ends with no Frame or Map, and starts no finder. */
+  /** The front task ends with no Frame or Map. */
   readonly frontFallback?: boolean;
-  /** How each finder ends, by lens; absent, it completes. */
 }) => {
   const front = defineTask<FrontInput, { phase: "run" }, FrontResult>({
     name: "test.front",
@@ -215,8 +208,8 @@ type Store = ReturnType<typeof scratch>;
  * by batch name; absent, the run has no readings (the off switch). `probe`: the readings port has no
  * `batches` or `settle`, as on a branch without the builder. `publisher`: the publish phase's port is
  * given (`settledStages`). `crashAtCall`: the run stops (the harness closes) as that publication
- * starts, before it does anything; `stopAtCall`: the review is stopped then. `holdFinders`: every
- * reading ends before the finders do. `joined`: the review's collector waits (up to 5 s) until
+ * starts, before it does anything; `stopAtCall`: the review is stopped then. With `joined`,
+ * the review's collector waits (up to 5 s) until
  * every waiter ended, so each settled batch is published by its own waiter; without it, waiters
  * that wake after the review is at Publish end late. `firstCallAfterPublish`: the first
  * publication starts only once the review is at Publish.
@@ -228,11 +221,10 @@ const runReview = async (
     readonly probe?: boolean;
     readonly publisher?: boolean;
     readonly followOn?: FollowOnAnswer;
-    /** The readings' end order, by batch name; the finders end after them. */
+    /** The readings' end order, by batch name. */
     readonly order?: ReadonlyArray<"a" | "b" | "c">;
     readonly crashAtCall?: number;
     readonly stopAtCall?: number;
-    readonly holdFinders?: boolean;
     readonly joined?: boolean;
     readonly firstCallAfterPublish?: boolean;
     readonly followOnThrows?: boolean;
@@ -248,11 +240,12 @@ const runReview = async (
     readonly endingFails?: boolean;
     /** The read of the chain's totals fails (a store error). */
     readonly chainTotalsFails?: boolean;
+    readonly incomingRace?: boolean;
+    readonly firstSettleRefused?: boolean;
     /** The run's cut-off; by default ten minutes ahead. In the past, the run starts already cut off. */
     readonly cutoffAt?: number;
     /** The request's run ID: each generation of a sequence is its own request. */
     readonly runId?: string;
-    /** How each finder ends, by lens; absent, every finder completes. */
     readonly storage?: Storage;
     readonly reviewId?: TaskId;
   },
@@ -278,6 +271,9 @@ const runReview = async (
   let runs = 0;
   let inFlight = 0;
   let maxInFlight = 0;
+  let firstCheckWaited = false;
+  const firstCheckGate = gate();
+  let registerSecond: (() => Promise<void>) | undefined;
   let stopReview: () => void = () => {};
   let atPublish: () => void = () => {};
   const publishing = new Promise<void>((resolve) => {
@@ -382,9 +378,7 @@ const runReview = async (
                   ],
                 }),
                 // Settled when its reading completed; not reached when it was cut off, unless this
-                // is the last allowed run; a quota refusal holds it. In the readers' order
-                // (`settleBatch`): the readings' own holds first, then the finders' (`findersHold`,
-                // the readers' own code), then the cut-off.
+                // is the last allowed run. A quota refusal holds it.
                 settle: async (input) => {
                   settles.push({
                     batch: input.batch,
@@ -394,6 +388,27 @@ const runReview = async (
                   const name = (["a", "b", "c"] as const).find(
                     (n) => keyOf(n) === input.batch,
                   )!;
+                  if (
+                    name === "a" &&
+                    options.firstSettleRefused &&
+                    settles.filter(({ batch }) => batch === input.batch)
+                      .length === 1
+                  ) {
+                    return {
+                      settled: false,
+                      gap: {
+                        key: "batch:a",
+                        kind: "refused",
+                        detail: "The store was busy.",
+                      },
+                    };
+                  }
+                  if (name === "a" && registerSecond !== undefined) {
+                    const register = registerSecond;
+                    registerSecond = undefined;
+                    firstCheckGate.open();
+                    await register();
+                  }
                   const outcome = input.readings[0]?.outcome;
                   const gap = (kind: "not-reached" | "quota") => ({
                     settled: false as const,
@@ -413,7 +428,40 @@ const runReview = async (
                     !input.last
                   )
                     return gap("not-reached");
-                  return { settled: true as const, batch: byName[name] };
+                  const batch = byName[name];
+                  if (name !== "a" || !options.incomingRace)
+                    return { settled: true as const, batch };
+                  const incoming = (input.incoming ?? []).flatMap((claim) => {
+                    if (claim.verifyKey === null) return [];
+                    const {
+                      kind,
+                      text,
+                      fails: _fails,
+                      ...anchor
+                    } = claim.comment;
+                    return [
+                      comment(claim.key, {
+                        kind,
+                        anchor,
+                        body: text,
+                        section: claim.target.section,
+                      }),
+                    ];
+                  });
+                  return {
+                    settled: true as const,
+                    batch: {
+                      ...batch,
+                      units: batch.units.map((unit, i) =>
+                        i === 0
+                          ? {
+                              ...unit,
+                              comments: [...unit.comments, ...incoming],
+                            }
+                          : unit,
+                      ),
+                    },
+                  };
                 },
               }),
         };
@@ -539,10 +587,47 @@ const runReview = async (
     },
   } as unknown as typeof review;
   const registry = createRegistry();
+  const check = defineTask<{ number: number }, { phase: "check" }, StageRecord>(
+    {
+      name: "test.verify-claim",
+      version: 1,
+      initial: () => ({ phase: "check" }),
+      phases: {
+        check: async (task, runtime, c) => {
+          if (task.input.number === 1)
+            await Promise.race([
+              firstCheckGate.opened,
+              abortOf(runtime.signal),
+            ]);
+          await runtime.commit(
+            () => ({
+              status: "terminal",
+              outcome: {
+                status: "completed",
+                result: {
+                  ...record("verify", "verify.claim"),
+                  key: String(task.input.number),
+                },
+              },
+            }),
+            c,
+          );
+        },
+      },
+      abort: (_task, runtime, c) =>
+        runtime.commit(
+          () => ({
+            status: "terminal",
+            outcome: { status: "aborted", reason: "stopped" },
+          }),
+          c,
+        ),
+    },
+  );
   registry.install(
     defineExtension({
       name: "test.stages",
-      tasks: [front, reading, plan, settled.task],
+      tasks: [front, reading, plan, settled.task, check],
     }),
   );
   registry.install(reviewExtension(observed));
@@ -557,7 +642,63 @@ const runReview = async (
     context,
   );
   let id = options.reviewId;
+  let stopWatching: (() => Promise<unknown>) | undefined;
   try {
+    if (options.incomingRace) {
+      const root = await harness.root(context);
+      const register = (number: number) =>
+        harness.commit(async (tx) => {
+          const task = await tx.createTask(
+            check,
+            { number },
+            {
+              ownership: { kind: "conversation" },
+              conversationId: root.id,
+            },
+          );
+          const key = `incoming-${number}`;
+          (await tx.doc(CrossBatchClaimsDoc)).claims[key] = {
+            key,
+            task,
+            answer: "lane-review-answer",
+            from: "another-group",
+            target: {
+              batch: keyOf("a"),
+              section: byName.a.sections[0]!.identity.key,
+            },
+            comment: {
+              path: "src/a.ts",
+              side: "new",
+              startLine: number === 1 ? 3 : 5,
+              endLine: number === 1 ? 3 : 5,
+              kind: "risk",
+              text: `Incoming claim ${number}.`,
+              fails: "",
+            },
+          };
+          return task;
+        }, context);
+      const first = await register(1);
+      registerSecond = async () => {
+        await harness.waitForTask(await register(2), context);
+      };
+      const graph = await harness.watchTaskGraph(context);
+      stopWatching = () => graph.stop();
+      graph.start(async ({ tasks }) => {
+        if (
+          Object.values(tasks).some(
+            ({ kind, state }) =>
+              kind === BATCH_WAITER_TASK &&
+              state.status === "waiting" &&
+              state.phase === "publish" &&
+              state.on.includes(first),
+          )
+        ) {
+          firstCheckWaited = true;
+          firstCheckGate.open();
+        }
+      });
+    }
     if (id === undefined) {
       const root = await harness.root(context);
       id = await harness.commit(
@@ -586,15 +727,11 @@ const runReview = async (
     stopReview = () => void harness.abortTask(reviewId, context);
     harness.resume();
     const ended = harness.waitForTask(id, context);
-    // The finders end first (or, held, after every reading), then the readings in the order asked,
-    // a little apart, once the review made its waiters.
+    // Release the readings in the requested order once the waiters exist.
     const order = options.order ?? ["a", "b", "c"];
     const release = (async () => {
       for (let i = 0; i < 250; i++) {
-        if (
-          options.holdFinders ||
-          commits.some((c) => JSON.stringify(c).includes('"publishing"'))
-        )
+        if (commits.some((c) => JSON.stringify(c).includes('"publishing"')))
           break;
         await sleep(10);
       }
@@ -659,9 +796,12 @@ const runReview = async (
       asked,
       askedAt,
       maxInFlight,
+      firstCheckWaited,
       log: ctx.log.read(),
     };
   } finally {
+    firstCheckGate.open();
+    await stopWatching?.();
     await harness.close(context);
   }
 };
@@ -778,8 +918,56 @@ test("three batches settled out of order publish in batch order, one call at a t
   expect(stages.at(-1)?.note).toContain("packet complete");
 });
 
-// Reason: no batch publishes before the four finders (with their Verify children) end: the
-// readings all end first, and nothing is published until the finders do.
+// The first check is still running when the target reading ends. A second claim registers while
+// the waiter is settling the batch. The first packet needs both anchors because it freezes the batch.
+test("a batch waits for an incoming check and includes a claim registered during settlement", async () => {
+  const store = scratch({ cycleId: CYCLE });
+  const run = done(
+    await runReview(store, { readings: ALL, joined: true, incomingRace: true }),
+  );
+  expect(run.firstCheckWaited).toBe(true);
+  const [first] = await packetsOf(store);
+  if (first === undefined) throw new Error("No packet");
+  const packet = await store.run(PublishedPackets.readExact(first.id));
+  if (packet?.kind !== "packet.published@2") throw new Error("No batch packet");
+  const incoming = packet.batches
+    .flatMap((batch) =>
+      batch.units.flatMap((unit) =>
+        unit.comments.map(({ payload }) => payload),
+      ),
+    )
+    .filter(({ body }) => body.startsWith("Incoming claim "));
+  expect(incoming).toEqual([
+    expect.objectContaining({
+      body: "Incoming claim 1.",
+      anchor: { path: "src/a.ts", side: "new", startLine: 3, endLine: 3 },
+    }),
+    expect.objectContaining({
+      body: "Incoming claim 2.",
+      anchor: { path: "src/a.ts", side: "new", startLine: 5, endLine: 5 },
+    }),
+  ]);
+});
+
+// A transient refusal of the first batch must not leave it waiting for the ending packet.
+test("the next waiter publishes an earlier batch whose settlement first failed", async () => {
+  const store = scratch({ cycleId: CYCLE });
+  const run = done(
+    await runReview(store, {
+      readings: ALL,
+      joined: true,
+      firstSettleRefused: true,
+    }),
+  );
+  expect(run.waiters[0]?.outcome).toEqual({
+    status: "completed",
+    result: { status: "not-settled", kind: "refused" },
+  });
+  const [first] = await packetsOf(store);
+  if (first === undefined) throw new Error("No packet");
+  expect(first.payload.complete).toBe(false);
+  expect(await batchesOf(store, first)).toEqual(["Retry policy", "Guards"]);
+});
 
 // Reason: the cut-off of the scheduler's amended shape. The review commits to Publish once its
 // readings ended and then waits for every waiter: a waiter that wakes after that publishes
@@ -800,11 +988,6 @@ test("waiters that wake after the review is at Publish end late; the ending call
   ]);
   expect(packets[1]!.payload.complete).toBe(true);
 });
-
-// Reason: the run's disclosures reach Records. What the review knew by Link (here the front's
-// freshness disclosure) and the run's gaps, the finders' included, are on every packet, so no
-// packet that holds agent decisions hides them; Link's own come on the ending packet, apart from
-// its placement of findings on the old units (`finding-unanchored`), which the new units replace.
 
 // Reason: the gate ("a replay publishes identical packets") and record 0016. The same review run
 // again over the same Records writes nothing new; one stopped between two publications and resumed
@@ -1325,10 +1508,6 @@ test("a failed read of the follow-on cap counts as a successor that may exist: t
   expect(last.payload.counts.pending).toEqual({ batches: 1, sections: 1 });
 });
 
-// Reason (round 14, review N1): a passing store error is never taken for "no successor". With the
-// cap read failing at Link and a finder cut, no batch is decided, nothing says the finders did not
-// finish as though final, and one follow-on is asked.
-
 // Reason (round 18, replacing ruling 5b's old-packet fallback for a plan that failed): with the
 // readings on and the plan dropped, a review never quietly publishes the old packet. A first run and
 // a follow-on alike publish per batch from the batches the readers give for the dropped plan (no
@@ -1387,12 +1566,6 @@ const notSettled = {
   status: "completed",
   result: { status: "not-settled", kind: "not-reached" },
 } as const;
-/** What a person reads on a packet when its run settled batches with finders unfinished. */
-const FINDERS_UNFINISHED = {
-  kind: "finders-unfinished",
-  detail:
-    "The finders did not finish before this review ended, so its findings are incomplete: a change shown with no finding may still have one.",
-};
 /**
  * Each published section of a packet, by section key: its unit, assessment and disposition as
  * Records holds them, so two packets compare by section key, whatever their unit IDs.
@@ -1427,21 +1600,8 @@ const expectNoSectionReversal = async (store: Store) => {
   return packets;
 };
 
-// Reason (round 14, the defect behind plant 108's reversal): a batch is decided only when nothing
-// later can change it. A finder cut at the cut-off still ends its task and wakes the waiters, but
-// it never searched: no waiter publishes, the ending call hands no decided batch and leaves every
-// batch pending, and one follow-on is asked. With no successor (the cap reached, decided at Link),
-// the same review settles its batches, and every packet tells a reader, in plain words, that the
-// finders did not finish.
-
-// Reason (round 14, the status): each status a finder, or its Verify, can end with, in turn, at the
-// settle point. Completed settles; every other leaves the batches not reached, with one follow-on
-// asked, unless the run can have no successor, when they settle and the packet says the finders did
-// not finish. A finder that left no result is the review's entry, never a completed one. The run
-// log's `finders.ended` row, which the receipt reads, says each finder's status.
-
 // Reason (14.6, round 14's chain under one run key): a follow-on reuses what is decided. Run 1
-// decides batch A with every finder completed and leaves B and C not reached; run 2, the follow-on
+// decides batch A and leaves B and C not reached; the follow-on
 // of the same run key, leaves A's batch key, its recorded batch, its unit IDs, lanes and verdicts
 // byte-equal, and decides only B and C, all through the real `publishSettled` on a real store.
 test("a chain under one run key: the follow-on leaves the decided batch byte-equal and decides only the rest", async () => {
@@ -1477,12 +1637,7 @@ test("a chain under one run key: the follow-on leaves the decided batch byte-equ
       .slice(packets.findIndex((p) => p.id === ending.id) + 1)
       .reduce((sum, p) => sum + p.payload.added.batches, 0),
   ).toBe(2);
-  // It was handed again (its waiter's call carries every settled batch up to its own), with the
-  // same content, so nothing of it was written again.
+  // The publisher kept the earlier batch frozen when its waiter handed it back.
   expect(Number(next.summaries[0]!["handed"])).toBe(1);
   expect(next.summaries[0]!["frozen"]).toBe(0);
 });
-
-// Reason (the sequence that found this, plant 108): a review cut at its cut-off with a finder
-// unfinished publishes no decided batch; the follow-on under the same run key, its finders now
-// completed, decides them all, and matched by section key nothing is reversed.

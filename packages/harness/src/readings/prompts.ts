@@ -197,7 +197,7 @@ export const laneReviewScopedSystem = replaced(laneReviewSystem, [
   ],
   [
     "What code checks, so an answer that breaks it does not stand:",
-    "- crossBatchClaims (optional, at most five): for a concrete claim on changed lines in another batch, report { path, side, startLine, endLine, kind: defect, risk or question, text, fails: the failure path for a defect, else empty }. Give no verdict on the other batch.\nWhat code checks, so an answer that breaks it does not stand:",
+    "- crossBatchClaims (at most five, [] if none): for a concrete claim on changed lines outside your assigned sections, report { path, side, startLine, endLine, kind: defect, risk or question, text, fails: the failure path for a defect, else empty }. Give no verdict on those sections.\nWhat code checks, so an answer that breaks it does not stand:",
   ],
   [
     "Answer unsure when you could not check what matters, and say what you could not check.",

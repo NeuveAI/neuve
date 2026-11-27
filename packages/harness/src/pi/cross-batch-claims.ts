@@ -1,5 +1,5 @@
-import type { StageRecord } from "../pipeline.ts";
 import { defineDoc } from "@earendil-works/pi-durable";
+import { z } from "zod";
 import type { CrossBatchClaim } from "../readings/answers.ts";
 
 export type CrossBatchReport = {
@@ -28,16 +28,18 @@ export type CheckedCrossBatchClaim = CrossBatchReport & {
   readonly verifyKey: string | null;
 };
 
+const StoredCheck = z.object({
+  status: z.enum(["computed", "reused"]),
+  key: z.string().min(1),
+});
+
+export const storedCheckKey = (record: unknown) =>
+  StoredCheck.safeParse(record).data?.key ?? null;
+
 export const checkRecord = (
   report: RegisteredCrossBatchClaim,
-  record: StageRecord | undefined,
+  record: unknown,
 ): CheckedCrossBatchClaim => {
   const { task: _task, ...claim } = report;
-  return {
-    ...claim,
-    verifyKey:
-      record?.status === "computed" || record?.status === "reused"
-        ? (record.key ?? null)
-        : null,
-  };
+  return { ...claim, verifyKey: storedCheckKey(record) };
 };

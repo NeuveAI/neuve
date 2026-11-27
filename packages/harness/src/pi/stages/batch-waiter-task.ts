@@ -3,7 +3,7 @@ import {
   checkRecord,
   type CheckedCrossBatchClaim,
 } from "../cross-batch-claims.ts";
-import { childId, resultOf } from "./children.ts";
+import { childId } from "./children.ts";
 import type { Context } from "@earendil-works/chord";
 import type {
   Task,
@@ -77,7 +77,10 @@ type Readings = NonNullable<ReviewStagesPort["readings"]>;
 /** What a waiter calls: the readings' `settle` and the review's `publishSettled`. */
 export type WaiterPort = {
   readonly settle: NonNullable<Readings["settle"]>;
-  readonly publishSettled: NonNullable<ReviewStagesPort["publishSettled"]>;
+  readonly publish: (
+    input: SettledPublishInput,
+    signal: AbortSignal,
+  ) => Promise<ReadonlyArray<SectionsPublishSummary["refused"][number]>>;
 };
 
 /**
@@ -122,22 +125,35 @@ export const endedOutcome = async <R>(
 export const crossBatchChecks = async (
   runtime: Pick<Runtime, "getTask" | "snapshot">,
   context: Context,
-  batch?: string,
+  batches?: ReadonlySet<string>,
 ) => {
   const registered = Object.values(
     (await runtime.snapshot(CrossBatchClaimsDoc, context))?.claims ?? {},
-  ).filter((claim) => batch === undefined || claim.target.batch === batch);
-  const waiting: Array<TaskId<StageRecord>> = [];
+  ).filter((claim) => batches === undefined || batches.has(claim.target.batch));
+  const waiting = new Map<string, Array<TaskId<StageRecord>>>();
   const checked: Array<CheckedCrossBatchClaim> = [];
   for (const claim of registered) {
-    if (claim.task === null) {
-      checked.push(checkRecord(claim, undefined));
-      continue;
+    const id =
+      claim.task === null ? undefined : childId<StageRecord>(claim.task);
+    const task =
+      id === undefined ? undefined : await runtime.getTask(id, context);
+    const state = task?.state;
+    if (
+      id !== undefined &&
+      state !== undefined &&
+      state.status !== "terminal"
+    ) {
+      const siblings = waiting.get(claim.target.batch) ?? [];
+      siblings.push(id);
+      waiting.set(claim.target.batch, siblings);
     }
-    const task = childId<StageRecord>(claim.task);
-    const outcome = await endedOutcome(runtime, task, context);
-    if (outcome === undefined) waiting.push(task);
-    else checked.push(checkRecord(claim, resultOf(outcome)));
+    const outcome = state?.status === "terminal" ? state.outcome : undefined;
+    checked.push(
+      checkRecord(
+        claim,
+        outcome?.status === "completed" ? outcome.result : undefined,
+      ),
+    );
   }
   return { registered, waiting, checked };
 };
@@ -152,7 +168,7 @@ export const settleUpTo = async (
     readonly batches: ReviewBatches;
     readonly readings: ReadonlyArray<Reading>;
     readonly through: number;
-    readonly from?: number;
+    readonly include?: ReadonlySet<string>;
     readonly incoming?: ReadonlyArray<CheckedCrossBatchClaim>;
     readonly last: (batch: string) => boolean;
     readonly final: boolean;
@@ -168,10 +184,8 @@ export const settleUpTo = async (
     readonly key: string;
     readonly settled: Awaited<ReturnType<WaiterPort["settle"]>>;
   }> = [];
-  for (const batch of input.batches.batches.slice(
-    input.from ?? 0,
-    input.through + 1,
-  )) {
+  for (const batch of input.batches.batches.slice(0, input.through + 1)) {
+    if (input.include !== undefined && !input.include.has(batch.key)) continue;
     const readings = await Promise.all(
       batch.readings.map(async (name) => {
         const id = byName.get(name);
@@ -314,29 +328,44 @@ export const batchWaiterTask = (
         if (batch === undefined || ports === undefined)
           return finish({ status: "failed" });
         try {
+          const earlier = await Promise.all(
+            view.waiters.slice(0, input.index).map(async ({ batch, task }) => {
+              const ended = await endedOutcome(runtime, task, context);
+              return ended?.status === "completed" &&
+                ended.result.status === "published"
+                ? []
+                : [batch];
+            }),
+          );
+          const candidates = new Set([...earlier.flat(), batch.key]);
           const { registered, waiting, checked } = await crossBatchChecks(
             runtime,
             context,
-            batch.key,
+            candidates,
           );
-          if (waiting.length > 0)
+          const ownChecks = waiting.get(batch.key);
+          if (ownChecks !== undefined)
             return commit(runtime, "publish", "publish", () =>
               runtime.commit(
                 () => ({
                   status: "waiting",
-                  on: waiting,
+                  on: ownChecks,
                   policy: "allSettled",
                   checkpoint: { phase: "publish" },
                 }),
                 context,
               ),
             );
-          const [built] = await settleUpTo(
+          // A later waiter can recover an earlier batch after a transient refusal.
+          // An incoming check on an earlier batch must not delay the current one.
+          const built = await settleUpTo(
             runtime,
             ports.settle,
             {
               ...view,
-              from: input.index,
+              include: new Set(
+                [...candidates].filter((key) => !waiting.has(key)),
+              ),
               through: input.index,
               last: () => false,
               final: view.final,
@@ -346,24 +375,29 @@ export const batchWaiterTask = (
             context,
             runtime.signal,
           );
-          const own = built?.settled;
+          const own = built.at(-1)?.settled;
           if (own === undefined) return finish({ status: "not-settled" });
           if (!own.settled)
             return finish({ status: "not-settled", kind: own.gap.kind });
+          const selected = built.flatMap(({ key, settled }) =>
+            settled.settled ? [{ key, batch: settled.batch }] : [],
+          );
+          const keys = new Set(selected.map(({ key }) => key));
+          const seen = registered.filter((claim) =>
+            keys.has(claim.target.batch),
+          );
 
           await commit(runtime, "publish", "write", () =>
             runtime.commit(async (tx) => {
               // Select the input in the same native transaction used to register incoming claims.
               // A new Verify child makes this build stale and will wake its retried phase.
               const doc = await tx.doc(CrossBatchClaimsDoc);
-              const peers = Object.values(doc.claims).filter(
-                (claim) => claim.target.batch === batch.key,
+              const peers = Object.values(doc.claims).filter((claim) =>
+                keys.has(claim.target.batch),
               );
               if (
-                peers.length !== registered.length ||
-                registered.some(
-                  (claim) => doc.claims[claim.key]?.task !== claim.task,
-                )
+                peers.length !== seen.length ||
+                seen.some((claim) => doc.claims[claim.key]?.task !== claim.task)
               )
                 return { status: "running", checkpoint: { phase: "publish" } };
               return {
@@ -371,7 +405,7 @@ export const batchWaiterTask = (
                 checkpoint: {
                   phase: "write",
                   input: {
-                    batches: [own.batch],
+                    batches: selected.map(({ batch }) => batch),
                     totals: view.batches.totals,
                     ending: false,
                     gaps: [
@@ -391,22 +425,22 @@ export const batchWaiterTask = (
       },
       write: async (task, runtime, context) => {
         const ports = port();
+        const { input } = task.state.checkpoint;
+        const batch = input.batches.at(-1);
+        const key = batch === undefined ? null : batchKeyOf(batch.paths);
         let status: BatchWaiterResult["status"] = "failed";
         if (ports !== undefined)
           try {
-            await ports.publishSettled(
-              task.state.checkpoint.input,
-              runtime.signal,
-            );
-            status = "published";
+            const refused = await ports.publish(input, runtime.signal);
+            if (!refused.some(({ batch }) => batch === key))
+              status = "published";
           } catch (error) {
             if (runtime.signal.aborted) throw error;
           }
-        const batch = task.state.checkpoint.input.batches[0];
         log?.write({
           type: "publish.waiter",
           taskId: runtime.taskId,
-          batch: batch === undefined ? null : batchKeyOf(batch.paths),
+          batch: key,
           index: task.input.index,
           status,
           kind: null,
@@ -449,10 +483,9 @@ export const settledStages = (
   readings: Readings | undefined,
 ) => {
   const { ctx } = services;
-  const publish: NonNullable<ReviewStagesPort["publishSettled"]> = async (
-    input,
-    signal,
-  ) =>
+  const publication = (signal: AbortSignal) =>
+    services.run(publishedBatchClaims(ctx.cycleId, ctx.runKey), signal);
+  const write = (input: SettledPublishInput, signal?: AbortSignal) =>
     services.run(
       Effect.gen(function* () {
         const started = yield* Clock.currentTimeMillis;
@@ -476,7 +509,7 @@ export const settledStages = (
           refused: summary.refused.map((r) => r.check),
           closure: summary.closure,
         });
-        if (!input.ending) return [] as ReadonlyArray<StageRecord>;
+        if (!input.ending) return { stages: [], refused: summary.refused };
         const done: StageRecord = {
           stage: "publish",
           status: "computed",
@@ -485,18 +518,19 @@ export const settledStages = (
         };
         ctx.log.write({ type: "stage", ...done });
         yield* recordPublishStage(ctx, done, summary.manifest);
-        return [done] as ReadonlyArray<StageRecord>;
+        return { stages: [done], refused: summary.refused };
       }).pipe(Effect.withSpan("harness.stage.publish")),
       signal,
     );
+  const publish: NonNullable<ReviewStagesPort["publishSettled"]> = async (
+    input,
+    signal,
+  ) => (await write(input, signal)).stages;
   const retainUnpublishedClaims: NonNullable<
     ReviewStagesPort["retainUnpublishedClaims"]
   > = async (claims, signal) => {
     if (claims.length === 0) return;
-    const published = await services.run(
-      publishedBatchClaims(ctx.cycleId, ctx.runKey),
-      signal,
-    );
+    const published = await publication(signal);
     const logged = new Set(
       ctx.log
         .read()
@@ -504,27 +538,33 @@ export const settledStages = (
         .map((row) => row["claim"]),
     );
     for (const { key, verifyKey, target, comment, from, answer } of claims) {
-      if (
-        published.get(target.batch)?.has(key) ||
-        logged.has(key) ||
+      const fate = published.get(target.batch)?.find(({ id }) => id === key);
+      if (fate?.fate === "published" || logged.has(key)) continue;
+      const verify =
         verifyKey === null
-      )
-        continue;
-      const verify = await services.run(
-        storedOutput(ctx, verifyKey, ClaimStored),
-        signal,
-      );
-      if (verify.claim !== key || claimVerdict(verify) !== "confirmed")
-        continue;
+          ? undefined
+          : Option.getOrUndefined(
+              await services.run(
+                Effect.option(storedOutput(ctx, verifyKey, ClaimStored)),
+                signal,
+              ),
+            );
+      const reason =
+        fate?.reason ??
+        (verify === undefined || verify.claim !== key
+          ? "check-not-completed"
+          : claimVerdict(verify) !== "confirmed"
+            ? "check-not-confirmed"
+            : published.has(target.batch)
+              ? "batch-published"
+              : "batch-pending");
       const { kind, text: _text, fails: _fails, ...anchor } = comment;
       ctx.log.write({
         type: "review.claim-unpublished",
         claim: key,
         batch: target.batch,
         section: target.section,
-        reason: published.has(target.batch)
-          ? "batch-published"
-          : "batch-pending",
+        reason,
         from,
         answer,
         verify: verifyKey,
@@ -596,7 +636,10 @@ export const settledStages = (
   let waiterPort: WaiterPort | undefined;
   const task = batchWaiterTask(ctx.log, () => waiterPort);
   if (ready && readings.settle !== undefined)
-    waiterPort = { settle: readings.settle, publishSettled: publish };
+    waiterPort = {
+      settle: readings.settle,
+      publish: async (input, signal) => (await write(input, signal)).refused,
+    };
   const port: Pick<
     ReviewStagesPort,
     | "batchWaiter"
