@@ -96,10 +96,8 @@ export function toolServer(
       const definition = definitions.find(
         (tool) => tool.name === request.params.name,
       );
-      if (definition === undefined) {
-        await onProtocolFault();
+      if (definition === undefined)
         return unknownTool(request.params.name, tools);
-      }
       // Live evidence: research/live-experiments.md (a), Claude Code 2.1.312, both parallel calls.
       const input = request.params.arguments ?? {};
       const direct = request.params._meta?.[TOOL_USE_ID_META];

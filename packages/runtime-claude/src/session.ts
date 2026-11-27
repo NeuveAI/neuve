@@ -192,6 +192,9 @@ const deny = (): PermissionResult => ({
   message: "The turn or tool is unavailable.",
   interrupt: true,
 });
+const neuveToolPrefix = "mcp__neuve__";
+const neuveTool = (name: string) =>
+  name.startsWith(neuveToolPrefix) && name.length > neuveToolPrefix.length;
 
 /**
  * The minimum message allowance for a final turn. Claude Code often answers in text first and
@@ -251,6 +254,11 @@ export const openClaudeSession = (
     const skillInput = z.object({ skill: z.string() });
     const skillTool = (wireName: string) =>
       wireName === "Skill" && skillNames.length > 0;
+    // Claude can answer a stale Neuve call itself. Only this policy's tools have Neuve handlers.
+    const foreignTool = (name: string, final: boolean) =>
+      !neuveTool(name) &&
+      !(name === "StructuredOutput" && final) &&
+      !skillTool(name);
     const context = yield* Effect.context<never>();
     const runPromise = Effect.runPromiseWith(context);
     const queue = yield* Queue.unbounded<RuntimeEvent, Cause.Done>();
@@ -752,10 +760,15 @@ export const openClaudeSession = (
           const prepared = yield* state(
             Effect.gen(function* () {
               const turn = active;
-              permissionTurn = turn;
               const definition = policy.tools.find(
-                (tool) => `mcp__neuve__${tool.name}` === wireName,
+                (tool) => `${neuveToolPrefix}${tool.name}` === wireName,
               );
+              if (definition === undefined && neuveTool(wireName))
+                return {
+                  behavior: "deny",
+                  message: "This tool is not available now.",
+                } satisfies PermissionResult;
+              permissionTurn = turn;
               if (
                 wireName === "StructuredOutput" &&
                 turn?.final &&
@@ -1520,12 +1533,10 @@ export const openClaudeSession = (
                           frame.event.content_block.type === "tool_use"
                         ) {
                           turn.observedCalls.add(frame.event.content_block.id);
-                          const name = frame.event.content_block.name;
                           if (
-                            !(name === "StructuredOutput" && turn.final) &&
-                            !skillTool(name) &&
-                            !policy.tools.some(
-                              (tool) => `mcp__neuve__${tool.name}` === name,
+                            foreignTool(
+                              frame.event.content_block.name,
+                              turn.final,
                             )
                           ) {
                             yield* dieProtocolLocked(
@@ -1554,14 +1565,7 @@ export const openClaudeSession = (
                         const foreign = frame.message.content.some(
                           (block) =>
                             block.type === "tool_use" &&
-                            !(
-                              block.name === "StructuredOutput" && turn.final
-                            ) &&
-                            !skillTool(block.name) &&
-                            !policy.tools.some(
-                              (tool) =>
-                                `mcp__neuve__${tool.name}` === block.name,
-                            ),
+                            foreignTool(block.name, turn.final),
                         );
                         if (foreign) {
                           yield* dieProtocolLocked(
