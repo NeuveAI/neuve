@@ -251,12 +251,21 @@ export const openClaudeSession = (
     }
     const plugin = policy.claudeSkillPlugin;
     const skillNames = plugin?.names ?? [];
+    const mcpServers = policy.mcpServers ?? {};
+    const nativeToolPrefixes = Object.keys(mcpServers).map(
+      (name) => `mcp__${name}__`,
+    );
+    const nativeTool = (name: string) =>
+      nativeToolPrefixes.some(
+        (prefix) => name.startsWith(prefix) && name.length > prefix.length,
+      );
     const skillInput = z.object({ skill: z.string() });
     const skillTool = (wireName: string) =>
       wireName === "Skill" && skillNames.length > 0;
     // Claude can answer a stale Neuve call itself. Only this policy's tools have Neuve handlers.
     const foreignTool = (name: string, final: boolean) =>
       !neuveTool(name) &&
+      !nativeTool(name) &&
       !(name === "StructuredOutput" && final) &&
       !skillTool(name);
     const context = yield* Effect.context<never>();
@@ -797,7 +806,7 @@ export const openClaudeSession = (
                   updatedInput: input,
                 } satisfies PermissionResult;
               }
-              if (definition === undefined) {
+              if (definition === undefined && !nativeTool(wireName)) {
                 yield* dieProtocolLocked("permission-unknown-tool");
                 return deny();
               }
@@ -828,7 +837,7 @@ export const openClaudeSession = (
                 at: now(),
                 requestId,
                 callId: options.toolUseID,
-                toolName: definition.name,
+                toolName: definition?.name ?? wireName,
                 input: parsed.data,
               });
               return { requestId, turn, answer, settled };
@@ -1204,7 +1213,7 @@ export const openClaudeSession = (
             account,
             config.oauthToken,
           ),
-          cwd: config.cwd,
+          cwd: policy.folder ?? config.cwd,
           tools: plugin === undefined ? [] : ["Skill"],
           settingSources: [],
           // Disable skill and plugin hooks. SDK callbacks still run.
@@ -1220,11 +1229,14 @@ export const openClaudeSession = (
             ? {}
             : { plugins: [{ type: "local", path: plugin.path }] }),
           systemPrompt: policy.systemPrompt,
-          mcpServers: { neuve: server },
+          mcpServers: { ...mcpServers, neuve: server },
           allowedTools: [
             ...skillNames.map((name) => `Skill(${name})`),
             ...(policy.approvalPolicy === "allow"
-              ? policy.tools.map((tool) => `mcp__neuve__${tool.name}`)
+              ? [
+                  ...policy.tools.map((tool) => `mcp__neuve__${tool.name}`),
+                  ...nativeToolPrefixes.map((prefix) => `${prefix}*`),
+                ]
               : []),
           ],
           permissionMode: "default",

@@ -5,6 +5,7 @@
  * processes: the person's own Codex, and a clean one for a read-only turn.
  */
 import type { SessionPolicy, TurnWorkspace } from "@neuve/runtime";
+import { parse, resolve } from "node:path";
 import type { AskForApproval } from "./generated/v2/AskForApproval";
 import type { SandboxPolicy } from "./generated/v2/SandboxPolicy";
 
@@ -95,15 +96,37 @@ export const launchArguments = (
   toolServer: string | undefined,
   tokenCommand?: CodexTokenCommand,
   environment?: SessionPolicy["environment"],
+  plugins?: Pick<SessionPolicy, "folder" | "mcpServers">,
 ): ReadonlyArray<string> => {
   const variables = Object.entries(environment ?? {});
   const includeOnly = own.includeOnly ?? [];
+  const folder = plugins?.folder;
+  const workspace = folder === undefined ? undefined : resolve(folder);
+  const pluginServers =
+    configuration === "own" && workspace && parse(workspace).root !== workspace
+      ? Object.entries(plugins?.mcpServers ?? {}).flatMap(([name, server]) => {
+          const preferred = `neuve_${name.replaceAll("-", "_")}`;
+          let alias = preferred;
+          for (let count = 2; own.mcpServers.includes(alias); count++)
+            alias = `${preferred}_${count}`;
+          const prefix = `mcp_servers.${alias}`;
+          return [
+            `${prefix}.command=${JSON.stringify(server.command)}`,
+            `${prefix}.args=${JSON.stringify([...(server.args ?? []), `--workspace=${workspace}`])}`,
+            ...Object.entries(server.env ?? {}).map(
+              ([key, value]) => `${prefix}.env.${key}=${JSON.stringify(value)}`,
+            ),
+            `${prefix}.default_tools_approval_mode="approve"`,
+          ];
+        })
+      : [];
   return flags([
     ...(tokenCommand === undefined ? [] : chatgptPlan(tokenCommand)),
     ...variables.map(
       ([name, value]) =>
         `shell_environment_policy.set.${name}=${JSON.stringify(value)}`,
     ),
+    ...pluginServers,
     ...(variables.length === 0 || includeOnly.length === 0
       ? []
       : [

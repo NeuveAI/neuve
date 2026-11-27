@@ -50,6 +50,7 @@ import {
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type { AccountStatus } from "@neuve/runtime/status";
+import type { SessionPolicy } from "@neuve/runtime";
 
 import { type Directory, messaging, subagent } from "./agents";
 import { type Browser, browser } from "./browser";
@@ -186,6 +187,8 @@ export type Options = {
 		hidden(): readonly string[];
 		ownsTool(name: string): boolean;
 		httpTools(): ReadonlySet<string>;
+		nativeServers?(): SessionPolicy["mcpServers"];
+		nativeTool?(name: string): boolean;
 		refresh(registry: Pick<Registry, "snapshot" | "install" | "uninstall">): Promise<void>;
 		waitForStartup(signal: AbortSignal): Promise<void>;
 		close(): Promise<void>;
@@ -398,12 +401,23 @@ export class Channel {
 				const names = new Set(extension.tools?.map(tool => tool.name));
 				return installGuarded({
 					...extension,
+					tools: extension.tools?.map(tool => !plugins?.nativeTool?.(tool.name) ? tool : {
+						...tool,
+						async execute(args, api, context) {
+							if (await approvals.attended(api, api.conversationId, context))
+								return { content: [{ type: "text", text: "This tool is unavailable in a person-driven chat." }], isError: true };
+							return tool.execute(args, api, context);
+						},
+					}) ?? [],
 					sections: extension.sections?.map(section => ({
 						...section,
 						async render(input, context) {
 							const provider = input.agent.model?.provider;
 							const http = provider && options.ownTools?.(provider) ? plugins?.httpTools() : undefined;
 							if (!input.agent.tools.some(tool => names.has(tool.name) && (!http || http.has(tool.name)))) return;
+							if (plugins?.nativeTool && [...names].some(plugins.nativeTool) &&
+								((provider && approvals.receivesAttendance(provider)) ||
+									await approvals.attended(input.read, input.conversationId, context))) return;
 							if (await planning(input.conversationId, context)) return;
 							return section.render(input, context);
 						},
@@ -428,7 +442,7 @@ export class Channel {
 			: registry;
 		refreshPlugins?.();
 		const harness = await Harness.open(options.storage, {
-			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider), plugins?.httpTools),
+			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider), plugins),
 			registry: visible,
 			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },
 			conversationCreated: clearInheritedQuery,

@@ -867,6 +867,75 @@ describe("the mode table", () => {
     );
   });
 
+  test("the carried stdio server starts in the write process with the chat folder and a distinct name", async () => {
+    const fake = codex();
+    const server = {
+      type: "stdio",
+      command: "npx",
+      args: ["--autoConnect"],
+    } as const;
+    const scoped = {
+      ...policy,
+      mcpServers: { "chrome-devtools": { ...server, args: [...server.args] } },
+    };
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          expect(
+            fake.processes.every(
+              ({ args }) =>
+                !args.some((arg) => arg.includes("neuve_chrome_devtools")),
+            ),
+          ).toBe(true);
+          yield* startOn(fake, session, write);
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.command="npx"',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.args=["--autoConnect","--workspace=/work"]',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.default_tools_approval_mode="approve"',
+          );
+          expect(fake.current().args).not.toContain(
+            "mcp_servers.chrome_devtools.enabled=false",
+          );
+          fake.send("turn/completed", completed("completed"));
+          yield* read.next("turn.finished");
+          yield* startOn(fake, session, readOnly);
+          expect(
+            fake
+              .current()
+              .args.some((arg) => arg.includes("neuve_chrome_devtools")),
+          ).toBe(false);
+        }),
+      { policy: scoped },
+    );
+    const personal = {
+      mcpServers: ["chrome_devtools", "neuve_chrome_devtools"],
+      plugins: [],
+      apps: [],
+      exclude: [],
+      skills: [],
+    };
+    const launch = (folder: string) =>
+      launchArguments("own", personal, undefined, undefined, undefined, {
+        folder,
+        mcpServers: scoped.mcpServers,
+      });
+    expect(
+      launch("/work/chat lane").filter((arg) => arg.startsWith("mcp_servers.")),
+    ).toEqual([
+      'mcp_servers.neuve_chrome_devtools_2.command="npx"',
+      'mcp_servers.neuve_chrome_devtools_2.args=["--autoConnect","--workspace=/work/chat lane"]',
+      'mcp_servers.neuve_chrome_devtools_2.default_tools_approval_mode="approve"',
+    ]);
+    expect(launch("/").some((arg) => arg.startsWith("mcp_servers."))).toBe(
+      false,
+    );
+  });
+
   test("a turn without its folder and access is refused before it starts", async () => {
     const fake = codex();
     await run(fake, (session, read) =>

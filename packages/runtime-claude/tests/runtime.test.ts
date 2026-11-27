@@ -142,6 +142,50 @@ test("a Claude Code subprocess inherits its Ace chat", async () => {
   );
 });
 
+test.each(["allow", "ask"] as const)(
+  "a carried MCP server sees the chat folder under Claude's %s policy",
+  async (approvalPolicy) => {
+    const server = {
+      type: "stdio" as const,
+      command: "npx",
+      args: ["--autoConnect"],
+    };
+    await sessionTest(
+      [
+        out({
+          type: "query.open",
+          check: (options) => {
+            expect(options).toMatchObject({
+              cwd: "/work/chat folder",
+              settingSources: [],
+              strictMcpConfig: true,
+              settings: { disableAllHooks: true },
+              mcpServers: { "chrome-devtools": server },
+            });
+            expect(options.allowedTools).toEqual(
+              approvalPolicy === "allow" ? ["mcp__chrome-devtools__*"] : [],
+            );
+          },
+        }),
+        offer,
+        inbound(result()),
+        close,
+      ],
+      (session, reader) =>
+        Effect.gen(function* () {
+          yield* session.startTurn(normal);
+          yield* reader.until("turn.finished");
+        }),
+      {
+        ...policy,
+        approvalPolicy,
+        folder: "/work/chat folder",
+        mcpServers: { "chrome-devtools": server },
+      },
+    );
+  },
+);
+
 async function finalOutputFormat(
   outputSchema: NonNullable<SessionPolicy["outputSchema"]>,
 ) {

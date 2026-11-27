@@ -112,6 +112,13 @@ export interface ToolSpec<I = unknown> {
 export interface ToolDefinition extends ToolSpec {
   readonly inputSchema: JsonSchema;
 }
+/** A carried plugin's stdio server, started by the runtime's own MCP client. */
+export type McpStdioServer = {
+  readonly type: "stdio";
+  readonly command: string;
+  readonly args?: string[];
+  readonly env?: Record<string, string>;
+};
 export interface SessionPolicy {
   readonly systemPrompt: string;
   readonly tools: ReadonlyArray<ToolDefinition>;
@@ -124,10 +131,10 @@ export interface SessionPolicy {
   readonly outputSchema?: JsonSchema | undefined;
   readonly approvalPolicy: "allow" | "ask";
   readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly mcpServers?: Readonly<Record<string, McpStdioServer>> | undefined;
   /**
    * The folder the session's work is in: a chat's own worktree. A runtime that declares ownTools
-   * starts there and refuses a session without it; pi and Claude Code ignore it, as they do a
-   * turn's workspace.
+   * starts there and refuses a session without it. Native MCP servers use it for the chat's files.
    */
   readonly folder?: string | undefined;
   readonly skillRoots?:

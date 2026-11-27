@@ -101,6 +101,7 @@ type Generation = {
   /** Channel policy for this request. Keep its temporary tool offer out of continuation digests. */
   planRequest?: SystemMessage;
   pluginTools?: ReadonlySet<string>;
+  mcpServers?: SessionPolicy["mcpServers"];
   cleanup: (() => void)[];
   head?: {
     owner: string;
@@ -115,6 +116,7 @@ const unsafeContinuation =
 const planningRequest = Symbol.for("neuve.chat.plan-request");
 
 const sandboxPluginTools = Symbol.for("neuve.chat.sandbox-plugin-tools");
+const nativePluginServers = Symbol.for("neuve.chat.native-plugin-servers");
 
 function offeredMessages(
   generation: Generation,
@@ -316,6 +318,8 @@ export class ChatRuntimeBridge {
     const requested = normalizeContext(context).messages;
     const pluginTools: unknown =
       options && Reflect.get(options, sandboxPluginTools);
+    const mcpServers: SessionPolicy["mcpServers"] =
+      options && Reflect.get(options, nativePluginServers);
     const planRequest = requested.find(
       (message): message is SystemMessage =>
         message.role === "system" &&
@@ -358,6 +362,7 @@ export class ChatRuntimeBridge {
       ...(identity?.folder === undefined ? {} : { folder: identity.folder }),
       ...(planRequest === undefined ? {} : { planRequest }),
       ...(pluginTools instanceof Set ? { pluginTools } : {}),
+      ...(mcpServers === undefined ? {} : { mcpServers }),
       cleanup: [],
       message: {
         role: "assistant",
@@ -674,6 +679,7 @@ export class ChatRuntimeBridge {
         skills: this.options.skills,
         ownTools: route.capabilities.ownTools,
         pluginTools: gen.pluginTools,
+        mcpServers: gen.mcpServers,
         approvals: route.capabilities.approvals,
         attended: gen.attended,
       },
@@ -930,6 +936,7 @@ export class ChatRuntimeBridge {
           skills,
           ownTools: route.capabilities.ownTools,
           pluginTools: gen.pluginTools,
+          mcpServers: gen.mcpServers,
           approvals: route.capabilities.approvals,
           attended: gen.attended,
         },
