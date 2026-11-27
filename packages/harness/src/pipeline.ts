@@ -851,6 +851,7 @@ export const agentStageSpec = (
   opVersion: options.opVersion,
   inputs: options.inputs as never,
   config: {
+    contextCeiling: config.budgets.contextCeiling,
     turnLimit: spec.turnLimit,
     ...(spec.retries === undefined ? {} : { retries: spec.retries }),
     agent: spec.agent,

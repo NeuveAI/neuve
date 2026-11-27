@@ -374,6 +374,7 @@ describe("stop, restart and uncertain effects", () => {
 
 	test("a pending question survives a restart and the run continues with its answer", async () => {
 		fixture = await Fixture.create();
+		const call = "call-question";
 		const question = {
 			questions: [{
 				header: "Approach",
@@ -382,21 +383,22 @@ describe("stop, restart and uncertain effects", () => {
 				multiple: false,
 			}],
 		};
-		fixture.script(tool("question", question, "call-question"));
+		fixture.script(tool("question", question, call));
 		const watch = await fixture.watch();
 		await fixture.request({ op: "ask", author: OWNER, text: "plan it", model: MODEL });
-		await watch.until("tool", (event) => event.call === "call-question");
+		await watch.until("tool", (event) => event.call === call);
 		await until(async () => (await fixture!.request<ChannelInfo>({ op: "info" })).chats[0]?.busy);
 		await watch.stop();
 		let answered = "";
 		fixture.script((received) => {
-			answered = seen(received).at(-1) || "";
+			const result = received.messages.findLast((message) => message.role === "toolResult" && message.toolCallId === call);
+			answered = result?.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("") ?? "";
 			return fauxAssistantMessage("Going small");
 		});
 		await fixture.restart();
-		await fixture.request({ op: "answer", author: OWNER, call: "call-question", answers: [{ choices: [0] }] });
+		await fixture.request({ op: "answer", author: OWNER, call, answers: [{ choices: [0] }] });
 		await expect(
-			fixture.request({ op: "answer", author: OWNER, call: "call-question", answers: [{ choices: [1] }] }),
+			fixture.request({ op: "answer", author: OWNER, call, answers: [{ choices: [1] }] }),
 		).rejects.toThrow();
 		const after = await fixture.watch();
 		await after.until("reply", (event) => event.text === "Going small");

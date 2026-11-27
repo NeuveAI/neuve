@@ -2,7 +2,14 @@ import { expect, test } from "bun:test";
 import { configure } from "@earendil-works/pi-durable";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
-import { account, context, FakeRuntime, fixture, until } from "./fixture.ts";
+import {
+  account,
+  context,
+  FakeRuntime,
+  fixture,
+  testModels,
+  until,
+} from "./fixture.ts";
 import { terminalText, resumeFailed } from "../../src/chat-runtime/failure.ts";
 import { handoff } from "../../src/chat-runtime/handoff.ts";
 import { pointer, usage } from "../../src/chat-runtime/transcript.ts";
@@ -10,8 +17,15 @@ import { STOP_ENTRY_KIND } from "../../src/chat-runtime/extension.ts";
 import { Effect } from "effect";
 import { type RuntimeFailure } from "@neuve/runtime";
 
+const statusModels = testModels.map((model) => ({
+  ...model,
+  contextWindow: 1_000_000,
+  maxOutputTokens: 128_000,
+}));
+
 test("1: two serial tool rounds queue a steer before either-order results, so pi stays the executor", async () => {
   const run = await fixture({
+    statusModels,
     execute: async (n, read) => {
       if (n === 1)
         await read().submit(
@@ -62,7 +76,7 @@ test("1: two serial tool rounds queue a steer before either-order results, so pi
 });
 
 test("2: pi rejects malformed input and foreign tool calls stay out of its transcript, so native handlers never validate", async () => {
-  const run = await fixture();
+  const run = await fixture({ statusModels });
   run.fake.frames.push(
     {
       calls: [

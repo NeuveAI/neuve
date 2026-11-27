@@ -106,7 +106,7 @@ try {
   const snapshot = value(await timed("exportCapturedDump", () => run(exportCapturedDump({capture, root: join(root, "datasets", "coding-exports"), retention: {policy: "coding snapshots retained by the workspace profile"}}))));
   const restored = await timed("readSessionDump", () => Effect.runPromise(readSessionDump(snapshot.directory)));
   await timed("exportPortableSnapshot", () => exportPortableSnapshot({ directory: snapshot.directory, root: join(root, "datasets", "coding"), retention: { policy: "coding snapshots retained by the workspace profile" } }));
-  console.log(JSON.stringify({ ok: true, requests: endpoint.received.length, leases: Number(readFileSync(token + ".count", "utf8")), turns: restored.sessions.reduce((n, s) => n + s.turns.length, 0), complete: restored.run.complete, identity: restored.sessions[0].calls[0].callId, backup: restored.run.backup, before, after: createHash("sha256").update(readFileSync(database)).digest("hex") }));
+  console.log(JSON.stringify({ ok: true, requests: endpoint.received.length, modelLists: endpoint.modelLists.length, leases: Number(readFileSync(token + ".count", "utf8")), turns: restored.sessions.reduce((n, s) => n + s.turns.length, 0), complete: restored.run.complete, identity: restored.sessions[0].calls[0].callId, backup: restored.run.backup, before, after: createHash("sha256").update(readFileSync(database)).digest("hex") }));
 } catch (error) { console.log(JSON.stringify({ ok: false, tag: error._tag, reason: error.reason ?? error.message, retained: existsSync(database) })); }
 finally {
   await timed("finally", async () => {
@@ -145,6 +145,7 @@ finally {
       complete: true,
       turns: 1,
       requests: 1,
+      modelLists: 1,
       leases: 1,
     });
     for (let cycle = 0; cycle < 2; cycle++) {
@@ -154,7 +155,9 @@ finally {
         complete: true,
         turns: 1,
         requests: 0,
-        leases: 1,
+        modelLists: 1,
+        // Each fresh worker leases once for its catalogue lookup.
+        leases: first.leases + cycle + 1,
         identity: first.identity,
       });
       expect(idle.before).toBe(idle.after);

@@ -114,7 +114,7 @@ test("direct routes list their accounts and keep their coding defaults and run k
     baseOid: "a".repeat(40),
     headOid: "b".repeat(40),
   };
-  // The keys main gives these routes (route-accounts.test.ts pins the same).
+  // Sol's frozen review window is now 475,000 tokens. route-accounts.test.ts pins the same keys.
   for (const [name, provider, model, account, key] of [
     [
       undefined,
@@ -128,7 +128,7 @@ test("direct routes list their accounts and keep their coding defaults and run k
       "openai",
       "gpt-6.1-sol",
       "chatgpt",
-      "c27221fd3a490479b60e0a89bb6bd544f5ee23a30db748cbe28f0eb4f16d813e",
+      "94ddcd8de243036393bdf16cf8c2030dd275c5856e07eb9f9812146b3c5f7b25",
     ],
   ] as const) {
     const direct = route(name);

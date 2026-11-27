@@ -297,6 +297,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
      */
     scope: z.enum(["request", "turn"]),
     model: z.string().optional(),
+    /** The latest request's context usage, separate from accumulated turn usage. */
+    contextTokens: z.number().int().positive().optional(),
     /** The model's limits as the runtime reports them on turn usage; never inside CallUsage. */
     contextWindow: z.number().int().positive().optional(),
     maxOutputTokens: z.number().int().positive().optional(),

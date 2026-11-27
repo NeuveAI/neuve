@@ -642,12 +642,15 @@ export const openCodexSession = Effect.fnUntraced(function* (
           const { total, last, modelContextWindow } = usage.data.tokenUsage;
           active.baseline ??= minus(total, last);
           const name = model?.id ?? threadModel;
+          const contextTokens =
+            count(last.inputTokens) + count(last.outputTokens);
           emit({
             type: "usage",
             turnId: active.id,
             at: now(),
             scope: "turn",
             ...(name === undefined ? {} : { model: name }),
+            ...(contextTokens > 0 ? { contextTokens } : {}),
             ...(modelContextWindow == null || modelContextWindow <= 0
               ? {}
               : { contextWindow: Math.round(modelContextWindow) }),

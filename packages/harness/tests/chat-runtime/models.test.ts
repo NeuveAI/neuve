@@ -5,8 +5,15 @@ import {
   getSupportedThinkingLevels,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
-import { account, context, fixture, testModels, until } from "./fixture.ts";
-import type { SessionPolicy } from "@neuve/runtime";
+import {
+  account,
+  context,
+  FakeRuntime,
+  fixture,
+  testModels,
+  until,
+} from "./fixture.ts";
+import { Account, type SessionPolicy } from "@neuve/runtime";
 
 // Status order, names and absent lists must survive without invented model choices.
 test("models follow status rows in order, and an absent list offers none", async () => {
@@ -195,31 +202,123 @@ for (const { label, supportsEffort, supportedEffortLevels } of [
   });
 }
 
-// Catalog precedence and account isolation prevent stale or cross-account context limits. The
-// catalogue is any provider's entry for the model the row names, so no vendor is assumed.
+test("account model rows have route limits before the first turn", async () => {
+  const fake = new FakeRuntime();
+  const codex = Account.parse({
+    name: "codex",
+    kind: "chatgpt-subscription",
+    runtime: "codex",
+    credential: { kind: "codex-home" },
+  });
+  const run = await fixture({
+    fake,
+    accounts: [account("claude"), codex],
+    runtimes: [
+      {
+        ...fake.shape,
+        kind: "codex",
+        continuation: ({ name }) => ({ runtime: "codex", key: name }),
+      },
+    ],
+    statusModels: [],
+  });
+  try {
+    const rows = (ids: string[]) =>
+      ids.map((id) => ({ id, displayName: id, description: "" }));
+    const [claudeStatus, codexStatus] = run.statuses.values;
+    run.statuses.set([
+      {
+        ...claudeStatus!,
+        models: [
+          { ...testModels[0]!, resolvedModel: "claude-sonnet-5-5" },
+          ...rows(["claude-fable-5-2", "claude-haiku-5-5", "unlisted"]),
+        ],
+      },
+      {
+        ...codexStatus!,
+        models: rows([
+          "gpt-6-sol",
+          "gpt-6.1-sol",
+          "gpt-6.2-sol",
+          "gpt-6.2-astra",
+          "gpt-6.1-terra",
+        ]),
+      },
+    ]);
+    await until(() => run.models.getModels("codex").length === 5);
+
+    const limits = (account: string) =>
+      run.models
+        .getModels(account)
+        .map(({ id, contextWindow, maxTokens }) => [
+          id,
+          contextWindow,
+          maxTokens,
+        ]);
+    expect(limits("claude")).toEqual([
+      ["sonnet", 1_000_000, 128_000],
+      ["claude-fable-5-2", 1_000_000, 128_000],
+      ["claude-haiku-5-5", 1_000_000, 128_000],
+      ["unlisted", 128_000, 16_384],
+    ]);
+    expect(limits("codex")).toEqual([
+      ["gpt-6-sol", 272_000, 128_000],
+      // Codex's bundled window wins over pi-ai's 272,000-token entry.
+      ["gpt-6.1-sol", 475_000, 128_000],
+      ["gpt-6.2-sol", 475_000, 16_384],
+      ["gpt-6.2-astra", 258_400, 16_384],
+      ["gpt-6.1-terra", 475_000, 16_384],
+    ]);
+    expect(run.models.getModel("claude", "unlisted")?.contextWindow).toBe(
+      128_000,
+    );
+    expect(
+      fake.logs.filter(
+        ({ event, fields }) =>
+          event === "model-limits.default" && fields.account === "claude",
+      ),
+    ).toEqual([
+      {
+        event: "model-limits.default",
+        fields: {
+          account: "claude",
+          model: "unlisted",
+          contextWindow: 128_000,
+          maxTokens: 16_384,
+        },
+      },
+    ]);
+    expect(fake.opened).toHaveLength(0);
+  } finally {
+    await run.close();
+  }
+});
+
+// A runtime report wins even when the account's list is newer than the bundled catalogue.
 test("catalog limits seed each model, turn usage updates alias and pin only on that account", async () => {
   const native = createModels();
+  native.setProvider(
+    fauxProvider({
+      provider: "openai",
+      models: [{ id: "real", contextWindow: 2_000_000, maxTokens: 128_000 }],
+    }).provider,
+  );
   native.setProvider(
     fauxProvider({
       provider: "anthropic",
       models: [
         { id: "claude-sonnet-test", contextWindow: 900_000, maxTokens: 64_000 },
         { id: "sonnet", contextWindow: 100_000, maxTokens: 10_000 },
-        { id: "real", contextWindow: 300_000, maxTokens: 16_000 },
+        { id: "uncatalogued-real", contextWindow: 300_000, maxTokens: 16_000 },
       ],
     }).provider,
   );
   const run = await fixture({
     native,
-    accounts: [account(), account("other")],
+    accounts: [account("subscription"), account("other")],
     statusModels: [
-      testModels[0]!,
+      { ...testModels[0]!, contextWindow: 880_000 },
       { ...testModels[1]!, resolvedModel: "uncatalogued-real" },
-      {
-        id: "missing",
-        displayName: "Missing",
-        description: "Uncatalogued model",
-      },
     ],
   });
   const limits = (provider: string, id: string) => {
@@ -227,12 +326,11 @@ test("catalog limits seed each model, turn usage updates alias and pin only on t
     return [model.contextWindow, model.maxTokens];
   };
   try {
-    expect(limits("subscription", "sonnet")).toEqual([900_000, 64_000]);
+    expect(limits("subscription", "sonnet")).toEqual([880_000, 64_000]);
     expect(limits("subscription", "claude-sonnet-test")).toEqual([
-      900_000, 64_000,
+      880_000, 64_000,
     ]);
     expect(limits("subscription", "real")).toEqual([300_000, 16_000]);
-    expect(limits("subscription", "missing")).toEqual([200_000, 32_000]);
     run.fake.frames.push({
       text: "usage",
       modelUsage: {
@@ -246,7 +344,7 @@ test("catalog limits seed each model, turn usage updates alias and pin only on t
     expect(limits("subscription", "claude-sonnet-test")).toEqual([
       800_000, 48_000,
     ]);
-    expect(limits("other", "sonnet")).toEqual([900_000, 64_000]);
+    expect(limits("other", "sonnet")).toEqual([880_000, 64_000]);
     expect(limits("subscription", "real")).toEqual([300_000, 16_000]);
     expect(
       native.getModel("anthropic", "claude-sonnet-test")?.contextWindow,
@@ -284,14 +382,13 @@ test("catalog limits seed each model, turn usage updates alias and pin only on t
   }
 });
 
-// Older runtimes omit limits; request usage and an output limit alone change nothing, while a
-// window alone, all Codex reports, updates the window and keeps the output limit.
+// A turn can report either limit independently. Request usage does not change either limit.
 test("missing, partial and request usage limits keep the row or fallback, and a window alone counts", async () => {
   const run = await fixture();
   try {
     for (const [modelUsage, expected] of [
-      [{ model: "sonnet" }, [200_000, 32_000]],
-      [{ model: "sonnet", maxOutputTokens: 50_000 }, [200_000, 32_000]],
+      [{ model: "sonnet" }, [128_000, 16_384]],
+      [{ model: "sonnet", maxOutputTokens: 48_000 }, [128_000, 48_000]],
       [
         {
           model: "sonnet",
@@ -299,9 +396,9 @@ test("missing, partial and request usage limits keep the row or fallback, and a 
           contextWindow: 500_000,
           maxOutputTokens: 50_000,
         },
-        [200_000, 32_000],
+        [128_000, 48_000],
       ],
-      [{ model: "sonnet", contextWindow: 500_000 }, [500_000, 32_000]],
+      [{ model: "sonnet", contextWindow: 500_000 }, [500_000, 48_000]],
     ] as const) {
       run.fake.frames.push({ text: "answer", modelUsage });
       expect((await run.submit("next")).status).toBe("done");
