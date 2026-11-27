@@ -27,7 +27,7 @@ import {
   unknownCommandRefusal,
   write,
 } from "./records-cli.ts";
-import { thisBuild } from "./review-worker.ts";
+import { thisBuild } from "./cli-command.ts";
 
 export const AUTH_HELP = `Usage:
   neuve auth login openai [--no-browser]

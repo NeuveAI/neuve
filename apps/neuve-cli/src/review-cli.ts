@@ -80,7 +80,7 @@ import {
 import { AccountDirectory, RuntimeRegistry } from "@neuve/runtime";
 import { harnessRuntimes, workerRuntimeOptions } from "@neuve/harness/runtimes";
 import { argumentRefusal, execute, withStore, write } from "./records-cli.ts";
-import { thisBuild } from "./review-worker.ts";
+import { thisBuild } from "./cli-command.ts";
 import { startCaptureWorker } from "./worker-cli.ts";
 import { deskLinkLine } from "./review-desk-claim.ts";
 import { REVIEW_DESK_COMMAND } from "./review-desk-config.ts";

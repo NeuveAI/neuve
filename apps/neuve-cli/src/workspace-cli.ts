@@ -68,7 +68,6 @@ import {
 } from "@neuve/records-schema";
 import { Effect } from "effect";
 import { Git } from "@neuve/harness";
-export { codingWorkerSetup } from "./workspace-worker.ts";
 
 export const WORKSPACE_HELP = `Usage: neuve workspace [--profile <pi-transition|local|profile.json>] [--source <checkout>] [--repo <path>] [--port <n>] [--web-port <n>] [--user <name>] [--loopback]
        neuve workspace lane [stop]

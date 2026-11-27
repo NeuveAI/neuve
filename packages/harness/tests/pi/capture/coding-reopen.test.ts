@@ -21,7 +21,7 @@ import { Harness, createRegistry } from ${resolve("@earendil-works/pi-durable")}
 import { openNodeSqliteStorage } from ${resolve("@earendil-works/pi-durable/storage/sqlite/node")};
 import { Effect } from ${resolve("effect")};
 import { builtinModels } from ${resolve("@earendil-works/pi-ai/providers/all")};
-import { codingWorkerSetup } from ${resolve("../../../../../apps/neuve-cli/src/workspace-cli.ts")};
+import { codingWorkerSetup } from ${resolve("../../../../../apps/neuve-cli/src/workspace-worker.ts")};
 import { SOL_ROUTE } from ${resolve("../../../src/route.ts")};
 import { CaptureRecords, DumpFailed, exportCapturedDump, readSessionDump, exportPortableSnapshot } from ${resolve("../../../src/session-dump.ts")};
 import { storeLocationIn } from ${resolve("@neuve/records-core")};

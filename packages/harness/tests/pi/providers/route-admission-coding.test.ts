@@ -28,7 +28,7 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { PI_TRANSITION_STORAGE_PROFILE } from "../../../../../scripts/pi-storage.ts";
-import { codingWorkerSetup } from "../../../../../apps/neuve-cli/src/workspace-cli.ts";
+import { codingWorkerSetup } from "../../../../../apps/neuve-cli/src/workspace-worker.ts";
 import * as WorkerCli from "../../../../../apps/neuve-cli/src/worker-cli.ts";
 import { openWorkerStorage, type WorkerContext } from "@ace/host/worker";
 import {

@@ -16,8 +16,6 @@ import { execute, withStore } from "./records-cli";
 import { within } from "./volume-within";
 import { thisBuild } from "./cli-command.ts";
 
-export { thisBuild };
-
 /** Keep one repository/job through pushed settlement, reconnecting only on socket loss. */
 const upkeep = new SharedWork<string | undefined>();
 
