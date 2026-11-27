@@ -2,6 +2,7 @@ import { basename, join } from "node:path";
 import { realpath } from "node:fs/promises";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { config } from "@ace/host/host-config";
+import { createCatalogue } from "@ace/channel/models";
 import { StorageProfile } from "../../../scripts/pi-storage.ts";
 import { Starter, storeLocationIn } from "@neuve/records-core";
 import {
@@ -9,11 +10,7 @@ import {
   closeWorkerBudget,
   workerBudget,
 } from "../../../packages/harness/src/budget/local.ts";
-import {
-  createModels,
-  type Models,
-  getSupportedThinkingLevels,
-} from "@earendil-works/pi-ai";
+import { type Models, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   defineDoc,
@@ -28,6 +25,7 @@ import {
 import type { WorkerAdmission } from "@ace/host/worker-runtime";
 import {
   accountModels,
+  accountProviderId,
   chatRuntimeExtension,
   ChatRuntimeBridge,
   NativeHeads,
@@ -43,6 +41,7 @@ import {
   protocolLogs,
 } from "@neuve/harness/runtimes";
 import {
+  accountForProvider,
   AccountDirectory,
   AccountStore,
   RuntimeRegistry,
@@ -418,8 +417,10 @@ export async function workspaceChatRuntime(
   }
 }
 
+const nativeCatalogue = createCatalogue({});
+
 export async function workspaceChatModels(
-  native: Models = createModels(),
+  native: Models = nativeCatalogue,
   sources?: ChatRuntimeSources,
 ) {
   if (!sources) return { current: () => [], close: async () => {} };
@@ -439,15 +440,20 @@ export async function workspaceChatModels(
               .current()
               .some(
                 (status) =>
-                  status.name === model.provider &&
+                  status.name ===
+                    (accountForProvider(model.provider) ?? model.provider) &&
                   status.signIn.state === "signed-in",
               ),
         )
-        .map((model) => ({
-          provider: model.provider,
-          modelId: model.id,
-          efforts: model.reasoning ? getSupportedThinkingLevels(model) : [],
-        })),
+        .map((model) => {
+          const account = accountForProvider(model.provider);
+          return {
+            provider: model.provider,
+            modelId: model.id,
+            efforts: model.reasoning ? getSupportedThinkingLevels(model) : [],
+            ...(account === undefined ? {} : { account }),
+          };
+        }),
     close: () => layer.close(),
   };
 }
@@ -491,5 +497,8 @@ export function claudeDefaultModel(
     throw new Error(
       `Claude Code for account ${name} doesn't offer ${route.model}, the model reviews run on. Run ${check} to read its models again, or pick another model for this chat.`,
     );
-  return { provider: name, modelId: row.id };
+  return {
+    provider: accountProviderId(nativeCatalogue, name),
+    modelId: row.id,
+  };
 }

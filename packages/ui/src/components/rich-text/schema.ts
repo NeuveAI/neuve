@@ -43,6 +43,7 @@ const nodes = base.spec.nodes.update("hard_break", {
 		id: { default: null },
 		name: {},
 		avatar: { default: null },
+		label: { default: null },
 	},
 	toDOM: (node) => [
 		"span",
@@ -50,6 +51,7 @@ const nodes = base.spec.nodes.update("hard_break", {
 			class: "mention",
 			"data-mention-id": node.attrs.id,
 			"data-mention-name": node.attrs.name,
+			...(node.attrs.label ? { "data-mention-label": node.attrs.label } : {}),
 		},
 		...(node.attrs.avatar
 			? [
@@ -60,13 +62,14 @@ const nodes = base.spec.nodes.update("hard_break", {
 				}] as const,
 			]
 			: []),
-		node.attrs.name,
+		node.attrs.label || node.attrs.name,
 	],
 	parseDOM: [{
 		tag: "span[data-mention-name]",
 		getAttrs: (dom) => ({
 			id: (dom as HTMLElement).getAttribute("data-mention-id"),
 			name: (dom as HTMLElement).getAttribute("data-mention-name"),
+			label: (dom as HTMLElement).getAttribute("data-mention-label"),
 			avatar: (dom as HTMLElement).querySelector("img")?.getAttribute("src") || null,
 		}),
 	}],

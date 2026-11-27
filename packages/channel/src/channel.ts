@@ -6,15 +6,12 @@ import { type Admission, type ChannelExtension, install, observe, price } from "
 import { admitted, claim, digest } from "./requests";
 import {
 	type AssistantMessage,
-	getSupportedThinkingLevels,
 	isContextOverflow,
-	type Model,
 	type Models,
 } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT as context, withCancel } from "@earendil-works/chord/context";
 import {
 	AgentDoc,
-	type AgentChange,
 	type AgentEvent,
 	type CommitChange,
 	CompactionEntry,
@@ -51,6 +48,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import type { AccountStatus } from "@neuve/runtime/status";
 
 import { type Directory, messaging, subagent } from "./agents";
 import { type Browser, browser } from "./browser";
@@ -58,13 +56,11 @@ import { Builds, BuildsDoc, buildTools, isMentionSubmission, isWorkMessageSubmis
 import {
 	caption,
 	CaptionsDoc,
-	FAST,
 	isStale,
 	pick,
 	recap,
 	segments,
 	spend,
-	STRONG,
 } from "./captions";
 import { instructions } from "./context";
 import { environment, type HostEnvironment } from "./environment";
@@ -85,7 +81,9 @@ import {
 	remove,
 } from "./messages";
 import { metadata, MetadataDoc, validateName } from "./metadata";
-import { available, choose, usable } from "./models";
+import { sameModel, usable } from "./models";
+import { ModelSettings, OwnerInputDoc, PendingModelDoc, type ModelSelection } from "./model-settings";
+import { modelNamedByOwner, modelTool } from "./model-tool";
 import { Plans, PlansDoc, type PlanCommentReceipt, type PlanFiles, type PlansState } from "./plan";
 import {
 	changePlanComment, discardPlanCommentBatch, keepPlanComment, KEPT_PLAN_REPLIES_REASON, planCommentAnswers, planCommentBatch,
@@ -106,6 +104,7 @@ import type {
 	Metadata,
 	ModelOption,
 	ModelRef,
+	PendingModel,
 	Request,
 	RunEnd,
 	ReviewCard,
@@ -167,6 +166,7 @@ export type Options = {
 	/** The host's current preference, consulted only for a chat's first agent invocation. */
 	defaultModel?(): Promise<ModelRef>;
 	routeModel?: Omit<ModelOption, "efforts"> | undefined;
+	accountStatuses?(): readonly AccountStatus[];
 	/** Administrative opens leave durable work for the configured worker. Defaults to true. */
 	resume?: boolean;
 	storage: Storage;
@@ -232,6 +232,7 @@ type Listener = {
 
 export class Channel {
 	#options: Options;
+	#modelSettings: ModelSettings;
 	#harness: Harness;
 	#log: Log;
 	#metadata: Metadata;
@@ -252,7 +253,7 @@ export class Channel {
 	#unbind?: () => void;
 	#closed?: Promise<void>;
 	#feed?: { close(): Promise<void>; pending(): boolean };
-	#captionTasks = new Set<Promise<void>>();
+	#backgroundTasks = new Set<Promise<void>>();
 	#admissions = new Map<ChatId, Promise<unknown>>();
 	#changingModes = new Map<ChatId, Promise<unknown>>();
 	#listeners = new Set<Listener>();
@@ -262,6 +263,7 @@ export class Channel {
 
 	private constructor(
 		options: Options,
+		modelSettings: ModelSettings,
 		harness: Harness,
 		log: Log,
 		value: Metadata,
@@ -270,6 +272,7 @@ export class Channel {
 		approvals: Approvals,
 	) {
 		this.#options = options;
+		this.#modelSettings = modelSettings;
 		this.#harness = harness;
 		this.#log = log;
 		this.#metadata = value;
@@ -297,11 +300,19 @@ export class Channel {
 		const planning: IsPlanning = async (chat, context) =>
 			isPlanning(channel.#harness, chat, context, id => channel.#changingModes.get(id));
 		const registry = createRegistry();
+		const modelSettings = new ModelSettings(options.models, options.defaultModel, options.extension?.thinkingLevel,
+			options.routeModel, options.accountStatuses);
 		registry.install(logging(log));
 		registry.install(CodingTools);
 		const handoffs = new Handoffs(options.directory);
 		registry.install(handoffs.extension);
-		const waits = new PersonWaits((chat, phase) => { void Promise.resolve().then(() => channel.#asked(chat, phase)); });
+		const waits = new PersonWaits((chat, phase) => {
+			if (channel.#closing.signal.aborted) return;
+			const task = Promise.resolve().then(() => channel.#asked(chat, phase))
+				.catch(error => log("warn", "run.attention", failure(error)));
+			channel.#backgroundTasks.add(task);
+			void task.finally(() => channel.#backgroundTasks.delete(task));
+		});
 		const questions = new Questions(waits);
 		const approvals = new Approvals(waits, error => log("warn", "approval.dismiss.failed", failure(error)),
 			(chat, work) => channel.#admitted(chat, work));
@@ -325,7 +336,17 @@ export class Channel {
 		if (options.images) registry.install(images(options.images));
 		if (options.tabs) registry.install(tabs(options.tabs));
 		registry.install(lanes({ ...options, name: options.prefix || options.name }));
-		registry.install(subagent((handle, input, scope) => channel.submitInput(handle, input, scope), questions.extension));
+		registry.install(subagent(
+			(handle, input, scope) => channel.submitInput(handle, input, scope),
+			(tx, chat, requested) => modelNamedByOwner(tx, chat, requested, modelSettings),
+			questions.extension,
+		));
+		registry.install(modelTool(modelSettings, async (tx, from, role, part) => {
+			if (role === "main") return part === undefined
+				? { chat: ROOT_CONVERSATION_ID }
+				: { refusal: "Omit the path scope for the main agent." };
+			return channel.#builds.findAgent(tx, from, role, part);
+		}));
 		registry.install(metadata((value) => channel.#changed(value), options.claim));
 		registry.install(messaging(options.directory));
 		const role = (chat: number) => channel.#builds.agent(chat)?.role;
@@ -401,6 +422,7 @@ export class Channel {
 		const settings = await harness.snapshot(SettingsDoc, context);
 		channel = new Channel(
 			options,
+			modelSettings,
 			harness,
 			log,
 			value,
@@ -431,6 +453,7 @@ export class Channel {
 				}
 				channel.#builds.postedMention(submission);
 			}
+			const selected = new Set<ConversationId>();
 			const ended: [ConversationId, readonly SubmissionId[]][] = [];
 			const began: [ConversationId, SubmissionId][] = [];
 			let runEnded = false;
@@ -445,6 +468,12 @@ export class Channel {
 					channel.#said(change.value, commentMessages?.has(change.value.id));
 				}
 				if (change.type !== "document") continue;
+				if (change.record.scope.kind === "conversation"
+					&& (change.record.kind === PendingModelDoc.definition.kind
+						|| change.record.kind === AgentDoc.definition.kind && (!change.ops.length || change.ops.some(([kind, path]) =>
+							kind === "r" || Array.isArray(path) && (path[0] === "model" || path[0] === "thinkingLevel"))))) {
+					selected.add(change.record.scope.conversationId);
+				}
 				if (change.record.kind === BuildsDoc.definition.kind) {
 					const woken = channel.#builds.observe(change.value as BuildsState | null);
 					if (options.resume !== false && woken.length) void Promise.resolve().then(() => channel.#builds.resume(woken));
@@ -501,17 +530,19 @@ export class Channel {
 				&& !(change.value as LiveState | null)?.run)
 				&& !channel.#closing.signal.aborted) {
 				const task = channel.#reconcilePlanExits().catch(error => channel.#log("error", "plan.exit.reconcile", failure(error)));
-				channel.#captionTasks.add(task);
-				void task.finally(() => channel.#captionTasks.delete(task));
+				channel.#backgroundTasks.add(task);
+				void task.finally(() => channel.#backgroundTasks.delete(task));
 			}
 			if (runEnded) void channel.#builds.replyToMentions();
 			// Ending a run settles its inputs in the same commit, in no particular change order.
 			for (const [chat, inputs] of ended) {
 				const task = channel.#ended(chat, inputs, changes);
-				channel.#captionTasks.add(task);
-				void task.finally(() => channel.#captionTasks.delete(task));
+				channel.#backgroundTasks.add(task);
+				void task.finally(() => channel.#backgroundTasks.delete(task));
 			}
 			for (const [chat, input] of began) void channel.#builds.state(chat, "running", input, true);
+			for (const chat of selected) void Promise.resolve().then(() => channel.#publishSelection(chat))
+				.catch(error => channel.#log("warn", "agent.selection.failed", failure(error)));
 			// Publish once per atomic commit, not once per chat or streaming delta.
 			channel.#publishBusy();
 			if (changes.some((change) => change.type === "entry")) channel.#activity();
@@ -613,7 +644,7 @@ export class Channel {
 			case "info":
 				return this.info();
 			case "models":
-				return available(this.#options.models, this.#options.routeModel);
+				return this.#modelSettings.listed();
 			case "say":
 				return this.#admitted(request.chat, () => this.#say(request));
 			case "ask":
@@ -788,10 +819,11 @@ export class Channel {
 		const modes = (await this.#harness.snapshot(ChatModesDoc, context))?.chats || {};
 		const byPath = new Map(Object.entries(lanes).map(([lane, { path }]) => [path, lane]));
 		const chats: Chat[] = await Promise.all(records.map(async (record) => {
-			const [agent, live, spent] = await Promise.all([
+			const [agent, live, spent, modelChange] = await Promise.all([
 				this.#harness.snapshot(AgentDoc, record.id, context),
 				this.#harness.snapshot(LiveDoc, record.id, context),
 				this.#harness.snapshot(UsageDoc, record.id, context),
+				this.#harness.snapshot(PendingModelDoc, record.id, context),
 			]);
 			const cwd = agent?.cwd;
 			const lane = cwd && byPath.get(cwd);
@@ -808,12 +840,13 @@ export class Channel {
 			if (window && used) chat.context = { used, window };
 			if (record.owner) chat.parent = record.owner.conversationId;
 			if (agent?.model) chat.model = agent.model;
+			if (modelChange?.pending) chat.pending = modelChange.pending;
 			chat.effort = agent?.thinkingLevel || "off";
 			if (lane) Object.assign(chat, { lane, cwd });
 			return chat;
 		}));
 		// Without a usable key there is nothing to name; asking says so.
-		const automatic = await this.#automatic().catch(() => undefined);
+		const automatic = await this.#modelSettings.automatic().catch(() => undefined);
 		return {
 			id,
 			name,
@@ -1058,8 +1091,8 @@ export class Channel {
 			const builds = this.#builds.close();
 			try { await this.#feed?.close(); } catch (error) { errors.push(error); }
 			// Native close seals admission and joins generation and tool tasks before storage closes.
-			// Caption calls are external producers, so join them before entering that boundary.
-			await Promise.allSettled(this.#captionTasks);
+			// Join channel notifications and captions while they can still read the store.
+			await Promise.allSettled(this.#backgroundTasks);
 			await Promise.allSettled(this.#admissions.values());
 			await builds;
 			await this.#approvals.close();
@@ -1158,17 +1191,19 @@ export class Channel {
 			if (existing !== undefined) return { submission: existing };
 		}
 		// The chat's next run reads this message, so it must fit the model the chat has now.
-		const { model } = await conversation.agent(context);
+		const stored = await this.#harness.snapshot(PendingModelDoc, conversation.id, context);
+		const model = stored?.pending?.model ?? (await conversation.agent(context)).model;
 		const selected = model && this.#options.models.getModel(model.provider, model.modelId);
 		if (selected) room.checkContext(selected, request);
 		const entry = room.draft(request.author, request.text, Date.now(), request);
-		if (requestId && value) {
-			const existing = await this.#afterMentionStops(() => this.#harness.commit(
-				tx => this.#claimMessage(tx, conversation.id, requestId, value, mention),
-				context,
-			));
-			if (existing !== undefined) return { submission: existing };
-		}
+		const existing = await this.#afterMentionStops(() => this.#harness.commit(async tx => {
+			if (requestId && value) {
+				const claimed = await this.#claimMessage(tx, conversation.id, requestId, value, mention);
+				if (claimed !== undefined) return claimed;
+			}
+			delete (await tx.doc(OwnerInputDoc, conversation.id)).input;
+		}, context));
+		if (existing !== undefined) return { submission: existing };
 		const submission = await conversation.submit({
 			type: "write",
 			entry,
@@ -1261,9 +1296,15 @@ export class Channel {
 				const record = await handle?.status(context);
 				if (record?.entry === undefined && record?.status !== "queued") throw new Error(refusal);
 			}
-			({ submission } = await this.#select(conversation, {}, {
-				bound, mode: "plan", attended: undefined, input, settled,
-			}, cancellation?.context ?? context));
+			const ownerText = request.author === this.#options.owner
+				? batch.items.flatMap(({ comment, reply }) => {
+					const written = reply ?? comment;
+					return written.author === request.author ? [written.text] : [];
+				}).join("\n")
+				: undefined;
+			submission = await this.#invoke(conversation, {
+				bound, mode: "plan", attended: undefined, input, settled, ownerText,
+			}, cancellation?.context ?? context);
 		} catch (error) {
 			if (planCommentBatch(this.#planState, chat, requestId)) {
 				await this.#harness.commit(tx => discardPlanCommentBatch(tx, chat, requestId), context)
@@ -1302,15 +1343,76 @@ export class Channel {
 	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
 		return this.#admitted(handle.id, async () => {
 			if (canSubmit?.() === false) return;
-			await this.#select(await this.#conversation(handle.id), {}, undefined, callContext);
+			await this.#modelSettings.check(this.#harness, handle.id, {}, callContext);
+			if (canSubmit?.() === false) return;
 			await this.#placeChatLane(handle.id, callContext);
 			if (canSubmit?.() === false) return;
-			return handle.submit(input, callContext);
+			const mention = isMentionSubmission(input);
+			const { author, text } = room.input(input.content);
+			const ownerText = mention && author === this.#options.owner ? text : undefined;
+			return this.#submit(handle, input, {}, ownerText, callContext);
 		});
+	}
+
+	async #submit(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, selection: ModelSelection, ownerText: string | undefined, callContext: Context): Promise<Submission> {
+		const chat = handle.id;
+		const requestId = input.requestId ?? (ownerText === undefined ? undefined : crypto.randomUUID());
+		const undo = await this.#harness.commit(async tx => {
+			if (requestId !== undefined && await tx.submissionByRequest(chat, requestId)) return;
+			const agent = await tx.doc(AgentDoc, chat);
+			const change = await tx.doc(PendingModelDoc, chat);
+			const owner = await tx.doc(OwnerInputDoc, chat);
+			const previous = {
+				model: agent.model ? { ...agent.model } : null,
+				thinkingLevel: agent.thinkingLevel ?? null,
+			};
+			const pending = change.pending && {
+				...(change.pending.model ? { model: { ...change.pending.model } } : {}),
+				...(change.pending.effort === undefined ? {} : { effort: change.pending.effort }),
+			};
+			const priorInput = owner.input && { ...owner.input };
+			await this.#modelSettings.select(tx, chat, selection, true);
+			const configured = !sameModel(previous.model ?? undefined, agent.model)
+				|| previous.thinkingLevel !== (agent.thinkingLevel ?? null);
+			const selected = { model: agent.model && { ...agent.model }, effort: agent.thinkingLevel };
+			const applied = { model: change.pending?.model && { ...change.pending.model }, effort: change.pending?.effort };
+			const lastEntry = configured ? (await tx.scanEntries({ conversationId: chat }, 1)).items[0]?.id : undefined;
+			owner.input = ownerText !== undefined && requestId !== undefined ? { requestId, text: ownerText } : undefined;
+			return async (tx: Tx) => {
+				if (requestId !== undefined && await tx.submissionByRequest(chat, requestId)) return;
+				(await tx.doc(OwnerInputDoc, chat)).input = priorInput;
+				const agent = await tx.doc(AgentDoc, chat);
+				if (configured) {
+					// Pi can pick up a queued run between commits. Preserve the selection if it did.
+					if ((await tx.doc(LiveDoc, chat)).run
+						|| (await tx.scanEntries({ conversationId: chat }, 1)).items[0]?.id !== lastEntry
+						|| !sameModel(agent.model, selected.model) || agent.thinkingLevel !== selected.effort) return;
+					await configure(tx, chat, previous);
+				}
+				const change = await tx.doc(PendingModelDoc, chat);
+				if (sameModel(change.pending?.model, applied.model) && change.pending?.effort === applied.effort) {
+					change.pending = pending;
+				}
+			};
+		}, callContext);
+		try {
+			return await handle.submit(requestId === undefined ? input : { ...input, requestId }, callContext);
+		} catch (error) {
+			if (undo) {
+				try { await this.#harness.commit(undo, context); }
+				catch (rollback) {
+					throw new AggregateError([error, rollback], "The chat could not restore its model settings after admission failed.");
+				}
+			}
+			throw error;
+		}
 	}
 
 	async #admit(request: Extract<Request, { op: "ask" }>, settled: Promise<unknown>) {
 		this.#author(request.author);
+		if (request.model !== undefined || request.effort !== undefined || request.automatic !== undefined) {
+			this.#maySelect(request.author);
+		}
 		room.checkAttachments(request);
 		if (!request.agents) await this.#mayInvoke(request.author);
 		const conversation = await this.#writableChat(request.chat);
@@ -1337,19 +1439,22 @@ export class Channel {
 			whenBusy: "steer",
 			...(requestId ? { requestId } : {}),
 		};
-		const { submission } = await this.#afterMentionStops(() => this.#select(conversation, request, { bound, mode, attended, input, settled }));
+		const ownerText = author === this.#options.owner ? text : undefined;
+		const submission = await this.#afterMentionStops(() => this.#invoke(conversation, {
+			bound, mode, attended, input, settled, selection: request, ownerText,
+		}));
 		return { submission };
 	}
 
 	async #pick(request: Extract<Request, { op: "select" }>) {
 		this.#author(request.author);
-		await this.#mayInvoke(request.author);
+		this.#maySelect(request.author);
 		const conversation = await this.#conversation(request.chat);
 		const agent = this.#builds.agent(conversation.id);
 		if (agent && !await this.#harness.commit(tx => tx.submissionByRequest(conversation.id, agent.requestId), context)) {
 			throw new Error(waitForBrief);
 		}
-		return this.#select(conversation, request);
+		return this.#harness.commit(tx => this.#modelSettings.select(tx, conversation.id, request), context);
 	}
 
 	#canInvoke(author: string, shared: boolean): boolean {
@@ -1408,97 +1513,46 @@ export class Channel {
 		for (const chat of chats) await this.#placeChatLane(chat, context);
 	}
 
-	/** Model and effort apply to a whole run, never just its later turns. */
-	async #select(
+	async #invoke(
 		conversation: Conversation,
-		selection: room.Attached & { model?: ModelRef; effort?: Effort; automatic?: boolean },
-		invocation?: { bound: ((tx: Tx) => Promise<void>) | undefined; mode: ChatMode | undefined; attended: boolean | undefined; input: InputSubmissionDraft; settled: Promise<unknown> },
+		{ bound, mode, attended, input, settled, selection, ownerText }: {
+			bound: ((tx: Tx) => Promise<void>) | undefined;
+			mode: ChatMode | undefined;
+			attended: boolean | undefined;
+			input: InputSubmissionDraft;
+			settled: Promise<unknown>;
+			selection?: ModelSelection;
+			ownerText?: string | undefined;
+		},
 		callContext = context,
-	): Promise<{ model: ModelRef; effort: Effort; submission?: SubmissionId }> {
-		const { model: requested, effort, automatic } = selection;
-		const agent = await conversation.agent(callContext);
-		const current = agent.model;
-		const kept = !requested && !automatic && current && await usable(this.#options.models, current)
-			? current
-			: undefined;
-		const model = requested || kept || await this.#automatic();
-		const selected = this.#options.models.getModel(model.provider, model.modelId);
-		if (!selected) {
-			throw new Error(`Model ${model.provider}/${model.modelId} is not offered. Choose another model.`);
-		}
-		// Before configuring, so a refused message leaves the chat's model as it was.
-		room.checkContext(selected, selection);
-		const levels = getSupportedThinkingLevels(selected);
-		if (effort !== undefined && effort !== "off" && !levels.includes(effort)) {
-			const listed = levels.filter((level) => level !== "off");
-			throw new Error(
-				`Unsupported reasoning effort ${effort} for ${model.provider}/${model.modelId}: ${listed.length ? `it lists ${listed.join(", ")}` : "it lists no effort levels"}, and off.`,
-			);
-		}
-		// Pi's "off" means omit reasoning, allowing provider defaults on always-thinking models.
-		const thinkingLevel = effort
-			|| (levels.includes(agent.thinkingLevel) ? agent.thinkingLevel : this.#options.extension?.thinkingLevel || "off");
-		const sameModel = current?.provider === model.provider && current.modelId === model.modelId;
-		const same = sameModel && thinkingLevel === agent.thinkingLevel;
-		if (model !== kept && !await usable(this.#options.models, model)) {
-			// getModel above found this model, so its provider is registered.
-			const name = this.#options.models.getProvider(model.provider)!.name;
-			throw new Error(
-				`The ${name} API key is missing. Add it in Provider settings to invoke an agent. Chat is still available.`,
-			);
-		}
-		const mode = invocation?.mode;
-		const checkModelIdle = async (tx: Tx) => {
-			if (!same && (await tx.doc(LiveDoc, conversation.id)).run) {
-				throw new Error(
-					"The chat is busy; stop it or wait before changing its model or reasoning effort",
-				);
-			}
-		};
+	): Promise<SubmissionId> {
+		const chat = conversation.id;
 		let modeChange: Awaited<ReturnType<typeof setChatMode>>;
-		let previousSelection: Pick<AgentChange, "model" | "thinkingLevel"> | undefined;
-		let submission: SubmissionId | undefined;
+		let submission: SubmissionId;
 		try {
-			if (invocation && mode !== undefined) {
-				// The chat and affected children must be idle, and new policy reads wait for admission to settle.
-				this.#changingModes.set(conversation.id, invocation.settled);
+			await this.#modelSettings.check(this.#harness, chat, selection ?? {}, callContext);
+			if (mode !== undefined) this.#changingModes.set(chat, settled);
+			if (mode !== undefined || bound) {
 				modeChange = await this.#harness.commit(async tx => {
-					await checkModelIdle(tx);
-					await invocation.bound?.(tx);
-					return setChatMode(tx, conversation.id, mode);
+					await bound?.(tx);
+					if (mode !== undefined) return setChatMode(tx, chat, mode);
 				}, callContext);
 			}
-			if (!same || (mode === undefined && invocation?.bound)) {
-				previousSelection = await this.#harness.commit(async tx => {
-					await checkModelIdle(tx);
-					if (mode === undefined) await invocation?.bound?.(tx);
-					if (same) return;
-					const state = await tx.doc(AgentDoc, conversation.id);
-					const previous = { model: state.model ? { ...state.model } : null, thinkingLevel: state.thinkingLevel ?? null };
-					await configure(tx, conversation.id, { model, thinkingLevel });
-					return previous;
-				}, callContext);
-			}
-			if (!same && !modeChange) this.#agentChanged(conversation.id, model, thinkingLevel);
-			if (invocation) {
-				await this.#placeChatLane(conversation.id, callContext);
-				submission = (await this.#approvals.admit(this.#harness, conversation.id, invocation.attended, invocation.settled,
-					() => conversation.submit(invocation.input, callContext))).id;
-			}
+			await this.#placeChatLane(chat, callContext);
+			submission = (await this.#approvals.admit(this.#harness, chat, attended, settled,
+				() => this.#submit(conversation, input, selection ?? {}, ownerText, callContext))).id;
 		} catch (error) {
 			if (modeChange) {
 				const { previous, pendingExit } = modeChange;
 				try {
 					await this.#harness.commit(async tx => {
 						const modes = await tx.doc(ChatModesDoc);
-						const { chats } = modes;
 						if (pendingExit) {
 							modes.pendingExits ??= {};
-							modes.pendingExits[conversation.id] = pendingExit;
+							modes.pendingExits[chat] = pendingExit;
 						}
-						if (previous === undefined) delete chats[conversation.id];
-						else chats[conversation.id] = previous;
-						if (previousSelection) await configure(tx, conversation.id, previousSelection);
+						if (previous === undefined) delete modes.chats[chat];
+						else modes.chats[chat] = previous;
 					}, context);
 				} catch (rollback) {
 					throw new AggregateError([error, rollback], "The chat could not restore its mode after admission failed.");
@@ -1506,10 +1560,10 @@ export class Channel {
 			}
 			throw error;
 		} finally {
-			if (mode !== undefined) this.#changingModes.delete(conversation.id);
+			if (mode !== undefined) this.#changingModes.delete(chat);
 		}
-		if (modeChange) this.#agentChanged(conversation.id, model, thinkingLevel, mode);
-		return { model, effort: thinkingLevel, ...(submission === undefined ? {} : { submission }) };
+		if (modeChange) await this.#publishSelection(chat, mode);
+		return submission;
 	}
 
 	async #reconcilePlanExits() {
@@ -1527,19 +1581,28 @@ export class Channel {
 
 	async #planExited({ chat, previous, mode, approval }: ModeTransition) {
 		this.#log("info", "plan.mode.exited", { chat, previousChatMode: previous, chatMode: mode, approvedPlanId: approval.plan });
-		const agent = await this.#harness.snapshot(AgentDoc, chat, context);
-		const model = agent?.model ?? await this.#automatic().catch(() => undefined);
-		if (model) this.#agentChanged(chat, model, agent?.thinkingLevel ?? "off", mode);
+		await this.#publishSelection(chat, mode);
 	}
 
-	#agentChanged(chat: ChatId, model: ModelRef, effort: Effort, mode?: ChatMode) {
+	async #publishSelection(chat: ConversationId, mode?: ChatMode) {
+		if (!mode && ![...this.#listeners].some(listener => listener.agent)) return;
+		const [agent, change] = await Promise.all([
+			this.#harness.snapshot(AgentDoc, chat, context),
+			this.#harness.snapshot(PendingModelDoc, chat, context),
+		]);
+		const model = agent?.model ?? (mode && await this.#modelSettings.automatic().catch(() => undefined));
+		if (model) this.#agentChanged(chat, model, agent?.thinkingLevel ?? "off", change?.pending, mode);
+	}
+
+	#agentChanged(chat: ChatId, model: ModelRef, effort: Effort, pending?: PendingModel, mode?: ChatMode) {
 		const event: Event = {
 			kind: "agent", chat, model, effort,
+			...(pending ? { pending } : {}),
 			...(mode === undefined ? {} : { mode }),
 		};
 		if (mode !== undefined) this.#log("info", "plan.mode.changed", { chat, mode });
 		for (const listener of this.#listeners) {
-			if (listener.chat !== chat || !listener.agent) continue;
+			if (!listener.agent || (mode !== undefined && listener.chat !== chat)) continue;
 			try {
 				listener.send(event);
 			} catch {
@@ -1548,12 +1611,13 @@ export class Channel {
 		}
 	}
 
-	#automatic(): Promise<ModelRef> {
-		return this.#options.defaultModel?.() || choose(this.#options.models);
+	#maySelect(author: string) {
+		if (author !== this.#options.owner) throw new Error("Only the channel's owner can change an agent's model.");
 	}
 
 	async #chat(request: Extract<Request, { op: "chat" }>) {
 		this.#author(request.author);
+		if (request.model !== undefined) this.#maySelect(request.author);
 		const conversation = await this.#harness.createConversation({
 			ownership: { kind: "ownerless" },
 			agent: { model: request.model || this.#options.model, cwd: this.#options.project, ...(this.#options.extension?.thinkingLevel ? {thinkingLevel: this.#options.extension.thinkingLevel} : {}) },
@@ -1671,8 +1735,8 @@ export class Channel {
 			} while (this.#captioning.get(id) && !this.#closing.signal.aborted);
 			this.#captioning.delete(id);
 		})();
-		this.#captionTasks.add(task);
-		void task.finally(() => this.#captionTasks.delete(task));
+		this.#backgroundTasks.add(task);
+		void task.finally(() => this.#backgroundTasks.delete(task));
 	}
 
 	async #captionPass(id: ConversationId): Promise<void> {
@@ -1688,19 +1752,30 @@ export class Channel {
 		const recaps = { ...stored?.recaps };
 		const { models } = this.#options;
 		const signal = this.#closing.signal;
-		let fast: Model<any> | undefined | null;
-		let strong: Model<any> | undefined | null;
+		const pickFor = async (kind: "caption" | "recap") => {
+			const captured = this.#options.extension?.nonTurnModels?.(kind, id);
+			if (captured) {
+				const model = await pick(captured);
+				if (model && await usable(models, { provider: model.provider, modelId: model.id }).catch(() => false)) {
+					return { transport: captured, model };
+				}
+			}
+			const model = await pick(models, agent?.model);
+			if (model) return { transport: models, model };
+		};
+		let captionsModel: Awaited<ReturnType<typeof pickFor>>;
+		let recapModel: Awaited<ReturnType<typeof pickFor>>;
 		for (const segment of segments(view.messages, !!live?.run)) {
 			for (const [index, group] of segment.groups.entries()) {
 				const key = group.calls[0]!.id;
 				if (!isStale(group, captions[key])) continue;
-				fast ??= await pick(models, FAST, agent?.model) || null;
-				if (!fast) return;
+				captionsModel ??= await pickFor("caption");
+				if (!captionsModel) return;
 				const previous = segment.groups.slice(Math.max(0, index - 3), index)
 					.flatMap((earlier) => captions[earlier.calls[0]!.id]?.text || []);
 				const { text, usage } = await caption(
-					this.#options.extension?.nonTurnModels?.("caption", id) || models,
-					fast,
+					captionsModel.transport,
+					captionsModel.model,
 					segment.request,
 					group,
 					previous,
@@ -1719,10 +1794,9 @@ export class Channel {
 			const calls = segment.groups.flatMap((group) => group.calls.map((call) => call.id));
 			const key = calls[0]!;
 			if (recaps[key]?.calls.length === calls.length) continue;
-			strong ??= await pick(models, STRONG, agent?.model)
-				|| await pick(models, FAST, agent?.model) || null;
-			if (!strong) return;
-			const { text, usage } = await recap(this.#options.extension?.nonTurnModels?.("recap", id) || models, strong, segment, captions, signal);
+			recapModel ??= await pickFor("recap");
+			if (!recapModel) return;
+			const { text, usage } = await recap(recapModel.transport, recapModel.model, segment, captions, signal);
 			await this.#harness.commit(async (tx) => {
 				(await tx.doc(CaptionsDoc, id)).recaps[key] = { calls, text };
 				spend(await tx.doc(UsageDoc, id), usage);

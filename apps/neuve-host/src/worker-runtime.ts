@@ -15,6 +15,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import type { ConversationId, Storage, ToolRegistration, Extension, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Channel, type Options, type ModelRef } from "@ace/channel";
+import { usable } from "@ace/channel/models";
 import { channelOperations, ExtensionRequestSchema, MUTATING } from "@ace/channel/operations";
 import type { Planning } from "@ace/channel/planning";
 import type { Review } from "@ace/channel/review";
@@ -23,6 +24,7 @@ import { configureRuntime, runtimeHooks } from "./runtime-hooks";
 import { planExplore, planFileAccess, readBranch } from "./plan-git";
 import { installedNeuve } from "./environment";
 import { git } from "./projects";
+import { defaultModel } from "./manage";
 /**
  * The channel a worker serves, given to root's factories before anything is created, so they can
  * bind provider capture and telemetry to it. The host keeps no capture store of its own.
@@ -64,6 +66,7 @@ export type WorkerSetup = {
 	/** What a chat without a model runs when the host configures none. */
 	defaultModel?(context: WorkerContext): Promise<ModelRef>;
 	routeModel?: Options["routeModel"];
+	accountStatuses?: Options["accountStatuses"];
 	tool?(context: WorkerContext, tool: ToolRegistration): ToolRegistration;
 	onConversation?(context: WorkerContext, id: ConversationId): void;
 	priced?(model: ModelRef): boolean;
@@ -223,6 +226,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			...(setup.nonTurnModels ? {nonTurnModels: (kind: "caption" | "recap", chat: ConversationId) => setup.nonTurnModels!(worker, kind, chat, options.models)} : {}),
 		};
 		const channel = await Channel.open({...planOptions, log: privateLog.log, storage, models, extension, routeModel: setup.routeModel,
+			...(setup.accountStatuses ? { accountStatuses: setup.accountStatuses } : {}),
 			...(additional?.ownTools ? { ownTools: additional.ownTools } : {}),
 			...(setup.review ? {
 				feed: async (harness, submitInput) => {
@@ -236,7 +240,12 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 					} catch (error) { adapter.close(); throw error; }
 				},
 			} : {}),
-			...(config.model ? {defaultModel: async () => config.model!} : setup.defaultModel ? {defaultModel: () => setup.defaultModel!(worker)} : {}),
+			defaultModel: async () => {
+				if (config.model) {
+					if (await usable(models, config.model).catch(() => false)) return config.model;
+				} else if (setup.defaultModel) return setup.defaultModel(worker);
+				return defaultModel(models);
+			},
 		});
 		bound.set(channel, operations.handle);
 		workers.set(channel, worker);

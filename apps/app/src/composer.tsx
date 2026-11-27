@@ -16,8 +16,8 @@ import {
 	type ChatMode,
 	type Effort,
 	MAX_IMAGES,
-	type ModelOption,
 	type ModelRef,
+	type PendingModel,
 	type QueuedMessage,
 } from "@ace/channel/protocol";
 import type { Listing } from "@ace/host/protocol";
@@ -35,7 +35,7 @@ import { mentionable } from "./build-card";
 import { agentMode, askMode, useChatMode } from "./composer-mode";
 import { host } from "./host";
 import { attachments } from "./attachments";
-import { key, listed } from "./listed-models";
+import { useModelChoice, useModels } from "./model-choice";
 
 const AGENT_MODE = {
 	id: "ace",
@@ -57,16 +57,6 @@ const BLOCKED_MODES = [{
 	placeholder: "Message the channel (agent access is off)",
 }];
 const UNKNOWN_MODES = [{ id: "chat", name: "Chat", placeholder: "Message the channel" }];
-export const EFFORTS: Record<Effort, string> = {
-	off: "Off",
-	minimal: "Minimal",
-	low: "Low",
-	medium: "Medium",
-	high: "High",
-	xhigh: "Extra high",
-	max: "Max",
-};
-
 /** The latest pick in this client, as `provider/id` or `auto`; new channels start on it. */
 export const LAST_MODEL = `ace:last-model:${host.url}`;
 
@@ -93,6 +83,8 @@ type Props = {
 	user: string;
 	current?: ModelRef;
 	currentEffort?: Effort;
+	/** The change the chat's next run takes, while it differs from the running value. */
+	pending?: PendingModel;
 	/** What the channel picks for a chat on Automatic. */
 	automatic?: ModelRef;
 	busy: boolean;
@@ -139,6 +131,7 @@ export function Composer(
 		user,
 		current,
 		currentEffort,
+		pending: next,
 		automatic,
 		busy,
 		waiting,
@@ -166,6 +159,8 @@ export function Composer(
 	const [, setLast] = useLocalStorage(LAST_MODEL, "auto");
 	// The channel refuses a blocked teammate's ask, stop, and kill too.
 	const blocked = shared === false && channel.owner !== user;
+	// Only the owner changes an agent's model, and the channel refuses anyone else.
+	const owner = channel.owner === user;
 	// Agent mode only once a teammate's access is known to be on, as it isn't while their Mac is offline.
 	const agents = channel.owner === user || shared === true;
 	const mode = agents ? stored : "chat";
@@ -177,11 +172,9 @@ export function Composer(
 		const people = members.filter((member) => !working.some((agent) => agent.name === member.name.toLowerCase()));
 		return agents ? [{ name: AGENT_ALIAS.name, avatar }, ...working, ...people] : people;
 	}, [agents, working, members, avatar]);
-	const [models, setModels] = useState<ModelOption[]>();
-	const [modelError, setModelError] = useState<string>();
 	const status = useSyncExternalStore(host.subscribe, () => host.status);
-	const settingsVersion = useSyncExternalStore(host.subscribe, () => host.settingsVersion);
-	const accounts = useSyncExternalStore(host.subscribe, () => host.accounts);
+	// A chat that can't load can't answer either, so its models are asked for once it loads.
+	const { models, error: modelError } = useModels(channel, agentic && ready);
 	// An agent draft leads with the agent's mention, except in Plan, which has no marker.
 	const agentDraft = (text: string) =>
 		mode === "plan"
@@ -240,61 +233,16 @@ export function Composer(
 	}, [returned, user, blocked]);
 	// An offline channel can't answer; the conversation already says so, so don't blame providers.
 	const offline = channel.state === "offline";
-	useEffect(() => {
-		// A chat that can't load can't answer either; asking again once it loads is how a refused
-		// channel's models recover, such as after a cloud workspace starts or Try again.
-		if (status !== "open" || !agentic || offline || !ready) return;
-		let active = true;
-		// Ask the channel itself: a hosted channel uses the service's credentials, not its workspace's.
-		host.channel<ModelOption[]>(channel.id, { op: "models" }).then(
-			(models) => {
-				if (!active) return;
-				setModels(models);
-				setModelError(undefined);
-			},
-			(error: Error) => {
-				if (!active) return;
-				setModels([]);
-				setModelError(error.message);
-			},
-		);
-		return () => {
-			active = false;
-		};
-	}, [channel.id, agentic, status, settingsVersion, offline, ready]);
 	// The chat holds the pick, so details, the CLI and other clients name what its next run uses.
-	// A pick shows until the chat's info reports a change, which follows the pick's own answer.
-	const chosen = `${current ? key(current) : "auto"} ${currentEffort || "off"}`;
-	const [picking, setPicking] = useState<{ model: string; effort?: Effort; from: string }>();
-	if (picking && picking.from !== chosen) setPicking(undefined);
-	const { rows, picked: kept } = listed(models || [], picking?.model || (current ? key(current) : "auto"), accounts);
-	// The channel runs Automatic for a stored model no account offers.
-	const model = rows.length && !rows.some((value) => key(value) === kept) ? "auto" : kept;
-	const levels = rows.find((value) => key(value) === model)?.efforts;
-	const requestedEffort = picking?.effort || currentEffort || "off";
-	const effort = requestedEffort === "off" || levels?.includes(requestedEffort)
-		? requestedEffort
-		: "off";
-	const efforts = levels && levels.some((level) => level !== "off")
-		? (levels.includes("off") ? levels : ["off" as const, ...levels]).map((id) => ({
-			id,
-			name: id === "off" && !levels.includes("off") ? "Default" : EFFORTS[id],
-		}))
-		: undefined;
-	const choices = rows.map((value) => ({
-		id: key(value),
-		name: value.name,
-		vendor: value.provider,
-	}));
-	if (model !== "auto" && !choices.some((value) => value.id === model)) {
-		choices.unshift({ id: model, name: model.split("/").slice(1).join("/"), vendor: "" });
-	}
-	// Automatic stays offered so a chat whose model lost its key can hand the choice back.
-	choices.unshift({
-		id: "auto",
-		name: automatic ? `Automatic (${automatic.modelId})` : "Automatic",
-		vendor: "",
-	});
+	const { next: { choices, model, efforts, effort }, pick } = useModelChoice(
+		channel.id,
+		id,
+		user,
+		{ model: current, effort: currentEffort, pending: next },
+		models,
+		automatic,
+		{ onPicked: setLast, onProviders },
+	);
 	// Formatting tools crowd a phone's composer; they stay one tap away.
 	const phone = useMedia("(width < 40rem)");
 
@@ -308,34 +256,6 @@ export function Composer(
 			});
 		}
 		setAttached(kept);
-	}
-
-	async function pick(next: string, nextEffort?: Effort) {
-		const from = chosen;
-		setPicking({ model: next, effort: nextEffort, from });
-		const [provider, ...rest] = next.split("/");
-		try {
-			const result = await host.channel<{ model: ModelRef; effort: Effort }>(channel.id, {
-				op: "select",
-				chat: id,
-				author: user,
-				...(next === "auto"
-					? { automatic: true }
-					: { model: { provider: provider!, modelId: rest.join("/") } }),
-				...(nextEffort ? { effort: nextEffort } : {}),
-			});
-			setPicking({ model: key(result.model), effort: result.effort, from });
-			setLast(next);
-		} catch (error) {
-			setPicking(undefined);
-			const { message } = error as Error;
-			toast.error("Could not change the model", {
-				description: message,
-				...(onProviders && /provider key/i.test(message)
-					? { action: { label: "Providers", onClick: onProviders } }
-					: {}),
-			});
-		}
 	}
 
 	async function send(text: string, chats: number[], mode: string, attached: Attachment[]) {
@@ -405,7 +325,7 @@ export function Composer(
 	}
 
 	// Retrying a model's own failure on that model would fail again, so it hands the choice back.
-	const reset = !!failure && MODEL_FAULT.test(failure) && model !== "auto";
+	const reset = owner && !!failure && MODEL_FAULT.test(failure) && model !== "auto";
 	async function retry() {
 		if (sending.current) return;
 		sending.current = true;
@@ -450,10 +370,10 @@ export function Composer(
 				plan={plan}
 				models={choices}
 				model={model}
-				onModelChange={(value) => void pick(value)}
+				onModelChange={owner ? (value) => void pick(value) : undefined}
 				efforts={efforts}
 				effort={effort}
-				onEffortChange={(value) => void pick(model, value as Effort)}
+				onEffortChange={owner ? (value) => void pick(model, value as Effort) : undefined}
 				attachments={attached}
 				onAttachmentsChange={attach}
 				busy={busy}

@@ -106,7 +106,7 @@ function LocalReference(props: ReferenceProps) {
 function inline(node: Line["nodes"][number], index: number): string {
 	switch (node.kind) {
 		case "mention":
-			return `${index}:mention:${node.name}:${node.avatar || ""}`;
+			return `${index}:mention:${node.name}:${node.avatar || ""}:${node.label || ""}`;
 		case "document":
 			return `${index}:document:${node.uid}:${node.name}:${node.reference}`;
 		case "plan":
@@ -405,7 +405,7 @@ function LineView({ line, fonts, width }: { line: Line; fonts: FontConfig; width
 								{node.avatar && (
 									<span className="mention-avatar" style={avatarStyle(node.avatar)} />
 								)}
-								<span className="chip-name">{node.name}</span>
+								<span className="chip-name">{node.label ?? node.name}</span>
 							</span>
 						);
 						break;
@@ -557,7 +557,7 @@ function LineStream({ line, fonts, path, track, width }: {
 								{node.avatar && (
 									<span className="mention-avatar" style={avatarStyle(node.avatar)} />
 								)}
-								<span className="chip-name">{node.name}</span>
+								<span className="chip-name">{node.label ?? node.name}</span>
 							</span>,
 							key,
 							fresh(track, "@" + node.name),

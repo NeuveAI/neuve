@@ -61,3 +61,19 @@ test("a model on two sign-ins, or on API keys and a plan, is listed for each, na
 	expect(picked).toBe("work/m");
 	expect(listed(models, "chatgpt/m", accounts).picked).toBe("codex/m");
 });
+
+// Why: an account named like a built-in provider's id is listed under `account:<name>`, beside that
+// provider's own row for the same model. Matched by provider, the built-in row took the account's
+// sign-in and folded the two into one, so the person lost the row they added; and the picker must
+// tell the two rows apart, naming the account as the person named it, never by the channel's route id.
+test("an account named like a built-in provider keeps its own row, told apart from the provider's", () => {
+	const models = [
+		{ provider: "openai", modelId: "m" },
+		{ provider: "account:openai", modelId: "m", account: "openai" },
+	];
+	const { rows } = listed(models, "auto", [plan("openai", "alex@example.com")]);
+	expect(rows.map(({ provider, name }) => `${provider} ${name}`)).toEqual([
+		"openai m · OpenAI",
+		"account:openai m · ChatGPT · openai",
+	]);
+});

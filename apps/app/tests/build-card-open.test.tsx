@@ -21,7 +21,7 @@ import type { BuildCardView } from "@ace/ui";
 
 const view = (states: BuildCardView["agents"][number]["state"][]): BuildCardView => ({
 	build: "b",
-	agents: states.map((state, index) => ({ chat: index + 2, name: `Agent ${index}`, state })),
+	agents: states.map((state, index) => ({ chat: index + 2, role: "implementer", name: `Agent ${index}`, state })),
 	stoppable: true,
 });
 

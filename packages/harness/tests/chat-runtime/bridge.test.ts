@@ -10,6 +10,7 @@ import {
   testModels,
   until,
 } from "./fixture.ts";
+import { available } from "../../../channel/src/models.ts";
 import { terminalText, resumeFailed } from "../../src/chat-runtime/failure.ts";
 import { handoff } from "../../src/chat-runtime/handoff.ts";
 import { pointer, usage } from "../../src/chat-runtime/transcript.ts";
@@ -379,29 +380,51 @@ test("9: non-account requests pass straight through the Models layer, so pi chat
   }
 });
 
-test("10: provider collisions retain pi and signed-out accounts give the sign-in command, while equal identities resume", async () => {
+// A built-in provider and a managed account can share both a name and a model ID.
+test("10: provider collisions list and route both models, while equal account identities resume", async () => {
   const run = await fixture({
-    accounts: [account(), account("other"), account("faux")],
+    accounts: [account(), account("faux")],
+    statusModels: [
+      ...testModels,
+      { id: "coder", displayName: "Shared coder", description: "Shared coder" },
+    ],
   });
   try {
     expect(run.models.getModels("faux").map((model) => model.id)).toEqual([
       "coder",
     ]);
-    expect(run.fake.logs).toContainEqual({
-      event: "chat-runtime.account.shadowed",
-      fields: { name: "faux" },
-    });
+    expect(await available(run.models)).toEqual(
+      expect.arrayContaining([
+        { provider: "faux", modelId: "coder", efforts: ["off"] },
+        {
+          provider: "account:faux",
+          account: "faux",
+          modelId: "coder",
+          efforts: ["off"],
+        },
+      ]),
+    );
+    expect(run.models.getProvider("account:faux")?.name).toBe("faux");
+    run.faux.appendResponses([piAnswer("native coder")]);
+    const native = run.models.getModel("faux", "coder")!;
+    expect(
+      (await run.models.completeSimple(native, { messages: [] })).content,
+    ).toEqual([{ type: "text", text: "native coder" }]);
     run.fake.frames.push({ text: "first" });
     await run.submit("first");
     await run.harness.commit(
       (tx) =>
         configure(tx, run.conversation.id, {
-          model: { provider: "other", modelId: "sonnet" },
+          model: { provider: "account:faux", modelId: "coder" },
         }),
       context,
     );
     run.fake.frames.push({ text: "continued" });
-    await run.submit("other");
+    await run.submit("colliding account");
+    expect(run.fake.opened.at(-1)).toMatchObject({
+      account: "faux",
+      policy: { model: { id: "coder" } },
+    });
     expect(run.fake.opened.at(-1)?.start).toEqual({
       kind: "resume",
       session: "session-1",
@@ -410,6 +433,9 @@ test("10: provider collisions retain pi and signed-out accounts give the sign-in
     expect(JSON.stringify(run.fake.requests.at(-1)?.input)).not.toContain(
       "Previous conversation",
     );
+    run.fake.frames.push({ text: "alias resumed" });
+    await run.submit("continue on the account");
+    expect(run.fake.opened).toHaveLength(2);
     const status = run.statuses.values[0]!;
     run.statuses.set([
       {

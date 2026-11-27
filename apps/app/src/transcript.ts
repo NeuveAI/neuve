@@ -373,6 +373,17 @@ export function apply(state: Transcript, event: Event): Transcript {
 	}
 }
 
+/** The chat's model and effort as an `agent` event reports them; one without `pending` clears it. */
+function changed(info: ChannelInfo, event: Extract<Event, { kind: "agent" }>): ChannelInfo {
+	const { chat, model, effort, pending } = event;
+	return {
+		...info,
+		chats: info.chats.map(({ pending: _, ...value }, index) =>
+			value.id === chat ? { ...value, model, effort, ...(pending ? { pending } : {}) } : info.chats[index]!
+		),
+	};
+}
+
 /** The notice joins the stopped reply; a run stopped before replying gets a reply of its own. */
 function withdraw(items: Item[], messages: QueuedMessage[]): Item[] {
 	const last = items.at(-1);
@@ -500,10 +511,25 @@ export function useTranscript(
 			// A re-watch replays the whole chat; the shown transcript stays until the replay is
 			// complete so the timeline, and what is expanded in it, stays mounted.
 			let replay: Transcript | undefined = EMPTY;
-			const read = () =>
-				host.channel<ChannelInfo>(channel, { op: "info" }).then((value) => {
+			// The chats info names, and those a read already under way is for.
+			const known = new Set<number>();
+			// Each chat's latest `agent` event, numbered, so a read sent before it can't undo it.
+			let heard = 0;
+			const agents = new Map<number, { at: number; event: Extract<Event, { kind: "agent" }> }>();
+			// Reads are numbered too, so one answering after a later read has landed is dropped.
+			let reads = 0;
+			let landed = 0;
+			const read = () => {
+				const sent = heard;
+				const number = ++reads;
+				return host.channel<ChannelInfo>(channel, { op: "info" }).then((value) => {
+					if (number < landed) return;
+					landed = number;
+					for (const { id } of value.chats) known.add(id);
+					for (const { at, event } of agents.values()) if (at > sent) value = changed(value, event);
 					if (current()) setInfo(value);
 				}, () => {});
+			};
 			refresh.current = () => void read();
 			void read();
 			host.channel(channel, {
@@ -530,7 +556,19 @@ export function useTranscript(
 						setRestarting(false);
 						replay = undefined;
 					}
-					if (event.kind === "run" || event.kind === "agent") void read();
+					// Any chat's model change comes as its `agent` event; a mode change only info holds.
+					if (event.kind === "agent") {
+						agents.set(event.chat, { at: ++heard, event });
+						setInfo((info) => info && changed(info, event));
+					}
+					// A build's new agent is announced only by its builds, so its chat is read from info then.
+					const fresh = event.kind === "builds"
+						? event.builds.flatMap((build) => build.agents).filter((agent) => !known.has(agent.chat))
+						: [];
+					for (const { chat } of fresh) known.add(chat);
+					if (event.kind === "run" || (event.kind === "agent" && event.mode !== undefined) || fresh.length) {
+						void read();
+					}
 				},
 				// A released watch belongs to an old generation; a reconnecting host restarts every watch.
 				closed(reason) {

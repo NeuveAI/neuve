@@ -231,6 +231,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
 		...base,
 		model: ModelRefSchema,
 		effort: EffortSchema,
+		pending: z.strictObject({ model: ModelRefSchema.optional(), effort: EffortSchema.optional() }).optional(),
 		mode: ChatModeSchema.optional(),
 	}),
 	z.object({

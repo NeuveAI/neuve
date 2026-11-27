@@ -128,10 +128,10 @@ function findSlash(state: EditorState) {
 }
 
 /** Inserts a mention node, replacing the active suggestion range. */
-function insertMention(view: EditorView, name: string, id?: string, avatar?: string) {
+function insertMention(view: EditorView, name: string, id?: string, avatar?: string, label?: string) {
 	let state = suggestKey.getState(view.state);
 	let { tr } = view.state;
-	let node = schema.nodes.mention.create({ name, id: id || null, avatar: avatar || null });
+	let node = schema.nodes.mention.create({ name, id: id || null, avatar: avatar || null, label: label || null });
 
 	if (state?.range) {
 		tr = tr.delete(state.range.from, state.range.to).insert(state.range.from, [
@@ -184,8 +184,11 @@ function insertPlan(view: EditorView) {
 	view.focus();
 }
 
-/** An `agent` entry's `id` is its chat; it becomes a mention only when picked from the list. */
-type Mention = { name: string; avatar?: string; id?: string; agent?: AgentLineView };
+/**
+ * An `agent` entry's `id` is its chat; it becomes a mention only when picked from the list. `label`
+ * is what its chip reads where it differs from the `name` the text carries.
+ */
+type Mention = { name: string; label?: string; avatar?: string; id?: string; agent?: AgentLineView };
 
 /**
  * Tracks `@query` text behind the cursor and auto-converts on space.

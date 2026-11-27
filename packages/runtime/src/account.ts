@@ -6,6 +6,13 @@ export const AccountName = z
   .brand<"AccountName">();
 export type AccountName = z.infer<typeof AccountName>;
 
+/** The colon keeps a colliding account's provider ID distinct from account names and built-ins. */
+export const ACCOUNT_PROVIDER_PREFIX = "account:";
+export function accountForProvider(provider: string): string | undefined {
+  if (provider.startsWith(ACCOUNT_PROVIDER_PREFIX))
+    return provider.slice(ACCOUNT_PROVIDER_PREFIX.length);
+}
+
 export const AccountKind = z.enum([
   "claude-subscription",
   "anthropic-api-key",

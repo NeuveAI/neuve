@@ -151,6 +151,7 @@ export class Fixture {
 		};
 		this.operations = channelOperations({...this.options, log: (level,event,fields) => this.log.push({level,event,...(fields ? {fields} : {})})});
 		const operations = this.operations;
+		const captions = faux();
 		this.channel = await Channel.open({
 			id: "one",
 			name: "one",
@@ -173,6 +174,7 @@ export class Fixture {
 			extension: {
 				...this.options,
 				...operations.extension,
+				nonTurnModels: this.options.nonTurnModels ?? this.options.extension?.nonTurnModels ?? (() => captions.models),
 				extensions: [...operations.extension.extensions, externalLanes({name: "one", project: this.project, lanes: this.lanes, env: (cwd) => scratchEnv(cwd, this.root)}), ...(this.options.extension?.extensions ?? [])],
 				attach: async (harness, admission) => {
 					await operations.extension.attach?.(harness, admission);

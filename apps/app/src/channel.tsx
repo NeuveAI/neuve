@@ -12,6 +12,7 @@ import {
 import type { Build, Change, Changes, GithubPull } from "@ace/channel/protocol";
 import type { ChannelInfo, Listing, TerminalShell } from "@ace/host/protocol";
 import {
+	AgentModelProvider,
 	Badge,
 	type DetailsChanges,
 	type DetailsFact,
@@ -25,14 +26,15 @@ import {
 } from "@ace/ui";
 import { IconCloud, IconGlobe, IconHash } from "@ace/ui/icons";
 
+import { AgentModel } from "./agent-model";
 import { agentName } from "./build-card";
 import { ChannelAccess } from "./channel-access";
-import { EFFORTS } from "./composer";
 import { Conversation } from "./conversation";
 import { forget, publish, useDetails, useNewestPlan, useNewestReview } from "./details";
 import { useAsked, useGit } from "./git";
 import { host, onOpen as onHostOpen } from "./host";
 import { CHAT, Layout } from "./layout/layout";
+import { EFFORTS, useModels } from "./model-choice";
 import { Diff, GROUPS } from "./panels/diff";
 import { Live } from "./panels/live";
 import { Plan } from "./panels/plan";
@@ -120,7 +122,7 @@ function workers(builds: Build[], open: ((chat?: number) => void) | undefined): 
 	return builds.flatMap((build) =>
 		build.agents.map((agent) => ({
 			id: `build:${agent.chat}`,
-			task: agentName(agent),
+			task: agentName(agent, build.agents),
 			state: agent.state,
 			...(open ? { open: () => open(agent.chat) } : {}),
 		}))
@@ -408,8 +410,15 @@ export function Channel(
 	const work = builds?.list.length
 		? builds.list.reduce((sum, build) => sum + build.agents.length, 0) + builds.messages.length
 		: undefined;
+	const { models } = useModels(channel, true);
+	const agentModel = useCallback(
+		(chat: number, plain?: boolean) => (
+			<AgentModel channel={channel.id} models={models} user={user} chat={chat} plain={plain} />
+		),
+		[channel.id, models, user],
+	);
 
-	return (
+	const layout = (
 		<Layout
 			id={channel.id}
 			name={place.kind === "cloud"
@@ -523,4 +532,5 @@ export function Channel(
 			}}
 		/>
 	);
+	return <AgentModelProvider value={agentModel}>{layout}</AgentModelProvider>;
 }
