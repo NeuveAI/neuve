@@ -13,6 +13,7 @@ import type { DeskBatch, LaneFacts } from "./lane-facts"
 import { withoutLocalIds } from "./projection"
 import { gitPerson } from "./feedback.server"
 import { readRecords, writeRecords } from "./records.server"
+import { ClientClosed } from "./client-closed"
 import {
   LANE_ORDER,
   asks,
@@ -111,6 +112,7 @@ const packetsOf = (reviews: ReadonlyArray<Listed>) =>
       })
     )
   ).catch((error: unknown) => {
+    if (error instanceof ClientClosed) throw error
     console.warn("the home page could not read the batch digests", error)
     return reviews.map(() => undefined)
   })

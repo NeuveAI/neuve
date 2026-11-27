@@ -6,7 +6,12 @@
 // that a genuine failure still logs and answers 500.
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import type { Mock } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { Log } from "@neuve/records-core"
 import { requestHandler } from "@tanstack/react-start/server"
+import { Effect } from "effect"
 
 import {
   CLIENT_CLOSED_STATUS,
@@ -14,6 +19,8 @@ import {
   endQuietlyOnClientClose,
   withClientClosedSignal,
 } from "./client-closed"
+import { reviewedCycle } from "./records-changes.fixture"
+import { createRecords, readRecords, writeRecords } from "./records.server"
 
 let consoleError: Mock<typeof console.error>
 
@@ -107,3 +114,72 @@ test("the request keeps its method, headers and body", async () => {
   expect(await request.json()).toEqual({ disposition: "approve" })
   expect(request.signal.aborted).toBe(false)
 })
+
+const withRecords = async (check: () => Promise<void>) => {
+  const root = await mkdtemp(join(tmpdir(), "neuve-client-closed-"))
+  const prior = process.env.NEUVE_REPOSITORY
+  try {
+    expect(Bun.spawnSync(["git", "init", "-q", root]).exitCode).toBe(0)
+    process.env.NEUVE_REPOSITORY = root
+    await createRecords("test.create", () => Effect.void)
+    await check()
+  } finally {
+    if (prior === undefined) delete process.env.NEUVE_REPOSITORY
+    else process.env.NEUVE_REPOSITORY = prior
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+// An abandoned page must release its read, and an abandoned command must still commit.
+test("closing a request interrupts its Records read and answers 499 quietly", () =>
+  withRecords(async () => {
+    const client = new AbortController()
+    let finished = false
+    const fetch = endQuietlyOnClientClose(
+      requestHandler(async () => {
+        await readRecords("test.read", () =>
+          Effect.gen(function* () {
+            yield* Effect.sync(() => client.abort())
+            yield* Effect.yieldNow
+            finished = true
+          })
+        )
+        return new Response()
+      })
+    )
+
+    const response = await fetch(
+      new Request("http://127.0.0.1/batch", { signal: client.signal }),
+      undefined
+    )
+    expect(response.status).toBe(CLIENT_CLOSED_STATUS)
+    expect(finished).toBe(false)
+    expect(consoleError).not.toHaveBeenCalled()
+  }))
+
+test("closing a request lets its Records write commit", () =>
+  withRecords(async () => {
+    const client = new AbortController()
+    const events = reviewedCycle()
+    const fetch = endQuietlyOnClientClose(
+      requestHandler(async () => {
+        await writeRecords("test.write", () =>
+          Effect.gen(function* () {
+            yield* Effect.sync(() => client.abort())
+            yield* Effect.yieldNow
+            yield* Log.append(events)
+          })
+        )
+        return new Response()
+      })
+    )
+
+    await fetch(
+      new Request("http://127.0.0.1/batch", { signal: client.signal }),
+      undefined
+    )
+    expect(client.signal.aborted).toBe(true)
+    expect(await readRecords("test.sequence", () => Log.currentSequence)).toBe(
+      events.length
+    )
+  }))
