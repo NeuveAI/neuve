@@ -114,13 +114,7 @@ export async function fork(id: string, author: string): Promise<catalog.Listing>
 		connection.close();
 	}
 	const root = info.chats.find((chat) => chat.id === ROOT_CONVERSATION_ID);
-	const refs = await git(source.project, [
-		"for-each-ref",
-		"--format=%(refname:lstrip=2)",
-		"refs/heads/",
-	]);
-	const branches = new Set(refs.stdout.split("\n").map((ref) => ref.split("/")[0]!));
-	const record = catalog.fork(source, root?.model || source.model, branches);
+	const record = catalog.fork(source, root?.model || source.model);
 	const lane = changes.lane
 		? {
 			name: changes.lane,

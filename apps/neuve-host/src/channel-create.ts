@@ -78,13 +78,8 @@ export async function lane(
 /** Neuve's coding isolation policy is composed after ordinary native channel admission. */
 export async function assign(record: catalog.Listing, requested?: LaneAssignment): Promise<catalog.Listing> {
 	try {
-		const refs = await output(record.project, ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/"]);
-		const taken = new Set(refs.split("\n").map((name) => name.split("/")[0]));
-		let prefix = record.prefix;
-		for (let index = 2; taken.has(prefix); index++) prefix = `${record.prefix}-${index}`;
-		const current = {...record, prefix};
-		const assigned = await lane(current, requested);
-		catalog.write({...current, lane: assigned});
+		const assigned = await lane(record, requested);
+		catalog.write({...record, lane: assigned});
 		return catalog.read(record.id);
 	} catch (error) {
 		catalog.remove(record.id);
