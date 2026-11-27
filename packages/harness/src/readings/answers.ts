@@ -2217,11 +2217,15 @@ export const laneReviewExpand = (
   readonly key: string;
   readonly judgement: LaneReviewJudgement;
 }> => {
-  // A stored answer of either form: the scoped one is repaired as the scoped form.
+  const stored = StoredLaneReviewAnswer.safeParse(withReadings(raw));
+  if (!stored.success) return [];
+  const scoped = stored.data.notAsked !== undefined;
   const { answer } = laneReviewRepair(
-    raw,
+    scoped
+      ? { ...stored.data, crossBatchClaims: stored.data.crossBatchClaims ?? [] }
+      : stored.data,
     index,
-    LaneReviewScopedAnswer.safeParse(withReadings(raw)).success,
+    scoped,
   );
   if (answer === null) return [];
   const notAsked = new Set(notAskedOf(answer) ?? []);

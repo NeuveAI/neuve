@@ -1700,3 +1700,25 @@ test("Lane review: an answer stored before readings reads as it did, and each ju
   });
   expect(laneReviewExpand(old, elsewhere)[0]!.judgement.fileProofs).toBe(0);
 });
+
+// Main stored scoped answers before cross-batch claims were part of the answer.
+test("Lane review expands a stored scoped answer from main", () => {
+  const old = {
+    ...review(V({ u: [0], a: [1] }), [{ kind: "risk" }]),
+    notAsked: [0],
+  };
+  expect(laneReviewExpand(old, index)).toEqual([
+    expect.objectContaining({
+      key: "k0",
+      judgement: expect.objectContaining({
+        verdict: "unsure",
+        notAsked: true,
+        comments: [expect.objectContaining({ kind: "risk" })],
+      }),
+    }),
+    expect.objectContaining({
+      key: "k1",
+      judgement: expect.objectContaining({ verdict: "approve" }),
+    }),
+  ]);
+});
