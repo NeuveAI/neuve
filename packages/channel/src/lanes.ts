@@ -70,7 +70,7 @@ async function fetched(
 	branch: string,
 ): Promise<Selection> {
 	const base = `refs/remotes/${remote}/${branch}`;
-	await run(`fetch ${quote(remote)} ${quote(`+refs/heads/${branch}:${base}`)}`).catch((error) => {
+	await run(`fetch --no-recurse-submodules --no-auto-maintenance ${quote(remote)} ${quote(`+refs/heads/${branch}:${base}`)}`).catch((error) => {
 		throw new Error(`Could not fetch ${remote}/${branch} (${error.message})`);
 	});
 	const commit = (await run(`rev-parse --verify --end-of-options ${quote(`${base}^{commit}`)}`))
@@ -99,7 +99,10 @@ export async function select(
 	requested: string | undefined,
 	context: Context,
 ): Promise<Selection> {
-	const run = (args: string) => git(env, `-C ${quote(project)} ${args}`, context);
+	const run = (args: string) => git(env,
+		`-C ${quote(project)} -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.ext.allow=never ${args}`,
+		context,
+	);
 	const remotes = (await run("remote")).split("\n");
 	if (!requested && remotes.includes("origin")) return advertised(run, "origin");
 	requested ||= "HEAD";

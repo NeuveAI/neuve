@@ -22,7 +22,7 @@ type ReviewSource = Pick<Worktree, "branch" | "base">;
 export type BuildHost = {
 	share<T>(key: string, run: () => Promise<T>): Promise<T>;
 	worktree(...args:
-		| [name: string, source?: ReviewSource]
+		| [name: string, source?: ReviewSource | "origin"]
 		| [placement: { chat: ConversationId; recorded?: { path: string; base?: string } }]
 	): Promise<Worktree>;
 	removeWorktree?(lane: string, worktree: Worktree, head: string): Promise<boolean>;
@@ -1205,7 +1205,8 @@ export class Builds {
 		try {
 			let worktree = start.worktree;
 			if (!worktree) {
-				worktree = await host.worktree(lane, role === "reviewer" ? start.source : undefined);
+				const source = role === "reviewer" ? start.source : first ? "origin" : undefined;
+				worktree = await host.worktree(lane, source);
 				const created = worktree;
 				await update((saved, build) => {
 					saved.worktree = created;

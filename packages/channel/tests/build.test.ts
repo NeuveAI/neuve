@@ -190,6 +190,39 @@ test("approval starts one ownerless implementer with the marked brief and write 
 	}
 });
 
+test("a new plan starts from the fetched default branch when the project checkout is behind", async () => {
+	const { fixture, watch, draft, approve, worktrees } = await setup();
+	const origin = join(fixture.root, "scratch origin");
+	git(fixture.root, "clone", "--bare", "-q", fixture.project, origin);
+	const checkoutHead = git(fixture.project, "rev-parse", "HEAD").trim();
+	git(fixture.lane.path, "commit", "--allow-empty", "-qm", "Advance the remote default branch");
+	const remoteHead = git(fixture.lane.path, "rev-parse", "HEAD").trim();
+	git(fixture.lane.path, "push", "-q", origin, "HEAD:refs/heads/trunk");
+	git(origin, "symbolic-ref", "HEAD", "refs/heads/trunk");
+	git(fixture.project, "remote", "add", "origin", origin);
+	git(fixture.project, "update-ref", "refs/remotes/origin/main", checkoutHead);
+	git(fixture.project, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+	const hooks = join(fixture.root, "git hooks");
+	await fs.mkdir(hooks);
+	await writeFile(join(hooks, "reference-transaction"), `#!/bin/sh
+while read -r before after ref; do
+	if [ "$ref" = refs/remotes/origin/trunk ]; then touch "$(dirname "$0")/ran"; fi
+done
+`, { mode: 0o755 });
+	git(fixture.project, "config", "core.hooksPath", hooks);
+
+	const plan = await draft(planText);
+	fixture.script(fauxAssistantMessage("Started."));
+	await approve(plan);
+	const build = await buildAt(watch, 0, "started");
+	const [worktree] = worktrees;
+	expect(build.branch).toBe(worktree!.branch);
+	expect(worktree!.base).toBe(remoteHead);
+	expect(git(worktree!.path, "rev-parse", "HEAD").trim()).toBe(remoteHead);
+	expect(git(fixture.project, "rev-parse", "HEAD").trim()).toBe(checkoutHead);
+	expect(await Bun.file(join(hooks, "ran")).exists()).toBe(false);
+});
+
 for (const retry of ["the same plan", "an identical copy"]) {
 	// A failed worktree could leave an approved plan with no agent, or a retry could create a second build.
 	test(`approving ${retry} retries a failed build and reuses a started or stopped build`, async () => {
