@@ -13,9 +13,11 @@ test("paused administrative opens preserve pending native work until normal resu
 	let calls = 0;
 	scripted.faux.appendResponses([() => { calls++; return fauxAssistantMessage("resumed exactly once"); }]);
 	const path = join(fixture.root, "state", "channel.sqlite");
+	const limits = Promise.withResolvers<void>();
 	const open = async (resume: boolean) => Channel.open({
 		id: "one", name: "one", owner: OWNER, project: fixture.project, resume,
 		storage: await openNodeSqliteStorage(path), models: scripted.models,
+		...(resume ? { prepareModels: () => limits.promise } : {}),
 		defaultModel: async () => MODEL,
 		env: (cwd) => scratchEnv(cwd, fixture.root),
 		directory: {self: {id: "one", name: "one"}, list: async () => [], deliver: async () => {}}, log: () => {},
@@ -40,9 +42,15 @@ test("paused administrative opens preserve pending native work until normal resu
 		expect(after.every((task) => task.status === "pending" && task.abort_requested === 0)).toBe(true);
 		expect(after.map((task) => JSON.parse(String(task.record)).state.checkpoint)).toEqual(before.map((task) => JSON.parse(String(task.record)).state.checkpoint));
 		channel = await open(true);
+		const events: string[] = [];
+		await channel.handle({ op: "watch" }, event => events.push(event.kind));
+		expect(events).toContain("live");
+		expect(calls).toBe(0);
 		if (submission === undefined) throw new Error("Native ask did not return a submission");
-		expect(await channel.handle({op: "wait", submission}, () => {})).toBe("done");
+		const waiting = channel.handle({op: "wait", submission}, () => {});
+		limits.resolve();
+		expect(await waiting).toBe("done");
 		expect(calls).toBe(1);
 		expect(JSON.stringify(await channel.export())).toContain("resumed exactly once");
-	} finally {await channel.close(); await fixture.dispose();}
+	} finally {limits.resolve(); await channel.close(); await fixture.dispose();}
 });

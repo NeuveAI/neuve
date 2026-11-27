@@ -173,7 +173,7 @@ test("a workspace uses its profile for host identity and honors explicit HTTPS p
     ]);
     await Promise.all([
       writeFile(
-        join(entry, "cli.ts"),
+        join(entry, "workspace-worker.ts"),
         "console.log(JSON.stringify({env: process.env.NEUVE_WORKER_PROJECT_FIXTURE ?? null, args: Bun.argv.slice(2)}))",
       ),
       writeFile(join(project, ".env"), "NEUVE_WORKER_PROJECT_FIXTURE=loaded\n"),
@@ -203,7 +203,7 @@ test("a workspace uses its profile for host identity and honors explicit HTTPS p
     expect({ exit, error }).toEqual({ exit: 0, error: "" });
     expect(JSON.parse(output)).toEqual({
       env: null,
-      args: ["workspace", "worker"],
+      args: [],
     });
     const explicit = workspaceConfiguration({
       ...input,

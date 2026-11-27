@@ -35,6 +35,37 @@ const settled = async (fixture: Fixture, submission: number) =>
 
 const ReviewFeedDoc = defineDoc(ReviewFeedDefinition);
 
+test("tool images stay in storage during live delivery and replay", async () => {
+	const image = { mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH3sAAAAASUVORK5CYII=" };
+	fixture = await Fixture.create({ images: async () => ({ text: "PNG screenshot", image }) });
+	const path = join(fixture.lane.path, "screenshot.png");
+	await writeFile(path, Buffer.from(image.data, "base64"));
+	const live = await fixture.watch();
+	fixture.script(tool("read", { path }, "call/image"), fauxAssistantMessage("Read the screenshot"));
+	const { submission } = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Read this", images: [image] });
+	expect(await settled(fixture, submission)).toBe("done");
+	const expected = {
+		kind: "result", chat: 1, call: "call/image", text: "PNG screenshot",
+		error: false, images: [{ mimeType: "image/png" }],
+	};
+	expect(EventSchema.parse(await live.until("result", event => event.call === "call/image"))).toEqual(expected);
+	expect(live.of("result")).toContainEqual(expected);
+	expect(live.of("message")[0]?.images).toEqual([image]);
+	await live.stop();
+
+	await fixture.restart();
+	const watch = await fixture.watch();
+	expect(watch.of("result")).toContainEqual(expected);
+	expect(watch.of("message")[0]?.images).toEqual([image]);
+	const request = { op: "tool-image", chat: 1, call: "call/image", index: 0 } as const;
+	expect(await fixture.request(request)).toEqual(image);
+	await expect(fixture.request({ ...request, call: "unknown" })).rejects.toThrow("No such tool image");
+	await expect(fixture.request({ ...request, index: 1 })).rejects.toThrow("No such tool image");
+	const { chat } = await fixture.request<{ chat: number }>({ op: "chat", author: OWNER });
+	await expect(fixture.request({ ...request, chat })).rejects.toThrow("No such tool image");
+	await watch.stop();
+});
+
 for (const op of ["ask", "say"] as const) test(`client ${op} refuses every reserved review ID in the parser and direct channel calls`, async () => {
 	const f = await Fixture.create(); fixture = f;
 	const watch = await fixture.watch();

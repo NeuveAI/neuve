@@ -264,6 +264,8 @@ const main = async (args: readonly string[]): Promise<number> => {
   if (command === "workspace") {
     if (RELEASE_BUILD)
       throw new Error("neuve workspace isn't part of this release.");
+    if (args[1] === "worker")
+      return (await import("./workspace-worker.ts")).runWorkspaceWorker();
     const { runWorkspaceCli } = await import("./workspace-cli.ts");
     return runWorkspaceCli(args.slice(1));
   }

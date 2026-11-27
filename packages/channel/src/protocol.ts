@@ -700,6 +700,7 @@ export type Request =
 	| { op: "patch"; chat?: ChatId; file: string; state?: Change["state"] }
 	/** Answer one open approval request by its runtime `requestId`. The host stamps the verified author. */
 	| { op: "approval-answer"; chat?: ChatId; author: string; requestId: string; decision: ApprovalDecision }
+	| { op: "tool-image"; chat: ChatId; call: string; index: number }
 	/** Replay the chat's transcript, then stream its events until the connection closes. */
 	| {
 		op: "watch";
@@ -819,7 +820,8 @@ export type Event =
 		call: string;
 		error: boolean;
 		text: string;
-		images?: Image[];
+		/** Image order supplies the zero-based index for `tool-image`. */
+		images?: Pick<Image, "mimeType">[];
 		stopped?: boolean;
 		interrupted?: boolean;
 		handoff?: boolean;

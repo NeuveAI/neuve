@@ -217,7 +217,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
 		call: text,
 		text,
 		error: z.boolean(),
-		images,
+		images: z.array(z.object({ mimeType: text })).optional(),
 		stopped: z.boolean().optional(),
 		interrupted: z.boolean().optional(),
 		handoff: z.boolean().optional(),

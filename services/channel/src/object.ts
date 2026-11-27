@@ -3,6 +3,7 @@ import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 
 import { Channel, type Envelope, type Frame, type Log, type ModelRef } from "@ace/channel";
 import { createCatalogue } from "@ace/channel/models";
+import { RequestSchema } from "@ace/channel/parse";
 import {
 	backupSnapshot,
 	exportSnapshot,
@@ -282,7 +283,7 @@ export class HostedChannel extends DurableObject<Env> {
 			}
 			const handled = (async () => {
 				try {
-					const value = await channel.handle(body, (event) => send({ id, event }), trace);
+					const value = await channel.handle(RequestSchema.parse(body), (event) => send({ id, event }), trace);
 					if (body.op === "watch") watches.push(value as { stop(): Promise<unknown> });
 					if (body.op === "ask") await this.#keepalive();
 					send({ id, ok: true, value: body.op === "watch" ? null : value ?? null });

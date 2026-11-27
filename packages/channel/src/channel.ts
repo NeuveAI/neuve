@@ -172,6 +172,8 @@ export type Options = {
 	resume?: boolean;
 	storage: Storage;
 	models: Models;
+	/** Resolve model limits before work starts. History and model display use the current limits. */
+	prepareModels?(): Promise<void>;
 	ownTools?(provider: string): boolean;
 	env(cwd: string, chat?: ChatId): ExecutionEnv;
 	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
@@ -625,12 +627,18 @@ export class Channel {
 		});
 		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
 		if (options.resume !== false) {
-			await channel.#builds.finishStops();
-			await channel.#builds.reconcileRuns();
-			await channel.#builds.recoverMentionEntries();
-			await channel.#placeResumingChats();
-			harness.resume();
-			void channel.#builds.resume();
+			if (options.prepareModels && await channel.#hasRecoverableWork()) {
+				const resuming = options.prepareModels().then(() => {
+					if (!channel.#closing.signal.aborted) return channel.#resumeWork();
+				});
+				channel.#resuming = resuming;
+				channel.#backgroundTasks.add(resuming);
+				void resuming.catch(error => log("error", "channel.resume.failed", failure(error))).finally(() => {
+					channel.#backgroundTasks.delete(resuming);
+				});
+			} else {
+				await channel.#resumeWork();
+			}
 		}
 		log("info", "channel.open", { name: value.name, project: options.project });
 		return channel;
@@ -708,8 +716,10 @@ export class Channel {
 			case "models":
 				return this.#modelSettings.listed();
 			case "say":
+				await this.#resuming;
 				return this.#admitted(request.chat, () => this.#say(request));
 			case "ask":
+				await this.#resuming;
 				return this.#ask(request);
 			case "select":
 				return this.#admitted(request.chat, () => this.#pick(request));
@@ -769,6 +779,7 @@ export class Channel {
 			case "plan-comment-edit":
 			case "plan-comment-remove":
 			case "plan-comments-send":
+				if (request.op === "plan-comments-send") await this.#resuming;
 				return this.#admitted(request.chat, async settled => {
 					const conversation = await this.#writableChat(request.chat);
 					this.#author(request.author);
@@ -802,6 +813,7 @@ export class Channel {
 					: remove(this.#harness, id, entry, request.author, context);
 			}
 			case "stop": {
+				await this.#resuming;
 				this.#author(request.author);
 				// Whoever can't start a run here can't end the owner's either.
 				await this.#mayInvoke(request.author);
@@ -810,6 +822,7 @@ export class Channel {
 					? { by: request.author, at: Date.now() } : undefined);
 			}
 			case "build-stop":
+				await this.#resuming;
 				this.#author(request.author);
 				if (room.isAgent(request.author)) throw new Error("Only a person can stop the plan's agents.");
 				await this.#mayInvoke(request.author);
@@ -826,6 +839,8 @@ export class Channel {
 				return this.#rename(request);
 			case "watch":
 				return this.#watch(request, send);
+			case "tool-image":
+				return this.#toolImage(request);
 			case "typing": {
 				this.#author(request.author);
 				const { id } = await this.#conversation(request.chat);
@@ -854,6 +869,7 @@ export class Channel {
 				return patch(env(cwd), cwd, project, lane?.base, request.file, request.state, context);
 			}
 			case "wait": {
+				await this.#resuming;
 				const submission = await this.#harness.submission(
 					request.submission as SubmissionId,
 					context,
@@ -1125,6 +1141,7 @@ export class Channel {
 
 	/** `author`'s kill records a Stop in each chat it ended, so their next runs know. */
 	async kill(author?: string): Promise<void> {
+		await this.#resuming?.catch(() => {});
 		const { chats } = await this.info();
 		const busy = chats.filter((chat) => chat.busy);
 		this.#log("warn", "channel.kill", { chats: busy.map((c) => c.id) });
@@ -1256,6 +1273,7 @@ export class Channel {
 		// The chat's next run reads this message, so it must fit the model the chat has now.
 		const stored = await this.#harness.snapshot(PendingModelDoc, conversation.id, context);
 		const model = stored?.pending?.model ?? (await conversation.agent(context)).model;
+		if (model && request.files?.length) await this.#options.prepareModels?.();
 		const selected = model && this.#options.models.getModel(model.provider, model.modelId);
 		if (selected) room.checkContext(selected, request);
 		const entry = room.draft(request.author, request.text, Date.now(), request);
@@ -1406,9 +1424,11 @@ export class Channel {
 
 	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context): Promise<Submission>;
 	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit: () => boolean): Promise<Submission | undefined>;
-	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
+	async submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
+		await this.#resuming;
 		return this.#admitted(handle.id, async () => {
 			if (canSubmit?.() === false) return;
+			await this.#options.prepareModels?.();
 			await this.#modelSettings.check(this.#harness, handle.id, {}, callContext);
 			if (canSubmit?.() === false) return;
 			await this.#placeChatLane(handle.id, callContext);
@@ -1579,6 +1599,26 @@ export class Channel {
 		for (const chat of chats) await this.#placeChatLane(chat, context);
 	}
 
+	#resuming: Promise<void> | undefined;
+
+	async #hasRecoverableWork(): Promise<boolean> {
+		return this.#harness.commit(async tx => {
+			for (const status of ["pending", "running", "waiting"] as const) {
+				if ((await tx.scanTasks({ status, abortRequested: false }, 1)).items.length) return true;
+			}
+			return false;
+		}, context);
+	}
+
+	async #resumeWork(): Promise<void> {
+		await this.#builds.finishStops();
+		await this.#builds.reconcileRuns();
+		await this.#builds.recoverMentionEntries();
+		await this.#placeResumingChats();
+		this.#harness.resume();
+		void this.#builds.resume();
+	}
+
 	async #invoke(
 		conversation: Conversation,
 		{ bound, mode, attended, input, settled, selection, ownerText }: {
@@ -1596,6 +1636,7 @@ export class Channel {
 		let modeChange: Awaited<ReturnType<typeof setChatMode>>;
 		let submission: SubmissionId;
 		try {
+			await this.#options.prepareModels?.();
 			await this.#modelSettings.check(this.#harness, chat, selection ?? {}, callContext);
 			if (mode !== undefined) this.#changingModes.set(chat, settled);
 			if (mode !== undefined || bound) {
@@ -1819,6 +1860,7 @@ export class Channel {
 		const { models } = this.#options;
 		const signal = this.#closing.signal;
 		const pickFor = async (kind: "caption" | "recap") => {
+			await this.#options.prepareModels?.();
 			const captured = this.#options.extension?.nonTurnModels?.(kind, id);
 			if (captured) {
 				const model = await pick(captured);
@@ -1893,6 +1935,24 @@ export class Channel {
 				this.#listeners.delete(listener);
 			}
 		}
+	}
+
+	/** One stored tool-result image, read when a person opens its tool group. */
+	async #toolImage({ chat, call, index }: Extract<Request, { op: "tool-image" }>) {
+		const conversation = await this.#conversation(chat);
+		let cursor: Cursor | undefined;
+		do {
+			const page = await conversation.entries({}, 16, cursor, context);
+			for (const entry of page.items) {
+				const message = entry.model?.[0];
+				if (entry.conversationId !== chat || message?.role !== "toolResult" || message.toolCallId !== call) continue;
+				const image = room.images(message)?.[index];
+				if (image) return image;
+				throw new Error("No such tool image");
+			}
+			cursor = page.next;
+		} while (cursor !== undefined);
+		throw new Error("No such tool image");
 	}
 
 	/** Replays the chat's active transcript, then streams. Resolves when the stream ends. */
@@ -2305,14 +2365,14 @@ function events(entry: EntryRecord): Event[] {
 		// pi reports this only when recovery finds an unsafe call that a previous worker started.
 		const interrupted = codes.includes("interrupted");
 		const handoff = codes.includes(HANDOFF);
-		const images = room.images(message);
+		const images = message.content.flatMap(block => block.type === "image" ? [{ mimeType: block.mimeType }] : []);
 		return [{
 			kind: "result",
 			chat,
 			call: message.toolCallId,
 			error: message.isError,
 			text: room.text(message),
-			...(images ? { images } : {}),
+			...(images.length ? { images } : {}),
 			...(stopped ? { stopped: true } : {}),
 			...(interrupted ? { interrupted: true } : {}),
 			...(handoff ? { handoff: true } : {}),

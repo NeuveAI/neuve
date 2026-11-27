@@ -7,6 +7,7 @@ import { testTemporaryDirectory as tmpdir } from "./fixtures/temporary.ts";
 import type WebSocket from "ws";
 
 import { serveCodingUi, type CodingUi } from "../src/app-gateway";
+import { toolImageResponse } from "../src/tool-images";
 import { GatewayClient } from "../src/gateway-client";
 import { startHost, type Host } from "./fixture-host";
 import type { ChannelInfo, Listing, TerminalOpened, TerminalShell } from "../src/protocol";
@@ -15,6 +16,7 @@ const Socket: typeof WebSocket = createRequire(import.meta.url)("../node_modules
 const roots: string[] = [];
 const stops: Array<() => Promise<void>> = [];
 const credential = "a".repeat(64);
+const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH3sAAAAASUVORK5CYII=";
 
 async function place() {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "ab-")));
@@ -167,13 +169,15 @@ async function git(cwd: string, ...args: string[]) {
 	if (code !== 0) throw new Error(stderr);
 }
 
-test("actual Ace client crosses the real private host with watches, verified authors and independently owned terminals", async () => {
+test("actual Ace client crosses the real private host with watches, verified authors, terminals and images", async () => {
 	const { root, app } = await place();
 	const home = join(root, "s"), lanes = join(root, "l"), project = join(root, "p"), script = join(root, "script.json");
 	await Promise.all([mkdir(home), mkdir(lanes), mkdir(project)]);
 	await git(project, "init", "-q", "-b", "main");
 	await writeFile(join(project, "README.md"), "hello\n");
-	await git(project, "add", "README.md"); await git(project, "commit", "-qm", "initial");
+	const png = Uint8Array.fromBase64(pngData);
+	await writeFile(join(project, "fixture.png"), png);
+	await git(project, "add", "README.md", "fixture.png"); await git(project, "commit", "-qm", "initial");
 	await writeFile(script, "[]"); await writeFile(`${script}.cursor`, "0");
 	const environment = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
 	const host: Host = await startHost({loopback: true,
@@ -224,8 +228,50 @@ test("actual Ace client crosses the real private host with watches, verified aut
 		await until(() => replay, "terminal replay on another socket");
 		await second.request({ op: "terminal-close", terminal: opened.terminal });
 		expect(await Bun.file(`${script}.cursor`).text()).toBe("0");
+
+		// An image must cross the same authorized routes as a watch, including the coding listener.
+		const call = "test/screenshot";
+		await writeFile(script, JSON.stringify([{ tool: "read", args: { path: "fixture.png" }, id: call }, { text: "Read" }]));
+		const turn = await second.channel<{ submission: number }>(channel.id, { op: "ask", author: "owner", text: "Read the fixture" });
+		expect(await second.channel(channel.id, { op: "wait", submission: turn.submission })).toBe("done");
+		const path = `/images/${channel.id}/1/${encodeURIComponent(call)}/0`;
+		for (const url of [host.url.replace("ws:", "http:"), coding.url]) {
+			const address = new URL(path, url);
+			const cookie = `ace-${address.port}=${host.token}`;
+			expect((await fetch(address)).status).toBe(401);
+			expect((await fetch(address, { headers: { Cookie: cookie, Origin: "https://foreign.invalid" } })).status).toBe(403);
+			const response = await fetch(address, { headers: { Cookie: cookie } });
+			expect(response.status).toBe(200);
+			expect(response.headers.get("content-type")).toBe("image/png");
+			expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+			expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+			expect(response.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+			expect(new Uint8Array(await response.arrayBuffer())).toEqual(png);
+			expect((await fetch(new URL(path.replace(/\/0$/, "/1"), url), { headers: { Cookie: cookie } })).status).toBe(404);
+		}
 	} finally {
 		first.close(); second.close();
 		if (original) Object.defineProperty(globalThis, "WebSocket", original);
 	}
 }, 30_000);
+
+test("the image response serves PNG bytes and refuses an active document type", async () => {
+	const url = new URL("http://localhost/images/0123456789abcdef/1/call%2Fimage/0");
+	const response = await toolImageResponse(new Request(url), url.pathname, async () => ({
+		mimeType: "text/html",
+		data: btoa("<html>not an image</html>"),
+	}));
+	expect(response.status).toBe(415);
+	expect(await response.text()).toBe("");
+	const image = await toolImageResponse(new Request(url), url.pathname, async (channel, request) => {
+		expect(channel).toBe("0123456789abcdef");
+		expect(request).toEqual({ op: "tool-image", chat: 1, call: "call/image", index: 0 });
+		return { mimeType: "image/png", data: pngData };
+	});
+	expect(image.status).toBe(200);
+	expect(image.headers.get("content-type")).toBe("image/png");
+	expect(image.headers.get("x-content-type-options")).toBe("nosniff");
+	expect(image.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+	expect(image.headers.get("cache-control")).toBe("private, max-age=31536000, immutable");
+	expect(new Uint8Array(await image.arrayBuffer())).toEqual(Uint8Array.fromBase64(pngData));
+});

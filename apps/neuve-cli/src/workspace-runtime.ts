@@ -126,11 +126,11 @@ export function workspaceConfiguration(input: {
   const { home, lanes } = workspaceDirectories(input.storage);
   const bundled = Bun.main.startsWith("/$bunfs/");
   const command = bundled
-    ? [process.execPath]
+    ? [process.execPath, "workspace", "worker"]
     : [
         process.execPath,
         ...Starter.sourceRunFlags(),
-        join(input.source, "apps/neuve-cli/src/cli.ts"),
+        join(input.source, "apps/neuve-cli/src/workspace-worker.ts"),
       ];
   // A bundled worker uses the executable's code, regardless of the source checkout.
   const provenance = bundled
@@ -164,7 +164,7 @@ export function workspaceConfiguration(input: {
         : {}),
     ...routeCodingDefaults(input.route),
     workerCloseTimeoutMs: 130_000,
-    worker: [...command, "workspace", "worker"],
+    worker: command,
     environment: {
       ...input.environment,
       NEUVE_WORKSPACE_PROFILE: JSON.stringify(input.profile),
