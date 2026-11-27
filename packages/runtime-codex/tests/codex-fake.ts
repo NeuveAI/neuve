@@ -98,6 +98,12 @@ const answers: Record<string, (params: any, process: Process) => unknown> = {
       },
     ],
   }),
+  "skills/extraRoots/set": () => ({}),
+  "plugin/reconcile": () => ({
+    changedPlugins: [],
+    failedRemotePluginIds: [],
+    failedMaterializationRemotePluginIds: [],
+  }),
   "mcpServerStatus/list": (_params, process) => ({
     data: Object.keys(OWN.mcp_servers).map((name) => ({
       name,
@@ -127,7 +133,7 @@ const answers: Record<string, (params: any, process: Process) => unknown> = {
             name: "bundled-skill",
             path: "/home/.codex/.system/bundled-skill/SKILL.md",
             scope: "system",
-            enabled: !process.args.includes("skills.bundled.enabled=false"),
+            enabled: true,
           },
           {
             name: "repo-skill",
@@ -139,7 +145,11 @@ const answers: Record<string, (params: any, process: Process) => unknown> = {
                 '{path="/work/.agents/skills/repo-skill/SKILL.md",enabled=false}',
               ),
           },
-        ],
+        ].filter(
+          (skill) =>
+            skill.scope !== "system" ||
+            !process.args.includes("skills.bundled.enabled=false"),
+        ),
         errors: [],
       },
     ],

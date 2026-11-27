@@ -36,6 +36,7 @@ const CLIENT_METHODS = [
   "hooks/list",
   "skills/list",
   "skills/extraRoots/set",
+  "plugin/reconcile",
   "app/list",
   "mcpServerStatus/list",
   "thread/start",

@@ -69,6 +69,10 @@ export const SkillsAnswer = loose({
   ),
 });
 
+export const PluginReconcileAnswer = loose({
+  failedRemotePluginIds: z.array(text),
+});
+
 const TurnError = loose({
   message: text,
   /** A name such as `usageLimitExceeded`, or an object keyed by one. */

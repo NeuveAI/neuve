@@ -37,14 +37,14 @@ const chatgptPlan = ([command, ...args]: CodexTokenCommand) => [
   "features.api_key_model_discovery=true",
 ];
 
-/** The names of the person's own settings, read through the protocol before a clean start. */
+/** The person's settings and the skill flags derived from the startup probe. */
 export interface OwnSettings {
   readonly mcpServers: ReadonlyArray<string>;
   readonly plugins: ReadonlyArray<string>;
   readonly apps: ReadonlyArray<string>;
   readonly skills: ReadonlyArray<{
     readonly path: string;
-    readonly enabled: boolean;
+    readonly enabled: Readonly<Record<Configuration, boolean>>;
   }>;
   /**
    * The person's own `shell_environment_policy.exclude`. A `-c` value replaces the setting, so
@@ -161,7 +161,7 @@ export const launchArguments = (
           `skills.config=[${own.skills
             .map(
               ({ path, enabled }) =>
-                `{path=${JSON.stringify(path)},enabled=${enabled}}`,
+                `{path=${JSON.stringify(path)},enabled=${enabled[configuration]}}`,
             )
             .join(",")}]`,
         ]),
