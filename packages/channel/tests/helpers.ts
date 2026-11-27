@@ -7,7 +7,7 @@ import type {Planning} from "@ace/channel/planning";
 import {lanes as externalLanes, isPlaced} from "@ace/channel/external-lanes";
 type Request = NativeRequest | ExtensionRequest;
 type FixtureOptions = Partial<Options> & Omit<ChannelExtension,"extensions"> & {review?: Review; planning?: Planning; lanes?: string};
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -66,6 +66,46 @@ export function git(dir: string, ...args: string[]): string {
 		throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
 	}
 	return result.stdout.toString();
+}
+
+/**
+ * What an agent can plant in its own lane: a submodule checkout, whose commit the lane records,
+ * and an untracked nested repository, each with Git settings of its own that run a script through
+ * fsmonitor and a clean filter. `.gitmodules` asks Git to look inside the submodule and to fetch
+ * into it. `ran` returns what the script recorded; the plant is checked live before it is cleared.
+ */
+export async function plantNested(lane: string, root: string) {
+	const marker = join(root, "nested ran");
+	const script = join(root, "nested script");
+	await writeFile(script, `#!/bin/sh\necho "$PWD $*" >> '${marker}'\n[ "$1" = clean ] && exec cat\nexit 1\n`);
+	await chmod(script, 0o755);
+	const plant = async (repo: string) => {
+		git(repo, "config", "core.fsmonitor", `'${script}'`);
+		git(repo, "config", "filter.x.clean", `'${script}' clean`);
+		// Same size, new content: Git must hash the file, which runs the clean filter.
+		await writeFile(join(repo, "file.txt"), "b\n");
+	};
+	const source = join(root, "nested source");
+	await mkdir(source);
+	git(source, "init", "-q", "-b", "main");
+	await writeFile(join(source, "file.txt"), "a\n");
+	await writeFile(join(source, ".gitattributes"), "* filter=x\n");
+	git(source, "add", ".");
+	git(source, "commit", "-qm", "nested");
+	git(lane, "-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "sub");
+	git(lane, "config", "-f", ".gitmodules", "submodule.sub.ignore", "none");
+	git(lane, "config", "-f", ".gitmodules", "submodule.sub.fetchRecurseSubmodules", "true");
+	git(lane, "add", ".gitmodules");
+	git(lane, "commit", "-qm", "add submodule");
+	await plant(join(lane, "sub"));
+	const loose = join(lane, "loose");
+	git(lane, "clone", "-q", source, loose);
+	await plant(loose);
+	const ran = async () => (await readFile(marker, "utf8").catch(() => ""));
+	Bun.spawnSync(["git", "-C", lane, "status"], { env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+	if (!(await ran())) throw new Error("The nested repository's settings did not run under plain Git");
+	await rm(marker);
+	return { source, path: join(lane, "sub"), ran };
 }
 
 /**

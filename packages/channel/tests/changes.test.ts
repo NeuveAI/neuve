@@ -1,87 +1,63 @@
 import { expect, test } from "bun:test";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 
 import { fetchBase } from "../src/changes";
 import type { Changes } from "../src/protocol";
-import { Fixture, git, scratchEnv } from "./helpers";
+import { Fixture, git, plantNested, scratchEnv } from "./helpers";
 
-async function addSubmodule(fixture: Fixture) {
-	const source = join(fixture.root, "submodule source");
-	await mkdir(source);
-	git(source, "init", "-qb", "main");
-	await writeFile(join(source, "file.txt"), "before\n");
-	git(source, "add", "file.txt");
-	git(source, "commit", "-qm", "first submodule commit");
-	const cwd = fixture.lane.path;
-	git(cwd, "-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "sub");
-	git(cwd, "config", "-f", ".gitmodules", "submodule.sub.ignore", "none");
-	git(cwd, "config", "-f", ".gitmodules", "submodule.sub.fetchRecurseSubmodules", "true");
-	git(cwd, "add", ".gitmodules");
-	git(cwd, "commit", "-qm", "add submodule");
-	return { source, path: join(cwd, "sub"), first: git(source, "rev-parse", "HEAD").trim() };
-}
-
-test("changes and patches show gitlink updates but omit edits inside the submodule", async () => {
+// An agent writes anything below its lane's own .git, including a nested repository's settings,
+// and Git started by the host must never run them.
+test("the changes view never runs a nested repository's settings and still shows its pointer", async () => {
 	const fixture = await Fixture.create();
 	try {
-		const { path, first } = await addSubmodule(fixture);
 		const cwd = fixture.lane.path;
-		await writeFile(join(path, "file.txt"), "edited\n");
+		const { path, ran } = await plantNested(cwd, fixture.root);
 		await writeFile(join(cwd, "README.md"), "changed in the lane\n");
-		expect((await fixture.request<Changes>({ op: "changes" })).files
-			.filter(file => file.state === "uncommitted").map(file => file.file)).toEqual(["README.md"]);
-		expect(await fixture.request<string>({ op: "patch", file: "sub", state: "uncommitted" })).toBe("");
-		expect(await fixture.request<string>({ op: "patch", file: "sub", state: "committed" }))
-			.toContain(`+Subproject commit ${first}`);
+		const listed = (await fixture.request<Changes>({ op: "changes" })).files;
+		for (const [file, state] of [["sub", "uncommitted"], ["sub", "committed"], ["sub", undefined], ["loose/", "untracked"], ["README.md", "uncommitted"]] as const) {
+			await fixture.request<string>({ op: "patch", file, ...(state ? { state } : {}) });
+		}
+		expect(await ran()).toBe("");
+		expect(listed.filter(file => file.state === "uncommitted").map(file => file.file)).toEqual(["README.md"]);
+		expect(listed).toContainEqual(expect.objectContaining({ file: "loose/", state: "untracked" }));
 
+		git(path, "-c", "core.fsmonitor=false", "-c", "filter.x.clean=cat", "commit", "-qam", "move the pointer");
+		const moved = git(path, "rev-parse", "HEAD").trim();
 		git(cwd, "config", "diff.submodule", "diff");
-		git(path, "commit", "-qam", "move the submodule pointer");
-		const second = git(path, "rev-parse", "HEAD").trim();
 		expect((await fixture.request<Changes>({ op: "changes" })).files)
 			.toContainEqual(expect.objectContaining({ file: "sub", state: "uncommitted" }));
 		expect(await fixture.request<string>({ op: "patch", file: "sub", state: "uncommitted" }))
-			.toContain(`+Subproject commit ${second}`);
-		expect(await fixture.request<string>({ op: "patch", file: "sub" }))
-			.toContain(`+Subproject commit ${second}`);
-
-		const loose = join(cwd, "untracked");
-		await mkdir(loose);
-		git(loose, "init", "-q");
-		await writeFile(join(loose, "file.txt"), "inside an untracked repository\n");
-		expect((await fixture.request<Changes>({ op: "changes" })).files)
-			.toContainEqual(expect.objectContaining({ file: "untracked/", state: "untracked" }));
-		expect(await fixture.request<string>({ op: "patch", file: "untracked/", state: "untracked" }))
-			.toBe("");
+			.toContain(`+Subproject commit ${moved}`);
+		expect(await ran()).toBe("");
 	} finally {
 		await fixture.dispose();
 	}
 });
 
-test("fetching a lane base updates the parent ref without fetching the submodule", async () => {
+test("fetching a lane's base moves its ref without fetching into a nested repository", async () => {
 	const fixture = await Fixture.create();
 	const cwd = fixture.lane.path;
 	const env = scratchEnv(cwd, fixture.root);
 	try {
-		const { source, path, first } = await addSubmodule(fixture);
+		const { source, path, ran } = await plantNested(cwd, fixture.root);
+		const first = git(path, "rev-parse", "refs/remotes/origin/main").trim();
 		const upstream = join(fixture.root, "upstream");
 		git(cwd, "clone", "-q", "--single-branch", "--branch", "one/work", fixture.project, upstream);
 		git(cwd, "remote", "add", "origin", upstream);
 		const base = "refs/remotes/origin/one/work";
-		const oldBase = git(upstream, "rev-parse", "HEAD").trim();
-		git(cwd, "update-ref", base, oldBase);
+		git(cwd, "update-ref", base, git(upstream, "rev-parse", "HEAD").trim());
 
-		await writeFile(join(source, "file.txt"), "remote edit\n");
-		git(source, "commit", "-qam", "move upstream submodule pointer");
-		const second = git(source, "rev-parse", "HEAD").trim();
-		git(upstream, "update-index", "--cacheinfo", `160000,${second},sub`);
+		await writeFile(join(source, "file.txt"), "c\n");
+		git(source, "-c", "filter.x.clean=cat", "commit", "-qam", "move upstream submodule pointer");
+		git(upstream, "update-index", "--cacheinfo", `160000,${git(source, "rev-parse", "HEAD").trim()},sub`);
 		git(upstream, "commit", "-qm", "advance upstream");
-		const nextBase = git(upstream, "rev-parse", "HEAD").trim();
 
 		await fetchBase(env, cwd, base, BACKGROUND_CONTEXT);
-		expect(git(cwd, "rev-parse", base).trim()).toBe(nextBase);
+		expect(git(cwd, "rev-parse", base).trim()).toBe(git(upstream, "rev-parse", "HEAD").trim());
 		expect(git(path, "rev-parse", "refs/remotes/origin/main").trim()).toBe(first);
+		expect(await ran()).toBe("");
 	} finally {
 		await env.cleanup(BACKGROUND_CONTEXT);
 		await fixture.dispose();

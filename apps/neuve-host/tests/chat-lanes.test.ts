@@ -15,6 +15,7 @@ import { open as openLog } from "../src/log";
 import { GatewayClient } from "../src/private-gateway-client";
 import { nativeHandoff } from "../src/review";
 import { startHost } from "./fixture-host";
+import { plantNested } from "../../../packages/channel/tests/helpers";
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
@@ -64,49 +65,39 @@ test("archive removes only host-created clean chat worktrees, retains refs/histo
 	expect((await archive(record.id, false)).chatLanes).toEqual(catalog.read(record.id).chatLanes);
 });
 
-test("review and compute check the lane without counting edits inside a submodule", async () => {
+// Review, the move to a cloud workspace and archive read a lane whose nested repositories an agent
+// can configure; none of them may run those repositories' settings on the host.
+test("review, compute and archive never run a nested repository's settings", async () => {
 	const { record, root } = await local();
 	const name = `chat-${ROOT_CONVERSATION_ID}`;
 	const lane = owned(record, name);
-	const source = join(root, "s");
-	await mkdir(source);
-	git(source, "init", "-q");
-	await writeFile(join(source, "file.txt"), "before\n");
-	git(source, "add", "file.txt");
-	const commit = (cwd: string) =>
-		git(cwd, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture");
-	commit(source);
-	git(lane.path, "-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "sub");
-	git(lane.path, "config", "-f", ".gitmodules", "submodule.sub.ignore", "none");
-	git(lane.path, "add", ".gitmodules");
-	commit(lane.path);
+	const { ran } = await plantNested(lane.path, root);
 	const head = git(lane.path, "rev-parse", "HEAD");
-	await writeFile(join(lane.path, "sub", "file.txt"), "edited\n");
-
 	const review = () => nativeHandoff(record.id, { kind: "lane" }, {
 		chat: ROOT_CONVERSATION_ID,
 		lane: { name, path: lane.path, base: lane.base },
 		planning: { selection: null, review: null },
 		items: [],
 	});
-	expect(await review()).toMatchObject({ head, base: lane.base, cwd: lane.path });
-	await writeFile(join(lane.path, "README.md"), "changed in the lane\n");
-	await expect(review()).rejects.toThrow("1 uncommitted or untracked path");
-	git(lane.path, "restore", "README.md");
+	const refused = await review().catch((error: Error) => error.message);
+	await rm(join(lane.path, "loose"), { recursive: true });
+	const reviewed = await review().catch((error: Error) => error.message);
 
-	expect((await archive(record.id, true)).archived).toBe(true);
-	expect(await readFile(join(lane.path, "sub", "file.txt"), "utf8")).toBe("edited\n");
-
-	const cloudLane = join(record.project, ".lane", "trees", record.prefix, "cloud");
-	git(record.project, "worktree", "add", "-qb", `${record.prefix}/cloud`, cloudLane, head);
+	const cloud = join(record.project, ".lane", "trees", record.prefix, "cloud");
+	git(record.project, "worktree", "add", "-qb", `${record.prefix}/cloud`, cloud, lane.base);
 	git(record.project, "remote", "add", "origin", record.project);
-	git(cloudLane, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--", "sub");
-	await writeFile(join(cloudLane, "sub", "file.txt"), "edited\n");
-	expect(await unready(record)).toEqual([]);
-	await writeFile(join(cloudLane, "README.md"), "changed in the lane\n");
-	expect(await unready(record)).toMatchObject([
-		{ name: "cloud", problem: "uncommitted changes to README.md" },
-	]);
+	await mkdir(join(root, "cloud"));
+	const cloudPlant = await plantNested(cloud, join(root, "cloud"));
+	await rm(join(cloud, "loose"), { recursive: true });
+	const moving = await unready(record);
+	const archived = (await archive(record.id, true)).archived;
+
+	expect(await ran() + await cloudPlant.ran()).toBe("");
+	// The untracked nested repository counts once, as work only on disk; the submodule's own edits don't.
+	expect(refused).toContain("1 uncommitted or untracked path");
+	expect(reviewed).toMatchObject({ head, base: lane.base, cwd: lane.path });
+	expect(moving).toEqual([]);
+	expect(archived).toBe(true);
 });
 
 for (const reason of ["dirty", "locked", "changed registration"] as const) test(`archive honestly retains ${reason} lanes with a warning`, async () => {
