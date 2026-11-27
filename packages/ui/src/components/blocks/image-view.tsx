@@ -146,8 +146,8 @@ function ImageOpen(
 ) {
 	let [open, setOpen] = useState(false);
 	let [actual, setActual] = useState(false);
-	// Only inline and same-origin images can be read back without the source's CORS consent.
-	let readable = src.startsWith("data:") || new URL(src, location.href).origin === location.origin;
+	// Only inline and root-relative (same-origin) images can be read back without the source's CORS consent.
+	let readable = src.startsWith("data:") || (src.startsWith("/") && !src.startsWith("//"));
 	let show = () => {
 		setActual(false);
 		setOpen(true);
