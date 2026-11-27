@@ -895,6 +895,7 @@ describe("the mode table", () => {
       type: "stdio",
       command: "npx",
       args: ["--autoConnect", "--workspace=/work"],
+      env: { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" },
     } as const;
     const scoped = {
       ...policy,
@@ -925,13 +926,16 @@ describe("the mode table", () => {
             'mcp_servers.neuve_chrome_devtools.args=["--autoConnect","--workspace=/work"]',
           );
           expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.env.CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS="1"',
+          );
+          expect(fake.current().args).toContain(
             'mcp_servers.neuve_plain.args=["--identify"]',
           );
           expect(fake.current().args).toContain(
             'mcp_servers.neuve_chrome_devtools.default_tools_approval_mode="approve"',
           );
           expect(fake.current().args).not.toContain(
-            "mcp_servers.chrome_devtools.enabled=false",
+            "mcp_servers.own-server.enabled=false",
           );
           fake.send("turn/completed", completed("completed"));
           yield* read.next("turn.finished");
@@ -964,6 +968,7 @@ describe("the mode table", () => {
     ).toEqual([
       'mcp_servers.neuve_chrome_devtools_2.command="npx"',
       'mcp_servers.neuve_chrome_devtools_2.args=["--autoConnect","--workspace=/work"]',
+      'mcp_servers.neuve_chrome_devtools_2.env.CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS="1"',
       'mcp_servers.neuve_chrome_devtools_2.default_tools_approval_mode="approve"',
     ]);
   });
