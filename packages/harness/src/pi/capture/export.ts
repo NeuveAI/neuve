@@ -434,6 +434,7 @@ const parseContents = async (
   const sessions = run.sessions.map((s) => json(SessionDump, s.file));
   const unjoined = json(z.array(CallRecord), "calls/unjoined.json");
   if (!verified) {
+    const recipe = portable ? undefined : json(ProjectionRecipe, RECIPE_FILE);
     const journal = decodeDumpJournal(files, limits);
     if (journal._tag !== "Read") return reject("raw journal cannot be decoded");
     const declaredObjects =
@@ -455,7 +456,9 @@ const parseContents = async (
     if (
       !portable &&
       JSON.stringify(manifest.retainedPrefixCalls ?? []) !==
-        JSON.stringify(retainedPrefixProof(journal.lines))
+        JSON.stringify(
+          retainedPrefixProof(journal.lines, recipe?.captureLossCertificates),
+        )
     )
       reject(
         "restricted retained-prefix proof disagrees with original journal",
@@ -472,7 +475,7 @@ const parseContents = async (
       files,
       portable,
       snapshotId,
-      recipe: portable ? undefined : json(ProjectionRecipe, RECIPE_FILE),
+      recipe,
       tornLines,
     });
     validateProvenance(source, run, sessions, unjoined, journal.lines);

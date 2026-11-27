@@ -1,3 +1,4 @@
+import { captureAuthority } from "./fixture.ts";
 // Why: a restricted dump must reconstruct the same calls after reopening an inline journal,
 // and credential inspection must cover object bytes even when the journal holds only references.
 import { expect, test } from "bun:test";
@@ -100,9 +101,11 @@ const request = (
 test("mixed journals preserve calls and restricted dumps carry only the referenced objects", async () => {
   const root = mkdtempSync(join(tmpdir(), "capture-objects-"));
   try {
-    const mixed = join(root, "mixed");
-    const inline = join(root, "inline");
-    const nativeDatabase = join(root, "pi.sqlite");
+    const source = join(root, "channel");
+    mkdirSync(source);
+    const mixed = join(source, "mixed");
+    const inline = join(source, "inline");
+    const nativeDatabase = join(source, "pi.sqlite");
     const storage = await openNodeSqliteStorage(nativeDatabase);
     const harness = await Harness.open(
       storage,
@@ -259,9 +262,11 @@ test("mixed journals preserve calls and restricted dumps carry only the referenc
 
     const dataset = join(root, "datasets");
     mkdirSync(dataset);
+    using authority = captureAuthority(source);
     const restricted = await Promise.all(
       [inline, mixed].map((journal) =>
         exportWhileOpen({
+          credentialInspection: authority.inspection,
           runId,
           journal,
           nativeDatabase,

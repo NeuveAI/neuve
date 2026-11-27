@@ -394,6 +394,7 @@ export async function fixture(
     recovery?: import("../../src/chat-runtime/recovery.ts").TurnRecoveryDriver;
     headsDirectory?: string;
     statusModels?: readonly RuntimeModel[];
+    runtimes?: readonly RuntimeShape[];
     native?: ReturnType<typeof createModels>;
     toolName?: string;
     executionMode?: "parallel" | "sequential";
@@ -415,7 +416,7 @@ export async function fixture(
   const scope = Scope.makeUnsafe();
   const built = await Effect.runPromise(
     Layer.buildWithScope(
-      runtimeRegistryLayer([fake.shape]).pipe(
+      runtimeRegistryLayer([fake.shape, ...(options.runtimes ?? [])]).pipe(
         Layer.provide(
           Layer.succeed(AccountDirectory, inMemoryAccountDirectory(accounts)),
         ),

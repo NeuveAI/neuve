@@ -13,7 +13,6 @@ import {
   ClaudeRouteConfig,
   RouteConfig,
   type AnyRouteConfig,
-  computationRoute,
   credentialName,
   routeCredentialVariable,
   SubscriptionRouteRequiresRuntime,
@@ -79,24 +78,24 @@ test("Claude stages separate from API stages and reuse across subscription accou
     ...claude,
     account: { ...claude.account, name: "other" },
   });
+  const spec = (route: AnyRouteConfig) =>
+    agentStageSpec(
+      defaultConfig(undefined, route),
+      { stage: "verify", turnLimit: 15, agent: "dispose.b1.u1" },
+      {
+        op: "harness.dispose",
+        opVersion: 4,
+        inputs: { unit: "computation:u" },
+      },
+    );
   const key = (route: AnyRouteConfig) =>
-    Computations.computationKey({
-      ...agentStageSpec(
-        defaultConfig(),
-        { stage: "verify", turnLimit: 15, agent: "dispose.b1.u1" },
-        {
-          op: "harness.dispose",
-          opVersion: 4,
-          inputs: { unit: "computation:u" },
-        },
-      ),
-      route: computationRoute(route),
-    }).key;
-  expect(computationRoute(claude)).toEqual({
+    Computations.computationKey(spec(route)).key;
+  expect(spec(claude).route).toEqual({
     provider: "claude",
     model: OPUS_ROUTE.model,
     reasoning: "medium",
   });
+  expect(spec(claude).config).toMatchObject({ contextCeiling: 500_000 });
   expect(key(claude)).not.toBe(key(OPUS_ROUTE));
   expect(key(claude)).toBe(key(other));
   expect(credentialName(claude)).toBe(

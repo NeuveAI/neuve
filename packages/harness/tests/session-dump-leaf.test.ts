@@ -3,7 +3,7 @@
 // way they will: a coding session's journal filed straight to a folder, read back with the leaf's
 // Effect reader, then refiled in its portable form.
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
@@ -18,12 +18,16 @@ import {
   type CaptureJournal,
   type JournalOptions,
 } from "@neuve/harness/session-dump";
+import { captureAuthority } from "./pi/capture/fixture.ts";
 
-const directory = mkdtempSync(join(tmpdir(), "harness-session-dump-leaf-"));
+const directory = realpathSync(
+  mkdtempSync(join(tmpdir(), "harness-session-dump-leaf-")),
+);
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
 test("the public leaf files, reads and derives a session dump by its package name", async () => {
-  const journal = join(directory, "capture");
+  const source = join(directory, "channel");
+  const journal = join(source, "capture");
   const scope = { runId: "leaf-channel" };
   const options: JournalOptions = {};
   const capture: CaptureJournal = openCaptureJournal(
@@ -49,7 +53,9 @@ test("the public leaf files, reads and derives a session dump by its package nam
   const root = join(directory, "datasets");
   mkdirSync(root);
   const retention = { policy: "leaf fixture" };
+  using authority = captureAuthority(source);
   const filed = await exportSnapshot({
+    credentialInspection: authority.inspection,
     runId: scope.runId,
     journal,
     root,

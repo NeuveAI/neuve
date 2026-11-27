@@ -15,7 +15,15 @@ import {
   readCapturedDump,
 } from "../../../src/pi/capture/export.ts";
 import { openCaptureJournal } from "../../../src/pi/capture/journal.ts";
-import { MODEL, route, scanCaptures, runIn, usage, value } from "./fixture.ts";
+import {
+  captureAuthority,
+  MODEL,
+  route,
+  scanCaptures,
+  runIn,
+  usage,
+  value,
+} from "./fixture.ts";
 
 const directory = mkdtempSync(join(tmpdir(), "harness-native-pricing-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -77,9 +85,10 @@ const cases: ReadonlyArray<{
 for (const sample of cases) {
   test(`native metered pricing: ${sample.name}`, async () => {
     const runId = sample.name;
-    const journalPath = join(directory, runId, "journal");
+    const journalPath = join(directory, runId, "capture");
     const database = join(directory, runId, "pi.sqlite");
     const journal = openCaptureJournal(journalPath, runId);
+    using authority = captureAuthority(join(directory, runId));
     const scope = { runId };
     journal.capture({
       type: "run.start",
@@ -110,12 +119,13 @@ for (const sample of cases) {
     await harness.close(context);
     journal.close();
     const storage = await openNodeSqliteStorage(database);
-    const location = storeLocationIn(join(directory, runId, "records"));
+    const location = storeLocationIn(join(directory, `${runId}-records`));
     const run = runIn(location);
     try {
       const captured = value(
         await run(
           captureRunDump({
+            credentialInspection: authority.inspection,
             runId,
             journal: journalPath,
             native: { reads: storage, context },

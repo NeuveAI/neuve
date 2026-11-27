@@ -55,7 +55,7 @@ for (const encoding of ["utf-8", "utf-16le", "utf-16be"]) {
         journal.capture({
           type: "run.start",
           scope: { runId },
-          runKind: "coding",
+          runKind: "reading",
           sourceRevision: "synthetic",
           route: "local",
           pricing: "subscription",
@@ -168,7 +168,7 @@ for (const [label, mediaType, bytes] of [
       journal.capture({
         type: "run.start",
         scope: { runId },
-        runKind: "coding",
+        runKind: "reading",
         sourceRevision: "synthetic",
         route: "local",
         pricing: "subscription",
@@ -222,7 +222,7 @@ test("BOM-only text and WHATWG labels preserve representation, binary stays raw"
   journal.capture({
     type: "run.start",
     scope: { runId },
-    runKind: "coding",
+    runKind: "reading",
     sourceRevision: "synthetic",
     route: "local",
     pricing: "subscription",
@@ -289,7 +289,7 @@ test("a portable copy without the current policy refuses even with recomputed ex
   journal.capture({
     type: "run.start",
     scope: { runId },
-    runKind: "coding",
+    runKind: "reading",
     sourceRevision: "synthetic",
     route: "local",
     pricing: "subscription",

@@ -88,9 +88,8 @@ export const PAGE_BODY_BYTES =
  * `read_many`'s result cap (lookups.ts), the one tool the owner's ruling of 12 November lets past
  * 10.18's 3,000 tokens. A finder's reading turn brings 20–45 KB of results today across 4–16
  * calls; 20,000 UN9 tokens is about 45 KB, so one call carries the heaviest reading turn measured.
- * It stays small beside the context ceiling (`contextCeiling`: 500,000 tokens on the smallest
- * window a route here has, so 4%; a fifth even on a 200,000-token window), and the finders'
- * 200,000-character reading budget still bounds what all their calls bring together.
+ * It uses less than 9% of the 237,500-token Sol ceiling. The finders' 200,000-character
+ * reading budget still bounds what all their calls bring together.
  */
 export const READ_MANY_RESULT_TOKENS = 20_000;
 

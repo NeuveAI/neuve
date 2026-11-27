@@ -1,3 +1,4 @@
+import { captureAuthority } from "./fixture.ts";
 // Direct caption/recap calls never enter pi's transcript or model ledger. Exercise the public
 // route factory, actual HTTP streaming, native SQLite, immutable snapshots and parsed readers.
 import { afterAll, expect, test } from "bun:test";
@@ -59,10 +60,12 @@ const answer = (id: string, wait = 0) =>
 
 test("native turn plus concurrent captions and recaps are counted once across close and reopen", async () => {
   const runId = "coding-auxiliary";
-  const journalFolder = join(directory, "capture");
-  const database = join(directory, "pi.sqlite");
+  const source = join(directory, "channel");
+  const journalFolder = join(source, "capture");
+  const database = join(source, "pi.sqlite");
   const token = tokenCommand(directory, "synthetic-lease");
   let journal = openCaptureJournal(journalFolder, runId);
+  using authority = captureAuthority(source);
   journal.capture({
     type: "run.start",
     scope: { runId },
@@ -72,7 +75,7 @@ test("native turn plus concurrent captions and recaps are counted once across cl
     pricing: "subscription",
   });
   const options = {
-    credentialInspection: "ephemeral" as const,
+    credentialInspection: authority.inspection,
     route: SOL_ROUTE,
     runId,
     sessionAffinity: runId,
@@ -132,6 +135,7 @@ test("native turn plus concurrent captions and recaps are counted once across cl
     const storage = await openNodeSqliteStorage(database);
     try {
       return await exportSnapshot({
+        credentialInspection: authority.inspection,
         runId,
         journal: journalFolder,
         native: { reads: storage, context },
@@ -301,6 +305,7 @@ test("native turn plus concurrent captions and recaps are counted once across cl
   try {
     await expect(
       buildDump({
+        credentialInspection: authority.inspection,
         runId,
         journal: journalFolder,
         native: { reads: raw, context },
@@ -321,6 +326,7 @@ test("an unresolved signal-aborted recap refuses export and preserves its source
   const datasets = join(root, "datasets");
   mkdirSync(datasets);
   let journal = openCaptureJournal(journalFolder, runId);
+  using authority = captureAuthority(root);
   journal.capture({
     type: "run.start",
     scope: { runId },
@@ -331,7 +337,7 @@ test("an unresolved signal-aborted recap refuses export and preserves its source
   });
   const token = tokenCommand(root, "synthetic-lease");
   const options = {
-    credentialInspection: "ephemeral" as const,
+    credentialInspection: authority.inspection,
     route: SOL_ROUTE,
     runId,
     sessionAffinity: runId,
@@ -369,6 +375,7 @@ test("an unresolved signal-aborted recap refuses export and preserves its source
     const storage = await openNodeSqliteStorage(database);
     try {
       return await exportSnapshot({
+        credentialInspection: authority.inspection,
         runId,
         journal: journalFolder,
         native: { reads: storage, context },

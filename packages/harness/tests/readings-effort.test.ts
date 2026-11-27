@@ -41,25 +41,20 @@ import {
 } from "../src/route.ts";
 import { mixedRange, riskRange } from "./fixtures/readings.ts";
 
-/**
- * The keys of the parent commit (c81aa916, before this round) for the steps `stepsOf` builds over
- * the mixed range's first group: computed by running that commit's code, unchanged, on its own tree.
- * Round 6 (the caller and test rows) moved the reading recipe and both prompt versions on purpose,
- * so stored readings are read again once: Assess and Lane review no longer key as these, while the
- * claim check, shown no evidence, still does.
- */
+// The stage key now covers the context ceiling.
+// These pins key the parent commit's step inputs for the mixed range's first group.
 const PARENT_KEYS = {
   opus: {
-    assess: "e225123f36931a4e6042443ead284b328d61401a5d80e0c35f6c0d251bebf67e",
+    assess: "5371c8a75fea47eb0c4e1f59dded934ecf3d3ad4f7955e5dc36196c8196fae2c",
     laneReview:
-      "302f01b42de1afd7400f6d60959c2b89d4288ce5296dde693e9b180a85cbcfdb",
-    claim: "0dad40df50340eff34e6153785a14e4cae775cae492eba3f4e2c8e38feff207b",
+      "57e99b27ca024f88c7e909d1d805a109dbd6bd26a5d93c5bb1292d05a9293798",
+    claim: "cc62282c9cd2ff3e24d363b97f3264338db19b227b695a2a5ca14d41c709c120",
   },
   sol: {
-    assess: "0f2c976fcf7b78a87bfdd6124458eaa2647c2f6b332bb60da3d73b3fd92f25b4",
+    assess: "ffe4413a6fe07f1c9893f3a8f37e3dfd498722385745aad4e688f9a517dd42c3",
     laneReview:
-      "fae14871a79b9fb3afd87cdb410eb8d1d2db8a01d30559a51fd1faad2b2b89b1",
-    claim: "40ae898b1fb509fe5f063dd6c233b06abc369250f3daf020b3efdeddd1f8edc3",
+      "87db4370e504eb4078b92c1db7442eebac9510ffe995589583011723d4ca9a90",
+    claim: "dcb58168ba271b5423012eeca0f5339162074bce78d96a063c0371fe2f60a6d3",
   },
 };
 
@@ -257,7 +252,7 @@ const parentInputs = (inputs: Record<string, unknown>) => {
 // move was the stored form's version on Assess and Lane review; round 6 then moved their recipe and
 // prompt versions on purpose (the caller and test rows), and the claim check shown no evidence keeps
 // its key.
-test("with effort by risk off and no step-effort setting, the claim-check key is the parent commit's, and Assess and Lane review moved only as round 6 meant", () => {
+test("with default effort settings, the claim check reuses its key and the changed reading inputs move their keys", () => {
   for (const [name, route] of [
     ["opus", OPUS_ROUTE],
     ["sol", SOL_ROUTE],
@@ -289,8 +284,7 @@ test("with effort by risk off and no step-effort setting, the claim-check key is
       expect(step.inputs["stored"]).toBe(READING_STORED_VERSION);
       // Rounds 6, 7, 10 and the readers' rounds 9 and 13 moved the recipe and the prompt version, and
       // nothing else: with those two set back (and the stored form's version left out, as above),
-      // every other key input, the task text's hash included, is the parent's, so the key is the
-      // parent's.
+      // every other step input, the task text's hash included, is the parent's.
       expect(step.inputs["recipe"]).toBe("neuve-reading-v10");
       expect(
         keyOf(
@@ -312,7 +306,7 @@ test("with effort by risk off and no step-effort setting, the claim-check key is
     }
     expect("stored" in steps.claim.inputs).toBe(false);
     expect(keyOf(config, steps.claim, steps.claim.inputs)).toBe(parent.claim);
-    // With what each step is offered, none of the three keys is the parent's.
+    // What each step is offered moves all three keys from their pins.
     for (const kind of ["assess", "laneReview", "claim"] as const)
       expect(fullKeyOf(config, steps[kind], steps[kind].inputs)).not.toBe(
         parent[kind],
@@ -532,36 +526,34 @@ const keyTable = (before9 = false) => {
   return out;
 };
 
-/**
- * The parent commit's table (cba39f58, before this round), computed by running that commit's code,
- * unchanged, on its own tree: the sha256 of its JSON, and the keys this round moves on purpose.
- */
+// The parent commit's effort table with the current stage key, and the entries changed by the
+// medium default. The table pin is the sha256 of its JSON.
 const PARENT_TABLE =
-  "7734d621005196d8dc300500cbb406fcf023b1843f5f7776829317599e30f186";
+  "8b8fb9ba8880e1c923595277975050832a6f69f480a8f207596d168ca83cda91";
 const PARENT_MOVED = {
   "opus.high.none.plain": {
-    assess: "a3895885f5787c453b30ee8a133d72e62284ee06df269215ec25d6ab8d4d23ff",
+    assess: "fe53e827ba34b761a63ed2ddefadb21709359ad5b8dac2f30c620187e804a8fc",
     laneReview:
-      "f164b151ead3dd8a8f8e24e5022a5d1c418eddbf93dd2bc68f389afec1830bc4",
+      "04e54a4ed18728f7aa5070e70536e07115e7798757647f19ed1b4a990d0d8646",
   },
   "opus.high.assess.plain": {
     laneReview:
-      "f164b151ead3dd8a8f8e24e5022a5d1c418eddbf93dd2bc68f389afec1830bc4",
+      "04e54a4ed18728f7aa5070e70536e07115e7798757647f19ed1b4a990d0d8646",
   },
   "sol.high.none.plain": {
-    assess: "e5616246c74d7d712e9b36248e591125a52946ef3681a85f6ea1a20291d58551",
+    assess: "6f643b3956107f369976be24cbfb7bbb935656bad632702e2a55aba3849a2243",
     laneReview:
-      "e86c45fe20c8dee3909f885a1a1a33bc7aa4def872f52924d0f41d4c469b0e5f",
+      "ef486b2814b471e19f11d5e88c5eec1d2f6ead759efb04748ba24ae4eba8d4c8",
   },
   "sol.high.assess.plain": {
     laneReview:
-      "e86c45fe20c8dee3909f885a1a1a33bc7aa4def872f52924d0f41d4c469b0e5f",
+      "ef486b2814b471e19f11d5e88c5eec1d2f6ead759efb04748ba24ae4eba8d4c8",
   },
 } as const;
 
 // Reason: stored answers at high must not be served for a medium reading, or the reverse; and only
 // the readings whose effort moved may key apart.
-test("on a high route with nothing set, Assess and Lane review key apart from the parent commit's and as medium readings; every other key, the claim check's and effort by risk's included, is the parent's", () => {
+test("on a high route, the medium default moves only the keys of readings whose effort changes", () => {
   // The parent predates the readers' round 9, which moved every Assess and Lane review key on
   // purpose (each row says what its line shows) and no claim check's: the comparisons with the
   // parent below are made with that round's moves set back.
@@ -586,7 +578,7 @@ test("on a high route with nothing set, Assess and Lane review key apart from th
   expect(table["opus.high.assess.plain"]!.assess).toBe(
     PARENT_MOVED["opus.high.none.plain"].assess,
   );
-  // With the moved keys set back, the whole table is the parent's.
+  // Restoring the moved entries recovers the pinned table.
   const restored = Object.fromEntries(
     Object.entries(table).map(([at, keys]) => [
       at,

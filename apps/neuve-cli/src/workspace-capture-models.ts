@@ -17,6 +17,7 @@ export function workspaceCaptureModels(
 ): Models {
   const captured = captureNativeModels(native, {
     capture: options.capture,
+    retry: options.retry,
     credentialInspection: options.credentialInspection,
     runId: options.runId,
     ...(options.agent === undefined ? {} : { agent: options.agent }),

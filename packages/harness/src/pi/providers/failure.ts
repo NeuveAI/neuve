@@ -1,8 +1,13 @@
 import type { Context } from "@earendil-works/chord";
 import type {
+  Api,
   AssistantMessage,
   AssistantMessageDiagnostic,
+  Message,
+  Model,
 } from "@earendil-works/pi-ai";
+import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
+import { DEFAULT_COMPACTION_POLICY } from "@earendil-works/pi-durable";
 import type {
   Conversation,
   Cursor,
@@ -12,7 +17,40 @@ import type {
   TaskId,
 } from "@earendil-works/pi-durable";
 import { NOT_RETRYABLE_CODES, USAGE_LIMIT } from "./wire.ts";
+import {
+  RESERVE_FULL_REASON,
+  RESERVE_UNWRITABLE_REASON,
+} from "../capture/credential-loss-reserve.ts";
 import { CaptureFailed } from "../capture/types.ts";
+
+/** An early EOF on a serving request is an overflow only near the selected model's limit. */
+export function streamEndedNearContextLimit(
+  model: Model<Api>,
+  messages: readonly Message[],
+  detail: string,
+): boolean {
+  if (
+    !/\bstream ended (?:before|without) (?:an? )?(?:terminal(?: response)? event|(?:stop|finish) reason|message_stop)\b/i.test(
+      detail,
+    )
+  )
+    return false;
+  // Pi's transcript estimator drops usage that predates a prepended compaction summary.
+  const { lastUsageIndex, usageTokens } = estimateContextTokens(messages);
+  const last = lastUsageIndex === null ? undefined : messages[lastUsageIndex];
+  if (
+    last?.role !== "assistant" ||
+    last.provider !== model.provider ||
+    last.model !== model.id ||
+    (last.stopReason !== "stop" &&
+      last.stopReason !== "toolUse" &&
+      last.stopReason !== "length")
+  )
+    return false;
+  const threshold =
+    model.contextWindow - DEFAULT_COMPACTION_POLICY.reserveTokens;
+  return threshold > 0 && usageTokens >= threshold;
+}
 
 /**
  * Why a route call failed, as the route provider records it on the failed `AssistantMessage` it
@@ -29,7 +67,7 @@ import { CaptureFailed } from "../capture/types.ts";
  * - `stream`: the stream failed or ended without its terminal event; `stalled`: it went silent.
  * - `sign_in`: the Neuve sign-in could not give a token, before anything was sent.
  * - `binding`: the agent route binding was missing or named another route; nothing was sent.
- * - `capture`: an event could not be recorded, so the call is not answered.
+ * - `capture`: credential protection or capture validation stopped the call.
  * - `aborted`: the caller cancelled.
  */
 export type RouteFailureKind =
@@ -64,13 +102,23 @@ export interface RouteFailure {
 /** The `diagnostics` type the route's failure is recorded under. */
 export const ROUTE_FAILURE = "neuve.route_failure";
 export const CAPTURE_FULL = "capture_full";
+const CREDENTIAL_LOSS_RESERVE_FULL = "credential_loss_reserve_full";
+const CREDENTIAL_LOSS_RESERVE_UNWRITABLE = "credential_loss_reserve_unwritable";
 
 export const captureRouteFailure = (detail: string, cause: unknown) => ({
   kind: "capture" as const,
   detail,
-  ...(cause instanceof CaptureFailed && cause.kind === "full"
-    ? { code: CAPTURE_FULL }
-    : {}),
+  ...(cause instanceof CaptureFailed &&
+  cause.event === "credential.registration.reserve"
+    ? {
+        code:
+          cause.kind === "full"
+            ? CREDENTIAL_LOSS_RESERVE_FULL
+            : CREDENTIAL_LOSS_RESERVE_UNWRITABLE,
+      }
+    : cause instanceof CaptureFailed && cause.kind === "full"
+      ? { code: CAPTURE_FULL }
+      : {}),
 });
 
 const KINDS: ReadonlySet<string> = new Set<RouteFailureKind>([
@@ -184,11 +232,16 @@ export const schedulerText = (
     (status < 200 || status >= 300) &&
     (RETRIED_STATUS.has(kind) || (status < 500 && status !== 429));
   const phrase =
-    kind === "capture" && failure.code === CAPTURE_FULL
-      ? "the capture journal is full"
-      : kind === "sign_in" && transient
-        ? "the route's credential is unavailable for now (network error)"
-        : SCHEDULED[kind];
+    kind === "capture" && failure.code === CREDENTIAL_LOSS_RESERVE_FULL
+      ? RESERVE_FULL_REASON
+      : kind === "capture" &&
+          failure.code === CREDENTIAL_LOSS_RESERVE_UNWRITABLE
+        ? RESERVE_UNWRITABLE_REASON
+        : kind === "capture" && failure.code === CAPTURE_FULL
+          ? "capture protection could not record required evidence"
+          : kind === "sign_in" && transient
+            ? "the route's credential is unavailable for now (network error)"
+            : SCHEDULED[kind];
   return `${label}${named ? ` (HTTP ${status})` : ""}: ${phrase}`;
 };
 

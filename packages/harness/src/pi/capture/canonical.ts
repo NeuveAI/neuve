@@ -44,7 +44,7 @@ import {
   type Turn,
   type Totals,
 } from "./dump.ts";
-import { sha256Of } from "./journal.ts";
+import { LOST_WRITE_PREFIX, sha256Of } from "./journal.ts";
 import {
   maskArtifact,
   restrictCall,
@@ -214,14 +214,24 @@ const sessionsOf = (lines: ReadonlyArray<JournalLine>) => {
     opened: number;
     closed: boolean;
     failures: Array<string>;
+    lostWrites: Array<string>;
   }> = [];
   for (const { seq, event } of lines) {
     if (event.type === "journal.open")
-      sessions.push({ opened: seq, closed: false, failures: [] });
+      sessions.push({
+        opened: seq,
+        closed: false,
+        failures: [],
+        lostWrites: [],
+      });
     const current = sessions.at(-1);
     if (current === undefined) continue;
     if (event.type === "journal.close") current.closed = true;
-    if (event.type === "journal.failed") current.failures.push(event.reason);
+    if (event.type === "journal.failed") {
+      if (event.reason.startsWith(LOST_WRITE_PREFIX))
+        current.lostWrites.push(event.reason.slice(LOST_WRITE_PREFIX.length));
+      else current.failures.push(event.reason);
+    }
   }
   return sessions;
 };
@@ -311,6 +321,13 @@ export const deriveCapture = async (
     recipe.sourceValidationVersion !== undefined,
     validateScope,
   );
+  for (const loss of recipe.captureLosses ?? [])
+    if (
+      loss.event !== "journal.open" &&
+      loss.credentialCoverage === "required" &&
+      calls.get(loss.callId)?.end === null
+    )
+      calls.delete(loss.callId);
   for (const call of calls.values()) {
     if (call.purpose === undefined) continue;
     if (review)
@@ -1016,8 +1033,23 @@ export const deriveCapture = async (
   }
 
   const journalSessions = sessionsOf(lines);
-  const failures = journalSessions.flatMap((s) => s.failures);
+  const failures = [
+    ...journalSessions.flatMap((s) => s.failures),
+    ...(recipe.captureLosses ?? []).map((loss) => {
+      const { event, kind, reason, at } = loss;
+      const owner =
+        event === "journal.open"
+          ? `session ${loss.sessionId}`
+          : `call ${loss.callId}`;
+      const overflow =
+        loss.ordinaryOverflow === undefined
+          ? ""
+          : " The loss record could not hold this loss and may be missing further ordinary losses.";
+      return `${owner} lost capture at ${event} (${kind}, ${reason}, ${at}). The rest of its capture was skipped.${overflow}`;
+    }),
+  ];
   const interrupted = journalSessions.filter((s) => !s.closed);
+  const lostWrites = interrupted.flatMap((session) => session.lostWrites);
   const differing = starts.filter(
     (other) => JSON.stringify(other) !== JSON.stringify(start),
   ).length;
@@ -1092,7 +1124,10 @@ export const deriveCapture = async (
     [
       "journal-interrupted",
       interrupted.length,
-      `capture sessions opened at line ${ids(interrupted.map((s) => s.opened))} ended without a clean close (a crash, a failed capture, or a capture taken while one was open), so events may be missing`,
+      `capture sessions opened at line ${ids(interrupted.map((s) => s.opened))} ended without a clean close (a crash, a failed capture, or a capture taken while one was open), so events may be missing` +
+        (lostWrites.length === 0
+          ? ""
+          : `. Lost writes: ${maskText(lostWrites.join(", "), declared)}.`),
     ],
     [
       "run-start-missing",
@@ -1226,7 +1261,7 @@ export const deriveCapture = async (
     restrictRun(
       {
         runId,
-        runKind: start?.runKind ?? null,
+        runKind: start?.runKind ?? recipe.captureLossRunKind ?? null,
         sourceRevision: start?.sourceRevision ?? null,
         ...(start?.harnessRevision === undefined
           ? {}

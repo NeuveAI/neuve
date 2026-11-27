@@ -157,6 +157,9 @@ export const claudeRoute = (
     provider: "claude",
     account: { name: account.name, kind: account.kind },
     model: OPUS_ROUTE.model,
+    // Claude Code defaults to extended context and uses the model's output cap.
+    // https://code.claude.com/docs/en/model-config#extended-context
+    // https://code.claude.com/docs/en/env-vars
     window: OPUS_ROUTE.window,
     maxOutputTokens: OPUS_ROUTE.maxOutputTokens,
     effort: reviewEffort(settings) ?? OPUS_ROUTE.effort,

@@ -15,6 +15,7 @@ import {
 import { isDeepStrictEqual } from "node:util";
 import {
   credentialGuards,
+  credentialLossEpochs,
   credentialRefusal,
   credentialSources,
   credentialAdministrationHash,
@@ -529,6 +530,9 @@ export const validateProjection = async (input: {
         maskVersion: 1 as const,
         sourceValidationVersion: 6 as const,
         tornLines: input.tornLines,
+        ...(run.sourceRevision === null && run.runKind !== null
+          ? { captureLossRunKind: run.runKind }
+          : {}),
         declared: [],
         close: run.close,
         rate: run.rate,
@@ -537,9 +541,37 @@ export const validateProjection = async (input: {
   const journal = portable
     ? portableFacts(run, sessions, unjoined)
     : input.journal;
+  const loss =
+    !portable &&
+    (run.journal.status === "captured" || run.backup.status === "captured")
+      ? {
+          epochs: credentialLossEpochs(
+            recipe.captureLosses ?? [],
+            new Map(
+              journal.flatMap(({ event }) =>
+                event.type === "credential.registration"
+                  ? [[event.callId, event.epochId] as const]
+                  : [],
+              ),
+            ),
+          ),
+          ...(recipe.captureLossCertificates === undefined
+            ? {}
+            : { certificates: recipe.captureLossCertificates }),
+        }
+      : undefined;
+  if (
+    recipe.captureLossCertificates !== undefined &&
+    (!loss?.epochs.size ||
+      recipe.captureLossCertificates.some(
+        ({ scope }) => scope.runId !== run.runId,
+      ))
+  )
+    reject("capture loss certificates disagree with their source");
   const coverage = credentialGuards(
     journal,
     portable ? { portableRetainedPrefixes } : "certificates-only",
+    loss,
   );
   if (coverage.refusal !== null) reject(coverage.refusal);
   const artifacts = portable
@@ -590,11 +622,16 @@ export const validateProjection = async (input: {
     const administrationHash =
       frames === undefined
         ? undefined
-        : credentialAdministrationHash(journal, frames);
+        : credentialAdministrationHash(
+            journal,
+            frames,
+            loss?.epochs.size ? recipe.captureLosses : undefined,
+          );
     const unsafe = credentialRefusal(
       journal,
       [...sources.keys()],
       administrationHash,
+      loss,
     );
     if (unsafe !== null) reject(unsafe);
   }

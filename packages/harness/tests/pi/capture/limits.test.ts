@@ -129,7 +129,9 @@ test("a journal is refused once it would outgrow the dump, at capture, at reopen
   ).toEqual([
     "full",
     expect.stringMatching(
-      new RegExp(`^${JOURNAL_FILE} is \\d+ bytes, over the 400-byte limit$`),
+      new RegExp(
+        `^could not open the capture journal: ${JOURNAL_FILE} is \\d+ bytes, over the 400-byte limit$`,
+      ),
     ),
   ]);
   expect(

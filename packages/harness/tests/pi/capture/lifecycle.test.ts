@@ -61,6 +61,7 @@ import {
   type OpenNativeStorage,
 } from "../../../src/run-folder.ts";
 import {
+  captureAuthority,
   ENCRYPTED,
   Lab,
   MODEL,
@@ -285,7 +286,9 @@ test("a coding session with pi's CodingTools and a child is dumped straight to a
   await harness.close(context);
 
   const storage = await openNodeSqliteStorage(database);
+  using authority = captureAuthority(folder);
   const exported = await exportSnapshot({
+    credentialInspection: authority.inspection,
     runId: RUN,
     journal: journalFolder,
     native: { reads: storage, context },
@@ -337,6 +340,7 @@ test("a coding session with pi's CodingTools and a child is dumped straight to a
   expect(dump.artifacts.get(artifact!.file!)).toEqual(full);
 
   const again = await exportSnapshot({
+    credentialInspection: authority.inspection,
     runId: RUN,
     journal: journalFolder,
     native: {

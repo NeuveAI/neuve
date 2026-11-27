@@ -1,3 +1,4 @@
+import { captureAuthority } from "./fixture.ts";
 import * as CaptureRecords from "../../../src/pi/capture/records.ts";
 // These fixtures cross the native, folder and Records boundaries because per-file schemas and
 // checksum checks alone cannot prove portable withholding, provenance or bounded reads.
@@ -74,7 +75,8 @@ const schema = Type.Object({
 beforeAll(async () => {
   mkdirSync(root);
   const scope = { runId: "BOUNDARIES" };
-  const at = join(directory, "journal");
+  const channel = join(directory, "channel");
+  const at = join(channel, "capture");
   const journal = openCaptureJournal(at, scope.runId);
   journal.capture({
     type: "run.start",
@@ -104,7 +106,7 @@ beforeAll(async () => {
   });
   const registry = createRegistry();
   registry.install(Extension);
-  const database = join(directory, "pi.sqlite");
+  const database = join(channel, "pi.sqlite");
   const harness = await Harness.open(
     await openNodeSqliteStorage(database),
     { registry, models: routed.models },
@@ -146,8 +148,10 @@ beforeAll(async () => {
   await harness.close(BACKGROUND_CONTEXT);
   journal.close();
   const storage = await openNodeSqliteStorage(database);
+  using authority = captureAuthority(channel);
   try {
     const exported = await exportSnapshot({
+      credentialInspection: authority.inspection,
       runId: scope.runId,
       journal: at,
       native: { reads: storage, context: BACKGROUND_CONTEXT },
