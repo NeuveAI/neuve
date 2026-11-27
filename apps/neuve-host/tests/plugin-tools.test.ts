@@ -36,6 +36,7 @@ test("Chrome DevTools resolves both host folders without a credential and alone 
 					join(config.home, "browser"), `--workspace=${folder}`,
 					"--experimentalScreencast", "--no-usage-statistics", "--no-performance-crux",
 				],
+				env: { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" },
 			},
 			plain: { type: "stdio", command: "plain-server", args: ["--identify"] },
 		});
@@ -138,8 +139,14 @@ let pending;
 const workspace = process.argv.find(arg => arg.startsWith("--workspace="));
 const screenshot = (id, { oversized }) => {
 	const data = oversized ? Buffer.alloc(900_001).toString("base64") : "aA==";
+	const scope = {
+		roots,
+		workspace,
+		noUpdateChecks: process.env.CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS,
+		hasPath: Boolean(process.env.PATH),
+	};
 	send({ id, result: { content: [
-		{ type: "image", mimeType: "image/png", data }, { type: "text", text: JSON.stringify({ roots, workspace }) },
+		{ type: "image", mimeType: "image/png", data }, { type: "text", text: JSON.stringify(scope) },
 	] } });
 };
 for await (const line of createInterface({ input: process.stdin })) {
@@ -169,11 +176,18 @@ const workspaceArg = devtoolsServer?.type === "stdio" && devtoolsServer.args?.fi
 if (!workspaceArg) throw new Error("Missing the DevTools workspace argument");
 const screenshotPlugin = PluginManifest.parse({
 	manifest: { name: "chrome-devtools", description: "Fixture", defaultEnabled: true },
-	mcp: { "chrome-devtools": { command: process.execPath, args: ["--no-env-file", "--eval", screenshotServer, "--", workspaceArg] } },
+	mcp: {
+		"chrome-devtools": {
+			...devtoolsServer,
+			command: process.execPath,
+			args: ["--no-env-file", "--eval", screenshotServer, "--", workspaceArg],
+		},
+	},
 });
 
 const screenshotText = (folder: string) => JSON.stringify({
 	roots: [{ uri: pathToFileURL(folder).href }], workspace: `--workspace=${folder}`,
+	noUpdateChecks: "1", hasPath: true,
 });
 async function screenshotTurn(channel: Fixture, mode: "ace" | "plan", attended: boolean, args?: { oversized?: boolean }) {
 	const tool = "chrome-devtools_take_screenshot";

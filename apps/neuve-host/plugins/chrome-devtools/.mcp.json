@@ -7,7 +7,8 @@
 				"-y", "chrome-devtools-mcp@1.14.0",
 				"--autoConnect", "--userDataDir", "${ACE_BROWSER_PROFILE}", "--workspace=${ACE_CHAT_FOLDER}",
 				"--experimentalScreencast", "--no-usage-statistics", "--no-performance-crux"
-			]
+			],
+			"env": { "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS": "1" }
 		}
 	}
 }
