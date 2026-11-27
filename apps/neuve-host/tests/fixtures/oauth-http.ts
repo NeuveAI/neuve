@@ -18,7 +18,7 @@ if (inProcess) {
 }
 
 export function serveOAuthFixture(fetch: Handler) {
-	if (!inProcess) return Bun.serve({ port: 0, hostname: "127.0.0.1", fetch });
+	if (!inProcess) return Bun.serve({ port: 0, hostname: "127.0.0.1", idleTimeout: 0, fetch });
 	const url = new URL(`http://127.0.0.1:${++port}`);
 	routes.set(url.origin, fetch);
 	return { url, port, stop: () => { routes.delete(url.origin); } };

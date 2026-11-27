@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { Options, Log } from "@ace/channel";
 import { Type } from "@earendil-works/pi-ai";
@@ -14,6 +15,7 @@ import { oauthAccessToken, pluginOAuthTransport } from "./plugin-oauth-client";
 import { pluginPreferences } from "./preferences";
 
 const CONNECT = { timeout: 20_000 };
+const STARTUP_TIMEOUT = 10_000;
 const TOOL_NAME_LIMIT = 64 - "mcp__neuve__".length;
 const request = globalThis.fetch;
 
@@ -48,6 +50,9 @@ type Connection = {
 	httpTools: string[];
 	lost: boolean;
 };
+
+type Startup = PromiseWithResolvers<void> & { claimed: boolean };
+type EnabledPlugin = { startup?: Startup };
 
 type PluginRegistry = Parameters<NonNullable<Options["plugins"]>["refresh"]>[0];
 
@@ -142,6 +147,7 @@ export function pluginTools(
 	readPreferences = pluginPreferences, lookup = key,
 ): NonNullable<Options["plugins"]> {
 	const active = new Map<Plugin, Connection>();
+	const enabledPlugins = new Map<Plugin, EnabledPlugin>();
 	const opened = new Map<Client, { plugin: string; closing?: Promise<void> }>();
 	const lifetime = new AbortController();
 	const work = new SharedWork<void>();
@@ -166,6 +172,24 @@ export function pluginTools(
 		}
 	}
 
+	function settleStartup(state: EnabledPlugin | undefined) {
+		state?.startup?.resolve();
+		if (state) delete state.startup;
+	}
+
+	function observePreferences() {
+		const enabled = preferences();
+		for (const plugin of plugins) {
+			const state = enabledPlugins.get(plugin);
+			if (enabled[plugin.name] === true) {
+				if (!state) enabledPlugins.set(plugin, { startup: { ...Promise.withResolvers<void>(), claimed: false } });
+			} else if (state) {
+				settleStartup(state);
+				enabledPlugins.delete(plugin);
+			}
+		}
+	}
+
 	return {
 		hidden() {
 			const enabled = preferences();
@@ -181,18 +205,52 @@ export function pluginTools(
 		async refresh(registry) {
 			if (lifetime.signal.aborted) return;
 			await work.run({ scope: "plugins", key: "refresh", run: async () => {
-				let enabled = preferences();
+				observePreferences();
 				for (;;) {
-					await reconcile(enabled, registry);
-					const next = preferences();
-					if (lifetime.signal.aborted || plugins.every(({ name }) => next[name] === enabled[name])) break;
-					enabled = next;
+					const enabled = new Map(enabledPlugins);
+					for (const plugin of plugins) {
+						if (lifetime.signal.aborted) break;
+						await reconcile(plugin, enabled.get(plugin), registry);
+					}
+					if (lifetime.signal.aborted) break;
+					observePreferences();
+					if (plugins.every(plugin => enabledPlugins.get(plugin) === enabled.get(plugin))) break;
 				}
 				return { kind: "succeeded", value: undefined };
 			} });
 		},
+		async waitForStartup(signal) {
+			if (signal.aborted) return;
+			observePreferences();
+			const pending = new Map<Plugin, Startup>();
+			for (const [plugin, { startup }] of enabledPlugins) {
+				if (!startup || startup.claimed) continue;
+				startup.claimed = true;
+				pending.set(plugin, startup);
+			}
+			if (pending.size === 0) return;
+			const timer = new AbortController();
+			try {
+				const timedOut = await Promise.race([
+					Promise.all([...pending.values()].map(startup => startup.promise)).then(() => false),
+					delay(STARTUP_TIMEOUT, true, { signal: AbortSignal.any([signal, timer.signal]) }),
+				]);
+				if (timedOut) {
+					for (const [plugin, startup] of pending) {
+						if (enabledPlugins.get(plugin)?.startup === startup)
+							log("warn", "plugin.startup.timeout", { plugin: plugin.name, ms: STARTUP_TIMEOUT });
+					}
+				}
+			} catch (error) {
+				if (!signal.aborted) throw error;
+			} finally {
+				timer.abort();
+			}
+		},
 		async close() {
 			lifetime.abort();
+			for (const state of enabledPlugins.values()) settleStartup(state);
+			enabledPlugins.clear();
 			active.clear();
 			await close([...opened.keys()]);
 		},
@@ -205,13 +263,12 @@ export function pluginTools(
 		return close(connection.clients);
 	}
 
-	async function reconcile(enabled: Record<string, boolean>, registry: PluginRegistry) {
-		for (const plugin of plugins) {
-			if (lifetime.signal.aborted) return;
+	async function reconcile(plugin: Plugin, state: EnabledPlugin | undefined, registry: PluginRegistry) {
+		try {
 			const name = extensionName(plugin);
 			const credentials = new Map<string, string>();
 			const signedIn = new Set<string>();
-			let ready = enabled[plugin.name] === true;
+			let ready = state !== undefined;
 			if (ready) {
 				for (const variable of plugin.variables) {
 					const value = await lookup(variable).catch(() => undefined);
@@ -250,21 +307,28 @@ export function pluginTools(
 			if (current) {
 				if (ready && credentials.size === current.credentials.size && signedIn.size === current.signedIn.size
 					&& [...signedIn].every(name => current.signedIn.has(name))
-					&& [...credentials].every(([key, value]) => current.credentials.get(key) === value)) continue;
+					&& [...credentials].every(([key, value]) => current.credentials.get(key) === value)) return;
 				await retire(plugin, current, registry);
 			}
-			if (!ready) continue;
+			if (!ready) return;
 			const names = new Set(registry.snapshot().tools().map(({ tool }) => tool.name));
 			const connected = await connect(plugin, credentials, signedIn, names, log, lifetime.signal, opened, close,
-				connection => { void retire(plugin, connection, registry); });
-			if (!connected) continue;
+				connection => {
+					if (active.get(plugin) !== connection) return;
+					const enabled = enabledPlugins.get(plugin);
+					if (enabled) enabled.startup = { ...Promise.withResolvers<void>(), claimed: false };
+					void retire(plugin, connection, registry);
+				});
+			if (!connected) return;
 			if (lifetime.signal.aborted) return;
 			if (connected.connection.lost || preferences()[plugin.name] !== true) {
 				await close(connected.connection.clients);
-				continue;
+				return;
 			}
 			active.set(plugin, connected.connection);
 			registry.install({ name, tools: connected.tools });
+		} finally {
+			settleStartup(state);
 		}
 	}
 }

@@ -186,6 +186,7 @@ export type Options = {
 		ownsTool(name: string): boolean;
 		httpTools(): ReadonlySet<string>;
 		refresh(registry: Pick<Registry, "snapshot" | "install" | "uninstall">): Promise<void>;
+		waitForStartup(signal: AbortSignal): Promise<void>;
 		close(): Promise<void>;
 	};
 	desktop?: Desktop;
@@ -241,7 +242,7 @@ export class Channel {
 	#options: Options;
 	#harness: Harness;
 	#log: Log;
-	#refreshPlugins?: () => void;
+	#refreshPlugins?: (signal?: AbortSignal) => Promise<void> | undefined;
 	#metadata: Metadata;
 	#plans: Plans;
 	#builds: Builds;
@@ -375,11 +376,12 @@ export class Channel {
 			},
 		};
 		let pluginRefresh: Promise<void> | undefined;
-		const refreshPlugins = plugins && (() => {
+		const refreshPlugins = plugins && ((signal?: AbortSignal) => {
 			unpublishedPlugins.clear();
 			pluginRefresh ??= plugins.refresh(pluginRegistry)
 				.catch(() => log("warn", "plugin.refresh.unavailable"))
 				.finally(() => { pluginRefresh = undefined; });
+			if (signal) return plugins.waitForStartup(signal).then(() => { unpublishedPlugins.clear(); });
 		});
 		const visible = execute || plugins
 			? capabilities(registry, () => [
@@ -1329,7 +1331,7 @@ export class Channel {
 		const previous = this.#admissions.get(chat) || Promise.resolve();
 		// Selection and submission must stay together across concurrent clients.
 		const pending: Promise<T> = previous.catch(() => {}).then(async () => {
-			this.#refreshPlugins?.();
+			if (this.#refreshPlugins) await this.#refreshPlugins(this.#closing.signal);
 			return admit(pending);
 		});
 		this.#admissions.set(chat, pending);

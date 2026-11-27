@@ -148,22 +148,30 @@ test("a running channel discovers, dispatches, and hides a plugin at the next re
 		expect((await ask("ace", "drop transport")).result).toEqual([
 			{ type: "text", text: "The plugin tool call failed." },
 		]);
-		expect((await ask()).offered).toEqual([]);
-		await refreshed;
 		expect((await ask("ace", "after reconnect")).result).toEqual([
 			{ type: "text", text: "authorized:write.issue:after reconnect" },
 		]);
 		expect((await ask("plan")).offered).toEqual([]);
 		enabled = false;
 		expect((await ask()).offered).toEqual([]);
+		await refreshed;
+		enabled = true;
+		expect((await ask("ace", "after enabling")).result).toEqual([
+			{ type: "text", text: "authorized:write.issue:after enabling" },
+		]);
 	} finally {
 		await channel.close();
 	}
 });
 
-// Keep initialize unanswered through channel open and two admissions, then let the same request finish.
-test("an unanswered MCP connection does not delay channel open or messages", async () => {
+// An MCP handshake can overlap the first message. Its tools should reach that turn if it answers,
+// and a stalled handshake must only delay one admission while the same connection continues.
+test.each([
+	{ outcome: "offers tools on the first message", answers: true },
+	{ outcome: "times out once and offers tools after connecting", answers: false },
+])("a pending MCP connection $outcome", async ({ answers }) => {
 	const initialize = Promise.withResolvers<void>();
+	const started = Promise.withResolvers<void>();
 	const connected = Promise.withResolvers<void>();
 	let initializations = 0;
 	const endpoint = serveOAuthFixture(async request => {
@@ -172,6 +180,7 @@ test("an unanswered MCP connection does not delay channel open or messages", asy
 		if (id === undefined) return new Response(null, { status: 202 });
 		if (method === "initialize") {
 			initializations++;
+			started.resolve();
 			await initialize.promise;
 			return Response.json({ jsonrpc: "2.0", id, result: {
 				protocolVersion: params.protocolVersion, capabilities: { tools: {} },
@@ -186,7 +195,8 @@ test("an unanswered MCP connection does not delay channel open or messages", asy
 		manifest: { name: "pending", description: "Holds initialization" },
 		mcp: { pending: { type: "http", url: endpoint.url.href, headers: { Authorization: "Bearer fixture" } } },
 	});
-	const plugins = pluginTools(() => {}, [plugin], () => ({ pending: true }));
+	const log: Array<{ event: string; fields?: Fields }> = [];
+	const plugins = pluginTools((_level, event, fields) => log.push({ event, fields }), [plugin], () => ({ pending: true }));
 	const refresh = plugins.refresh;
 	plugins.refresh = registry => refresh(registry).then(() => { connected.resolve(); });
 	const model = { provider: "faux", modelId: "agent" };
@@ -216,19 +226,35 @@ test("an unanswered MCP connection does not delay channel open or messages", asy
 			expect(await opened.handle({ op: "wait", submission: response.submission }, () => {})).toBe("done");
 			return offer.promise;
 		}
-		expect(await ask()).toEqual([]);
-		expect(await ask()).toEqual([]);
 		expect(performance.now() - before).toBeLessThan(2000);
-		initialize.resolve();
-		await connected.promise;
-		expect(await ask()).toEqual(["pending_answer"]);
+		await started.promise;
+		const firstAt = performance.now();
+		const first = ask();
+		if (answers) {
+			await Bun.sleep(100);
+			initialize.resolve();
+			expect(await first).toEqual(["pending_answer"]);
+		} else {
+			expect(await first).toEqual([]);
+			expect(performance.now() - firstAt).toBeGreaterThanOrEqual(9_950);
+			expect(performance.now() - firstAt).toBeLessThan(11_000);
+			const secondAt = performance.now();
+			expect(await ask()).toEqual([]);
+			expect(performance.now() - secondAt).toBeLessThan(1000);
+			initialize.resolve();
+			await connected.promise;
+			expect(await ask()).toEqual(["pending_answer"]);
+		}
+		expect(log.filter(item => item.event === "plugin.startup.timeout")).toEqual(answers ? [] : [
+			{ event: "plugin.startup.timeout", fields: { plugin: "pending", ms: 10_000 } },
+		]);
 		expect(initializations).toBe(1);
 	} finally {
 		initialize.resolve();
 		await channel?.close();
 		await endpoint.stop(true);
 	}
-});
+}, 15_000);
 
 // Closing while a credential read is unanswered must let shutdown finish and prevent a later install.
 test("a keychain read that finishes after close cannot install plugin tools", async () => {
@@ -282,13 +308,9 @@ test("an expired HTTP session is replaced without restarting the channel or retr
 		mcp: { session: { type: "http", url: endpoint.url.href, headers: { Authorization: "Bearer fixture" } } },
 	});
 	const plugins = pluginTools(() => {}, [plugin], () => ({ session: true }));
-	const refresh = plugins.refresh;
-	let refreshed = Promise.resolve();
-	plugins.refresh = registry => refreshed = refresh(registry);
 	let chat: Fixture | undefined;
 	try {
 		const channel = chat = await Fixture.create({ plugins });
-		await refreshed;
 		const watch = await channel.watch();
 		async function ask(text: string, call?: string) {
 			if (call) channel.script(fauxAssistantMessage(fauxToolCall("session_answer", {}, { id: call }), { stopReason: "toolUse" }));
@@ -303,8 +325,6 @@ test("an expired HTTP session is replaced without restarting the channel or retr
 		expect(failed?.error).toBe(true);
 		expect(failed?.text).toBe("The plugin tool call failed.");
 		expect(opened).toBe(1);
-		await ask("Trigger reconnect");
-		await refreshed;
 		expect((await ask("After reconnect", "after-expiry"))?.text).toBe("Answered in session 2");
 		expect(opened).toBe(2);
 		await watch.stop();
