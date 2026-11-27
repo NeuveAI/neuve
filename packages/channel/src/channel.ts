@@ -70,7 +70,7 @@ import { changes, fetchBase, patch } from "./changes";
 import { type Desktop, desktop, DESKTOP_EXTENSION } from "./desktop";
 import { HANDOFF, Handoffs } from "./handoffs";
 import { type Images, images } from "./images";
-import { lanes, LanesDoc } from "./lanes";
+import { LanesDoc } from "./lanes";
 import { failure, type Log, logging, scoped } from "./log";
 import {
 	DeletionEntry,
@@ -348,7 +348,6 @@ export class Channel {
 		if (options.browser) registry.install(browser(options.browser));
 		if (options.images) registry.install(images(options.images));
 		if (options.tabs) registry.install(tabs(options.tabs));
-		registry.install(lanes({ ...options, name: options.prefix || options.name }));
 		registry.install(subagent(
 			(handle, input, scope) => channel.submitInput(handle, input, scope),
 			(tx, chat, requested) => modelNamedByOwner(tx, chat, requested, modelSettings),

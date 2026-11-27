@@ -163,6 +163,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 	const place = config.lanes && {
 		name: options.prefix || options.name, project: options.project, lanes: join(config.lanes, options.id), env: options.env,
 	};
+	const laneExtensions = place ? [externalLanes(place)] : [];
 	const files = planFiles(plans);
 	const worker: WorkerContext = {sessionId: options.id, config, stateDirectory};
 	const query = setup?.query;
@@ -205,7 +206,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 	};
 	if (!setup) return Channel.open({
 		...planOptions,
-		extension: { ...options.extension, extensions: [...(options.extension?.extensions ?? []), planExplore] },
+		extension: { ...options.extension, extensions: [...laneExtensions, ...(options.extension?.extensions ?? []), planExplore] },
 	});
 	const storage = options.storage;
 	try {
@@ -218,7 +219,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		const extension = {
 			environment: (cwd: string) => isPlaced(cwd, options.project),
 			...operations.extension,
-			extensions: [...operations.extension.extensions, ...(place ? [externalLanes(place)] : []), ...(additional?.extensions ?? []), planExplore],
+			extensions: [...operations.extension.extensions, ...laneExtensions, ...(additional?.extensions ?? []), planExplore],
 			attach: async (harness: Harness, admission: WorkerAdmission) => {
 				await operations.extension.attach?.(harness, admission);
 				await additional?.attach?.(harness, admission);
