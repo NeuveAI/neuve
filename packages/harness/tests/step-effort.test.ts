@@ -31,7 +31,7 @@ const range = {
   headOid: "b".repeat(40),
 };
 
-type Kind = "frame" | "map" | "find" | "verify";
+type Kind = "frame" | "map" | "verify";
 
 /** One Frame, Map, find and Verify step, shaped as their builders shape them, with fixed inputs. */
 const stageKeys = (
@@ -76,21 +76,6 @@ const stageKeys = (
         inputs: { frame: "computation:frame", manifest: "d".repeat(64) },
       },
     ),
-    find: key(
-      "find",
-      { agent: "find.correctness" },
-      {
-        op: "harness.find",
-        opVersion: 4,
-        inputs: {
-          lens: "correctness",
-          frame: "computation:frame",
-          map: "computation:map",
-          manifest: "computation:manifest",
-          search: null,
-        },
-      },
-    ),
     verify: key(
       "verify",
       { agent: "verify.correctness.1" },
@@ -109,17 +94,17 @@ const stageKeys = (
 
 const GOLDEN = {
   anthropic: {
-    run: "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c",
+    run: "d9ff25efaa3d8ee17aadff833e6dcf2996118dd1a256320bd259959c4fcb651a",
     frame: "577ef7270610c9207ebbb4d427f6c95d5c9429a4dec3a2cf356c9997d9e134ec",
     map: "01b3a02fde601d3ad328d5d33803c1d8c8b521e2428d1dbbe6a4567d5ddfc7c8",
-    find: "60ad493b1aaa10642a6ebb6ab821ae97990f988791e80386dd6ed4adfdedd543",
+
     verify: "298fdba36009b73e50a81181a84546c6797109279075d83189059e84c76c81db",
   },
   openai: {
-    run: "94ddcd8de243036393bdf16cf8c2030dd275c5856e07eb9f9812146b3c5f7b25",
+    run: "1f5ac2f6296d668cafd7f0d5bf4a9e77ae95ede9f32d80d794ef59026536a408",
     frame: "34802747340ad98076cffce5984002ceae44891ed106eb305d66b53a0045d408",
     map: "62fb0c4f5ffe8cb0e661baffa9bedb2dc20e6ca6789a98151977f5ee5211bfdb",
-    find: "5edb402160ef7d4bbc1219bc1e44e2e54f0ba60e782065032cb6d601aa520a17",
+
     verify: "3af1a2ca7833ff70702d0d11907ad5cb5c4ec31370a250cc9d2f9cfc80bef6db",
   },
 } as const;
@@ -149,16 +134,10 @@ test("a step at another effort moves its own key and no other step's", () => {
     [SOL_ROUTE, GOLDEN.openai],
   ] as const) {
     const name = route.provider;
-    // From the route's per-kind efforts.
-    const fromMap = stageKeys(
+    const legacy = stageKeys(
       routeByName(name, undefined, undefined, { find: "high" }),
     );
-    expect(fromMap.find).not.toBe(golden.find);
-    expect([fromMap.frame, fromMap.map, fromMap.verify]).toEqual([
-      golden.frame,
-      golden.map,
-      golden.verify,
-    ]);
+    expect(legacy).toEqual(golden);
     // From the step's own effort.
     const fromStep = stageKeys(route, { verify: "high" });
     expect(fromStep.verify).not.toBe(golden.verify);
@@ -173,10 +152,8 @@ test("a step at another effort moves its own key and no other step's", () => {
       routeByName(name, undefined, undefined, {
         frame: "medium",
         map: "medium",
-        find: "medium",
         verify: "medium",
       }),
-      { find: "medium" },
     );
     expect({ ...same, run: golden.run }).toEqual(golden);
   }

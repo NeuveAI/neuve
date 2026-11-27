@@ -1,18 +1,27 @@
-// Why (12.41): the task cutover must preserve coverage through interruption and obey a fixed call
-// budget. Run the production graph and publisher on a real range with only the model replaced.
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { CrossBatchClaimsDoc } from "../src/pi/cross-batch-claims.ts";
+import type { AgentStepInput } from "../src/pi/stages/agent-step.ts";
+import { childId } from "../src/pi/stages/children.ts";
+import type { CrossBatchClaim } from "../src/readings/answers.ts";
+import { ClaimStored } from "../src/readings/claims.ts";
+import { LaneReviewStored } from "../src/readings/steps.ts";
+import { UnitSections } from "@neuve/records-schema";
+// Run the production task graph and publisher on a committed range with a scripted model.
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { Effect } from "effect";
-import { FINDERS, FindStored } from "../src/find.ts";
-import type { StageRecord } from "../src/pipeline.ts";
-import type { FinderResult } from "../src/pi/stages/finder-task.ts";
-import { claimKeyOf, VerifyStored } from "../src/verify.ts";
 import { AssembledBatch } from "../src/compose.ts";
-import { ReviewMap } from "../src/review-map.ts";
-import { runReview, toolTurn, type Answer } from "./fixtures/pi-review.ts";
+import type { StageRecord } from "../src/pipeline.ts";
+import { MARK } from "../src/pi/stages/agent.ts";
+import {
+  runReview,
+  textOf,
+  toolTurn,
+  type Answer,
+} from "./fixtures/pi-review.ts";
 
 const directory =
   process.env.SHAPE_EVIDENCE_DIRECTORY ??
@@ -34,7 +43,7 @@ const head = Object.fromEntries(
   ]),
 );
 
-const answerer = (fullBudget = false): Answer => {
+const answerer = (): Answer => {
   const turns = new Map<string, number>();
   return (agent, _messages, hunks) => {
     const turn = (turns.get(agent) ?? 0) + 1;
@@ -64,47 +73,24 @@ const answerer = (fullBudget = false): Answer => {
           },
         ],
       });
-    if (agent.startsWith("find.")) {
-      if (fullBudget && turn <= 11)
-        return submit("hunk", { id: hunks[0]!.hunkId, page: null });
-      const output = {
-        findings: fullBudget
-          ? hunks.map((h) => ({
-              claim: `The limit at ${h.path} is two.`,
-              kind: "defect",
-              about: "code",
-              signal: null,
-              critical: false,
-              anchors: [
-                { path: h.path, side: "new", startLine: 1, endLine: 1 },
-              ],
-              doneWhen: "D1",
-              evidence: [h.hunkId],
-            }))
-          : [],
-        notes: [],
-        ...(agent === "find.scope-fit"
-          ? {
-              conditions: [
-                {
-                  doneWhen: "D1",
-                  verdict: "needs-human",
-                  anchors: [],
-                  note: "Check the new limits.",
-                },
-              ],
-            }
-          : {}),
-      };
-      return fullBudget
-        ? fauxAssistantMessage(JSON.stringify(output))
-        : submit("submit_find", output);
-    }
-    if (agent.startsWith("verify."))
-      return submit("submit_verify", {
-        decision: "keep",
-        reason: "The cited line sets the limit to two.",
+    if (agent.startsWith("assess."))
+      return submit("submit_assess", {
+        classes: [],
+        factors: [],
+        requirements: [],
+        impact: [],
       });
+    if (agent.startsWith("lane-review."))
+      return submit("submit_review", {
+        files: [],
+        sections: { a: [], r: [], u: [] },
+        comments: [],
+        unsure: [],
+        notAsked: [],
+        crossBatchClaims: [],
+      });
+    if (agent.startsWith("brief.") || agent.startsWith("digest."))
+      return fauxAssistantMessage("No briefing.");
     throw new Error(`No fixture answer for ${agent}`);
   };
 };
@@ -121,7 +107,10 @@ const run = (
     ...options,
   });
 
-const coverage = async (result: Awaited<ReturnType<typeof runReview>>) => {
+const coverage = async (
+  result: Awaited<ReturnType<typeof runReview>>,
+  pending = false,
+) => {
   const linked = await result.lookup("harness.linked-batch");
   const outputs = await Promise.all(
     linked.map((r) => result.read(r.key, AssembledBatch)),
@@ -131,11 +120,28 @@ const coverage = async (result: Awaited<ReturnType<typeof runReview>>) => {
       ...new Set(outputs.flatMap((o) => o.units.flatMap((u) => u.hunkIds))),
     ].sort(),
   ).toEqual(result.manifest.hunks.map((h) => h.hunkId).sort());
-  const recorded = result.publicationHistory.flatMap((entry) =>
-    entry.event.kind === "unit.recorded@2"
-      ? entry.event.payload.ownedRanges
-      : [],
-  );
+  if (pending) {
+    expect(
+      result.publicationHistory.some(
+        ({ event }) =>
+          event.kind === "packet.published@2" &&
+          event.payload.counts.pending.sections > 0,
+      ),
+    ).toBe(true);
+    return;
+  }
+  const recorded = (
+    await Promise.all(
+      result.publicationHistory.map(async ({ event }) => {
+        if (event.kind === "unit.recorded@2") return event.payload.ownedRanges;
+        if (event.kind !== "unit.recorded@3") return [];
+        const unit = UnitSections.parse(
+          await result.readBlob(event.refs[0].ref.slice(5)),
+        );
+        return unit.sections.flatMap((section) => section.ownedRanges);
+      }),
+    )
+  ).flat();
   const key = (path: string, side: string, start: number, count: number) =>
     `${path}:${side}:${start}:${count}`;
   expect(
@@ -162,179 +168,12 @@ const coverage = async (result: Awaited<ReturnType<typeof runReview>>) => {
   );
   expect(
     result.publicationHistory.some(
-      (e) => e.event.kind === "packet.published@1",
+      (e) =>
+        e.event.kind === "packet.published@1" ||
+        e.event.kind === "packet.published@2",
     ),
   ).toBe(true);
 };
-
-test("precompute, front, four concurrent finders with fill, link and publish use at most 70 calls", async () => {
-  const result = await run("full", { answer: answerer(true) });
-  expect(result.outcome.status).toBe("completed");
-  expect(result.reports).toEqual([]);
-  expect(
-    result.stageOutputs.lines.some((line) =>
-      line.startsWith("Frame: 1 done-when"),
-    ),
-  ).toBe(true);
-  expect(
-    result.stageOutputs.lines.some((line) => line.startsWith("Map: 1 groups")),
-  ).toBe(true);
-  expect(
-    result.stageOutputs.lines.filter((line) => line.startsWith("verify.")),
-  ).toHaveLength(20);
-  // Why: the stage lines judge a Verify used by keying each final finding's claim with the Frame
-  // key Front recorded. In a whole review that must be the key the finders' Verifies were keyed
-  // with, or every Verify would fall to the lines' fail-open rule unseen.
-  const frontRecord = result.tasks.find((t) => t.kind === "neuve.front")!;
-  const frontResult = (
-    frontRecord.state as {
-      outcome?: { result?: { frameKey?: string; stages?: StageRecord[] } };
-    }
-  ).outcome?.result;
-  const frameKey = frontResult?.frameKey;
-  expect(frameKey).toBeString();
-  expect(
-    frontResult?.stages?.some((s) => s.agent === "frame" && s.key === frameKey),
-  ).toBe(true);
-  let verdicts = 0;
-  for (const task of result.tasks.filter((t) => t.kind === "neuve.finder")) {
-    const finder = (task.state as { outcome?: { result?: FinderResult } })
-      .outcome?.result;
-    if (finder?.findKey == null) continue;
-    const final = await result.read(finder.findKey, FindStored);
-    for (const found of finder.findings) {
-      const finding = final.findings.find((f) => f.id === found.id)!;
-      const verdict = await result.read(found.verifyKey!, VerifyStored);
-      expect(verdict.finding).toBe(claimKeyOf(frameKey!, finding));
-      verdicts++;
-    }
-  }
-  expect(verdicts).toBe(20);
-  expect(
-    result.stageOutputs.lines.filter((line) => line.includes("not used")),
-  ).toEqual([]);
-  const review = result.tasks.find((t) => t.kind === "neuve.review")!;
-  const front = result.tasks.filter((t) => t.kind === "neuve.front");
-  const finders = result.tasks.filter((t) => t.kind === "neuve.finder");
-  expect(front).toHaveLength(1);
-  expect(finders).toHaveLength(4);
-  for (const child of [...front, ...finders])
-    expect(Number(child.owner)).toBe(Number(review.id));
-  expect(result.sent.filter((s) => s.agent === "frame")).toHaveLength(1);
-  expect(result.sent.filter((s) => s.agent === "map")).toHaveLength(1);
-  for (const lens of FINDERS)
-    expect(result.sent.filter((s) => s.agent === `find.${lens}`)).toHaveLength(
-      12,
-    );
-  expect(result.sent.filter((s) => s.agent.startsWith("verify."))).toHaveLength(
-    20,
-  );
-  expect(result.sent).toHaveLength(1 + 1 + 4 * 12 + 20);
-  expect(await result.lookup("harness.code-fill")).toHaveLength(1);
-  expect(
-    result.log.read().filter((r) => r.type === "finder.result"),
-  ).toHaveLength(4);
-  expect(result.log.read().filter((r) => r.type === "finding")).toHaveLength(
-    20,
-  );
-  expect(
-    result.log
-      .read()
-      .filter((r) => r.type === "span" && r["name"] === "harness.stage.verify"),
-  ).toHaveLength(24); // Four code dedupes and twenty verify agents.
-  const order = result.timeline.map((t) => t.event);
-  expect(order.indexOf("frame")).toBeGreaterThan(order.indexOf("precompute"));
-  expect(order.indexOf("map")).toBeGreaterThan(order.indexOf("frame"));
-  expect(order.indexOf("fill.start")).toBeGreaterThan(order.indexOf("map"));
-  expect(order.indexOf("link")).toBeGreaterThan(order.indexOf("fill.end"));
-  expect(order.indexOf("publish")).toBeGreaterThan(order.indexOf("link"));
-  for (const lens of FINDERS)
-    expect(result.log.read()).toContainEqual(
-      expect.objectContaining({
-        type: "span",
-        name: "harness.stage.find",
-        attributes: expect.objectContaining({ "harness.batch": lens }),
-      }),
-    );
-  await coverage(result);
-}, 60_000);
-
-test("finders interrupted at C still link and publish every hunk", async () => {
-  const result = await run("cutoff", { interruptFinders: true });
-  expect(result.outcome.status).toBe("completed");
-  const finders = result.tasks.filter((t) => t.kind === "neuve.finder");
-  expect(finders).toHaveLength(4);
-  for (const finder of finders)
-    expect(finder.state).toMatchObject({
-      status: "terminal",
-      outcome: { status: "aborted", reason: "cutoff" },
-    });
-  expect(result.sent).toHaveLength(6);
-  expect(result.timeline.map((t) => t.event)).toContain("cutoff");
-  await coverage(result);
-}, 60_000);
-
-test("less than 90 seconds before the verification reserve skips all finders and discloses it", async () => {
-  const result = await run("skip", { cutoffAfterMs: 164_000 });
-  expect(result.outcome.status).toBe("completed");
-  expect(result.tasks.filter((t) => t.kind === "neuve.finder")).toHaveLength(0);
-  expect(result.sent).toHaveLength(2);
-  expect(
-    result.publicationHistory.flatMap((row) =>
-      row.event.kind === "packet.published@1"
-        ? [row.event.payload.complete]
-        : [],
-    ),
-  ).toEqual([false]);
-  expect(
-    result.outcome.status === "completed"
-      ? result.outcome.result.stages
-          .filter((stage) => stage.stage === "find")
-          .map((stage) => ({ agent: stage.agent, status: stage.status }))
-      : [],
-  ).toEqual(
-    FINDERS.map((lens) => ({ agent: `find.${lens}`, status: "skipped" })),
-  );
-  expect(result.log.read()).toContainEqual(
-    expect.objectContaining({
-      type: "review.schedule",
-      finders: 0,
-      skipped: true,
-    }),
-  );
-  expect(result.publicationHistory).toContainEqual(
-    expect.objectContaining({
-      event: expect.objectContaining({
-        kind: "gap.disclosed@1",
-        payload: expect.objectContaining({ kind: "finders-skipped" }),
-      }),
-    }),
-  );
-  await coverage(result);
-}, 60_000);
-
-// Why: a finder with no returned result cannot count as a completed search.
-test("a missing finder outcome makes the published packet partial", async () => {
-  const result = await run("missing-finder", { missingFinderOutcome: true });
-  expect(result.outcome.status).toBe("completed");
-  expect(
-    result.publicationHistory.flatMap((row) =>
-      row.event.kind === "packet.published@1"
-        ? [row.event.payload.complete]
-        : [],
-    ),
-  ).toEqual([false]);
-  expect(
-    result.outcome.status === "completed"
-      ? result.outcome.result.stages
-          .filter((stage) => stage.stage === "find")
-          .map((stage) => ({ agent: stage.agent, status: stage.status }))
-      : [],
-  ).toEqual(
-    FINDERS.map((lens) => ({ agent: `find.${lens}`, status: "interrupted" })),
-  );
-  await coverage(result);
-}, 60_000);
 
 test("aborting the review publishes nothing", async () => {
   const result = await run("abort", { abortReview: true });
@@ -356,7 +195,7 @@ test("reaching C before front uses code fallbacks and still records the inline f
       ? result.outcome.result.stages.some((r) => r.agent === "link.fill")
       : false,
   ).toBe(true);
-  await coverage(result);
+  await coverage(result, true);
 }, 60_000);
 
 // Why (NEU-148): no review step reads the leads, so Frame, Map and Publish must all run while they
@@ -416,16 +255,20 @@ test("Frame, Map and Publish run while the range's leads are held, and the revie
 }, 60_000);
 
 // Why (NEU-148): the leads task exists so Frame waits for neither the leads nor the head tree's
-// index. Both are held until Publish starts, so a Frame or Map that waited for either would never
-// be sent and the review would never publish.
+// index. Release the index at Map, since the later readings can need it, and hold the leads until
+// Publish. A Frame or Map that waited for either would never be sent.
 test("Frame and Map are sent while the head-index prefetch and the leads are both held", async () => {
-  let release = () => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
+  let releaseIndex = () => {};
+  const indexHeld = new Promise<void>((resolve) => {
+    releaseIndex = resolve;
+  });
+  let releaseLeads = () => {};
+  const leadsHeld = new Promise<void>((resolve) => {
+    releaseLeads = resolve;
   });
   let chunksEntered = 0;
   let chunksDone = 0;
-  let doneAtPublish: number | undefined;
+  let leadsStoredAtPublish: boolean | undefined;
   let doneAtLeads: number | undefined;
   let leadsStored = false;
   const seen: Array<{
@@ -435,17 +278,18 @@ test("Frame and Map are sent while the head-index prefetch and the leads are bot
   }> = [];
   const answer = answerer();
   // A file no other test in this file has, so the head tree's index is not already in memory.
-  const unique = { "notes/prefetch-held.txt": "held until Publish\n" };
+  const unique = { "notes/prefetch-held.txt": "held until Map\n" };
   const result = await run("prefetch-held", {
     base: { ...base, ...unique },
     head: { ...head, ...unique },
     answer: (agent, messages, hunks) => {
       seen.push({ agent, chunksDone, leadsStored });
+      if (agent === "map") releaseIndex();
       return answer(agent, messages, hunks);
     },
     onPublish: () => {
-      doneAtPublish = chunksDone;
-      release();
+      leadsStoredAtPublish = leadsStored;
+      releaseLeads();
     },
     chunks: {
       paths: Object.keys(unique),
@@ -455,7 +299,7 @@ test("Frame and Map are sent while the head-index prefetch and the leads are bot
             chunksEntered++;
           }),
           Effect.andThen(
-            Effect.promise(() => held),
+            Effect.promise(() => indexHeld),
             Effect.tap(compute, () =>
               Effect.sync(() => {
                 chunksDone++;
@@ -470,7 +314,7 @@ test("Frame and Map are sent while the head-index prefetch and the leads are bot
           doneAtLeads = chunksDone;
         }),
         Effect.andThen(
-          Effect.promise(() => held),
+          Effect.promise(() => leadsHeld),
           Effect.tap(compute, () =>
             Effect.sync(() => {
               leadsStored = true;
@@ -484,12 +328,12 @@ test("Frame and Map are sent while the head-index prefetch and the leads are bot
     { agent: "frame", chunksDone: 0, leadsStored: false },
     { agent: "map", chunksDone: 0, leadsStored: false },
   ]);
-  expect(doneAtPublish).toBe(0);
+  expect(leadsStoredAtPublish).toBe(false);
   // The head index goes first (NEU-148): the leads computation starts only once the prefetch has
   // ended, so the held blob was already chunked when it started. Started beside the prefetch, it
   // would have started while the blob was still held.
   expect(doneAtLeads).toBeGreaterThan(0);
-  // The hold was real: the held blob was chunked only after the release, and the prefetch built
+  // The hold was real: the held blob was chunked only after Map, and the prefetch built
   // the head tree's index (not from memory), so it needed that blob and was held with it.
   expect(chunksEntered).toBeGreaterThan(0);
   expect(chunksDone).toBeGreaterThan(0);
@@ -528,10 +372,16 @@ test("a failed head-index prefetch is written and dropped, and the leads start a
   const result = await run("prefetch-failed", {
     base: { ...base, ...unique },
     head: { ...head, ...unique },
-    onPublish: () => release(),
+    answer: (() => {
+      const answer = answerer();
+      return (agent, messages, hunks) => {
+        if (agent === "map") release();
+        return answer(agent, messages, hunks);
+      };
+    })(),
     chunks: {
       paths: Object.keys(unique),
-      // The first chunking of the blob is held until Publish and then fails, so the head tree's
+      // The first chunking of the blob is held until Map and then fails, so the head tree's
       // index fails; every later chunking (the base tree's index, in the leads) computes.
       wrap: <A, E, R>(compute: Effect.Effect<A, E, R>) =>
         Effect.suspend((): Effect.Effect<A, unknown, R> =>
@@ -636,250 +486,878 @@ test("stopping the review while its leads run aborts them and publishes nothing"
   ).toHaveLength(0);
 }, 60_000);
 
-// Why (NEU-148): the waits a review's timings are read from are these records and spans; nothing
-// else asserts them. Counts, kinds, keys and task IDs only.
-test("the run log names the commit after Precompute, each wait with what it waited on, and each child's inputs", async () => {
-  const result = await run("wait-telemetry");
-  expect(result.outcome.status).toBe("completed");
-  const records = result.log.read();
-  const spans = (name: string) =>
-    records.filter((r) => r.type === "span" && r["name"] === name);
-  const attributes = (record: (typeof records)[number]) =>
-    record["attributes"] as Record<string, unknown>;
-  expect(spans("harness.pi.commit").map(attributes)).toContainEqual(
-    expect.objectContaining({
-      "harness.task_kind": "review",
-      "harness.phase": "precompute",
-      "harness.next_phase": "front",
-    }),
+const paths = ["src/first.ts", "src/second.ts"] as const;
+const splitRange = {
+  base: {
+    [paths[0]]: "export const first = 1;\n",
+    [paths[1]]: "export const second = 1;\n",
+  },
+  head: {
+    [paths[0]]: "export const first = 0;\n",
+    [paths[1]]: "export const second = 0;\n",
+  },
+  message: "Change the two constants",
+};
+const earlyText = "The second constant can now be zero.";
+const lateText = "The first constant can now be zero.";
+const claimOn = (path: string, text: string): CrossBatchClaim => ({
+  path,
+  side: "new",
+  startLine: 1,
+  endLine: 1,
+  kind: "defect",
+  text,
+  fails: "A caller dividing by the constant divides by zero.",
+  evidenceAnchors: [],
+});
+const submit = (
+  agent: string,
+  name: string,
+  args: Parameters<typeof toolTurn>[0][number]["args"],
+) => toolTurn([{ name, id: agent, args }]);
+const reviewWithClaims = (
+  agent: string,
+  claims: CrossBatchClaim[],
+  unanswered = false,
+) =>
+  submit(agent, "submit_review", {
+    sections: { a: [], r: [], u: unanswered ? [] : [1] },
+    files: [
+      {
+        f: 1,
+        checked: "Checked the new value.",
+        rows: [{ row: "D1", status: "no-evidence", reading: "", cites: [] }],
+      },
+    ],
+    comments: [],
+    unsure: unanswered ? [] : [{ s: 1, t: "The caller is unavailable." }],
+    notAsked: [],
+    crossBatchClaims: claims,
+  });
+const verify = (agent: string) =>
+  submit(agent, "submit_verify", {
+    decision: "keep",
+    reason: "The pinned source shows the constant is zero.",
+  });
+const splitMap = (files: readonly string[] = paths) =>
+  submit("map", "submit_map", {
+    groups: files.map((path, i) => ({
+      label: `Change ${path}`,
+      why: "Change one constant.",
+      tier: "core",
+      doneWhen: ["D1"],
+      entries: [`f${i + 1}`],
+    })),
+  });
+const commentsOf = (result: Awaited<ReturnType<typeof runReview>>) =>
+  result.publicationHistory.flatMap(({ event }) =>
+    event.kind === "comment.recorded@3" ? [event.payload] : [],
   );
-  for (const [kind, next] of [
-    ["front", "terminal"],
-    ["leads", "terminal"],
-  ] as const)
-    expect(spans("harness.pi.commit").map(attributes)).toContainEqual(
-      expect.objectContaining({
-        "harness.task_kind": kind,
-        "harness.next_phase": next,
-      }),
-    );
-  const front = result.tasks.find((t) => t.kind === "neuve.front")!;
-  const waits = spans("harness.pi.wait").map(attributes);
-  expect(waits).toContainEqual(
-    expect.objectContaining({
-      "harness.task_kind": "review",
-      "harness.next_phase": "front",
-      "harness.waiting_on": "front",
-      "harness.waiting_on_ids": String(front.id),
-    }),
-  );
-  expect(waits).toContainEqual(
-    expect.objectContaining({
-      "harness.task_kind": "front",
-      "harness.waiting_on": "frame",
-    }),
-  );
-  for (const wait of waits)
-    expect(typeof wait["harness.waiting_on_ids"]).toBe("string");
-  const inputs = records.filter((r) => r.type === "task.inputs");
-  // Each finder's Find, and each Verify it or a record call started (finder-task.ts, tools.ts).
-  const kinds = inputs.map((r) => String(r["kind"]));
-  expect(
-    kinds.filter((kind) => kind !== "find" && kind !== "verify").sort(),
-  ).toEqual(
+
+const sharedPath = "src/format.ts";
+const callerPath = "src/change-facts.ts";
+const unchangedPath = "src/labels.ts";
+const previous =
+  'const label = (count: number) => count === 1 ? "file" : "files";';
+const replacement =
+  'export const label = (count: number) => count <= 1 ? "file" : "files";';
+const consolidationText = "The consolidation changes the label for zero files.";
+const removedCopy = {
+  path: callerPath,
+  side: "old" as const,
+  startLine: 10,
+  endLine: 10,
+};
+const userText = (messages: Parameters<Answer>[1]) =>
+  messages
+    .flatMap((message) => {
+      if (message.role !== "user") return [];
+      return typeof message.content === "string"
+        ? [message.content]
+        : message.content.flatMap((part) =>
+            part.type === "text" ? [part.text] : [],
+          );
+    })
+    .join("\n");
+
+const consolidation = async (
+  mode: "anchored" | "without" | "missing" | "incoming",
+) => {
+  const oldCaller = (implementation: string) =>
     [
-      "front",
-      "leads",
-      "frame",
-      "map",
-      ...FINDERS.map((lens) => `finder.${lens}`),
-    ].sort(),
-  );
-  expect(kinds.filter((kind) => kind === "find")).toHaveLength(FINDERS.length);
-  expect(kinds.filter((kind) => kind === "verify")).toHaveLength(
-    spans("harness.child.started").length,
-  );
-  for (const record of inputs)
-    for (const key of Object.values(record["inputs"] as Record<string, string>))
-      expect(key).toMatch(/^computation:/);
-  // Readings are off in these runs, so the review starts no relations task (NEU-148 WP11).
-  expect(result.tasks.filter((t) => t.kind === "neuve.relations")).toEqual([]);
-}, 60_000);
-
-// Why: a replay between logging the schedule and committing children must not double-count it.
-test("replaying front scheduling writes one schedule and creates one set of finders", async () => {
-  const result = await run("replay-schedule", { replaySchedule: true });
-  expect(result.outcome.status).toBe("completed");
-  expect(result.scheduleReplays).toBe(1);
-  expect(
-    result.log.read().filter((entry) => entry.type === "review.schedule"),
-  ).toHaveLength(1);
-  expect(
-    result.tasks.filter((task) => task.kind === "neuve.finder"),
-  ).toHaveLength(4);
-  await coverage(result);
-}, 60_000);
-
-// The finders share a registry, so check tool availability in each model request.
-test("each finder is offered its lens's tools, with read_many beside read", async () => {
-  const result = await run("finder-tools");
-  expect(result.outcome.status).toBe("completed");
-  const offered = new Map<string, Array<string>>();
-  for (const sent of result.sent) {
-    if (!sent.agent.startsWith("find.") || offered.has(sent.agent)) continue;
-    const system = sent.messages.find((m) => m.role === "system");
-    offered.set(
-      sent.agent,
-      system?.role === "system"
-        ? (system.toolsAdded ?? []).map((tool) => tool.name)
-        : [],
-    );
-  }
-  expect([...offered.keys()].sort()).toEqual(
-    FINDERS.map((lens) => `find.${lens}`).sort(),
-  );
-  for (const lens of FINDERS) {
-    const list = offered.get(`find.${lens}`)!;
-    expect(list.slice(0, 2)).toEqual(["read", "read_many"]);
-    expect(
-      list.filter((name) =>
-        ["scope_section", "proofs", "proof"].includes(name),
-      ),
-    ).toEqual(
-      lens === "scope-fit"
-        ? ["scope_section", "proofs", "proof"]
-        : lens === "tests"
-          ? ["proofs", "proof"]
-          : [],
-    );
-  }
-  expect(
-    result.outcome.status === "completed"
-      ? result.outcome.result.stages
-          .filter((stage) => stage.stage === "find")
-          .map((stage) => stage.status)
-      : [],
-  ).toEqual(FINDERS.map(() => "computed"));
-}, 60_000);
-
-// Why (NEU-148 slice B): the finders start when Frame lands, in the front task's commit that starts
-// Map, owned by the review; Map then gates only Fill, Link and Publish. In the run log the finders'
-// inputs come before Map's own stage record, and each names the front task it waits on for Map.
-test("finders are created when Frame lands, before Map ends, owned by the review", async () => {
-  const result = await run("finders-at-frame", { answer: answerer(true) });
-  expect(result.outcome.status).toBe("completed");
-  const records = result.log.read();
-  const front = result.tasks.find((t) => t.kind === "neuve.front")!;
-  const review = result.tasks.find((t) => t.kind === "neuve.review")!;
-  const finders = result.tasks.filter((t) => t.kind === "neuve.finder");
-  expect(finders).toHaveLength(4);
-  for (const finder of finders) {
-    expect(Number(finder.owner)).toBe(Number(review.id));
-    expect((finder.input as { front: number }).front).toBe(Number(front.id));
-  }
-  const mapEnded = records.findIndex(
-    (r) => r.type === "stage" && r["agent"] === "map",
-  );
-  const created = records.flatMap((r, index) =>
-    r.type === "task.inputs" && String(r["kind"]).startsWith("finder.")
-      ? [index]
-      : [],
-  );
-  expect(created).toHaveLength(4);
-  expect(mapEnded).toBeGreaterThan(-1);
-  for (const index of created) expect(index).toBeLessThan(mapEnded);
-  // The start rule was decided once, at that commit, by the front task.
-  expect(records.filter((r) => r.type === "review.schedule")).toEqual([
-    expect.objectContaining({
-      taskId: Number(review.id),
-      front: Number(front.id),
-      finders: 4,
-      skipped: false,
-    }),
-  ]);
-}, 60_000);
-
-// Why (NEU-148 slice B): the schedule and the finders' inputs are written after the commit that
-// starts the finders, so a crash between the two would lose them for good; the front task's next
-// phase writes what the log lacks, from its checkpoint and the inputs the finders were given.
-test("the schedule and the finders' inputs lost after the starting commit are written by the next phase", async () => {
-  const result = await run("finder-log-lost", { loseFinderLog: true });
-  expect(result.outcome.status).toBe("completed");
-  const records = result.log.read();
-  const front = result.tasks.find((t) => t.kind === "neuve.front")!;
-  const review = result.tasks.find((t) => t.kind === "neuve.review")!;
-  const finders = result.tasks.filter((t) => t.kind === "neuve.finder");
-  expect(finders).toHaveLength(4);
-  expect(records.filter((r) => r.type === "review.schedule")).toEqual([
-    expect.objectContaining({
-      taskId: Number(review.id),
-      front: Number(front.id),
-      finders: 4,
-      skipped: false,
-    }),
-  ]);
-  const inputs = records.filter(
-    (r) => r.type === "task.inputs" && String(r["kind"]).startsWith("finder."),
-  );
-  expect(inputs.map((r) => Number(r["taskId"])).sort()).toEqual(
-    finders.map((f) => Number(f.id)).sort(),
-  );
-  for (const row of inputs) {
-    const given = finders.find((f) => Number(f.id) === Number(row["taskId"]))!
-      .input as { frameKey: string; manifestKey: string };
-    expect(row["inputs"]).toEqual({
-      frame: `computation:${given.frameKey}`,
-      manifest: `computation:${given.manifestKey}`,
-    });
-  }
-}, 60_000);
-
-// Why: Map falling back after the finders started must not hang or lose them: the review still
-// publishes, and each finder groups its findings by the fallback Map the front task returns.
-test("a Map that falls back after the finders started still groups their findings and publishes", async () => {
-  const base = answerer(true);
-  const result = await run("map-fallback", {
-    answer: (agent, messages, hunks) =>
-      agent === "map"
-        ? toolTurn([
+      ...Array.from({ length: 9 }, (_, i) => `// Before ${i + 1}`),
+      implementation,
+      "export const noFiles = label(0);",
+      ...Array.from({ length: 8 }, (_, i) => `// After ${i + 2}`),
+    ].join("\n") + "\n";
+  const anchors =
+    mode === "without"
+      ? undefined
+      : mode === "missing"
+        ? [{ ...removedCopy, path: sharedPath, startLine: 1, endLine: 1 }]
+        : [
+            removedCopy,
             {
-              name: "submit_map",
-              id: `map-${Math.random()}`,
-              args: {
-                groups: [
-                  {
-                    label: "Nothing real",
-                    why: "Names an entry that does not exist.",
-                    tier: "core",
-                    doneWhen: ["D1"],
-                    entries: ["f999"],
-                  },
-                ],
-              },
+              path: unchangedPath,
+              side: "new" as const,
+              startLine: 1,
+              endLine: 1,
             },
-          ])
-        : base(agent, messages, hunks),
+          ];
+  const failure = "A report with zero files prints the singular label.";
+  const fallback = answerer();
+  const checking = Promise.withResolvers<void>();
+  const result = await runReview({
+    directory: join(directory, `consolidation-${mode}`),
+    base: {
+      [callerPath]: oldCaller(previous),
+      [unchangedPath]: 'import { noFiles } from "./change-facts";\n',
+    },
+    head: {
+      [callerPath]: oldCaller('import { label } from "./format";'),
+      [sharedPath]: replacement + "\n",
+    },
+    message: "Share the file label helper",
+    answer: async (agent, messages, hunks) => {
+      const task = userText(messages);
+      if (agent === "map") return splitMap([callerPath, sharedPath]);
+      if (agent.startsWith("verify.claim.")) {
+        checking.resolve();
+        return submit(agent, "submit_verify", {
+          decision:
+            task.includes(previous) && task.includes(replacement)
+              ? "keep"
+              : "drop",
+          reason:
+            "The regression needs both the former and the current implementation.",
+        });
+      }
+      if (!agent.startsWith("lane-review."))
+        return fallback(agent, messages, hunks);
+      const reviewingHelper = task.includes(
+        `kind="file">\npath: ${sharedPath}\n`,
+      );
+      if (mode === "incoming") {
+        if (reviewingHelper) {
+          await checking.promise;
+          return reviewWithClaims(agent, []);
+        }
+        return reviewWithClaims(agent, [
+          {
+            ...claimOn(sharedPath, consolidationText),
+            fails: failure,
+            evidenceAnchors: anchors ?? [],
+          },
+        ]);
+      }
+      if (!reviewingHelper) return reviewWithClaims(agent, []);
+      return submit(agent, "submit_review", {
+        files: [{ f: 1, checked: "Checked the file label.", rows: null }],
+        sections: { a: [], r: [1], u: [] },
+        comments: [
+          {
+            s: 1,
+            side: "new",
+            start: 1,
+            end: 1,
+            kind: "defect",
+            effect: null,
+            t: consolidationText,
+            cites: ["1n1"],
+            fails: failure,
+            row: null,
+            evidenceAnchors: anchors ?? [],
+          },
+        ],
+        unsure: [],
+        notAsked: [],
+        crossBatchClaims: [],
+      });
+    },
   });
   expect(result.outcome.status).toBe("completed");
-  const front = result.tasks.find((t) => t.kind === "neuve.front")!;
-  const mapKey = (front.state as { outcome?: { result?: { mapKey?: string } } })
-    .outcome?.result?.mapKey;
-  expect(mapKey).toBeString();
-  expect((await result.read(mapKey!, ReviewMap)).source).toBe("fallback");
-  let kept = 0;
-  for (const task of result.tasks.filter((t) => t.kind === "neuve.finder")) {
-    const finder = (task.state as { outcome?: { result?: FinderResult } })
-      .outcome?.result;
-    expect(finder?.reason).toBeUndefined();
-    if (finder?.findKey == null) continue;
-    const final = await result.read(finder.findKey, FindStored);
-    for (const f of final.findings) expect(f.group).toMatch(/^g\d+$/);
-    kept += finder.findings.filter((f) => f.status === "kept").length;
+  const requests = result.sent.filter(({ agent }) =>
+    agent.startsWith("verify.claim."),
+  );
+  expect(requests).toHaveLength(1);
+  const [check] = result.log
+    .read()
+    .filter(
+      (row) =>
+        row.type === "stage" &&
+        String(row["agent"]).startsWith("verify.claim.") &&
+        row["status"] === "computed",
+    );
+  const answer = await result.read(String(check?.["key"]), ClaimStored);
+  return {
+    task: userText(requests[0]!.messages),
+    decision: answer.decision,
+    units: result.publicationHistory.flatMap(({ event }) =>
+      event.kind === "unit.recorded@3" && event.payload.path === sharedPath
+        ? event.attribution.unitIds
+        : [],
+    ),
+    comments: result.publicationHistory.flatMap(({ event }) =>
+      event.kind === "comment.recorded@3" &&
+      event.payload.body.includes(consolidationText)
+        ? [event]
+        : [],
+    ),
+  };
+};
+
+// A consolidation regression needs the removed copy as well as the replacement to reach the desk.
+test.each(["anchored", "incoming"] as const)(
+  "Verify uses both sides of a consolidation (%s)",
+  async (mode) => {
+    const { task, decision, comments, units } = await consolidation(mode);
+    expect(task).toContain(replacement);
+    expect(task).toContain(
+      `${callerPath} (old) lines 10-10, context 8\n2: // Before 2`,
+    );
+    expect(task).toContain(`10: ${previous}`);
+    expect(task).toContain("11: export const noFiles = label(0);");
+    expect(task).toContain("18: // After 8");
+    expect(task).not.toContain("1: // Before 1\n");
+    expect(task).not.toContain("19: // After 9");
+    expect(task).toContain('1: import { noFiles } from "./change-facts";');
+    expect(decision).toBe("keep");
+    expect(units).toHaveLength(1);
+    expect(comments).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          anchor: expect.objectContaining({ path: sharedPath }),
+          finding: expect.objectContaining({ kind: "defect" }),
+        }),
+        attribution: expect.objectContaining({ unitIds: units }),
+      }),
+    ]);
+  },
+  60_000,
+);
+
+// The same claim is unsupported when Lane review sends only its primary anchor.
+test("Verify drops a consolidation claim without evidence anchors", async () => {
+  const { task, decision, comments } = await consolidation("without");
+  expect(task).toContain(replacement);
+  expect(task).not.toContain(previous);
+  expect(decision).toBe("drop");
+  expect(comments).toEqual([]);
+}, 60_000);
+
+// A file added at head has no old blob. Verify must report the missing source, as on main.
+test("Verify reports evidence missing at the cited revision", async () => {
+  const { task, decision, comments } = await consolidation("missing");
+  expect(task).toContain(
+    `${sharedPath} (old) lines 1-1, context 8\nUnavailable at the cited revision.`,
+  );
+  expect(task).not.toContain(previous);
+  expect(decision).toBe("drop");
+  expect(comments).toEqual([]);
+}, 60_000);
+
+// Both files share a directory. Map must separate their readings. Hold the second reviewer
+// until the first batch reaches Records to prove the outgoing claim can't reopen it.
+test("batch reviewers verify claims and leave published batches unchanged", async () => {
+  const { promise: firstPublished, resolve: openSecond } =
+    Promise.withResolvers<void>();
+  const laneViews: string[] = [];
+  const verifyViews: string[] = [];
+  const fallback = answerer();
+  const result = await runReview({
+    directory: join(directory, "cross-batch"),
+    ...splitRange,
+    afterBatchPublished: (index) => {
+      if (index === 0) openSecond();
+    },
+    answer: async (agent, messages, hunks) => {
+      if (agent === "map") return splitMap();
+      if (agent.startsWith("lane-review.")) {
+        const text = textOf(messages);
+        laneViews.push(text);
+        const readsFirst = text.includes("export const first");
+        if (!readsFirst) await firstPublished;
+        return reviewWithClaims(agent, [
+          readsFirst
+            ? claimOn(paths[1], earlyText)
+            : claimOn(paths[0], lateText),
+        ]);
+      }
+      if (agent.startsWith("verify.claim.")) {
+        verifyViews.push(textOf(messages));
+        return verify(agent);
+      }
+      return fallback(agent, messages, hunks);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(result.sent.some(({ agent }) => agent.startsWith("find."))).toBe(
+    false,
+  );
+  expect(
+    laneViews.filter((view) => view.includes("export const first")),
+  ).toHaveLength(1);
+  expect(
+    laneViews.filter((view) => view.includes("export const second")),
+  ).toHaveLength(1);
+  expect(
+    laneViews.every(
+      (view) =>
+        view.includes("export const first") !==
+        view.includes("export const second"),
+    ),
+  ).toBe(true);
+  expect(verifyViews).toHaveLength(2);
+  expect(
+    verifyViews.some(
+      (view) =>
+        view.includes(earlyText) && view.includes("export const second = 0;"),
+    ),
+  ).toBe(true);
+  expect(
+    verifyViews.some(
+      (view) =>
+        view.includes(lateText) && view.includes("export const first = 0;"),
+    ),
+  ).toBe(true);
+  const comments = commentsOf(result);
+  expect(
+    comments.filter((comment) => comment.body.includes(earlyText)),
+  ).toHaveLength(1);
+  expect(comments.some((comment) => comment.body.includes(lateText))).toBe(
+    false,
+  );
+  const retained = result.log
+    .read()
+    .filter(({ type }) => type === "review.claim-unpublished");
+  expect(retained).toEqual([
+    expect.objectContaining({
+      reason: "batch-published",
+      anchor: expect.objectContaining({ path: paths[0] }),
+      kind: "defect",
+    }),
+  ]);
+  const lateAnswer = await result.read(
+    String(retained[0]!["answer"]),
+    LaneReviewStored,
+  );
+  expect(lateAnswer.answer.crossBatchClaims).toEqual([
+    expect.objectContaining({
+      path: paths[0],
+      text: lateText,
+    }),
+  ]);
+}, 60_000);
+
+// Claims without owned changed lines must leave their anchor in the run log.
+test("a claim on an unchanged line is kept in the run log", async () => {
+  const fallback = answerer();
+  const unchanged = "export const unchanged = 42;\n";
+  const claim = { ...claimOn(paths[1], earlyText), startLine: 2, endLine: 2 };
+  const result = await runReview({
+    directory: join(directory, "unchanged-claim"),
+    ...splitRange,
+    base: {
+      ...splitRange.base,
+      [paths[1]]: splitRange.base[paths[1]] + unchanged,
+    },
+    head: {
+      ...splitRange.head,
+      [paths[1]]: splitRange.head[paths[1]] + unchanged,
+    },
+    answer: async (agent, messages, hunks) => {
+      if (agent === "map") return splitMap();
+      if (
+        agent.startsWith("lane-review.") &&
+        textOf(messages).includes("export const first")
+      )
+        return reviewWithClaims(agent, [claim]);
+      return fallback(agent, messages, hunks);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(
+    result.log.read().filter(({ type }) => type === "review.claim-unpublished"),
+  ).toEqual([
+    expect.objectContaining({
+      reason: "anchor-unowned",
+      anchor: { path: paths[1], side: "new", startLine: 2, endLine: 2 },
+      verify: null,
+    }),
+  ]);
+  expect(
+    commentsOf(result).some((comment) => comment.body.includes(earlyText)),
+  ).toBe(false);
+}, 60_000);
+
+// A new attempt uses the same session registry and stored Lane review answer. Stopping the first
+// attempt while one Verify is running must replace that check and reuse another that finished.
+test("a retried review replaces an aborted check and reuses a stored check", async () => {
+  const firstVerify = Promise.withResolvers<void>();
+  const reply = Promise.withResolvers<void>();
+  const fallback = answerer();
+  const storedText = "Callers now receive a zero second constant.";
+  let checks = 0;
+  let storedChecks = 0;
+  const result = await runReview({
+    directory: join(directory, "retried-check"),
+    ...splitRange,
+    runAttempts: async (harness, start) => {
+      const first = await start();
+      await firstVerify.promise;
+      const registered = await harness.snapshot(CrossBatchClaimsDoc, context);
+      const held = Object.values(registered?.claims ?? {});
+      const oldTask = held.find(
+        ({ comment }) => comment.text === earlyText,
+      )?.task;
+      const storedTask = held.find(
+        ({ comment }) => comment.text === storedText,
+      )?.task;
+      if (oldTask == null || storedTask == null)
+        throw new Error("Claims were not registered");
+      expect(
+        (await harness.waitForTask(childId<StageRecord>(storedTask), context))
+          .state.outcome,
+      ).toMatchObject({
+        status: "completed",
+        result: { status: "computed", key: expect.any(String) },
+      });
+      const graph = await harness.watchTaskGraph(context);
+      graph.start(async ({ tasks }) => {
+        const check = tasks[String(oldTask)];
+        if (check === undefined || check.abortRequested) reply.resolve();
+      });
+      try {
+        await harness.abortTask(first, context);
+        await reply.promise;
+      } finally {
+        await graph.stop();
+      }
+      expect(
+        (await harness.waitForTask(first, context)).state.outcome.status,
+      ).toBe("aborted");
+      expect(
+        (await harness.waitForTask(childId(oldTask), context)).state.outcome
+          .status,
+      ).toBe("aborted");
+      return start();
+    },
+    answer: async (agent, messages, hunks) => {
+      if (agent === "map") return splitMap();
+      if (agent.startsWith("lane-review."))
+        return reviewWithClaims(
+          agent,
+          textOf(messages).includes("export const first")
+            ? [claimOn(paths[1], earlyText), claimOn(paths[1], storedText)]
+            : [],
+        );
+      if (agent.startsWith("verify.claim.")) {
+        if (textOf(messages).includes(storedText)) {
+          storedChecks++;
+          return verify(agent);
+        }
+        if (++checks === 1) {
+          firstVerify.resolve();
+          await reply.promise;
+          return fauxAssistantMessage("The check was interrupted.");
+        }
+        return verify(agent);
+      }
+      return fallback(agent, messages, hunks);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(checks).toBe(2);
+  expect(storedChecks).toBe(1);
+  expect(
+    result.sent.filter(
+      ({ agent, messages }) =>
+        agent.startsWith("lane-review.") &&
+        textOf(messages).includes("export const first"),
+    ),
+  ).toHaveLength(1);
+  expect(
+    commentsOf(result).filter(({ body }) => body.includes(earlyText)),
+  ).toHaveLength(1);
+  expect(
+    commentsOf(result).filter(({ body }) => body.includes(storedText)),
+  ).toHaveLength(1);
+}, 60_000);
+
+// Once Lane review stores its answer, the cut-off can prevent Verify from ever starting.
+test("a claim whose Verify never starts at the cut-off stays in the run log", async () => {
+  const fallback = answerer();
+  const result = await runReview({
+    directory: join(directory, "cutoff-claim"),
+    ...splitRange,
+    readingMaxFiles: 1,
+    onLog: (row, reachCutoff) => {
+      if (
+        row.type === "stage" &&
+        String(row["agent"]).startsWith("lane-review.") &&
+        row["status"] === "computed"
+      )
+        reachCutoff();
+    },
+    answer: (agent, messages, hunks) =>
+      agent.startsWith("lane-review.")
+        ? reviewWithClaims(agent, [claimOn(paths[1], earlyText)])
+        : fallback(agent, messages, hunks),
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(
+    result.sent.filter(({ agent }) => agent.startsWith("verify.claim.")),
+  ).toHaveLength(0);
+  const claims = result.log
+    .read()
+    .filter(({ type }) => type === "review.claim-unpublished");
+  expect(claims).toEqual([
+    expect.objectContaining({
+      reason: "check-not-completed",
+      anchor: { path: paths[1], side: "new", startLine: 1, endLine: 1 },
+      verify: null,
+    }),
+  ]);
+  const held = await result.read(
+    String(claims[0]?.["answer"]),
+    LaneReviewStored,
+  );
+  expect(held.answer.crossBatchClaims).toEqual([claimOn(paths[1], earlyText)]);
+}, 60_000);
+
+// Stop a reading while its re-read is pending. Its stored first answer's claim must still be kept.
+test("a reading stopped before checking claims retains its incoming claim", async () => {
+  const rereading = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const fallback = answerer();
+  const result = await runReview({
+    directory: join(directory, "stopped-reading-claim"),
+    ...splitRange,
+    runAttempts: async (harness, start) => {
+      const review = await start();
+      await rereading.promise;
+      try {
+        const reread = await harness.commit(
+          async (tx) =>
+            (await tx.scanTasks({}, 1000)).items.find(({ kind, input }) => {
+              if (kind !== "neuve.agent-step") return false;
+              const step = input as AgentStepInput;
+              return (
+                step.kind === "lane-review" &&
+                (step.params as { part?: string }).part === "reread"
+              );
+            }),
+          context,
+        );
+        if (reread?.owner == null)
+          throw new Error("The re-read has no owning task");
+        const reading = childId(reread.owner);
+        await harness.abortTask(reading, context);
+        release.resolve();
+        expect(
+          (await harness.waitForTask(reading, context)).state.outcome.status,
+        ).toBe("aborted");
+        const registered = await harness.snapshot(CrossBatchClaimsDoc, context);
+        expect(Object.values(registered?.claims ?? {})).toEqual([
+          expect.objectContaining({
+            comment: claimOn(paths[1], earlyText),
+            task: null,
+          }),
+        ]);
+        return review;
+      } finally {
+        release.resolve();
+      }
+    },
+    answer: async (agent, messages, hunks) => {
+      if (agent === "map") return splitMap();
+      if (!agent.startsWith("lane-review."))
+        return fallback(agent, messages, hunks);
+      if (!textOf(messages).includes("export const first"))
+        return reviewWithClaims(agent, []);
+      if (!agent.endsWith(".reread"))
+        return reviewWithClaims(agent, [claimOn(paths[1], earlyText)], true);
+      rereading.resolve();
+      await release.promise;
+      return reviewWithClaims(agent, []);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(
+    result.sent.filter(({ agent }) => agent.startsWith("verify.claim.")),
+  ).toHaveLength(0);
+  expect(
+    result.log.read().filter(({ type }) => type === "review.claim-unpublished"),
+  ).toEqual([
+    expect.objectContaining({ reason: "check-not-completed", verify: null }),
+  ]);
+}, 60_000);
+
+// A batch can need more than one reading group. A section outside the source group can still
+// receive a confirmed claim on its own changed line.
+test("a claim on another reading group reaches the same batch", async () => {
+  const fallback = answerer();
+  const result = await runReview({
+    directory: join(directory, "same-batch"),
+    ...splitRange,
+    readingMaxFiles: 1,
+    answer: (agent, messages, hunks) => {
+      if (agent.startsWith("lane-review."))
+        return reviewWithClaims(
+          agent,
+          textOf(messages).includes("export const first")
+            ? [claimOn(paths[1], earlyText)]
+            : [],
+        );
+      if (agent.startsWith("verify.claim.")) return verify(agent);
+      return fallback(agent, messages, hunks);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(
+    result.sent.filter(({ agent }) => agent.startsWith("verify.claim.")),
+  ).toHaveLength(1);
+  expect(
+    commentsOf(result).filter(({ body }) => body.includes(earlyText)),
+  ).toEqual([
+    expect.objectContaining({
+      anchor: expect.objectContaining({ path: paths[1] }),
+    }),
+  ]);
+}, 60_000);
+
+// A Lane review can ask for its changed file and an unchanged caller in one read_many.
+// The file fits that tool's cap but previously consumed the review's whole budget.
+test("Lane review reads the caller after a large range in one tool call", async () => {
+  const path = "src/retries.ts";
+  const caller = "src/schedule.ts";
+  const padding = Array.from(
+    { length: 280 },
+    (_, n) => `// ${n} ${"context ".repeat(12)}\n`,
+  ).join("");
+  const callerText = "export const schedule = () => retryLimit * 2;";
+  const untouched = {
+    [caller]: `import { retryLimit } from "./retries.ts";\n${callerText}\n`,
+  };
+  const fallback = answerer();
+  let sawCaller = false;
+  const result = await runReview({
+    directory: join(directory, "multi-range-caller"),
+    base: { [path]: `${padding}export const retryLimit = 1;\n`, ...untouched },
+    head: { [path]: `${padding}export const retryLimit = 2;\n`, ...untouched },
+    message: "Raise the retry limit",
+    answer: (agent, messages, hunks) => {
+      if (!agent.startsWith("lane-review."))
+        return fallback(agent, messages, hunks);
+      const toolReply = messages.find(
+        (message) =>
+          message.role === "toolResult" && message.toolName === "read_many",
+      );
+      if (toolReply === undefined)
+        return submit(agent, "read_many", {
+          entries: [
+            { path, startLine: 1, endLine: 281 },
+            { path: caller, startLine: 2, endLine: 2 },
+          ],
+        });
+      sawCaller = textOf([toolReply]).includes(callerText);
+      return reviewWithClaims(agent, []);
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  expect(sawCaller).toBe(true);
+}, 60_000);
+
+// Lane review often spends its last tool turn on uses. A caller that would fit must reach it
+// on that turn, and a larger list still needs a continuation.
+test("Lane review receives a full caller list up to the uses cap and a page beyond it", async () => {
+  const files = Object.fromEntries(
+    [20, 60].flatMap((perFile) =>
+      Array.from({ length: 3 }, (_, file) => [
+        `src/callers-${perFile}/file${file}.ts`,
+        'import * as retries from "../retries.ts";\n' +
+          Array.from(
+            { length: perFile },
+            (_, line) =>
+              `const caller${file * perFile + line} = retries.retryLimit("${"retry context ".repeat(18)}");\n`,
+          ).join(""),
+      ]),
+    ),
+  );
+  const usesReplies = (messages: Parameters<Answer>[1]) =>
+    messages.flatMap((message) =>
+      message.role === "toolResult" && message.toolName === "uses"
+        ? message.content.flatMap((part) =>
+            part.type === "text" ? [part.text] : [],
+          )
+        : [],
+    );
+  const fallback = answerer();
+  const result = await run("uses-pages", {
+    base: {
+      ...files,
+      "src/retries.ts": "export const retryLimit = (_reason: string) => 1;\n",
+    },
+    head: {
+      ...files,
+      "src/retries.ts": "export const retryLimit = (_reason: string) => 2;\n",
+    },
+    answer: (agent, messages, hunks) => {
+      if (!agent.startsWith("lane-review."))
+        return fallback(agent, messages, hunks);
+      const paths = ["src/callers-20", "src/callers-60"];
+      const turn = usesReplies(messages).length;
+      const path = paths[turn];
+      if (path === undefined) return reviewWithClaims(agent, []);
+      return submit(`${agent}-uses-${turn}`, "uses", {
+        identifier: "retryLimit",
+        paths: [path],
+      });
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  const transcript = result.sent.findLast(({ agent }) =>
+    agent.startsWith("lane-review."),
+  );
+  const [whole, paged] = usesReplies(transcript?.messages ?? []);
+  expect(whole).toContain("60 occurrence(s) of retryLimit in 3 file(s)");
+  expect(whole).not.toMatch(/; page \d+ of|\[more: uses page|\[result cut/);
+  expect(
+    Array.from((whole ?? "").matchAll(/const caller(\d+) =/g), ([, n]) =>
+      Number(n),
+    ),
+  ).toEqual(Array.from({ length: 60 }, (_, n) => n));
+  expect(paged).toContain("180 occurrence(s) of retryLimit in 3 file(s)");
+  expect(paged).toMatch(/; page 1 of \d+/);
+  expect(paged).toContain("[more: uses page 2]");
+  expect(paged).not.toMatch(/const caller179 =|\[result cut/);
+}, 60_000);
+
+// A page can end before the caller. Lane review needs to read the continuation and still have
+// a turn left if its first submission is refused.
+test("Lane review follows a read_many continuation and can resubmit a refused answer", async () => {
+  const path = "src/retries.ts";
+  const caller = "src/schedule.ts";
+  const padding = Array.from(
+    { length: 450 },
+    (_, n) => `// ${n} ${"context ".repeat(12)}\n`,
+  ).join("");
+  const callerText = "export const schedule = () => retryLimit * 2;";
+  const untouched = {
+    [caller]: `import { retryLimit } from "./retries.ts";\n${callerText}\n`,
+  };
+  const checked = "The scheduler uses twice the retry limit.";
+  for (const refuseFirst of [false, true]) {
+    const fallback = answerer();
+    const result = await runReview({
+      directory: join(directory, `paged-caller-${refuseFirst}`),
+      base: {
+        [path]: `${padding}export const retryLimit = 1;\n`,
+        ...untouched,
+      },
+      head: {
+        [path]: `${padding}export const retryLimit = 2;\n`,
+        ...untouched,
+      },
+      message: "Raise the retry limit",
+      answer: (agent, messages, hunks) => {
+        if (!agent.startsWith("lane-review."))
+          return fallback(agent, messages, hunks);
+        const replies = messages.filter(
+          (message) => message.role === "toolResult",
+        );
+        const pages = replies.filter((reply) => reply.toolName === "read_many");
+        const call = (name: string, args: Parameters<typeof submit>[2]) =>
+          submit(`${agent}-${messages.length}`, name, args);
+        if (pages.length === 0)
+          return call("read_many", {
+            entries: [{ path }, { path: caller, startLine: 2, endLine: 2 }],
+          });
+        const page = pages.at(-1)?.content.find((part) => part.type === "text");
+        if (pages.length === 1) {
+          const continuation = page?.text.match(
+            /For the rest, ask read_many with entries (\[.*\])\]/,
+          )?.[1];
+          expect(page?.text).not.toContain(callerText);
+          if (continuation === undefined) throw new Error("Missing next page");
+          return call("read_many", { entries: JSON.parse(continuation) });
+        }
+        expect(page?.text).toContain(callerText);
+        const answer = {
+          files: [{ f: 1, checked, rows: null }],
+          sections: { a: [1], r: [], u: [] },
+          comments: [],
+          unsure: [],
+          notAsked: [],
+          crossBatchClaims: [],
+        };
+        const transcript = textOf(messages);
+        if (transcript.includes(MARK.final))
+          return fauxAssistantMessage(JSON.stringify(answer));
+        const refused = replies.some(
+          (reply) => reply.toolName === "submit_review",
+        );
+        return call(
+          "submit_review",
+          refuseFirst && !refused
+            ? { ...answer, sections: "approved" }
+            : answer,
+        );
+      },
+    });
+    if (result.outcome.status !== "completed")
+      throw new Error(`Review ${result.outcome.status}`);
+    const stages = result.outcome.result.stages.filter((stage) =>
+      stage.agent?.startsWith("lane-review."),
+    );
+    expect(stages.map((stage) => stage.agentResult)).toMatchObject([
+      {
+        status: "submitted",
+        endedBy: "submit",
+        turnsUsed: refuseFirst ? 4 : 3,
+      },
+    ]);
+    const stored = await result.read(stages[0]!.key!, LaneReviewStored);
+    expect(stored.answer.files).toEqual([{ f: 1, checked, rows: null }]);
+    expect(stored.answer.sections).toEqual({ a: [1], r: [], u: [] });
   }
-  expect(kept).toBeGreaterThan(0);
+}, 60_000);
+
+// The ending packet is already stored when retention appends the run-log row.
+test("a run-log write failure cannot fail a published review", async () => {
+  const fallback = answerer();
+  const firstPublished = Promise.withResolvers<void>();
+  let failedWrites = 0;
+  const result = await runReview({
+    directory: join(directory, "retention-failure"),
+    ...splitRange,
+    afterBatchPublished: (index) => {
+      if (index === 0) firstPublished.resolve();
+    },
+    onLog: (row) => {
+      if (row.type === "review.claim-unpublished") {
+        failedWrites++;
+        throw new Error("run log write refused");
+      }
+    },
+    answer: async (agent, messages, hunks) => {
+      if (agent === "map") return splitMap();
+      if (agent.startsWith("verify.claim.")) return verify(agent);
+      if (agent.startsWith("lane-review.")) {
+        if (textOf(messages).includes("export const first"))
+          return reviewWithClaims(agent, []);
+        await firstPublished.promise;
+        return reviewWithClaims(agent, [claimOn(paths[0], lateText)]);
+      }
+      return fallback(agent, messages, hunks);
+    },
+  });
+  expect(failedWrites).toBe(1);
+  expect(result.outcome.status).toBe("completed");
   expect(
     result.publicationHistory.some(
-      (e) => e.event.kind === "packet.published@1",
+      ({ event }) =>
+        event.kind === "packet.published@2" && event.payload.complete,
     ),
   ).toBe(true);
 }, 60_000);

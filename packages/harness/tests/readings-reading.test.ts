@@ -776,6 +776,7 @@ test("the keys that carry the reading's rendering moved, and the listed digest d
   const planOf = (recipe: string) => {
     const spec = planSpec({
       manifestKey: "m",
+      mapKey: "map",
       bounds: { maxFiles: 16, maxCharacters: 48_000, maxItems: 40 },
       source: { sha256: "s" },
     });
@@ -839,8 +840,8 @@ test("the keys that carry the reading's rendering moved, and the listed digest d
   // shows), that one by two, past the scope-and-tests variants' 12 and 11; the answers are
   // unchanged. The readers' round 30 moved Lane review's by two again, and its answer from 4 to 6
   // (each row's reading), past its variants' 13 and 5.
-  expect([ASSESS_PROMPT_VERSION, LANE_REVIEW_PROMPT_VERSION]).toEqual([13, 14]);
-  expect([assess.opVersion, review.opVersion]).toEqual([13, 14]);
+  expect([ASSESS_PROMPT_VERSION, LANE_REVIEW_PROMPT_VERSION]).toEqual([13, 20]);
+  expect([assess.opVersion, review.opVersion]).toEqual([13, 20]);
   expect([ASSESS_ANSWER_VERSION, LANE_REVIEW_ANSWER_VERSION]).toEqual([6, 6]);
 });
 

@@ -99,7 +99,7 @@ import type { StageRunner, StageServices } from "./services.ts";
  *   (`executionMode: "sequential"`), so the state never races and ledger IDs follow the order the
  *   model wrote the calls in; separate contexts still run in parallel.
  * - **Children.** An answer may ask for a child task of another task (`ChildRequest`, such as the
- *   Verify of a recorded finding, owned by its finder): it starts in the commit that stores the
+ *   a child that checks a recorded claim): it starts in the commit that stores the
  *   answer, named in its owner's `ChildrenDoc`, so it starts once (`startChild`).
  * - **Answer.** The text with the budget line (turn, cap, allowance use) under the 3,000-token cap,
  *   as before. A call that ends the context's tool use (its submission accepted, its chances used
@@ -765,19 +765,8 @@ export const kindExtension = (
             context,
           );
           if (doc === undefined) return;
-          const unavailable = new Set<string>();
-          if (doc.step !== null) {
+          if (doc.step !== null)
             await tools.admitted?.(doc.step.taskId, context.abortSignal);
-            if (kind === "find") {
-              const { step } = await tools.resolve(
-                api,
-                api.conversationId,
-                context,
-              );
-              for (const tool of step.spec.tools)
-                if (tool.available === false) unavailable.add(tool.name);
-            }
-          }
           // Only joined results of calls rejected by the original schema have an applied answer
           // here. The immutable native result retains pi's structured validation diagnostic.
           const rejected = new Set<string>();
@@ -798,17 +787,6 @@ export const kindExtension = (
           }
           return {
             messages: messages.map((message) => {
-              if (
-                unavailable.size > 0 &&
-                message.role === "system" &&
-                message.toolsAdded !== undefined
-              )
-                return {
-                  ...message,
-                  toolsAdded: message.toolsAdded.filter(
-                    (tool) => !unavailable.has(tool.name),
-                  ),
-                };
               if (
                 message.role !== "toolResult" ||
                 !message.isError ||

@@ -8,15 +8,9 @@ import { Checkpoints, Proofs } from "@neuve/records-core";
 // later fails. The advice that is returned once (§8.4) is a loop rule no other test reaches.
 import { expect, test } from "bun:test";
 import { laneOf, type ProofEntry } from "../src/compose.ts";
-import {
-  codeFilledBatch,
-  placeFindings,
-  groupDigest,
-  DIGEST_CHARS,
-} from "../src/link.ts";
+import { codeFilledBatch } from "../src/link.ts";
 import { anchorResolves } from "../src/disposition.ts";
-import { FindStored } from "../src/find.ts";
-import { frame, mapOf, inputsOf, hunk } from "./fixtures/link.ts";
+import { inputsOf, hunk } from "./fixtures/link.ts";
 
 const cited = [{ cites: ["p1.e1"] }];
 const requirement = (coverage: "missing" | "shallow" | "solid") => ({
@@ -300,58 +294,4 @@ test("code fill preserves proximity, old-side and non-text ownership with no mod
       { unit: gone, references: [] },
     ),
   ).toBe(false);
-});
-
-test("an unanchored finding becomes a gap, and capped digests retain whole unit links", () => {
-  const inputs = inputsOf([hunk("h1", "a.ts")]);
-  const assembled = codeFilledBatch(inputs),
-    unit = assembled.units[0]!;
-  const finding = FindStored.shape.findings.element.parse({
-    id: "f1",
-    lens: "correctness",
-    hunkId: "h1",
-    claim: "A ".repeat(140),
-    kind: "defect",
-    about: "code",
-    signal: null,
-    critical: false,
-    anchors: [{ path: "a.ts", side: "new", startLine: 11, endLine: 11 }],
-    doneWhen: "D1",
-    group: "g1",
-    evidence: [],
-  });
-  const unanchored = placeFindings(assembled.units, [
-    {
-      ...finding,
-      anchors: [
-        { path: "outside.ts", side: "new", startLine: 11, endLine: 11 },
-      ],
-    },
-  ]);
-  expect(unanchored.placed.size).toBe(0);
-  expect(unanchored.disclosures.map((gap) => gap.kind)).toEqual([
-    "finding-unanchored",
-  ]);
-  const group = mapOf(inputs.manifest.hunks).groups[0]!;
-  const digest = groupDigest(
-    frame,
-    group,
-    assembled.units,
-    new Map([[unit.id, Array.from({ length: 20 }, () => finding)]]),
-    [
-      {
-        doneWhen: "D1",
-        verdict: "needs-human",
-        anchors: [],
-        note: "Human evidence is needed.",
-      },
-    ],
-    [],
-  );
-  expect(digest.digest.length).toBeLessThanOrEqual(DIGEST_CHARS);
-  expect(digest.digest).toEndWith("](" + unit.id + ")");
-  expect(digest.verification).toContain(
-    "[A revoked link is refused](D1): needs-human",
-  );
-  expect(digest.limitations.join(" ")).toContain("beyond this digest's limit");
 });

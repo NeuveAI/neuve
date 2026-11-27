@@ -180,45 +180,83 @@ const scenarios = [
   },
 ] as const;
 
-// A complete fake review over the fixture's single changed file: Frame, Map, then four empty finding searches.
-const acceptedSubmission = (tool: string, conditions: boolean) =>
-  tool === "submit_frame"
-    ? {
+// The queue fixture changes one section and has no defect claim to check.
+const reviewTools = [
+  "submit_frame",
+  "submit_map",
+  "submit_assess",
+  "submit_review",
+  "submit_briefing",
+];
+
+const acceptedSubmission = (tool: string, prompt: string) => {
+  switch (tool) {
+    case "submit_frame":
+      return {
         goal: "Review the value change",
         stratum: "nothing",
         sourceIds: [],
         doneWhen: [
           { text: "The value changes", candidateId: null, sectionId: null },
         ],
-      }
-    : tool === "submit_map"
-      ? {
-          groups: [
-            {
-              label: "Value change",
-              why: "The value changes.",
-              tier: "core",
-              doneWhen: ["D1"],
-              entries: ["f1"],
+      };
+    case "submit_map":
+      return {
+        groups: [
+          {
+            label: "Value change",
+            why: "The value changes.",
+            tier: "core",
+            doneWhen: ["D1"],
+            entries: ["f1"],
+          },
+        ],
+      };
+    case "submit_assess":
+      return {
+        factors: [],
+        requirements: [],
+        impact: [],
+        classes: [
+          { S: [1], c: "l", v: "e", F: [], R: [], person: null, gaps: null },
+        ],
+      };
+    case "submit_review":
+      return {
+        files: [{ f: 1, checked: "Read the changed value.", rows: null }],
+        sections: { a: [1], r: [], u: [] },
+        comments: [],
+        unsure: [],
+        notAsked: [],
+        crossBatchClaims: [],
+      };
+    case "submit_briefing": {
+      const hunk = /hunks: (\S+) lines 1/.exec(prompt)?.[1];
+      if (hunk === undefined)
+        throw new Error("The briefing has no changed line");
+      const text = `[The value rises to two](${hunk}@1).`;
+      return {
+        sections: [
+          {
+            n: 1,
+            title: "Raise the value",
+            briefed: text,
+            explained: {
+              before: "The value was one.",
+              after: "The value is two.",
+              terms: [],
+              cites: [hunk],
             },
-          ],
-        }
-      : {
-          findings: [],
-          notes: [],
-          ...(conditions
-            ? {
-                conditions: [
-                  {
-                    doneWhen: "D1",
-                    verdict: "needs-human",
-                    anchors: [],
-                    note: "Fake review",
-                  },
-                ],
-              }
-            : {}),
-        };
+          },
+        ],
+        leads: [],
+        digest: { digest: text, uncertainty: [], limitations: [] },
+      };
+    }
+    default:
+      throw new Error(`Unexpected submission ${tool}`);
+  }
+};
 
 const runScenario = async (
   scenario: (typeof scenarios)[number],
@@ -299,10 +337,7 @@ const runScenario = async (
       tool.name.startsWith("submit_"),
     );
     if (tool === undefined) throw new Error("No submission tool");
-    const input = acceptedSubmission(
-      tool.name,
-      turn.policy.systemPrompt.includes("Return exactly one condition verdict"),
-    );
+    const input = acceptedSubmission(tool.name, turn.prompt);
     const call = {
       callId: `accepted-${turn.turnId}`,
       toolName: tool.name,
@@ -313,7 +348,7 @@ const runScenario = async (
   };
   const fake = fakeRuntime(
     fresh || recovery !== undefined
-      ? Array.from({ length: 6 }, () => accept)
+      ? reviewTools.map(() => accept)
       : [
           async (turn) => {
             if (writeRefusal) {
@@ -664,8 +699,6 @@ const runScenario = async (
           runtimes: folderAt === "startup" ? fakeRegistry : registry,
           search: {},
           stack: undefined,
-          // Off, so the review's model turns are its stages' alone, whatever the settings say.
-          readings: undefined,
         });
         const queue = yield* JobQueue.JobQueue;
         let job = Option.getOrThrow(yield* queue.take(["review.run@2"]));
@@ -906,14 +939,30 @@ const runScenario = async (
       }).pipe(Effect.provide(JobQueue.layer), Effect.provide(run.ctx.records)),
     );
     if ("fresh" in observed) {
-      expect(fake.turns).toHaveLength(6);
+      expect(
+        fake.turns
+          .map(
+            (turn) =>
+              turn.policy.tools.find((tool) => tool.name.startsWith("submit_"))
+                ?.name,
+          )
+          .sort(),
+      ).toEqual([...reviewTools].sort());
       expect(fake.opens()).toBe(fake.closes());
       expect(fake.probes()).toBe(0);
       expect(cleanup).toMatchObject([{ mode: "ended", stop: false }]);
       return;
     }
     if ("recovered" in observed) {
-      expect(fake.turns).toHaveLength(6);
+      expect(
+        fake.turns
+          .map(
+            (turn) =>
+              turn.policy.tools.find((tool) => tool.name.startsWith("submit_"))
+                ?.name,
+          )
+          .sort(),
+      ).toEqual([...reviewTools].sort());
       expect(fake.opens()).toBe(fake.closes());
       expect(fake.probes()).toBe(0);
       expect(cleanup).toMatchObject(
@@ -1153,12 +1202,7 @@ const anthropicEndpoint = (seen: string[]) =>
         index: 0,
         delta: {
           type: "input_json_delta",
-          partial_json: JSON.stringify(
-            acceptedSubmission(
-              tool.name,
-              text.includes("Return exactly one condition verdict"),
-            ),
-          ),
+          partial_json: JSON.stringify(acceptedSubmission(tool.name, text)),
         },
       },
       { type: "content_block_stop", index: 0 },
@@ -1247,8 +1291,6 @@ test("an API-key review commits on its first claim after the live store's root t
           runtimes: registry,
           search: {},
           stack: undefined,
-          // Off, so the review's model turns are its stages' alone, whatever the settings say.
-          readings: undefined,
         });
         chmodSync(folder, 0o775);
         // Both pi defaults resolve from their declarations; their readiness reads no account file.
@@ -1331,8 +1373,8 @@ test("an API-key review commits on its first claim after the live store's root t
     );
     for (const type of ["run.attempt-failed", "run.failed", "run.held"])
       expect(log).not.toContainEqual(expect.objectContaining({ type }));
-    expect(seen.filter((name) => name.startsWith("submit_"))).toEqual(
-      expect.arrayContaining(["submit_frame", "submit_map"]),
+    expect(seen.filter((name) => name.startsWith("submit_")).sort()).toEqual(
+      [...reviewTools].sort(),
     );
     // Neither the fake Claude runtime nor a status probe ran for the API-key review.
     expect(calls).toEqual([]);

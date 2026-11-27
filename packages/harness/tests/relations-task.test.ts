@@ -2017,36 +2017,14 @@ test("the head gate at its bound continues nothing: a read it alone subscribed t
 // Why (the coordinator's condition): the review is given the starter only when the run's frozen
 // configuration has the readings setting, while the task is registered either way, so a stored
 // checkpoint that names one resumes.
-test("the stages give the relations starter only with readings on, and register the task either way", async () => {
+test("the stages always provide the relations starter and head gate", async () => {
   const s = await setup();
-  const stagesWith = (readings: boolean) =>
-    reviewStages({
-      ...s.services,
-      registry: createRegistry(),
-      ctx: {
-        ...s.services.ctx,
-        config: readings
-          ? {
-              ...s.services.ctx.config,
-              readings: {
-                mode: "probe",
-                bounds: { maxFiles: 1, maxCharacters: 1, maxItems: 1 },
-                recipe: "test",
-              },
-            }
-          : s.services.ctx.config,
-      },
-    });
-  const off = stagesWith(false);
-  const on = stagesWith(true);
-  expect("relations" in off).toBe(false);
-  expect("headGate" in off).toBe(false);
-  expect(typeof on.relations).toBe("function");
-  expect(typeof on.headGate).toBe("function");
-  for (const stages of [off, on])
-    expect(
-      stages.extension.tasks?.map((task) => task.definition.name),
-    ).toContain(RELATIONS_TASK);
+  const stages = reviewStages({ ...s.services, registry: createRegistry() });
+  expect(typeof stages.relations).toBe("function");
+  expect(typeof stages.headGate).toBe("function");
+  expect(stages.extension.tasks?.map((task) => task.definition.name)).toContain(
+    RELATIONS_TASK,
+  );
 });
 
 const realSource = captureOutlineSource();

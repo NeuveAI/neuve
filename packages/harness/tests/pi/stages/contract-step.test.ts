@@ -17,14 +17,9 @@ import {
   ROUND_ENDED,
 } from "../../../src/pi/stages/contract-tools.ts";
 import { TOOL_RESULT_BYTES } from "../../../src/budget.ts";
-import { findStep } from "../../../src/pi/stages/find-steps.ts";
-import { withTelemetry } from "../../../src/run-log.ts";
-import type { ToolSpec } from "../../../src/toolkit.ts";
-import { finding, frame, hunk, view } from "../../find-fixture.ts";
 
 import {
   setup,
-  fakeRuntime,
   waitHeld,
   call,
   submit,
@@ -33,7 +28,6 @@ import {
   route,
   type Script,
 } from "./contract-fixture.ts";
-import { settled, world } from "./fixture.ts";
 
 const accept: Script = async (turn) => {
   const item = submit("valid", 2);
@@ -58,137 +52,6 @@ const summary = (
 };
 
 // The contract runtime owns dispatch, so pi tests cannot catch failures on this path.
-test("contract find tools apply defaults, teach refusals and log starts with telemetry off", async () => {
-  let reviewTools: ReadonlyArray<ToolSpec> = [];
-  const { signal: _signal, ...withoutSignal } = finding;
-  const fake = fakeRuntime(
-    [
-      async (turn) => {
-        const names = turn.policy.tools.map((tool) => tool.name);
-        expect(names).toContain("record_finding");
-        expect(names).not.toContain("scope_section");
-        expect(names).not.toContain("proofs");
-        expect(
-          turn.policy.tools.find((tool) => tool.name === "log")!.inputSchema[
-            "required"
-          ] ?? [],
-        ).not.toContain("format");
-        const log = call("log-default", "log", {});
-        const tree = call("tree-default", "tree", {});
-        const invalid = call("log-invalid", "log", { format: "full" });
-        const record = call("missing-signal", "record_finding", withoutSignal);
-        const end = submit("done", 2);
-        await turn.message([log, tree, invalid, record, end]);
-        expect((await turn.invoke(log)).text).toContain("22222222 change");
-        expect((await turn.invoke(tree)).text).toContain("new.ts 12 B");
-        expect((await turn.invoke(invalid)).text).toStartWith(
-          'log format accepts "oneline" or "message" and received "full".',
-        );
-        expect((await turn.invoke(record)).text).toStartWith(
-          'record_finding signal accepts "forged" or "test-bloat" or "untested" or "stale-proof" or null and received no value.',
-        );
-        await turn.invoke(end);
-        await turn.charge(usage);
-      },
-    ],
-    false,
-  );
-  const run = await world(
-    "contract-review-tools",
-    6,
-    false,
-    false,
-    "faux",
-    undefined,
-    false,
-    undefined,
-    {
-      runtimes: fake.registry,
-      configure: (step) => ({
-        ...step,
-        spec: { ...step.spec, tools: reviewTools },
-      }),
-    },
-  );
-  run.ctx.config.route = route;
-  run.ctx.log = withTelemetry(run.ctx.log, false);
-  const range = view();
-  const step = await Effect.runPromise(
-    findStep(
-      run.ctx,
-      {
-        ...range,
-        head: {
-          ...range.head,
-          entries: new Map([
-            [
-              "new.ts",
-              {
-                path: "new.ts",
-                type: "blob",
-                mode: "100644",
-                oid: hunk.newOid!,
-                size: 12,
-              },
-            ],
-          ]),
-        },
-        commits: [
-          { oid: range.head.commit, subject: "change", body: "message" },
-        ],
-      },
-      {
-        lens: "correctness",
-        frame,
-        keys: { frame: "frame", manifest: "manifest" },
-      },
-    ).pipe(Effect.provide(run.ctx.records)),
-  );
-  reviewTools = step.spec.tools.map((tool) =>
-    tool.name !== "log"
-      ? tool
-      : {
-          ...tool,
-          handle: (input) =>
-            Effect.sync(() => {
-              expect(
-                run.ctx.log
-                  .read()
-                  .filter((row) => row["callId"] === "log-default"),
-              ).toEqual([
-                {
-                  at: expect.any(String),
-                  type: "tool.started",
-                  stage: "frame",
-                  agent: expect.stringMatching(/^frame(?:\.\d+)?$/),
-                  turn: 1,
-                  tool: "log",
-                  callId: "log-default",
-                },
-              ]);
-            }).pipe(Effect.andThen(tool.handle(input))),
-        },
-  );
-  const opened = await run.open();
-  try {
-    const id = await run.start(opened);
-    await opened.harness.resume();
-    expect((await settled(opened.harness, id)).agentResult?.status).toBe(
-      "submitted",
-    );
-    expect(
-      run.ctx.log
-        .read()
-        .filter((row) => row["callId"] === "log-invalid")
-        .map((row) => [row.type, row["error"]]),
-    ).toEqual([
-      ["tool.started", undefined],
-      ["tool.call", "InvalidInput"],
-    ]);
-  } finally {
-    await opened.harness.close(context);
-  }
-});
 
 test("round-one submission is accepted, committed and closed without pi generation", async () => {
   const w = await setup("accept", [accept]);

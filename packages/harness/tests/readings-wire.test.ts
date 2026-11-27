@@ -208,7 +208,8 @@ test("every reading kind's submit schema is inside the provider's strict subset,
 });
 
 test("a value in the strict form, nulls where a field is absent, reads back and passes the schema", () => {
-  const [assess, review, claim] = specs.map(([, spec]) => spec);
+  const [assess, review, claim, , scoped] = specs.map(([, spec]) => spec);
+  const anchor = { path: "src/a.ts", side: "old", startLine: 2, endLine: 3 };
   const values: ReadonlyArray<readonly [AgentSpec<unknown>, unknown]> = [
     [
       assess!,
@@ -276,6 +277,39 @@ test("a value in the strict form, nulls where a field is absent, reads back and 
       },
     ],
     [claim!, { decision: "keep", reason: "The cited lines show it." }],
+    [
+      scoped!,
+      {
+        files: [],
+        sections: { a: [], r: [1], u: [] },
+        comments: [
+          {
+            s: 1,
+            side: "new",
+            start: 1,
+            end: 1,
+            kind: "defect",
+            effect: null,
+            t: "The helper drops an item.",
+            cites: [],
+            fails: "The last item is lost.",
+            row: null,
+            evidenceAnchors: [anchor],
+          },
+        ],
+        crossBatchClaims: [
+          {
+            ...anchor,
+            kind: "risk",
+            text: "A caller uses the old count.",
+            fails: "",
+            evidenceAnchors: [],
+          },
+        ],
+        unsure: [],
+        notAsked: [],
+      },
+    ],
   ];
   for (const [spec, value] of values) {
     // The final answer, read as agent-step.ts reads it.
@@ -316,6 +350,40 @@ test("a value in the strict form, nulls where a field is absent, reads back and 
     message:
       'submit_assess classes[0].person accepts only the keys "need", "why" and received unknown key "reason".',
   });
+});
+
+// All anchors must reach Verify and affect reuse, even when the cited code is too long to send.
+test("Verify keeps the anchor locations inside the task budget and computation key", () => {
+  const comment = {
+    path: "src/new.ts",
+    side: "new" as const,
+    startLine: 1,
+    endLine: 1,
+    text: "The new helper drops an item.",
+    fails: "The last item is lost.",
+  };
+  const stem = "a".repeat(4080);
+  const paths = [`${stem}-first.ts`, `${stem}-second.ts`, `${stem}-third.ts`];
+  const step = (anchors: string[]) =>
+    claimVerifyStep({
+      key: "a".repeat(64),
+      section: "section",
+      comment,
+      reading: { text: "x".repeat(30_000) },
+      turnLimit: 1,
+      evidence: anchors.map((path) => ({
+        anchor: { ...comment, path, side: "old" },
+        source: "y".repeat(30_000),
+      })),
+    });
+  const checked = step(paths);
+  expect(checked.spec.task.length).toBeLessThanOrEqual(24_000);
+  expect(checked.spec.task).toContain("[evidence truncated]");
+  expect(checked.spec.task.match(/\[context truncated\]/g)).toHaveLength(3);
+  for (const path of paths) expect(checked.spec.task).toContain(path);
+  expect(checked.inputs.task).not.toBe(
+    step([...paths.slice(0, 2), `${stem}-other.ts`]).inputs.task,
+  );
 });
 
 // Why (round 2f): the answers became classes (Assess) and lists by verdict (Lane review), and the

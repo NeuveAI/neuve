@@ -734,8 +734,6 @@ const noteShownHunks = (
 const hunkTouches = (hunk: ManifestHunk, path: string) =>
   [hunk.path, hunk.oldPath, hunk.newPath].includes(path);
 
-// No group or partition filter: no caller places hunks before its finders read them (Map runs
-// beside the finders, and groups are assigned at dedupe), so such a filter could only answer nothing.
 const HunksInput = z.strictObject({
   path: z
     .string()
@@ -938,8 +936,7 @@ const ReadManyInput = z.strictObject({
 type ReadManyInput = z.infer<typeof ReadManyInput>;
 
 /**
- * How a caller wires `read_many`. A `read` of the caller's own, such as the one its head reads are
- * recorded from (find.ts `recordingHeadReads`), comes only with `remaining`: a reading budget that
+ * How a caller wires `read_many`. A `read` of the caller's own comes with `remaining`: a budget that
  * cut the result after its pages were read would leave lines recorded that were never shown. That
  * `read` must be the unwrapped one, never the budget-wrapped tool, which would count every page
  * again on top of `read_many`'s whole result.
@@ -957,7 +954,7 @@ export type ReadManyOptions = {
   | {
       /** The `read` every range is read through, page by page, so what wraps it sees each page. */
       readonly read: ToolSpec<unknown>;
-      /** The characters the caller's reading budget has left (find.ts `readingBudget`). */
+      /** The characters the caller's reading budget has left. */
       readonly remaining: () => number;
     }
 );
@@ -1009,9 +1006,9 @@ const startOf = (entry: ReadManyEntry) =>
 /** What a call answers when the reading budget is spent: the instruction first, so it survives. */
 const spentAnswer = (left: number) =>
   [
-    `Reading budget spent. Submit your findings. (${left.toLocaleString("en")} characters are left, too few to read any of these entries.)`,
-    "Reading budget spent. Submit your findings.",
-    "Submit your findings.",
+    `Reading budget spent. Submit your review. (${left.toLocaleString("en")} characters are left, too few to read any of these entries.)`,
+    "Reading budget spent. Submit your review.",
+    "Submit your review.",
     "Submit.",
   ].find((text) => text.length <= left) ?? "Submit.";
 
@@ -1036,7 +1033,7 @@ export const readManyTool = (
 ): ToolSpec<unknown> => {
   const read = options.read ?? readTool(ctx);
   // Refusals come from a `read` that records nothing: a refusal repeats the path asked, so a path
-  // shaped like a page header must never be taken for lines read (find.ts `recordingHeadReads`).
+  // shaped like a page header must never be taken for lines read.
   const refusals = readTool(ctx);
   const hunk = hunkTool(ctx, options.allowed);
   /** The room a call over `entries` keeps for its note or its last words, before reading. */
@@ -1434,7 +1431,7 @@ export const readManyTool = (
                   : later === 1
                     ? `, and entry ${stop.at + 2}`
                     : `, and entries ${stop.at + 2} to ${count}`;
-              text = `${text}\n[read_many stopped: the reading budget is all but spent, with fewer than ${Math.max(0, (remaining ?? 0) - text.length).toLocaleString("en")} characters left after this result, too few to show any more. Not read: entry ${stop.at + 1}${startOf(stop.next)}${rest}. There is nothing to ask again; submit your findings.]`;
+              text = `${text}\n[read_many stopped: the reading budget is all but spent, with fewer than ${Math.max(0, (remaining ?? 0) - text.length).toLocaleString("en")} characters left after this result, too few to show any more. Not read: entry ${stop.at + 1}${startOf(stop.next)}${rest}. There is nothing to ask again; submit your review.]`;
             }
           }
           yield* Effect.annotateCurrentSpan({
@@ -2304,7 +2301,7 @@ export const rankedSearchTool = (
 
 /**
  * BM25 for `search`, whatever the leads come from: the frozen candidate's fallback, or BM25, as the
- * manifest's settings hold it (`searchRetriever`, manifest.ts), so the finders' keys hold it.
+ * manifest's settings hold it (`searchRetriever`, manifest.ts).
  */
 const lexicalConfig = (ctx: LookupContext): RetrieverConfig =>
   ctx.manifest.settings.search;
@@ -2366,7 +2363,6 @@ const UsesInput = z.strictObject({
 type UsesInput = z.infer<typeof UsesInput>;
 
 const WORD = /^[A-Za-z0-9_]+$/;
-const USES_PER_PAGE = 50;
 /** Printed bytes of a match's code and enclosing name; the rest is in `read`. */
 const CODE_BYTES = 320;
 const ENCLOSING_BYTES = 60;
@@ -2495,13 +2491,17 @@ const usesCandidates = (
     return route;
   });
 
-export const usesTool = (ctx: LookupContext): ToolSpec<unknown> =>
+export const usesTool = (
+  ctx: LookupContext,
+  resultCap?: typeof READ_MANY_CAP,
+): ToolSpec<unknown> =>
   defineTool({
     name: "uses",
     description:
       "Find every textual occurrence of an identifier at a revision (git grep over the tree, whole words), grouped by file, each with its line and enclosing symbol where a capability declares one. Textual, not semantic: it finds names, including in comments.",
     input: UsesInput,
     hints: READ_ONLY,
+    resultCap,
     handle: (input: UsesInput) =>
       answer(
         ctx,
@@ -2590,8 +2590,10 @@ export const usesTool = (ctx: LookupContext): ToolSpec<unknown> =>
               text: `No occurrence of ${input.identifier} at ${view.label} ${view.commit.slice(0, 12)}${input.paths === undefined ? "" : ` under ${input.paths.join(", ")}`} (git grep${word ? " -w" : ", fixed string with identifier boundaries"}, binary files skipped).`,
               empty: true,
             };
-          // Pages hold at most USES_PER_PAGE matches and break where an upper bound of their printed
-          // size would pass the result cap, so a page is never cut and every match is on one page.
+          // Size pages by an upper bound of their printed bytes so the result cap leaves every
+          // match intact.
+          const bodyBytes =
+            resultCap === undefined ? PAGE_BODY_BYTES : READ_MANY_BODY_BYTES;
           const pages: Array<Array<number>> = [[]];
           let used = 0;
           let file = "";
@@ -2601,11 +2603,7 @@ export const usesTool = (ctx: LookupContext): ToolSpec<unknown> =>
                 ? Buffer.byteLength(match.path) + USES_HEADER_BYTES
                 : 0;
             const bytes = header + USES_LINE_BYTES;
-            if (
-              pages.at(-1)!.length > 0 &&
-              (used + bytes > PAGE_BODY_BYTES ||
-                pages.at(-1)!.length >= USES_PER_PAGE)
-            ) {
+            if (pages.at(-1)!.length > 0 && used + bytes > bodyBytes) {
               pages.push([]);
               used = Buffer.byteLength(match.path) + USES_HEADER_BYTES;
             }

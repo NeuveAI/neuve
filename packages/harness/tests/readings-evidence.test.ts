@@ -1,3 +1,5 @@
+import { buildMapManifest, fallbackMap } from "../src/review-map.ts";
+import { frame } from "./find-fixture.ts";
 // Why (NEU-148 WP6, round 6): a section reading is now shown who calls its changed code and which
 // test file does, from the relations the review's relations task stored. Missing caller or test
 // evidence is a gap that sends the work to a person (the owner's ruling), so the one place where
@@ -109,7 +111,7 @@ import {
 } from "../src/readings/evidence.ts";
 import { CODE_GAPS } from "../src/readings/decide.ts";
 import {
-  READING_RECIPE,
+  READING_RECIPE_SCOPE_AND_TESTS,
   planReadings,
   removalAttribution,
   symbolRemovedOf,
@@ -487,7 +489,7 @@ const decided = (
     groups: [],
     collected,
     proofs: new Map(of.sections.map((s) => [s.path, RECORDS])),
-    findings: [],
+
     excluded: [],
     relations: new Set(
       evidence.sections
@@ -1394,7 +1396,7 @@ const decisionX = (
       ]),
     ),
     proofs: new Map([[section.path, RECORDS]]),
-    findings: [],
+
     excluded: [],
     relations: new Set(
       evidence.sections
@@ -3200,12 +3202,7 @@ test("equal reading evidence shares step keys across runs, and changed evidence 
   expect(none.claim).not.toBe(one.claim);
 
   // The run key still matches the parent. The step pins below use the mixed range's parent inputs.
-  expect(
-    runKeyFor(
-      { baseRef: "main", baseOid: "1".repeat(40), headOid: "2".repeat(40) },
-      defaultConfig(),
-    ),
-  ).toBe(PARENT.runKeyOff);
+
   const range = mixedRange();
   const mixed = planReadings({
     hunks: range.hunks,
@@ -3258,20 +3255,16 @@ test("equal reading evidence shares step keys across runs, and changed evidence 
   );
   expect(keyOf(mixedAssess)).not.toBe(PARENT.assess);
   expect(keyOf(mixedReview)).not.toBe(PARENT.review);
-  // Restoring the parent recipe, prompt versions, stored version and offered input recovers the pins.
+  // Restoring the parent's prompt, budget and stored inputs recovers the pins.
   for (const [step, parent, back] of [
-    [mixedAssess, PARENT.assess, { by: 7 }],
-    [mixedReview, PARENT.review, { by: 9, answer: 4 }],
+    [mixedAssess, PARENT.assess, { opVersion: 6, turnLimit: 2 }],
+    [mixedReview, PARENT.review, { opVersion: 5, turnLimit: 3, answer: 4 }],
   ] as const)
     expect(
       keyOf({
         ...step,
-        // Rounds 6, 6e, 7, 7d and 10 each moved the prompt versions by one; round 9 by two, past
-        // the scope-and-tests variants' numbers. Round 15 added what the step is offered; round 17
-        // moved the stored version from 2 (the producer is stored with the output). The readers'
-        // round 30 moved Lane review's prompt by two more and its answer from 4 to 6 (each row's
-        // reading), past the variants' numbers.
-        opVersion: step.opVersion - back.by,
+        opVersion: back.opVersion,
+        spec: { ...step.spec, turnLimit: back.turnLimit },
         inputs: {
           ...withoutOffered(step).inputs,
           recipe: "neuve-reading-v3",
@@ -3719,6 +3712,11 @@ const reviewWorld = async (
     },
   };
   const manifestKey = await storeValue("test.range-manifest", manifest);
+  const frameKey = await storeValue("test.frame", frame);
+  const mapKey = await storeValue(
+    "test.map",
+    fallbackMap(frame, buildMapManifest(manifest), frameKey),
+  );
   const evidencePlan = planReadings({
     hunks: changed as never,
     structures: new Map(
@@ -3832,6 +3830,8 @@ const reviewWorld = async (
   return {
     engine,
     index,
+    frameKey,
+    mapKey,
     manifestKey,
     rows,
     computed,
@@ -4567,7 +4567,7 @@ test("the old switch is ignored: set or not, the readings block and the run key 
     baseOid: "1".repeat(40),
     headOid: "2".repeat(40),
   };
-  const keyWith = (block: ReturnType<typeof readingsConfig>) =>
+  const keyWith = (block: ReturnType<typeof readingsConfig> | undefined) =>
     runKeyFor(
       range,
       defaultConfig(
@@ -4584,7 +4584,8 @@ test("the old switch is ignored: set or not, the readings block and the run key 
   expect(absent).toEqual({
     mode: "probe",
     bounds: { ...DEFAULT_READING_BOUNDS },
-    recipe: READING_RECIPE,
+    recipe: READING_RECIPE_SCOPE_AND_TESTS,
+    scopeAndTests: true,
   });
   expect(JSON.stringify(readingsConfig(Option.none()))).toBe(
     JSON.stringify(absent),
@@ -4612,8 +4613,8 @@ test("the old switch is ignored: set or not, the readings block and the run key 
     readingsConfig(
       settingsOf({ sectionReadings: "off", sectionReadingsCallsLiftGap: true }),
     ),
-  ).toBeUndefined();
-  expect(keyWith(undefined)).toBe(PARENT.runKeyOff);
+  ).toEqual(absent);
+  expect(keyWith(undefined)).toBe(keyWith(absent));
   // Beside scope and tests, only scope and tests is frozen.
   const scoped = readingsConfig(
     settingsOf({
@@ -4927,8 +4928,8 @@ const gatedWorld = async (
             outcome: {
               status: "completed",
               result: {
-                frameKey: "front-frame",
-                mapKey: "front-map",
+                frameKey: world.frameKey,
+                mapKey: world.mapKey,
               } as FrontResult,
             },
           }),
@@ -5477,6 +5478,7 @@ test("the review's real readings plan, given graph's head gate as the review giv
     const { harness, stages, startReview } = await gated.openStages(at);
     expect(stages.headGate).toBeDefined();
     const ids = await startReview();
+    gated.releaseFront();
     const planEnd = await harness.waitForTask(ids.plan, context);
     expect([first, planEnd.state.outcome.status]).toEqual([first, "completed"]);
     const planned = (planEnd.state.outcome as { result: ReadingsPlanResult })
@@ -5506,9 +5508,8 @@ test("the review's real readings plan, given graph's head gate as the review giv
       expect((record!.input as ReadingTaskInput).relations).toBe(
         Number(ids.gate),
       );
-      expect((record!.input as ReadingTaskInput).front).toBe(Number(ids.front));
+      expect((record!.input as ReadingTaskInput).front).toBeUndefined();
     }
-    gated.releaseFront();
     // Each reading ends, having decided once the gate ended, from one decision per group.
     const ended = await Promise.all(
       readings.map(async ({ task }) => {

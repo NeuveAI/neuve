@@ -1,4 +1,5 @@
 import { captureOutlineSource } from "../../graph-outline.ts";
+import { CrossBatchClaim } from "../../readings/answers.ts";
 import { readData } from "@neuve/records-core";
 import { copyJson, type Context } from "@earendil-works/chord";
 import type { DocumentReader, TaskId } from "@earendil-works/pi-durable";
@@ -11,7 +12,7 @@ import {
   MAP_DEADLINE_MS,
   type AgentStage,
 } from "../../budget.ts";
-import { git, rangeCommitFiles } from "../../git.ts";
+import { git } from "../../git.ts";
 import { rangeCommits, revisionViews } from "../../lookups.ts";
 import { RangeManifest } from "../../manifest.ts";
 import {
@@ -24,26 +25,17 @@ import {
 import { snapshotByKey } from "../../scope.ts";
 import { readSettings } from "../../settings.ts";
 import { freezeStackRun, runStackSettings } from "../../stack/frozen-state.ts";
-import type { ChildRequest, ToolSpec } from "../../toolkit.ts";
-import {
-  Claim,
-  claimKeyOf,
-  claimOf,
-  verifyAgentOf,
-  verifyChildName,
-} from "../../verify.ts";
+import type { ToolSpec } from "../../toolkit.ts";
 import { ChangeMap } from "../../review-map.ts";
 import { candidateObligations, commitsByPath } from "../../scope-text.ts";
 import { lookupContext } from "../../pipeline.ts";
-import { AGENT_STEP, type AgentStepInput } from "./agent-step.ts";
+import { type AgentStepInput } from "./agent-step.ts";
 import { RunSetupDoc, type AgentKind } from "./docs.ts";
 import type { StageServices } from "./services.ts";
 import { scopeChangeStep } from "./scope-change-step.ts";
 import { frameStep, mapStep } from "./front-steps.ts";
-import { findStep, verifyStep } from "./find-steps.ts";
 import { Frame } from "../../frame.ts";
 import { MapManifest } from "../../review-map.ts";
-import { Lens } from "../../find.ts";
 import { erased } from "./agent.ts";
 import { stageOfKind, type ResolvedAgent } from "./tools.ts";
 import { readingStep } from "./reading-task.ts";
@@ -91,18 +83,6 @@ const ReadingEvidence = z.string().optional();
 export const KindParams = {
   frame: z.strictObject({}),
   map: z.strictObject({ frame: z.string(), manifest: z.string() }),
-  find: z.strictObject({
-    lens: Lens,
-    frame: z.string(),
-    manifest: z.string(),
-    /** The finder task that owns the step, which owns the Verify of each finding it records. */
-    finder: z.int().min(0),
-  }),
-  /** The claim a Verify reads, carried whole: it exists before the Find that recorded it ends. */
-  verify: z.strictObject({
-    frame: z.string(),
-    finding: Claim,
-  }),
   "scope-change": z.strictObject({
     change: z.strictObject({
       source: z.string(),
@@ -147,6 +127,9 @@ export const KindParams = {
     manifest: z.string(),
     answer: z.string(),
     claim: z.string(),
+    crossBatch: z
+      .strictObject({ section: z.string(), comment: CrossBatchClaim })
+      .optional(),
     effort: ReadingStepEffort,
     evidence: ReadingEvidence,
   }),
@@ -195,43 +178,6 @@ export const stepInput = <K extends AgentKind>(
     cutoffAt,
     ...(limit === undefined ? {} : { deadline: limit }),
   };
-};
-
-/**
- * The Verify of one claim, as a child of its finder: asked for by the `record_finding` call that
- * accepts the claim (find-steps.ts) or by the finder's verify phase (finder-task.ts). Both name it
- * by the claim's key and give it the same input, so whichever comes first starts the one run.
- * `findKey`, for one the verify phase starts, is the final list it read the claim from; a record
- * call's claim comes from the call itself, which its `task.inputs` record names.
- */
-export const verifyChild = (
-  finder: number,
-  frameKey: string,
-  cutoffAt: number,
-  finding: Claim,
-  findKey?: string,
-) => {
-  const claimKey = claimKeyOf(frameKey, finding);
-  return {
-    owner: finder,
-    name: verifyChildName(claimKey),
-    task: AGENT_STEP,
-    input: stepInput(
-      "verify",
-      { frame: frameKey, finding: claimOf(finding) },
-      cutoffAt,
-    ),
-    attributes: {
-      "harness.lens": finding.lens,
-      "harness.claim": claimKey,
-      "harness.agent": verifyAgentOf(finding.lens, claimKey),
-    },
-    kind: "verify",
-    inputs: {
-      frame: `computation:${frameKey}`,
-      ...(findKey === undefined ? {} : { find: `computation:${findKey}` }),
-    },
-  } satisfies ChildRequest;
 };
 
 export interface StageRun {
@@ -373,11 +319,6 @@ export const stageRun = (
             base,
             hunks: new Map(manifest.hunks.map((hunk) => [hunk.hunkId, hunk])),
             commits: yield* rangeCommits(ctx.repository, manifest),
-            findLog: yield* rangeCommitFiles(
-              ctx.repository,
-              manifest.range.mergeBase,
-              manifest.range.headOid,
-            ).pipe(Effect.catch(() => Effect.succeed(undefined))),
             byPath: yield* commitsByPath(manifest, (args) =>
               git(ctx.repository, args),
             ),
@@ -490,55 +431,10 @@ export const stageRun = (
           vent,
         };
       }
-      case "find":
-      case "verify": {
-        const setup = await setupOf(reader, context);
-        const view = await viewOf(
-          { precompute: setup.precompute, setup },
-          signal,
-        );
-        if (input.kind === "find") {
-          const params = readData(KindParams.find, input.params);
-          return {
-            step: erased(
-              await run(
-                findStep(ctx, view, {
-                  lens: params.lens,
-                  frame: await read(params.frame, Frame, signal),
-                  keys: params,
-                  verify: (claim) =>
-                    verifyChild(
-                      params.finder,
-                      params.frame,
-                      input.cutoffAt,
-                      claim,
-                    ),
-                }),
-                signal,
-              ),
-            ),
-            vent,
-          };
-        }
-        const params = readData(KindParams.verify, input.params);
-        return {
-          step: erased(
-            await run(
-              verifyStep(ctx, view, {
-                finding: params.finding,
-                frame: await read(params.frame, Frame, signal),
-                frameKey: params.frame,
-              }),
-              signal,
-            ),
-          ),
-          vent,
-        };
-      }
       case "assess":
       case "lane-review":
       case "verify-claim": {
-        // Only Lane review's tools read the range's trees; the other two never list them.
+        // Lane review's tools and cited claim evidence use the pinned trees on demand.
         const view = async () => {
           const setup = await setupOf(reader, context);
           return viewOf({ precompute: setup.precompute, setup }, signal);

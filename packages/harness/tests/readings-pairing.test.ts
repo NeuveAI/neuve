@@ -1,3 +1,4 @@
+import { oneBatchPlanMap } from "./fixtures/readings.ts";
 // Why (NEU-148 WP6, round 10): a removed line that released something (a listener, a timer, a
 // handle) is judged by the claim check on one section with no tools. Without the line that set it up,
 // the check cannot confirm a request lane review made with its tools, and drops it. The plan now
@@ -9,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import { Context, Effect, Exit, Layer, Option, Scope } from "effect";
+import { Context, Effect, Exit, Layer, Scope } from "effect";
 import {
   Blobs,
   Computations,
@@ -18,13 +19,12 @@ import {
   storeLocationIn,
 } from "@neuve/records-core";
 import { graphTestPrerequisite } from "../../../scripts/graph-test-prerequisite.ts";
-import { defaultConfig, runKeyFor } from "../src/config.ts";
+import { defaultConfig } from "../src/config.ts";
 import { captureOutlineSource } from "../src/graph-outline.ts";
 import { defaultManifestSettings, frontManifest } from "../src/manifest.ts";
 import { McpClients, mcpClientsLayer } from "../src/mcp-client.ts";
 import { storedOutput } from "../src/pipeline.ts";
 import { DEFAULT_READING_BOUNDS } from "../src/reading-groups.ts";
-import { readingsConfig } from "../src/request.ts";
 import { erased, type AgentStep } from "../src/pi/stages/agent.ts";
 import { readingStep, structuresOf } from "../src/pi/stages/reading-task.ts";
 import { stageRunner } from "../src/pi/stages/services.ts";
@@ -567,19 +567,6 @@ test("sections that remove nothing keep their text and key, groups without a rem
       ),
     ),
   ).toBe(JSON.stringify(mixedPlan));
-  // With the readings' off switch, nothing of the readings is frozen into the run, and its key is
-  // the one before the probe existed.
-  expect(
-    readingsConfig(
-      Option.some({ version: 1, review: { sectionReadings: "off" } }),
-    ),
-  ).toBeUndefined();
-  expect(
-    runKeyFor(
-      { baseRef: "main", baseOid: "1".repeat(40), headOid: "2".repeat(40) },
-      defaultConfig(),
-    ),
-  ).toBe(BASE_RUN_KEY);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -683,6 +670,7 @@ test.skipIf(graph.skip)(
       storePlan(ctx, {
         manifestKey: manifest.key,
         bounds: DEFAULT_READING_BOUNDS,
+        map: oneBatchPlanMap(manifest),
         manifest: manifest.value,
       }),
     );

@@ -1,3 +1,4 @@
+import { oneBatchPlanMap } from "./fixtures/readings.ts";
 // Why: a budget caps a request's or a lease's owner at 128 characters, and callers pass the
 // repository path as the owner, so a review in a deeper folder lost its CPU grants. Each owner must
 // reach every budget, an older host included, under one bounded name, and a lease and its calls must
@@ -315,6 +316,7 @@ test.skipIf(!("sha256" in source.key))(
           storePlan(ctx, {
             manifestKey: manifest.key,
             bounds: DEFAULT_READING_BOUNDS,
+            map: oneBatchPlanMap(manifest),
             manifest: manifest.value,
           }),
         ),

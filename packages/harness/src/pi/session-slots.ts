@@ -7,7 +7,7 @@ import type { Budget } from "../budget/scheduler.ts";
 export const continuationAccountKey = (identity: ContinuationIdentity) =>
   sha256Hex(canonicalJson(identity));
 
-/** One semaphore per run, shared by its contract contexts and finder children. */
+/** One semaphore per run, shared by its contract contexts. */
 export function contractSessionSlots(
   budget: Budget,
   limit: number,

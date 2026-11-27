@@ -3,7 +3,7 @@ import { Duration } from "effect";
 import { z } from "zod";
 import type { RouteConfig } from "./route.ts";
 
-/** The fixed review shape, in receipt order (12.41). */
+/** Stage names in receipts and frozen settings. */
 export const Stage = z.enum([
   "precompute",
   "frame",
@@ -18,12 +18,11 @@ export type AgentStage = Extract<Stage, "frame" | "map" | "find" | "verify">;
 
 export const FRAME_DEADLINE_MS = 90_000;
 export const MAP_DEADLINE_MS = 120_000;
-export const FIND_DEADLINE_MS = 270_000;
+export const PREPARATION_DEADLINE_MS = 270_000;
 export const VERIFY_RESERVE_MS = 75_000;
-export const MIN_FIND_WINDOW_MS = 90_000;
 
-export const findDeadline = (start: number, cutoffAt: number) =>
-  Math.min(start + FIND_DEADLINE_MS, cutoffAt - VERIFY_RESERVE_MS);
+export const preparationDeadline = (start: number, cutoffAt: number) =>
+  Math.min(start + PREPARATION_DEADLINE_MS, cutoffAt - VERIFY_RESERVE_MS);
 
 /** Model calls in flight per run, shared by every stage (10.27). */
 export const CALLS_IN_FLIGHT = 8;
@@ -85,11 +84,8 @@ export const PAGE_BODY_BYTES =
   TOOL_RESULT_BYTES - BUDGET_LINE_BYTES - RESULT_FRAME_BYTES;
 
 /**
- * `read_many`'s result cap (lookups.ts), the one tool the owner's ruling of 12 November lets past
- * 10.18's 3,000 tokens. A finder's reading turn brings 20–45 KB of results today across 4–16
- * calls; 20,000 UN9 tokens is about 45 KB, so one call carries the heaviest reading turn measured.
- * It uses less than 9% of the 237,500-token Sol ceiling. The finders' 200,000-character
- * reading budget still bounds what all their calls bring together.
+ * A multi-range read can return up to 20,000 estimated tokens, about 45 KB.
+ * The reading budget also limits the combined results of all calls in a Lane review.
  */
 export const READ_MANY_RESULT_TOKENS = 20_000;
 

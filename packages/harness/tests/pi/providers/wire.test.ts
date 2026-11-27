@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { z } from "zod";
 import { FrameSubmission } from "../../../src/frame.ts";
 import { MapSubmission } from "../../../src/review-map.ts";
-import { FindSubmission } from "../../../src/find.ts";
+import { FindSubmission } from "../../../src/find-schema.ts";
 import { VerifySubmission } from "../../../src/verify.ts";
 import { wireSchema } from "../../../src/toolkit.ts";
 import {

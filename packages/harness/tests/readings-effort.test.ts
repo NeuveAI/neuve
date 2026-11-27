@@ -225,10 +225,12 @@ const keyOf = (
  * The row-reading round (a56671eb: each done-when row also gives its reading) moved the Lane review's
  * prompt version by two (12 to 14, past the scope-and-tests variant's 13) and its answer version from
  * 4 to 6 (past 5) on purpose, so every Lane review runs once again; it moved nothing else of these
- * keys, and no Assess or claim-check key. The comparisons with the parents set it back.
+ * keys, and no Assess or claim-check key. The two-tool-turn and caller-page rounds (17.71) then moved
+ * Lane review's prompt version by six more (14 to 20) and its turn limit from 3 to 4. The comparisons
+ * with the parents set all of it back.
  */
 const beforeRowReading = <
-  S extends { readonly opVersion: number },
+  S extends { readonly opVersion: number; readonly spec: object },
   I extends Record<string, unknown>,
 >(
   kind: "assess" | "laneReview",
@@ -237,7 +239,11 @@ const beforeRowReading = <
 ): readonly [S, I] =>
   kind === "laneReview"
     ? [
-        { ...step, opVersion: step.opVersion - 2 },
+        {
+          ...step,
+          opVersion: step.opVersion - 8,
+          spec: { ...step.spec, turnLimit: 3 },
+        },
         { ...inputs, answer: 4 },
       ]
     : [step, inputs];
@@ -692,6 +698,7 @@ test("off, the plan is the parent commit's byte for byte; on, a file's flagged a
     Computations.computationKey(
       planSpec({
         manifestKey: "m",
+        mapKey: "map",
         bounds: { maxFiles: 16, maxCharacters: 48_000, maxItems: 40 },
         source: { sha256: "s" },
         ...(effort === undefined ? {} : { effort }),
@@ -702,6 +709,7 @@ test("off, the plan is the parent commit's byte for byte; on, a file's flagged a
     "effort" in
       (planSpec({
         manifestKey: "m",
+        mapKey: "map",
         bounds: { maxFiles: 16, maxCharacters: 48_000, maxItems: 40 },
         source: { sha256: "s" },
       }).inputs as Record<string, unknown>),

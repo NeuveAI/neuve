@@ -598,6 +598,21 @@ const walk = (cycleId: string, runKey: string) =>
 // Lineage and carried decisions
 // ---------------------------------------------------------------------------------------------
 
+/** Comment fates for batches that reached a packet in this publication chain. */
+export const publishedBatchClaims = (cycleId: string, runKey: string) =>
+  Effect.map(
+    walk(cycleId, runKey),
+    ({ chain }) =>
+      new Map(
+        chain.packetBatches.flatMap((batch) => {
+          const key = batch["key"];
+          return typeof key === "string"
+            ? [[key, chain.fates.get(key) ?? []] as const]
+            : [];
+        }),
+      ),
+  );
+
 /** The earlier units of each packet fixed in the sequence's first plan. */
 const earlierSets = (lineage: Plan["lineage"]) =>
   Effect.gen(function* () {

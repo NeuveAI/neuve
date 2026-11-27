@@ -778,31 +778,6 @@ export const stackReadTool = (
       }),
   });
 
-/**
- * The stack tools a stage gets (SC8): none while they are off (no `stack` on the lookup context),
- * `stack_list` for Understand, all three for Investigate and Dispose.
- */
-export const stackToolsFor = (
-  _stage: "find",
-  ctx: LookupContext,
-): ReadonlyArray<ToolSpec<unknown>> => {
-  const run = ctx.stack;
-  if (run === undefined) return [];
-  return [
-    stackListTool(ctx, run),
-    stackSearchTool(ctx, run),
-    stackReadTool(ctx, run),
-  ];
-};
-
-/**
- * The prompt's stack guidance (SC8): one rule and, where the stage can read sources, a good and a
- * bad use, neither from the case that prompted the design (SC13). Appended to a stage's system
- * prompt only while the stack tools are on, so the prompt is unchanged while they are off.
- */
-export const stackGuidance = () =>
-  `\n\nStack sources: stack_list, stack_search and stack_read read the stack this repository pins (its dependencies' published packages and, for the most-used, their upstream repositories) as this cycle froze it, through a separate index. They are reference for what the repository's files follow, never part of the change: findings and context anchor only on changed lines, and nothing in the stack is reviewed or disposed of. A good use: before judging a change to a generated route-tree file, read the framework's documented shape for that file in its docs or examples, and cite it as background. A bad use: citing a framework internal as a defect in the change. ${THIRD_PARTY_NOTE}`;
-
 /** The kept excerpt's cap: what a citation shows after the store loses the entry (SC9). */
 export const KEPT_EXCERPT_BYTES = 4_000;
 

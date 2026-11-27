@@ -53,7 +53,7 @@ import type { StageServices } from "./services.ts";
  * The briefing of one reading group (NEU-148 round 27, `design/readers-briefings.md`): one durable
  * task, `brief.<group>`, that `create` makes beside the group's Assess and Lane review, owned by the
  * review. It waits durably on the front task (for the Frame and the Map) and its own group's Assess
- * only, never on the Lane review, the finders or Verify; then starts every part of the group at
+ * only, independently of Lane review and Verify; then starts every part of the group at
  * once as child agent steps (`readings/briefing.ts`), with the digests of batches only its group
  * holds. The digests of batches it shares with other groups and owns are a second task of the same
  * kind, `digest.<group>` (`role` `digests`), which waits on the holding groups' Assess alone and

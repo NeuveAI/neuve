@@ -5,8 +5,12 @@ import { Blobs, Computations } from "@neuve/records-core";
 import { z } from "zod";
 import { Frame } from "./frame.ts";
 import { ReviewMap } from "./review-map.ts";
-import { FindOutput, FindStored } from "./find.ts";
-import { claimKeyOf, VerifyStored } from "./verify.ts";
+import {
+  FindOutput,
+  FindStored,
+  claimKeyOf,
+  VerifyStored,
+} from "./historical-find.ts";
 
 /** Count summaries for the new stages. Old published packets still use the packet reader. */
 const outputOf = (key: string) =>

@@ -231,7 +231,18 @@ test("a batch without the new fields publishes the packet e0ebb64d wrote", async
   const result = await store.run(
     atTime(T)(
       Effect.gen(function* () {
-        const ctx = store.ctx({ runId: RUN, startedAt: T - 1_000 });
+        const current = store.ctx({ runId: RUN, startedAt: T - 1_000 });
+        const { readings: _readings, ...config } = current.config;
+        const ctx = {
+          ...current,
+          config: {
+            ...config,
+            budgets: {
+              ...config.budgets,
+              turnLimits: { frame: 1, map: 1, find: 11, verify: 1 },
+            },
+          },
+        };
         const summary = yield* publishSettled(
           ctx,
           inputOf([withNotes, b, c], { ending: true }),

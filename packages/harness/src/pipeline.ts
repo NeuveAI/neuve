@@ -97,7 +97,7 @@ import type { RunLog } from "./run-log.ts";
 import { RECORDS, defineTool, type ToolSpec } from "./toolkit.ts";
 import { type StackRun } from "./stack/tools.ts";
 
-/** Shared Records computations and telemetry for the native front, finder and publication tasks. */
+/** Shared Records computations and telemetry for the native review tasks. */
 
 /** What every stage of one run shares. */
 export class RunContext extends Context.Service<
@@ -619,13 +619,13 @@ export const precomputeStage = (
       ),
   );
 
-/** Runs `effect` unless the cut-off has passed; holds the stage first when a stub setting asks. */
-/** Attributes for the stage spans opened under it, such as a finder's lens. */
+/** Attributes for spans opened during the stage. */
 const StageSpanAttributes = Context.Reference<Record<string, string>>(
   "neuve/harness/StageSpanAttributes",
   { defaultValue: () => ({}) },
 );
 
+/** Runs `effect` unless the cut-off has passed; holds the stage first when a stub setting asks. */
 export const guard = <E, R>(
   ctx: RunContext["Service"],
   stage: Stage,

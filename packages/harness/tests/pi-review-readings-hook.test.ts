@@ -16,29 +16,18 @@ import {
   createRegistry,
   defineExtension,
   defineTask,
-  type TaskId,
   type TaskOutcome,
   type Tx,
 } from "@earendil-works/pi-durable";
 import { MemoryStorage } from "@earendil-works/pi-durable/storage/memory";
-import { FINDERS } from "../src/find.ts";
-import {
-  findDeadline,
-  MIN_FIND_WINDOW_MS,
-  VERIFY_RESERVE_MS,
-} from "../src/budget.ts";
+import {} from "../src/budget.ts";
 import {
   childOf,
   reviewExtension,
   reviewTask,
   type PublishInput,
-  type ReadingsPrepareInput,
   type ReviewStagesPort,
 } from "../src/pi/review-task.ts";
-import type {
-  FinderInput,
-  FinderResult,
-} from "../src/pi/stages/finder-task.ts";
 import type { FrontInput, FrontResult } from "../src/pi/stages/front-task.ts";
 import type { LeadsInput, LeadsResult } from "../src/pi/stages/leads-task.ts";
 import type {
@@ -88,7 +77,6 @@ const frontTask = (
     readonly fails?: boolean;
     readonly ended?: () => void;
     /** How each finder ends, by lens; a lens not named completes with its findings. */
-    readonly finderEnds?: Partial<Record<FinderInput["lens"], FinderEnd>>;
   },
 ) =>
   defineTask<FrontInput, { phase: "run" }, FrontResult>({
@@ -98,8 +86,6 @@ const frontTask = (
     phases: {
       run: async (task, runtime, context) => {
         await hooks.before?.();
-        let owner: TaskId | undefined;
-        let schedule: FrontResult["finders"];
         await runtime.commit(async (tx) => {
           await hooks.atEnd?.(tx);
           if (hooks.fails)
@@ -125,37 +111,6 @@ const frontTask = (
                 },
               },
             };
-          const self = await tx.task(runtime.taskId);
-          owner = self?.owner;
-          const now = clock(runtime.now());
-          const deadline = findDeadline(now, task.input.cutoffAt);
-          const started =
-            task.input.cutoffAt - VERIFY_RESERVE_MS - now >= MIN_FIND_WINDOW_MS;
-          const finders: Array<{
-            lens: FinderInput["lens"];
-            task: TaskId<FinderResult>;
-          }> = [];
-          if (started && self?.owner !== undefined)
-            for (const lens of FINDERS) {
-              const end = hooks.finderEnds?.[lens];
-              finders.push({
-                lens,
-                task: await tx.createTask(
-                  finder,
-                  {
-                    lens,
-                    frameKey: "frame-key",
-                    manifestKey: "manifest-key",
-                    front: runtime.taskId,
-                    cutoffAt: task.input.cutoffAt,
-                    deadline,
-                    ...(end === undefined ? {} : { end }),
-                  },
-                  { ownership: { kind: "task", taskId: self.owner } },
-                ),
-              });
-            }
-          schedule = { start: now, deadline, started, finders };
           return {
             status: "terminal",
             outcome: {
@@ -169,28 +124,11 @@ const frontTask = (
                 strongestStratum: "nothing",
                 frameStratum: "nothing",
                 disclosures: [],
-                finders: { start: now, deadline, started, finders },
               },
             },
           };
         }, context);
         hooks.ended?.();
-        if (
-          schedule !== undefined &&
-          !log
-            .read()
-            .some((r) => r.type === "review.schedule" && r["taskId"] === owner)
-        )
-          log.write({
-            type: "review.schedule",
-            taskId: owner,
-            front: runtime.taskId,
-            start: schedule.start,
-            deadline: schedule.deadline,
-            cutoffAt: task.input.cutoffAt,
-            finders: schedule.finders.length,
-            skipped: !schedule.started,
-          });
       },
     },
     abort: (_task, runtime, context) =>
@@ -202,80 +140,6 @@ const frontTask = (
         context,
       ),
   });
-/**
- * How a finder ends: with its findings (the default), with them and an unused Verify, aborted at the
- * cut-off with no result (the review fills in its entry), or with a result whose search was skipped.
- */
-type FinderEnd = "completed" | "unused" | "cutoff" | "skipped";
-const finder = defineTask<
-  FinderInput & { readonly end?: FinderEnd },
-  { phase: "run" },
-  FinderResult
->({
-  name: "test.finder",
-  version: 1,
-  initial: () => ({ phase: "run" }),
-  phases: {
-    run: (task, runtime, context) => {
-      const { lens, end = "completed" } = task.input;
-      return runtime.commit(
-        () => ({
-          status: "terminal",
-          outcome:
-            end === "cutoff"
-              ? { status: "aborted", reason: "cutoff" }
-              : {
-                  status: "completed",
-                  result:
-                    end === "skipped"
-                      ? {
-                          lens,
-                          findKey: null,
-                          findings: [],
-                          stages: [record("find", `find.${lens}`, "skipped")],
-                          reason: "skipped",
-                          end: { find: "skipped", verify: "completed" },
-                        }
-                      : {
-                          lens,
-                          findKey: `find-${lens}`,
-                          findings: [
-                            {
-                              id: `finding-${lens}`,
-                              verifyKey: null,
-                              status: "kept",
-                            },
-                          ],
-                          stages: [record("find", `find.${lens}`)],
-                          end: { find: "completed", verify: "completed" },
-                          ...(end === "unused"
-                            ? {
-                                unused: [
-                                  {
-                                    claim: `An unused claim of ${lens}.`,
-                                    agent: `verify.${lens}.9`,
-                                    status: "computed",
-                                    key: `verify-${lens}-9`,
-                                  },
-                                ],
-                              }
-                            : {}),
-                        },
-                },
-        }),
-        context,
-      );
-    },
-  },
-  abort: (_task, runtime, context) =>
-    runtime.commit(
-      () => ({
-        status: "terminal",
-        outcome: { status: "aborted", reason: "stopped" },
-      }),
-      context,
-    ),
-});
 const leads = defineTask<LeadsInput, { phase: "run" }, LeadsResult>({
   name: "test.leads",
   version: 1,
@@ -408,7 +272,7 @@ const readingTask = (stop: () => void) =>
 
 type Readings = NonNullable<ReviewStagesPort["readings"]>;
 type Collected = Parameters<Readings["collect"]>[0];
-type Replayable = "precompute" | "front" | "find+fill" | "link" | "plan";
+type Replayable = "precompute" | "front" | "fill" | "link" | "plan";
 
 /** What one run saw: every commit's next state, the tasks each commit created, the stage calls. */
 type Seen = {
@@ -423,14 +287,12 @@ type Seen = {
   readonly calls: Array<string>;
   /** Open review and plan transactions when `prepare` was called and when it resolved. */
   readonly open: Array<number>;
-  readonly prepared: Array<ReadingsPrepareInput>;
+  readonly prepared: Array<Parameters<Readings["prepare"]>[0]>;
   /** The deadline each finder was created with, in creation order (read from their inputs). */
-  finderDeadlines: Array<number>;
   /** How many reading tasks existed in the front task's terminal commit. */
   readingsAtFrontEnd?: number;
   published?: PublishInput;
   /** The finders' results Link received. */
-  linkedFinders?: ReadonlyArray<FinderResult>;
   /** When Link started, in true time. */
   linkAt?: number;
   /** The review's status as the relations stand-in was released, after Publish's commit. */
@@ -472,7 +334,6 @@ const runReview = async (options: {
   /** The front task ends without a Frame or a Map. */
   readonly frontFallback?: boolean;
   /** How each finder ends, by lens; a lens not named completes with its findings. */
-  readonly finderEnds?: Partial<Record<FinderInput["lens"], FinderEnd>>;
   /** The front task ends failed. */
   readonly frontFails?: boolean;
   /**
@@ -487,7 +348,6 @@ const runReview = async (options: {
     calls: [],
     open: [],
     prepared: [],
-    finderDeadlines: [],
   };
   /** The review's and the plan's commits whose change is running now. */
   let open = 0;
@@ -608,9 +468,6 @@ const runReview = async (options: {
       ...(options.frontFallback ? { fallback: true } : {}),
       ...(options.frontFails ? { fails: true } : {}),
       ended: () => seen.calls.push("front.end"),
-      ...(options.finderEnds === undefined
-        ? {}
-        : { finderEnds: options.finderEnds }),
       ...(options.frontWaitsForPlan
         ? {
             before: () => Promise.race([planYet, sleep(5_000)]),
@@ -737,14 +594,9 @@ const runReview = async (options: {
     link: async (input) => {
       seen.calls.push("link");
       seen.linkAt = Date.now();
-      seen.linkedFinders = input.finders;
       return {
         record: record("link", "link"),
-        candidates: input.finders.map((f) => ({
-          candidate: f.lens,
-          assembledKey: `assembled-${f.lens}`,
-          disposed: [],
-        })),
+        candidates: [],
         changeMapKey: "change-map-key",
         disclosures: [{ kind: "link", detail: "Link disclosed this." }],
       };
@@ -764,7 +616,7 @@ const runReview = async (options: {
   registry.install(
     defineExtension({
       name: "test.stages",
-      tasks: [front, finder, leads, relations, reading, plan],
+      tasks: [front, leads, relations, reading, plan],
     }),
   );
   registry.install(reviewExtension(task));
@@ -811,10 +663,6 @@ const runReview = async (options: {
       async (tx) => (await tx.scanTasks({}, 1000)).items,
       context,
     );
-    seen.finderDeadlines = tasks
-      .filter((t) => t.kind === "test.finder")
-      .sort((a, b) => Number(a.id) - Number(b.id))
-      .map((t) => (t.input as FinderInput).deadline);
     // Telemetry is written a microtask late.
     await sleep(0);
     return {
@@ -886,7 +734,6 @@ const PRE = record("precompute", "precompute");
 const FRAME = record("frame", "frame");
 const FILL = record("link", "link.fill");
 const LINK = record("link", "link");
-const FINDS = FINDERS.map((lens) => record("find", `find.${lens}`));
 const SOURCES = {
   sources: { manifest: "manifest-key", changeMap: null, scope: "scope-key" },
   strongestStratum: "nothing",
@@ -900,7 +747,6 @@ const KEYS = {
 // Task IDs on a fresh store without the port: the front is 7, the leads 8, the finders 9 to 12.
 // With it, the plan is 9, created in the same commit, and the finders and readings follow in the
 // order the front task's and the plan's commits land.
-const FINDER_TASKS = FINDERS.map((lens, index) => ({ lens, task: 9 + index }));
 const PLAN = 9;
 
 const THREE: ReadonlyArray<ReadingEnd> = [
@@ -946,342 +792,14 @@ const before = (run: Run, first: string, then: string) => {
 // f1ed6458, before the hook existed (this test was run there, unchanged, and passed). Since
 // 5c783b7d no checkpoint names the leads task and Link goes to Publish at once (`running`). With
 // the port absent no plan task is created, so every task ID is today's.
-test("with the port absent, every checkpoint and the final stages are today's", async () => {
-  const run = await runReview({});
-  expect(states(run)).toEqual([
-    {
-      phase: "precompute",
-      state: {
-        status: "waiting",
-        on: [7],
-        policy: "allSettled",
-        checkpoint: {
-          phase: "front",
-          stages: [PRE],
-          facts: { key: "precompute-key", output: PRECOMPUTE },
-          front: 7,
-          disclosures: [],
-        },
-      },
-    },
-    {
-      phase: "front",
-      state: {
-        status: "running",
-        checkpoint: {
-          phase: "find+fill",
-          stages: [PRE, FRAME],
-          sources: SOURCES,
-          ...KEYS,
-          finders: FINDER_TASKS,
-        },
-      },
-    },
-    {
-      phase: "find+fill",
-      state: {
-        status: "waiting",
-        on: [9, 10, 11, 12],
-        policy: "allSettled",
-        checkpoint: {
-          phase: "link",
-          stages: [PRE, FRAME],
-          sources: SOURCES,
-          ...KEYS,
-          finders: FINDER_TASKS,
-          fill: { record: FILL, groups: [] },
-        },
-      },
-    },
-    {
-      phase: "link",
-      state: {
-        status: "running",
-        checkpoint: {
-          phase: "publish",
-          stages: [PRE, FRAME, FILL, ...FINDS, LINK],
-          sources: {
-            ...SOURCES,
-            sources: { ...SOURCES.sources, changeMap: "change-map-key" },
-            disclosures: [{ kind: "link", detail: "Link disclosed this." }],
-            findings: FINDERS.map((lens) => `finding-${lens}`),
-          },
-          candidates: FINDERS.map((lens) => ({
-            candidate: lens,
-            assembledKey: `assembled-${lens}`,
-            disposed: [],
-          })),
-        },
-      },
-    },
-    {
-      phase: "publish",
-      state: {
-        status: "terminal",
-        outcome: {
-          status: "completed",
-          result: {
-            stages: [
-              PRE,
-              FRAME,
-              FILL,
-              ...FINDS,
-              LINK,
-              record("publish", "publish"),
-            ],
-          },
-        },
-      },
-    },
-  ]);
-  // Byte-identical, key order included: no `readings` or `plan` key anywhere, not even an empty one.
-  expect(JSON.stringify(states(run))).not.toContain("readings");
-  expect(JSON.stringify(states(run))).not.toContain('"plan"');
-  expect(JSON.stringify(run.seen.commits[1]!.state)).toBe(
-    JSON.stringify({
-      status: "running",
-      checkpoint: {
-        phase: "find+fill",
-        stages: [PRE, FRAME],
-        sources: SOURCES,
-        ...KEYS,
-        finders: FINDER_TASKS,
-      },
-    }),
-  );
-  expect(run.outcome).toEqual({
-    status: "completed",
-    result: {
-      stages: [PRE, FRAME, FILL, ...FINDS, LINK, record("publish", "publish")],
-    },
-  });
-  expect(kind(run, "test.reading")).toHaveLength(0);
-  expect(kind(run, READINGS_PLAN_TASK)).toHaveLength(0);
-  expect(prepareRows(run)).toEqual([]);
-  // No relations task either (NEU-148 WP11): the port has no starter, as with readings off.
-  expect(kind(run, "test.relations")).toHaveLength(0);
-  expect(
-    run.records.filter(
-      (r) => r.type === "task.inputs" && r["kind"] === "relations",
-    ),
-  ).toEqual([]);
-}, 30_000);
 
 // Why: the readings' plan starts when its inputs exist, in Precompute's commit beside the front
 // task, so it never waits for Frame or Map; the review waits for it only before Link, beside the
 // finders, then on the readings it named, and collects them without a poll in creation order.
-test("the plan starts in Precompute's commit, and its readings reach the collector in creation order", async () => {
-  const run = await runReview({ readings: THREE });
-  expect(run.outcome.status).toBe("completed");
-  const review = reviewOf(run);
-  // Precompute's commit creates the front task, the leads and the plan, and names the plan.
-  const pre = run.seen.commits.filter((c) => c.phase === "precompute");
-  expect(pre).toHaveLength(1);
-  expect(pre[0]!.created).toEqual([
-    { kind: "test.front", id: 7 },
-    { kind: "test.leads", id: 8 },
-    { kind: READINGS_PLAN_TASK, id: PLAN },
-  ]);
-  expect(pre[0]!.state).toEqual({
-    status: "waiting",
-    on: [7],
-    policy: "allSettled",
-    checkpoint: {
-      phase: "front",
-      stages: [PRE],
-      facts: { key: "precompute-key", output: PRECOMPUTE },
-      front: 7,
-      disclosures: [],
-      plan: PLAN,
-    },
-  });
-  // It reads only what exists now: the manifest key and the front task's ID.
-  expect(run.seen.prepared as ReadonlyArray<unknown>).toEqual([
-    { manifestKey: "manifest-key", cutoffAt: run.cutoffAt, front: 7 },
-  ]);
-  expect(kind(run, READINGS_PLAN_TASK)).toEqual([
-    expect.objectContaining({ id: PLAN, owner: review, status: "terminal" }),
-  ]);
-  // The plan's own commit creates the readings, each the review's child, as the finders are.
-  const readings = readingsOf(run);
-  expect(readings).toHaveLength(3);
-  const plans = run.seen.commits.filter((c) => c.phase === "plan");
-  expect(plans).toHaveLength(1);
-  expect(plans[0]!.created).toEqual(
-    readings.map((r) => ({ kind: "test.reading", id: r.task })),
-  );
-  expect(plans[0]!.state).toEqual({
-    status: "terminal",
-    outcome: { status: "completed", result: { status: "ok", readings } },
-  });
-  for (const t of [...kind(run, "test.reading"), ...kind(run, "test.finder")])
-    expect(t).toMatchObject({ owner: review, status: "terminal" });
-  // The review's front and find+fill commits create nothing; the front task created the finders.
-  for (const phase of ["front", "find+fill", "link"])
-    for (const commit of run.seen.commits.filter((c) => c.phase === phase))
-      expect(commit.created).toEqual([]);
-  const finders = kind(run, "test.finder").map((t) => t.id);
-  expect(finders).toHaveLength(4);
-  expect(checkpointOf(run, "front")?.["plan"]).toBe(PLAN);
-  // Link's first wait names the finders and the plan; no reading is named before the plan ends.
-  const wait = run.seen.commits.find((c) => c.phase === "find+fill")!.state!;
-  expect(wait["status"]).toBe("waiting");
-  expect(wait["on"]).toEqual([...finders, PLAN]);
-  expect(wait["policy"]).toBe("allSettled");
-  expect(checkpointOf(run, "find+fill")?.["plan"]).toBe(PLAN);
-  expect(checkpointOf(run, "find+fill")?.["readings"]).toBeUndefined();
-  // Then the review waits on the readings themselves, in a commit that names them.
-  const links = run.seen.commits.filter((c) => c.phase === "link");
-  expect(links).toHaveLength(2);
-  expect(links[0]!.state).toMatchObject({
-    status: "waiting",
-    on: readings.map((r) => r.task),
-    policy: "allSettled",
-  });
-  expect(checkpointOf(run, "link")).toMatchObject({
-    phase: "link",
-    plan: PLAN,
-    readings,
-  });
-  const waits = run.records
-    .filter((r) => r.type === "span.start" && r["name"] === "harness.pi.wait")
-    .map((r) => r["attributes"] as Record<string, unknown>)
-    .filter((a) => a["harness.task_id"] === review);
-  expect(waits).toEqual([
-    expect.objectContaining({
-      "harness.next_phase": "front",
-      "harness.waiting_on": "front",
-    }),
-    expect.objectContaining({
-      "harness.next_phase": "link",
-      "harness.waiting_on": [
-        ...FINDERS.map((lens) => `finder.${lens}`),
-        "readings-plan",
-      ].join(","),
-      "harness.waiting_on_ids": [...finders, PLAN].join(","),
-    }),
-    expect.objectContaining({
-      "harness.next_phase": "link",
-      "harness.waiting_on": "reading,reading,reading",
-      "harness.waiting_on_ids": readings.map((r) => r.task).join(","),
-    }),
-  ]);
-  // Each step names only inputs that exist when it is created: the plan and the readings, the
-  // manifest alone.
-  expect(
-    run.records.filter(
-      (r) =>
-        r.type === "task.inputs" &&
-        (r["kind"] === "reading" || r["kind"] === "readings-plan"),
-    ),
-  ).toEqual([
-    {
-      type: "task.inputs",
-      taskId: PLAN,
-      owner: review,
-      kind: "readings-plan",
-      inputs: { manifest: "computation:manifest-key" },
-    },
-    ...readings.map((r) => ({
-      type: "task.inputs",
-      taskId: r.task,
-      owner: review,
-      kind: "reading",
-      inputs: { manifest: "computation:manifest-key" },
-    })),
-  ]);
-  // The plan's commit spans, like the leads task's.
-  expect(run.records).toContainEqual(
-    expect.objectContaining({
-      type: "span",
-      name: "harness.pi.commit",
-      attributes: {
-        "harness.task_id": PLAN,
-        "harness.task_kind": "readings-plan",
-        "harness.phase": "run",
-        "harness.next_phase": "terminal",
-      },
-    }),
-  );
-  // The finders' results come as Link gets them.
-  const linked = run.seen.linkedFinders;
-  if (linked === undefined) throw new Error("Link did not run");
-  expect(linked).toHaveLength(FINDERS.length);
-  expect(run.seen.collected).toEqual([
-    {
-      ...KEYS,
-      readings: readings.map((r) => ({
-        name: r.name,
-        outcome: {
-          status: "completed",
-          result: { name: r.name, judged: "manifest-key" },
-        },
-      })),
-      finders: linked,
-    },
-  ]);
-  before(run, "tx:precompute", "readings.prepare");
-  before(run, "readings.prepare", "readings.create");
-  before(run, "readings.create", "readings.collect");
-  before(run, "readings.collect", "link");
-  // No transaction was open when `prepare` was called or when it resolved.
-  expect(run.seen.open).toEqual([0, 0]);
-  // The row keeps its name and fields, with the review's ID.
-  expect(prepareRows(run)).toEqual([
-    {
-      type: "readings.prepare",
-      taskId: review,
-      status: "ok",
-      durationMs: expect.any(Number),
-    },
-  ]);
-  // In-process work in its own span, ended once: never counted as a durable wait.
-  expect(prepareSpans(run)).toEqual([
-    expect.objectContaining({
-      type: "span",
-      name: "harness.readings.prepare",
-      status: "ok",
-      attributes: {
-        "harness.task_id": PLAN,
-        "harness.task_kind": "readings-plan",
-        "harness.phase": "run",
-      },
-    }),
-  ]);
-  expect(
-    run.records.filter(
-      (r) =>
-        r["name"] === "harness.pi.wait" &&
-        JSON.stringify(r["attributes"]).includes("readings.prepare"),
-    ),
-  ).toEqual([]);
-  const read = readings.map((r) => record("verify", `read.${r.name}`));
-  expect(run.outcome).toEqual({
-    status: "completed",
-    result: {
-      stages: [
-        PRE,
-        FRAME,
-        FILL,
-        ...FINDS,
-        ...read,
-        LINK,
-        record("publish", "publish"),
-      ],
-    },
-  });
-}, 30_000);
 
 // Why: the readings exist before the front task ends. The front task here waits for the plan's
 // commit before its own (up to 5 s); had the plan waited for the front task, its commit would find
 // no reading.
-test("the readings exist before the front task ends", async () => {
-  const run = await runReview({ readings: THREE, frontWaitsForPlan: true });
-  expect(run.outcome.status).toBe("completed");
-  expect(run.seen.readingsAtFrontEnd).toBe(3);
-  before(run, "tx:plan", "front.end");
-  expect(run.seen.collected).toHaveLength(1);
-}, 30_000);
 
 // Why: a failed reading must never fail the review; the collector records it as not judged.
 test("a failed and a faulted reading still complete and publish the review, with the collector's records", async () => {
@@ -1319,25 +837,10 @@ test("a failed and a faulted reading still complete and publish the review, with
   expect(run.outcome).toEqual({
     status: "completed",
     result: {
-      stages: [
-        PRE,
-        FRAME,
-        FILL,
-        ...FINDS,
-        ...read,
-        LINK,
-        record("publish", "publish"),
-      ],
+      stages: [PRE, FRAME, FILL, ...read, LINK, record("publish", "publish")],
     },
   });
-  expect(run.seen.published?.stages).toEqual([
-    PRE,
-    FRAME,
-    FILL,
-    ...FINDS,
-    ...read,
-    LINK,
-  ]);
+  expect(run.seen.published?.stages).toEqual([PRE, FRAME, FILL, ...read, LINK]);
   // The readings' disclosures come after Link's, so Link's gaps keep their places (and keys).
   expect(run.seen.published?.disclosures).toEqual([
     { kind: "link", detail: "Link disclosed this." },
@@ -1350,20 +853,13 @@ test("a failed and a faulted reading still complete and publish the review, with
 // its commit's change ran (and the commit did not land) creates each task once, in the commit that
 // lands: one plan, one front task, four finders, three readings, collected once. Only a replayed
 // plan prepares again, with its own row and span; a replayed review phase never plans.
-for (const replay of [
-  "precompute",
-  "front",
-  "find+fill",
-  "link",
-  "plan",
-] as const)
+for (const replay of ["precompute", "front", "fill", "link", "plan"] as const)
   test(`replaying ${replay === "plan" ? "the plan task" : `the ${replay} phase`} creates each reading once`, async () => {
     const run = await runReview({ readings: THREE, replay });
     expect(run.outcome.status).toBe("completed");
     expect(run.seen.calls).toContain(`${replay}.replayed`);
     expect(kind(run, READINGS_PLAN_TASK)).toHaveLength(1);
     expect(kind(run, "test.front")).toHaveLength(1);
-    expect(kind(run, "test.finder")).toHaveLength(4);
     expect(kind(run, "test.reading")).toHaveLength(3);
     const plans = replay === "plan" ? 2 : 1;
     expect(run.seen.calls.filter((c) => c === "readings.prepare")).toHaveLength(
@@ -1385,35 +881,10 @@ for (const replay of [
     expect(
       run.seen.collected[0]!.readings.map((r) => outcomeOf(r)?.status),
     ).toEqual(["completed", "completed", "completed"]);
-    const schedules = run.records.filter((r) => r.type === "review.schedule");
-    expect(schedules).toHaveLength(1);
-    expect(run.seen.finderDeadlines).toEqual(
-      FINDERS.map(() => schedules[0]!["deadline"] as number),
-    );
   }, 30_000);
 
 // Why: the finders' start rule no longer gates the readings. When too little time is left for the
 // finders, the readings exist anyway, Link waits for their plan and them, and the collector runs.
-test("when the finders do not start, the readings still run and are collected", async () => {
-  const run = await runReview({ readings: THREE, cutoffAfterMs: 100_000 });
-  expect(run.outcome.status).toBe("completed");
-  expect(kind(run, "test.finder")).toHaveLength(0);
-  expect(kind(run, "test.reading")).toHaveLength(3);
-  expect(
-    run.seen.commits.find((c) => c.phase === "find+fill")?.state,
-  ).toMatchObject({
-    status: "waiting",
-    on: [PLAN],
-  });
-  expect(run.seen.collected).toHaveLength(1);
-  expect(
-    run.seen.collected[0]!.readings.map((r) => outcomeOf(r)?.status),
-  ).toEqual(["completed", "completed", "completed"]);
-  expect(run.seen.published?.disclosures).toContainEqual(
-    expect.objectContaining({ kind: "finders-skipped" }),
-  );
-  expect(prepareRows(run).map((r) => r["status"])).toEqual(["ok"]);
-}, 30_000);
 
 // Why: an optional port must not be able to fail a review. A `prepare` that throws, as a rejected
 // promise or before it returns one, leaves the review publishing exactly what a port-absent run
@@ -1425,12 +896,11 @@ for (const mode of ["throws", "throwsSync"] as const)
     const run = await runReview({ readings: THREE, prepare: mode });
     expect(run.outcome).toEqual(absent.outcome);
     expect(run.seen.published).toEqual(withNoReadings(absent));
-    expect(run.seen.published?.candidates).toHaveLength(FINDERS.length);
+    expect(run.seen.published?.candidates).toHaveLength(0);
     expect(run.seen.calls).toContain("readings.prepare");
     expect(run.seen.calls).not.toContain("readings.create");
     expect(run.seen.calls).not.toContain("readings.collect");
     expect(kind(run, "test.reading")).toHaveLength(0);
-    expect(kind(run, "test.finder")).toHaveLength(4);
     expect(run.seen.commits.find((c) => c.phase === "plan")?.state).toEqual({
       status: "terminal",
       outcome: {
@@ -1453,44 +923,6 @@ for (const mode of ["throws", "throwsSync"] as const)
     expect(prepareSpans(run).map((s) => s["status"])).toEqual(["error"]);
   }, 30_000);
 
-/** The `review.schedule` row and the finders' deadlines, relative to the run's cut-off. */
-const startOf = (run: Run) => {
-  const schedule = run.records.find((r) => r.type === "review.schedule")!;
-  return {
-    start: (schedule["start"] as number) - run.cutoffAt,
-    deadline: (schedule["deadline"] as number) - run.cutoffAt,
-    finders: schedule["finders"],
-    skipped: schedule["skipped"],
-    finderDeadlines: run.seen.finderDeadlines.map((d) => d - run.cutoffAt),
-  };
-};
-
-// Why: an optional port must not be able to delay a review. A `prepare` that returns only once Fill
-// has started (so after Frame, the finders' start and Map) delays none of them: the front task ends
-// and the finders start before it returns, exactly when a port-absent run starts them (the same
-// `review.schedule` start and deadline, 200 s before the cut-off), and the review's commits up to
-// Link's wait are a port-absent run's but for the plan's ID. Had anything before Link waited for
-// the plan, Fill would not start until its 10 s fallback.
-test("a plan slower than Frame and Map delays nothing before Link", async () => {
-  const options = { frontAtMsBeforeCutoff: 200_000 };
-  const absent = await runReview(options);
-  const run = await runReview({ ...options, readings: THREE, prepare: "slow" });
-  expect(run.outcome.status).toBe("completed");
-  before(run, "front.end", "readings.prepared");
-  before(run, "fill", "readings.prepared");
-  before(run, "tx:find+fill", "readings.prepared");
-  expect(startOf(run)).toEqual(startOf(absent));
-  expect(startOf(run)).toMatchObject({ finders: 4, skipped: false });
-  expect(upToLinkWait(run)).toEqual(upToLinkWait(absent));
-  expect(run.seen.published?.candidates).toEqual(
-    absent.seen.published?.candidates,
-  );
-  expect(kind(run, "test.reading")).toHaveLength(3);
-  expect(run.seen.collected).toHaveLength(1);
-  expect(prepareRows(run).map((r) => r["status"])).toEqual(["ok"]);
-}, 30_000);
-
-// Why: the plan is bounded by `findDeadline` measured as it starts (at most 75 s before the
 // cut-off): a `prepare` held until its signal aborts, or one deaf to it that never settles, ends the
 // plan at that bound without readings, and Link follows then, not at the cut-off. The review
 // publishes what a port-absent run publishes, with the line that no reading ran. The run's cut-off is
@@ -1501,9 +933,8 @@ for (const mode of ["held", "ignores"] as const)
     const absent = await runReview(options);
     const run = await runReview({ ...options, readings: THREE, prepare: mode });
     expect(run.outcome.status).toBe("completed");
-    expect(startOf(run)).toEqual(startOf(absent));
     expect(run.seen.published).toEqual(withNoReadings(absent));
-    expect(run.seen.published?.candidates).toHaveLength(FINDERS.length);
+    expect(run.seen.published?.candidates).toHaveLength(0);
     expect(run.seen.calls).not.toContain("readings.create");
     expect(run.seen.calls).not.toContain("readings.collect");
     expect(kind(run, "test.reading")).toHaveLength(0);
@@ -1516,9 +947,8 @@ for (const mode of ["held", "ignores"] as const)
       },
     ]);
     expect(prepareSpans(run).map((s) => s["status"])).toEqual(["error"]);
-    const bound = run.cutoffAt - VERIFY_RESERVE_MS;
     // A timer may fire a few milliseconds early.
-    expect(run.seen.linkAt).toBeGreaterThanOrEqual(bound - 50);
+    expect(run.seen.linkAt).toBeGreaterThanOrEqual(run.cutoffAt - 75_050);
     // Link, and the whole run, came long before the cut-off: the cut-off is a minute further on.
     expect(run.endedAt).toBeLessThan(run.cutoffAt - 60_000);
   }, 30_000);
@@ -1583,108 +1013,21 @@ test("a stop while the readings run stops the review and its readings", async ()
   });
 }, 30_000);
 
-// Why: readings now exist before Frame is known to succeed. When the front task ends without a
-// Frame or a Map, the review publishes as it does without the port (with the reason, no candidate,
-// no collector call), saying no section reading ran (round 18: every drop gets a gap), and never
-// hangs. A plan that landed first created readings, which the review
-// owns: it becomes terminal once they end. A plan that comes back after the review went to Publish
-// creates none, since nothing would read them.
-for (const [when, options, made, status] of [
-  ["before", { frontWaitsForPlan: true }, 3, "ok"],
-  ["after", { prepare: "slow" }, 0, "published"],
-] as const)
-  test(`when Frame falls back ${when} the plan lands, the review publishes as without the port and ends`, async () => {
-    const absent = await runReview({ frontFallback: true });
-    const run = await runReview({
-      ...options,
-      readings: THREE,
-      frontFallback: true,
-    });
-    expect(run.outcome).toEqual(absent.outcome);
-    expect(run.outcome.status).toBe("completed");
-    expect(run.seen.published).toEqual(withNoReadings(absent));
-    expect(run.seen.published?.reason).toBe(FALLBACK_REASON);
-    expect(run.seen.calls).not.toContain("readings.collect");
-    expect(run.seen.calls).not.toContain("link");
-    expect(withoutPlan(run)).toEqual(withoutPlan(absent));
-    expect(kind(run, READINGS_PLAN_TASK)).toEqual([
-      expect.objectContaining({
-        status: "terminal",
-        outcome: {
-          status: "completed",
-          result: { status, readings: readingsOf(run) },
-        },
-      }),
-    ]);
-    const readings = kind(run, "test.reading");
-    expect(readings).toHaveLength(made);
-    for (const t of readings)
-      expect(t).toMatchObject({
-        status: "terminal",
-        outcome: { status: "completed" },
-      });
-    if (when === "before") before(run, "tx:plan", "publish");
-    else before(run, "publish", "readings.prepared");
-  }, 30_000);
+test("when Frame falls back, no reading starts and the review publishes its fallback", async () => {
+  const absent = await runReview({ frontFallback: true });
+  const run = await runReview({ readings: THREE, frontFallback: true });
+  expect(run.outcome.status).toBe("completed");
+  expect(run.seen.published).toEqual(withNoReadings(absent));
+  expect(run.seen.published?.reason).toBe(FALLBACK_REASON);
+  expect(run.seen.calls).not.toContain("readings.prepare");
+  expect(kind(run, "test.reading")).toEqual([]);
+}, 30_000);
 
 // Why: a finding must reach the readings' decision exactly as it reaches Link. With one finder
 // completed (its unused Verify included), one aborted at the cut-off with no result (the review
 // fills in its entry) and one skipped, the collector gets the very list Link gets, in its order.
 // The readings are created by their plan; `collect` runs in Link's invocation after it waited on
 // them, with the same finders' list that invocation hands Link.
-test("collect receives the finders' results exactly as Link does", async () => {
-  const run = await runReview({
-    readings: THREE,
-    finderEnds: {
-      "scope-fit": "unused",
-      correctness: "cutoff",
-      "risky-edges": "skipped",
-    },
-  });
-  expect(run.outcome.status).toBe("completed");
-  expect(run.seen.collected).toHaveLength(1);
-  const linked = run.seen.linkedFinders;
-  expect(linked).toHaveLength(FINDERS.length);
-  expect(run.seen.collected[0]!.finders).toEqual(linked);
-  expect(run.seen.collected[0]!.finders!.map((f) => f.lens)).toEqual([
-    ...FINDERS,
-  ]);
-  // The three kinds of entry, as Link got them.
-  expect(linked![0]).toMatchObject({
-    lens: "scope-fit",
-    findKey: "find-scope-fit",
-    unused: [{ claim: "An unused claim of scope-fit.", status: "computed" }],
-  });
-  expect(linked![1]).toEqual({
-    lens: "correctness",
-    findKey: null,
-    findings: [],
-    stages: [
-      {
-        stage: "find",
-        agent: "find.correctness",
-        status: "interrupted",
-        wallMs: 0,
-        disclosure: null,
-      },
-    ],
-    reason: "stopped",
-    // The review's entry says how it ended; never an empty find taken for a completed one.
-    end: { find: "stopped", verify: "stopped" },
-  });
-  expect(linked![2]).toMatchObject({
-    lens: "risky-edges",
-    findKey: null,
-    reason: "skipped",
-    stages: [{ stage: "find", status: "skipped" }],
-    end: { find: "skipped", verify: "completed" },
-  });
-  // Collected before Link, after the review waited on the plan's readings.
-  expect(
-    run.seen.calls.filter((c) => c === "readings.collect" || c === "link"),
-  ).toEqual(["readings.collect", "link"]);
-  expect(run.seen.commits.filter((c) => c.phase === "link")).toHaveLength(2);
-}, 30_000);
 
 // Why (NEU-148 WP11): the relations task is started in Precompute's commit beside the leads and
 // nothing in the review waits for it. Held until Publish's commit has landed, it moves none of
@@ -1711,7 +1054,6 @@ test("a held relations task delays nothing before Publish, and the review ends o
   );
   for (const { state } of states(run))
     expect((state?.["on"] as number[] | undefined) ?? []).not.toContain(9);
-  expect(startOf(run)).toEqual(startOf(absent));
   expect(run.seen.published).toEqual(absent.seen.published);
   // Its input row names the manifest alone.
   expect(

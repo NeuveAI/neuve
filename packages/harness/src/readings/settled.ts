@@ -1,3 +1,4 @@
+import type { CrossBatchReport } from "../pi/cross-batch-claims.ts";
 import { sha256Hex } from "@neuve/records-core";
 import {
   AssembledReference,
@@ -9,8 +10,7 @@ import {
 } from "@neuve/records-schema";
 import { z } from "zod";
 import { overlaps, requirementsProof } from "../disposition.ts";
-import type { StoredFinding } from "../find.ts";
-import { addedLines, LANE_RULE_VERSION, movesOf } from "../lane-rule.ts";
+import { addedLines, LANE_RULE_VERSION } from "../lane-rule.ts";
 import type { ManifestHunk } from "../manifest.ts";
 import type { NamedProof } from "../proof-state.ts";
 import { unitKeyOf } from "../publish-sections-input.ts";
@@ -20,13 +20,7 @@ import {
   type Effect as ImpactEffect,
   type LaneReviewJudgement,
 } from "./answers.ts";
-import {
-  COMMENT_ID,
-  claimKey,
-  commentKey,
-  finderClaim,
-  findingCommentId,
-} from "./claims.ts";
+import { COMMENT_ID, claimAnchor, claimKey, commentKey } from "./claims.ts";
 import {
   decideSection,
   type UndecidedCause,
@@ -89,7 +83,7 @@ import {
 /**
  * What the readings hand the new publisher (`publishSettled`): one `SettledBatch` per settled Map
  * group, in the Map's order, built by code from the plan, the decisions, the readings' judgements
- * and the finders' kept findings. Pure. Nothing here publishes or calls a model; comment bodies are
+ * and their confirmed incoming claims. Nothing here publishes or calls a model. Comment bodies are
  * the one place model text is carried, and they go only into this value (and the stored decision
  * that holds it), never into a run-log row.
  *
@@ -212,7 +206,7 @@ export interface SettledUnit {
   readonly message?: string;
   /** Proof record IDs an approval rests on; empty for any other disposition. */
   readonly proof: ReadonlyArray<string>;
-  /** Every comment on the unit, from readings and finders alike, in rank order. */
+  /** Every comment on the unit, from the readings, in rank order. */
   readonly comments: ReadonlyArray<SettledComment>;
   /** The Guided stop, by code, on every unit (`guidedOf`). */
   readonly guided: SettledGuided;
@@ -655,12 +649,6 @@ export interface CollectedSection {
   };
 }
 
-/** A finder's finding that Verify kept, with the stored find output that holds it. */
-export interface KeptFinding {
-  readonly finding: StoredFinding;
-  readonly findKey: string | null;
-}
-
 /**
  * The generated batch: lockfiles and declared-generated files, as today's code-only batch holds
  * them (`link.ts` `fillGroups`, `EXCLUDED_GROUP`). Its words are code's, the same as today's.
@@ -1053,92 +1041,29 @@ const inside = (anchor: AnchorValue, ranges: ReadonlyArray<OwnedRange>) =>
       anchor.endLine <= range.endLine,
   );
 
-// ---------------------------------------------------------------------------------------------
-// Finder findings, placed by anchor
-// ---------------------------------------------------------------------------------------------
-
-export type UnplacedReason =
-  /** The finding has no primary anchor. */
-  | "no-anchor"
-  /** No planned section owns the lines of its primary anchor. */
-  | "no-owner"
-  /** The section that owns them is an excluded file, which stays in today's code-only batch. */
-  | "excluded";
-
-export interface Placement {
-  /** Each placed finding, by the comment ID it takes, on the section that owns its primary anchor. */
-  readonly placed: ReadonlyArray<{
-    readonly id: string;
-    readonly section: string;
-    readonly anchor: AnchorValue;
-    readonly kept: KeptFinding;
-  }>;
-  readonly unplaced: ReadonlyArray<{
-    readonly id: string;
-    /** The Map group the finding named; used only to say where its gap belongs. */
-    readonly group: string;
-    readonly reason: UnplacedReason;
-  }>;
-}
-
-/**
- * Each kept finding on the section that owns its primary anchor, by anchor alone (never by the Map
- * group the finding names): the section whose owned lines on that side hold the anchor's first
- * line, else the first in file order whose owned lines it overlaps. A finding no section owns is
- * returned with why, never dropped. The same finding given twice is placed once.
- */
-export const placeFindings = (
-  sections: ReadonlyArray<PlannedSection>,
+/** A cross-batch anchor must belong to exactly one section under the shared review rules. */
+export const sectionOwning = (
+  plan: ReadingPlan,
   hunks: ReadonlyMap<string, ManifestHunk>,
-  findings: ReadonlyArray<KeptFinding>,
-): Placement => {
-  const placed: Array<Placement["placed"][number]> = [];
-  const unplaced: Array<Placement["unplaced"][number]> = [];
-  const ordered = [...sections].sort(
-    (a, b) =>
-      (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || a.first - b.first,
-  );
-  const ranges = new Map(
-    ordered.map((section) => [section.key, ownedRangesOf(section, hunks)]),
-  );
-  const seen = new Set<string>();
-  for (const kept of findings) {
-    const id = findingCommentId(kept.finding.id);
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const primary = kept.finding.anchors[0];
-    if (primary === undefined) {
-      unplaced.push({ id, group: kept.finding.group, reason: "no-anchor" });
-      continue;
-    }
-    const start = { ...primary, endLine: primary.startLine };
-    const owner =
-      ordered.find(
-        (section) =>
-          clipTo(start, section, ranges.get(section.key)!) !== undefined,
-      ) ??
-      ordered.find(
-        (section) =>
-          clipTo(primary, section, ranges.get(section.key)!) !== undefined,
-      );
-    if (owner === undefined)
-      unplaced.push({ id, group: kept.finding.group, reason: "no-owner" });
-    else if (owner.cause === "excluded")
-      unplaced.push({ id, group: kept.finding.group, reason: "excluded" });
-    else
-      placed.push({
-        id,
-        section: owner.key,
-        anchor: clipTo(primary, owner, ranges.get(owner.key)!)!,
-        kept,
-      });
-  }
-  return { placed, unplaced };
+  anchor: AnchorValue,
+) => {
+  const owners = [...plan.sections, ...plan.unread].flatMap((section) => {
+    if (
+      section.path !== anchor.path &&
+      (anchor.side !== "old" || section.identity.renamedFrom !== anchor.path)
+    )
+      return [];
+    const ranges = ownedRangesOf(section, hunks);
+    const canonical = clipTo(anchor, section, ranges);
+    return canonical !== undefined &&
+      canonical.startLine === anchor.startLine &&
+      canonical.endLine === anchor.endLine &&
+      inside(canonical, ranges)
+      ? [{ section, anchor: canonical }]
+      : [];
+  });
+  return owners.length === 1 ? owners[0] : undefined;
 };
-
-// ---------------------------------------------------------------------------------------------
-// Deciding every planned section, finder claims included
-// ---------------------------------------------------------------------------------------------
 
 export interface DecidedSection {
   readonly section: PlannedSection;
@@ -1152,7 +1077,7 @@ export interface DecidedSection {
    * excluded list does not name (no reason is guessed for it). It is in no batch and counts as pending.
    */
   readonly decision: DecideOutput | null;
-  /** Every claim on it: the Lane review's, then the finders' kept defects. */
+  /** Every claim on it: the Lane review's and confirmed incoming claims. */
   readonly claims: ReadonlyArray<Claim>;
 }
 
@@ -1182,20 +1107,16 @@ export const sectionAdded = (
  * Every planned section decided by `decideSection`, read or not: a too-large or unreadable section
  * is decided as not judged by that cause; an excluded one (a lockfile or declared-generated file) is
  * decided as excluded, with the reason the map gives, and belongs to the generated batch
- * (`GENERATED_GROUP`) whatever Map group holds its hunks. A kept finder defect is
- * a confirmed claim on the section that owns its anchor, added before the section is decided, so
- * it reaches the verdict as a Lane review's confirmed claim does; every kept finding placed there
- * that moves an axis is a move on the matrix the lane rule reads (`movesOf`, 14.28). The request for
- * changes those confirmed claims make also moves both axes, to high complexity and hard validation,
- * which `decideSection` places from the verdict (`confirmedMoveOf`, 14.34).
+ * (`GENERATED_GROUP`) whatever Map group holds its hunks. Verified claims follow the section that
+ * owns their anchor.
  */
 export const decideSections = (input: {
   readonly plan: ReadingPlan;
   readonly hunks: ReadonlyMap<string, ManifestHunk>;
   readonly groups: ReadonlyArray<Pick<MapGroup, "id" | "hunkIds">>;
+  readonly incoming?: ReadonlyMap<string, ReadonlyArray<CrossBatchReport>>;
   readonly collected: ReadonlyMap<string, CollectedSection>;
   readonly proofs: ReadonlyMap<string, ReadonlyMap<string, NamedProof>>;
-  readonly findings: ReadonlyArray<KeptFinding>;
   /** The paths the map excluded, with why (`ReviewMap.excluded`). */
   readonly excluded: ReadonlyArray<{
     readonly path: string;
@@ -1225,27 +1146,8 @@ export const decideSections = (input: {
   readonly carried?: ReadonlyMap<string, CarriedFrom> | undefined;
 }): {
   readonly sections: ReadonlyArray<DecidedSection>;
-  readonly placement: Placement;
 } => {
   const { plan, hunks } = input;
-  const planned: Array<PlannedSection> = [...plan.sections, ...plan.unread];
-  const placement = placeFindings(planned, hunks, input.findings);
-  // The moves each section's kept findings give on the matrix (14.28), by the finding's comment ID:
-  // a finding about code raises complexity, one about tests or proof makes validation hard, and a
-  // pattern note moves nothing. The kind and `about` are the finding's own, as Find stored them.
-  const movesBy = new Map<string, ReturnType<typeof movesOf>>();
-  for (const { id, section, kept } of placement.placed)
-    movesBy.set(section, [
-      ...(movesBy.get(section) ?? []),
-      ...movesOf([{ id, kind: kept.finding.kind, about: kept.finding.about }]),
-    ]);
-  const finderClaims = new Map<string, Array<Claim>>();
-  for (const { section, kept } of placement.placed)
-    if (kept.finding.kind === "defect")
-      finderClaims.set(section, [
-        ...(finderClaims.get(section) ?? []),
-        finderClaim(kept.finding.id),
-      ]);
   const groupOf = new Map(
     plan.groups.flatMap((group) => group.keys.map((key) => [key, group.id])),
   );
@@ -1283,7 +1185,7 @@ export const decideSections = (input: {
           removesPublicName: false,
           effects: [],
         },
-        moves: movesBy.get(section.key) ?? [],
+        moves: [],
         facts: {
           kind: section.kind,
           declared: section.declared,
@@ -1310,15 +1212,26 @@ export const decideSections = (input: {
       },
     });
   };
+  const claimsOf = (key: string): ReadonlyArray<Claim> => {
+    const claims = new Map(
+      (input.collected.get(key)?.claims ?? []).map((claim) => [
+        claim.id,
+        claim,
+      ]),
+    );
+    for (const report of input.incoming?.get(key) ?? [])
+      if (report.comment.kind === "defect")
+        claims.set(report.key, {
+          id: report.key,
+          source: "lane-review",
+          verify: "confirmed",
+        });
+    return [...claims.values()];
+  };
   const sections: Array<DecidedSection> = [];
   for (const section of plan.sections) {
     const held = input.collected.get(section.key);
-    const claims = [
-      ...(held?.claims ?? []),
-      ...(finderClaims.get(section.key) ?? []).filter(
-        (claim) => !(held?.claims ?? []).some((c) => c.id === claim.id),
-      ),
-    ];
+    const claims = claimsOf(section.key);
     const outcomes = {
       assess: held?.assess ?? {
         judged: false as const,
@@ -1346,7 +1259,7 @@ export const decideSections = (input: {
   }
   for (const section of plan.unread) {
     const excluded = section.cause === "excluded";
-    const claims = excluded ? [] : (finderClaims.get(section.key) ?? []);
+    const claims = claimsOf(section.key);
     // The map's reason. In `collect` the plan's excluded list and the map's are made by the same
     // code from the same manifest (`buildMapManifest`), so a file the plan excluded that the map
     // does not name comes only from a mismatched pair (such as a map stored by another build of
@@ -1386,7 +1299,7 @@ export const decideSections = (input: {
       claims,
     });
   }
-  return { sections, placement };
+  return { sections };
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -1443,31 +1356,7 @@ export const readingCitation = (
     : [citation(`computation:${context.step}`, cite)];
 };
 
-/**
- * A finder's evidence ID in Citation form: a hunk names the range manifest with the hunk ID, a proof
- * record its event, and anything else (a scope section) the finder's stored output with the ID.
- */
-const finderCitation = (
-  id: string,
-  context: {
-    readonly manifestKey: string;
-    readonly hunks: ReadonlyMap<string, ManifestHunk>;
-    readonly findKey: string | null;
-  },
-) =>
-  context.hunks.has(id)
-    ? [citation(`computation:${context.manifestKey}`, id)]
-    : ULID.test(id)
-      ? [{ ref: `event:${id}` }]
-      : context.findKey === null
-        ? []
-        : [citation(`computation:${context.findKey}`, id)];
-
-// ---------------------------------------------------------------------------------------------
-// Settled batches
-// ---------------------------------------------------------------------------------------------
-
-/** One batch's record, settled or not: what the `reading.batch` row holds, and why it is not handed over. */
+/** A defect claim as a unit's comment shows it: one whose check was not reached reads as unchecked. */
 export interface BatchRecord {
   readonly mapGroup: string | null;
   /** Every one of its planned sections is settled. */
@@ -1528,7 +1417,6 @@ export interface SettledOutput {
   /** About the run, not one batch. */
   readonly gaps: ReadonlyArray<RunGap>;
   /** The findings no section owns, with why (also disclosed as gaps). */
-  readonly unplaced: Placement["unplaced"];
 }
 
 export interface SettledInput {
@@ -1541,8 +1429,8 @@ export interface SettledInput {
   readonly frame: GuidedFrame;
   readonly sections: ReadonlyArray<DecidedSection>;
   /** The read sections' outcomes, for comment text and the steps they cite. */
+  readonly incoming?: ReadonlyMap<string, ReadonlyArray<CrossBatchReport>>;
   readonly collected: ReadonlyMap<string, CollectedSection>;
-  readonly placement: Placement;
   /** The proof record IDs the readings listed. */
   readonly proofs: ReadonlySet<string>;
   /** Gaps about the run the caller found (findings it could not read), given first. */
@@ -1608,7 +1496,6 @@ const droppedReadingGaps = (members: ReadonlyArray<DecidedSection>) => {
   });
 };
 
-/** A defect claim as a unit's comment shows it: one whose check was not reached reads as unchecked. */
 const shownVerify = (
   verify: Claim["verify"] | undefined,
 ): "confirmed" | "refuted" | "unconfirmed" =>
@@ -2397,30 +2284,6 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
       .filter((s) => s.section.declared === "test")
       .map((s) => s.section.path),
   );
-  const placedOn = new Map<string, Array<Placement["placed"][number]>>();
-  for (const placed of input.placement.placed)
-    placedOn.set(placed.section, [
-      ...(placedOn.get(placed.section) ?? []),
-      placed,
-    ]);
-  const settledGroups = new Set<string>();
-  // From the Assess judgements, which a reading gives for all its sections at once, so whether a
-  // reason is shared never depends on which batches have settled.
-  const sharedLean = sharedLeanReasons(
-    [...input.collected.values()].map((held) =>
-      held.assess.judged ? held.assess.judgement.lean : null,
-    ),
-  );
-  const unplacedGap = (id: string, reason: UnplacedReason) => ({
-    key: `finding-unplaced:${sha256Hex(id).slice(0, 16)}`,
-    kind: "finding-unplaced",
-    detail:
-      reason === "no-anchor"
-        ? "One verified finding names no lines, so it is not shown on any unit."
-        : reason === "excluded"
-          ? "One verified finding is on a lockfile or a generated file, which no reading reads, so it is not shown on any unit."
-          : "One verified finding is on lines no changed section owns, so it is not shown on any unit.",
-  });
 
   // A section the plan excluded with no reason from the map is undecided (`decideSections`): it is
   // in no batch, counts as pending, and is a run gap.
@@ -2455,6 +2318,11 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
   for (const evidence of input.evidence ?? [])
     for (const entry of evidence.sections)
       if (!callerRows.has(entry.key)) callerRows.set(entry.key, entry.rows);
+  const sharedLean = sharedLeanReasons(
+    [...input.collected.values()].map((held) =>
+      held.assess.judged ? held.assess.judgement.lean : null,
+    ),
+  );
   let totalBatches = 0;
   let totalSections = 0;
   let unowned = 0;
@@ -2773,6 +2641,27 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
             },
           );
         }
+        for (const claim of input.incoming?.get(key) ?? []) {
+          const { kind, text, fails } = claim.comment;
+          add(
+            {
+              id: claim.key,
+              section: key,
+              kind,
+              about,
+              body:
+                fails === "" || fails === text ? text : `${text}\n\n${fails}`,
+              anchor: claimAnchor(claim.comment),
+              evidence: [
+                citation(`computation:${claim.answer}`),
+                ...section.hunkIds.map((id) =>
+                  citation(`computation:${input.manifestKey}`, id),
+                ),
+              ].slice(0, 8),
+            },
+            { source: "lane-review", verify: "confirmed", cites: 1 },
+          );
+        }
         // Assess's impact entries: on the first owned lines a lines cite of it falls on, else on the
         // section's first owned lines. Code's own `removed` entry (`code-facts.ts`) is the removal
         // code's comment below says, by the same rule, so it is not shown a second time.
@@ -2871,41 +2760,6 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
               { source: "code", cites: section.hunkIds.length },
             );
           }
-        }
-        // The finders' kept findings this section owns.
-        for (const placed of placedOn.get(key) ?? []) {
-          const finding = placed.kept.finding;
-          // Nothing in this build is about proof: a finding about proof is about its file.
-          const own = finding.about === "proof" ? about : finding.about;
-          add(
-            {
-              id: placed.id,
-              section: key,
-              kind: finding.kind,
-              about: own,
-              ...(finding.signal !== null && own === finding.about
-                ? { signal: finding.signal }
-                : {}),
-              body: finding.claim,
-              anchor: placed.anchor,
-              evidence: distinct(
-                finding.evidence.flatMap((id) =>
-                  finderCitation(id, {
-                    manifestKey: input.manifestKey,
-                    hunks,
-                    findKey: placed.kept.findKey,
-                  }),
-                ),
-              ),
-            },
-            {
-              source: "finder",
-              ...(finding.kind === "defect"
-                ? { verify: "confirmed" as const }
-                : {}),
-              cites: finding.evidence.length,
-            },
-          );
         }
       }
       const rests = [...new Set(restsOn)];
@@ -3006,9 +2860,6 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
       });
     }
 
-    for (const unplaced of input.placement.unplaced)
-      if (unplaced.group === mapGroup)
-        gaps.push(unplacedGap(unplaced.id, unplaced.reason));
     if (input.dropped !== true) gaps.push(...droppedReadingGaps(members));
     if (withheld.length > 0)
       gaps.push({
@@ -3172,7 +3023,6 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
       guided: guidedCounts,
     });
     if (!ready) continue;
-    settledGroups.add(group.id);
     batches.push({
       title: group.label,
       focus: group.why,
@@ -3186,10 +3036,6 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
     });
   }
 
-  // A finding whose gap no handed-over batch carries is a gap about the run.
-  for (const unplaced of input.placement.unplaced)
-    if (!settledGroups.has(unplaced.group))
-      runGaps.push(unplacedGap(unplaced.id, unplaced.reason));
   if (unowned > 0)
     runGaps.push({
       key: "sections-unowned",
@@ -3215,7 +3061,6 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
     formed,
     totals: { batches: totalBatches, sections: totalSections + unnamed.length },
     gaps: runGaps,
-    unplaced: input.placement.unplaced,
   };
 };
 

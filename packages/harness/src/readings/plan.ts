@@ -323,6 +323,8 @@ export interface PlanInput {
           | "linguist-vendored";
       }>
     | undefined;
+  /** Map assigns each changed file to one batch. Pack each batch independently. */
+  readonly batches?: ReadonlyArray<ReadonlySet<string>> | undefined;
   /** Affinity keys per path for `readingGroups`, such as a Map group. */
   readonly affinity?: ReadonlyMap<string, ReadonlyArray<string>> | undefined;
   /** Change facts, so each section's size counts the facts its reading shows. */
@@ -706,15 +708,21 @@ export const planReadings = (input: PlanInput): ReadingPlan => {
   // differ between them.
   const classes =
     input.split === "by-risk" ? effortFactsOf(read, hunks) : undefined;
-  const groups =
+  const pack = (members: ReadonlyArray<ReadingItem>) =>
     classes === undefined
-      ? packApart(items)
+      ? packApart(members)
       : [true, false].flatMap((high) => {
-          const of = items.filter(
+          const of = members.filter(
             (item) => isHigh(classes.get(item.key)) === high,
           );
           return of.length === 0 ? [] : packApart(of);
         });
+  const groups =
+    input.batches === undefined
+      ? pack(items)
+      : input.batches.flatMap((paths) =>
+          pack(items.filter((item) => paths.has(item.path))),
+        );
 
   return ReadingPlan.parse({
     recipe: READING_RECIPE,

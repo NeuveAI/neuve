@@ -1,5 +1,4 @@
-import type { readingBudget } from "../../find.ts";
-import type { recordingHeadReads } from "../../find.ts";
+import type { readingBudget } from "../../readings/tool-budget.ts";
 import type { HandleRegistry } from "../../lookups.ts";
 import type { ToolStateHolder } from "./agent.ts";
 
@@ -10,14 +9,10 @@ import type { ToolStateHolder } from "./agent.ts";
 export const toolState = (parts: {
   readonly handles: HandleRegistry;
   readonly reading?: Pick<ReturnType<typeof readingBudget>, "save" | "restore">;
-  readonly headReads?: ReturnType<typeof recordingHeadReads> | undefined;
 }): ToolStateHolder => {
   const save = () => ({
     handles: parts.handles.toJSON(),
     ...(parts.reading === undefined ? {} : { reading: parts.reading.save() }),
-    ...(parts.headReads === undefined
-      ? {}
-      : { headReads: [...parts.headReads.reads()] }),
   });
   const initial = save();
   return {
@@ -27,7 +22,6 @@ export const toolState = (parts: {
       parts.handles.restore(from.handles ?? initial.handles);
       parts.handles.turn = turn;
       parts.reading?.restore(from.reading ?? initial.reading ?? { used: 0 });
-      parts.headReads?.restore(from.headReads ?? initial.headReads ?? []);
     },
   };
 };

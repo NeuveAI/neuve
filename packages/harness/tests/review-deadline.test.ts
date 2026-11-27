@@ -66,13 +66,13 @@ test("a longer deadline moves the cut-off with it and is a run of its own", () =
   expect(runKeyFor(range, long)).not.toBe(runKeyFor(range, defaultConfig()));
 });
 
-test("runs of two lifetimes reuse completed Find steps but keep separate run keys", () => {
+test("runs of two lifetimes reuse completed Frame steps but keep separate run keys", () => {
   const stageKey = (config: PipelineConfig) =>
     Computations.computationKey(
       agentStageSpec(
         config,
-        { stage: "find", turnLimit: 11, agent: "find.correctness" },
-        { op: "harness.find", opVersion: 1, inputs: { frame: "f", map: "m" } },
+        { stage: "frame", turnLimit: 1, agent: "frame" },
+        { op: "harness.frame", opVersion: 1, inputs: { precompute: "p" } },
       ),
     ).key;
   expect(stageKey(frozen({ deadline: 20 }))).toBe(stageKey(defaultConfig()));

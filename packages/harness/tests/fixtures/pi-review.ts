@@ -5,6 +5,7 @@ import {
   childOf,
   reviewTask,
   reviewExtension,
+  type ReviewOutcome,
 } from "../../src/pi/review-task.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +19,11 @@ import {
   type AssistantMessage,
   type Message,
 } from "@earendil-works/pi-ai";
-import { Harness, createRegistry } from "@earendil-works/pi-durable";
+import {
+  Harness,
+  createRegistry,
+  type TaskId,
+} from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Context, Effect, Layer, Scope, Tracer } from "effect";
 import type { z } from "zod";
@@ -34,12 +39,13 @@ import { defaultConfig } from "../../src/config.ts";
 import { RangeManifest, type ManifestHunk } from "../../src/manifest.ts";
 import { McpClients, mcpClientsLayer } from "../../src/mcp-client.ts";
 import { storedOutput } from "../../src/pipeline.ts";
-import { openRunLog, runLogTracer, type RunLog } from "../../src/run-log.ts";
+import { openRunLog, runLogTracer } from "../../src/run-log.ts";
+import type { RunLogRecord } from "../../src/run-log.ts";
 import {
   agentRoutes,
   clearInheritedAgentRoute,
 } from "../../src/pi/bindings.ts";
-import type { Capture, CaptureEvent } from "../../src/pi/capture/types.ts";
+import type { CaptureEvent } from "../../src/pi/capture/types.ts";
 import {
   reviewStages,
   stageRunner,
@@ -94,27 +100,6 @@ const gitIn =
     return run.stdout.toString().trim();
   };
 
-/** A run log that drops the first schedule row and each finder's first inputs row, when asked. */
-const loseFirstFinderLog = (log: RunLog, lose: boolean): RunLog => {
-  if (!lose) return log;
-  const lost = new Set<string>();
-  return {
-    ...log,
-    write: (record) => {
-      const finderRow =
-        record.type === "review.schedule" ||
-        (record.type === "task.inputs" &&
-          String(record["kind"]).startsWith("finder."));
-      const id = `${record.type}\0${String(record["taskId"])}`;
-      if (finderRow && !lost.has(id)) {
-        lost.add(id);
-        return;
-      }
-      log.write(record);
-    },
-  };
-};
-
 export const runReview = async (options: {
   readonly directory: string;
   readonly base: Record<string, string>;
@@ -122,19 +107,18 @@ export const runReview = async (options: {
   readonly message: string;
   readonly answer: Answer;
   readonly cutoffAfterMs?: number;
-  readonly interruptFinders?: boolean;
   readonly abortReview?: boolean;
   readonly abortBeforeFill?: boolean;
   readonly precomputeDeadline?: boolean;
-  readonly replaySchedule?: boolean;
-  readonly missingFinderOutcome?: boolean;
-  /**
-   * Drops the first `review.schedule` row and each finder's first `task.inputs` row, as a crash
-   * right after the commit that starts the finders would leave the log.
-   */
-  readonly loseFinderLog?: boolean;
   /** Called as Publish starts. */
   readonly onPublish?: () => void;
+  readonly afterBatchPublished?: (index: number) => void;
+  readonly readingMaxFiles?: number;
+  readonly onLog?: (record: RunLogRecord, reachCutoff: () => void) => void;
+  readonly runAttempts?: (
+    harness: Harness,
+    start: () => Promise<TaskId<ReviewOutcome>>,
+  ) => Promise<TaskId<ReviewOutcome>>;
   /** Wraps the range's leads computation (`harness.range-leads`), to hold or fail it. */
   readonly leads?: <A, E, R>(
     compute: Effect.Effect<A, E, R>,
@@ -212,6 +196,21 @@ export const runReview = async (options: {
     McpClients,
   );
   const runId = mintUlid();
+  const log = openRunLog(location, runId);
+  const defaults = defaultConfig();
+  const config =
+    options.readingMaxFiles === undefined || defaults.readings === undefined
+      ? defaults
+      : {
+          ...defaults,
+          readings: {
+            ...defaults.readings,
+            bounds: {
+              ...defaults.readings.bounds,
+              maxFiles: options.readingMaxFiles,
+            },
+          },
+        };
   const ctx = {
     location,
     repository,
@@ -219,11 +218,21 @@ export const runReview = async (options: {
     runKey: "f".repeat(64),
     range: { baseRef: "main", baseOid, headOid },
     cycleId: mintUlid(),
-    config: defaultConfig(),
-    log: loseFirstFinderLog(
-      openRunLog(location, runId),
-      options.loseFinderLog === true,
-    ),
+    config,
+    log: {
+      ...log,
+      write: (record: Parameters<typeof log.write>[0]) => {
+        options.onLog?.(record, () => {
+          advanced = true;
+        });
+        log.write(record);
+        if (
+          record.type === "publish.waiter" &&
+          record["status"] === "published"
+        )
+          options.afterBatchPublished?.(Number(record["index"]));
+      },
+    },
     startedAt: Date.now(),
     reconciliationId: mintUlid(),
     records,
@@ -241,7 +250,6 @@ export const runReview = async (options: {
   const fillEntered = new Promise<void>((resolve) => {
     enteredFill = resolve;
   });
-  const unblock: Array<() => void> = [];
   const cutoffAt = started + (options.cutoffAfterMs ?? 550_000);
   /**
    * The review's clock, the harness's `now`: the real time until the script reaches the cut-off,
@@ -250,29 +258,13 @@ export const runReview = async (options: {
    */
   const now = () => (advanced ? cutoffAt : actualNow());
   const interrupt = async () => {
-    if (
-      advanced ||
-      !fillFinished ||
-      (!options.abortReview &&
-        sent.filter((s) => s.agent.startsWith("find.")).length < 4)
-    )
-      return;
+    if (advanced || !fillFinished) return;
     advanced = true;
-    timeline.push({
-      event: options.abortReview ? "review.abort" : "cutoff",
-      at: cutoffAt - started,
-    });
     const state = await open().inspect(context);
-    const children = state.tasks.filter(
-      (t) =>
-        t.record.kind ===
-        (options.abortReview ? "neuve.review" : "neuve.finder"),
+    const review = state.tasks.find(
+      (task) => task.record.kind === "neuve.review",
     );
-    const aborting = Promise.all(
-      children.map((t) => open().abortTask(t.record.id, context)),
-    );
-    await aborting;
-    for (const resume of unblock) resume();
+    if (review !== undefined) await open().abortTask(review.record.id, context);
   };
   const scriptErrors: Array<string> = [];
   /** Extension failures pi reported without failing the calling operation. */
@@ -300,19 +292,6 @@ export const runReview = async (options: {
           Array.from({ length: 20 }, () => (transcript) => {
             sent.push({ agent: binding.agent, messages: transcript.messages });
             timeline.push({ event: binding.agent, at: now() - started });
-            if (
-              (options.interruptFinders || options.abortReview) &&
-              binding.agent.startsWith("find.")
-            ) {
-              return new Promise<AssistantMessage>((resolve) => {
-                unblock.push(() =>
-                  resolve(fauxAssistantMessage("interrupted fixture call")),
-                );
-                void interrupt().catch((error) =>
-                  scriptErrors.push(String(error)),
-                );
-              });
-            }
             try {
               return options.answer(binding.agent, transcript.messages, hunks);
             } catch (error) {
@@ -353,11 +332,10 @@ export const runReview = async (options: {
   };
   const stages = reviewStages(services);
   let precomputed: Awaited<ReturnType<typeof stages.precompute>> | undefined;
-  const originalTask = reviewTask(
+  const task = reviewTask(
     {
       ...stages,
       front: childOf(stages.front),
-      finder: childOf(stages.finder),
       precompute: async (...args) => {
         timeline.push({ event: "precompute", at: now() - started });
         const prepared = await stages.precompute(
@@ -387,13 +365,18 @@ export const runReview = async (options: {
         const filled = await stages.fill(...args);
         fillFinished = true;
         timeline.push({ event: "fill.end", at: now() - started });
-        if (options.interruptFinders || options.abortReview)
+        if (options.abortReview)
           void interrupt().catch((error) => scriptErrors.push(String(error)));
         return filled;
       },
       link: async (...args) => {
         timeline.push({ event: "link", at: now() - started });
         return stages.link(...args);
+      },
+      publishSettled: async (...args) => {
+        timeline.push({ event: "publish", at: now() - started });
+        options.onPublish?.();
+        return stages.publishSettled!(...args);
       },
       publish: async (...args) => {
         timeline.push({ event: "publish", at: now() - started });
@@ -403,55 +386,6 @@ export const runReview = async (options: {
     },
     ctx.log,
   );
-  let scheduleReplays = 0;
-  const wrapTask = options.replaySchedule || options.missingFinderOutcome;
-  const task: typeof originalTask = wrapTask
-    ? {
-        definition: {
-          ...originalTask.definition,
-          phases: {
-            ...originalTask.definition.phases,
-            link: (task, runtime, c) =>
-              originalTask.definition.phases.link(
-                task,
-                options.missingFinderOutcome
-                  ? { ...runtime, outcomes: async () => [] }
-                  : runtime,
-                c,
-              ),
-            front: async (task, runtime, c) => {
-              if (!options.replaySchedule)
-                return originalTask.definition.phases.front(task, runtime, c);
-              const interruption = new Error("replay before scheduling commit");
-              try {
-                await originalTask.definition.phases.front(
-                  task,
-                  {
-                    ...runtime,
-                    commit: async (...args) => {
-                      if (
-                        scheduleReplays === 0 &&
-                        ctx.log
-                          .read()
-                          .some((entry) => entry.type === "review.schedule")
-                      ) {
-                        scheduleReplays++;
-                        throw interruption;
-                      }
-                      return runtime.commit(...args);
-                    },
-                  },
-                  c,
-                );
-              } catch (error) {
-                if (error !== interruption) throw error;
-                await originalTask.definition.phases.front(task, runtime, c);
-              }
-            },
-          },
-        },
-      }
-    : originalTask;
   registry.install(stages.extension);
   registry.install(reviewExtension(task));
   harness = await Harness.open(
@@ -471,24 +405,26 @@ export const runReview = async (options: {
     await routes().restoreAgentRoutes(context);
     await stages.restore(harness, context);
     const root = await harness.root(context);
-    const id = await harness.commit(
-      (tx) =>
-        tx.createTask(
-          task,
-          {
-            range: ctx.range,
-            config: ctx.config,
-            runKey: ctx.runKey,
-            runId: ctx.runId,
-            cycleId: ctx.cycleId,
-            generation: 0,
-            cutoffAt,
-          },
-          { ownership: { kind: "conversation" }, conversationId: root.id },
-        ),
-      context,
-    );
+    const start = () =>
+      open().commit(
+        (tx) =>
+          tx.createTask(
+            task,
+            {
+              range: ctx.range,
+              config: ctx.config,
+              runKey: ctx.runKey,
+              runId: ctx.runId,
+              cycleId: ctx.cycleId,
+              generation: 0,
+              cutoffAt,
+            },
+            { ownership: { kind: "conversation" }, conversationId: root.id },
+          ),
+        context,
+      );
     harness.resume();
+    const id = await (options.runAttempts?.(harness, start) ?? start());
     if (options.abortBeforeFill) {
       await fillEntered;
       await harness.abortTask(id, context);
@@ -550,8 +486,14 @@ export const runReview = async (options: {
       ),
     );
     return {
-      scheduleReplays,
       log: ctx.log,
+      readBlob: async (hash: string): Promise<unknown> => {
+        const blob = await Effect.runPromise(
+          Context.get(records, Blobs.BlobStore).get(hash),
+        );
+        if (blob._tag === "Pruned") throw new Error(`Blob ${hash} was pruned`);
+        return JSON.parse(new TextDecoder().decode(blob.bytes));
+      },
       precomputed,
       stageOutputs: await services.run(runStageOutputs(ctx.runId)),
       sent,

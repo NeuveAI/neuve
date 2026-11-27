@@ -1,5 +1,4 @@
 import { captureOutlineSource } from "../src/graph-outline.ts";
-import { stackGuidance } from "../src/stack/tools.ts";
 import { LedgerSource } from "@neuve/records-schema";
 import {
   afterAll,
@@ -40,7 +39,6 @@ import { DEFAULT_RETRIEVER } from "../src/retriever.ts";
 import { BM25, terms } from "../src/search-index.ts";
 import {
   STACK_EVENTS,
-  THIRD_PARTY_NOTE,
   buildTreeIndex,
   emptyRepoStack,
   freezeStackRun,
@@ -59,7 +57,6 @@ import {
   stackReadTool,
   stackSearchTool,
   stackToolsConfig,
-  stackToolsFor,
   storeLayout,
   thirdPartyBlock,
   writePackageTree,
@@ -311,22 +308,7 @@ describe("the stack tools' guard", () => {
     expect("stack" in defaultConfig()).toBe(false);
   });
 
-  test("Find's stack tools stay absent while disabled and read frozen sources while enabled", () => {
-    const off = contextWith(fixtureSource);
-    const run: StackRun = {
-      root: join(root, "none"),
-      git: storeGit,
-      state: undefined,
-      unavailable: "test",
-    };
-    const on = contextWith(fixtureSource, run);
-    expect(stackToolsFor("find", off)).toEqual([]);
-    expect(stackToolsFor("find", on).map((tool) => tool.name)).toEqual([
-      "stack_list",
-      "stack_search",
-      "stack_read",
-    ]);
-    expect(stackGuidance()).toContain(THIRD_PARTY_NOTE);
+  test("enabling stack tools changes the review key", () => {
     const config = stackToolsConfig(
       Option.some({ stack: { tools: true } }),
       captureOutlineSource(),

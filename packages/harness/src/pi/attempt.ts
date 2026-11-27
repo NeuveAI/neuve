@@ -265,7 +265,6 @@ export const openAttempt = async (input: {
             port: {
               ...stages,
               front: childOf(stages.front),
-              finder: childOf(stages.finder),
             },
             extension: stages.extension,
             restore: stages.restore,

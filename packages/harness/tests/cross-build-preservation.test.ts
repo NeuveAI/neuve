@@ -441,7 +441,7 @@ test("a real pi tool commit updates used and keeps futureRoot and reading.future
       },
     };
     const extension = kindExtension(
-      "find",
+      "lane-review",
       [
         {
           name: tool.name,

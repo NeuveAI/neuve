@@ -73,16 +73,15 @@ import { ReadingListed, readingIndexOf, type Reading } from "./reading.ts";
  * a comment over its bound withheld) is counted but never sent back: size is never a reason to
  * spend a turn.
  *
- * Turns. Assess has two turns and Lane review three (its first is for its tools): the turn past
- * the answer's exists only so that an answer sent back comes again through the submit tool, not
- * through the structured final answer. `worstCaseModelCalls` says what that costs at most.
+ * Assess has two turns. Lane review has four, with lookup tools on the first two. Both can resend
+ * a refused answer through the submit tool. `worstCaseModelCalls` gives the maximum cost.
  *
  * No `partial`: a reading the run's cut-off interrupted stores nothing, so the next generation
  * finds it missing and reads it again.
  */
 
 export const ASSESS_TURNS = 2;
-export const LANE_REVIEW_TURNS = 3;
+export const LANE_REVIEW_TURNS = 4;
 export const READING_RETRIES = 1;
 
 /**
@@ -236,7 +235,9 @@ const emptyLaneReview = (): LaneReviewAnswer => ({
 /** The backstop of the scoped form (scope and tests on): the empty answer, with no section not asked for. */
 const emptyScopedReview = (): LaneReviewScopedAnswer => ({
   ...emptyLaneReview(),
+  comments: [],
   notAsked: [],
+  crossBatchClaims: [],
 });
 
 const sourceOf = (status: AgentResult<unknown>["status"]) =>
@@ -420,7 +421,7 @@ export const laneReviewStep = (p: {
   readonly stage: AgentStage;
   readonly reading: Reading<"lane-review">;
   readonly goal: LaneReviewGoal;
-  /** The tools it may call in its first turn, supplied by the caller. */
+  /** The tools it may call in its first two turns, supplied by the caller. */
   readonly tools: ReadonlyArray<ToolSpec<unknown>>;
   /** What the tools hold between calls, when they hold anything. */
   readonly state?: ToolStateHolder | undefined;
@@ -449,15 +450,13 @@ export const laneReviewStep = (p: {
     laneReviewRepair(raw, index, scoped);
   const backstop = scoped ? emptyScopedReview : emptyLaneReview;
   const checks = checksOf(issues, reading.index);
-  // The turn the context is in, as its tools are loaded for each call: the tools answer in the
-  // first turn only; the second is for the answer, and the third for an answer sent back.
   let turn = 0;
   const tools = p.tools.map((tool): ToolSpec<unknown> => ({
     ...tool,
     handle: (input) =>
-      turn > 1
+      turn > 2
         ? Effect.succeed({
-            text: `The tools were for your first turn. Answer now by calling ${LANE_REVIEW_SUBMIT}.`,
+            text: `The tools were for your first two turns. Answer now by calling ${LANE_REVIEW_SUBMIT}.`,
             error: "ToolsSpent",
           })
         : tool.handle(input),

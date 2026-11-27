@@ -186,7 +186,6 @@ test("code fill publishes plain reader prose", async () => {
         manifestKey,
         setup,
         fill: filled,
-        finders: [],
       });
       yield* publishPacket(ctx, {
         candidates: linked.candidates,

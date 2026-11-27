@@ -1,6 +1,7 @@
 import type { Task, TaskRuntime, Tx } from "@earendil-works/pi-durable";
-import { findDeadline } from "../../budget.ts";
+import { preparationDeadline } from "../../budget.ts";
 import { logTimed, scopedLogSpan, startLogSpan } from "../../log-span.ts";
+import { outcomeOf, resultOf } from "./children.ts";
 import type { RunLog } from "../../run-log.ts";
 import { definePolicyTask as defineTask } from "../failure-policy.ts";
 import {
@@ -10,28 +11,7 @@ import {
   type ReviewStagesPort,
 } from "../review-task.ts";
 
-/**
- * The readings' plan (NEU-148): the review creates this task in the commit that creates the front
- * task, the moment its only inputs (the range manifest's key and the front task's ID) exist. It runs
- * the readings' `prepare` beside Frame and Map, then creates the reading tasks in its own terminal
- * commit, and its result names them in creation order.
- *
- * - **Owner.** The review owns this task and every reading it creates (`create`'s owner is this
- *   task's owner), as it owns the finders the front task creates. The review waits for this task
- *   beside the finders, before Link, and then on the readings it names; nothing else waits for it.
- * - **The bound.** `prepare` is bounded by `findDeadline` measured as the plan starts (at most 75 s
- *   before the cut-off), and raced against its signal: one that throws, is cut off or ignores its
- *   signal ends the plan without readings, with one `readings.prepare` row saying how (`taskId` is
- *   the review's), and nothing in the packet. A call that ignored its signal keeps running
- *   unowned, a defect of the port's implementation.
- * - **A stop.** The review's stop aborts this task first (pi aborts owned work bottom-up): its
- *   `prepare` is signalled, its commit rejects, and its abort commits `stopped` with no readings.
- *   No row then; the review's own abort says it.
- * - **A replay.** Before its commit lands, a replayed plan calls `prepare` again (deterministic for
- *   its input) and `create` again (idempotent by task name), so each reading is created once.
- * - **The port absent.** Registered whatever the run's configuration says, so a review that created
- *   this task always resumes it; without the port it ends at once with no readings.
- */
+/** Waits for Map, then prepares and creates the review's reading tasks in a single commit. */
 export const READINGS_PLAN_TASK = "neuve.readings-plan";
 export type ReadingsPlanInput = ReadingsPrepareInput;
 export type ReadingsPlanResult = {
@@ -93,7 +73,7 @@ export const readingsPlanTask = (
   const prepare = async (
     runtime: Runtime,
     port: Readings,
-    input: ReadingsPlanInput,
+    input: Parameters<Readings["prepare"]>[0],
     owner: number,
     bound: number,
   ): Promise<
@@ -179,16 +159,24 @@ export const readingsPlanTask = (
         if (owner === undefined)
           throw new Error("a readings plan is always owned by its review");
         // The head gate, when the review created one, goes on to every reading (`readingTaskInputs`).
-        const input: ReadingsPlanInput = {
+        const front = resultOf(
+          await outcomeOf(runtime, task.input.front, context),
+        );
+        const input = {
           manifestKey: task.input.manifestKey,
           cutoffAt: task.input.cutoffAt,
-          front: task.input.front,
+          frameKey: front?.frameKey,
+          mapKey: front?.mapKey,
           ...(task.input.relations === undefined
             ? {}
             : { relations: task.input.relations }),
         };
         let ended: Awaited<ReturnType<typeof prepare>>;
-        if (readings === undefined) {
+        if (
+          readings === undefined ||
+          input.frameKey == null ||
+          input.mapKey == null
+        ) {
           log?.write({
             type: "readings.prepare",
             taskId: owner,
@@ -200,9 +188,9 @@ export const readingsPlanTask = (
           ended = await prepare(
             runtime,
             readings,
-            input,
+            { ...input, frameKey: input.frameKey, mapKey: input.mapKey },
             owner,
-            findDeadline(runtime.now(), task.input.cutoffAt),
+            preparationDeadline(runtime.now(), task.input.cutoffAt),
           );
         let created: ReadonlyArray<Reading> = [];
         await commit(runtime, () =>
@@ -230,14 +218,16 @@ export const readingsPlanTask = (
             };
           }, context),
         );
-        // A reading exists before the Frame and the Map do: it is logged as reading the manifest only.
         for (const reading of created)
           log?.write({
             type: "task.inputs",
             taskId: reading.task,
             owner,
             kind: "reading",
-            inputs: { manifest: `computation:${task.input.manifestKey}` },
+            inputs: {
+              manifest: `computation:${task.input.manifestKey}`,
+              map: `computation:${input.mapKey}`,
+            },
           });
       },
     },

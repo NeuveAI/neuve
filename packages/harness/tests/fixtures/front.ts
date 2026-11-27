@@ -9,7 +9,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
-import { Harness, createRegistry, type Task } from "@earendil-works/pi-durable";
+import { Harness, createRegistry } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { Context, Effect, Exit, Layer, Scope } from "effect";
 import {
@@ -33,7 +33,6 @@ import { RunControlDoc } from "../../src/pi/control.ts";
 import { agentKinds } from "../../src/pi/stages/kinds.ts";
 import { stageRun } from "../../src/pi/stages/run.ts";
 import { frontTask } from "../../src/pi/stages/front-task.ts";
-import { finderTask } from "../../src/pi/stages/finder-task.ts";
 import { RunSetupDoc } from "../../src/pi/stages/docs.ts";
 import {
   stageRunner,
@@ -189,12 +188,7 @@ export const runFront = async (
   const run = stageRun(services),
     kinds = agentKinds(services, run),
     // Created conversation-owned here, the front task has no review to start finders for.
-    front = frontTask(
-      services,
-      run,
-      kinds.agentStep,
-      finderTask(services, run, kinds.agentStep),
-    );
+    front = frontTask(services, run, kinds.agentStep);
   const stopPhase: typeof front.definition.phases.setup = async (t, r, c) => {
     await r.commit(async (tx) => {
       const doc = await tx.doc(RunControlDoc);

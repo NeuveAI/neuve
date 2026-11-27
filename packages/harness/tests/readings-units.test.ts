@@ -48,7 +48,7 @@ test("a unit requests changes if any section does, approves only if all do, and 
     section("one", 0, { lane: "agentic" }),
     section("two", 1, {
       lane: "agentic",
-      claims: [{ source: "finder", verify: "unconfirmed" }],
+      claims: [{ source: "lane-review", verify: "unconfirmed" }],
     }),
     section("three", 2, { lane: "agentic" }),
     section("four", 3, { lane: "human-required" }),
@@ -157,7 +157,7 @@ test("an undecided section that requests changes gives its unit no verdict", () 
     review: "request-changes",
     claims: [
       { source: "lane-review", verify: "confirmed" },
-      { source: "finder", verify: "unconfirmed" },
+      { source: "lane-review", verify: "unconfirmed" },
     ],
   });
   expect(undecided.decision.settled && undecided.decision.entry).toMatchObject({
@@ -284,7 +284,7 @@ test("a confirmed defect a request rests on is shown even behind three impact co
     },
     {
       id: "defect",
-      source: "finder",
+      source: "lane-review",
       kind: "defect",
       verify: "confirmed",
       anchor: at(60),
@@ -292,7 +292,7 @@ test("a confirmed defect a request rests on is shown even behind three impact co
     },
     {
       id: "refuted",
-      source: "finder",
+      source: "lane-review",
       kind: "defect",
       verify: "refuted",
       anchor: at(70),

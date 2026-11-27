@@ -1,3 +1,4 @@
+import { oneBatchPlanMap } from "./fixtures/readings.ts";
 // Why (NEU-148, round 17): a review whose head differs from an earlier one only by a submodule
 // pointer re-read unchanged sections, because they shared a reading group with the pointer and a
 // group's readings are keyed by its whole reading text. These hold, in a real Git repository with
@@ -226,6 +227,7 @@ test.skipIf(graph.skip)(
         storePlan(ctx, {
           manifestKey: manifest.key,
           bounds: DEFAULT_READING_BOUNDS,
+          map: oneBatchPlanMap(manifest),
           manifest: manifest.value,
         }),
       );

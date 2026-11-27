@@ -1907,7 +1907,7 @@ test("settle, cut: not settled while a follow-on is left; final, published with 
         .readings.map((name) => ({ name, ended: true })),
       settled: out,
       sections: decision.sections,
-      findersEnded: [],
+
       final,
     });
   const held = settleWith(false);
@@ -2036,7 +2036,7 @@ test("a section never read (too large, or with no text) gets code's one-line Bri
     groups: [group],
     collected: new Map(),
     proofs: new Map(),
-    findings: [],
+
     excluded: range.excluded,
   });
   const out = settledBatches({
@@ -2047,7 +2047,7 @@ test("a section never read (too large, or with no text) gets code's one-line Bri
     frame: FRAME,
     sections: decision.sections,
     collected: new Map(),
-    placement: decision.placement,
+
     proofs: new Set(),
   });
   const unread = unreadPlan.unread.filter(
@@ -2106,7 +2106,7 @@ test("a submodule pointer's undecided note: the pointer's own line at unsure, th
       frame: FRAME,
       sections: decision.sections,
       collected: held,
-      placement: decision.placement,
+
       proofs: new Set(["p1", "p2"]),
     });
     return {

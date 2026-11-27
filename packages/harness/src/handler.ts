@@ -102,7 +102,6 @@ import {
   listRunFolders,
   removeRunFolder,
   runFolder,
-  runFolderExists,
 } from "./run-folder.ts";
 import {
   heldReviewsPath,
@@ -146,6 +145,13 @@ export class JobHeld extends Data.TaggedError("JobHeld")<{
 
 /** The job's event is not a review request; no attempt can succeed. */
 export class NotAReviewRequest extends Data.TaggedError("NotAReviewRequest")<{
+  readonly message: string;
+  readonly retryable: false;
+}> {}
+
+export class UnsupportedReviewPipeline extends Data.TaggedError(
+  "UnsupportedReviewPipeline",
+)<{
   readonly message: string;
   readonly retryable: false;
 }> {}
@@ -300,6 +306,11 @@ export const reviewRunHandler =
       if (event === undefined || event.kind !== "review.requested@1")
         return yield* new NotAReviewRequest({
           message: `job ${job.seq}'s event ${job.eventId} is not a review.requested@1`,
+          retryable: false,
+        });
+      if (event.payload.pipeline.version !== PIPELINE_VERSION)
+        return yield* new UnsupportedReviewPipeline({
+          message: `This review was requested for pipeline version ${event.payload.pipeline.version}. Request the range again on the current build.`,
           retryable: false,
         });
       // This claim of the job (host.ts `QueueClaim`): a held job comes back with its attempt
@@ -1037,6 +1048,11 @@ const dueRunFolders = (location: StoreLocation, except?: string) =>
           if (folder.compatible || Option.isNone(folder.manifest)) return;
           if (!(yield* knownRunJob(folder.manifest.value.jobSeq))) return;
           const job = yield* queue.inspect(folder.manifest.value.jobSeq);
+          if (
+            Option.isSome(job) &&
+            job.value.lastError?.tag === "UnsupportedReviewPipeline"
+          )
+            return;
           if (
             Option.isSome(job) &&
             job.value.state !== "failed" &&

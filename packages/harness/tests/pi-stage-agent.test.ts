@@ -746,7 +746,6 @@ test("old optional turn-limit keys decode while the new stages use their default
   expect(current.budgets.turnLimits).toEqual({
     frame: 1,
     map: 1,
-    find: 11,
     verify: 1,
   });
   const legacy = PipelineConfig.parse({
@@ -759,15 +758,16 @@ test("old optional turn-limit keys decode while the new stages use their default
         assemble: 40,
         dispose: 15,
         merge: 20,
+        find: 11,
       },
     },
   });
+  expect(legacy.budgets.turnLimits.find).toBe(11);
   expect([
     turnLimitFor(legacy, "frame"),
     turnLimitFor(legacy, "map"),
-    turnLimitFor(legacy, "find"),
     turnLimitFor(legacy, "verify"),
-  ]).toEqual([1, 1, 11, 1]);
+  ]).toEqual([1, 1, 1]);
 });
 
 // Why: the front task's durable children must get their own contract deadlines automatically.

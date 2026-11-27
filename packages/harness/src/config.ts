@@ -17,6 +17,7 @@ import {
   OPUS_ROUTE,
   RouteConfig,
   computationRoute,
+  activeStepEffort,
   routeAccount,
   routeRuntimeError,
   stageCapabilitiesMissing,
@@ -25,10 +26,12 @@ import {
 import type { RetrieverConfig } from "./retriever.ts";
 import { GRAPH_DEADLINE_MS, SearchConfig } from "./search-config.ts";
 import { BLOB_STRUCTURE_RECIPE, SECTIONS_RECIPE } from "./sections.ts";
+import { DEFAULT_READING_BOUNDS } from "./reading-groups.ts";
+import { READING_RECIPE_SCOPE_AND_TESTS } from "./readings/plan.ts";
 import { StackToolsConfig } from "./stack/settings.ts";
 
 /** A new fixed review shape gets a new run key, including for an unfinished older request. */
-export const PIPELINE_VERSION = 12;
+export const PIPELINE_VERSION = 13;
 
 /**
  * Development settings for slice H1's stub stages, recorded in the configuration and printed on its
@@ -142,11 +145,7 @@ export const PipelineConfig = z.strictObject({
    * each, and the run keeps the key it had before.
    */
   sections: SectionsConfig.optional(),
-  /**
-   * The section readings (NEU-148), present unless the user's settings turn them off
-   * (`review.sectionReadings: "off"`). Absent: no readings, and the run keeps the key it had
-   * before.
-   */
+  /** Section reading configuration. Historical requests may omit the block. */
   readings: z
     .strictObject({
       mode: z.literal("probe"),
@@ -218,8 +217,8 @@ export const runConfig = (
 };
 export type ReadingsConfig = NonNullable<PipelineConfig["readings"]>;
 
-const turnLimits = { frame: 1, map: 1, find: 11, verify: 1 } satisfies Record<
-  AgentStage,
+const turnLimits = { frame: 1, map: 1, verify: 1 } satisfies Record<
+  Exclude<AgentStage, "find">,
   number
 >;
 
@@ -240,32 +239,50 @@ export const defaultConfig = (
   lifetime: Duration.Duration = RUN_LIFETIME,
   /** Responsibility sections (`sectionsConfig`); absent leaves the configuration as it was. */
   sections?: SectionsConfig,
-  /** The section readings; absent leaves the configuration as it was. */
+  /** Optional settings for the section readings. */
   readings?: ReadingsConfig,
-): PipelineConfig => ({
-  route,
-  budgets: {
-    turnLimits: { ...turnLimits },
-    callsInFlight: CALLS_IN_FLIGHT,
-    contextCeiling: contextCeiling(route),
-    toolResultTokens: TOOL_RESULT_TOKENS,
-    lifetimeMs: Duration.toMillis(lifetime),
-    cutoffMs: Duration.toMillis(runCutoff(lifetime)),
-  },
-  ...(stub === undefined || Object.keys(stub).length === 0 ? {} : { stub }),
-  precompute: {
-    ...defaultManifestSettings(route.window),
-    ...(search?.leads === undefined ? {} : { retriever: search.leads }),
-    // Graph's lead round waits as long as a review waits on Graph at a time (0013).
-    ...(search?.leads?.id === "graph"
-      ? { graphWaitMs: search.tools?.graphDeadlineMs ?? GRAPH_DEADLINE_MS }
-      : {}),
-  },
-  ...(search?.tools === undefined ? {} : { search: search.tools }),
-  ...(stack === undefined ? {} : { stack }),
-  ...(sections === undefined ? {} : { sections }),
-  ...(readings === undefined ? {} : { readings }),
-});
+): PipelineConfig => {
+  const { stepEffort, ...routePolicy } = route;
+  const effort = activeStepEffort(stepEffort);
+  const { hold, ...stubSettings } = stub ?? {};
+  const activeStub = {
+    ...stubSettings,
+    ...(hold === undefined || hold.stage === "find" ? {} : { hold }),
+  };
+  return {
+    route: {
+      ...routePolicy,
+      ...(effort === undefined ? {} : { stepEffort: effort }),
+    },
+    budgets: {
+      turnLimits: { ...turnLimits },
+      callsInFlight: CALLS_IN_FLIGHT,
+      contextCeiling: contextCeiling(route),
+      toolResultTokens: TOOL_RESULT_TOKENS,
+      lifetimeMs: Duration.toMillis(lifetime),
+      cutoffMs: Duration.toMillis(runCutoff(lifetime)),
+    },
+    ...(Object.keys(activeStub).length === 0 ? {} : { stub: activeStub }),
+    precompute: {
+      ...defaultManifestSettings(route.window),
+      ...(search?.leads === undefined ? {} : { retriever: search.leads }),
+      // Graph's lead round waits as long as a review waits on Graph at a time (0013).
+      ...(search?.leads?.id === "graph"
+        ? { graphWaitMs: search.tools?.graphDeadlineMs ?? GRAPH_DEADLINE_MS }
+        : {}),
+    },
+    ...(search?.tools === undefined ? {} : { search: search.tools }),
+    ...(stack === undefined ? {} : { stack }),
+    ...(sections === undefined ? {} : { sections }),
+    readings: {
+      mode: "probe",
+      bounds: { ...DEFAULT_READING_BOUNDS },
+      ...readings,
+      recipe: READING_RECIPE_SCOPE_AND_TESTS,
+      scopeAndTests: true,
+    },
+  };
+};
 
 /** The run's Precompute settings: frozen with the request, or the defaults for an older request. */
 export const precomputeSettings = (config: PipelineConfig) =>
@@ -339,6 +356,4 @@ export type CompletedRun = z.infer<typeof CompletedRun>;
 
 /** The turn limit an agent of a stage runs with: the ruled one unless a stub setting lowers it. */
 export const turnLimitFor = (config: PipelineConfig, stage: AgentStage) =>
-  config.stub?.turnLimit ??
-  config.budgets.turnLimits[stage] ??
-  turnLimits[stage];
+  config.stub?.turnLimit ?? config.budgets.turnLimits[stage] ?? 1;

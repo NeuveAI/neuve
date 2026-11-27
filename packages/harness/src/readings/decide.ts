@@ -60,7 +60,7 @@ export const UNDECIDED_CAUSES: ReadonlyArray<UndecidedCause> = [
 
 export interface Claim {
   readonly id: string;
-  readonly source: "lane-review" | "finder";
+  readonly source: "lane-review";
   /** `not-reached`: its check was not started before the run's cut-off; it is not unconfirmed. */
   readonly verify: "confirmed" | "refuted" | "unconfirmed" | "not-reached";
 }
@@ -620,9 +620,8 @@ const row = (
     result.verdict === null || result.undecided !== null ? "none" : "by-lane",
 });
 
-const unconfirmed = { source: "finder", verify: "unconfirmed" } as const;
-const finderConfirmed = { source: "finder", verify: "confirmed" } as const;
-const reviewConfirmed = { source: "lane-review", verify: "confirmed" } as const;
+const unconfirmed = { source: "lane-review", verify: "unconfirmed" } as const;
+const confirmed = { source: "lane-review", verify: "confirmed" } as const;
 const reviewRefuted = { source: "lane-review", verify: "refuted" } as const;
 
 export const OUTCOMES: ReadonlyArray<Outcome> = [
@@ -632,22 +631,22 @@ export const OUTCOMES: ReadonlyArray<Outcome> = [
     { lane: "rule", undecided: null, verdict: "approve" },
   ),
   row(
-    "assessed; Lane review approves; a finder's claim refuted",
+    "assessed; Lane review approves; a reviewer's claim refuted",
     {
       assess: "judged",
       review: "approve",
-      claims: [{ source: "finder", verify: "refuted" }],
+      claims: [{ source: "lane-review", verify: "refuted" }],
     },
     { lane: "rule", undecided: null, verdict: "approve" },
   ),
   row(
     "assessed; Lane review requests changes on a confirmed defect",
-    { assess: "judged", review: "request-changes", claims: [reviewConfirmed] },
+    { assess: "judged", review: "request-changes", claims: [confirmed] },
     { lane: "human-required", undecided: null, verdict: "request-changes" },
   ),
   row(
-    "assessed; Lane review approves; a finder's defect confirmed",
-    { assess: "judged", review: "approve", claims: [finderConfirmed] },
+    "assessed; Lane review approves; a reviewer's defect confirmed",
+    { assess: "judged", review: "approve", claims: [confirmed] },
     { lane: "human-required", undecided: null, verdict: "request-changes" },
   ),
   row(
@@ -682,7 +681,7 @@ export const OUTCOMES: ReadonlyArray<Outcome> = [
     {
       assess: "judged",
       review: "request-changes",
-      claims: [reviewConfirmed, unconfirmed],
+      claims: [confirmed, unconfirmed],
     },
     {
       lane: "human-required",
@@ -700,8 +699,8 @@ export const OUTCOMES: ReadonlyArray<Outcome> = [
     },
   ),
   row(
-    "assessed; Lane review unsure; a finder's defect confirmed",
-    { assess: "judged", review: "unsure", claims: [finderConfirmed] },
+    "assessed; Lane review unsure; a reviewer's defect confirmed",
+    { assess: "judged", review: "unsure", claims: [confirmed] },
     {
       lane: "human-required",
       undecided: { cause: "unsure", reading: "lane-review" },
@@ -729,8 +728,8 @@ export const OUTCOMES: ReadonlyArray<Outcome> = [
     },
   ),
   row(
-    "assessed; Lane review not judged; a finder's defect confirmed",
-    { assess: "judged", review: "failed", claims: [finderConfirmed] },
+    "assessed; Lane review not judged; a reviewer's defect confirmed",
+    { assess: "judged", review: "failed", claims: [confirmed] },
     {
       lane: "human-required",
       undecided: { cause: "failed", reading: "lane-review" },
@@ -759,7 +758,7 @@ export const OUTCOMES: ReadonlyArray<Outcome> = [
   ),
   row(
     "Assess not judged; Lane review requests changes on a confirmed defect",
-    { assess: "failed", review: "request-changes", claims: [reviewConfirmed] },
+    { assess: "failed", review: "request-changes", claims: [confirmed] },
     {
       lane: "human-required",
       undecided: { cause: "failed", reading: "assess" },

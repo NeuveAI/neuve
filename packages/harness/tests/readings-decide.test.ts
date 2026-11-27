@@ -340,7 +340,7 @@ test("a confirmed request for changes with easy validation and high complexity i
     // Plant 101's shape: kept finder defects about code, Lane review requesting changes too.
     [
       [
-        { source: "finder", verify: "confirmed" },
+        { source: "lane-review", verify: "confirmed" },
         { source: "lane-review", verify: "confirmed" },
       ],
       "request-changes",
@@ -447,8 +447,8 @@ test("a confirmed request for changes with low complexity is human-required: thr
           lane: "agentic",
           review: "approve",
           claims: [
-            { source: "finder", verify: "confirmed" },
-            { source: "finder", verify: "confirmed" },
+            { source: "lane-review", verify: "confirmed" },
+            { source: "lane-review", verify: "confirmed" },
           ],
           moves: [keptTests("claim-0"), keptTests("claim-1")],
         }),
@@ -487,7 +487,7 @@ test("a confirmed request for changes with low complexity is human-required: thr
 test("an unconfirmed or refuted claim, and an approval, give no verdict move", () => {
   for (const [review, claims, verdict] of [
     ["approve", [{ source: "lane-review", verify: "refuted" }], "approve"],
-    ["approve", [{ source: "finder", verify: "refuted" }], "approve"],
+    ["approve", [{ source: "lane-review", verify: "refuted" }], "approve"],
     ["approve", [{ source: "lane-review", verify: "unconfirmed" }], null],
     ["request-changes", [{ source: "lane-review", verify: "refuted" }], null],
     ["request-changes", [], null],
@@ -518,10 +518,10 @@ test("an undecided section is unchanged: no verdict move, human-required", () =>
       "request-changes",
       [
         { source: "lane-review", verify: "confirmed" },
-        { source: "finder", verify: "unconfirmed" },
+        { source: "lane-review", verify: "unconfirmed" },
       ],
     ],
-    ["unsure", [{ source: "finder", verify: "confirmed" }]],
+    ["unsure", [{ source: "lane-review", verify: "confirmed" }]],
   ] as const) {
     const entry = settledEntry(
       withLevels(inputFor({ lane: "agentic", review, claims }), "low", "easy"),

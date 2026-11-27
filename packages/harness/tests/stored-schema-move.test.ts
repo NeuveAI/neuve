@@ -10,8 +10,10 @@ import {
   ReviewMap,
   MAP_PROMPT_VERSION,
 } from "../src/review-map.ts";
-import { FindSubmission, FindStored } from "../src/find.ts";
-import { VerifySubmission, VerifyStored } from "../src/verify.ts";
+import { FindStored } from "../src/historical-find.ts";
+import { FindSubmission } from "../src/find-schema.ts";
+import { VerifySubmission } from "../src/verify.ts";
+import { VerifyStored } from "../src/historical-find.ts";
 import { LinkedReview } from "../src/disposition.ts";
 import { PIPELINE_VERSION, defaultConfig, runKeyFor } from "../src/config.ts";
 import { agentStageSpec } from "../src/pipeline.ts";
@@ -69,7 +71,7 @@ const EXPECTED = {
     FRAME_PROMPT_VERSION: 2,
     MAP_PROMPT_VERSION: 2,
     PUBLISH_VERSION: 7,
-    PIPELINE_VERSION: 12,
+    PIPELINE_VERSION: 13,
   },
 };
 if (process.env["PRINT_FINGERPRINTS"] === "1")
@@ -92,7 +94,7 @@ test("new runs have distinct keys while agent keys bind retry policy and reuse a
     headOid: "b".repeat(40),
   };
   const config = defaultConfig(undefined, OPUS_ROUTE);
-  expect(PIPELINE_VERSION).toBe(12);
+  expect(PIPELINE_VERSION).toBe(13);
   expect(runKeyFor(range, config)).not.toBe(
     runKeyFor(range, defaultConfig(undefined, SOL_ROUTE)),
   );

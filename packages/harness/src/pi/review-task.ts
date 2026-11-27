@@ -1,3 +1,4 @@
+import type { CheckedCrossBatchClaim } from "./cross-batch-claims.ts";
 import { readData } from "@neuve/records-core";
 import type { Context } from "@earendil-works/chord";
 import {
@@ -14,27 +15,18 @@ import {
 import { Blobs, Computations } from "@neuve/records-core";
 import { Effect, Option } from "effect";
 import { z } from "zod";
-import { findDeadline } from "../budget.ts";
 import { releaseRelationsCache } from "../relations-index.ts";
 import { releaseIndexCache } from "../search-index.ts";
-import { FINDERS } from "../find.ts";
 import type { Freshness } from "../freshness.ts";
 import type { FillResult } from "../link.ts";
 import { logTimed, scopedLogSpan, waitSpans } from "../log-span.ts";
 import type { PrecomputeOutput, StageRecord } from "../pipeline.ts";
 import type { PublishCandidate } from "../publish.ts";
 import type { SettledBatch } from "../publish-sections.ts";
-import type { RunLog } from "../run-log.ts";
+import { enqueueTelemetry, type RunLog } from "../run-log.ts";
 import type { ReviewRunInput } from "./contracts.ts";
 import { definePolicyTask as defineTask } from "./failure-policy.ts";
 import type { FrontInput, FrontResult } from "./stages/front-task.ts";
-import {
-  finderEndOf,
-  type FinderEnd,
-  type FinderInput,
-  type FinderResult,
-  type FinderStatus,
-} from "./stages/finder-task.ts";
 import type { LeadsInput, LeadsResult } from "./stages/leads-task.ts";
 import type {
   ReadingsPlanInput,
@@ -45,12 +37,9 @@ import {
   type RelationsInput,
   type RelationsResult,
 } from "./stages/relations-task.ts";
+import { NO_READINGS, droppedPlanGap } from "../readings/batches.ts";
 import {
-  NO_READINGS,
-  droppedPlanGap,
-  findersHeldBy,
-} from "../readings/batches.ts";
-import {
+  crossBatchChecks,
   settleUpTo,
   type BatchWaiterInput,
   type BatchWaiterResult,
@@ -136,10 +125,6 @@ export type FollowOnAnswer = "requested" | "cap-reached" | "refused";
 export type Reading = { readonly name: string; readonly task: TaskId<unknown> };
 /** What the readings' `prepare` hands their `create`; opaque to the review, which only passes it on. */
 type ReadingsPrepared = Readonly<Record<string, unknown>>;
-/**
- * What the readings' plan reads: only what exists when Precompute ends. A reading that needs the
- * Frame or the Map waits on the front task itself.
- */
 export type ReadingsPrepareInput = {
   readonly manifestKey: string;
   readonly cutoffAt: number;
@@ -153,12 +138,6 @@ type Read = Awaited<
 >;
 export interface ReviewStagesPort {
   readonly front: StartChild<FrontInput, FrontResult>;
-  /**
-   * Unused: the front task starts the finders when Frame lands (front-task.ts). Kept optional only
-   * because the runtime's wiring (`pi/attempt.ts`) still passes it; remove with that line.
-   */
-  readonly finder?: StartChild<FinderInput, FinderResult>;
-  /** The range's leads and tree indexes, which no step waits for (NEU-148); absent in some tests. */
   readonly leads?: StartChild<LeadsInput, LeadsResult>;
   /** The range's commits' relations, which no step waits for (NEU-148); given only with readings on. */
   readonly relations?: StartChild<RelationsInput, RelationsResult>;
@@ -182,7 +161,6 @@ export interface ReviewStagesPort {
     input: MapInput & {
       readonly frameKey: string;
       readonly fill: FillResult | null;
-      readonly finders: ReadonlyArray<FinderResult>;
     },
     reader: DocumentReader,
     context: Context,
@@ -232,22 +210,18 @@ export interface ReviewStagesPort {
    * Asks for the run's follow-on run, once per run, only after the ending call is stored (records'
    * own key makes a repeat the same ask).
    */
+  readonly retainUnpublishedClaims?: (
+    claims: ReadonlyArray<CheckedCrossBatchClaim>,
+    signal: AbortSignal,
+  ) => Promise<void>;
   readonly followOn?: (signal?: AbortSignal) => Promise<FollowOnAnswer>;
   /** The model readings of the changed sections (NEU-148); absent, the review has none. */
   readonly readings?: {
-    /**
-     * Everything slow, outside any commit: no transaction is open. The readings' plan task calls it
-     * as soon as Precompute's commit created that task beside the front task, so it runs beside
-     * Frame and Map, and nothing but Link waits for that task. Deterministic for its input, so a
-     * replayed plan may call it again. Its signal aborts at a stop and at the bound measured as the
-     * plan starts (`findDeadline`, at most 75 s before the cut-off), and it must honour it: the plan
-     * does not wait for one that ignores it but ends without readings at that bound, and that call
-     * keeps running unowned, a defect of the port's implementation. When it throws or that bound
-     * ends it, the review goes on without readings. What stays true by design: Link waits for the
-     * reading tasks themselves, so a slow reading delays Link; bounding them is the port owner's.
-     */
     readonly prepare: (
-      input: ReadingsPrepareInput,
+      input: Omit<ReadingsPrepareInput, "front"> & {
+        readonly frameKey: string;
+        readonly mapKey: string;
+      },
       signal: AbortSignal,
     ) => Promise<ReadingsPrepared>;
     /**
@@ -270,8 +244,6 @@ export interface ReviewStagesPort {
           readonly name: string;
           readonly outcome: TaskOutcome<unknown> | undefined;
         }>;
-        /** The finders' results exactly as Link gets them, the review's own entry for a cut-short one included. */
-        readonly finders?: ReadonlyArray<FinderResult>;
         /** The readings' plan task ended cut at its cut-off (`Publishing.planCut`). */
         readonly planCut?: boolean | undefined;
       },
@@ -282,20 +254,11 @@ export interface ReviewStagesPort {
       readonly stages: ReadonlyArray<StageRecord>;
       readonly disclosures: Freshness["disclosures"];
     }>;
-    /**
-     * The review's batches, in its batch order, each with the reading tasks its sections wait on,
-     * and the review's totals and run gaps: code only, deterministic for its input. Called once the
-     * plan named its readings, before the commit that creates the waiters, and once more by the
-     * ending call with the finders' results, whose run gaps (a finding that could not be read, or
-     * one no section of any batch owns) only that call carries. A batch's waited-on readings include
-     * the briefing tasks of the groups that hold its sections, so it publishes once those briefings
-     * are in, without holding back a batch that is already published.
-     */
+    /** Map batches and their reading tasks, plus the run totals and gaps. */
     readonly batches?: (
       input: MapInput & {
         readonly frameKey: string;
         readonly readings: ReadonlyArray<Reading>;
-        readonly finders?: ReadonlyArray<FinderResult> | undefined;
         /** The readings' plan task ended cut at its cut-off (`Publishing.planCut`). */
         readonly planCut?: boolean | undefined;
       },
@@ -318,17 +281,7 @@ export interface ReviewStagesPort {
           readonly name: string;
           readonly outcome: TaskOutcome<unknown> | undefined;
         }>;
-        readonly finders: ReadonlyArray<FinderResult>;
-        /**
-         * How each of the review's finders ended (`finderEnds`), a lens the front task never started
-         * `skipped`: unless `final`, a batch settles only when every one completed.
-         */
-        readonly findersEnded: ReadonlyArray<LensEnd>;
-        /**
-         * No later run of this run key can change the batch: the review decided at Link that no
-         * follow-on is left under the cap, or the ending call met a quota refusal. Unfinished
-         * finders then hold no batch, and the packet says they did not finish.
-         */
+        readonly incoming?: ReadonlyArray<CheckedCrossBatchClaim>;
         readonly final: boolean;
         readonly last: boolean;
         /** The readings' plan task ended cut at its cut-off (`Publishing.planCut`). */
@@ -354,10 +307,6 @@ type Ready = {
   readonly frameKey: string;
   readonly mapKey: string;
   readonly manifestKey: string;
-  readonly finders: ReadonlyArray<{
-    readonly lens: FinderInput["lens"];
-    readonly task: TaskId<FinderResult>;
-  }>;
   /** The readings' plan task, created with the front task; absent when the review plans no readings. */
   readonly plan?: TaskId<ReadingsPlanResult>;
   /**
@@ -378,8 +327,6 @@ type Ready = {
 };
 type Publishing = {
   readonly batches: ReviewBatches;
-  /** Link's entry for a finder with no result, fixed when the batches were made: every call's. */
-  readonly reason: "cutoff" | "stopped";
   /**
    * Whether this run can have no successor, decided once, read only, in the commit that made the
    * waiters, before any of them ran: no follow-on is left under the cap (`followOnLeft`). Absent in
@@ -406,7 +353,7 @@ type ReviewCheckpoint =
       readonly disclosures: Freshness["disclosures"];
       readonly plan?: TaskId<ReadingsPlanResult>;
     }
-  | (Ready & { readonly phase: "find+fill" })
+  | (Ready & { readonly phase: "fill" })
   | (Ready & { readonly phase: "link"; readonly fill: FillResult | null })
   | {
       readonly phase: "publish";
@@ -423,7 +370,6 @@ type ReviewCheckpoint =
         readonly mapKey: string;
         readonly manifestKey: string;
         readonly readings: ReadonlyArray<Reading>;
-        readonly finders: Ready["finders"];
       };
       /**
        * Set by the commit after the ending call, before the follow-on ask: a retried phase does not
@@ -441,16 +387,7 @@ type Runtime = TaskRuntime<
   object
 >;
 export const REVIEW_TASK = "neuve.review";
-/**
- * 3: Precompute's checkpoint names stage keys of the NEU-148 shape (the manifest without leads),
- * and the leads task is the review's child. 4: the front task starts the finders when Frame lands
- * and returns them. 5: the readings' plan task is created with the front task, and the `front`,
- * `find+fill` and `link` checkpoints name it; `find+fill` no longer plans. 6: the publish phase
- * (NEU-148, WP8): the `link` checkpoint may name the batches and their waiters, and the `publish`
- * checkpoint what the ending call reads, waiting on the waiters. An older live review restarts from
- * Precompute (`migrate`): its checkpoints name stage keys and children of an earlier shape.
- */
-export const REVIEW_TASK_VERSION = 6;
+export const REVIEW_TASK_VERSION = 7;
 const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const failure = (
   outcome: TaskOutcome<unknown>,
@@ -465,7 +402,7 @@ const failure = (
       : undefined;
 /**
  * What a batch waiter reads from its review: the `link` checkpoint that created it names the
- * batches, the readings and the finders. Undefined once the review is at Publish (or ended), when a
+ * batches and readings. Undefined once the review is at Publish (or ended), when a
  * waiter publishes nothing.
  */
 export const publishingOf = (checkpoint: unknown) => {
@@ -475,13 +412,11 @@ export const publishingOf = (checkpoint: unknown) => {
         frameKey: at.frameKey!,
         mapKey: at.mapKey!,
         manifestKey: at.manifestKey!,
-        finders: at.finders ?? [],
         readings: at.readings ?? [],
         batches: at.publishing.batches,
-        reason: at.publishing.reason,
+        waiters: at.publishing.waiters,
         final: at.publishing.final ?? false,
         planCut: at.publishing.planCut === true,
-        /** What the review disclosed by Link: Precompute's, the front's and the finders' start. */
         disclosures: at.sources?.disclosures ?? [],
       }
     : undefined;
@@ -544,190 +479,6 @@ const resultOf = <R>(outcome: TaskOutcome<R>): R | undefined =>
     ? outcome.result
     : undefined;
 
-/**
- * How a finder that left no result ended, by its task's outcome: failed, or cut off or stopped as
- * the review's entry says (`reason`, fixed in its checkpoint, so every call reads the same).
- */
-const missingEnd = (
-  outcome: TaskOutcome<FinderResult> | undefined,
-  reason: "cutoff" | "stopped",
-): FinderEnd => {
-  if (outcome === undefined) return { find: reason, verify: reason };
-  switch (outcome.status) {
-    case "completed":
-    case "aborted":
-      return { find: reason, verify: reason };
-    case "failed":
-    case "faulted":
-    case "orphaned":
-      return { find: "failed", verify: "failed" };
-  }
-};
-
-/**
- * The finders' results as Link gets them, each with how it ended (`end`): each finder's own, or for
- * one that has none (cut short, stopped or failed) the review's own entry, an interrupted find with
- * no findings, whose `end` says how it ended, never `completed`. A result of an earlier build has no
- * `end`: it is read from its records, as the finder sets it. The batch waiters and the publish phase
- * read them the same way.
- */
-export const finderResults = (
-  finders: ReadonlyArray<{
-    readonly lens: FinderInput["lens"];
-    readonly task: TaskId<FinderResult>;
-  }>,
-  outcomes: ReadonlyArray<TaskOutcome<FinderResult> | undefined>,
-  reason: "cutoff" | "stopped",
-): Array<FinderResult> =>
-  finders.map((child, index): FinderResult => {
-    const outcome = outcomes[index];
-    const result = outcome === undefined ? undefined : resultOf(outcome);
-    if (result !== undefined)
-      return (result as Partial<FinderResult>).end !== undefined
-        ? result
-        : {
-            ...result,
-            end: finderEndOf(
-              result.stages.find((stage) => stage.stage === "find"),
-              result.stages.filter(
-                (stage) =>
-                  stage.stage === "verify" &&
-                  stage.agent?.startsWith("verify.") === true,
-              ),
-              reason,
-            ),
-          };
-    return {
-      lens: child.lens,
-      findKey: null,
-      findings: [],
-      stages: [
-        {
-          stage: "find",
-          agent: `find.${child.lens}`,
-          status: "interrupted",
-          wallMs: 0,
-          disclosure: null,
-        },
-      ],
-      reason,
-      end: missingEnd(outcome, reason),
-    };
-  });
-
-/** One lens's end, as the settle decision, the disclosure, the follow-on and the receipt read it. */
-export type LensEnd = { readonly lens: FinderInput["lens"] } & FinderEnd;
-
-/**
- * Every lens's end, in the finders' order: a started finder's `end`, and `skipped` for a lens the
- * front task never started (too little time remained when Frame landed).
- */
-export const finderEnds = (
-  results: ReadonlyArray<FinderResult>,
-): Array<LensEnd> =>
-  FINDERS.map((lens) => {
-    const result = results.find((r) => r.lens === lens);
-    return result === undefined
-      ? { lens, find: "skipped", verify: "skipped" }
-      : { lens, find: result.end.find, verify: result.end.verify };
-  });
-
-/** Whether a step's end leaves the finding search unfinished, as a person is told it. */
-const unfinished = (status: FinderStatus): boolean => {
-  switch (status) {
-    case "completed":
-      return false;
-    case "cutoff":
-    case "stopped":
-    case "skipped":
-    case "failed":
-      return true;
-  }
-};
-
-/**
- * The run gap a run with no successor publishes when it settles batches while finders had not
- * finished: in plain words, so a person knows the findings are incomplete. None when every finder
- * completed, or when the run can still have a successor (then no batch settled).
- */
-export const findersUnfinishedGap = (
-  ended: ReadonlyArray<LensEnd>,
-  final: boolean,
-): Array<PublishGap> =>
-  final && ended.some((e) => unfinished(e.find) || unfinished(e.verify))
-    ? [
-        {
-          key: "run:finders-unfinished",
-          kind: "finders-unfinished",
-          detail:
-            "The finders did not finish before this review ended, so its findings are incomplete: a change shown with no finding may still have one.",
-        },
-      ]
-    : [];
-
-/**
- * Whether any finder answered at its own time limit: a Find or Verify step the finders' deadline
- * before the cut-off made give its final answer (`agent-step.ts`, `toFinal` with `timeout`), its
- * record computed or reused with `endedBy: "timeout"` and `finalGeneration: true`. Its status stays
- * `completed`; only the packet and the receipt say it, in one plain line each.
- */
-export const findersAtLimit = (finders: ReadonlyArray<FinderResult>) =>
-  finders.some((finder) =>
-    finder.stages.some(
-      (stage) =>
-        (stage.stage === "find" || stage.stage === "verify") &&
-        // A stored answer reused by a later run keeps how it ended: the same line.
-        (stage.status === "computed" || stage.status === "reused") &&
-        stage.agentResult?.endedBy === "timeout" &&
-        stage.agentResult.finalGeneration === true,
-    ),
-  );
-/** The packet's line when any finder answered at its time limit (`findersAtLimit`). */
-export const FINDERS_AT_LIMIT = {
-  kind: "finders-at-limit",
-  detail:
-    "The finders answered at their time limit, so their findings are what they had found by then.",
-};
-/** The run gap a per-batch call carries when any finder answered at its time limit. */
-export const findersAtLimitGap = (
-  finders: ReadonlyArray<FinderResult>,
-): Array<PublishGap> =>
-  findersAtLimit(finders)
-    ? [{ key: "run:finders-at-limit", ...FINDERS_AT_LIMIT }]
-    : [];
-
-/**
- * Whether a follow-on run of this run key runs a step of this finder again: one that completed is
- * stored and reused (its Find and Verify keys hold no run), every other one runs again.
- */
-const runsAgain = (status: FinderStatus): boolean => {
-  switch (status) {
-    case "completed":
-      return false;
-    case "cutoff":
-    case "stopped":
-    case "skipped":
-    case "failed":
-      return true;
-  }
-};
-
-/** The finders' ends as the run log keeps them for the receipt (`receipt.ts`, `finders.ended`). */
-export const findersEndedRow = (
-  ended: ReadonlyArray<LensEnd>,
-  atLimit = false,
-) => ({
-  type: "finders.ended",
-  finders: ended.map((e) => ({
-    lens: e.lens,
-    find: e.find,
-    verify: e.verify,
-    again: runsAgain(e.find) || runsAgain(e.verify),
-  })),
-  // Only when a finder answered at its time limit (`findersAtLimit`), so the row is as before.
-  ...(atLimit ? { atLimit: true } : {}),
-});
-
 /** Reads the actual output, including an interrupted step's partial envelope. */
 export const outputOf = <O>(record: StageRecord, schema: z.ZodType<O>) =>
   Effect.gen(function* () {
@@ -751,7 +502,7 @@ export const outputOf = <O>(record: StageRecord, schema: z.ZodType<O>) =>
  * Reviews running in this process, across every review host it opened. A review counts once, from
  * the first phase or abort handler its task runs here until one of them ends with the task terminal
  * or `completing`, or ends by throwing (pi then faults the task, or the Harness is closing, so this
- * definition runs no more of it). A review waiting on its children (front, finders, readings,
+ * definition runs no more of it). A review waiting on its children (front, readings,
  * waiters) stays counted. When the count falls to none, this process's tree indexes and decoded
  * relations indexes are released: the next review builds or decodes them again.
  */
@@ -975,17 +726,7 @@ export const reviewTask = (
     const port = publisher(stages);
     if (port === undefined)
       throw new Error("a review that publishes per batch has no publisher");
-    const finders = finderResults(
-      settled.finders,
-      await runtime.outcomes(
-        settled.finders.map((f) => f.task),
-        context,
-      ),
-      settled.reason,
-    );
-    const ended = finderEnds(finders);
-    // No successor, as the commit that made the waiters decided it (an earlier build's checkpoint
-    // has none: the cap is read now). Unfinished finders then hold no batch.
+    const { checked } = await crossBatchChecks(runtime, context);
     const noSuccessor = settled.final ?? !(await followOnLeft(port, runtime));
     const settleAll = (last: (batch: string) => boolean, final: boolean) =>
       settleUpTo(
@@ -993,9 +734,9 @@ export const reviewTask = (
         port.settle,
         {
           ...settled,
-          finders,
           through: settled.batches.batches.length - 1,
           last,
+          incoming: checked,
           final,
         },
         runtime,
@@ -1012,7 +753,7 @@ export const reviewTask = (
       ({ settled: s }) => !s.settled && s.gap.kind === "quota",
     );
     // The last run the review is allowed: a quota refusal asks for no follow-on run, and past the
-    // cap none is left. Its batches not reached (a reading, or the finders, unfinished) then settle,
+    // cap none is left. Its batches not reached then settle,
     // a section no reading reached as human-required, `not-reached`; otherwise they stay pending
     // and the follow-on is asked for after this call is stored.
     const last = notReached.size > 0 && (quota || noSuccessor);
@@ -1022,8 +763,6 @@ export const reviewTask = (
     // for the range's complete review (its receipt says `timed-out`) when no stage already is.
     const pending = notReached.size > 0 && !last;
     const decided = built.some(({ settled: s }) => s.settled);
-    // Why the finders hold the batches, if they do: only the cut-off is named as the cut-off.
-    const heldBy = findersHeldBy(ended);
     const cut: ReadonlyArray<StageRecord> =
       pending && !records.some(cutShort)
         ? [
@@ -1032,7 +771,7 @@ export const reviewTask = (
               agent: "link.batches",
               status: "interrupted",
               wallMs: 0,
-              note: `${notReached.size} batch(es) not reached ${heldBy === "other" ? "because the finders did not finish" : "by the cut-off"}`,
+              note: `${notReached.size} batch(es) not reached by the cut-off`,
               disclosure: null,
             },
           ]
@@ -1044,7 +783,7 @@ export const reviewTask = (
         ),
         totals: settled.batches.totals,
         ending: true,
-        // What the review disclosed (Precompute, the finders' start, Link, the readings), keyed as
+        // What the review disclosed (Precompute, Link and the readings), keyed as
         // the old packet keys them, then the run's gaps and each batch still not settled.
         gaps: [
           ...disclosureGaps(disclosures),
@@ -1059,23 +798,23 @@ export const reviewTask = (
                 notReachedGap(
                   decided
                     ? `${notReached.size} of ${settled.batches.batches.length} batch(es) were not reached before the cut-off`
-                    : heldBy === "cutoff"
-                      ? "The finders did not finish before the cut-off, so no batch was decided"
-                      : heldBy === "other"
-                        ? "The finders did not finish, so no batch was decided yet"
-                        : "The review ran out of time before any batch was decided",
+                    : "The review ran out of time before any batch was decided",
                   "they wait for a follow-on run, or for the next request when none starts",
                 ),
               ]
             : []),
-          ...findersUnfinishedGap(ended, noSuccessor || last),
-          ...findersAtLimitGap(finders),
           ...built.flatMap(({ settled: s }) => (s.settled ? [] : [s.gap])),
         ],
         stages: [...records, ...cut],
       },
       runtime.signal,
     );
+    try {
+      await stages.retainUnpublishedClaims?.(checked, runtime.signal);
+    } catch (error) {
+      if (runtime.signal.aborted) throw error;
+      enqueueTelemetry(log, { type: "review.claim-retention", failed: true });
+    }
     return { published: [...cut, ...published], ask: pending };
   };
   const review = defineTask<ReviewTaskInput, ReviewCheckpoint, ReviewOutcome>({
@@ -1213,9 +952,6 @@ export const reviewTask = (
                     },
                     runtime.taskId,
                   );
-            // The readings' plan, in this same commit: the manifest key and the front task's ID, all
-            // it reads, exist now. The review never waits for it here; only Link does, beside the
-            // finders, so however slow its `prepare` is, Frame, the finders, Map and Fill never wait.
             const plan =
               stages.readings === undefined || stages.readingsPlan === undefined
                 ? undefined
@@ -1304,84 +1040,27 @@ export const reviewTask = (
             },
             context,
           );
-        // The finders started when Frame landed, in the front task's commit that started Map, and
-        // that commit decided the start rule. A front task that never got there started none: the
-        // review records the schedule then, skipped, as it did when it started them itself.
-        const started = front.finders;
-        const start = started?.started === true;
-        if (
-          started === undefined &&
-          !log
-            ?.read()
-            .some(
-              (entry) =>
-                entry.type === "review.schedule" &&
-                entry["taskId"] === runtime.taskId,
-            )
-        ) {
-          const now = runtime.now();
-          log?.write({
-            type: "review.schedule",
-            taskId: runtime.taskId,
-            start: now,
-            deadline: findDeadline(now, task.input.cutoffAt),
-            cutoffAt: task.input.cutoffAt,
-            finders: 0,
-            skipped: true,
-          });
-        }
-
-        const frameKey = front.frameKey,
-          mapKey = front.mapKey;
-        const finders = started?.finders ?? [];
-        // No readings here: their plan task, created with the front task, creates them, and Link
-        // waits for it beside the finders.
-        await commit(runtime, "front", "find+fill", () =>
-          runtime.commit(() => {
-            return {
+        const { frameKey, mapKey } = front;
+        await commit(runtime, "front", "fill", () =>
+          runtime.commit(
+            () => ({
               status: "running",
               checkpoint: json({
-                phase: "find+fill",
-                stages: [
-                  ...records,
-                  ...(start
-                    ? []
-                    : FINDERS.map((lens): StageRecord => ({
-                        stage: "find",
-                        agent: `find.${lens}`,
-                        status: "skipped",
-                        wallMs: 0,
-                        disclosure: null,
-                      }))),
-                ],
-                sources: {
-                  ...sources,
-                  disclosures: [
-                    ...sources.disclosures,
-                    ...(start
-                      ? []
-                      : [
-                          {
-                            kind: "finders-skipped",
-                            detail:
-                              "The finding searches did not start because too little review time remained. The published units have code coverage without a finding search.",
-                          },
-                        ]),
-                  ],
-                },
+                phase: "fill",
+                stages: records,
+                sources,
                 frameKey,
                 mapKey,
                 manifestKey: front.manifestKey,
-                finders,
                 ...(at.plan === undefined ? {} : { plan: at.plan }),
               }),
-            };
-          }, context),
+            }),
+            context,
+          ),
         );
-        // The finders' inputs are logged by the front task, which created them.
       },
-      "find+fill": async (task, runtime, context) => {
-        using phaseSpan = span(runtime, "find+fill");
+      fill: async (task, runtime, context) => {
+        using phaseSpan = span(runtime, "fill");
         const at = task.state.checkpoint;
         const stop = new AbortController();
         const timer = setTimeout(
@@ -1402,18 +1081,11 @@ export const reviewTask = (
         } finally {
           clearTimeout(timer);
         }
-        // Link waits for the finders and the readings' plan alike; the plan's readings are waited
-        // on in the `link` phase, once the plan has named them.
-        const on = [
-          ...at.finders.map((f) => ({
-            kind: `finder.${f.lens}`,
-            task: f.task as TaskId,
-          })),
-          ...(at.plan === undefined
+        const on =
+          at.plan === undefined
             ? []
-            : [{ kind: "readings-plan", task: at.plan as TaskId }]),
-        ];
-        await commit(runtime, "find+fill", "link", () =>
+            : [{ kind: "readings-plan", task: at.plan as TaskId }];
+        await commit(runtime, "fill", "link", () =>
           runtime.commit(() => {
             const checkpoint = json({ ...at, phase: "link" as const, fill });
             return on.length === 0
@@ -1431,14 +1103,6 @@ export const reviewTask = (
       link: async (task, runtime, context) => {
         using phaseSpan = span(runtime, "link");
         const at = task.state.checkpoint;
-        const outcomes = await runtime.outcomes(
-          at.finders.map((f) => f.task),
-          context,
-        );
-        for (const outcome of outcomes) {
-          const failed = failure(outcome);
-          if (failed !== undefined) return fail(runtime, failed, context);
-        }
         // The plan's readings: once it ended with a plan, the review waits on them itself, as their
         // owner, in a commit of this phase that names them. A plan that failed, was cut off or
         // faulted leaves none, never the review's failure. One that failed (admission refused
@@ -1475,9 +1139,6 @@ export const reviewTask = (
             // here, as without them; it waits for the waiters only once it is at Publish.
             const port = publisher(stages);
             let batches: ReviewBatches | undefined;
-            // The finders have ended: their run gaps are in every call's, all equal.
-            const early: Publishing["reason"] =
-              runtime.now() >= task.input.cutoffAt ? "cutoff" : "stopped";
             if (port !== undefined)
               try {
                 batches = await port.batches(
@@ -1486,7 +1147,6 @@ export const reviewTask = (
                     mapKey: at.mapKey,
                     manifestKey: at.manifestKey,
                     readings: named,
-                    finders: finderResults(at.finders, outcomes, early),
                     ...(planEnd === "cutoff" ? { planCut: true } : {}),
                   },
                   runtime,
@@ -1513,7 +1173,7 @@ export const reviewTask = (
                 runtime.commit(async (tx) => {
                   on.length = 0;
                   const waiters: Array<Publishing["waiters"][number]> = [];
-                  // Each waiter reads the batches, readings and finders from this checkpoint.
+                  // Each waiter reads its batch and readings from this checkpoint.
                   for (const [index, batch] of known.batches.entries()) {
                     const id = await port.batchWaiter(
                       tx,
@@ -1530,7 +1190,6 @@ export const reviewTask = (
                     readings: named,
                     publishing: {
                       batches: known,
-                      reason: early,
                       final,
                       ...(planEnd === "cutoff"
                         ? { planCut: true as const }
@@ -1579,13 +1238,6 @@ export const reviewTask = (
             readings = named;
           }
         }
-        const reason =
-          at.publishing?.reason ??
-          (runtime.now() >= task.input.cutoffAt ? "cutoff" : "stopped");
-        const finders = finderResults(at.finders, outcomes, reason);
-        log?.write(
-          findersEndedRow(finderEnds(finders), findersAtLimit(finders)),
-        );
         // A reading's failure is the collector's "not judged", never the review's: no `failure()`.
         let read: Read | undefined;
         if (readings !== undefined && stages.readings !== undefined) {
@@ -1602,7 +1254,6 @@ export const reviewTask = (
                 name: r.name,
                 outcome: ended[index],
               })),
-              finders,
               // Only a cut plan says so, so the input is as before otherwise.
               ...(at.publishing?.planCut === true ? { planCut: true } : {}),
             },
@@ -1617,7 +1268,6 @@ export const reviewTask = (
             mapKey: at.mapKey,
             manifestKey: at.manifestKey,
             fill: at.fill,
-            finders,
           },
           runtime,
           context,
@@ -1644,31 +1294,18 @@ export const reviewTask = (
             stages: [
               ...at.stages,
               ...(fillRecord === undefined ? [] : [fillRecord]),
-              ...finders.flatMap((f) => f.stages),
               ...(read?.stages ?? []),
               linked.record,
             ],
             sources: {
               ...at.sources,
-              findings: finders.flatMap((finder) =>
-                finder.findings
-                  .filter((finding) => finding.status === "kept")
-                  .map((finding) => finding.id),
-              ),
               sources: {
                 ...at.sources.sources,
                 changeMap: linked.changeMapKey,
               },
               disclosures: [
                 ...at.sources.disclosures,
-                // Per batch, findings are placed on the new units by anchor (the readers'
-                // `finding-unplaced` gaps say which were not); Link's placement on the old units
-                // would say a finding the new units publish was not published.
-                ...(at.publishing === undefined
-                  ? linked.disclosures
-                  : linked.disclosures.filter(
-                      (d) => d.kind !== "finding-unanchored",
-                    )),
+                ...linked.disclosures,
                 // A dropped plan published per batch: its run gap already says no reading ran.
                 ...(read?.disclosures ?? []).filter(
                   (d) =>
@@ -1676,10 +1313,6 @@ export const reviewTask = (
                     d.detail !== NO_READINGS.detail,
                 ),
                 ...fellBack,
-                // Per batch, every call carries it as a run gap (`findersAtLimitGap`).
-                ...(at.publishing === undefined && findersAtLimit(finders)
-                  ? [FINDERS_AT_LIMIT]
-                  : []),
               ],
             },
             candidates: linked.candidates,
@@ -1692,7 +1325,6 @@ export const reviewTask = (
                     mapKey: at.mapKey,
                     manifestKey: at.manifestKey,
                     readings: readings ?? [],
-                    finders: at.finders,
                   },
                 }),
           },

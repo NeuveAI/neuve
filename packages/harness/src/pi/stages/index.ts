@@ -24,7 +24,6 @@ import {
 } from "../../pipeline.ts";
 import type { AgentStepCheckpoint } from "./agent-step.ts";
 import { frontTask } from "./front-task.ts";
-import { finderTask } from "./finder-task.ts";
 import { leadsTask } from "./leads-task.ts";
 import { readingsStages } from "./readings-plan-task.ts";
 import { headGateOf, relationsTask } from "./relations-task.ts";
@@ -43,15 +42,11 @@ export { stageRunner } from "./services.ts";
 
 export type { PublishInput } from "../review-task.ts";
 
-export interface ReviewStages extends Omit<
-  ReviewStagesPort,
-  "front" | "finder"
-> {
+export interface ReviewStages extends Omit<ReviewStagesPort, "front"> {
   readonly extension: Extension;
   readonly coverage: NonNullable<ReviewStagesPort["coverage"]>;
   readonly leads: NonNullable<ReviewStagesPort["leads"]>;
   readonly front: ReturnType<typeof frontTask>;
-  readonly finder: ReturnType<typeof finderTask>;
   readonly restore: (harness: Harness, context: Context) => Promise<void>;
 }
 
@@ -67,9 +62,7 @@ export const reviewStages = (services: StageServices): ReviewStages => {
   const { agentStep, restore } = agentKinds(bound.services, {
     prepare: bound.prepare,
   });
-  const finder = finderTask(services, run, agentStep);
-  // Front starts the finders when Frame lands, so it is given the finder task.
-  const front = frontTask(services, run, agentStep, finder);
+  const front = frontTask(services, run, agentStep);
   const leads = leadsTask(services);
   // Registered always, like the plan task; the review starts it only with readings on.
   const relations = relationsTask(services);
@@ -93,7 +86,6 @@ export const reviewStages = (services: StageServices): ReviewStages => {
       tasks: [
         agentStep,
         front,
-        finder,
         leads,
         relations,
         reading,
@@ -111,7 +103,6 @@ export const reviewStages = (services: StageServices): ReviewStages => {
           headGate: headGateOf(relations, ctx),
         }),
     front,
-    finder,
     // Already a child starter, so the runtime's port takes it as it stands.
     leads: childOf(leads),
     restore,

@@ -94,9 +94,7 @@ export const RunToolsDoc = defineDoc<{
 
 /**
  * The children a stage task owns, by name, written in the commit that creates each one: a phase
- * that runs again after a crash finds its child instead of starting a second. A tool call may start
- * one for the task too, in the commit that records its answer (tools.ts): a finder's Verify of a
- * recorded claim, under the name the finder's verify phase looks for.
+ * that runs again after a crash finds its child instead of starting a second.
  */
 export const ChildrenDoc = defineDoc<{ children: { [name: string]: number } }>({
   kind: "neuve.stage-children",

@@ -7,7 +7,6 @@ import { AssembledBatch } from "../src/compose.ts";
 import { fill, link } from "../src/link.ts";
 import { storedOutput } from "../src/pipeline.ts";
 import { publishPacket } from "../src/publish.ts";
-import { FINDERS } from "../src/find.ts";
 import {
   hunk,
   frame,
@@ -46,7 +45,7 @@ test("1,484 hunks across 975 files and a lockfile publish after cutoff with seve
         mapKey,
         manifestKey,
         fill: filled,
-        finders: [],
+
         setup,
       });
       const batches: AssembledBatch[] = [];
@@ -58,12 +57,12 @@ test("1,484 hunks across 975 files and a lockfile publish after cutoff with seve
         candidates: linked.candidates,
         stages: [
           filled.record,
-          ...FINDERS.map((lens) => ({
-            stage: "find" as const,
-            agent: `find.${lens}`,
-            status: "skipped" as const,
+          {
+            stage: "verify",
+            agent: "lane-review.cut-off",
+            status: "skipped",
             wallMs: 0,
-          })),
+          },
           linked.record,
         ],
         sources: {
