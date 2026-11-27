@@ -39,6 +39,7 @@ import {
   type StorageProfile,
 } from "../../../scripts/pi-storage";
 import { closeChild } from "./workspace-child";
+import { placeWorkspaceGraph } from "./workspace-graph";
 import { requireWorkspaceBun } from "./workspace-runtime";
 
 const HELP = "Usage: neuve workspace lane [stop]";
@@ -338,9 +339,27 @@ async function keep(
     const bin = join(scratch, "bin");
     const neuve = join(bin, "neuve");
     await mkdir(bin);
-    const environment = laneWorkspaceEnvironment(scratch, env.PATH);
+    const buildOptions = {
+      cwd: lane,
+      env: spawnEnvironment(storage, env),
+      signal,
+    };
+    const graph = await placeWorkspaceGraph({
+      lane,
+      scratch,
+      installed: Bun.which("neuve"),
+      env,
+      build: (command) =>
+        runBuildStep("Neuve Graph build", command, buildOptions, scratch),
+    });
+    const environment = {
+      ...laneWorkspaceEnvironment(scratch, env.PATH),
+      // The source host runs scope reads with Bun as its executable, so it needs the path too.
+      NEUVE_GRAPH_BINARY: graph,
+      NEUVE_BUDGET_DIRECTORY: join(scratch, "cache", "budget"),
+    };
     const childEnvironment = {
-      ...spawnEnvironment(storage, env),
+      ...buildOptions.env,
       ...environment,
     };
     await runBuildStep(
