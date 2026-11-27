@@ -165,7 +165,7 @@ export function planModeModels(
 			if (mode === "plan" || offer.toolsRemoved?.length) messages.push(offer);
 		}
 		const pluginTools = mode === "ace" ? plugins?.httpTools() : undefined;
-		const mcpServers = mode === "ace" && keepAttendance && !attended ? plugins?.nativeServers?.() : undefined;
+		const mcpServers = mode === "ace" && keepAttendance ? plugins?.nativeServers?.() : undefined;
 		const streamOptions = pluginTools?.size || mcpServers
 			? { ...options, [sandboxPluginTools]: pluginTools, [nativePluginServers]: mcpServers }
 			: options;
