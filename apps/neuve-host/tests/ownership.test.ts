@@ -8,6 +8,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -30,7 +31,7 @@ const environment = Object.fromEntries(
 
 function place() {
 	if (!process.env.TMPDIR) throw new Error("Set TMPDIR to the external temporary directory");
-	const root = mkdtempSync(join(tmpdir(), "ho"));
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "ho")));
 	roots.push(root);
 	for (const name of ["h", "l", "p"]) mkdirSync(join(root, name));
 	writeFileSync(join(root, "script"), JSON.stringify([{ text: "still owned" }]));
@@ -284,7 +285,7 @@ test("malformed, public, symlinked, or multiply linked lock files fail closed wi
 	const home = join(root, "h");
 	const lock = join(home, "host.lock");
 	writeFileSync(lock, "not a SQLite file", { mode: 0o600 });
-	expect(() => acquireHome(home)).toThrow();
+	expect(() => acquireHome(home)).toThrow("file is not a database");
 	expect(readFileSync(lock, "utf8")).toBe("not a SQLite file");
 	rmSync(lock);
 	writeFileSync(lock, "", { mode: 0o644 });
