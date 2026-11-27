@@ -11,7 +11,7 @@ import { runReview } from "./fixtures/pi-review.ts";
 const root = mkdtempSync(join(tmpdir(), "large-review-integration-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-test("a real precompute deadline publishes complete coverage with attributed fallback and preparation", async () => {
+test("a real precompute deadline retains complete coverage and publishes the unread batches as pending", async () => {
   const directory = join(root, "deadline");
   const run = await runReview({
     directory,
@@ -37,14 +37,24 @@ test("a real precompute deadline publishes complete coverage with attributed fal
   expect(owned).toHaveLength(2);
   expect(
     run.publicationHistory.filter(
-      (row) => row.event.kind === "unit.recorded@2",
+      ({ event }) =>
+        event.kind === "unit.recorded@2" || event.kind === "unit.recorded@3",
     ),
-  ).toHaveLength(2);
+  ).toHaveLength(0);
   expect(
-    run.publicationHistory.some(
-      (row) => row.event.kind === "packet.published@1",
+    run.publicationHistory.filter(
+      ({ event }) => event.kind === "packet.published@2",
     ),
-  ).toBe(true);
+  ).toMatchObject([
+    {
+      event: {
+        payload: {
+          complete: false,
+          counts: { pending: { batches: 2, sections: 2 } },
+        },
+      },
+    },
+  ]);
   expect(run.sent).toHaveLength(0);
   const records = run.log.read();
   expect(records).toContainEqual(

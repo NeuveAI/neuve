@@ -51,7 +51,8 @@ export const ContractState = z.object({
   contextKey: z.string(),
   agent: z.string(),
   stage: z.enum(["frame", "map", "find", "verify"]),
-  kind: AgentKind,
+  // Captures outlive the task kinds that produced them.
+  kind: z.enum([...AGENT_KINDS, "find", "verify"]),
   account: AccountName,
   accountKind: AccountKind.optional(),
   continuation: ContinuationIdentity,

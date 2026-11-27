@@ -394,7 +394,7 @@ export type CrossBatchClaim = z.infer<typeof CrossBatchClaim>;
 export const LaneReviewScopedAnswer = z.strictObject({
   ...LaneReviewAnswer.shape,
   notAsked: Sections,
-  crossBatchClaims: z.array(CrossBatchClaim).max(5).optional(),
+  crossBatchClaims: z.array(CrossBatchClaim).max(5),
 });
 export type LaneReviewScopedAnswer = z.infer<typeof LaneReviewScopedAnswer>;
 /** A new Lane review answer of either form. */

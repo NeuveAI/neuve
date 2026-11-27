@@ -79,6 +79,7 @@ const answerer = (): Answer => {
         comments: [],
         unsure: [],
         notAsked: [],
+        crossBatchClaims: [],
       });
     if (agent.startsWith("brief.")) return fauxAssistantMessage("No briefing.");
     throw new Error(`No fixture answer for ${agent}`);
@@ -247,16 +248,20 @@ test("Frame, Map and Publish run while the range's leads are held, and the revie
 }, 60_000);
 
 // Why (NEU-148): the leads task exists so Frame waits for neither the leads nor the head tree's
-// index. Both are held until Publish starts, so a Frame or Map that waited for either would never
-// be sent and the review would never publish.
+// index. Release the index at Map, since the later readings can need it, and hold the leads until
+// Publish. A Frame or Map that waited for either would never be sent.
 test("Frame and Map are sent while the head-index prefetch and the leads are both held", async () => {
-  let release = () => {};
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
+  let releaseIndex = () => {};
+  const indexHeld = new Promise<void>((resolve) => {
+    releaseIndex = resolve;
+  });
+  let releaseLeads = () => {};
+  const leadsHeld = new Promise<void>((resolve) => {
+    releaseLeads = resolve;
   });
   let chunksEntered = 0;
   let chunksDone = 0;
-  let doneAtPublish: number | undefined;
+  let leadsStoredAtPublish: boolean | undefined;
   let doneAtLeads: number | undefined;
   let leadsStored = false;
   const seen: Array<{
@@ -266,17 +271,18 @@ test("Frame and Map are sent while the head-index prefetch and the leads are bot
   }> = [];
   const answer = answerer();
   // A file no other test in this file has, so the head tree's index is not already in memory.
-  const unique = { "notes/prefetch-held.txt": "held until Publish\n" };
+  const unique = { "notes/prefetch-held.txt": "held until Map\n" };
   const result = await run("prefetch-held", {
     base: { ...base, ...unique },
     head: { ...head, ...unique },
     answer: (agent, messages, hunks) => {
       seen.push({ agent, chunksDone, leadsStored });
+      if (agent === "map") releaseIndex();
       return answer(agent, messages, hunks);
     },
     onPublish: () => {
-      doneAtPublish = chunksDone;
-      release();
+      leadsStoredAtPublish = leadsStored;
+      releaseLeads();
     },
     chunks: {
       paths: Object.keys(unique),
@@ -286,7 +292,7 @@ test("Frame and Map are sent while the head-index prefetch and the leads are bot
             chunksEntered++;
           }),
           Effect.andThen(
-            Effect.promise(() => held),
+            Effect.promise(() => indexHeld),
             Effect.tap(compute, () =>
               Effect.sync(() => {
                 chunksDone++;
@@ -301,7 +307,7 @@ test("Frame and Map are sent while the head-index prefetch and the leads are bot
           doneAtLeads = chunksDone;
         }),
         Effect.andThen(
-          Effect.promise(() => held),
+          Effect.promise(() => leadsHeld),
           Effect.tap(compute, () =>
             Effect.sync(() => {
               leadsStored = true;
@@ -315,12 +321,12 @@ test("Frame and Map are sent while the head-index prefetch and the leads are bot
     { agent: "frame", chunksDone: 0, leadsStored: false },
     { agent: "map", chunksDone: 0, leadsStored: false },
   ]);
-  expect(doneAtPublish).toBe(0);
+  expect(leadsStoredAtPublish).toBe(false);
   // The head index goes first (NEU-148): the leads computation starts only once the prefetch has
   // ended, so the held blob was already chunked when it started. Started beside the prefetch, it
   // would have started while the blob was still held.
   expect(doneAtLeads).toBeGreaterThan(0);
-  // The hold was real: the held blob was chunked only after the release, and the prefetch built
+  // The hold was real: the held blob was chunked only after Map, and the prefetch built
   // the head tree's index (not from memory), so it needed that blob and was held with it.
   expect(chunksEntered).toBeGreaterThan(0);
   expect(chunksDone).toBeGreaterThan(0);
@@ -359,10 +365,16 @@ test("a failed head-index prefetch is written and dropped, and the leads start a
   const result = await run("prefetch-failed", {
     base: { ...base, ...unique },
     head: { ...head, ...unique },
-    onPublish: () => release(),
+    answer: (() => {
+      const answer = answerer();
+      return (agent, messages, hunks) => {
+        if (agent === "map") release();
+        return answer(agent, messages, hunks);
+      };
+    })(),
     chunks: {
       paths: Object.keys(unique),
-      // The first chunking of the blob is held until Publish and then fails, so the head tree's
+      // The first chunking of the blob is held until Map and then fails, so the head tree's
       // index fails; every later chunking (the base tree's index, in the leads) computes.
       wrap: <A, E, R>(compute: Effect.Effect<A, E, R>) =>
         Effect.suspend((): Effect.Effect<A, unknown, R> =>

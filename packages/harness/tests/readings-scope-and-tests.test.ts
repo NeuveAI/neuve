@@ -655,6 +655,7 @@ test("on, Lane review's reading marks each file no done-when row covers, names t
       { s: test.index, t: "Neither the goal nor D1 asks for this test." },
     ],
     notAsked: [test.index],
+    crossBatchClaims: [],
   };
   expect(LaneReviewScopedAnswer.safeParse(answer).success).toBe(true);
   // Off, the form refuses the key; on, the answer has no problem that costs a turn.
@@ -728,6 +729,7 @@ test("on, a Lane review row names the sections not asked for by their identity k
       comments: [],
       unsure: [{ s: at, t: "Nothing asks for this test." }],
       notAsked: [at],
+      crossBatchClaims: [],
     };
     const stored = LaneReviewStored.parse(
       erased(

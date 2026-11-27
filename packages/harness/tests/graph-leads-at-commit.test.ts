@@ -5,8 +5,7 @@ import { captureOutlineSource } from "../src/graph-outline.ts";
 // (graph-client's own tests do that). This runs the worker's own commit preparation child
 // (`neuve worker prepare-commit`) with settings that take leads from Graph, then, in this process
 // as the worker's review would, computes the range's manifest: the review must find the lead ready
-// without searching Graph, the child must have used a Graph folder of its own (a clone shared
-// with the review's breaks the other's preparations), and a review-time search must carry Graph's
+// without searching Graph, the lead search must use its own clone, and a review-time search must carry Graph's
 // timings, the child's CPU and the two waits. It runs only where the engine is built
 // (`bun run build:graph`).
 import { afterAll, expect, test } from "bun:test";
@@ -116,9 +115,6 @@ test.skipIf(graphPrerequisite.skip)(
       JSON.stringify({
         version: 1,
         search: { graph: { executable: engine }, leads: "graph" },
-        // Readings are on by default, and then commit preparation also reads the commit's callers
-        // into the review's clone (`commit-relations.test.ts`); off here, so this stays about leads.
-        review: { sectionReadings: "off" },
       }),
     );
     const child = Bun.spawnSync(
@@ -137,8 +133,7 @@ test.skipIf(graphPrerequisite.skip)(
     expect(child.exitCode, output).toBe(0);
     expect(output).toContain("graph leads 1 searched, 0 reused");
     const location = await Effect.runPromise(resolveStoreLocation(repository));
-    // The child prepared Graph in its own clone, into the store's one Graph cache; the review's
-    // clone is untouched until it needs Graph.
+    // Lead searches use the commit clone. Relations also prepare the review clone.
     expect(
       existsSync(join(location.directory, COMMIT_GRAPH_DIRECTORY, "clones")),
     ).toBe(true);
@@ -149,7 +144,7 @@ test.skipIf(graphPrerequisite.skip)(
       executable: engine,
       workDirectory: join(location.directory, "graph"),
     };
-    expect(existsSync(join(runtime.workDirectory, "clones"))).toBe(false);
+    expect(existsSync(join(runtime.workDirectory, "clones"))).toBe(true);
     expect(existsSync(join(runtime.workDirectory, "cache"))).toBe(true);
     setSearchRuntime({ graph: runtime, frozen: new Map(), problems: {} });
     const records: Array<RunLogRecord> = [];

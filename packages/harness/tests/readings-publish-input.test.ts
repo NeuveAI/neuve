@@ -46,6 +46,7 @@ import {
   type ReadingTaskResult,
 } from "../src/pi/stages/reading-task.ts";
 import { stageRunner, type StageServices } from "../src/pi/stages/services.ts";
+import type { CheckedCrossBatchClaim } from "../src/pi/cross-batch-claims.ts";
 import { publishSettled } from "../src/publish-sections.ts";
 import {
   SettledBatch as PublisherBatch,
@@ -55,7 +56,7 @@ import {
   unitSections,
 } from "../src/publish-sections-input.ts";
 import { DEFAULT_READING_BOUNDS } from "../src/reading-groups.ts";
-import { ClaimStored, claimKey } from "../src/readings/claims.ts";
+import { ClaimStored, claimKey, commentKey } from "../src/readings/claims.ts";
 import {
   decisionKeyOf,
   readingsPort,
@@ -110,7 +111,7 @@ const MARKS = {
   impact: "IMPACT-MARK callers now count only the filled items",
   defect: "DEFECT-MARK an empty string is no longer counted",
   risk: "RISK-MARK a caller may rely on the old count",
-  finder: "FINDER-MARK the plural rule misses zero",
+  incoming: "INCOMING-MARK the plural rule misses zero",
 };
 
 const COUNT_BASE =
@@ -268,15 +269,14 @@ interface Options {
   readonly removal?: boolean;
   /** NEU-446's planted shapes (`PLANTED_BASE`): a function moved, and a component replaced. */
   readonly planted?: boolean;
-  /** A second kept finding, on lines no section owns, naming a Map group that is no batch. */
-  readonly strayFinding?: boolean;
+  readonly incomingClaim?: boolean;
 }
 
 /**
  * One review: the repository, its stored manifest (the real engine's), its stored plan (the real
  * engine's structures), a Map of two groups (the code; the test, binary and lockfile, the lockfile
  * leaving for the generated batch), stored answers for every reading group, one confirmed defect
- * claim on `count`, a finder's kept risk on `label.ts` naming the wrong Map group, and the port.
+ * claim on `count`, and the port. The fields case also supplies a confirmed incoming claim.
  */
 const review = async (name: string, options: Options = {}) => {
   process.env[ENGINE] = source.executable;
@@ -613,10 +613,44 @@ const review = async (name: string, options: Options = {}) => {
     });
   }
 
-  // A finder's kept risk on label.ts's changed line, naming the other Map group: placed by anchor.
-  const labelHunk = hunkList.find((hunk) => hunk.path === "src/label.ts")!;
-  const labelSection = plan.sections.find((s) => s.path === "src/label.ts")!;
-  const labelLine = labelSection.owned.find((r) => r.side === "new")!.startLine;
+  const incoming: CheckedCrossBatchClaim[] = [];
+  if (options.incomingClaim === true) {
+    const label = plan.sections.find(
+      (section) => section.path === "src/label.ts",
+    )!;
+    const line = label.owned.find((range) => range.side === "new")!.startLine;
+    const comment = {
+      path: label.path,
+      side: "new" as const,
+      startLine: line,
+      endLine: line,
+      kind: "risk" as const,
+      text: MARKS.incoming,
+      fails: "",
+    };
+    const key = commentKey(comment);
+    const verifyKey = await storeValue(
+      "test.claim",
+      ClaimStored.parse({
+        decision: "keep",
+        reason: "The changed line changes the plural rule.",
+        claim: key,
+        section: label.key,
+        source: "agent",
+      }),
+    );
+    incoming.push({
+      key,
+      target: {
+        batch: batchKeyOf(map.groups[0]!.files.map(({ path }) => path)),
+        section: label.key,
+      },
+      comment,
+      verifyKey,
+      from: "lane-review.other",
+      answer: verifyKey,
+    });
+  }
   const registry = createRegistry();
   const services: StageServices = {
     ctx,
@@ -681,6 +715,7 @@ const review = async (name: string, options: Options = {}) => {
         ...keys,
         batch,
         readings,
+        incoming,
 
         final: ends.final ?? false,
         last,
@@ -809,10 +844,10 @@ test.skipIf(graph.skip)(
 
 // Reason: the publisher writes what it is handed, so each field must be its true value.
 test.skipIf(graph.skip)(
-  "each field arrives with its true value: identity whole, owned ranges with paths, a whole binary range, comment text and about, an impact's summary, a finder's finding on the unit its anchor falls in, evidence as citations",
+  "each field arrives with its true value: identity whole, owned ranges with paths, a whole binary range, comment text and about, an impact's summary, an incoming claim on the unit its anchor falls in, evidence as citations",
   async () => {
     graph.require();
-    const world = await review("fields");
+    const world = await review("fields", { incomingClaim: true });
     const { batches } = await allSettled(world);
     const [counting, rest, generated] = batches as [
       PublisherBatch,
@@ -889,25 +924,26 @@ test.skipIf(graph.skip)(
       for (const cite of comment.evidence)
         expect(cite.ref).toMatch(/^computation:[0-9a-f]{64}$/);
     expect(defect.evidence[0]?.entry).toMatch(/^src\/count\.ts:new:\d+-\d+$/);
-    // The finder's risk: on label.ts's unit, in the batch its anchor falls in (not the group it
-    // named), cited by the manifest's hunk.
     const labelUnit = counting.units.find((u) => u.path === "src/label.ts")!;
-    const finder = labelUnit.comments.find((c) => c.body === MARKS.finder)!;
-    expect(finder).toMatchObject({
-      id: expect.stringContaining("risky-edges.1"),
+    const claim = labelUnit.comments.find((c) => c.body === MARKS.incoming)!;
+    expect(claim).toMatchObject({
       kind: "risk",
       about: "code",
     });
-    expect(finder.anchor?.path).toBe("src/label.ts");
-    expect(finder.evidence).toEqual([
+    expect(claim.anchor?.path).toBe("src/label.ts");
+    expect(claim.evidence).toEqual([
       expect.objectContaining({
-        ref: expect.stringMatching(/^computation:/),
+        ref: expect.stringMatching(/^computation:[0-9a-f]{64}$/),
+      }),
+      expect.objectContaining({
+        ref: expect.stringMatching(/^computation:[0-9a-f]{64}$/),
+        entry: expect.stringMatching(/^h[0-9a-f]+$/),
       }),
     ]);
     expect(
       rest.units
         .flatMap((u) => u.comments)
-        .some((c) => c.body === MARKS.finder),
+        .some((c) => c.body === MARKS.incoming),
     ).toBe(false);
     await world.harness.close(context);
   },

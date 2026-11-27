@@ -21,21 +21,23 @@ const range = {
   headOid: "b".repeat(40),
 };
 
-// Why: adding default account metadata must still join runs completed before this change.
-// These keys omit default account metadata. step-effort.test.ts pins the same keys.
+// Why: default account metadata must not split the same review into two runs.
+// These keys pin that identity for the current pipeline.
 test.each([
   [
     OPUS_ROUTE,
-    "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c",
+    "d9ff25efaa3d8ee17aadff833e6dcf2996118dd1a256320bd259959c4fcb651a",
   ],
   [
     SOL_ROUTE,
-    "94ddcd8de243036393bdf16cf8c2030dd275c5856e07eb9f9812146b3c5f7b25",
+    "1f5ac2f6296d668cafd7f0d5bf4a9e77ae95ede9f32d80d794ef59026536a408",
   ],
 ] as const)(
   "the default $provider route keeps its base run key",
   (route, key) => {
+    const { account: _account, ...legacy } = route;
     expect(runKeyFor(range, defaultConfig(undefined, route))).toBe(key);
+    expect(runKeyFor(range, defaultConfig(undefined, legacy))).toBe(key);
   },
 );
 

@@ -237,6 +237,7 @@ const emptyLaneReview = (): LaneReviewAnswer => ({
 const emptyScopedReview = (): LaneReviewScopedAnswer => ({
   ...emptyLaneReview(),
   notAsked: [],
+  crossBatchClaims: [],
 });
 
 const sourceOf = (status: AgentResult<unknown>["status"]) =>

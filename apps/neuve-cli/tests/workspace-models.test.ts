@@ -121,14 +121,14 @@ test("direct routes list their accounts and keep their coding defaults and run k
       "anthropic",
       "claude-opus-5-5",
       "anthropic",
-      "720ce74fe4364ec4914804655139c11e65160513ebaa872f5e53d09c04721d1c",
+      "d9ff25efaa3d8ee17aadff833e6dcf2996118dd1a256320bd259959c4fcb651a",
     ],
     [
       "openai",
       "openai",
       "gpt-6.1-sol",
       "chatgpt",
-      "94ddcd8de243036393bdf16cf8c2030dd275c5856e07eb9f9812146b3c5f7b25",
+      "1f5ac2f6296d668cafd7f0d5bf4a9e77ae95ede9f32d80d794ef59026536a408",
     ],
   ] as const) {
     const direct = route(name);
