@@ -40,9 +40,9 @@ See [0002](decisions/0002-event-driven-processes.md) for the process model and [
 | [0002](decisions/0002-event-driven-processes.md) | Event-driven. Hooks capture quickly, jobs queue, and a worker runs on demand with a launchd backstop. No always-on service. |
 | [0003](decisions/0003-effect-native-harness-runtime.md) | The incumbent Effect runtime and its validation. Superseded for agent execution by 0014. |
 | [0004](decisions/0004-persistence-and-range-immutability.md) | An append-only record log plus a content-addressed computation store. Ranges are immutable, nothing is recomputed, and full session data is kept for 30 days. |
-| [0005](decisions/0005-harness-pipeline.md)                        | The fixed review-shape trial: Frame, Map, four finders, Verify, code fill, Link and Publish, with bounded work and full range coverage.                                                       |
+| [0005](decisions/0005-harness-pipeline.md) | Frame and Map set the goal and batches. Lane review checks each batch, and Verify checks defect claims before code settles and publishes batches. |
 | [0006](decisions/0006-hybrid-retrieval-and-context-references.md) | The semantic layer, then procedural enrichment, then agentic refinement, with one context-reference contract feeding the context margin. |
-| [0007](decisions/0007-batches-units-lanes-and-cycles.md)          | The established batch and lane policy, with the fixed-shape trial's proximity units, unassessed coverage and defect-only dispositions.                                                        |
+| [0007](decisions/0007-batches-units-lanes-and-cycles.md) | What batches and units own, how lanes and dispositions are decided, and when a cycle ends. |
 | [0008](decisions/0008-model-routes-and-budgets.md) | Anthropic API and ChatGPT subscription routes freeze accounts and budgets while preserving legacy keys. Run configurations admit the Claude subscription route. |
 | [0009](decisions/0009-identity-without-auth.md) | No auth. Agents are identified by fingerprint and alias, and git credentials are enough. |
 | [0010](decisions/0010-release-and-distribution.md) | A binary distribution installed on the PATH. Tests never touch the installed binary, and end-to-end runs test the release. |

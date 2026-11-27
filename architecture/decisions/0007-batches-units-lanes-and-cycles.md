@@ -2,17 +2,11 @@
 
 Status: accepted, 16 October 2026; revised 23 October 2026 and for NEU-148, November 2026. Source: decisions [1.10, 2.8, 4.1–4.14, 10.4, 10.9, 10.55–10.59, 10.109, 10.110, 10.120, 11.1, 11.8, 11.16–11.21, 13.23 and 14.3–14.6, 14.12, 14.13 and 14.19](../../process/decisions.md).
 
-## Fixed-shape trial
+## Batches and reading groups
 
-The NEU-111 trial uses Frame's done-when conditions and Map's groups in place of agent-confirmed candidate batches. Code assigns each group proximity units, or, with responsibility sections on, units by section, preserving every changed range. Lockfiles and declared-generated files form one code-only batch.
+Frame sets the goal and done-when conditions. Map groups the changed files by intent. Code packs each batch's sections into bounded reading groups. Lane review gives verdicts on its assigned sections. The [shared review rules](../../packages/review-rules/src/index.ts) govern ownership and the lines that can anchor a comment. The [pipeline record](0005-harness-pipeline.md) explains scheduling, Verify and when a published batch freezes.
 
-With the readings off, code fill records Facts, human-suggested and not-assessed for units without an assessment. Link adds kept, verified findings to the unit that owns their primary anchor. A defect produces a request for changes resting on its comments. Risks and questions add comments without a disposition. Link never approves, and untouched units have no disposition. Publish records pending Guided rows and one assessment gap per batch.
-
-These trial rules hold only for a review with the readings off. Carried judgements and background model preparation are disabled during the trial. Old events and packets remain readable. The [pipeline record](0005-harness-pipeline.md) holds execution bounds. The owner settled the target in 13.23 and [Area 14](../../process/decisions.md#area-14-lane-assignment-and-agent-dispositions-redesigned-12-november-2026): every unit in the agent-decided lanes carries its lane's judgement and disposition; work no agent could judge is human-required; results are published per settled batch. The established policy below is that target.
-
-## Established product policy
-
-The policy below remains the product reference where the trial has not replaced execution. It does not describe the trial's assessment coverage.
+## Product policy
 
 - **Batches** come from behaviour and obligation. One commit range can produce several batches, each with a single focus. The batch overview shows one batch and its batch digest.
 - **Review units** are one file's sections that share a review lane, within a batch (10.109, 10.120). A section is part of a file's changed lines cut at Graph's symbol boundaries (a class kept whole, Markdown by heading, a named line-window fallback elsewhere). A unit owns only its sections' line ranges, removed lines included, plus surrounding context that may include padding and other code.
@@ -39,7 +33,7 @@ The policy below remains the product reference where the trial has not replaced 
 
 ## Consequences
 
-- With the readings off, the trial generates no quadrant assessments or suggested approvals. With them, every section is assessed and `assessment.recorded@4` records the lane, the rule version, each section's lane trail and the undecided counts by cause; the desk reads both the old and the new records. Older builds skip the new kinds and show no review for a new-style review, with a one-line notice.
+- Records keeps each section's lane, the lane rule version and the count of undecided sections by cause. Old packets remain readable.
 - Gaps never stop a package from reaching people. A batch waits only while one of its sections is not reached and a follow-on run remains, or while a quota refusal leaves it pending; both are disclosed.
 - Records keeps each checkpoint's anchors with its requirement, so the BFF projects them and never infers lines.
 - The vocabulary entries for "review cycle" and "packet" need the owner's approval to reflect these definitions. The design's working words (section, reading group, code risk floor, backstop) do not become vocabulary.
