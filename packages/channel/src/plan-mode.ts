@@ -133,7 +133,7 @@ export function planModeModels(models: Models, receivesAttendance: (provider: st
 			keepAttendance || message.role !== "system" || !Object.hasOwn(message.sections ?? {}, ATTENDED_SECTION)
 		)).map(message =>
 			mode === "ace" && message.role === "system" && message.toolsAdded
-				? { ...message, toolsAdded: message.toolsAdded.filter(tool => tool.name !== PLAN_COMMENT_TOOL) }
+				? { ...message, toolsAdded: message.toolsAdded.filter(tool => tool.name !== PLAN_COMMENT_TOOL && tool.name !== PLAN_TOOL) }
 				: message);
 		if (mode === "plan") {
 			// Add the marker after all request hooks, which may copy the transcript.
