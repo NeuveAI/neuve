@@ -16,7 +16,7 @@ import { Identity, Sessions } from "@neuve/records-core/capture";
 
 import * as catalog from "./catalog";
 import { request } from "./client";
-import { publishBuildPulls } from "./plan-pulls";
+import { publishBuildPulls, publishPullActivity } from "./plan-pulls";
 import { browser } from "./browser";
 import { desktop, desktopAvailable } from "./desktop";
 import { images } from "./images";
@@ -90,6 +90,7 @@ const channel = await openChannel({
 	claim: async (name, exact) => catalog.claim(id, name, exact),
 	onMetadata: (value) => catalog.metadata(id, value),
 	onBuildPulls: (value) => publishBuildPulls(id, value),
+	onPullActivity: value => publishPullActivity(id, value),
 	onActivity: (at) => catalog.activity(id, at),
 	onBusy: (busy) => catalog.busy(id, busy),
 	onRun: (ran) => catalog.ran(id, ran),

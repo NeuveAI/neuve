@@ -6,12 +6,16 @@ import { z } from "zod";
 
 import * as catalog from "./catalog";
 import { request } from "./client";
-import { project, pullGithub } from "./github";
+import { pullGithub } from "./github";
 import { failure, log } from "./log";
 import { PullReaders } from "./pull-reader";
+import { checkout, git } from "./projects";
 import type { HostRequest, Listing } from "./protocol";
 
 const file = "build-pulls.json";
+const activityFile = "pull-activity.json";
+const Activity = z.record(z.string(), z.object({ head: z.string().optional(), run: z.number().optional() }));
+type Activity = z.output<typeof Activity>;
 const Projection = z.array(z.object({
 	build: BuildSchema,
 	ended: z.array(z.number()),
@@ -34,6 +38,28 @@ export function publishBuildPulls(channel: string, builds: Parameters<NonNullabl
 	writeProjection(path, projection);
 }
 
+function pullActivity(path: string): Activity {
+	return existsSync(path) ? Activity.parse(JSON.parse(readFileSync(path, "utf8"))) : {};
+}
+
+export async function publishPullActivity(channel: string, event: Parameters<NonNullable<Options["onPullActivity"]>>[0]) {
+	let branch: string | undefined;
+	if ("cwd" in event) {
+		const result = await git(event.cwd, ["symbolic-ref", "--quiet", "HEAD"]);
+		const ref = result.stdout.trim();
+		if (result.status === 0 && ref.startsWith("refs/heads/")) branch = ref.slice("refs/heads/".length);
+	} else {
+		branch = event.branch;
+	}
+	if (!branch) return;
+	const path = join(catalog.dir(channel), activityFile);
+	const activity = pullActivity(path);
+	const before = Object.hasOwn(activity, branch) ? activity[branch] : undefined;
+	if ("head" in event && before?.head === event.head) return;
+	const update = "head" in event ? { head: event.head } : { run: (before?.run ?? 0) + 1 };
+	writeProjection(path, JSON.stringify({ ...activity, [branch]: { ...before, ...update } }));
+}
+
 function readiness(channel: string) {
 	const path = join(catalog.dir(channel), "readied-pulls.json");
 	const read = () => existsSync(path) ? ReadiedHeads.parse(JSON.parse(readFileSync(path, "utf8"))) : {};
@@ -47,7 +73,7 @@ function readiness(channel: string) {
 }
 
 type TrackedPull = { repo: string; branch: string; ended: string; reviewed: string; detach(): void };
-type ChannelPlans = { rows: Projection; pulls: Map<string, TrackedPull>; summary?: Listing["plans"] };
+type ChannelPlans = { rows: Projection; pulls: Map<string, TrackedPull>; activity: Activity; summary?: Listing["plans"] };
 
 type MergeRequest = Extract<HostRequest, { op: "plan-pull-merge" }>;
 
@@ -72,7 +98,7 @@ export class PlanPulls {
 
 	changed(path: string | null) {
 		if (!path || path === "." || path === "channels" || path === catalog.dir("")) return this.#scan(false);
-		const match = /^([0-9a-f]{16})(?:\/(?:build-pulls\.json|channel\.json))?$/.exec(path);
+		const match = /^([0-9a-f]{16})(?:\/(?:build-pulls\.json|pull-activity\.json|channel\.json))?$/.exec(path);
 		if (match) this.#sync(match[1]!);
 	}
 
@@ -105,26 +131,35 @@ export class PlanPulls {
 
 	async #load(channel: string, startup: boolean) {
 		const path = join(catalog.dir(channel), file);
+		const activityPath = join(catalog.dir(channel), activityFile);
 		const record = this.#local(channel);
-		if (!record || !existsSync(path)) return this.#drop(channel);
-		const repo = await project(record.project, true);
+		if (!record || !existsSync(path) && !existsSync(activityPath)) return this.#drop(channel);
+		const { repo, repositories } = await checkout(record.project);
 		if (this.#closed) return;
 		const current = this.#local(channel);
 		if (!current) return this.#drop(channel);
 		if (current.project !== record.project) return;
-		if (!existsSync(path)) return this.#drop(channel);
-		const rows = Projection.parse(JSON.parse(readFileSync(path, "utf8")));
-		this.#apply(channel, repo, rows, startup);
-	}
-
-	#apply(channel: string, repo: string | null, rows: Projection, startup: boolean) {
-		if (!rows.length) return this.#drop(channel);
-		const plans: ChannelPlans = this.#channels.get(channel) ?? { rows, pulls: new Map() };
+		const rows = existsSync(path) ? Projection.parse(JSON.parse(readFileSync(path, "utf8"))) : [];
+		const activity = pullActivity(activityPath);
+		const plans: ChannelPlans = this.#channels.get(channel) ?? { rows, activity: {}, pulls: new Map() };
+		const prior = plans.activity;
+		plans.activity = activity;
 		plans.rows = rows;
 		this.#channels.set(channel, plans);
+		this.#apply(channel, repo, repositories, plans, startup);
+		if (!repo || startup) return;
+		for (const [branch, { run, head }] of Object.entries(activity)) {
+			const before = Object.hasOwn(prior, branch) ? prior[branch] : undefined;
+			if (run !== before?.run || before?.head !== undefined && head !== before.head) {
+				this.readers.wake(repo, branch, repositories);
+			}
+		}
+	}
+
+	#apply(channel: string, repo: string | undefined, repositories: string[], plans: ChannelPlans, startup: boolean) {
 		const tracked = plans.pulls;
 		const current = new Set<string>();
-		for (const row of rows) {
+		for (const row of plans.rows) {
 			const { build } = row;
 			const { branch, review, id } = build;
 			if (!repo || !branch || build.merged) continue;
@@ -147,7 +182,7 @@ export class PlanPulls {
 				readiness: readiness(channel),
 				changed: () => this.#summarize(channel),
 				merged: (number, head, at) => request(channel, { op: "plan-pull-merged", build: id, branch, number, head, at }),
-			});
+			}, repositories);
 			tracked.set(id, { repo, branch, ended, reviewed, detach });
 		}
 		for (const [id, value] of tracked) {

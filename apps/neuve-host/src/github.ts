@@ -69,8 +69,12 @@ type File = {
 	patch?: string;
 };
 
+function validRepository(value: string): boolean {
+	return REPO.test(value) && ![".", ".."].includes(value.split("/")[1]!);
+}
+
 export function repository(value: string): string {
-	if (!REPO.test(value) || [".", ".."].includes(value.split("/")[1]!)) {
+	if (!validRepository(value)) {
 		throw new Error("Choose a GitHub repository in owner/name format");
 	}
 	return value;
@@ -255,6 +259,10 @@ export const REMOTES = ["config", "--local", "--get-regexp", "^remote\\..*\\.(ur
 
 /** The GitHub repository in `git config` output for REMOTES, preferring gh's chosen base. */
 export function remote(config: string): string | null {
+	return remoteRepositories(config)[0] ?? null;
+}
+
+export function remoteRepositories(config: string): string[] {
 	const remotes = new Map<string, string>();
 	let preferred: string | undefined;
 	for (const line of config.trim().split("\n")) {
@@ -266,6 +274,7 @@ export function remote(config: string): string | null {
 		if (field === "gh-resolved" && value === "base") preferred = name;
 		if (field === "url") remotes.set(name, value);
 	}
+	const repositories = new Set<string>();
 	for (const name of [preferred, "origin", "upstream", ...remotes.keys()]) {
 		const url = name ? remotes.get(name) : undefined;
 		if (!url) continue;
@@ -274,22 +283,21 @@ export function remote(config: string): string | null {
 				.exec(url);
 		if (!match) continue;
 		const repo = match[1]!.replace(/\.git$/i, "");
-		if (REPO.test(repo)) return repository(repo);
+		if (validRepository(repo)) repositories.add(repo.toLowerCase());
 	}
-	return null;
+	return [...repositories];
 }
 
 /** Reading a remote needs no GitHub credentials, including on a teammate's host. */
-export async function project(path: string, originOnly = false): Promise<string | null> {
-	const arguments_ = originOnly ? ["config", "--local", "--get", "remote.origin.url"] : REMOTES;
-	const child = Bun.spawn(["git", "-C", path, ...arguments_], {
+export async function project(path: string): Promise<string | null> {
+	const child = Bun.spawn(["git", "-C", path, ...REMOTES], {
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "ignore",
 		timeout: 5000,
 	});
 	const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-	return code === 0 ? remote(originOnly ? `remote.origin.url ${out.trim()}` : out) : null;
+	return code === 0 ? remote(out) : null;
 }
 
 function item(value: Item, kind: GithubKind): GithubItem {
@@ -444,6 +452,7 @@ type PullDetail = z.infer<typeof PullDetail>;
 export type PullSnapshot = {
 	pull: GithubPull;
 	node: string;
+	headRepo?: string;
 	mergedAt?: number;
 };
 
@@ -531,16 +540,29 @@ export function pullGithub(fetcher: typeof globalThis.fetch = fetch, signIn = to
 		throw error;
 	};
 	const ref = (repo: string, branch: string) => `${path(repo)}/git/ref/heads/${branch.split("/").map(encodeURIComponent).join("/")}`;
+	const branchRef = (url: string, signal: AbortSignal) =>
+		json(url, z.object({ object: z.object({ sha: z.string() }) }), signal).catch(absent);
 	const settings = (repo: string, signal: AbortSignal) => json(path(repo), RepoSettings, signal);
+	const owner = (repo: string) => repo.split("/")[0]!;
+	const qualified = (repo: string, branch: string) => `${owner(repo)}:${branch}`;
 
 	return {
-		async find(repo: string, branch: string, signal: AbortSignal, cache: Cache) {
-			const search = new URLSearchParams({ head: `${repo.split("/")[0]}:${branch}`, state: "all", sort: "created", direction: "desc", per_page: "100" });
-			const { value, status } = await read(`${path(repo)}/pulls?${search}`, z.array(PullRow), signal, cache);
-			return {
-				number: value.find(({ head }) => head.ref === branch && head.repo?.full_name.toLowerCase() === repo.toLowerCase())?.number,
-				status,
-			};
+		async find(repo: string, branch: string, signal: AbortSignal, cache: Cache, headRepos = [repo]) {
+			let status = 304;
+			let closed: number | undefined;
+			for (const name of new Set(headRepos.map(owner))) {
+				const search = new URLSearchParams({ head: `${name}:${branch}`, state: "all", sort: "created", direction: "desc", per_page: "100" });
+				const result = await read(`${path(repo)}/pulls?${search}`,
+					z.array(PullRow.extend({ state: PullDetail.shape.state })), signal, cache);
+				if (result.status !== 304) status = result.status;
+				for (const row of result.value) {
+					const source = row.head.repo?.full_name.toLowerCase();
+					if (row.head.ref !== branch || !source || !headRepos.includes(source)) continue;
+					if (row.state === "open") return { number: row.number, status };
+					closed = Math.max(closed ?? 0, row.number);
+				}
+			}
+			return { number: closed, status };
 		},
 		async detail(repo: string, number: number, signal: AbortSignal, cache: Cache) {
 			return read(`${path(repo)}/pulls/${number}`, PullDetail, signal, cache);
@@ -567,16 +589,24 @@ export function pullGithub(fetcher: typeof globalThis.fetch = fetch, signIn = to
 			const result = z.object({ node: z.object({ reviewDecision: z.string().nullable() }) }).parse(data);
 			return REVIEWS[result.node.reviewDecision ?? ""];
 		},
-		async draft(repo: string, branch: string, title: string, body: () => Promise<string>, signal: AbortSignal) {
+		async draft(repo: string, branch: string, title: string, body: () => Promise<string>, signal: AbortSignal, headRepos = [repo]) {
 			const { default_branch: base } = await json(path(repo), RepoSettings.pick({ default_branch: true }), signal);
-			if (base === branch) return;
-			const compare = await json(`${path(repo)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}`,
-				z.object({ ahead_by: z.number() }), signal).catch(absent);
-			if (!compare?.ahead_by) return;
-			const created = await json(`${path(repo)}/pulls`, PullRow, signal, "POST", {
-				head: branch, base, title, body: await body(), draft: true,
-			});
-			return created.number;
+			for (const headRepo of headRepos) {
+				const fork = headRepo !== repo;
+				if (!fork && base === branch) continue;
+				const tip = fork ? (await branchRef(ref(headRepo, branch), signal))?.object.sha : branch;
+				if (!tip) continue;
+				const comparisonBase = fork ? qualified(repo, base) : base;
+				const comparisonHead = fork ? qualified(headRepo, tip) : tip;
+				const compare = await json(`${path(repo)}/compare/${encodeURIComponent(comparisonBase)}...${encodeURIComponent(comparisonHead)}`,
+					z.object({ ahead_by: z.number() }), signal).catch(absent);
+				if (!compare?.ahead_by) continue;
+				const created = await json(`${path(repo)}/pulls`, PullRow, signal, "POST", {
+					head: fork ? qualified(headRepo, branch) : branch, base, title, body: await body(), draft: true,
+					...(fork ? { head_repo: headRepo.split("/")[1] } : {}),
+				});
+				return created.number;
+			}
 		},
 		async ready(id: string, signal: AbortSignal) {
 			await graphql("mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }", id, signal);
@@ -596,15 +626,14 @@ export function pullGithub(fetcher: typeof globalThis.fetch = fetch, signIn = to
 		},
 		async deleteBranch(repo: string, branch: string, head: string, signal: AbortSignal) {
 			const url = ref(repo, branch);
-			const current = await json(url, z.object({ object: z.object({ sha: z.string() }) }), signal).catch(absent);
+			const current = await branchRef(url, signal);
 			if (!current) return "missing";
 			if (current.object.sha !== head) return "moved";
 			try {
 				await request(url.replace("/git/ref/", "/git/refs/"), { method: "DELETE", signal });
 			} catch (error) {
 				if (error instanceof GithubRefusal && error.status === 404) return "missing";
-				if (error instanceof GithubRefusal && error.status === 422 &&
-					!await json(url, z.object({ object: z.object({ sha: z.string() }) }), signal).catch(absent)) return "missing";
+				if (error instanceof GithubRefusal && error.status === 422 && !await branchRef(url, signal)) return "missing";
 				throw error;
 			}
 			return "deleted";
@@ -612,18 +641,19 @@ export function pullGithub(fetcher: typeof globalThis.fetch = fetch, signIn = to
 	};
 }
 
-export function pullSnapshot(value: PullDetail, checks: GithubCheck[], review: GithubPull["review"]): PullSnapshot {
+export function pullSnapshot(repo: string, value: PullDetail, checks: GithubCheck[], review: GithubPull["review"]): PullSnapshot {
 	const mergedAt = value.merged_at ? Date.parse(value.merged_at) : undefined;
+	const headRepo = value.head.repo?.full_name.toLowerCase();
 	const base = item({
 		number: value.number, title: value.title, url: value.html_url, isDraft: value.draft,
 		state: mergedAt !== undefined ? "MERGED" : value.state === "open" ? "OPEN" : "CLOSED",
 		author: value.user, createdAt: value.created_at, updatedAt: value.updated_at,
-		labels: value.labels, headRefName: value.head.ref, isCrossRepository: false,
+		labels: value.labels, headRefName: value.head.ref, isCrossRepository: headRepo !== undefined && headRepo !== repo,
 	}, "prs");
 	const merge = value.mergeable_state === "dirty" ? "conflicts"
 		: value.mergeable_state === "unknown" || value.mergeable === null ? "unknown"
 		: value.mergeable_state === "clean" || value.mergeable_state === "unstable" ? "ready" : "blocked";
-	return { node: value.node_id, mergedAt, pull: {
+	return { node: value.node_id, mergedAt, headRepo, pull: {
 		...base, checks, sha: value.head.sha, ...(review ? { review } : {}),
 		...(base.state === "open" || base.state === "draft" ? { merge } : {}),
 	} };

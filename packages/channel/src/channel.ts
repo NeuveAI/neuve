@@ -97,6 +97,7 @@ import type {
 	ApprovalRequestsState,
 	BuildNotice,
 	ChannelInfo,
+	Changes,
 	Chat,
 	ChatId,
 	ChatMode,
@@ -205,6 +206,7 @@ export type Options = {
 	/** Publish a projection of committed metadata to the runtime's channel catalog. */
 	onMetadata?(value: Metadata): void;
 	onBuildPulls?(value: ReturnType<Builds["pulls"]>): void;
+	onPullActivity?(activity: { cwd: string } | Pick<Changes, "branch" | "head">): void | Promise<void>;
 	/** Publish when the transcript last grew, in epoch milliseconds. */
 	onActivity?(at: number): void;
 	/** Rebuildable channel-wide projection of pi live runs, including child chats. */
@@ -513,7 +515,7 @@ export class Channel {
 			const ended: [ConversationId, readonly SubmissionId[]][] = [];
 			const began: [ConversationId, SubmissionId][] = [];
 			const reviewed: ConversationId[] = [];
-			let runEnded = false;
+			const endedChats: ConversationId[] = [];
 			for (const change of changes) {
 				if (change.type === "entry" && CompactionEntry.is(change.value)) {
 					log("info", "chat.compacted", { chat: change.value.conversationId, reason: change.value.data.reason });
@@ -577,7 +579,7 @@ export class Channel {
 				const { run } = (change.value || {}) as LiveState;
 				const inputs = channel.#runs.get(scope.conversationId);
 				if (inputs && inputs[0] !== run?.inputs[0]) {
-					runEnded = true;
+					endedChats.push(scope.conversationId);
 					if (!run || channel.#builds.agent(scope.conversationId)) ended.push([scope.conversationId, inputs]);
 				}
 				if (run) {
@@ -597,7 +599,7 @@ export class Channel {
 				channel.#backgroundTasks.add(task);
 				void task.finally(() => channel.#backgroundTasks.delete(task));
 			}
-			if (runEnded) void channel.#builds.replyToMentions();
+			if (endedChats.length) void channel.#builds.replyToMentions();
 			if (reviewed.length) void channel.#builds.refreshReviews(reviewed)
 				.catch(error => log("error", "build.review.failed", failure(error)));
 			// Ending a run settles its inputs in the same commit, in no particular change order.
@@ -605,6 +607,15 @@ export class Channel {
 				const task = channel.#ended(chat, inputs, changes);
 				channel.#backgroundTasks.add(task);
 				void task.finally(() => channel.#backgroundTasks.delete(task));
+			}
+			if (options.onPullActivity) {
+				for (const chat of endedChats) {
+					const task = channel.#place(chat).then(({ cwd, lane }) => {
+						if (lane) return options.onPullActivity?.({ cwd });
+					}).catch(error => log("warn", "pull.activity.failed", { chat, ...failure(error) }));
+					channel.#backgroundTasks.add(task);
+					void task.finally(() => channel.#backgroundTasks.delete(task));
+				}
 			}
 			for (const [chat, input] of began) void channel.#builds.state(chat, "running", input, true);
 			for (const chat of selected) void Promise.resolve().then(() => channel.#publishSelection(chat))
@@ -858,7 +869,11 @@ export class Channel {
 			}
 			case "changes": {
 				const { cwd, lane } = await this.#place(request.chat);
-				return changes(this.#options.env(cwd), cwd, this.#options.project, lane, context);
+				const value = await changes(this.#options.env(cwd), cwd, this.#options.project, lane, context);
+				const activity = this.#options.onPullActivity;
+				if (activity) await Promise.resolve().then(() => activity({ branch: value.branch, head: value.head }))
+					.catch(error => this.#log("warn", "pull.activity.failed", failure(error)));
+				return value;
 			}
 			case "fetch": {
 				const { cwd, lane } = await this.#place(request.chat);

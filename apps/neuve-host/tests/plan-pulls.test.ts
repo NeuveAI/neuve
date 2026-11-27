@@ -9,8 +9,9 @@ import type { Build } from "@ace/channel";
 import * as catalog from "../src/catalog";
 import { pullGithub } from "../src/github";
 import { parseHostEnvelope, parseHostFrame } from "../src/parse";
-import { PlanPulls, publishBuildPulls, requirePullOwner } from "../src/plan-pulls";
+import { PlanPulls, publishBuildPulls, publishPullActivity, requirePullOwner } from "../src/plan-pulls";
 import { removePlanWorktree } from "../src/plan-worktree";
+import { checkout } from "../src/projects";
 import { PullReaders } from "../src/pull-reader";
 import type { Listing, PullUpdate } from "../src/protocol";
 
@@ -69,13 +70,14 @@ for (const final of ["closed", "merged"] as const) {
 	// All views must receive the same revision, including a check run that changes during a 304.
 	test(`three views share conditional requests and reads stop after ${final}`, async () => {
 		let reads = 0;
+		let searches = 0;
 		let runs = 0;
 		const log: unknown[] = [];
 		const github = transport((url, request) => {
 			if (url.pathname.endsWith("/pulls")) {
 				expect(url.searchParams.get("head")).toBe(`owner:${branch}`);
 				expect(url.searchParams.get("state")).toBe("all");
-				return Response.json([detail(7, branch)]);
+				return Response.json(++searches === 1 ? [detail(7, branch)] : [detail(8, branch), detail(7, branch, final)]);
 			}
 			if (url.pathname.endsWith("/pulls/7")) {
 				reads++;
@@ -87,6 +89,7 @@ for (const final of ["closed", "merged"] as const) {
 				expect(conditional).toBe('"open"');
 				return reads === 2 ? new Response(null, { status: 304 }) : Response.json(detail(7, branch, final));
 			}
+			if (url.pathname.endsWith("/pulls/8")) return Response.json(detail(8, branch));
 		});
 		const instrumented = { ...github, async checks(...args: Parameters<typeof github.checks>) {
 			await github.checks(...args);
@@ -104,11 +107,73 @@ for (const final of ["closed", "merged"] as const) {
 			await Bun.sleep(85);
 			expect(reads).toBe(3);
 			expect(log).toEqual([200, 304, 200]);
+			expect(searches).toBe(1);
+			readers.wake(repo, branch, [repo]);
+			await until(() => views.every(view => view.values.at(-1)?.pull?.number === 8));
+			expect(searches).toBe(2);
+			expect(reads).toBe(3);
 		} finally {
 			readers.close();
 		}
 	});
 }
+
+test("run ends and moved heads wake one read for all branch subscribers", async () => {
+	const home = await mkdtemp(join(tmpdir(), "pull-activity-"));
+	const original = { home: catalog.home, user: catalog.user, local: false };
+	const channel = "deadbeefdeadbeef";
+	const next = "b".repeat(40);
+	let searches = 0;
+	let reads = 0;
+	const github = transport(url => {
+		if (url.pathname.endsWith("/pulls")) return Response.json(++searches === 1 ? [] : [detail(7, branch)]);
+		if (url.pathname.endsWith("/pulls/7")) {
+			const value = detail(7, branch);
+			return Response.json(++reads === 1 ? value : { ...value, head: { ...value.head, sha: next } });
+		}
+	});
+	const host = new PlanPulls(new PullReaders(github, () => {}));
+	try {
+		git(home, "init", "-q");
+		git(home, "remote", "add", "origin", `https://github.com/${repo}.git`);
+		catalog.bind({ home, user: "owner", local: true });
+		catalog.save({ id: channel, version: 2, name: "river", prefix: "river", named: true, local: true, owner: "owner", project: home, created: 1 });
+		const views = [updates(host.readers, branch), updates(host.readers, branch), updates(host.readers, branch)];
+		await until(() => views.every(view => view.values.at(-1)?.pull === null));
+
+		const activity = `${channel}/pull-activity.json`;
+		await publishPullActivity(channel, { branch, head });
+		git(home, "symbolic-ref", "HEAD", "refs/heads/river/unwatched");
+		await publishPullActivity(channel, { cwd: home });
+		host.changed(activity);
+		await Bun.sleep(25);
+		expect(searches).toBe(1);
+		expect(reads).toBe(0);
+
+		git(home, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
+		await publishPullActivity(channel, { cwd: home });
+		host.changed(activity);
+		host.changed(channel);
+		await until(() => views.every(view => view.values.at(-1)?.pull?.sha === head));
+		expect(searches).toBe(2);
+		expect(reads).toBe(1);
+
+		await publishPullActivity(channel, { branch, head: next });
+		host.changed(activity);
+		await until(() => views.every(view => view.values.at(-1)?.pull?.sha === next));
+		await publishPullActivity(channel, { branch, head: next });
+		host.changed(activity);
+		await Bun.sleep(25);
+		expect(searches).toBe(2);
+		expect(reads).toBe(2);
+		expect(views[0]!.values).toEqual(views[1]!.values);
+		expect(views[0]!.values).toEqual(views[2]!.values);
+	} finally {
+		host.close();
+		catalog.bind(original);
+		await rm(home, { recursive: true, force: true });
+	}
+});
 
 test("one existing pull request is adopted and another plan gets its own draft and review", async () => {
 	const second = "river/build-second";
@@ -166,6 +231,7 @@ test("plan listings share pull reads and a new head returns only host-readied pu
 	const original = { home: catalog.home, user: catalog.user, local: false };
 	const channel = "deadbeefdeadbeef";
 	const other = "river/build-other";
+	const fork = "maintainer/project-fork";
 	const next = "b".repeat(40);
 	let sha = head;
 	let draft = true;
@@ -182,15 +248,19 @@ test("plan listings share pull reads and a new head returns only host-readied pu
 			return Response.json({ data: { [mutation]: { pullRequest: { id } } } });
 		}
 		if (url.pathname.endsWith("/pulls")) {
-			return Response.json(url.searchParams.get("head") === `owner:${branch}`
-				? [detail(7, branch)] : [detail(8, other)]);
+			expect(url.pathname).toBe(`/repos/${repo}/pulls`);
+			const query = url.searchParams.get("head");
+			return Response.json(query === `owner:${branch}` ? [detail(7, branch)]
+				: query === `maintainer:${other}` ? [{
+					...detail(8, other), head: { ref: other, sha, repo: { full_name: fork } },
+				}] : []);
 		}
 		if (url.pathname.endsWith("/pulls/7")) {
 			reads++;
 			return Response.json({ ...detail(7, branch, "open", draft), head: { ref: branch, sha, repo: { full_name: repo } } });
 		}
 		if (url.pathname.endsWith("/pulls/8")) {
-			return Response.json({ ...detail(8, other), head: { ref: other, sha, repo: { full_name: repo } }, mergeable_state: "blocked" });
+			return Response.json({ ...detail(8, other), head: { ref: other, sha, repo: { full_name: fork } }, mergeable_state: "blocked" });
 		}
 	});
 	const listings: Listing["plans"][] = [];
@@ -212,7 +282,10 @@ test("plan listings share pull reads and a new head returns only host-readied pu
 	let host: PlanPulls | undefined;
 	try {
 		git(home, "init", "-q");
-		git(home, "remote", "add", "origin", `https://github.com/${repo}.git`);
+		git(home, "remote", "add", "origin", `https://github.com/${fork}.git`);
+		git(home, "remote", "add", "upstream", `https://github.com/${repo}.git`);
+		git(home, "config", "remote.upstream.gh-resolved", "base");
+		expect((await checkout(home)).repo).toBe(repo);
 		catalog.bind({ home, user: "owner", local: true });
 		catalog.save({ id: channel, version: 2, name: "river", prefix: "river", named: true, local: true, owner: "owner", project: home, created: 1 });
 		publishBuildPulls(channel, [first, second]);
@@ -240,6 +313,7 @@ test("plan listings share pull reads and a new head returns only host-readied pu
 		const reopened = host;
 		await until(() => reopened.readers.current(repo, branch)?.state === "draft" &&
 			reopened.readers.current(repo, other)?.state === "open");
+		expect(reopened.readers.current(repo, other)?.fork).toBe(true);
 		expect(listings.at(-1)).toEqual({ humanRequired: 5 });
 		expect(reads).toBe(3);
 		expect(actions).toEqual([`markPullRequestReadyForReview pull-7 ${head}`, `convertPullRequestToDraft pull-7 ${next}`]);
@@ -326,6 +400,56 @@ test("a successful merge publishes the result and cleans up the matching remote 
 		await Promise.all([readers.merge(repo, branch, "plan", 7, head), readers.merge(repo, branch, "plan", 7, head)]);
 		expect(view.values.at(-1)?.pull?.state).toBe("merged");
 		expect(actions).toEqual([{ sha: head, merge_method: "merge" }, "deleted", { number: 7, sha: head, at: expect.any(Number) }]);
+	} finally {
+		readers.close();
+	}
+});
+
+for (const forkOwner of ["maintainer", "owner"]) test(`a branch on ${forkOwner}'s fork drafts and merges in the base repository`, async () => {
+	const fork = `${forkOwner}/project-fork`;
+	const pull = { ...detail(9, branch, "open", true), head: { ref: branch, sha: head, repo: { full_name: fork } } };
+	const paths: string[] = [];
+	const github = transport((url, request) => {
+		paths.push(`${request.method ?? "GET"} ${url.pathname}`);
+		if (url.pathname === `/repos/${repo}/pulls` && request.method === "POST") {
+			expect(JSON.parse(String(request.body))).toEqual({
+				head: `${forkOwner}:${branch}`, head_repo: "project-fork", base: "main", title: "Plan", body: "# Approved", draft: true,
+			});
+			return Response.json(pull, { status: 201 });
+		}
+		if (url.pathname === `/repos/${repo}/pulls`) return Response.json([]);
+		if (url.pathname === `/repos/${repo}`) return Response.json({
+			default_branch: "main", allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false,
+		});
+		if (url.pathname === `/repos/${repo}/compare/main...${encodeURIComponent(branch)}`) {
+			return Response.json({ message: "Not Found" }, { status: 404 });
+		}
+		if (url.pathname === `/repos/${repo}/compare/owner%3Amain...${encodeURIComponent(`${forkOwner}:${head}`)}`) {
+			return Response.json({ ahead_by: 1 });
+		}
+		if (url.pathname === `/repos/${repo}/pulls/9`) return Response.json({ ...pull, draft: false, mergeable_state: "clean" });
+		if (url.pathname === `/repos/${repo}/pulls/9/merge`) {
+			expect(JSON.parse(String(request.body))).toEqual({ sha: head, merge_method: "squash" });
+			return Response.json({ message: "Pull request merged", merged: true });
+		}
+		if (url.pathname === `/repos/${fork}/git/ref/heads/${branch}`) return Response.json({ object: { sha: head } });
+		if (url.pathname === `/repos/${fork}/git/refs/heads/${branch}`) return new Response(null, { status: 204 });
+	});
+	const readers = new PullReaders(github, () => {});
+	try {
+		readers.plan(repo, branch, {
+			id: "plan", title: "Plan", open: true, text: async () => "# Approved", ready: () => false, merged: async () => {},
+		}, [repo, fork]);
+		const view = updates(readers, branch);
+		await until(() => view.values.at(-1)?.pull?.number === 9);
+		expect(view.values.at(-1)?.pull).toMatchObject({ sha: head, fork: true });
+		await readers.merge(repo, branch, "plan", 9, head);
+		expect(view.values.at(-1)?.pull?.state).toBe("merged");
+		expect(paths.slice(-3)).toEqual([
+			`PUT /repos/${repo}/pulls/9/merge`,
+			`GET /repos/${fork}/git/ref/heads/${branch}`,
+			`DELETE /repos/${fork}/git/refs/heads/${branch}`,
+		]);
 	} finally {
 		readers.close();
 	}

@@ -5,6 +5,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { AgentDoc, configure, ROOT_CONVERSATION_ID, type ConversationId, type Harness } from "@earendil-works/pi-durable";
 import type { BuildHost } from "../src/build";
+import type { Options } from "../src/channel";
 import { buildWorktree } from "../src/external-lanes";
 import { LanesDoc } from "../src/lanes";
 import type { Changes } from "../src/protocol";
@@ -14,7 +15,7 @@ import { Fixture, git, MODEL, OWNER, scratchEnv } from "./helpers";
 // Admission, pi persistence and real Git must agree: a mocked builder alone cannot prove placement.
 const fixtures: Fixture[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.dispose(); });
-async function setup() {
+async function setup(onPullActivity?: Options["onPullActivity"]) {
 	let fixture!: Fixture;
 	let harness!: Harness;
 	let fail = false;
@@ -29,7 +30,7 @@ async function setup() {
 			return buildWorktree({ name: "one", project: fixture.project, lanes: fixture.lanes, env: cwd => scratchEnv(cwd, fixture.root) }, name, context, source, recorded);
 		},
 	};
-	fixture = await Fixture.create({ lane: undefined, build: host, planFileAccess, extension: { extensions: [], attach(value) { harness = value; } } });
+	fixture = await Fixture.create({ lane: undefined, build: host, planFileAccess, onPullActivity, extension: { extensions: [], attach(value) { harness = value; } } });
 	fixtures.push(fixture);
 	return { fixture, calls, host, get harness() { return harness; }, fail(value: boolean) { fail = value; } };
 }
@@ -39,6 +40,26 @@ async function ask(fixture: Fixture, mode?: "plan" | "ace") {
 }
 const shell = (command: string, id = "first-shell") => fauxAssistantMessage(fauxToolCall("bash", { command }, { id }), { stopReason: "toolUse" });
 const cwd = (run: Awaited<ReturnType<typeof setup>>) => run.harness.snapshot(AgentDoc, ROOT_CONVERSATION_ID, context).then(agent => agent?.cwd);
+
+test("run completion and Diff observations report the chat's lane to the host without a transcript watch", async () => {
+	const ended = Promise.withResolvers<string>();
+	const heads: Pick<Changes, "branch" | "head">[] = [];
+	const { fixture } = await setup(activity => {
+		if ("cwd" in activity) ended.resolve(activity.cwd);
+		else heads.push(activity);
+	});
+	fixture.script(fauxAssistantMessage("Ready"));
+	await ask(fixture);
+	const path = join(fixture.lanes, `chat-${ROOT_CONVERSATION_ID}`);
+	expect(await ended.promise).toBe(path);
+	const branch = `one/chat-${ROOT_CONVERSATION_ID}`;
+	const first = git(path, "rev-parse", "HEAD").trim();
+	await fixture.request<Changes>({ op: "changes" });
+	git(path, "commit", "--allow-empty", "-m", "Move the lane head");
+	const second = git(path, "rev-parse", "HEAD").trim();
+	await fixture.request<Changes>({ op: "changes" });
+	expect(heads).toEqual([{ branch, head: first }, { branch, head: second }]);
+});
 
 test("ordinary first write admission persists a registered external lane before shell and file tools run; reopen reuses it", async () => {
 	const run = await setup(), { fixture } = run;

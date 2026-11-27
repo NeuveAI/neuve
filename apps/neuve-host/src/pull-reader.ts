@@ -19,6 +19,7 @@ type Listener = (state: { pull: GithubPull | null; error?: string }) => void;
 type Reader = {
 	repo: string;
 	branch: string;
+	headRepos: string[];
 	number?: number;
 	snapshot?: PullSnapshot | null;
 	error?: string;
@@ -28,6 +29,7 @@ type Reader = {
 	plan?: PlanPull;
 	finalized?: string;
 	wake: boolean;
+	findAgain: boolean;
 	timer?: ReturnType<typeof setTimeout>;
 	listeners: Set<Listener>;
 	controller: AbortController;
@@ -56,7 +58,8 @@ export class PullReaders {
 		const key = this.#key(repo, branch);
 		let reader = this.#readers.get(key);
 		if (!reader) this.#readers.set(key, reader = {
-			repo: repo.toLowerCase(), branch, wake: false, cache: new Map(), listeners: new Set(),
+			repo: repo.toLowerCase(), branch, headRepos: [repo.toLowerCase()], wake: false, findAgain: false,
+			cache: new Map(), listeners: new Set(),
 			controller: new AbortController(),
 		});
 		return reader;
@@ -84,15 +87,30 @@ export class PullReaders {
 		return this.#readers.get(this.#key(repo, branch))?.snapshot?.pull;
 	}
 
-	plan(repo: string, branch: string, plan: PlanPull): () => void {
+	wake(repo: string, branch: string, headRepos: readonly string[]) {
+		const reader = this.#readers.get(this.#key(repo, branch));
+		if (!reader) return;
+		this.#headRepos(reader, headRepos);
+		this.#wake(reader, true);
+	}
+
+	plan(repo: string, branch: string, plan: PlanPull, headRepos: readonly string[] = []): () => void {
 		const reader = this.#get(repo, branch);
+		const repositoriesChanged = this.#headRepos(reader, headRepos);
 		reader.plan = { ...plan, open: plan.open || reader.plan?.open === true };
-		this.#wake(reader);
+		this.#wake(reader, plan.open || repositoriesChanged);
 		return () => {
 			if (reader.plan?.id !== plan.id) return;
 			reader.plan = undefined;
 			this.#drop(reader);
 		};
+	}
+
+	#headRepos(reader: Reader, headRepos: readonly string[]) {
+		const repositories = [...new Set([...reader.headRepos, ...headRepos.map(repo => repo.toLowerCase())])];
+		if (repositories.length === reader.headRepos.length) return false;
+		reader.headRepos = repositories;
+		return true;
 	}
 
 	close() {
@@ -129,8 +147,10 @@ export class PullReaders {
 				const merged: PullSnapshot = {
 					...snapshot, mergedAt: Date.now(), pull: { ...snapshot.pull, state: "merged", merge: undefined },
 				};
-				this.#publish(reader, merged);
-				clearTimeout(reader.timer);
+				if (reader.number === number) {
+					this.#publish(reader, merged);
+					if (!reader.wake) clearTimeout(reader.timer);
+				}
 				await this.#finish(reader, merged);
 				return { kind: "succeeded", value: undefined };
 			},
@@ -165,10 +185,10 @@ export class PullReaders {
 		}
 	}
 
-	#wake(reader: Reader) {
+	#wake(reader: Reader, findAgain = false) {
 		reader.wake = true;
-		clearTimeout(reader.timer);
-		void this.#read(reader).catch(() => {});
+		reader.findAgain ||= findAgain;
+		this.#schedule(reader, 0);
 	}
 
 	async #read(reader: Reader) {
@@ -176,8 +196,10 @@ export class PullReaders {
 			scope: reader.repo, key: reader.branch, signal: reader.controller.signal,
 			run: async signal => {
 				reader.wake = false;
+				const findAgain = reader.findAgain;
+				reader.findAgain = false;
 				try {
-					return { kind: "succeeded", value: await this.#tick(reader, signal) };
+					return { kind: "succeeded", value: await this.#tick(reader, signal, findAgain) };
 				} catch (error) {
 					if (!signal.aborted) {
 						this.log("warn", "pull.read.failed", { repo: reader.repo, branch: reader.branch, number: reader.number, ...failure(error) });
@@ -193,7 +215,7 @@ export class PullReaders {
 					const pending = pull?.merge === "unknown" || pull?.checks.some(check => check.state === "pending");
 					if (!signal.aborted) {
 						if (reader.wake) this.#schedule(reader, 0);
-						else if (reader.error || !terminal(reader.snapshot) && (pull || !reader.plan)) {
+						else if (this.#shouldSchedule(reader)) {
 							this.#schedule(reader, pending && !reader.error ? this.cadence.pending : this.cadence.idle);
 						}
 					}
@@ -201,6 +223,13 @@ export class PullReaders {
 			},
 		});
 		return result.outcome.kind === "succeeded" ? result.outcome.value : null;
+	}
+
+	#shouldSchedule(reader: Reader) {
+		const pull = reader.snapshot?.pull;
+		if (!terminal(reader.snapshot)) return !!reader.error || !!pull || !reader.plan;
+		const finalizing = pull?.state === "merged" && reader.plan && reader.finalized !== reader.plan.id;
+		return !!reader.error && (reader.number !== pull?.number || finalizing);
 	}
 
 	#schedule(reader: Reader, delay: number) {
@@ -211,21 +240,30 @@ export class PullReaders {
 		}, delay);
 	}
 
-	async #tick(reader: Reader, signal: AbortSignal) {
-		const { repo, branch, cache } = reader;
-		if (terminal(reader.snapshot)) {
-			if (reader.snapshot?.pull.state === "merged") await this.#finish(reader, reader.snapshot);
-			return reader.snapshot ?? null;
+	async #tick(reader: Reader, signal: AbortSignal, findAgain: boolean) {
+		const { repo, branch, cache, headRepos } = reader;
+		const previous = reader.snapshot;
+		const finished = previous && terminal(previous) ? previous : undefined;
+		if (finished) {
+			if (finished.pull.state === "merged") await this.#finish(reader, finished);
+			if (reader.number === finished.pull.number && !findAgain) return finished;
 		}
 		const started = Date.now();
 		const plan = reader.plan;
 		let status: number;
-		if (reader.number === undefined) {
-			const found = await this.github.find(repo, branch, signal, cache);
+		if (reader.number === undefined || reader.number === finished?.pull.number) {
+			const found = await this.github.find(repo, branch, signal, cache, headRepos);
+			signal.throwIfAborted();
 			status = found.status;
+			if (finished && (found.number === undefined || found.number <= finished.pull.number)) {
+				this.log("info", "pull.read", { repo, branch, number: found.number ?? null, status, ms: Date.now() - started });
+				this.#publish(reader, finished);
+				return finished;
+			}
+			if (finished) cache.delete(`/repos/${repo}/pulls/${finished.pull.number}`);
 			reader.number = found.number;
 			if (reader.number === undefined && plan?.open) {
-				reader.number = await this.github.draft(repo, branch, plan.title, plan.text, signal);
+				reader.number = await this.github.draft(repo, branch, plan.title, plan.text, signal, headRepos);
 				plan.open = false;
 			}
 			if (reader.number === undefined) {
@@ -238,18 +276,19 @@ export class PullReaders {
 		this.log("info", "pull.read", { repo, branch, number: reader.number, status: detail.status, ms: Date.now() - started });
 		const value = detail.value;
 		const head = value.head.sha;
-		if (value.head.ref !== branch || value.head.repo && value.head.repo.full_name.toLowerCase() !== repo) {
+		const headRepo = value.head.repo?.full_name.toLowerCase();
+		if (value.head.ref !== branch || headRepo && !headRepos.includes(headRepo)) {
 			throw new Error("GitHub returned a pull request from a different branch.");
 		}
 		signal.throwIfAborted();
 		// A person can merge while a conditional read is still answering.
-		if (reader.snapshot?.pull.state === "merged") return reader.snapshot;
+		if (reader.snapshot !== previous && reader.snapshot?.pull.state === "merged") return reader.snapshot;
 		if (value.state === "open" && !value.draft && this.#staleReview(reader, value.node_id, head)) {
-			const blocked = pullSnapshot({ ...value, mergeable: false, mergeable_state: "blocked" }, [], undefined);
+			const blocked = pullSnapshot(repo, { ...value, mergeable: false, mergeable_state: "blocked" }, [], undefined);
 			this.#publish(reader, blocked);
 			await this.github.returnToDraft(value.node_id, signal);
 			this.log("info", "pull.review.stale", { repo, branch, number: value.number, head, reviewedHead: reader.readied?.head });
-			const draft = pullSnapshot({ ...value, draft: true, mergeable: false, mergeable_state: "draft" }, [], undefined);
+			const draft = pullSnapshot(repo, { ...value, draft: true, mergeable: false, mergeable_state: "draft" }, [], undefined);
 			this.#publish(reader, draft);
 			return draft;
 		}
@@ -257,20 +296,25 @@ export class PullReaders {
 			for (const path of cache.keys()) if (path.includes("/commits/")) cache.delete(path);
 			reader.checkHead = head;
 		}
+		const samePull = previous?.pull.number === value.number ? previous : undefined;
 		const review = value.state === "open" && detail.status !== 304
 			? await this.github.review(value.node_id, signal).catch(error => {
 				if (!signal.aborted) this.log("warn", "pull.review.failed", { repo, number: value.number, ...failure(error) });
-				return reader.snapshot?.pull.review;
+				return samePull?.pull.review;
 			})
-			: reader.snapshot?.pull.review;
+			: samePull?.pull.review;
 		const checks = value.state === "open"
-			? await this.github.checks(repo, head, signal, cache)
-			: reader.snapshot?.pull.checks ?? [];
+			? await this.github.checks(headRepo ?? repo, head, signal, cache)
+			: samePull?.pull.checks ?? [];
 		signal.throwIfAborted();
-		if (terminal(reader.snapshot)) return reader.snapshot ?? null;
-		const snapshot = pullSnapshot(value, checks, review);
+		if (reader.snapshot !== previous && terminal(reader.snapshot)) return reader.snapshot ?? null;
+		const snapshot = pullSnapshot(repo, value, checks, review);
 		this.#publish(reader, snapshot);
 		if (snapshot.pull.state === "merged") await this.#finish(reader, snapshot);
+		if (findAgain && !finished && terminal(snapshot)) {
+			reader.findAgain = true;
+			reader.wake = true;
+		}
 		const active = reader.plan;
 		if (snapshot.pull.state === "draft" && active?.ready(head) && this.#readiedHead(reader, snapshot.node) !== head) {
 			await this.github.ready(snapshot.node, signal);
@@ -290,8 +334,10 @@ export class PullReaders {
 			scope: reader.repo, key: JSON.stringify([number, sha]), signal: this.#lifetime.signal,
 			run: async signal => {
 				try {
-					const removed = await this.github.deleteBranch(reader.repo, reader.branch, sha, signal);
-					this.log("info", "pull.branch.cleanup", { repo: reader.repo, branch: reader.branch, number, result: removed });
+					if (snapshot.headRepo) {
+						const removed = await this.github.deleteBranch(snapshot.headRepo, reader.branch, sha, signal);
+						this.log("info", "pull.branch.cleanup", { repo: snapshot.headRepo, branch: reader.branch, number, result: removed });
+					}
 				} catch (error) {
 					this.log("warn", "pull.branch.cleanup.failed", { repo: reader.repo, branch: reader.branch, number, ...failure(error) });
 				}
