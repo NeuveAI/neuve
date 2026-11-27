@@ -21,7 +21,9 @@ export type LinearMcpCall = {
 };
 export function linearMcpSession(
   integrations: Integrations | IntegrationFile,
-  options: Pick<McpClientOptions, "http"> & { capture?(call: LinearMcpCall): void } = {},
+  options: Pick<McpClientOptions, "http"> & {
+    capture?(call: LinearMcpCall): void;
+  } = {},
 ) {
   const { capture, ...transport } = options;
   const makeRuntime = () =>

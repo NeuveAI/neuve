@@ -1,13 +1,23 @@
 import type { Planning, PlanningConnections } from "@ace/channel/planning";
 import { linearPlanningSource } from "@ace/host/linear-plugin";
 import { createPlanning, type PlanningCall } from "@ace/host/planning";
-import { IntegrationFile, linearMcpSession, type LinearMcpCall } from "@neuve/harness/linear-planning";
+import {
+  IntegrationFile,
+  linearMcpSession,
+  type LinearMcpCall,
+} from "@neuve/harness/linear-planning";
 
 const unavailable = "No Linear read operations are configured on this host.";
 
-export async function planningConnections(source = linearPlanningSource()): Promise<PlanningConnections> {
-  return await source.available()
-    ? { connections: [{ id: source.id, label: source.label }], status: "configured", message: null }
+export async function planningConnections(
+  source = linearPlanningSource(),
+): Promise<PlanningConnections> {
+  return (await source.available())
+    ? {
+        connections: [{ id: source.id, label: source.label }],
+        status: "configured",
+        message: null,
+      }
     : { connections: [], status: "unavailable", message: unavailable };
 }
 
@@ -33,7 +43,7 @@ export function workspaceLinearPlanning(options: {
     ...(options.capturePlanning ? { capture: options.capturePlanning } : {}),
   });
   const read: Planning = async (request, context) =>
-    await source.available()
+    (await source.available())
       ? planning(request, context)
       : { kind: "failure", reason: "unavailable", message: unavailable };
   return { client, read };

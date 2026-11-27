@@ -84,7 +84,11 @@ const message = (error: unknown) =>
   (error instanceof Error ? error.message : String(error)).slice(0, 300);
 
 /** Builds the transport with the listed variables expanded from the environment now. */
-const transportFor = (name: string, server: IntegrationServer, options: McpClientOptions) => {
+const transportFor = (
+  name: string,
+  server: IntegrationServer,
+  options: McpClientOptions,
+) => {
   const unset: Array<string> = [];
   const take = (value: string) => {
     const expanded = expand(value, server.variables);
@@ -155,7 +159,11 @@ const transportFor = (name: string, server: IntegrationServer, options: McpClien
 export type McpClientOptions = {
   readonly sanitizeError?: (error: unknown) => string;
   readonly captureDefinitions?: boolean;
-  readonly http?: (name: string) => Pick<StreamableHTTPClientTransportOptions, "authProvider" | "fetch"> | undefined;
+  readonly http?: (
+    name: string,
+  ) =>
+    | Pick<StreamableHTTPClientTransportOptions, "authProvider" | "fetch">
+    | undefined;
 };
 
 export const connect = (
@@ -346,9 +354,12 @@ export const mcpClientsLayer = (
             IntegrationUnavailable
           >();
           opened.set(server, deferred);
-          const definitions = "servers" in integrations
-            ? integrations.servers
-            : integrations.status === "configured" ? integrations.file.servers : undefined;
+          const definitions =
+            "servers" in integrations
+              ? integrations.servers
+              : integrations.status === "configured"
+                ? integrations.file.servers
+                : undefined;
           const definition = definitions?.[server];
           // A caller that gives up (a timeout) never leaves the next caller waiting forever.
           const exit = yield* Effect.exit(

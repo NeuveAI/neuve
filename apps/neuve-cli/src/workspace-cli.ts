@@ -35,7 +35,10 @@ import {
 } from "@ace/host/native-review";
 import { CommitPrepare } from "@neuve/harness";
 import type { LinearMcpSession } from "@neuve/harness/linear-planning";
-import { planningConnections, workspaceLinearPlanning } from "./workspace-linear.ts";
+import {
+  planningConnections,
+  workspaceLinearPlanning,
+} from "./workspace-linear.ts";
 import { startHost, type Host } from "@ace/host/host";
 import {
   configureReviewRoutes,
