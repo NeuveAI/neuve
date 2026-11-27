@@ -172,12 +172,7 @@ export async function gh<T>(schema: z.ZodType<T>, args: string[]): Promise<T> {
 	return parsed.data;
 }
 
-export const REMOTES = [
-	"config",
-	"--local",
-	"--get-regexp",
-	"^remote\\..*\\.(url|gh-resolved)$",
-];
+export { REMOTES } from "./github";
 export function remote(text: string): string | null {
 	const remotes = new Map<string, string>();
 	let preferred: string | undefined;

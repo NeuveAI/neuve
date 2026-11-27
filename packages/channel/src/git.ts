@@ -1,6 +1,25 @@
 import type { Context } from "@earendil-works/chord";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 
+export type GitCommand = readonly [subcommand: string, ...args: string[]];
+
+// .gitmodules can override config defaults, so use flags for commands that can recurse.
+const submoduleFlags = new Map<string, readonly string[]>([
+	["diff", ["--ignore-submodules=dirty", "--submodule=short"]],
+	["status", ["--ignore-submodules=dirty"]],
+	["fetch", ["--no-recurse-submodules"]],
+]);
+
+export function gitArgs([command, ...args]: GitCommand, config: readonly string[] = []): string[] {
+	if (!command || command.startsWith("-")) throw new Error("Expected a Git subcommand first");
+	return [
+		...config.flatMap(value => ["-c", value]),
+		"-c", "core.fsmonitor=false",
+		"-c", "submodule.recurse=false",
+		command, ...(submoduleFlags.get(command) ?? []), ...args,
+	];
+}
+
 export function quote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
@@ -35,13 +54,14 @@ export async function run(
  */
 export function git(
 	env: ExecutionEnv,
-	args: string,
+	args: GitCommand,
 	context: Context,
-	options: { cwd?: string; ok?: number[] } = {},
+	options: { cwd?: string; ok?: number[]; quiet?: boolean } = {},
 ): Promise<string> {
+	const command = gitArgs(args).map(quote).join(" ");
 	return run(
 		env,
-		`GIT_LITERAL_PATHSPECS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 git ${args}`,
+		`GIT_LITERAL_PATHSPECS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 git ${command}${options.quiet ? " 2>/dev/null" : ""}`,
 		context,
 		options,
 	);
