@@ -69,6 +69,22 @@ export function lineView(agent: BuildAgent): AgentLineView {
 	};
 }
 
+/**
+ * The main agent's line for each chat that planned a build with agents. Where two chats planned,
+ * each line carries its chat's newest plan's title, as the mention list tells agents apart.
+ */
+export function mainLines(builds: Build[], chats: Chat[], avatar: string): AgentLineView[] {
+	const planned = new Map<ChatId, string>();
+	for (const build of builds) if (build.agents.length) planned.set(build.chat, build.plan.title);
+	return [...planned].map(([chat, title]) => ({
+		chat,
+		name: AGENT_ALIAS.label,
+		avatar,
+		...(planned.size > 1 ? { caption: title } : {}),
+		state: chats.find((value) => value.id === chat)?.busy ? "running" : "done",
+	}));
+}
+
 const alive = (agent: BuildAgent) => agent.state === "running" || agent.state === "waiting";
 
 /**

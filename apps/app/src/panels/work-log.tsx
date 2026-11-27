@@ -1,11 +1,10 @@
 import { useMemo } from "react";
 
 import type { Listing } from "@ace/host/protocol";
-import { type AgentLineView, AgentLine, Timeline } from "@ace/ui";
+import { AgentLine, Timeline } from "@ace/ui";
 
-import { AGENT_ALIAS } from "../agent-mention";
 import { useAgentAvatar } from "../agent-avatar";
-import { agentAuthor, lineView, workEvents } from "../build-card";
+import { agentAuthor, lineView, mainLines, workEvents } from "../build-card";
 import { Conversation } from "../conversation";
 import { useDetails } from "../details";
 
@@ -30,14 +29,7 @@ export function WorkLog({ channel, channels, user, chat, onChat, onOpen }: Props
 	const avatar = useAgentAvatar();
 	const list = builds?.list ?? [];
 	const agents = list.flatMap((build) => build.agents);
-	const lines: AgentLineView[] = [
-		...new Set(list.filter((build) => build.agents.length).map((build) => build.chat)),
-	].map((planner): AgentLineView => ({
-		chat: planner,
-		name: AGENT_ALIAS.label,
-		avatar,
-		state: info?.chats.find((value) => value.id === planner)?.busy ? "running" : "done",
-	})).concat(agents.map(lineView));
+	const lines = mainLines(list, info?.chats ?? [], avatar).concat(agents.map(lineView));
 	const chosen = lines.find((line) => line.chat === chat);
 	const events = useMemo(
 		() => workEvents(builds?.list ?? [], builds?.messages ?? [], channel.id),
