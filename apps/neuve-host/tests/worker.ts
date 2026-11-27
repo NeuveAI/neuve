@@ -18,6 +18,7 @@ import type { JsonObject } from "@earendil-works/pi-durable";
 
 import { nativeReview } from "../src/native-review";
 import { runWorker } from "../src/worker-runtime";
+import { fauxNonTurnModels } from "./fixtures/non-turn-models";
 
 export type Step =
 	| { text: string }
@@ -26,6 +27,8 @@ export type Step =
 
 const script = () => process.env.NEUVE_TEST_SCRIPT!;
 const cursor = () => `${script()}.cursor`;
+const model = { provider: "faux", modelId: "coder" };
+const nonTurnModels = fauxNonTurnModels(model);
 
 const next: FauxResponseStep = () => {
 	const steps = JSON.parse(readFileSync(script(), "utf8")) as Step[];
@@ -65,11 +68,12 @@ await runWorker({
 	models({ sessionId, stateDirectory, config }) {
 		// What root's factory would bind capture to, recorded for the host test to compare.
 		writeFileSync(join(stateDirectory, "models-context.json"), JSON.stringify({ sessionId, stateDirectory, home: config.home }));
-		const faux = fauxProvider({ provider: "faux", models: [{ id: "coder", contextWindow: 200_000 }] });
+		const faux = fauxProvider({ provider: model.provider, models: [{ id: model.modelId, contextWindow: 200_000 }] });
 		faux.setResponses(Array.from({ length: 64 }, () => next));
 		const models = createModels();
 		models.setProvider(faux.provider);
 		return models;
 	},
-	defaultModel: async () => ({ provider: "faux", modelId: "coder" }),
+	nonTurnModels: (_, kind) => nonTurnModels(kind),
+	defaultModel: async () => model,
 });

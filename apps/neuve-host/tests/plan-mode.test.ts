@@ -11,6 +11,10 @@ import { config } from "../src/host-config";
 import { openChannel } from "../src/worker-runtime";
 import { parseHostEnvelope } from "../src/parse";
 import { configureRuntime, runtimeHooks } from "../src/runtime-hooks";
+import { fauxNonTurnModels } from "./fixtures/non-turn-models";
+
+const model = { provider: "plan-test", modelId: "agent" };
+const nonTurnModels = fauxNonTurnModels(model);
 
 function git(cwd: string, ...args: string[]) {
 	const child = Bun.spawnSync(["git", "-c", "user.name=Test", "-c", "user.email=test@neuve.invalid", ...args], { cwd });
@@ -19,7 +23,7 @@ function git(cwd: string, ...args: string[]) {
 }
 
 function faux() {
-	const fake = fauxProvider({ provider: "plan-test", models: [{ id: "agent" }], tokensPerSecond: 100_000 });
+	const fake = fauxProvider({ provider: model.provider, models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
 	const models = createModels();
 	models.setProvider(fake.provider);
 	return { fake, models };
@@ -34,16 +38,15 @@ async function open(root: string, models: Models, home: string) {
 	}({ cwd: root });
 	// These file-policy fixtures have no catalog admission; exercise the environment gate alone.
 	const lanes = config.lanes;
-	const captions = faux().models;
 	Reflect.deleteProperty(config, "lanes");
 	try { return await openChannel({
 		id: "plan-test", name: "Plan test", owner: "owner", project: root,
-		defaultModel: async () => ({ provider: "plan-test", modelId: "agent" }),
+		defaultModel: async () => model,
 		storage: new MemoryStorage(), models,
 		env: () => env,
 		directory: { self: { id: "plan-test", name: "Plan test" }, list: async () => [], deliver: async () => {} },
 		log: () => {},
-		extension: { extensions: [], nonTurnModels: () => captions },
+		extension: { extensions: [], nonTurnModels },
 	}, root); }
 	finally { if (lanes !== undefined) config.lanes = lanes; }
 }
@@ -284,8 +287,7 @@ test("the worker without a placement adapter confines Plan reads and denies ordi
 		git(repo, "add", "--", "tracked.txt");
 
 		Reflect.deleteProperty(config, "lanes");
-		const captions = faux().models;
-		configureRuntime({ worker: { models: (_, defaults) => defaults, nonTurnModels: () => captions } });
+		configureRuntime({ worker: { models: (_, defaults) => defaults, nonTurnModels: (_, kind) => nonTurnModels(kind) } });
 		const { fake, models } = faux();
 		const channel = await open(repo, models, join(dir, "home"));
 		try {
