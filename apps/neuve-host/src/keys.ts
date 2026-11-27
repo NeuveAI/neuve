@@ -11,6 +11,7 @@ import type { MutableModels } from "@earendil-works/pi-ai";
 import { ClaudeSubscriptionTokenRefused, isClaudeSubscriptionToken } from "../../../packages/harness/src/subscription-token.ts";
 
 import { config } from "./config";
+import { secretName } from "./plugin-manifest";
 import type { CredentialStatus } from "./protocol";
 
 const sealed = new Map<string, string>();
@@ -24,11 +25,9 @@ const usable = (name: string, value: string | undefined) => refused(name, value)
  * `env` through its agent. Credentials leave `process.env` before any tool runs and stay
  * readable only through `key`.
  */
-const secret = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIALS?)$/;
-
 export function seal(): void {
 	for (const [name, value] of Object.entries(process.env)) {
-		if (!secret.test(name) || value === undefined) continue;
+		if (!secretName(name) || value === undefined) continue;
 		if (!subscriptionOnly(name)) sealed.set(name, value);
 		delete process.env[name];
 	}
@@ -59,18 +58,20 @@ export const KEYCHAIN_WAITING = "Neuve Helper is waiting for keychain access";
 /** A macOS prompt holds a read until someone answers it, so concurrent readers share one prompt. */
 const reading = new Map<string, Promise<string | undefined>>();
 
-function keychain(name: string): Promise<string | undefined> {
-	let read = reading.get(name);
-	if (read) return read;
+export function keychain(name: string, fresh = false): Promise<string | undefined> {
+	const current = reading.get(name);
+	if (current && !fresh) return current;
 	// Resolve each request so running workers observe replacement and removal immediately.
-	read = Bun.secrets.get({ service: config.keychain, name }).then(
+	const read = Bun.secrets.get({ service: config.keychain, name }).then(
 		(value) => set(value ?? undefined),
 		() => {
 			throw new Error(
 				`Cannot access ${name} in the keychain. Unlock it and allow Neuve Helper, then retry.`,
 			);
 		},
-	).finally(() => reading.delete(name));
+	).finally(() => {
+		if (reading.get(name) === read) reading.delete(name);
+	});
 	reading.set(name, read);
 	return read;
 }
@@ -95,6 +96,7 @@ const changed = new Map<string, number>();
 const rejected = new Set<string>();
 
 function change(name: string): void {
+	reading.delete(name);
 	known.delete(name);
 	rejected.delete(name);
 	changed.set(name, performance.now());
@@ -171,7 +173,7 @@ function look(name: string): Promise<Read> {
  * by a prompt, and a later call picks up the result. Settings polls while it waits, so after a
  * prompted read only `fresh` reads again, or each poll would raise another prompt.
  */
-function peek(name: string, fresh?: boolean): Promise<Read | undefined> {
+export function peek(name: string, fresh?: boolean): Promise<Read | undefined> {
 	const last = known.get(name);
 	if (last?.prompted && !fresh && !queued.has(name)) return Promise.resolve(last);
 	return Promise.race([look(name), stuck.promise]);

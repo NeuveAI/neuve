@@ -196,6 +196,7 @@ export function policy(
     folder?: string | undefined;
     skills?: { home: string; carried?: string | undefined } | undefined;
     ownTools?: boolean;
+    pluginTools?: ReadonlySet<string> | undefined;
     approvals?: boolean;
     attended?: boolean;
   } = {},
@@ -222,7 +223,11 @@ export function policy(
   // Serving a tool is running it: the bridge hands pi every call to a served tool, outside the
   // runtime's sandbox. Offer only tools that preserve that sandbox's limits.
   const withheld = sandboxed
-    ? offered.filter((tool) => !SANDBOX_TOOLS.has(tool.name))
+    ? offered.filter(
+        (tool) =>
+          !SANDBOX_TOOLS.has(tool.name) &&
+          (planning || !where.pluginTools?.has(tool.name)),
+      )
     : [];
   const served = offered.filter((tool) => !withheld.includes(tool));
   const prompt = [getCurrentSystemPrompt(messages)];

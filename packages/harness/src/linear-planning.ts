@@ -3,12 +3,12 @@ import { Effect, ManagedRuntime } from "effect";
 import {
   McpClients,
   mcpClientsLayer,
+  type McpClientOptions,
   type McpConnection,
 } from "./mcp-client.ts";
-import { readIntegrations, type Integrations } from "./integrations.ts";
+import { type IntegrationFile, type Integrations } from "./integrations.ts";
 
-export { readIntegrations } from "./integrations.ts";
-export type { Integrations } from "./integrations.ts";
+export { IntegrationFile } from "./integrations.ts";
 
 /** Coding sessions own their MCP lifetimes without changing independent review defaults. */
 export type LinearMcpCall = {
@@ -20,12 +20,16 @@ export type LinearMcpCall = {
   outcome: "completed" | "provider-error" | "failed" | "cancelled";
 };
 export function linearMcpSession(
-  integrations: Integrations = readIntegrations(),
-  options: { capture?(call: LinearMcpCall): void } = {},
+  integrations: Integrations | IntegrationFile,
+  options: Pick<McpClientOptions, "http"> & {
+    capture?(call: LinearMcpCall): void;
+  } = {},
 ) {
+  const { capture, ...transport } = options;
   const makeRuntime = () =>
     ManagedRuntime.make(
       mcpClientsLayer(integrations, {
+        ...transport,
         sanitizeError: (error) => {
           const parsed = z
             .object({
@@ -127,7 +131,7 @@ export function linearMcpSession(
           outcome = result.isError ? "provider-error" : "completed";
           return result;
         } finally {
-          options.capture?.({
+          capture?.({
             server,
             tool,
             startedAt: new Date(started).toISOString(),

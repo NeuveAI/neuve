@@ -23,6 +23,8 @@ import { config, configure, CONFIG_VARIABLE, GIT_LOCAL, workspaceSettingsEnviron
 import { configureRuntime, runtimeHooks } from "./runtime-hooks";
 import { planExplore, planFileAccess, readBranch } from "./plan-git";
 import { installedNeuve } from "./environment";
+import { pluginTools } from "./plugin-tools";
+import { secretName } from "./plugin-manifest";
 import { git } from "./projects";
 import { defaultModel } from "./manage";
 /**
@@ -197,6 +199,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		...(build ? { build } : {}),
 		planFileAccess,
 		planFiles: files,
+		plugins: pluginTools(setup ? privateLog.log : options.log),
 		...(config.skills ? { skills: config.skills } : {}),
 	};
 	if (!setup) return Channel.open({
@@ -443,9 +446,8 @@ export async function bindWorkerCatalog(): Promise<void> {
 
 /** Each worker receives its validated snapshot; arbitrary variables never contaminate the host. */
 export function applyWorkerEnvironment(): void {
-	const secret = /(_KEY|_TOKEN|_SECRET|_PASSWORD|_CREDENTIALS?)$/;
 	for (const name of Object.keys(process.env)) {
-		if (!(name in config.environment) && !secret.test(name) && name !== CONFIG_VARIABLE) delete process.env[name];
+		if (!(name in config.environment) && !secretName(name) && name !== CONFIG_VARIABLE) delete process.env[name];
 	}
 	for (const [name, value] of Object.entries(config.environment)) process.env[name] = value;
 	process.env.ACE_HOME = config.home;

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type {
   Options,
   SDKMessage,
+  SDKPartialAssistantMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -375,6 +376,121 @@ for (const kind of ["assistant", "terminal"] as const)
         });
       }),
     ));
+
+// A resumed model can ask for a plugin tool that vanished from its current policy.
+test.each(["SDK lookup", "permission callback"] as const)(
+  "an unavailable Neuve tool returns an error and the turn completes after %s",
+  (source) =>
+    run((f, session, seen, next) =>
+      Effect.gen(function* () {
+        yield* session.startTurn({ turnId: "one", message: "Read my issue" });
+        const child = f.children[0]!;
+        const sessionId = (yield* session.continuation).sessionId;
+        const block = {
+          type: "tool_use" as const,
+          name: "mcp__neuve__linear_get_issue",
+          id: "unavailable",
+          input: { id: "fixture-issue" },
+        };
+        const call = assistant(undefined);
+        call.session_id = sessionId;
+        call.message.stop_reason = "tool_use";
+        call.message.content = [block];
+        const stream = (event: SDKPartialAssistantMessage["event"]) => ({
+          ...textDelta(""),
+          session_id: sessionId,
+          event,
+        });
+        yield* Queue.offerAll(child.frames, [
+          stream({
+            type: "message_start",
+            message: { ...call.message, content: [], stop_reason: null },
+          }),
+          stream({
+            type: "content_block_start",
+            index: 0,
+            content_block: block,
+          }),
+          call,
+          stream({ type: "content_block_stop", index: 0 }),
+          stream({ type: "message_stop" }),
+        ]);
+        let error = `Error: No such tool available: ${block.name}`;
+        if (source === "permission callback") {
+          const permission = yield* Effect.promise(() =>
+            child.options.canUseTool!(block.name, block.input, {
+              signal: new AbortController().signal,
+              toolUseID: block.id,
+              requestId: "fixture",
+            }),
+          );
+          expect(permission).toEqual({
+            behavior: "deny",
+            message: "This tool is not available now.",
+          });
+          if (permission?.behavior === "deny") error = permission.message;
+        }
+        const reply = assistant(undefined, "Linear is unavailable.");
+        reply.message.id = "answer";
+        yield* Queue.offerAll(child.frames, [
+          {
+            type: "user",
+            parent_tool_use_id: null,
+            session_id: sessionId,
+            uuid: crypto.randomUUID(),
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: block.id,
+                  is_error: true,
+                  content: error,
+                },
+              ],
+            },
+          },
+          stream({
+            type: "message_start",
+            message: { ...reply.message, content: [], stop_reason: null },
+          }),
+          stream({
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "", citations: [] },
+          }),
+          { ...textDelta("Linear is unavailable."), session_id: sessionId },
+          { ...reply, session_id: sessionId },
+          stream({ type: "content_block_stop", index: 0 }),
+          stream({ type: "message_stop" }),
+          result({ session_id: sessionId }),
+        ]);
+        expect(yield* next()).toMatchObject({
+          outcome: { status: "completed" },
+        });
+        expect(child.closed).toBe(false);
+        expect(seen.filter((event) => event.type === "text")).toMatchObject([
+          { text: "Linear is unavailable." },
+        ]);
+        expect(
+          seen.filter((event) => event.type === "message.finished"),
+        ).toMatchObject([
+          { messageId: call.message.id, stopReason: "tool-use", toolCalls: [] },
+          {
+            messageId: reply.message.id,
+            stopReason: "end-turn",
+            toolCalls: [],
+          },
+        ]);
+        expect(
+          seen.filter(
+            (event) =>
+              event.type === "tool.started" || event.type === "tool.finished",
+          ),
+        ).toEqual([]);
+      }),
+    ),
+);
 
 for (const kind of ["permission", "assistant", "partial"] as const)
   test(`round 2 foreign tool via ${kind} closes without mirrored tool events`, () =>

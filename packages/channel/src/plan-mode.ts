@@ -118,10 +118,11 @@ export async function reconcilePlanExit(tx: Tx, chat: ConversationId): Promise<M
 
 // The bridge consumes this transient marker before its request becomes a runtime turn.
 const planningRequest = Symbol.for("neuve.chat.plan-request");
+const sandboxPluginTools = Symbol.for("neuve.chat.sandbox-plugin-tools");
 const requestMode = "neuve.chat.request-mode";
 
 /** Pi can commit a streamed partial instead of calling afterResponse when a run is interrupted. */
-export function planModeModels(models: Models, receivesAttendance: (provider: string) => boolean): Models {
+export function planModeModels(models: Models, receivesAttendance: (provider: string) => boolean, httpTools?: () => ReadonlySet<string>): Models {
 	const streamSimple: Models["streamSimple"] = (model, request, options) => {
 		const decision = request.messages.findLast(message =>
 			message.role === "system" && message.sections?.[requestMode] !== undefined);
@@ -148,7 +149,9 @@ export function planModeModels(models: Models, receivesAttendance: (provider: st
 			Object.defineProperty(offer, planningRequest, { value: true });
 			messages.push(offer);
 		}
-		const stream = models.streamSimple(model, { ...request, messages }, options);
+		const pluginTools = mode === "ace" ? httpTools?.() : undefined;
+		const streamOptions = pluginTools?.size ? { ...options, [sandboxPluginTools]: pluginTools } : options;
+		const stream = models.streamSimple(model, { ...request, messages }, streamOptions);
 		return new Proxy(stream, {
 			get(target, property) {
 				if (property === Symbol.asyncIterator) return async function* () {

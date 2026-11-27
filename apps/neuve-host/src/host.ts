@@ -14,7 +14,7 @@ export type HostOptions = NativeReviewCallbacks & {
 	models(): ModelOption[];
 	review?: Review;
 	reviewLink?(project: string, reference: string): Promise<string>;
-	planningConnections?(): PlanningConnections;
+	planningConnections?(): PlanningConnections | Promise<PlanningConnections>;
 	reviewHistory?(query: ReviewHistoryQuery): Promise<ReviewReceipt[]>;
 	loopback?: boolean;
 };

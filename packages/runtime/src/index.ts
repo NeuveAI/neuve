@@ -9,7 +9,12 @@ export * from "./status.ts";
 export * from "./contract.ts";
 export * from "./errors.ts";
 export * from "./registry.ts";
-export { mcpTool, unknownTool } from "./mcp-tool.ts";
+export {
+  declaresToolUseId,
+  mcpTool,
+  TOOL_USE_ID_INPUT,
+  unknownTool,
+} from "./mcp-tool.ts";
 export { findProgram } from "./find-program.ts";
 export { signInCommand, unavailableText } from "./sign-in-command.ts";
 export * as AccountStore from "./store/index.ts";

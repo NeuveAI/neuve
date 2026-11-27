@@ -31,7 +31,7 @@ function clip(value: unknown): unknown {
  * Model responses and tool calls of every conversation. Hooks rerun when a crash replays a task,
  * so a replayed call logs again; `task` tells repeats apart from new work.
  */
-export function logging(log: Log) {
+export function logging(log: Log, privateTool?: (name: string) => boolean) {
 	const started = new Map<string, number>();
 	return defineExtension({
 		name: "ace-log",
@@ -66,7 +66,7 @@ export function logging(log: Log) {
 						task: api.taskId,
 						call: call.id,
 						tool: call.name,
-						args: clip(call.arguments),
+						...(!privateTool?.(call.name) && { args: clip(call.arguments) }),
 					});
 					return undefined;
 				},

@@ -189,7 +189,7 @@ export function createPlanning(options: {
 		let outcome: PlanningResult;
 		try {
 			const connection = await options.client.connection(request.connection, signal);
-			const required = Object.values(mapping);
+			const required = [mapping.search, mapping.issue, mapping.dependencies];
 			if (
 				required.some(
 					({ tool }) =>

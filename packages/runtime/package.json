@@ -32,6 +32,10 @@
     "./skills": {
       "types": "./.types/src/skills.d.ts",
       "default": "./src/skills.ts"
+    },
+    "./open-browser": {
+      "types": "./.types/src/open-browser.d.ts",
+      "default": "./src/open-browser.ts"
     }
   },
   "dependencies": {

@@ -34,11 +34,11 @@ import {
   configureReviewPreparation,
 } from "@ace/host/native-review";
 import { CommitPrepare } from "@neuve/harness";
-import { createPlanning } from "@ace/host/planning";
+import type { LinearMcpSession } from "@neuve/harness/linear-planning";
 import {
-  linearMcpSession,
-  readIntegrations,
-} from "@neuve/harness/linear-planning";
+  planningConnections,
+  workspaceLinearPlanning,
+} from "./workspace-linear.ts";
 import { startHost, type Host } from "@ace/host/host";
 import {
   configureReviewRoutes,
@@ -189,7 +189,7 @@ export function codingWorkerSetup(
   const planningSessions = new Map<
     string,
     {
-      client: ReturnType<typeof linearMcpSession>;
+      client: LinearMcpSession;
       pending: Set<Promise<unknown>>;
     }
   >();
@@ -328,19 +328,8 @@ export function codingWorkerSetup(
       return adapter.review;
     },
     planning(worker) {
-      const integrations = readIntegrations();
-      const mappings =
-        integrations.status === "configured"
-          ? Object.fromEntries(
-              Object.entries(integrations.file.servers).flatMap(
-                ([id, server]) =>
-                  server.planning ? [[id, server.planning]] : [],
-              ),
-            )
-          : {};
-      if (!Object.keys(mappings).length) return undefined;
-      const client = linearMcpSession(integrations, {
-        capture(call) {
+      const { client, read: planning } = workspaceLinearPlanning({
+        captureMcp(call) {
           const bytes = new TextEncoder().encode(JSON.stringify(call));
           journal(worker).capture({
             type: "artifact",
@@ -350,13 +339,7 @@ export function codingWorkerSetup(
             bytes,
           });
         },
-      });
-      const pending = new Set<Promise<unknown>>();
-      planningSessions.set(worker.sessionId, { client, pending });
-      const planning = createPlanning({
-        client,
-        mappings,
-        capture(call) {
+        capturePlanning(call) {
           const bytes = new TextEncoder().encode(JSON.stringify(call));
           journal(worker).capture({
             type: "artifact",
@@ -367,6 +350,8 @@ export function codingWorkerSetup(
           });
         },
       });
+      const pending = new Set<Promise<unknown>>();
+      planningSessions.set(worker.sessionId, { client, pending });
       return (request, context) => {
         const task = planning(request, context);
         pending.add(task);
@@ -1134,22 +1119,7 @@ async function workspace(args: readonly string[]): Promise<number> {
         ),
         ...chatModels.current(),
       ],
-      planningConnections() {
-        const integrations = readIntegrations();
-        const connections =
-          integrations.status === "configured"
-            ? Object.entries(integrations.file.servers)
-                .filter(([, server]) => server.planning)
-                .map(([id]) => ({ id, label: id }))
-            : [];
-        return {
-          connections,
-          status: connections.length ? "configured" : "unavailable",
-          message: connections.length
-            ? null
-            : "No Linear read operations are configured on this host.",
-        };
-      },
+      planningConnections,
       ...{
         async reviewHistory(query: ReviewHistoryQuery) {
           const reviews = await reviewHistory(query);

@@ -30,7 +30,7 @@ export function install(
 	confinedReads: boolean,
 	log: Log,
 	buildPaused: (chat: ConversationId, context: Context) => Promise<string | undefined>,
-): void {
+) {
 	for (const item of extension?.extensions || []) registry.install(item);
 	const guard = (registration: ToolRegistration): ToolRegistration => {
 		const tool = extension?.tool?.(registration) ?? registration;
@@ -53,9 +53,12 @@ export function install(
 			},
 		};
 	};
+	const guarded = (item: Extension) =>
+		registry.install(item.tools ? { ...item, tools: item.tools.map(guard) } : item);
 	for (const installed of registry.snapshot().installed()) {
-		if (installed.tools) registry.install({ ...installed, tools: installed.tools.map(guard) });
+		if (installed.tools) guarded(installed);
 	}
+	return guarded;
 }
 
 export async function observe(harness: Harness, extension?: ChannelExtension): Promise<() => void> {

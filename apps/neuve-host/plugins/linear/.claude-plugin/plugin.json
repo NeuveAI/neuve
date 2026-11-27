@@ -1,0 +1,8 @@
+{
+  "name": "linear",
+  "description": "Read and update Linear issues, projects, and teams.",
+  "apiKey": { "linear": "LINEAR_API_KEY" },
+  "interface": {
+    "displayName": "Linear"
+  }
+}
