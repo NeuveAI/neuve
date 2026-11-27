@@ -1,13 +1,16 @@
 import { sha256Hex } from "@neuve/records-core";
+import { Effect } from "effect";
 import { z } from "zod";
 import { dataBlock } from "../data-block.ts";
+import { blobTextOf } from "../lookups.ts";
+import type { RangeView } from "../pipeline.ts";
 import type { AgentStep } from "../pi/stages/agent.ts";
 import {
   VERIFY_INPUT_CHARS,
   VerifySubmission,
   verifySystem,
 } from "../verify.ts";
-import type { LaneReviewJudgement } from "./answers.ts";
+import type { Anchor, LaneReviewJudgement } from "./answers.ts";
 import type { Claim } from "./decide.ts";
 import type { Reading } from "./reading.ts";
 import { withOffered } from "./steps.ts";
@@ -19,6 +22,15 @@ import { withOffered } from "./steps.ts";
  */
 
 type Comment = LaneReviewJudgement["comments"][number];
+type ClaimComment = Anchor &
+  Pick<Comment, "text" | "fails" | "evidenceAnchors">;
+
+export const claimAnchor = ({ path, side, startLine, endLine }: Anchor) => ({
+  path,
+  side,
+  startLine,
+  endLine,
+});
 
 /** A claim's text in its normal form: lower case, runs of white space as one space, trimmed. */
 const normalised = (text: string) =>
@@ -72,33 +84,78 @@ export const ClaimStored = VerifySubmission.extend({
 });
 export type ClaimStored = z.infer<typeof ClaimStored>;
 
-/** What the check's task is told, fresh: the claim and the section's reading as the reviewer saw it. */
+type Evidence = { readonly anchor: Anchor; readonly source: string | null };
+
+export const claimEvidence = (
+  repository: string,
+  anchors: ReadonlyArray<Anchor>,
+  view: Pick<RangeView, "head" | "base">,
+) =>
+  Effect.forEach(anchors, (anchor) => {
+    const revision = anchor.side === "new" ? view.head : view.base;
+    const blob = revision.entries.get(anchor.path);
+    return Effect.map(
+      blob?.type === "blob"
+        ? blobTextOf(repository, blob.oid)
+        : Effect.succeed(null),
+      (source): Evidence => ({ anchor, source }),
+    );
+  });
+
+const bounded = (text: string, room: number, marker: string) =>
+  text.length <= room
+    ? text
+    : text.slice(0, Math.max(0, room - marker.length)) + marker;
+
+/** The claim, its own section and the pinned source it cites elsewhere. */
 export const claimTask = (
-  comment: Pick<
-    Comment,
-    "path" | "side" | "startLine" | "endLine" | "text" | "fails"
-  >,
+  comment: ClaimComment,
   reading: Pick<Reading<"lane-review">, "text">,
+  evidence: ReadonlyArray<Evidence> = [],
 ) => {
   const wrap = (body: string) => dataBlock("verify-evidence", {}, body);
   const body = [
     `${JSON.stringify({
       claim: comment.text,
       fails: comment.fails,
-      anchor: {
-        path: comment.path,
-        side: comment.side,
-        startLine: comment.startLine,
-        endLine: comment.endLine,
-      },
+      anchor: claimAnchor(comment),
     })}\n`,
     `The changed section the claim is about, as the reviewer read it\n${reading.text}\n`,
   ].join("");
   const room = VERIFY_INPUT_CHARS - wrap("").length;
+  if (evidence.length === 0)
+    return wrap(bounded(body, room, "\n[evidence truncated]\n"));
+
+  const excerpts = evidence.map(({ anchor, source }) => {
+    const { path, side, startLine, endLine } = anchor;
+    const first = Math.max(1, startLine - 8);
+    const lines = source?.split("\n");
+    const text =
+      lines === undefined || endLine < startLine || endLine > lines.length
+        ? "Unavailable at the cited revision."
+        : lines
+            .slice(first - 1, endLine + 8)
+            .map((line, i) => `${first + i}: ${line}`)
+            .join("\n");
+    return {
+      heading: `${path} (${side}) lines ${startLine}-${endLine}, context 8\n`,
+      text: `${text}\n`,
+    };
+  });
+  const marker = "\n[context truncated]\n";
+  const textRoom =
+    room - excerpts.reduce((size, { heading }) => size + heading.length, 0);
+  const section = bounded(
+    body,
+    Math.min(Math.floor(room / 2), textRoom - excerpts.length * marker.length),
+    "\n[evidence truncated]\n",
+  );
+  const perAnchor = Math.floor((textRoom - section.length) / excerpts.length);
   return wrap(
-    body.length > room
-      ? `${body.slice(0, Math.max(0, room - 24))}\n[evidence truncated]\n`
-      : body,
+    section +
+      excerpts
+        .map(({ heading, text }) => heading + bounded(text, perAnchor, marker))
+        .join(""),
   );
 };
 
@@ -110,15 +167,13 @@ export const claimTask = (
 export const claimVerifyStep = (p: {
   readonly key: string;
   readonly section: string;
-  readonly comment: Pick<
-    Comment,
-    "path" | "side" | "startLine" | "endLine" | "text" | "fails"
-  >;
+  readonly comment: ClaimComment;
   /** The section's reading as the reviewer saw it. */
   readonly reading: Pick<Reading<"lane-review">, "text">;
+  readonly evidence?: ReadonlyArray<Evidence> | undefined;
   readonly turnLimit: number;
 }): AgentStep<VerifySubmission, ClaimStored> => {
-  const task = claimTask(p.comment, p.reading);
+  const task = claimTask(p.comment, p.reading, p.evidence);
   const fallback = (): VerifySubmission => ({
     decision: "drop",
     reason: "The claim was not checked.",

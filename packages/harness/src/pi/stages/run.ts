@@ -434,7 +434,7 @@ export const stageRun = (
       case "assess":
       case "lane-review":
       case "verify-claim": {
-        // Only Lane review's tools read the range's trees; the other two never list them.
+        // Lane review's tools and cited claim evidence use the pinned trees on demand.
         const view = async () => {
           const setup = await setupOf(reader, context);
           return viewOf({ precompute: setup.precompute, setup }, signal);

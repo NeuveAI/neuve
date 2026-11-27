@@ -146,7 +146,7 @@ What code checks, so an answer that breaks it does not stand:
  * change's files read separately.
  */
 export const ASSESS_TESTED_PROMPT_VERSION = 14;
-export const LANE_REVIEW_SCOPED_PROMPT_VERSION = 16;
+export const LANE_REVIEW_SCOPED_PROMPT_VERSION = 17;
 
 /** A base prompt with each of its lines replaced, refusing a line that is not there exactly once. */
 const replaced = (
@@ -197,7 +197,7 @@ export const laneReviewScopedSystem = replaced(laneReviewSystem, [
   ],
   [
     "What code checks, so an answer that breaks it does not stand:",
-    "- crossBatchClaims (at most five, [] if none): for a concrete claim on changed lines outside your assigned sections, report { path, side, startLine, endLine, kind: defect, risk or question, text, fails: the failure path for a defect, else empty }. Give no verdict on those sections.\nWhat code checks, so an answer that breaks it does not stand:",
+    "- crossBatchClaims (at most five, [] if none): for a concrete claim on changed lines outside your assigned sections, report { path, side, startLine, endLine, kind: defect, risk or question, text, fails: the failure path for a defect, else empty, evidenceAnchors }. Give no verdict on those sections.\n- For a defect comment or crossBatchClaim that depends on code elsewhere, give up to three evidenceAnchors { path, side: old for base or new for head, startLine, endLine } for those lines. Otherwise use [].\nWhat code checks, so an answer that breaks it does not stand:",
   ],
   [
     "Answer unsure when you could not check what matters, and say what you could not check.",

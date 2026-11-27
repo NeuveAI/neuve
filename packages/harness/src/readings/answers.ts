@@ -136,9 +136,10 @@ export const LANE_REVIEW_ANSWER_VERSION = 6;
  * skip these numbers, so a version never names two forms.
  * Assess 7: version 6, with `testedBy` beside each requirement's `testable` and `untested`.
  * Lane review 5: version 4, with `notAsked`. Lane review 7: version 6, with `notAsked`.
+ * Lane review 8: claims carry evidence anchors for Verify.
  */
 export const ASSESS_TESTED_ANSWER_VERSION = 7;
-export const LANE_REVIEW_SCOPED_ANSWER_VERSION = 7;
+export const LANE_REVIEW_SCOPED_ANSWER_VERSION = 8;
 
 /**
  * A text the model is told the bound of (the wire form states it in the field's description) and
@@ -342,28 +343,33 @@ const laneReviewFiles = <R extends z.ZodType>(row: R) =>
     ANSWER_BOUNDS.files,
   );
 
+const LaneReviewComment = z.strictObject({
+  s: Index,
+  side: z.enum(["old", "new"]),
+  start: z.int().min(1),
+  end: z.int().min(1),
+  kind: z.enum(["defect", "risk", "question", "pattern-note", "impact"]),
+  /** What an impact comment says happens to existing behaviour; null on any other comment. */
+  effect: Effect.nullable(),
+  /** Past its bound a comment is withheld alone (`long-comment`), never clipped. */
+  t: text(ANSWER_BOUNDS.commentText),
+  cites: Cites,
+  fails: z.string().meta({ maxLength: ANSWER_BOUNDS.failsText }),
+  row: Cite.nullable(),
+});
+
+const laneReviewComments = <C extends z.ZodType>(comment: C) =>
+  list(
+    comment,
+    ANSWER_BOUNDS.sections * ANSWER_BOUNDS.commentsPerSection,
+    LONG_LIST_CEILING,
+  );
+
 export const LaneReviewAnswer = z.strictObject({
   files: laneReviewFiles(LaneReviewRow),
   /** The sections by verdict: a (approve), r (request changes) and u (unsure); each listed once. */
   sections: z.strictObject({ a: Sections, r: Sections, u: Sections }),
-  comments: list(
-    z.strictObject({
-      s: Index,
-      side: z.enum(["old", "new"]),
-      start: z.int().min(1),
-      end: z.int().min(1),
-      kind: z.enum(["defect", "risk", "question", "pattern-note", "impact"]),
-      /** What an impact comment says happens to existing behaviour; null on any other comment. */
-      effect: Effect.nullable(),
-      /** Past its bound a comment is withheld alone (`long-comment`), never clipped. */
-      t: text(ANSWER_BOUNDS.commentText),
-      cites: Cites,
-      fails: z.string().meta({ maxLength: ANSWER_BOUNDS.failsText }),
-      row: Cite.nullable(),
-    }),
-    ANSWER_BOUNDS.sections * ANSWER_BOUNDS.commentsPerSection,
-    LONG_LIST_CEILING,
-  ),
+  comments: laneReviewComments(LaneReviewComment),
   unsure: list(
     z.strictObject({ s: Index, t: text(ANSWER_BOUNDS.unsureText) }),
     ANSWER_BOUNDS.sections,
@@ -372,29 +378,32 @@ export const LaneReviewAnswer = z.strictObject({
 });
 export type LaneReviewAnswer = z.infer<typeof LaneReviewAnswer>;
 
-/**
- * A Lane review answer with scope and tests on: also `notAsked`, the numbers of the sections it is
- * unsure of because neither the goal nor its done-when conditions ask for their change. The
- * smallest closed addition that code and the run log can count: no existing field says why a
- * section is unsure in closed words (an unsure note is free text), and a list of section numbers
- * leaves the verdict lists and the unsure notes exactly as they are. Every section it names must
- * also be under `u`; it moves no section anywhere (code's decision reads the verdict lists only).
- */
-export const CrossBatchClaim = z.strictObject({
+const SourceAnchor = z.strictObject({
   path: z.string().min(1).max(4096),
   side: z.enum(["old", "new"]),
   startLine: z.int().min(1),
   endLine: z.int().min(1),
+});
+const EvidenceAnchors = z.array(SourceAnchor).max(3);
+
+export const CrossBatchClaim = SourceAnchor.extend({
   kind: z.enum(["defect", "risk", "question"]),
   text: z.string().trim().min(1).max(ANSWER_BOUNDS.commentText),
   fails: z.string().trim().max(ANSWER_BOUNDS.failsText),
+  evidenceAnchors: EvidenceAnchors.default([]),
 });
 export type CrossBatchClaim = z.infer<typeof CrossBatchClaim>;
 
+/** The scoped form records cross-batch claims and which unsure sections the scope did not ask for. */
 export const LaneReviewScopedAnswer = z.strictObject({
   ...LaneReviewAnswer.shape,
+  comments: laneReviewComments(
+    LaneReviewComment.extend({ evidenceAnchors: EvidenceAnchors }),
+  ),
   notAsked: Sections,
-  crossBatchClaims: z.array(CrossBatchClaim).max(5),
+  crossBatchClaims: z
+    .array(CrossBatchClaim.extend({ evidenceAnchors: EvidenceAnchors }))
+    .max(5),
 });
 export type LaneReviewScopedAnswer = z.infer<typeof LaneReviewScopedAnswer>;
 /** A new Lane review answer of either form. */
@@ -416,6 +425,9 @@ const notAskedOf = (
  */
 export const StoredLaneReviewAnswer = z.strictObject({
   ...LaneReviewAnswer.shape,
+  comments: laneReviewComments(
+    LaneReviewComment.extend({ evidenceAnchors: EvidenceAnchors.optional() }),
+  ),
   /** A row stored before version 6 (scoped 7) has no reading. */
   files: laneReviewFiles(
     z.strictObject({
@@ -1525,7 +1537,7 @@ export const assessExpand = (
 // Lane review: problems, repair, expand
 // ---------------------------------------------------------------------------------------------
 
-type Comment = LaneReviewAnswer["comments"][number];
+type Comment = z.infer<typeof StoredLaneReviewAnswer>["comments"][number];
 
 /** Whether a comment's lines are owned lines of its section, as `anchorResolves` reads an anchor. */
 const onOwnedLines = (comment: Comment, section: ReadingSection) =>
@@ -2170,6 +2182,7 @@ export interface LaneReviewJudgement {
     readonly cites: ReadonlyArray<string>;
     readonly fails: string;
     readonly row: string | null;
+    readonly evidenceAnchors?: ReadonlyArray<Anchor> | undefined;
   }>;
   /** What was checked, once per file: the section takes its file's line. */
   readonly checked: string;
@@ -2222,12 +2235,20 @@ export const laneReviewExpand = (
   const scoped = stored.data.notAsked !== undefined;
   const { answer } = laneReviewRepair(
     scoped
-      ? { ...stored.data, crossBatchClaims: stored.data.crossBatchClaims ?? [] }
+      ? {
+          ...stored.data,
+          comments: stored.data.comments.map((comment) => ({
+            ...comment,
+            evidenceAnchors: comment.evidenceAnchors ?? [],
+          })),
+          crossBatchClaims: stored.data.crossBatchClaims ?? [],
+        }
       : stored.data,
     index,
     scoped,
   );
   if (answer === null) return [];
+  const comments: ReadonlyArray<Comment> = answer.comments;
   const notAsked = new Set(notAskedOf(answer) ?? []);
   const sections = new Map(index.sections.map((s) => [s.index, s]));
   const files = new Map(index.files.map((file) => [file.index, file]));
@@ -2244,7 +2265,7 @@ export const laneReviewExpand = (
         key: section.key,
         judgement: {
           verdict: VERDICTS[verdict],
-          comments: answer.comments
+          comments: comments
             .filter((comment) => comment.s === s)
             .map((comment) => ({
               path,
@@ -2257,6 +2278,9 @@ export const laneReviewExpand = (
               cites: stableOf(index, comment.cites),
               fails: comment.fails,
               row: comment.row ?? null,
+              ...(comment.evidenceAnchors?.length
+                ? { evidenceAnchors: comment.evidenceAnchors }
+                : {}),
             })),
           checked: entry?.checked ?? "",
           rows: (entry?.rows ?? []).map((row) => ({

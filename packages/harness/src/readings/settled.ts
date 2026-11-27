@@ -20,7 +20,7 @@ import {
   type Effect as ImpactEffect,
   type LaneReviewJudgement,
 } from "./answers.ts";
-import { COMMENT_ID, claimKey, commentKey } from "./claims.ts";
+import { COMMENT_ID, claimAnchor, claimKey, commentKey } from "./claims.ts";
 import {
   decideSection,
   type UndecidedCause,
@@ -2642,7 +2642,7 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
           );
         }
         for (const claim of input.incoming?.get(key) ?? []) {
-          const { kind, text, fails, ...anchor } = claim.comment;
+          const { kind, text, fails } = claim.comment;
           add(
             {
               id: claim.key,
@@ -2651,7 +2651,7 @@ export const settledBatches = (input: SettledInput): SettledOutput => {
               about,
               body:
                 fails === "" || fails === text ? text : `${text}\n\n${fails}`,
-              anchor,
+              anchor: claimAnchor(claim.comment),
               evidence: [
                 citation(`computation:${claim.answer}`),
                 ...section.hunkIds.map((id) =>

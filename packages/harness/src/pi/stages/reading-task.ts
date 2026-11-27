@@ -68,6 +68,7 @@ import type { RouteEffort } from "../../route.ts";
 import type { BlobStructure } from "../../sections.ts";
 import type { ReadingProof } from "../../readings/answers.ts";
 import {
+  claimEvidence,
   claimKey,
   claimVerifyStep,
   commentKey,
@@ -1202,7 +1203,7 @@ type ReadingParams =
 export const readingStep = async (
   ctx: Ctx,
   run: Run,
-  /** The range as the run reads it, for Lane review's tools only: listed only when asked for. */
+  /** The pinned range, read by Lane review's tools and by Verify when a claim cites other source. */
   view: () => Promise<RangeView>,
   input: ReadingParams,
   signal?: AbortSignal,
@@ -1210,6 +1211,34 @@ export const readingStep = async (
   const { params } = input;
   const plan = await readPlan(ctx, run, params.plan, signal);
   const manifest = await readManifest(ctx, run, params.manifest, signal);
+  const verifyClaim = async (
+    p: KindParams<"verify-claim">,
+    section: string,
+    comment: Parameters<typeof claimVerifyStep>[0]["comment"],
+    reading: { readonly text: string },
+  ) => {
+    const anchors = comment.evidenceAnchors ?? [];
+    const evidence =
+      anchors.length === 0
+        ? undefined
+        : await run(
+            claimEvidence(ctx.repository, anchors, await view()),
+            signal,
+          );
+    return withStepEffort(
+      erased(
+        claimVerifyStep({
+          key: p.claim,
+          section,
+          comment,
+          reading,
+          evidence,
+          turnLimit: turnLimitFor(ctx.config, "verify"),
+        }),
+      ),
+      p.effort,
+    );
+  };
   if (input.kind === "verify-claim" && input.params.crossBatch !== undefined) {
     const { comment, section } = input.params.crossBatch;
     const hunk = manifest.hunks.find((hunk) =>
@@ -1226,18 +1255,9 @@ export const readingStep = async (
       .slice(first - 1, comment.endLine + 10)
       .map((line, index) => `${first + index}: ${line}`)
       .join("\n");
-    return withStepEffort(
-      erased(
-        claimVerifyStep({
-          key: input.params.claim,
-          section,
-          comment,
-          reading: { text: excerpt ?? "[source unavailable]" },
-          turnLimit: turnLimitFor(ctx.config, "verify"),
-        }),
-      ),
-      input.params.effort,
-    );
+    return verifyClaim(input.params, section, comment, {
+      text: excerpt ?? "[source unavailable]",
+    });
   }
   const { structures } = await structuresRead(
     ctx,
@@ -1281,18 +1301,7 @@ export const readingStep = async (
       only: [found.key],
       evidence,
     });
-    return withStepEffort(
-      erased(
-        claimVerifyStep({
-          key: p.claim,
-          section: found.key,
-          comment: found.comment,
-          reading,
-          turnLimit: turnLimitFor(ctx.config, "verify"),
-        }),
-      ),
-      p.effort,
-    );
+    return verifyClaim(p, found.key, found.comment, reading);
   }
   const proofs = await proofsFor(ctx, run, paths, signal);
   const only = input.params.part === "reread" ? input.params.only : undefined;

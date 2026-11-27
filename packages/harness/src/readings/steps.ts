@@ -236,6 +236,7 @@ const emptyLaneReview = (): LaneReviewAnswer => ({
 /** The backstop of the scoped form (scope and tests on): the empty answer, with no section not asked for. */
 const emptyScopedReview = (): LaneReviewScopedAnswer => ({
   ...emptyLaneReview(),
+  comments: [],
   notAsked: [],
   crossBatchClaims: [],
 });

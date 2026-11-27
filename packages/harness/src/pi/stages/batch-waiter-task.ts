@@ -36,7 +36,11 @@ import {
   type ReviewStagesPort,
 } from "../review-task.ts";
 import { storedOutput } from "../../pipeline.ts";
-import { ClaimStored, claimVerdict } from "../../readings/claims.ts";
+import {
+  ClaimStored,
+  claimAnchor,
+  claimVerdict,
+} from "../../readings/claims.ts";
 import type { StageServices } from "./services.ts";
 
 export const BATCH_WAITER_TASK = "neuve.batch-waiter";
@@ -558,7 +562,6 @@ export const settledStages = (
             : published.has(target.batch)
               ? "batch-published"
               : "batch-pending");
-      const { kind, text: _text, fails: _fails, ...anchor } = comment;
       ctx.log.write({
         type: "review.claim-unpublished",
         claim: key,
@@ -568,8 +571,8 @@ export const settledStages = (
         from,
         answer,
         verify: verifyKey,
-        kind,
-        anchor,
+        kind: comment.kind,
+        anchor: claimAnchor(comment),
       });
     }
   };

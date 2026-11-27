@@ -433,16 +433,12 @@ const runReview = async (
                     return { settled: true as const, batch };
                   const incoming = (input.incoming ?? []).flatMap((claim) => {
                     if (claim.verifyKey === null) return [];
-                    const {
-                      kind,
-                      text,
-                      fails: _fails,
-                      ...anchor
-                    } = claim.comment;
+                    const { kind, text, path, side, startLine, endLine } =
+                      claim.comment;
                     return [
                       comment(claim.key, {
                         kind,
-                        anchor,
+                        anchor: { path, side, startLine, endLine },
                         body: text,
                         section: claim.target.section,
                       }),
@@ -674,6 +670,7 @@ const runReview = async (
               kind: "risk",
               text: `Incoming claim ${number}.`,
               fails: "",
+              evidenceAnchors: [],
             },
           };
           return task;

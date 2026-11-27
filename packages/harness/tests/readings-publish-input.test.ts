@@ -628,6 +628,7 @@ const review = async (name: string, options: Options = {}) => {
       kind: "risk" as const,
       text: MARKS.incoming,
       fails: "",
+      evidenceAnchors: [],
     };
     const key = commentKey(comment);
     const verifyKey = await storeValue(

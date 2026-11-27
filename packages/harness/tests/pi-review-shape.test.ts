@@ -2,6 +2,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { CrossBatchClaimsDoc } from "../src/pi/cross-batch-claims.ts";
 import { childId } from "../src/pi/stages/children.ts";
 import type { CrossBatchClaim } from "../src/readings/answers.ts";
+import { ClaimStored } from "../src/readings/claims.ts";
 import { LaneReviewStored } from "../src/readings/steps.ts";
 import { UnitSections } from "@neuve/records-schema";
 // Run the production task graph and publisher on a committed range with a scripted model.
@@ -505,15 +506,20 @@ const claimOn = (path: string, text: string): CrossBatchClaim => ({
   kind: "defect",
   text,
   fails: "A caller dividing by the constant divides by zero.",
+  evidenceAnchors: [],
 });
 const submit = (
   agent: string,
   name: string,
   args: Parameters<typeof toolTurn>[0][number]["args"],
 ) => toolTurn([{ name, id: agent, args }]);
-const reviewWithClaims = (agent: string, claims: CrossBatchClaim[]) =>
+const reviewWithClaims = (
+  agent: string,
+  claims: CrossBatchClaim[],
+  unanswered = false,
+) =>
   submit(agent, "submit_review", {
-    sections: { a: [], r: [], u: [1] },
+    sections: { a: [], r: [], u: unanswered ? [] : [1] },
     files: [
       {
         f: 1,
@@ -522,7 +528,7 @@ const reviewWithClaims = (agent: string, claims: CrossBatchClaim[]) =>
       },
     ],
     comments: [],
-    unsure: [{ s: 1, t: "The caller is unavailable." }],
+    unsure: unanswered ? [] : [{ s: 1, t: "The caller is unavailable." }],
     notAsked: [],
     crossBatchClaims: claims,
   });
@@ -531,9 +537,9 @@ const verify = (agent: string) =>
     decision: "keep",
     reason: "The pinned source shows the constant is zero.",
   });
-const splitMap = () =>
+const splitMap = (files: readonly string[] = paths) =>
   submit("map", "submit_map", {
-    groups: paths.map((path, i) => ({
+    groups: files.map((path, i) => ({
       label: `Change ${path}`,
       why: "Change one constant.",
       tier: "core",
@@ -545,6 +551,208 @@ const commentsOf = (result: Awaited<ReturnType<typeof runReview>>) =>
   result.publicationHistory.flatMap(({ event }) =>
     event.kind === "comment.recorded@3" ? [event.payload] : [],
   );
+
+const sharedPath = "src/format.ts";
+const callerPath = "src/change-facts.ts";
+const unchangedPath = "src/labels.ts";
+const previous =
+  'const label = (count: number) => count === 1 ? "file" : "files";';
+const replacement =
+  'export const label = (count: number) => count <= 1 ? "file" : "files";';
+const consolidationText = "The consolidation changes the label for zero files.";
+const removedCopy = {
+  path: callerPath,
+  side: "old" as const,
+  startLine: 10,
+  endLine: 10,
+};
+const userText = (messages: Parameters<Answer>[1]) =>
+  messages
+    .flatMap((message) => {
+      if (message.role !== "user") return [];
+      return typeof message.content === "string"
+        ? [message.content]
+        : message.content.flatMap((part) =>
+            part.type === "text" ? [part.text] : [],
+          );
+    })
+    .join("\n");
+
+const consolidation = async (
+  mode: "anchored" | "without" | "missing" | "incoming",
+) => {
+  const oldCaller = (implementation: string) =>
+    [
+      ...Array.from({ length: 9 }, (_, i) => `// Before ${i + 1}`),
+      implementation,
+      "export const noFiles = label(0);",
+      ...Array.from({ length: 8 }, (_, i) => `// After ${i + 2}`),
+    ].join("\n") + "\n";
+  const anchors =
+    mode === "without"
+      ? undefined
+      : mode === "missing"
+        ? [{ ...removedCopy, path: sharedPath, startLine: 1, endLine: 1 }]
+        : [
+            removedCopy,
+            {
+              path: unchangedPath,
+              side: "new" as const,
+              startLine: 1,
+              endLine: 1,
+            },
+          ];
+  const failure = "A report with zero files prints the singular label.";
+  const fallback = answerer();
+  const checking = Promise.withResolvers<void>();
+  const result = await runReview({
+    directory: join(directory, `consolidation-${mode}`),
+    base: {
+      [callerPath]: oldCaller(previous),
+      [unchangedPath]: 'import { noFiles } from "./change-facts";\n',
+    },
+    head: {
+      [callerPath]: oldCaller('import { label } from "./format";'),
+      [sharedPath]: replacement + "\n",
+    },
+    message: "Share the file label helper",
+    answer: async (agent, messages, hunks) => {
+      const task = userText(messages);
+      if (agent === "map") return splitMap([callerPath, sharedPath]);
+      if (agent.startsWith("verify.claim.")) {
+        checking.resolve();
+        return submit(agent, "submit_verify", {
+          decision:
+            task.includes(previous) && task.includes(replacement)
+              ? "keep"
+              : "drop",
+          reason:
+            "The regression needs both the former and the current implementation.",
+        });
+      }
+      if (!agent.startsWith("lane-review."))
+        return fallback(agent, messages, hunks);
+      const reviewingHelper = task.includes(
+        `kind="file">\npath: ${sharedPath}\n`,
+      );
+      if (mode === "incoming") {
+        if (reviewingHelper) {
+          await checking.promise;
+          return reviewWithClaims(agent, []);
+        }
+        return reviewWithClaims(agent, [
+          {
+            ...claimOn(sharedPath, consolidationText),
+            fails: failure,
+            evidenceAnchors: anchors ?? [],
+          },
+        ]);
+      }
+      if (!reviewingHelper) return reviewWithClaims(agent, []);
+      return submit(agent, "submit_review", {
+        files: [{ f: 1, checked: "Checked the file label.", rows: null }],
+        sections: { a: [], r: [1], u: [] },
+        comments: [
+          {
+            s: 1,
+            side: "new",
+            start: 1,
+            end: 1,
+            kind: "defect",
+            effect: null,
+            t: consolidationText,
+            cites: ["1n1"],
+            fails: failure,
+            row: null,
+            evidenceAnchors: anchors ?? [],
+          },
+        ],
+        unsure: [],
+        notAsked: [],
+        crossBatchClaims: [],
+      });
+    },
+  });
+  expect(result.outcome.status).toBe("completed");
+  const requests = result.sent.filter(({ agent }) =>
+    agent.startsWith("verify.claim."),
+  );
+  expect(requests).toHaveLength(1);
+  const [check] = result.log
+    .read()
+    .filter(
+      (row) =>
+        row.type === "stage" &&
+        String(row["agent"]).startsWith("verify.claim.") &&
+        row["status"] === "computed",
+    );
+  const answer = await result.read(String(check?.["key"]), ClaimStored);
+  return {
+    task: userText(requests[0]!.messages),
+    decision: answer.decision,
+    units: result.publicationHistory.flatMap(({ event }) =>
+      event.kind === "unit.recorded@3" && event.payload.path === sharedPath
+        ? event.attribution.unitIds
+        : [],
+    ),
+    comments: result.publicationHistory.flatMap(({ event }) =>
+      event.kind === "comment.recorded@3" &&
+      event.payload.body.includes(consolidationText)
+        ? [event]
+        : [],
+    ),
+  };
+};
+
+// A consolidation regression needs the removed copy as well as the replacement to reach the desk.
+test.each(["anchored", "incoming"] as const)(
+  "Verify uses both sides of a consolidation (%s)",
+  async (mode) => {
+    const { task, decision, comments, units } = await consolidation(mode);
+    expect(task).toContain(replacement);
+    expect(task).toContain(
+      `${callerPath} (old) lines 10-10, context 8\n2: // Before 2`,
+    );
+    expect(task).toContain(`10: ${previous}`);
+    expect(task).toContain("11: export const noFiles = label(0);");
+    expect(task).toContain("18: // After 8");
+    expect(task).not.toContain("1: // Before 1\n");
+    expect(task).not.toContain("19: // After 9");
+    expect(task).toContain('1: import { noFiles } from "./change-facts";');
+    expect(decision).toBe("keep");
+    expect(units).toHaveLength(1);
+    expect(comments).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          anchor: expect.objectContaining({ path: sharedPath }),
+          finding: expect.objectContaining({ kind: "defect" }),
+        }),
+        attribution: expect.objectContaining({ unitIds: units }),
+      }),
+    ]);
+  },
+  60_000,
+);
+
+// The same claim is unsupported when Lane review sends only its primary anchor.
+test("Verify drops a consolidation claim without evidence anchors", async () => {
+  const { task, decision, comments } = await consolidation("without");
+  expect(task).toContain(replacement);
+  expect(task).not.toContain(previous);
+  expect(decision).toBe("drop");
+  expect(comments).toEqual([]);
+}, 60_000);
+
+// A file added at head has no old blob. Verify must report the missing source, as on main.
+test("Verify reports evidence missing at the cited revision", async () => {
+  const { task, decision, comments } = await consolidation("missing");
+  expect(task).toContain(
+    `${sharedPath} (old) lines 1-1, context 8\nUnavailable at the cited revision.`,
+  );
+  expect(task).not.toContain(previous);
+  expect(decision).toBe("drop");
+  expect(comments).toEqual([]);
+}, 60_000);
 
 // Both files share a directory. Map must separate their readings. Hold the second reviewer
 // until the first batch reaches Records to prove the outgoing claim can't reopen it.
