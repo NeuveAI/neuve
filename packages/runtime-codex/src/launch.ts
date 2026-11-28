@@ -86,12 +86,11 @@ export const unaddressable = (own: OwnSettings): string | undefined =>
 const flags = (settings: ReadonlyArray<string>) =>
   settings.flatMap((setting) => ["-c", setting]);
 
-const TOOL_TIMEOUT_SECONDS = 31_536_000;
-
 /**
- * Arguments after `app-server`. Neuve's tools and the carried stdio tools are approved without
- * asking. Their timeout is a year, so a call ends when its handler, turn, or session ends.
- * Both configurations keep the token out of shell commands and use Neuve's tool for questions.
+ * The arguments after `app-server`. Both configurations serve Neuve's HTTP tools (when the session
+ * has any), approved without asking, with no limit on how long a call takes, and keep the token's
+ * variable out of every command Codex runs. Codex's own question tool is off in both: a question
+ * for the person goes through Neuve's own tool, and nothing in a Neuve session answers Codex's.
  */
 export const launchArguments = (
   configuration: Configuration,
@@ -124,7 +123,12 @@ export const launchArguments = (
             `${prefix}.args=${JSON.stringify(server.args ?? [])}`,
             ...(env === "" ? [] : [`${prefix}.env={${env}}`]),
             `${prefix}.default_tools_approval_mode="approve"`,
-            `${prefix}.tool_timeout_sec=${TOOL_TIMEOUT_SECONDS}`,
+            ...(server.direct === undefined
+              ? []
+              : [
+                  `${prefix}.omit_tools_from=["deferred","code_mode"]`,
+                  `${prefix}.tool_timeout_sec=${server.direct.timeoutSeconds}`,
+                ]),
           ];
         })
       : [];
@@ -144,7 +148,8 @@ export const launchArguments = (
       `mcp_servers.${name}.url=${JSON.stringify(url)}`,
       `mcp_servers.${name}.bearer_token_env_var=${JSON.stringify(TOKEN_VARIABLE)}`,
       `mcp_servers.${name}.default_tools_approval_mode="approve"`,
-      `mcp_servers.${name}.tool_timeout_sec=${TOOL_TIMEOUT_SECONDS}`,
+      // A year: a call ends when its handler does, or the turn or the session ends.
+      `mcp_servers.${name}.tool_timeout_sec=31536000`,
       ...(name === NEUVE_SERVER
         ? [`mcp_servers.${name}.omit_tools_from=["deferred","code_mode"]`]
         : []),

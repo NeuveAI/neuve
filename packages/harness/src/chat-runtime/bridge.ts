@@ -1,3 +1,4 @@
+import { GRAPH_SNAPSHOT_DEADLINE_MS } from "@neuve/graph-client";
 import type { TurnRecovery } from "@neuve/records-core";
 import { Identity } from "@neuve/records-core/capture";
 import type { TurnRecoveryCheckpoint } from "@neuve/records-schema";
@@ -50,6 +51,7 @@ import {
   type ToolOutcome,
 } from "@neuve/runtime";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
+import { SCOPE_FETCH_BOUND_MS } from "../scope.ts";
 import { NativeHeads } from "./heads.ts";
 import { HANDOFF_TOKENS, MAY_HAVE_RUN, handoff } from "./handoff.ts";
 import {
@@ -971,6 +973,11 @@ export class ChatRuntimeBridge {
             command,
             args: ["mcp", "--repo", folder],
             env: environment,
+            // A query can wait for both the Graph snapshot and the scope fetch.
+            direct: {
+              timeoutSeconds:
+                (GRAPH_SNAPSHOT_DEADLINE_MS + SCOPE_FETCH_BOUND_MS) / 1_000,
+            },
           },
         };
     }
