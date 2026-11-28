@@ -426,7 +426,10 @@ test("a lockfile unit no agent read never waits on a person, and draws no square
     (batch) => batch.id === fixture.lock!.batchId
   )
   expect(lockBatch).toMatchObject({ unitCount: 1, needYou: 0 })
-  expect(waitingOf(listed, standing).nextUnitId).not.toBe(lock)
+  const readBatch = summary.batches.find(
+    (batch) => batch.id === fixture.batches[0]
+  )
+  expect(readBatch).toMatchObject({ unitCount: 1, needYou: 1 })
 })
 
 /** Two branches: branch one reviewed at two heads, the second holding the first's work; branch two once. */

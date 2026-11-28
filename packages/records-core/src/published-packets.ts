@@ -37,7 +37,7 @@ import {
 } from "./checkpoints.ts";
 import { ComputationStore } from "./computations.ts";
 import { judge, type UnitJudgement } from "./dispositions.ts";
-import { get } from "./log.ts";
+import { get, toStored } from "./log.ts";
 import { unitRanges } from "./unit-ranges.ts";
 
 /**
@@ -1505,7 +1505,7 @@ const JudgementsEnvelope = z.looseObject({
 const judgementsOf = (
   assessment: Of<"assessment.recorded@4">,
   undecoded: Array<ReadUndecoded>,
-  of: { readonly batch: string; readonly unit: string },
+  of: { readonly batch?: string; readonly unit: string },
 ) =>
   Effect.gen(function* () {
     const ref = assessment.refs[0].ref;
@@ -1570,6 +1570,38 @@ const judgementsOf = (
       entries.set(entry.data.key, entry.data);
     }
     return { entries, failed };
+  });
+
+/** The readable judgement entries of each unit's newest assessment. */
+export const latestJudgements = (unitIds: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient;
+    const byUnit = new Map<string, ReadonlyArray<AssessedSection>>();
+    const pageSize = 500;
+    for (let start = 0; start < unitIds.length; start += pageSize) {
+      const page = unitIds.slice(start, start + pageSize);
+      const rows = yield* sql<{
+        unitId: string;
+        seq: number;
+        recordedAt: string;
+        kind: string;
+        envelope: string;
+      }>`SELECT u.unit_id, e.seq, e.recorded_at, e.kind, e.envelope
+        FROM projection_units u JOIN events e ON e.id = u.assessment_event_id
+        WHERE ${sql.in("u.unit_id", page)} AND e.kind = 'assessment.recorded@4'`;
+      for (const row of rows) {
+        const stored = yield* toStored(row);
+        if (Option.isNone(stored)) continue;
+        const assessment = stored.value.event;
+        if (assessment.kind !== "assessment.recorded@4") continue;
+        const judged = yield* judgementsOf(assessment, [], {
+          unit: row.unitId,
+        });
+        if (judged !== undefined && judged.entries.size > 0)
+          byUnit.set(row.unitId, [...judged.entries.values()]);
+      }
+    }
+    return byUnit;
   });
 
 /** Reads a `packet.published@2`: its manifest's batches, each unit whole, and the gaps it names. */

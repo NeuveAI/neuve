@@ -21,7 +21,7 @@ import { successorOf } from "./desk.server"
 import type { OpensCache } from "./desk.server"
 import { repositoryName } from "./git-source.server"
 import { git } from "./git.server"
-import { LANE_FACTS } from "./lane-facts"
+import { excludedSections, LANE_FACTS } from "./lane-facts"
 import type { LaneFacts } from "./lane-facts"
 import { ancestryOf, rangeEnds, rangePatchesOf } from "./range-done.server"
 import type { RangeEnd } from "./range-done.server"
@@ -38,8 +38,8 @@ import { NoStore, readRecords, repository } from "./records.server"
  * (`Dispositions.judgeDispositions`) still needs a person's act on it: a
  * human-required unit until a person decides it (a carried decision
  * included), a human-suggested one until anyone does, the agent's
- * disposition included. A unit no agent read (a lockfile or a generated
- * file, as the overview reads it) never waits. Nor does a unit a later
+ * disposition included. A unit marked excluded in its newest assessment
+ * (a lockfile or a generated file) never waits. Nor does a unit a later
  * review took over: the desk's `successorOf`, with the "Newer review"
  * link's `laterThan`, leads from it to a unit that opens, which counts in
  * its own review instead. Nor does any unit of a review a later published
@@ -376,12 +376,11 @@ const isPerson = (actorId: string, known: PersonKinds) =>
  *   dispositions in force, of any actor, carried ones included
  *   (`Dispositions.currentMany`, by unit ID through the index); a person's
  *   kind read once per actor;
- * - not read: M's `LANE_FACTS.excluded` on the standing packet, read only for
- *   a review with an assessed human-suggested unit nobody decided.
+ * - not read: the exclusion rule on the newest assessment's judgements,
+ *   read only for assessed human-suggested units nobody decided.
  */
 export const standingOf = (
   reviews: ReadonlyArray<Listed>,
-  facts: LaneFacts = LANE_FACTS,
   /** Reviews a later review's range holds (`replacedOf`): every unit of theirs is taken over. */
   replaced: ReadonlySet<string> = new Set()
 ) =>
@@ -465,31 +464,22 @@ export const standingOf = (
       if (judgement.closed && judgement.standing)
         decided.set(unit.unitId, judgement.standing.verdict)
     }
-    const suggested = asked.filter(
-      ({ unit }) => humanLane(unit) === "human-suggested"
+    const open = asked.flatMap(({ unit }) =>
+      unit.lane === "human-suggested" && !decided.has(unit.unitId)
+        ? [unit.unitId]
+        : []
     )
-    // Records' readers put a lockfile or a generated file in human-suggested
-    // (`recordedLane`), assessed and with no disposition.
+    const judgements = yield* PublishedPackets.latestJudgements(open)
     const notRead = new Set<string>()
-    const open = suggested.filter(
-      ({ unit }) => unit.lane !== null && !decided.has(unit.unitId)
-    )
-    const openIds = new Set(open.map(({ unit }) => unit.unitId))
-    const packetReads = new Set(open.map(({ review }) => review.cycleId))
-    for (const cycleId of packetReads) {
-      const packet = yield* PublishedPackets.readStanding(cycleId)
-      for (const batch of packet?.batches ?? [])
-        for (const unit of batch.units)
-          if (openIds.has(unit.unitId) && facts.excluded(unit) !== undefined)
-            notRead.add(unit.unitId)
-    }
+    for (const [unitId, sections] of judgements)
+      if (excludedSections(sections) !== undefined) notRead.add(unitId)
     // What this load read, so the span shows when a Records read that
     // answers all of it at once is worth building.
     yield* Effect.annotateCurrentSpan({
       "neuve.reviews.successor-walks": walks,
       "neuve.reviews.successor-reviews": cache.size,
       "neuve.reviews.asked-units": asked.length,
-      "neuve.reviews.packet-reads": packetReads.size,
+      "neuve.reviews.judgement-units": judgements.size,
       "neuve.reviews.taken-over": taken.size,
       "neuve.reviews.replaced": replaced.size,
     })
@@ -536,7 +526,7 @@ const answers = (
 ) =>
   Effect.gen(function* () {
     return {
-      standing: yield* standingOf(reviews, LANE_FACTS, replaced),
+      standing: yield* standingOf(reviews, replaced),
       feedback: yield* ReviewList.feedbackGiven(
         reviews.map((review) => review.cycleId)
       ),
