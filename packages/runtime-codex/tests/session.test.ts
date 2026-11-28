@@ -22,7 +22,7 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { turnSettings } from "../src/launch.ts";
+import { launchArguments, turnSettings } from "../src/launch.ts";
 import type { LogEntry } from "../src/log.ts";
 import { openCodexSession, type CodexSignInCheck } from "../src/session.ts";
 import {
