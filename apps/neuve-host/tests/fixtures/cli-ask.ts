@@ -19,6 +19,7 @@ mock.module("../../src/client", () => ({
 	...client,
 	Connection: {
 		open: async () => {
+			const lateRunStart = process.argv.at(-1) === "Fail before run start";
 			let watch: Watch | undefined;
 			let error: string | undefined;
 			return {
@@ -29,18 +30,19 @@ mock.module("../../src/client", () => ({
 						case "watch":
 							watch = subscription;
 							watch?.event({ kind: "live", chat: 1 });
-							watch?.event({ kind: "run", chat: 1, state: "start" });
+							if (!lateRunStart) watch?.event({ kind: "run", chat: 1, state: "start" });
 							return;
 						case "ask":
 							if (!watch) console.log(JSON.stringify(request));
-							error = request.text === "Fail" ? "Provider failed" : undefined;
+							error = request.text === "Fail" || lateRunStart ? "Provider failed" : undefined;
 							return { submission: 1 };
 						case "wait":
 							setImmediate(() => {
+								if (lateRunStart) watch?.event({ kind: "run", chat: 1, state: "start" });
 								watch?.event({ kind: "reply", chat: 1, entry: 1, at: 0, model: "test", text: "Final reply", error });
 								watch?.event({ kind: "run", chat: 1, state: "end" });
 							});
-							return "done";
+							return lateRunStart ? "unanswered" : "done";
 					}
 				},
 				close: () => {},

@@ -35,3 +35,9 @@ test("ace ask exits 1 when the final reply after wait is an error", async () => 
 	expect(status).toBe(1);
 	expect(output).toContain("Run failed: Provider failed");
 });
+
+test("ace ask prints the error when wait answers before the watch sees the run start", async () => {
+	const { status, output } = await ask("Fail before run start");
+	expect(status).toBe(1);
+	expect(output).toContain("Run failed: Provider failed");
+});

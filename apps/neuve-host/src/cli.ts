@@ -255,26 +255,26 @@ type Session = { request<T = unknown>(request: Request, watch?: Watch): Promise<
 async function watch(session: Session, replay = true) {
 	const info = await session.request<ChannelInfo>({ op: "info" });
 	let live = false;
-	const ended = Promise.withResolvers<void>();
+	const closed = Promise.withResolvers<void>();
+	let runOpen = false;
 	let runEnd: PromiseWithResolvers<void> | undefined;
 	await session.request({ op: "watch", chat: chat(), stops: true, ...(replay && flags.plans ? { plans: true, planComments: true } : {}), ...(flags.builds ? { builds: true } : {}) }, {
 		event(event) {
 			if (event.kind === "live") return void (live = true);
 			if (live || replay) render(event, info);
 			if (event.kind === "run") {
-				if (event.state === "start") runEnd ??= Promise.withResolvers<void>();
-				else {
-					runEnd?.resolve();
-					runEnd = undefined;
-				}
+				runOpen = event.state === "start";
+				if (live && !runOpen) runEnd?.resolve();
 			}
 		},
-		closed: () => ended.resolve(),
+		closed: () => closed.resolve(),
 	});
 	return {
-		ended: ended.promise,
+		ended: closed.promise,
 		waitForRunEnd() {
-			if (runEnd) return Promise.race([runEnd.promise, ended.promise]);
+			if (ended && !runOpen) return;
+			runEnd = Promise.withResolvers<void>();
+			return Promise.race([runEnd.promise, closed.promise]);
 		},
 	};
 }
