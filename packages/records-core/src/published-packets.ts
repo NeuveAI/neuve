@@ -1572,7 +1572,11 @@ const judgementsOf = (
     return { entries, failed };
   });
 
-/** The readable judgement entries of each unit's newest assessment. */
+/**
+ * The readable judgement entries of each unit's newest assessment, through the unit's projection
+ * row. Unlike a packet read, entries are not joined to the unit's sections blob; a stray entry
+ * (`ReviewStats` counts them) would still count here.
+ */
 export const latestJudgements = (unitIds: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
