@@ -705,6 +705,8 @@ export type Request =
 	| {
 		op: "watch";
 		chat?: ChatId;
+		/** Replay only the newest this many turns. Omit to replay the whole chat. */
+		turns?: number;
 		/** Include approval-requests events; older clients do not understand them. */
 		approvals?: boolean;
 		/** Include queue events; older clients do not understand them. */
@@ -856,7 +858,12 @@ export type Event =
 	 */
 	| ({ kind: "metadata"; chat: ChatId; shared?: boolean; desktop?: boolean } & Metadata)
 	/** The replayed transcript has been sent; later events are live. */
-	| { kind: "live"; chat: ChatId }
+	| {
+		kind: "live";
+		chat: ChatId;
+		/** Entries before the replayed window exist. */
+		older?: true;
+	}
 	/**
 	 * The chat's complete list of open, answered, and closed approval requests, oldest opening
 	 * first. Sent on attachment and every change when the watch opts in with `approvals`.

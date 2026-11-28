@@ -163,6 +163,7 @@ export const RequestSchema = z.discriminatedUnion("op", [
 	z.strictObject({
 		op: z.literal("watch"),
 		chat,
+		turns: z.int().positive().optional(),
 		approvals: z.boolean().optional(),
 		queue: z.boolean().optional(),
 		captions: z.boolean().optional(),

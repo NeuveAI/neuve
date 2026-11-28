@@ -1996,6 +1996,8 @@ export class Channel {
 	async #watch(request: Extract<Request, { op: "watch" }>, send: Send) {
 		const conversation = await this.#conversation(request.chat);
 		const stream = await watchEvents(this.#harness, conversation.id, context);
+		const entries = stream.snapshot.entries;
+		const start = request.turns === undefined ? 0 : replayStart(entries, request.turns);
 		const observedChats = new Set<ConversationId>([conversation.id]);
 		type NoticeIndex = {
 			entries: Map<number, ReviewNotice | BuildNotice>; submissions: Map<number, ReviewNotice | BuildNotice>;
@@ -2073,7 +2075,7 @@ export class Channel {
 				return [system ? { ...message, system } : message];
 			});
 		};
-		await loadNotices([conversation.id, ...sourceChats(stream.snapshot.entries)]).catch(async error => { await stopNotices(); await stream.stop(); throw error; });
+		await loadNotices([conversation.id, ...sourceChats(entries)]).catch(async error => { await stopNotices(); await stream.stop(); throw error; });
 		const tools = request.progress ? progress(conversation.id, send) : undefined;
 		const harness = this.#harness;
 		let reviews: DocumentWatch<{ cards: Record<string, ReviewCard> }> | undefined;
@@ -2187,10 +2189,12 @@ export class Channel {
 		};
 		// An edit follows its message, so replay folds the newest one in and sends no earlier text.
 		const edits = new Map<number, { text: string; at: number }>();
-		for (const entry of stream.snapshot.entries) {
+		for (const entry of entries) {
 			if (EditEntry.is(entry)) edits.set(entry.data.target, entry.data);
 		}
+		const replayedCalls = request.turns !== undefined && request.captions ? new Set<string>() : undefined;
 		const replay = (event: Event) => {
+			if (event.kind === "tool") replayedCalls?.add(event.call);
 			if (event.kind === "edited") return;
 			if (event.kind !== "message") return forward(event);
 			const edited = edits.get(event.entry);
@@ -2205,7 +2209,7 @@ export class Channel {
 		});
 		void view?.closed.then(() => stream.stop());
 		send(this.#event(conversation.id));
-		for (const entry of stream.snapshot.entries) for (const event of events(entry)) replay(event);
+		for (let i = start; i < entries.length; i++) for (const event of events(entries[i]!)) replay(event);
 		// A commit while the document was read has already sent its newer state.
 		if (actions && !listener.reacted && Object.keys(messages?.reactions || {}).length) {
 			send({ kind: "reactions", chat: conversation.id, reactions: messages!.reactions });
@@ -2213,9 +2217,11 @@ export class Channel {
 		if (request.captions) {
 			const captions = await this.#harness.snapshot(CaptionsDoc, conversation.id, context);
 			for (const { calls, text } of Object.values(captions?.groups || {})) {
+				if (replayedCalls && !calls.some(call => replayedCalls.has(call))) continue;
 				send({ kind: "caption", chat: conversation.id, calls, text });
 			}
 			for (const { calls, text } of Object.values(captions?.recaps || {})) {
+				if (replayedCalls && !calls.some(call => replayedCalls.has(call))) continue;
 				send({ kind: "recap", chat: conversation.id, calls, text });
 			}
 		}
@@ -2241,7 +2247,7 @@ export class Channel {
 				await queueChanged();
 			});
 		}
-		send({ kind: "live", chat: conversation.id });
+		send({ kind: "live", chat: conversation.id, ...(start > 0 ? { older: true } : {}) });
 		stream.start(async (batch) => {
 			const chats = new Set<ConversationId>();
 			for (const event of batch) {
@@ -2266,6 +2272,18 @@ export class Channel {
 			},
 		};
 	}
+}
+
+function replayStart(entries: readonly EntryRecord[], turns: number): number {
+	// T3 Code budgets 500 entries for 10 turns.
+	const cap = Math.max(0, entries.length - turns * 50);
+	let firstTurn: number | undefined;
+	for (let i = entries.length - 1; i >= cap; i--) {
+		if (!room.human(entries[i]!)) continue;
+		firstTurn = i;
+		if (--turns === 0) return i;
+	}
+	return cap > 0 ? firstTurn ?? cap : 0;
 }
 
 function usage(state: Readonly<UsageState> | undefined): Usage {
