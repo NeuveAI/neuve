@@ -283,7 +283,7 @@ test("an attended Codex write turn launches Neuve proof with its chat identity",
     ).toEqual([
       'mcp_servers.neuve_proof.command="/fixture/bin/neuve"',
       'mcp_servers.neuve_proof.args=["mcp","--repo","/work"]',
-      `mcp_servers.neuve_proof.env.NEUVE_ACE_CHAT="proof-fixture/${run.conversation.id}"`,
+      `mcp_servers.neuve_proof.env={"NEUVE_ACE_CHAT"="proof-fixture/${run.conversation.id}"}`,
       'mcp_servers.neuve_proof.default_tools_approval_mode="approve"',
     ]);
     server.send("turn/completed", completed("completed"));
