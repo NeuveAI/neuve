@@ -61,7 +61,7 @@ const PERSONAL_FEATURES = [
   "hooks",
   "apps",
   "plugins",
-  "remote_app",
+  "remote_plugin",
   "plugin_sharing",
   "memories",
   "browser_use",
