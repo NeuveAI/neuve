@@ -287,7 +287,7 @@ test("an attended Codex write turn launches Neuve Records with its chat identity
       `mcp_servers.neuve_records.env={"NEUVE_ACE_CHAT"="records-fixture/${run.conversation.id}"}`,
       'mcp_servers.neuve_records.default_tools_approval_mode="approve"',
       'mcp_servers.neuve_records.omit_tools_from=["deferred","code_mode"]',
-      "mcp_servers.neuve_records.tool_timeout_sec=360",
+      "mcp_servers.neuve_records.tool_timeout_sec=31536000",
     ]);
     server.send("turn/completed", completed("completed"));
     expect((await submitted).status).toBe("done");

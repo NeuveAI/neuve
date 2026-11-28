@@ -12,6 +12,8 @@ import type { SandboxPolicy } from "./generated/v2/SandboxPolicy";
 export const TOKEN_VARIABLE = "NEUVE_CODEX_TOOL_TOKEN";
 export const NEUVE_SERVER = "neuve";
 export const NEUVE_PLUGINS_SERVER = "neuve_plugins";
+// A year: a call ends when its handler does, or the turn or the session ends.
+const TOOL_TIMEOUT_SECONDS = 31_536_000;
 export type ToolServers = Readonly<
   Partial<Record<typeof NEUVE_SERVER | typeof NEUVE_PLUGINS_SERVER, string>>
 >;
@@ -123,12 +125,12 @@ export const launchArguments = (
             `${prefix}.args=${JSON.stringify(server.args ?? [])}`,
             ...(env === "" ? [] : [`${prefix}.env={${env}}`]),
             `${prefix}.default_tools_approval_mode="approve"`,
-            ...(server.direct === undefined
-              ? []
-              : [
+            ...(server.direct
+              ? [
                   `${prefix}.omit_tools_from=["deferred","code_mode"]`,
-                  `${prefix}.tool_timeout_sec=${server.direct.timeoutSeconds}`,
-                ]),
+                  `${prefix}.tool_timeout_sec=${TOOL_TIMEOUT_SECONDS}`,
+                ]
+              : []),
           ];
         })
       : [];
@@ -148,8 +150,7 @@ export const launchArguments = (
       `mcp_servers.${name}.url=${JSON.stringify(url)}`,
       `mcp_servers.${name}.bearer_token_env_var=${JSON.stringify(TOKEN_VARIABLE)}`,
       `mcp_servers.${name}.default_tools_approval_mode="approve"`,
-      // A year: a call ends when its handler does, or the turn or the session ends.
-      `mcp_servers.${name}.tool_timeout_sec=31536000`,
+      `mcp_servers.${name}.tool_timeout_sec=${TOOL_TIMEOUT_SECONDS}`,
       ...(name === NEUVE_SERVER
         ? [`mcp_servers.${name}.omit_tools_from=["deferred","code_mode"]`]
         : []),
