@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { Registry } from "@neuve/records-core";
 import { markSetUp } from "./fixtures/set-up.ts";
 import {
+  CHECKOUT,
   CLI,
   removeScratch,
   scratch,
@@ -145,6 +146,10 @@ esac
 // Read back the files to catch lost capture choices, foreign entries, or no-op writes.
 test("upgrade repairs dead hooks with backups, and healthy setup and upgrade leave capture untouched", async () => {
   const f = await fixture();
+  await writeFile(
+    join(f.root, "agent-stubs/codex"),
+    `#!/bin/sh\nexec "${process.execPath}" --no-env-file "${join(CHECKOUT, "packages/runtime-codex/tests/stub-program.ts")}" "$@"\n`,
+  );
   const engine = await graphFor(f.root, f.repository);
   await markSetUp(f.repository, { cliBinary: f.copy, graphBinary: engine });
   const other = await scratch();
@@ -202,6 +207,9 @@ test("upgrade repairs dead hooks with backups, and healthy setup and upgrade lea
   const repaired = await f.upgrade();
   expect(repaired.code, repaired.stderr).toBe(0);
   expect(repaired.stdout).toContain("repaired");
+  expect(repaired.stdout).toContain(
+    "Codex asks you to review and trust new hooks the next time it starts.",
+  );
   expect(JSON.parse(await readFile(f.config, "utf8"))).toEqual({
     version: 1,
     command: [binary],
@@ -259,6 +267,60 @@ test("upgrade repairs dead hooks with backups, and healthy setup and upgrade lea
     await Promise.all(files.map(async (path) => (await stat(path)).mtimeMs)),
   ).toEqual(files.map(() => past.getTime()));
 }, 90_000);
+
+test("upgrade keeps an absent Codex listed and leaves its hook file absent", async () => {
+  const f = await fixture();
+  await markSetUp(f.repository);
+  const enabled = await f.setupHooks(
+    "--agents",
+    "claude-code,codex",
+    "--no-stack",
+  );
+  expect(enabled.code, enabled.stderr).toBe(0);
+  await rm(f.codex);
+
+  const healthy = await f.upgrade();
+  expect(healthy.code, healthy.stderr).toBe(0);
+  expect(healthy.stdout).toMatch(/Codex +not found/);
+  expect(healthy.stdout).toMatch(/Capture +nothing to do/);
+  expect(await Bun.file(f.codex).exists()).toBe(false);
+
+  const config = JSON.parse(await readFile(f.config, "utf8"));
+  await writeFile(
+    f.config,
+    JSON.stringify({ ...config, hookCommand: [f.copy, "hook"] }),
+  );
+  const repaired = await f.upgrade();
+  expect(repaired.code, repaired.stderr).toBe(0);
+  expect(repaired.stdout).toMatch(/Capture +repaired/);
+  expect(JSON.parse(await readFile(f.config, "utf8"))).toEqual(config);
+  expect(await Bun.file(f.codex).exists()).toBe(false);
+}, 60_000);
+
+test("setup reports an unreadable capture.json and still reaches its closing summary", async () => {
+  const f = await fixture();
+  const engine = await graphFor(f.root, f.repository);
+  await mkdir(dirname(f.config), { recursive: true });
+  await writeFile(f.config, "not JSON");
+
+  const setup = await f.installed(
+    "setup",
+    "--repo",
+    f.repository,
+    "--graph-binary",
+    engine,
+    "--agents",
+    "none",
+    "--no-skills",
+  );
+  expect(setup.code, setup.stderr).toBe(0);
+  expect(setup.stdout).toMatch(
+    /Capture +stopped in .*capture\.json can't be kept as written/,
+  );
+  expect(setup.stdout).toContain("Run neuve setup hooks --repo ");
+  expect(setup.stdout).toContain("Not finished");
+  expect(await readFile(f.config, "utf8")).toBe("not JSON");
+}, 60_000);
 
 test("only the compiled CLI flags capture that calls a different working install", async () => {
   const f = await fixture();

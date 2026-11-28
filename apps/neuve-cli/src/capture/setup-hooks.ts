@@ -96,6 +96,8 @@ Hooks only write the spool; the worker ingests it.
 /** Marks files and entries this command owns, so a rerun replaces them and leaves the rest alone. */
 const MARKER = "neuve-capture-hook";
 const COMMAND_MARKER = `# ${MARKER}`;
+const CODEX_HOOK_TRUST =
+  "Codex asks you to review and trust new hooks the next time it starts.";
 
 /**
  * Whether an agent hook entry is this command's: it carries the marker. Entries written before the
@@ -280,6 +282,7 @@ export const gitHookScript = (
 interface Change {
   readonly path: string;
   readonly action: string;
+  readonly harness?: AgentHarness;
 }
 
 /** Whether Git would run the file as a hook: its owner may execute it. */
@@ -646,7 +649,7 @@ const installAgentHooks = async (
   const next = `${JSON.stringify(built, null, 2)}\n`;
   // As it should be, whatever its layout: the same keys in the same order. Nothing is written.
   if (present && JSON.stringify(built) === JSON.stringify(read.raw))
-    return { path, action: "unchanged" };
+    return { path, harness, action: "unchanged" };
   // Neuve's entries already right and only their place or layout differs: said as that.
   const judged = present
     ? await judgeAgentHooks(read.file, harness, command)
@@ -655,6 +658,7 @@ const installAgentHooks = async (
   if (dryRun)
     return {
       path,
+      harness,
       action: reordered
         ? "would reorder"
         : present
@@ -664,6 +668,7 @@ const installAgentHooks = async (
   const backup = await replaceFile(path, next);
   return {
     path,
+    harness,
     action:
       backup === undefined
         ? `created with ${AGENT_EVENTS.length} ${harness} hooks`
@@ -809,10 +814,7 @@ export const runSetupHooks = async (
   );
   for (const line of notFound)
     await screen.step(line.mark, line.label, line.text);
-  if (hooked.includes("codex"))
-    await screen.detail([
-      "Codex asks you to review and trust new hooks the next time it starts.",
-    ]);
+  if (hooked.includes("codex")) await screen.detail([CODEX_HOOK_TRUST]);
   // Stack sources (11.15): their own lines, so what is fetched and its caps are named.
   const [first = "", ...rest] = await setupStack({
     root,
@@ -831,7 +833,7 @@ const writeCapture = async ({
   root,
   location,
   config,
-  hooked = config.agents,
+  hooked,
   hookFiles,
   dryRun = false,
   bundle = false,
@@ -839,7 +841,7 @@ const writeCapture = async ({
   root: string;
   location: StoreLocation;
   config: CaptureConfig;
-  hooked?: ReadonlyArray<AgentHarness>;
+  hooked: ReadonlyArray<AgentHarness>;
   hookFiles?: (harness: AgentHarness) => string | undefined;
   dryRun?: boolean;
   bundle?: boolean;
@@ -1241,7 +1243,11 @@ const inspectCaptureParts = async ({
 };
 
 /** Setup and upgrade repair only capture that the repository already opted into. */
-export const repairCapture = async (root: string, screen: Screen) => {
+export const repairCapture = async (
+  root: string,
+  screen: Screen,
+  foundPrograms?: () => Promise<ReadonlyArray<AgentHarness>>,
+) => {
   if (!compiled()) return;
   const located = await Effect.runPromiseExit(resolveStoreLocation(root));
   if (Exit.isFailure(located))
@@ -1262,12 +1268,15 @@ export const repairCapture = async (root: string, screen: Screen) => {
 
   const command = [...Starter.currentCliCommand()];
   const hookCommand = [...command, "hook"];
+  const found = await (foundPrograms?.() ??
+    findAgentPrograms("check", undefined, config.agents).then(foundIds));
+  const hooked = config.agents.filter((agent) => found.includes(agent));
   const parts = await inspectCaptureParts({
     root,
     location,
     config,
     hookFiles: defaultHookFile,
-    harnesses: config.agents,
+    harnesses: hooked,
     prefix: shellCommand(hookCommand),
   });
   if (parts.every((part) => part.state === "ok")) {
@@ -1278,9 +1287,16 @@ export const repairCapture = async (root: string, screen: Screen) => {
     root,
     location,
     config: { ...config, command, hookCommand },
+    hooked,
   });
   await screen.step("done", "Capture", `repaired in ${shown(root)}`);
   await screen.detail(
     changes.map((change) => `${change.path}: ${change.action}`),
   );
+  if (
+    changes.some(
+      ({ harness, action }) => harness === "codex" && action !== "unchanged",
+    )
+  )
+    await screen.detail([CODEX_HOOK_TRUST]);
 };
