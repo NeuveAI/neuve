@@ -73,13 +73,16 @@ test("the native session policy reopens when Chrome DevTools changes and withhol
 // The parser supplies a settings label and limits expansion to the credentials declared in the files.
 test("the manifest resolves the display name and restricts expansion to resolved credentials", () => {
 	const plugin = {
-		manifest: { name: "example", description: "Example plugin" },
+		manifest: { name: "example", description: "Example plugin", codexPlugin: "example_plugin" },
 		mcp: { mcpServers: { example: {
 			type: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer ${EXAMPLE_KEY}" },
 		} } },
 	};
 	const parsed = PluginManifest.parse(plugin);
 	expect(parsed.displayName).toBe("example");
+	expect(parsed.codexPlugin).toBe("example_plugin");
+	// Codex splits override keys on dots.
+	expect(PluginManifest.safeParse({ ...plugin, manifest: { ...plugin.manifest, codexPlugin: "example.codexPlugin" } }).success).toBe(false);
 	expect(PluginManifest.parse({
 		...plugin, manifest: { ...plugin.manifest, interface: { displayName: "Example" } },
 	}).displayName).toBe("Example");
@@ -310,6 +313,7 @@ test("plugin sections give each runtime its discovery guidance", async () => {
 		manifest: {
 			name: "tracker", interface: { displayName: "Fixture Tracker" },
 			description: "Read and update tickets.", apiKey: { tracker: "FIXTURE_TRACKER_KEY" },
+			codexPlugin: "fixture_tracker",
 		},
 		mcp: { tracker: { type: "http", url: endpoint.url.href } },
 	});
@@ -371,8 +375,8 @@ test("plugin sections give each runtime its discovery guidance", async () => {
 		expect(claude).not.toContain("Use `ToolSearch`");
 		const codex = (await ask("ace", "fixture-codex")).pi;
 		expect(codex).toContain(`${list}\n\nUse Codex's tool discovery to load tools from the \`neuve_plugins\` server on demand.`);
-		// The native request needs the endpoint of the server that answered discovery.
-		expect(deferredTools).toEqual(new Map([["tracker_find_issue", endpoint.url.href]]));
+		// The native request needs the Codex plugin that the tool's plugin declares.
+		expect(deferredTools).toEqual(new Map([["tracker_find_issue", "fixture_tracker"]]));
 		const plan = await ask("plan");
 		expect(plan.offered).toContain("planning_issue");
 		expect(plan.pi).toContain("Linear planning tools read scope and dependencies.");

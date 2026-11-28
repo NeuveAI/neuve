@@ -48,23 +48,18 @@ function stdio(config: Extract<PluginServer, { type: "stdio" }>, credentials: Re
 }
 
 function transport(config: PluginServer, credentials: ReadonlyMap<string, string>, folder?: string) {
-	if (config.type === "stdio") return {
-		transport: new StdioClientTransport({
-			...stdio(config, credentials, folder),
-			cwd: folder ?? homedir(),
-			stderr: "ignore",
-		}),
-	};
+	if (config.type === "stdio") return new StdioClientTransport({
+		...stdio(config, credentials, folder),
+		cwd: folder ?? homedir(),
+		stderr: "ignore",
+	});
 	const url = new URL(expandPluginValue(config.url, credentials));
 	if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("Expected an HTTP URL");
 	const headers = new Headers(expandValues(config.headers, credentials));
-	return {
-		endpoint: url.href,
-		transport: new StreamableHTTPClientTransport(url, {
-			fetch: request,
-			requestInit: { headers, redirect: "error" },
-		}),
-	};
+	return new StreamableHTTPClientTransport(url, {
+		fetch: request,
+		requestInit: { headers, redirect: "error" },
+	});
 }
 
 type Connection = {
@@ -103,10 +98,10 @@ async function connect(
 		try {
 			const scoped = browserPlugin(plugin) && config.type === "stdio";
 			const oauth = plugin.oauth.get(server);
-			const { client, transport: wire, endpoint } = oauth ? { ...pluginMcp(oauth, lookup), endpoint: oauth.url.href } : {
+			const { client, transport: wire } = oauth ? pluginMcp(oauth, lookup) : {
 				client: new Client({ name: "neuve", version: "1" }),
 				// Discovery only lists tools, so a chat-scoped server gets only the temporary directory here.
-				...transport(config, credentials, scoped ? chatFolder(tmpdir()) : undefined),
+				transport: transport(config, credentials, scoped ? chatFolder(tmpdir()) : undefined),
 			};
 			opened.set(client, { plugin: plugin.name });
 			connection.clients.add(client);
@@ -133,7 +128,7 @@ async function connect(
 						opened.delete(next);
 					};
 					try {
-						await next.connect(transport(config, credentials, folder).transport, { ...CONNECT, signal: scopeSignal });
+						await next.connect(transport(config, credentials, folder), { ...CONNECT, signal: scopeSignal });
 						scopeSignal.throwIfAborted();
 						if (closed) throw new Error("The plugin server disconnected.");
 						chatClients.set(key, next);
@@ -209,7 +204,10 @@ async function connect(
 							log(outcome === "ok" ? "info" : "warn", "plugin.tool.call", { plugin: plugin.name, tool: name, outcome });
 						}
 					},
-				}), { deferred: true, ...(endpoint === undefined ? {} : { endpoint }) }));
+				}), {
+					deferred: true,
+					...(plugin.codexPlugin === undefined ? {} : { codexPlugin: plugin.codexPlugin }),
+				}));
 			}
 			let guidance = client.getInstructions() ?? "";
 			for (const value of credentials.values()) {

@@ -178,7 +178,7 @@ const canonicalSkillPath = async (path: string) =>
   isAbsolute(path) ? realpath(path).catch(() => undefined) : undefined;
 
 const EMPTY: OwnSettings = {
-  mcpServers: new Map(),
+  mcpServers: [],
   plugins: [],
   apps: [],
   skills: [],
@@ -1207,12 +1207,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
                 preferred.set(skill.name, skill);
         }
         return {
-          mcpServers: new Map(
-            Object.entries(config.mcp_servers ?? {}).map(([name, server]) => [
-              name,
-              server.enabled !== false ?(server.url ?? undefined) : undefined,
-            ]),
-          ),
+          mcpServers: Object.keys(config.mcp_servers ?? {}),
           plugins: Object.keys(config.plugins ?? {}),
           apps: Object.keys(config.apps ?? {}).filter(
             (name) => name !== "_default",
@@ -1234,7 +1229,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         Effect.catchCause(() => Effect.fail(unavailable("start-failed"))),
       );
       for (const [list, label] of [
-        [[...settings.mcpServers.keys()], "server"],
+        [settings.mcpServers, "server"],
         [settings.plugins, "plugin"],
         [settings.apps, "app"],
         [settings.skills.map(({ path }) => path), "skill"],
@@ -1349,8 +1344,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
       }),
     );
 
-  const collides = (settings: OwnSettings) =>
-    [...settings.mcpServers.keys()].some(ours);
+  const collides = (settings: OwnSettings) => settings.mcpServers.some(ours);
   const live = (active?: Turn) =>
     !dead && (active === undefined || !active.finished);
   /** After every wait, before anything more is written: the session and the turn still live. */

@@ -112,8 +112,8 @@ export interface ToolSpec<I = unknown> {
 export interface ToolDefinition extends ToolSpec {
   readonly inputSchema: JsonSchema;
   readonly deferred?: true;
-  /** The HTTP endpoint of the plugin server that provides this tool. */
-  readonly endpoint?: string;
+  /** Codex's own plugin, by its id in Codex's `apps` settings, that this tool's plugin stands for. */
+  readonly codexPlugin?: string;
 }
 /** A carried plugin's stdio server, started by the runtime's own MCP client. */
 export type McpStdioServer = {

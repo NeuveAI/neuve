@@ -156,7 +156,12 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
               name: "fails",
               handle: () => Effect.die("fixture failure"),
             },
-            { ...probe, name: "lookup", deferred: true },
+            {
+              ...probe,
+              name: "lookup",
+              deferred: true,
+              codexPlugin: "tracker_plugin",
+            },
           ],
           approvalPolicy: "allow",
           turnLimit: TurnLimit.parse(8),
@@ -188,6 +193,8 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
       expect(args).toContain(
         'mcp_servers.neuve.default_tools_approval_mode="approve"',
       );
+      // The clean launch before any write turn leaves Codex's apps to its own switch-off.
+      expect(args).not.toContain("apps.tracker_plugin.enabled=false");
 
       const outside = yield* Effect.promise(() =>
         rpc(url, token, call(1)).then((r) => r.json()),
@@ -199,6 +206,10 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
         message: "go",
         workspace: { folder: "/work", access: "write" },
       });
+      // The write turn's launch switches off the Codex plugin that Ace's plugin stands for.
+      expect(fake.current().args).toContain(
+        "apps.tracker_plugin.enabled=false",
+      );
       const ran = yield* Effect.promise(() =>
         rpc(plugin, token, {
           ...call(1),
@@ -372,7 +383,7 @@ test('Codex gets "Stopped." when a Neuve tool call is interrupted', async () => 
 
 test("Codex loads only the core endpoint eagerly and keeps the person's write tools enabled", () => {
   const own = {
-    mcpServers: new Map([["personal", undefined]]),
+    mcpServers: ["personal"],
     plugins: ["personal-plugin"],
     apps: [],
     skills: [],
@@ -402,48 +413,64 @@ test("Codex loads only the core endpoint eagerly and keeps the person's write to
   ).toBe(false);
 });
 
-// The launch flags must leave protected and unaddressable names on even when endpoints match.
-test("the write launch switches off only addressable personal copies of served HTTP servers", () => {
-  const endpoint = "https://mcp.example.com/Tracker/?view=Full";
-  const matching = "HTTPS://MCP.EXAMPLE.COM:443/tracker?VIEW=full";
+// Every served Codex plugin is switched off once, and other personal features keep their mode's defaults.
+test("only a write launch serving deferred plugin tools switches off the Codex plugins they stand for", () => {
   const own = {
-    mcpServers: new Map([
-      ["matching", matching],
-      ["different-query", "https://mcp.example.com/tracker?view=summary"],
-      ["disabled-or-stdio", undefined],
-      ["broken-url", "mcp.example.com/Tracker"],
-      ["name.with.dot", matching],
-      ['name"with"quotes', matching],
-      ["name with space", matching],
-      ["neuve", matching],
-      ["neuve_plugins", matching],
-    ]),
-    plugins: [],
-    apps: [],
+    mcpServers: ["personal"],
+    plugins: ["personal-plugin"],
+    apps: ["tracker_plugin", "other_plugin", "personal_plugin"],
     skills: [],
     exclude: [],
   };
-  const servers = { neuve_plugins: "http://127.0.0.1:1234/plugins/mcp" };
+  const core = { neuve: "http://127.0.0.1:1234/mcp" };
+  const served = {
+    ...core,
+    neuve_plugins: "http://127.0.0.1:1234/plugins/mcp",
+  };
   const tools = [
-    { ...probe, deferred: true, endpoint },
+    {
+      ...probe,
+      name: "lookup",
+      deferred: true,
+      codexPlugin: "tracker_plugin",
+    },
+    {
+      ...probe,
+      name: "update",
+      deferred: true,
+      codexPlugin: "tracker_plugin",
+    },
+    { ...probe, name: "search", deferred: true, codexPlugin: "other_plugin" },
+    { ...probe, codexPlugin: "personal_plugin" },
   ] satisfies SessionPolicy["tools"];
-  const flagsFor = (
-    served: typeof servers | undefined,
-    offered: SessionPolicy["tools"],
-  ) =>
+  const write = (servers: typeof core, offered: SessionPolicy["tools"]) =>
     launchArguments(
       "own",
+      own,
+      servers,
+      undefined,
+      undefined,
+      undefined,
+      offered,
+    );
+  const withoutCodexPlugins = [
+    { ...probe, deferred: true },
+  ] satisfies SessionPolicy["tools"];
+
+  expect(write(served, tools).filter((arg) => arg.startsWith("apps."))).toEqual(
+    ["apps.tracker_plugin.enabled=false", "apps.other_plugin.enabled=false"],
+  );
+  expect(write(core, tools)).toEqual(write(core, []));
+  expect(write(served, withoutCodexPlugins)).toEqual(write(served, []));
+  expect(
+    launchArguments(
+      "clean",
       own,
       served,
       undefined,
       undefined,
       undefined,
-      offered,
-    ).filter((arg) => /^mcp_servers\..+\.enabled=false$/.test(arg));
-
-  expect(flagsFor(servers, tools)).toEqual([
-    "mcp_servers.matching.enabled=false",
-  ]);
-  expect(flagsFor(undefined, tools)).toEqual([]);
-  expect(flagsFor(servers, [{ ...probe, deferred: true }])).toEqual([]);
+      tools,
+    ),
+  ).toEqual(launchArguments("clean", own, served));
 });

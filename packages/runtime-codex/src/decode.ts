@@ -27,14 +27,11 @@ export const AccountAnswer = loose({
   requiresOpenaiAuth: z.boolean(),
 });
 
-/** The person's own settings, from their effective configuration. */
+/** The names of the person's own settings, from their effective configuration. */
 export const ConfigAnswer = loose({
   config: loose({
     mcp_servers: nullable(
-      z.record(
-        text,
-        loose({ enabled: z.boolean().optional(), url: nullable(text) }),
-      ),
+      z.record(text, loose({ enabled: z.boolean().optional() })),
     ),
     plugins: nullable(z.record(text, z.unknown())),
     apps: nullable(z.record(text, z.unknown())),
