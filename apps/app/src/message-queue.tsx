@@ -16,6 +16,8 @@ export function MessageQueue({ messages, said, people, channels, agents, locked 
 	/** A build's agent's chat, where every input asks the agent. */
 	locked?: boolean;
 }) {
+	// The channel's input that starts the turn after Plan mode turns on is no one's message.
+	messages = messages.filter((message) => message.system?.kind !== "neuve:plan:entered");
 	if (!messages.length) return null;
 	return (
 		<section

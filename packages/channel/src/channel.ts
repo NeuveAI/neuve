@@ -107,6 +107,7 @@ import type {
 	ModelOption,
 	ModelRef,
 	PendingModel,
+	PlanNotice,
 	Request,
 	RunEnd,
 	ReviewCard,
@@ -116,7 +117,7 @@ import type {
 	Said,
 	Usage,
 } from "./protocol";
-import { buildId, MENTION, reservedBuildRequestId, reservedReviewRequestId, ReviewFeedDefinition } from "./protocol";
+import { buildId, MENTION, reservedBuildRequestId, reservedPlanRequestId, reservedReviewRequestId, ReviewFeedDefinition } from "./protocol";
 import { queue, withdrawn } from "./queue";
 import * as room from "./room";
 import { exportSeed, importSeed, type Seed } from "./seed";
@@ -1146,15 +1147,32 @@ export class Channel {
 		try {
 			// The newest human input names who is waiting; agents' inputs are their parents' work.
 			const input = await this.#harness.commit(async (tx) => {
+				let planEntry: EntryId | undefined;
 				for (const submission of submissions.toReversed()) {
 					if (submission?.type !== "input" || submission.conversationId !== chat || submission.entry === undefined) continue;
 					if (this.#builds.isBrief(submission) || isMentionSubmission(submission)) continue;
+					if (submission.requestId && reservedPlanRequestId(submission.requestId)
+						&& (await tx.doc(ChatModesDoc)).entered?.[chat]?.includes(submission.requestId)) {
+						planEntry ??= submission.entry;
+						continue;
+					}
 					const human = room.human((await tx.entry(submission.entry))!);
 					if (human && !room.isAgent(human.author)) return { author: human.author, submission: submission.id };
 				}
+				if (planEntry === undefined) return;
+				// The Plan mode input resumes the person's prior request in a separate run.
+				let cursor: Cursor | undefined;
+				do {
+					const page = await tx.scanEntries({ conversationId: chat, maxEntryId: planEntry }, 32, cursor);
+					for (const entry of page.items) {
+						const human = room.human(entry);
+						if (human?.invoked && human.author !== "unknown" && !room.isAgent(human.author)) return { author: human.author };
+					}
+					cursor = page.next;
+				} while (cursor !== undefined);
 			}, context);
 			if (!input) return;
-			const feed = await this.#harness.snapshot(ReviewFeedDoc, chat, context);
+			const feed = input.submission === undefined ? undefined : await this.#harness.snapshot(ReviewFeedDoc, chat, context);
 			const notice = Object.entries(feed?.notices ?? {}).find(([, notice]) =>
 				notice.delivered && notice.chat === chat && notice.submission === input.submission
 			);
@@ -1442,6 +1460,7 @@ export class Channel {
 	#clientRequestId(requestId: string | undefined) {
 		if (reservedReviewRequestId(requestId)) throw new Error("The neuve.review: request-ID namespace is reserved for the host");
 		if (reservedBuildRequestId(requestId)) throw new Error("The neuve.build: request-ID namespace is reserved for the host.");
+		if (reservedPlanRequestId(requestId)) throw new Error("The neuve.plan:enter: request-ID namespace is reserved for the host.");
 	}
 
 	async #admitted<T>(id: ChatId | undefined, admit: (settled: Promise<T>) => Promise<T>): Promise<T> {
@@ -1732,12 +1751,21 @@ export class Channel {
 				if (this.#closing.signal.aborted) return;
 				const transition = await this.#harness.commit(tx => reconcilePlanEntry(tx, chat), context);
 				if (!transition) return;
-				const { previous, mode } = transition;
-				await this.#publishSelection(chat, mode);
-				this.#log("info", "plan.mode.entered", { chat, previousChatMode: previous, chatMode: mode });
-				await this.#submitInput(conversation, {
-					type: "input", whenBusy: "followUp",
-					content: "[Neuve system note] Plan mode is on. Write the plan for the person's latest request.",
+				const { requestId, mode } = transition;
+				if (mode) {
+					await this.#publishSelection(chat, mode);
+					this.#log("info", "plan.mode.entered", { chat, previousChatMode: "ace", chatMode: mode });
+				}
+				const submitted = await this.#harness.commit(tx => tx.submissionByRequest(chat, requestId), context);
+				if (!submitted) {
+					await this.#submitInput(conversation, {
+						type: "input", whenBusy: "followUp", requestId,
+						content: "[Neuve system note] Plan mode is on. Write the plan for the person's latest request.",
+					}, context);
+				}
+				await this.#harness.commit(async tx => {
+					const pending = (await tx.doc(ChatModesDoc)).pendingEntries;
+					if (pending?.[chat] === requestId) delete pending[chat];
 				}, context);
 			});
 		}
@@ -2016,8 +2044,9 @@ export class Channel {
 		const conversation = await this.#conversation(request.chat);
 		const stream = await watchEvents(this.#harness, conversation.id, context);
 		const observedChats = new Set<ConversationId>([conversation.id]);
+		type SystemNotice = ReviewNotice | BuildNotice | PlanNotice;
 		type NoticeIndex = {
-			entries: Map<number, ReviewNotice | BuildNotice>; submissions: Map<number, ReviewNotice | BuildNotice>;
+			entries: Map<number, SystemNotice>; submissions: Map<number, SystemNotice>;
 			pendingEntries: Set<number>; pendingSubmissions: Set<number>;
 		};
 		const notices = new Map<number, NoticeIndex>();
@@ -2044,6 +2073,16 @@ export class Channel {
 							if (record.entry !== undefined) index.entries.set(record.entry, system);
 						}
 					}
+					await this.#harness.commit(async tx => {
+						const { entered } = await tx.doc(ChatModesDoc);
+						for (const requestId of entered?.[chat] ?? []) {
+							const record = await tx.submissionByRequest(chat, requestId);
+							if (record?.type !== "input") continue;
+							const system: PlanNotice = { kind: "neuve:plan:entered" };
+							index.submissions.set(record.id, system);
+							if (record.entry !== undefined) index.entries.set(record.entry, system);
+						}
+					}, context);
 					const feed = await this.#harness.snapshot(ReviewFeedDoc, chat, context);
 					for (const [review, notice] of Object.entries(feed?.notices ?? {})) {
 						if (notice.chat !== chat) continue;
@@ -2071,7 +2110,15 @@ export class Channel {
 		const updates = new Set<Promise<void>>();
 		const unsubscribeNotices = this.#harness.subscribeCommits(({ changes }) => {
 			const chats = new Set<ConversationId>();
-			for (const change of changes) if (change.type === "document" && change.record.kind === ReviewFeedDefinition.kind && change.record.scope.kind === "conversation" && observedChats.has(change.record.scope.conversationId)) chats.add(change.record.scope.conversationId);
+			for (const change of changes) {
+				if (change.type !== "document") continue;
+				const { kind, scope } = change.record;
+				if (kind === ChatModesDoc.definition.kind) {
+					for (const chat of observedChats) chats.add(chat);
+				} else if (kind === ReviewFeedDefinition.kind && scope.kind === "conversation" && observedChats.has(scope.conversationId)) {
+					chats.add(scope.conversationId);
+				}
+			}
 			if (!chats.size || stopped) return;
 			const update = loadNotices(chats).then(() => queueChanged());
 			updates.add(update);
@@ -2264,6 +2311,7 @@ export class Channel {
 		stream.start(async (batch) => {
 			const chats = new Set<ConversationId>();
 			for (const event of batch) {
+				// Pi publishes the input entry and its placed submission in the same batch.
 				if (event.type === "submission") chats.add(event.record.conversationId);
 				else if (event.type === "snapshot") for (const chat of sourceChats(event.entries)) chats.add(chat);
 			}

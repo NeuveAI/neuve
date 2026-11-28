@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { EffortSchema } from "./effort";
 import type { Request } from "./protocol";
-import { reservedBuildRequestId, reservedReviewRequestId } from "./protocol";
+import { reservedBuildRequestId, reservedPlanRequestId, reservedReviewRequestId } from "./protocol";
 
 export { EffortSchema };
 
@@ -23,6 +23,8 @@ const requestId = z.string().min(1).max(200).refine(value => !reservedReviewRequ
 	message: "The neuve.review: request-ID namespace is reserved for the host",
 }).refine(value => !reservedBuildRequestId(value), {
 	message: "The neuve.build: request-ID namespace is reserved for the host",
+}).refine(value => !reservedPlanRequestId(value), {
+	message: "The neuve.plan:enter: request-ID namespace is reserved for the host",
 }).optional();
 const agents = z.array(id).min(1).optional();
 /**

@@ -9,7 +9,7 @@ import { Channel, type Options } from "../src/channel";
 import { EventSchema } from "../src/frame";
 import { parseRequest } from "../src/parse";
 import { ChatModesDoc } from "../src/plan-mode";
-import type { ChannelInfo, ChatMode, Event, Request } from "../src/protocol";
+import type { ChannelInfo, ChatMode, Event, Request, RunEnd } from "../src/protocol";
 import { faux, Fixture, isolateClaudeConfig, MODEL, OWNER, scratch, scratchEnv, until } from "./helpers";
 
 // Both composers send through this parser before admission.
@@ -286,6 +286,82 @@ const question = (id: string) => fauxAssistantMessage(fauxToolCall("question", {
 		multiple: false,
 	}],
 }, { id }), { stopReason: "toolUse" });
+
+test.each(["live", "replayed", "published"] as const)("Plan mode entry keeps the person's credit when %s", async delivery => {
+	const runs: RunEnd[] = [];
+	const fixture = await Fixture.create({
+		onRun: run => runs.push(run),
+		planFiles: { stage: async () => {}, read: async (_file, _hash, bytes) => bytes },
+	});
+	const watch = await fixture.watch();
+	const text = "Make a plan";
+	const note = "Plan mode is on.";
+	try {
+		fixture.script(
+			fauxAssistantMessage(fauxToolCall("plan_enter", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("Planning now"),
+		);
+		await fixture.request({ op: "ask", author: OWNER, text });
+		await watch.until("reply", event => event.text === "Planning now");
+		if (delivery === "published") {
+			await until(() => runs.length === 2, 15_000, "both run outcomes");
+			expect(runs[1]).toMatchObject({ author: OWNER, outcome: "done" });
+			expect(runs[1]?.system).toBeUndefined();
+			return;
+		}
+		let transcript = watch;
+		if (delivery === "replayed") {
+			await watch.stop();
+			await fixture.restart();
+			transcript = await fixture.watch();
+		}
+		try {
+			const human = await transcript.until("message", event => event.text === text);
+			expect(EventSchema.parse(human)).toMatchObject({ author: OWNER });
+			expect(human.system).toBeUndefined();
+			const entry = await transcript.until("message", event => event.text.includes(note));
+			expect(EventSchema.parse(entry)).toMatchObject({ system: { kind: "neuve:plan:entered" } });
+		} finally {
+			if (transcript !== watch) await transcript.stop();
+		}
+	} finally {
+		await watch.stop();
+		await fixture.dispose();
+	}
+});
+
+test("reopening retries a Plan mode input whose submission was interrupted", async () => {
+	let interrupt = false;
+	const fixture = await Fixture.create({
+		planFiles: { stage: async () => {}, read: async (_file, _hash, bytes) => bytes },
+		prepareModels: async () => {
+			if (interrupt) throw new Error("Interrupted before submitting the Plan mode input");
+		},
+	});
+	try {
+		fixture.script(() => {
+			interrupt = true;
+			return fauxAssistantMessage(fauxToolCall("plan_enter", {}), { stopReason: "toolUse" });
+		});
+		await fixture.request({ op: "ask", author: OWNER, text: "Make a plan" });
+		await until(() => fixture.log.find(entry => entry.event === "plan.mode.reconcile"), 15_000, "the interrupted input");
+		interrupt = false;
+		fixture.script(fauxAssistantMessage("Planning after reopening"));
+		await fixture.restart();
+		const watch = await fixture.watch();
+		await watch.until("reply", event => event.text === "Planning after reopening", 2_000);
+		await watch.stop();
+		await fixture.restart();
+		const replay = await fixture.watch();
+		expect(replay.of("message").filter(event => event.text.startsWith("[Neuve system note]"))).toEqual([
+			expect.objectContaining({ system: { kind: "neuve:plan:entered" } }),
+		]);
+		expect(fixture.faux.state.callCount).toBe(2);
+		await replay.stop();
+	} finally {
+		await fixture.dispose();
+	}
+});
 
 test.each(["Yes", "No"])("Plan mode follows the person's answer of %s", async answer => {
 	const fixture = await Fixture.create({ planFiles: { stage: async () => {}, read: async (_file, _hash, bytes) => bytes } });

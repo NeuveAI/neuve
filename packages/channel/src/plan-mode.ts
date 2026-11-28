@@ -12,7 +12,7 @@ import {
 	type Harness,
 	type Tx,
 } from "@earendil-works/pi-durable";
-import { AGENT_MESSAGE_TOOL, AGENT_MODEL_TOOL, PLAN_COMMENT_TOOL, PLAN_TOOL, type ChatMode } from "./protocol";
+import { AGENT_MESSAGE_TOOL, AGENT_MODEL_TOOL, PLAN_COMMENT_TOOL, PLAN_REQUEST_PREFIX, PLAN_TOOL, type ChatMode } from "./protocol";
 import { ATTENDED_SECTION } from "./approvals";
 
 export type PlanExit = { plan: string; hash: string };
@@ -20,7 +20,8 @@ export type ModeTransition = { chat: ConversationId; previous: ChatMode; mode: C
 
 export const ChatModesDoc = defineDoc<{
 	chats: Record<string, ChatMode>;
-	pendingEntries?: Record<string, true>;
+	pendingEntries?: Record<string, true | string>;
+	entered?: Record<string, string[]>;
 	pendingExits?: Record<string, PlanExit>;
 }>({
 	kind: "neuve.chat-modes",
@@ -121,11 +122,24 @@ export async function reconcilePlanExit(tx: Tx, chat: ConversationId): Promise<M
 export async function reconcilePlanEntry(tx: Tx, chat: ConversationId) {
 	const doc = await tx.doc(ChatModesDoc);
 	const entries = doc.pendingEntries;
-	if (!entries?.[chat] || !await checkIdle(tx, chat, doc.chats)) return;
-	delete entries[chat];
-	if (doc.chats[chat] === "plan") return;
+	const pending = entries?.[chat];
+	if (!entries || !pending) return;
+	if (pending !== true) {
+		if (doc.chats[chat] === "plan") return { requestId: pending };
+		delete entries[chat];
+		return;
+	}
+	if (!await checkIdle(tx, chat, doc.chats)) return;
+	if (doc.chats[chat] === "plan") {
+		delete entries[chat];
+		return;
+	}
 	await setChatMode(tx, chat, "plan");
-	return { chat, previous: "ace", mode: "plan" } as const;
+	const requestId = `${PLAN_REQUEST_PREFIX}${crypto.randomUUID()}`;
+	entries[chat] = requestId;
+	doc.entered ??= {};
+	doc.entered[chat] = [...(doc.entered[chat] ?? []), requestId];
+	return { requestId, mode: "plan" } as const;
 }
 
 // The bridge strips marked tool offers from the transcript. A true value denotes Plan mode.
