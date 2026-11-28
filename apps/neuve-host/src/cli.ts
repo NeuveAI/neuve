@@ -252,18 +252,31 @@ function render(event: Event, info: ChannelInfo) {
 type Session = { request<T = unknown>(request: Request, watch?: Watch): Promise<T>; close(): void };
 
 /** Once watching; `ended` resolves when its channel or relaying host ends the watch. */
-async function watch(session: Session, replay = true): Promise<{ ended: Promise<void> }> {
+async function watch(session: Session, replay = true) {
 	const info = await session.request<ChannelInfo>({ op: "info" });
 	let live = false;
 	const ended = Promise.withResolvers<void>();
+	let runEnd: PromiseWithResolvers<void> | undefined;
 	await session.request({ op: "watch", chat: chat(), stops: true, ...(replay && flags.plans ? { plans: true, planComments: true } : {}), ...(flags.builds ? { builds: true } : {}) }, {
 		event(event) {
 			if (event.kind === "live") return void (live = true);
 			if (live || replay) render(event, info);
+			if (event.kind === "run") {
+				if (event.state === "start") runEnd ??= Promise.withResolvers<void>();
+				else {
+					runEnd?.resolve();
+					runEnd = undefined;
+				}
+			}
 		},
 		closed: () => ended.resolve(),
 	});
-	return { ended: ended.promise };
+	return {
+		ended: ended.promise,
+		waitForRunEnd() {
+			if (runEnd) return Promise.race([runEnd.promise, ended.promise]);
+		},
+	};
 }
 
 function ago(at: number): string {
@@ -728,7 +741,7 @@ async function main() {
 							`Asked ${name}'s agent; the run continues. Follow it with: ace watch ${name}`,
 						);
 					}
-					await watch(session, false);
+					const watching = await watch(session, false);
 					const { submission } = await session.request<{ submission: number }>(body).catch(
 						refused,
 					);
@@ -737,6 +750,7 @@ async function main() {
 						process.exit(130);
 					});
 					const status = await session.request<string>({ op: "wait", submission });
+					await watching.waitForRunEnd();
 					if (status === "unanswered" && !ended) console.log(dim("  (stopped before answering)"));
 					if (status === "unanswered" || unanswered) process.exit(1);
 					return;
